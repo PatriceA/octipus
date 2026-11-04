@@ -3,6 +3,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, rm, readFile, writeFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { gunzipSync } from 'node:zlib';
 import { afterEach, expect, it, vi } from 'vitest';
 import { authenticatedGit } from './credential-git';
 import { connectionProfileSchema } from './credential-connections';
@@ -19,11 +20,23 @@ it('fetches and pushes through the broker; the Git child and persisted Git files
  await mkdir(source);await mkdir(local);run(dir,['init','--bare',remote]);run(source,['init']);run(local,['init']);
  run(source,['-c','user.name=Test','-c','user.email=test@example.test','commit','--allow-empty','-m','seed']);run(source,['push',remote,'HEAD:refs/heads/main']);
  run(source,['tag','release']);run(source,['push',remote,'refs/tags/release']);
+ // Real Git gzips negotiation once it asks for enough distinct refs.
+ for (let i=0;i<80;i++) {
+  const hash=run(source,['-c','user.name=Test','-c','user.email=test@example.test','commit-tree','HEAD^{tree}','-p','HEAD','-m',`audit-${i}`]).trim();
+  run(source,['update-ref',`refs/heads/audit-seed/${i}`,hash]);
+ }
+ run(source,['push',remote,'refs/heads/audit-seed/*:refs/heads/audit-seed/*']);
+ let compressedUploads=0;
+ let upstreamStatus:number|undefined;
  const server=createServer(async(req,res)=>{
+  if(upstreamStatus){res.writeHead(upstreamStatus).end('upstream unavailable');return;}
   if(req.headers.authorization!==`Basic ${Buffer.from('oauth2:'+fx.secret).toString('base64')}`){res.writeHead(401).end();return;}
   const u=new URL(req.url!,'http://local');const chunks:Buffer[]=[];for await(const c of req)chunks.push(c);
-  const child=spawn('git',['http-backend'],{env:{PATH:process.env.PATH,GIT_PROJECT_ROOT:dir,GIT_HTTP_EXPORT_ALL:'1',REQUEST_METHOD:req.method!,PATH_INFO:u.pathname,QUERY_STRING:u.search.slice(1),CONTENT_TYPE:req.headers['content-type']??'',CONTENT_LENGTH:String(Buffer.concat(chunks).length),REMOTE_USER:'test'}});
-  const output:Buffer[]=[];child.stdout.on('data',c=>output.push(c));child.stdin.end(Buffer.concat(chunks));
+  const encoded=Buffer.concat(chunks);
+  const body=req.headers['content-encoding']==='gzip'?gunzipSync(encoded):encoded;
+  if(req.headers['content-encoding']==='gzip')compressedUploads++;
+  const child=spawn('git',['http-backend'],{env:{PATH:process.env.PATH,GIT_PROJECT_ROOT:dir,GIT_HTTP_EXPORT_ALL:'1',REQUEST_METHOD:req.method!,PATH_INFO:u.pathname,QUERY_STRING:u.search.slice(1),CONTENT_TYPE:req.headers['content-type']??'',CONTENT_LENGTH:String(body.length),REMOTE_USER:'test'}});
+  const output:Buffer[]=[];child.stdout.on('data',c=>output.push(c));child.stdin.end(body);
   child.once('close',()=>{const b=Buffer.concat(output);const i=b.indexOf('\r\n\r\n');if(i<0){res.writeHead(500).end();return;}
    for(const h of b.subarray(0,i).toString().split('\r\n')){const n=h.indexOf(':');if(n>0){if(h.slice(0,n).toLowerCase()==='status')res.statusCode=parseInt(h.slice(n+1));else res.setHeader(h.slice(0,n),h.slice(n+1).trim());}}
    res.end(b.subarray(i+4));});
@@ -43,6 +56,7 @@ it('fetches and pushes through the broker; the Git child and persisted Git files
  expect(run(local,['rev-parse','refs/remotes/pi29-audit/main']).trim()).toBe(run(source,['rev-parse','HEAD']).trim());
  expect(run(local,['rev-parse','refs/tags/pi29-audit/release']).trim()).toBe(run(source,['rev-parse','HEAD']).trim());
  expect(run(local,['for-each-ref','--format=%(refname)','refs/tags/']).trim()).toBe('refs/tags/pi29-audit/release');
+ expect(compressedUploads).toBeGreaterThan(0);
  const beforeInvalid = run(local,['for-each-ref','--format=%(refname) %(objectname)']);
  const spawnsBeforeInvalid = fx.spawns.length;
  await expect(authenticatedGit(profile,caller,{operation:'fetch',path:local,remotePath:'//remote.git',refspecs:['+refs/heads/*:refs/remotes/pi29-audit/*']})).rejects.toThrow(/exactly one leading slash/);
@@ -57,4 +71,6 @@ it('fetches and pushes through the broker; the Git child and persisted Git files
  for(const file of await readdir(join(local,'.git'))) {try{expect(await readFile(join(local,'.git',file),'utf8')).not.toContain(fx.secret);}catch(e){if((e as NodeJS.ErrnoException).code!=='EISDIR')throw e;}}
  await expect(authenticatedGit(profile,{...caller,workspaceId:'other'},{operation:'fetch',path:local,remotePath:'/remote.git',refspecs:['main']})).rejects.toThrow(/access denied/);
  await expect(authenticatedGit(profile,caller,{operation:'fetch',path:local,remotePath:'/remote.git',refspecs:['--upload-pack=evil']})).rejects.toThrow(/flags/);
+ upstreamStatus=500;
+ await expect(authenticatedGit(profile,caller,{operation:'fetch',path:local,remotePath:'/remote.git',refspecs:['refs/heads/main:refs/remotes/origin/main']})).rejects.toThrow(/Git broker: ref discovery: upstream HTTP 500/);
 },30_000);

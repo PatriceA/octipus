@@ -179,6 +179,9 @@ The approved repository's object store is shared; fetched ref updates are applie
 transactionally with expected old values, so concurrent ref changes cause a failure.
 No checkout is performed and the original FETCH_HEAD is not changed. Configured
 repository roots must contain the actual Git metadata and object store too.
+The broker preserves gzip-compressed Git negotiation requests. Transport errors
+identify ref discovery or pack transfer and retain an upstream HTTP failure code,
+instead of presenting every upstream failure as an unexplained local HTTP 502.
 
 The temporary broker closes before the call returns. Fetch and push have separate
 permission actions; push defaults to ASK. Transfers default to 10 minutes, accept

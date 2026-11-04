@@ -47,7 +47,9 @@ export async function authenticatedGit(p: ConnectionProfile, caller: ConnectionP
   const deadline = AbortSignal.timeout(timeoutMs);
   const lifetime = signal ? AbortSignal.any([signal, deadline]) : deadline;
   let maskOutput: (value: unknown) => unknown = value => value;
+  let transportFailure: string | undefined;
   const server = createServer(async (req, res) => {
+    const phase = req.method === 'POST' ? 'pack transfer' : 'ref discovery';
     try {
       const advertise = req.method === 'GET' && req.url === `${prefix}/info/refs?service=${service}`;
       const pack = req.method === 'POST' && req.url === `${prefix}/${service}`;
@@ -59,19 +61,26 @@ export async function authenticatedGit(p: ConnectionProfile, caller: ConnectionP
         chunks.push(chunk);
       }
       const path = `${args.remotePath}${advertise ? `/info/refs?service=${service}` : `/${service}`}`;
+      const headers: Record<string, string> = pack ? { 'Content-Type': `application/x-${service}-request` } : {};
+      // Git compresses larger negotiation bodies. Forwarding the gzip bytes
+      // without this header makes GitLab parse them as plain pkt-lines.
+      const encoding = req.headers['content-encoding'];
+      if (encoding !== undefined && encoding !== 'gzip') throw new Error('Unsupported Git request encoding');
+      if (pack && encoding) headers['Content-Encoding'] = encoding;
       const { response, mask } = await authenticatedFetch(p, caller, path, {
         method: req.method, signal: lifetime,
-        headers: pack ? { 'Content-Type': `application/x-${service}-request` } : {},
+        headers,
         body: pack ? Buffer.concat(chunks) : undefined,
       });
       const previousMask = maskOutput; maskOutput = value => mask(previousMask(value));
       if (!response.ok) {
+        transportFailure = `${phase}: upstream HTTP ${response.status}`;
         const diagnostic = mask((await readBoundedResponse(response)).slice(0, 4000));
         res.writeHead(502, { 'Content-Type': 'text/plain' }).end(`Git upstream returned ${response.status}: ${diagnostic}`);
         return;
       }
       const expected = `application/x-${service}-${advertise ? 'advertisement' : 'result'}`;
-      if (response.headers.get('content-type')?.split(';')[0] !== expected) { await response.body?.cancel(); throw new Error('Invalid Git response'); }
+      if (response.headers.get('content-type')?.split(';')[0] !== expected) { transportFailure = `${phase}: upstream returned a non-Git response`; await response.body?.cancel(); throw new Error('Invalid Git response'); }
       res.writeHead(200, { 'Content-Type': expected });
       const reader = response.body!.getReader(); let received = 0;
       try {
@@ -85,7 +94,10 @@ export async function authenticatedGit(p: ConnectionProfile, caller: ConnectionP
         }
         res.end();
       } finally { await reader.cancel().catch(() => {}); }
-    } catch { if (!res.headersSent) res.writeHead(502).end('Authenticated Git transport failed'); else res.destroy(); }
+    } catch (error) {
+      transportFailure ??= `${phase}: ${error instanceof Error && ['Git request too large', 'Git response too large', 'Git client disconnected', 'Authenticated connection request failed (network, TLS, cancellation or timeout); credentials withheld'].includes(error.message) ? error.message : 'broker request failed'}`;
+      if (!res.headersSent) res.writeHead(502).end('Authenticated Git transport failed'); else res.destroy();
+    }
   });
   try {
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
@@ -115,7 +127,7 @@ export async function authenticatedGit(p: ConnectionProfile, caller: ConnectionP
       try { result=await gitCall([...clean,'-c','credential.helper=','-c','protocol.allow=never','-c','protocol.http.allow=always',
         '-c','http.followRedirects=false','-c','http.proxy=','-c','http.extraHeader=',args.operation,
         ...(args.operation==='fetch'?['--no-tags','--no-recurse-submodules']:['--no-verify']),'--',url,...args.refspecs],temporary,lifetime,undefined,env); }
-      catch(error){ throw new Error(String(maskOutput((error as Error).message.replaceAll(url,p.http.origin+args.remotePath)))); }
+      catch(error){ throw new Error(String(maskOutput((error as Error).message.replaceAll(url,p.http.origin+args.remotePath) + (transportFailure ? `\nGit broker: ${transportFailure}` : '')))); }
       if(args.operation==='fetch'){
         const after=refMap((await gitCall([...clean,'for-each-ref','--format=%(refname) %(objectname)'],temporary,lifetime,undefined,env)).stdout);
         const changes=[...after].filter(([ref,hash])=>before.get(ref)!==hash);
