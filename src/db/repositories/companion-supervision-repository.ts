@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { and, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { companionActions, companionEvents, companionGoals, companionSessionLinks, companionSettings, type CompanionGoal } from '@/db/schema/companion-supervision';
+import { companionActions, companionIncidents, companionEvents, companionGoals, companionSessionLinks, companionSettings, type CompanionGoal } from '@/db/schema/companion-supervision';
 import { workspaces } from '@/db/schema/organizations';
 import { users } from '@/db/schema/users';
 import { sessions, sessionGeneration } from '@/db/schema/sessions';
@@ -26,8 +26,16 @@ const terminal = (goal: CompanionGoal) => goal.state === 'completed' || goal.sta
 /** All entry points revalidate scope in the transaction; no admin bypass or implicit enrollment. */
 export class CompanionSupervisionRepository {
   readonly scope: CompanionScope;
-  constructor(scope: CompanionScope, private db = getDb) {
+  constructor(scope: CompanionScope, private db = getDb, readonly authority?: { settingsId: string; revision: number }) {
     this.scope = Object.freeze(companionScopeSchema.parse(scope));
+  }
+
+  private async assertAuthority(tx: Transaction) {
+    if (!this.authority) return;
+    const [row] = await tx.select().from(companionSettings).where(and(eq(companionSettings.id, this.authority.settingsId),
+      eq(companionSettings.userId, this.scope.userId), eq(companionSettings.workspaceId, this.scope.workspaceId))).for('share');
+    if (!row?.enabled || row.autonomy === 'observe' || row.revision !== this.authority.revision)
+      fail('conflict', 'Companion authority changed; inspect current settings before dispatch');
   }
 
   private async assertScope(tx: Transaction) {
@@ -77,8 +85,16 @@ export class CompanionSupervisionRepository {
   async create(input: unknown) {
     const data = createCompanionGoalSchema.parse(input);
     assertNoCredentialTemplates(data);
+    if(data.attachments.length){
+      const [source]=data.sourceSessionId?await this.db().select({context:sessions.context}).from(sessions).where(and(eq(sessions.id,data.sourceSessionId),eq(sessions.userId,this.scope.userId),eq(sessions.workspaceId,this.scope.workspaceId),eq(sessions.kind,'chat'),isNull(sessions.groupChannelId))):[];
+      if(data.sourceSessionId&&!source)return fail('not_found','Attachment source is unavailable');
+      const {WorkspaceFS}=await import('@/security/workspace-fs');
+      const fs=source?WorkspaceFS.forSession({...this.scope,context:source.context},{space:null}):WorkspaceFS.forPrincipal({kind:'user',userId:this.scope.userId,workspaceId:this.scope.workspaceId,workspaceKind:'personal',isAdmin:false} as import('@/security/principal').Principal);
+      for(const file of data.attachments)file.path=fs.resolve(file.path);
+    }
     return this.db().transaction(async tx => {
       await this.assertScope(tx);
+      await this.assertAuthority(tx);
       // Claim the request key before source locks. Retries must acquire the
       // goal before a session, just like adoption, including concurrent creates.
       const [created] = await tx.insert(companionGoals).values({ ...data, ...this.scope, taskId: null, workPlanSessionId: null, sourceSessionId: null }).onConflictDoNothing({
@@ -89,13 +105,13 @@ export class CompanionSupervisionRepository {
           eq(companionGoals.workspaceId, this.scope.workspaceId), eq(companionGoals.requestKey, data.requestKey))).for('update');
         // Mutable priority is excluded: a retry must not undo later prioritization.
         if (!existing || existing.title !== data.title || existing.request !== data.request || existing.outcome !== data.outcome
-          || JSON.stringify(existing.acceptanceCriteria) !== JSON.stringify(data.acceptanceCriteria) || existing.tokenBudget !== data.tokenBudget
+          || JSON.stringify(existing.attachments) !== JSON.stringify(data.attachments) || JSON.stringify(existing.acceptanceCriteria) !== JSON.stringify(data.acceptanceCriteria) || existing.tokenBudget !== data.tokenBudget
           || existing.taskId !== data.taskId || existing.workPlanSessionId !== data.workPlanSessionId || existing.sourceSessionId !== data.sourceSessionId) {
           return fail('conflict', 'Request key already belongs to a different goal request');
         }
         return this.protect(tx, existing);
       }
-      let protectionLevel = 1;
+      let protectionLevel = Math.max(1,...data.attachments.map(file=>file.protectionLevel??1));
       if (data.taskId) {
         const [task] = await tx.select({ id: tasks.id }).from(tasks).where(and(eq(tasks.id, data.taskId),
           eq(tasks.userId, this.scope.userId), eq(tasks.workspaceId, this.scope.workspaceId))).for('share');
@@ -108,7 +124,13 @@ export class CompanionSupervisionRepository {
         protectionLevel = Math.max(protectionLevel, source.protectionLevel ?? 1);
         Object.assign(flowLabel, source.flowLabel ?? {});
       }
-      const [goal] = await tx.update(companionGoals).set({ taskId: data.taskId, workPlanSessionId: data.workPlanSessionId, sourceSessionId: data.sourceSessionId, flowLabel, protectionLevel })
+      if(data.attachments.length){
+        const source=data.sourceSessionId?await this.session(tx,data.sourceSessionId):undefined;
+        const {WorkspaceFS}=await import('@/security/workspace-fs');
+        const fs=source?WorkspaceFS.forSession({...this.scope,context:source.context},{space:null}):WorkspaceFS.forPrincipal({kind:'user',userId:this.scope.userId,workspaceId:this.scope.workspaceId,workspaceKind:'personal',isAdmin:false} as import('@/security/principal').Principal);
+        for(const file of data.attachments)file.path=fs.resolve(file.path);
+      }
+      const [goal] = await tx.update(companionGoals).set({ attachments:data.attachments, taskId: data.taskId, workPlanSessionId: data.workPlanSessionId, sourceSessionId: data.sourceSessionId, flowLabel, protectionLevel })
         .where(this.goalWhere(created.id)).returning();
       return goal;
     });
@@ -117,6 +139,7 @@ export class CompanionSupervisionRepository {
   async list(limit = 50) {
     return this.db().transaction(async tx => {
       await this.assertScope(tx);
+      await this.assertAuthority(tx);
       const rows = await tx.select().from(companionGoals).where(and(eq(companionGoals.userId, this.scope.userId),
         eq(companionGoals.workspaceId, this.scope.workspaceId))).orderBy(desc(companionGoals.priority), desc(companionGoals.createdAt))
         .limit(Math.max(1, Math.min(Number.isFinite(limit) ? Math.trunc(limit) : 50, 100)));
@@ -131,6 +154,7 @@ export class CompanionSupervisionRepository {
   async read(id: string) {
     return this.db().transaction(async tx => {
       await this.assertScope(tx);
+      await this.assertAuthority(tx);
       const goal = await this.protect(tx, await this.goal(tx, id));
       const links = await tx.select().from(companionSessionLinks).where(eq(companionSessionLinks.goalId, goal.id)).orderBy(companionSessionLinks.createdAt);
       return { goal, links };
@@ -142,6 +166,7 @@ export class CompanionSupervisionRepository {
     assertNoCredentialTemplates(data);
     return this.db().transaction(async tx => {
       await this.assertScope(tx);
+      await this.assertAuthority(tx);
       const goal = await this.goal(tx, id, true);
       if (terminal(goal)) return fail('conflict', 'This goal has ended');
       // All claims in a session serialize, including pipeline versus whole-session ownership.
@@ -223,6 +248,15 @@ export class CompanionSupervisionRepository {
     assertNoCredentialTemplates(data);
     return this.db().transaction(async tx => {
       await this.assertScope(tx);
+      await this.assertAuthority(tx);
+      if (data.dependencies) {
+        const all=await tx.select().from(companionGoals).where(and(eq(companionGoals.userId,this.scope.userId),eq(companionGoals.workspaceId,this.scope.workspaceId))).orderBy(companionGoals.id).for('update');
+        const graph=new Map(all.map(goal=>[goal.id,goal.id===id?data.dependencies!:goal.dependencies]));
+        if(data.dependencies.some(dependency=>!graph.has(dependency)))return fail('not_found','Dependency not found in this workspace');
+        const visiting=new Set<string>(),finished=new Set<string>();
+        const walk=(node:string):boolean=>{if(visiting.has(node))return true;if(finished.has(node))return false;visiting.add(node);for(const next of graph.get(node)??[])if(walk(next))return true;visiting.delete(node);finished.add(node);return false;};
+        if(walk(id))return fail('conflict','Goal dependencies cannot contain cycles');
+      }
       const goal = await this.protect(tx, await this.goal(tx, id, true));
       if (goal.revision !== data.expectedRevision) return fail('conflict', 'Goal changed; refresh before updating it');
       if (terminal(goal)) return fail('conflict', 'This goal has ended');
@@ -230,7 +264,7 @@ export class CompanionSupervisionRepository {
       if (data.evidence) await this.validateCompletion(tx, goal, data.evidence);
       const now = new Date();
       const [updated] = await tx.update(companionGoals).set({ state: data.state ?? goal.state, priority: data.priority ?? goal.priority,
-        protectionLevel: goal.protectionLevel, revision: goal.revision + 1, updatedAt: now,
+        protectionLevel: goal.protectionLevel, ...(data.dependencies !== undefined ? {dependencies:[...new Set(data.dependencies)]}:{}), ...(data.tokenBudget !== undefined ? {tokenBudget:data.tokenBudget}:{}), revision: goal.revision + 1, updatedAt: now,
         ...(data.evidence ? { completionEvidence: data.evidence, completedAt: now } : {}),
       }).where(this.goalWhere(id)).returning();
       if (terminal(updated)) await tx.update(companionSessionLinks).set({ active: false, releasedAt: now })
@@ -241,11 +275,14 @@ export class CompanionSupervisionRepository {
     });
   }
 
-  async startSession(id: string, input: unknown, automatic = false) {
+  async startSession(id: string, input: unknown, automatic = false, maintenanceBinding?: string) {
     const data = startCompanionSessionSchema.parse(input);
     assertNoCredentialTemplates(data);
     return this.db().transaction(async tx => {
       await this.assertScope(tx);
+      await this.assertAuthority(tx);
+      const [maintenanceSettings]=maintenanceBinding?await tx.select().from(companionSettings).where(and(eq(companionSettings.userId,this.scope.userId),eq(companionSettings.workspaceId,this.scope.workspaceId))).for('share'):[];
+      if(maintenanceBinding&&(!maintenanceSettings?.enabled||maintenanceSettings.autonomy!=='repair'))return fail('conflict','Maintenance authority changed');
       const goal = await this.protect(tx, await this.goal(tx, id, true));
       const [existing] = await tx.select().from(companionActions).where(and(eq(companionActions.goalId, id), eq(companionActions.requestKey, data.requestKey)));
       if (existing) {
@@ -255,10 +292,22 @@ export class CompanionSupervisionRepository {
         return existing;
       }
       if (terminal(goal) || goal.state === 'paused' || goal.revision !== data.expectedRevision) return fail('conflict', 'Goal changed or is not ready to start work');
-      if (automatic) {
+      if(automatic){
+        const [paused]=await tx.select({id:sessions.id}).from(sessions).innerJoin(companionSessionLinks,eq(companionSessionLinks.sessionId,sessions.id)).where(and(eq(companionSessionLinks.goalId,id),eq(companionSessionLinks.active,true),eq(companionSessionLinks.ownership,'owner'),eq(sessions.status,'paused'))).limit(1);
+        if(paused)return fail('conflict','The owner paused existing work; automatic maintenance cannot replace it');
+      }
+      if (automatic && !maintenanceBinding) {
         const [paused] = await tx.select({ id: sessions.id }).from(sessions).innerJoin(companionSessionLinks, eq(companionSessionLinks.sessionId, sessions.id))
-          .where(and(eq(companionSessionLinks.goalId, id), eq(companionSessionLinks.active, true), eq(companionSessionLinks.ownership, 'owner'), eq(sessions.status, 'paused'))).limit(1);
-        if (paused) return fail('conflict', 'The owner paused existing work; automatic coordination cannot replace it');
+          .where(and(eq(companionSessionLinks.goalId, id), eq(companionSessionLinks.active, true), eq(companionSessionLinks.ownership, 'owner'), isNull(companionSessionLinks.pipelineId))).limit(1);
+        if (paused) return fail('conflict', 'Automatic coordination must reuse existing owned work');
+      }
+      let repair: {incidentId:string;strategyIndex:number}|undefined;
+      if(maintenanceBinding&&this.authority){
+        const [incident]=await tx.select().from(companionIncidents).where(and(eq(companionIncidents.goalId,id),ne(companionIncidents.state,'resolved'))).orderBy(desc(companionIncidents.createdAt));
+        if(!incident||incident.state!=='repairing')return fail('conflict','Record an available incident strategy before automatic maintenance');
+        const [used]=await tx.select({id:companionActions.id}).from(companionActions).where(and(eq(companionActions.incidentId,incident.id),eq(companionActions.strategyIndex,incident.strategies.length)));
+        if(used)return fail('conflict','This strategy already dispatched; inspect its outcome');
+        repair={incidentId:incident.id,strategyIndex:incident.strategies.length};
       }
       const source = data.sourceSessionId ? await this.session(tx, data.sourceSessionId) : undefined;
       const [sourceLabels] = source ? await tx.select({ flowLabel: sessions.flowLabel, protectionLevel: sessions.protectionLevel }).from(sessions).where(eq(sessions.id, source.id)) : [];
@@ -266,12 +315,13 @@ export class CompanionSupervisionRepository {
       const level = Math.max(goal.protectionLevel, sourceLabels?.protectionLevel ?? 1);
       await tx.insert(sessions).values({ id: sessionId, ...this.scope, title: goal.title, channelType: 'webchat', channelId: `companion:${goal.id}`,
         pinned: true,
-        protectionLevel: level, flowLabel: { ...goal.flowLabel, ...sourceLabels?.flowLabel }, context: { companion: { goalId: goal.id, modelName: data.modelName },
-          ...(data.projectPath ? { projectPath: data.projectPath } : {}) } });
+        protectionLevel: level, flowLabel: { ...goal.flowLabel, ...sourceLabels?.flowLabel }, context: { companion: { goalId: goal.id, modelName: data.modelName, sourceFiles:goal.attachments },
+          ...(maintenanceBinding ? { companionMaintenance: { binding: maintenanceBinding, authorityRevision: maintenanceSettings!.revision, ...repair } } : {}),
+          ...(data.projectPath ? { devMode: true, projectPath: data.projectPath } : {}) } });
       await tx.insert(companionSessionLinks).values({ goalId: id, sessionId, origin: 'created', ownership: 'owner', purpose: goal.outcome });
-      const [action] = await tx.insert(companionActions).values({ goalId: id, requestKey: data.requestKey, sessionId, kind: 'start_session',
-        protectionLevel: level, flowLabel: { ...goal.flowLabel, ...sourceLabels?.flowLabel },
-        message: `Companion goal: ${goal.title}\n\n${goal.request}\n\nRequired outcome: ${goal.outcome}\n\nAcceptance criteria:\n${goal.acceptanceCriteria.map(value => `- ${value}`).join('\n')}\n\nContinue within this request. Report actual results and blockers; do not claim completion without evidence.` }).returning();
+      const [action] = await tx.insert(companionActions).values({ goalId: id, requestKey: data.requestKey, sessionId, kind: 'start_session', ...repair, authoritySettingsId: this.authority?.settingsId, authorityRevision: this.authority?.revision,
+        attachments:goal.attachments, protectionLevel: level, flowLabel: { ...goal.flowLabel, ...sourceLabels?.flowLabel },
+        message: `${maintenanceBinding ? "MAINTENANCE SESSION: Inspect the linked incident and existing work before repair. Use maintenance_run for the explicitly configured maintenance runtime. Preserve unrelated edits. For source changes run focused tests, independent code review and build. Verify the affected project runtime before resolution. Do not restart without activation policy.\n\n" : ""}Companion goal: ${goal.title}\n\n${goal.request}\n\nRequired outcome: ${goal.outcome}\n\nAcceptance criteria:\n${goal.acceptanceCriteria.map(value => `- ${value}`).join('\n')}\n\nContinue within this request. Report actual results and blockers; do not claim completion without evidence.` }).returning();
       await tx.update(companionGoals).set({ state: 'active', revision: goal.revision + 1, protectionLevel: level, updatedAt: new Date() }).where(this.goalWhere(id));
       return action;
     });
@@ -279,9 +329,11 @@ export class CompanionSupervisionRepository {
 
   async queueMessage(id: string, input: unknown) {
     const data = companionSessionMessageSchema.parse(input);
+    if (this.authority) await this.detectIncident(id, data.sessionId);
     assertNoCredentialTemplates(data);
     return this.db().transaction(async tx => {
       await this.assertScope(tx);
+      await this.assertAuthority(tx);
       const goal = await this.goal(tx, id, true);
       const [existing] = await tx.select().from(companionActions).where(and(eq(companionActions.goalId, id), eq(companionActions.requestKey, data.requestKey)));
       if (existing) {
@@ -296,18 +348,33 @@ export class CompanionSupervisionRepository {
       const [link] = await tx.select({ id: companionSessionLinks.id }).from(companionSessionLinks).where(and(eq(companionSessionLinks.goalId, id),
         eq(companionSessionLinks.sessionId, data.sessionId), isNull(companionSessionLinks.pipelineId), eq(companionSessionLinks.active, true), eq(companionSessionLinks.ownership, 'owner')));
       if (!link) return fail('not_found', 'An owned whole-session link is required to send instructions');
+      let repair: { incidentId: string; strategyIndex: number } | undefined;
+      if (this.authority) {
+        const target=sources.find(source=>source.id===data.sessionId);
+        const parentIncident=target?.context?.companionMaintenance?.incidentId;
+        const [incident] = await tx.select().from(companionIncidents).where(and(eq(companionIncidents.goalId, id), parentIncident?eq(companionIncidents.id,parentIncident):eq(companionIncidents.sessionId, data.sessionId), ne(companionIncidents.state, 'resolved'))).orderBy(desc(companionIncidents.createdAt));
+        if (incident) {
+          if (incident.state !== 'repairing') return fail('conflict', 'Record an available incident repair strategy before automatic dispatch');
+          const [used] = await tx.select({ id: companionActions.id }).from(companionActions).where(and(eq(companionActions.incidentId, incident.id), eq(companionActions.strategyIndex, incident.strategies.length)));
+          if (used) return fail('conflict', 'This repair strategy already dispatched; inspect its result before another strategy');
+          repair = { incidentId: incident.id, strategyIndex: incident.strategies.length };
+          if(parentIncident)await tx.update(sessions).set({context:sql`jsonb_set(${sessions.context},'{companionMaintenance,strategyIndex}',${JSON.stringify(incident.strategies.length)}::jsonb)`}).where(eq(sessions.id,data.sessionId));
+        }
+      }
       const level = Math.max(goal.protectionLevel, ...sources.map(source => source.protectionLevel ?? 1));
       const labels = Object.assign({}, goal.flowLabel, ...sources.map(source => source.flowLabel ?? {}));
       await tx.update(sessions).set({ protectionLevel: level, flowLabel: labels }).where(eq(sessions.id, data.sessionId));
       await tx.update(companionGoals).set({ protectionLevel: level, flowLabel: labels }).where(this.goalWhere(id));
       return (await tx.insert(companionActions).values({ goalId: id, sessionId: data.sessionId, requestKey: data.requestKey,
-        kind: 'steer_session', message: data.message, protectionLevel: level, flowLabel: labels, generation: sessionGeneration(sources.find(source => source.id === data.sessionId)?.context) }).returning())[0];
+        authoritySettingsId: this.authority?.settingsId, authorityRevision: this.authority?.revision,
+        ...repair, kind: 'steer_session', message: data.message, protectionLevel: level, flowLabel: labels, generation: sessionGeneration(sources.find(source => source.id === data.sessionId)?.context) }).returning())[0];
     });
   }
 
   async actions(id: string) {
     return this.db().transaction(async tx => {
       await this.assertScope(tx);
+      await this.assertAuthority(tx);
       await this.goal(tx, id);
       return tx.select().from(companionActions).where(eq(companionActions.goalId, id)).orderBy(desc(companionActions.createdAt)).limit(50);
     });
@@ -316,9 +383,10 @@ export class CompanionSupervisionRepository {
   async readSettings() {
     return this.db().transaction(async tx => {
       await this.assertScope(tx);
+      await this.assertAuthority(tx);
       const [row] = await tx.select().from(companionSettings).where(and(eq(companionSettings.userId, this.scope.userId), eq(companionSettings.workspaceId, this.scope.workspaceId)));
       return { ...companionSettingsSchema.parse({ ...row?.options, enabled: row?.enabled ?? false, modelName: row?.modelName ?? '', autonomy: row?.autonomy ?? 'observe' }),
-        supervisorSessionId: row?.supervisorSessionId ?? null, revision: row?.revision ?? 0 };
+        settingsId: row?.id ?? null, supervisorSessionId: row?.supervisorSessionId ?? null, revision: row?.revision ?? 0 };
     });
   }
 
@@ -328,6 +396,7 @@ export class CompanionSupervisionRepository {
     try { new Intl.DateTimeFormat('en', { timeZone: data.timezone }).format(); } catch { return fail('conflict', 'Choose a valid timezone'); }
     return this.db().transaction(async tx => {
       await this.assertScope(tx);
+      await this.assertAuthority(tx);
       await tx.insert(companionSettings).values(this.scope).onConflictDoNothing({ target: [companionSettings.userId, companionSettings.workspaceId] });
       const [row] = await tx.select().from(companionSettings).where(and(eq(companionSettings.userId, this.scope.userId), eq(companionSettings.workspaceId, this.scope.workspaceId))).for('update');
       if (row.revision !== expectedRevision) return fail('conflict', 'Companion settings changed; refresh before saving');
@@ -345,18 +414,14 @@ export class CompanionSupervisionRepository {
       const { enabled, modelName, autonomy, ...options } = data;
       await tx.update(companionSettings).set({ enabled, modelName, autonomy, options, supervisorSessionId: sessionId,
         revision: row.revision + 1, approvedAt: enabled ? new Date() : null, updatedAt: new Date() }).where(eq(companionSettings.id, row.id));
-      if (enabled) {
-        const goals = await tx.select({ id: companionGoals.id, state: companionGoals.state }).from(companionGoals)
-          .where(and(eq(companionGoals.userId, this.scope.userId), eq(companionGoals.workspaceId, this.scope.workspaceId), inArray(companionGoals.state, ['queued', 'active', 'waiting', 'needs_decision'])));
-        if (goals.length) await tx.insert(companionEvents).values(goals.map(goal => ({ goalId: goal.id, kind: 'reconcile', sourceId: goal.id, state: goal.state })));
-      }
-      return { ...data, supervisorSessionId: sessionId, revision: row.revision + 1 };
+      return { ...data, settingsId: row.id, supervisorSessionId: sessionId, revision: row.revision + 1 };
     });
   }
 
   async inspectSession(id: string, sessionId: string) {
     return this.db().transaction(async tx => {
       await this.assertScope(tx);
+      await this.assertAuthority(tx);
       const goal = await this.goal(tx, id, true);
       const source = await this.session(tx, sessionId);
       const [link] = await tx.select({ id: companionSessionLinks.id }).from(companionSessionLinks).where(and(eq(companionSessionLinks.goalId, id), eq(companionSessionLinks.sessionId, sessionId)));
@@ -375,9 +440,127 @@ export class CompanionSupervisionRepository {
     });
   }
 
+  async authorizeGoal(id: string, profile: unknown, expectedRevision: number) {
+    if (this.authority) return fail('conflict', 'Only the owner can grant execution scope');
+    const { pipelinePermissionProfileSchema } = await import('@/shared/pipeline-permissions');
+    const parsed = profile === null ? null : pipelinePermissionProfileSchema.parse(profile);
+    if (parsed && parsed.executionScope !== 'run') return fail('conflict', 'Companion delegation uses repository run scope');
+    return this.db().transaction(async tx => {
+      await this.assertScope(tx);
+      const goal = await this.goal(tx, id, true);
+      if (terminal(goal) || goal.revision !== expectedRevision) return fail('conflict', 'Goal changed or has ended');
+      return (await tx.update(companionGoals).set({ executionPolicy: parsed ? { profile: parsed, approvedBy: this.scope.userId, approvedAt: new Date().toISOString() } : null,
+        revision: goal.revision + 1, updatedAt: new Date() }).where(this.goalWhere(id)).returning())[0];
+    });
+  }
+
+  async incidents(id: string) {
+    return this.db().transaction(async tx => {
+      await this.assertScope(tx); await this.goal(tx, id);
+      return tx.select().from(companionIncidents).where(eq(companionIncidents.goalId, id)).orderBy(desc(companionIncidents.createdAt)).limit(30);
+    });
+  }
+
+  /** Detection uses current persisted sources; reports never grant repair authority. */
+  async detectIncident(id: string, sessionId: string) {
+    const snapshot = await this.inspectSession(id, sessionId);
+    return this.db().transaction(async tx => {
+      await this.assertScope(tx); await this.assertAuthority(tx);
+      const goal = await this.goal(tx, id, true);
+      if (terminal(goal) || goal.state === 'paused' || snapshot.session.status === 'paused') return fail('conflict', 'Respect the owner pause');
+      const [link] = await tx.select().from(companionSessionLinks).where(and(eq(companionSessionLinks.goalId, id), eq(companionSessionLinks.sessionId, sessionId), eq(companionSessionLinks.active, true)));
+      if (!link) return fail('not_found', 'Execution is no longer supervised');
+      const uncertain = await tx.select().from(companionActions).where(and(eq(companionActions.goalId, id), eq(companionActions.sessionId, sessionId), eq(companionActions.status, 'unknown'))).limit(1);
+      const worker = snapshot.workers[0];
+      if (worker?.status === 'running') return null;
+      const latestRun = snapshot.pipelines[0];
+      const run = latestRun && ['paused','failed','awaiting_approval'].includes(latestRun.status) ? latestRun : undefined;
+      if (!uncertain.length && latestRun && ['running','completed'].includes(latestRun.status)) return null;
+      if (!uncertain.length && (!worker || !['failed','stopped'].includes(worker.status)) && !run) return null;
+      const summary = uncertain.length ? 'Execution receipt interrupted; inspect effects before any retry.' : String(worker?.error || run?.summary || `Execution ${run?.status ?? worker?.status}; inspect current history.`).slice(0, 2000);
+      const { classifyCompanionBlocker } = await import('@/core/companion/incidents');
+      const category = classifyCompanionBlocker(summary);
+      const fingerprint = createHash('sha256').update(`${uncertain[0]?.id ?? run?.id ?? worker?.id}:${category}`).digest('hex');
+      const [incident] = await tx.insert(companionIncidents).values({ goalId: id, sessionId, category, summary, fingerprint })
+        .onConflictDoNothing().returning();
+      return incident ?? (await tx.select().from(companionIncidents).where(and(eq(companionIncidents.goalId, id), eq(companionIncidents.sessionId, sessionId), eq(companionIncidents.fingerprint, fingerprint))))[0];
+    });
+  }
+
+  async reopenIncident(id:string,incidentId:string,expectedRevision:number){
+    if(this.authority)return fail('conflict','Only an explicit owner decision can extend repair attempts');
+    return this.db().transaction(async tx=>{
+      await this.assertScope(tx);const goal=await this.goal(tx,id,true);
+      if(terminal(goal)||goal.state==='paused')return fail('conflict','Supervision is not active');
+      const [incident]=await tx.select().from(companionIncidents).where(and(eq(companionIncidents.id,incidentId),eq(companionIncidents.goalId,id))).for('update');
+      if(!incident||incident.revision!==expectedRevision||incident.state!=='escalated'||incident.attemptAllowance>=1000)return fail('conflict','Incident changed or is not ready for another strategy');
+      const source=await this.session(tx,incident.sessionId);if(source.status!=='active')return fail('conflict','Explicitly continue the paused execution first');
+      const [owner]=await tx.select({id:companionSessionLinks.id}).from(companionSessionLinks).where(and(eq(companionSessionLinks.goalId,id),eq(companionSessionLinks.sessionId,source.id),eq(companionSessionLinks.active,true),eq(companionSessionLinks.ownership,'owner')));
+      if(!owner)return fail('conflict','Recovery ownership has ended');
+      const [updated]=await tx.update(companionIncidents).set({state:'observed',attemptLimit:incident.strategies.length+1,attemptAllowance:incident.attemptAllowance+1,attemptApprovals:[...incident.attemptApprovals,{userId:this.scope.userId,at:new Date().toISOString(),additionalStrategies:1}],revision:incident.revision+1,updatedAt:new Date()}).where(eq(companionIncidents.id,incidentId)).returning();
+      await tx.update(companionGoals).set({state:'active',revision:goal.revision+1,updatedAt:new Date()}).where(this.goalWhere(id));return updated;
+    });
+  }
+
+  async beginVerification(id: string, incidentId: string) {
+    return this.db().transaction(async tx => {
+      await this.assertScope(tx); await this.assertAuthority(tx);
+      const goal = await this.goal(tx, id, true);
+      if (terminal(goal) || goal.state === 'paused') return fail('conflict', 'Supervision is not active');
+      const [incident] = await tx.select().from(companionIncidents).where(and(eq(companionIncidents.id, incidentId), eq(companionIncidents.goalId, id))).for('update');
+      if (!incident || incident.state !== 'repairing' || !incident.strategies.length) return fail('conflict', 'Record an available repair/inspection strategy before verification');
+      const target = await this.session(tx, incident.sessionId);
+      if (target.status !== 'active') return fail('conflict', 'The owner paused this execution');
+      return (await tx.update(companionIncidents).set({ state: 'verifying', revision: incident.revision + 1, updatedAt: new Date() }).where(eq(companionIncidents.id, incidentId)).returning())[0];
+    });
+  }
+
+  async advanceIncident(id: string, incidentId: string, input: { expectedRevision: number; strategy?: string; evidenceId?: string }) {
+    return this.db().transaction(async tx => {
+      await this.assertScope(tx); await this.assertAuthority(tx);
+      const goal = await this.goal(tx, id, true);
+      if (terminal(goal) || goal.state === 'paused') return fail('conflict', 'Supervision is not active');
+      const [incident] = await tx.select().from(companionIncidents).where(and(eq(companionIncidents.id, incidentId), eq(companionIncidents.goalId, id))).for('update');
+      if (!incident) return fail('not_found', 'Incident not found');
+      if (incident.revision !== input.expectedRevision || ['resolved','escalated'].includes(incident.state)) return fail('conflict', 'Incident changed or has ended');
+      const session = await this.session(tx, incident.sessionId);
+      if (session.status !== 'active') return fail('conflict', 'The owner paused this execution');
+      const [owner] = await tx.select().from(companionSessionLinks).where(and(eq(companionSessionLinks.goalId, id), eq(companionSessionLinks.sessionId, session.id), eq(companionSessionLinks.active, true), eq(companionSessionLinks.ownership, 'owner')));
+      if (!owner) return fail('conflict', 'Incident recovery requires current execution ownership');
+      if (input.evidenceId) {
+        const [evidence] = await tx.select().from(verificationEvidence).where(and(eq(verificationEvidence.id, input.evidenceId), eq(verificationEvidence.sessionId, incident.sessionId), eq(verificationEvidence.passed, true)));
+        const detail = evidence?.detail as Record<string, unknown> | null;
+        if (!evidence || evidence.createdAt <= incident.createdAt || detail?.checkScope !== `incident:${incident.id}`)
+          return fail('invalid_evidence', 'A fresh passing check in the affected runtime must reference this incident checkScope');
+        const [later] = await tx.select({ id: verificationEvidence.id }).from(verificationEvidence).where(and(eq(verificationEvidence.sessionId, incident.sessionId),
+          sql`${verificationEvidence.detail}->>'checkScope' = ${`incident:${incident.id}`}`, sql`${verificationEvidence.createdAt} >= ${evidence.createdAt}`,
+          eq(verificationEvidence.passed, false)));
+        if (later) return fail('invalid_evidence', 'A later failing verification supersedes this pass');
+        if (incident.category === 'unknown_outcome') {
+          if (!['verified_present','verified_absent'].includes(String(detail?.actionOutcome))) return fail('invalid_evidence', 'Inspect external effects and record actionOutcome verified_present or verified_absent');
+          if (createHash('sha256').update(`${detail?.actionId}:unknown_outcome`).digest('hex') !== incident.fingerprint) return fail('invalid_evidence', 'Verification must inspect this exact uncertain receipt');
+          const reconciled = await tx.update(companionActions).set({ status: detail?.actionOutcome === 'verified_present' ? 'completed' : 'cancelled', result: `Outcome reconciled by verification ${evidence.id}; no replay performed.`, updatedAt: new Date() })
+            .where(and(eq(companionActions.goalId, id), eq(companionActions.sessionId, incident.sessionId), eq(companionActions.status, 'unknown'),
+              eq(companionActions.id, String(detail?.actionId ?? '00000000-0000-0000-0000-000000000000')))).returning({ id: companionActions.id });
+          if (!reconciled.length) return fail('conflict', 'The uncertain receipt changed; inspect again');
+        }
+        return (await tx.update(companionIncidents).set({ state: 'resolved', evidenceId: evidence.id, revision: incident.revision + 1, updatedAt: new Date() }).where(eq(companionIncidents.id, incidentId)).returning())[0];
+      }
+      if (!input.strategy?.trim() || input.strategy.length > 2000) return fail('conflict', 'Describe one materially different repair strategy');
+      const [settings] = await tx.select().from(companionSettings).where(and(eq(companionSettings.userId, this.scope.userId), eq(companionSettings.workspaceId, this.scope.workspaceId)));
+      const limit = incident.attemptLimit ?? companionSettingsSchema.parse({ ...settings?.options }).maxRepairAttempts;
+      const repeated = incident.strategies.some(strategy => strategy.trim().toLowerCase() === input.strategy!.trim().toLowerCase());
+      const exhausted = repeated || incident.strategies.length >= limit;
+      if(exhausted)await tx.update(companionGoals).set({state:'needs_decision',revision:goal.revision+1,updatedAt:new Date()}).where(this.goalWhere(id));
+      return (await tx.update(companionIncidents).set({ state: exhausted ? 'escalated' : 'repairing',
+        strategies: exhausted ? incident.strategies : [...incident.strategies, input.strategy.trim()], revision: incident.revision + 1, updatedAt: new Date() }).where(eq(companionIncidents.id, incidentId)).returning())[0];
+    });
+  }
+
   async controlSession(id: string, sessionId: string, state: 'active' | 'paused', automatic = false) {
     return this.db().transaction(async tx => {
       await this.assertScope(tx);
+      await this.assertAuthority(tx);
       const goal = await this.goal(tx, id, true);
       if (terminal(goal)) return fail('conflict', 'This goal has ended');
       const session = await this.session(tx, sessionId);

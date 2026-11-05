@@ -491,6 +491,10 @@ export class AgentManager {
         createdAt: context.createdAt,
       });
     } catch (err) {
+      const causes = [err, (err as {cause?:unknown})?.cause];
+      if(causes.some(cause=>String((cause as {message?:string})?.message??cause).includes('Octipus activation is in progress'))){
+        worker.stop('activation_admission_blocked');this.agents.delete(agentId);throw err;
+      }
       agentLogger.error({ err, agentId }, 'Failed to persist agent record');
     }
 

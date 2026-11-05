@@ -87,3 +87,13 @@ describe('a delegating stage keeps the pipeline reachable', () => {
     expect(block).toContain('stageChildMetadata(');
   });
 });
+
+it('source refs survive every delegation depth without creating pipeline or host authority',()=>{
+ const refs=[{path:'/approved/source/brief.pdf',version:'v1',protectionLevel:4 as const}];
+ const root={companionSourceFiles:refs,hostServices:true,resumeKey:'not-a-stage',attemptId:'not-an-attempt',isAdmin:true};
+ expect(pipelineMetadata(root)).toEqual({companionSourceFiles:refs});
+ expect(stageChildMetadata(root)).toEqual({companionSourceFiles:refs});
+ const child=stageChildMetadata({...root,pipelineId:'run',nodeKey:'review'});
+ expect(child).toEqual({companionSourceFiles:refs,pipelineId:'run',nodeKey:'review'});
+ expect(stageChildMetadata(child)).toEqual(child);
+});

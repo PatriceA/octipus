@@ -2,6 +2,7 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { MaintenanceSettings } from '@/components/companion/maintenance-settings';
 import { api } from '@/lib/api';
 
 type Tool = { name: string; path: string; resolvedPath: string; available?: boolean };
@@ -52,6 +53,7 @@ export function CliToolsTab() {
   return (
     <div className="space-y-5">
       <h2 className="text-lg font-extrabold">CLI tools</h2>
+      <MaintenanceSettings />
       <p className="text-sm text-on-surface-variant">Make installed commands available to sandboxed shell steps and test runners on this Octipus server. Approvals apply across this installation and take effect for new commands without a restart.</p>
       <p className="text-sm text-on-surface-variant">Executables are exposed read-only. Credentials, network access and action permissions are configured separately. Standard system tools remain available; this list adds tools that the sandbox cannot otherwise see. Scripts may need their interpreter or additional dependencies installed in the sandbox.</p>
       {(message || error) && <p role="status" className="text-sm">{message || (error as Error).message}</p>}

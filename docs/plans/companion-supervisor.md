@@ -1,6 +1,6 @@
 # Companion supervisor implementation plan
 
-Status: Implementation started on `feat/companion-supervisor`. Created 2026-11-05. M1 through M3 are implemented and reviewed; M4 through M8 remain in progress. Companion has goal intake, session control, durable dispatch and opt-in background observation. Incident recovery and maintenance are the next milestones.
+Status: M1 through M8 implemented and independently reviewed on `feat/companion-supervisor`. The opt-in release is ready for activation. Existing live work has not been enrolled or restarted. See [setup and rollout](../COMPANION-SUPERVISION.md).
 
 Companion becomes the persistent owner of the user's work across projects and sessions. The user gives it an outcome; Companion starts or adopts sessions, follows their progress, investigates blockers, coordinates repairs, verifies recovery and reports meaningful results. The user should no longer need to copy error reports between sessions to keep work moving.
 
@@ -123,7 +123,15 @@ M3 adds transactionally recorded source events, coalesced persisted supervisor w
 
 Independent M3 review found and verified fixes for unstarted event loss on reconfiguration, workspace starvation, retention, pause preservation and silent CLI stalls. Backend validation includes 130 passing tests across repository, retention, controller policy and pipeline-loop suites, followed by focused reruns. Four browser scenarios pass, including persisted supervision settings and revocation. Queued automatic-action authority revalidation is explicitly required in M4 before activation.
 
-Next: M4 incident diagnosis and bounded recovery. No existing live sessions or pipelines have been enrolled, and the live backend has not been restarted as part of this implementation.
+M4 adds scoped incident detection, bounded strategies tied to automatic dispatch, fresh affected-runtime verification, automatic interrupted-observation reconciliation and evidence-backed uncertain-effect reconciliation. Queued mutations carry a revocable settings revision. Goal-level repository scope can be approved once and inherited by child pipelines. Explicit owner decisions can authorize exactly one additional strategy after escalation without rewriting prior failure history.
+
+M5 adds an operator-configured maintenance runtime and test action in Settings → CLI tools. It has independent approved directory trees and optional host services/USB/SSH-agent access. Scoped maintenance workers can obtain an independent read-only child review. Managed activation requires tests/build/review for the current source, survives backend termination through a detached launcher and persists captured resumptions atomically with completion. An admission gate protects the wait-for-idle policy. Its managed handoff is not an OS privilege boundary for arbitrary approved scripts.
+
+M6 adds goal execution approval/revocation, incident state and repair-attempt display, exact verification panels, minimized app-only notifications, quiet hours and notification-to-goal navigation. Workspace changes remount local form state and caches. M7 adds acyclic dependencies, per-goal and UTC daily usage accounting, shared reservations for turns/observations/stages, native child budget clamps and persistent overlapping checkout/maintenance claims, including adopted work.
+
+M8 exercises a complete engine-driven recovery with no browser: the service boundary is deterministic, while database persistence and required process-sandbox commands are real. A persisted failure is consumed after database reopen, maintenance repairs the prerequisite, the original runtime is verified, continuation executes exactly once and the goal completes against fresh evidence. Separate tests cover external launcher success/failure, atomic captured-resume recovery, source paging, protected document references and delegation. Required-sandbox cases explicitly skip without a runner; no unconfined fallback is counted as sandbox proof. Physical device operation and a production service restart remain operational checks rather than claims made by these fixtures.
+
+Independent reviews were run for every milestone and their blocking findings corrected. The host USB prerequisite is a separate commit; unrelated CLI compaction edits remain outside this feature. No existing live sessions or pipelines have been enrolled, and the live backend has not been restarted as part of this implementation.
 
 ### M1 Durable goals and ownership
 

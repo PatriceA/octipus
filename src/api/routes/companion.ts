@@ -37,6 +37,18 @@ export const companionRoutes = new Elysia({ prefix: '/companion' }).use(apiConte
   .get('/goals/:id', ({ principal, set, params }) => handle(principal, set, false, s => s.readGoal(params.id)), { params: id })
   .patch('/goals/:id', ({ principal, set, params, body }) => handle(principal, set, true, s => s.updateGoal(params.id, body)), { params: id, body: t.Unknown() })
   .post('/goals/:id/adopt', ({ principal, set, params, body }) => handle(principal, set, true, s => s.adoptExecution(params.id, body)), { params: id, body: t.Unknown() })
+  .put('/goals/:id/authorization', ({ principal, set, params, body }) => handle(principal, set, true, async s => {
+    const { pipelinePermissionProfileSchema } = await import('@/shared/pipeline-permissions');
+    const profile = body.profile === null ? null : pipelinePermissionProfileSchema.parse(body.profile);
+    if (profile) {
+      const fs = WorkspaceFS.forRequest(principal);
+      profile.repoPath = fs.resolve(profile.repoPath);
+      profile.repoPaths = profile.repoPaths.map(path => fs.resolve(path));
+    }
+    return s.authorizeGoal(params.id, profile, body.expectedRevision);
+  }), { params: id, body: t.Object({ expectedRevision: t.Integer({ minimum: 0 }), profile: t.Unknown() }) })
+  .post('/goals/:id/incident-decision',({principal,set,params,body})=>handle(principal,set,true,s=>s.reopenIncident(params.id,body.incidentId,body.expectedRevision)),{params:id,body:t.Object({incidentId:t.String({pattern:'^[0-9a-fA-F-]{36}$'}),expectedRevision:t.Integer({minimum:0})})})
+  .get('/goals/:id/incidents', ({ principal, set, params }) => handle(principal, set, false, async s => ({ incidents: await s.incidents(params.id) })), { params: id })
   .get('/goals/:id/actions', ({ principal, set, params }) => handle(principal, set, false, async s => ({ actions: await s.actions(params.id) })), { params: id })
   .get('/goals/:id/sessions/:sessionId', ({ principal, set, params }) => handle(principal, set, false, s => s.inspectSession(params.id, params.sessionId)),
     { params: t.Object({ id: t.String({ pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' }), sessionId: t.String({ pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' }) }) })

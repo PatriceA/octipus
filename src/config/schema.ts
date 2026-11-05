@@ -1,3 +1,4 @@
+import { companionMaintenanceSchema } from '@/shared/companion-maintenance';
 import { isIP } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -93,6 +94,7 @@ export const securityConfigSchema = z.object({
   shellSandbox: z.enum(['off', 'auto', 'required']).default('off'),
   /** Expose only the host SSH agent socket and known_hosts to personal shell runs. */
   shellSshAgent: z.boolean().default(false),
+  companionMaintenance: companionMaintenanceSchema.default({ enabled: false, userId: null, roots: [], hostServices: false, sshAgent: false, allowActivation: false, interruptionPolicy: 'wait' }),
   cliKubeconfigs: z.array(z.object({ userId: z.string().min(1), path: z.string().startsWith('/'), resolvedPath: z.string().startsWith('/'), context: z.string().min(1) }).strict()).max(200).default([]),
   cliRuntimes: z.array(z.object({
     name: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._+-]*$/),

@@ -446,7 +446,7 @@ export class WorkspaceFS {
     const project = context.metadata?.projectPath;
     return WorkspaceFS.forRequest(agentPrincipal(context), {
       ...options,
-      extraAllowedPrefixes: [...(options.extraAllowedPrefixes ?? []), ...(typeof project === 'string' && project ? [pathResolve(project)] : [])],
+      extraAllowedPrefixes: [...(options.extraAllowedPrefixes ?? []), ...(typeof project === 'string' && project ? [pathResolve(project)] : []), ...((context.metadata?.companionSourceFiles as Array<{path:string}>|undefined)??[]).map(file=>pathResolve(file.path))],
     });
   }
 
@@ -508,15 +508,15 @@ export class WorkspaceFS {
       return WorkspaceFS.forSpace(session.workspaceId as string, { dataRoot: options.dataRoot, guestFolders });
     }
     const ctx = session.context as
-      | { devMode?: boolean; projectPath?: string }
+      | { devMode?: boolean; projectPath?: string; companion?:{sourceFiles?:Array<{path:string}>} }
       | null
       | undefined;
     if (ctx?.devMode && ctx.projectPath) {
-      return WorkspaceFS.withRoot(pathResolve(ctx.projectPath), options);
+      return WorkspaceFS.withRoot(pathResolve(ctx.projectPath),{...options,extraAllowedPrefixes:[...(options.extraAllowedPrefixes??[]),...(ctx.companion?.sourceFiles??[]).map(file=>pathResolve(file.path))]});
     }
     return WorkspaceFS.forPrincipal(
       agentPrincipal({ userId: session.userId, workspaceId: session.workspaceId ?? null }),
-      options,
+      {...options,extraAllowedPrefixes:[...(options.extraAllowedPrefixes??[]),...(ctx?.companion?.sourceFiles??[]).map(file=>pathResolve(file.path))]},
     );
   }
 

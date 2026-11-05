@@ -181,7 +181,15 @@ export async function routeApprovalFor(
   if (space && (decision.route === 'execute' || decision.route === 'ask_human') && personalSourceRead(call)) {
     observeFlow(context.sessionId, { toolId: call.toolId, action: call.action }, { taints: ['private'] });
   }
+  if (level === 'ASK' && !space && source !== 'flow-guard' && context.trigger !== 'remote'
+    && await (await import('@/core/companion/permissions')).companionCoordinationAllowed(context, call))
+    return { route: 'execute', level, source: 'companion-coordination' };
   if (level === 'ASK' && context.trigger !== 'remote') {
+    if (!space && await (await import('@/core/companion/permissions')).companionActivationAllowed(context, call))
+      return { route: 'execute', level, source: 'companion-activation' };
+    const delegated = !space ? (await (await import('@/core/companion/permissions')).companionMaintenanceProfile(context) ?? await (await import('@/core/companion/permissions')).companionGoalProfile(context)) : undefined;
+    if (delegated && profileExplicitlyAllows(delegated.profile, 'maintenance' in delegated ? (await import('@/core/companion/permissions')).companionProfileCall(context, call, true) : effectiveProfileCall(context, (await import('@/core/companion/permissions')).companionExecutionCall(call))))
+      return { route: 'execute', level, source: 'companion-goal' };
     const run = await runPermissionProfile(context);
     if (run && !space && !['space-flow', 'space-room', 'space-federated'].includes(source ?? '')
       && (source === 'flow-guard'

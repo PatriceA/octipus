@@ -43,9 +43,9 @@ const KIND_LABEL: Record<EvidenceRecord['kind'], string> = {
  * fetch resolves; hides itself entirely when a session has no evidence (most
  * agents never run a completion check), so it doesn't add noise to the page.
  */
-export function VerificationEvidence({ sessionId }: { sessionId: string }) {
+export function VerificationEvidence({ sessionId, workspaceId, evidenceId }: { sessionId: string; workspaceId?: string; evidenceId?: string }) {
   const { data, isLoading } = useQuery({
-    queryKey: ['verification', sessionId],
+    queryKey: ['verification', workspaceId ?? null, sessionId],
     queryFn: async () => {
       try {
         return await api.get<VerificationResponse>(`/verification/${sessionId}`);
@@ -59,7 +59,10 @@ export function VerificationEvidence({ sessionId }: { sessionId: string }) {
 
   // Nothing to show: still loading, no session, or a session that never ran a
   // completion check. Stay invisible rather than render an empty shell.
-  if (isLoading || !data || data.evidence.length === 0) return null;
+  if (isLoading) return null;
+  if (!data || data.evidence.length === 0) return evidenceId ? <p className="text-sm">Referenced verification is unavailable.</p> : null;
+  const shown = evidenceId ? data.evidence.filter(row => row.id === evidenceId) : data.evidence;
+  if (!shown.length) return <p className="text-sm">Referenced verification is outside this bounded ledger view.</p>;
 
   return (
     <div className="bg-surface-container rounded-xs border border-outline-variant/10">
@@ -67,11 +70,11 @@ export function VerificationEvidence({ sessionId }: { sessionId: string }) {
         <h2 className="section-label">
           verification
           <span className="ml-2 normal-case tracking-normal font-normal">
-            {data.evidence.length} {data.evidence.length === 1 ? 'check' : 'checks'}
+            {shown.length} {shown.length === 1 ? 'check' : 'checks'}
           </span>
         </h2>
         <div className="ml-auto">
-          {data.verified ? (
+          {(evidenceId ? shown.every(row=>row.passed) : data.verified) ? (
             <StatusBadge variant="success" dot>verified</StatusBadge>
           ) : (
             <StatusBadge variant="danger" dot>unverified</StatusBadge>
@@ -79,7 +82,7 @@ export function VerificationEvidence({ sessionId }: { sessionId: string }) {
         </div>
       </div>
       <ul className="divide-y divide-outline-variant/10">
-        {data.evidence.map((e) => (
+        {shown.map((e) => (
           <EvidenceRow key={e.id} evidence={e} />
         ))}
       </ul>

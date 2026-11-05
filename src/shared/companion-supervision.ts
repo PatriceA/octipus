@@ -5,6 +5,8 @@ export type CompanionGoalState = typeof companionGoalStates[number];
 /** Browser-safe wire views; database schemas carry server-only dependencies. */
 export interface CompanionGoalView {
   id: string; title: string; request: string; outcome: string; acceptanceCriteria: string[];
+  dependencies?: string[]; tokenBudget?: number | null;
+  executionPolicy?: { profile: unknown; approvedAt: string } | null; completionEvidence?: CompanionCompletionEvidence[];
   state: CompanionGoalState; priority: number; revision: number; protectionLevel: number;
 }
 export interface CompanionLinkView {
@@ -41,8 +43,10 @@ export const companionSessionMessageSchema = z.object({
   sourceSessionId: z.uuid().optional(),
 }).strict();
 
+export const companionAttachmentSchema=z.object({path:z.string().min(1).max(2000),version:z.string().max(256).optional(),protectionLevel:z.union([z.literal(1),z.literal(2),z.literal(3),z.literal(4)]).optional()}).strict();
 export const createCompanionGoalSchema = z.object({
   requestKey: z.uuid(),
+  attachments:z.array(companionAttachmentSchema).max(20).default([]),
   title: z.string().trim().min(1).max(200),
   request: z.string().trim().min(1).max(20_000),
   outcome: z.string().trim().min(1).max(4000),
@@ -66,8 +70,10 @@ export const updateCompanionGoalSchema = z.object({
   expectedRevision: z.number().int().min(0),
   state: z.enum(companionGoalStates).optional(),
   priority: z.number().int().min(0).max(3).optional(),
+  dependencies: z.array(z.uuid()).max(30).optional(),
+  tokenBudget: z.number().int().min(1000).max(1000000000).nullable().optional(),
   evidence: z.array(companionCompletionEvidenceSchema).min(1).max(50).optional(),
-}).strict().refine(value => value.state !== undefined || value.priority !== undefined, 'A state or priority change is required')
+}).strict().refine(value => value.state !== undefined || value.priority !== undefined || value.dependencies !== undefined || value.tokenBudget !== undefined, 'A state or priority change is required')
   .refine(value => (value.state === 'completed') === (value.evidence !== undefined), 'Completion requires evidence; other transitions cannot attach completion evidence');
 
 export const adoptCompanionExecutionSchema = z.object({

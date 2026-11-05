@@ -156,6 +156,12 @@ export async function isApprovedCall(caller: ApprovedCallCaller, call: SpaceTool
  * names this exact call for this stage attempt.
  */
 export async function askStillAuthorized(source: string, caller: ApprovedCallCaller, call: SpaceToolCall, currentSource?: string): Promise<boolean> {
+  if (source === 'companion-activation') return (await import('@/core/companion/permissions')).companionActivationAllowed(caller, call);
+  if (source === 'companion-coordination') return currentSource !== 'flow-guard' && (await import('@/core/companion/permissions')).companionCoordinationAllowed(caller, call);
+  if (source === 'companion-goal') {
+    const delegated = await (await import('@/core/companion/permissions')).companionMaintenanceProfile(caller) ?? await (await import('@/core/companion/permissions')).companionGoalProfile(caller);
+    return !!delegated && (await import('./pipeline-permissions')).profileExplicitlyAllows(delegated.profile, 'maintenance' in delegated ? (await import('@/core/companion/permissions')).companionProfileCall(caller, call, true) : (await import('./pipeline-permissions')).effectiveProfileCall(caller, (await import('@/core/companion/permissions')).companionExecutionCall(call)));
+  }
   if (!source.startsWith('approval:') && source !== 'pipeline-approval') return false;
   const { applyFlowGuard } = await import('./flow-guard');
   const { getConfig } = await import('@/config');

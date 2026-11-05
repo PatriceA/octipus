@@ -109,7 +109,8 @@ export interface SessionContext {
   /** Dedicated controller session. Its model has only the scoped Companion toolbox. */
   companionSupervisor?: { modelName: string };
   /** Explicit persistent model binding for a Companion-created project session. */
-  companion?: { goalId: string; modelName: string };
+  companionMaintenance?: { binding: string; authorityRevision: number; incidentId?: string; strategyIndex?: number };
+  companion?: { goalId: string; modelName: string; sourceFiles?: import('@/core/session-files').AttachedFileRef[] };
   /** Unique clear generation; timestamps alone can collide within one millisecond. */
   conversationGeneration?: string;
   /** Last direct-provider conversation, including tool results and signed blocks. */

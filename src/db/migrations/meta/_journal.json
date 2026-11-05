@@ -1142,6 +1142,34 @@
       "when": 1793880002000,
       "tag": "0162_companion_observation",
       "breakpoints": true
+    },
+    {
+      "idx": 163,
+      "version": "7",
+      "when": 1793880003000,
+      "tag": "0163_companion_recovery",
+      "breakpoints": true
+    },
+    {
+      "idx": 164,
+      "version": "7",
+      "when": 1793880004000,
+      "tag": "0164_companion_maintenance",
+      "breakpoints": true
+    },
+    {
+      "idx": 165,
+      "version": "7",
+      "when": 1793880005000,
+      "tag": "0165_companion_coordination",
+      "breakpoints": true
+    },
+    {
+      "idx": 166,
+      "version": "7",
+      "when": 1793880006000,
+      "tag": "0166_companion_sources",
+      "breakpoints": true
     }
   ]
 }

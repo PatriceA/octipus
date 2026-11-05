@@ -22,7 +22,30 @@ export class CompanionService {
     if (!model || !canServeText(model) || !(model.supportsTools || model.provider === 'cli') || /reasoner|thinking/.test(model.modelId)) throw new CompanionSupervisionError('conflict', 'Choose an available text model with tools for this session');
     return this.repo.startSession(id, { ...data, modelName: model.name }, automatic);
   }
+  async startMaintenance(id: string, input: unknown) {
+    const runtime = (await import('./maintenance')).maintenanceRuntime(this.repo.scope);
+    const data = startCompanionSessionSchema.parse(input);
+    const settings = await this.repo.readSettings();
+    if (!settings.enabled || settings.autonomy !== 'repair') throw new CompanionSupervisionError('conflict', 'Enable repair autonomy before starting maintenance');
+    const detail = await this.repo.read(id);
+    for (const link of detail.links) {
+      const { sessionRepository } = await import('@/db/repositories/session-repository');
+      const existing=link.active?(await sessionRepository.findById(link.sessionId))?.context?.companionMaintenance:undefined;
+      if (existing?.binding===runtime.binding && existing.authorityRevision===settings.revision)
+        throw new CompanionSupervisionError('conflict', 'Reuse the existing maintenance session');
+    }
+    const model = await resolveModel({ userId: this.repo.scope.userId, name: data.modelName });
+    if (!model || model.provider === 'cli' || !model.supportsTools || !canServeText(model) || /reasoner|thinking/.test(model.modelId))
+      throw new CompanionSupervisionError('conflict', 'Choose an API or local tool-capable model for scoped maintenance');
+    return this.repo.startSession(id, { ...data, modelName: model.name, projectPath: undefined }, true, runtime.binding);
+  }
   messageSession(id: string, input: unknown) { return this.repo.queueMessage(id, input); }
+  authorizeGoal(id: string, profile: unknown, expectedRevision: number) { return this.repo.authorizeGoal(id, profile, expectedRevision); }
+  incidents(id: string) { return this.repo.incidents(id); }
+  detectIncident(id: string, sessionId: string) { return this.repo.detectIncident(id, sessionId); }
+  reopenIncident(id:string,incidentId:string,expectedRevision:number){return this.repo.reopenIncident(id,incidentId,expectedRevision);}
+  beginVerification(id: string, incidentId: string) { return this.repo.beginVerification(id, incidentId); }
+  advanceIncident(id: string, incidentId: string, input: { expectedRevision: number; strategy?: string; evidenceId?: string }) { return this.repo.advanceIncident(id, incidentId, input); }
   actions(id: string) { return this.repo.actions(id); }
   inspectSession(id: string, sessionId: string) { return this.repo.inspectSession(id, sessionId); }
   readSettings() { return this.repo.readSettings(); }

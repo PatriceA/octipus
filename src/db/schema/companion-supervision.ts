@@ -11,6 +11,7 @@ export const companionGoals = pgTable('companion_goals', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   workspaceId: uuid('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  attachments:jsonb('attachments').$type<import('@/core/session-files').AttachedFileRef[]>().notNull().default([]),
   requestKey: uuid('request_key').notNull(),
   title: text('title').notNull(),
   request: text('request').notNull(),
@@ -19,6 +20,8 @@ export const companionGoals = pgTable('companion_goals', {
   state: text('state').$type<CompanionGoalState>().notNull().default('queued'),
   priority: integer('priority').notNull().default(0),
   tokenBudget: integer('token_budget'),
+  dependencies: jsonb('dependencies').$type<string[]>().notNull().default([]),
+  executionPolicy: jsonb('execution_policy').$type<{ profile: unknown; approvedBy: string; approvedAt: string } | null>(),
   taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
   workPlanSessionId: uuid('work_plan_session_id').references(() => sessions.id, { onDelete: 'set null' }),
   sourceSessionId: uuid('source_session_id').references(() => sessions.id, { onDelete: 'set null' }),
@@ -67,12 +70,19 @@ export type CompanionSessionLink = typeof companionSessionLinks.$inferSelect;
 export const companionActions = pgTable('companion_actions', {
   id: uuid('id').primaryKey().defaultRandom(),
   goalId: uuid('goal_id').notNull().references(() => companionGoals.id, { onDelete: 'cascade' }),
+  attachments:jsonb('attachments').$type<import('@/core/session-files').AttachedFileRef[]>().notNull().default([]),
   requestKey: uuid('request_key').notNull(),
   sessionId: uuid('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
   generation: text('generation').notNull().default(''),
+  authoritySettingsId: uuid('authority_settings_id'),
+  authorityRevision: integer('authority_revision'),
+  tokenCap: integer('token_cap'),
+  incidentId: uuid('incident_id'),
+  strategyIndex: integer('strategy_index'),
   protectionLevel: integer('protection_level').notNull().default(1),
   flowLabel: jsonb('flow_label').$type<CompanionGoal['flowLabel']>().notNull().default({}),
-  kind: text('kind').$type<'start_session' | 'message_session' | 'steer_session'>().notNull(),
+  pipelineId:uuid('pipeline_id').references(()=>pipelines.id,{onDelete:'set null'}),
+  kind: text('kind').$type<'start_session' | 'message_session' | 'steer_session' | 'resume_pipeline'>().notNull(),
   message: text('message').notNull(),
   status: text('status').$type<'queued' | 'running' | 'completed' | 'failed' | 'unknown' | 'cancelled'>().notNull().default('queued'),
   leaseToken: uuid('lease_token'),
@@ -82,7 +92,7 @@ export const companionActions = pgTable('companion_actions', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [uniqueIndex('companion_actions_request_idx').on(t.goalId, t.requestKey), index('companion_actions_due_idx').on(t.status, t.createdAt),
   uniqueIndex('companion_actions_session_claim_idx').on(t.sessionId).where(sql`${t.status} IN ('running', 'unknown') AND ${t.kind} <> 'steer_session'`),
-  check('companion_actions_kind_chk', sql`${t.kind} IN ('start_session', 'message_session', 'steer_session')`),
+  check('companion_actions_kind_chk', sql`${t.kind} IN ('start_session', 'message_session', 'steer_session','resume_pipeline')`),
   check('companion_actions_status_chk', sql`${t.status} IN ('queued', 'running', 'completed', 'failed', 'unknown', 'cancelled')`),
 ]);
 export type CompanionAction = typeof companionActions.$inferSelect;
@@ -97,6 +107,7 @@ export const companionSettings = pgTable('companion_settings', {
   options: jsonb('options').$type<Record<string, unknown>>().notNull().default({}),
   supervisorSessionId: uuid('supervisor_session_id').references(() => sessions.id, { onDelete: 'set null' }),
   revision: integer('revision').notNull().default(0),
+  reconciledRevision: integer('reconciled_revision').notNull().default(-1),
   approvedAt: timestamp('approved_at', { withTimezone: true }),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [uniqueIndex('companion_settings_scope_idx').on(t.userId, t.workspaceId)]);
@@ -117,9 +128,53 @@ export const companionWakes = pgTable('companion_wakes', {
   sessionId: uuid('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
   generation: text('generation').notNull().default(''),
   status: text('status').$type<'running' | 'completed' | 'failed' | 'unknown'>().notNull(),
+  tokenCap: integer('token_cap'),
   eventSeqs: jsonb('event_seqs').$type<number[]>().notNull(),
   leaseToken: uuid('lease_token').notNull(), leaseUntil: timestamp('lease_until', { withTimezone: true }).notNull(),
   result: text('result'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [uniqueIndex('companion_wakes_active_idx').on(t.settingsId).where(sql`${t.status} IN ('running','unknown')`)]);
+
+export const companionIncidents = pgTable('companion_incidents', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  goalId: uuid('goal_id').notNull().references(() => companionGoals.id, { onDelete: 'cascade' }),
+  sessionId: uuid('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  fingerprint: text('fingerprint').notNull(),
+  category: text('category').notNull(),
+  summary: text('summary').notNull(),
+  state: text('state').$type<'observed' | 'repairing' | 'verifying' | 'resolved' | 'escalated'>().notNull().default('observed'),
+  attemptLimit:integer('attempt_limit'),
+  attemptAllowance:integer('attempt_allowance').notNull().default(0),
+  attemptApprovals:jsonb('attempt_approvals').$type<Array<{userId:string;at:string;additionalStrategies:number}>>().notNull().default([]),
+  strategies: jsonb('strategies').$type<string[]>().notNull().default([]),
+  evidenceId: uuid('evidence_id'),
+  revision: integer('revision').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex('companion_incidents_identity_idx').on(t.goalId, t.sessionId, t.fingerprint)]);
+
+export const companionActivations = pgTable('companion_activations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  goalId: uuid('goal_id').notNull().references(() => companionGoals.id, { onDelete: 'cascade' }),
+  sessionId: uuid('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  requestKey: uuid('request_key').notNull(), authorityRevision: integer('authority_revision').notNull(), binding: text('binding').notNull(), root: text('root').notNull(),
+  status: text('status').$type<'queued' | 'launched' | 'restarted' | 'reconciled' | 'failed' | 'unknown'>().notNull().default('queued'),
+  resumeGenerations:jsonb('resume_generations').$type<Record<string,string>>().notNull().default({}),
+  resumeIds: jsonb('resume_ids').$type<string[]>().notNull().default([]), result: text('result'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex('companion_activations_request_idx').on(t.goalId, t.requestKey),
+  uniqueIndex('companion_activations_active_idx').on(sql`(true)`).where(sql`${t.status} IN ('queued','launched','unknown')`)]);
+
+export const companionClaims = pgTable('companion_claims', {
+  resource: text('resource').primaryKey(),
+  actionId: uuid('action_id').notNull().references(() => companionActions.id,{onDelete:'cascade'}),
+  createdAt: timestamp('created_at',{withTimezone:true}).notNull().defaultNow(),
+});
+
+export const companionClaimMutex=pgTable('companion_claim_mutex',{id:text('id').primaryKey()});
+export const companionStageReservations=pgTable('companion_stage_reservations',{
+ pipelineId:uuid('pipeline_id').primaryKey().references(()=>pipelines.id,{onDelete:'cascade'}),
+ goalId:uuid('goal_id').notNull().references(()=>companionGoals.id,{onDelete:'cascade'}),tokens:integer('tokens').notNull(),createdAt:timestamp('created_at',{withTimezone:true}).notNull().defaultNow(),
+});

@@ -27,6 +27,39 @@ const MODULES_ELSEWHERE = 'Modules are switched in Settings → Modules (PUT /ap
 export const settingsRoutes = new Elysia({ prefix: '/settings' })
   .use(apiContext)
 
+  .get('/companion-maintenance', async ({ user, set }) => {
+    if (!user?.isAdmin) { set.status = 403; return { error: 'Admin access required' }; }
+    const { companionMaintenanceSchema } = await import('@/shared/companion-maintenance');
+    return { runtime: companionMaintenanceSchema.parse(await getSettingsService().get('security.companionMaintenance') ?? {}), userId: user.id };
+  })
+  .put('/companion-maintenance', async ({ user, body, set }) => {
+    if (!user?.isAdmin) { set.status = 403; return { error: 'Admin access required' }; }
+    try {
+      const { companionMaintenanceSchema } = await import('@/shared/companion-maintenance');
+      const { realpathSync } = await import('node:fs');
+      const runtime = companionMaintenanceSchema.parse({ ...body, userId: user.id });
+      runtime.roots = [...new Set(runtime.roots.map(path => { const root = realpathSync(path); if (!statSync(root).isDirectory()) throw new Error('Choose existing maintenance directories'); return root; }))];
+      await getSettingsService().set('security.companionMaintenance', runtime, user.id);
+      await auditRepository.log({ userId: user.id, action: 'settings_changed', resourceType: 'setting', resourceId: 'security.companionMaintenance', details: { enabled: runtime.enabled, roots: runtime.roots, hostServices: runtime.hostServices, sshAgent: runtime.sshAgent, allowActivation: runtime.allowActivation } });
+      return { runtime, userId: user.id };
+    } catch { set.status = 400; return { error: 'Choose valid existing directories and runtime options' }; }
+  }, { body: t.Record(t.String(), t.Unknown()) })
+  .post('/companion-maintenance/test', async ({ user, set }) => {
+    if (!user?.isAdmin) { set.status = 403; return { error: 'Admin access required' }; }
+    try {
+      const { maintenanceRuntime } = await import('@/core/companion/maintenance');
+      const runtime = maintenanceRuntime({ userId: user.id, workspaceId: user.id });
+      const { LocalShellOperations } = await import('@/tools/shell/local-operations');
+      const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+      const code = 'const fs=require("node:fs");const p=require("node:path").join(process.argv[1],".companion-probe-"+process.pid);fs.writeFileSync(p,"probe",{flag:"wx",mode:384});fs.unlinkSync(p);process.stdout.write("runtime-write-ok")';
+      const result = await new LocalShellOperations().exec(`${quote(process.execPath)} -e ${quote(code)} ${quote(runtime.roots[0])}`, runtime.roots[0], {
+        timeout: 10000, allowedCwdRoots: runtime.roots, extraReadWrite: runtime.roots, extraReadOnly: [process.execPath], allowNetwork: runtime.hostServices, allowHostUsb: runtime.hostServices, allowHostSshAgent: runtime.sshAgent,
+      });
+      return { passed: result.exitCode === 0 && !result.killed, exitCode: result.exitCode,
+        summary: result.exitCode === 0 ? 'Maintenance runtime launched and wrote to the approved directory.' : 'Maintenance runtime failed its write probe. Inspect server sandbox configuration.',
+        capabilities: { hostServices: runtime.hostServices, sshAgent: runtime.sshAgent, activation: runtime.allowActivation } };
+    } catch { set.status = 400; return { error: 'Maintenance runtime is unavailable; check saved scope and host prerequisites' }; }
+  })
   .get('/cli-tools', async ({ user, set }) => {
     if (!user?.isAdmin) { set.status = 403; return { error: 'Admin access required' }; }
     const approved = (await getSettingsService().get('security.cliRuntimes') ?? []) as CliRuntime[];

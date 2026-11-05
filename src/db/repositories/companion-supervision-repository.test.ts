@@ -55,8 +55,8 @@ beforeAll(async () => {
     CREATE TABLE pipelines(id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id), workspace_id uuid, session_id uuid NOT NULL REFERENCES sessions(id), status text DEFAULT 'running');
     CREATE TABLE tasks(id uuid PRIMARY KEY, user_id uuid REFERENCES users(id), workspace_id uuid);
     CREATE TABLE verification_evidence(id uuid PRIMARY KEY, session_id uuid, pipeline_id uuid, passed boolean,
-      kind text DEFAULT 'pre_verify', stage text, node_id text, detail jsonb, created_at timestamptz DEFAULT now());
-    CREATE TABLE agents(id text PRIMARY KEY, session_id uuid, status text, user_id text, workspace_id uuid, role text, model text, error text, parent_agent_id text, created_at timestamptz DEFAULT now());
+      kind text DEFAULT 'pre_verify', confidence text, stage text, node_id text, detail jsonb, created_at timestamptz DEFAULT now());
+    CREATE TABLE agents(id text PRIMARY KEY, session_id uuid, status text, user_id text, workspace_id uuid, role text, model text, error text, parent_agent_id text, total_tokens integer DEFAULT 0, billable_tokens integer, completed_at timestamptz, created_at timestamptz DEFAULT now());
     CREATE TABLE messages(id uuid PRIMARY KEY DEFAULT gen_random_uuid(), session_id uuid, role text, content text, created_at timestamptz DEFAULT now());
     ALTER TABLE pipelines ADD COLUMN title text;
     ALTER TABLE pipelines ADD COLUMN summary text;
@@ -65,17 +65,23 @@ beforeAll(async () => {
     ALTER TABLE pipelines ADD COLUMN metadata jsonb DEFAULT '{}';
     CREATE TABLE agent_events(id serial PRIMARY KEY,agent_id text,user_id text,created_at timestamptz DEFAULT now());
     CREATE TABLE tool_actions(id uuid PRIMARY KEY,agent_id text,user_id text,status text,created_at timestamptz DEFAULT now());
+    CREATE TABLE cost_log(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),user_id uuid,workspace_id uuid,agent_id text,session_id uuid,input_tokens integer,output_tokens integer,cached_input_tokens integer DEFAULT 0,created_at timestamptz DEFAULT now());
+    CREATE TABLE notifications(id uuid PRIMARY KEY,user_id uuid,workspace_id uuid,type text,title text,body text,metadata jsonb,read boolean DEFAULT false,delivered_channels text[] DEFAULT '{}',created_at timestamptz DEFAULT now());
     CREATE TABLE permission_requests(id uuid PRIMARY KEY,agent_id text,status text,expires_at timestamptz);
   `);
   await pg.exec(readFileSync('src/db/migrations/0160_companion_supervision.sql', 'utf8'));
   await pg.exec(readFileSync('src/db/migrations/0161_companion_actions.sql', 'utf8'));
   await pg.exec(readFileSync('src/db/migrations/0162_companion_observation.sql', 'utf8'));
+  await pg.exec(readFileSync('src/db/migrations/0163_companion_recovery.sql', 'utf8'));
+  await pg.exec(readFileSync('src/db/migrations/0164_companion_maintenance.sql', 'utf8'));
+  await pg.exec(readFileSync('src/db/migrations/0165_companion_coordination.sql','utf8'));
+  await pg.exec(readFileSync('src/db/migrations/0166_companion_sources.sql','utf8'));
   db = drizzle(pg);
   runtime.db = db;
 }, 30_000);
 afterAll(async () => { await pg.close(); rmSync(dir, { recursive: true, force: true }); });
 beforeEach(async () => {
-  await pg.exec('TRUNCATE companion_wakes,companion_events,companion_settings,companion_actions, companion_session_links, companion_goals, verification_evidence, tasks, pipelines, sessions, workspaces, users, agents, messages,agent_events,tool_actions,permission_requests CASCADE');
+  await pg.exec('TRUNCATE cost_log,notifications, companion_wakes,companion_events,companion_settings,companion_actions, companion_session_links, companion_goals, verification_evidence, tasks, pipelines, sessions, workspaces, users, agents, messages,agent_events,tool_actions,permission_requests CASCADE');
   vi.clearAllMocks(); resetFlowLabels(); resetSessionLevels();
   runtime.canSteer.mockReturnValue(false); runtime.steer.mockReturnValue(true); runtime.guard.mockResolvedValue(undefined);
   runtime.worker.mockReturnValue(undefined);
@@ -588,4 +594,209 @@ test('idle enabled workspaces do not starve a workspace with pending observation
   await vi.waitFor(() => expect(runtime.handle).toHaveBeenCalledTimes(1));
   expect(runtime.handle.mock.calls[0][0]).toBe(settings.supervisorSessionId);
   await vi.waitFor(async () => expect((await pg.query('SELECT status FROM companion_wakes')).rows).toEqual([{ status: 'completed' }]));
+});
+
+test('revoked automatic delegation cancels queued work without cancelling owner intent', async () => {
+  const settings = await repository().saveSettings({ enabled: true, modelName: 'local', autonomy: 'coordinate' }, 0);
+  const auto = new CompanionSupervisionRepository({ userId, workspaceId }, connection, { settingsId: settings.settingsId, revision: settings.revision });
+  const goal = await service().createGoal(request());
+  const action = await auto.startSession(goal.id, { expectedRevision: 0, requestKey: randomUUID(), modelName: 'fixture-model' }, true);
+  await repository().saveSettings({ enabled: false }, settings.revision);
+  await expect(auto.queueMessage(goal.id, { sessionId: action.sessionId, requestKey: randomUUID(), message: 'continue' })).rejects.toMatchObject({ code: 'conflict' });
+  await new CompanionDispatcher().tick();
+  expect((await service().actions(goal.id))[0]).toMatchObject({ status: 'cancelled' });
+  expect(runtime.handle).not.toHaveBeenCalled();
+});
+
+test('incident recovery deduplicates blockers, bounds strategies and requires fresh scoped verification', async () => {
+  const goal = await service().createGoal(request());
+  await service().adoptExecution(goal.id, adoption({ pipelineId: null }));
+  await pg.query("UPDATE pipelines SET status='paused',summary='SDK location not found' WHERE id=$1", [pipelineId]);
+  const first = await service().detectIncident(goal.id, sessionId);
+  expect(first).toMatchObject({ category: 'environment', state: 'observed' });
+  expect((await service().detectIncident(goal.id, sessionId))?.id).toBe(first?.id);
+  const repairing = await service().advanceIncident(goal.id, first!.id, { expectedRevision: 0, strategy: 'Bind writable SDK/cache runtime' });
+  expect(repairing.state).toBe('repairing');
+  const stale = randomUUID();
+  await pg.query("INSERT INTO verification_evidence(id,session_id,passed,created_at,detail) VALUES($1,$2,true,now()-interval '1 day','{}')", [stale, sessionId]);
+  await expect(service().advanceIncident(goal.id, first!.id, { expectedRevision: 1, evidenceId: stale })).rejects.toMatchObject({ code: 'invalid_evidence' });
+  const evidence = randomUUID();
+  await pg.query('INSERT INTO verification_evidence(id,session_id,passed,detail) VALUES($1,$2,true,$3)', [evidence, sessionId, JSON.stringify({ checkScope: `incident:${first!.id}` })]);
+  expect(await service().advanceIncident(goal.id, first!.id, { expectedRevision: 1, evidenceId: evidence })).toMatchObject({ state: 'resolved', evidenceId: evidence });
+  expect((await service().readGoal(goal.id)).goal.state).not.toBe('completed');
+});
+
+test('repeating a repair strategy escalates once and another user cannot read incidents', async () => {
+  const goal = await service().createGoal(request());
+  await service().adoptExecution(goal.id, adoption({ pipelineId: null }));
+  await pg.query("UPDATE pipelines SET status='paused',summary='Permission denied (publickey)' WHERE id=$1", [pipelineId]);
+  const incident = (await service().detectIncident(goal.id, sessionId))!;
+  expect(incident.category).toBe('authentication');
+  await service().advanceIncident(goal.id, incident.id, { expectedRevision: 0, strategy: 'Inspect trusted SSH agent' });
+  expect(await service().advanceIncident(goal.id, incident.id, { expectedRevision: 1, strategy: 'Inspect trusted SSH agent' })).toMatchObject({ state: 'escalated' });
+  await expect(service().advanceIncident(goal.id, incident.id, { expectedRevision: 2, strategy: 'Retry' })).rejects.toMatchObject({ code: 'conflict' });
+  await expect(repository(otherUserId, otherWorkspaceId).incidents(goal.id)).rejects.toMatchObject({ code: 'not_found' });
+});
+
+test('interrupted supervisor wake reconciles without replaying an active root', async () => {
+  const settings = await repository().saveSettings({ enabled: true, modelName: 'local', autonomy: 'observe' }, 0);
+  await service().createGoal(request());
+  const wake = randomUUID();
+  await pg.query("INSERT INTO companion_wakes(id,settings_id,session_id,status,event_seqs,lease_token,lease_until) VALUES($1,$2,$3,'unknown','[]',$4,now())", [wake, settings.settingsId, settings.supervisorSessionId, randomUUID()]);
+  await pg.query("INSERT INTO agents(id,session_id,status,user_id,workspace_id) VALUES('controller-root',$1,'running',$2,$3)", [settings.supervisorSessionId, userId, workspaceId]);
+  await tickCompanionObservation();
+  expect(runtime.handle).not.toHaveBeenCalled();
+  await pg.query("UPDATE agents SET status='completed' WHERE id='controller-root'");
+  await tickCompanionObservation();
+  await vi.waitFor(() => expect(runtime.handle).toHaveBeenCalledTimes(1));
+  expect((await pg.query<{status: string}>('SELECT status FROM companion_wakes WHERE id=$1',[wake])).rows[0].status).toBe('failed');
+});
+
+test('unknown effects are inspected and reconciled before later session work can dispatch', async () => {
+  const goal = await service().createGoal(request());
+  const action = await repository().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0, modelName: 'fixture-model' });
+  await pg.query("UPDATE companion_actions SET status='unknown' WHERE id=$1", [action.id]);
+  const incident = (await service().detectIncident(goal.id, action.sessionId))!;
+  const evidence = randomUUID();
+  await pg.query('INSERT INTO verification_evidence(id,session_id,passed,detail) VALUES($1,$2,true,$3)', [evidence, action.sessionId, JSON.stringify({ checkScope: `incident:${incident.id}`, actionId: action.id, actionOutcome: 'verified_present' })]);
+  await service().advanceIncident(goal.id, incident.id, { expectedRevision: 0, evidenceId: evidence });
+  expect((await service().actions(goal.id))[0]).toMatchObject({ id: action.id, status: 'completed' });
+  expect(runtime.handle).not.toHaveBeenCalled();
+});
+
+test('automatic repair derives incidents and each strategy permits one dispatch and one verification', async () => {
+  const settings=await repository().saveSettings({enabled:true,modelName:'local',autonomy:'repair'},0);
+  const auto=new CompanionSupervisionRepository({userId,workspaceId},connection,{settingsId:settings.settingsId,revision:settings.revision});
+  const goal=await service().createGoal(request());await service().adoptExecution(goal.id,adoption({pipelineId:null}));
+  await pg.query("UPDATE pipelines SET status='paused',summary='SDK location not found' WHERE id=$1",[pipelineId]);
+  const message=()=>auto.queueMessage(goal.id,{sessionId,requestKey:randomUUID(),message:'Repair and verify the affected runtime'});
+  await expect(message()).rejects.toMatchObject({code:'conflict'});
+  const incident=(await service().incidents(goal.id))[0];expect(incident.category).toBe('environment');
+  await auto.advanceIncident(goal.id,incident.id,{expectedRevision:0,strategy:'Mount approved SDK/cache paths'});
+  expect(await message()).toMatchObject({incidentId:incident.id,strategyIndex:1});
+  await expect(message()).rejects.toMatchObject({code:'conflict'});
+  expect(await auto.beginVerification(goal.id,incident.id)).toMatchObject({state:'verifying'});
+  await expect(auto.beginVerification(goal.id,incident.id)).rejects.toMatchObject({code:'conflict'});
+  await auto.advanceIncident(goal.id,incident.id,{expectedRevision:2,strategy:'Mount approved SDK/cache paths'});
+  await expect(message()).rejects.toMatchObject({code:'conflict'});
+});
+
+test('goal dependencies reject cycles and block only dependent work', async () => {
+  const prerequisite=await service().createGoal(request());const dependent=await service().createGoal(request());const independent=await service().createGoal(request());
+  await service().updateGoal(dependent.id,{expectedRevision:0,dependencies:[prerequisite.id]});
+  expect((await service().readGoal(dependent.id)).goal.dependencies).toEqual([prerequisite.id]);
+  await expect(service().updateGoal(prerequisite.id,{expectedRevision:0,dependencies:[dependent.id]})).rejects.toMatchObject({code:'conflict'});
+  await repository().startSession(dependent.id,{expectedRevision:1,requestKey:randomUUID(),modelName:'fixture-model'});
+  const action=await repository().startSession(independent.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model'});
+  await new CompanionDispatcher().tick();await vi.waitFor(()=>expect(runtime.handle).toHaveBeenCalledTimes(1));
+  expect(runtime.handle.mock.calls[0][0]).toBe(action.sessionId);
+  expect((await service().actions(dependent.id))[0]).toMatchObject({status:'queued',result:expect.stringContaining('prerequisite')});
+});
+
+test('billable token budget preserves queued state without starting another worker',async()=>{
+  await repository().saveSettings({enabled:false,dailyTokenBudget:1000},0);
+  const goal=await service().createGoal(request());const action=await repository().startSession(goal.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model'});
+  await pg.query("INSERT INTO agents(id,session_id,user_id,workspace_id,status,total_tokens,billable_tokens) VALUES('spent',$1,$2,$3,'completed',200000,1000)",[action.sessionId,userId,workspaceId]);
+  await new CompanionDispatcher().tick();expect(runtime.handle).not.toHaveBeenCalled();
+  expect((await service().actions(goal.id))[0]).toMatchObject({status:'queued',result:expect.stringContaining('budget exhausted')});
+});
+
+test('checkout claims serialize supervised writers and release after known completion',async()=>{
+  const checkout=mkdtempSync(join(tmpdir(),'companion-checkout-'));
+  const {mkdirSync}=await import('node:fs');mkdirSync(join(checkout,'.git'));
+  try {
+    const first=await service().createGoal(request()),second=await service().createGoal(request());
+    const a=await repository().startSession(first.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model',projectPath:checkout});
+    await repository().startSession(second.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model',projectPath:checkout});
+    let finish!:()=>void;const blocked=new Promise<void>(resolve=>{finish=resolve;});
+    runtime.handle.mockImplementationOnce(async(_s,_u,_m,_c,_f,_o,before)=>{await before();await blocked;return{outcome:'success',response:'done'};});
+    const dispatcher=new CompanionDispatcher();await dispatcher.tick();await vi.waitFor(()=>expect(runtime.handle).toHaveBeenCalledTimes(1));
+    expect((await service().actions(second.id))[0]).toMatchObject({status:'queued',result:expect.stringContaining('checkout')});
+    finish();await vi.waitFor(async()=>expect((await service().actions(first.id))[0].status).toBe('completed'));
+    await dispatcher.tick();await vi.waitFor(()=>expect(runtime.handle).toHaveBeenCalledTimes(2));
+    expect(runtime.handle.mock.calls[0][0]).toBe(a.sessionId);
+  }finally{rmSync(checkout,{recursive:true,force:true});}
+});
+
+test('quiet hours delay app feedback and durable notification IDs prevent duplicates',async()=>{
+  const {tickCompanionFeedback}=await import('@/core/companion/feedback');
+  await repository().saveSettings({enabled:true,modelName:'local',autonomy:'observe',timezone:'UTC',quietHoursStart:22,quietHoursEnd:7},0);
+  const goal=await service().createGoal(request());await pg.query("UPDATE companion_goals SET state='completed' WHERE id=$1",[goal.id]);
+  await tickCompanionFeedback(new Date('2026-11-05T23:00:00Z'));expect((await pg.query('SELECT id FROM notifications')).rows).toHaveLength(0);
+  await tickCompanionFeedback(new Date('2026-11-06T12:00:00Z'));await tickCompanionFeedback(new Date('2026-11-06T12:00:00Z'));
+  expect((await pg.query('SELECT id FROM notifications')).rows).toHaveLength(1);
+});
+
+test('running goal reservations prevent a second worker exceeding the goal cap',async()=>{
+ const goal=await service().createGoal(request({tokenBudget:1000}));
+ const first=await repository().startSession(goal.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model'});
+ await repository().startSession(goal.id,{expectedRevision:1,requestKey:randomUUID(),modelName:'fixture-model'});
+ let finish!:()=>void;const blocked=new Promise<void>(resolve=>{finish=resolve;});
+ runtime.handle.mockImplementationOnce(async(_s,_u,_m,_c,_f,_o,before)=>{await before();await blocked;return{outcome:'success',response:'done'};});
+ await new CompanionDispatcher().tick();await vi.waitFor(()=>expect(runtime.handle).toHaveBeenCalledTimes(1));
+ expect((await service().actions(goal.id)).find(a=>a.id===first.id)?.tokenCap).toBe(1000);
+ expect((await service().actions(goal.id)).filter(a=>a.status==='queued')).toHaveLength(1);
+ finish();await vi.waitFor(async()=>expect((await service().actions(goal.id)).find(a=>a.id===first.id)?.status).toBe('completed'));
+});
+
+test('adopted active pipelines hold their checkout before a new dispatch claim exists',async()=>{
+ const checkout=mkdtempSync(join(tmpdir(),'companion-adopted-'));try{
+  const original=await service().createGoal(request());await service().adoptExecution(original.id,adoption());
+  await pg.query('UPDATE sessions SET context=$1 WHERE id=$2',[JSON.stringify({devMode:true,projectPath:checkout}),sessionId]);
+  const next=await service().createGoal(request());await repository().startSession(next.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model',projectPath:checkout});
+  await new CompanionDispatcher().tick();expect(runtime.handle).not.toHaveBeenCalled();
+  expect((await service().actions(next.id))[0]).toMatchObject({status:'queued',result:expect.stringContaining('checkout')});
+ }finally{rmSync(checkout,{recursive:true,force:true});}
+});
+
+test('daily token accounting charges today’s usage from a worker started yesterday',async()=>{
+ const goal=await service().createGoal(request());const action=await repository().startSession(goal.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model'});
+ await pg.query("INSERT INTO agents(id,session_id,user_id,workspace_id,status,created_at,billable_tokens) VALUES('overnight',$1,$2,$3,'running',now()-interval '1 day',9000)",[action.sessionId,userId,workspaceId]);
+ await pg.query("INSERT INTO cost_log(user_id,workspace_id,agent_id,session_id,input_tokens,output_tokens,cached_input_tokens) VALUES($1,$2,'overnight',$3,500,500,100)",[userId,workspaceId,action.sessionId]);
+ const {companionSpend}=await import('@/core/companion/scheduling');expect(await companionSpend({userId,workspaceId})).toBe(900);
+});
+
+test('stage reservations clamp worker slices and reserve the shared goal balance',async()=>{
+ const goal=await service().createGoal(request({tokenBudget:1000}));await service().adoptExecution(goal.id,adoption());
+ const {reserveCompanionStage,releaseCompanionStage}=await import('@/core/companion/scheduling');
+ expect(await reserveCompanionStage({userId,workspaceId},sessionId,pipelineId,50000)).toBe(1000);
+ const second=randomUUID();await pg.query('INSERT INTO pipelines(id,user_id,workspace_id,session_id) VALUES($1,$2,$3,$4)',[second,userId,workspaceId,sessionId]);
+ await service().adoptExecution(goal.id,adoption({expectedRevision:1,pipelineId:second}));
+ await expect(reserveCompanionStage({userId,workspaceId},sessionId,second,50000)).rejects.toThrow('exhausted');
+ await releaseCompanionStage(pipelineId);expect(await reserveCompanionStage({userId,workspaceId},sessionId,second,50000)).toBe(1000);
+ await releaseCompanionStage(second);
+});
+
+test('protected document refs survive delegation and permit the exact source file without opening its directory',async()=>{
+ const {mkdirSync,writeFileSync,readFileSync}=await import('node:fs');
+ const source=mkdtempSync(join(tmpdir(),'companion-doc-source-')),target=mkdtempSync(join(tmpdir(),'companion-doc-target-'));
+ try{
+  const path=join(source,'brief.pdf');writeFileSync(path,'%PDF-1.4\nConfidential original words');writeFileSync(join(source,'unrelated.txt'),'unrelated');
+  await pg.query('UPDATE sessions SET context=$1,protection_level=4,flow_label=$2 WHERE id=$3',[JSON.stringify({devMode:true,projectPath:source}),JSON.stringify({secret:'protected document'}),sessionId]);
+  const input=request({sourceSessionId:sessionId,attachments:[{path:'brief.pdf',protectionLevel:4}]});
+  const goal=await service().createGoal(input);expect((await service().createGoal(input)).id).toBe(goal.id);
+  const action=await repository().startSession(goal.id,{requestKey:randomUUID(),expectedRevision:0,modelName:'fixture-model',projectPath:target});
+  expect(action.attachments).toEqual([{path,protectionLevel:4}]);expect(action.protectionLevel).toBe(4);
+  const row=(await pg.query<{context:Record<string,unknown>}>('SELECT context FROM sessions WHERE id=$1',[action.sessionId])).rows[0];
+  const {WorkspaceFS}=await import('@/security/workspace-fs');
+  const fs=WorkspaceFS.forSession({userId,workspaceId,context:row.context},{space:null});
+  expect(readFileSync(fs.resolve(path),'utf8')).toContain('Confidential original words');
+  expect(()=>fs.resolve(join(source,'unrelated.txt'))).toThrow();
+  await new CompanionDispatcher().tick();await vi.waitFor(()=>expect(runtime.handle).toHaveBeenCalled());
+  expect(runtime.handle.mock.calls.find(call=>call[0]===action.sessionId)?.[4]).toEqual([{path,protectionLevel:4}]);
+ }finally{rmSync(source,{recursive:true,force:true});rmSync(target,{recursive:true,force:true});}
+});
+
+test('only an explicit owner decision reopens escalation for exactly one further strategy',async()=>{
+ const settings=await repository().saveSettings({enabled:false,maxRepairAttempts:3},0);
+ const goal=await service().createGoal(request());await service().adoptExecution(goal.id,adoption({pipelineId:null}));
+ await pg.query("UPDATE pipelines SET status='paused',summary='SDK location not found' WHERE id=$1",[pipelineId]);
+ const incident=(await service().detectIncident(goal.id,sessionId))!;
+ await service().advanceIncident(goal.id,incident.id,{expectedRevision:0,strategy:'First strategy'});
+ await service().advanceIncident(goal.id,incident.id,{expectedRevision:1,strategy:'First strategy'});
+ const auto=new CompanionSupervisionRepository({userId,workspaceId},connection,{settingsId:settings.settingsId,revision:settings.revision});
+ await expect(auto.reopenIncident(goal.id,incident.id,2)).rejects.toMatchObject({code:'conflict'});
+ expect(await repository().reopenIncident(goal.id,incident.id,2)).toMatchObject({state:'observed',attemptLimit:2,attemptApprovals:[{userId,additionalStrategies:1,at:expect.any(String)}]});
+ await service().advanceIncident(goal.id,incident.id,{expectedRevision:3,strategy:'Second distinct strategy'});
+ expect(await service().advanceIncident(goal.id,incident.id,{expectedRevision:4,strategy:'Third strategy not approved'})).toMatchObject({state:'escalated',strategies:['First strategy','Second distinct strategy']});
 });

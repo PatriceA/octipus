@@ -1,7 +1,8 @@
+import { companionActionAuthorized } from './authority';
 import { randomUUID } from 'node:crypto';
 import { and, eq, inArray, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { companionActions, companionGoals, companionSessionLinks } from '@/db/schema/companion-supervision';
+import { companionActions, companionActivations, companionGoals, companionSessionLinks } from '@/db/schema/companion-supervision';
 import { users } from '@/db/schema/users';
 import { workspaces } from '@/db/schema/organizations';
 import { sessions, sessionGeneration } from '@/db/schema/sessions';
@@ -16,6 +17,11 @@ import { coreLogger } from '@/utils/logger';
 export class CompanionDispatcher {
   private running = new Set<string>();
   async tick() {
+    await (await import('./scheduling')).releaseCompanionClaims();
+    await (await import('./feedback')).tickCompanionFeedback();
+    await (await import('./activation')).tickCompanionActivation();
+    const [activation]=await getDb().select({id:companionActivations.id}).from(companionActivations).where(eq(companionActivations.status,'launched')).limit(1);
+    if(activation)return;
     await (await import('./observation')).tickCompanionObservation();
     // Every server stops its own workers after an owner's durable pause,
     // including when the control request reached a different server instance.
@@ -31,8 +37,14 @@ export class CompanionDispatcher {
     await getDb().update(companionActions).set({ status: 'unknown', leaseToken: null, leaseUntil: null,
       result: 'Execution receipt was interrupted. Inspect the linked session before retrying.', updatedAt: new Date() })
       .where(and(eq(companionActions.status, 'running'), lte(companionActions.leaseUntil, new Date())));
+    const pending = await getDb().select({ action: companionActions, userId: companionGoals.userId, workspaceId: companionGoals.workspaceId })
+      .from(companionActions).innerJoin(companionGoals, eq(companionGoals.id, companionActions.goalId))
+      .where(and(eq(companionActions.status, 'queued'), sql`${companionActions.authorityRevision} IS NOT NULL`)).limit(100);
+    for (const row of pending) if (!await companionActionAuthorized(row.action, row))
+      await getDb().update(companionActions).set({ status: 'cancelled', result: 'Automatic delegation was revoked or reconfigured.', updatedAt: new Date() })
+        .where(and(eq(companionActions.id, row.action.id), eq(companionActions.status, 'queued')));
     await this.steerPending();
-    if (this.running.size >= 2) return;
+    if (this.running.size >= 8) return;
     const candidates = await getDb().select({ action: companionActions, userId: companionGoals.userId, workspaceId: companionGoals.workspaceId })
       .from(companionActions).innerJoin(companionGoals, eq(companionGoals.id, companionActions.goalId))
       .innerJoin(users, eq(users.id, companionGoals.userId)).innerJoin(workspaces, eq(workspaces.id, companionGoals.workspaceId))
@@ -41,14 +53,20 @@ export class CompanionDispatcher {
         sql`(${companionActions.kind} = 'steer_session' OR NOT EXISTS (SELECT 1 FROM companion_actions earlier WHERE earlier.session_id = ${companionActions.sessionId}
           AND earlier.id <> ${companionActions.id} AND (earlier.status IN ('running','unknown')
           OR (earlier.status = 'queued' AND (earlier.created_at, earlier.id) < (${companionActions.createdAt}, ${companionActions.id})))))`))
-      .orderBy(companionActions.createdAt).limit(2 - this.running.size);
+      .orderBy(sql`${companionGoals.priority} DESC`,companionActions.createdAt).limit(50);
     for (const candidate of candidates) {
+      if(this.running.size>=8)break;
       const token = randomUUID();
       const claimed = await getDb().transaction(async tx => {
+        await tx.select({id:workspaces.id}).from(workspaces).where(eq(workspaces.id,candidate.workspaceId)).for('update');
+        const [liveAction]=await tx.select().from(companionActions).where(eq(companionActions.id,candidate.action.id)).for('update');
+        if(liveAction?.status!=='queued')return;
         await tx.select({ id: sessions.id }).from(sessions).where(eq(sessions.id, candidate.action.sessionId)).for('update');
         const [busy] = await tx.select({ id: companionActions.id }).from(companionActions).where(and(eq(companionActions.sessionId, candidate.action.sessionId), inArray(companionActions.status, ['running', 'unknown']), sql`${companionActions.kind} <> 'steer_session'`));
         if (busy) return undefined;
-        return (await tx.update(companionActions).set({ status: 'running', leaseToken: token, leaseUntil: new Date(Date.now() + 90_000), updatedAt: new Date() })
+        const prepared=await (await import('./scheduling')).prepareCompanionDispatch(tx,liveAction,candidate);
+        if(!prepared)return;
+        return (await tx.update(companionActions).set({ tokenCap:prepared.tokenCap, status: 'running', leaseToken: token, leaseUntil: new Date(Date.now() + 90_000), updatedAt: new Date() })
           .where(and(eq(companionActions.id, candidate.action.id), eq(companionActions.status, 'queued'))).returning())[0];
       });
       if (!claimed) continue;
@@ -81,6 +99,7 @@ export class CompanionDispatcher {
     const detail = await new CompanionService({ userId: candidate.userId, workspaceId: candidate.workspaceId }).readGoal(action.goalId);
     const [session] = await getDb().select({ context: sessions.context, status: sessions.status, userId: sessions.userId, workspaceId: sessions.workspaceId,
       protectionLevel: sessions.protectionLevel, flowLabel: sessions.flowLabel }).from(sessions).where(eq(sessions.id, action.sessionId));
+    if (!await companionActionAuthorized(action, candidate)) return;
     if (!session || session.status !== 'active' || session.userId !== candidate.userId || session.workspaceId !== candidate.workspaceId
       || sessionGeneration(session.context) !== action.generation || !['active', 'queued', 'waiting'].includes(detail.goal.state)
       || !detail.links.some(link => link.active && link.ownership === 'owner' && !link.pipelineId && link.sessionId === action.sessionId)) return;
@@ -101,6 +120,7 @@ export class CompanionDispatcher {
       if (!row) throw new Error('The running model is no longer available');
       const { assertMayLeave } = await import('@/core/protection/routing');
       await assertMayLeave(row, action.sessionId);
+      if (!await companionActionAuthorized(action, candidate)) throw new Error('Automatic delegation was revoked');
       delivered = getAgentService().steer(action.sessionId, { role: 'user', content: action.message, timestamp: new Date() });
     } catch (error) {
       await getDb().update(companionActions).set({ status: 'failed', result: (error as Error).message.slice(0, 1000), leaseToken: null, leaseUntil: null, updatedAt: new Date() })
@@ -120,15 +140,29 @@ export class CompanionDispatcher {
     try {
       const { getAgentService } = await import('@/core/agent/service');
       const service = new CompanionService({ userId: scope.userId, workspaceId: scope.workspaceId });
-      const result = await getAgentService().handleMessage(action.sessionId, scope.userId, action.message, 'monitor', [], undefined, async () => {
+      const authorize=async (markStarted=true) => {
         const { goal, links } = await service.readGoal(action.goalId);
         const [live] = await getDb().select({ id: companionActions.id }).from(companionActions).where(and(eq(companionActions.id, action.id), eq(companionActions.leaseToken, token), eq(companionActions.status, 'running')));
         const [session] = await getDb().select({ status: sessions.status, userId: sessions.userId, workspaceId: sessions.workspaceId, context: sessions.context }).from(sessions).where(eq(sessions.id, action.sessionId));
-        if (!live || !['queued', 'active', 'waiting'].includes(goal.state) || !links.some(link => link.sessionId === action.sessionId && link.active && link.ownership === 'owner' && !link.pipelineId)
+        if (!await companionActionAuthorized(action, scope)) throw new Error('Automatic delegation was revoked');
+        if (!live || !['queued', 'active', 'waiting'].includes(goal.state) || !links.some(link => link.sessionId === action.sessionId && link.active && link.ownership === 'owner' && (!link.pipelineId || action.kind==='resume_pipeline'&&link.pipelineId===action.pipelineId))
           || session?.status !== 'active' || session.userId !== scope.userId || session.workspaceId !== scope.workspaceId || sessionGeneration(session.context) !== action.generation) throw new Error('Companion dispatch is no longer authorized, or the session was paused or cleared');
-        started = true;
-      });
-      getAgentService().publishResponse(action.sessionId, scope.userId, result);
+        await getDb().update(sessions).set({protectionLevel:sql`greatest(coalesce(${sessions.protectionLevel},1),${goal.protectionLevel})`,flowLabel:sql`coalesce(${sessions.flowLabel},'{}'::jsonb)||${JSON.stringify(goal.flowLabel)}::jsonb`}).where(eq(sessions.id,action.sessionId));
+        raiseSessionLevel(action.sessionId,goal.protectionLevel);
+        observeFlow(action.sessionId,{toolId:'companion',action:'read'},{taints:(['private','secret','suspicious'] as const).filter(flag=>!!goal.flowLabel[flag])});
+        if(markStarted)started = true;
+      };
+      const result=action.kind==='resume_pipeline'?await (async()=>{
+        await authorize(false);if(!action.pipelineId)throw new Error('Captured pipeline was deleted');
+        const {pipelineRepository}=await import('@/db/repositories/pipeline-repository');const run=await pipelineRepository.findById(action.pipelineId);
+        if(!run||run.sessionId!==action.sessionId||run.userId!==scope.userId||run.workspaceId!==scope.workspaceId)throw new Error('Captured pipeline is unavailable');
+        if(['running','completed'].includes(run.status))return {outcome:'success' as const,response:'Captured pipeline is already running or completed; no resume repeated.'};
+        if(run.status!=='paused')throw new Error('Captured pipeline is no longer eligible for automatic continuation');
+        await authorize(false);started=true;
+        const resumed=await (await import('@/core/agent/pipeline-manager')).getPipelineManager().resume(run.id);
+        return {outcome:'success' as const,response:resumed.result};
+      })():await getAgentService().handleMessage(action.sessionId, scope.userId, action.message, 'monitor', action.attachments, undefined,()=>authorize());
+      if('classification' in result)getAgentService().publishResponse(action.sessionId, scope.userId, result);
       const provenance = await persistCompanionSource(scope, action.sessionId);
       await getDb().update(companionActions).set({ status: result.outcome === 'success' ? 'completed' : 'failed',
         protectionLevel: provenance.protectionLevel ?? action.protectionLevel, flowLabel: provenance.flowLabel ?? action.flowLabel,

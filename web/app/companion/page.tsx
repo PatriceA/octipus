@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import { useWorkspace } from '@/lib/workspace-context';
+import { GoalRecovery } from '@/components/companion/goal-recovery';
 import { SupervisionSettings } from '@/components/companion/supervision-settings';
 import type { CompanionGoalView as CompanionGoal, CompanionLinkView as CompanionSessionLink, CompanionActionView as CompanionAction } from '../../../src/shared/companion-supervision';
 
@@ -13,13 +14,13 @@ type ModelChoice = { name: string; modelId: string; isEnabled: boolean; supports
 const field = 'w-full rounded-xs border border-outline-variant bg-surface-container px-3 py-2 text-sm';
 const button = 'rounded-xs border border-outline-variant px-3 py-2 text-sm hover:bg-surface-container-high disabled:opacity-50';
 
-export default function CompanionPage() {
+function CompanionWorkspacePage() {
   const { activeWorkspace } = useWorkspace();
   const cache = useQueryClient();
   const [request, setRequest] = useState('');
   const [outcome, setOutcome] = useState('');
   const [criteria, setCriteria] = useState('');
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(() => { const id = new URLSearchParams(window.location.search).get('goal'); return id && /^[0-9a-f-]{36}$/i.test(id) ? id : null; });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [modelName, setModelName] = useState('');
@@ -35,7 +36,7 @@ export default function CompanionPage() {
     return result;
   }
   const personal = activeWorkspace?.kind === 'personal';
-  useEffect(() => { setSelected(null); setSessionId(''); setMessage(''); setError(''); keys.current.clear(); }, [activeWorkspace?.id]);
+  useEffect(() => { setSessionId(''); setMessage(''); setError(''); keys.current.clear(); }, [activeWorkspace?.id]);
   const goals = useQuery({ queryKey: ['companion', activeWorkspace?.id], queryFn: () => api.get<{ goals: CompanionGoal[] }>('/companion/goals'), enabled: personal, refetchInterval: 5000 });
   const detail = useQuery({ queryKey: ['companion', activeWorkspace?.id, selected], queryFn: () => api.get<{ goal: CompanionGoal; links: CompanionSessionLink[] }>(`/companion/goals/${selected}`), enabled: personal && !!selected, refetchInterval: 5000 });
   const actions = useQuery({ queryKey: ['companion', activeWorkspace?.id, selected, 'actions'], queryFn: () => api.get<{ actions: CompanionAction[] }>(`/companion/goals/${selected}/actions`), enabled: personal && !!selected, refetchInterval: 5000 });
@@ -108,9 +109,15 @@ export default function CompanionPage() {
               <button className={button} disabled={busy || !sessionId || !message.trim()}>Send instructions</button>
             </form>
           </>}
+          {activeWorkspace && <GoalRecovery key={`${activeWorkspace.id}:${goal.id}`} goal={goal} workspaceId={activeWorkspace.id} />}
           <div className="space-y-2"><h3>Activity</h3>{actions.data?.actions.map(action => <div className="border-l-2 border-outline-variant pl-3 text-sm" key={action.id}><p>{action.kind.replaceAll('_', ' ')} · {action.status}</p>{action.result && <p className="whitespace-pre-wrap text-on-surface-variant">{action.result}</p>}</div>)}</div>
         </section>}
       </div>
     </>}
   </div>;
+}
+
+export default function CompanionPage() {
+  const { activeWorkspace } = useWorkspace();
+  return <CompanionWorkspacePage key={activeWorkspace?.id ?? 'none'} />;
 }

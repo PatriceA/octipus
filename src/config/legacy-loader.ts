@@ -62,6 +62,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
         return 'off';
       })(),
       shellSshAgent: process.env.SHELL_SSH_AGENT === 'true',
+      companionMaintenance: { enabled: false, userId: null, roots: [], hostServices: false, sshAgent: false, allowActivation: false, interruptionPolicy: 'wait' },
       cliRuntimes: [],
       cliKubeconfigs: [],
       vaultDenyUnscopedSecrets: process.env.VAULT_DENY_UNSCOPED_SECRETS === 'true',

@@ -276,6 +276,7 @@ export async function runRootAgent(
   const modelName = selectedModel.modelId;
   const attachmentSession = extras.attachedFiles?.length ? await sessionRepository.findById(sessionId) : null;
   if (extras.attachedFiles?.length && !attachmentSession) throw new Error('Attachment session no longer exists');
+  const companionSourceRefs=attachmentSession?(await import('@/core/companion/sources')).companionSourceFiles(WorkspaceFS.forSession(attachmentSession,{space}),extras.attachedFiles!):planSessionCtx?.companion?.sourceFiles??[];
   const attachments = attachmentSession
     ? await buildRootAttachmentContext(WorkspaceFS.forSession(attachmentSession, { space }), extras.attachedFiles!, (modelMeta ? modelMeta.provider === 'cli' : !!getCLIToolConfig(modelName)), userId, message, sessionId)
     : { context: '', imagePaths: [] };
@@ -324,6 +325,13 @@ export async function runRootAgent(
   // Parent AgentNode for the swarm. `id` is a placeholder — overwritten
   // once we know the real agentId post-spawn. `spawn_child` closes over
   // `parentNode` by reference, so the mutation is observed.
+  const companionTokenCap = await (async () => {
+    const {getDb}=await import('@/db/postgres'); const {companionActions}=await import('@/db/schema/companion-supervision'); const {and,eq,ne}=await import('drizzle-orm');
+    const [action]=await getDb().select({cap:companionActions.tokenCap}).from(companionActions).where(and(eq(companionActions.sessionId,sessionId),eq(companionActions.status,'running'),ne(companionActions.kind,'steer_session')));
+    if(action?.cap)return action.cap;
+    if(supervisor){const {companionWakes}=await import('@/db/schema/companion-supervision');const [wake]=await getDb().select({cap:companionWakes.tokenCap}).from(companionWakes).where(and(eq(companionWakes.sessionId,sessionId),eq(companionWakes.status,'running')));return wake?.cap??undefined;}
+    return undefined;
+  })();
   const parentNode: AgentNode = {
     id: '__pending__',
     rootSessionId: sessionId,
@@ -338,6 +346,8 @@ export async function runRootAgent(
     allowedToolIds: rootAllowedToolIds,
     signal: rootAbortController.signal,
   };
+
+  if(companionTokenCap)parentNode.budget.tokens.cap=Math.min(parentNode.budget.tokens.cap,companionTokenCap);
 
   // Late-bound worker handles for detach-mode `spawn_child` +
   // `collect_children`. The root agent's AgentWorker is created below
@@ -458,6 +468,14 @@ export async function runRootAgent(
     metaTools = metaTools.filter(tool => allowed.has(tool.name));
     rootAllowedToolIds.clear(); for (const tool of [...rootTools, ...metaTools]) rootAllowedToolIds.add(tool.toolId ?? tool.name);
   }
+  if (planSessionCtx?.companionMaintenance) {
+    if (modelMeta?.provider === 'cli') throw new Error('Maintenance requires a scoped API or local worker');
+    const { getToolRegistry } = await import('@/tools/registry');
+    const allowed = new Set(['companion__read', 'companion__inspect_session', 'companion__maintenance_run', 'companion__activate', 'companion__maintenance_inspect', 'companion__maintenance_check', 'companion__maintenance_review', 'companion__reconcile_activation', 'companion__verify_incident', 'spawn_child', 'collect_children', 'send_status_update']);
+    rootTools = getToolRegistry().getToolHandlersForTools(['companion']).filter(tool => allowed.has(tool.name));
+    metaTools = metaTools.filter(tool => allowed.has(tool.name));
+    rootAllowedToolIds.clear(); for (const tool of [...rootTools, ...metaTools]) rootAllowedToolIds.add(tool.toolId ?? tool.name);
+  }
   let turnTools = [...rootTools, ...metaTools];
   if (!remoteRoom) turnTools = [...turnTools, selfReport(turnTools)];
 
@@ -479,7 +497,7 @@ export async function runRootAgent(
   if (
     !remoteRoom &&
     rootCoreToolIds !== undefined &&
-    !supervisor && shouldUseLazyDiscovery({
+    !supervisor && !planSessionCtx?.companionMaintenance && shouldUseLazyDiscovery({
       hasCoreToolIds: true,
       isSmallModel: rootIsSmall,
       supportsTools: modelMeta?.supportsTools === true,
@@ -800,7 +818,7 @@ export async function runRootAgent(
     toolAdvertisement,
     // Full mode: agent.maxIterations (0 = unlimited) via agentManager.spawn.
     maxIterations: supervisor ? 12 : isLite ? agentCfg.liteMaxIterations : undefined,
-    maxTokenBudget: supervisor?.turnTokenBudget,
+    maxTokenBudget: companionTokenCap ?? supervisor?.turnTokenBudget,
     timeout: turnTimeout,
     // Seed the user's raw request so the spawner can forward it verbatim
     // to every child. Without this, children only see the root agent's
@@ -814,6 +832,8 @@ export async function runRootAgent(
     // user-reported TUI bug where `--project` was effectively ignored.
     contextMetadata: {
       originalRequest: message,
+      companionSourceFiles: companionSourceRefs,
+      ...(supervisor ? { companionAuthorityRevision: supervisor.revision } : {}),
       ...(attachments.imagePaths.length ? { imageAttachments: attachments.imagePaths } : {}),
       sessionGeneration: sessionGeneration(sessionCtx),
       inputGuardFlags: guardFlags,

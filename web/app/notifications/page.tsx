@@ -46,6 +46,7 @@ function queryFor(filter: Filter, offset: number): string {
  */
 function linkFor(n: Notification): { href: string; label: string } | null {
   const m = n.metadata ?? {};
+  if (n.type === 'companion' && typeof m.goalId === 'string') return { href: `/companion?goal=${encodeURIComponent(m.goalId)}`, label: 'open supervised goal' };
   // Spend budgets (src/security/spend-budgets.ts notify): the budgets card.
   if (typeof m.budgetId === 'string') return { href: '/#budgets', label: 'open budgets' };
   if (typeof m.workerId === 'string') return { href: `/agents/view?id=${encodeURIComponent(m.workerId)}`, label: 'open agent' };

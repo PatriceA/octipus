@@ -8,6 +8,7 @@ async function setup(page: import('@playwright/test').Page) {
   await stubAllDefaults(page);
   await page.route('**/api/companion/goals', route => json(route, 200, { goals: [goal] }));
   await page.route('**/api/companion/goals/goal-one', route => json(route, 200, { goal, links: [{ id: 'link', sessionId: 'existing-session', pipelineId: null, purpose: 'Project work', ownership: 'owner', active: true }] }));
+  await page.route('**/api/companion/goals/goal-one/incidents', route => json(route, 200, { incidents: [] }));
   await page.route('**/api/companion/goals/goal-one/actions', route => json(route, 200, { actions: [] }));
   await page.route('**/api/companion/settings', route => json(route, 200, defaultSettings));
   await page.route('**/api/models', route => json(route, 200, { models: [{ name: 'Codex', modelId: 'cli/codex', provider: 'cli', supportsTools: true, isEnabled: true }] }));
@@ -84,4 +85,35 @@ test('background supervision settings persist and can be revoked without opening
   await panel.getByRole('checkbox', { name: 'Enable background supervision' }).uncheck();
   await panel.getByRole('button', { name: 'Save supervision settings' }).click();
   await expect.poll(() => settings.enabled).toBe(false);
+});
+
+test('goal-wide execution approval persists without a command list and can be revoked', async ({ authenticatedPage: page }) => {
+  await setup(page);
+  let current: Record<string, unknown> = {...goal, executionPolicy: null};
+  let granted: Record<string, unknown> | undefined;
+  await page.route('**/api/companion/goals/goal-one', route=>json(route,200,{goal:current,links:[]}));
+  await page.route('**/api/companion/goals/goal-one/authorization', route=>{
+    const input=route.request().postDataJSON();granted=input.profile;
+    current={...current,revision:Number(current.revision)+1,executionPolicy:input.profile?{profile:input.profile,approvedAt:'2026-11-05T12:00:00Z'}:null};
+    return json(route,200,current);
+  });
+  await page.getByLabel('Repository directory',{exact:true}).fill('/home/you/projects');
+  await page.getByLabel('Include host network services, Docker and USB devices').check();
+  await page.getByRole('button',{name:'Approve execution for this goal'}).click();
+  await expect(page.getByRole('button',{name:'Revoke execution scope'})).toBeVisible();
+  expect(granted).toMatchObject({executionScope:'run',repoPath:'/home/you/projects',hostServices:true});
+  expect(granted).not.toHaveProperty('commands');
+  await page.reload();await page.getByRole('button',{name:/Finish the project/}).click();
+  await expect(page.getByRole('button',{name:'Revoke execution scope'})).toBeVisible();
+  await page.getByRole('button',{name:'Revoke execution scope'}).click();
+  await expect(page.getByRole('button',{name:'Approve execution for this goal'})).toBeVisible();expect(granted).toBeNull();
+});
+
+test('recovery exposes the actual verification record supporting resolution',async({authenticatedPage:page})=>{
+  await setup(page);
+  await page.route('**/api/companion/goals/goal-one/incidents',route=>json(route,200,{incidents:[{id:'incident',sessionId:'existing-session',category:'environment',state:'resolved',summary:'SDK location not found',strategies:['Restore SDK mount'],evidenceId:'evidence-one',updatedAt:'2026-11-05T12:00:00Z'}]}));
+  await page.route('**/api/verification/existing-session',route=>json(route,200,{sessionId:'existing-session',verified:true,evidence:[{id:'evidence-one',sessionId:'existing-session',kind:'adhoc',passed:true,createdAt:'2026-11-05T12:00:00Z',detail:{checkScope:'incident:incident',command:'sdk-runtime-check',exitCode:0}}]}));
+  await page.reload();await page.getByRole('button',{name:/Finish the project/}).click();
+  await page.getByText('Inspect verification',{exact:true}).click();
+  await expect(page.getByText('sdk-runtime-check (exit 0)',{exact:true})).toBeVisible();
 });

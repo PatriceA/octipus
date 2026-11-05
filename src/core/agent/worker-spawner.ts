@@ -99,12 +99,14 @@ const AGENTS_MD_GUIDE_TOKEN_BUDGET = 2000;
 export function pipelineMetadata(metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
   if (!metadata) return undefined;
   const { pipelineId, nodeKey, hostServices, resumeKey, attemptId } = metadata as Record<string, unknown>;
-  if (pipelineId === undefined && nodeKey === undefined) return undefined;
-  return { ...(pipelineId !== undefined && { pipelineId }), ...(nodeKey !== undefined && { nodeKey }), ...(hostServices === true && { hostServices }),
+  const sourceFiles=Array.isArray(metadata.companionSourceFiles)?metadata.companionSourceFiles.slice(0,20).filter((file):file is import('@/core/session-files').AttachedFileRef=>!!file&&typeof file==='object'&&typeof (file as {path?:unknown}).path==='string').map(({path,version,protectionLevel})=>({path,version,protectionLevel})):[];
+  if (pipelineId === undefined && nodeKey === undefined && !sourceFiles.length) return undefined;
+  const hasPipelineScope=pipelineId!==undefined||nodeKey!==undefined;
+  return { ...(sourceFiles.length?{companionSourceFiles:sourceFiles}:{}), ...(pipelineId !== undefined && { pipelineId }), ...(nodeKey !== undefined && { nodeKey }), ...(hasPipelineScope && hostServices === true && { hostServices }),
     // The stage attempt's vendor CLI conversation (`cli-agent-worker`) and the
     // attempt its approvals were granted to (`approved-calls.ts`). Not passed
     // on to a stage's own children (`stageChildMetadata`).
-    ...(typeof resumeKey === 'string' && { resumeKey }), ...(typeof attemptId === 'string' && { attemptId }) };
+    ...(hasPipelineScope && typeof resumeKey === 'string' && { resumeKey }), ...(hasPipelineScope && typeof attemptId === 'string' && { attemptId }) };
 }
 
 /**
@@ -900,7 +902,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       subtopic: overrides.swarmParent.subtopic,
       model: finalModel,
       budget: {
-        tokens: { cap: lvl.tokens, used: 0 },
+        tokens: { cap: Math.min(lvl.tokens,overrides?.maxTokenBudget??Infinity), used: 0 },
         wallClockMs: { cap: lvl.wallMs, startedAt: Date.now() },
         fanOut: { cap: lvl.fanOut, used: 0 },
         depth: 1,

@@ -971,6 +971,7 @@ export class PipelineManager {
       );
     }
 
+    const companionDelegation = await (await import('@/core/companion/permissions')).companionGoalProfile(context);
     const requestedProfile = options?.permissionProfile === undefined ? undefined : proposedPipelinePermissionProfileSchema.parse(options.permissionProfile);
     if (requestedProfile) {
       const session = await sessionRepository.findById(sessionId);
@@ -1104,7 +1105,8 @@ export class PipelineManager {
     if (requestedProfile) {
       const [entry] = await pipelineRepository.getNodes(pipeline.id);
       if (!entry) throw new Error('Pipeline has no entry stage for permission approval');
-      const decision = await this.requestPipelineApproval(pipeline, entry, rootAgent,
+      const inherited = companionDelegation && JSON.stringify(companionDelegation.profile) === JSON.stringify(requestedProfile);
+      const decision = inherited ? { approved: true, response: 'Approve' } : await this.requestPipelineApproval(pipeline, entry, rootAgent,
         `Approve this permission profile once for pipeline "${title}":\n${JSON.stringify(requestedProfile, null, 2)}`,
         `${permissionProfileDisclosure(requestedProfile)} allowCheckpointReplay permits repeating completed effects from a saved stage; uncertain outcomes still require inspection.`,
         context, ['Approve', 'Deny']) as { approved: boolean; response?: string };
@@ -1116,7 +1118,7 @@ export class PipelineManager {
         await this.updatePipeline(pipeline.id, { status: 'paused', summary: 'Run permission profile was not approved; no stage has run.' });
         return { pipelineId: pipeline.id, result: 'Permission profile not approved.' };
       }
-      pipeline.metadata = { ...pipeline.metadata, permissionProfile: { profile: requestedProfile, repoPath: requestedProfile.repoPath, approvedBy: userId, approvedAt: new Date().toISOString() } };
+      pipeline.metadata = { ...pipeline.metadata, ...(inherited ? { companionGoalId: companionDelegation.goalId } : {}), permissionProfile: { profile: requestedProfile, repoPath: requestedProfile.repoPath, approvedBy: userId, approvedAt: new Date().toISOString() } };
       await this.updatePipeline(pipeline.id, { status: 'running', metadata: pipeline.metadata });
       context = { ...context, attended: requestedProfile.overnight ? false : context.attended,
         metadata: { ...context.metadata, approvedRunGates: requestedProfile.autoApproveGates, overnightRun: requestedProfile.overnight } };
@@ -1438,12 +1440,17 @@ export class PipelineManager {
       // rather than mid-turn.
       const pool = typeof persisted?.metadata?.tokenBudget === 'number' ? persisted.metadata.tokenBudget : getConfig().agent.pipelineTokenBudget;
       const spent = [...nodes.values()].reduce((sum, n) => sum + n.tokensUsed, 0);
-      const summary = poolExhaustedSummary(pool, spent, byKey.get(cursor)?.name ?? cursor);
+      let companionExhausted=false;
+      const {getDb}=await import('@/db/postgres'); const {companionGoals,companionSessionLinks}=await import('@/db/schema/companion-supervision');
+      const {and,eq,inArray,or,isNull}=await import('drizzle-orm');
+      const [supervised]=await getDb().select({id:companionGoals.id}).from(companionGoals).innerJoin(companionSessionLinks,eq(companionSessionLinks.goalId,companionGoals.id)).where(and(eq(companionSessionLinks.sessionId,sessionId),or(isNull(companionSessionLinks.pipelineId),eq(companionSessionLinks.pipelineId,pipeline.id)),eq(companionSessionLinks.active,true),eq(companionSessionLinks.ownership,'owner'),eq(companionGoals.userId,pipeline.userId),eq(companionGoals.workspaceId,pipeline.workspaceId!),inArray(companionGoals.state,['active','queued','waiting'])));
+      if(supervised && pipeline.workspaceId)companionExhausted=await (await import('@/core/companion/scheduling')).companionRemainingBudget({userId:pipeline.userId,workspaceId:pipeline.workspaceId},supervised.id)<1000;
+      const summary = companionExhausted?'Companion token budget exhausted. Checkpoint preserved; raise the goal/daily budget or wait for its next UTC day.':poolExhaustedSummary(pool, spent, byKey.get(cursor)?.name ?? cursor);
       // Finish only the active item's body and its loop-head bookkeeping.
       // A loop elsewhere in the graph must not exempt pre/post-loop work.
       const budgetNode = byKey.get(cursor);
       const finishingItem = currentItem && (budgetNode?.parentKey || budgetNode?.kind === 'foreach');
-      if (summary && !finishingItem) {
+      if (summary && (companionExhausted || !finishingItem)) {
         await this.updatePipeline(pipeline.id, { status: 'paused', summary });
         recordRunEvent({
           runId: sessionId,
@@ -3055,7 +3062,9 @@ export class PipelineManager {
     }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
 
     let spentTokens = 0;
+    let companionStageCap: number | undefined;
     try {
+      if(pipeline.workspaceId)companionStageCap=await (await import('@/core/companion/scheduling')).reserveCompanionStage({userId:pipeline.userId,workspaceId:pipeline.workspaceId},sessionId,pipeline.id,node.maxTokens??undefined);
       // Resolve through the role’s topic, including its configured executor.
       const stageModel = await resolveStageModel(stageTemplate, getRoleConfig(node.role as AgentRole).defaultTopic, pipeline.userId ?? undefined, registry);
       const modelOverride = stageModel?.modelId;
@@ -3107,7 +3116,7 @@ export class PipelineManager {
           purpose: { producesArtifacts: declared.producesArtifacts, runsCommands: declared.runsCommands },
           // `NodeBudget.tokens.cap` for a graph node. Null ⇒ the global
           // per-agent default, which is what every stage ran on before.
-          ...(node.maxTokens != null ? { maxTokenBudget: node.maxTokens } : {}),
+          ...(companionStageCap!==undefined?{maxTokenBudget:companionStageCap}:node.maxTokens != null ? { maxTokenBudget: node.maxTokens } : {}),
           // Charged cumulatively: a retry inside the worker, and every later
           // visit of this node, add to the same total.
           onTokens: (t) => { spentTokens += t; },
@@ -3331,6 +3340,10 @@ export class PipelineManager {
 
       return { output, raw };
     } catch (error) {
+      if((error as Error)?.name==='CompanionBudgetWaitError'){
+        const message=(error as Error).message;await this.updateNode(node.id,{status:'pending'});await this.updatePipeline(pipeline.id,{status:'paused',summary:message});
+        return {output:'',raw:'',stopped:{pipelineId:pipeline.id,result:message}};
+      }
       // The stage's own reason, without worker-spawner's `Worker "x" failed:` wrapper (#7).
       const errorMsg = (error as Error).message.replace(/^Worker "[^"]*" failed: /, '');
       await partialWrite;
@@ -3427,6 +3440,7 @@ export class PipelineManager {
 
       return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: `Pipeline failed at "${node.name}": ${errorMsg}${remainingNote}` } };
     } finally {
+      if(companionStageCap!==undefined)await (await import('@/core/companion/scheduling')).releaseCompanionStage(pipeline.id);
       // Charge the node whatever this visit cost, success or failure — a run
       // that failed still burned the tokens, and the pool it draws from is what
       // bounds a loop whose item count is not known when the run starts. The

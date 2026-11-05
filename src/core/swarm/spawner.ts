@@ -611,6 +611,14 @@ export class SwarmSpawner {
       }
     }
 
+    const maintenanceSession = await sessionRepository.findById(parentContext.sessionId);
+    const maintenanceReview = !!maintenanceSession?.context?.companionMaintenance;
+    if (maintenanceReview) {
+      if (childRole !== 'review') return denyAndRelease(this.denialResult(parent, 'Maintenance delegation supports an independent review role only.'));
+      const { getToolRegistry } = await import('@/tools/registry');
+      const allowed = new Set(['companion__maintenance_inspect','companion__maintenance_review']);
+      roleTools.splice(0,roleTools.length,...getToolRegistry().getToolHandlersForTools(['companion']).filter(tool=>allowed.has(tool.name)));
+    }
     let childTools = resolveChildTools(parent.allowedToolIds, roleTools);
 
     // Plan mode is inherited by every child, at every depth. This is the OTHER
@@ -664,6 +672,7 @@ export class SwarmSpawner {
         parentContext.sponsor,
       ));
 
+    if (maintenanceReview && isCLIProvider((await resolveModel({userId:parentContext.userId,name:childModelName}))?.provider ?? '')) return denyAndRelease(this.denialResult(parent, 'Maintenance reviewers require a scoped API or local model.'));
     if (params.routePolicy?.primaryModel && ![childModel, childModelName].includes(params.routePolicy.primaryModel)) {
       graph.releaseFingerprint(briefHash);
       return this.denialResult(parent, 'Requested primaryModel does not match the configured topic route. No child was started; change the topic binding or request its configured model.');
@@ -918,7 +927,7 @@ export class SwarmSpawner {
       resumeKey,
       onWorkerStarted: internal.onWorkerStarted,
       dispatchId: internal.dispatchId ?? randomUUID(),
-      allowBackup: params.routePolicy?.allowBackup !== false,
+      allowBackup: !maintenanceReview && params.routePolicy?.allowBackup !== false,
       requestedModel: childModel,
       attempts: [],
     })).finally(() => {

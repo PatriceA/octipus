@@ -63,6 +63,12 @@ export async function runPermissionProfile(caller: ApprovalCaller) {
   if (!pipeline || pipeline.userId !== caller.userId || pipeline.sessionId !== caller.sessionId
     || (pipeline.workspaceId ?? null) !== (caller.workspaceId ?? null)
     || !['running', 'awaiting_approval'].includes(pipeline.status)) return undefined;
+  if (pipeline.metadata?.companionGoalId) {
+    const delegated = await (await import('@/core/companion/permissions')).companionGoalProfile(caller);
+    if (!delegated || delegated.goalId !== pipeline.metadata.companionGoalId) return undefined;
+    const bound = pipeline.metadata.permissionProfile as { profile?: unknown } | undefined;
+    if (JSON.stringify(bound?.profile) !== JSON.stringify(delegated.profile)) return undefined;
+  }
   const stored = pipeline.metadata?.permissionProfile as { approvedBy?: string; repoPath?: string; profile?: unknown } | undefined;
   const parsed = pipelinePermissionProfileSchema.safeParse(stored?.profile);
   if (stored?.approvedBy !== caller.userId || !parsed.success || stored.repoPath !== parsed.data.repoPath) return undefined;
