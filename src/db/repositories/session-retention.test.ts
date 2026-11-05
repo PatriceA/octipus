@@ -41,12 +41,12 @@ afterAll(async () => {
  * Inserted with its age: a BEFORE UPDATE trigger resets `updated_at` to now()
  * on every UPDATE, so it cannot be backdated afterwards.
  */
-async function sessionAged(channelId: string, ageDays: number, pinned = false, message?: string) {
+async function sessionAged(channelId: string, ageDays: number, pinned = false, message?: string, workspaceId?: string) {
   const { getDb } = await import('@/db/postgres');
   const { sessions } = await import('@/db/schema/sessions');
   const { messages } = await import('@/db/schema/messages');
   const [session] = await getDb().insert(sessions).values({
-    userId, channelType: 'webchat', channelId, pinned, updatedAt: new Date(Date.now() - ageDays * DAY),
+    userId, workspaceId, channelType: 'webchat', channelId, pinned, updatedAt: new Date(Date.now() - ageDays * DAY),
   }).returning();
   if (message) await getDb().insert(messages).values({ sessionId: session.id, role: 'user', content: message });
   return session;
@@ -146,4 +146,23 @@ describe('sessionRepository.delete', () => {
     expect(left.map((n) => n.pipelineId)).not.toContain(b);
     expect(left.map((n) => n.pipelineId)).toContain(kept);
   });
+});
+
+test('active Companion ownership preserves idle project recovery state until supervision ends', async () => {
+  const { getDb } = await import('@/db/postgres');
+  const { workspaces } = await import('@/db/schema/organizations');
+  const { CompanionSupervisionRepository } = await import('@/db/repositories/companion-supervision-repository');
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const [workspace] = await getDb().insert(workspaces).values({ userId, slug: 'supervision-retention', name: 'Supervision retention', filesDir: crypto.randomUUID() }).returning();
+  const source = await sessionAged('supervision-retained', 20, false, undefined, workspace.id);
+  const repo = new CompanionSupervisionRepository({ userId, workspaceId: workspace.id });
+  const goal = await repo.create({ requestKey: crypto.randomUUID(), title: 'Long running goal', request: 'Keep existing progress', outcome: 'Verified completion', acceptanceCriteria: ['Tests pass'] });
+  await repo.adopt(goal.id, { sessionId: source.id, expectedRevision: 0, purpose: 'Retain recovery state' });
+  await sessionRepository.cleanupOldWebchatSessions(7);
+  expect((await sessionRepository.findById(source.id))?.status).toBe('active');
+  await sessionRepository.deleteExpired(new Date(Date.now() - 14 * DAY));
+  expect(await sessionRepository.findById(source.id)).not.toBeNull();
+  await repo.update(goal.id, { expectedRevision: 1, state: 'cancelled' });
+  await sessionRepository.deleteExpired(new Date(Date.now() - 14 * DAY));
+  expect(await sessionRepository.findById(source.id)).toBeNull();
 });

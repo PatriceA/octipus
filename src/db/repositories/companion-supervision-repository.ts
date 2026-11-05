@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { companionActions, companionGoals, companionSessionLinks, type CompanionGoal } from '@/db/schema/companion-supervision';
+import { companionActions, companionEvents, companionGoals, companionSessionLinks, companionSettings, type CompanionGoal } from '@/db/schema/companion-supervision';
 import { workspaces } from '@/db/schema/organizations';
 import { users } from '@/db/schema/users';
 import { sessions, sessionGeneration } from '@/db/schema/sessions';
@@ -16,6 +16,7 @@ import {
   CompanionSupervisionError, createCompanionGoalSchema, updateCompanionGoalSchema,
   type CompanionCompletionEvidence, type CompanionScope,
   startCompanionSessionSchema, companionSessionMessageSchema,
+  companionSettingsSchema,
 } from '@/shared/companion-supervision';
 
 type Transaction = Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0];
@@ -145,6 +146,7 @@ export class CompanionSupervisionRepository {
       if (terminal(goal)) return fail('conflict', 'This goal has ended');
       // All claims in a session serialize, including pipeline versus whole-session ownership.
       const session = await this.session(tx, data.sessionId);
+      if (session.context?.companionSupervisor) return fail('conflict', 'The Companion controller cannot adopt itself as project work');
       if (data.pipelineId) {
         const [pipeline] = await tx.select({ id: pipelines.id }).from(pipelines).where(and(eq(pipelines.id, data.pipelineId),
           eq(pipelines.sessionId, session.id), eq(pipelines.userId, this.scope.userId), eq(pipelines.workspaceId, this.scope.workspaceId))).for('share');
@@ -166,6 +168,7 @@ export class CompanionSupervisionRepository {
       }
       const [link] = await tx.insert(companionSessionLinks).values({ goalId: goal.id, sessionId: session.id, pipelineId: data.pipelineId,
         purpose: data.purpose, ownership: data.ownership }).returning();
+      await tx.insert(companionEvents).values({ goalId: goal.id, sessionId: session.id, kind: 'adopted', sourceId: data.pipelineId ?? session.id, state: session.status });
       const [updated] = await tx.update(companionGoals).set({ revision: goal.revision + 1, updatedAt: new Date(),
         protectionLevel: Math.max(goal.protectionLevel, session.protectionLevel ?? 1) }).where(this.goalWhere(id)).returning();
       return { goal: await this.protect(tx, updated), link };
@@ -238,7 +241,7 @@ export class CompanionSupervisionRepository {
     });
   }
 
-  async startSession(id: string, input: unknown) {
+  async startSession(id: string, input: unknown, automatic = false) {
     const data = startCompanionSessionSchema.parse(input);
     assertNoCredentialTemplates(data);
     return this.db().transaction(async tx => {
@@ -252,11 +255,17 @@ export class CompanionSupervisionRepository {
         return existing;
       }
       if (terminal(goal) || goal.state === 'paused' || goal.revision !== data.expectedRevision) return fail('conflict', 'Goal changed or is not ready to start work');
+      if (automatic) {
+        const [paused] = await tx.select({ id: sessions.id }).from(sessions).innerJoin(companionSessionLinks, eq(companionSessionLinks.sessionId, sessions.id))
+          .where(and(eq(companionSessionLinks.goalId, id), eq(companionSessionLinks.active, true), eq(companionSessionLinks.ownership, 'owner'), eq(sessions.status, 'paused'))).limit(1);
+        if (paused) return fail('conflict', 'The owner paused existing work; automatic coordination cannot replace it');
+      }
       const source = data.sourceSessionId ? await this.session(tx, data.sourceSessionId) : undefined;
       const [sourceLabels] = source ? await tx.select({ flowLabel: sessions.flowLabel, protectionLevel: sessions.protectionLevel }).from(sessions).where(eq(sessions.id, source.id)) : [];
       const sessionId = randomUUID();
       const level = Math.max(goal.protectionLevel, sourceLabels?.protectionLevel ?? 1);
       await tx.insert(sessions).values({ id: sessionId, ...this.scope, title: goal.title, channelType: 'webchat', channelId: `companion:${goal.id}`,
+        pinned: true,
         protectionLevel: level, flowLabel: { ...goal.flowLabel, ...sourceLabels?.flowLabel }, context: { companion: { goalId: goal.id, modelName: data.modelName },
           ...(data.projectPath ? { projectPath: data.projectPath } : {}) } });
       await tx.insert(companionSessionLinks).values({ goalId: id, sessionId, origin: 'created', ownership: 'owner', purpose: goal.outcome });
@@ -283,6 +292,7 @@ export class CompanionSupervisionRepository {
       const sourceIds = [...new Set([data.sessionId, data.sourceSessionId].filter((id): id is string => !!id))].sort();
       const sources = [];
       for (const sourceId of sourceIds) sources.push(await this.session(tx, sourceId));
+      if (sources.find(source => source.id === data.sessionId)?.status !== 'active') return fail('conflict', 'The owner paused this session; explicitly continue it before sending work');
       const [link] = await tx.select({ id: companionSessionLinks.id }).from(companionSessionLinks).where(and(eq(companionSessionLinks.goalId, id),
         eq(companionSessionLinks.sessionId, data.sessionId), isNull(companionSessionLinks.pipelineId), eq(companionSessionLinks.active, true), eq(companionSessionLinks.ownership, 'owner')));
       if (!link) return fail('not_found', 'An owned whole-session link is required to send instructions');
@@ -300,6 +310,47 @@ export class CompanionSupervisionRepository {
       await this.assertScope(tx);
       await this.goal(tx, id);
       return tx.select().from(companionActions).where(eq(companionActions.goalId, id)).orderBy(desc(companionActions.createdAt)).limit(50);
+    });
+  }
+
+  async readSettings() {
+    return this.db().transaction(async tx => {
+      await this.assertScope(tx);
+      const [row] = await tx.select().from(companionSettings).where(and(eq(companionSettings.userId, this.scope.userId), eq(companionSettings.workspaceId, this.scope.workspaceId)));
+      return { ...companionSettingsSchema.parse({ ...row?.options, enabled: row?.enabled ?? false, modelName: row?.modelName ?? '', autonomy: row?.autonomy ?? 'observe' }),
+        supervisorSessionId: row?.supervisorSessionId ?? null, revision: row?.revision ?? 0 };
+    });
+  }
+
+  async saveSettings(input: unknown, expectedRevision: number) {
+    const data = companionSettingsSchema.parse(input);
+    assertNoCredentialTemplates(data);
+    try { new Intl.DateTimeFormat('en', { timeZone: data.timezone }).format(); } catch { return fail('conflict', 'Choose a valid timezone'); }
+    return this.db().transaction(async tx => {
+      await this.assertScope(tx);
+      await tx.insert(companionSettings).values(this.scope).onConflictDoNothing({ target: [companionSettings.userId, companionSettings.workspaceId] });
+      const [row] = await tx.select().from(companionSettings).where(and(eq(companionSettings.userId, this.scope.userId), eq(companionSettings.workspaceId, this.scope.workspaceId))).for('update');
+      if (row.revision !== expectedRevision) return fail('conflict', 'Companion settings changed; refresh before saving');
+      let sessionId = row.supervisorSessionId;
+      if (data.enabled && !sessionId) {
+        sessionId = randomUUID();
+        await tx.insert(sessions).values({ id: sessionId, ...this.scope, title: 'Companion project coordination', channelType: 'webchat', channelId: `companion-controller:${row.id}`,
+          pinned: true,
+          context: { companionSupervisor: { modelName: data.modelName } } });
+      } else if (sessionId) {
+        await tx.update(sessions).set({ ...(data.enabled ? { status: 'active' as const } : {}),
+          context: sql`jsonb_set(coalesce(${sessions.context},'{}'::jsonb) - 'companionOwnerPause','{companionSupervisor}',${JSON.stringify({ modelName: data.modelName })}::jsonb)` })
+          .where(and(eq(sessions.id, sessionId), eq(sessions.userId, this.scope.userId), eq(sessions.workspaceId, this.scope.workspaceId)));
+      }
+      const { enabled, modelName, autonomy, ...options } = data;
+      await tx.update(companionSettings).set({ enabled, modelName, autonomy, options, supervisorSessionId: sessionId,
+        revision: row.revision + 1, approvedAt: enabled ? new Date() : null, updatedAt: new Date() }).where(eq(companionSettings.id, row.id));
+      if (enabled) {
+        const goals = await tx.select({ id: companionGoals.id, state: companionGoals.state }).from(companionGoals)
+          .where(and(eq(companionGoals.userId, this.scope.userId), eq(companionGoals.workspaceId, this.scope.workspaceId), inArray(companionGoals.state, ['queued', 'active', 'waiting', 'needs_decision'])));
+        if (goals.length) await tx.insert(companionEvents).values(goals.map(goal => ({ goalId: goal.id, kind: 'reconcile', sourceId: goal.id, state: goal.state })));
+      }
+      return { ...data, supervisorSessionId: sessionId, revision: row.revision + 1 };
     });
   }
 
@@ -324,12 +375,13 @@ export class CompanionSupervisionRepository {
     });
   }
 
-  async controlSession(id: string, sessionId: string, state: 'active' | 'paused') {
+  async controlSession(id: string, sessionId: string, state: 'active' | 'paused', automatic = false) {
     return this.db().transaction(async tx => {
       await this.assertScope(tx);
       const goal = await this.goal(tx, id, true);
       if (terminal(goal)) return fail('conflict', 'This goal has ended');
-      await this.session(tx, sessionId);
+      const session = await this.session(tx, sessionId);
+      if (automatic && state === 'active' && session.status === 'paused') return fail('conflict', 'Only the owner can resume deliberately paused work');
       const [owner] = await tx.select({ id: companionSessionLinks.id }).from(companionSessionLinks).where(and(eq(companionSessionLinks.goalId, id),
         eq(companionSessionLinks.sessionId, sessionId), isNull(companionSessionLinks.pipelineId), eq(companionSessionLinks.ownership, 'owner'), eq(companionSessionLinks.active, true)));
       if (!owner) return fail('not_found', 'An owned whole-session link is required');

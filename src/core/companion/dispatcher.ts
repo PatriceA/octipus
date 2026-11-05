@@ -16,6 +16,7 @@ import { coreLogger } from '@/utils/logger';
 export class CompanionDispatcher {
   private running = new Set<string>();
   async tick() {
+    await (await import('./observation')).tickCompanionObservation();
     // Every server stops its own workers after an owner's durable pause,
     // including when the control request reached a different server instance.
     const paused = await getDb().select({ sessionId: sessions.id, userId: companionGoals.userId }).from(sessions)

@@ -1,6 +1,6 @@
 # Companion supervisor implementation plan
 
-Status: Implementation started on `feat/companion-supervisor`. Created 2026-11-05. M1 and M2 are implemented and reviewed; M3 through M8 remain in progress. Companion now has goal intake, session control and durable dispatch; automatic observation and recovery are the next milestones.
+Status: Implementation started on `feat/companion-supervisor`. Created 2026-11-05. M1 through M3 are implemented and reviewed; M4 through M8 remain in progress. Companion has goal intake, session control, durable dispatch and opt-in background observation. Incident recovery and maintenance are the next milestones.
 
 Companion becomes the persistent owner of the user's work across projects and sessions. The user gives it an outcome; Companion starts or adopts sessions, follows their progress, investigates blockers, coordinates repairs, verifies recovery and reports meaningful results. The user should no longer need to copy error reports between sessions to keep work moving.
 
@@ -119,7 +119,11 @@ M2 adds authenticated goal/session APIs, the Companion page and General-agent to
 
 The M2 review identified and corrected privacy transfer gaps, concurrent session dispatch, cleared-conversation replay, live cloud steering, retry-key lifecycle, HTTP UUID validation and completion while work remains active. The final independent review found no remaining blocking M2 issues. Validation: 64 focused backend tests and three browser scenarios passed, with typechecks, lint and build checks.
 
-Next: M3 durable observation and proactive continuation. No existing live sessions or pipelines have been enrolled, and the live backend has not been restarted as part of this implementation.
+M3 adds transactionally recorded source events, coalesced persisted supervisor wakes, opt-in settings and a dedicated scoped controller conversation. The controller uses an API or local tool-capable text model; project sessions retain CLI support. Observation mode withholds mutation and generic execution/delegation tools. Pauses and stops are durable across existing command, API and gateway surfaces. Active ownership protects project recovery state from retention. Stale workers generate bounded inspection-only suspicions using progress, command receipts and human/provider waits.
+
+Independent M3 review found and verified fixes for unstarted event loss on reconfiguration, workspace starvation, retention, pause preservation and silent CLI stalls. Backend validation includes 130 passing tests across repository, retention, controller policy and pipeline-loop suites, followed by focused reruns. Four browser scenarios pass, including persisted supervision settings and revocation. Queued automatic-action authority revalidation is explicitly required in M4 before activation.
+
+Next: M4 incident diagnosis and bounded recovery. No existing live sessions or pipelines have been enrolled, and the live backend has not been restarted as part of this implementation.
 
 ### M1 Durable goals and ownership
 

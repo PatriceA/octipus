@@ -788,6 +788,10 @@ async function handleAgentStop(
       });
       return;
     }
+    if (agent.getContext().root) {
+      try { await (await import('@/core/companion/user-control')).recordCompanionOwnerStop(agent.getContext().sessionId, context.userId); }
+      catch (error) { coreLogger.error({ error, sessionId: agent.getContext().sessionId }, 'Could not persist Companion owner stop'); }
+    }
     agentManager.stop(message.agentId, { actorUserId: context.userId });
 
     hub.publishEvent({

@@ -1135,6 +1135,13 @@
       "when": 1793880001000,
       "tag": "0161_companion_actions",
       "breakpoints": true
+    },
+    {
+      "idx": 162,
+      "version": "7",
+      "when": 1793880002000,
+      "tag": "0162_companion_observation",
+      "breakpoints": true
     }
   ]
 }

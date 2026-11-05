@@ -28,6 +28,10 @@ async function handle<T>(principal: Principal, set: { status?: string | number }
 }
 const id = t.Object({ id: t.String({ pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' }) });
 export const companionRoutes = new Elysia({ prefix: '/companion' }).use(apiContext)
+  .get('/settings', ({ principal, set }) => handle(principal, set, false, s => s.readSettings()))
+  .put('/settings', ({ principal, set, body }) => handle(principal, set, true, s => s.saveSettings(body.settings, body.expectedRevision)), {
+    body: t.Object({ expectedRevision: t.Integer({ minimum: 0 }), settings: t.Unknown() }),
+  })
   .get('/goals', ({ principal, set }) => handle(principal, set, false, async s => ({ goals: await s.listGoals() })))
   .post('/goals', ({ principal, set, body }) => handle(principal, set, true, s => s.createGoal(body)), { body: t.Unknown() })
   .get('/goals/:id', ({ principal, set, params }) => handle(principal, set, false, s => s.readGoal(params.id)), { params: id })

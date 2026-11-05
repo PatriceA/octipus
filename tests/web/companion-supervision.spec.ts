@@ -2,11 +2,14 @@ import { test, expect } from './fixtures/auth';
 import { json, stubAllDefaults } from './fixtures/api-stubs';
 
 const goal = { id: 'goal-one', title: 'Finish the project', request: 'Finish the project', outcome: 'Verified delivery', acceptanceCriteria: ['Tests pass'], state: 'active', priority: 0, revision: 1, protectionLevel: 1 };
+const defaultSettings = { enabled: false, modelName: '', autonomy: 'observe', maxConcurrent: 2, dailyTokenBudget: 100000, turnTokenBudget: 16000,
+  maxRepairAttempts: 2, quietHoursStart: 22, quietHoursEnd: 7, timezone: 'UTC', revision: 0, supervisorSessionId: null };
 async function setup(page: import('@playwright/test').Page) {
   await stubAllDefaults(page);
   await page.route('**/api/companion/goals', route => json(route, 200, { goals: [goal] }));
   await page.route('**/api/companion/goals/goal-one', route => json(route, 200, { goal, links: [{ id: 'link', sessionId: 'existing-session', pipelineId: null, purpose: 'Project work', ownership: 'owner', active: true }] }));
   await page.route('**/api/companion/goals/goal-one/actions', route => json(route, 200, { actions: [] }));
+  await page.route('**/api/companion/settings', route => json(route, 200, defaultSettings));
   await page.route('**/api/models', route => json(route, 200, { models: [{ name: 'Codex', modelId: 'cli/codex', provider: 'cli', supportsTools: true, isEnabled: true }] }));
   await page.route('**/api/sessions?limit=100', route => json(route, 200, { sessions: [{ id: 'existing-session', title: 'Project session' }] }));
   await page.goto('/companion');
@@ -60,4 +63,25 @@ test('repeated intentional instructions get distinct action keys after successfu
     await expect(page.getByLabel('Send instructions to the selected session')).toHaveValue('');
   }
   expect(keys).toHaveLength(2); expect(keys[0]).not.toBe(keys[1]);
+});
+
+test('background supervision settings persist and can be revoked without opening configuration files', async ({ authenticatedPage: page }) => {
+  await setup(page);
+  let settings = { ...defaultSettings };
+  await page.route('**/api/models', route => json(route, 200, { models: [{ name: 'Local supervisor', modelId: 'qwen', provider: 'ollama', supportsTools: true, isEnabled: true }] }));
+  await page.route('**/api/companion/settings', route => {
+    if (route.request().method() === 'PUT') settings = { ...settings, ...route.request().postDataJSON().settings, revision: settings.revision + 1 };
+    return json(route, 200, settings);
+  });
+  await page.reload();
+  const panel = page.getByRole('form', { name: 'Supervision settings' });
+  await panel.getByRole('checkbox', { name: 'Enable background supervision' }).check();
+  await panel.getByRole('combobox', { name: 'Supervisor model' }).selectOption('Local supervisor');
+  await panel.getByRole('button', { name: 'Save supervision settings' }).click();
+  await expect.poll(() => settings.enabled).toBe(true);
+  await page.reload();
+  await expect(panel.getByRole('checkbox', { name: 'Enable background supervision' })).toBeChecked();
+  await panel.getByRole('checkbox', { name: 'Enable background supervision' }).uncheck();
+  await panel.getByRole('button', { name: 'Save supervision settings' }).click();
+  await expect.poll(() => settings.enabled).toBe(false);
 });

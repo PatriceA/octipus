@@ -106,6 +106,8 @@ export interface CompactionState {
 }
 
 export interface SessionContext {
+  /** Dedicated controller session. Its model has only the scoped Companion toolbox. */
+  companionSupervisor?: { modelName: string };
   /** Explicit persistent model binding for a Companion-created project session. */
   companion?: { goalId: string; modelName: string };
   /** Unique clear generation; timestamps alone can collide within one millisecond. */

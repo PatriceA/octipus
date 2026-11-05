@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { boolean, check, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigserial, boolean, check, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type { CompanionCompletionEvidence, CompanionGoalState } from '@/shared/companion-supervision';
 import { users } from './users';
 import { workspaces } from './organizations';
@@ -86,3 +86,40 @@ export const companionActions = pgTable('companion_actions', {
   check('companion_actions_status_chk', sql`${t.status} IN ('queued', 'running', 'completed', 'failed', 'unknown', 'cancelled')`),
 ]);
 export type CompanionAction = typeof companionActions.$inferSelect;
+
+export const companionSettings = pgTable('companion_settings', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  workspaceId: uuid('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  enabled: boolean('enabled').notNull().default(false),
+  modelName: text('model_name').notNull().default(''),
+  autonomy: text('autonomy').$type<'observe' | 'coordinate' | 'repair'>().notNull().default('observe'),
+  options: jsonb('options').$type<Record<string, unknown>>().notNull().default({}),
+  supervisorSessionId: uuid('supervisor_session_id').references(() => sessions.id, { onDelete: 'set null' }),
+  revision: integer('revision').notNull().default(0),
+  approvedAt: timestamp('approved_at', { withTimezone: true }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex('companion_settings_scope_idx').on(t.userId, t.workspaceId)]);
+
+export const companionEvents = pgTable('companion_events', {
+  seq: bigserial('seq', { mode: 'number' }).primaryKey(),
+  goalId: uuid('goal_id').notNull().references(() => companionGoals.id, { onDelete: 'cascade' }),
+  sessionId: uuid('session_id'),
+  kind: text('kind').notNull(), sourceId: text('source_id').notNull(), state: text('state').notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [index('companion_events_pending_idx').on(t.consumedAt, t.seq), index('companion_events_goal_idx').on(t.goalId, t.seq),
+  uniqueIndex('companion_events_stall_idx').on(t.goalId, t.kind, t.sourceId).where(sql`${t.kind} = 'stall'`)]);
+
+export const companionWakes = pgTable('companion_wakes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  settingsId: uuid('settings_id').notNull().references(() => companionSettings.id, { onDelete: 'cascade' }),
+  sessionId: uuid('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  generation: text('generation').notNull().default(''),
+  status: text('status').$type<'running' | 'completed' | 'failed' | 'unknown'>().notNull(),
+  eventSeqs: jsonb('event_seqs').$type<number[]>().notNull(),
+  leaseToken: uuid('lease_token').notNull(), leaseUntil: timestamp('lease_until', { withTimezone: true }).notNull(),
+  result: text('result'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex('companion_wakes_active_idx').on(t.settingsId).where(sql`${t.status} IN ('running','unknown')`)]);

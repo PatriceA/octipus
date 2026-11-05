@@ -9,14 +9,17 @@ import type { getDb } from '@/db/postgres';
 import { CompanionService } from '@/core/companion/service';
 import { CompanionSupervisionRepository } from './companion-supervision-repository';
 import { CompanionDispatcher } from '@/core/companion/dispatcher';
+import { tickCompanionObservation } from '@/core/companion/observation';
+import { companionStallSuspected, scanCompanionStalls, COMPANION_STALL_SILENCE_MS } from '@/core/companion/stalls';
+import { recordCompanionOwnerStop } from '@/core/companion/user-control';
 import { persistCompanionSource } from '@/core/companion/provenance';
 import { observeFlow, resetFlowLabels } from '@/security/flow-guard';
 import { raiseSessionLevel, resetSessionLevels } from '@/core/protection/session-level';
 
-const runtime = vi.hoisted(() => ({ db: undefined as unknown, handle: vi.fn(), canSteer: vi.fn(), steer: vi.fn(), publish: vi.fn(), stop: vi.fn(), guard: vi.fn(), model: vi.fn() }));
+const runtime = vi.hoisted(() => ({ db: undefined as unknown, handle: vi.fn(), canSteer: vi.fn(), steer: vi.fn(), publish: vi.fn(), stop: vi.fn(), guard: vi.fn(), model: vi.fn(), worker: vi.fn() }));
 vi.mock('@/db/postgres', () => ({ getDb: () => runtime.db }));
 vi.mock('@/core/agent/service', () => ({ getAgentService: () => ({ handleMessage: runtime.handle, canSteer: runtime.canSteer, steer: runtime.steer, publishResponse: runtime.publish }) }));
-vi.mock('@/core/agent-manager', () => ({ getAgentManager: () => ({ stopSession: runtime.stop, getBySession: () => [{ getStatus: () => 'running', getContext: () => ({ root: true, model: 'fixture-model', modelName: 'fixture-model' }) }] }) }));
+vi.mock('@/core/agent-manager', () => ({ getAgentManager: () => ({ get: runtime.worker, stopSession: runtime.stop, getBySession: () => [{ getStatus: () => 'running', getContext: () => ({ root: true, model: 'fixture-model', modelName: 'fixture-model' }) }] }) }));
 vi.mock('@/models/resolve-model', () => ({ resolveModel: runtime.model }));
 vi.mock('@/core/protection/routing', () => ({ assertMayLeave: runtime.guard }));
 
@@ -53,23 +56,29 @@ beforeAll(async () => {
     CREATE TABLE tasks(id uuid PRIMARY KEY, user_id uuid REFERENCES users(id), workspace_id uuid);
     CREATE TABLE verification_evidence(id uuid PRIMARY KEY, session_id uuid, pipeline_id uuid, passed boolean,
       kind text DEFAULT 'pre_verify', stage text, node_id text, detail jsonb, created_at timestamptz DEFAULT now());
-    CREATE TABLE agents(id text PRIMARY KEY, session_id uuid, status text, user_id text, workspace_id uuid, role text, model text, error text, created_at timestamptz DEFAULT now());
+    CREATE TABLE agents(id text PRIMARY KEY, session_id uuid, status text, user_id text, workspace_id uuid, role text, model text, error text, parent_agent_id text, created_at timestamptz DEFAULT now());
     CREATE TABLE messages(id uuid PRIMARY KEY DEFAULT gen_random_uuid(), session_id uuid, role text, content text, created_at timestamptz DEFAULT now());
     ALTER TABLE pipelines ADD COLUMN title text;
     ALTER TABLE pipelines ADD COLUMN summary text;
     ALTER TABLE pipelines ADD COLUMN current_node_key text;
     ALTER TABLE pipelines ADD COLUMN created_at timestamptz DEFAULT now();
+    ALTER TABLE pipelines ADD COLUMN metadata jsonb DEFAULT '{}';
+    CREATE TABLE agent_events(id serial PRIMARY KEY,agent_id text,user_id text,created_at timestamptz DEFAULT now());
+    CREATE TABLE tool_actions(id uuid PRIMARY KEY,agent_id text,user_id text,status text,created_at timestamptz DEFAULT now());
+    CREATE TABLE permission_requests(id uuid PRIMARY KEY,agent_id text,status text,expires_at timestamptz);
   `);
   await pg.exec(readFileSync('src/db/migrations/0160_companion_supervision.sql', 'utf8'));
   await pg.exec(readFileSync('src/db/migrations/0161_companion_actions.sql', 'utf8'));
+  await pg.exec(readFileSync('src/db/migrations/0162_companion_observation.sql', 'utf8'));
   db = drizzle(pg);
   runtime.db = db;
 }, 30_000);
 afterAll(async () => { await pg.close(); rmSync(dir, { recursive: true, force: true }); });
 beforeEach(async () => {
-  await pg.exec('TRUNCATE companion_actions, companion_session_links, companion_goals, verification_evidence, tasks, pipelines, sessions, workspaces, users, agents, messages CASCADE');
+  await pg.exec('TRUNCATE companion_wakes,companion_events,companion_settings,companion_actions, companion_session_links, companion_goals, verification_evidence, tasks, pipelines, sessions, workspaces, users, agents, messages,agent_events,tool_actions,permission_requests CASCADE');
   vi.clearAllMocks(); resetFlowLabels(); resetSessionLevels();
   runtime.canSteer.mockReturnValue(false); runtime.steer.mockReturnValue(true); runtime.guard.mockResolvedValue(undefined);
+  runtime.worker.mockReturnValue(undefined);
   runtime.model.mockImplementation(async ({ name }: { name: string }) => ({ name, modelId: name, supportsTools: true, provider: 'cli' }));
   runtime.handle.mockImplementation(async (_session, _user, _message, _channel, _files, _mode, beforeStart) => { await beforeStart(); return { outcome: 'success', response: 'Checked result' }; });
   await pg.query('INSERT INTO users(id) VALUES ($1), ($2)', [userId, otherUserId]);
@@ -463,4 +472,120 @@ test('durable session pause is enforced on every dispatcher and cannot be change
   await expect(repository().controlSession(observer.id, sessionId, 'active')).rejects.toMatchObject({ code: 'not_found' });
   await repository().controlSession(goal.id, sessionId, 'active');
   expect((await pg.query('SELECT status FROM sessions WHERE id=$1', [sessionId])).rows).toEqual([{ status: 'active' }]);
+});
+
+test('execution events commit and roll back with the source transition', async () => {
+  const goal = await service().createGoal(request());
+  await service().adoptExecution(goal.id, adoption());
+  const before = await pg.query('SELECT count(*)::int AS count FROM companion_events');
+  await pg.exec("BEGIN; UPDATE pipelines SET status='failed'; ROLLBACK;");
+  expect((await pg.query('SELECT count(*)::int AS count FROM companion_events')).rows).toEqual(before.rows);
+  await pg.query("UPDATE pipelines SET status='paused',metadata='{}' WHERE id=$1", [pipelineId]);
+  expect((await pg.query('SELECT source_id,state FROM companion_events WHERE kind=\'pipelines\'')).rows)
+    .toEqual([{ source_id: pipelineId, state: 'paused' }]);
+});
+
+test('a committed event batch wakes the supervisor once without any browser or process-local event delivery', async () => {
+  const goal = await service().createGoal(request());
+  await service().adoptExecution(goal.id, adoption());
+  await repository().saveSettings({ enabled: true, modelName: 'fixture-api', autonomy: 'observe' }, 0);
+  await pg.query("UPDATE pipelines SET status='failed' WHERE id=$1", [pipelineId]);
+  await pg.query("UPDATE pipelines SET status='completed' WHERE id=$1", [pipelineId]);
+  await Promise.all([tickCompanionObservation(), tickCompanionObservation()]);
+  await vi.waitFor(async () => expect((await pg.query('SELECT status FROM companion_wakes')).rows).toEqual([{ status: 'completed' }]));
+  expect(runtime.handle).toHaveBeenCalledTimes(1);
+  const prompt = runtime.handle.mock.calls[0][2];
+  expect(prompt).toContain('completed');
+  expect(prompt).not.toContain('"state":"failed"');
+  await tickCompanionObservation(); expect(runtime.handle).toHaveBeenCalledTimes(1);
+});
+
+test('observation is opt-in and revalidates settings before the queued model turn starts', async () => {
+  await service().createGoal(request());
+  await tickCompanionObservation(); expect(runtime.handle).not.toHaveBeenCalled();
+  await repository().saveSettings({ enabled: true, modelName: 'fixture-api' }, 0);
+  runtime.handle.mockImplementationOnce(async (_session, _user, _message, _channel, _files, _mode, beforeStart) => {
+    await repository().saveSettings({ enabled: false, modelName: 'fixture-api' }, 1);
+    await beforeStart(); return { outcome: 'success', response: 'Should not run' };
+  });
+  await tickCompanionObservation();
+  await vi.waitFor(async () => expect((await pg.query('SELECT status FROM companion_wakes')).rows).toEqual([{ status: 'failed' }]));
+  expect(runtime.publish).not.toHaveBeenCalled();
+});
+
+test('observer settings reject shared scopes, stale edits, invalid zones and CLI supervisor models', async () => {
+  await expect(repository(userId, sharedWorkspaceId).saveSettings({}, 0)).rejects.toMatchObject({ code: 'scope_unavailable' });
+  await repository().saveSettings({ enabled: false }, 0);
+  await expect(repository().saveSettings({ enabled: true, modelName: 'api' }, 0)).rejects.toMatchObject({ code: 'conflict' });
+  await expect(repository().saveSettings({ timezone: 'Missing/Timezone' }, 1)).rejects.toMatchObject({ code: 'conflict' });
+  await expect(service().saveSettings({ enabled: true, modelName: 'fixture-cli' }, 1)).rejects.toMatchObject({ code: 'conflict' });
+});
+
+test('a cancelled unstarted observation batch remains available after supervision is enabled again', async () => {
+  await service().createGoal(request());
+  await repository().saveSettings({ enabled: true, modelName: 'api' }, 0);
+  runtime.handle.mockImplementationOnce(async (_session, _user, _message, _channel, _files, _mode, beforeStart) => {
+    await repository().saveSettings({ enabled: false, modelName: 'api' }, 1);
+    await beforeStart();
+  });
+  await tickCompanionObservation();
+  await vi.waitFor(async () => expect((await pg.query('SELECT status FROM companion_wakes')).rows).toEqual([{ status: 'failed' }]));
+  expect((await pg.query('SELECT count(*)::int AS n FROM companion_events WHERE consumed_at IS NULL')).rows[0]).toMatchObject({ n: expect.any(Number) });
+  await repository().saveSettings({ enabled: true, modelName: 'api' }, 2);
+  await tickCompanionObservation();
+  await vi.waitFor(async () => expect((await pg.query("SELECT count(*)::int AS n FROM companion_wakes WHERE status='completed'")).rows).toEqual([{ n: 1 }]));
+});
+
+test('automatic coordination cannot reactivate or replace deliberately paused work', async () => {
+  const goal = await service().createGoal(request());
+  await service().adoptExecution(goal.id, adoption({ pipelineId: null }));
+  await recordCompanionOwnerStop(sessionId, userId);
+  expect((await pg.query('SELECT status FROM sessions WHERE id=$1', [sessionId])).rows).toEqual([{ status: 'paused' }]);
+  await expect(repository().controlSession(goal.id, sessionId, 'active', true)).rejects.toMatchObject({ code: 'conflict' });
+  await expect(repository().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 1, modelName: 'api' }, true)).rejects.toMatchObject({ code: 'conflict' });
+  await repository().controlSession(goal.id, sessionId, 'active', false);
+  expect((await pg.query('SELECT status FROM sessions WHERE id=$1', [sessionId])).rows).toEqual([{ status: 'active' }]);
+});
+
+test('stall suspicion excludes healthy commands, approval waits, provider waits and recent progress', () => {
+  const input = { now: COMPANION_STALL_SILENCE_MS + 10_000, lastProgressAt: 1, commandRunning: false, awaitingApproval: false };
+  expect(companionStallSuspected(input)).toBe(true);
+  expect(companionStallSuspected({ ...input, commandRunning: true })).toBe(false);
+  expect(companionStallSuspected({ ...input, awaitingApproval: true })).toBe(false);
+  expect(companionStallSuspected({ ...input, localActivity: { lastActivityAt: 1, blockedSince: 1 } })).toBe(false);
+  expect(companionStallSuspected({ ...input, localActivity: { lastActivityAt: input.now, blockedSince: null } })).toBe(false);
+});
+
+test('silent stalls create one durable inspection event per progress marker without stopping a worker', async () => {
+  const goal = await service().createGoal(request());
+  await service().adoptExecution(goal.id, adoption({ pipelineId: null }));
+  await service().updateGoal(goal.id, { expectedRevision: 1, state: 'active' });
+  await repository().saveSettings({ enabled: true, modelName: 'api' }, 0);
+  await pg.query("INSERT INTO agents(id,user_id,workspace_id,session_id,status,created_at) VALUES ('silent',$1,$2,$3,'running',now()-interval '40 minutes')", [userId, workspaceId, sessionId]);
+  runtime.worker.mockReturnValue({ getStatus: () => 'running' }); // CLI workers have no getActivity heartbeat.
+  await scanCompanionStalls(Date.now(), true); await scanCompanionStalls(Date.now(), true);
+  expect((await pg.query("SELECT count(*)::int AS n FROM companion_events WHERE kind='stall'")).rows).toEqual([{ n: 1 }]);
+  expect(runtime.stop).not.toHaveBeenCalled();
+  await pg.query("INSERT INTO tool_actions(id,agent_id,user_id,status) VALUES ($1,'silent',$2,'started')", [randomUUID(), userId]);
+  await pg.query("INSERT INTO agent_events(agent_id,user_id,created_at) VALUES ('silent',$1,now()-interval '35 minutes')", [userId]);
+  await scanCompanionStalls(Date.now(), true);
+  expect((await pg.query("SELECT count(*)::int AS n FROM companion_events WHERE kind='stall'")).rows).toEqual([{ n: 1 }]);
+  await pg.query("UPDATE tool_actions SET created_at=now()-interval '3 hours'");
+  await scanCompanionStalls(Date.now(), true);
+  expect((await pg.query("SELECT count(*)::int AS n FROM companion_events WHERE kind='stall'")).rows).toEqual([{ n: 2 }]);
+  expect((await pg.query("SELECT state FROM companion_events WHERE state='suspected_command_outcome'")).rows).toHaveLength(1);
+  expect(runtime.stop).not.toHaveBeenCalled();
+});
+
+test('idle enabled workspaces do not starve a workspace with pending observations', async () => {
+  const idleIds = Array.from({ length: 51 }, () => randomUUID());
+  await pg.query("INSERT INTO workspaces(id,user_id,kind) SELECT x,$1,'personal' FROM unnest($2::uuid[]) x", [userId, idleIds]);
+  await pg.query("INSERT INTO companion_settings(user_id,workspace_id,enabled,model_name) SELECT $1,x,true,'api' FROM unnest($2::uuid[]) x", [userId, idleIds]);
+  await service().createGoal(request());
+  const settings = await repository().saveSettings({ enabled: true, modelName: 'api' }, 0);
+  expect((await pg.query('SELECT pinned FROM sessions WHERE id=$1', [settings.supervisorSessionId])).rows).toEqual([{ pinned: true }]);
+  await tickCompanionObservation();
+  await vi.waitFor(() => expect(runtime.handle).toHaveBeenCalledTimes(1));
+  expect(runtime.handle.mock.calls[0][0]).toBe(settings.supervisorSessionId);
+  await vi.waitFor(async () => expect((await pg.query('SELECT status FROM companion_wakes')).rows).toEqual([{ status: 'completed' }]));
 });

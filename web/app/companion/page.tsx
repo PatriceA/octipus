@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import { useWorkspace } from '@/lib/workspace-context';
+import { SupervisionSettings } from '@/components/companion/supervision-settings';
 import type { CompanionGoalView as CompanionGoal, CompanionLinkView as CompanionSessionLink, CompanionActionView as CompanionAction } from '../../../src/shared/companion-supervision';
 
 type ModelChoice = { name: string; modelId: string; isEnabled: boolean; supportsTools: boolean; provider: string };
@@ -51,6 +52,7 @@ export default function CompanionPage() {
   return <div className="max-w-6xl space-y-6">
     <PageHeader title="Companion" description="Give your companion an outcome and follow its work across project sessions." />
     {!personal ? <p>Choose a personal workspace to supervise your projects.</p> : <>
+      {activeWorkspace && <SupervisionSettings key={activeWorkspace.id} workspaceId={activeWorkspace.id} models={models.data?.models ?? []} />}
       {(error || goals.error || detail.error || actions.error) && <p role="alert" className="text-error">{error || (goals.error || detail.error || actions.error)?.message}</p>}
       <form className="space-y-3" onSubmit={event => { event.preventDefault(); void change(async () => {
         const created = await postIntent<CompanionGoal>('/companion/goals', { title: request.trim().slice(0, 100), request,

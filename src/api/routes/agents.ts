@@ -460,6 +460,8 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
 
       // Stop the target agent and all other agents in the same session
       // (e.g. stopping the root agent should also stop child CLI workers)
+      try { await (await import('@/core/companion/user-control')).recordCompanionOwnerStop(context.sessionId, user.id); }
+      catch (err) { apiLogger.error({ err, sessionId: context.sessionId }, 'Could not persist Companion owner stop'); }
       const stopped = agentManager.stopSession(context.sessionId, user.id);
 
       return { stopped: stopped > 0 };

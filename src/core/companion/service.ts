@@ -16,17 +16,29 @@ export class CompanionService {
   readGoal(id: string) { return this.repo.read(id); }
   adoptExecution(id: string, input: unknown) { return this.repo.adopt(id, input); }
   updateGoal(id: string, input: unknown) { return this.repo.update(id, input); }
-  async startSession(id: string, input: unknown) {
+  async startSession(id: string, input: unknown, automatic = false) {
     const data = startCompanionSessionSchema.parse(input);
     const model = await resolveModel({ userId: this.repo.scope.userId, name: data.modelName });
     if (!model || !canServeText(model) || !(model.supportsTools || model.provider === 'cli') || /reasoner|thinking/.test(model.modelId)) throw new CompanionSupervisionError('conflict', 'Choose an available text model with tools for this session');
-    return this.repo.startSession(id, { ...data, modelName: model.name });
+    return this.repo.startSession(id, { ...data, modelName: model.name }, automatic);
   }
   messageSession(id: string, input: unknown) { return this.repo.queueMessage(id, input); }
   actions(id: string) { return this.repo.actions(id); }
   inspectSession(id: string, sessionId: string) { return this.repo.inspectSession(id, sessionId); }
-  async controlSession(id: string, sessionId: string, state: 'active' | 'paused') {
-    const result = await this.repo.controlSession(id, sessionId, state);
+  readSettings() { return this.repo.readSettings(); }
+  async saveSettings(input: unknown, expectedRevision: number) {
+    const { companionSettingsSchema } = await import('@/shared/companion-supervision');
+    const data = companionSettingsSchema.parse(input);
+    if (data.enabled) {
+      const model = await resolveModel({ userId: this.repo.scope.userId, name: data.modelName });
+      if (!model || model.provider === 'cli' || !model.supportsTools || !canServeText(model) || /reasoner|thinking/.test(model.modelId))
+        throw new CompanionSupervisionError('conflict', 'Choose an API or local text model with tools for the supervisor. Project sessions can use CLI models.');
+      data.modelName = model.name;
+    }
+    return this.repo.saveSettings(data, expectedRevision);
+  }
+  async controlSession(id: string, sessionId: string, state: 'active' | 'paused', automatic = false) {
+    const result = await this.repo.controlSession(id, sessionId, state, automatic);
     if (state === 'paused') {
       const { getAgentManager } = await import('@/core/agent-manager');
       getAgentManager().stopSession(sessionId, this.repo.scope.userId);

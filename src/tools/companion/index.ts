@@ -19,6 +19,20 @@ function service(context: AgentContext) {
   if (context.space || !context.workspaceId) throw new Error('Companion supervision requires your personal workspace');
   return new CompanionService({ userId: context.userId, workspaceId: context.workspaceId });
 }
+async function mutationService(context: AgentContext, goalId?: string, operation?: string) {
+  const s = service(context);
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const caller = await sessionRepository.findById(context.sessionId);
+  if (caller?.context?.companionSupervisor) {
+    const settings = await s.readSettings();
+    if (!settings.enabled || settings.autonomy === 'observe') throw new Error('Companion is in observation mode; enable coordination to dispatch work');
+    if (context.trigger !== 'user') {
+      if (operation === 'create') throw new Error('Background coordination can manage existing goals; a new goal requires an owner request');
+      if (goalId && (await s.readGoal(goalId)).goal.state === 'paused') throw new Error('The owner paused this goal; automatic coordination cannot resume it');
+    }
+  }
+  return s;
+}
 export class CompanionTool extends BaseTool {
   readonly id = 'companion'; readonly name = 'Companion supervision'; readonly version = '1.0.0';
   readonly description = 'Own goals across project sessions. Start or adopt work, inspect progress, and send authorized instructions. Never create duplicate goals or sessions to retry a failed action; reuse request keys and inspect activity.';
@@ -61,14 +75,14 @@ export class CompanionTool extends BaseTool {
     }, { permissionAction: 'read' });
     this.registerTool('create', 'Create one durable goal. Use a stable UUID requestKey for retries. Acceptance criteria describe the actual requested outcome.', z.toJSONSchema(createCompanionGoalSchema, { io: 'input' }),
       async (args, context) => {
-        const s = service(context);
+        const s = await mutationService(context, undefined, 'create');
         await persistCompanionSource({ userId: context.userId, workspaceId: context.workspaceId! }, context.sessionId);
         const goal = await s.createGoal({ ...args, sourceSessionId: context.sessionId });
         return (await carry(s, goal.id, context)).goal;
       }, { permissionAction: 'write', injectSecrets: false });
     this.registerTool('control_session', 'Pause owned session work, or allow continuation after a user pause. Pausing preserves the saved checkpoint. Activating does not replay old work; send a fresh instruction to continue after inspecting its state.',
       z.toJSONSchema(z.object({ id: z.uuid(), sessionId: z.uuid(), state: z.enum(['active', 'paused']) }), { io: 'input' }),
-      async (args, context) => { const input = z.object({ id: z.uuid(), sessionId: z.uuid(), state: z.enum(['active', 'paused']) }).parse(args); return service(context).controlSession(input.id, input.sessionId, input.state); },
+      async (args, context) => { const input = z.object({ id: z.uuid(), sessionId: z.uuid(), state: z.enum(['active', 'paused']) }).parse(args); return (await mutationService(context, input.id)).controlSession(input.id, input.sessionId, input.state, context.trigger !== 'user'); },
       { permissionAction: 'execute', injectSecrets: false });
     for (const [name, schema, action] of [
       ['update', updateCompanionGoalSchema, 'write'], ['adopt', adoptCompanionExecutionSchema, 'write'],
@@ -76,14 +90,14 @@ export class CompanionTool extends BaseTool {
     ] as const) {
       this.registerTool(name, `${name} for an existing goal. Reuse the request key after a lost response. Starting work does not expand the user's original authorization.`,
         z.toJSONSchema(z.object({ id: z.uuid(), input: schema }), { io: 'input' }), async (args, context) => {
-          const s = service(context), id = z.uuid().parse(args.id);
+          const id = z.uuid().parse(args.id), s = await mutationService(context, id);
           await carry(s, id, context);
           await persistCompanionSource({ userId: context.userId, workspaceId: context.workspaceId! }, context.sessionId);
           let result: unknown;
           if (name === 'start_session') {
             const input = startCompanionSessionSchema.parse(args.input);
             if (input.projectPath) input.projectPath = WorkspaceFS.forAgent(context).resolve(input.projectPath);
-            result = await s.startSession(id, { ...input, sourceSessionId: context.sessionId });
+            result = await s.startSession(id, { ...input, sourceSessionId: context.sessionId }, context.trigger !== 'user');
           }
           else if (name === 'message_session') result = await s.messageSession(id, { ...companionSessionMessageSchema.parse(args.input), sourceSessionId: context.sessionId });
           else if (name === 'adopt') result = await s.adoptExecution(id, args.input);
