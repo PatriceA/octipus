@@ -1508,6 +1508,7 @@ When a task matches one of these skills, load it with get_skill before starting 
       // than leaving a quote-bearing or backslash-terminated value unquoted.
       const shellQuote = (value: string): string => (useShellForSpawn ? windowsShellQuote(value) : value);
       const quoteArg = windowsShellQuoter(binary);
+      // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- binary from the configured CLI tool, args built by its adapter; shell only on Windows with every value quoted (windowsShellQuote); the flagged `opts` carries two booleans that pick resume mode and cold-history length
       const proc = spawn(shellQuote(binary), useShellForSpawn ? args.map(quoteArg) : args, {
         env,
         cwd: workspaceCwd,
