@@ -131,6 +131,8 @@ M6 adds goal execution approval/revocation, incident state and repair-attempt di
 
 M8 exercises a complete engine-driven recovery with no browser: the service boundary is deterministic, while database persistence and required process-sandbox commands are real. A persisted failure is consumed after database reopen, maintenance repairs the prerequisite, the original runtime is verified, continuation executes exactly once and the goal completes against fresh evidence. Separate tests cover external launcher success/failure, atomic captured-resume recovery, source paging, protected document references and delegation. Required-sandbox cases explicitly skip without a runner; no unconfined fallback is counted as sandbox proof. Physical device operation and a production service restart remain operational checks rather than claims made by these fixtures.
 
+Clean-checkout verification of `b0718d88` passed 250 backend tests across 14 suites and all six browser scenarios, plus backend/frontend typechecks, lint, catalog validation and build.
+
 Independent reviews were run for every milestone and their blocking findings corrected. The host USB prerequisite is a separate commit; unrelated CLI compaction edits remain outside this feature. No existing live sessions or pipelines have been enrolled, and the live backend has not been restarted as part of this implementation.
 
 ### M1 Durable goals and ownership
