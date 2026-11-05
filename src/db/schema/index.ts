@@ -79,3 +79,4 @@ export * from './inline-ui-blocks';
 export * from './scan-folders';
 
 export * from './docker-project-owners';
+export * from './companion-supervision';

@@ -276,6 +276,12 @@ describe('the plan loop runs the body once per item', () => {
 
     const { rows } = await queryRaw(`SELECT status FROM pipelines WHERE id = '${pipelineId}'`);
     expect(rows[0].status).toBe('completed');
+    const { rows: checks } = await queryRaw(`SELECT kind, detail->>'checkScope' AS scope FROM verification_evidence WHERE pipeline_id = '${pipelineId}' AND stage = 'QA'`);
+    const { rows: expected } = await queryRaw(`SELECT 'item:' || i.id::text || ':node:' || n.node_key AS scope
+      FROM plan_items i CROSS JOIN pipeline_nodes n WHERE i.pipeline_id = '${pipelineId}' AND n.pipeline_id = i.pipeline_id AND n.name = 'QA'`);
+    expect(expected).toHaveLength(2);
+    for (const item of expected) expect(checks.filter(check => check.scope === item.scope).map(check => check.kind).sort())
+      .toEqual(['audit_coverage', 'qa_verdict', 'side_effect']);
   });
 
   test('each pass carries its own item into the implementer', async () => {

@@ -1855,6 +1855,7 @@ export class PipelineManager {
             sessionId,
             pipelineId: pipeline.id,
             stageName: node.name,
+            checkScope: `${gnode.parentKey && currentItem ? `item:${currentItem.id}` : 'run'}:node:${node.nodeKey}`,
           }, itemAcceptance);
           // A rejected REPORT says nothing about the work, so only a verdict
           // the gate let stand is an attempt worth remembering.
@@ -2490,6 +2491,7 @@ export class PipelineManager {
     sessionId: string;
     pipelineId: string;
     stageName: string;
+    checkScope?: string;
     declared: StageDeclaration | undefined;
     counters: SideEffectCounters | null;
     /** Workspace state captured before the stage ran — see `snapshotStage`. */
@@ -2529,6 +2531,7 @@ export class PipelineManager {
         kind: 'side_effect',
         passed,
         detail: {
+          ...(args.checkScope ? { checkScope: args.checkScope } : {}),
           // Recorded even when null, so a later reader can tell "the snapshot
           // said nothing changed" from "there was no snapshot" — the two reasons
           // a counters-only failure can happen.
@@ -2650,7 +2653,7 @@ export class PipelineManager {
   private async gateQaVerdict(
     output: string,
     scope: AuditScopeStage[],
-    evidence: { sessionId: string; pipelineId: string; stageName: string },
+    evidence: { sessionId: string; pipelineId: string; stageName: string; checkScope?: string },
     acceptance: string[] = [],
   ): Promise<QAValidationResult | null> {
     let parsed = this.parseQAResult(output);
@@ -2680,7 +2683,7 @@ export class PipelineManager {
           stage: evidence.stageName,
           kind: 'audit_coverage',
           passed: false,
-          detail: { reason, source: 'unparseable', scope: coverageScope(scope).map((s) => s.name) },
+          detail: { reason, source: 'unparseable', scope: coverageScope(scope).map((s) => s.name), ...(evidence.checkScope ? { checkScope: evidence.checkScope } : {}) },
         });
       } catch (err) {
         coreLogger.warn({ err: (err as Error).message }, 'Failed to record unparseable-verdict evidence');
@@ -2702,7 +2705,7 @@ export class PipelineManager {
       };
     }
 
-    void this.recordQaEvidence(evidence.sessionId, evidence.pipelineId, evidence.stageName, parsed);
+    void this.recordQaEvidence(evidence.sessionId, evidence.pipelineId, evidence.stageName, parsed, evidence.checkScope);
 
     const failure = auditVerdictFailure(parsed, scope, acceptance);
     if (!parsed.passed) return parsed;
@@ -2716,6 +2719,7 @@ export class PipelineManager {
         passed: failure === null,
         confidence: parsed.confidence ?? null,
         detail: {
+          ...(evidence.checkScope ? { checkScope: evidence.checkScope } : {}),
           scope: coverageScope(scope).map((s) => s.name),
           doubtScope: scope.filter((s) => s.confidence === 'low').map((s) => s.name),
           uncovered: uncoveredStages(parsed, coverageScope(scope)),
@@ -2765,6 +2769,7 @@ export class PipelineManager {
     pipelineId: string,
     stage: string,
     qaResult: QAValidationResult,
+    checkScope?: string,
   ): Promise<void> {
     try {
       await verificationEvidenceRepository.record({
@@ -2775,6 +2780,7 @@ export class PipelineManager {
         passed: qaResult.passed,
         confidence: qaResult.confidence ?? null,
         detail: {
+          ...(checkScope ? { checkScope } : {}),
           issues: qaResult.issues,
           feedback: qaResult.feedback,
           retryCount: qaResult.retryCount,
@@ -3229,6 +3235,7 @@ export class PipelineManager {
         sessionId,
         pipelineId: pipeline.id,
         stageName: node.name,
+        checkScope: `${itemId ? `item:${itemId}` : 'run'}:node:${node.nodeKey}`,
         declared,
         before,
         workspaceRoot,
