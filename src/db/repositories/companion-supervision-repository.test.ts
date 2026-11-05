@@ -4,10 +4,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
-import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, test, vi } from 'vitest';
 import type { getDb } from '@/db/postgres';
 import { CompanionService } from '@/core/companion/service';
 import { CompanionSupervisionRepository } from './companion-supervision-repository';
+import { CompanionDispatcher } from '@/core/companion/dispatcher';
+import { persistCompanionSource } from '@/core/companion/provenance';
+import { observeFlow, resetFlowLabels } from '@/security/flow-guard';
+import { raiseSessionLevel, resetSessionLevels } from '@/core/protection/session-level';
+
+const runtime = vi.hoisted(() => ({ db: undefined as unknown, handle: vi.fn(), canSteer: vi.fn(), steer: vi.fn(), publish: vi.fn(), stop: vi.fn(), guard: vi.fn(), model: vi.fn() }));
+vi.mock('@/db/postgres', () => ({ getDb: () => runtime.db }));
+vi.mock('@/core/agent/service', () => ({ getAgentService: () => ({ handleMessage: runtime.handle, canSteer: runtime.canSteer, steer: runtime.steer, publishResponse: runtime.publish }) }));
+vi.mock('@/core/agent-manager', () => ({ getAgentManager: () => ({ stopSession: runtime.stop, getBySession: () => [{ getStatus: () => 'running', getContext: () => ({ root: true, model: 'fixture-model', modelName: 'fixture-model' }) }] }) }));
+vi.mock('@/models/resolve-model', () => ({ resolveModel: runtime.model }));
+vi.mock('@/core/protection/routing', () => ({ assertMayLeave: runtime.guard }));
 
 const userId = randomUUID(), otherUserId = randomUUID();
 const workspaceId = randomUUID(), secondWorkspaceId = randomUUID(), otherWorkspaceId = randomUUID(), sharedWorkspaceId = randomUUID();
@@ -29,18 +40,38 @@ beforeAll(async () => {
     CREATE TABLE users(id uuid PRIMARY KEY, is_active boolean NOT NULL DEFAULT true, kind text NOT NULL DEFAULT 'local');
     CREATE TABLE workspaces(id uuid PRIMARY KEY, user_id uuid REFERENCES users(id), kind text NOT NULL DEFAULT 'personal', archived_at timestamptz);
     CREATE TABLE sessions(id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id), workspace_id uuid, kind text NOT NULL DEFAULT 'chat',
-      group_channel_id uuid, protection_level smallint, metadata jsonb DEFAULT '{}', status text DEFAULT 'active');
+      group_channel_id uuid, protection_level smallint, flow_label jsonb, context jsonb DEFAULT '{}', metadata jsonb DEFAULT '{}', status text DEFAULT 'active',
+      title text, channel_type text, channel_id text, updated_at timestamptz DEFAULT now());
+    ALTER TABLE sessions ADD COLUMN thread_id text;
+    ALTER TABLE sessions ADD COLUMN room_visibility text;
+    ALTER TABLE sessions ADD COLUMN message_count integer DEFAULT 0;
+    ALTER TABLE sessions ADD COLUMN token_count integer DEFAULT 0;
+    ALTER TABLE sessions ADD COLUMN pinned boolean DEFAULT false;
+    ALTER TABLE sessions ADD COLUMN created_at timestamptz DEFAULT now();
+    ALTER TABLE sessions ADD COLUMN completed_at timestamptz;
     CREATE TABLE pipelines(id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id), workspace_id uuid, session_id uuid NOT NULL REFERENCES sessions(id), status text DEFAULT 'running');
     CREATE TABLE tasks(id uuid PRIMARY KEY, user_id uuid REFERENCES users(id), workspace_id uuid);
     CREATE TABLE verification_evidence(id uuid PRIMARY KEY, session_id uuid, pipeline_id uuid, passed boolean,
       kind text DEFAULT 'pre_verify', stage text, node_id text, detail jsonb, created_at timestamptz DEFAULT now());
+    CREATE TABLE agents(id text PRIMARY KEY, session_id uuid, status text, user_id text, workspace_id uuid, role text, model text, error text, created_at timestamptz DEFAULT now());
+    CREATE TABLE messages(id uuid PRIMARY KEY DEFAULT gen_random_uuid(), session_id uuid, role text, content text, created_at timestamptz DEFAULT now());
+    ALTER TABLE pipelines ADD COLUMN title text;
+    ALTER TABLE pipelines ADD COLUMN summary text;
+    ALTER TABLE pipelines ADD COLUMN current_node_key text;
+    ALTER TABLE pipelines ADD COLUMN created_at timestamptz DEFAULT now();
   `);
   await pg.exec(readFileSync('src/db/migrations/0160_companion_supervision.sql', 'utf8'));
+  await pg.exec(readFileSync('src/db/migrations/0161_companion_actions.sql', 'utf8'));
   db = drizzle(pg);
+  runtime.db = db;
 }, 30_000);
 afterAll(async () => { await pg.close(); rmSync(dir, { recursive: true, force: true }); });
 beforeEach(async () => {
-  await pg.exec('TRUNCATE companion_session_links, companion_goals, verification_evidence, tasks, pipelines, sessions, workspaces, users CASCADE');
+  await pg.exec('TRUNCATE companion_actions, companion_session_links, companion_goals, verification_evidence, tasks, pipelines, sessions, workspaces, users, agents, messages CASCADE');
+  vi.clearAllMocks(); resetFlowLabels(); resetSessionLevels();
+  runtime.canSteer.mockReturnValue(false); runtime.steer.mockReturnValue(true); runtime.guard.mockResolvedValue(undefined);
+  runtime.model.mockImplementation(async ({ name }: { name: string }) => ({ name, modelId: name, supportsTools: true, provider: 'cli' }));
+  runtime.handle.mockImplementation(async (_session, _user, _message, _channel, _files, _mode, beforeStart) => { await beforeStart(); return { outcome: 'success', response: 'Checked result' }; });
   await pg.query('INSERT INTO users(id) VALUES ($1), ($2)', [userId, otherUserId]);
   await pg.query(`INSERT INTO workspaces(id,user_id,kind) VALUES ($1,$2,'personal'),($3,$2,'personal'),($4,$5,'personal'),($6,NULL,'shared')`,
     [workspaceId, userId, secondWorkspaceId, otherWorkspaceId, otherUserId, sharedWorkspaceId]);
@@ -260,6 +291,7 @@ test('goals and adopted links survive closing and reopening the database', async
   pg = new PGlite(dir);
   await pg.waitReady;
   db = drizzle(pg);
+  runtime.db = db;
   const restored = await service().readGoal(goal.id);
   expect(restored.goal).toMatchObject({ id: goal.id, state: 'queued', revision: 1 });
   expect(restored.links).toMatchObject([{ id: adopted.link.id, pipelineId, active: true }]);
@@ -271,4 +303,164 @@ test('input contracts reject hidden scope changes, forged origin and credential 
   const goal = await service().createGoal(request());
   await expect(service().adoptExecution(goal.id, adoption({ origin: 'created' }))).rejects.toThrow();
   await expect(service().updateGoal(goal.id, { expectedRevision: 0, state: 'completed' })).rejects.toThrow();
+});
+
+test('starting a session and retrying the request creates one session, link and action', async () => {
+  const goal = await service().createGoal(request());
+  const input = { requestKey: randomUUID(), expectedRevision: 0, modelName: 'fixture-model' };
+  const [a, b] = await Promise.all([service().startSession(goal.id, input), service().startSession(goal.id, input)]);
+  expect(a.id).toBe(b.id);
+  expect(a.sessionId).toBe(b.sessionId);
+  expect((await service().readGoal(goal.id)).links).toMatchObject([{ sessionId: a.sessionId, origin: 'created' }]);
+  expect(await service().actions(goal.id)).toHaveLength(1);
+  const session = await pg.query('SELECT context FROM sessions WHERE id=$1', [a.sessionId]);
+  expect(session.rows).toMatchObject([{ context: { companion: { modelName: 'fixture-model', goalId: goal.id } } }]);
+  await expect(service().startSession(goal.id, { ...input, modelName: 'other-model' })).rejects.toMatchObject({ code: 'conflict' });
+});
+
+test('source privacy survives goal creation, source deletion and later session creation', async () => {
+  await pg.query(`UPDATE sessions SET protection_level=4, flow_label='{"secret":"source-env","private":"source"}' WHERE id=$1`, [sessionId]);
+  const goal = await service().createGoal(request({ sourceSessionId: sessionId }));
+  expect(goal).toMatchObject({ protectionLevel: 4, flowLabel: { secret: 'source-env' } });
+  await pg.query('DELETE FROM pipelines WHERE id=$1', [pipelineId]);
+  await pg.query('DELETE FROM sessions WHERE id=$1', [sessionId]);
+  const action = await service().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0, modelName: 'fixture-model' });
+  expect(action).toMatchObject({ protectionLevel: 4, flowLabel: { secret: 'source-env' } });
+  expect((await pg.query('SELECT protection_level,flow_label FROM sessions WHERE id=$1', [action.sessionId])).rows)
+    .toMatchObject([{ protection_level: 4, flow_label: { secret: 'source-env' } }]);
+});
+
+test('message transfer raises target and receipt provenance and cannot mutate observer-only work', async () => {
+  const targetId = randomUUID();
+  await pg.query('INSERT INTO sessions(id,user_id,workspace_id) VALUES ($1,$2,$3)', [targetId, userId, workspaceId]);
+  await pg.query(`UPDATE sessions SET protection_level=4,flow_label='{"secret":"source-env"}' WHERE id=$1`, [sessionId]);
+  const goal = await service().createGoal(request());
+  await service().adoptExecution(goal.id, adoption({ sessionId: targetId, pipelineId: null }));
+  const action = await service().messageSession(goal.id, { requestKey: randomUUID(), sessionId: targetId, sourceSessionId: sessionId, message: 'Use the protected source' });
+  expect(action).toMatchObject({ protectionLevel: 4, flowLabel: { secret: 'source-env' } });
+  expect((await pg.query('SELECT protection_level,flow_label FROM sessions WHERE id=$1', [targetId])).rows)
+    .toMatchObject([{ protection_level: 4, flow_label: { secret: 'source-env' } }]);
+  const observer = await service().createGoal(request());
+  await service().adoptExecution(observer.id, adoption({ sessionId: targetId, pipelineId: null, ownership: 'observer' }));
+  await expect(service().messageSession(observer.id, { requestKey: randomUUID(), sessionId: targetId, message: 'Change it' })).rejects.toMatchObject({ code: 'not_found' });
+});
+
+test('trusted source snapshots cover labels whose background persistence is delayed', async () => {
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const delayedLevel = vi.spyOn(sessionRepository, 'raiseProtectionLevel').mockResolvedValue(undefined);
+  const delayedFlow = vi.spyOn(sessionRepository, 'addFlowLabel').mockResolvedValue(undefined);
+  try {
+    raiseSessionLevel(sessionId, 4);
+    observeFlow(sessionId, { toolId: 'fixture', action: 'read' }, { taints: ['secret'] });
+    await persistCompanionSource({ userId, workspaceId }, sessionId);
+    const goal = await service().createGoal(request({ sourceSessionId: sessionId }));
+    expect(goal.protectionLevel).toBe(4);
+    expect(goal.flowLabel.secret).toBeTruthy();
+  } finally { delayedLevel.mockRestore(); delayedFlow.mockRestore(); }
+});
+
+async function waitAction(id: string, status: string) {
+  await vi.waitFor(async () => {
+    const { rows } = await pg.query<{ status: string }>('SELECT status FROM companion_actions WHERE id=$1', [id]);
+    expect(rows[0].status).toBe(status);
+  });
+}
+
+test('two dispatchers claim one action once and save its result with source provenance', async () => {
+  const goal = await service().createGoal(request());
+  const action = await service().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0, modelName: 'fixture-model' });
+  await Promise.all([new CompanionDispatcher().tick(), new CompanionDispatcher().tick()]);
+  await waitAction(action.id, 'completed');
+  expect(runtime.handle).toHaveBeenCalledTimes(1);
+  expect((await service().actions(goal.id))[0]).toMatchObject({ result: 'Checked result', status: 'completed', protectionLevel: 1 });
+});
+
+test('clearing a target conversation cancels queued work instead of replaying it into the new generation', async () => {
+  const goal = await service().createGoal(request());
+  const action = await service().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0, modelName: 'fixture-model' });
+  await pg.query('UPDATE sessions SET context=$1 WHERE id=$2', [JSON.stringify({ conversationGeneration: randomUUID() }), action.sessionId]);
+  await new CompanionDispatcher().tick();
+  await waitAction(action.id, 'cancelled');
+  expect(runtime.publish).not.toHaveBeenCalled();
+});
+
+test('expired execution receipts become unknown and block later turns in the same session', async () => {
+  const goal = await service().createGoal(request());
+  const first = await service().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0, modelName: 'fixture-model' });
+  await pg.query("UPDATE companion_actions SET status='running',lease_until=now()-interval '1 minute' WHERE id=$1", [first.id]);
+  const next = await service().messageSession(goal.id, { requestKey: randomUUID(), sessionId: first.sessionId, message: 'Continue' });
+  await new CompanionDispatcher().tick();
+  expect((await service().actions(goal.id)).find(action => action.id === first.id)?.status).toBe('unknown');
+  expect((await service().actions(goal.id)).find(action => action.id === next.id)?.status).toBe('queued');
+  expect(runtime.handle).not.toHaveBeenCalled();
+});
+
+test('live steering is delivered even when both execution slots are occupied', async () => {
+  const goal = await service().createGoal(request());
+  const first = await service().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0, modelName: 'fixture-model' });
+  const other = await service().createGoal(request());
+  const second = await service().startSession(other.id, { requestKey: randomUUID(), expectedRevision: 0, modelName: 'fixture-model' });
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  runtime.handle.mockImplementation(async (_session, _user, _message, _channel, _files, _mode, beforeStart) => { await beforeStart(); await held; return { outcome: 'success', response: 'Done' }; });
+  const dispatcher = new CompanionDispatcher();
+  await dispatcher.tick();
+  await vi.waitFor(() => expect(runtime.handle).toHaveBeenCalledTimes(2));
+  const steer = await service().messageSession(goal.id, { requestKey: randomUUID(), sessionId: first.sessionId, message: 'Use the updated requirement' });
+  runtime.canSteer.mockReturnValue(true);
+  try {
+    await dispatcher.tick();
+    await waitAction(steer.id, 'completed');
+    expect(runtime.steer).toHaveBeenCalledWith(first.sessionId, expect.objectContaining({ content: 'Use the updated requirement' }));
+  } finally { release(); await waitAction(first.id, 'completed'); await waitAction(second.id, 'completed'); }
+});
+
+test('newly protected instructions never reach an ineligible active cloud CLI', async () => {
+  const goal = await service().createGoal(request());
+  await service().adoptExecution(goal.id, adoption({ pipelineId: null }));
+  const action = await service().messageSession(goal.id, { requestKey: randomUUID(), sessionId, message: 'Protected material' });
+  runtime.canSteer.mockReturnValue(true);
+  runtime.guard.mockRejectedValue(new Error('Protection level 4 requires a local model'));
+  await new CompanionDispatcher().tick();
+  await waitAction(action.id, 'failed');
+  expect(runtime.steer).not.toHaveBeenCalled();
+  expect(runtime.guard).toHaveBeenCalled();
+});
+
+test('adopted sessions expose bounded history and live status only within their goal scope', async () => {
+  const goal = await service().createGoal(request());
+  await service().adoptExecution(goal.id, adoption({ pipelineId: null }));
+  await pg.query('INSERT INTO messages(session_id,role,content) SELECT $1,\'user\',$2 FROM generate_series(1,30)', [sessionId, 'x'.repeat(6000)]);
+  const detail = await service().inspectSession(goal.id, sessionId);
+  expect(detail.messages).toHaveLength(20);
+  expect(detail.messages.every(message => message.content.length === 4000)).toBe(true);
+  expect(detail.pipelines).toMatchObject([{ id: pipelineId, status: 'running' }]);
+  await expect(service().inspectSession(goal.id, otherSessionId)).rejects.toMatchObject({ code: 'not_found' });
+});
+
+test('completion cannot release work with pending actions or live workers', async () => {
+  const goal = await service().createGoal(request());
+  const action = await service().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0, modelName: 'fixture-model' });
+  const evidenceId = randomUUID();
+  await pg.query('INSERT INTO verification_evidence(id,session_id,passed) VALUES ($1,$2,true)', [evidenceId, action.sessionId]);
+  const complete = () => service().updateGoal(goal.id, { expectedRevision: 1, state: 'completed', evidence: [{ criterionIndex: 0, evidenceId, summary: 'Checked' }] });
+  await expect(complete()).rejects.toMatchObject({ code: 'conflict' });
+  await new CompanionDispatcher().tick(); await waitAction(action.id, 'completed');
+  await pg.query("INSERT INTO agents(id,session_id,status,user_id,workspace_id) VALUES ('live-root',$1,'running',$2,$3)", [action.sessionId, userId, workspaceId]);
+  await expect(complete()).rejects.toMatchObject({ code: 'conflict' });
+  await pg.query("UPDATE agents SET status='completed' WHERE id='live-root'");
+  expect(await complete()).toMatchObject({ state: 'completed' });
+});
+
+test('durable session pause is enforced on every dispatcher and cannot be changed through observer links', async () => {
+  const goal = await service().createGoal(request());
+  await service().adoptExecution(goal.id, adoption({ pipelineId: null }));
+  await repository().controlSession(goal.id, sessionId, 'paused');
+  await new CompanionDispatcher().tick();
+  expect(runtime.stop).toHaveBeenCalledWith(sessionId, userId);
+  const observer = await service().createGoal(request());
+  await service().adoptExecution(observer.id, adoption({ pipelineId: null, ownership: 'observer' }));
+  await expect(repository().controlSession(observer.id, sessionId, 'active')).rejects.toMatchObject({ code: 'not_found' });
+  await repository().controlSession(goal.id, sessionId, 'active');
+  expect((await pg.query('SELECT status FROM sessions WHERE id=$1', [sessionId])).rows).toEqual([{ status: 'active' }]);
 });

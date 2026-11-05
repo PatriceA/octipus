@@ -65,6 +65,7 @@ const navGroups: NavGroup[] = [
   { label: 'Work', items: [
     { name: 'overview', href: '/', icon: LayoutDashboard },
     { name: 'chat', href: '/chat', icon: MessageSquare },
+    { name: 'companion', href: '/companion', icon: Sparkles },
     { name: 'to-do', href: '/tasks', icon: ListTodo },
     { name: 'my work', href: '/my-work', icon: ClipboardList },
     { name: 'inbox', href: '/notifications', icon: Bell },

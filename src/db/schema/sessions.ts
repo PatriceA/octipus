@@ -106,6 +106,8 @@ export interface CompactionState {
 }
 
 export interface SessionContext {
+  /** Explicit persistent model binding for a Companion-created project session. */
+  companion?: { goalId: string; modelName: string };
   /** Unique clear generation; timestamps alone can collide within one millisecond. */
   conversationGeneration?: string;
   /** Last direct-provider conversation, including tool results and signed blocks. */

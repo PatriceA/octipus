@@ -1128,6 +1128,13 @@
       "when": 1793880000000,
       "tag": "0160_companion_supervision",
       "breakpoints": true
+    },
+    {
+      "idx": 161,
+      "version": "7",
+      "when": 1793880001000,
+      "tag": "0161_companion_actions",
+      "breakpoints": true
     }
   ]
 }

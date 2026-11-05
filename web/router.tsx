@@ -32,6 +32,7 @@ const ArtifactsPage = lazy(() => import('./app/artifacts/page'));
 const ArtifactsNewPage = lazy(() => import('./app/artifacts/new/page'));
 const ArtifactsViewPage = lazy(() => import('./app/artifacts/view/page'));
 const ChatPage = lazy(() => import('./app/chat/page'));
+const CompanionPage = lazy(() => import('./app/companion/page'));
 const DocumentsPage = lazy(() => import('./app/documents/page'));
 const EmailPage = lazy(() => import('./app/email/page'));
 const MailPage = lazy(() => import('./app/mail/page'));
@@ -138,6 +139,7 @@ const router = createBrowserRouter([
       { path: 'artifacts/view', element: <ArtifactsViewPage /> },
       { path: 'artifacts/:id', element: <LegacyArtifactRedirect /> },
       { path: 'chat', element: <ChatPage /> },
+      { path: 'companion', element: <CompanionPage /> },
       { path: 'onboarding', element: <OnboardingPage /> },
       { path: 'documents', element: <DocumentsPage /> },
       { path: 'email', element: <EmailPage /> },

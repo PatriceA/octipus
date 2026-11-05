@@ -25,6 +25,7 @@ import * as BrowserModule from './browser';
 import * as BrowserExtModule from './browser-ext';
 import * as CasesModule from './cases';
 import * as ConnectionsModule from './connections';
+import * as CompanionModule from './companion';
 import * as DataModule from './data';
 import * as DockerModule from './docker';
 import * as DocumentsModule from './documents';
@@ -65,6 +66,7 @@ const MODULES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ['browser-ext', BrowserExtModule],
   ['cases', CasesModule],
   ['connections', ConnectionsModule],
+  ['companion', CompanionModule],
   ['data', DataModule],
   ['docker', DockerModule],
   ['documents', DocumentsModule],

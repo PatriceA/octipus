@@ -156,7 +156,7 @@ export class ModelSelector {
     sessionId?: string,
     turnType: MessageClassification['type'] = 'casual',
     /** The request being routed, and its classification. Absent ⇒ no routing. */
-    routing?: { message: string; classification?: MessageClassification; laneChoice?: LaneChoice; conversation?: WarmConversation },
+    routing?: { message: string; classification?: MessageClassification; laneChoice?: LaneChoice; conversation?: WarmConversation; boundModelName?: string },
     requester: ModelRequester = {},
   ): Promise<SelectedModel> {
     const registry = getModelRegistry();
@@ -184,6 +184,13 @@ export class ModelSelector {
           'Session model override points to an unregistered model — falling back to configured routing',
         );
       }
+    }
+
+    if (routing?.boundModelName) {
+      if (!requester.userId) throw new Error('A Companion model requires an authenticated owner');
+      const bound = await resolveModel({ userId: requester.userId, name: routing.boundModelName, inSpace: requester.inSpace, spaceRole: requester.spaceRole, sponsor: requester.sponsor });
+      if (!bound || !canServeText(bound) || !(bound.supportsTools || bound.provider === 'cli') || /reasoner|thinking/.test(bound.modelId)) throw new Error('The bound Companion model is unavailable or unsuitable; choose an eligible model');
+      return { modelId: bound.modelId, name: bound.name };
     }
 
     // Where the model comes from now: the request. The General expert row used

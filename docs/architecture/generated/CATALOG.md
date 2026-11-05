@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-608 mounted routes across 83 route files. The path is the full one, group prefix included — what a client actually calls.
+618 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -138,6 +138,16 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/chat/approvals/pending` | `src/api/routes/chat.ts` |
 | POST | `/api/chat/approve` | `src/api/routes/chat.ts` |
 | GET | `/api/chat/commands` | `src/api/routes/chat.ts` |
+| GET | `/api/companion/goals` | `src/api/routes/companion.ts` |
+| POST | `/api/companion/goals` | `src/api/routes/companion.ts` |
+| GET | `/api/companion/goals/:id` | `src/api/routes/companion.ts` |
+| PATCH | `/api/companion/goals/:id` | `src/api/routes/companion.ts` |
+| GET | `/api/companion/goals/:id/actions` | `src/api/routes/companion.ts` |
+| POST | `/api/companion/goals/:id/adopt` | `src/api/routes/companion.ts` |
+| POST | `/api/companion/goals/:id/control` | `src/api/routes/companion.ts` |
+| POST | `/api/companion/goals/:id/messages` | `src/api/routes/companion.ts` |
+| POST | `/api/companion/goals/:id/sessions` | `src/api/routes/companion.ts` |
+| GET | `/api/companion/goals/:id/sessions/:sessionId` | `src/api/routes/companion.ts` |
 | GET | `/api/connectors` | `src/api/routes/connectors.ts` |
 | DELETE | `/api/connectors/:id` | `src/api/routes/connectors.ts` |
 | POST | `/api/connectors/:id/authorize` | `src/api/routes/connectors.ts` |
@@ -629,7 +639,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `capabilities` | 1 |
 | `(root)` | `channels` | 1 |
 | `(root)` | `config` | 4 |
-| `(root)` | `core` | 34 |
+| `(root)` | `core` | 35 |
 | `(root)` | `db` | 12 |
 | `(root)` | `extensions` | 2 |
 | `(root)` | `hooks` | 3 |
@@ -645,19 +655,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 26 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 170 |
+| `api` | `core` | 171 |
 | `api` | `db` | 123 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 4 |
 | `api` | `models` | 39 |
 | `api` | `plugins` | 2 |
-| `api` | `security` | 153 |
+| `api` | `security` | 156 |
 | `api` | `services` | 5 |
-| `api` | `shared` | 16 |
+| `api` | `shared` | 18 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 4 |
-| `api` | `utils` | 74 |
+| `api` | `utils` | 75 |
 | `api` | `voice` | 23 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
@@ -690,19 +700,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 14 |
 | `core` | `config` | 66 |
 | `core` | `connectors` | 4 |
-| `core` | `db` | 405 |
+| `core` | `db` | 415 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 10 |
-| `core` | `models` | 125 |
+| `core` | `models` | 128 |
 | `core` | `modules` | 2 |
-| `core` | `security` | 197 |
+| `core` | `security` | 199 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
-| `core` | `shared` | 48 |
+| `core` | `shared` | 49 |
 | `core` | `skills` | 11 |
 | `core` | `tools` | 23 |
-| `core` | `utils` | 224 |
+| `core` | `utils` | 225 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
 | `db` | `core` | 21 |
@@ -781,15 +791,15 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 3 |
 | `tools` | `connectors` | 2 |
-| `tools` | `core` | 114 |
+| `tools` | `core` | 117 |
 | `tools` | `db` | 36 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 8 |
 | `tools` | `plugins` | 1 |
-| `tools` | `security` | 54 |
+| `tools` | `security` | 56 |
 | `tools` | `services` | 1 |
-| `tools` | `shared` | 7 |
+| `tools` | `shared` | 8 |
 | `tools` | `skills` | 5 |
 | `tools` | `utils` | 39 |
 | `tools` | `visual` | 2 |

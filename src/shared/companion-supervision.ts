@@ -2,8 +2,31 @@ import { z } from 'zod';
 
 export const companionGoalStates = ['queued', 'active', 'waiting', 'needs_decision', 'paused', 'completed', 'cancelled'] as const;
 export type CompanionGoalState = typeof companionGoalStates[number];
+/** Browser-safe wire views; database schemas carry server-only dependencies. */
+export interface CompanionGoalView {
+  id: string; title: string; request: string; outcome: string; acceptanceCriteria: string[];
+  state: CompanionGoalState; priority: number; revision: number; protectionLevel: number;
+}
+export interface CompanionLinkView {
+  id: string; sessionId: string; pipelineId: string | null; purpose: string; ownership: 'owner' | 'observer'; active: boolean;
+}
+export interface CompanionActionView {
+  id: string; kind: string; status: string; result: string | null;
+}
 export const companionScopeSchema = z.object({ userId: z.uuid(), workspaceId: z.uuid() }).strict();
 export type CompanionScope = z.infer<typeof companionScopeSchema>;
+
+export const startCompanionSessionSchema = z.object({
+  requestKey: z.uuid(), expectedRevision: z.number().int().min(0),
+  modelName: z.string().trim().min(1).max(200),
+  projectPath: z.string().min(1).max(2000).optional(),
+  sourceSessionId: z.uuid().optional(),
+}).strict();
+export const companionSessionMessageSchema = z.object({
+  requestKey: z.uuid(), sessionId: z.uuid(),
+  message: z.string().trim().min(1).max(20_000),
+  sourceSessionId: z.uuid().optional(),
+}).strict();
 
 export const createCompanionGoalSchema = z.object({
   requestKey: z.uuid(),
@@ -15,6 +38,7 @@ export const createCompanionGoalSchema = z.object({
   tokenBudget: z.number().int().min(1).max(1_000_000_000).nullable().default(null),
   taskId: z.uuid().nullable().default(null),
   workPlanSessionId: z.uuid().nullable().default(null),
+  sourceSessionId: z.uuid().nullable().default(null),
 }).strict();
 export type CreateCompanionGoal = z.infer<typeof createCompanionGoalSchema>;
 

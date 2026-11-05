@@ -1,5 +1,6 @@
 import { initializeCliExecutables } from '@/core/cli-executable';
 import { startMonitors, stopMonitors } from '@/core/monitors/service';
+import { startCompanion, stopCompanion } from '@/core/companion/dispatcher';
 import { startServer, stopApiServer } from '@/api/server';
 import { initializeChannels } from '@/channels';
 import { loadRuntimeConfig } from '@/config';
@@ -446,6 +447,7 @@ async function main() {
     // Start recurring task scheduler
     startCronLoop();
     startMonitors();
+    startCompanion();
     // Role heartbeats: a task wakeup for a role-assigned task marks that
     // role's heartbeat hook due for the next tick (no-op without such hooks).
     startRoleHeartbeatWakeups();
@@ -567,6 +569,7 @@ async function main() {
       }
 
       stopMonitors();
+      stopCompanion();
       stopRoleHeartbeatWakeups();
       try {
         const { stopTaskWakeupBridge } = await import('@/core/tasks/wakeup-bridge');

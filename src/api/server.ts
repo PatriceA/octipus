@@ -89,6 +89,7 @@ import { pluginPackageRoutes } from './routes/plugin-packages';
 import { mailRoutes } from './routes/mail';
 import { moduleRoutes } from './routes/modules';
 import { scanFolderRoutes } from './routes/scan-folders';
+import { companionRoutes } from './routes/companion';
 import { backupRoutes } from './routes/backups';
 import { protectionRoutes } from './routes/protection';
 import { teamsWebhookRoutes } from './routes/teams-webhook';
@@ -466,6 +467,7 @@ export function createServer() {
         .use(pluginPackageRoutes)
         .use(mailRoutes)
         .use(scanFolderRoutes)
+        .use(companionRoutes)
         .use(backupRoutes)
         .use(protectionRoutes)
         .use(readerRoutes)

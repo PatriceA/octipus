@@ -264,9 +264,10 @@ export async function runRootAgent(
   const session = await sessionRepository.findById(sessionId);
   const planSessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
   const conversation = warmConversationOf(planSessionCtx);
-  const chosenModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification, laneChoice, conversation }, requester);
+  const chosenModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification, laneChoice, conversation, boundModelName: planSessionCtx?.companion?.modelName }, requester);
   const chosenMeta = await getModelRegistry().getModel(chosenModel.name);
   const modelMeta = await localRowInstead(chosenMeta, sessionId, 'tools', () => modelCandidates(requester), PSEUDONYMIZED);
+  if (planSessionCtx?.companion?.modelName && modelMeta !== chosenMeta) throw new Error('The bound Companion model cannot handle this protection level. Bind an eligible local model before continuing.');
   const selectedModel = modelMeta && modelMeta !== chosenMeta ? { modelId: modelMeta.modelId, name: modelMeta.name } : chosenModel;
   const modelName = selectedModel.modelId;
   const attachmentSession = extras.attachedFiles?.length ? await sessionRepository.findById(sessionId) : null;

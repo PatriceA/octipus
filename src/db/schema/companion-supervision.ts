@@ -21,6 +21,8 @@ export const companionGoals = pgTable('companion_goals', {
   tokenBudget: integer('token_budget'),
   taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
   workPlanSessionId: uuid('work_plan_session_id').references(() => sessions.id, { onDelete: 'set null' }),
+  sourceSessionId: uuid('source_session_id').references(() => sessions.id, { onDelete: 'set null' }),
+  flowLabel: jsonb('flow_label').$type<Partial<Record<'private' | 'suspicious' | 'secret', string>>>().notNull().default({}),
   protectionLevel: integer('protection_level').notNull().default(1),
   revision: integer('revision').notNull().default(0),
   completionEvidence: jsonb('completion_evidence').$type<CompanionCompletionEvidence[]>().notNull().default([]),
@@ -61,3 +63,26 @@ export const companionSessionLinks = pgTable('companion_session_links', {
 
 export type CompanionGoal = typeof companionGoals.$inferSelect;
 export type CompanionSessionLink = typeof companionSessionLinks.$inferSelect;
+
+export const companionActions = pgTable('companion_actions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  goalId: uuid('goal_id').notNull().references(() => companionGoals.id, { onDelete: 'cascade' }),
+  requestKey: uuid('request_key').notNull(),
+  sessionId: uuid('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  generation: text('generation').notNull().default(''),
+  protectionLevel: integer('protection_level').notNull().default(1),
+  flowLabel: jsonb('flow_label').$type<CompanionGoal['flowLabel']>().notNull().default({}),
+  kind: text('kind').$type<'start_session' | 'message_session' | 'steer_session'>().notNull(),
+  message: text('message').notNull(),
+  status: text('status').$type<'queued' | 'running' | 'completed' | 'failed' | 'unknown' | 'cancelled'>().notNull().default('queued'),
+  leaseToken: uuid('lease_token'),
+  leaseUntil: timestamp('lease_until', { withTimezone: true }),
+  result: text('result'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex('companion_actions_request_idx').on(t.goalId, t.requestKey), index('companion_actions_due_idx').on(t.status, t.createdAt),
+  uniqueIndex('companion_actions_session_claim_idx').on(t.sessionId).where(sql`${t.status} IN ('running', 'unknown') AND ${t.kind} <> 'steer_session'`),
+  check('companion_actions_kind_chk', sql`${t.kind} IN ('start_session', 'message_session', 'steer_session')`),
+  check('companion_actions_status_chk', sql`${t.status} IN ('queued', 'running', 'completed', 'failed', 'unknown', 'cancelled')`),
+]);
+export type CompanionAction = typeof companionActions.$inferSelect;
