@@ -12,6 +12,18 @@ const mockCodexList = (stdout: string | Error) => vi.mocked(execFile).mockImplem
 }) as never);
 
 const builder = new CLIArgumentBuilder();
+
+it.each([true, false])('Codex keeps writable build caches on fresh and resumed workspace runs (first=%s)', first => {
+  const paths = ['/home/fixture/.gradle', '/home/fixture/.android'];
+  const connection = { url: 'http://127.0.0.1:1234', key: 'fixture', planMode: false, maxIterations: 2, codexMcpServers: [], writableRuntimePaths: paths };
+  const { args } = builder.build('Codex CLI', 'test', {}, [], null, 100, 'fixture', connection, { id: first ? '' : 'thread', isFirstRun: first });
+  const override = args.find(arg => arg.startsWith('sandbox_workspace_write.writable_roots='));
+  expect(parseToml(override!).sandbox_workspace_write).toEqual({ writable_roots: paths });
+  for (const restricted of [{ space: true }, { personal: true }, { planMode: true }]) {
+    const result = builder.build('Codex CLI', 'test', {}, [], null, 100, 'fixture', { ...connection, ...restricted });
+    expect(result.args.some(arg => arg.startsWith('sandbox_workspace_write.writable_roots='))).toBe(false);
+  }
+});
 /**
  * How Claude receives the system prompt on THIS platform. Windows spills it to
  * a file because the command line caps around 8191 chars; everywhere else it

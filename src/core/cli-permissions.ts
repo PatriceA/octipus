@@ -21,8 +21,12 @@ const requestSchema = z.object({
 export async function answerCliPermissionRequest(
   raw: unknown, context: AgentContext, emit: (type: AgentEvent['type'], data: unknown) => void, signal?: AbortSignal,
   octipusBridgeTools?: () => ToolHandler[],
+  executionCwd?: string,
 ): Promise<unknown> {
   const { request_id, request } = requestSchema.parse(raw);
+  // Server-observed CLI spawn directory, never inferred from an approval or
+  // copied into the vendor's tool input. Keep the live context for stop checks.
+  const approvalContext = executionCwd ? { ...context, metadata: { ...context.metadata, cliWorkingDirectory: executionCwd } } : context;
   // Only the run-local Octipus bridge can defer to our ToolExecutor. Do not
   // trust an MCP server name alone: external/unconnected servers retain the
   // vendor policy below. The callback comes from the worker's current tool set.
@@ -71,7 +75,7 @@ export async function answerCliPermissionRequest(
   const permission = applyFlowGuard(getConfig().agent?.flowGuard, context.sessionId, flowCall,
     await manager.check(context.userId, toolId, request.tool_name, request.input, context));
   // A stored ALLOW authorizes asking, but cannot invent the user's answers.
-  const decision = await routeApprovalFor(context, { toolId, action: request.tool_name, toolName: request.tool_name, args: request.input },
+  const decision = await routeApprovalFor(approvalContext, { toolId, action: request.tool_name, toolName: request.tool_name, args: request.input },
     isQuestion && permission.level !== 'DENY' ? { ...permission, level: 'ASK' } : permission, { unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions });
   let allowed = decision.route === 'execute';
   let authorizationSource = decision.source ?? 'policy';
@@ -83,7 +87,7 @@ export async function answerCliPermissionRequest(
       ...(decision.source === 'flow-guard' || decision.source === 'space-flow' ? { reason: decision.reason } : {}) });
     allowed = await manager.waitForApproval(id, { agentId: context.id });
     if (allowed) authorizationSource = `approval:${id}`;
-    if (allowed) await rememberRunDecision(context, { ...flowCall, toolName: request.tool_name }, undefined, id);
+    if (allowed) await rememberRunDecision(approvalContext, { ...flowCall, toolName: request.tool_name }, undefined, id);
     if (allowed && isQuestion) {
       let answers: ReturnType<typeof parseCliAnswers>;
       try {
@@ -102,8 +106,8 @@ export async function answerCliPermissionRequest(
     if (currentFlow.level === 'DENY') allowed = false;
     else if (currentFlow.level === 'ASK') {
       allowed = authorizationSource.startsWith('approval:') || authorizationSource === 'pipeline-approval'
-        ? await askStillAuthorized(authorizationSource, context, { ...flowCall, toolName: request.tool_name }, currentFlow.source)
-        : (await routeApprovalFor(context, { ...flowCall, toolName: request.tool_name }, currentFlow)).route === 'execute';
+        ? await askStillAuthorized(authorizationSource, approvalContext, { ...flowCall, toolName: request.tool_name }, currentFlow.source)
+        : (await routeApprovalFor(approvalContext, { ...flowCall, toolName: request.tool_name }, currentFlow)).route === 'execute';
     }
   }
   if (context.status !== 'running' || signal?.aborted) allowed = false;

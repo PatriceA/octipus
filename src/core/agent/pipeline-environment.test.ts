@@ -11,7 +11,9 @@ test('policy repair reports never become generic user decisions', () => {
 });
 
 test.each(['go: Kommando nicht gefunden', 'go: command not found', '/home/user/.local/go/bin/go: No such file or directory',
-  'ECONNREFUSED ::1:5433', '/var/run/docker.sock: no such file or directory'])
+  'ECONNREFUSED ::1:5433', '/var/run/docker.sock: no such file or directory',
+  'Could not create parent directory for lock file /home/user/.gradle/wrapper/dists/gradle.zip.lck',
+  "Cannot mkdir '/home/user/.android': Read-only file system"])
 ('identifies a missing gate prerequisite: %s', reason => { expect(stageEnvironmentReason(reason)).toBe(reason); });
 test.each(['assertion failed: expected 2 to be 1', 'ECONNREFUSED 127.0.0.1:3007', 'missing implementation file src/new.ts', 'Tool is not available to this agent'])
 ('keeps code failures separate: %s', reason => { expect(stageEnvironmentReason(reason)).toBeUndefined(); });

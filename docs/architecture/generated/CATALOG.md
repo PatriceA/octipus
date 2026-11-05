@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-607 mounted routes across 83 route files. The path is the full one, group prefix included — what a client actually calls.
+608 mounted routes across 83 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -376,6 +376,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/pipelines/:id/checkpoints` | `src/api/routes/pipelines.ts` |
 | PATCH | `/api/pipelines/:id/checkpoints/:seq` | `src/api/routes/pipelines.ts` |
 | POST | `/api/pipelines/:id/pause` | `src/api/routes/pipelines.ts` |
+| PUT | `/api/pipelines/:id/permission-profile` | `src/api/routes/pipelines.ts` |
 | GET | `/api/pipelines/:id/plan` | `src/api/routes/pipelines.ts` |
 | POST | `/api/pipelines/:id/plan` | `src/api/routes/pipelines.ts` |
 | DELETE | `/api/pipelines/:id/plan/:itemId` | `src/api/routes/pipelines.ts` |
@@ -642,18 +643,18 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `utils` | 1 |
 | `api` | `capabilities` | 1 |
 | `api` | `channels` | 22 |
-| `api` | `config` | 25 |
+| `api` | `config` | 26 |
 | `api` | `connectors` | 3 |
 | `api` | `core` | 170 |
-| `api` | `db` | 122 |
+| `api` | `db` | 123 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 4 |
 | `api` | `models` | 39 |
 | `api` | `plugins` | 2 |
-| `api` | `security` | 151 |
+| `api` | `security` | 153 |
 | `api` | `services` | 5 |
-| `api` | `shared` | 15 |
+| `api` | `shared` | 16 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 4 |
 | `api` | `utils` | 74 |
@@ -695,7 +696,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `mcp` | 10 |
 | `core` | `models` | 124 |
 | `core` | `modules` | 2 |
-| `core` | `security` | 195 |
+| `core` | `security` | 197 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
 | `core` | `shared` | 48 |
@@ -786,7 +787,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 8 |
 | `tools` | `plugins` | 1 |
-| `tools` | `security` | 52 |
+| `tools` | `security` | 54 |
 | `tools` | `services` | 1 |
 | `tools` | `shared` | 7 |
 | `tools` | `skills` | 5 |

@@ -945,6 +945,11 @@ Profile (bubblewrap, the preferred backend):
 - `--unshare-net` by default; `allowNetwork: true` keeps it on.
 - `--ro-bind /usr /lib /lib64 /bin /etc /opt`.
 - `--bind <workspaceRoot>` — read-write.
+- Shell tools also bind the caller's existing approved workspace, project and
+  additional directories read-write, using `WorkspaceFS.persistentRoots()`.
+  Changing the working directory does not make the workspace read-only.
+- `--remount-ro /` keeps synthetic, unmounted parent directories read-only so
+  writes cannot appear successful and then disappear on sandbox teardown.
 - Per-spawn `--bind <fresh-tmp> /tmp` for transient writes
   (cleaned up by `cleanup()`).
 - `--proc /proc`, `--dev /dev`, `--chdir <workspace>`.

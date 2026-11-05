@@ -188,7 +188,7 @@ export async function routeApprovalFor(
         ? profileExplicitlyAllows(run.profile, effectiveProfileCall(context, call))
         : profileAllows(run.profile, effectiveProfileCall(context, call)) || await isApprovedCall(context, call))) return { route: 'execute', level, source: 'pipeline-approval' };
     if (run?.profile.overnight) {
-      const mismatch = source === 'flow-guard' ? `flow guard requires consent for this command or its verification target: ${reason ?? 'data egress'}; command-family approval is insufficient` : profileMismatch(run.profile, effectiveProfileCall(context, call));
+      const mismatch = source === 'flow-guard' && run.profile.executionScope !== 'run' ? `flow guard requires consent for this command or its verification target: ${reason ?? 'data egress'}; command-family approval is insufficient` : profileMismatch(run.profile, effectiveProfileCall(context, call));
       const profileRevision = createHash('sha256').update(JSON.stringify(run.profile)).digest('hex').slice(0, 12);
       const detail = `Outside the approved overnight profile: ${mismatch}. Approval: ${(run.pipeline.metadata?.permissionProfile as { approvedAt?: string })?.approvedAt ?? 'unknown'}; pipeline ${run.pipeline.id}, profile revision ${profileRevision}.`;
       await (await import('@/db/repositories/pipeline-repository')).pipelineRepository.appendRunMetadata(run.pipeline.id, 'deniedRequests', {

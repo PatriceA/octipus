@@ -8,6 +8,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { AgentTimeline } from '@/components/agent-timeline';
 import { StatusBadge, type StatusVariant } from '@/components/ui/status-badge';
 import { PipelineView } from '@/components/pipeline-view';
+import { PipelinePermissions } from '@/components/pipeline-permissions';
+import type { PipelinePermissionProfile } from '../../../../src/shared/pipeline-permissions';
 import { VerificationEvidence } from '@/components/verification-evidence';
 import { useAgentEvents } from '@/hooks/useAgentEvents';
 import { api } from '@/lib/api';
@@ -34,6 +36,7 @@ interface PipelineDetail {
     type: string;
     status: string;
     currentNodeKey: string | null;
+    metadata?: { permissionProfile?: { profile?: Partial<PipelinePermissionProfile> } };
   };
   nodes: Array<{
     id: string;
@@ -79,7 +82,7 @@ export default function AgentDetailPage() {
   });
 
   // Fetch pipeline if this agent is a root agent for one
-  const { data: pipelineData } = useQuery({
+  const { data: pipelineData, refetch: refreshPipeline } = useQuery({
     queryKey: ['agent-pipeline', agentId, workspaceId],
     queryFn: async () => {
       try {
@@ -296,6 +299,9 @@ export default function AgentDetailPage() {
           </div>
         </div>
       )}
+
+      {pipelineData?.pipeline && <PipelinePermissions key={pipelineData.pipeline.id} id={pipelineData.pipeline.id} status={pipelineData.pipeline.status}
+        stored={pipelineData.pipeline.metadata?.permissionProfile} onSaved={() => { void refreshPipeline(); }} />}
 
       {/* Verification evidence — self-hides when the session ran no checks. */}
       <VerificationEvidence sessionId={agent.sessionId} />

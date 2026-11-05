@@ -209,6 +209,47 @@ test('flow consent is rechecked and remembered shell grants bind the actual defa
   expect(await isApprovedCall({ ...caller, metadata: { ...caller.metadata, projectPath: '/repo-b' } }, custom)).toBe(false);
 });
 
+test('one run approval covers new SSH/verification scripts after credential reads, across stages and resume, and can be revoked', async () => {
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const { routeApprovalFor } = await import('./approval-route');
+  const { askStillAuthorized } = await import('./approved-calls');
+  const { observeFlow } = await import('./flow-guard');
+  const { proposedPipelinePermissionProfileSchema } = await import('@/shared/pipeline-permissions');
+  const profile = proposedPipelinePermissionProfileSchema.parse({ repoPath: '/repo', overnight: true });
+  const pipeline = await pipelineRepository.create({ rootAgentId: 'root', sessionId, userId,
+    title: 'run consent', type: 'development', status: 'running',
+    metadata: { permissionProfile: { profile, repoPath: '/repo', approvedBy: userId } } });
+  const caller = { userId, sessionId, attended: false, metadata: { pipelineId: pipeline.id, nodeKey: 'deploy', attemptId: 'one', projectPath: '/repo' } };
+  observeFlow(sessionId, { toolId: 'fixture', action: 'credential-read' }, { taints: ['secret', 'private', 'suspicious'] });
+  const call = { toolId: 'shell', action: 'execute', toolName: 'run', args: { command: 'ssh root@tower "docker compose exec -T backend node -e \'countUsers()\'"', cwd: '/repo/backend', network: true, useShell: true } };
+  const flow = { level: 'ASK' as const, source: 'flow-guard' };
+  expect(await routeApprovalFor(caller, call, flow)).toMatchObject({ route: 'execute', source: 'pipeline-approval' });
+  expect(await askStillAuthorized('pipeline-approval', caller, call, 'flow-guard')).toBe(true);
+  await pipelineRepository.updatePipeline(pipeline.id, { status: 'paused' });
+  expect(await askStillAuthorized('pipeline-approval', caller, call, 'flow-guard')).toBe(false);
+  await pipelineRepository.updatePipeline(pipeline.id, { status: 'running' });
+  const resumed = { ...caller, metadata: { ...caller.metadata, nodeKey: 'qa', attemptId: 'two' } };
+  const fresh = { ...call, args: { ...call.args, command: 'curl --fail --max-time 20 http://tower/api/health' } };
+  expect(await routeApprovalFor(resumed, fresh, flow)).toMatchObject({ route: 'execute' });
+  expect(await askStillAuthorized('pipeline-approval', resumed, fresh, 'flow-guard')).toBe(true);
+  const native = { toolId: 'cli-native:Bash', toolName: 'Bash', action: 'Bash', args: { command: fresh.args.command } };
+  expect(await routeApprovalFor({ ...resumed, metadata: { ...resumed.metadata, cliWorkingDirectory: '/repo/backend' } }, native, flow)).toMatchObject({ route: 'execute' });
+  expect(await askStillAuthorized('pipeline-approval', { ...resumed, metadata: { ...resumed.metadata, cliWorkingDirectory: '/repo/backend' } }, native, 'flow-guard')).toBe(true);
+  expect(await routeApprovalFor(resumed, native, flow)).not.toMatchObject({ route: 'execute' });
+  // Framework-linked children inherit the run scope, not stage-specific grants.
+  expect(await routeApprovalFor({ ...caller, metadata: { pipelineId: pipeline.id, nodeKey: 'qa', projectPath: '/repo' } }, fresh, flow)).toMatchObject({ route: 'execute' });
+  expect(await routeApprovalFor(resumed, fresh, { level: 'DENY', source: 'permission:deny' })).toMatchObject({ route: 'deny' });
+  expect(await routeApprovalFor({ ...resumed, sessionId: otherSessionId }, fresh, flow)).not.toMatchObject({ route: 'execute' });
+  expect(await routeApprovalFor({ ...resumed, workspaceId: rand(16) }, fresh, flow)).not.toMatchObject({ route: 'execute' });
+  expect(await routeApprovalFor({ ...resumed, root: true }, fresh, flow)).not.toMatchObject({ route: 'execute' });
+  expect(await routeApprovalFor({ ...resumed, trigger: 'remote' }, fresh, flow)).not.toMatchObject({ route: 'execute' });
+  await expect(routeApprovalFor(resumed, { ...fresh, args: { ...fresh.args, cwd: '/repo-foreign' } }, flow)).rejects.toThrow(/outside the workspace/);
+  // Persisted authority is re-read; replacing it with narrow scope revokes the run grant.
+  await pipelineRepository.updatePipeline(pipeline.id, { metadata: { permissionProfile: { profile: { ...profile, executionScope: 'commands' }, repoPath: '/repo', approvedBy: userId } } });
+  expect(await askStillAuthorized('pipeline-approval', resumed, fresh, 'flow-guard')).toBe(false);
+  expect(await routeApprovalFor(resumed, fresh, flow)).toMatchObject({ route: 'deny' });
+});
+
 test('Compose reservations survive cleanup and refuse foreign scope and unknown retained resources', async () => {
   const { claimDockerProject } = await import('@/db/repositories/docker-project-repository');
   const identity = `test-daemon:${rand(8)}`;
@@ -270,6 +311,27 @@ test('registered shell dispatch reaches the approved SSH executor after flow tai
     expect(exec).toHaveBeenCalledTimes(2);
     expect(refused.find(message => message.role === 'tool')?.content).toContain('anchor is unavailable');
   } finally { changed.mockRestore(); }
+
+  // A disclosed run grant reaches the actual registered executor for commands
+  // never listed in the profile, through both dispatch and final revalidation.
+  await pipelineRepository.updatePipeline(pipeline.id, { metadata: { permissionProfile: {
+    profile: { ...profile, executionScope: 'run', commands: [] }, repoPath: repo, approvedBy: userId,
+  } } });
+  for (const fresh of [
+    'ssh root@192.168.1.156 "docker compose -f /opt/stacks/solar-system-map/compose.yaml exec -T solar-system-backend node -e countUsers()"',
+    'curl --fail --max-time 20 http://192.168.1.156:3002/api/health',
+  ]) {
+    const before = exec.mock.calls.length;
+    await executor.handleToolCalls([{ id: rand(8), name: 'shell__run', arguments: { command: fresh, cwd: repo, network: true } }]);
+    expect(exec).toHaveBeenCalledTimes(before + 1);
+    expect(exec.mock.calls.at(-1)?.[0]).toBe(fresh);
+  }
+  const { answerCliPermissionRequest } = await import('@/core/cli-permissions');
+  await getPermissionManager().setPermission(userId, 'cli-native:Bash', 'Bash', 'ASK');
+  const input = { command: 'ssh root@192.168.1.156 "docker compose exec -T backend node -e countUsers()"' };
+  const native = await answerCliPermissionRequest({ type: 'control_request', request_id: 'native-run-scope',
+    request: { subtype: 'can_use_tool', tool_name: 'Bash', input } }, context, () => {}, undefined, undefined, repo);
+  expect(native).toMatchObject({ response: { response: { behavior: 'allow', updatedInput: input } } });
 
 });
 

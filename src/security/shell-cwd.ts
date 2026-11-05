@@ -8,15 +8,14 @@ export function resolveShellCwd(requested: unknown, context: AgentContext | unde
   if (!context) {
     throw new ToolNotExecutedError('shell', 'shell commands run for an agent: no agent context was given');
   }
-  const base = (typeof context.metadata?.projectPath === 'string' && context.metadata.projectPath ? resolve(context.metadata.projectPath) : WorkspaceFS.forAgent(context).root);
-  if (requested === undefined || requested === null || requested === '') return base;
-  if (typeof requested !== 'string') {
+  const fs = WorkspaceFS.forAgent(context);
+  const project = !fs.isSpace && typeof context.metadata?.projectPath === 'string' && context.metadata.projectPath ? resolve(context.metadata.projectPath) : undefined;
+  const base = project ?? fs.root;
+  if (requested !== undefined && requested !== null && typeof requested !== 'string') {
     throw new ToolNotExecutedError('shell', 'cwd must be a string');
   }
-  const projectPath = (typeof context.metadata?.projectPath === 'string' && context.metadata.projectPath ? resolve(context.metadata.projectPath) : undefined);
-  const fs = WorkspaceFS.forAgent(context, { extraAllowedPrefixes: projectPath ? [projectPath] : [] });
   try {
-    return fs.resolve(isAbsolute(requested) ? requested : resolve(base, requested));
+    return fs.resolve(requested ? (isAbsolute(requested) ? requested : resolve(base, requested)) : base);
   } catch (err) {
     if (err instanceof WorkspaceFsError) {
       throw new ToolNotExecutedError('shell', `cwd '${requested}' is outside the workspace; run the command from the workspace or the project`);

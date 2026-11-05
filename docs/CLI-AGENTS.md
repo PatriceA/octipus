@@ -149,19 +149,17 @@ stages run; a model-supplied profile is a proposal, never an authorization.
 `repoPath` names the target repository. `repoPaths` can name additional repositories.
 Each path must be accessible to the session's filesystem scope (including its
 configured additional paths); the profile does not grant new filesystem access.
-Profile auto-approval requires an explicit absolute `cwd` matching an approved
-repo path. Omitted or relative directories use normal permissions: the profile
-does not determine where the shell or vendor CLI actually runs.
+Run approval uses the actual absolute execution `cwd` in an approved repository
+or its subdirectories. Octipus shell defaults use its workspace resolver; native
+CLI permissions use the server-observed CLI spawn directory. A profile never
+invents an execution directory.
 
 ```json
 {
   "repoPath": "/absolute/path/to/project",
+  "executionScope": "run",
   "repoPaths": [],
   "allowTimedOutCommands": false,
-  "commands": ["pnpm exec vitest run"],
-  "packageManagers": ["pnpm", "go"],
-  "publicHosts": ["go.dev", "proxy.golang.org", "registry.npmjs.org"],
-  "dockerProjects": ["project-tests"],
   "hostServices": true,
   "rememberDecisions": true,
   "overnight": true,
@@ -170,16 +168,33 @@ does not determine where the shell or vendor CLI actually runs.
 }
 ```
 
-Profiles cover exact commands and recognized package build/test/install forms,
-public unauthenticated curl GET/HEAD calls to the listed hosts, and supported
-Compose operations explicitly naming an approved project. Changed directories,
-custom HTTP headers, shell expressions, arbitrary scripts, and destructive
-operations need separate authorization. Existing DENY rules and space/flow
-restrictions remain authoritative. Named Docker projects do not remove the
+New permission proposals default to `executionScope: "run"`. The single approval
+explicitly covers shell work, including new scripts, remote deployment, cleanup,
+privileged commands when policy permits, verification and network use of
+credentials/private data read now or later. No command list is needed. It holds
+across stages, retries, resumes and framework-linked stage children, for the
+same owner, session, workspace and live pipeline. It is not a network destination
+allowlist: arbitrary shell programs cannot be confined to destinations by
+matching command text. Existing DENY rules, filesystem boundaries and shared
+workspace restrictions remain authoritative; approving personal shell work does
+not waive space/room consent.
+
+Previously stored profiles retain `executionScope: "commands"`; they are never
+silently widened. That legacy mode still supports exact commands and recognized
+package/Compose/public-read command families, with per-operation flow consent.
+The owner can change a paused run under **Run permissions** on the pipeline's
+agent detail page: enter repositories, review the disclosed scope and choose
+**Approve entire run**. **Revoke run-wide shell approval** removes the broad
+shell grant. Saving permissions does not resume or replay work. The authenticated
+owner API is `PUT /api/pipelines/:id/permission-profile` with
+`{ "confirmed": true, "profile": { "executionScope": "run", "repoPath": "/absolute/project" } }`.
+Changes are persisted with their approver and previous profile, take effect on
+the next authorization check, and are refused while the pipeline is active.
+
+Run approval does not remove the
 template's separate `hostServices` sandbox requirement unless the user also
 approves `hostServices: true` in the run profile. That run option gives stage
-shells host localhost networking and the Docker socket; command permissions
-still apply. The shipped Full Development Cycle enables host services on
+shells host localhost networking and the Docker socket. The shipped Full Development Cycle enables host services on
 Testing, Code Review and QA Validation, including existing preset rows missing
 the flag. An explicit per-stage false is preserved during preset backfill.
 
@@ -306,8 +321,26 @@ the server's `ANDROID_HOME`, `ANDROID_SDK_ROOT`, or the platform's default SDK
 directory (Linux: `~/Android/Sdk`). A valid installation must contain
 `platforms` and `build-tools`. Both SDK environment variables point to the
 selected installation inside the sandbox. Install missing components on the
-host; jobs cannot modify the shared SDK. Adjacent `.android` keys and the rest
-of the host home directory are not exposed by this mount.
+host; jobs cannot modify the shared SDK. This SDK mount does not expose the
+rest of the home directory.
+
+Personal shell jobs, framework verification gates and workspace-write Codex
+runs also receive writable `~/.gradle` and `~/.android` runtime directories,
+plus `~/.m2/repository` and the individual `~/.robolectric-download-lock` file
+for Robolectric. Maven settings and the rest of home are not mounted.
+`GRADLE_USER_HOME` and `ANDROID_USER_HOME` point there. Existing Gradle downloads
+and Android/adb state are reused across stages; there is no repository-local
+cache or per-command download. Codex receives the same writable roots on both
+fresh and resumed runs. Shared-space jobs and locked native CLI modes do not
+inherit these personal directories. The rest of home remains outside these
+runtime grants.
+
+Resuming a stage paused for an environment failure starts a fresh stage
+attempt and CLI conversation, while keeping the completed plan items. The
+worker must execute the blocked gate again in its current runtime. A recheck
+that only repeats an old failure with no new command gets one correction;
+another empty recheck pauses with an explicit execution-evidence problem,
+rather than treating the historical failure as a current environment failure.
 
 Personal shell runs can opt into the host SSH agent with
 `security.shellSshAgent: true` (or `SHELL_SSH_AGENT=true`). This is a separate

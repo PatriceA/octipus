@@ -208,7 +208,10 @@ function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): 
   }
   // Sentinel separator so the original command isn't confused with
   // bwrap's own flags.
-  args.push('--');
+  // Synthetic parent directories are not host mounts. Keep them read-only:
+  // otherwise a git worktree can leave persistent .git metadata pointing at
+  // files created only in this command's disposable mount namespace.
+  args.push('--remount-ro', '/', '--');
   return args;
 }
 

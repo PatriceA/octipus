@@ -1,4 +1,5 @@
 import { runPermissionProfile } from '@/security/pipeline-permissions';
+import { personalBuildCaches } from '@/security/build-caches';
 import { redactedCommand } from '@/utils/command-log';
 import { redactAgentDiagnostics } from '@/security/credential-redaction';
 import { createAgentActivityTools } from './agent/activity-tools';
@@ -318,7 +319,13 @@ When a task matches one of these skills, load it with get_skill before starting 
     if (guidance.length && !this.acceptsLiveGuidance) this.emit('thought', { type: 'steering_delivered', delivery: 'CLI context', count: guidance.length });
     const permissionRun = await runPermissionProfile(this.context);
     return JSON.stringify({
-      ...(permissionRun ? { pipelineApproval: { pipelineId: permissionRun.pipeline.id, approvedAt: (permissionRun.pipeline.metadata?.permissionProfile as { approvedAt?: string })?.approvedAt, repositories: [permissionRun.profile.repoPath, ...permissionRun.profile.repoPaths], commands: permissionRun.profile.commands.map(redactedCommand), note: 'Use these approved commands for remote verification; transport/output-only verification variants retain the same fixed target. Other commands still need consent.' } } : {}),
+      ...(permissionRun ? { pipelineApproval: { pipelineId: permissionRun.pipeline.id, approvedAt: (permissionRun.pipeline.metadata?.permissionProfile as { approvedAt?: string })?.approvedAt,
+        executionScope: permissionRun.profile.executionScope,
+        repositories: [permissionRun.profile.repoPath, ...permissionRun.profile.repoPaths],
+        ...(permissionRun.profile.executionScope === 'run' ? {
+          commandListRequired: false,
+          note: 'The owner approved shell work for this entire run, including new scripts, remote deployment, cleanup, verification and network/credential use. No command list or new per-command consent is required inside the approved repository scope. Historical refusals under the previous profile are not current decisions: use the current permission check and actual execution result. Existing DENY rules, filesystem and shared-workspace restrictions still apply.',
+        } : { commandListRequired: true, commands: permissionRun.profile.commands.map(redactedCommand), note: 'This is a legacy command-scoped profile. Use the listed commands for remote verification; transport/output-only verification variants retain the same fixed target. Other commands still need consent.' }) } } : {}),
       agentId: this.context.id, sessionId: this.context.sessionId,
       workspaceId: this.context.workspaceId, planMode: this.connection?.planMode ?? false,
       shellCapabilities: { hostServices: this.context.metadata?.hostServices === true,
@@ -1184,7 +1191,8 @@ When a task matches one of these skills, load it with get_skill before starting 
     if (this.credentialOwner && !this.connection) throw new Error('A personal CLI model needs the Octipus bridge, which did not start');
     // Discovery reads the config.toml the run will read: the owner's CODEX_HOME for a personal row.
     const codexMcpServers = this.connection && adapterKey === 'Codex CLI' ? await discoverCodexMcpServers(workspaceCwd, cliEnvFor(this.credentialOwner, toolConfig)) : undefined;
-    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedChildSystem ?? this.systemMessages, resumedChildSystem ? resumedChildSystem.join('\n\n') : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, images, workingDirectory: workspaceCwd, codexMcpServers, shellGuard: getConfig().agent?.cliShellGuard !== false, maxIterations: Math.max(1, this.config.maxIterations - this.iteration), space: !!this.context.space, personal: !!this.credentialOwner } : undefined, resume);
+    const buildCaches = this.context.space ? undefined : personalBuildCaches();
+    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedChildSystem ?? this.systemMessages, resumedChildSystem ? resumedChildSystem.join('\n\n') : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, images, workingDirectory: workspaceCwd, writableRuntimePaths: buildCaches?.paths, codexMcpServers, shellGuard: getConfig().agent?.cliShellGuard !== false, maxIterations: Math.max(1, this.config.maxIterations - this.iteration), space: !!this.context.space, personal: !!this.credentialOwner } : undefined, resume);
     const { args, stdinPrompt, useShell } = built;
     this.launchCleanup = () => {
       const configIndex = args.indexOf('--mcp-config');
@@ -1199,7 +1207,7 @@ When a task matches one of these skills, load it with get_skill before starting 
     const binary = configuredCliBinary(built.binary);
     // Vendor CLIs that reuse the `claude` binary (z.ai GLM / Moonshot Kimi) inject
     // ANTHROPIC_BASE_URL + auth token via buildEnv — merge it over the adapter's env.
-    const toolEnv = { ...built.env, ...providerEnv };
+    const toolEnv = { ...buildCaches?.env, ...built.env, ...providerEnv };
 
 
     const previousCounters = this.parser?.getSideEffectCounters();
@@ -1517,6 +1525,7 @@ When a task matches one of these skills, load it with get_skill before starting 
             if (built.keepStdinOpen && event.type === 'control_request') {
               void answerCliPermissionRequest(event, this.context, (type, data) => this.emit(type, data), this.abortController.signal,
                 this.bridge ? () => this.availableBridgeTools() : undefined,
+                workspaceCwd,
               ).then(response => {
                 if (!this.aborted && proc.stdin?.writable) proc.stdin.write(JSON.stringify(response) + '\n');
               }).catch((err: unknown) => {

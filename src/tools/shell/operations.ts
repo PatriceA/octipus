@@ -41,6 +41,8 @@ export interface ShellOperations {
 
 /** How a run's environment and sandbox differ from the default (a space run's tool home, coworking §9.5). */
 export interface ShellEnvOptions {
+  /** Approved directories for cwd, including a normalized leading `cd`. */
+  allowedCwdRoots?: string[];
   /** Explicit server-side authorization for the host agent; never granted to shared spaces. */
   allowHostSshAgent?: boolean;
   /** Variables removed from the inherited environment (before `env` is laid over it). */

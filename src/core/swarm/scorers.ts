@@ -1100,6 +1100,7 @@ async function evaluate(
       // the process sandbox and its runner probe.
       const { LocalShellOperations } = await import('@/tools/shell/local-operations');
       try {
+        const caches = fs && !fs.isSpace ? (await import('@/security/build-caches')).personalBuildCaches() : undefined;
         const repaired = requoteSplitPath(scorer.command, cwd);
         if (repaired !== scorer.command) {
           coreLogger.info(
@@ -1116,8 +1117,11 @@ async function evaluate(
         }
         const res = await new LocalShellOperations().exec(repaired, cwd, withCliKubeconfig(ctx, {
           timeout: remainingTimeout,
+          env: { ...caches?.env, PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0] },
+          extraReadWrite: [...(caches?.paths ?? []), ...(ctx.hostServices ? ['/var/run/docker.sock'] : [])],
+          extraReadOnly: browserRuntimeMounts(),
           // A pipeline stage's `hostServices` opt-in reaches its verify command too.
-          ...(ctx.hostServices ? { allowNetwork: true, extraReadWrite: ['/var/run/docker.sock'], extraReadOnly: browserRuntimeMounts(), env: { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0] } } : {}),
+          ...(ctx.hostServices ? { allowNetwork: true } : {}),
           ...(ctx.signal ? { signal: ctx.signal } : {}),
           // Never `unsafe`. Safe mode is what makes `tokenizeSafe` reject shell
           // metacharacters, and it is the whole security argument for letting an

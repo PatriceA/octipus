@@ -443,7 +443,11 @@ export class WorkspaceFS {
     // A space without the turn's membership: no folder at all (fail closed;
     // the approval path refuses such a turn's tools anyway).
     if (isKnownSharedWorkspace(context.workspaceId)) return WorkspaceFS.forSpace(context.workspaceId as string, { guestFolders: [] });
-    return WorkspaceFS.forRequest(agentPrincipal(context), options);
+    const project = context.metadata?.projectPath;
+    return WorkspaceFS.forRequest(agentPrincipal(context), {
+      ...options,
+      extraAllowedPrefixes: [...(options.extraAllowedPrefixes ?? []), ...(typeof project === 'string' && project ? [pathResolve(project)] : [])],
+    });
   }
 
   /**
@@ -530,6 +534,18 @@ export class WorkspaceFS {
     if (!existsSync(this.root)) {
       mkdirSync(this.root, { recursive: true });
     }
+  }
+
+  /** Persistent host paths exposed to shell commands, from the same policy
+   * used by filesystem tools. Never mount a prefix's parent (notably /tmp).
+   * Missing additional directories can be created through filesystem tools
+   * first; mounting an absent path must not silently expose its parent.
+   */
+  persistentRoots(): string[] {
+    const candidates = this.guestFolders
+      ? this.guestFolders.map(folder => join(this.root, folder))
+      : [this.root, ...this.extraAllowedPrefixes.filter(p => !this.isTransientPrefix(p))];
+    return [...new Set(candidates.filter(p => existsSync(p)).map(p => this.resolve(p)))];
   }
 
   /**
@@ -681,13 +697,16 @@ export class WorkspaceFS {
    *     `/tmp/assistant-foo` — preserves the legacy tmp-file convention
    *     where the suffix encodes the session id).
    *
-   * Operators who add custom directory prefixes don't need to think
-   * about this — `isUnder` is the safe path. The string-prefix path is
-   * here for backwards compat with the legacy validatePath behavior.
+   * Only the legacy assistant scratch prefix uses string matching.
+   * Configured directories require a path-segment boundary.
    */
   private isInExtraAllowed(absolute: string): boolean {
     return this.extraAllowedPrefixes.some(
-      (p) => this.isUnder(absolute, p) || absolute.startsWith(p),
+      (p) => this.isUnder(absolute, p) || (this.isTransientPrefix(p) && absolute.startsWith(p)),
     );
+  }
+
+  private isTransientPrefix(prefix: string): boolean {
+    return prefix === pathResolve('/tmp/assistant-') || prefix === pathResolve(join(tmpdir(), 'assistant-'));
   }
 }

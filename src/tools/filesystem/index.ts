@@ -722,11 +722,7 @@ export class FilesystemTool extends BaseTool {
     if (!context) {
       throw new ToolNotExecutedError(this.id, 'filesystem tools work for an agent: no agent context was given');
     }
-    const projectPath = (context.metadata as Record<string, unknown> | undefined)
-      ?.projectPath as string | undefined;
-    const fs = WorkspaceFS.forAgent(context, {
-      extraAllowedPrefixes: projectPath ? [resolve(projectPath)] : [],
-    });
+    const fs = WorkspaceFS.forAgent(context);
     // Materialize the workspace root. In multiuser the per-user root
     // (`workspace/users/<uid>/workspaces/default/files`) is not seeded
     // anywhere — nothing calls ensureRoot at session setup — so read/list/

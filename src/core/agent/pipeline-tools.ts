@@ -1,6 +1,6 @@
 import { toolActionRepository } from '@/db/repositories/tool-action-repository';
 import { activeEnvironmentBlock } from './pipeline-environment';
-import { pipelinePermissionProfileSchema } from '@/shared/pipeline-permissions';
+import { proposedPipelinePermissionProfileSchema, permissionProfileDisclosure } from '@/shared/pipeline-permissions';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { z } from 'zod';
@@ -75,7 +75,7 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
         evidence: { type: 'string', description: 'Why the plan is changing: user decision or verification evidence' },
       } : {}),
       ...(name === 'resume_pipeline' ? {
-        permissionProfile: z.toJSONSchema(pipelinePermissionProfileSchema),
+        permissionProfile: z.toJSONSchema(proposedPipelinePermissionProfileSchema),
         tokenBudget: { type: 'integer', minimum: 1, description: 'Raise the total token pool for this run (must exceed spend). Requires user approval before resuming.' },
         fromStage: { type: 'string', description: 'Optional stage name or node key; defaults to the last checkpoint' },
         skipItems: { type: 'array', items: { type: 'string' }, description: 'Plan item ids already delivered by earlier work; marked skipped so the loop does not redo them' },
@@ -237,7 +237,7 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
       if (args.tokenBudget !== undefined || args.permissionProfile !== undefined) {
         const spent = nodes.reduce((sum, node) => sum + (node.tokensUsed ?? 0), 0);
         const budget = args.tokenBudget ?? pipeline.metadata?.tokenBudget ?? getConfig().agent.pipelineTokenBudget;
-        const profile = args.permissionProfile === undefined ? undefined : pipelinePermissionProfileSchema.parse(args.permissionProfile);
+        const profile = args.permissionProfile === undefined ? undefined : proposedPipelinePermissionProfileSchema.parse(args.permissionProfile);
         if (profile) {
           const session = await sessionRepository.findById(pipeline.sessionId);
           if (!session) throw new Error('Pipeline session not found');
@@ -248,7 +248,7 @@ export function createPipelineRecoveryTools(trackPipeline?: (id: string, complet
         if (typeof budget !== 'number' || !Number.isSafeInteger(budget) || budget <= spent || budget <= 0) throw new Error('tokenBudget must be a positive integer greater than recorded spend');
         const { getAgentService } = await import('./service');
         void getAgentService().requestApproval(`Resume pipeline "${pipeline.title}" with total token pool ${budget} (${spent} spent)?${profile ? `\nRun permission profile:\n${JSON.stringify(profile, null, 2)}` : ''}`,
-          'Approve this run scope and token pool, then resume the saved checkpoint? If allowCheckpointReplay is enabled, completed stage effects may repeat; uncertain outcomes still need inspection.', context, ['Approve', 'Deny'])
+          `Approve this run scope and token pool, then resume the saved checkpoint? ${profile ? permissionProfileDisclosure(profile) : ''} If allowCheckpointReplay is enabled, completed stage effects may repeat; uncertain outcomes still need inspection.`, context, ['Approve', 'Deny'])
           .then(async answer => {
             if (!(answer as { approved?: boolean }).approved || replyAnswer((answer as { response?: string }).response ?? '') !== 'approve') return;
             const current = await pipelineRepository.findById(pipeline.id);

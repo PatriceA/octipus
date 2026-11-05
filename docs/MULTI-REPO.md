@@ -44,6 +44,17 @@ The scanner detects repos by a `.git` directory/worktree file or a project marke
 for the package name + dependencies, reads the git remote/branch, and upserts a
 registry row. Re-scanning refreshes rows in place.
 
+Shell and filesystem tools share access to the user's workspace, the current
+project, and configured additional workspace directories. Sandboxed foreground
+and background commands mount those existing directories read-write, regardless
+of which repository is the command's working directory. Put Git worktrees under
+one of these directories so later shell calls and filesystem edits see the same
+persistent files. A missing additional directory can first be created with the
+filesystem tool. `/tmp` remains temporary per command; unmounted parent
+directories in bubblewrap are read-only rather than accepting files that vanish
+when the command exits. Shared spaces do not inherit personal project paths or
+additional workspace directories.
+
 ## How agents use it
 
 The General/root role and code-oriented roles (architecture, coding, review, research) get the

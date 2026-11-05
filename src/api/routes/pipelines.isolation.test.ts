@@ -110,6 +110,32 @@ describe('GET /api/pipelines/:id cross-tenant', () => {
   });
 });
 
+test('only the owner can approve a paused run scope; changes are persistent, bounded and do not resume work', async () => {
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const { seedSession } = await import('@/test-helpers/multiuser-fixtures');
+  const { WorkspaceFS } = await import('@/security/workspace-fs');
+  const { principalFromUser } = await import('@/security/principal');
+  const session = await seedSession({ userId: aliceId, channelId: rand(8) });
+  const repoPath = WorkspaceFS.forPrincipal(principalFromUser({ id: aliceId, username: 'alice', isAdmin: false })).root;
+  const pipeline = await pipelineRepository.create({ rootAgentId: 'root', sessionId: session.id, userId: aliceId,
+    title: 'owner permission edit', type: 'development', status: 'paused', metadata: { keep: 'checkpoint' } });
+  const profile = { repoPath, executionScope: 'run', commands: [] };
+  expect((await putJson(aliceApp, `/api/pipelines/${bobPipelineId}/permission-profile`, { confirmed: true, profile })).status).toBe(404);
+  expect((await putJson(aliceApp, `/api/pipelines/${pipeline.id}/permission-profile`, { profile })).status).toBeGreaterThanOrEqual(400);
+  const saved = await putJson(aliceApp, `/api/pipelines/${pipeline.id}/permission-profile`, { confirmed: true, profile });
+  expect(saved.body.saved).toBe(true);
+  const stored = await pipelineRepository.findById(pipeline.id);
+  expect(stored).toMatchObject({ status: 'paused', metadata: { keep: 'checkpoint', permissionProfile: { approvedBy: aliceId, profile: { executionScope: 'run', commands: [] } } } });
+  expect((await putJson(aliceApp, `/api/pipelines/${pipeline.id}/permission-profile`, { confirmed: true, profile })).body.saved).toBe(true);
+  expect((await pipelineRepository.findById(pipeline.id))?.metadata?.permissionProfileHistory).toHaveLength(0);
+  // Saving/revoking authority never starts a walker; the owner resumes separately.
+  expect((await putJson(aliceApp, `/api/pipelines/${pipeline.id}/permission-profile`, { confirmed: true, profile: { ...profile, executionScope: 'commands' } })).body.saved).toBe(true);
+  expect((await pipelineRepository.findById(pipeline.id))?.metadata?.permissionProfileHistory).toHaveLength(1);
+  expect((await putJson(aliceApp, `/api/pipelines/${pipeline.id}/permission-profile`, { confirmed: true, profile: { ...profile, repoPath: '/not-approved/repo' } })).status).toBe(400);
+  await pipelineRepository.updatePipeline(pipeline.id, { status: 'running' });
+  expect((await putJson(aliceApp, `/api/pipelines/${pipeline.id}/permission-profile`, { confirmed: true, profile })).status).toBe(409);
+});
+
 describe('PUT /api/pipelines/templates/:id auth (gap closed in Phase 1a)', () => {
   test('alice cannot rewrite bob’s private template', async () => {
     const r = await putJson(aliceApp, `/api/pipelines/templates/${bobTemplateId}`, { name: 'pwned' });

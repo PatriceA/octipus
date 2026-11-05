@@ -1117,10 +1117,15 @@ test.each(['go: Kommando nicht gefunden', 'ECONNREFUSED ::1:5433', '/var/run/doc
   expect(await manager.getPipeline(pipelineId)).toMatchObject({ status: 'paused', metadata: {
     environmentBlock: { reason: expect.stringContaining(reason), itemId: expect.any(String), attemptId: expect.any(String) },
   } });
+  const blockedAttempt = calls.filter(call => call.stageName === 'QA').at(-1)!;
   replies = { QA: [QA_PASS] };
   const { actionRecovery } = await import('@/core/action-recovery');
   const review = vi.spyOn(actionRecovery, 'reviewPipeline').mockResolvedValue();
   try { await manager.resume(pipelineId); } finally { review.mockRestore(); }
+  const recheckedAttempt = calls.filter(call => call.stageName === 'QA').find(call => call.input.includes('ENVIRONMENT RECHECK:'))!;
+  expect(recheckedAttempt).toBeDefined();
+  expect(recheckedAttempt.resumeKey).not.toBe(blockedAttempt.resumeKey);
+  expect(recheckedAttempt.input).toContain('Run the previously blocked required command now');
   expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done']);
   expect((await manager.getPipeline(pipelineId))?.metadata?.environmentBlock).toBeUndefined();
   expect(calls.filter(call => call.stageName === 'Implement')).toHaveLength(2);
@@ -1132,6 +1137,21 @@ test('a stopped testing handoff with an environment blocker pauses before comman
   const { pipelineId } = await run('verify the project');
   expect(await manager.getPipeline(pipelineId)).toMatchObject({ status: 'paused', summary: expect.stringContaining('Environment blocked') });
   expect(await planItemStatuses(pipelineId)).toEqual(['running', 'pending']);
+});
+
+test('an environment resume cannot re-pause on an old report without fresh execution', async () => {
+  const old = '```handoff\n' + JSON.stringify({ stopped: true, environmentBlocked: 'Required gate: gradlew test; Could not create parent directory for lock file /home/user/.gradle/gradle.zip.lck' }) + '\n```';
+  replies = { QA: [old] };
+  const { pipelineId } = await run('verify the project');
+  const before = calls.filter(call => call.stageName === 'QA').length;
+  commandCounts = [0, 0];
+  const { actionRecovery } = await import('@/core/action-recovery');
+  const review = vi.spyOn(actionRecovery, 'reviewPipeline').mockResolvedValue();
+  try { await manager.resume(pipelineId); } finally { review.mockRestore(); }
+  expect(calls.filter(call => call.stageName === 'QA')).toHaveLength(before + 2);
+  expect(await manager.getPipeline(pipelineId)).toMatchObject({ status: 'paused', summary: expect.stringContaining('did not execute the required command') });
+  expect((await manager.getPipeline(pipelineId))?.metadata?.environmentBlock).toBeUndefined();
+  expect(calls.filter(call => call.stageName === 'Implement')).toHaveLength(1);
 });
 
 test('host service declarations reach the actual stage worker metadata', async () => {
@@ -1550,6 +1570,25 @@ test.each(['explicit', 'legacy', 'denial-counter'])('policy repair parks once wi
   expect(approvalsAsked).toBe(0);
   expect(calls.filter(call => call.stageName === 'Implement')).toHaveLength(1);
   expect(calls.some(call => call.stageName === 'QA')).toBe(false);
+});
+
+test('resuming policy repair with an approved run scope starts a fresh verification attempt', async () => {
+  replies = { QA: ['```handoff\n' + JSON.stringify({ stopped: true, blockedOnPolicy: 'Previously refused database verification under a command-only profile' }) + '\n```'] };
+  const { pipelineId } = await run('verify the repaired permission scope');
+  const blocked = calls.filter(call => call.stageName === 'QA').at(-1)!;
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const { proposedPipelinePermissionProfileSchema } = await import('@/shared/pipeline-permissions');
+  expect(await pipelineRepository.approvePermissionProfile(pipelineId, userId, proposedPipelinePermissionProfileSchema.parse({ repoPath: '/repo' }))).toBe(true);
+  replies = { QA: [QA_PASS] };
+  const { actionRecovery } = await import('@/core/action-recovery');
+  const review = vi.spyOn(actionRecovery, 'reviewPipeline').mockResolvedValue();
+  try { await manager.resume(pipelineId); } finally { review.mockRestore(); }
+  const fresh = calls.find(call => call.input.includes('PERMISSION RECHECK:'))!;
+  expect(fresh).toBeDefined();
+  expect(fresh.resumeKey).not.toBe(blocked.resumeKey);
+  expect(fresh.input).toContain('no command list');
+  expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done']);
+  expect(calls.filter(call => call.stageName === 'Implement')).toHaveLength(2);
 });
 
 test('a stage stopped by content policy gets a policy retry reason, never probe blame (#71)', async () => {

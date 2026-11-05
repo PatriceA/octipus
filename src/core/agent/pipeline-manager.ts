@@ -6,7 +6,7 @@ import type { PendingStageApproval } from '@/shared/pipeline-approval';
 import { replyAnswer } from './approval-manager';
 import { WorkerInterruptedError } from '@/core/interruption';
 import { pipelineBudget } from './pipeline-budget';
-import { pipelinePermissionProfileSchema } from '@/shared/pipeline-permissions';
+import { proposedPipelinePermissionProfileSchema, permissionProfileDisclosure } from '@/shared/pipeline-permissions';
 import { classifyError, FailoverReason } from '@/core/errors/classification';
 import { providerResetAt } from '@/core/errors/provider-recovery';
 import { getAgentManager } from '@/core/agent-manager';
@@ -971,7 +971,7 @@ export class PipelineManager {
       );
     }
 
-    const requestedProfile = options?.permissionProfile === undefined ? undefined : pipelinePermissionProfileSchema.parse(options.permissionProfile);
+    const requestedProfile = options?.permissionProfile === undefined ? undefined : proposedPipelinePermissionProfileSchema.parse(options.permissionProfile);
     if (requestedProfile) {
       const session = await sessionRepository.findById(sessionId);
       if (!session) throw new Error('Pipeline session not found');
@@ -1106,7 +1106,7 @@ export class PipelineManager {
       if (!entry) throw new Error('Pipeline has no entry stage for permission approval');
       const decision = await this.requestPipelineApproval(pipeline, entry, rootAgent,
         `Approve this permission profile once for pipeline "${title}":\n${JSON.stringify(requestedProfile, null, 2)}`,
-        'Allow these commands, package tools, public hosts and named Docker projects for this run? Commands outside the profile still require approval; overnight mode denies and records them instead. allowCheckpointReplay permits repeating completed effects from a saved stage; uncertain outcomes still require inspection.',
+        `${permissionProfileDisclosure(requestedProfile)} allowCheckpointReplay permits repeating completed effects from a saved stage; uncertain outcomes still require inspection.`,
         context, ['Approve', 'Deny']) as { approved: boolean; response?: string };
       if (!decision.approved || replyAnswer(decision.response ?? '') !== 'approve') {
         const stopped = (await this.getPipeline(pipeline.id))?.status === 'stopped';
@@ -2374,7 +2374,20 @@ export class PipelineManager {
     }
     // A deliberate rewind runs the stage afresh; otherwise the interrupted
     // attempt continues, with its CLI conversation and its progress.
-    if (opts.freshAttempt) {
+    const environment = meta.environmentBlock as { nodeKey?: string; itemId?: string | null; reason?: string } | undefined;
+    const recheckEnvironment = opts.fromSeq == null && environment?.nodeKey === resumeState.cursor
+      && (environment.itemId ?? null) === (resumeState.currentItemId ?? null);
+    if (recheckEnvironment) {
+      context = { ...context, metadata: { ...context.metadata, environmentRecheck: environment } };
+    }
+    const policy = meta.coordinatorRequest as { nodeKey?: string; itemId?: string | null; reason?: string } | undefined;
+    const profile = meta.permissionProfile as { profile?: { executionScope?: string }; approvedBy?: string } | undefined;
+    const recheckPolicy = opts.fromSeq == null && policy?.nodeKey === resumeState.cursor
+      && (policy.itemId ?? null) === (resumeState.currentItemId ?? null)
+      && /Policy enforcement requires repair:/.test(policy.reason ?? '')
+      && profile?.approvedBy === pipeline.userId && profile.profile?.executionScope === 'run';
+    if (recheckPolicy) context = { ...context, metadata: { ...context.metadata, policyRecheck: policy } };
+    if (opts.freshAttempt || recheckEnvironment || recheckPolicy) {
       resumeState.attemptId = undefined;
       resumeState.partial = undefined;
     }
@@ -2956,6 +2969,7 @@ export class PipelineManager {
 
   private async runStepNode(args: {
     retryContract?: boolean;
+    environmentRecheckCorrection?: boolean;
     pipeline: Pipeline;
     node: PipelineNodeRow;
     declared: ReturnType<typeof buildStagesFromTemplate>[number];
@@ -2981,6 +2995,17 @@ export class PipelineManager {
   }): Promise<{ output: string; raw: string; contractFailure?: string; stopped?: { pipelineId: string; result: string } }> {
     const { pipeline, node, declared, stageTemplate, stageContext, context, registry, workspaceRoot, title, attemptId, itemId, checkpoint } = args;
     let input = args.partial ? `${incompleteAttemptNote(args.partial.text)}\n\n${args.input}` : args.input;
+    const policyRecheck = context.metadata?.policyRecheck as { nodeKey?: string; itemId?: string | null; reason?: string } | undefined;
+    if (policyRecheck?.nodeKey === node.nodeKey && (policyRecheck.itemId ?? null) === itemId) {
+      input = `PERMISSION RECHECK: The owner has approved run-wide shell work, including network/credential use, with no command list. Read the current get_cli_run_context. The previous refusal is historical, not a current permission decision. Perform the required verification using the current scope and report its actual result. Do not stop solely because an earlier command was refused or a legacy command list is empty. Honor any new refusal; do not repeat denied calls or redo completed implementation.\nPrevious policy report (historical): ${policyRecheck.reason}\n\n${input}`;
+    }
+    const recheck = context.metadata?.environmentRecheck as { nodeKey?: string; itemId?: string | null; reason?: string } | undefined;
+    if (recheck?.nodeKey === node.nodeKey && (recheck.itemId ?? null) === itemId) {
+      input = `ENVIRONMENT RECHECK: The user resumed after a recorded environment failure. This is a fresh stage attempt. The prior failure is historical, not evidence of the current runtime. Run the previously blocked required command now using the current sandbox, and use its new exit code/output. Do not re-pause by quoting the old report. If it still fails, report the fresh command, cwd, error and time. A workstation run cannot substitute for this stage's sandbox execution. Do not redo completed implementation or unrelated stages.\nPrevious environment report (historical): ${recheck.reason}\n\n${input}`;
+      const current = await this.getPipeline(pipeline.id);
+      await this.updatePipeline(pipeline.id, { metadata: { ...current?.metadata,
+        environmentBlock: { ...current?.metadata?.environmentBlock as object, nodeKey: node.nodeKey, itemId, attemptId, recheckingAt: new Date().toISOString() } } });
+    }
     const rootAgent = getAgentService();
     const sessionId = pipeline.sessionId;
     // Progress of this attempt, on its checkpoint: a restart or a cold retry
@@ -3187,6 +3212,18 @@ export class PipelineManager {
       }
       const environment = handoff?.environmentBlocked || ((handoff?.stopped || verdict?.passed === false)
         ? stageEnvironmentReason(verdict ? [...verdict.issues, verdict.feedback].join('\n') : String(result)) : undefined);
+      if (environment && recheck?.nodeKey === node.nodeKey && (recheck.itemId ?? null) === itemId
+        && !((counters as SideEffectCounters | null)?.commandsRun)) {
+        if (!args.environmentRecheckCorrection) return this.runStepNode({ ...args, partial: undefined,
+          environmentRecheckCorrection: true, startReason: 'environment_recheck_correction',
+          input: `${args.input}\n\nThe environment recheck produced no new command execution. Do not reuse the historical failure. Run the required gate now and report its new result; do not change product files to satisfy this check.` });
+        const current = await this.getPipeline(pipeline.id);
+        const { environmentBlock: previousBlock, ...metadata } = current?.metadata ?? {};
+        await this.updatePipeline(pipeline.id, { metadata: { ...metadata, lastEnvironmentBlock: previousBlock } });
+        return { output: '', raw: '', stopped: await this.pauseForCoordinator(pipeline, node,
+          'The environment recheck did not execute the required command. The old error is historical; current environment status is unverified.', attemptId, itemId,
+          'Check this stage\'s available execution tool. Resume for a fresh required-gate execution; do not classify the old log as a new environment failure.') };
+      }
       if (environment) throw new StageEnvironmentError(environment);
       await this.assertStageEvidence({
         sessionId,

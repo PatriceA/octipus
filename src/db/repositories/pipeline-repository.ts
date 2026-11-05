@@ -1,4 +1,6 @@
 import type { PipelineReplayReceipt } from '@/shared/pipeline-replay';
+import type { PipelinePermissionProfile } from '@/shared/pipeline-permissions';
+import { isDeepStrictEqual } from 'node:util';
 import { permissionRequests } from '../schema/permissions';
 import { assertNoCredentialTemplates } from '@/security/credential-boundary';
 import type { PendingStageApproval } from '@/shared/pipeline-approval';
@@ -80,6 +82,27 @@ export class PipelineRepository {
         updatedAt: new Date() }).where(eq(pipelines.id, id));
       if (data.metadata?.environmentBlock) await this.clearSettledEnvironmentBlock(tx, id);
       await this.syncWorkPlan(tx, id);
+    });
+  }
+
+  /** Direct owner approval from the permissions UI/API. A row lock preserves
+   * concurrent checkpoint metadata and makes an active run reject changes. */
+  async approvePermissionProfile(id: string, userId: string, profile: PipelinePermissionProfile): Promise<boolean> {
+    assertNoCredentialTemplates(profile);
+    return this.db.transaction(async tx => {
+      // i2: the authenticated owner and the scoped route's pipeline id bind this write.
+      const [row] = await tx.select().from(pipelines).where(and(eq(pipelines.id, id), eq(pipelines.userId, userId))).for('update');
+      if (!row || !['paused', 'stopped', 'failed'].includes(row.status)) return false;
+      const prior = row.metadata?.permissionProfile as { profile?: unknown; approvedBy?: string } | undefined;
+      if (prior?.approvedBy === userId && isDeepStrictEqual(prior.profile, profile)) return true;
+      const approvedAt = new Date().toISOString();
+      const previous = row.metadata?.permissionProfile;
+      const history = Array.isArray(row.metadata?.permissionProfileHistory) ? row.metadata.permissionProfileHistory : [];
+      await tx.update(pipelines).set({ metadata: { ...row.metadata,
+        permissionProfileHistory: [...history, ...(previous ? [previous] : [])].slice(-50),
+        permissionProfile: { profile, repoPath: profile.repoPath, approvedBy: userId, approvedAt, source: 'owner_permission_settings' },
+      }, updatedAt: new Date() }).where(eq(pipelines.id, id));
+      return true;
     });
   }
 

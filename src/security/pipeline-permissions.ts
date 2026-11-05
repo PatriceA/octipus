@@ -10,17 +10,23 @@ import type { ApprovalCaller } from './approval-route';
 import type { SpaceToolCall } from './space-tools';
 import { callFingerprint, routedToolName } from './approved-calls';
 import { matchDestructiveCommand } from '@/tools/shell/policy';
+import { isInside } from './workspace-fs';
 
-/** Match only explicit shell forms; shell expressions and arbitrary inline scripts ask separately. */
+/** Run approvals cover shell work; legacy profiles match explicit command forms. */
 export function profileAllows(profile: PipelinePermissionProfile, call: SpaceToolCall): boolean {
-  if (!(call.toolId === 'shell' && ['execute', 'execute_elevated'].includes(call.action) || call.toolId === 'cli-native:Bash' && call.action === 'Bash')) return false;
+  if (!(call.toolId === 'shell' && ['execute', 'execute_elevated', ...(profile.executionScope === 'run' ? ['execute_destructive'] : [])].includes(call.action) || call.toolId === 'cli-native:Bash' && call.action === 'Bash')) return false;
   const args = call.args ?? {};
   const command = args.command;
-  if (typeof command !== 'string' || Object.keys(args).some(key => !['command', 'cwd', 'timeout', 'description', 'network', 'useShell'].includes(key))) return false;
+  if (typeof command !== 'string' || !command.trim() || Object.keys(args).some(key => !['command', 'cwd', 'timeout', 'description', 'network', 'useShell', ...(profile.executionScope === 'run' ? ['env'] : [])].includes(key))) return false;
   // The shell and vendor CLIs can default to different workspaces/worktrees.
   // A profile is authority for a named repo, never evidence of execution cwd.
   if (typeof args.cwd !== 'string' || !isAbsolute(args.cwd)) return false;
   const cwd = resolve(args.cwd);
+  if (profile.executionScope === 'run') {
+    if (call.toolId === 'shell' && !['run', 'run_background'].includes(call.toolName ?? '')) return false;
+    if (call.toolId === 'cli-native:Bash' && call.toolName !== 'Bash') return false;
+    return [profile.repoPath, ...profile.repoPaths].some(repo => isInside(repo, cwd));
+  }
   if (![profile.repoPath, ...profile.repoPaths].some(repo => cwd === resolve(repo)) || matchDestructiveCommand(command)) return false;
   if (profile.commands.includes(command)) return true;
   const verification = matchingVerificationCommand(profile.commands, command);
@@ -52,14 +58,20 @@ export function profileAllows(profile: PipelinePermissionProfile, call: SpaceToo
 
 export async function runPermissionProfile(caller: ApprovalCaller) {
   const id = caller.metadata?.pipelineId;
-  if (typeof id !== 'string' || !isUuid(id) || caller.root === true || typeof caller.metadata?.attemptId !== 'string') return undefined;
+  if (typeof id !== 'string' || !isUuid(id) || caller.root === true) return undefined;
   const pipeline = await pipelineRepository.findById(id);
   if (!pipeline || pipeline.userId !== caller.userId || pipeline.sessionId !== caller.sessionId
     || (pipeline.workspaceId ?? null) !== (caller.workspaceId ?? null)
     || !['running', 'awaiting_approval'].includes(pipeline.status)) return undefined;
   const stored = pipeline.metadata?.permissionProfile as { approvedBy?: string; repoPath?: string; profile?: unknown } | undefined;
   const parsed = pipelinePermissionProfileSchema.safeParse(stored?.profile);
-  return stored?.approvedBy === caller.userId && parsed.success && stored.repoPath === parsed.data.repoPath ? { pipeline, profile: parsed.data } : undefined;
+  if (stored?.approvedBy !== caller.userId || !parsed.success || stored.repoPath !== parsed.data.repoPath) return undefined;
+  // A run approval covers framework-linked stage children too. A legacy call
+  // approval remains bound to a stage worker's own attempt.
+  if (parsed.data.executionScope === 'run'
+    ? typeof caller.metadata?.nodeKey !== 'string'
+    : typeof caller.metadata?.attemptId !== 'string') return undefined;
+  return { pipeline, profile: parsed.data };
 }
 
 /** Save the actual authorized arguments, never an agent-authored pattern. */
@@ -82,6 +94,10 @@ export async function rememberRunDecision(caller: ApprovalCaller, call: SpaceToo
 
 /** Resolve Octipus shell defaults exactly as execution does, independently of the profile. */
 export function effectiveProfileCall(caller: ApprovalCaller, call: SpaceToolCall): SpaceToolCall {
+  if (call.toolId === 'cli-native:Bash' && call.action === 'Bash' && call.args?.cwd === undefined
+    && typeof caller.metadata?.cliWorkingDirectory === 'string') {
+    return { ...call, args: { ...call.args, cwd: caller.metadata.cliWorkingDirectory } };
+  }
   if (call.toolId !== 'shell' || !['run', 'run_background'].includes(call.toolName ?? '')) return call;
   return { ...call, args: { ...call.args, cwd: resolveShellCwd(call.args?.cwd, caller as AgentContext) } };
 }
@@ -89,14 +105,15 @@ export function effectiveProfileCall(caller: ApprovalCaller, call: SpaceToolCall
 export function profileMismatch(profile: PipelinePermissionProfile, call: SpaceToolCall): string {
   if (call.toolId !== 'shell' && call.toolId !== 'cli-native:Bash' && call.toolId !== 'docker') return `tool ${call.toolId}.${call.action} is not covered`;
   if (typeof call.args?.cwd !== 'string' || !isAbsolute(call.args.cwd)) return 'execution cwd is missing or not absolute';
-  if (![profile.repoPath, ...profile.repoPaths].some(repo => resolve(repo) === resolve(call.args!.cwd as string))) return `execution cwd ${call.args.cwd} is outside approved repositories`;
-  if (Object.keys(call.args ?? {}).some(key => !['command', 'cwd', 'timeout', 'description', 'network', 'useShell'].includes(key))) return 'additional execution arguments are not covered by the profile';
+  if (![profile.repoPath, ...profile.repoPaths].some(repo => profile.executionScope === 'run' ? isInside(repo, call.args!.cwd as string) : resolve(repo) === resolve(call.args!.cwd as string))) return `execution cwd ${call.args.cwd} is outside approved repositories`;
+  if (Object.keys(call.args ?? {}).some(key => !['command', 'cwd', 'timeout', 'description', 'network', 'useShell', ...(profile.executionScope === 'run' ? ['env'] : [])].includes(key))) return 'additional execution arguments are not covered by the profile';
+  if (profile.executionScope === 'run') return 'shell operation is outside the approved run scope';
   return 'command or permission action does not match an approved command or command family';
 }
 
-/** Listed commands and narrowly anchored verification targets satisfy consent; general families cannot. */
+/** A disclosed run approval includes data-flow consent. Legacy families do not. */
 export function profileExplicitlyAllows(profile: PipelinePermissionProfile, call: SpaceToolCall): boolean {
-  return typeof call.args?.command === 'string' && (profile.commands.includes(call.args.command) || !!matchingVerificationCommand(profile.commands, call.args.command)) && profileAllows(profile, call);
+  return profileAllows(profile, call) && (profile.executionScope === 'run' || typeof call.args?.command === 'string' && (profile.commands.includes(call.args.command) || !!matchingVerificationCommand(profile.commands, call.args.command)));
 }
 
 /** The shell discloses this rewrite and executes the approved file, not discovery/overrides. */

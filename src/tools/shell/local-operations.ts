@@ -1,4 +1,5 @@
 import { statSync } from 'node:fs';
+import { WorkspaceFS } from '@/security/workspace-fs';
 import { shellSshAgent } from '@/security/shell-ssh-agent';
 import { runtimePath, packageStorePath } from '@/security/runtime-path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
@@ -11,6 +12,18 @@ import { tokenizeSafe } from './policy';
 import type { ShellEnvOptions, ShellExecResult, ShellOperations } from './operations';
 
 const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB
+
+/** A leading `cd dir && cmd` must not turn an unapproved host path into
+ * the sandbox's writable root. Trusted internal callers can omit roots. */
+function approvedCwd(cwd: string, options: ShellEnvOptions): string {
+  if (!options.allowedCwdRoots) return cwd;
+  const [root, ...extras] = options.allowedCwdRoots;
+  if (root) {
+    try { return WorkspaceFS.withRoot(root, { extraAllowedPrefixes: extras }).resolve(cwd); }
+    catch { /* report a definite pre-execution refusal below */ }
+  }
+  throw new ToolNotExecutedError('shell', 'Working directory is outside approved workspace directories');
+}
 
 /**
  * PIDs of process GROUPS this process started and has not yet reaped.
@@ -165,6 +178,7 @@ export class LocalShellOperations implements ShellOperations {
       ? posixShellArgv(command)
       : [argv![0], ...argv!.slice(1)];
 
+    cwd = approvedCwd(cwd, options);
     assertCwd(cwd);
     const { wrapCommand } = await import('@/security/shell-sandbox');
     let wrap: ReturnType<typeof wrapCommand>;
@@ -321,6 +335,7 @@ export class LocalShellOperations implements ShellOperations {
       ? posixShellArgv(command)
       : [argv![0], ...argv!.slice(1)];
 
+    cwd = approvedCwd(cwd, options);
     assertCwd(cwd);
     const { wrapCommand } = await import('@/security/shell-sandbox');
     const sshAgent = sshAgentFor(options);

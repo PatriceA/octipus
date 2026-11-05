@@ -47,6 +47,8 @@ export interface CliRunConnection {
   maxIterations: number;
   /** Resolve vendor configuration from the same directory used for execution. */
   workingDirectory?: string;
+  /** Server-selected writable runtime directories; never agent-supplied. */
+  writableRuntimePaths?: string[];
   /** Codex only: effective MCP servers from `discoverCodexMcpServers`, disabled for the run. */
   codexMcpServers?: Array<{ name: string }>;
   /** Install the network-shell guard hook (`agent.cliShellGuard`). */
@@ -937,6 +939,11 @@ export class CLIArgumentBuilder {
     // A first/non-resumed `exec` run still takes --sandbox directly.
     if (isResumedRun) baseArgs.push('-c', `sandbox_mode="${codexPermMode}"`);
     else baseArgs.push('--sandbox', codexPermMode);
+    // Config overrides are accepted by both exec and exec resume; --add-dir
+    // is not accepted by resume. Read-only/space/personal-row modes stay locked.
+    if (codexPermMode === 'workspace-write' && !lockedRun(connection) && connection?.writableRuntimePaths?.length) {
+      baseArgs.push('-c', `sandbox_workspace_write.writable_roots=${JSON.stringify(connection.writableRuntimePaths)}`);
+    }
     // Delegation goes through Octipus spawn_child only. Accepted by both
     // `exec` and `exec resume` (verified on 0.154.0, `codex features list`).
     for (const feature of CODEX_NATIVE_SUBAGENT_FEATURES) baseArgs.push('--disable', feature);

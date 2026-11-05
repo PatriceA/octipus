@@ -1,7 +1,7 @@
 import { withCliKubeconfig } from '@/security/cli-kubeconfig';
 import { isApprovedCall } from '@/security/approved-calls';
 import { implicitVerificationCommand } from '@/security/verification-command';
-import { profileVerificationRewrite, runPermissionProfile } from '@/security/pipeline-permissions';
+import { profileAllows, profileVerificationRewrite, runPermissionProfile } from '@/security/pipeline-permissions';
 import { resolveShellCwd } from '@/security/shell-cwd';
 import { redactedCommand } from '@/utils/command-log';
 import { homedir } from 'node:os';
@@ -10,6 +10,7 @@ import { browserRuntimeDiagnostic, browserRuntimeMounts, browserRuntimePaths } f
 import { getExecutionSignal } from '@/core/execution-scope';
 import { isToolNotExecutedResult, ToolNotExecutedError, ToolPolicyRefusalError } from '@/core/tool-execution-error';
 import { WorkspaceFS } from '@/security/workspace-fs';
+import { personalBuildCaches } from '@/security/build-caches';
 import { isSensitiveEnvName } from '@/security/child-env';
 import { HOST_IDENTITY_ENV, openSpaceToolHome, type SpaceToolHome, withToolHome } from '@/security/space-tool-env';
 import type { AgentContext, ToolManifest } from '@/core/types';
@@ -44,6 +45,22 @@ export function spaceRunOptions(env: Record<string, string> | undefined, home: S
 } {
   if (!home) return { env, extraReadOnly: [join(homedir(), '.gitconfig'), join(homedir(), '.config/git/config')] };
   return { env: withToolHome(env ?? {}, home), unsetEnv: HOST_IDENTITY_ENV, extraReadWrite: [home.dir] };
+}
+
+/** Shell and filesystem tools share the caller's approved host directories. */
+export function shellRunOptions(context: AgentContext, env: Record<string, string> | undefined, home: SpaceToolHome | null, cwd?: string) {
+  const fs = WorkspaceFS.forAgent(context);
+  fs.ensureRootSync();
+  const options = spaceRunOptions(env, home);
+  const roots = fs.persistentRoots();
+  const caches = fs.isSpace ? undefined : personalBuildCaches();
+  return {
+    ...options,
+    env: { ...caches?.env, ...options.env },
+    allowHostSshAgent: !fs.isSpace,
+    extraReadWrite: [...roots, ...(options.extraReadWrite ?? []), ...(caches?.paths ?? [])],
+    allowedCwdRoots: [...roots, ...(cwd ? [fs.resolve(cwd)] : [])],
+  };
 }
 
 /**
@@ -107,7 +124,7 @@ export class ShellTool extends BaseTool {
   protected async registerTools(): Promise<void> {
     this.registerTool(
       'run',
-      'Execute a shell command and return the output. Simple commands are spawned directly with no shell. Set useShell:true if you need pipes, redirects, or command substitution (audited).',
+      'Execute a shell command and return the output. Keep persistent files and Git worktrees inside the workspace, project, or configured additional workspace directories; these share host storage with filesystem tools. Other unmounted directories are read-only; /tmp is temporary per command. Simple commands are spawned directly with no shell. Set useShell:true if you need pipes, redirects, or command substitution (audited).',
       createParameterSchema({
         command: { type: 'string', description: 'Shell command to execute', required: true },
         cwd: { type: 'string', description: 'Working directory for command execution' },
@@ -144,9 +161,7 @@ export class ShellTool extends BaseTool {
         try {
           result = await this.ops.exec(command, cwd, withCliKubeconfig(context, withHostServices(context?.metadata, {
             timeout, unsafe, allowNetwork, signal: getExecutionSignal(context),
-            ...spaceRunOptions(args.env as Record<string, string> | undefined, home),
-            allowHostSshAgent: context ? !WorkspaceFS.forAgent(context).isSpace : false,
-            extraReadOnly: [...(spaceRunOptions(args.env as Record<string, string> | undefined, home).extraReadOnly ?? []), ...(context && !cwd.startsWith(WorkspaceFS.forAgent(context).root) ? [WorkspaceFS.forAgent(context).root] : [])],
+            ...shellRunOptions(context, args.env as Record<string, string> | undefined, home, cwd),
           })));
         } finally {
           home?.dispose();
@@ -201,7 +216,7 @@ export class ShellTool extends BaseTool {
 
     this.registerTool(
       'run_background',
-      'Execute a command in the background (detached). Safe by default: simple commands are spawned with no shell. Set useShell:true only if you need pipes, redirects, or command substitution (audited).',
+      'Execute a command in the background (detached), with the same persistent workspace/project/additional-directory access as run and filesystem tools. /tmp is temporary per command. Safe by default: simple commands are spawned with no shell. Set useShell:true only if you need pipes, redirects, or command substitution (audited).',
       createParameterSchema({
         command: { type: 'string', description: 'Shell command to execute', required: true },
         cwd: { type: 'string', description: 'Working directory' },
@@ -238,9 +253,8 @@ export class ShellTool extends BaseTool {
         let pid: number | undefined;
         try {
           ({ pid } = await this.ops.spawnBackground(command, cwd, withCliKubeconfig(context, withHostServices(context?.metadata, {
-            unsafe, allowNetwork, ...spaceRunOptions(args.env as Record<string, string> | undefined, home),
-            allowHostSshAgent: context ? !WorkspaceFS.forAgent(context).isSpace : false,
-            extraReadOnly: [...(spaceRunOptions(args.env as Record<string, string> | undefined, home).extraReadOnly ?? []), ...(context && !cwd.startsWith(WorkspaceFS.forAgent(context).root) ? [WorkspaceFS.forAgent(context).root] : [])], onExit: () => home?.dispose(),
+            unsafe, allowNetwork, ...shellRunOptions(context, args.env as Record<string, string> | undefined, home, cwd),
+            onExit: () => home?.dispose(),
           }))));
         } catch (err) {
           home?.dispose();
@@ -329,6 +343,7 @@ export class ShellTool extends BaseTool {
     const requested = args.command as string;
     const call = { toolId: this.id, action: this.resolvePermissionAction(requested), toolName, args };
     const run = await runPermissionProfile(context);
+    if (run?.profile.executionScope === 'run' && profileAllows(run.profile, call)) return requested;
     if (run?.profile.commands.includes(requested)) return requested;
     const rewritten = run ? profileVerificationRewrite(run.profile, call) : undefined;
     if (rewritten) return rewritten;

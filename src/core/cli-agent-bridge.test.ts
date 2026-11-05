@@ -14,6 +14,24 @@ const fixture = vi.hoisted(() => ({ script: '', dir: '', plan: { revision: 0, cu
   wait: vi.fn(), waitListener: undefined as undefined | ((agentId: string, waiting: boolean, requestId: string) => void),
   sessionWorkspaceId: null as string | null }));
 const commentary = vi.hoisted(() => vi.fn().mockResolvedValue({ sent: true }));
+
+it.each(['run', 'commands'] as const)('run context tells workers the actual %s permission scope', async executionScope => {
+  const profiles = await import('@/security/pipeline-permissions');
+  const { pipelinePermissionProfileSchema } = await import('@/shared/pipeline-permissions');
+  const profile = pipelinePermissionProfileSchema.parse({ executionScope, repoPath: '/repo', commands: executionScope === 'run' ? [] : ['approved-check'] });
+  const lookup = vi.spyOn(profiles, 'runPermissionProfile').mockResolvedValue({ pipeline: { id: 'pipeline', metadata: {} }, profile } as never);
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own', id: 'scope-worker', sessionId: 's', userId: 'u', model: 'fixture', role: 'review', topic: 'review', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+    { maxIterations: 1, maxTokenBudget: 1000, timeout: 1000, contextWindowSize: 1000 });
+  try {
+    const data = JSON.parse(await (worker as unknown as { controlContext(): Promise<string> }).controlContext());
+    expect(data.pipelineApproval.executionScope).toBe(executionScope);
+    expect(data.pipelineApproval.commandListRequired).toBe(executionScope === 'commands');
+    if (executionScope === 'run') {
+      expect(data.pipelineApproval.commands).toBeUndefined();
+      expect(data.pipelineApproval.note).toContain('No command list');
+    } else expect(data.pipelineApproval.commands).toEqual(['approved-check']);
+  } finally { lookup.mockRestore(); }
+});
 vi.mock('./agent/service', () => ({ getAgentService: () => ({ sendStatusUpdate: commentary }) }));
 // These process/bridge fixtures have no database; accounting is tested separately.
 const usage = vi.hoisted(() => vi.fn(async () => {}));

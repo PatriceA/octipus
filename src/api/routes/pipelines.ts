@@ -25,6 +25,10 @@ import { contentRepos } from '@/db/repositories/content';
 import { type PipelineStepConfig, pipelineTemplates } from '@/db/schema/pipeline-templates';
 import { isAuthenticated } from '@/security/principal';
 import { coreLogger } from '@/utils/logger';
+import { proposedPipelinePermissionProfileSchema } from '@/shared/pipeline-permissions';
+import { WorkspaceFS } from '@/security/workspace-fs';
+import { sessionRepository } from '@/db/repositories/session-repository';
+import { getConfig } from '@/config';
 
 /** Shared Elysia body schema for a recipe stage. */
 const recipeStepBodySchema = t.Object({
@@ -600,6 +604,31 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       body: t.Optional(t.Object({ fromSeq: t.Optional(t.Number()) })),
       detail: { tags: ['pipelines'] },
     },
+  )
+
+  // The owner changes a paused run's scope directly, without an agent or a
+  // second approval prompt. This saves authority; it does not resume work.
+  .put(
+    '/:id/permission-profile',
+    async ({ user, principal, params, body, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      const pipeline = await contentRepos(principal).pipelines.findById(params.id);
+      if (!pipeline || pipeline.userId !== user.id) { set.status = 404; return { error: 'Pipeline not found' }; }
+      const parsed = proposedPipelinePermissionProfileSchema.safeParse(body.profile);
+      if (!parsed.success) { set.status = 400; return { error: 'Invalid run permission profile' }; }
+      const session = await sessionRepository.findById(pipeline.sessionId);
+      if (!session || session.userId !== user.id || (session.workspaceId ?? null) !== (pipeline.workspaceId ?? null)) { set.status = 404; return { error: 'Pipeline session not found' }; }
+      if (await (await import('@/security/workspace-fs')).isSharedWorkspaceId(pipeline.workspaceId)) { set.status = 403; return { error: 'Run-wide personal shell approval is unavailable in shared workspaces' }; }
+      try {
+        const fs = WorkspaceFS.forSession(session, { space: null }, { extraAllowedPrefixes: getConfig().workspace.additionalPaths });
+        for (const repo of [parsed.data.repoPath, ...parsed.data.repoPaths]) fs.resolve(repo);
+      } catch { set.status = 400; return { error: 'A repository is outside the accessible workspace directories' }; }
+      if (!await pipelineRepository.approvePermissionProfile(pipeline.id, user.id, parsed.data)) {
+        set.status = 409; return { error: 'Pause or stop the pipeline before changing its permissions' };
+      }
+      return { saved: true, profile: parsed.data };
+    },
+    { params: t.Object({ id: t.String() }), body: t.Object({ profile: t.Unknown(), confirmed: t.Literal(true) }), detail: { tags: ['pipelines'] } },
   )
 
   // Stop a pipeline

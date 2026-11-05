@@ -9,7 +9,7 @@ export function stageHostServices(declared: { hostServices?: boolean }, pipeline
 
 /** Recognize unavailable execution prerequisites, never ordinary test failures. */
 export function stageEnvironmentReason(text: string): string | undefined {
-  return /(?:go|pnpm|docker|staticcheck|govulncheck):\s*(?:command not found|not found|no such file or directory|Kommando nicht gefunden)|(?:\.local\/go\/bin\/go|\/var\/run\/docker\.sock).{0,100}(?:not found|no such file|nicht gefunden)|(?:ECONNREFUSED|connection refused).{0,80}(?:localhost|127\.0\.0\.1|::1):(?:5432|5433|5443|25433)\b|Cannot connect to (?:the )?Docker daemon|Executable doesn't exist at .{0,180}ms-playwright|Scorer environment:|ENVIRONMENT BLOCKED:/i.test(text)
+  return /Could not create parent directory for lock file[^\r\n]*\.gradle\b|(?:\.gradle|\.android)[^\r\n]*(?:Read-only file system|Permission denied)|(?:go|pnpm|docker|staticcheck|govulncheck):\s*(?:command not found|not found|no such file or directory|Kommando nicht gefunden)|(?:\.local\/go\/bin\/go|\/var\/run\/docker\.sock).{0,100}(?:not found|no such file|nicht gefunden)|(?:ECONNREFUSED|connection refused).{0,80}(?:localhost|127\.0\.0\.1|::1):(?:5432|5433|5443|25433)\b|Cannot connect to (?:the )?Docker daemon|Executable doesn't exist at .{0,180}ms-playwright|Scorer environment:|ENVIRONMENT BLOCKED:/i.test(text)
     ? text.slice(-4000) : undefined;
 }
 
