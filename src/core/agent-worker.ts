@@ -213,6 +213,8 @@ export class AgentWorker extends BaseAgentWorker {
    * seeded from the saved conversation, `null` when it recorded none.
    */
   private lastPrefixFingerprint: string | null | undefined;
+  /** The model runs Claude's manual thinking (`budget_tokens`); see `withoutStaleReasoning`. */
+  private manualThinking = false;
   /**
    * G5: one-shot native retry when a turn was truncated ('length') or the
    * provider reported a malformed function call — before falling back to
@@ -849,7 +851,7 @@ export class AgentWorker extends BaseAgentWorker {
         // of the conversation the signed reasoning after it was bound to.
         const firstEdited = saved.findIndex((m, i) => stubbedMessages.has(kept[i]) || m.role !== kept[i].role || m.content !== kept[i].content);
         await sessionRepository.patchContextIfGeneration(this.context.sessionId, this.cacheGeneration, {
-          nativeConversation: { generation: this.cacheGeneration, model: this.context.model, modelName: this.context.modelName,
+          nativeConversation: { generation: this.cacheGeneration, model: this.context.model, modelName: this.context.modelName, lane: this.context.topic,
             ownerAgentId: this.context.id, checkpointId: this.checkpointId, acknowledged: this.userCursor,
             prefixFingerprint: this.lastPrefixFingerprint ?? undefined,
             messages: capNativeSnapshot(firstEdited < 0 ? saved : stripSignedReasoning(saved, firstEdited)) },
@@ -1269,7 +1271,7 @@ export class AgentWorker extends BaseAgentWorker {
       if (toolOutputsTruncated > 0) {
         // Signed reasoning after the rewritten output no longer matches its
         // conversation; replayed, Claude would reject the request.
-        this.messages = stripSignedReasoning(toolCompacted, firstChanged);
+        this.messages = this.withoutStaleReasoning(toolCompacted, firstChanged);
         agentLogger.info({
           agentId: this.context.id, iteration: this.iteration,
           toolOutputsTruncated, messageCount: this.messages.length,
@@ -1294,7 +1296,7 @@ export class AgentWorker extends BaseAgentWorker {
         if (proactiveRemoved > 0) {
           // A summary replaces the start of the history: no signed reasoning
           // after it matches its conversation any more.
-          this.messages = stripSignedReasoning(proactiveCompacted);
+          this.messages = this.withoutStaleReasoning(proactiveCompacted);
           agentLogger.info({
             agentId: this.context.id, iteration: this.iteration,
             messagesRemoved: proactiveRemoved, totalTokens: this.totalTokensUsed,
@@ -1313,7 +1315,7 @@ export class AgentWorker extends BaseAgentWorker {
       });
 
       if (removed > 0) {
-        this.messages = stripSignedReasoning(compactedMessages);
+        this.messages = this.withoutStaleReasoning(compactedMessages);
         agentLogger.info({
           agentId: this.context.id, sessionId: this.context.sessionId,
           iteration: this.iteration, elapsedMs: this.elapsed(),
@@ -1396,7 +1398,7 @@ export class AgentWorker extends BaseAgentWorker {
             userId: this.context.userId,
           });
           // Both rewrites above edit earlier turns: no signed reasoning stays.
-          this.messages = stripSignedReasoning(compacted);
+          this.messages = this.withoutStaleReasoning(compacted);
           continue;
         }
 
@@ -2107,12 +2109,6 @@ export class AgentWorker extends BaseAgentWorker {
   }
 
   /**
-   * Tool handlers advertised to the model this turn. Lazy mode (set by the
-   * spawner) trims long-tail handlers from the advertised schema array; they
-   * stay registered and callable by name. `full` (the default) is unchanged.
-   * Shared by the completion call and toolshim so both see the same tool set.
-   */
-  /**
    * Leave out signed reasoning that no longer matches its conversation.
    *
    * A Claude thinking block is bound to the system prompt, the tool set and
@@ -2134,11 +2130,29 @@ export class AgentWorker extends BaseAgentWorker {
         .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
     ])).digest('hex').slice(0, 32);
     if (this.lastPrefixFingerprint !== undefined && this.lastPrefixFingerprint !== fingerprint) {
-      this.messages = stripSignedReasoning(this.messages);
+      this.messages = this.withoutStaleReasoning(this.messages);
     }
     this.lastPrefixFingerprint = fingerprint;
   }
 
+  /**
+   * `stripSignedReasoning` for an edit made inside the agent loop — except
+   * under manual thinking (`budget_tokens`). Only models from before the
+   * conversation-binding check accept that mode, so nothing there needs
+   * removing, and those models require a tool round still in flight to start
+   * with its thinking block: removing it is the 400. Turn-boundary edits
+   * (snapshot, compaction) strip regardless; no round is in flight there.
+   */
+  private withoutStaleReasoning(messages: AgentMessage[], from?: number): AgentMessage[] {
+    return this.manualThinking ? messages : stripSignedReasoning(messages, from);
+  }
+
+  /**
+   * Tool handlers advertised to the model this turn. Lazy mode (set by the
+   * spawner) trims long-tail handlers from the advertised schema array; they
+   * stay registered and callable by name. `full` (the default) is unchanged.
+   * Shared by the completion call and toolshim so both see the same tool set.
+   */
   private getAdvertisedToolHandlers(): ToolHandler[] {
     const advertisement = this.config.toolAdvertisement ?? { mode: 'full' };
     const registeredTools = Array.from(this.toolExecutor.getTools().values());
@@ -2439,7 +2453,10 @@ export class AgentWorker extends BaseAgentWorker {
     // forced tool choice outright, older ones reject it with thinking on, and a
     // list of the models that accept it would need an entry for every release.
     // (The providers map 'required' to 'auto' for Claude as well.)
-    const claudeModel = model.provider === 'anthropic' || model.provider === 'custom-anthropic' || isAnthropicFamily(model.modelId);
+    // (A custom Anthropic-compatible endpoint may serve a non-Claude model:
+    // it is judged by the model id, as its provider judges it.)
+    const claudeModel = model.provider === 'anthropic' || isAnthropicFamily(model.modelId);
+    this.manualThinking = claudeModel && Boolean(metadata?.providerSettings?.thinkingBudget || (extraBody?.thinking as { type?: string } | undefined)?.type === 'enabled');
     const escalateToolChoice = this.forceToolChoiceNextTurn && tools.length > 0 && !claudeModel;
     this.forceToolChoiceNextTurn = false;
 

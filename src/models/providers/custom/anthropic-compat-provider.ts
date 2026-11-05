@@ -6,7 +6,7 @@ import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../../litellm-client';
 import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from '../http-retry';
 import type { ModelProvider, ProviderHealthStatus } from '../interface';
-import { buildCachedBlocks, type CacheTtl, cacheControl, cacheTtlFor, splitVolatileSystem } from '../prompt-cache';
+import { buildCachedBlocks, type CacheTtl, cacheControl, cacheTtlFor, isAnthropicFamily, splitVolatileSystem } from '../prompt-cache';
 import { BaseCustomProvider, type ResolvedCustomConfig } from './base-custom-provider';
 import { foldCacheCounters } from '../usage';
 import { claudeToolChoice, dropClaudeSampling } from '../../claude-request';
@@ -145,8 +145,14 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
     if (options.cachePolicy !== 'off' && options.historyCache !== false) markHistoryCacheBreakpoint(messages, Boolean(options.cacheScope), ttl);
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
     if (options.tools?.length) body.tools = toAnthropicTools(options.tools);
+    // An Anthropic-shaped endpoint can serve a non-Claude model (self-hosted,
+    // proxied): the Claude-only rules (`claude-request.ts`) stay off for it,
+    // and its sampling parameters still reach it (Messages takes [0, 1]).
+    const claude = isAnthropicFamily(String(body.model));
+    if (!claude && options.temperature != null) body.temperature = Math.max(0, Math.min(1, options.temperature));
+    if (!claude && options.topP != null) body.top_p = options.topP;
     if (options.extraBody) Object.assign(body, options.extraBody);
-    configureAnthropicBody(body, options);
+    configureAnthropicBody(body, options, claude);
 
     const path = cfg.custom.pathOverride || '/v1/messages';
     const { headers, queryParams } = this.buildHeaders(cfg.custom, cfg.apiKey);
@@ -164,7 +170,7 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
   }
 
   private parseResponse(data: AnthropicResponse, modelId: string, latencyMs: number): CompletionResult {
-    return parseAnthropicResponse(data, modelId, latencyMs);
+    return parseAnthropicResponse(data, modelId, latencyMs, this.name);
   }
 }
 
@@ -174,7 +180,7 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
  * exactly this decoding — including the cache-token folding — instead of
  * re-implementing it and drifting.
  */
-export function parseAnthropicResponse(data: AnthropicResponse, modelId: string, latencyMs: number): CompletionResult {
+export function parseAnthropicResponse(data: AnthropicResponse, modelId: string, latencyMs: number, providerName = 'anthropic'): CompletionResult {
   const blocks = data.content || [];
   const textParts: string[] = [];
   const toolCalls: ToolCall[] = [];
@@ -195,7 +201,7 @@ export function parseAnthropicResponse(data: AnthropicResponse, modelId: string,
   }
 
   const accounting = anthropicAccountingResponse(data, modelId);
-  reportInputTransformations(data.input_transformations, 'anthropic', accounting.model);
+  reportInputTransformations(data.input_transformations, providerName, accounting.model);
   const result: CompletionResult = {
     content: textParts.join(''),
     finishReason: mapStopReason(data.stop_reason),
@@ -585,10 +591,15 @@ interface AnthropicStreamEvent {
 
 /**
  * Shared policy for native Claude and native-compatible endpoints. The tool
- * choice and sampling rules hold for every Claude model (`claude-request.ts`).
+ * choice and sampling rules hold for every Claude model (`claude-request.ts`);
+ * `claude: false` (a non-Claude model behind an Anthropic-shaped endpoint)
+ * keeps a forced tool choice and the caller's sampling parameters.
  */
-export function configureAnthropicBody(body: Record<string, any>, options: CompletionOptions): void {
-  if (options.tools?.length) body.tool_choice = { type: claudeToolChoice(options.toolChoice) };
+export function configureAnthropicBody(body: Record<string, any>, options: CompletionOptions, claude = true): void {
+  if (options.tools?.length) {
+    body.tool_choice = { type: claude ? claudeToolChoice(options.toolChoice)
+      : options.toolChoice === 'required' ? 'any' : options.toolChoice === 'none' ? 'none' : 'auto' };
+  }
   if (options.responseFormat?.type === 'json_schema') {
     body.output_config = { ...body.output_config, format: { type: 'json_schema', schema: options.responseFormat.json_schema.schema } };
   } else if (options.responseFormat?.type === 'json_object') {
@@ -597,7 +608,7 @@ export function configureAnthropicBody(body: Record<string, any>, options: Compl
     const instruction = { type: 'text', text: 'Return only a valid JSON object.' };
     body.system = typeof body.system === 'string' ? [{ type: 'text', text: body.system }, instruction] : [...(body.system ?? []), instruction];
   }
-  dropClaudeSampling(body);
+  if (claude) dropClaudeSampling(body);
 }
 
 /** Beta that lets a request say what to do with replayed thinking that no longer matches. */
@@ -612,25 +623,20 @@ export const THINKING_BINDING_BETA = 'thinking-binding-controls-2026-08-01';
  * enforced for that is a 400 for the whole turn; `drop_block` degrades it to
  * losing the stale blocks, and the response's `input_transformations` names
  * them (`reportInputTransformations`). Applies only when the request replays
- * thinking and has thinking on; `disabled` and `between_tools` take no
- * `block_binding`. Returns whether the caller must send `THINKING_BINDING_BETA`.
+ * thinking and configures it as `adaptive` or `enabled`; `disabled` and
+ * `between_tools` take no `block_binding`. Returns whether the caller must
+ * send `THINKING_BINDING_BETA`.
  */
 export function bindReplayedThinking(body: Record<string, any>): boolean {
   const messages = (body.messages ?? []) as AnthropicMessage[];
-  const thinkingIn = (m: AnthropicMessage) => m.role === 'assistant' && Array.isArray(m.content)
-    && m.content.some((b) => b.type === 'thinking' || b.type === 'redacted_thinking');
-  if (!messages.some(thinkingIn)) return false;
+  const replays = messages.some((m) => m.role === 'assistant' && Array.isArray(m.content)
+    && m.content.some((b) => b.type === 'thinking' || b.type === 'redacted_thinking'));
   const thinking = body.thinking as { type?: string } | undefined;
-  if (thinking) {
-    if (thinking.type !== 'adaptive' && thinking.type !== 'enabled') return false;
-  } else {
-    // Omitted: the model's default. It thinks by default when its latest
-    // answer in this conversation carried thinking — then `adaptive` says the
-    // same thing explicitly; otherwise leave the request as it is.
-    const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant' && Array.isArray(m.content));
-    if (!lastAssistant || !thinkingIn(lastAssistant)) return false;
-  }
-  body.thinking = { ...(thinking ?? { type: 'adaptive' }), block_binding: { prefix_mismatch_behavior: 'drop_block' } };
+  // Only an explicit configuration carries the binding. With thinking left to
+  // the model's default, writing one in would choose a mode for it — and turn
+  // thinking back on for a model whose user switched it off.
+  if (!replays || (thinking?.type !== 'adaptive' && thinking?.type !== 'enabled')) return false;
+  body.thinking = { ...thinking, block_binding: { prefix_mismatch_behavior: 'drop_block' } };
   return true;
 }
 

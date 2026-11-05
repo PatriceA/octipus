@@ -215,22 +215,29 @@ keeps a long session's prefix stable:
 - **The root agent's model** follows the routed lane only when it is a step up
   in price while the conversation is warm (`warmConversationOf`,
   `keepWarmModel` in `model-selector.ts`); a cheaper lane would save less than
-  re-reading the history costs. `/model` still wins.
+  re-reading the history costs. `/model` still wins, and so does a rebound
+  lane: once the lane that chose the model no longer resolves to it, the next
+  turn follows the route.
 
 Claude binds its thinking blocks to the system prompt, tools and messages
 before them ("preserved thinking"); replayed after an edit they are rejected
 (accounts created on or after 2026-08-31) or dropped. Wherever Octipus edits a
 conversation — truncation, compaction, a trimmed snapshot, a changed prompt or
 tool set between requests — it removes the signed reasoning from that point on
-(`stripSignedReasoning`, `guardSignedReasoning` in `agent-worker.ts`). The
-native Claude API additionally gets `thinking.block_binding.prefix_mismatch_behavior:
-"drop_block"` (beta `thinking-binding-controls-2026-08-01`), and a reported
+(`stripSignedReasoning`, `guardSignedReasoning` in `agent-worker.ts`). Under
+manual thinking (`budget_tokens`, accepted only by models from before the
+check) the agent loop keeps it: those models need the in-flight tool round's
+thinking block. A native Claude request that configures thinking explicitly
+also gets `thinking.block_binding.prefix_mismatch_behavior: "drop_block"`
+(beta `thinking-binding-controls-2026-08-01`); a request that leaves thinking
+to the model's default is not given a mode. A reported
 `prefix_binding_mismatch` is logged as a warning.
 
 Every Claude request, on every path and for every model, carries no forced tool
 choice (`required` becomes `auto`) and no `temperature`/`top_p`/`top_k`
 (`claude-request.ts`) — rules each release has tightened, kept by family rather
-than by a version list.
+than by a version list. A non-Claude model behind an Anthropic-compatible
+endpoint keeps both.
 
 **Session cache keys.** The affinity key (`cacheAffinityKey`) hashes user,
 session and cache scope (`root:<generation>` for the root agent,
@@ -238,7 +245,7 @@ session and cache scope (`root:<generation>` for the root agent,
 
 | Provider | Sent |
 | --- | --- |
-| OpenAI | `prompt_cache_key` by default (off with `cachePolicy: 'off'`); `session` adds `prompt_cache_retention: '24h'` |
+| OpenAI | `prompt_cache_key` by default (off with `cachePolicy: 'off'`); `session` adds `prompt_cache_retention: '24h'`, dropped (and retried once) for a model that rejects it |
 | Grok | `x-grok-conv-id` header |
 | Mistral | `prompt_cache_key` |
 | OpenRouter | the key as `user`, plus a per-conversation endpoint pin (below) |

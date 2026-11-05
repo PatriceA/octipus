@@ -12,8 +12,8 @@ import type { MessageClassification } from './types';
 import { type SessionContext, sessionGeneration } from '@/db/schema/sessions';
 import { isChildCliSessionKey } from '@/core/cli-session-store';
 
-/** The model a session's conversation is warm on (`warmConversationOf`). */
-export interface WarmConversation { name?: string; modelId: string }
+/** The model a session's conversation is warm on (`warmConversationOf`), and the lane that chose it. */
+export interface WarmConversation { name?: string; modelId: string; lane?: string }
 
 /**
  * A conversation shorter than this (chars of the saved transcript) costs
@@ -36,14 +36,14 @@ export function warmConversationOf(ctx: SessionContext | null | undefined): Warm
   const native = ctx.nativeConversation;
   if (native && native.generation === generation && native.checkpointId === checkpointId
     && native.messages.reduce((n, m) => n + m.content.length, 0) >= STICKY_LANE_MIN_CHARS) {
-    candidates.push({ name: native.modelName, modelId: native.model, at: native.messages.at(-1)?.timestamp ?? '' });
+    candidates.push({ name: native.modelName, modelId: native.model, lane: native.lane, at: native.messages.at(-1)?.timestamp ?? '' });
   }
   for (const [key, record] of Object.entries(ctx.cliSessions ?? {})) {
     if (isChildCliSessionKey(key) || (record.generation ?? '') !== generation || !record.modelName) continue;
     candidates.push({ name: record.modelName, modelId: record.modelName, at: record.lastUsedAt });
   }
   const latest = candidates.sort((a, b) => b.at.localeCompare(a.at))[0];
-  return latest ? { name: latest.name, modelId: latest.modelId } : undefined;
+  return latest ? { name: latest.name, modelId: latest.modelId, ...(latest.lane ? { lane: latest.lane } : {}) } : undefined;
 }
 
 interface ModelRouting {
@@ -234,12 +234,18 @@ export class ModelSelector {
    * model: the message asks for more than the current one gives); a cheaper or
    * equal lane would save less than the re-read costs, so the conversation
    * stays where it is. The session override (`/model`) is decided before this.
+   *
+   * A configuration change still wins: when the lane that chose the
+   * conversation's model no longer resolves to it (the lane was rebound, or
+   * the model came from an override since removed), the route is followed.
    */
   private async keepWarmModel(conversation: WarmConversation | undefined, routed: ModelConfigEntry, requester: ModelRequester): Promise<ModelConfigEntry | null> {
     if (!conversation || !requester.userId) return null;
     if (conversation.name ? conversation.name === routed.name : conversation.modelId === routed.modelId) return null;
-    const current = await resolveModel({ userId: requester.userId, name: conversation.name ?? conversation.modelId, inSpace: requester.inSpace, spaceRole: requester.spaceRole, sponsor: requester.sponsor });
+    const scope = { userId: requester.userId, inSpace: requester.inSpace, spaceRole: requester.spaceRole, sponsor: requester.sponsor };
+    const current = await resolveModel({ ...scope, name: conversation.name ?? conversation.modelId });
     if (!current || current.name === routed.name) return null;
+    if (conversation.lane && (await resolveModel({ ...scope, topic: conversation.lane }))?.name !== current.name) return null;
     const price = (m: Pick<ModelConfigEntry, 'costPerInputToken' | 'costPerOutputToken'>) => (m.costPerInputToken ?? 0) + (m.costPerOutputToken ?? 0);
     return price(routed) > price(current) ? null : current;
   }

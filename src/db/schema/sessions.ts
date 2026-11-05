@@ -113,6 +113,8 @@ export interface SessionContext {
     generation: string; model: string; ownerAgentId: string; checkpointId?: string;
     /** Registry row the conversation ran on (the lane's model); `model` is its provider id. */
     modelName?: string;
+    /** The lane the turn was routed to (`AgentContext.topic`); see `keepWarmModel`. */
+    lane?: string;
     /**
      * Hash of the system prompt and tool schemas the snapshot's last request
      * carried. When the next turn's differ, signed reasoning in the snapshot

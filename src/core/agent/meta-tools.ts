@@ -643,7 +643,7 @@ export function createMetaTools(
     },
   );
 
-  if (options?.takenTasks?.length) tools.push(createCompleteTakenTaskTool(options.takenTasks));
+  if (options?.takenTasks?.length) tools.push(createCompleteTakenTaskTool());
 
   if (lite) {
     return tools.filter(
@@ -660,7 +660,7 @@ export function createMetaTools(
  * those (`completeTakenTask` re-checks); the tasks tool's general write stays
  * behind its ASK.
  */
-export function createCompleteTakenTaskTool(_open: ReadonlyArray<{ id: string }>): ToolHandler {
+export function createCompleteTakenTaskTool(): ToolHandler {
   return {
     name: 'complete_taken_task',
     // The same text whatever is open: tool definitions are the start of the

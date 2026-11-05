@@ -25,7 +25,7 @@ import { ModelSelector, STICKY_LANE_MIN_CHARS, warmConversationOf } from './mode
 
 afterEach(() => vi.restoreAllMocks());
 
-const route = (lane: string, conversation?: { name?: string; modelId: string }) =>
+const route = (lane: string, conversation?: { name?: string; modelId: string; lane?: string }) =>
   new ModelSelector().selectForRootAgent('s1', 'task', { message: 'm', laneChoice: { lane, reason: 'test' } as never, conversation }, { userId: 'u1' });
 
 describe('lane routing within a warm conversation', () => {
@@ -42,6 +42,17 @@ describe('lane routing within a warm conversation', () => {
   test('a conversation model the requester can no longer use is not kept', async () => {
     expect((await route('everyday', { name: 'gone-row', modelId: 'gone' })).name).toBe('everyday-row');
   });
+  test('a rebound lane is honoured: the model is kept only while its lane still chooses it', async () => {
+    // The conversation ran on the coding lane's model, and that lane still maps to it.
+    expect((await route('everyday', { name: 'coding-row', modelId: 'strong-model', lane: 'coding' })).name).toBe('coding-row');
+    // The admin rebinds `coding` to the cheap row: the next turn follows the route.
+    const before = rows.coding;
+    rows.unbound = before; // the row still exists, it just no longer serves the lane
+    rows.coding = rows.everyday;
+    try {
+      expect((await route('everyday', { name: 'coding-row', modelId: 'strong-model', lane: 'coding' })).name).toBe('everyday-row');
+    } finally { rows.coding = before; delete rows.unbound; }
+  });
 });
 
 describe('warmConversationOf', () => {
@@ -53,6 +64,7 @@ describe('warmConversationOf', () => {
 
   test('a saved conversation of the current generation and checkpoint, big enough to keep', () => {
     expect(warmConversationOf({ nativeConversation: native() })).toEqual({ name: 'coding-row', modelId: 'strong-model' });
+    expect(warmConversationOf({ nativeConversation: native({ lane: 'coding' }) })).toEqual({ name: 'coding-row', modelId: 'strong-model', lane: 'coding' });
     expect(warmConversationOf({ nativeConversation: native({ messages: [{ role: 'user', content: 'hi', timestamp: '' }] }) })).toBeUndefined();
     expect(warmConversationOf({ conversationGeneration: 'g2', nativeConversation: native() })).toBeUndefined();
     expect(warmConversationOf({ nativeConversation: native({ checkpointId: 'old' }) })).toBeUndefined();

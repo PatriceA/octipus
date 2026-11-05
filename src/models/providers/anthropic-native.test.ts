@@ -100,9 +100,17 @@ describe('replayed thinking on the native API', () => {
   };
 
   test('asks the API to drop, not reject, thinking whose conversation changed', async () => {
-    const { headers, body } = await send({ messages: conversation([thinking, { type: 'text', text: 'a' }]) });
+    const { headers, body } = await send({ messages: conversation([thinking, { type: 'text', text: 'a' }]), extraBody: { thinking: { type: 'adaptive' } } });
     expect(headers['anthropic-beta']).toBe('thinking-binding-controls-2026-08-01');
     expect(body.thinking).toEqual({ type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } });
+  });
+
+  test('never writes a thinking mode the request left to the model', async () => {
+    // A user who switched thinking off leaves blocks in the snapshot; adding
+    // `adaptive` here would turn it back on (and 400 on models without it).
+    const { headers, body } = await send({ messages: conversation([thinking, { type: 'text', text: 'a' }]) });
+    expect(headers['anthropic-beta']).toBeUndefined();
+    expect(body.thinking).toBeUndefined();
   });
 
   test('keeps an explicit thinking configuration and adds only the binding', async () => {

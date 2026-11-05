@@ -308,6 +308,15 @@ describe('session lifecycle across ephemeral root workers', () => {
       expect(blocks(w.messages)).toEqual(['tool_use', 'thinking', 'tool_use']);
     });
 
+    test('under manual thinking (budget_tokens) the loop keeps them: those models check no binding, and need the in-flight block', () => {
+      const w = worker(1) as unknown as Guarded & { manualThinking: boolean };
+      w.manualThinking = true;
+      w.messages = [{ role: 'system', content: 'sys', timestamp: new Date() }, signed(1)];
+      w.guardSignedReasoning([tool('read_file')]);
+      w.guardSignedReasoning([tool('write_file')]);
+      expect(blocks(w.messages)).toEqual(['thinking', 'tool_use']);
+    });
+
     test('a summary folded into the system prompt strips them too', () => {
       const w = worker(1) as unknown as Guarded;
       w.messages = [{ role: 'system', content: 'sys', timestamp: new Date() }, signed(1)];

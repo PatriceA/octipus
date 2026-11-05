@@ -1894,9 +1894,13 @@ When a task matches one of these skills, load it with get_skill before starting 
           // The prompt did not fit the model: a cold transcript too long for
           // it, or a resumed conversation too full to take another turn. Retry
           // once, cold, on a quarter of the transcript budget. The stored
-          // record is left alone: a retry that succeeds replaces it, and one
-          // that fails leaves the conversation it had.
+          // record is dropped: the vendor reports the overflow as its own
+          // answer (`onVendorReply` already advanced the cursor), and the
+          // thread it names is too full for another turn either way — kept,
+          // a failed retry would leave the next turn resuming it again.
           if (!opts?.tightened && (this.runError || (code !== 0 && code !== null)) && PROMPT_TOO_LONG.test(deadSessionEvidence)) {
+            if (ownsStoreKey()) await dropCliSession(this.context.sessionId, storeKey!)
+              .catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to drop overflowing CLI session id'));
             agentLogger.warn({ agentId: this.context.id, adapterKey, resumed: this.resuming }, 'CLI prompt did not fit the model context — retrying cold on a shorter transcript');
             this.runError = null;
             resolve(this.executeCLI({ forceCold: true, tightened: true }));

@@ -407,11 +407,11 @@ async function compactRoom(sessionId: string, options: MaybeCompactSessionOption
 }
 
 /**
- * Whether a chat session is certainly too small to compact, read from one
- * aggregate instead of its rows: fewer rows than the row threshold, and
- * fewer UTF-8 bytes (an upper bound on tokens) than the token threshold
- * across what `maybeCompactSession` would count — the transcript after the
- * checkpoint, the checkpoint summary and the native snapshot.
+ * Whether a chat session is too small to compact, read from one aggregate
+ * instead of its rows: fewer rows than the row threshold, and fewer tokens
+ * (estimated from UTF-8 bytes) than the token threshold across what
+ * `maybeCompactSession` would count — the transcript after the checkpoint,
+ * the checkpoint summary and the native snapshot.
  */
 async function belowCompactionThreshold(session: Session, triggerTokens: number): Promise<boolean> {
   const context = session.context ?? {};
@@ -423,8 +423,13 @@ async function belowCompactionThreshold(session: Session, triggerTokens: number)
   for (const m of context.nativeConversation?.messages ?? []) {
     bytes += Buffer.byteLength(m.content) + (m.toolCalls ? Buffer.byteLength(JSON.stringify(m.toolCalls)) : 0);
   }
-  // Bytes bound tokens from above (a token is at least one byte).
-  return bytes < triggerTokens;
+  // Half the bytes: a token is two or more bytes for prose, code and JSON
+  // alike (UTF-8 CJK runs closer to two). A strict bound (a token is at least
+  // one byte) left every session between a quarter of the trigger and the
+  // trigger reading and tokenizing its whole transcript after each turn, now
+  // that the trigger is up to 64k; an underestimate only delays a pass, with
+  // the agent loop's own compaction behind it.
+  return bytes / 2 < triggerTokens;
 }
 
 /**
