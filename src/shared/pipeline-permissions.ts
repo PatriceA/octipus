@@ -10,7 +10,7 @@ export const pipelinePermissionProfileSchema = z.object({
   publicHosts: z.array(z.string().regex(/^[a-z0-9.-]+$/i)).max(30).default([]),
   packageManagers: z.array(z.enum(['npm', 'pnpm', 'yarn', 'go'])).default([]),
   dockerProjects: z.array(z.string().regex(/^[a-z0-9_-]+$/i)).default([]),
-  hostServices: z.boolean().default(false).describe('Expose host localhost services and the Docker socket to stage shells; command permissions still apply.'),
+  hostServices: z.boolean().default(false).describe('Expose host localhost services (including ADB), the Docker socket and USB devices to stage shells and verification gates; command permissions still apply.'),
   rememberDecisions: z.boolean().default(true),
   overnight: z.boolean().default(false),
   autoApproveGates: z.boolean().default(true),

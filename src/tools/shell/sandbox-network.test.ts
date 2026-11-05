@@ -43,8 +43,9 @@ describe('pipeline stage host services (#17)', () => {
     const { withHostServices } = await import('./index');
     expect(withHostServices({ pipelineId: 'p' }, { allowNetwork: false })).toMatchObject({ allowNetwork: false, extraReadOnly: browserRuntimeMounts(), env: { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0] } });
     expect(withHostServices({}, {})).not.toHaveProperty('extraReadWrite');
+    expect(withHostServices({}, {})).not.toHaveProperty('allowHostUsb');
     expect(withHostServices({ hostServices: true }, { allowNetwork: false, extraReadWrite: ['/home/tool'] }))
-      .toMatchObject({ allowNetwork: true, extraReadWrite: ['/home/tool', '/var/run/docker.sock'], extraReadOnly: browserRuntimeMounts(),
+      .toMatchObject({ allowNetwork: true, allowHostUsb: true, extraReadWrite: ['/home/tool', '/var/run/docker.sock'], extraReadOnly: browserRuntimeMounts(),
         env: { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0] } });
   });
 });

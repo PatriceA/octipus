@@ -185,7 +185,7 @@ export class LocalShellOperations implements ShellOperations {
     let sshAgent: ReturnType<typeof sshAgentFor>;
     try {
       sshAgent = sshAgentFor(options);
-      wrap = wrapCommand(baseArgv, { sshAgent, workspaceRoot: cwd, allowNetwork: resolveAllowNetwork(options), path: options.env?.PATH, extraReadWrite: options.extraReadWrite, extraReadOnly: options.extraReadOnly });
+      wrap = wrapCommand(baseArgv, { sshAgent, workspaceRoot: cwd, allowNetwork: resolveAllowNetwork(options), allowHostUsb: options.allowHostUsb, path: options.env?.PATH, extraReadWrite: options.extraReadWrite, extraReadOnly: options.extraReadOnly });
     } catch (error) {
       throw new ToolNotExecutedError('shell', error instanceof Error ? error.message : String(error), { cause: error });
     }
@@ -343,6 +343,7 @@ export class LocalShellOperations implements ShellOperations {
       sshAgent, path: options.env?.PATH,
       workspaceRoot: cwd,
       allowNetwork: resolveAllowNetwork(options),
+      allowHostUsb: options.allowHostUsb,
       extraReadWrite: options.extraReadWrite,
       extraReadOnly: options.extraReadOnly,
     });

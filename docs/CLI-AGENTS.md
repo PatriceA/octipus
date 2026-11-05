@@ -194,7 +194,7 @@ the next authorization check, and are refused while the pipeline is active.
 Run approval does not remove the
 template's separate `hostServices` sandbox requirement unless the user also
 approves `hostServices: true` in the run profile. That run option gives stage
-shells host localhost networking and the Docker socket. The shipped Full Development Cycle enables host services on
+shells host localhost networking, the Docker socket and USB devices. The shipped Full Development Cycle enables host services on
 Testing, Code Review and QA Validation, including existing preset rows missing
 the flag. An explicit per-stage false is preserved during preset backfill.
 
@@ -309,11 +309,22 @@ network and without the Docker socket. A pipeline step can opt in with
 `"hostServices": true` in its template step. When set, that stage's
 `shell__run` and `shell__run_background` commands and its `verifyCommand` share
 the host network (for example, a local Postgres) and get
-`/var/run/docker.sock` (for example, for `docker compose build`). It is off by
+`/var/run/docker.sock` (for example, for `docker compose build`). On Linux it
+also exposes `/dev/bus/usb` with device access and read-only USB sysfs topology,
+so ADB/libusb can discover physical phones. It is off by
 default. The Docker socket is root-equivalent on the host, so set it only on
 stages whose commands you trust. It covers the stage's own commands only:
 agents the stage spawns run in the default sandbox. The setting has no effect
 when the sandbox is off.
+
+ADB clients can reuse the host ADB server on `localhost:5037` through host
+networking. Without `hostServices`, use `network: true` on a registered shell
+call to reach that server; this does not grant direct USB access. Check
+`adb devices -l` inside the actual testing sandbox. Octipus does not run ADB
+as root, change udev permissions, approve a phone's authorization prompt, or
+restart an existing host ADB server. Host permissions and phone authorization
+still apply. Device access is consistent for foreground commands, background
+commands and framework verification gates.
 
 Android SDKs are shared read-only across sandboxed shell commands and test
 gates, independently of `hostServices`. Octipus discovers installed SDKs from

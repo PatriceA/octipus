@@ -18,6 +18,8 @@ Before a long showcase, run a small Playwright launch/close smoke check through 
 
 A shell without `hostServices` lacks the Docker socket; this says nothing about the host daemon. Use permitted `docker__list_containers`, `docker__exec_command` and `docker__compose_project` instead of concluding Docker is unavailable.
 
+For physical Android testing, `hostServices` grants host networking (including the existing ADB server on localhost:5037) and direct Linux USB device access at `/dev/bus/usb`, with USB sysfs topology mounted read-only. The same grant reaches foreground shells, background shells and verification gates. A plain `network: true` shell call can reuse the host ADB server without direct USB access. SDK visibility alone does not grant device access; verify `adb devices -l` inside the testing runtime. Host USB permissions and phone authorization still apply.
+
 `docker__compose_project` accepts `operation` (`status`, `up`, `logs`, `down`), an explicit `project`, an absolute approved `cwd`, an optional repository-relative `file` (default `compose.yaml`), `approvedPorts`, `approvedBindPaths`, `build`, `forceRecreate`, optional `services` and an execution `timeout` in milliseconds. Example:
 
 ```json

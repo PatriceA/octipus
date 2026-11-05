@@ -44,7 +44,7 @@ export function PipelinePermissions({ id, status, stored, onSaved }: {
       <textarea aria-label="Approved repositories" value={repositories} onChange={event => setRepositories(event.target.value)} disabled={!editable || saving}
         className="mt-1 block w-full rounded border border-outline-variant/30 bg-surface p-2" rows={2} />
     </label>
-    <label className="flex items-center gap-2"><input type="checkbox" checked={hostServices} onChange={event => setHostServices(event.target.checked)} disabled={!editable || saving} />Allow host services and Docker socket</label>
+    <label className="flex items-center gap-2"><input type="checkbox" checked={hostServices} onChange={event => setHostServices(event.target.checked)} disabled={!editable || saving} />Allow host services, Docker socket and USB/ADB devices</label>
     <p className="text-on-surface-variant">{disclosure}</p>
     {!editable && <p>Pause the pipeline before changing its permissions.</p>}
     <div className="flex gap-3">

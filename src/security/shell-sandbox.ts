@@ -60,6 +60,8 @@ export interface WrapOptions {
   /** Allow network access. Defaults to `false` — sandboxed shells
    *  typically don't need network. */
   allowNetwork?: boolean;
+  /** Server-authorized host USB access for device tests; not implied by network access. */
+  allowHostUsb?: boolean;
   /** Additional read-only paths to expose (e.g. /Users for macOS-style
    *  layouts). Caller's responsibility. */
   extraReadOnly?: string[];
@@ -195,6 +197,13 @@ function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): 
   for (const p of options.extraReadWrite ?? []) {
     args.push('--bind-try', p, p);
   }
+  if (options.allowHostUsb) {
+    // Ordinary bind mounts are nodev. USB needs a device bind, after the
+    // private /dev, plus read-only sysfs topology for libusb discovery.
+    args.push('--dev-bind-try', '/dev/bus/usb', '/dev/bus/usb',
+      '--ro-bind-try', '/sys/bus/usb', '/sys/bus/usb',
+      '--ro-bind-try', '/sys/devices', '/sys/devices');
+  }
   for (const tool of cliTools) {
     args.push('--ro-bind', tool.resolvedPath, `/tmp/octipus-cli-bin/${tool.name}`);
   }
@@ -229,6 +238,8 @@ function buildFirejailArgs(binary: string, options: WrapOptions): string[] {
     '--noprofile',
     '--private-tmp',
     '--private-dev',
+    // Firejail's private-dev retains USB by default; make the opt-in explicit.
+    ...(options.allowHostUsb ? ['--read-only=/sys/bus/usb', '--read-only=/sys/devices'] : ['--blacklist=/dev/bus/usb']),
     '--noroot',
     '--seccomp',
     `--whitelist=${options.workspaceRoot}`,

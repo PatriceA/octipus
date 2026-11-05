@@ -65,13 +65,13 @@ export function shellRunOptions(context: AgentContext, env: Record<string, strin
 
 /**
  * A pipeline stage that opted into `hostServices` (off by default): host
- * network plus the Docker socket, so gates like `docker compose build` or a
- * local Postgres work under the process sandbox. Exported for the tests.
+ * network, Docker socket and USB devices, so builds and physical-device tests
+ * work under the process sandbox. Exported for the tests.
  */
 export function withHostServices<T extends { allowNetwork?: boolean; extraReadWrite?: string[]; extraReadOnly?: string[]; env?: Record<string, string> }>(
   metadata: Record<string, unknown> | undefined, options: T,
 ): T {
-  return { ...options, ...(metadata?.hostServices === true ? { allowNetwork: true, extraReadWrite: [...(options.extraReadWrite ?? []), '/var/run/docker.sock'] } : {}),
+  return { ...options, ...(metadata?.hostServices === true ? { allowNetwork: true, allowHostUsb: true, extraReadWrite: [...(options.extraReadWrite ?? []), '/var/run/docker.sock'] } : {}),
     extraReadOnly: [...(options.extraReadOnly ?? []), ...browserRuntimeMounts()],
     env: { ...options.env, PLAYWRIGHT_BROWSERS_PATH: options.env?.PLAYWRIGHT_BROWSERS_PATH ?? process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0] } };
 }

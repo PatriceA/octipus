@@ -1121,7 +1121,7 @@ async function evaluate(
           extraReadWrite: [...(caches?.paths ?? []), ...(ctx.hostServices ? ['/var/run/docker.sock'] : [])],
           extraReadOnly: browserRuntimeMounts(),
           // A pipeline stage's `hostServices` opt-in reaches its verify command too.
-          ...(ctx.hostServices ? { allowNetwork: true } : {}),
+          ...(ctx.hostServices ? { allowNetwork: true, allowHostUsb: true } : {}),
           ...(ctx.signal ? { signal: ctx.signal } : {}),
           // Never `unsafe`. Safe mode is what makes `tokenizeSafe` reject shell
           // metacharacters, and it is the whole security argument for letting an

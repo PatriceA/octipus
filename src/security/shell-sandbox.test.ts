@@ -262,6 +262,38 @@ test.skipIf(!hasBwrap)('browser cache is mounted read-only without a host-servic
   } finally { wrapped.cleanup(); getConfig().security.shellSandbox = 'off'; }
 });
 
+test.skipIf(!hasBwrap)('host USB devices require a separate grant even when networking is enabled', async () => {
+  const { getConfig } = await import('@/config');
+  const { wrapCommand } = await import('./shell-sandbox');
+  const { spawnSync } = await import('node:child_process');
+  getConfig().security.shellSandbox = 'required';
+  try {
+    for (const allowHostUsb of [false, true]) {
+      const visible = allowHostUsb && existsSync('/dev/bus/usb');
+      const code = `const fs=require('node:fs'),a=require('node:assert/strict');
+        a.equal(fs.existsSync('/dev/bus/usb'),${visible});
+        if (${visible}) {
+          for (const bus of fs.readdirSync('/dev/bus/usb')) {
+            for (const device of fs.readdirSync('/dev/bus/usb/'+bus)) {
+              a.ok(fs.statSync('/dev/bus/usb/'+bus+'/'+device).isCharacterDevice());
+            }
+          }
+          a.ok(fs.readdirSync('/sys/bus/usb/devices').length);
+          for (const device of fs.readdirSync('/sys/bus/usb/devices')) fs.realpathSync('/sys/bus/usb/devices/'+device);
+          a.throws(()=>fs.writeFileSync('/sys/bus/usb/octipus-write-probe','denied'));
+        }
+        a.equal(fs.existsSync('/dev/sda'),false);`;
+      const out = wrapCommand(['node', '-e', code], { workspaceRoot: workspace, allowNetwork: true, allowHostUsb });
+      try {
+        expect(out.argv.includes('--dev-bind-try')).toBe(allowHostUsb);
+        const result = spawnSync(out.argv[0], out.argv.slice(1), { encoding: 'utf8', timeout: 10_000 });
+        expect(result.stderr).toBe('');
+        expect(result.status).toBe(0);
+      } finally { out.cleanup(); }
+    }
+  } finally { getConfig().security.shellSandbox = 'off'; }
+});
+
 test.skipIf(!hasBwrap)('Android SDK is readable by isolated test jobs while SDK writes and adjacent credentials stay blocked', async () => {
   const home = mkdtempSync(join(tmpdir(), 'octipus-android-home-'));
   const sdk = join(home, 'Android/Sdk');
