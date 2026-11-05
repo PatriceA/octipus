@@ -61,7 +61,14 @@ export async function compactCliConversation(session: Session, instructions: str
   let completed = false;
   try {
     if (adapter === 'Claude Code') {
+      // The model the conversation runs on, resolved as the agent run does
+      // (`buildClaudeArgs`): without it the summary ran on the CLI's default
+      // model. Tool parity is not reachable here — the session's tools come
+      // from the Octipus bridge, which only a live run starts — so this pass
+      // still reads the conversation outside its prompt cache.
+      const claudeModel = process.env.CLAUDE_MODEL || model?.metadata?.cliAgent?.model;
       const output = await execCli(tool.binaryPath, ['--print', '--resume', record.id,
+        ...(claudeModel ? ['--model', claudeModel] : []),
         '--output-format', 'stream-json', '--verbose', '--tools', '', '--strict-mcp-config',
         // A personal row reads no settings file from the owner's cli-home (§8.4).
         ...(credentialOwner ? ['--setting-sources='] : []),

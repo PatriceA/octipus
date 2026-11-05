@@ -646,9 +646,17 @@ Vendor reuse belongs to the root conversation. Children have isolated vendor
 conversations and bridge namespaces, and start cold unless they are resumed per
 role and task (see
 [Resuming child sessions per role and task](#resuming-child-sessions-per-role-and-task)). A fingerprint covers model, configured
-provider identity, permissions, plan mode, workspace, stable instructions and
-tool schemas. A changed fingerprint starts a new persistent vendor conversation.
-Each record also tracks a clear generation and an acknowledged transcript cursor.
+provider identity, workspace, stable instructions (the role or root prompt
+before its date marker, plus the vault, bridge and skill-index blocks) and tool
+schemas. A changed fingerprint starts a new persistent vendor conversation.
+Permission mode and plan mode are not part of it: every invocation passes them
+again, a resumed one too, so toggling plan mode keeps the conversation. For the
+same reason the file-changing tools plan mode withholds are left out of the
+tool schemas. Each record also tracks a clear generation and an acknowledged
+transcript cursor. The record is written as soon as the vendor starts
+answering a turn, so a turn that is stopped or fails after that keeps its
+conversation and is not re-sent; a turn stopped before the vendor answered is
+re-sent on the next one.
 `/clear` invalidates old state even if an old turn finishes afterward.
 
 ### What resume actually saves
@@ -656,8 +664,12 @@ Each record also tracks a clear generation and an acknowledged transcript cursor
 The next launch sends current guidance and messages the vendor has not yet seen.
 This includes intervening answers or corrections from another provider. The
 vendor may still process its stored history; actual cached-token usage and cost,
-not stdin size, determine savings. Codex's Octipus MCP namespace stays stable
-across root turns while bridge endpoints and credentials remain per-run.
+not stdin size, determine savings. A resumed turn re-sends only the volatile
+tail of the system prompt (date, memory, attachments, security reminders); the
+stable blocks stay in the vendor's first-run prompt. Codex's Octipus MCP
+namespace stays stable across root turns, and across the runs of a keyed child
+(it follows the resume key), while bridge endpoints and credentials remain
+per-run.
 
 ### Compaction
 
@@ -687,6 +699,13 @@ cold, with the full prompt — so a turn is never simply lost because the
 vendor forgot its session. The replacement ID is persisted, so the following
 turn resumes normally.
 
+A cold launch replays the Octipus transcript, held to half the model's context
+window (never less than a 128k-token window): the checkpoint summary if there
+is one, then the newest messages that fit, with a line saying how many were
+left out. When the vendor reports that the prompt is too long — a cold
+transcript, or a resumed conversation too full for another turn — the turn is
+retried once, cold, on a quarter of that budget.
+
 ### Resuming child sessions per role and task
 
 By default a child agent starts a fresh vendor conversation every time it is
@@ -714,8 +733,8 @@ The vendor session is stored in the same per-session record as the root's,
 under `<adapter>::<key>`. A keyed child resumes only when all of these hold:
 
 - the stored record's fingerprint matches. For a keyed child it covers the
-  model, permission and plan mode, working directory, role, tool ids (without
-  the lazy discovery tools) and all stable instructions (role prompt, critical
+  model, working directory, role, tool ids (without the lazy discovery tools
+  and the file-changing tools) and all stable instructions (role prompt, critical
   rules, delegation, vault and bridge guidance). Changing any of them starts
   cold. A different brief, or different brief- or session-selected skills,
   does not: those follow the prompt's volatile marker and are re-sent on each
@@ -736,8 +755,9 @@ rather than inherit the spent context. At most 50 child task sessions are kept
 per Octipus session; the least recently used are removed first. Compaction
 keeps them (see [Compaction](#compaction)).
 
-Root CLI fingerprints include the full tool schemas, so any change to a root's
-tools starts its vendor session cold once. Adding `resumeKey` to `spawn_child`
+Root CLI fingerprints include the full tool schemas (except the file-changing
+tools plan mode withholds), so any other change to a root's tools starts its
+vendor session cold once. Adding `resumeKey` to `spawn_child`
 was such a change: existing root Claude Code and Codex sessions started cold
 once after the upgrade that introduced it.
 

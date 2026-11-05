@@ -49,3 +49,15 @@ test('a clear during casual inference prevents an old assistant answer being per
   expect(result.response).toContain('cleared');
   expect(fixture.rows.some(r => r.role === 'assistant')).toBe(false);
 });
+test('a casual reply caches its conversation only after another casual reply', async () => {
+  // After an agent turn (a plain assistant row) the history is not marked:
+  // the next agent turn runs on another prompt and could not read it.
+  fixture.rows = [{ id: 'm0', role: 'user', content: 'agent question', createdAt: new Date(0) } as Message,
+    { id: 'm1', role: 'assistant', content: 'agent answer', createdAt: new Date(0) } as Message];
+  await directResponse('thanks', 's', 'u', selector);
+  expect(fixture.requests[0].historyCache).toBe(false);
+  expect(fixture.rows.at(-1)?.metadata?.directReply).toBe(true);
+  // A second casual turn follows a casual reply: its history is worth caching.
+  await directResponse('and another thing', 's', 'u', selector);
+  expect(fixture.requests[1].historyCache).toBe(true);
+});

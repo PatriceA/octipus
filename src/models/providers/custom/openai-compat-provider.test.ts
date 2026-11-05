@@ -57,3 +57,44 @@ describe('CustomOpenAICompatProvider stream usage fallback', () => {
     expect(chunks).toEqual([{ content: 'partial' }]);
   });
 });
+
+describe('CustomOpenAICompatProvider — a gateway serving Claude', () => {
+  const claude = (over: Partial<CompletionOptions> = {}): CompletionOptions => ({
+    ...options,
+    model: 'anthropic/claude-sonnet-4-6',
+    messages: [
+      { role: 'system', content: `${'x'.repeat(100)}\n\nCURRENT DATE/TIME: now`, timestamp: new Date() },
+      { role: 'user', content: 'hi', timestamp: new Date() },
+    ],
+    tools: [{ type: 'function', function: { name: 'read', parameters: { type: 'object' } } }],
+    toolChoice: 'required', temperature: 0.7, topP: 0.9, cacheScope: 'root:',
+    ...over,
+  });
+  async function send(o: CompletionOptions) {
+    async function* stream() { yield { id: 'c', model: 'm', choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }; }
+    const create = vi.fn().mockResolvedValue(stream());
+    const provider = new CustomOpenAICompatProvider();
+    (provider as unknown as { createClient: () => unknown }).createClient = () => ({ chat: { completions: { create } } });
+    for await (const _ of provider.stream(o)) { /* drain */ }
+    return create.mock.calls[0][0];
+  }
+
+  test('gets the cache breakpoints and the Claude request rules', async () => {
+    const params = await send(claude());
+    expect(params.tool_choice).toBe('auto');
+    expect(params).not.toHaveProperty('temperature');
+    expect(params).not.toHaveProperty('top_p');
+    expect(params.messages[0].content[0].cache_control).toEqual({ type: 'ephemeral' });
+  });
+
+  test("cachePolicy 'off' leaves a gateway that rejects the field alone", async () => {
+    const params = await send(claude({ cachePolicy: 'off' }));
+    expect(typeof params.messages[0].content).toBe('string');
+  });
+
+  test('another model keeps its tool choice and sampling', async () => {
+    const params = await send({ ...options, tools: claude().tools, toolChoice: 'required', temperature: 0.7 });
+    expect(params.tool_choice).toBe('required');
+    expect(params.temperature).toBe(0.7);
+  });
+});

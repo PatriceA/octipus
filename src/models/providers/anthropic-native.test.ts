@@ -49,25 +49,82 @@ describe('AnthropicProvider native /v1/messages body (Phase A2)', () => {
     expect(buildBody(opts, true).stream).toBe(true);
   });
 
-  test('maps toolChoice to Anthropic tool_choice', () => {
-    expect(buildBody({ ...opts, toolChoice: 'required' }, false).tool_choice).toEqual({ type: 'any' });
+  test('never forces a tool call on any Claude model', () => {
+    // Forced tool choice is a 400 on current Claude models (and with thinking
+    // on older ones); `required` is an escalation, sent as `auto` for all.
+    for (const model of ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-next-9']) {
+      expect(buildBody({ ...opts, model, toolChoice: 'required' }, false).tool_choice).toEqual({ type: 'auto' });
+    }
+    expect(buildBody({ ...opts, toolChoice: 'required', extraBody: { thinking: { type: 'enabled', budget_tokens: 1024 } } }, false).tool_choice).toEqual({ type: 'auto' });
     expect(buildBody({ ...opts, toolChoice: 'none' }, false).tool_choice).toEqual({ type: 'none' });
     expect(buildBody({ ...opts, toolChoice: 'auto' }, false).tool_choice).toEqual({ type: 'auto' });
     expect(buildBody({ ...opts, toolChoice: undefined }, false).tool_choice).toEqual({ type: 'auto' });
   });
 
-  test('allows required tool choice with adaptive thinking', () => {
-    expect(buildBody({ ...opts, model: 'claude-opus-4-7', toolChoice: 'required', extraBody: { thinking: { type: 'adaptive' } } }, false).tool_choice).toEqual({ type: 'any' });
-  });
-
-  test('rejects required tool choice with manual thinking', () => {
-    expect(() => buildBody({ ...opts, toolChoice: 'required', extraBody: { thinking: { type: 'enabled', budget_tokens: 1024 } } }, false)).toThrow('manual Claude thinking');
-  });
-
-  test('rejects required tool choice on Fable and Mythos 5.1', () => {
-    for (const model of ['claude-fable-5-1', 'claude-mythos-5-1-20260901']) {
-      expect(() => buildBody({ ...opts, model, toolChoice: 'required' }, false)).toThrow('not supported by this Claude model');
+  test('sends no sampling parameters to any Claude model', () => {
+    for (const model of ['claude-sonnet-4-6', 'claude-haiku-5-5', 'claude-next-9']) {
+      const body = buildBody({ ...opts, model, temperature: 0.7, topP: 0.9, extraBody: { top_k: 5 } }, false);
+      expect(body).not.toHaveProperty('temperature');
+      expect(body).not.toHaveProperty('top_p');
+      expect(body).not.toHaveProperty('top_k');
     }
+  });
+
+  test("cachePolicy 'session' caches for an hour, on every breakpoint", () => {
+    const messages = [...(opts.messages as CompletionOptions['messages']), { role: 'assistant', content: 'a', timestamp: new Date() }, { role: 'user', content: 'b', timestamp: new Date() }] as CompletionOptions['messages'];
+    const body = buildBody({ ...opts, messages, cachePolicy: 'session', cacheScope: 'root:' }, false);
+    expect((body.system as Array<{ cache_control?: unknown }>)[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
+    const marked = (body.messages as Array<{ content: unknown }>).flatMap(m => (Array.isArray(m.content) ? m.content : [])).filter((b: any) => b.cache_control);
+    expect(marked.map((b: any) => b.cache_control)).toEqual([{ type: 'ephemeral', ttl: '1h' }]);
+    expect((buildBody(opts, false).system as Array<{ cache_control?: unknown }>)[0].cache_control).toEqual({ type: 'ephemeral' });
+  });
+});
+
+describe('replayed thinking on the native API', () => {
+  const thinking = { type: 'thinking', thinking: '', signature: 'sig' };
+  const conversation = (raw?: unknown[]) => [
+    { role: 'user', content: 'q', timestamp: new Date() },
+    { role: 'assistant', content: 'a', timestamp: new Date(), ...(raw ? { providerRaw: { anthropicContent: raw } } : {}) },
+    { role: 'user', content: 'next', timestamp: new Date() },
+  ] as CompletionOptions['messages'];
+  const send = async (o: Partial<CompletionOptions>) => {
+    vi.stubEnv('ANTHROPIC_API_KEY', 'test-key');
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => Response.json({
+      id: 'm', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn',
+      usage: { input_tokens: 1, output_tokens: 1 }, input_transformations: [],
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    await new AnthropicProvider().complete({ model: 'claude-opus-5-5', messages: [], ...o });
+    const init = fetchMock.mock.calls[0][1];
+    return { headers: init.headers as Record<string, string>, body: JSON.parse(String(init.body)) };
+  };
+
+  test('asks the API to drop, not reject, thinking whose conversation changed', async () => {
+    const { headers, body } = await send({ messages: conversation([thinking, { type: 'text', text: 'a' }]), extraBody: { thinking: { type: 'adaptive' } } });
+    expect(headers['anthropic-beta']).toBe('thinking-binding-controls-2026-08-01');
+    expect(body.thinking).toEqual({ type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } });
+  });
+
+  test('never writes a thinking mode the request left to the model', async () => {
+    // A user who switched thinking off leaves blocks in the snapshot; adding
+    // `adaptive` here would turn it back on (and 400 on models without it).
+    const { headers, body } = await send({ messages: conversation([thinking, { type: 'text', text: 'a' }]) });
+    expect(headers['anthropic-beta']).toBeUndefined();
+    expect(body.thinking).toBeUndefined();
+  });
+
+  test('keeps an explicit thinking configuration and adds only the binding', async () => {
+    const { body } = await send({ messages: conversation([thinking]), extraBody: { thinking: { type: 'enabled', budget_tokens: 2048 } } });
+    expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 2048, block_binding: { prefix_mismatch_behavior: 'drop_block' } });
+  });
+
+  test('leaves requests without replayed thinking, or with thinking off, unchanged', async () => {
+    const plain = await send({ messages: conversation() });
+    expect(plain.headers['anthropic-beta']).toBeUndefined();
+    expect(plain.body.thinking).toBeUndefined();
+    const off = await send({ messages: conversation([thinking]), extraBody: { thinking: { type: 'between_tools' } } });
+    expect(off.headers['anthropic-beta']).toBeUndefined();
+    expect(off.body.thinking).toEqual({ type: 'between_tools' });
   });
 });
 

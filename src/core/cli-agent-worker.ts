@@ -33,14 +33,14 @@ import { agentLogger } from '@/utils/logger';
 import { killProcessTree } from '@/utils/proc';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
-import { CLIArgumentBuilder, CLIOutputParser, isCodexHookTrustWarning, discoverCodexMcpServers, resolveCliMcpEntry, type CliRunConnection } from './cli-adapters';
+import { CLIArgumentBuilder, CLIOutputParser, isCodexHookTrustWarning, discoverCodexMcpServers, resolveCliMcpEntry, stableFirst, type CliRunConnection } from './cli-adapters';
 import { writePromptDump } from './prompt-dumps';
 import { childCliSessionKey, claimCliSession, cliSessionHolder, dropCliSession, fingerprintRun, loadCliSession, ownedResumeKey, releaseCliSessions, rootCliSessionKey, saveCliSession } from './cli-session-store';
 import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
 import { startCliToolBridge, type BridgeResult } from './cli-tool-bridge';
 import { PIPELINE_SHELL_TIMEOUT_FLOOR_MS } from '@/tools/shell';
 
-import { ToolExecutor } from './tool-executor';
+import { FILE_CHANGE_TOOLS, ToolExecutor } from './tool-executor';
 import { answerCliPermissionRequest } from './cli-permissions';
 import { getPermissionManager } from '@/security/permissions';
 import { observeFlow } from '@/security/flow-guard';
@@ -96,6 +96,47 @@ export function isBorrowedProjectDir(
 /** Skill index per (user, role, CLI family): assignments change rarely, and the lookup must not delay a spawn. */
 const SKILL_INDEX_TTL_MS = 60_000;
 const skillIndexCache = new Map<string, { at: number; value?: string; ready: Promise<void> }>();
+
+/**
+ * A vendor's own "the prompt does not fit" failure: Claude's "Prompt is too
+ * long", Codex's context_length_exceeded / "exceeds the context window".
+ */
+const PROMPT_TOO_LONG = /prompt is too long|context[_ ]length[_ ]exceeded|exceeds? the context window|maximum context length/i;
+
+/**
+ * Smallest context window, in tokens, among the models the resumable and
+ * cold CLI vendors run (GLM 128k; Claude, Codex, Kimi and Gemini are larger).
+ * A CLI row usually declares no window, so the worker's window is the install
+ * default (32k), far below what the vendor really holds.
+ */
+const CLI_MIN_CONTEXT_TOKENS = 128_000;
+
+/** Opens the summary `readSessionHistory` puts first when the session has a checkpoint. */
+const CHECKPOINT_PREFIX = '[Conversation checkpoint]';
+
+/**
+ * The transcript parts a cold launch replays, held to `budgetChars`: the
+ * checkpoint summary when there is one, then the newest parts that fit, with
+ * a line saying how many were left out. Under budget, all of them.
+ *
+ * A root CLI conversation is never summarized by Octipus while its vendor
+ * session lives (session-compaction skips it), so by the time that session is
+ * lost — a changed fingerprint, a vendor that forgot it — the transcript can
+ * be up to 400 rows. Replayed whole it can overflow the model outright.
+ */
+export function boundColdHistory(parts: readonly string[], budgetChars: number): string[] {
+  const size = (part: string) => part.length + 2;
+  if (parts.reduce((n, part) => n + size(part), 0) <= budgetChars) return [...parts];
+  const head = parts[0]?.startsWith(CHECKPOINT_PREFIX) ? [parts[0]] : [];
+  let room = budgetChars - head.reduce((n, part) => n + size(part), 0);
+  const kept: string[] = [];
+  for (let i = parts.length - 1; i >= head.length && size(parts[i]) <= room; i--) {
+    kept.unshift(parts[i]);
+    room -= size(parts[i]);
+  }
+  const omitted = parts.length - head.length - kept.length;
+  return [...head, `[Octipus] ${omitted} earlier message${omitted === 1 ? ' of this conversation is' : 's of this conversation are'} left out here to fit the model's context.`, ...kept];
+}
 
 /** Octipus tools reached over the run-local MCP bridge, as the vendor CLIs name them. */
 const CLI_BRIDGED_TOOL_RE = /^mcp__octipus__|^octipus[_.]|^octipus_run_[a-f0-9]+\./;
@@ -169,6 +210,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
   private clearedAt?: string;
   private userCursor?: { id: string; createdAt: string };
   private resumeDelta: string[] = [];
+  /** Where this run's own messages start in `this.messages`; before it is the loaded transcript. */
+  private turnStart = 0;
   /**
    * Detached subagents not yet collected — the same manager the native worker
    * uses, so `spawn_child` can detach and `collect_children` works for a CLI.
@@ -274,8 +317,13 @@ export class CLIAgentWorker extends BaseAgentWorker {
    * skills it loads natively, so without this it never looked at Octipus ones.
    * Spawned children already carry the spawner's index; skills the CLI loads
    * itself are left out.
-   * Optional context: it never holds the spawn back more than 300 ms; a cold
-   * registry (a first scan of the skill dirs took ~10 s) serves the next run.
+   * For an adapter that resumes its vendor session the index is part of the
+   * session's fingerprint and of the first run's recorded prompt, so it is
+   * awaited: a 300 ms race that missed on turn 1 (cold cache) and hit on turn 2
+   * changed the fingerprint and threw the vendor conversation away. The wait
+   * is two indexed queries (the registry scans the skill dirs at boot,
+   * src/index.ts). Elsewhere it is optional context and never holds the spawn
+   * back more than 300 ms.
    */
   private async cliSkillIndex(): Promise<string> {
     if (this.systemMessages.some(message => message.includes('Available skills (call `get_skill`'))) return '';
@@ -286,6 +334,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
     const key = `${this.context.userId}|${role}|${native}`;
     let entry = skillIndexCache.get(key);
     if (!entry || Date.now() - entry.at > SKILL_INDEX_TTL_MS) {
+      const previous = entry?.value;
       const pending: { at: number; value?: string; ready: Promise<void> } = { at: Date.now(), ready: Promise.resolve() };
       pending.ready = (async () => {
         const registry = getSkillRegistry();
@@ -294,8 +343,11 @@ export class CLIAgentWorker extends BaseAgentWorker {
         pending.value = index && `${index}
 When a task matches one of these skills, load it with get_skill before starting and follow it.`;
       })().catch(err => {
-        pending.value = '';
-        agentLogger.debug({ err, agentId: this.context.id }, 'CLI skill index unavailable');
+        // A failed refresh keeps serving the last index rather than dropping
+        // it for a TTL: the index is fingerprinted, so a blip would otherwise
+        // restart every resumable vendor conversation of this role cold.
+        pending.value = previous ?? '';
+        agentLogger.warn({ err, agentId: this.context.id, kept: previous !== undefined }, 'CLI skill index refresh failed');
       });
       // A stale value keeps serving until the refresh lands.
       if (entry?.value !== undefined && pending.value === undefined) void pending.ready.then(() => skillIndexCache.set(key, pending));
@@ -303,9 +355,12 @@ When a task matches one of these skills, load it with get_skill before starting 
       entry = entry?.value !== undefined ? entry : pending;
     }
     if (entry.value === undefined) {
-      let timer: NodeJS.Timeout | undefined;
-      await Promise.race([entry.ready, new Promise<void>(resolve => { timer = setTimeout(resolve, 300); })]);
-      clearTimeout(timer);
+      if (adapter && canResume(adapter)) await entry.ready;
+      else {
+        let timer: NodeJS.Timeout | undefined;
+        await Promise.race([entry.ready, new Promise<void>(resolve => { timer = setTimeout(resolve, 300); })]);
+        clearTimeout(timer);
+      }
     }
     return entry.value ?? '';
   }
@@ -575,6 +630,7 @@ When a task matches one of these skills, load it with get_skill before starting 
     let permissionCleanup: () => void = () => {};
     try {
     if (this.aborted) throw new Error('Agent was aborted before starting');
+    this.turnStart = this.messages.length;
     if (userMessage) {
       await this.addUserMessage(userMessage);
     }
@@ -642,8 +698,16 @@ When a task matches one of these skills, load it with get_skill before starting 
         },
       });
       if (this.aborted) throw new Error('Agent was aborted during bridge startup');
+      // Names the bridge for the vendor (Codex's MCP namespace, every Octipus
+      // tool's name prefix). As stable as the vendor conversation it serves:
+      // the root's is the session's; a keyed child's is its resume key, since
+      // a child is a new agent each spawn and an agent-id name renamed every
+      // tool between two runs of one resumed thread — a changed tool list at
+      // the head of the prompt, and earlier calls naming tools that were gone.
+      const resumeKey = this.context.metadata?.resumeKey;
       this.connection = { url: this.bridge.url, key: this.bridge.key,
-        conversationId: isRootAgent(this.context) ? this.context.sessionId : this.context.id,
+        conversationId: isRootAgent(this.context) ? this.context.sessionId
+          : typeof resumeKey === 'string' && resumeKey ? `${this.context.sessionId}::${resumeKey}` : this.context.id,
         planMode: isPlanMode(session.context as { planMode?: boolean }), maxIterations: this.config.maxIterations };
       const helper = resolveCliMcpEntry().replace(/index\.js$/, 'agent-bridge-client.js');
       const quote = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
@@ -908,28 +972,35 @@ When a task matches one of these skills, load it with get_skill before starting 
    * Build the conversation prompt (user + assistant messages only).
    * System messages are handled separately via buildSystemPrompt().
    */
-  private buildPrompt(): string {
+  private buildPrompt(historyBudgetChars = Infinity): string {
     // The vendor session already holds every earlier turn. Re-sending them
     // would pay for the same history twice — once in our prompt and again in
     // the vendor's own replay — which is the whole cost this change removes.
     if (this.resuming) {
       const runContextBlock = this.messages.find(m => m.role === 'user' && m.content.startsWith('Octipus run context:'))?.content;
       const currentUserMessage = [...this.messages].reverse().find(m => m.role === 'user' && !m.content.startsWith('Octipus run context:'))?.content;
-      return [...this.resumeDelta, runContextBlock, currentUserMessage].filter(Boolean).join('\n\n');
+      // Turns another provider answered since are held to the same budget.
+      return [...boundColdHistory(this.resumeDelta, historyBudgetChars), runContextBlock, currentUserMessage].filter(Boolean).join('\n\n');
     }
 
-    const parts: string[] = [];
+    // System messages are excluded — they go through buildSystemPrompt().
+    const flatten = (messages: AgentMessage[]) => messages.flatMap(msg =>
+      msg.role === 'user' ? [msg.content] : msg.role === 'assistant' ? [`[Octipus] ${msg.content}`] : []);
+    // The earlier transcript is held to the budget; this turn's own messages
+    // (the request, the run context, follow-ups) are always sent whole.
+    const history = boundColdHistory(flatten(this.messages.slice(0, this.turnStart)), historyBudgetChars);
+    return [...history, ...flatten(this.messages.slice(this.turnStart))].join('\n\n');
+  }
 
-    for (const msg of this.messages) {
-      if (msg.role === 'user') {
-        parts.push(msg.content);
-      } else if (msg.role === 'assistant') {
-        parts.push(`[Octipus] ${msg.content}`);
-      }
-      // System messages are excluded — they go through buildSystemPrompt()
-    }
-
-    return parts.join('\n\n');
+  /**
+   * Characters of earlier transcript a cold launch replays: half the model's
+   * window at 3 characters a token, as the native worker budgets it, and never
+   * less than the smallest window a CLI vendor runs. A retry after the vendor
+   * said the prompt was too long gets a quarter of that.
+   */
+  private coldHistoryBudgetChars(tightened?: boolean): number {
+    const chars = Math.floor(Math.max(this.config.contextWindowSize, CLI_MIN_CONTEXT_TOKENS) * 3 * 0.5);
+    return tightened ? Math.floor(chars / 4) : chars;
   }
 
   /**
@@ -946,7 +1017,7 @@ When a task matches one of these skills, load it with get_skill before starting 
       }
     }
     if (systemParts.length === 0) return null;
-    return systemParts.join('\n\n');
+    return stableFirst(systemParts).join('\n\n');
   }
 
   private async getCLISettings(): Promise<CLIAgentConfig> {
@@ -966,7 +1037,7 @@ When a task matches one of these skills, load it with get_skill before starting 
     return model?.metadata?.cliAgent || {};
   }
 
-  private async executeCLI(opts?: { forceCold?: boolean }): Promise<string> {
+  private async executeCLI(opts?: { forceCold?: boolean; tightened?: boolean }): Promise<string> {
     const toolConfig = getCLIToolConfig(this.context.model);
     if (!toolConfig) {
       throw new Error(`No CLI tool config found for model: ${this.context.model}`);
@@ -1093,10 +1164,11 @@ When a task matches one of these skills, load it with get_skill before starting 
 
     // Vendor CLI session reuse — always on for adapters the shared
     // capability table marks resumable (never a hardcoded adapter check
-    // here). `forceCold` is the cold-retry's own flag: it skips this whole
-    // block so the retry can never itself trigger another retry (no
-    // `resume` => the close handler's dead-session branch below cannot fire
-    // for it).
+    // here). `forceCold` is a recovery retry's own flag (the stored vendor
+    // session is gone, or the prompt was too long): the retry never loads the
+    // stored record, so it starts — and records — a fresh vendor conversation,
+    // and the close handler's recovery branches check the flag so a retry can
+    // never trigger another one.
     const providerEnv = await toolConfig.buildEnv?.();
     // Roots continue one vendor session per octipus session. A child only
     // resumes when its spawner gave it an explicit `resumeKey` (parent scope,
@@ -1135,10 +1207,20 @@ When a task matches one of these skills, load it with get_skill before starting 
     };
     let resume: { id: string; isFirstRun: boolean } | undefined;
     let fingerprint: string | undefined;
+    // What the vendor conversation held before this run, if it is resumed.
+    let previouslyAcknowledged: { id: string; createdAt: string } | undefined;
     if (reuseSessions) {
       const model = (adapterKey === 'Claude Code' ? process.env.CLAUDE_MODEL : adapterKey === 'Codex CLI' ? process.env.CODEX_MODEL : undefined) || settings.model;
-      const run = { model, permissionMode: settings.permissionMode, planMode: this.connection?.planMode, workingDirectory: workspaceCwd };
-      const tools = [...this.toolExecutor.getTools().values()];
+      // Permission and plan mode are not fingerprinted: every invocation passes
+      // them again, a resumed one too (Claude `--permission-mode`, Codex
+      // `-c sandbox_mode`), and the plan directive rides in the volatile tail.
+      // Fingerprinting them threw the vendor conversation away on each plan
+      // toggle — the moment its explored context matters most.
+      const run = { model, workingDirectory: workspaceCwd };
+      // The file-changing tools are left out for the same reason: plan mode and
+      // a withheld-writes space turn strip exactly these, and the bridge lists
+      // the live tool set to the vendor on every invocation anyway.
+      const tools = [...this.toolExecutor.getTools().values()].filter(tool => !FILE_CHANGE_TOOLS.has(tool.name));
       // Everything before VOLATILE_MARKER. For a keyed child that is its role
       // prompt, critical rules and guidance (the spawner puts the brief- and
       // session-selected skills after the marker), plus the stable worker
@@ -1150,7 +1232,13 @@ When a task matches one of these skills, load it with get_skill before starting 
         ? tools.map(tool => [tool.name, tool.description, tool.parameters]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
         : [this.context.role, [...new Set(tools.filter(tool => tool.toolId !== TOOL_DISCOVERY_TOOL_ID).map(tool => tool.toolId ?? tool.name))].sort()];
       fingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, toolIdentity, credentialOwnerId ?? null]), instructions });
-      const existing = opts?.forceCold ? null : await loadCliSession(this.context.sessionId, storeKey!, fingerprint);
+      let existing = opts?.forceCold ? null : await loadCliSession(this.context.sessionId, storeKey!, fingerprint);
+      // A root record without a cursor was never shown to hold the
+      // conversation: a first run that died after the vendor named its thread
+      // and before it answered. Its thread may hold nothing, and a resume sends
+      // no history, so start cold instead. (Children carry no cursor at all.)
+      if (root && existing && !existing.acknowledged) existing = null;
+      previouslyAcknowledged = existing?.acknowledged;
       this.resumeDelta = existing?.acknowledged
         ? (await messageRepository.findContextMessages(this.context.sessionId, this.clearedAt, existing.acknowledged, this.generation))
           .filter(row => row.id !== this.userCursor?.id)
@@ -1175,11 +1263,13 @@ When a task matches one of these skills, load it with get_skill before starting 
 
     // Recovery opens a new persistent conversation and cannot retry recursively.
     this.resuming = !!resume && !resume.isFirstRun;
-    const prompt = this.buildPrompt();
-    // A resumed keyed child re-sends only the volatile tail of its marker
-    // message: the stable guidance appended after it (vault, bridge) is in the
-    // vendor's first-run snapshot and fingerprinted. Roots are unchanged.
-    const resumedChildSystem = this.resuming && !root ? this.systemMessages.filter(part => VOLATILE_MARKER.test(part)) : undefined;
+    const prompt = this.buildPrompt(this.coldHistoryBudgetChars(opts?.tightened));
+    // Stable parts first, volatile tails last (`stableFirst`). A resumed run
+    // re-sends only the tails: the stable parts — the role or root prompt and
+    // the vault, bridge and skill-index blocks — are in the vendor's first-run
+    // snapshot and fingerprinted.
+    const systemParts = stableFirst(this.systemMessages);
+    const resumedSystem = this.resuming ? systemParts.filter(part => VOLATILE_MARKER.test(part)) : undefined;
 
     this.launchCleanup?.();
     this.launchCleanup = undefined;
@@ -1192,7 +1282,7 @@ When a task matches one of these skills, load it with get_skill before starting 
     // Discovery reads the config.toml the run will read: the owner's CODEX_HOME for a personal row.
     const codexMcpServers = this.connection && adapterKey === 'Codex CLI' ? await discoverCodexMcpServers(workspaceCwd, cliEnvFor(this.credentialOwner, toolConfig)) : undefined;
     const buildCaches = this.context.space ? undefined : personalBuildCaches();
-    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedChildSystem ?? this.systemMessages, resumedChildSystem ? resumedChildSystem.join('\n\n') : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, images, workingDirectory: workspaceCwd, writableRuntimePaths: buildCaches?.paths, codexMcpServers, shellGuard: getConfig().agent?.cliShellGuard !== false, maxIterations: Math.max(1, this.config.maxIterations - this.iteration), space: !!this.context.space, personal: !!this.credentialOwner } : undefined, resume);
+    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedSystem ?? systemParts, resumedSystem ? resumedSystem.join('\n\n') : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, images, workingDirectory: workspaceCwd, writableRuntimePaths: buildCaches?.paths, codexMcpServers, shellGuard: getConfig().agent?.cliShellGuard !== false, maxIterations: Math.max(1, this.config.maxIterations - this.iteration), space: !!this.context.space, personal: !!this.credentialOwner } : undefined, resume);
     const { args, stdinPrompt, useShell } = built;
     this.launchCleanup = () => {
       const configIndex = args.indexOf('--mcp-config');
@@ -1216,6 +1306,19 @@ When a task matches one of these skills, load it with get_skill before starting 
     let invocationUsage: import('@/models/litellm-client').CompletionResult['usage'] = { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false };
     let capturedVendorId: string | undefined;
     let vendorSessionStarted = false;
+    let vendorReplied = false;
+    // This run's writes of its vendor session record, in order. The close
+    // handler waits for them before its own write or drop, so an early write
+    // can never land after — and undo — the record the run ends with.
+    let sessionWrites: Promise<void> = Promise.resolve();
+    const recordSession = (id: string, acknowledged: { id: string; createdAt: string } | undefined) => {
+      if (!ownsStoreKey()) return;
+      sessionWrites = sessionWrites.then(() => saveCliSession(this.context.sessionId, storeKey!, {
+        id, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
+        generation: this.generation, ownerAgentId: this.context.id, ...(acknowledged ? { acknowledged } : {}),
+        modelName: this.accountingModelName, credentialOwner: credentialOwnerId,
+      })).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store CLI session id'));
+    };
     const parser = this.parser = new CLIOutputParser(
       this.context.id,
       this.context.model,
@@ -1292,25 +1395,28 @@ When a task matches one of these skills, load it with get_skill before starting 
           // with it so the run surfaces as failed, not (no response) success.
           if (!this.runError) this.runError = reason;
         },
-        // Codex assigns its own thread id (thread.started); this fires once
-        // per run and is Codex's early write point. Claude's id is
-        // caller-minted, so there is nothing to capture: the close handler
-        // records it (on a clean close, or when a keyed child is stopped).
+        // Codex assigns its own thread id (thread.started), once per run.
+        // Write it as soon as the vendor announces it: a timeout, a kill or a
+        // crash after this point would otherwise orphan the thread — it exists
+        // on disk, we just forgot its id. The vendor has not answered yet, so
+        // the cursor stays what the conversation held before this run: a
+        // resume off this row re-sends this turn rather than skipping it.
         onVendorSession: (id) => {
           capturedVendorId = id;
-          // Write it as soon as the vendor announces it, not only on a clean
-          // close. A timeout, a kill or a crash after this point would
-          // otherwise orphan the vendor thread — it exists on disk, we just
-          // forgot its id, and the next turn pays a cold launch for nothing.
-          // The close handler rewrites the record with the acknowledged
-          // cursor; this early row carries no cursor, so a resume off it
-          // re-sends the turn rather than skipping it.
-          if (!ownsStoreKey()) return;
-          void saveCliSession(this.context.sessionId, storeKey!, {
-            id, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
-            generation: this.generation, ownerAgentId: this.context.id,
-            modelName: this.accountingModelName, credentialOwner: credentialOwnerId,
-          }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store CLI session id'));
+          recordSession(id, previouslyAcknowledged);
+        },
+        // The vendor is answering, so its conversation now holds this turn:
+        // the run's one early write, with this turn's cursor. A Claude first
+        // run has no other early write — its id is minted, not announced — so
+        // until this a stopped or failed first turn left no record and the
+        // next turn started cold. A stopped resumed turn now also stops
+        // re-sending a message its vendor already holds; one stopped before
+        // the vendor answered keeps the old cursor, and the message is re-sent.
+        onVendorReply: () => {
+          if (vendorReplied) return;
+          vendorReplied = true;
+          const id = capturedVendorId || resume?.id;
+          if (id) recordSession(id, this.userCursor ?? previouslyAcknowledged);
         },
       },
       workspaceCwd,
@@ -1410,6 +1516,7 @@ When a task matches one of these skills, load it with get_skill before starting 
       // than leaving a quote-bearing or backslash-terminated value unquoted.
       const shellQuote = (value: string): string => (useShellForSpawn ? windowsShellQuote(value) : value);
       const quoteArg = windowsShellQuoter(binary);
+      // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- binary from the configured CLI tool, args built by its adapter; shell only on Windows with every value quoted (windowsShellQuote); the flagged `opts` carries two booleans that pick resume mode and cold-history length
       const proc = spawn(shellQuote(binary), useShellForSpawn ? args.map(quoteArg) : args, {
         env,
         cwd: workspaceCwd,
@@ -1456,11 +1563,6 @@ When a task matches one of these skills, load it with get_skill before starting 
       this.liveTurnActive = true;
       this.liveResultsPending = 1;
       this.wakeForGuidance();
-
-      // A caller-minted id (Claude: --session-id / --resume) is known before
-      // the process even starts, so unlike a captured id there is nothing to
-      // wait for — write it as soon as the process starts. One write per
-      // run, here and only here.
 
       // Single hard timeout: force-kill on overrun and stamp abortReason so
       // run() reports "timed out" instead of "aborted by user". timeout <= 0
@@ -1708,6 +1810,8 @@ When a task matches one of these skills, load it with get_skill before starting 
             this.billableTokensUsed += billableTokens(invocationUsage);
           }
           await recordProviderUsage({ model: this.context.model, modelConfigName: this.accountingModelName, messages: [], ...usageContextOf(this.context), requestType: 'cli' }, 'cli', { model: this.context.model, usage: invocationUsage }, code !== 0 || this.aborted || !!this.runError);
+          // Every write below follows the run's early writes, never races them.
+          await sessionWrites;
 
           // A keyed child stopped by a turn limit (ours, or Claude's
           // error_max_turns), a timeout or a cancel still records its vendor
@@ -1797,6 +1901,22 @@ When a task matches one of these skills, load it with get_skill before starting 
             return;
           }
 
+          // The prompt did not fit the model: a cold transcript too long for
+          // it, or a resumed conversation too full to take another turn. Retry
+          // once, cold, on a quarter of the transcript budget. The stored
+          // record is dropped: the vendor reports the overflow as its own
+          // answer (`onVendorReply` already advanced the cursor), and the
+          // thread it names is too full for another turn either way — kept,
+          // a failed retry would leave the next turn resuming it again.
+          if (!opts?.tightened && (this.runError || (code !== 0 && code !== null)) && PROMPT_TOO_LONG.test(deadSessionEvidence)) {
+            if (ownsStoreKey()) await dropCliSession(this.context.sessionId, storeKey!)
+              .catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to drop overflowing CLI session id'));
+            agentLogger.warn({ agentId: this.context.id, adapterKey, resumed: this.resuming }, 'CLI prompt did not fit the model context — retrying cold on a shorter transcript');
+            this.runError = null;
+            resolve(this.executeCLI({ forceCold: true, tightened: true }));
+            return;
+          }
+
           // CLI reported its own failure (Claude error_max_turns/is_error,
           // codex turn.failed/error) — never resolve as success (C3).
           if (this.runError) {
@@ -1829,7 +1949,7 @@ When a task matches one of these skills, load it with get_skill before starting 
           const vendorId = capturedVendorId || resume?.id;
           if (ownsStoreKey() && vendorId) await saveCliSession(this.context.sessionId, storeKey!, {
             id: vendorId, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
-            generation: this.generation, ownerAgentId: this.context.id, acknowledged: this.userCursor,
+            generation: this.generation, ownerAgentId: this.context.id, acknowledged: this.userCursor ?? previouslyAcknowledged,
             modelName: this.accountingModelName, credentialOwner: credentialOwnerId,
           });
           resolve(accumulatedText || '(no response)');

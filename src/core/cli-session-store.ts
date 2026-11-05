@@ -44,9 +44,13 @@ export function cliSessionKeyAdapter(key: string): string {
  * Fingerprints the parameters of a run that would change what a resumed
  * vendor session means. Not reversible, just needs to detect change — a
  * SHA-256 over the fields, hex-truncated.
+ *
+ * Permission and plan mode are deliberately absent: both adapters that resume
+ * take them on every invocation, resumed ones included, so a change applies to
+ * the next turn without discarding the conversation.
  */
-export function fingerprintRun(run: { model?: string; permissionMode?: string; planMode?: boolean; workingDirectory?: string; providerIdentity?: string; instructions?: string }): string {
-  const material = JSON.stringify([run.model ?? '', run.permissionMode ?? '', run.planMode ?? false, run.workingDirectory ?? '', run.providerIdentity ?? '', run.instructions ?? '']);
+export function fingerprintRun(run: { model?: string; workingDirectory?: string; providerIdentity?: string; instructions?: string }): string {
+  const material = JSON.stringify([run.model ?? '', run.workingDirectory ?? '', run.providerIdentity ?? '', run.instructions ?? '']);
   return createHash('sha256').update(material).digest('hex').slice(0, 16);
 }
 

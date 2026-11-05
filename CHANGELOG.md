@@ -139,6 +139,45 @@ labels reflect blast radius, not contract guarantees.
 
 ### Fixed
 
+- **Long sessions keep their prompt cache.** Several things rewrote the start
+  of a conversation every turn or two, so everything after the system prompt
+  was re-read uncached: session compaction ran after every turn once a session
+  passed 8k tokens or 20 rows (it now waits for half the model's window, up to
+  64k tokens, or 300 rows); the root agent's tool list followed the wording of
+  each message (a tool group now stays once the conversation used it); each
+  message could switch model by lane (a warm conversation now changes model
+  only for a step up, or once its lane is rebound); old tool outputs and the
+  saved conversation were trimmed one message at a time (now in batches).
+  `complete_taken_task` no longer lists the open ids in its description, which
+  changed the tools whenever a task opened or closed. Casual direct replies no
+  longer write a cache entry that only an agent turn, on another prompt, would
+  have read.
+- **Claude conversations survive Octipus's own history edits.** Claude binds
+  thinking blocks to the conversation before them; replayed after a truncation,
+  compaction, trimmed snapshot or changed tool set they are rejected on accounts
+  created on or after 2026-08-31. Signed reasoning is now removed from the
+  first edited message on, and the native API also gets `drop_block`.
+- **No Claude model gets a forced tool choice or sampling parameters.** Both
+  were version lists that missed new models (Opus 5.5 and Sonnet 5.5 rejected
+  the forced tool call; Haiku 5.5 rejected every request's temperature). They
+  now hold for every Claude model on every path. Older Claude models lose their
+  configured temperature; a non-Claude model behind an Anthropic-compatible
+  endpoint keeps both.
+- **Session cache keys.** OpenRouter's endpoint pin was shared by every
+  session never cleared (its key was the root scope `root:` alone); it is per
+  session now. OpenAI gets `prompt_cache_key` by default. Children scope their
+  key by role, so siblings share the role prefix. The `session` cache policy
+  now means long sessions everywhere: one-hour Claude breakpoints, 24-hour
+  OpenAI retention (dropped for a model that rejects it), and a session key
+  behind LiteLLM or a custom endpoint.
+- **CLI sessions restart cold less often.** Resumed main turns no longer
+  re-send the vault, bridge and skill-index blocks; plan and permission mode
+  and the order of the skill index no longer change the session fingerprint;
+  resumed Codex children keep their tool namespace; a stopped first turn keeps
+  its vendor session; `/compact` runs on the session's model; a cold launch
+  replays at most half the model's window and retries once smaller on
+  "prompt too long". Every stored CLI session restarts cold once after this
+  release, since the fingerprint inputs changed.
 - **The heartbeat reads standing instructions written in the web app.** It
   looked for a `heartbeat` note outside every workspace, but notes made in the
   web app or by an agent are saved in a workspace, so their instructions were

@@ -9,6 +9,42 @@ import { selectLaneWithDecision, type LaneChoice } from './lane-intent';
 import { hasRecentShim } from './model-capability';
 import { getSessionModel } from './session-model-override';
 import type { MessageClassification } from './types';
+import { type SessionContext, sessionGeneration } from '@/db/schema/sessions';
+import { isChildCliSessionKey } from '@/core/cli-session-store';
+
+/** The model a session's conversation is warm on (`warmConversationOf`), and the lane that chose it. */
+export interface WarmConversation { name?: string; modelId: string; lane?: string }
+
+/**
+ * A conversation shorter than this (chars of the saved transcript) costs
+ * little to re-read on another model, so per-message routing still wins.
+ */
+export const STICKY_LANE_MIN_CHARS = 16_000;
+
+/**
+ * The model the session's root conversation last ran on, when that
+ * conversation is still the current one (same clear generation and
+ * checkpoint) and big enough to be worth keeping warm: the saved native
+ * conversation of an API model, or a root vendor CLI session (whose switch is
+ * a cold restart of the whole vendor history). The latest of the two wins.
+ */
+export function warmConversationOf(ctx: SessionContext | null | undefined): WarmConversation | undefined {
+  if (!ctx) return undefined;
+  const generation = sessionGeneration(ctx);
+  const checkpointId = ctx.checkpoint?.generation === generation ? ctx.checkpoint.entryId : undefined;
+  const candidates: Array<WarmConversation & { at: string }> = [];
+  const native = ctx.nativeConversation;
+  if (native && native.generation === generation && native.checkpointId === checkpointId
+    && native.messages.reduce((n, m) => n + m.content.length, 0) >= STICKY_LANE_MIN_CHARS) {
+    candidates.push({ name: native.modelName, modelId: native.model, lane: native.lane, at: native.messages.at(-1)?.timestamp ?? '' });
+  }
+  for (const [key, record] of Object.entries(ctx.cliSessions ?? {})) {
+    if (isChildCliSessionKey(key) || (record.generation ?? '') !== generation || !record.modelName) continue;
+    candidates.push({ name: record.modelName, modelId: record.modelName, at: record.lastUsedAt });
+  }
+  const latest = candidates.sort((a, b) => b.at.localeCompare(a.at))[0];
+  return latest ? { name: latest.name, modelId: latest.modelId, ...(latest.lane ? { lane: latest.lane } : {}) } : undefined;
+}
 
 interface ModelRouting {
   model: string;
@@ -120,7 +156,7 @@ export class ModelSelector {
     sessionId?: string,
     turnType: MessageClassification['type'] = 'casual',
     /** The request being routed, and its classification. Absent ⇒ no routing. */
-    routing?: { message: string; classification?: MessageClassification; laneChoice?: LaneChoice },
+    routing?: { message: string; classification?: MessageClassification; laneChoice?: LaneChoice; conversation?: WarmConversation },
     requester: ModelRequester = {},
   ): Promise<SelectedModel> {
     const registry = getModelRegistry();
@@ -158,6 +194,14 @@ export class ModelSelector {
     const routed = routing ? routing.laneChoice ?? await selectLaneWithDecision(routing.message, routing.classification) : null;
     if (routed) {
       const routedModel = await resolveModel({ userId: requester.userId, topic: routed.lane, inSpace: requester.inSpace, spaceRole: requester.spaceRole, sponsor: requester.sponsor });
+      const kept = routedModel ? await this.keepWarmModel(routing?.conversation, routedModel, requester) : null;
+      if (kept) {
+        coreLogger.info(
+          { lane: routed.lane, routedModel: routedModel!.modelId, model: kept.modelId, turnType },
+          'Request routed to a cheaper or equal lane — staying on the conversation\'s model, whose prompt cache is warm',
+        );
+        return this.validateRootModel(kept, requester);
+      }
       if (routedModel) {
         coreLogger.info(
           { lane: routed.lane, reason: routed.reason, model: routedModel.modelId, turnType },
@@ -178,6 +222,32 @@ export class ModelSelector {
       throw new Error('No default model configured. Set one in the Models page.');
     }
     return this.validateRootModel(defaultModel, requester);
+  }
+
+  /**
+   * The model to keep instead of the routed one, or null to follow the route.
+   *
+   * Lanes are chosen per message, and every switch of model is a cold prompt
+   * cache for the whole conversation — re-read at full price on the new model
+   * (and for a CLI model, a cold restart of the vendor session). Within a warm
+   * conversation the route is followed only when it is a step UP (a pricier
+   * model: the message asks for more than the current one gives); a cheaper or
+   * equal lane would save less than the re-read costs, so the conversation
+   * stays where it is. The session override (`/model`) is decided before this.
+   *
+   * A configuration change still wins: when the lane that chose the
+   * conversation's model no longer resolves to it (the lane was rebound, or
+   * the model came from an override since removed), the route is followed.
+   */
+  private async keepWarmModel(conversation: WarmConversation | undefined, routed: ModelConfigEntry, requester: ModelRequester): Promise<ModelConfigEntry | null> {
+    if (!conversation || !requester.userId) return null;
+    if (conversation.name ? conversation.name === routed.name : conversation.modelId === routed.modelId) return null;
+    const scope = { userId: requester.userId, inSpace: requester.inSpace, spaceRole: requester.spaceRole, sponsor: requester.sponsor };
+    const current = await resolveModel({ ...scope, name: conversation.name ?? conversation.modelId });
+    if (!current || current.name === routed.name) return null;
+    if (conversation.lane && (await resolveModel({ ...scope, topic: conversation.lane }))?.name !== current.name) return null;
+    const price = (m: Pick<ModelConfigEntry, 'costPerInputToken' | 'costPerOutputToken'>) => (m.costPerInputToken ?? 0) + (m.costPerOutputToken ?? 0);
+    return price(routed) > price(current) ? null : current;
   }
 
   /**

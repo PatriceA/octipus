@@ -33,7 +33,9 @@ export function providerControls(provider: string, model = '', anthropicNative =
     reasoning: ((provider === 'openai' || provider === 'openrouter') && /(?:^|\/)(?:gpt-[5-9]|o[1-9])/.test(model)) || (provider === 'gemini' && /gemini-(?:2\.5|[3-9])/.test(model)) || (provider === 'grok' && /grok-(?:3-mini|[4-9])/.test(model) && !model.includes('non-reasoning')) || (provider === 'anthropic' && /(?:opus|sonnet)-4-[6-9]|(?:opus|sonnet|fable|mythos)-[5-9]/.test(model)),
     thinkingBudget: provider === 'anthropic' && /(?:opus|sonnet|haiku)-4-[0-6]|claude-3[.-]7/.test(model),
     strictTools: ['openai', 'openrouter'].includes(provider) || (provider === 'anthropic' && anthropicNative && supportsClaudeStructuredOutput(model)),
-    cachePolicy: ['openai', 'mistral', 'grok'].includes(provider) || (provider === 'anthropic' && anthropicNative),
+    // `session`: a session cache key where the provider takes one, the
+    // 24-hour OpenAI retention, the one-hour Claude cache (any Claude path).
+    cachePolicy: ['openai', 'mistral', 'grok', 'openrouter', 'litellm', 'custom-openai', 'custom-anthropic'].includes(provider) || (provider === 'anthropic' && anthropicNative),
     cachedContent: provider === 'gemini',
   };
 }

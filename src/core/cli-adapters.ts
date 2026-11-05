@@ -711,18 +711,19 @@ export class CLIArgumentBuilder {
     // snapshot of the first turn's system prompt), but `systemMessages` is NOT
     // static: its tail is root-runner's VOLATILE tier — the wall-clock date
     // stamp, this turn's memory and attached-file blocks, the tool-budget
-    // notice, the bridge instructions, and `buildSecurityReminder(guardFlags)`.
+    // notice and `buildSecurityReminder(guardFlags)`.
     // Relying on the snapshot froze the date at turn 1 and threw away a
     // security reminder raised by content that arrived on turn 7. Ride the
     // volatile tier in on the delta user message instead, which is the only
     // channel a resumed turn still has. `VOLATILE_MARKER` is the same boundary
-    // the prompt-cache split cuts on, so the two can't drift.
+    // the prompt-cache split cuts on, so the two can't drift. The worker hands
+    // a resumed run only the parts carrying the marker (`stableFirst`), so the
+    // stable vault, bridge and skill-index blocks stay in the snapshot.
     if (resume && !resume.isFirstRun && systemMessages.length > 0) {
       const joined = systemMessages.join('\n');
       const marker = joined.match(VOLATILE_MARKER);
-      // No marker: not a root-runner prompt (sub-worker, pipeline stage). Those
-      // build a fresh system prompt per turn with nothing snapshot-stable to
-      // rely on, so send all of it rather than guess where the boundary is.
+      // No marker: a caller that did not split its parts. Send all of it
+      // rather than guess where the boundary is.
       const volatile = (marker?.index !== undefined ? joined.slice(marker.index) : joined).trim();
       if (volatile) prompt = `${volatile}\n\n---\n\n${prompt}`;
     }
@@ -1042,6 +1043,34 @@ export interface CLIParserCallbacks {
   onVendorSession?: (id: string) => void;
   /** Claude's `system/init`: the vendor has opened (or reopened) the session. */
   onSessionInit?: () => void;
+  /**
+   * The vendor answered this run's prompt (a Claude `assistant` message, a
+   * Codex `item.*` event). A vendor writes the prompt into its conversation
+   * before it starts answering, so from here on a resume holds this turn.
+   */
+  onVendorReply?: () => void;
+}
+
+/**
+ * System parts with every stable part ahead of every volatile tail.
+ *
+ * Each part is split at `VOLATILE_MARKER`: what precedes the marker is stable
+ * (fingerprinted, recorded once in a vendor's first-run prompt), the marker
+ * and what follows is per turn. A part without a marker is entirely stable —
+ * the worker's own vault, bridge and skill-index blocks. Before this they
+ * followed the root prompt's volatile tail, so a resumed turn, which re-sends
+ * everything from the marker on, sent them again every turn.
+ */
+export function stableFirst(parts: readonly string[]): string[] {
+  const stable: string[] = [];
+  const tails: string[] = [];
+  for (const part of parts) {
+    const at = part.match(VOLATILE_MARKER)?.index;
+    if (at === undefined) { stable.push(part); continue; }
+    if (at > 0) stable.push(part.slice(0, at));
+    tails.push(part.slice(at));
+  }
+  return [...stable, ...tails];
 }
 
 /**
@@ -1241,6 +1270,7 @@ export class CLIOutputParser {
     }
 
     if (type === 'assistant') {
+      this.callbacks.onVendorReply?.();
       const message = event.message as Record<string, unknown> | undefined;
       const content = (message?.content as Array<Record<string, unknown>>) || [];
 
@@ -1485,6 +1515,7 @@ export class CLIOutputParser {
     //   { type: "error", message }
 
     const item = event.item as Record<string, unknown> | undefined;
+    if (item && type.startsWith('item.')) this.callbacks.onVendorReply?.();
 
     if (type === 'thread.started') {
       this.callbacks.onVendorSession?.(event.thread_id as string);

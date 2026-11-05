@@ -475,3 +475,15 @@ test('hybrid discovery includes explicitly assigned mounted skills without a dat
   const { discoverSkillIds } = await import('@/skills/discovery');
   expect(await discoverSkillIds({ topic: TEST_TOPIC, message: 'unrelated request' })).toContain(id);
 });
+
+test('topic skill ids and the skill rows a prompt is built from come back in a stable order', async () => {
+  for (const id of ['order-a', 'order-b', 'order-c']) await seedSkill({ id });
+  // An UPDATE writes a new row version at the end of the table, as the skill
+  // usage counters do: unordered reads then return order-a last.
+  await getDb().update(skills).set({ description: 'touched' }).where(eq(skills.id, 'order-a'));
+  await getDb().update(skillTopicAssignments).set({ isActive: true }).where(eq(skillTopicAssignments.skillId, 'order-a'));
+  const { fetchActiveSkillIdsForTopic } = await import('./discovery');
+  expect(await fetchActiveSkillIdsForTopic(TEST_TOPIC)).toEqual(['order-a', 'order-b', 'order-c']);
+  const { skillRepository } = await import('@/db/repositories/skill-repository');
+  expect((await skillRepository.findByIds(['order-c', 'order-a', 'order-b'])).map(row => row.id)).toEqual(['order-a', 'order-b', 'order-c']);
+});

@@ -351,6 +351,37 @@ describeUnit('LiteLLMClient — cachePolicy off disables cache_control', () => {
   });
 });
 
+describeUnit('LiteLLMClient — rules every Claude request follows', () => {
+  const messages = () => [
+    { role: 'system' as const, content: `${'x'.repeat(5000)}\n\nCURRENT DATE/TIME: now`, timestamp: ts() },
+    userMsg('first'),
+    { role: 'assistant' as const, content: 'answer', timestamp: ts() },
+    userMsg('second'),
+  ];
+  const tools = [{ type: 'function' as const, function: { name: 'read', parameters: { type: 'object' } } }];
+
+  test('no forced tool choice, no sampling, and an hour-long cache under the session policy', async () => {
+    let captured: any;
+    chatCreateImpl.current = (params: any) => { captured = params; return Promise.resolve(chatCompletion({ content: 'ok' })); };
+    await new LiteLLMClient().completeViaProxy({ model: 'claude-sonnet-4-6', messages: messages(), tools, toolChoice: 'required',
+      temperature: 0.7, topP: 0.9, extraBody: { top_k: 3 }, cachePolicy: 'session', cacheScope: 'root:' });
+    expect(captured.tool_choice).toBe('auto');
+    expect(captured).not.toHaveProperty('temperature');
+    expect(captured).not.toHaveProperty('top_p');
+    expect(captured).not.toHaveProperty('top_k');
+    const marks = captured.messages.flatMap((m: any) => (Array.isArray(m.content) ? m.content : [])).filter((b: any) => b.cache_control).map((b: any) => b.cache_control);
+    expect(marks).toEqual([{ type: 'ephemeral', ttl: '1h' }, { type: 'ephemeral', ttl: '1h' }]);
+  });
+
+  test('other models keep their tool choice and sampling', async () => {
+    let captured: any;
+    chatCreateImpl.current = (params: any) => { captured = params; return Promise.resolve(chatCompletion({ content: 'ok' })); };
+    await new LiteLLMClient().completeViaProxy({ model: 'gpt-4', messages: messages(), tools, toolChoice: 'required', temperature: 0.2 });
+    expect(captured.tool_choice).toBe('required');
+    expect(captured.temperature).toBe(0.2);
+  });
+});
+
 describeUnit('LiteLLMClient — formatMessages', () => {
   test('serializes assistant tool_calls arguments as JSON string', async () => {
     let captured: any;

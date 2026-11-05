@@ -465,6 +465,22 @@ it('reports the Codex thread id to the caller', () => {
   expect(seen).toEqual(['0199a213-81c0-7800-8aa1-bbab2a035a53']);
 });
 
+it('reports the vendor answering a run, for Claude and Codex, but not its session or thread announcements', () => {
+  const replies: string[] = [];
+  const parserFor = (tool: string) => new CLIOutputParser('agent-1', 'cli/x', () => {}, { onTurn: () => {}, onVendorReply: () => replies.push(tool) }, '/work');
+  const claude = parserFor('Claude Code');
+  claude.parse({ type: 'system', subtype: 'init', session_id: 's' }, 'Claude Code');
+  expect(replies).toEqual([]);
+  claude.parse({ type: 'assistant', message: { id: 'a', content: [{ type: 'text', text: 'On it.' }] } }, 'Claude Code');
+  expect(replies).toEqual(['Claude Code']);
+  const codex = parserFor('Codex CLI');
+  codex.parse({ type: 'thread.started', thread_id: 't' }, 'Codex CLI');
+  codex.parse({ type: 'turn.started' }, 'Codex CLI');
+  expect(replies).toEqual(['Claude Code']);
+  codex.parse({ type: 'item.started', item: { id: 'i', type: 'reasoning', text: '' } }, 'Codex CLI');
+  expect(replies).toEqual(['Claude Code', 'Codex CLI']);
+});
+
 describe('CLIOutputParser — Claude background task tracking', () => {
   const launch = (id: string, name: string, input: Record<string, unknown>) => ({ type: 'assistant', message: { id: `m-${id}`, content: [{ type: 'tool_use', id, name, input }] } });
   const result = (id: string, isError = false) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'launched', is_error: isError }] } });

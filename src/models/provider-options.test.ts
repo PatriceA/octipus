@@ -13,7 +13,27 @@ test('rejects invalid types and arrays without item schemas', () => {
 });
 test('maps session cache affinity and reasoning', () => {
   const out = applyProviderSettings(options, 'openai', { reasoningEffort: 'low', cachePolicy: 'session' });
-  expect(out.extraBody).toMatchObject({ reasoning_effort: 'low', prompt_cache_key: expect.stringMatching(/^octi-/) });
+  expect(out.extraBody).toMatchObject({ reasoning_effort: 'low', prompt_cache_key: expect.stringMatching(/^octi-/), prompt_cache_retention: '24h' });
+});
+test('OpenAI gets a session cache key by default, none when cache hints are off', () => {
+  const byDefault = applyProviderSettings(options, 'openai');
+  expect(byDefault.extraBody?.prompt_cache_key).toMatch(/^octi-/);
+  expect(byDefault.extraBody).not.toHaveProperty('prompt_cache_retention');
+  expect(applyProviderSettings(options, 'openai', { cachePolicy: 'off' }).extraBody).not.toHaveProperty('prompt_cache_key');
+  // Same session and scope ⇒ same key; another scope (a child role) ⇒ another.
+  expect(applyProviderSettings({ ...options, cacheScope: 'root:' }, 'openai').extraBody?.prompt_cache_key)
+    .toBe(applyProviderSettings({ ...options, cacheScope: 'root:' }, 'openai').extraBody?.prompt_cache_key);
+  expect(applyProviderSettings({ ...options, cacheScope: 'child:research' }, 'openai').extraBody?.prompt_cache_key)
+    .not.toBe(applyProviderSettings({ ...options, cacheScope: 'root:' }, 'openai').extraBody?.prompt_cache_key);
+  // A caller's own key wins.
+  expect(applyProviderSettings({ ...options, extraBody: { prompt_cache_key: 'mine' } }, 'openai').extraBody?.prompt_cache_key).toBe('mine');
+});
+test('behind a proxy or custom endpoint the key is opt-in, and never for a Claude model', () => {
+  for (const provider of ['litellm', 'custom-openai']) {
+    expect(applyProviderSettings(options, provider).extraBody).not.toHaveProperty('prompt_cache_key');
+    expect(applyProviderSettings(options, provider, { cachePolicy: 'session' }).extraBody?.prompt_cache_key).toMatch(/^octi-/);
+    expect(applyProviderSettings({ ...options, model: 'anthropic/claude-sonnet-4-6' }, provider, { cachePolicy: 'session' }).extraBody).not.toHaveProperty('prompt_cache_key');
+  }
 });
 test('does not silently expand output ceiling for Claude thinking', () => {
   expect(() => applyProviderSettings({ ...options, model: 'claude-sonnet-4-5' }, 'anthropic', { thinkingBudget: 8192 })).toThrow('smaller');

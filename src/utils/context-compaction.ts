@@ -10,6 +10,7 @@ import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { withInstallUsage } from '@/models/providers/instrumented';
 import { coreLogger } from '@/utils/logger';
+export { stripSignedReasoning } from '@/models/signed-reasoning';
 import { estimateTokens } from '@/utils/token-count';
 
 // Summarizer input sizing. A single pass reads at most SUMMARY_INPUT_CHARS; a
@@ -191,24 +192,34 @@ const TOOL_OUTPUT_TRUNCATED_MARKER = '\n\n[... older tool output truncated to ke
 export const CONTEXT_OVERFLOW_TRUNCATED_MARKER = '\n\n[... truncated due to context window limit]';
 
 /**
- * Tool-output-targeted compaction: once there are more than `softCap` tool-result
- * messages in context, truncate the OLDEST ones (keeping the most recent `softCap`
- * full) to a fixed char budget. Cheaper and far less destructive than whole-history
- * summarization, and it triggers earlier so context-overflow errors are rarer.
+ * Tool-output-targeted compaction: once a large tool output falls outside the
+ * newest `softCap` tool results, truncate every large output older than the
+ * newest `keepFull` (half the cap by default) to a fixed char budget. Cheaper
+ * and far less destructive than whole-history summarization, and it triggers
+ * earlier so context-overflow errors are rarer.
  *
  * - Only `role === 'tool'` messages are touched; assistant/user/system turns are
  *   left intact, so the model keeps its reasoning and the recent tool outputs full.
+ * - Batched: truncating rewrites history, and a rewritten message is a lost
+ *   provider prompt cache from that message on. Truncating exactly one output
+ *   per new tool result (the old "keep the newest `softCap`" rule) rewrote the
+ *   history on every iteration once the cap was reached; cutting back to half
+ *   the cap at once leaves room for `softCap - keepFull` results before the next
+ *   rewrite.
  * - Idempotent: an already-truncated output (ends with the marker) is skipped, so
  *   re-running each iteration does NOT double-fold or re-count.
  * - Returns a new array only when something changed; otherwise the original is
- *   returned unchanged with `truncated: 0`.
+ *   returned unchanged with `truncated: 0`. `firstChanged` is the index of the
+ *   earliest rewritten message — signed reasoning after it no longer matches
+ *   its conversation (`stripSignedReasoning`).
  */
 export function truncateOldestToolOutputs(
   messages: AgentMessage[],
-  opts: { softCap?: number; maxToolChars?: number } = {},
-): { messages: AgentMessage[]; truncated: number } {
+  opts: { softCap?: number; maxToolChars?: number; keepFull?: number } = {},
+): { messages: AgentMessage[]; truncated: number; firstChanged?: number } {
   const softCap = opts.softCap ?? DEFAULT_TOOL_OUTPUT_SOFT_CAP;
   const maxToolChars = opts.maxToolChars ?? TOOL_OUTPUT_TRUNCATE_CHARS;
+  const keepFull = Math.min(softCap, Math.max(1, opts.keepFull ?? Math.floor(softCap / 2)));
 
   const toolIndices: number[] = [];
   for (let i = 0; i < messages.length; i++) {
@@ -216,25 +227,32 @@ export function truncateOldestToolOutputs(
   }
   if (toolIndices.length <= softCap) return { messages, truncated: 0 };
 
-  // Oldest tool outputs above the cap are candidates; keep the most recent `softCap`.
-  const candidates = toolIndices.slice(0, toolIndices.length - softCap);
+  // Nothing to gain on already-small outputs, and skip already-truncated ones
+  // (the marker check is what prevents a double-fold loop on repeated calls).
+  // Recognize BOTH markers so a tool output the reactive overflow path already
+  // truncated isn't re-folded here with a different marker.
+  const truncatable = (msg: AgentMessage) => msg.content.length > maxToolChars
+    && !msg.content.endsWith(TOOL_OUTPUT_TRUNCATED_MARKER) && !msg.content.endsWith(CONTEXT_OVERFLOW_TRUNCATED_MARKER);
+  // Trigger: a large output older than the newest `softCap`.
+  if (!toolIndices.slice(0, toolIndices.length - softCap).some((idx) => truncatable(messages[idx]))) {
+    return { messages, truncated: 0 };
+  }
+
+  // Cut back: every large output older than the newest `keepFull`.
+  const candidates = toolIndices.slice(0, toolIndices.length - keepFull);
   const result = [...messages];
   let truncated = 0;
+  let firstChanged: number | undefined;
 
   for (const idx of candidates) {
     const msg = result[idx];
-    const content = msg.content;
-    // Nothing to gain on already-small outputs, and skip already-truncated ones
-    // (the marker check is what prevents a double-fold loop on repeated calls).
-    // Recognize BOTH markers so a tool output the reactive overflow path already
-    // truncated isn't re-folded here with a different marker.
-    if (content.length <= maxToolChars) continue;
-    if (content.endsWith(TOOL_OUTPUT_TRUNCATED_MARKER) || content.endsWith(CONTEXT_OVERFLOW_TRUNCATED_MARKER)) continue;
-    result[idx] = { ...msg, content: content.slice(0, maxToolChars) + TOOL_OUTPUT_TRUNCATED_MARKER };
+    if (!truncatable(msg)) continue;
+    result[idx] = { ...msg, content: msg.content.slice(0, maxToolChars) + TOOL_OUTPUT_TRUNCATED_MARKER };
+    firstChanged ??= idx;
     truncated++;
   }
 
-  return truncated > 0 ? { messages: result, truncated } : { messages, truncated: 0 };
+  return truncated > 0 ? { messages: result, truncated, firstChanged } : { messages, truncated: 0 };
 }
 
 /**

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { Message } from '@/db/schema/messages';
 import type { SessionContext } from '@/db/schema/sessions';
 import type { AgentMessage } from './types';
-const fixture = vi.hoisted(() => ({ context: {} as SessionContext, rows: [] as Message[], sizeReads: 0, failSummary: false, failInsert: false, noSavings: false, clearInSummary: false, summaries: [] as AgentMessage[][] }));
+const fixture = vi.hoisted(() => ({ context: {} as SessionContext, rows: [] as Message[], sizeReads: 0, failSummary: false, failInsert: false, noSavings: false, clearInSummary: false, summaries: [] as AgentMessage[][], evidence: 15 }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
   findById: async () => ({ id: 'session', userId: 'user', context: structuredClone(fixture.context) }),
   incrementMessageCount: async () => {},
@@ -57,12 +57,12 @@ vi.mock('@/utils/context-compaction', async original => ({ ...await original<typ
 import { AgentWorker } from './agent-worker';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { acknowledgeProviderTurn } from './cli-session-store';
-import { COMPACTION_FAILURE_BACKOFF_MAX_MS, COMPACTION_FAILURE_BACKOFF_MS, compactSessionCommand, compactionRetryAt, decideCompaction, maybeCompactSession } from './agent/session-compaction';
+import { COMPACTION_FAILURE_BACKOFF_MAX_MS, COMPACTION_FAILURE_BACKOFF_MS, COMPACTION_MESSAGE_THRESHOLD, COMPACTION_TRIGGER_MAX_TOKENS, COMPACTION_TRIGGER_MIN_TOKENS, compactSessionCommand, compactionRetryAt, compactionTriggerTokens, decideCompaction, maybeCompactSession } from './agent/session-compaction';
 import { readSessionHistory } from './session-history';
 import { OpenRouterProvider } from '@/models/providers/openrouter-provider';
 import { estimateTokens } from '@/utils/token-count';
 
-beforeEach(() => { fixture.context = {}; fixture.rows = []; fixture.sizeReads = 0; fixture.failSummary = false; fixture.failInsert = false; fixture.noSavings = false; fixture.clearInSummary = false; fixture.summaries = []; });
+beforeEach(() => { fixture.context = {}; fixture.rows = []; fixture.sizeReads = 0; fixture.failSummary = false; fixture.failInsert = false; fixture.noSavings = false; fixture.clearInSummary = false; fixture.summaries = []; fixture.evidence = 15; });
 function worker(turn: number, model = 'anthropic/claude-sonnet-4-6', root = true) {
   return new AgentWorker({ space: null, trigger: 'user', funding: 'own',  id: `agent-${turn}`, sessionId: 'session', userId: 'user', model, role: 'general', topic: 'test',
     status: 'idle', createdAt: new Date(), updatedAt: new Date(), root, metadata: {} },
@@ -77,7 +77,7 @@ async function turn(n: number, inspect?: (messages: AgentMessage[]) => void) {
     state.messages.push({ role: 'assistant', content: '', timestamp: new Date(),
       toolCalls: [{ id: `tool-${n}`, name: 'read_file', arguments: { path: 'project.txt' } }],
       providerRaw: { openrouterModel: 'anthropic/claude-sonnet-4-6', reasoning_details: [{ type: 'reasoning.encrypted', data: `signed-${n}`, index: 0 }] } },
-      { role: 'tool', content: `FACT_${n} ` + 'Verified project evidence. '.repeat(15), toolCallId: `tool-${n}`, timestamp: new Date() });
+      { role: 'tool', content: `FACT_${n} ` + 'Verified project evidence. '.repeat(fixture.evidence), toolCallId: `tool-${n}`, timestamp: new Date() });
     return `Completed task ${n}.`;
   };
   const answer = await w.run(`Question ${n}: apply the project decision.`);
@@ -139,7 +139,36 @@ describe('session lifecycle across ephemeral root workers', () => {
     expect(fixture.context.cliSessions?.['Claude Code'].id).toBe('live');
     expect(fixture.context.nativeConversation).toEqual(original);
   });
+  test('a long but small session is not re-checkpointed after every turn', async () => {
+    // 12 turns, 24 rows, a few thousand tokens: this used to compact (20 rows
+    // or 8k tokens), and again on nearly every later turn — each pass a cold
+    // prompt cache for the whole conversation and an extra summary call.
+    for (let i = 0; i < 12; i++) await turn(i);
+    expect(await maybeCompactSession('session')).toBe(false);
+    expect(fixture.summaries).toHaveLength(0);
+    expect(fixture.context.checkpoint).toBeUndefined();
+  });
+  test('the automatic trigger scales with the context window, below the in-turn compaction', async () => {
+    const { CONTEXT_MESSAGE_CAP } = await vi.importActual<typeof import('@/db/repositories/message-repository')>('@/db/repositories/message-repository');
+    expect(compactionTriggerTokens(32_000)).toBe(16_000);
+    expect(compactionTriggerTokens(200_000)).toBe(COMPACTION_TRIGGER_MAX_TOKENS);
+    expect(compactionTriggerTokens(1_000_000)).toBe(COMPACTION_TRIGGER_MAX_TOKENS);
+    expect(compactionTriggerTokens(4_000)).toBe(COMPACTION_TRIGGER_MIN_TOKENS);
+    expect(COMPACTION_TRIGGER_MAX_TOKENS).toBeLessThan(100_000); // agent-worker AUTO_COMPACT_THRESHOLD
+    expect(COMPACTION_MESSAGE_THRESHOLD).toBeLessThan(CONTEXT_MESSAGE_CAP);
+  });
+  test('a large session compacts, and the retained turns lose their signed reasoning', async () => {
+    fixture.evidence = 1_200; // ~5k tokens of tool output per turn
+    for (let i = 0; i < 6; i++) await turn(i);
+    expect(fixture.context.nativeConversation?.messages.some(m => m.providerRaw?.reasoning_details)).toBe(true);
+    expect(await maybeCompactSession('session')).toBe(true);
+    const kept = fixture.context.nativeConversation?.messages ?? [];
+    expect(kept[0].content).toContain('[Conversation checkpoint]');
+    expect(kept.some(m => m.role === 'tool')).toBe(true);
+    expect(kept.some(m => m.providerRaw?.reasoning_details)).toBe(false);
+  });
   test('ineffective automatic compaction keeps state and waits for real context growth', async () => {
+    fixture.evidence = 1_200;
     for (let i = 0; i < 12; i++) await turn(i);
     const original = structuredClone(fixture.context.nativeConversation);
     fixture.noSavings = true;
@@ -151,6 +180,7 @@ describe('session lifecycle across ephemeral root workers', () => {
     expect(fixture.summaries).toHaveLength(1);
   });
   test('a failed automatic summary backs off instead of retrying on every turn', async () => {
+    fixture.evidence = 1_200;
     for (let i = 0; i < 12; i++) await turn(i);
     fixture.failSummary = true;
     await expect(maybeCompactSession('session')).rejects.toThrow('summary unavailable');
@@ -254,5 +284,58 @@ describe('session lifecycle across ephemeral root workers', () => {
       inputTokens, potentialReusablePrefixTokens: reusablePrefixTokens, potentialPrefixReuseRatio: reusablePrefixTokens / inputTokens,
       measuredProviderCost: null, measuredCacheHits: null, samples };
     if (process.env.SESSION_BENCHMARK_REPORT) writeFileSync(process.env.SESSION_BENCHMARK_REPORT, JSON.stringify(report, null, 2) + '\n');
+  });
+
+  describe('signed reasoning and the conversation it was bound to', () => {
+    type Guarded = { messages: AgentMessage[]; lastPrefixFingerprint?: string | null; guardSignedReasoning(tools?: unknown[]): void; loadHistory(): Promise<void> };
+    const signed = (n: number): AgentMessage => ({ role: 'assistant', content: '', timestamp: new Date(),
+      toolCalls: [{ id: `tool-${n}`, name: 'read_file', arguments: {} }],
+      providerRaw: { anthropicContent: [{ type: 'thinking', thinking: '', signature: `sig-${n}` }, { type: 'tool_use', id: `tool-${n}`, name: 'read_file', input: {} }] } });
+    const tool = (name: string) => ({ type: 'function' as const, function: { name, description: name, parameters: { type: 'object' } } });
+    const blocks = (messages: AgentMessage[]) => messages.flatMap(m => (m.providerRaw?.anthropicContent as Array<{ type: string }> | undefined) ?? []).map(b => b.type);
+
+    test('a changed tool set mid-run strips every replayed thinking block, an unchanged one keeps them', () => {
+      const w = worker(1) as unknown as Guarded;
+      w.messages = [{ role: 'system', content: 'sys', timestamp: new Date() }, { role: 'user', content: 'q', timestamp: new Date() }, signed(1)];
+      w.guardSignedReasoning([tool('read_file')]);
+      w.guardSignedReasoning([tool('read_file')]);
+      expect(blocks(w.messages)).toEqual(['thinking', 'tool_use']);
+      // Order alone is not a change (Claude binds tools as a name-sorted set).
+      w.guardSignedReasoning([tool('read_file'), tool('write_file')]);
+      expect(blocks(w.messages)).toEqual(['tool_use']);
+      w.messages.push(signed(2));
+      w.guardSignedReasoning([tool('write_file'), tool('read_file')]);
+      expect(blocks(w.messages)).toEqual(['tool_use', 'thinking', 'tool_use']);
+    });
+
+    test('under manual thinking (budget_tokens) the loop keeps them: those models check no binding, and need the in-flight block', () => {
+      const w = worker(1) as unknown as Guarded & { manualThinking: boolean };
+      w.manualThinking = true;
+      w.messages = [{ role: 'system', content: 'sys', timestamp: new Date() }, signed(1)];
+      w.guardSignedReasoning([tool('read_file')]);
+      w.guardSignedReasoning([tool('write_file')]);
+      expect(blocks(w.messages)).toEqual(['thinking', 'tool_use']);
+    });
+
+    test('a summary folded into the system prompt strips them too', () => {
+      const w = worker(1) as unknown as Guarded;
+      w.messages = [{ role: 'system', content: 'sys', timestamp: new Date() }, signed(1)];
+      w.guardSignedReasoning([]);
+      w.messages.splice(1, 0, { role: 'system', content: '[Context Summary] earlier work', timestamp: new Date() });
+      w.guardSignedReasoning([]);
+      expect(blocks(w.messages)).toEqual(['tool_use']);
+    });
+
+    test('the next turn compares against the prompt the snapshot recorded', async () => {
+      await turn(1);
+      // The stubbed loop made no model call, so this snapshot recorded no
+      // prompt: its reasoning is treated as bound to an unknown one.
+      fixture.context.nativeConversation!.messages[1] = { ...signed(1), timestamp: new Date().toISOString() } as never;
+      const next = worker(2) as unknown as Guarded;
+      await next.loadHistory();
+      expect(next.lastPrefixFingerprint).toBeNull();
+      next.guardSignedReasoning([]);
+      expect(blocks(next.messages)).toEqual(['tool_use']);
+    });
   });
 });

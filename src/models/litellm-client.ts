@@ -11,7 +11,8 @@ import { coerceDeepseekToolChoice, DEEPSEEK_TEMPLATE_LEAK, parseDsmlToolCalls } 
 import { transformMessagesForProvider } from '@/models/message-transform';
 import { parseToolCallArguments } from '@/models/tool-call-args';
 import { normalizeUsage } from '@/models/providers/usage';
-import { applyAnthropicCacheControl, isAnthropicFamily, logMissedCacheSplit } from '@/models/providers/prompt-cache';
+import { applyAnthropicCacheControl, cacheTtlFor, isAnthropicFamily, logMissedCacheSplit } from '@/models/providers/prompt-cache';
+import { claudeToolChoice, dropClaudeSampling } from '@/models/claude-request';
 import { modelLogger } from '@/utils/logger';
 
 export interface CompletionOptions {
@@ -19,6 +20,13 @@ export interface CompletionOptions {
   cachePolicy?: 'default' | 'off' | 'session';
   /** Logical agent conversation and clear generation, for provider affinity. */
   cacheScope?: string;
+  /**
+   * `false`: cache the system prefix only, no breakpoint in the conversation.
+   * For a request the next one is unlikely to continue (a casual reply between
+   * agent turns, which run on another prompt): a history breakpoint there is a
+   * cache WRITE of the whole conversation (1.25x input) that nothing reads.
+   */
+  historyCache?: boolean;
   agentId?: string;
   requestType?: string;
   accountingMetadata?: Record<string, unknown>;
@@ -487,6 +495,30 @@ export class LiteLLMClient {
   }
 
   /**
+   * What both proxy requests (complete and stream) add to their params: the
+   * Anthropic cache breakpoints, the tool policy and the caller's extra body —
+   * then, for a Claude model, the rules every Claude request follows
+   * (`claude-request.ts`), after the extra body so nothing reintroduces them.
+   */
+  private applyProxyRequestPolicy(params: ChatCompletionCreateParams, options: CompletionOptions): void {
+    const model = params.model || '';
+    const claude = isAnthropicFamily(model);
+    // Anthropic prompt caching (Phase A1): the proxy forwards `cache_control`
+    // content blocks to Anthropic upstreams, so cache the static prefix.
+    if (options.cachePolicy !== 'off' && claude) {
+      const cached = applyAnthropicCacheControl(params.messages, model, { conversation: Boolean(options.cacheScope), history: options.historyCache, ttl: cacheTtlFor(options.cachePolicy) });
+      if (!cached.system) logMissedCacheSplit(model);
+    }
+    if (options.tools?.length) {
+      params.tools = options.tools;
+      params.tool_choice = claude ? claudeToolChoice(options.toolChoice) : coerceDeepseekToolChoice(model, options.toolChoice) ?? 'auto';
+    }
+    // Merge extra body parameters (e.g. { think: false } for Ollama/Qwen3/Gemma4)
+    if (options.extraBody) Object.assign(params, options.extraBody);
+    if (claude) dropClaudeSampling(params as unknown as Record<string, unknown>);
+  }
+
+  /**
    * Create a chat completion directly via the LiteLLM proxy, bypassing
    * the ProviderRouter. Used internally and by the LiteLLMProvider.
    */
@@ -511,21 +543,7 @@ export class LiteLLMClient {
 
     // Anthropic prompt caching (Phase A1): the proxy forwards `cache_control`
     // content blocks to Anthropic upstreams, so cache the static prefix.
-    if (options.cachePolicy !== 'off' && isAnthropicFamily(params.model || '')) {
-      const cached = applyAnthropicCacheControl(params.messages, params.model, { conversation: Boolean(options.cacheScope) });
-      if (!cached.system) logMissedCacheSplit(params.model || '');
-    }
-
-    if (options.tools?.length) {
-      params.tools = options.tools;
-      params.tool_choice = coerceDeepseekToolChoice(params.model || '', options.toolChoice) ?? 'auto';
-    }
-
-    // Merge extra body parameters (e.g. { think: false } for Ollama/Qwen3/Gemma4)
-    // Pass via both top-level merge and extra_body to ensure params reach LiteLLM proxy
-    if (options.extraBody) {
-      Object.assign(params, options.extraBody);
-    }
+    this.applyProxyRequestPolicy(params, options);
 
     modelLogger.info({ model: params.model, provider: 'litellm', messageCount: options.messages.length }, 'LLM request');
 
@@ -704,20 +722,7 @@ export class LiteLLMClient {
       stream_options: { include_usage: true },
     };
 
-    if (options.cachePolicy !== 'off' && isAnthropicFamily(params.model || '')) {
-      const cached = applyAnthropicCacheControl(params.messages, params.model, { conversation: Boolean(options.cacheScope) });
-      if (!cached.system) logMissedCacheSplit(params.model || '');
-    }
-
-    if (options.tools?.length) {
-      params.tools = options.tools;
-      params.tool_choice = coerceDeepseekToolChoice(params.model || '', options.toolChoice) ?? 'auto';
-    }
-
-    // Merge extra body parameters (e.g. { think: false } for Ollama Qwen3)
-    if (options.extraBody) {
-      Object.assign(params, options.extraBody);
-    }
+    this.applyProxyRequestPolicy(params, options);
 
     modelLogger.debug({ model: params.model }, 'Starting streaming completion via LiteLLM proxy');
 

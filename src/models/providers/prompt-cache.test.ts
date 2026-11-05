@@ -164,3 +164,15 @@ describe('logMissedCacheSplit', () => {
     warnSpy.mockRestore();
   });
 });
+
+describe('applyAnthropicCacheControl — history: false', () => {
+  test('caches the system prefix only', async () => {
+    const { applyAnthropicCacheControl } = await import('./prompt-cache');
+    const messages: any[] = [
+      { role: 'system', content: `${'x'.repeat(100)}\n\nCURRENT DATE/TIME: now` },
+      { role: 'user', content: 'a' }, { role: 'assistant', content: 'b' }, { role: 'user', content: 'c' },
+    ];
+    expect(applyAnthropicCacheControl(messages, 'claude-sonnet-4-6', { conversation: true, history: false })).toEqual({ system: true, history: false });
+    expect(messages.slice(1).every((m) => typeof m.content === 'string')).toBe(true);
+  });
+});

@@ -2,7 +2,7 @@ import { parse as parseToml } from 'smol-toml';
 import { readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { assertCliSpaceMode, CLI_SPACE_MODES, CLIArgumentBuilder, discoverCodexMcpServers, injectVibeMcpServer, resolveClaudePermissionMode, resolveCodexSandboxMode, resolveVibeMode } from './cli-adapters';
+import { assertCliSpaceMode, CLI_SPACE_MODES, CLIArgumentBuilder, discoverCodexMcpServers, injectVibeMcpServer, resolveClaudePermissionMode, resolveCodexSandboxMode, resolveVibeMode, stableFirst } from './cli-adapters';
 
 vi.mock('node:child_process', () => ({ execFile: vi.fn() }));
 type ExecCb = (err: Error | null, stdout: string, stderr: string) => void;
@@ -646,5 +646,28 @@ describe('original image delivery', () => {
   it('other adapters retain the original file reference', () => {
     const out = builder.build('Antigravity', 'Look at this', {}, [], undefined, undefined, 'images', connection);
     expect(out.args[out.args.indexOf('--print') + 1]).toContain(JSON.stringify(image.path));
+  });
+});
+
+describe('stableFirst', () => {
+  const tail = '\n\nCURRENT DATE & TIME: today';
+  it('moves every stable part ahead of every volatile tail, keeping each group in order', () => {
+    expect(stableFirst([`Root rules.${tail} memory`, 'Vault guidance.', 'Bridge block.'])).toEqual([
+      'Root rules.', 'Vault guidance.', 'Bridge block.', `${tail} memory`,
+    ]);
+  });
+  it('keeps a part that is all tail, and leaves parts without a marker untouched', () => {
+    expect(stableFirst([tail, 'Stable.'])).toEqual(['Stable.', tail]);
+    expect(stableFirst(['a', 'b'])).toEqual(['a', 'b']);
+  });
+  it('gives a resumed Claude run only the tail, with the stable blocks left in the snapshot', () => {
+    const connection = { url: 'http://127.0.0.1:43123', key: 'k', planMode: false, maxIterations: 7, workingDirectory: '/w', codexMcpServers: [] as Array<{ name: string }> };
+    const parts = stableFirst([`Root rules.${tail} memory`, 'Bridge block.']);
+    const resumedParts = parts.filter(part => part.includes('CURRENT DATE'));
+    const { stdinPrompt } = new CLIArgumentBuilder().build('Claude Code', 'question', {}, resumedParts, null, 100, 'agent', connection, { id: 'id', isFirstRun: false });
+    const sent = JSON.parse(stdinPrompt!).message.content as string;
+    expect(sent).toContain('CURRENT DATE & TIME: today memory');
+    expect(sent).not.toContain('Bridge block.');
+    expect(sent).not.toContain('Root rules.');
   });
 });
