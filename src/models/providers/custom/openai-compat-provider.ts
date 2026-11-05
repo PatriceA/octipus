@@ -12,6 +12,8 @@ import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from '../interface';
 import { BaseCustomProvider, type ResolvedCustomConfig } from './base-custom-provider';
+import { applyAnthropicCacheControl, cacheTtlFor, isAnthropicFamily, logMissedCacheSplit } from '../prompt-cache';
+import { claudeToolChoice, dropClaudeSampling } from '../../claude-request';
 import { isPrivateEndpoint, type DecisionAnswers, type DecisionRequest } from '@/models/decision';
 import { systemOneDecide } from '@/models/systemone-decision';
 
@@ -75,12 +77,7 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
       stream: false,
     };
 
-    if (options.tools?.length) {
-      params.tools = options.tools;
-      params.tool_choice = options.toolChoice ?? 'auto';
-    }
-
-    if (options.extraBody) Object.assign(params, options.extraBody);
+    applyClaudeGatewayPolicy(params, options);
 
     modelLogger.debug(
       { model: params.model, messageCount: options.messages.length, provider: this.name, baseUrl: cfg.baseUrl },
@@ -143,12 +140,7 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
       stream_options: { include_usage: true },
     };
 
-    if (options.tools?.length) {
-      params.tools = options.tools;
-      params.tool_choice = options.toolChoice ?? 'auto';
-    }
-
-    if (options.extraBody) Object.assign(params, options.extraBody);
+    applyClaudeGatewayPolicy(params, options);
 
     modelLogger.debug({ model: params.model, provider: this.name }, 'Starting streaming completion via custom-openai');
 
@@ -295,4 +287,26 @@ export function isUnsupportedStreamUsageError(error: unknown): boolean {
 function safeStringify(value: unknown): string {
   if (value == null) return '';
   try { return JSON.stringify(value); } catch { return String(value); }
+}
+
+/**
+ * Tool policy and caller extra body for a request, plus — when the gateway
+ * serves a Claude model — what every Claude request gets on the other
+ * OpenAI-compatible paths (LiteLLM, OpenRouter): the prompt-cache breakpoints
+ * (`cachePolicy: 'off'` turns them off for a gateway that rejects the field)
+ * and the rules of `claude-request.ts`, after the extra body.
+ */
+function applyClaudeGatewayPolicy(params: ChatCompletionCreateParams, options: CompletionOptions): void {
+  const model = String(params.model);
+  const claude = isAnthropicFamily(model);
+  if (claude && options.cachePolicy !== 'off') {
+    const cached = applyAnthropicCacheControl(params.messages, model, { conversation: Boolean(options.cacheScope), history: options.historyCache, ttl: cacheTtlFor(options.cachePolicy) });
+    if (!cached.system) logMissedCacheSplit(model);
+  }
+  if (options.tools?.length) {
+    params.tools = options.tools;
+    params.tool_choice = claude ? claudeToolChoice(options.toolChoice) : options.toolChoice ?? 'auto';
+  }
+  if (options.extraBody) Object.assign(params, options.extraBody);
+  if (claude) dropClaudeSampling(params as unknown as Record<string, unknown>);
 }

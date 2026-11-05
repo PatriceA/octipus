@@ -9,14 +9,28 @@ describe('capNativeSnapshot', () => {
     expect(capNativeSnapshot(messages)).toBe(messages);
   });
 
-  test('drops the OLDEST messages until it fits', () => {
-    const big = Math.floor(NATIVE_SNAPSHOT_MAX_CHARS / 3);
-    const messages = [msg('user', big), msg('assistant', big), msg('user', big), msg('assistant', big)];
+  test('drops the OLDEST messages down to half the ceiling at once', () => {
+    const size = Math.floor(NATIVE_SNAPSHOT_MAX_CHARS / 10);
+    const messages = Array.from({ length: 12 }, (_, i) => msg(i % 2 ? 'assistant' : 'user', size));
     const kept = capNativeSnapshot(messages);
-    expect(kept.length).toBeLessThan(messages.length);
     // The newest turn always survives — it is the one the next request needs.
     expect(kept.at(-1)).toBe(messages.at(-1));
-    expect(JSON.stringify(kept).length).toBeLessThanOrEqual(NATIVE_SNAPSHOT_MAX_CHARS + 100);
+    // Half the ceiling, not just under it: the next turns fit without another
+    // trim (each trim moves the start of the history, a lost prompt cache).
+    expect(JSON.stringify(kept).length).toBeLessThanOrEqual(NATIVE_SNAPSHOT_MAX_CHARS / 2 + 100);
+    const next = [...kept, msg('user', size), msg('assistant', size)];
+    expect(capNativeSnapshot(next)).toBe(next);
+  });
+
+  test('a trimmed snapshot keeps no signed reasoning (it was bound to the dropped turns)', () => {
+    const size = Math.floor(NATIVE_SNAPSHOT_MAX_CHARS / 3);
+    const signed = { anthropicContent: [{ type: 'thinking', thinking: '', signature: 's' }, { type: 'text', text: 'a' }] };
+    const messages: Array<{ role: string; content: string; providerRaw?: Record<string, unknown> }> = [msg('user', size), msg('user', size), { ...msg('assistant', size), providerRaw: signed }, { ...msg('assistant', 10), providerRaw: signed }];
+    const kept = capNativeSnapshot(messages);
+    expect(kept.at(-1)?.providerRaw).toEqual({ anthropicContent: [{ type: 'text', text: 'a' }] });
+    // Untrimmed: reasoning stays as it was produced.
+    const small = [{ ...msg('assistant', 10), providerRaw: signed }];
+    expect(capNativeSnapshot(small)).toBe(small);
   });
 
   test('never leaves a leading orphan tool result', () => {

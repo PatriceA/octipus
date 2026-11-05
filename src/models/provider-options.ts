@@ -1,6 +1,7 @@
 import { anthropicNativeMessagesEnabled, type ProviderSettings, providerControls } from '@/shared/provider-settings';
 import type { CompletionOptions } from './litellm-client';
 import { cacheAffinityKey } from './providers/usage';
+import { isAnthropicFamily } from './providers/prompt-cache';
 
 /** Only opt schemas into strict mode when doing so preserves optionality. */
 export function strictSchema(schema: any): boolean {
@@ -52,9 +53,25 @@ export function applyProviderSettings(options: CompletionOptions, provider: stri
     if (settings.thinkingBudget >= (options.maxTokens ?? 4096)) throw new Error('Thinking budget must be smaller than max output tokens');
     extra.thinking = { type: 'enabled', budget_tokens: settings.thinkingBudget };
   }
-  if (provider === 'openai' && settings?.cachePolicy === 'session') {
+  // OpenAI routes a request to a cached prefix by `prompt_cache_key` combined
+  // with the prefix itself; without one, every session sharing the system
+  // prompt lands on the same machines and overflows them. Same session ⇒ same
+  // key, so it is sent by default on the direct provider (Grok and Mistral do
+  // the same in their providers) — it used to need `cachePolicy: 'session'`.
+  // `session` adds the 24-hour retention, for conversations whose turns are
+  // further apart than the in-memory cache lives. Behind a LiteLLM proxy or a
+  // custom OpenAI-compatible endpoint the upstream is unknown and an older one
+  // rejects the field, so there it stays opt-in.
+  const policy = options.cachePolicy ?? settings?.cachePolicy;
+  const sendsKey = provider === 'openai'
+    ? policy !== 'off'
+    : (provider === 'litellm' || provider === 'custom-openai') && policy === 'session' && !isAnthropicFamily(options.model);
+  if (sendsKey && extra.prompt_cache_key === undefined) {
     const key = cacheAffinityKey(options.sessionId, options.userId, options.cacheScope);
     if (key) extra.prompt_cache_key = key;
+  }
+  if (provider === 'openai' && policy === 'session' && extra.prompt_cache_retention === undefined) {
+    extra.prompt_cache_retention = '24h';
   }
   // Cache suppression is only an Octipus explicit-cache control. Upstream
   // automatic caching cannot universally be disabled by a client.

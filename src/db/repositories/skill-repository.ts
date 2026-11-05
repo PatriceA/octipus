@@ -70,15 +70,22 @@ export class SkillRepository {
     return row;
   }
 
+  /**
+   * Ordered by id: these rows become prompt text (skill indexes, domain
+   * knowledge), which must read the same on every turn to stay a cached
+   * prefix — and, for a CLI agent, to keep its vendor session's fingerprint.
+   * Unordered, Postgres returned them in physical order, which the usage
+   * counters' own UPDATEs reshuffle.
+   */
   async findByIds(skillIds: string[]): Promise<SkillView[]> {
     if (skillIds.length === 0) return [];
-    return this.db.select(viewColumns).from(skills).where(inArray(skills.id, skillIds));
+    return this.db.select(viewColumns).from(skills).where(inArray(skills.id, skillIds)).orderBy(skills.id);
   }
 
-  /** The rows among `skillIds` that `userId` can see (system, own, their orgs'). */
+  /** The rows among `skillIds` that `userId` can see (system, own, their orgs'), ordered by id (see `findByIds`). */
   async findVisibleByIds(userId: string, skillIds: string[]): Promise<SkillView[]> {
     if (skillIds.length === 0) return [];
-    return this.db.select(viewColumns).from(skills).where(and(inArray(skills.id, skillIds), await visibleTo(userId)));
+    return this.db.select(viewColumns).from(skills).where(and(inArray(skills.id, skillIds), await visibleTo(userId))).orderBy(skills.id);
   }
 
   /**

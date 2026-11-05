@@ -689,11 +689,11 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 14 |
 | `core` | `config` | 66 |
 | `core` | `connectors` | 4 |
-| `core` | `db` | 403 |
+| `core` | `db` | 404 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 10 |
-| `core` | `models` | 124 |
+| `core` | `models` | 125 |
 | `core` | `modules` | 2 |
 | `core` | `security` | 195 |
 | `core` | `services` | 2 |
@@ -802,7 +802,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tui-pi` | `shared` | 2 |
 | `tui-pi` | `voice` | 2 |
 | `utils` | `core` | 3 |
-| `utils` | `models` | 3 |
+| `utils` | `models` | 4 |
 | `utils` | `security` | 2 |
 | `visual` | `models` | 1 |
 | `visual` | `utils` | 2 |

@@ -29,11 +29,11 @@ import { buildSecurityReminder } from './input-guard';
 import { createMetaTools } from './meta-tools';
 import { shouldUseLazyDiscovery } from './lazy-tools';
 import { selectLaneWithDecision } from './lane-intent';
-import { selectCoreToolIds } from './tool-intent';
+import { selectCoreToolIds, stickyCoreToolIds } from './tool-intent';
 import { isPlanMode, PLAN_MODE_DIRECTIVE, stripMutatingTools } from './plan-mode';
 import { isLongTailHandler } from './tool-split';
 import { buildCapabilitiesHandler } from '@/tools/self-report';
-import { modelCandidates, type ModelSelector } from './model-selector';
+import { modelCandidates, type ModelSelector, warmConversationOf } from './model-selector';
 import { localRowInstead, ProtectionRoutingError, PSEUDONYMIZED } from '@/core/protection/routing';
 import { prepareAttachmentProtection } from '@/core/protection/attachments';
 import { resolvePromptTier } from './prompt-tier';
@@ -142,6 +142,31 @@ export function buildPreHookVolatileParts(extraSystemContext: string, guardFlags
   return parts;
 }
 
+/**
+ * This turn's core tool groups for the root agent: the message's selection
+ * plus the groups the conversation already advertised (`stickyCoreToolIds`),
+ * recorded in the session when the set grows. A failed write is logged: the
+ * turn still runs, and the next one re-selects.
+ */
+async function sessionCoreToolIds(
+  sessionId: string,
+  ctx: import('@/db/schema/sessions').SessionContext | undefined,
+  selected: string[],
+  coreToolIds: readonly string[],
+): Promise<string[]> {
+  const generation = sessionGeneration(ctx);
+  const checkpointId = ctx?.checkpoint?.generation === generation ? ctx.checkpoint.entryId : undefined;
+  const { ids, changed } = stickyCoreToolIds(selected, coreToolIds, ctx?.toolGroups, { generation, checkpointId });
+  if (changed) {
+    try {
+      await sessionRepository.patchContextIfGeneration(sessionId, generation, { toolGroups: { generation, checkpointId, ids } });
+    } catch (err) {
+      coreLogger.warn({ err, sessionId }, 'Could not record the conversation\'s tool groups; the next turn re-selects');
+    }
+  }
+  return ids;
+}
+
 /** The session's `context.remoteRoom` (federation §9), validated; null for every other session. */
 async function remoteRoomOfSession(ctx: unknown) {
   if (!(ctx as { remoteRoom?: unknown } | undefined)?.remoteRoom) return null;
@@ -234,7 +259,12 @@ export async function runRootAgent(
   // binding), then the install's (coworking spec §8.2).
   const inSpace = !!space;
   const requester = { userId, inSpace, spaceRole: space?.role, sponsor: scope.sponsor };
-  const chosenModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification, laneChoice }, requester);
+  // Read once, here: the model choice keeps a warm conversation's model, and
+  // the tool set decided further down needs plan mode.
+  const session = await sessionRepository.findById(sessionId);
+  const planSessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
+  const conversation = warmConversationOf(planSessionCtx);
+  const chosenModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification, laneChoice, conversation }, requester);
   const chosenMeta = await getModelRegistry().getModel(chosenModel.name);
   const modelMeta = await localRowInstead(chosenMeta, sessionId, 'tools', () => modelCandidates(requester), PSEUDONYMIZED);
   const selectedModel = modelMeta && modelMeta !== chosenMeta ? { modelId: modelMeta.modelId, name: modelMeta.name } : chosenModel;
@@ -262,10 +292,6 @@ export async function runRootAgent(
   );
   coreLogger.info({ sessionId, modelName, promptTier, role: ROOT_ROLE }, 'Root agent mode resolved');
 
-  // Read once, here, because the tool set is decided further down and plan mode
-  // has to reach it. The later `session` read is the same row.
-  const session = await sessionRepository.findById(sessionId);
-  const planSessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
 
   const rootRoleConfig = getRoleConfig(ROOT_ROLE);
 
@@ -437,7 +463,7 @@ export async function runRootAgent(
   // stays reachable through `list_tools`. See tool-intent.ts.
   const rootCoreToolIds = rootRoleConfig.coreToolIds === undefined
     ? undefined
-    : selectCoreToolIds(message, rootRoleConfig.coreToolIds);
+    : await sessionCoreToolIds(sessionId, planSessionCtx, selectCoreToolIds(message, rootRoleConfig.coreToolIds), rootRoleConfig.coreToolIds);
   if (
     !remoteRoom &&
     rootCoreToolIds !== undefined &&

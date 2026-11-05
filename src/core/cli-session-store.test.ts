@@ -5,19 +5,26 @@ import { childCliSessionKey, claimCliSession, cliSessionHolder, dropCliSession, 
 
 describe('fingerprintRun', () => {
   it('changes when the model changes', () => {
-    const a = fingerprintRun({ model: 'sonnet', permissionMode: 'acceptEdits', planMode: false, workingDirectory: '/w' });
-    const b = fingerprintRun({ model: 'opus', permissionMode: 'acceptEdits', planMode: false, workingDirectory: '/w' });
+    const a = fingerprintRun({ model: 'sonnet', workingDirectory: '/w' });
+    const b = fingerprintRun({ model: 'opus', workingDirectory: '/w' });
     expect(a).not.toBe(b);
   });
 
-  it('changes when plan mode changes — resume cannot switch it', () => {
-    const a = fingerprintRun({ model: 'sonnet', permissionMode: 'acceptEdits', planMode: false, workingDirectory: '/w' });
-    const b = fingerprintRun({ model: 'sonnet', permissionMode: 'acceptEdits', planMode: true, workingDirectory: '/w' });
-    expect(a).not.toBe(b);
+  it('changes when the stable instructions or the working directory change', () => {
+    const base = fingerprintRun({ model: 'sonnet', workingDirectory: '/w', instructions: 'a' });
+    expect(fingerprintRun({ model: 'sonnet', workingDirectory: '/w', instructions: 'b' })).not.toBe(base);
+    expect(fingerprintRun({ model: 'sonnet', workingDirectory: '/x', instructions: 'a' })).not.toBe(base);
+  });
+
+  it('carries no permission or plan mode: each invocation passes them, a resumed one too', () => {
+    // Plan mode used to be fingerprinted, so every /plan toggle threw the
+    // vendor conversation away. The run type no longer has the fields.
+    // @ts-expect-error — permissionMode/planMode are not fingerprint inputs
+    expect(fingerprintRun({ model: 'sonnet', workingDirectory: '/w', planMode: true })).toBe(fingerprintRun({ model: 'sonnet', workingDirectory: '/w' }));
   });
 
   it('is stable for identical runs', () => {
-    const r = { model: 'sonnet', permissionMode: 'acceptEdits', planMode: false, workingDirectory: '/w' };
+    const r = { model: 'sonnet', workingDirectory: '/w' };
     expect(fingerprintRun(r)).toBe(fingerprintRun(r));
   });
 });

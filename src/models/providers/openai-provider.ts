@@ -57,6 +57,42 @@ function omitsTemperature(model: string): boolean {
 }
 
 /**
+ * Models that rejected `prompt_cache_retention`. Extended (24h) retention is
+ * offered on some OpenAI models only, and which ones changes by release, so
+ * there is no list to keep: a model that refuses it is retried once without
+ * and not sent it again by this process (`cachePolicy: 'session'` still
+ * brings the session key).
+ */
+const noExtendedRetention = new Set<string>();
+
+/** A 400 naming `prompt_cache_retention`: the model does not offer it. */
+export function isUnsupportedRetentionError(err: unknown): boolean {
+  const e = err as { status?: number; message?: unknown } | undefined;
+  return e?.status === 400 && /prompt_cache_retention/i.test(String(e.message ?? ''));
+}
+
+/**
+ * Send `params`, retrying once without `prompt_cache_retention` when the model
+ * rejects it. Errors pass through unchanged otherwise.
+ */
+async function createWithRetentionFallback<T>(params: Record<string, unknown>, send: (p: Record<string, unknown>) => Promise<T>): Promise<T> {
+  const model = String(params.model);
+  if (params.prompt_cache_retention !== undefined && noExtendedRetention.has(model)) {
+    const { prompt_cache_retention: _unsupported, ...rest } = params;
+    params = rest;
+  }
+  try {
+    return await send(params);
+  } catch (err) {
+    if (params.prompt_cache_retention === undefined || !isUnsupportedRetentionError(err)) throw err;
+    noExtendedRetention.add(model);
+    modelLogger.warn({ model, provider: 'openai' }, 'Model does not offer extended prompt-cache retention; retrying without it');
+    const { prompt_cache_retention: _unsupported, ...rest } = params;
+    return send(rest);
+  }
+}
+
+/**
  * OpenAI direct provider -- calls the OpenAI API without going through
  * the LiteLLM proxy. API key is retrieved from the vault at runtime.
  */
@@ -110,7 +146,8 @@ export class OpenAIProvider implements ModelProvider {
     );
 
     try {
-      const response = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
+      const response = await createWithRetentionFallback(params as unknown as Record<string, unknown>, (p) =>
+        client.chat.completions.create(p as unknown as typeof params, options.signal ? { signal: options.signal } : undefined));
       options.accountingResponse?.({ model: response.model ?? options.model, requestId: response.id, usage: normalizeUsage(response.usage) });
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
@@ -168,7 +205,8 @@ export class OpenAIProvider implements ModelProvider {
 
     let stream;
     try {
-      stream = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
+      stream = await createWithRetentionFallback(params as unknown as Record<string, unknown>, (p) =>
+        client.chat.completions.create(p as unknown as typeof params, options.signal ? { signal: options.signal } : undefined));
     } catch (err) {
       throw classifyError(err, 'openai');
     }

@@ -20,7 +20,7 @@ export function ProviderSettingsFields({ provider, model, settings, pricing, con
     </label>}
     {controls.cachePolicy && <label className="block text-sm">Prompt cache policy
       <select className={inputClass} value={settings.cachePolicy ?? 'default'} onChange={e => onSettings({ ...settings, cachePolicy: e.target.value as ProviderSettings['cachePolicy'] })}>
-        <option value="default">Provider default</option><option value="session">Session affinity / stable prefix</option><option value="off">Disable Octipus cache hints</option>
+        <option value="default">Provider default</option><option value="session">Long sessions (longer cache lifetime, session key)</option><option value="off">Disable Octipus cache hints</option>
       </select><span className="text-xs text-on-surface-variant">Upstream automatic caching may still apply.</span>
     </label>}
     {controls.cachedContent && <label className="block text-sm">Existing Gemini cache reference

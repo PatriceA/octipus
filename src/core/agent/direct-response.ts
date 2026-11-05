@@ -89,8 +89,15 @@ async function directResponseInternal(
   const recentMessages = history.rows;
   const historyMessages = history.messages;
   const summary = history.checkpoint?.summary;
+  // A casual reply runs on its own prompt (no tools, its own system prompt,
+  // the text transcript), so only another casual reply can read what it
+  // caches. Its conversation is cached when the turn before it was one too;
+  // after an agent turn, writing the whole history would be a surcharge on a
+  // cache entry the next (agent) turn cannot use.
+  const lastRow = history.rows.at(-1);
+  const followsDirectReply = lastRow?.role === 'assistant' && (lastRow.metadata as Record<string, unknown> | null)?.directReply === true;
   const persistAnswer = async (content: string) => {
-    const row = await messageRepository.createForGeneration({ sessionId, role: 'assistant', content }, history.generation);
+    const row = await messageRepository.createForGeneration({ sessionId, role: 'assistant', content, metadata: { directReply: true } }, history.generation);
     if (!row) return false;
     await sessionRepository.incrementMessageCount(sessionId);
     return true;
@@ -204,6 +211,7 @@ async function directResponseInternal(
       userId,
       sessionId,
       cacheScope: `root:${history.generation}`,
+      historyCache: followsDirectReply,
     });
 
     const tokens = result.usage?.totalTokens || 0;

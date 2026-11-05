@@ -42,6 +42,8 @@ export interface MessageMetadata {
   sessionGeneration?: string;
   /** Immutable context supplied with this user turn, outside the system prefix. */
   promptContext?: string;
+  /** An answer of the casual direct-reply path (no agent loop); see `direct-response.ts`. */
+  directReply?: boolean;
   /** A user message sent from an interactive answer's suggestion (docs/plans/inline-ui-spec.md §6): its chip. */
   inlineUiProvenance?: { id: string };
   channelMessageId?: string;

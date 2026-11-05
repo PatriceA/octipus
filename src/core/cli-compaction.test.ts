@@ -34,6 +34,18 @@ test('Claude compact resumes exact vendor ID and never mutates its record', asyn
   expect(args).not.toContain('--fork-session');
   expect(JSON.stringify(state)).toBe(before);
 });
+test('Claude compact runs on the model the conversation runs on', async () => {
+  mock.exec.mockResolvedValue(JSON.stringify({ type: 'system', subtype: 'compact_boundary', session_id: record.id }));
+  mock.row.mockResolvedValue({ metadata: { cliAgent: { model: 'opus' } } });
+  await compactCliConversation(session(), '', 'user');
+  let [, args] = mock.exec.mock.calls[0];
+  expect(args[args.indexOf('--model') + 1]).toBe('opus');
+  // Unset on the row: the CLI's own default, as for the agent run.
+  mock.row.mockResolvedValue({ metadata: {} });
+  await compactCliConversation(session(), '', 'user');
+  [, args] = mock.exec.mock.calls[1];
+  expect(args).not.toContain('--model');
+});
 test('ordinary CLI text or success without compaction is not accepted', async () => {
   mock.exec.mockResolvedValue(JSON.stringify({ type: 'result', result: 'Done', session_id: record.id }));
   await expect(compactCliConversation(session(), '', 'user')).rejects.toThrow('did not confirm');
