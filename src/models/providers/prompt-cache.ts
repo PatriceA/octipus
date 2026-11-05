@@ -39,9 +39,27 @@ export function splitVolatileSystem(system: string, _model?: string): { staticPa
   return { staticPart: system.slice(0, m.index), volatilePart: system.slice(m.index) };
 }
 
+/**
+ * Cache lifetime for an Anthropic breakpoint: the default five minutes, or an
+ * hour. `cachePolicy: 'session'` (a model setting) asks for the hour: a write
+ * costs 2x instead of 1.25x, and the entry survives the gaps between a user's
+ * messages in a long session, where five minutes expires between turns.
+ */
+export type CacheTtl = '1h' | undefined;
+
+export function cacheTtlFor(policy: 'default' | 'off' | 'session' | undefined): CacheTtl {
+  return policy === 'session' ? '1h' : undefined;
+}
+
+/** The `cache_control` marker. Every breakpoint of a request gets the same TTL:
+ * Anthropic requires longer-lived entries to come before shorter ones. */
+export function cacheControl(ttl?: CacheTtl): { type: 'ephemeral'; ttl?: '1h' } {
+  return ttl ? { type: 'ephemeral', ttl } : { type: 'ephemeral' };
+}
+
 /** Cache-breakpoint content block. `cache_control` is an Anthropic pass-through
  * field the OpenAI SDK types don't model; the volatile block omits it. */
-type CachedBlock = { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } };
+type CachedBlock = { type: 'text'; text: string; cache_control?: ReturnType<typeof cacheControl> };
 
 /**
  * Build the [static (cached), volatile (uncached)] content blocks for a split.
@@ -49,8 +67,8 @@ type CachedBlock = { type: 'text'; text: string; cache_control?: { type: 'epheme
  * (buildCachedSystem) and the OpenAI-compat message content (below) use it, so
  * the two wire shapes can't drift out of lockstep.
  */
-export function buildCachedBlocks(split: { staticPart: string; volatilePart: string }): CachedBlock[] {
-  const blocks: CachedBlock[] = [{ type: 'text', text: split.staticPart, cache_control: { type: 'ephemeral' } }];
+export function buildCachedBlocks(split: { staticPart: string; volatilePart: string }, ttl?: CacheTtl): CachedBlock[] {
+  const blocks: CachedBlock[] = [{ type: 'text', text: split.staticPart, cache_control: cacheControl(ttl) }];
   if (split.volatilePart) blocks.push({ type: 'text', text: split.volatilePart });
   return blocks;
 }
@@ -83,14 +101,14 @@ export function isAnthropicFamily(model: string): boolean {
 export function applyAnthropicCacheControl(
   messages: ChatCompletionMessageParam[],
   model?: string,
-  opts?: { conversation?: boolean },
+  opts?: { conversation?: boolean; history?: boolean; ttl?: CacheTtl },
 ): { system: boolean; history: boolean } {
   let system = false;
   for (const msg of messages) {
     if (msg.role !== 'system' || typeof msg.content !== 'string') continue;
     const split = splitVolatileSystem(msg.content, model);
     if (!split) continue;
-    (msg as { content: unknown }).content = buildCachedBlocks(split);
+    (msg as { content: unknown }).content = buildCachedBlocks(split, opts?.ttl);
     system = true;
     break;
   }
@@ -105,11 +123,11 @@ export function applyAnthropicCacheControl(
   // the settled history the way this did before — which for a 1-message
   // one-shot means no second breakpoint at all.
   let history = false;
-  for (let i = messages.length - (opts?.conversation ? 1 : 2); i >= 0; i--) {
+  for (let i = opts?.history === false ? -1 : messages.length - (opts?.conversation ? 1 : 2); i >= 0; i--) {
     const msg = messages[i];
     if (msg.role === 'system') continue;
     if (typeof msg.content === 'string') {
-      (msg as { content: unknown }).content = [{ type: 'text', text: msg.content, cache_control: { type: 'ephemeral' } }];
+      (msg as { content: unknown }).content = [{ type: 'text', text: msg.content, cache_control: cacheControl(opts?.ttl) }];
       history = true;
       break;
     }
@@ -118,7 +136,7 @@ export function applyAnthropicCacheControl(
       // the native path does.
       const lastIndex = msg.content.length - 1;
       (msg as { content: unknown }).content = msg.content.map((block, index) => index === lastIndex
-        ? { ...block, cache_control: { type: 'ephemeral' } } : block);
+        ? { ...block, cache_control: cacheControl(opts?.ttl) } : block);
       history = true;
       break;
     }

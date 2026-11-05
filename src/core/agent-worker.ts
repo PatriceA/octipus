@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
 import { usageContextOf } from '@/core/agent/context';
 import { limitKindOf } from '@/core/errors/limit-refusal';
@@ -7,7 +8,7 @@ import { workPlanRepository } from '@/db/repositories/work-plan-repository';
 import type { ChatCompletionTool } from 'openai/resources/chat/completions';
 import { recordAgentCompletion } from '@/core/agent-task-recorder';
 import { capNativeSnapshot, readSessionHistory, roomRequestOf, toContextMessage, withSessionConversation } from './session-history';
-import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
+import { isAnthropicFamily, VOLATILE_MARKER } from '@/models/providers/prompt-cache';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
@@ -23,7 +24,7 @@ import { applyTopicParamOverrides, getTopicConfig } from '@/models/topic-config'
 import { getConfig } from '@/config';
 import { writePromptDump } from './prompt-dumps';
 import type { ModelConfigEntry } from '@/db/schema/models';
-import { compactMessagesWithSummary, CONTEXT_OVERFLOW_TRUNCATED_MARKER, DEFAULT_TOOL_OUTPUT_SOFT_CAP, shouldCompactToolOutputs, truncateOldestToolOutputs } from '@/utils/context-compaction';
+import { compactMessagesWithSummary, CONTEXT_OVERFLOW_TRUNCATED_MARKER, DEFAULT_TOOL_OUTPUT_SOFT_CAP, shouldCompactToolOutputs, stripSignedReasoning, truncateOldestToolOutputs } from '@/utils/context-compaction';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { BaseAgentWorker } from './agent-base';
 import { contentStorageOffFor } from './agent/audience';
@@ -205,6 +206,13 @@ export class AgentWorker extends BaseAgentWorker {
    * gets forced to a structured call before we degrade further.
    */
   private forceToolChoiceNextTurn: boolean = false;
+  /** An earlier request of this run declared tool definitions (see `declareToolsOnly`). */
+  private declaredTools = false;
+  /**
+   * System prompt + tool set of the previous request (`guardSignedReasoning`);
+   * seeded from the saved conversation, `null` when it recorded none.
+   */
+  private lastPrefixFingerprint: string | null | undefined;
   /**
    * G5: one-shot native retry when a turn was truncated ('length') or the
    * provider reported a malformed function call — before falling back to
@@ -587,6 +595,9 @@ export class AgentWorker extends BaseAgentWorker {
     if (saved && saved.generation === history.generation && saved.checkpointId === this.checkpointId) {
       const unseen = await messageRepository.findContextMessages(this.context.sessionId, history.session?.context?.clearedAt, saved.acknowledged, history.generation);
       this.messages = [...saved.messages.map(m => ({ ...m, providerRaw: saved.model === this.context.model ? m.providerRaw : undefined, timestamp: new Date(m.timestamp) })), ...unseen.map(toContextMessage)];
+      // The prompt and tools the saved reasoning was bound to; the first
+      // request of this turn compares its own (`guardSignedReasoning`).
+      this.lastPrefixFingerprint = saved.prefixFingerprint ?? null;
     }
 
     agentLogger.debug({ agentId: this.context.id, messageCount: this.messages.length }, 'History loaded');
@@ -822,18 +833,26 @@ export class AgentWorker extends BaseAgentWorker {
         } else this.messages.push({ role: 'assistant', content: finalResult, timestamp: new Date() });
         // Fences in earlier iterations (text beside a tool call) never reach
         // the user; keep only a line of them in the history.
+        const stubbedMessages = new Set<AgentMessage>();
         for (const m of this.messages) {
           if (m.role !== 'assistant' || typeof m.content !== 'string') continue;
           const stubbed = stubInlineUiFences(m.content);
-          if (stubbed !== m.content) { m.content = stubbed; m.providerRaw = undefined; }
+          if (stubbed !== m.content) { m.content = stubbed; m.providerRaw = undefined; stubbedMessages.add(m); }
         }
+        const kept = this.messages.filter(m => m.role !== 'system' || m.content.startsWith('[Context Summary'));
+        // Group-thread transcripts and the space turn context are per turn:
+        // the next turn reads them afresh, so the snapshot keeps none
+        // (omitGroupTranscripts, omitSpaceTurnContext).
+        const saved = kept.map(m => ({ ...m, role: m.role === 'system' ? 'user' as const : m.role, content: m.role === 'user' ? omitSpaceTurnContext(omitGroupTranscripts(m.content)) : m.content, timestamp: m.timestamp.toISOString() }));
+        // Every message the snapshot rewrites (a stubbed fence, an omitted
+        // turn context, a summary moved out of the system prompt) is an edit
+        // of the conversation the signed reasoning after it was bound to.
+        const firstEdited = saved.findIndex((m, i) => stubbedMessages.has(kept[i]) || m.role !== kept[i].role || m.content !== kept[i].content);
         await sessionRepository.patchContextIfGeneration(this.context.sessionId, this.cacheGeneration, {
-          nativeConversation: { generation: this.cacheGeneration, model: this.context.model,
+          nativeConversation: { generation: this.cacheGeneration, model: this.context.model, modelName: this.context.modelName,
             ownerAgentId: this.context.id, checkpointId: this.checkpointId, acknowledged: this.userCursor,
-            // Group-thread transcripts and the space turn context are per
-            // turn: the next turn reads them afresh, so the snapshot keeps
-            // none (omitGroupTranscripts, omitSpaceTurnContext).
-            messages: capNativeSnapshot(this.messages.filter(m => m.role !== 'system' || m.content.startsWith('[Context Summary')).map(m => ({ ...m, role: m.role === 'system' ? 'user' : m.role, content: m.role === 'user' ? omitSpaceTurnContext(omitGroupTranscripts(m.content)) : m.content, timestamp: m.timestamp.toISOString() }))) },
+            prefixFingerprint: this.lastPrefixFingerprint ?? undefined,
+            messages: capNativeSnapshot(firstEdited < 0 ? saved : stripSignedReasoning(saved, firstEdited)) },
         });
       }
       this.context.completedAt = new Date();
@@ -1243,12 +1262,14 @@ export class AgentWorker extends BaseAgentWorker {
       // instead of reading them back at a fiftieth of the price, every run.
       // Truncate only once the request is actually approaching the window,
       // which is still ahead of the aggressive path below.
-      const { messages: toolCompacted, truncated: toolOutputsTruncated } =
+      const { messages: toolCompacted, truncated: toolOutputsTruncated, firstChanged } =
         shouldCompactToolOutputs(this.estimateRequestTokens(), this.config.contextWindowSize)
           ? truncateOldestToolOutputs(this.messages, { softCap: effectiveSoftCap })
-          : { messages: this.messages, truncated: 0 };
+          : { messages: this.messages, truncated: 0, firstChanged: undefined };
       if (toolOutputsTruncated > 0) {
-        this.messages = toolCompacted;
+        // Signed reasoning after the rewritten output no longer matches its
+        // conversation; replayed, Claude would reject the request.
+        this.messages = stripSignedReasoning(toolCompacted, firstChanged);
         agentLogger.info({
           agentId: this.context.id, iteration: this.iteration,
           toolOutputsTruncated, messageCount: this.messages.length,
@@ -1271,7 +1292,9 @@ export class AgentWorker extends BaseAgentWorker {
           userId: this.context.userId,
         });
         if (proactiveRemoved > 0) {
-          this.messages = proactiveCompacted;
+          // A summary replaces the start of the history: no signed reasoning
+          // after it matches its conversation any more.
+          this.messages = stripSignedReasoning(proactiveCompacted);
           agentLogger.info({
             agentId: this.context.id, iteration: this.iteration,
             messagesRemoved: proactiveRemoved, totalTokens: this.totalTokensUsed,
@@ -1290,7 +1313,7 @@ export class AgentWorker extends BaseAgentWorker {
       });
 
       if (removed > 0) {
-        this.messages = compactedMessages;
+        this.messages = stripSignedReasoning(compactedMessages);
         agentLogger.info({
           agentId: this.context.id, sessionId: this.context.sessionId,
           iteration: this.iteration, elapsedMs: this.elapsed(),
@@ -1360,11 +1383,9 @@ export class AgentWorker extends BaseAgentWorker {
             messageCount: this.messages.length,
           }, 'Context window exceeded, compacting aggressively and retrying');
 
-          for (const msg of this.messages) {
-            if (msg.role === 'tool' && msg.content.length > 2000) {
-              msg.content = msg.content.slice(0, 2000) + CONTEXT_OVERFLOW_TRUNCATED_MARKER;
-            }
-          }
+          this.messages = this.messages.map((msg) => msg.role === 'tool' && msg.content.length > 2000
+            ? { ...msg, content: msg.content.slice(0, 2000) + CONTEXT_OVERFLOW_TRUNCATED_MARKER }
+            : msg);
 
           const { messages: compacted } = await compactMessagesWithSummary(this.messages, {
             maxTokens: Math.floor(this.config.contextWindowSize * 0.5),
@@ -1374,7 +1395,8 @@ export class AgentWorker extends BaseAgentWorker {
             summaryModelName: this.context.modelName,
             userId: this.context.userId,
           });
-          this.messages = compacted;
+          // Both rewrites above edit earlier turns: no signed reasoning stays.
+          this.messages = stripSignedReasoning(compacted);
           continue;
         }
 
@@ -2090,6 +2112,33 @@ export class AgentWorker extends BaseAgentWorker {
    * stay registered and callable by name. `full` (the default) is unchanged.
    * Shared by the completion call and toolshim so both see the same tool set.
    */
+  /**
+   * Leave out signed reasoning that no longer matches its conversation.
+   *
+   * A Claude thinking block is bound to the system prompt, the tool set and
+   * every message before it. When this request's system prompt or tools differ
+   * from the previous request's — a tool registered mid-run, a summary folded
+   * into the system prompt, a new turn whose prompt or tool groups changed —
+   * every earlier block is invalid, and replaying one is a 400 on accounts the
+   * check is enforced for. Edits to earlier messages strip at the edit itself
+   * (tool-output truncation, compaction); this catches the prefix half.
+   * `lastPrefixFingerprint` carries over from the saved conversation, so a
+   * change between turns is caught too.
+   */
+  private guardSignedReasoning(sentTools: ChatCompletionTool[] | undefined): void {
+    const fingerprint = createHash('sha256').update(JSON.stringify([
+      this.messages.filter((m) => m.role === 'system').map((m) => m.content),
+      // Bound as a name-sorted set: order alone is not a change.
+      (sentTools ?? [])
+        .map((t) => (t.type === 'function' ? [t.function.name, t.function.description, t.function.parameters] : [t.type]))
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+    ])).digest('hex').slice(0, 32);
+    if (this.lastPrefixFingerprint !== undefined && this.lastPrefixFingerprint !== fingerprint) {
+      this.messages = stripSignedReasoning(this.messages);
+    }
+    this.lastPrefixFingerprint = fingerprint;
+  }
+
   private getAdvertisedToolHandlers(): ToolHandler[] {
     const advertisement = this.config.toolAdvertisement ?? { mode: 'full' };
     const registeredTools = Array.from(this.toolExecutor.getTools().values());
@@ -2386,8 +2435,12 @@ export class AgentWorker extends BaseAgentWorker {
     // G1 one-shot escalation: if the PREVIOUS turn's tool calls had to be
     // recovered from prose (text-parse/shim), force the next call to emit a
     // structured tool call (toolChoice 'required'), then fall back to 'auto'.
-    const claudeThinking = model.provider === 'anthropic' && (metadata?.providerSettings?.thinkingBudget || (extraBody?.thinking as { type?: string } | undefined)?.type === 'enabled' || /claude-(?:fable|mythos)-5[.-]1/.test(model.modelId));
-    const escalateToolChoice = this.forceToolChoiceNextTurn && tools.length > 0 && !claudeThinking;
+    // Never for a Claude model, whatever its version: current models reject a
+    // forced tool choice outright, older ones reject it with thinking on, and a
+    // list of the models that accept it would need an entry for every release.
+    // (The providers map 'required' to 'auto' for Claude as well.)
+    const claudeModel = model.provider === 'anthropic' || model.provider === 'custom-anthropic' || isAnthropicFamily(model.modelId);
+    const escalateToolChoice = this.forceToolChoiceNextTurn && tools.length > 0 && !claudeModel;
     this.forceToolChoiceNextTurn = false;
 
     // Dropping the tool definitions on a turn where tools are DISABLED (a
@@ -2402,8 +2455,12 @@ export class AgentWorker extends BaseAgentWorker {
     // `toolChoice: 'none'` is the supported way to say "no more tool calls"
     // (every provider here maps it), so the history stays valid while the
     // disable still holds. Nothing changes on a turn that has tools.
+    //
+    // The same holds once an earlier request of this run declared them: tool
+    // definitions are the first thing in the prompt, so dropping them for the
+    // final call made that call re-read the whole conversation uncached.
     const declareToolsOnly =
-      tools.length === 0 && declarableTools.length > 0 && historyReferencesTools(this.messages);
+      tools.length === 0 && declarableTools.length > 0 && (this.declaredTools || historyReferencesTools(this.messages));
     if (declareToolsOnly) {
       agentLogger.debug(
         { agentId: this.context.id, toolCount: declarableTools.length },
@@ -2411,12 +2468,21 @@ export class AgentWorker extends BaseAgentWorker {
       );
     }
 
+    const sentTools = tools.length > 0 ? tools : declareToolsOnly ? declarableTools : undefined;
+    if (sentTools?.length) this.declaredTools = true;
+    this.guardSignedReasoning(sentTools);
+
     const completionOpts = applyTopicParamOverrides(
       {
         model: litellmModel,
         messages: this.messages,
-        cacheScope: isRootAgent(this.context) ? `root:${this.cacheGeneration}` : this.context.id,
-        tools: tools.length > 0 ? tools : declareToolsOnly ? declarableTools : undefined,
+        // Provider cache affinity (OpenAI/Mistral prompt_cache_key, Grok
+        // x-grok-conv-id, OpenRouter's endpoint pin), hashed with the session
+        // and user. A child scopes by its ROLE, not its agent id: siblings of
+        // one role share the role prompt and tool block, and a key per agent
+        // sent each of them to a different (cold) cache for that shared prefix.
+        cacheScope: isRootAgent(this.context) ? `root:${this.cacheGeneration}` : `child:${this.context.role}`,
+        tools: sentTools,
         ...(declareToolsOnly ? { toolChoice: 'none' as const } : {}),
         // G6: nullish coalescing — a configured temperature of 0 must survive
         // (|| turned it into 0.7, hurting small-model tool-call fidelity).

@@ -6,6 +6,7 @@ import type { SessionContext } from '@/db/schema/sessions';
 import type { AgentMessage } from './types';
 import { omitGroupTranscripts } from '@/core/channels/group-context';
 import { omitSpaceTurnContext } from '@/core/spaces/turn-context';
+import { stripSignedReasoning } from '@/models/signed-reasoning';
 
 /** A history row, with its author's display name in a room (null in a chat). */
 export type HistoryRow = Message & { authorName: string | null };
@@ -168,25 +169,37 @@ export function toContextMessage(row: Message): AgentMessage {
  * Ceiling on the serialized native-conversation snapshot kept in
  * `sessions.context`. That column is read and rewritten on every turn, and the
  * snapshot carries tool results and provider-native blocks, so it grows much
- * faster than the text transcript. Past this we keep the newest turns: the
- * durable record is the `messages` table, and the snapshot only exists to
- * preserve native state the transcript cannot express.
- * ponytail: char budget, not tokens — this is a storage guard, not a context
- * guard; swap in a token count if it ever needs to be exact.
+ * faster than the text transcript. The durable record is the `messages` table;
+ * the snapshot only exists to preserve native state the transcript cannot
+ * express.
+ *
+ * It is a storage guard, not the context policy: session compaction
+ * (`compactionTriggerTokens`, at most 64k tokens of content) checkpoints a
+ * conversation long before this, provider blocks included.
+ * ponytail: char budget, not tokens — swap in a token count if it ever needs
+ * to be exact.
  */
-export const NATIVE_SNAPSHOT_MAX_CHARS = 256_000;
+export const NATIVE_SNAPSHOT_MAX_CHARS = 1_000_000;
 
-export function capNativeSnapshot<T extends { role: string; content: string }>(messages: T[]): T[] {
+/**
+ * The snapshot within `NATIVE_SNAPSHOT_MAX_CHARS`. Past it the oldest turns go,
+ * down to HALF the ceiling at once: dropping turns from the front changes the
+ * start of the history, which is a lost provider prompt cache, and trimming
+ * only just under the ceiling did that again on every following turn. What is
+ * kept loses its signed reasoning — it was bound to the turns that went.
+ */
+export function capNativeSnapshot<T extends { role: string; content: string; providerRaw?: Record<string, unknown> }>(messages: T[]): T[] {
   const size = (m: T) => JSON.stringify(m).length;
   let total = messages.reduce((n, m) => n + size(m), 0);
   if (total <= NATIVE_SNAPSHOT_MAX_CHARS) return messages;
+  const target = Math.floor(NATIVE_SNAPSHOT_MAX_CHARS / 2);
   const kept = [...messages];
   // Head is oldest. Drop from the head, then discard tool results whose calling
   // assistant turn went with them — a leading orphan `tool` message is rejected
   // by every provider.
-  while (kept.length > 1 && total > NATIVE_SNAPSHOT_MAX_CHARS) total -= size(kept.shift()!);
+  while (kept.length > 1 && total > target) total -= size(kept.shift()!);
   while (kept.length > 1 && kept[0].role === 'tool') total -= size(kept.shift()!);
-  return kept;
+  return stripSignedReasoning(kept);
 }
 
 /** Serialize maintenance and CLI runs for a session inside the server process. */

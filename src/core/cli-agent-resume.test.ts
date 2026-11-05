@@ -24,7 +24,7 @@ vi.mock('@/models/install-access', async (importOriginal) => ({
   mayUseInstallModels: async () => true,
   assertInstallModelAccess: async () => {},
 }));
-import { CLIAgentWorker } from './cli-agent-worker';
+import { boundColdHistory, CLIAgentWorker } from './cli-agent-worker';
 import { childCliSessionKey, claimCliSession, cliSessionHolder, fingerprintRun, loadCliSession, releaseCliSessions } from './cli-session-store';
 import type { AgentContext } from './types';
 import type { SessionContext } from '@/db/schema/sessions';
@@ -222,6 +222,7 @@ beforeEach(() => {
     if (existsSync(hang)) {
       const mode = readFileSync(hang, 'utf-8');
       if (mode) console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: idArg }));
+      if (mode === 'reply') console.log(JSON.stringify({ type: 'assistant', message: { id: 'm-reply', content: [{ type: 'text', text: 'working on it' }] } }));
       if (mode === 'budget') console.log(JSON.stringify({ type: 'assistant', message: { id: 'm-big', content: [], usage: { input_tokens: 1000000, output_tokens: 1 } } }));
       if (mode === 'maxturns') {
         const said = join(process.cwd(), 'answer-marker');
@@ -263,6 +264,14 @@ beforeEach(() => {
     const resumedId = resumeIdx >= 0 ? args[resumeIdx + 1] : null;
     const threadId = resumedId || 'codex-thread-' + Math.random().toString(36).slice(2);
     console.log(JSON.stringify({ type: 'thread.started', thread_id: threadId }));
+    const hang = join(process.cwd(), 'hang-marker');
+    if (existsSync(hang)) {
+      if (readFileSync(hang, 'utf-8') === 'reply') {
+        console.log(JSON.stringify({ type: 'turn.started' }));
+        console.log(JSON.stringify({ type: 'item.started', item: { id: 'i1', type: 'reasoning', text: 'thinking' } }));
+      }
+      await new Promise(r => setTimeout(r, 10000));
+    }
     console.log(JSON.stringify({ type: 'turn.started' }));
     const answerMarker = join(process.cwd(), 'answer-marker');
     const answer = existsSync(answerMarker) ? readFileSync(answerMarker, 'utf-8') : 'answer for ' + threadId;
@@ -796,5 +805,208 @@ describe('chat image transport through the worker', () => {
     turn.worker.getContext().metadata.imageAttachments = [join(fixture.dir, '..', 'other-user.png')];
     await expect(turn.run('Inspect')).rejects.toThrow();
     expect(fixture.spawnCount).toBe(0);
+  });
+});
+
+describe('cache-preserving resume of root conversations', () => {
+  const lastClaudeArgs = (): string[] => JSON.parse(readFileSync(join(fixture.dir, 'claude-last-args.json'), 'utf-8'));
+  const lastCodexArgs = (): string[] => JSON.parse(readFileSync(join(fixture.dir, 'codex-last-args.json'), 'utf-8'));
+  const record = (sessionId: string, key = 'Claude Code') => fixture.sessions.get(sessionId)?.context.cliSessions?.[key];
+  // A root turn as agent-manager builds it: the transcript loaded, then the
+  // root prompt (stable part, the date marker, this turn's volatile tail).
+  const runRoot = async (root: ReturnType<typeof makeClaudeWorker>, stamp: string, message: string) => {
+    await root.worker.loadHistory();
+    root.worker.addSystemMessage(`Root rules.\n\nCURRENT DATE & TIME: ${stamp}`);
+    return root.worker.run(message);
+  };
+
+  it('puts the bridge and vault blocks before the volatile tail and never re-sends them on resume', async () => {
+    const { VAULT_USAGE_GUIDANCE } = await import('@/core/agent/vault-guidance');
+    await runRoot(makeClaudeWorker({ sessionId: 'tail' }), 'TURN-ONE-STAMP', 'first question');
+    const firstArgs = lastClaudeArgs();
+    const system = firstArgs[firstArgs.indexOf('--append-system-prompt') + 1];
+    expect(system.indexOf('Root rules.')).toBeLessThan(system.indexOf('You are connected to your Octipus run'));
+    expect(system.indexOf('You are connected to your Octipus run')).toBeLessThan(system.indexOf('TURN-ONE-STAMP'));
+    const id = record('tail')!.id;
+
+    const second = makeClaudeWorker({ sessionId: 'tail', history: ['first question', 'answer'] });
+    expect(await runRoot(second, 'TURN-TWO-STAMP', 'second question')).toContain(id);
+    expect(lastClaudeArgs()).not.toContain('--append-system-prompt');
+    expect(second.lastPrompt).toContain('TURN-TWO-STAMP');
+    expect(second.lastPrompt).toContain('second question');
+    expect(second.lastPrompt).not.toContain('You are connected to your Octipus run');
+    expect(second.lastPrompt).not.toContain(VAULT_USAGE_GUIDANCE.slice(0, 60));
+    expect(second.lastPrompt).not.toContain('Root rules.');
+  });
+
+  it('keeps the vendor conversation across a plan-mode toggle and passes the mode on the resumed run', async () => {
+    // A root's tools as root-runner hands them over; plan mode strips the
+    // file-changing ones, and the fingerprint must not see that either.
+    const withTools = (worker: ReturnType<typeof makeClaudeWorker>, writes: boolean) => {
+      worker.worker.registerTool({ name: 'read_notes', description: 'read', parameters: { type: 'object', properties: {} }, execute: async () => '' });
+      if (writes) worker.worker.registerTool({ name: 'filesystem__write_file', description: 'write', parameters: { type: 'object', properties: {} }, execute: async () => '' });
+      return worker;
+    };
+    await withTools(makeClaudeWorker({ sessionId: 'plan' }), true).run('look around');
+    const id = record('plan')!.id;
+    (fixture.sessions.get('plan')!.context as SessionContext & { planMode?: boolean }).planMode = true;
+    const planning = withTools(makeClaudeWorker({ sessionId: 'plan' }), false);
+    expect(await planning.run('plan it')).toContain(id);
+    let args = lastClaudeArgs();
+    expect(args[args.indexOf('--resume') + 1]).toBe(id);
+    expect(args[args.indexOf('--permission-mode') + 1]).toBe('plan');
+
+    (fixture.sessions.get('plan')!.context as SessionContext & { planMode?: boolean }).planMode = false;
+    expect(await withTools(makeClaudeWorker({ sessionId: 'plan' }), true).run('do it')).toContain(id);
+    args = lastClaudeArgs();
+    expect(args[args.indexOf('--permission-mode') + 1]).not.toBe('plan');
+  });
+
+  it('keeps the vendor conversation when the row\'s permission mode changes', async () => {
+    await makeClaudeWorker({ sessionId: 'perm', permissionMode: 'acceptEdits' }).run('first');
+    const id = record('perm')!.id;
+    expect(await makeClaudeWorker({ sessionId: 'perm', permissionMode: 'bypassPermissions' }).run('second')).toContain(id);
+    const args = lastClaudeArgs();
+    expect(args[args.indexOf('--permission-mode') + 1]).toBe('bypassPermissions');
+  });
+
+  it('records a first Claude turn stopped after the vendor answered, and does not re-send it', async () => {
+    writeFileSync(join(fixture.dir, 'hang-marker'), 'reply');
+    const first = makeClaudeWorker({ sessionId: 'stopped' });
+    const running = first.run('stopped question').catch(() => 'stopped');
+    await vi.waitFor(() => expect(record('stopped')?.acknowledged).toBeDefined(), { timeout: 5000 });
+    first.worker.stop();
+    await running;
+    const kept = record('stopped')!;
+    expect(kept.acknowledged!.id).toBe('message-0');
+    unlinkSync(join(fixture.dir, 'hang-marker'));
+
+    const next = makeClaudeWorker({ sessionId: 'stopped', history: ['stopped question'] });
+    expect(await next.run('carry on')).toContain(kept.id);
+    expect(next.lastPrompt).toContain('carry on');
+    expect(next.lastPrompt).not.toContain('stopped question');
+  });
+
+  it('re-sends a resumed turn that was stopped before the vendor answered', async () => {
+    await makeClaudeWorker({ sessionId: 'unanswered' }).run('first');
+    const before = record('unanswered')!;
+    writeFileSync(join(fixture.dir, 'hang-marker'), 'init');
+    const stopped = makeClaudeWorker({ sessionId: 'unanswered', history: ['first', 'answer'] });
+    const running = stopped.run('lost question').catch(() => 'stopped');
+    await vi.waitFor(() => expect(fixture.spawnCount).toBe(2), { timeout: 5000 });
+    await new Promise(r => setTimeout(r, 300));
+    stopped.worker.stop();
+    await running;
+    expect(record('unanswered')!.acknowledged).toEqual(before.acknowledged);
+    unlinkSync(join(fixture.dir, 'hang-marker'));
+
+    const next = makeClaudeWorker({ sessionId: 'unanswered', history: ['first', 'answer', 'lost question'] });
+    expect(await next.run('third')).toContain(before.id);
+    expect(next.lastPrompt).toContain('lost question');
+  });
+
+  it('keeps the previous cursor when a resumed Codex run names its thread and dies before answering', async () => {
+    await makeCodexWorker({ sessionId: 'codex-cursor' }).run('first');
+    const before = record('codex-cursor', 'Codex CLI')!;
+    expect(before.acknowledged).toBeDefined();
+    writeFileSync(join(fixture.dir, 'hang-marker'), '');
+    const stopped = makeCodexWorker({ sessionId: 'codex-cursor' });
+    const running = stopped.run('lost question').catch(() => 'stopped');
+    await vi.waitFor(() => expect(fixture.spawnCount).toBe(2), { timeout: 5000 });
+    await new Promise(r => setTimeout(r, 300));
+    stopped.worker.stop();
+    await running;
+    expect(record('codex-cursor', 'Codex CLI')).toMatchObject({ id: before.id, acknowledged: before.acknowledged });
+  });
+
+  it('records the cursor once a Codex run answers, and starts cold off a first thread that never did', async () => {
+    writeFileSync(join(fixture.dir, 'hang-marker'), 'reply');
+    const answered = makeCodexWorker({ sessionId: 'codex-reply' });
+    const running = answered.run('question').catch(() => 'stopped');
+    await vi.waitFor(() => expect(record('codex-reply', 'Codex CLI')?.acknowledged?.id).toBe('message-0'), { timeout: 5000 });
+    answered.worker.stop();
+    await running;
+
+    writeFileSync(join(fixture.dir, 'hang-marker'), '');
+    const silent = makeCodexWorker({ sessionId: 'codex-silent' });
+    const dying = silent.run('question').catch(() => 'stopped');
+    await vi.waitFor(() => expect(record('codex-silent', 'Codex CLI')?.id).toEqual(expect.any(String)), { timeout: 5000 });
+    silent.worker.stop();
+    await dying;
+    expect(record('codex-silent', 'Codex CLI')!.acknowledged).toBeUndefined();
+    unlinkSync(join(fixture.dir, 'hang-marker'));
+    await makeCodexWorker({ sessionId: 'codex-silent' }).run('again');
+    expect(lastCodexArgs()[1]).not.toBe('resume');
+  });
+
+  it('names a keyed Codex child\'s bridge after its resume key, so a resumed thread keeps its tool names', async () => {
+    const namespace = () => lastCodexArgs().join(' ').match(/octipus_run_[0-9a-f]{16}/)?.[0];
+    const child = (resumeKey?: string) => {
+      const worker = makeCodexWorker({ sessionId: 'codex-kid' });
+      Object.assign(worker.worker.getContext(), { root: false, role: 'coding', parentAgentId: 'parent', metadata: resumeKey ? { resumeKey } : {} });
+      return worker;
+    };
+    await child('coding:parser-fix').run('fix the parser');
+    const first = namespace();
+    expect(first).toBeDefined();
+    await child('coding:parser-fix').run('add the test');
+    expect(lastCodexArgs().slice(0, 2)).toEqual(['exec', 'resume']);
+    expect(namespace()).toBe(first);
+    await child('coding:other-task').run('something else');
+    expect(namespace()).not.toBe(first);
+    await child().run('unkeyed');
+    const unkeyed = namespace();
+    await child().run('unkeyed again');
+    expect(namespace()).not.toBe(unkeyed);
+  });
+});
+
+describe('long conversations on a cold launch', () => {
+  it('keeps the checkpoint summary ahead of the newest parts, and everything under budget', () => {
+    const parts = ['[Conversation checkpoint]\nsummary', 'x'.repeat(100), 'y'.repeat(100), 'newest'];
+    expect(boundColdHistory(parts, 120)).toEqual([
+      '[Conversation checkpoint]\nsummary',
+      "[Octipus] 2 earlier messages of this conversation are left out here to fit the model's context.",
+      'newest',
+    ]);
+    expect(boundColdHistory(parts, 10_000)).toEqual(parts);
+    expect(boundColdHistory(['a'.repeat(50), 'b'], 10)).toEqual(["[Octipus] 1 earlier message of this conversation is left out here to fit the model's context.", 'b']);
+  });
+
+  it('replays only the newest transcript that fits, saying what was left out', async () => {
+    const history = ['OLDEST-' + 'a'.repeat(150_000), 'old answer', 'NEWER-' + 'b'.repeat(100_000), 'newer answer'];
+    const worker = makeClaudeWorker({ sessionId: 'long', history });
+    await worker.run('current question');
+    expect(worker.lastPrompt).not.toContain('OLDEST-');
+    expect(worker.lastPrompt).toContain('NEWER-');
+    expect(worker.lastPrompt).toContain('old answer');
+    expect(worker.lastPrompt).toContain('newer answer');
+    expect(worker.lastPrompt).toContain('1 earlier message of this conversation is left out');
+    expect(worker.lastPrompt).toContain('current question');
+  });
+
+  it('retries cold on a shorter transcript when the vendor says the prompt is too long', async () => {
+    await makeClaudeWorker({ sessionId: 'overflow' }).run('first');
+    const before = fixture.sessions.get('overflow')!.context.cliSessions!['Claude Code']!;
+    writeFileSync(failMarker(), 'Prompt is too long', 'utf-8');
+    const worker = makeClaudeWorker({ sessionId: 'overflow', history: ['first', 'answer', 'NEWER-' + 'b'.repeat(60_000), 'newer answer'] });
+    const spawned = fixture.spawnCount;
+    const answer = await worker.run('next');
+    expect(fixture.spawnCount - spawned).toBe(2);
+    const after = fixture.sessions.get('overflow')!.context.cliSessions!['Claude Code']!;
+    expect(after.id).not.toBe(before.id);
+    expect(answer).toContain(after.id);
+    // A quarter of the 192k-character budget leaves the 60k message out.
+    expect(worker.lastPrompt).not.toContain('NEWER-');
+    expect(worker.lastPrompt).toContain('next');
+  });
+
+  it('fails a run whose shorter retry is still too long instead of retrying again', async () => {
+    writeFileSync(fixture.script, `
+      console.log(JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'Prompt is too long' }));
+      process.exit(1);
+    `);
+    await expect(makeClaudeWorker({ sessionId: 'overflow-twice' }).run('question')).rejects.toThrow(/Prompt is too long/);
+    expect(fixture.spawnCount).toBe(2);
   });
 });

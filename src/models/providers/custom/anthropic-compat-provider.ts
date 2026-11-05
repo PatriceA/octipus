@@ -6,9 +6,10 @@ import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../../litellm-client';
 import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from '../http-retry';
 import type { ModelProvider, ProviderHealthStatus } from '../interface';
-import { buildCachedBlocks, splitVolatileSystem } from '../prompt-cache';
+import { buildCachedBlocks, type CacheTtl, cacheControl, cacheTtlFor, splitVolatileSystem } from '../prompt-cache';
 import { BaseCustomProvider, type ResolvedCustomConfig } from './base-custom-provider';
 import { foldCacheCounters } from '../usage';
+import { claudeToolChoice, dropClaudeSampling } from '../../claude-request';
 
 /**
  * Custom Anthropic-compatible provider.
@@ -139,10 +140,9 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
       max_tokens: options.maxTokens ?? CustomAnthropicCompatProvider.DEFAULT_MAX_TOKENS,
       stream: streaming,
     };
-    if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, (body.model as string) || options.model);
-    if (options.cachePolicy !== 'off') markHistoryCacheBreakpoint(messages, Boolean(options.cacheScope));
-    if (options.temperature != null) body.temperature = clampAnthropicTemperature(options.temperature);
-    if (options.topP != null) body.top_p = options.topP;
+    const ttl = cacheTtlFor(options.cachePolicy);
+    if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, (body.model as string) || options.model, ttl);
+    if (options.cachePolicy !== 'off' && options.historyCache !== false) markHistoryCacheBreakpoint(messages, Boolean(options.cacheScope), ttl);
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
     if (options.tools?.length) body.tools = toAnthropicTools(options.tools);
     if (options.extraBody) Object.assign(body, options.extraBody);
@@ -195,6 +195,7 @@ export function parseAnthropicResponse(data: AnthropicResponse, modelId: string,
   }
 
   const accounting = anthropicAccountingResponse(data, modelId);
+  reportInputTransformations(data.input_transformations, 'anthropic', accounting.model);
   const result: CompletionResult = {
     content: textParts.join(''),
     finishReason: mapStopReason(data.stop_reason),
@@ -252,7 +253,7 @@ interface AnthropicMessage {
 
 type AnthropicSystem =
   | string
-  | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }>;
+  | Array<{ type: 'text'; text: string; cache_control?: ReturnType<typeof cacheControl> }>;
 
 /**
  * Emit the system prompt as Anthropic content blocks with a `cache_control`
@@ -263,19 +264,10 @@ type AnthropicSystem =
  * volatile marker or the static prefix is too small to cache. Shares the split
  * with the OpenAI-compat pass-through (LiteLLM/OpenRouter) via prompt-cache.
  */
-/**
- * Anthropic /v1/messages requires temperature in [0, 1] (the OpenAI-compat
- * layer auto-caps; native 400s on >1). Shared by both native-body builders so
- * the bound is stated once.
- */
-export function clampAnthropicTemperature(t: number): number {
-  return Math.max(0, Math.min(1, t));
-}
-
-export function buildCachedSystem(system: string, model?: string): AnthropicSystem {
+export function buildCachedSystem(system: string, model?: string, ttl?: CacheTtl): AnthropicSystem {
   const split = splitVolatileSystem(system, model);
   if (!split) return system;
-  return buildCachedBlocks(split);
+  return buildCachedBlocks(split, ttl);
 }
 
 /**
@@ -385,7 +377,7 @@ export function toAnthropicMessages(messages: AgentMessage[]): { system?: string
  *
  * Anthropic allows four breakpoints; with the system split this is the second.
  */
-export function markHistoryCacheBreakpoint(messages: AnthropicMessage[], conversation?: boolean): boolean {
+export function markHistoryCacheBreakpoint(messages: AnthropicMessage[], conversation?: boolean, ttl?: CacheTtl): boolean {
   // The newest turn is only worth a cache WRITE (1.25x base input) when a later
   // request in the same conversation will read it back. A one-shot completion
   // stops at the settled history instead. Same rule as the OpenAI-compat path
@@ -400,10 +392,10 @@ export function markHistoryCacheBreakpoint(messages: AnthropicMessage[], convers
   const last = [...prev.content]
     .reverse()
     .find((b) => b.type !== 'thinking' && b.type !== 'redacted_thinking') as
-      | { cache_control?: { type: 'ephemeral' } }
+      | { cache_control?: ReturnType<typeof cacheControl> }
       | undefined;
   if (!last) return false;
-  last.cache_control = { type: 'ephemeral' };
+  last.cache_control = cacheControl(ttl);
   return true;
 }
 
@@ -438,6 +430,7 @@ function safeParse(s: string): Record<string, unknown> {
 
 interface AnthropicResponse {
   id?: string;
+  input_transformations?: unknown;
   content?: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }>;
   stop_reason?: string;
   model?: string;
@@ -517,6 +510,7 @@ export async function* parseAnthropicSseStream(body: ReadableStream<Uint8Array>,
 
         switch (data.type) {
           case 'message_start': {
+            reportInputTransformations(data.message?.input_transformations, providerName, data.message?.model ?? '');
             usage = data.message?.usage;
             model = data.message?.model ?? '';
             requestId = data.message?.id;
@@ -581,7 +575,7 @@ export async function* parseAnthropicSseStream(body: ReadableStream<Uint8Array>,
 interface AnthropicStreamEvent {
   type: string;
   index?: number;
-  message?: { usage?: AnthropicResponse['usage']; model?: string; id?: string };
+  message?: { usage?: AnthropicResponse['usage']; model?: string; id?: string; input_transformations?: unknown };
   usage?: AnthropicResponse['usage'];
   content_block?: { type?: string; id?: string; name?: string; [key: string]: unknown };
   delta?: { thinking?: string; signature?: string; type?: string; text?: string; partial_json?: string; stop_reason?: string };
@@ -589,9 +583,12 @@ interface AnthropicStreamEvent {
 }
 
 
-/** Shared policy for native Claude and native-compatible endpoints. */
+/**
+ * Shared policy for native Claude and native-compatible endpoints. The tool
+ * choice and sampling rules hold for every Claude model (`claude-request.ts`).
+ */
 export function configureAnthropicBody(body: Record<string, any>, options: CompletionOptions): void {
-  if (options.tools?.length) body.tool_choice = { type: options.toolChoice === 'required' ? 'any' : options.toolChoice === 'none' ? 'none' : 'auto' };
+  if (options.tools?.length) body.tool_choice = { type: claudeToolChoice(options.toolChoice) };
   if (options.responseFormat?.type === 'json_schema') {
     body.output_config = { ...body.output_config, format: { type: 'json_schema', schema: options.responseFormat.json_schema.schema } };
   } else if (options.responseFormat?.type === 'json_object') {
@@ -600,19 +597,56 @@ export function configureAnthropicBody(body: Record<string, any>, options: Compl
     const instruction = { type: 'text', text: 'Return only a valid JSON object.' };
     body.system = typeof body.system === 'string' ? [{ type: 'text', text: body.system }, instruction] : [...(body.system ?? []), instruction];
   }
-  if (/(?:opus|sonnet)-4-[7-9]|(?:opus|sonnet|fable|mythos)-[5-9]/.test(options.model)) { delete body.temperature; delete body.top_p; }
-  const manualThinking = body.thinking?.type === 'enabled';
-  const forcedToolsUnsupported = /(?:^|[-/])(?:fable|mythos)-5-1(?:-|$)/i.test(options.model);
-  if (body.thinking && body.thinking.type !== 'disabled') {
-    delete body.temperature;
-    delete body.top_p;
-  } else if (body.temperature != null) {
-    // Claude rejects simultaneous temperature and top_p on some models.
-    delete body.top_p;
+  dropClaudeSampling(body);
+}
+
+/** Beta that lets a request say what to do with replayed thinking that no longer matches. */
+export const THINKING_BINDING_BETA = 'thinking-binding-controls-2026-08-01';
+
+/**
+ * Ask the API to drop, not reject, replayed thinking whose conversation changed.
+ *
+ * Claude binds each thinking block to the system prompt, tools and messages
+ * before it; Octipus strips the blocks at every edit it makes (`stripSignedReasoning`),
+ * so a mismatch here means an edit it missed. On accounts the check is
+ * enforced for that is a 400 for the whole turn; `drop_block` degrades it to
+ * losing the stale blocks, and the response's `input_transformations` names
+ * them (`reportInputTransformations`). Applies only when the request replays
+ * thinking and has thinking on; `disabled` and `between_tools` take no
+ * `block_binding`. Returns whether the caller must send `THINKING_BINDING_BETA`.
+ */
+export function bindReplayedThinking(body: Record<string, any>): boolean {
+  const messages = (body.messages ?? []) as AnthropicMessage[];
+  const thinkingIn = (m: AnthropicMessage) => m.role === 'assistant' && Array.isArray(m.content)
+    && m.content.some((b) => b.type === 'thinking' || b.type === 'redacted_thinking');
+  if (!messages.some(thinkingIn)) return false;
+  const thinking = body.thinking as { type?: string } | undefined;
+  if (thinking) {
+    if (thinking.type !== 'adaptive' && thinking.type !== 'enabled') return false;
+  } else {
+    // Omitted: the model's default. It thinks by default when its latest
+    // answer in this conversation carried thinking — then `adaptive` says the
+    // same thing explicitly; otherwise leave the request as it is.
+    const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant' && Array.isArray(m.content));
+    if (!lastAssistant || !thinkingIn(lastAssistant)) return false;
   }
-  if (body.tool_choice?.type === 'any' && (manualThinking || forcedToolsUnsupported)) {
-    throw new Error(manualThinking
-      ? 'Required tool choice is incompatible with manual Claude thinking; select auto or disable thinking.'
-      : 'Required tool choice is not supported by this Claude model; select auto.');
+  body.thinking = { ...(thinking ?? { type: 'adaptive' }), block_binding: { prefix_mismatch_behavior: 'drop_block' } };
+  return true;
+}
+
+/**
+ * Log what the API changed in the input it was sent. A thinking block dropped
+ * for `prefix_binding_mismatch` means Octipus edited a conversation without
+ * stripping the reasoning bound to it — a bug worth seeing; a model switch
+ * (`model_binding_mismatch`) is expected.
+ */
+export function reportInputTransformations(transformations: unknown, providerName: string, model: string): void {
+  if (!Array.isArray(transformations) || transformations.length === 0) return;
+  const entries = transformations as Array<{ type?: string; reason?: string; path?: string }>;
+  const unexpected = entries.filter((t) => t.reason === 'prefix_binding_mismatch');
+  if (unexpected.length) {
+    modelLogger.warn({ provider: providerName, model, transformations: unexpected }, 'Claude dropped replayed thinking: the conversation was edited after it was produced');
+  } else {
+    modelLogger.debug({ provider: providerName, model, transformations: entries }, 'Claude input transformations');
   }
 }

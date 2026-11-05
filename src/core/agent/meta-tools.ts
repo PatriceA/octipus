@@ -660,15 +660,18 @@ export function createMetaTools(
  * those (`completeTakenTask` re-checks); the tasks tool's general write stays
  * behind its ASK.
  */
-export function createCompleteTakenTaskTool(open: ReadonlyArray<{ id: string }>): ToolHandler {
+export function createCompleteTakenTaskTool(_open: ReadonlyArray<{ id: string }>): ToolHandler {
   return {
     name: 'complete_taken_task',
+    // The same text whatever is open: tool definitions are the start of the
+    // prompt, so a description listing the open ids changed it whenever a task
+    // was taken or closed — a cold prompt cache for the whole conversation and
+    // a cold restart of a CLI session. The ids are in the turn's taken-tasks
+    // block (`takenTasksContext`), next to their fenced titles.
     description:
       "Mark a task you took on in this channel thread as done, with a short result for the requester's board. "
       + 'Call it only when the requested work is complete, not while you still need something from the requester. '
-      // Ids only: titles come from members' messages, which must not reach
-      // the tool schema unfenced (the turn context lists them, fenced).
-      + `Open task ids: ${open.map((t) => t.id).join(', ')}.`,
+      + 'The open task ids are listed in the TAKEN TASKS block of this turn.',
     parameters: {
       type: 'object',
       properties: {

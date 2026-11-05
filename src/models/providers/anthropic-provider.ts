@@ -12,15 +12,18 @@ import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import {
   anthropicAccountingResponse,
+  bindReplayedThinking,
   buildCachedSystem,
   markHistoryCacheBreakpoint,
-  clampAnthropicTemperature,
   configureAnthropicBody,
   parseAnthropicResponse,
   parseAnthropicSseStream,
+  THINKING_BINDING_BETA,
   toAnthropicMessages,
   toAnthropicTools,
 } from './custom/anthropic-compat-provider';
+import { claudeToolChoice, dropClaudeSampling } from '../claude-request';
+import { cacheTtlFor } from './prompt-cache';
 import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from './http-retry';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
 import { normalizeUsage } from './usage';
@@ -74,13 +77,14 @@ export class AnthropicProvider implements ModelProvider {
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = options.toolChoice ?? 'auto';
+      params.tool_choice = claudeToolChoice(options.toolChoice);
     }
 
     // Merge extra body parameters
     if (options.extraBody) {
       Object.assign(params, options.extraBody);
     }
+    dropClaudeSampling(params as unknown as Record<string, unknown>);
 
     // Prompt caching is NOT supported through Anthropic's OpenAI-compat
     // layer — it requires the native /v1/messages endpoint with
@@ -166,13 +170,14 @@ export class AnthropicProvider implements ModelProvider {
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = options.toolChoice ?? 'auto';
+      params.tool_choice = claudeToolChoice(options.toolChoice);
     }
 
     // Merge extra body parameters
     if (options.extraBody) {
       Object.assign(params, options.extraBody);
     }
+    dropClaudeSampling(params as unknown as Record<string, unknown>);
 
     modelLogger.debug({ model: params.model, provider: this.name }, 'Starting streaming completion via Anthropic');
 
@@ -237,23 +242,23 @@ export class AnthropicProvider implements ModelProvider {
       max_tokens: options.maxTokens || 4096,
       stream,
     };
-    if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, options.model);
-    if (options.cachePolicy !== 'off') markHistoryCacheBreakpoint(messages, Boolean(options.cacheScope));
-    if (options.temperature != null) body.temperature = clampAnthropicTemperature(options.temperature);
-    if (options.topP != null) body.top_p = options.topP;
+    const ttl = cacheTtlFor(options.cachePolicy);
+    if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, options.model, ttl);
+    if (options.cachePolicy !== 'off' && options.historyCache !== false) markHistoryCacheBreakpoint(messages, Boolean(options.cacheScope), ttl);
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
-    if (options.tools?.length) {
-      body.tools = toAnthropicTools(options.tools);
-      // Mirror the compat/default path's tool policy. Anthropic tool_choice:
-      // required→any, none→none, else auto (Anthropic's own default).
-      body.tool_choice =
-        options.toolChoice === 'required' ? { type: 'any' }
-        : options.toolChoice === 'none' ? { type: 'none' }
-        : { type: 'auto' };
-    }
+    // Tool choice and sampling are set by `configureAnthropicBody`.
+    if (options.tools?.length) body.tools = toAnthropicTools(options.tools);
     if (options.extraBody) Object.assign(body, options.extraBody);
     configureAnthropicBody(body, options);
     return body;
+  }
+
+  /** Headers for a native request, with the thinking-binding beta when the body asks for it. */
+  private async nativeRequest(options: CompletionOptions, stream: boolean): Promise<{ headers: Record<string, string>; body: Record<string, unknown> }> {
+    const headers = await this.nativeHeaders(options.apiKey);
+    const body = this.buildNativeBody(options, stream);
+    if (bindReplayedThinking(body)) headers['anthropic-beta'] = THINKING_BINDING_BETA;
+    return { headers, body };
   }
 
   private async nativeHeaders(apiKeyOverride?: string): Promise<Record<string, string>> {
@@ -266,8 +271,7 @@ export class AnthropicProvider implements ModelProvider {
 
   private async completeNative(options: CompletionOptions): Promise<CompletionResult> {
     const startTime = Date.now();
-    const headers = await this.nativeHeaders(options.apiKey);
-    const body = this.buildNativeBody(options, false);
+    const { headers, body } = await this.nativeRequest(options, false);
 
     let res: Response;
     try {
@@ -295,8 +299,7 @@ export class AnthropicProvider implements ModelProvider {
   }
 
   private async *streamNative(options: CompletionOptions): AsyncGenerator<StreamChunk> {
-    const headers = await this.nativeHeaders(options.apiKey);
-    const body = this.buildNativeBody(options, true);
+    const { headers, body } = await this.nativeRequest(options, true);
 
     // Idle (per-chunk) timeout that resets on each streamed chunk — a long but
     // healthy stream must not be killed by a fixed total-duration cap; the caller

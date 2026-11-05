@@ -8,12 +8,55 @@ import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { CHILD_CLI_SESSION_KEY_PREFIXES } from '@/core/cli-session-store';
 import { type CompactionState, type Session, sessionGeneration } from '@/db/schema/sessions';
-import { calculateTotalTokens, createLLMSummary } from '@/utils/context-compaction';
+import { calculateTotalTokens, createLLMSummary, stripSignedReasoning, usableContextWindow } from '@/utils/context-compaction';
 import { coreLogger } from '@/utils/logger';
 import { compactCliConversation, rootCliConversation } from '@/core/cli-compaction';
 
-const COMPACTION_MESSAGE_THRESHOLD = 20;
-const COMPACTION_TOKEN_THRESHOLD = 8000;
+/**
+ * When an automatic pass checkpoints a chat session.
+ *
+ * A pass rewrites the start of the history the next turn sends, so the provider
+ * prompt cache for the whole conversation is lost with it — on top of the
+ * summary call itself. The thresholds used to be 20 rows or 8,000 tokens and
+ * the pass runs after every turn, so a tool-heavy session past 8k tokens was
+ * re-checkpointed on almost every turn: a cold cache, an extra model call and
+ * all but the last three exchanges summarized away, even on 1M-token models.
+ *
+ * The token trigger is now a share of the session model's context window,
+ * capped below the agent loop's own in-turn compaction (100k tokens in
+ * `agent-worker.ts`), so the checkpoint lands between turns rather than in the
+ * middle of a tool loop. The row trigger stays below `CONTEXT_MESSAGE_CAP`:
+ * past it the transcript read drops its oldest rows on every turn, which is
+ * both lost context and a sliding (uncacheable) prefix.
+ */
+export const COMPACTION_MESSAGE_THRESHOLD = 300; // 3/4 of CONTEXT_MESSAGE_CAP (asserted in session-turns.test.ts)
+export const COMPACTION_WINDOW_SHARE = 0.5;
+export const COMPACTION_TRIGGER_MAX_TOKENS = 64_000;
+export const COMPACTION_TRIGGER_MIN_TOKENS = 8_000;
+
+/** The token count at which an automatic pass runs, for a model with this context window. */
+export function compactionTriggerTokens(contextWindow: number): number {
+  return Math.max(COMPACTION_TRIGGER_MIN_TOKENS, Math.min(COMPACTION_TRIGGER_MAX_TOKENS, Math.floor(contextWindow * COMPACTION_WINDOW_SHARE)));
+}
+
+/**
+ * The context window of the model the session's conversation last ran on (its
+ * native snapshot), else of the default model, else the configured fallback.
+ */
+async function sessionContextWindow(session: Session): Promise<number> {
+  const fallback = getConfig().agent.contextWindowSize;
+  try {
+    const registry = getModelRegistry();
+    const native = session.context?.nativeConversation;
+    const row = (native?.modelName ? await registry.getModel(native.modelName) : null)
+      ?? (native?.model ? await registry.getModelByModelId(native.model, { userId: session.userId }) : null)
+      ?? await registry.getDefaultModel();
+    return usableContextWindow(row?.contextWindow, fallback);
+  } catch (err) {
+    coreLogger.warn({ err, sessionId: session.id }, 'Session model window unavailable; compaction uses the configured window');
+    return fallback;
+  }
+}
 
 /** Wait after the first failed automatic pass; doubles with each one in a row. */
 export const COMPACTION_FAILURE_BACKOFF_MS = 5 * 60_000;
@@ -141,7 +184,8 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
     if (!manual && retryAt !== undefined && Date.now() < retryAt) return false;
     // The common case — a short session — is settled from one aggregate
     // query, not by reading and tokenizing the whole transcript every turn.
-    if (!manual && session && (await belowCompactionThreshold(session))) return false;
+    const triggerTokens = session ? compactionTriggerTokens(await sessionContextWindow(session)) : COMPACTION_TRIGGER_MIN_TOKENS;
+    if (!manual && session && (await belowCompactionThreshold(session, triggerTokens))) return false;
     const history = await readSessionHistory(sessionId);
     if (!history.session || history.rows.length < 2) return false;
     const savedNative = history.session.context?.nativeConversation;
@@ -150,7 +194,7 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
       ? [...savedNative.messages.map(m => ({ ...m, timestamp: new Date(m.timestamp) })), ...history.rows.slice(acknowledgedIndex + 1).map(toContextMessage)]
       : history.messages;
     const tokensBefore = calculateTotalTokens(activeMessages);
-    if (!manual && history.rows.length < COMPACTION_MESSAGE_THRESHOLD && tokensBefore < COMPACTION_TOKEN_THRESHOLD) return false;
+    if (!manual && history.rows.length < COMPACTION_MESSAGE_THRESHOLD && tokensBefore < triggerTokens) return false;
     const cfg = getConfig().compaction;
     const state = history.session.context?.compactionState;
     const decision = decideCompaction({ currentTokens: tokensBefore, state, config: cfg });
@@ -246,8 +290,11 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
         lastSavingsRatio: savingsRatio, ineffectivePasses: 0, compactionIneffective: false },
       // Both vendors restart from this durable checkpoint. No unscoped vendor
       // maintenance subprocess, extra hidden bill, or concurrent /compact.
+      // The retained turns' signed reasoning was produced with the whole
+      // history in front of it; replayed after the summary it no longer
+      // matches its conversation (Anthropic rejects it), so it stays behind.
       nativeConversation: native && nativeTail ? { ...native, checkpointId: entry.id,
-        messages: capNativeSnapshot([{ role: 'user', content: `[Conversation checkpoint]\n${summary}`, timestamp: last.createdAt.toISOString() }, ...nativeTail]) } : null,
+        messages: capNativeSnapshot([{ role: 'user', content: `[Conversation checkpoint]\n${summary}`, timestamp: last.createdAt.toISOString() }, ...stripSignedReasoning(nativeTail)]) } : null,
     }, { keepCliSessionPrefixes: CHILD_CLI_SESSION_KEY_PREFIXES });
     if (published && extractsMemoryOnCompaction(getConfig().memory?.extractionCadence, audience)) {
       const { updateMemoriesAfterTurn } = await import('@/core/memory');
@@ -366,7 +413,7 @@ async function compactRoom(sessionId: string, options: MaybeCompactSessionOption
  * across what `maybeCompactSession` would count — the transcript after the
  * checkpoint, the checkpoint summary and the native snapshot.
  */
-async function belowCompactionThreshold(session: Session): Promise<boolean> {
+async function belowCompactionThreshold(session: Session, triggerTokens: number): Promise<boolean> {
   const context = session.context ?? {};
   const generation = sessionGeneration(context);
   const checkpoint = context.checkpoint?.generation === generation ? context.checkpoint : undefined;
@@ -376,7 +423,8 @@ async function belowCompactionThreshold(session: Session): Promise<boolean> {
   for (const m of context.nativeConversation?.messages ?? []) {
     bytes += Buffer.byteLength(m.content) + (m.toolCalls ? Buffer.byteLength(JSON.stringify(m.toolCalls)) : 0);
   }
-  return bytes < COMPACTION_TOKEN_THRESHOLD;
+  // Bytes bound tokens from above (a token is at least one byte).
+  return bytes < triggerTokens;
 }
 
 /**

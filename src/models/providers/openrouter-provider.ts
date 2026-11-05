@@ -11,7 +11,8 @@ import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus, QuotaStatus } from './interface';
-import { applyAnthropicCacheControl, isAnthropicFamily, logMissedCacheSplit } from './prompt-cache';
+import { applyAnthropicCacheControl, cacheTtlFor, isAnthropicFamily, logMissedCacheSplit } from './prompt-cache';
+import { claudeToolChoice, dropClaudeSampling } from '../claude-request';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -72,6 +73,13 @@ export class OpenRouterProvider implements ModelProvider {
       stream,
     };
     const body = params as unknown as Record<string, unknown>;
+    const claude = isAnthropicFamily(String(body.model));
+    // The rules every Claude request follows (`claude-request.ts`); an upstream
+    // Claude rejects a forced tool call and sampling parameters.
+    if (claude) {
+      if (params.tool_choice) params.tool_choice = claudeToolChoice(options.toolChoice);
+      dropClaudeSampling(body);
+    }
     // Routing/cache affinity for this conversation. Sent as `user`, the
     // OpenAI-compatible field OpenRouter is guaranteed to accept and forward —
     // NOT a bespoke top-level `session_id`, which is unverified against the
@@ -95,14 +103,15 @@ export class OpenRouterProvider implements ModelProvider {
     // An explicit `provider` from extraBody is an operator decision and wins
     // outright — it is spread last, so nothing here overrides it.
     const explicit = body.provider && typeof body.provider === 'object' ? body.provider as Record<string, unknown> : undefined;
-    const pinned = OpenRouterProvider.stickyProviders.get(this.stickyKey(options));
+    const sticky = this.stickyKey(options);
+    const pinned = sticky ? OpenRouterProvider.stickyProviders.get(sticky) : undefined;
     const requireParameters = params.tools?.length || params.response_format ? { require_parameters: true } : {};
     const routing = explicit
       ? { ...requireParameters, ...explicit }
       : { ...(pinned ? { order: [pinned], allow_fallbacks: true } : {}), ...requireParameters };
     if (Object.keys(routing).length) body.provider = routing; else delete body.provider;
-    if (options.cachePolicy !== 'off' && isAnthropicFamily(String(body.model))) {
-      const cached = applyAnthropicCacheControl(params.messages, String(body.model), { conversation: Boolean(options.cacheScope) });
+    if (options.cachePolicy !== 'off' && claude) {
+      const cached = applyAnthropicCacheControl(params.messages, String(body.model), { conversation: Boolean(options.cacheScope), history: options.historyCache, ttl: cacheTtlFor(options.cachePolicy) });
       if (!cached.system) logMissedCacheSplit(String(body.model));
     }
     return params;
@@ -112,9 +121,16 @@ export class OpenRouterProvider implements ModelProvider {
    * One conversation on one model. The model is part of the key because the
    * endpoint that serves GLM has nothing to do with the one that serves
    * DeepSeek, and switching model invalidates the upstream cache anyway.
+   *
+   * The conversation is the session's affinity key, never the cache scope
+   * alone: a root agent's scope is `root:<clear generation>`, which is
+   * `root:` for every session never cleared — so every user's root agent
+   * shared one pin per model. Without a session there is no conversation to
+   * pin, and nothing is remembered.
    */
-  private stickyKey(options: CompletionOptions): string {
-    return `${options.model}::${options.cacheScope ?? options.sessionId ?? ''}`;
+  private stickyKey(options: CompletionOptions): string | undefined {
+    const conversation = cacheAffinityKey(options.sessionId, options.userId, options.cacheScope ?? 'root');
+    return conversation ? `${options.model}::${conversation}` : undefined;
   }
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {

@@ -80,3 +80,32 @@ export function selectCoreToolIds(message: string, coreToolIds: readonly string[
     return trigger === undefined || trigger.test(text);
   });
 }
+
+/**
+ * The core groups to advertise this turn, given what earlier turns of the
+ * same conversation advertised: this message's selection, plus every group
+ * already advertised since the last clear or checkpoint.
+ *
+ * Per-message selection alone made the tool list follow the wording of each
+ * message — "search for X", then "thanks, summarize", then "search for Y" —
+ * and tool definitions are the start of the prompt: every change was a cold
+ * provider cache for the whole conversation (and on Claude, every earlier
+ * thinking block invalid; on a CLI, a cold restart of the vendor session). A
+ * group therefore stays once a conversation has used it. The saving still
+ * holds for short conversations, and a clear or checkpoint (which resets the
+ * cache anyway) lets the list shrink again.
+ *
+ * Always a subset of the role's list, in the role's order (`selectCoreToolIds`).
+ */
+export function stickyCoreToolIds(
+  selected: readonly string[],
+  coreToolIds: readonly string[],
+  stored: { generation: string; checkpointId?: string; ids: string[] } | undefined,
+  scope: { generation: string; checkpointId?: string },
+): { ids: string[]; changed: boolean } {
+  const previous = stored && stored.generation === scope.generation && stored.checkpointId === scope.checkpointId ? stored.ids : [];
+  const ids = coreToolIds.filter((id) => selected.includes(id) || previous.includes(id));
+  const changed = !stored || stored.generation !== scope.generation || stored.checkpointId !== scope.checkpointId
+    || ids.length !== stored.ids.length || ids.some((id, i) => stored.ids[i] !== id);
+  return { ids, changed };
+}

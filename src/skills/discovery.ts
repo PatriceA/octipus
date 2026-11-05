@@ -94,7 +94,9 @@ export async function fetchActiveSkillIdsForTopic(topic: string): Promise<string
         eq(skillTopicAssignments.isActive, true),
       ),
     );
-  return [...new Set(rows.map(r => getSkillRegistry().canonicalId(r.skillId)))];
+  // Sorted: the ids order the prompt text built from them (see
+  // skillRepository.findByIds), and the query has no order of its own.
+  return [...new Set(rows.map(r => getSkillRegistry().canonicalId(r.skillId)))].sort();
 }
 
 /** Always-inject set, filtered to the topic's active assignment ids. */

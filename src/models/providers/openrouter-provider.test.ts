@@ -146,6 +146,38 @@ describe('OpenRouter endpoint stickiness', () => {
     expect(captured.provider.order).toEqual(['SomeoneElse']);
   });
 
+  test('two sessions whose root scope is the same (never cleared) are pinned separately', async () => {
+    // A root agent's scope is `root:<clear generation>`, i.e. `root:` in every
+    // session never cleared; the pin used to be keyed by it alone, so every
+    // user's root agent shared one pin per model.
+    const provider = new OpenRouterProvider();
+    await provider.complete(conversation({ sessionId: 'session-a', cacheScope: 'root:' }));
+    servedBy = 'OtherCo';
+    await provider.complete(conversation({ sessionId: 'session-b', cacheScope: 'root:' }));
+    expect(captured.provider).toBeUndefined(); // session b inherits nothing from session a
+    await provider.complete(conversation({ sessionId: 'session-a', cacheScope: 'root:' }));
+    expect(captured.provider).toEqual({ order: ['CheapCo'], allow_fallbacks: true });
+  });
+
+  test('without a session nothing is pinned', async () => {
+    const provider = new OpenRouterProvider();
+    await provider.complete(conversation({ sessionId: undefined }));
+    await provider.complete(conversation({ sessionId: undefined }));
+    expect(captured.provider).toBeUndefined();
+  });
+
+  test('Claude requests carry no forced tool choice or sampling parameters', async () => {
+    await new OpenRouterProvider().complete(conversation({ model: 'anthropic/claude-sonnet-4-6', temperature: 0.7, topP: 0.9, toolChoice: 'required',
+      tools: [{ type: 'function', function: { name: 'read', parameters: { type: 'object' } } }] }));
+    expect(captured.tool_choice).toBe('auto');
+    expect(captured).not.toHaveProperty('temperature');
+    expect(captured).not.toHaveProperty('top_p');
+    await new OpenRouterProvider().complete(conversation({ temperature: 0.7, toolChoice: 'required',
+      tools: [{ type: 'function', function: { name: 'read', parameters: { type: 'object' } } }] }));
+    expect(captured.tool_choice).toBe('required');
+    expect(captured.temperature).toBe(0.7);
+  });
+
   test('a different conversation on the same model is pinned separately', async () => {
     const provider = new OpenRouterProvider();
     await provider.complete(conversation());

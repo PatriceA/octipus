@@ -111,6 +111,14 @@ export interface SessionContext {
   /** Last direct-provider conversation, including tool results and signed blocks. */
   nativeConversation?: {
     generation: string; model: string; ownerAgentId: string; checkpointId?: string;
+    /** Registry row the conversation ran on (the lane's model); `model` is its provider id. */
+    modelName?: string;
+    /**
+     * Hash of the system prompt and tool schemas the snapshot's last request
+     * carried. When the next turn's differ, signed reasoning in the snapshot
+     * no longer matches its conversation and is left out (agent-worker).
+     */
+    prefixFingerprint?: string;
     acknowledged: { id: string; createdAt: string };
     messages: Array<Omit<import('@/core/types').AgentMessage, 'timestamp'> & { timestamp: string }>;
   };
@@ -159,6 +167,14 @@ export interface SessionContext {
   clearedAt?: string;
   /** Anti-thrashing compaction guard state. */
   compactionState?: CompactionState;
+  /**
+   * The keyword-gated tool groups the root agent has advertised in this
+   * conversation (`selectCoreToolIds`), kept so a later message cannot drop
+   * one again: a changed tool list is a cold prompt cache for the whole
+   * conversation (and a cold restart of a CLI session). Scoped to the clear
+   * generation and checkpoint, the same lifetime as the provider cache.
+   */
+  toolGroups?: { generation: string; checkpointId?: string; ids: string[] };
   /**
    * PLAN MODE — the session explores and proposes, and changes nothing.
    *
