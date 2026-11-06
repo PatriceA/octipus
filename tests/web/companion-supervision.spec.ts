@@ -145,10 +145,14 @@ test('background supervision settings persist and can be revoked without opening
   const panel = page.getByRole('form', { name: 'Supervision settings' });
   await panel.getByRole('checkbox', { name: 'Enable background supervision' }).check();
   await panel.getByRole('combobox', { name: 'Supervisor model' }).selectOption('Local supervisor');
+  await panel.getByLabel('Tokens per background turn').fill('1000000');
+  await panel.getByLabel('Daily token budget (UTC day)').fill('10000000');
   await panel.getByRole('button', { name: 'Save supervision settings' }).click();
   await expect.poll(() => settings.enabled).toBe(true);
   await page.reload();
   await expect(panel.getByRole('checkbox', { name: 'Enable background supervision' })).toBeChecked();
+  await expect(panel.getByLabel('Tokens per background turn')).toHaveValue('1000000');
+  await expect(panel.getByLabel('Daily token budget (UTC day)')).toHaveValue('10000000');
   await panel.getByRole('checkbox', { name: 'Enable background supervision' }).uncheck();
   await panel.getByRole('button', { name: 'Save supervision settings' }).click();
   await expect.poll(() => settings.enabled).toBe(false);

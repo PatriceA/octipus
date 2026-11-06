@@ -2,13 +2,14 @@ import type { LimitRefusal } from '@/core/errors/limit-refusal';
 
 /**
  * A specialist arm. There is no `orchestrator` role any more: the root agent
- * of a turn runs as `general` (see `ROOT_ROLE`), and the role that could only
+ * of an ordinary turn runs as `general` (see `ROOT_ROLE`); the personal
+ * supervisor runs as `companion` with its scoped toolbox, and the role that could only
  * delegate went with the routing hop in Phase 9 of the rebuild plan. Historical
  * `agents.role = 'orchestrator'` rows predate that and are read as plain text.
  */
 export type AgentRole =
   | 'research' | 'coding' | 'review' | 'qa'
-  | 'communication' | 'general'
+  | 'communication' | 'general' | 'companion'
   | 'design' | 'devops' | 'security' | 'data' | 'ai'
   | 'finance' | 'automation' | 'pm' | 'writing' | 'architecture';
 

@@ -18,12 +18,17 @@ export interface CompanionActionView {
 export const companionScopeSchema = z.object({ userId: z.uuid(), workspaceId: z.uuid() }).strict();
 export type CompanionScope = z.infer<typeof companionScopeSchema>;
 
+export const COMPANION_TOKEN_LIMITS = {
+  dailyDefault: 10_000_000, dailyMax: 100_000_000,
+  turnDefault: 1_000_000, turnMax: 10_000_000,
+} as const;
+
 export const companionSettingsSchema = z.object({
   enabled: z.boolean().default(false), modelName: z.string().trim().max(200).default(''),
   autonomy: z.enum(['observe', 'coordinate', 'repair']).default('observe'),
   maxConcurrent: z.number().int().min(1).max(8).default(2),
-  dailyTokenBudget: z.number().int().min(1000).max(10_000_000).default(100_000),
-  turnTokenBudget: z.number().int().min(1000).max(100_000).default(16_000),
+  dailyTokenBudget: z.number().int().min(1000).max(COMPANION_TOKEN_LIMITS.dailyMax).default(COMPANION_TOKEN_LIMITS.dailyDefault),
+  turnTokenBudget: z.number().int().min(1000).max(COMPANION_TOKEN_LIMITS.turnMax).default(COMPANION_TOKEN_LIMITS.turnDefault),
   maxRepairAttempts: z.number().int().min(1).max(5).default(2),
   quietHoursStart: z.number().int().min(0).max(23).default(22),
   quietHoursEnd: z.number().int().min(0).max(23).default(7),

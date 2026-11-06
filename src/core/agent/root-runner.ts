@@ -1,4 +1,4 @@
-import { companionControllerLimits } from '@/core/companion/turn-limits';
+import { companionBudgetResponse, companionControllerLimits } from '@/core/companion/turn-limits';
 import { getCLIToolConfig } from '@/core/cli-agent-factory';
 import { buildRootAttachmentContext } from './image-attachments';
 import type { AttachedFileRef } from '@/core/session-files';
@@ -8,7 +8,7 @@ import { CONTENT_STORAGE_OFF_KEY } from './audience';
 import { getAgentManager } from '@/core/agent-manager';
 import { humanizeProviderError } from '@/core/errors/humanize';
 import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
-import { isCancellationError } from '@/core/swarm/errors';
+import { isCancellationError, BudgetExceededError } from '@/core/swarm/errors';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';
 import { taskFingerprint } from '@/core/swarm/spawner';
 import { createRootBudget } from '@/core/swarm/spawn-budget';
@@ -267,6 +267,7 @@ export async function runRootAgent(
   const conversation = warmConversationOf(planSessionCtx);
   const supervisor = planSessionCtx?.companionSupervisor && session?.workspaceId
     ? await import('@/core/companion/service').then(({ CompanionService }) => new CompanionService({ userId, workspaceId: session.workspaceId! }).readSettings()) : null;
+  const rootAgentRole = supervisor ? 'companion' : ROOT_ROLE;
   const boundModelName = planSessionCtx?.companion?.modelName ?? planSessionCtx?.companionSupervisor?.modelName;
   const chosenModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification, laneChoice, conversation, boundModelName }, requester);
   const chosenMeta = await getModelRegistry().getModel(chosenModel.name);
@@ -297,7 +298,7 @@ export async function runRootAgent(
       liteModelMaxParams: agentCfg.liteModelMaxParams,
     },
   );
-  coreLogger.info({ sessionId, modelName, promptTier, role: ROOT_ROLE }, 'Root agent mode resolved');
+  coreLogger.info({ sessionId, modelName, promptTier, role: rootAgentRole }, 'Root agent mode resolved');
 
 
   const rootRoleConfig = getRoleConfig(ROOT_ROLE);
@@ -340,7 +341,7 @@ export async function runRootAgent(
     parentNodeId: null,
     kind: 'root',
     depth: 0,
-    role: ROOT_ROLE,
+    role: rootAgentRole,
     topicPath: 'root',
     model: modelName,
     budget: createRootBudget(),
@@ -433,7 +434,7 @@ export async function runRootAgent(
   let droppedToolGroups: string[] = [];
   if (rootIsSmall) {
     const before = new Set(rootTools.map((t) => t.toolId ?? t.name));
-    rootTools = applyToolCap(rootTools, agentCfg.smallModelMaxTools, { role: ROOT_ROLE, modelId: modelName });
+    rootTools = applyToolCap(rootTools, agentCfg.smallModelMaxTools, { role: rootAgentRole, modelId: modelName });
     const after = new Set(rootTools.map((t) => t.toolId ?? t.name));
     droppedToolGroups = [...before].filter((id) => !after.has(id));
   }
@@ -459,7 +460,7 @@ export async function runRootAgent(
       registered: rootTools,
       userId,
       model: modelName,
-      role: ROOT_ROLE,
+      role: rootAgentRole,
     });
 
   if (supervisor) {
@@ -535,7 +536,7 @@ export async function runRootAgent(
         rootAllowedToolIds.add('tool_discovery');
         coreLogger.info(
           {
-            role: ROOT_ROLE, model: modelName, longTailCount: longTail.length,
+            role: rootAgentRole, model: modelName, longTailCount: longTail.length,
             // Which groups the message kept, and which the role holds — a
             // capability the user thinks is missing is answered from here.
             coreToolIds: rootCoreToolIds,
@@ -577,7 +578,7 @@ export async function runRootAgent(
   // prompt before the root agent LLM call. Subscribers run
   // sequentially; thrown handlers are logged and swallowed.
   const hookCtx = await getAgentHooks().fire('before-agent-start', {
-    role: ROOT_ROLE,
+    role: rootAgentRole,
     root: true,
     userId,
     sessionId,
@@ -772,7 +773,7 @@ export async function runRootAgent(
 
   recordContextFill(sessionId, logPromptComposition(
     {
-      role: ROOT_ROLE,
+      role: rootAgentRole,
       model: modelName,
       contextWindow: modelMeta?.contextWindow ?? undefined,
       // What is ADVERTISED, not what is registered. On the lazy path those are
@@ -806,7 +807,7 @@ export async function runRootAgent(
     topic: routedLane,
     model: modelName,
     modelName: selectedModel.name,
-    role: ROOT_ROLE,
+    role: rootAgentRole,
     root: true,
     // Who is on the other end — derived from whether this channel can actually
     // CARRY a prompt, not from its name. The old test ("not a hook, not a
@@ -911,7 +912,7 @@ export async function runRootAgent(
       parentNodeId: null,
       depth: 0,
       kind: 'root',
-      role: ROOT_ROLE,
+      role: rootAgentRole,
       expertId: null,
       topicPath: 'root',
       subtopic: null,
@@ -942,7 +943,7 @@ export async function runRootAgent(
         kind: 'root',
         depth: 0,
         topicPath: 'root',
-        role: ROOT_ROLE,
+        role: rootAgentRole,
         model: modelName,
         budgets: parentNode.budget,
         taskBriefPreview: message.slice(0, 200),
@@ -956,7 +957,7 @@ export async function runRootAgent(
     type: 'worker_spawned',
     sessionId,
     userId,
-    data: { agentId, role: ROOT_ROLE, root: true, model: modelName },
+    data: { agentId, role: rootAgentRole, root: true, model: modelName },
     timestamp: new Date(),
   });
 
@@ -978,7 +979,7 @@ export async function runRootAgent(
       const lastStatus = ctxMeta?.lastStatusMessage as string | undefined;
       if (lastStatus?.trim()) {
         coreLogger.warn(
-          { agentId, role: ROOT_ROLE },
+          { agentId, role: rootAgentRole },
           'Root agent returned empty — falling back to last send_status_update message',
         );
         finalResponse = lastStatus;
@@ -991,7 +992,7 @@ export async function runRootAgent(
       userId,
       data: {
         workerId: agentId,
-        role: ROOT_ROLE,
+        role: rootAgentRole,
         root: true,
         result: '',
         model: modelName,
@@ -1021,7 +1022,7 @@ export async function runRootAgent(
           kind: 'root',
           depth: 0,
           topicPath: 'root',
-          role: ROOT_ROLE,
+          role: rootAgentRole,
           status: 'completed',
           usedTokens: worker.getTotalTokens(),
           durationMs: Date.now() - orchStartTime,
@@ -1040,7 +1041,8 @@ export async function runRootAgent(
     // The worker records a refusal as 'failed'; 'stopped' means the user (or
     // a cascade) stopped it first, and that stop wins over a late refusal.
     const limit = worker.getStatus() === 'stopped' ? null : limitRefusalOf(error);
-    const wasStopped = !limit
+    const tokenBudgetExceeded = error instanceof BudgetExceededError || (error as Error).name === 'BudgetExceededError';
+    const wasStopped = !limit && !tokenBudgetExceeded
       && (errMsg.includes('aborted') || errMsg.includes('stopped') || worker.getStatus() === 'stopped');
     // Admin cancel / cascaded abort is an intentional outcome — don't log it
     // as `error`. The status downstream is already 'stopped'/'cancelled'.
@@ -1059,7 +1061,7 @@ export async function runRootAgent(
       userId,
       data: {
         workerId: agentId,
-        role: ROOT_ROLE,
+        role: rootAgentRole,
         root: true,
         result: '',
         model: modelName,
@@ -1075,7 +1077,7 @@ export async function runRootAgent(
     try {
       // 'budget' is the swarm's existing status for a cap (swarm/errors.ts
       // classifies quota and spend errors the same way).
-      const rootStatus: 'cancelled' | 'budget' | 'tool_error' = wasStopped ? 'cancelled' : limit ? 'budget' : 'tool_error';
+      const rootStatus: 'cancelled' | 'budget' | 'tool_error' = wasStopped ? 'cancelled' : limit || tokenBudgetExceeded ? 'budget' : 'tool_error';
       await swarmNodeRepository.updateStatus(agentId, {
         status: rootStatus,
         tokensUsed: worker.getTotalTokens(),
@@ -1094,7 +1096,7 @@ export async function runRootAgent(
           kind: 'root',
           depth: 0,
           topicPath: 'root',
-          role: ROOT_ROLE,
+          role: rootAgentRole,
           status: rootStatus,
           usedTokens: worker.getTotalTokens(),
           durationMs: Date.now() - orchStartTime,
@@ -1107,7 +1109,9 @@ export async function runRootAgent(
 
     if (limit) return { response: limit.text, agentId, sources: [], outcome: 'failed', limit: limit.refusal };
     // Confidential content and no local model (core/protection/routing.ts): the reason is the answer.
-    const response = wasStopped
+    const response = supervisor && tokenBudgetExceeded
+      ? companionBudgetResponse(error, scope.trigger)!
+      : wasStopped
       ? 'Task was stopped. Would you like to adjust the request or start something new?'
       : error instanceof ProtectionRoutingError ? errMsg
       : `I encountered an error while processing your request: ${humanizeProviderError(errMsg)}`;

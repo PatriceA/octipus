@@ -111,6 +111,7 @@ export interface TeamState {
 // ---------------------------------------------------------------------------
 
 const ROLE_COLORS: Record<string, string> = {
+  companion: 'border-primary bg-primary-container/30',
   rootAgent: 'border-purple-400 bg-purple-900/20',
   research: 'border-accent/60 bg-accent-container/60',
   coding: 'border-tertiary/60 bg-tertiary-container/60',
@@ -130,6 +131,7 @@ const ROLE_COLORS: Record<string, string> = {
 };
 
 const ROLE_BADGE_COLORS: Record<string, string> = {
+  companion: 'bg-purple-900/40 text-primary',
   rootAgent: 'bg-purple-900/40 text-primary',
   research: 'bg-primary-container/60 text-primary',
   coding: 'bg-tertiary-container/60 text-tertiary',
@@ -571,7 +573,7 @@ function AgentActivityInline({ agent, onOpenFile }: { agent: TrackedAgent; onOpe
         {statusIcon}
 
         <span className={cn('px-1.5 py-0.5 rounded-md font-medium text-[11px]', getRoleBadgeColor(agent.role))}>
-          {agent.role}
+          {agent.role === 'companion' ? 'Companion' : agent.role === 'companion' ? 'Companion' : agent.role}
         </span>
 
         <span className="text-on-surface-variant">{agent.model}</span>
