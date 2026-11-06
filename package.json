@@ -105,6 +105,7 @@
     "@axe-core/playwright": "4.14.0",
     "@biomejs/biome": "2.5.15",
     "@playwright/test": "1.64.1",
+    "@tauri-apps/api": "^2.12.4",
     "@types/js-yaml": "4.0.9",
     "@types/mailparser": "3.9.0",
     "@types/nodemailer": "8.0.2",
