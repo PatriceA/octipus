@@ -2,6 +2,8 @@
 
 Companion accepts outcomes, starts or adopts project sessions, monitors committed execution changes, investigates failures and coordinates bounded repairs. Goals, ownership, observations, incidents and action receipts live in the database. Closing the browser does not stop supervision.
 
+Companion chat is optional. Open it from the highlighted card above the chat session list or from the Companion page. Its header identifies the coordinator, fixed model and supervision status; regular sessions remain available for direct work. The saved controller identity determines the distinction, independently of its title or pin.
+
 ## Start using it
 
 1. Open **Companion** in a personal workspace. Create a goal with its original request, desired outcome and acceptance criteria, or adopt existing work.

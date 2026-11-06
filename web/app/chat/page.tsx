@@ -5,10 +5,12 @@ import { CHAT_INBOX_RESOURCE, CHAT_MESSAGE_MAX_CHARS, EXTERNAL_CHANNEL_TYPES } f
 import { SessionCost } from '@/components/chat/session-cost';
 import { SkillUsage } from '@/components/skills/skill-usage';
 
-import { PanelRight, PanelRightClose, Paperclip, X } from 'lucide-react';
+import { PanelRight, PanelRightClose, Paperclip, Sparkles, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useSearchParams } from 'next/navigation';
+import Link from 'next/link';
+import { useCompanionChat } from '@/hooks/useCompanionChat';
+import { useRouter, useSearchParams } from 'next/navigation';
 import type { ResolvedPersona } from '../../../src/core/personas/types';
 import { usePermissions } from '@/lib/permission-context';
 import FileViewer from '@/components/chat/file-viewer';
@@ -160,6 +162,9 @@ function latestUserMessageTime(messages: ChatMessageData[]): number {
 
 export default function ChatPage() {
   const { activeWorkspace } = useWorkspace();
+  const router = useRouter();
+  const companionChat = useCompanionChat();
+  const companionSessionId = activeWorkspace?.kind === 'personal' ? companionChat.data?.supervisorSessionId : null;
   // The tab's one gateway connection, shared with the permission prompts and
   // the rest of the app (lib/gateway.ts).
   const gateway = useGateway();
@@ -183,6 +188,13 @@ export default function ChatPage() {
   const historyPauseUntilRef = useRef(new Map<string, number>());
   const deletedSessionsRef = useRef<Set<string>>(new Set());
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const clearActiveSelection = useCallback(() => {
+    setActiveSessionId(null);
+    localStorage.removeItem(STORAGE_KEY_ACTIVE);
+    const params = new URLSearchParams(window.location.search);
+    params.delete('session');
+    router.replace(`/chat${params.size ? `?${params.toString()}` : ''}`);
+  }, [router]);
   /** The open session, for callbacks registered once (the reconnect reload). */
   const activeSessionIdRef = useRef<string | null>(null);
   useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
@@ -597,13 +609,14 @@ export default function ChatPage() {
     if (!mounted) {
       setMounted(true);
       // `?session=<id>` opens that chat (a room's "Ask privately"), else the last one.
-      const savedActive = new URLSearchParams(window.location.search).get('session') ?? localStorage.getItem(STORAGE_KEY_ACTIVE);
+      const requestedSession = new URLSearchParams(window.location.search).get('session');
+      const savedActive = localStorage.getItem(STORAGE_KEY_ACTIVE);
 
       loadSessions().then((items) => {
-        if (items.length > 0) {
-          const target = savedActive && items.find(t => t.id === savedActive)
-            ? savedActive
-            : items[0].id;
+        // Explicit links also work when the controller is outside the recent
+        // sessions page. The messages endpoint still enforces ownership.
+        const target = requestedSession ?? (savedActive && items.some(t => t.id === savedActive) ? savedActive : items[0]?.id);
+        if (target) {
           setActiveSessionId(target);
           loadSessionMessages(target);
         }
@@ -615,24 +628,38 @@ export default function ChatPage() {
 
   // Persist active session
   useEffect(() => {
-    if (activeSessionId) localStorage.setItem(STORAGE_KEY_ACTIVE, activeSessionId);
-  }, [activeSessionId]);
+    if (activeSessionId) {
+      localStorage.setItem(STORAGE_KEY_ACTIVE, activeSessionId);
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('session') !== activeSessionId) {
+        params.set('session', activeSessionId);
+        router.replace(`/chat?${params.toString()}`);
+      }
+    }
+  }, [activeSessionId, router]);
 
   // Refresh sessions when the active workspace changes.
   // Sessions are workspace-scoped via the X-Octipus-Workspace header; without
   // re-loading here the user has to navigate away and back to see the list
   // for the newly selected workspace.
+  const resolvedChatWorkspace = useRef<string | null>(null);
   useEffect(() => {
-    if (!mounted) return;
+    if (!mounted || !activeWorkspace?.id) return;
+    const previousWorkspace = resolvedChatWorkspace.current;
+    resolvedChatWorkspace.current = activeWorkspace.id;
+    const changedWorkspace = previousWorkspace !== null && previousWorkspace !== activeWorkspace.id;
     loadSessions().then((items) => {
-      // Clear the active session if it no longer belongs to this workspace
-      if (activeSessionId && !items.find(s => s.id === activeSessionId)) {
-        setActiveSessionId(items[0]?.id ?? null);
-        if (items[0]?.id) loadSessionMessages(items[0].id);
+      // Initial scope resolution is not a switch: a valid explicit link can
+      // be outside the recent list. Only a real workspace change discards it.
+      if (changedWorkspace && activeSessionId && !items.find(s => s.id === activeSessionId)) {
+        if (items[0]?.id) {
+          setActiveSessionId(items[0].id);
+          loadSessionMessages(items[0].id);
+        } else clearActiveSelection();
       }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWorkspace?.id]);
+  }, [activeWorkspace?.id, mounted]);
 
   // Load models
   const loadModels = useCallback(async () => {
@@ -1624,7 +1651,7 @@ export default function ChatPage() {
     if (activeSessionId === id) {
       const remaining = sessions.filter(s => s.id !== id);
       if (remaining.length > 0) selectSession(remaining[0].id);
-      else setActiveSessionId(null);
+      else clearActiveSelection();
     }
   };
 
@@ -1968,7 +1995,8 @@ export default function ChatPage() {
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [activeSessionId, closeCompactSessions, showCompactSessions]);
 
-  const activeSessionTitle = activeSessionId
+  const isCompanionChat = !!companionSessionId && activeSessionId === companionSessionId;
+  const activeSessionTitle = isCompanionChat ? 'Companion chat' : activeSessionId
     ? sessions.find((session) => session.id === activeSessionId)?.title || 'Untitled work'
     : 'Choose a conversation';
 
@@ -2029,6 +2057,7 @@ export default function ChatPage() {
       <div className="workspace-sessions w-56 border-r border-outline-variant/10 shrink-0 bg-surface-container-low">
         <SessionList
           sessions={sessions}
+          companion={activeWorkspace?.kind === 'personal' && companionChat.data ? { sessionId: companionSessionId ?? null } : undefined}
           activeSessionId={activeSessionId}
           onSelect={selectSession}
           onCreate={createSession}
@@ -2057,6 +2086,7 @@ export default function ChatPage() {
           >
             <SessionList
               sessions={sessions}
+              companion={activeWorkspace?.kind === 'personal' && companionChat.data ? { sessionId: companionSessionId ?? null } : undefined}
               activeSessionId={activeSessionId}
               onSelect={(id) => {
                 selectSession(id);
@@ -2098,8 +2128,17 @@ export default function ChatPage() {
             <span className="text-primary" aria-hidden>&gt; </span>
             {activeSessionTitle}
           </button>
+          {!isCompanionChat && companionSessionId && <button type="button" onClick={() => selectSession(companionSessionId)} className="inline-flex items-center gap-1 text-xs text-primary whitespace-nowrap"><Sparkles className="h-3.5 w-3.5" aria-hidden />Companion</button>}
           <button type="button" onClick={createSession} className="text-xs text-primary whitespace-nowrap">New work</button>
         </div>
+        {isCompanionChat && <section aria-label="Companion chat identity" className="border-b border-primary/20 bg-primary/5 px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="flex items-center gap-2 text-sm font-medium text-primary"><Sparkles className="h-4 w-4" aria-hidden />Your cross-project coordinator</p>
+            <Link href="/companion" className="text-xs text-primary underline">Goals & supervision settings</Link>
+          </div>
+          <p className="mt-1 text-xs text-on-surface-variant">Plan work, follow your projects, or save an idea for later. You can also work directly in any session chat.</p>
+          <p className="mt-1 text-xs text-on-surface-variant">{companionChat.data?.modelName} · {companionChat.data?.enabled ? 'Supervision enabled' : 'Supervision disabled'}</p>
+        </section>}
         {activeSessionId && <SessionCost sessionId={activeSessionId} />}
         {activeSessionId && <SkillUsage key={activeSessionId} sessionId={activeSessionId} running={isLoading} />}
         {activeSessionId && historyErrors[activeSessionId] && <div role="status" data-testid="chat-sync-status"
@@ -2188,7 +2227,7 @@ export default function ChatPage() {
                the dialog then adds a second, empty one. A running turn does not
                block: the server delivers the message to it as guidance. */
             disabled={showNewSessionDialog}
-            placeholder={showNewSessionDialog ? 'Choose a session type first...' : activeSessionId ? 'Send a message or change direction...' : 'Create a session to start chatting'}
+            placeholder={showNewSessionDialog ? 'Choose a session type first...' : isCompanionChat ? 'Plan work, check progress, or park an idea...' : activeSessionId ? 'Send a message or change direction...' : 'Create a session to start chatting'}
             voiceError={realtime.error || voiceUnavailableReason}
             voiceAvailable={voiceAvailable !== false}
             realtimeMode={realtimeMode}

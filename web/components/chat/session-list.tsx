@@ -2,6 +2,7 @@
 
 import { Code2, Globe, Hash, MessageSquare, MoreHorizontal, Pencil, Pin, PinOff, Plus, Search, Smartphone, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState, } from 'react';
+import { CompanionChatEntry } from '@/components/companion/chat-entry';
 import { cn } from '@/lib/utils';
 
 export interface SessionInfo {
@@ -20,6 +21,7 @@ export interface SessionInfo {
 
 interface SessionListProps {
   sessions: SessionInfo[];
+  companion?: { sessionId: string | null };
   activeSessionId: string | null;
   onSelect: (id: string) => void;
   onCreate: () => void;
@@ -70,6 +72,7 @@ const GROUP_ORDER = [KEPT_GROUP, 'Today', 'Yesterday', 'This Week', 'Older'];
 
 export function SessionList({
   sessions,
+  companion,
   activeSessionId,
   onSelect,
   onCreate,
@@ -108,7 +111,7 @@ export function SessionList({
   }, [renamingId]);
 
   const filtered = sessions.filter((s) =>
-    s.title.toLowerCase().includes(search.toLowerCase())
+    s.id !== companion?.sessionId && s.title.toLowerCase().includes(search.toLowerCase())
   );
 
   const grouped = GROUP_ORDER.reduce<Record<string, SessionInfo[]>>((acc, group) => {
@@ -148,7 +151,7 @@ export function SessionList({
       <div className="flex items-center justify-between border-b border-outline-variant/60 px-3 py-2">
         <h2 className="text-[12px] uppercase tracking-wider text-on-surface flex items-center gap-1.5">
           <span aria-hidden className="text-primary font-bold">&gt;</span>
-          sessions
+          session chats
         </h2>
         <div className="flex items-center gap-1">
           <button
@@ -170,6 +173,10 @@ export function SessionList({
           )}
         </div>
       </div>
+
+      {companion && <div className="border-b border-outline-variant/60 p-2">
+        <CompanionChatEntry sessionId={companion.sessionId} active={!!companion.sessionId && activeSessionId === companion.sessionId} onOpen={onSelect} compact />
+      </div>}
 
       <div className="px-2 py-2 border-b border-outline-variant/60">
         <div className="relative">

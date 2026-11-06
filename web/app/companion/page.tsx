@@ -1,12 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import { useWorkspace } from '@/lib/workspace-context';
 import { GoalRecovery } from '@/components/companion/goal-recovery';
+import { CompanionChatEntry } from '@/components/companion/chat-entry';
+import { useCompanionChat } from '@/hooks/useCompanionChat';
 import { SupervisionSettings } from '@/components/companion/supervision-settings';
 import type { CompanionGoalView as CompanionGoal, CompanionLinkView as CompanionSessionLink, CompanionActionView as CompanionAction } from '../../../src/shared/companion-supervision';
 
@@ -16,6 +18,7 @@ const button = 'rounded-xs border border-outline-variant px-3 py-2 text-sm hover
 
 function CompanionWorkspacePage() {
   const { activeWorkspace } = useWorkspace();
+  const companionChat = useCompanionChat();
   const cache = useQueryClient();
   const [request, setRequest] = useState('');
   const [outcome, setOutcome] = useState('');
@@ -36,7 +39,6 @@ function CompanionWorkspacePage() {
     return result;
   }
   const personal = activeWorkspace?.kind === 'personal';
-  useEffect(() => { setSessionId(''); setMessage(''); setError(''); keys.current.clear(); }, [activeWorkspace?.id]);
   const goals = useQuery({ queryKey: ['companion', activeWorkspace?.id], queryFn: () => api.get<{ goals: CompanionGoal[] }>('/companion/goals'), enabled: personal, refetchInterval: 5000 });
   const detail = useQuery({ queryKey: ['companion', activeWorkspace?.id, selected], queryFn: () => api.get<{ goal: CompanionGoal; links: CompanionSessionLink[] }>(`/companion/goals/${selected}`), enabled: personal && !!selected, refetchInterval: 5000 });
   const actions = useQuery({ queryKey: ['companion', activeWorkspace?.id, selected, 'actions'], queryFn: () => api.get<{ actions: CompanionAction[] }>(`/companion/goals/${selected}/actions`), enabled: personal && !!selected, refetchInterval: 5000 });
@@ -53,6 +55,7 @@ function CompanionWorkspacePage() {
   return <div className="max-w-6xl space-y-6">
     <PageHeader title="Companion" description="Give your companion an outcome and follow its work across project sessions." />
     {!personal ? <p>Choose a personal workspace to supervise your projects.</p> : <>
+      {companionChat.data?.supervisorSessionId && <CompanionChatEntry sessionId={companionChat.data.supervisorSessionId} />}
       {activeWorkspace && <SupervisionSettings key={activeWorkspace.id} workspaceId={activeWorkspace.id} models={models.data?.models ?? []} />}
       {(error || goals.error || detail.error || actions.error) && <p role="alert" className="text-error">{error || (goals.error || detail.error || actions.error)?.message}</p>}
       <form className="space-y-3" onSubmit={event => { event.preventDefault(); void change(async () => {
