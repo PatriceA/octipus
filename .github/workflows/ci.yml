@@ -176,7 +176,14 @@ jobs:
           # here installs from. Drop it first.
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
                      /etc/apt/sources.list.d/google-chrome.sources
-          sudo apt-get update
+          # The Azure mirror timed out this job while downloading build deps.
+          # Use Ubuntu's primary archive, retaining the signed distribution sources.
+          for source in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
+            if [ -f "$source" ]; then
+              sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' "$source"
+            fi
+          done
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update
           # --no-install-recommends: the plain install pulls ~188 packages
           # (gstreamer, pipewire, docs) and spent 16 min in the Azure mirror
           # on 2026-08-19. Only the link-time deps are needed to compile.
