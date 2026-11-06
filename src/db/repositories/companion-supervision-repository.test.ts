@@ -929,3 +929,99 @@ test('one owner turn can extend an incident only once, including after another e
  expect(await repository().reopenIncident(goal.id,incident.id,5,turn)).toMatchObject({state:'escalated',attemptAllowance:1});
  expect(await repository().reopenIncident(goal.id,incident.id,5,'owner-message-two')).toMatchObject({state:'observed',attemptAllowance:2});
 });
+
+
+test('changed diagnostic classification preserves the incident and prepared strategy',async()=>{
+ const settings=await repository().saveSettings({enabled:true,modelName:'local',autonomy:'coordinate'},0);
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ await pg.query("UPDATE pipelines SET status='failed',summary='Review did not pass' WHERE id=$1",[pipelineId]);
+ const first=(await repository().detectIncident(goal.id,sessionId))!;
+ await repository().advanceIncident(goal.id,first.id,{expectedRevision:0,strategy:'Investigate gateway health in affected runtime'});
+ await pg.query("UPDATE pipelines SET summary='Device not found; gateway runtime unavailable' WHERE id=$1",[pipelineId]);
+ expect((await repository().detectIncident(goal.id,sessionId))?.id).toBe(first.id);
+ const automatic=new CompanionSupervisionRepository({userId,workspaceId},connection,{settingsId:settings.settingsId!,revision:settings.revision});
+ const action=await automatic.queueMessage(goal.id,{requestKey:randomUUID(),sessionId,incidentId:first.id,message:'Inspect the gateway'});
+ expect(action).toMatchObject({incidentId:first.id,strategyIndex:1,status:'queued'});
+ expect(await repository().incidents(goal.id)).toHaveLength(1);
+});
+
+test('legacy category fingerprints are reused when the diagnostic category changes',async()=>{
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ await pg.query("UPDATE pipelines SET status='failed',summary='Device not found' WHERE id=$1",[pipelineId]);
+ const {createHash}=await import('node:crypto');const legacy=randomUUID();
+ await pg.query("INSERT INTO companion_incidents(id,goal_id,session_id,fingerprint,category,summary,state,strategies) VALUES($1,$2,$3,$4,'execution','Earlier failure','repairing','[\"Inspect runtime\"]')",[legacy,goal.id,sessionId,createHash('sha256').update(`${pipelineId}:execution`).digest('hex')]);
+ expect((await repository().detectIncident(goal.id,sessionId))?.id).toBe(legacy);
+ expect(await repository().incidents(goal.id)).toHaveLength(1);
+});
+
+test('pinned prepared incidents cannot be replaced by newer observed incidents or cross-session pins',async()=>{
+ const settings=await repository().saveSettings({enabled:true,modelName:'local',autonomy:'coordinate'},0);
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ await pg.query("UPDATE pipelines SET status='failed',summary='Device not found' WHERE id=$1",[pipelineId]);
+ const prepared=(await repository().detectIncident(goal.id,sessionId))!;
+ await repository().advanceIncident(goal.id,prepared.id,{expectedRevision:0,strategy:'Check deployed gateway'});
+ const extra=randomUUID();await pg.query("INSERT INTO companion_incidents(id,goal_id,session_id,fingerprint,category,summary,created_at) VALUES($1,$2,$3,$4,'execution','Other observed blocker',now()+interval '1 minute')",[extra,goal.id,sessionId,randomUUID()]);
+ const automatic=new CompanionSupervisionRepository({userId,workspaceId},connection,{settingsId:settings.settingsId!,revision:settings.revision});
+ await expect(automatic.queueMessage(goal.id,{requestKey:randomUUID(),sessionId,message:'Check runtime'})).rejects.toThrow(`Incident ${extra} is observed at revision 0`);
+ const key=randomUUID(),input={requestKey:key,sessionId,incidentId:prepared.id,message:'Check runtime'};
+ const action=await automatic.queueMessage(goal.id,input);expect(action.incidentId).toBe(prepared.id);
+ expect((await automatic.queueMessage(goal.id,input)).id).toBe(action.id);
+ await expect(automatic.queueMessage(goal.id,{...input,incidentId:extra})).rejects.toThrow('different session action');
+ await expect(automatic.queueMessage(goal.id,{...input,requestKey:randomUUID(),incidentId:randomUUID()})).rejects.toMatchObject({code:'not_found'});
+});
+
+
+test('maintenance follow-ups retain the affected project incident rather than requiring its session ID',async()=>{
+ const settings=await repository().saveSettings({enabled:true,modelName:'local',autonomy:'repair'},0);
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ await pg.query("UPDATE pipelines SET status='failed',summary='SDK location not found' WHERE id=$1",[pipelineId]);
+ const incident=(await repository().detectIncident(goal.id,sessionId))!;
+ await repository().advanceIncident(goal.id,incident.id,{expectedRevision:0,strategy:'Repair the registered runtime'});
+ const maintenance=randomUUID();
+ await pg.query('INSERT INTO sessions(id,user_id,workspace_id,context) VALUES($1,$2,$3,$4)',[maintenance,userId,workspaceId,JSON.stringify({companionMaintenance:{incidentId:incident.id,binding:'fixture',authorityRevision:settings.revision}})]);
+ await pg.query("INSERT INTO companion_session_links(goal_id,session_id,purpose,origin,ownership) VALUES($1,$2,'Runtime repair','created','owner')",[goal.id,maintenance]);
+ const automatic=new CompanionSupervisionRepository({userId,workspaceId},connection,{settingsId:settings.settingsId!,revision:settings.revision});
+ await expect(automatic.queueMessage(goal.id,{requestKey:randomUUID(),sessionId:maintenance,incidentId:randomUUID(),message:'Follow up'})).rejects.toThrow('retain its bound incident');
+ const action=await automatic.queueMessage(goal.id,{requestKey:randomUUID(),sessionId:maintenance,incidentId:incident.id,message:'Follow up'});
+ expect(action).toMatchObject({incidentId:incident.id,strategyIndex:1});
+ await pg.query("UPDATE companion_actions SET status='unknown' WHERE id=$1",[action.id]);
+ await expect(automatic.queueMessage(goal.id,{requestKey:randomUUID(),sessionId:maintenance,incidentId:incident.id,message:'Inspect again'})).rejects.toThrow('reconcile the uncertain action');
+});
+
+test('pinning a prepared incident cannot bypass an interrupted action receipt',async()=>{
+ const settings=await repository().saveSettings({enabled:true,modelName:'local',autonomy:'coordinate'},0);
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ await pg.query("UPDATE pipelines SET status='failed',summary='Device unavailable' WHERE id=$1",[pipelineId]);
+ const incident=(await repository().detectIncident(goal.id,sessionId))!;
+ await repository().advanceIncident(goal.id,incident.id,{expectedRevision:0,strategy:'Inspect the device'});
+ const interrupted=await repository().queueMessage(goal.id,{requestKey:randomUUID(),sessionId,message:'Earlier owner instruction'});
+ await pg.query("UPDATE companion_actions SET status='unknown' WHERE id=$1",[interrupted.id]);
+ const automatic=new CompanionSupervisionRepository({userId,workspaceId},connection,{settingsId:settings.settingsId!,revision:settings.revision});
+ await expect(automatic.queueMessage(goal.id,{requestKey:randomUUID(),sessionId,incidentId:incident.id,message:'Continue the repair'})).rejects.toThrow('reconcile the uncertain action');
+});
+
+
+test('a new failure after resolution in the same pipeline gets a new incident',async()=>{
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ await pg.query("UPDATE pipelines SET status='failed',summary='SDK location not found' WHERE id=$1",[pipelineId]);
+ const first=(await repository().detectIncident(goal.id,sessionId))!;
+ await pg.query("UPDATE companion_incidents SET state='resolved',updated_at=now() WHERE id=$1",[first.id]);
+ // Without a new attempt, text changes still refer to the resolved source.
+ await pg.query("UPDATE pipelines SET summary='Device not found' WHERE id=$1",[pipelineId]);
+ expect((await repository().detectIncident(goal.id,sessionId))?.id).toBe(first.id);
+ await pg.query("UPDATE pipelines SET status='running' WHERE id=$1",[pipelineId]);
+ await pg.query("UPDATE pipelines SET status='failed',summary='Database not found' WHERE id=$1",[pipelineId]);
+ const next=(await repository().detectIncident(goal.id,sessionId))!;
+ expect(next.id).not.toBe(first.id);expect(next.state).toBe('observed');
+});
+
+
+test('paused pipeline bookkeeping events do not replace a prepared incident',async()=>{
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ await pg.query("UPDATE pipelines SET status='paused',summary='Review did not pass' WHERE id=$1",[pipelineId]);
+ const first=(await repository().detectIncident(goal.id,sessionId))!;
+ await repository().advanceIncident(goal.id,first.id,{expectedRevision:0,strategy:'Inspect runtime prerequisites'});
+ await pg.query("UPDATE pipelines SET summary='Device not found',current_node_key='qa' WHERE id=$1",[pipelineId]);
+ expect((await repository().detectIncident(goal.id,sessionId))?.id).toBe(first.id);
+ expect(await repository().incidents(goal.id)).toHaveLength(1);
+});

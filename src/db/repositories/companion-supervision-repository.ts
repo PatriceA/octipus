@@ -338,7 +338,7 @@ export class CompanionSupervisionRepository {
       const goal = await this.goal(tx, id, true);
       const [existing] = await tx.select().from(companionActions).where(and(eq(companionActions.goalId, id), eq(companionActions.requestKey, data.requestKey)));
       if (existing) {
-        if (!['message_session', 'steer_session'].includes(existing.kind) || existing.sessionId !== data.sessionId || existing.message !== data.message) return fail('conflict', 'Request key belongs to a different session action');
+        if (!['message_session', 'steer_session'].includes(existing.kind) || existing.sessionId !== data.sessionId || existing.message !== data.message || (data.incidentId && existing.incidentId !== data.incidentId)) return fail('conflict', 'Request key belongs to a different session action');
         return existing;
       }
       if (terminal(goal) || goal.state === 'paused') return fail('conflict', 'Supervision is not active');
@@ -350,12 +350,18 @@ export class CompanionSupervisionRepository {
         eq(companionSessionLinks.sessionId, data.sessionId), isNull(companionSessionLinks.pipelineId), eq(companionSessionLinks.active, true), eq(companionSessionLinks.ownership, 'owner')));
       if (!link) return fail('not_found', 'An owned whole-session link is required to send instructions');
       let repair: { incidentId: string; strategyIndex: number } | undefined;
-      if (this.authority) {
+      if (this.authority || data.incidentId) {
         const target=sources.find(source=>source.id===data.sessionId);
         const parentIncident=target?.context?.companionMaintenance?.incidentId;
-        const [incident] = await tx.select().from(companionIncidents).where(and(eq(companionIncidents.goalId, id), parentIncident?eq(companionIncidents.id,parentIncident):eq(companionIncidents.sessionId, data.sessionId), ne(companionIncidents.state, 'resolved'))).orderBy(desc(companionIncidents.createdAt));
+        if(parentIncident&&data.incidentId&&parentIncident!==data.incidentId)return fail('conflict','Maintenance work must retain its bound incident');
+        const selectedId=data.incidentId??parentIncident;
+        const [incident] = await tx.select().from(companionIncidents).where(and(eq(companionIncidents.goalId, id),...(!parentIncident?[eq(companionIncidents.sessionId,data.sessionId)]:[]),
+          ...(selectedId?[eq(companionIncidents.id,selectedId)]:[ne(companionIncidents.state,'resolved')]))).orderBy(desc(companionIncidents.createdAt),desc(companionIncidents.id)).limit(1).for('update');
+        if(selectedId&&!incident)return fail('not_found','Prepared incident does not belong to this goal and target session');
         if (incident) {
-          if (incident.state !== 'repairing') return fail('conflict', 'Record an available incident repair strategy before automatic dispatch');
+          if (incident.state !== 'repairing' || !incident.strategies.length) return fail('conflict', `Incident ${incident.id} is ${incident.state} at revision ${incident.revision}. Read this incident and record an available strategy before dispatch; pass its incidentId.`);
+          const unknown=await tx.select({id:companionActions.id}).from(companionActions).where(and(eq(companionActions.goalId,id),inArray(companionActions.sessionId,[incident.sessionId,data.sessionId]),eq(companionActions.status,'unknown')));
+          if(unknown.some(row=>incident.fingerprint!==createHash('sha256').update(`${row.id}:unknown_outcome`).digest('hex')))return fail('conflict','Inspect and reconcile the uncertain action before dispatching another repair');
           const [used] = await tx.select({ id: companionActions.id }).from(companionActions).where(and(eq(companionActions.incidentId, incident.id), eq(companionActions.strategyIndex, incident.strategies.length)));
           if (used) return fail('conflict', 'This repair strategy already dispatched; inspect its result before another strategy');
           repair = { incidentId: incident.id, strategyIndex: incident.strategies.length };
@@ -541,10 +547,26 @@ export class CompanionSupervisionRepository {
       const run = latestRun && ['paused','failed','awaiting_approval'].includes(latestRun.status) ? latestRun : undefined;
       if (!uncertain.length && latestRun && ['running','completed'].includes(latestRun.status)) return null;
       if (!uncertain.length && (!worker || !['failed','stopped'].includes(worker.status)) && !run) return null;
-      const summary = uncertain.length ? 'Execution receipt interrupted; inspect effects before any retry.' : String(worker?.error || run?.summary || `Execution ${run?.status ?? worker?.status}; inspect current history.`).slice(0, 2000);
+      const summary = uncertain.length ? 'Execution receipt interrupted; inspect effects before any retry.' : String(run?.summary || worker?.error || `Execution ${run?.status ?? worker?.status}; inspect current history.`).slice(0, 2000);
       const { classifyCompanionBlocker } = await import('@/core/companion/incidents');
       const category = classifyCompanionBlocker(summary);
-      const fingerprint = createHash('sha256').update(`${uncertain[0]?.id ?? run?.id ?? worker?.id}:${category}`).digest('hex');
+      const sourceId=uncertain[0]?.id??run?.id??worker?.id;
+      // A pipeline may fail again after recovery. Its latest
+      // running observation identifies the attempt, independently of diagnostic text.
+      const [transition]=run?await tx.select({seq:companionEvents.seq,createdAt:companionEvents.createdAt}).from(companionEvents).where(and(eq(companionEvents.goalId,id),eq(companionEvents.sourceId,run.id),eq(companionEvents.kind,'pipelines'),eq(companionEvents.state,'running'))).orderBy(desc(companionEvents.seq)).limit(1):[];
+      const prefix=`execution:${sourceId}:`;
+      const fingerprint=uncertain.length?createHash('sha256').update(`${sourceId}:unknown_outcome`).digest('hex'):`${prefix}${transition?.seq??0}`;
+      const previous=await tx.select().from(companionIncidents).where(and(eq(companionIncidents.goalId,id),eq(companionIncidents.sessionId,sessionId))).orderBy(desc(companionIncidents.createdAt),desc(companionIncidents.id));
+      const known=previous.find(row=>row.fingerprint===fingerprint);
+      if(known)return known;
+      // Migrate category-based identities once. Classification is a hint, not
+      // a new incident; don't revive an older legacy duplicate after migration.
+      if(!uncertain.length&&!previous.some(row=>row.fingerprint.startsWith(prefix))){
+        const legacy=previous.find(row=>row.fingerprint===createHash('sha256').update(`${sourceId}:${row.category}`).digest('hex'));
+        if(legacy&&!(legacy.state==='resolved'&&transition&&transition.createdAt>legacy.updatedAt)){
+          return (await tx.update(companionIncidents).set({fingerprint}).where(eq(companionIncidents.id,legacy.id)).returning())[0];
+        }
+      }
       const [incident] = await tx.insert(companionIncidents).values({ goalId: id, sessionId, category, summary, fingerprint })
         .onConflictDoNothing().returning();
       return incident ?? (await tx.select().from(companionIncidents).where(and(eq(companionIncidents.goalId, id), eq(companionIncidents.sessionId, sessionId), eq(companionIncidents.fingerprint, fingerprint))))[0];

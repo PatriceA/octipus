@@ -39,6 +39,7 @@ export const startCompanionSessionSchema = z.object({
 }).strict();
 export const companionSessionMessageSchema = z.object({
   requestKey: z.uuid(), sessionId: z.uuid(),
+  incidentId: z.uuid().optional().describe("The prepared incident to repair. Read it, record one strategy, then pass its ID so dispatch cannot select a different incident."),
   message: z.string().trim().min(1).max(20_000),
   sourceSessionId: z.uuid().optional(),
 }).strict();
