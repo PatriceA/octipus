@@ -69,7 +69,7 @@ export async function answerCliPermissionRequest(
   // turn ALLOW into ASK, and an allowed call's reads join the session label.
   const flowCall = { toolId, action: request.tool_name, args: request.input };
   // A read-only turn (security/read-only-turn.ts) refuses before anyone is asked.
-  const readOnly = readOnlyRefusal(context.sessionId, context.userId, flowCall);
+  const readOnly = readOnlyRefusal(context.sessionId, context.userId, flowCall,context.metadata.companionBriefing===true);
   if (readOnly) return deny(`Octipus ${readOnly}`);
   await ensureSharedAudienceKnown(context.sessionId);
   const permission = applyFlowGuard(getConfig().agent?.flowGuard, context.sessionId, flowCall,

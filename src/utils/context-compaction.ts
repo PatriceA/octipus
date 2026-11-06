@@ -60,6 +60,7 @@ async function condenseForSummary(
   const mapOpts = (chunk: string): CompletionOptions => ({
     model: summaryModel,
     modelConfigName: summaryModelName,
+    requestType:'compaction-map',
     userId,
     messages: [
       {

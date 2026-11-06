@@ -170,6 +170,9 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
   return withSessionConversation(sessionId, async () => {
     const session = await sessionRepository.findById(sessionId);
     if (session?.kind === 'room') return compactRoom(sessionId, options);
+    // Companion reads bounded owner history and durable project journals;
+    // repeatedly summarizing its archived tool log adds cost without context.
+    if(session?.context?.companionSupervisor&&!options.force&&!options.userInstructions)return false;
     // A space on another install (federation §9, F-D11): its text stays in
     // the session's own rows only — a summary would be one more copy.
     if (session && (await sessionAudience(session)).contentStorageOff) return false;

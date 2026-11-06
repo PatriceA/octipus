@@ -1,3 +1,4 @@
+import { companionCacheScope } from '@/core/companion/history';
 import { createHash } from 'node:crypto';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
 import { usageContextOf } from '@/core/agent/context';
@@ -588,6 +589,12 @@ export class AgentWorker extends BaseAgentWorker {
 
     const history = await readSessionHistory(this.context.sessionId, { room: roomRequestOf(this.context) });
     this.messages = history.messages;
+    const compactController=this.context.role==='companion'||this.context.metadata.companionBriefing===true;
+    if(compactController){
+      this.messages=(await import('@/core/companion/history')).companionHistory(history.messages,this.context.trigger,this.context.metadata.companionBriefing===true);
+      this.cacheGeneration=history.generation;this.checkpointId=history.checkpoint?.entryId;
+      return;
+    }
     this.cacheGeneration = history.generation;
     this.checkpointId = history.checkpoint?.entryId;
     // A room's history is the fenced, attributed transcript every turn: no
@@ -646,6 +653,7 @@ export class AgentWorker extends BaseAgentWorker {
       const storedContext = omitSpaceTurnContext(promptContext).trim();
       const provenance = getRunContext()?.inlineUiProvenance;
       const metadata = {
+        trigger:this.context.trigger,
         ...(storedContext ? { promptContext: storedContext } : {}),
         ...(provenance ? { inlineUiProvenance: { id: provenance } } : {}),
       };
@@ -825,7 +833,7 @@ export class AgentWorker extends BaseAgentWorker {
           contentStorageOff: contentStorageOffFor(this.context),
         })).text;
       }
-      if (isRootAgent(this.context) && this.userCursor && !this.inRoom) {
+      if (isRootAgent(this.context) && this.userCursor && !this.inRoom && this.context.role!=='companion' && this.context.metadata.companionBriefing!==true) {
         const last = this.messages.at(-1);
         if (last?.role === 'assistant' && !last.toolCalls?.length) {
           // The provider's own blocks still hold the fence; replayed byte for
@@ -1334,7 +1342,8 @@ export class AgentWorker extends BaseAgentWorker {
           this.abortController.abort(`budget_exceeded_preflight:${projected}/${this.config.maxTokenBudget}`);
           throw new BudgetExceededError({
             agentId: this.context.id,
-            used: projected,
+            used: this.billableTokensUsed,
+            projected,
             cap: this.config.maxTokenBudget,
           });
         }
@@ -2498,7 +2507,7 @@ export class AgentWorker extends BaseAgentWorker {
         // and user. A child scopes by its ROLE, not its agent id: siblings of
         // one role share the role prompt and tool block, and a key per agent
         // sent each of them to a different (cold) cache for that shared prefix.
-        cacheScope: isRootAgent(this.context) ? `root:${this.cacheGeneration}` : `child:${this.context.role}`,
+        cacheScope: companionCacheScope(this.context,this.cacheGeneration) ?? (isRootAgent(this.context) ? `root:${this.cacheGeneration}` : `child:${this.context.role}`),
         tools: sentTools,
         ...(declareToolsOnly ? { toolChoice: 'none' as const } : {}),
         // G6: nullish coalescing — a configured temperature of 0 must survive
@@ -2515,6 +2524,7 @@ export class AgentWorker extends BaseAgentWorker {
         sessionId: this.context.sessionId,
         agentId: this.context.id,
         modelConfigName: model.name,
+        ...(this.context.metadata.companionBriefing===true?{requestType:'companion-briefing'}:{}),
         accountingMetadata: { iteration: this.iteration },
       },
       getTopicConfig(this.context.topic),

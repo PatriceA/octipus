@@ -337,7 +337,7 @@ export class AgentManager {
     // A read-only turn (security/read-only-turn.ts) holds only reads and the
     // notify step; a vendor CLI may run its own tools without asking, which
     // Octipus could not refuse.
-    if (isCLI && isReadOnlyTurn(options.sessionId)) {
+    if (isCLI && (isReadOnlyTurn(options.sessionId)||options.contextMetadata?.companionBriefing===true)) {
       throw new Error(`${routedModel} is a CLI agent, which can run its own tools without asking: a read-only hook turn runs on API models only. Bind this hook's topic to an API model.`);
     }
 
@@ -485,6 +485,7 @@ export class AgentManager {
         topic: routedTopic,
         metadata: {
           root: context.root === true,
+          ...(options.contextMetadata?.companionBriefing===true?{companionBriefing:true}:{}),
           ...(options.contextMetadata?.delegationDispatchId ? { delegationDispatchId: options.contextMetadata.delegationDispatchId } : {}),
         },
         status: 'running',

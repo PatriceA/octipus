@@ -117,7 +117,7 @@ test.skipIf(!sandboxAvailable)('engine observes a persisted blocker after restar
  let continuations=0,acceptanceId:string|undefined;
  agentBoundary.handle.mockImplementation(async(sid:string,_uid:string,_message:string,_channel:string,_files:unknown,_mode:unknown,beforeStart:()=>Promise<void>)=>{
   await beforeStart();const id=`engine-${randomUUID()}`;
-  await getDb().insert(agents).values({id,sessionId:sid,userId,workspaceId,status:'running',role:'general',model:'fixture-local'});
+  await getDb().insert(agents).values({id,sessionId:sid,userId,workspaceId,status:'running',role:'general',model:'fixture-local',metadata:{root:true,...(_message.startsWith('SESSION BRIEFING')?{companionBriefing:true}:{})}});
   const [session]=await getDb().select().from(sessions).where(eq(sessions.id,sid));
   const actor={...context,id,sessionId:sid,metadata:{companionAuthorityRevision:settings.revision,...(session.context?.projectPath?{projectPath:session.context.projectPath}:{})}};
   const call=async(name:string,args:Record<string,unknown>)=>toolbox.getTool(name)!.execute(args,actor);
@@ -135,11 +135,16 @@ test.skipIf(!sandboxAvailable)('engine observes a persisted blocker after restar
      }else if(incident?.state==='repairing'&&actions.some(action=>action.incidentId===incident.id&&action.status==='completed')){
       const proof=await call('verify_incident',{id:goal.id,incidentId:incident.id,command:'test -f engine-sdk',cwd:projectRoot}) as {evidenceId:string;passed:boolean};expect(proof.passed).toBe(true);
       await call('advance_incident',{id:goal.id,incidentId:incident.id,expectedRevision:incident.revision+1,evidenceId:proof.evidenceId});
-      await call('message_session',{id:goal.id,input:{requestKey:randomUUID(),sessionId:original.sessionId,message:'Continue the original milestone after the verified runtime repair.'}});
+      await call('request_briefing',{id:goal.id,requestKey:randomUUID(),sessionId:original.sessionId});
+     }else if(incident?.state==='resolved'&&!acceptanceId){
+      const brief=actions.find(action=>action.kind==='request_briefing'&&action.sessionId===original.sessionId&&action.status==='completed');
+      if(brief&&!actions.some(action=>action.kind==='message_session'))await call('message_session',{id:goal.id,input:{requestKey:randomUUID(),sessionId:original.sessionId,briefingId:brief.id,message:'Continue the original milestone after the verified runtime repair.'}});
      }else if(acceptanceId&&actions.every(action=>!['queued','running','unknown'].includes(action.status))){
       await call('update',{id:goal.id,input:{expectedRevision:detail.goal.revision,state:'completed',evidence:[{criterionIndex:0,evidenceId:acceptanceId,summary:'Fresh registered runtime gate passed after recovery'}]}});
      }
     }
+   }else if(_message.startsWith('SESSION BRIEFING')){
+    response='Architecture: existing project runtime in its approved checkout; SDK prerequisite is restored. No implementation executed in this briefing.';
    }else if(session.context?.companionMaintenance){
     const {runMaintenance}=await import('./maintenance');const result=await runMaintenance(actor,{command:'touch engine-sdk',cwd:projectRoot});expect(result.exitCode).toBe(0);response='Runtime prerequisite restored';
    }else{

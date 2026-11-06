@@ -36,6 +36,7 @@ export interface ToolCallData {
 }
 
 export interface MessageMetadata {
+  trigger?: import('@/core/types').AgentTrigger;
   companion?: CompanionIdentity;
   /** An intermediate public update, distinct from the completed turn's answer. */
   kind?: 'progress';

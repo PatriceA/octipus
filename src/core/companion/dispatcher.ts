@@ -151,7 +151,7 @@ export class CompanionDispatcher {
         await getDb().update(sessions).set({protectionLevel:sql`greatest(coalesce(${sessions.protectionLevel},1),${goal.protectionLevel})`,flowLabel:sql`coalesce(${sessions.flowLabel},'{}'::jsonb)||${JSON.stringify(goal.flowLabel)}::jsonb`}).where(eq(sessions.id,action.sessionId));
         raiseSessionLevel(action.sessionId,goal.protectionLevel);
         observeFlow(action.sessionId,{toolId:'companion',action:'read'},{taints:(['private','secret','suspicious'] as const).filter(flag=>!!goal.flowLabel[flag])});
-        if(markStarted)started = true;
+        if(markStarted){if(action.kind==='request_briefing')await service.markBriefingStart(action.goalId,action.id);started = true;}
       };
       const result=action.kind==='resume_pipeline'?await (async()=>{
         await authorize(false);if(!action.pipelineId)throw new Error('Captured pipeline was deleted');
@@ -162,12 +162,21 @@ export class CompanionDispatcher {
         await authorize(false);started=true;
         const resumed=await (await import('@/core/agent/pipeline-manager')).getPipelineManager().resume(run.id);
         return {outcome:'success' as const,response:resumed.result};
-      })():await getAgentService().handleMessage(action.sessionId, scope.userId, action.message, 'monitor', action.attachments, undefined,()=>authorize());
+      })():await (async()=>{
+        let internal:{companionBriefing:true;companionBriefingModel:string;companionBriefingBudget:number}|undefined;
+        if(action.kind==='request_briefing'){
+          const settings=await service.readSettings();
+          const model=await(await import('@/models/resolve-model')).resolveModel({userId:scope.userId,name:settings.modelName});
+          if(!settings.enabled||!settings.modelName.trim()||!model||model.provider==='cli')throw new Error('A configured API/local text model is required for a read-only session briefing');
+          internal={companionBriefing:true,companionBriefingModel:settings.modelName,companionBriefingBudget:settings.turnTokenBudget};
+        }
+        return getAgentService().handleMessage(action.sessionId,scope.userId,action.message,'monitor',action.attachments,undefined,()=>authorize(),undefined,undefined,undefined,internal);
+      })();
       if('classification' in result)getAgentService().publishResponse(action.sessionId, scope.userId, result);
       const provenance = await persistCompanionSource(scope, action.sessionId);
       await getDb().update(companionActions).set({ status: result.outcome === 'success' ? 'completed' : 'failed',
         protectionLevel: provenance.protectionLevel ?? action.protectionLevel, flowLabel: provenance.flowLabel ?? action.flowLabel,
-        result: result.response.slice(0, 8000), leaseToken: null, leaseUntil: null, updatedAt: new Date() })
+        result: result.response, leaseToken: null, leaseUntil: null, updatedAt: new Date() })
         .where(and(eq(companionActions.id, action.id), eq(companionActions.leaseToken, token), eq(companionActions.status, 'running')));
     } catch (error) {
       await getDb().update(companionActions).set({ status: started ? 'unknown' : 'cancelled', result: (error as Error).message.slice(0, 1000),

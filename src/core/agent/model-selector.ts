@@ -156,10 +156,17 @@ export class ModelSelector {
     sessionId?: string,
     turnType: MessageClassification['type'] = 'casual',
     /** The request being routed, and its classification. Absent ⇒ no routing. */
-    routing?: { message: string; classification?: MessageClassification; laneChoice?: LaneChoice; conversation?: WarmConversation; boundModelName?: string },
+    routing?: { message: string; classification?: MessageClassification; laneChoice?: LaneChoice; conversation?: WarmConversation; boundModelName?: string; fixedBinding?:boolean },
     requester: ModelRequester = {},
   ): Promise<SelectedModel> {
     const registry = getModelRegistry();
+    if(routing?.fixedBinding){
+      if(!requester.userId||!routing.boundModelName)throw new Error('An authenticated fixed supervisor binding is required');
+      const bound=await resolveModel({userId:requester.userId,name:routing.boundModelName,inSpace:requester.inSpace,spaceRole:requester.spaceRole,sponsor:requester.sponsor});
+      if(!bound||bound.provider==='cli'||!canServeText(bound)||!bound.supportsTools||/reasoner|thinking/.test(bound.modelId))throw new Error('The fixed supervisor model must be an eligible API/local text model');
+      return {modelId:bound.modelId,name:bound.name};
+    }
+
 
     // Per-session override (Phase 6) wins over the registry default,
     // but it must pass the same reasoner/no-tools rejection the default

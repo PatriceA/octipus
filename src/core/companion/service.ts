@@ -39,6 +39,8 @@ export class CompanionService {
       throw new CompanionSupervisionError('conflict', 'Choose an API or local tool-capable model for scoped maintenance');
     return this.repo.startSession(id, { ...data, modelName: model.name, projectPath: undefined }, true, runtime.binding);
   }
+  markBriefingStart(id:string,actionId:string){return this.repo.markBriefingStart(id,actionId);}
+  requestBriefing(id:string,input:{sessionId:string;requestKey:string;refresh?:boolean}){return this.repo.requestBriefing(id,input);}
   messageSession(id: string, input: unknown) { return this.repo.queueMessage(id, input); }
   authorizeGoal(id: string, profile: unknown, expectedRevision: number) { return this.repo.authorizeGoal(id, profile, expectedRevision); }
   incidents(id: string) { return this.repo.incidents(id); }
@@ -49,6 +51,7 @@ export class CompanionService {
   actions(id: string) { return this.repo.actions(id); }
   findSessions(query: string, limit?: number) { return this.repo.findSessions(query, limit); }
   readSession(sessionId: string) { return this.repo.readSession(sessionId); }
+  readReport(id:string,sessionId:string,input:{messageId?:string;actionId?:string;offset:number;limit:number}){return this.repo.readReport(id,sessionId,input);}
   inspectSession(id: string, sessionId: string) { return this.repo.inspectSession(id, sessionId); }
   readSettings() { return this.repo.readSettings(); }
   async saveSettings(input: unknown, expectedRevision: number) {

@@ -24,6 +24,7 @@
  * permission relay (core/cli-permissions.ts).
  */
 
+import { getRunContext } from '@/core/run-context';
 import { isOwnerOnlyDelivery } from './flow-guard';
 
 /** Sessions in a read-only turn, with how many such turns hold the mark. */
@@ -40,7 +41,8 @@ export function endReadOnlyTurn(sessionId: string): void {
 }
 
 export function isReadOnlyTurn(sessionId: string | undefined): boolean {
-  return !!sessionId && active.has(sessionId);
+  const run=getRunContext();
+  return !!sessionId && (active.has(sessionId)||(run?.sessionId===sessionId&&run.companionBriefing===true));
 }
 
 /** Test seam. */
@@ -78,8 +80,8 @@ export interface ReadOnlyCall {
  * Why this call is refused in a read-only turn, or undefined when it may run.
  * `userId` is the turn's user: `send_to_user` to them is the notify step.
  */
-export function readOnlyRefusal(sessionId: string | undefined, userId: string, call: ReadOnlyCall): string | undefined {
-  if (!isReadOnlyTurn(sessionId)) return undefined;
+export function readOnlyRefusal(sessionId: string | undefined, userId: string, call: ReadOnlyCall, explicitReadOnly=false): string | undefined {
+  if (!explicitReadOnly&&!isReadOnlyTurn(sessionId)) return undefined;
   // The notify step: the same check the flow guard exempts (security/flow-guard.ts).
   if (isOwnerOnlyDelivery(userId, call)) return undefined;
   if (call.toolId.startsWith('cli-native:')) {
@@ -87,6 +89,6 @@ export function readOnlyRefusal(sessionId: string | undefined, userId: string, c
   } else if (call.readOnlyHandler || (READ_TOOL_IDS.has(call.toolId) && READ_ACTIONS.has(call.action))) {
     return undefined;
   }
-  return `read-only turn: ${call.toolId}.${call.action} is not available. This turn was started by an external event and may only read; `
+  return `read-only turn: ${call.toolId}.${call.action} is not available. This turn may only read; `
     + 'to propose an action, tell the owner with send_to_user and stop.';
 }

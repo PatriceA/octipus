@@ -38,7 +38,7 @@ export async function companionSpend(scope:CompanionScope,goalId?:string,tx:Tran
     SELECT greatest(c.input_tokens+c.output_tokens-coalesce(c.cached_input_tokens,0),0) AS used FROM cost_log c
       WHERE c.user_id=${scope.userId} AND c.workspace_id=${scope.workspaceId}
         ${daily ? sql`AND c.created_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'` : sql``}
-        AND ${daily ? observedUsage(scope,sql`c.session_id`,sql`c.created_at`) : costOwned}
+        AND ${daily ? sql`(${observedUsage(scope,sql`c.session_id`,sql`c.created_at`)} OR c.request_type='companion-briefing')` : costOwned}
     UNION ALL SELECT coalesce(a.billable_tokens,a.total_tokens,0) AS used FROM agents a
       WHERE a.user_id=${scope.userId} AND a.workspace_id=${scope.workspaceId}
         ${daily ? sql`AND (a.created_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' OR a.status='running' OR a.completed_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')` : sql``}
@@ -72,7 +72,15 @@ export async function prepareCompanionDispatch(tx:Transaction,action:typeof comp
   const stages=await tx.select({tokens:companionStageReservations.tokens}).from(companionStageReservations).where(eq(companionStageReservations.goalId,goal.id));
   const remaining=goal.tokenBudget===null?Infinity:goal.tokenBudget-await companionSpend(scope,goal.id,tx)-goalReservations.reduce((sum,row)=>sum+(row.cap??0),0)-stages.reduce((sum,row)=>sum+row.tokens,0);
   if(remaining<1000)return wait('explicit goal token budget exhausted or reserved; checkpoint preserved');
-  const cap=Number.isFinite(remaining)?remaining:null;
+  let cap=Number.isFinite(remaining)?remaining:null;
+  if(action.kind==='request_briefing'){
+    const reserved=await tx.execute<{tokens:string}>(sql`SELECT coalesce(sum(cap),0)::text AS tokens FROM (
+      SELECT w.token_cap AS cap FROM companion_wakes w JOIN companion_settings s ON s.id=w.settings_id WHERE s.user_id=${scope.userId} AND s.workspace_id=${scope.workspaceId} AND w.status IN ('running','unknown')
+      UNION ALL SELECT a.token_cap AS cap FROM companion_actions a JOIN companion_goals g ON g.id=a.goal_id WHERE g.user_id=${scope.userId} AND g.workspace_id=${scope.workspaceId} AND a.kind='request_briefing' AND a.status IN ('running','unknown')
+    ) reservations`);
+    cap=Math.min(remaining,limits.turnTokenBudget,limits.dailyTokenBudget-await companionSpend(scope,undefined,tx)-Number(rowsOf<{tokens:string}>(reserved)[0]?.tokens??0));
+    if(cap<1000)return wait('Companion briefing budget exhausted or reserved; project execution budgets are unchanged');
+  }
   if(!await reserveCompanionPaths(tx,action,scope))return wait('another supervised execution owns this checkout or maintenance runtime');
   return {tokenCap:cap};
 }

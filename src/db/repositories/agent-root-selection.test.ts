@@ -32,4 +32,6 @@ test('latest root query isolates session and owner, excluding children and expli
   expect((await agentRepository.findLatestRootForSession(sessionId, userId))?.id).toBe(root.id);
   const customRoot = await create(7, { role: 'custom', metadata: { root: true } });
   expect((await agentRepository.findLatestRootForSession(sessionId, userId))?.id).toBe(customRoot.id);
+  await create(8,{model:'api/briefing',metadata:{root:true,companionBriefing:true}});
+  expect((await agentRepository.findLatestRootForSession(sessionId,userId))?.id).toBe(customRoot.id);
 });

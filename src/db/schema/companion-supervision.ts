@@ -79,10 +79,11 @@ export const companionActions = pgTable('companion_actions', {
   tokenCap: integer('token_cap'),
   incidentId: uuid('incident_id'),
   strategyIndex: integer('strategy_index'),
+  briefingContextKey: text('briefing_context_key'),
   protectionLevel: integer('protection_level').notNull().default(1),
   flowLabel: jsonb('flow_label').$type<CompanionGoal['flowLabel']>().notNull().default({}),
   pipelineId:uuid('pipeline_id').references(()=>pipelines.id,{onDelete:'set null'}),
-  kind: text('kind').$type<'start_session' | 'message_session' | 'steer_session' | 'resume_pipeline'>().notNull(),
+  kind: text('kind').$type<'start_session' | 'message_session' | 'steer_session' | 'resume_pipeline' | 'request_briefing'>().notNull(),
   message: text('message').notNull(),
   status: text('status').$type<'queued' | 'running' | 'completed' | 'failed' | 'unknown' | 'cancelled'>().notNull().default('queued'),
   leaseToken: uuid('lease_token'),
@@ -92,7 +93,7 @@ export const companionActions = pgTable('companion_actions', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [uniqueIndex('companion_actions_request_idx').on(t.goalId, t.requestKey), index('companion_actions_due_idx').on(t.status, t.createdAt),
   uniqueIndex('companion_actions_session_claim_idx').on(t.sessionId).where(sql`${t.status} IN ('running', 'unknown') AND ${t.kind} <> 'steer_session'`),
-  check('companion_actions_kind_chk', sql`${t.kind} IN ('start_session', 'message_session', 'steer_session','resume_pipeline')`),
+  check('companion_actions_kind_chk', sql`${t.kind} IN ('start_session', 'message_session', 'steer_session','resume_pipeline','request_briefing')`),
   check('companion_actions_status_chk', sql`${t.status} IN ('queued', 'running', 'completed', 'failed', 'unknown', 'cancelled')`),
 ]);
 export type CompanionAction = typeof companionActions.$inferSelect;

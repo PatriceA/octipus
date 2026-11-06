@@ -67,3 +67,20 @@ describe('readOnlyRefusal', () => {
     expect(readOnlyNotifyAllowed(S, U, notify)).toBe(false);
   });
 });
+
+test('a session briefing is isolated to its asynchronous run, including with a missing model binding',async()=>{
+ const {runWithContext}=await import('@/core/run-context');
+ await runWithContext({runId:'brief',sessionId:S,companionBriefing:true},async()=>{
+   await Promise.resolve();
+   expect(readOnlyRefusal(S,U,{toolId:'shell',action:'execute'})).toMatch(/read-only/);
+   expect(readOnlyRefusal(S,U,{toolId:'filesystem',action:'read'})).toBeUndefined();
+   expect(readOnlyRefusal('parallel-session',U,{toolId:'shell',action:'execute'})).toBeUndefined();
+ });
+ expect(readOnlyRefusal(S,U,{toolId:'shell',action:'execute'})).toBeUndefined();
+});
+
+test('an explicit briefing context remains read-only outside ambient async storage',()=>{
+ expect(readOnlyRefusal(S,U,{toolId:'shell',action:'execute'},true)).toMatch(/read-only/);
+ expect(readOnlyRefusal(S,U,{toolId:'filesystem',action:'read'},true)).toBeUndefined();
+ expect(readOnlyRefusal(S,U,{toolId:'shell',action:'execute'})).toBeUndefined();
+});

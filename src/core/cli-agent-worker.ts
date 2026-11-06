@@ -585,6 +585,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         role: 'user',
         content,
         agentId: this.context.id,
+        metadata:{trigger:this.context.trigger},
       }, this.generation);
       this.userCursor = row.id ? { id: row.id, createdAt: row.createdAt.toISOString() } : undefined;
       await sessionRepository.incrementMessageCount(this.context.sessionId);

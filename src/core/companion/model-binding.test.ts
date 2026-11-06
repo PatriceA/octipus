@@ -15,3 +15,13 @@ test.each([null, { name: 'ocr', modelId: 'deepseek-ocr', provider: 'ollama', sup
   await expect(new ModelSelector().selectForRootAgent('session', 'task', { message: 'Work', boundModelName: 'bound' }, { userId: 'owner' })).rejects.toThrow('bound Companion model');
   expect(mocks.defaults).not.toHaveBeenCalled();
 });
+
+test('a trusted read-only briefing binding wins over a source session CLI override without changing it',async()=>{
+ const {setSessionModel,getSessionModel,clearSessionModel}=await import('@/core/agent/session-model-override');
+ setSessionModel('brief-source','owner','project-codex');
+ mocks.resolve.mockImplementation(async({name}:{name:string})=>name==='supervisor-api'?{name,modelId:'deepseek',provider:'openrouter',supportsTools:true}:{name,modelId:'cli/codex',provider:'cli',supportsTools:true});
+ try{
+  expect(await new ModelSelector().selectForRootAgent('brief-source','task',{message:'Read-only architecture briefing',boundModelName:'supervisor-api',fixedBinding:true},{userId:'owner'})).toEqual({name:'supervisor-api',modelId:'deepseek'});
+  expect(getSessionModel('brief-source','owner')).toBe('project-codex');
+ }finally{clearSessionModel('brief-source','owner');}
+});

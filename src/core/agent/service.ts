@@ -10,7 +10,7 @@ import { prepareAttachmentProtection } from '@/core/protection/attachments';
 import { finishContextTurn, runContextHooks } from '@/core/context-hooks';
 import { clearFlowLabel, getFlowLabel, markNotSharedAudience, markSharedAudience, observeFlow } from '@/security/flow-guard';
 import { bareReply, type GroupTurn, groupTurnContext } from '@/core/channels/group-context';
-import { generateRunId, runWithContext } from '@/core/run-context';
+import { generateRunId, runWithContext, getRunContext } from '@/core/run-context';
 import type { AttachedFileRef } from '@/core/session-files';
 import { recordClassification, recordRootRun } from '@/core/telemetry';
 import { TrajectoryRecorder } from '@/core/trajectories/recorder';
@@ -246,6 +246,7 @@ export class AgentService {
      * renders, and model-facing notes already checked against the session.
      */
     inlineUi?: { renders?: readonly string[]; notes?: readonly string[]; provenanceId?: string },
+    internal?: { companionBriefingModel?:string; companionBriefing?:boolean;companionBriefingBudget?:number },
   ): Promise<TurnResult> {
     const turnTrigger = trigger ?? triggerForChannel(channel, !!groupTurn);
     // Controls must reach a running turn; queuing /stop behind it defeats cancellation.
@@ -281,6 +282,7 @@ export class AgentService {
       return runWithContext(
         {
           runId, sessionId, userId, channel: channel ?? 'api', origin: channel ?? 'api',
+          ...(internal?.companionBriefing?{companionBriefing:true,companionBriefingModel:internal.companionBriefingModel,companionBriefingBudget:internal.companionBriefingBudget}:{}),
           ...(inlineUi?.renders?.length ? { renders: inlineUi.renders } : {}),
           ...(inlineUi?.notes?.length ? { inlineUiNotes: inlineUi.notes } : {}),
           ...(inlineUi?.provenanceId ? { inlineUiProvenance: inlineUi.provenanceId } : {}),
@@ -914,7 +916,7 @@ export class AgentService {
       // ambiguous and follow-ups such as "Yes, look it up online". Tool-level
       // approval policy still applies; the transport is not a planning mode.
       const voiceGateKey = voiceKey(resolvedSessionId, userId);
-      if (!isRoom && !bypassVoiceGate && channel !== 'mobile-voice' && this.voiceSessions.has(voiceGateKey)) {
+      if (!isRoom && !bypassVoiceGate && !getRunContext()?.companionBriefing && channel !== 'mobile-voice' && this.voiceSessions.has(voiceGateKey)) {
         // Gate vague requests too, not just cleanly-scored 'task'. Spoken input is
         // usually under-specified → the classifier falls to 'ambiguous', which would
         // otherwise reach the raw root agent and get blind-dispatched or dryly told
@@ -1140,7 +1142,7 @@ export class AgentService {
 
       // A room is compacted by its transcript's size, as the requester of
       // this turn, funded by the install (§6.4).
-      maybeCompactSession(resolvedSessionId, isRoom ? { requesterId: userId } : {}).catch(err =>
+      if(!getRunContext()?.companionBriefing)maybeCompactSession(resolvedSessionId, isRoom ? { requesterId: userId } : {}).catch(err =>
         coreLogger.error({ err, sessionId: resolvedSessionId }, 'Session compaction failed'),
       );
 
@@ -1151,11 +1153,12 @@ export class AgentService {
         );
       }
 
-      fireMemoryUpdate();
+      const syntheticCoordination=!!getRunContext()?.companionBriefing||(session.context?.companionSupervisor&&scope.trigger!=='user');
+      if(!syntheticCoordination)fireMemoryUpdate();
       void finishContextTurn(contextHooks.turn, { agentId, response: finalResponse, outcome });
       // Group threads, rooms and space sessions are never learned from (the
       // processor refuses them too).
-      if (outcome === 'success' && agentId && !memoryOff) {
+      if (outcome === 'success' && agentId && !memoryOff && !syntheticCoordination) {
         try {
           const { enqueueTurnLearning } = await import('@/core/learning/queue');
           await enqueueTurnLearning(resolvedSessionId, userId, agentId, new Date(startTime));

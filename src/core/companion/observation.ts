@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { companionActivations, companionEvents, companionGoals, companionSettings, companionWakes } from '@/db/schema/companion-supervision';
+import { companionActions, companionActivations, companionEvents, companionGoals, companionSettings, companionWakes } from '@/db/schema/companion-supervision';
 import { agents } from '@/db/schema/agents';
 import { sessions, sessionGeneration } from '@/db/schema/sessions';
 import { users } from '@/db/schema/users';
@@ -62,7 +62,8 @@ export async function tickCompanionObservation() {
       if (!session || session.status !== 'active') return;
       const options=companionSettingsSchema.parse(live.options);
       const remaining=options.dailyTokenBudget-await (await import('./scheduling')).companionSpend({userId:live.userId,workspaceId:live.workspaceId},undefined,tx);
-      const cap=Math.min(options.turnTokenBudget,remaining);
+      const briefings=await tx.select({cap:companionActions.tokenCap}).from(companionActions).innerJoin(companionGoals,eq(companionGoals.id,companionActions.goalId)).where(and(eq(companionGoals.userId,live.userId),eq(companionGoals.workspaceId,live.workspaceId),eq(companionActions.kind,'request_briefing'),inArray(companionActions.status,['running','unknown'])));
+      const cap=Math.min(options.turnTokenBudget,remaining-briefings.reduce((sum,row)=>sum+(row.cap??0),0));
       if(cap<1000)return;
       const events = await tx.select({ event: companionEvents }).from(companionEvents).innerJoin(companionGoals, eq(companionGoals.id, companionEvents.goalId))
         .where(and(eq(companionGoals.userId, live.userId), eq(companionGoals.workspaceId, live.workspaceId), inArray(companionGoals.state, ['queued', 'active', 'waiting', 'needs_decision']),

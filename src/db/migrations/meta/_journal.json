@@ -1177,6 +1177,13 @@
       "when": 1793966400000,
       "tag": "0167_companion_wake_usage",
       "breakpoints": true
+    },
+    {
+      "idx": 168,
+      "version": "7",
+      "when": 1793970000000,
+      "tag": "0168_companion_briefings",
+      "breakpoints": true
     }
   ]
 }

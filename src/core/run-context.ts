@@ -21,6 +21,10 @@ import { randomUUID } from 'node:crypto';
 export interface RunContext {
   /** Stable id for one orchestrated turn — `run_<uuid>`. */
   readonly runId: string;
+  /** Internal, per-run briefing scope. Does not affect parallel pipeline workers. */
+  readonly companionBriefingModel?: string;
+  readonly companionBriefing?: boolean;
+  readonly companionBriefingBudget?: number;
   readonly sessionId?: string;
   readonly userId?: string;
   /** Entry channel (`api`, `webchat`, `slack`, `heartbeat`, …). */

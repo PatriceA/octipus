@@ -56,8 +56,8 @@ beforeAll(async () => {
     CREATE TABLE tasks(id uuid PRIMARY KEY, user_id uuid REFERENCES users(id), workspace_id uuid);
     CREATE TABLE verification_evidence(id uuid PRIMARY KEY, session_id uuid, pipeline_id uuid, passed boolean,
       kind text DEFAULT 'pre_verify', confidence text, stage text, node_id text, detail jsonb, created_at timestamptz DEFAULT now());
-    CREATE TABLE agents(id text PRIMARY KEY, session_id uuid, status text, user_id text, workspace_id uuid, role text, model text, error text, parent_agent_id text, total_tokens integer DEFAULT 0, billable_tokens integer, completed_at timestamptz, created_at timestamptz DEFAULT now());
-    CREATE TABLE messages(id uuid PRIMARY KEY DEFAULT gen_random_uuid(), session_id uuid, role text, content text, created_at timestamptz DEFAULT now());
+    CREATE TABLE agents(id text PRIMARY KEY, session_id uuid, status text, user_id text, workspace_id uuid, role text, model text, error text, metadata jsonb DEFAULT '{}', parent_agent_id text, total_tokens integer DEFAULT 0, billable_tokens integer, completed_at timestamptz, created_at timestamptz DEFAULT now());
+    CREATE TABLE messages(id uuid PRIMARY KEY DEFAULT gen_random_uuid(), session_id uuid, role text, content text, metadata jsonb DEFAULT '{}', created_at timestamptz DEFAULT now());
     ALTER TABLE pipelines ADD COLUMN title text;
     ALTER TABLE pipelines ADD COLUMN summary text;
     ALTER TABLE pipelines ADD COLUMN current_node_key text;
@@ -66,7 +66,7 @@ beforeAll(async () => {
     ALTER TABLE pipelines ADD COLUMN metadata jsonb DEFAULT '{}';
     CREATE TABLE agent_events(id serial PRIMARY KEY,agent_id text,user_id text,created_at timestamptz DEFAULT now());
     CREATE TABLE tool_actions(id uuid PRIMARY KEY,agent_id text,user_id text,status text,created_at timestamptz DEFAULT now());
-    CREATE TABLE cost_log(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),user_id uuid,workspace_id uuid,agent_id text,session_id uuid,input_tokens integer,output_tokens integer,cached_input_tokens integer DEFAULT 0,created_at timestamptz DEFAULT now());
+    CREATE TABLE cost_log(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),user_id uuid,workspace_id uuid,agent_id text,session_id uuid,input_tokens integer,output_tokens integer,cached_input_tokens integer DEFAULT 0,request_type text,created_at timestamptz DEFAULT now());
     CREATE TABLE notifications(id uuid PRIMARY KEY,user_id uuid,workspace_id uuid,type text,title text,body text,metadata jsonb,read boolean DEFAULT false,delivered_channels text[] DEFAULT '{}',created_at timestamptz DEFAULT now());
     CREATE TABLE permission_requests(id uuid PRIMARY KEY,agent_id text,status text,expires_at timestamptz);
   `);
@@ -78,6 +78,7 @@ beforeAll(async () => {
   await pg.exec(readFileSync('src/db/migrations/0165_companion_coordination.sql','utf8'));
   await pg.exec(readFileSync('src/db/migrations/0166_companion_sources.sql','utf8'));
   await pg.exec(readFileSync('src/db/migrations/0167_companion_wake_usage.sql','utf8'));
+  await pg.exec(readFileSync('src/db/migrations/0168_companion_briefings.sql','utf8'));
   db = drizzle(pg);
   runtime.db = db;
 }, 30_000);
@@ -1024,4 +1025,112 @@ test('paused pipeline bookkeeping events do not replace a prepared incident',asy
  await pg.query("UPDATE pipelines SET summary='Device not found',current_node_key='qa' WHERE id=$1",[pipelineId]);
  expect((await repository().detectIncident(goal.id,sessionId))?.id).toBe(first.id);
  expect(await repository().incidents(goal.id)).toHaveLength(1);
+});
+
+test('briefing requests fail closed without a configured supervisor and never consume a repair strategy',async()=>{
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ await expect(repository().requestBriefing(goal.id,{sessionId,requestKey:randomUUID()})).rejects.toThrow('Configure and enable');
+ await repository().saveSettings({enabled:true,modelName:'local',autonomy:'coordinate'},0);
+ await pg.query("UPDATE pipelines SET status='failed',summary='Device not found' WHERE id=$1",[pipelineId]);
+ const incident=(await repository().detectIncident(goal.id,sessionId))!;
+ await pg.query("UPDATE companion_incidents SET state='escalated' WHERE id=$1",[incident.id]);
+ const input={sessionId,requestKey:randomUUID()};const brief=await repository().requestBriefing(goal.id,input);
+ expect(brief).toMatchObject({kind:'request_briefing',incidentId:null,strategyIndex:null});
+ expect(brief.message).toContain('READ ONLY');expect(brief.message).toContain('actual deployment hosts');
+ expect((await repository().requestBriefing(goal.id,input)).id).toBe(brief.id);
+ expect((await repository().requestBriefing(goal.id,{sessionId,requestKey:randomUUID()})).id).toBe(brief.id);
+ expect((await repository().incidents(goal.id))[0]).toMatchObject({state:'escalated',strategies:[]});
+});
+
+test('completed briefings are cached until owner context changes, and are required for controller instructions',async()=>{
+ const settings=await repository().saveSettings({enabled:true,modelName:'local',autonomy:'coordinate'},0);
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ const auto=new CompanionSupervisionRepository({userId,workspaceId},connection,{settingsId:settings.settingsId!,revision:settings.revision,requireBriefing:true});
+ await expect(auto.queueMessage(goal.id,{requestKey:randomUUID(),sessionId,message:'Activate gateway'})).rejects.toThrow('briefing is required');
+ const brief=await auto.requestBriefing(goal.id,{sessionId,requestKey:randomUUID()});
+ await pg.query("UPDATE companion_actions SET status='completed',result='External deployment host; Appwrite intermediary' WHERE id=$1",[brief.id]);
+ expect((await auto.requestBriefing(goal.id,{sessionId,requestKey:randomUUID()})).id).toBe(brief.id);
+ await pg.query("INSERT INTO messages(session_id,role,content,metadata) VALUES($1,'user','Automated observation','{\"trigger\":\"monitor\"}')",[sessionId]);
+ expect((await auto.requestBriefing(goal.id,{sessionId,requestKey:randomUUID()})).id).toBe(brief.id);
+ expect(await auto.queueMessage(goal.id,{requestKey:randomUUID(),sessionId,briefingId:brief.id,message:'Check the documented external host'})).toMatchObject({status:'queued'});
+ await pg.query("INSERT INTO messages(session_id,role,content,metadata) VALUES($1,'user','Architecture changed','{\"trigger\":\"user\"}')",[sessionId]);
+ await expect(auto.queueMessage(goal.id,{requestKey:randomUUID(),sessionId,briefingId:brief.id,message:'Use previous recipe'})).rejects.toThrow('briefing is required');
+ expect((await auto.requestBriefing(goal.id,{sessionId,requestKey:randomUUID()})).id).not.toBe(brief.id);
+});
+
+test('briefing dispatch uses a read-only API binding and preserves the complete source report',async()=>{
+ await repository().saveSettings({enabled:true,modelName:'api-supervisor',autonomy:'coordinate'},0);
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ const brief=await repository().requestBriefing(goal.id,{sessionId,requestKey:randomUUID()});
+ await pg.query('UPDATE companion_settings SET reconciled_revision=revision');await pg.query('UPDATE companion_events SET consumed_at=now()');
+ runtime.model.mockResolvedValue({name:'api-supervisor',modelId:'deepseek',provider:'openrouter',supportsTools:true});
+ const text='External Appwrite deployment. '+'x'.repeat(12000);
+ runtime.handle.mockImplementationOnce(async(...args)=>{expect(args[10]).toEqual({companionBriefing:true,companionBriefingModel:'api-supervisor',companionBriefingBudget:1000000});await args[6]();return{outcome:'success',response:text};});
+ await new CompanionDispatcher().tick();await vi.waitFor(async()=>expect((await repository().actions(goal.id)).find(action=>action.id===brief.id)?.status).toBe('completed'));
+ expect((await repository().actions(goal.id)).find(action=>action.id===brief.id)?.result).toBe(text);
+});
+
+test('a queued briefing rejects a CLI-only binding before starting the session',async()=>{
+ await repository().saveSettings({enabled:true,modelName:'cli-source',autonomy:'coordinate'},0);
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ const brief=await repository().requestBriefing(goal.id,{sessionId,requestKey:randomUUID()});
+ await pg.query('UPDATE companion_settings SET reconciled_revision=revision');await pg.query('UPDATE companion_events SET consumed_at=now()');
+ await new CompanionDispatcher().tick();await vi.waitFor(async()=>expect((await repository().actions(goal.id)).find(action=>action.id===brief.id)?.status).toBe('cancelled'));
+ expect(runtime.handle).not.toHaveBeenCalled();
+});
+
+test('full reports page consistently, retain provenance, and respect clears and workspace scope',async()=>{
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ const messageId=randomUUID(),body='x'.repeat(4500)+'Appwrite is on the external host.'+'y'.repeat(6000);
+ await pg.query("INSERT INTO messages(id,session_id,role,content) VALUES($1,$2,'assistant',$3)",[messageId,sessionId,body]);
+ const first=await repository().readReport(goal.id,sessionId,{offset:0,limit:4000});
+ expect(first.totalChars).toBe(body.length);expect(first.continuation).toEqual({messageId,offset:4000});
+ await pg.query("INSERT INTO messages(session_id,role,content,created_at) VALUES($1,'assistant','A newer report',now()+interval '1 second')",[sessionId]);
+ const next=await repository().readReport(goal.id,sessionId,{...first.continuation!,limit:8000});
+ expect(next.reportId).toBe(messageId);expect(next.text).toContain('Appwrite');expect(next.nextOffset).toBeNull();
+ await expect(repository(otherUserId,otherWorkspaceId).readReport(goal.id,sessionId,{offset:0,limit:8000})).rejects.toMatchObject({code:'not_found'});
+ const action=await repository().queueMessage(goal.id,{sessionId,requestKey:randomUUID(),message:'Earlier private work'});
+ await pg.query("UPDATE companion_actions SET status='completed',result='Protected report',protection_level=4,flow_label='{\"secret\":\"retained\"}' WHERE id=$1",[action.id]);
+ expect(await repository().readReport(goal.id,sessionId,{actionId:action.id,offset:0,limit:8000})).toMatchObject({text:'Protected report',protectionLevel:4,flowLabel:{secret:'retained'}});
+ await pg.query('UPDATE sessions SET context=$1 WHERE id=$2',[JSON.stringify({clearedAt:new Date().toISOString(),conversationGeneration:randomUUID()}),sessionId]);
+ await expect(repository().readReport(goal.id,sessionId,{messageId,offset:0,limit:8000})).rejects.toMatchObject({code:'not_found'});
+});
+
+test('routine work-plan status updates keep the cached architecture briefing',async()=>{
+ await repository().saveSettings({enabled:true,modelName:'api',autonomy:'coordinate'},0);
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ const {emptyWorkPlan,reviseWorkPlan,planUpdateSchema}=await import('@/shared/work-plan');
+ const plan=reviseWorkPlan(emptyWorkPlan(),planUpdateSchema.parse({revision:0,title:'Project',goal:'External gateway with Appwrite intermediary',summary:'Approved external architecture',steps:[{id:'check',title:'Verify gateway',status:'pending'}]}));
+ await pg.query('UPDATE sessions SET metadata=$1 WHERE id=$2',[JSON.stringify({workPlan:plan}),sessionId]);
+ const first=await repository().requestBriefing(goal.id,{sessionId,requestKey:randomUUID()});
+ await pg.query("UPDATE companion_actions SET status='completed',result='Architecture summary' WHERE id=$1",[first.id]);
+ plan.current!.revision++;plan.current!.steps[0].status='done';plan.current!.steps[0].evidence='Gate passed';
+ await pg.query('UPDATE sessions SET metadata=$1 WHERE id=$2',[JSON.stringify({workPlan:plan}),sessionId]);
+ expect((await repository().requestBriefing(goal.id,{sessionId,requestKey:randomUUID()})).id).toBe(first.id);
+ plan.current!.goal='Architecture changed to another documented deployment target';
+ await pg.query('UPDATE sessions SET metadata=$1 WHERE id=$2',[JSON.stringify({workPlan:plan}),sessionId]);
+ expect((await repository().requestBriefing(goal.id,{sessionId,requestKey:randomUUID()})).id).not.toBe(first.id);
+});
+
+test('briefing coordination is budgeted without restricting ordinary project execution',async()=>{
+ await repository().saveSettings({enabled:true,modelName:'api',autonomy:'coordinate',dailyTokenBudget:1000,turnTokenBudget:1000},0);
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ await pg.query("INSERT INTO cost_log(user_id,workspace_id,session_id,input_tokens,output_tokens,request_type) VALUES($1,$2,$3,1000,0,'companion-briefing')",[userId,workspaceId,sessionId]);
+ const instruction=await repository().queueMessage(goal.id,{sessionId,requestKey:randomUUID(),message:'Authorized project work'});
+ const brief=await repository().requestBriefing(goal.id,{sessionId,requestKey:randomUUID()});
+ const {prepareCompanionDispatch}=await import('@/core/companion/scheduling');
+ expect(await db.transaction(tx=>prepareCompanionDispatch(tx as never,instruction,{userId,workspaceId}))).toEqual({tokenCap:null});
+ expect(await db.transaction(tx=>prepareCompanionDispatch(tx as never,brief,{userId,workspaceId}))).toBeUndefined();
+ expect((await repository().actions(goal.id)).find(action=>action.id===brief.id)?.result).toContain('briefing budget exhausted');
+});
+
+test('successful briefing helpers cannot hide a failed standalone project execution',async()=>{
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ await pg.query('DELETE FROM pipelines WHERE id=$1',[pipelineId]);
+ await pg.query("INSERT INTO agents(id,session_id,user_id,workspace_id,status,role,error,metadata) VALUES('failed-project',$1,$2,$3,'failed','general','SDK location not found','{\"root\":true}')",[sessionId,userId,workspaceId]);
+ const first=(await repository().detectIncident(goal.id,sessionId))!;
+ await pg.query("INSERT INTO agents(id,session_id,user_id,workspace_id,status,role,metadata,created_at) VALUES('brief-helper',$1,$2,$3,'completed','general','{\"root\":true,\"companionBriefing\":true}',now()+interval '1 minute')",[sessionId,userId,workspaceId]);
+ expect((await repository().detectIncident(goal.id,sessionId))?.id).toBe(first.id);
+ expect((await repository().inspectSession(goal.id,sessionId)).workers[0].id).toBe('failed-project');
+ expect((await repository().readSession(sessionId)).workers[0].id).toBe('failed-project');
 });

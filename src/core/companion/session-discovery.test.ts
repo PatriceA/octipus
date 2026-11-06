@@ -131,3 +131,38 @@ test('background turns cannot apply owner incident retry decisions',async()=>{
  await(await import('@/security/permissions')).getPermissionManager().setPermission(owner,'companion','execute','ALLOW');
  await expect(tool.getTool('reopen_incident')!.execute({id:randomUUID(),incidentId:randomUUID(),expectedRevision:0},{...context,trigger:'monitor'})).rejects.toThrow('explicit owner retry request');
 });
+
+test('historical action report provenance protects a clean controller before report content is returned',async()=>{
+ const {getDb}=await import('@/db/postgres');const {sessions}=await import('@/db/schema/sessions');
+ const {companionActions}=await import('@/db/schema/companion-supervision');const {eq}=await import('drizzle-orm');
+ const source=randomUUID(),controller=randomUUID();
+ await getDb().insert(sessions).values([
+  {id:source,userId:owner,workspaceId,channelType:'webchat',channelId:randomUUID(),protectionLevel:1,context:{}},
+  {id:controller,userId:owner,workspaceId,channelType:'webchat',channelId:randomUUID(),protectionLevel:1,context:{companionSupervisor:{modelName:'fixture'}}},
+ ]);
+ const {CompanionSupervisionRepository}=await import('@/db/repositories/companion-supervision-repository');
+ const repo=new CompanionSupervisionRepository({userId:owner,workspaceId});
+ const goal=await repo.create({requestKey:randomUUID(),title:'Report',request:'Inspect saved report',outcome:'Read correctly',acceptanceCriteria:['Read']});
+ await repo.adopt(goal.id,{expectedRevision:0,sessionId:source,pipelineId:null,purpose:'Read existing result'});
+ const action=await repo.queueMessage(goal.id,{requestKey:randomUUID(),sessionId:source,message:'Earlier work'});
+ await getDb().update(companionActions).set({status:'completed',result:'Sensitive historical result',protectionLevel:4,flowLabel:{secret:'saved source'}}).where(eq(companionActions.id,action.id));
+ await tool.getTool('read_report')!.execute({id:goal.id,sessionId:source,actionId:action.id},{...context,sessionId:controller});
+ const {sessionProtectionLevel}=await import('@/core/protection/session-level');const {getFlowLabel}=await import('@/security/flow-guard');
+ expect(sessionProtectionLevel(controller)).toBe(4);expect(getFlowLabel(controller).secret).toBe(true);
+ expect((await getDb().select().from(sessions).where(eq(sessions.id,controller)))[0].protectionLevel).toBe(4);
+});
+
+test('adoption receipts stay successful when a paused source cannot accept an automatic briefing',async()=>{
+ const {getDb}=await import('@/db/postgres');const {sessions}=await import('@/db/schema/sessions');
+ const {CompanionSupervisionRepository}=await import('@/db/repositories/companion-supervision-repository');
+ const repo=new CompanionSupervisionRepository({userId:owner,workspaceId});
+ const settings=await repo.saveSettings({enabled:true,modelName:'fixture',autonomy:'coordinate'},0);
+ const source=randomUUID();await getDb().insert(sessions).values({id:source,userId:owner,workspaceId,channelType:'webchat',channelId:randomUUID(),status:'paused'});
+ const goal=await repo.create({requestKey:randomUUID(),title:'Paused source',request:'Observe existing paused work',outcome:'Keep original execution',acceptanceCriteria:['Preserved']});
+ const result=await tool.getTool('adopt')!.execute({id:goal.id,input:{expectedRevision:0,sessionId:source,pipelineId:null,purpose:'Supervise existing work'}},{...context,role:'companion',sessionId:settings.supervisorSessionId!,metadata:{companionAuthorityRevision:settings.revision}}) as {link:{id:string};briefing:{status:string}};
+ expect(result.link.id).toBeTruthy();expect(result.briefing.status).toBe('not_requested');
+ expect((await repo.read(goal.id)).links).toHaveLength(1);expect(await repo.actions(goal.id)).toHaveLength(0);
+ const pipelineGoal=await repo.create({requestKey:randomUUID(),title:'Pipeline-only supervision',request:'Observe pipeline',outcome:'Preserve scope',acceptanceCriteria:['Preserved']});
+ const pipelineResult=await tool.getTool('adopt')!.execute({id:pipelineGoal.id,input:{expectedRevision:0,sessionId:lifeId,pipelineId,purpose:'Supervise only this pipeline'}},{...context,role:'companion',sessionId:settings.supervisorSessionId!,metadata:{companionAuthorityRevision:settings.revision}}) as {link:{pipelineId:string}};
+ expect(pipelineResult.link.pipelineId).toBe(pipelineId);expect(await repo.actions(pipelineGoal.id)).toHaveLength(0);
+});

@@ -21,12 +21,12 @@ import type { ChildResultStatus } from './types';
 
 /** Thrown when a node exceeds its `tokens.cap` before or during an LLM call. */
 export class BudgetExceededError extends ClassifiedError {
-  constructor(opts: { agentId: string; used: number; cap: number; cause?: unknown }) {
+  constructor(opts: { agentId: string; used: number; cap: number; projected?: number; cause?: unknown }) {
     super({
       reason: FailoverReason.BUDGET_EXCEEDED,
       recovery: RecoveryAction.ABORT,
-      message: `Token budget exceeded for ${opts.agentId} (${opts.used}/${opts.cap})`,
-      metadata: { agentId: opts.agentId, used: opts.used, cap: opts.cap },
+      message: opts.projected===undefined ? `Token budget exceeded for ${opts.agentId} (${opts.used}/${opts.cap})` : `Next model call would exceed the token budget for ${opts.agentId}: ${opts.used} spent, ${opts.projected} projected, limit ${opts.cap}` ,
+      metadata: { agentId: opts.agentId, used: opts.used, cap: opts.cap, ...(opts.projected===undefined?{}:{projected:opts.projected}) },
       cause: opts.cause,
     });
     this.name = 'BudgetExceededError';

@@ -146,7 +146,9 @@ describe('AgentWorker — hard budget enforcement (Phase 2)', () => {
     }
     expect(thrown).toBeInstanceOf(BudgetExceededError);
     // projected = 50 (spent) + 100 (estimated input) = 150 ≥ cap 100
-    expect((thrown as BudgetExceededError).metadata?.used).toBe(150);
+    expect((thrown as BudgetExceededError).metadata?.used).toBe(50);
+    expect((thrown as BudgetExceededError).metadata?.projected).toBe(150);
+    expect((thrown as Error).message).toContain('50 spent, 150 projected');
     expect((thrown as BudgetExceededError).metadata?.cap).toBe(100);
   });
 

@@ -590,7 +590,7 @@ export class ToolExecutor {
       : tool.permissionAction || bareName;
     return readOnlyRefusal(this.context.sessionId, this.context.userId, {
       toolId: tool.toolId || 'agent', action, args: call.arguments, readOnlyHandler: tool.replaySafety === 'read_only',
-    });
+    },this.context.metadata.companionBriefing===true);
   }
 
   /** How the last model-issued batch went, for the worker's failure-streak guard. */

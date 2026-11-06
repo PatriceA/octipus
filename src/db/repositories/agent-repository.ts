@@ -58,6 +58,7 @@ export class AgentRepository {
     const result = await this.db.select().from(agents).where(and(
       eq(agents.sessionId, sessionId), eq(agents.userId, userId),
       isNull(agents.parentAgentId),
+      sql`coalesce(${agents.metadata}->>'companionBriefing','false') <> 'true'`,
       or(sql`${agents.metadata}->>'root' = 'true'`, and(
         sql`NOT (coalesce(${agents.metadata}, '{}'::jsonb) ? 'root')`,
         inArray(agents.role, ['general', 'orchestrator']),

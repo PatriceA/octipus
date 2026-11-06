@@ -1,5 +1,5 @@
-const reads = ['companion__list', 'companion__read', 'companion__inspect_session','companion__read_part', 'companion__heartbeat_status', 'tasks__list_tasks'];
-const writes = ['companion__update', 'companion__adopt', 'companion__start_session', 'companion__message_session', 'companion__control_session', 'companion__detect_incident', 'companion__advance_incident'];
+const reads = ['companion__list', 'companion__read', 'companion__inspect_session','companion__read_part','companion__read_report', 'companion__heartbeat_status', 'tasks__list_tasks'];
+const writes = ['companion__request_briefing','companion__update', 'companion__adopt', 'companion__start_session', 'companion__message_session', 'companion__control_session', 'companion__detect_incident', 'companion__advance_incident'];
 /** A controller reaches project/maintenance execution only through scoped operations. */
 export function companionControllerTools(mode: 'observe' | 'coordinate' | 'repair', enabled: boolean, userTurn: boolean) {
   const discovery = userTurn ? ['companion__find_sessions', 'companion__read_session'] : [];
