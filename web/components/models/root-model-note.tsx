@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import Link from 'next/link';
 import { Bot } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -80,11 +81,11 @@ export function RootModelNote() {
       <div className="flex items-start gap-2">
         <Bot className="w-4 h-4 text-primary mt-0.5 shrink-0" />
         <div className="min-w-0 text-xs text-on-surface-variant space-y-1">
-          <p className="text-sm font-medium text-on-surface">Which model answers you</p>
+          <p className="text-sm font-medium text-on-surface">Model assignments</p>
           <p>
             It depends on what you ask. Each request is routed to a lane before the turn starts,
             so implementation and a lookup are answered by different models on purpose. A
-            per-session <span className="font-mono">/model</span> override wins over all of it.
+            <Link href="/topics" className="text-primary underline">Manage topic assignments</Link>. A per-session <span className="font-mono">/model</span> override wins over all of it.
           </p>
           <ul className="space-y-0.5 pt-1">
             {lanes.map((lane) => (
@@ -92,7 +93,7 @@ export function RootModelNote() {
                 <span className="font-mono text-primary">{lane.value}</span>
                 <span className="text-outline">{lane.answers}</span>
                 <span className="font-mono">
-                  {lane.model ?? (defaultModel ? `→ ${defaultModel} (unbound, falls back)` : '→ nothing bound')}
+                  {lane.model ?? (defaultModel ? `→ ${defaultModel} (legacy fallback; topic unbound)` : '→ nothing bound')}
                 </span>
               </li>
             ))}
@@ -106,7 +107,7 @@ export function RootModelNote() {
           )}
           {unbound.length > 0 && !defaultModel && (
             <p className="text-error">
-              {unbound.map((l) => l.value).join(', ')} unbound and no default model — a request
+              {unbound.map((l) => l.value).join(', ')} unbound and no fallback model — a request
               routed there has nothing to run on.
             </p>
           )}

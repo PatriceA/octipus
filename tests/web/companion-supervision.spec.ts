@@ -4,6 +4,73 @@ import { json, stubAllDefaults } from './fixtures/api-stubs';
 const goal = { id: 'goal-one', title: 'Finish the project', request: 'Finish the project', outcome: 'Verified delivery', acceptanceCriteria: ['Tests pass'], state: 'active', priority: 0, revision: 1, protectionLevel: 1 };
 const defaultSettings = { enabled: false, modelName: '', autonomy: 'observe', maxConcurrent: 2, dailyTokenBudget: 100000, turnTokenBudget: 16000,
   maxRepairAttempts: 2, quietHoursStart: 22, quietHoursEnd: 7, timezone: 'UTC', revision: 0, supervisorSessionId: null };
+
+test('Models exposes a persistent Companion assignment independently of topics and legacy fallback', async ({ authenticatedPage: page }) => {
+  await stubAllDefaults(page);
+  await page.route('**/api/companion/goals', route => json(route, 200, { goals: [] }));
+  let settings = { ...defaultSettings, enabled: true, modelName: 'DeepSeek', revision: 4 };
+  const models = [
+    { id: 'deepseek', name: 'DeepSeek', modelId: 'deepseek-flash-latest', provider: 'openrouter', supportsTools: true, isEnabled: true, isDefault: true, topics: [] },
+    { id: 'local', name: 'Local supervisor', modelId: 'qwen', provider: 'ollama', supportsTools: true, isEnabled: true, topics: [] },
+  ];
+  await page.route('**/api/models', route => json(route, 200, { models }));
+  await page.route('**/api/companion/settings', route => {
+    if (route.request().method() === 'PUT') {
+      const body = route.request().postDataJSON();
+      expect(body.expectedRevision).toBe(settings.revision);
+      settings = { ...settings, ...body.settings, revision: settings.revision + 1 };
+    }
+    return json(route, 200, settings);
+  });
+  await page.goto('/models');
+  const panel = page.getByRole('form', { name: 'Companion model assignment' });
+  await expect(panel.getByLabel('Supervisor model')).toHaveValue('DeepSeek');
+  await expect(page.getByTitle('Set as default', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Manage topic assignments' })).toBeVisible();
+  await panel.getByLabel('Supervisor model').selectOption('Local supervisor');
+  await panel.getByRole('button', { name: 'Save Companion model' }).click();
+  await expect.poll(() => settings.modelName).toBe('Local supervisor');
+  expect(settings.enabled).toBe(true);
+  expect(settings.turnTokenBudget).toBe(defaultSettings.turnTokenBudget);
+  await page.reload();
+  await expect(panel.getByLabel('Supervisor model')).toHaveValue('Local supervisor');
+  await panel.getByRole('link', { name: /Supervision settings/ }).click();
+  await expect(page.getByRole('form', { name: 'Supervision settings' }).getByLabel('Supervisor model')).toHaveValue('Local supervisor');
+});
+
+test('initial settings recover automatically after a rate-limited reload', async ({ authenticatedPage: page }) => {
+  await stubAllDefaults(page);
+  await page.route('**/api/companion/goals', route => json(route, 200, { goals: [] }));
+  let reads = 0;
+  await page.route('**/api/companion/settings', route => {
+    if (++reads === 1) return route.fulfill({ status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': '1' }, body: JSON.stringify({ error: 'Too many requests', retryAfter: 1 }) });
+    return json(route, 200, defaultSettings);
+  });
+  await page.goto('/companion');
+  await expect(page.getByRole('combobox', { name: 'Supervisor model' })).toBeVisible();
+  expect(reads).toBeGreaterThan(1);
+});
+
+test('non-admins can assign their own Companion model without install-model controls', async ({ authenticatedPage: page }) => {
+  await stubAllDefaults(page);
+  await page.route('**/api/auth/me', route => json(route, 200, { id: 'e2e-user-id', username: 'e2etest', isAdmin: false }));
+  await page.route('**/api/models', route => json(route, 200, { models: [
+    { id: 'personal', name: 'My supervisor', modelId: 'qwen', provider: 'ollama', supportsTools: true, isEnabled: true, topics: [] },
+  ] }));
+  let settings = { ...defaultSettings };
+  await page.route('**/api/companion/settings', route => {
+    if (route.request().method() === 'PUT') settings = { ...settings, ...route.request().postDataJSON().settings, revision: settings.revision + 1 };
+    return json(route, 200, settings);
+  });
+  await page.goto('/models');
+  const panel = page.getByRole('form', { name: 'Companion model assignment' });
+  await panel.getByLabel('Supervisor model').selectOption('My supervisor');
+  await panel.getByRole('button', { name: 'Save Companion model' }).click();
+  await expect.poll(() => settings.modelName).toBe('My supervisor');
+  await expect(page.getByRole('button', { name: 'Add Model', exact: true })).toHaveCount(0);
+  await expect(page.getByTitle('Edit model', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Fallback model', { exact: true })).toHaveCount(0);
+});
 async function setup(page: import('@playwright/test').Page) {
   await stubAllDefaults(page);
   await page.route('**/api/companion/goals', route => json(route, 200, { goals: [goal] }));

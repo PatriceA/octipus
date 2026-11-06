@@ -3,6 +3,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { type ReactNode, useState } from 'react';
 import { DesktopConnectionGate } from '@/components/desktop-connection-gate';
+import { ApiError } from '@/lib/api';
 import { AuthProvider } from '@/lib/auth-context';
 import { CompanionPresenceProvider } from '@/lib/companion-presence';
 import { GatewayProvider } from '@/lib/gateway-context';
@@ -26,6 +27,11 @@ export function Providers({ children }: { children: ReactNode }) {
           queries: {
             staleTime: 60 * 1000,
             refetchOnWindowFocus: false,
+            // Respect the server's cooldown after restart bursts rather than
+            // exhausting query retries while the API client is still paused.
+            retryDelay: (attempt, error) => error instanceof ApiError && error.status === 429
+              ? Math.max(1000, error.retryAfterMs) + Math.random() * 1000
+              : Math.min(1000 * 2 ** attempt, 30_000),
           },
         },
       })

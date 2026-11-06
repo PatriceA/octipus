@@ -54,6 +54,15 @@ export function isCredentialAttempt(path: string): boolean {
 export function isPublicFormPath(path: string): boolean {
   return path.startsWith('/api/forms/');
 }
+// Background indexing can issue hundreds of batches after a restart. It must
+// remain bounded without spending the interactive UI's allowance. Only the
+// authenticated admin-only indexing route gets this separate fixed bucket;
+// headers, credentials and arbitrary paths cannot create new buckets.
+export function apiRateWorkload(path: string, method: string, principal?: Principal): 'api' | 'indexing' {
+  return method === 'POST' && /^\/api\/connectors\/cocoindex\/(document|query)\/embeddings$/.test(path)
+    && !!principal && isAuthenticated(principal) && principal.isAdmin ? 'indexing' : 'api';
+}
+
 const USER_QUOTA_WINDOW_SECS = 60;
 
 // Baseline per-IP ceiling on all /api/* traffic, applied in EVERY deployment
@@ -168,13 +177,16 @@ export const rateLimitMiddleware = new Elysia({ name: 'rate-limit' }).onBeforeHa
     // liveness/readiness checks can't be starved by a noisy neighbour.
     if (!url.pathname.startsWith('/api/') || url.pathname.startsWith('/api/health') || url.pathname.startsWith('/api/metrics')) return;
 
+    const principal = (ctx as { principal?: Principal }).principal;
+    const workload = apiRateWorkload(url.pathname, request.method, principal);
+
     // ── Layer 1b: baseline per-IP cap on all /api/* (any mode) ──────
     if (BASELINE_IP_LIMIT > 0) {
       const ip = clientIp(request, socketAddress);
       const rateLimiter = getRateLimiter();
-      const result = await rateLimiter.check(`api:ip:${ip}`, BASELINE_IP_LIMIT, BASELINE_IP_WINDOW_SECS);
+      const result = await rateLimiter.check(`${workload}:ip:${ip}`, BASELINE_IP_LIMIT, BASELINE_IP_WINDOW_SECS);
       if (!result.allowed) {
-        if (shouldWarn(`api:ip:${ip}`, BASELINE_IP_WINDOW_SECS)) {
+        if (shouldWarn(`${workload}:ip:${ip}`, BASELINE_IP_WINDOW_SECS)) {
           apiLogger.warn({ ip, path: url.pathname, retryAfter: result.retryAfter }, 'Baseline per-IP API rate limit exceeded');
         }
         set.status = 429;
@@ -184,7 +196,6 @@ export const rateLimitMiddleware = new Elysia({ name: 'rate-limit' }).onBeforeHa
     }
 
     // ── Layer 2: per-user (Phase 3c-2) ─────────────────────────────
-    const principal = (ctx as { principal?: Principal }).principal;
     if (!principal || !isAuthenticated(principal)) return;
     // A request is a real user's or a system job's; only system jobs are
     // exempt. No connection ever carries the system identity.
@@ -198,14 +209,14 @@ export const rateLimitMiddleware = new Elysia({ name: 'rate-limit' }).onBeforeHa
 
       const rateLimiter = getRateLimiter();
       const result = await rateLimiter.check(
-        `user:rl:${principal.userId}`, max, USER_QUOTA_WINDOW_SECS,
+        `user:rl:${principal.userId}${workload === 'indexing' ? ':indexing' : ''}`, max, USER_QUOTA_WINDOW_SECS,
       );
 
       set.headers['X-RateLimit-Limit'] = String(max);
       set.headers['X-RateLimit-Remaining'] = String(result.remaining);
 
       if (!result.allowed) {
-        if (shouldWarn(`user:rl:${principal.userId}`, USER_QUOTA_WINDOW_SECS)) {
+        if (shouldWarn(`user:rl:${principal.userId}${workload === 'indexing' ? ':indexing' : ''}`, USER_QUOTA_WINDOW_SECS)) {
           apiLogger.warn(
             { userId: principal.userId, max, retryAfter: result.retryAfter },
             'Per-user API quota exceeded',

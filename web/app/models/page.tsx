@@ -8,6 +8,8 @@ import { AddModelModal } from '@/components/models/add-model-modal';
 import { CLIStatusPanel } from '@/components/models/cli-status-panel';
 import { EditModelModal } from '@/components/models/edit-model-modal';
 import { ModelCard } from '@/components/models/model-card';
+import { SupervisionSettings } from '@/components/companion/supervision-settings';
+import { useWorkspace } from '@/lib/workspace-context';
 import { RootModelNote } from '@/components/models/root-model-note';
 import { RecommendedModelsPanel } from '@/components/models/recommended-models-panel';
 import { PageHeader } from '@/components/ui/page-header';
@@ -21,6 +23,7 @@ export default function ModelsPage() {
   // under Settings → My models.
   const { user, isLoading: authLoading } = useAuth();
   const isAdmin = !!user?.isAdmin;
+  const { activeWorkspace } = useWorkspace();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingModel, setEditingModel] = useState<Model | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
@@ -128,6 +131,7 @@ export default function ModelsPage() {
           The install&apos;s models are managed by an admin. Add and manage your own under{' '}
           <Link href="/settings" className="text-primary underline">Settings → My models</Link>.
         </p>
+        {activeWorkspace?.kind === 'personal' && <SupervisionSettings key={activeWorkspace.id} workspaceId={activeWorkspace.id} models={models} compact />}
         <div className="stagger grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {models.length === 0 ? (
             <p className="col-span-full text-center py-8 text-on-surface-variant">No models available to you yet.</p>
@@ -137,7 +141,6 @@ export default function ModelsPage() {
                 key={model.id}
                 model={model}
                 readOnly
-                onSetDefault={() => {}}
                 onEdit={() => {}}
                 onToggleEnabled={() => {}}
                 onDelete={() => {}}
@@ -182,6 +185,16 @@ export default function ModelsPage() {
       )}
 
       <RootModelNote />
+      {activeWorkspace?.kind === 'personal' && <SupervisionSettings key={activeWorkspace.id} workspaceId={activeWorkspace.id} models={models} compact />}
+
+      <details className="rounded-xs border border-outline-variant/20 p-4">
+        <summary className="cursor-pointer text-sm font-medium">Advanced · legacy fallback model</summary>
+        <p className="my-2 text-sm text-on-surface-variant">Topic assignments choose the model for each request. This fallback only applies when a topic is unbound; Companion has its own assignment above.</p>
+        <label className="text-sm">Fallback model <select aria-label="Fallback model" className="ml-2 rounded-xs border border-outline-variant bg-surface-container p-2" disabled={actionLoading} value={models.find(model => model.isDefault)?.name ?? ''} onChange={event => void handleSetDefault(event.target.value)}>
+          <option value="" disabled>No fallback configured</option>
+          {models.filter(model => model.isEnabled).map(model => <option key={model.name} value={model.name}>{model.name}</option>)}
+        </select></label>
+      </details>
 
       <RecommendedModelsPanel onInstalled={fetchModels} />
 
@@ -213,7 +226,6 @@ export default function ModelsPage() {
             <ModelCard
               key={model.id}
               model={model}
-              onSetDefault={handleSetDefault}
               onEdit={setEditingModel}
               onToggleEnabled={handleToggleEnabled}
               onDelete={handleDeleteModel}

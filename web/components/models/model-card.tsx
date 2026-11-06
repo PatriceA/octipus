@@ -1,11 +1,10 @@
 'use client';
 
-import { AlertCircle, CheckCircle, Cpu, Pencil, Star, Terminal, Trash2, XCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle, Cpu, Pencil, Terminal, Trash2, XCircle } from 'lucide-react';
 import type { Model } from '@/lib/types/models';
 
 export interface ModelCardProps {
   model: Model;
-  onSetDefault: (name: string) => void;
   onEdit: (model: Model) => void;
   onToggleEnabled: (model: Model) => void;
   onDelete: (name: string) => void;
@@ -53,23 +52,12 @@ function ProviderBadge({ provider }: { provider: string }) {
 
 export { HealthBadge, ProviderBadge };
 
-export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDelete, readOnly = false }: ModelCardProps) {
+export function ModelCard({ model, onEdit, onToggleEnabled, onDelete, readOnly = false }: ModelCardProps) {
   return (
     <div
-      className={`bg-surface-container rounded-xs border ${
-        model.isDefault ? 'border-primary/40' : 'border-outline-variant/10'
-      }${model.isEnabled ? '' : ' opacity-60'} p-4 relative group`}
+      className={`bg-surface-container rounded-xs border border-outline-variant/10${model.isEnabled ? '' : ' opacity-60'} p-4 relative group`}
     >
       {!readOnly && <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        {!model.isDefault && (
-          <button
-            onClick={() => onSetDefault(model.name)}
-            className="p-1.5 text-on-surface-variant hover:text-warning hover:bg-warning/10 rounded cursor-pointer"
-            title="Set as default"
-          >
-            <Star className="w-4 h-4" />
-          </button>
-        )}
         <button
           onClick={() => onEdit(model)}
           className="p-1.5 text-on-surface-variant hover:text-primary hover:bg-primary/10 rounded cursor-pointer"
@@ -105,11 +93,7 @@ export function ModelCard({ model, onSetDefault, onEdit, onToggleEnabled, onDele
             <Cpu className="w-5 h-5 text-primary" />
           )}
           <h3 className="font-semibold text-on-surface">{model.name}</h3>
-          {model.isDefault && (
-            <span className="px-2 py-0.5 bg-primary/10 text-primary text-xs rounded-full flex items-center gap-1 shrink-0">
-              <Star className="w-3 h-3" /> Default
-            </span>
-          )}
+
         </div>
       </div>
 

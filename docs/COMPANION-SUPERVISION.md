@@ -5,7 +5,7 @@ Companion accepts outcomes, starts or adopts project sessions, monitors committe
 ## Start using it
 
 1. Open **Companion** in a personal workspace. Create a goal with its original request, desired outcome and acceptance criteria, or adopt existing work.
-2. Choose a tool-capable API or local model under **Background supervision**. Enable observation, coordination or repair. Project sessions can use CLI models; the controller and scoped maintenance workers use API/local models so their tool boundary can be enforced.
+2. Choose a tool-capable API or local model under **Models → Companion model** (also available under **Companion → Background supervision**). This is a fixed General-role binding, independent of topic assignments. Enable observation, coordination or repair. Project sessions can use CLI models; the controller and scoped maintenance workers use API/local models so their tool boundary can be enforced.
 3. Approve the goal's repository execution scope when shell work is needed. This covers new commands, scripts, deployment, cleanup and credential/private-data network use within that goal. Child pipelines can inherit the same profile. Existing policy denials and filesystem boundaries still apply.
 4. For installation or host repairs, an administrator configures **Settings → CLI tools → Companion maintenance runtime**. Approve directory trees and optional host networking, Docker/USB access and the existing SSH-agent socket. Test the saved runtime from the same page. No private key is copied into a repository or conversation.
 
