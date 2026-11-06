@@ -25,7 +25,7 @@ import type { ClientMessage, ConnectionContext, PendingApproval, PendingPermissi
  * react. The injected message is persisted so the transcript stays complete
  * (the steering queue itself does not persist).
  */
-type SteerableWorker = { steer: (m: { role: 'user'; content: string; timestamp: Date }) => void };
+type SteerableWorker = { steer: (m: { role: 'user'; content: string; timestamp: Date }) => void | boolean; canAcceptSteering?: () => boolean };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -97,7 +97,7 @@ export async function trySteerRunningRootAgent(sessionId: string, content: strin
     .getBySession(sessionId)
     .filter((a) => a.getStatus() === 'running' && a.getContext().root === true)
     .find((a): a is typeof a & SteerableWorker => typeof (a as Partial<SteerableWorker>).steer === 'function');
-  if (!target) return false;
+  if (!target || target.canAcceptSteering?.() === false) return false;
   // A room turn is never steered: a member's post is stored once by the
   // room, and a running room turn belongs to its requester alone (§6.3).
   if (target.getContext().metadata?.room) return false;
@@ -114,7 +114,7 @@ export async function trySteerRunningRootAgent(sessionId: string, content: strin
   // Interactive-answer notes (reports, provenance) ride ahead of the steer
   // for the model, and on the row as its prompt context, like a normal turn.
   const notes = inlineUi?.notes.join('\n') ?? '';
-  target.steer({ role: 'user', content: notes ? `${notes}\n\n${content}` : content, timestamp: new Date() });
+  if (target.steer({ role: 'user', content: notes ? `${notes}\n\n${content}` : content, timestamp: new Date() }) === false) return false;
 
   // Race guard: if the root agent finished between the status check and the
   // steer, its steering queue will never drain. Don't persist an orphaned user

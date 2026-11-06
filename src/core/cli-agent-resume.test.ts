@@ -1010,3 +1010,120 @@ describe('long conversations on a cold launch', () => {
     expect(fixture.spawnCount).toBe(2);
   });
 });
+
+
+describe('Codex steering receipts', () => {
+  it('migrates the old context-tool fingerprint without replacing the vendor thread', async () => {
+    const store = await import('./cli-session-store');
+    const fingerprintSpy = vi.spyOn(store, 'fingerprintRun');
+    const first = makeCodexWorker({ sessionId: 'codex-schema-migration' });
+    await first.run('First turn');
+    const currentRun = fingerprintSpy.mock.calls[0][0];
+    fingerprintSpy.mockRestore();
+    const identity = JSON.parse(currentRun.providerIdentity!);
+    identity[4] = identity[4].map((tool: unknown[]) => tool[0] === 'get_cli_run_context'
+      ? [tool[0], tool[1], { type: 'object', properties: {} }] : tool);
+    const legacyFingerprint = fingerprintRun({ ...currentRun, providerIdentity: JSON.stringify(identity) });
+    const record = fixture.sessions.get('codex-schema-migration')!.context.cliSessions!['Codex CLI'];
+    const oldId = record.id;
+    const currentFingerprint = record.fingerprint;
+    record.fingerprint = legacyFingerprint;
+    const second = makeCodexWorker({ sessionId: 'codex-schema-migration' });
+    await second.run('Second turn');
+    expect(fixture.sessions.get('codex-schema-migration')!.context.cliSessions!['Codex CLI'].id).toBe(oldId);
+    expect(second.fingerprint).toBe(currentFingerprint);
+    const third = makeCodexWorker({ sessionId: 'codex-schema-migration' });
+    third.worker.addSystemMessage('Different stable instruction');
+    await third.run('Third turn');
+    expect(fixture.sessions.get('codex-schema-migration')!.context.cliSessions!['Codex CLI'].id).not.toBe(oldId);
+  });
+
+  it('runs an actual Codex subprocess follow-up after guidance was only presented by a tool', async () => {
+    writeFileSync(fixture.codexScript, `
+      import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+      import { join } from 'node:path';
+      let prompt = ''; for await (const chunk of process.stdin) prompt += chunk;
+      const marker = join(process.cwd(), 'steering-attempt');
+      const second = existsSync(marker); writeFileSync(marker, prompt);
+      console.log(JSON.stringify({ type: 'thread.started', thread_id: 'steering-thread' }));
+      console.log(JSON.stringify({ type: 'turn.started' }));
+      await new Promise(r => setTimeout(r, 100));
+      const answer = second && prompt.includes('Remove tower Ollama') ? 'Correction received in direct follow-up' : 'Original answer';
+      console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: answer } }));
+      console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }));
+    `);
+    const { worker, run } = makeCodexWorker({ sessionId: 'codex-process-steering' });
+    let presented: Promise<string> | undefined;
+    worker.onEvent(event => {
+      if (!presented && (event.data as { type?: string }).type === 'iteration_update') {
+        worker.steer({ role: 'user', content: 'Remove tower Ollama', timestamp: new Date() });
+        presented = (worker as unknown as { controlContext(): Promise<string> }).controlContext();
+      }
+    });
+    expect(await run('Deploy')).toBe('Correction received in direct follow-up');
+    expect(JSON.parse(await presented!).guidanceItems).toHaveLength(1);
+    expect(fixture.spawnCount).toBe(2);
+  });
+
+  it('keeps tool-presented guidance pending and starts an explicit follow-up', async () => {
+    const { worker, run } = makeCodexWorker({ sessionId: 'codex-steering' });
+    const internal = worker as unknown as {
+      controlContext(): Promise<string>; executeCLI(): Promise<string>;
+      buildPrompt(): string;
+    };
+    const events: unknown[] = [];
+    worker.onEvent(event => events.push(event.data));
+    const execute = vi.spyOn(internal, 'executeCLI').mockImplementation(async () => {
+      if (execute.mock.calls.length === 1) {
+        worker.steer({ role: 'user', content: 'Use the workstation Ollama; remove tower Ollama', timestamp: new Date() });
+        const first = JSON.parse(await internal.controlContext());
+        const second = JSON.parse(await internal.controlContext());
+        expect(second.guidanceItems).toEqual(first.guidanceItems);
+        return 'Original work finished';
+      }
+      expect(internal.buildPrompt()).toContain('Use the workstation Ollama; remove tower Ollama');
+      return 'Correction handled';
+    });
+    expect(await run('Deploy')).toBe('Correction handled');
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'steering_presented' }));
+    expect(events).toContainEqual(expect.objectContaining({ type: 'steering_followup_completed' }));
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'steering_delivered' }));
+    expect(worker.steer({ role: 'user', content: 'Too late', timestamp: new Date() })).toBe(false);
+  });
+
+  it('retains guidance arriving during a follow-up for the next turn', async () => {
+    const { worker, run } = makeCodexWorker({ sessionId: 'codex-overlapping-steering' });
+    const internal = worker as unknown as { controlContext(): Promise<string>; executeCLI(): Promise<string>; buildPrompt(): string };
+    const execute = vi.spyOn(internal, 'executeCLI').mockImplementation(async () => {
+      const count = execute.mock.calls.length;
+      if (count === 1) worker.steer({ role: 'user', content: 'First correction', timestamp: new Date() });
+      if (count === 2) {
+        worker.steer({ role: 'user', content: 'Second correction', timestamp: new Date() });
+        await internal.controlContext();
+      }
+      if (count === 3) expect(internal.buildPrompt()).toContain('Second correction');
+      return 'Done';
+    });
+    await run('Deploy');
+    expect(execute).toHaveBeenCalledTimes(3);
+  });
+
+  it('only acknowledges known guidance IDs and avoids a redundant follow-up', async () => {
+    const { worker, run } = makeCodexWorker({ sessionId: 'codex-acknowledged-steering' });
+    const internal = worker as unknown as { controlContext(): Promise<string>; executeCLI(): Promise<string>;
+      toolExecutor: { getTools(): Map<string, { execute(args: Record<string, unknown>): Promise<string> }> } };
+    const execute = vi.spyOn(internal, 'executeCLI').mockImplementation(async () => {
+      worker.steer({ role: 'user', content: 'Use the existing external database', timestamp: new Date() });
+      const context = JSON.parse(await internal.controlContext());
+      const read = internal.toolExecutor.getTools().get('get_cli_run_context')!;
+      await expect(read.execute({ acknowledgeGuidanceIds: ['missing'] })).rejects.toThrow('Unknown guidance');
+      expect(JSON.parse(await internal.controlContext()).guidanceItems).toHaveLength(1);
+      const acknowledged = JSON.parse(await read.execute({ acknowledgeGuidanceIds: [context.guidanceItems[0].id] }));
+      expect(acknowledged.guidanceItems).toEqual([]);
+      return 'Handled owner correction';
+    });
+    await run('Deploy');
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+});

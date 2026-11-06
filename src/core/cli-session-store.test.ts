@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { agentRepository } from '@/db/repositories/agent-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import type { Session, SessionContext } from '@/db/schema/sessions';
-import { childCliSessionKey, claimCliSession, cliSessionHolder, dropCliSession, isChildCliSessionKey, fingerprintRun, MAX_CHILD_CLI_SESSIONS, loadCliSession, releaseCliSessions, saveCliSession } from './cli-session-store';
+import { acknowledgeProviderTurn, childCliSessionKey, claimCliSession, cliSessionHolder, dropCliSession, isChildCliSessionKey, fingerprintRun, MAX_CHILD_CLI_SESSIONS, loadCliSession, releaseCliSessions, saveCliSession } from './cli-session-store';
 
 describe('fingerprintRun', () => {
   it('changes when the model changes', () => {
@@ -88,6 +89,23 @@ describe('cli session store', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('does not advance the vendor cursor past unhandled steering', async () => {
+    const previous = { id: 'owner-request', createdAt: '2026-11-06T10:00:00.000Z' };
+    await saveCliSession('s1', 'Codex CLI', { id: 'thread', fingerprint: 'fp', lastUsedAt: new Date().toISOString(), ownerAgentId: 'a', acknowledged: previous });
+    const agent = vi.spyOn(agentRepository, 'findById').mockResolvedValue({ metadata: { pendingGuidanceCount: 1 } } as never);
+    const answer = { id: 'answer', createdAt: new Date('2026-11-06T11:00:00.000Z') };
+    await acknowledgeProviderTurn('s1', 'a', answer);
+    expect((await loadCliSession('s1', 'Codex CLI', 'fp'))?.acknowledged).toEqual(previous);
+    // A failed terminal-status write leaves no receipt. It must not be
+    // mistaken for a successful write recording zero pending guidance.
+    agent.mockResolvedValue({ metadata: {} } as never);
+    await acknowledgeProviderTurn('s1', 'a', answer);
+    expect((await loadCliSession('s1', 'Codex CLI', 'fp'))?.acknowledged).toEqual(previous);
+    agent.mockResolvedValue({ metadata: { pendingGuidanceCount: 0 } } as never);
+    await acknowledgeProviderTurn('s1', 'a', answer);
+    expect((await loadCliSession('s1', 'Codex CLI', 'fp'))?.acknowledged?.id).toBe('answer');
   });
 
   it('returns null when the stored fingerprint does not match', async () => {

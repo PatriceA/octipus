@@ -37,6 +37,14 @@ describe('trySteerRunningRootAgent', () => {
   const createSpy = vi.spyOn(messageRepository, 'create');
   const incSpy = vi.spyOn(sessionRepository, 'incrementMessageCount');
 
+  test('queues a normal turn when the CLI is finalizing instead of accepting lost steering', async () => {
+    const worker = fakeWorker({ role: 'general', root: true }) as Record<string, unknown>;
+    worker.canAcceptSteering = () => false;
+    getBySessionSpy.mockReturnValue([worker] as never);
+    expect(await trySteerRunningRootAgent(sid, 'Please correct the deployment')).toBe(false);
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     getBySessionSpy.mockReset();
     createSpy.mockReset();

@@ -23,11 +23,13 @@ export class AgentRepository {
       error?: string;
       toolCalls?: Array<{ name: string; count: number }>;
       completionReason?: AgentCompletionReason;
+      pendingGuidanceCount?: number;
       /** Why a failed run failed when it was a user cap, not a fault: 'spend_budget' | 'quota'. */
       failureReason?: 'spend_budget' | 'quota';
     },
   ): Promise<void> {
     const patch = {
+      ...(update.pendingGuidanceCount !== undefined && { pendingGuidanceCount: update.pendingGuidanceCount }),
       ...(update.completionReason && { completionReason: update.completionReason }),
       ...(update.failureReason && { failureReason: update.failureReason }),
     };

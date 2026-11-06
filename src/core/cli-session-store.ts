@@ -1,3 +1,4 @@
+import { agentRepository } from '@/db/repositories/agent-repository';
 import { sessionGeneration } from '@/db/schema/sessions';
 import { createHash } from 'node:crypto';
 import { sessionRepository } from '@/db/repositories/session-repository';
@@ -161,9 +162,20 @@ export function releaseCliSessions(agentId: string): void {
 
 /** The final persisted Octipus answer is now part of this vendor turn. */
 export async function acknowledgeProviderTurn(sessionId: string, agentId: string, cursor: { id: string; createdAt: Date }): Promise<void> {
+  // Do not advance past user steering the CLI has not handled. Its next turn
+  // must replay those durable messages even when a final answer was stored.
   await withSessionConversation(sessionId, async () => {
   const session = await sessionRepository.findById(sessionId);
-  for (const [key, rec] of Object.entries(session?.context?.cliSessions ?? {})) {
+  const records = Object.entries(session?.context?.cliSessions ?? {});
+  if (records.some(([, rec]) => rec.ownerAgentId === agentId)) {
+    const agent = await agentRepository.findById(agentId);
+    const pending = agent?.metadata?.pendingGuidanceCount;
+    const ownsCodex = records.some(([key, rec]) => key.startsWith('Codex CLI') && rec.ownerAgentId === agentId);
+    // A missing receipt can mean the terminal write failed. Fail closed for
+    // Codex instead of treating that failure as acknowledgement of all input.
+    if ((ownsCodex && pending !== 0) || Number(pending ?? 0) > 0) return;
+  }
+  for (const [key, rec] of records) {
     if (rec.ownerAgentId === agentId) await saveCliSession(sessionId, key, {
       ...rec, acknowledged: { id: cursor.id, createdAt: cursor.createdAt.toISOString() },
     });

@@ -1487,7 +1487,8 @@ export class AgentService {
 
   canSteer(sessionId: string): boolean {
     return getAgentManager().getBySession(sessionId).some(agent => agent.getStatus() === 'running'
-      && agent.getContext().root === true && !agent.getContext().metadata?.room && 'steer' in agent);
+      && agent.getContext().root === true && !agent.getContext().metadata?.room && 'steer' in agent
+      && (!('canAcceptSteering' in agent) || (agent as { canAcceptSteering(): boolean }).canAcceptSteering()));
   }
 
   /**
@@ -1503,7 +1504,7 @@ export class AgentService {
     // Only the root receives session steering and decides whether a child needs it.
     // Workers wake collection and deliver at their next supported input boundary.
     if ('steer' in running && typeof running.steer === 'function') {
-      running.steer(message);
+      if (running.steer(message) === false) return false;
       coreLogger.info({ sessionId, agentId: running.getContext().id }, 'Steering message queued for root');
       return true;
     }

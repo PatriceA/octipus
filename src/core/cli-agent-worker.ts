@@ -181,6 +181,15 @@ export class CLIAgentWorker extends BaseAgentWorker {
   }
   private bridgeErrors = new Map<string, boolean>();
   private steeringQueue: AgentMessage[] = [];
+  // Codex exec has no live stdin. Tool presentation is not acknowledgement.
+  private pendingCodexGuidance = new Map<string, AgentMessage>();
+  private acceptingSteering = true;
+  private isCodex(): boolean {
+    const tool = getCLIToolConfig(this.context.model);
+    return (tool?.adapter ?? tool?.name) === 'Codex CLI';
+  }
+  private pendingGuidanceCount(): number { return this.steeringQueue.length + this.pendingCodexGuidance.size; }
+  canAcceptSteering(): boolean { return this.acceptingSteering && !this.aborted; }
   private liveGuidance = new Map<string, AgentMessage[]>();
   /**
    * Unacknowledged live guidance an Octipus tool response has already gone
@@ -228,7 +237,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
   collectAllDetached(timeoutMs: number): Promise<ChildResult[]> { return this.detached.collectAll(timeoutMs); }
 
   /** User guidance stays with this worker; only its explicit tool call steers a child. */
-  steer(message: AgentMessage): void {
+  steer(message: AgentMessage): boolean {
+    if (!this.canAcceptSteering()) return false;
     this.steeringQueue.push(message);
     this.config.maxIterations += 1;
     this.detached.interruptWaits();
@@ -236,6 +246,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
     // Wake Claude at the next completed tool boundary. Merely appending user
     // input can leave it queued until the vendor finishes the entire turn.
     this.wakeForGuidance();
+    return true;
   }
 
   private wakeForGuidance(): void {
@@ -369,10 +380,14 @@ When a task matches one of these skills, load it with get_skill before starting 
     const state = await workPlanRepository.read(this.context.sessionId, this.context.userId);
     // Streaming guidance remains queued until Claude acknowledges a real user
     // message. A JSON context attachment alone must not consume the wake-up.
-    const guidance = this.acceptsLiveGuidance ? [...this.steeringQueue] : this.steeringQueue.splice(0);
-    if (!this.acceptsLiveGuidance) this.messages.push(...guidance);
-    if (guidance.length && !this.acceptsLiveGuidance) this.emit('thought', { type: 'steering_delivered', delivery: 'CLI context', count: guidance.length });
     const permissionRun = await runPermissionProfile(this.context);
+    const newlyPresented = this.acceptsLiveGuidance ? [...this.steeringQueue] : this.steeringQueue.splice(0);
+    if (!this.acceptsLiveGuidance) this.messages.push(...newlyPresented);
+    if (this.isCodex()) for (const message of newlyPresented) this.pendingCodexGuidance.set(randomUUID(), message);
+    const guidance = this.isCodex() ? [...this.pendingCodexGuidance.values()] : newlyPresented;
+    if (newlyPresented.length && !this.acceptsLiveGuidance) this.emit('thought', {
+      type: this.isCodex() ? 'steering_presented' : 'steering_delivered', delivery: 'CLI context', count: newlyPresented.length,
+    });
     return JSON.stringify({
       ...(permissionRun ? { pipelineApproval: { pipelineId: permissionRun.pipeline.id, approvedAt: (permissionRun.pipeline.metadata?.permissionProfile as { approvedAt?: string })?.approvedAt,
         executionScope: permissionRun.profile.executionScope,
@@ -389,11 +404,14 @@ When a task matches one of these skills, load it with get_skill before starting 
         docker: 'Use permitted dedicated docker tools for host containers; compose_project provides repository-scoped local lifecycle when available. Remote stacks require approved SSH shell commands.',
         note: 'Registered shell commands use the Octipus sandbox. Without approved hostServices a missing Docker socket describes that sandbox, not the host. Native vendor CLI Bash may have different host access. A root context does not inherit child pipeline approval; inspect that pipeline status for its scope.' },
       workPlan: formatWorkPlanContext(state), guidance: guidance.map(m => m.content),
+      ...(this.isCodex() ? { guidanceItems: [...this.pendingCodexGuidance].map(([id, message]) => ({ id, content: message.content })) } : {}),
       ...(this.detached.count() > 0 ? {
         detachedChildren: this.detached.list().map(pc => ({ childId: pc.childId, topic: pc.topic, runningMs: Date.now() - pc.startedAt })),
         detachedChildrenNote: 'Call collect_children before your final answer to receive their results; otherwise the run collects them for you.',
       } : {}),
-      guidanceDelivery: 'Review this guidance before further affected work. Pending feedback must be acknowledged through update_work_plan.',
+      guidanceDelivery: this.isCodex()
+        ? 'These are pending owner/session instructions. Handle them before further affected work. After applying each instruction or reporting its blocker, call get_cli_run_context with acknowledgeGuidanceIds containing its id. Acknowledgement is receipt, not proof of completion. Pending plan feedback must be acknowledged through update_work_plan.'
+        : 'Review this guidance before further affected work. Pending feedback must be acknowledged through update_work_plan.',
     });
   }
 
@@ -439,9 +457,10 @@ When a task matches one of these skills, load it with get_skill before starting 
         contextText = 'Tool execution finished. Run context refresh is temporarily unavailable; use get_cli_run_context before further affected work.';
       }
       return { content: [
+        ...(this.isCodex() ? [{ type: 'text' as const, text: contextText }] : []),
         ...messages.map(m => ({ type: 'text' as const, text: m.content })),
         ...(resent ? [{ type: 'text' as const, text: `[Octipus] Nothing was pending, so these ${resent} result(s) are from your previous collect_children call, re-sent in case its response did not reach you.` }] : []),
-        { type: 'text', text: contextText },
+        ...(!this.isCodex() ? [{ type: 'text' as const, text: contextText }] : []),
       ], isError };
     } finally {
       this.activeBridgeCalls--; this.bridgeErrors.delete(id); if (delegation) this.setPause('delegation', false);
@@ -518,7 +537,19 @@ When a task matches one of these skills, load it with get_skill before starting 
     }, undefined, this.abortController.signal);
     this.toolExecutor.remoteHarness = true;
     this.registerTool({ name: 'get_cli_run_context', description: 'Read the current Octipus plan, feedback and new user guidance. Check before further work and before your final answer.',
-      parameters: { type: 'object', properties: {} }, execute: async () => this.controlContext() });
+      parameters: { type: 'object', properties: this.isCodex() ? {
+        acknowledgeGuidanceIds: { type: 'array', items: { type: 'string' }, description: 'IDs of owner guidance handled or explicitly reported as blocked.' },
+      } : {} }, execute: async args => {
+        const ids = args.acknowledgeGuidanceIds;
+        if (ids !== undefined) {
+          if (!this.isCodex() || !Array.isArray(ids) || ids.some(id => typeof id !== 'string' || !this.pendingCodexGuidance.has(id))) {
+            throw new Error('Unknown guidance acknowledgement; read current guidance before acknowledging it.');
+          }
+          for (const id of ids) this.pendingCodexGuidance.delete(id);
+          if (ids.length) this.emit('thought', { type: 'steering_acknowledged', count: ids.length });
+        }
+        return this.controlContext();
+      } });
 
     if (opts?.parentSignal) {
       const parent = opts.parentSignal;
@@ -755,24 +786,31 @@ When a task matches one of these skills, load it with get_skill before starting 
       // A plain CLI has no mid-turn input protocol. If guidance arrived after
       // its last bridge call, run a bounded follow-up instead of silently losing it.
       let followups = 0;
-      while (!this.aborted && this.steeringQueue.length > 0 && !buffered && followups < 2 && this.iteration < this.config.maxIterations) {
+      while (!this.aborted && this.pendingGuidanceCount() > 0 && !buffered && followups < 2 && this.iteration < this.config.maxIterations) {
         followups++;
         this.messages.push({ role: 'assistant', content: result, timestamp: new Date() });
-        this.messages.push({ role: 'user', content: `New guidance: ${await this.controlContext()}`, timestamp: new Date() });
+        const guidanceContext = await this.controlContext();
+        const presentedIds = [...this.pendingCodexGuidance.keys()];
+        this.messages.push({ role: 'user', content: `New guidance: ${guidanceContext}\nReconcile this guidance with completed effects. Apply only outstanding instructions or report their blocker; do not repeat completed actions.`, timestamp: new Date() });
         result = await this.executeCLI();
+        if (!this.aborted) {
+          for (const id of presentedIds) this.pendingCodexGuidance.delete(id);
+          if (presentedIds.length) this.emit('thought', { type: 'steering_followup_completed', count: presentedIds.length });
+        }
         if (!this.aborted && this.detached.count() > 0) result = await this.settleDetachedChildren(result, buffered);
         await checkLateFeedback();
       }
-      if (!this.aborted && this.steeringQueue.length > 0) {
+      if (!this.aborted && this.pendingGuidanceCount() > 0) {
         // Keep the completed work; say plainly what was not applied. Plan feedback
         // stays pending in the durable record; steering text is already in the
         // session history, so the next message carries it.
-        const pending = this.steeringQueue.length;
+        const pending = this.pendingGuidanceCount();
         const reason = buffered ? 'this CLI reports only at completion' : this.iteration >= this.config.maxIterations ? 'the turn budget is exhausted' : 'the follow-up limit was reached';
         this.emit('thought', { type: 'guidance_pending', count: pending, reason });
-        result += `\n\n[Octipus] ${pending} guidance/feedback item${pending === 1 ? '' : 's'} arrived after this CLI's last Octipus tool call and ${pending === 1 ? 'was' : 'were'} not applied because ${reason}. Send another message to continue with it.`;
+        result += `\n\n[Octipus] ${pending} guidance/feedback item${pending === 1 ? '' : 's'} ${pending === 1 ? 'remains' : 'remain'} unhandled at the end of this turn because ${reason}. Send another message to continue with it.`;
       }
 
+      this.acceptingSteering = false;
       if (this.aborted) throw new Error(this.runError ?? this.abortReason ?? `Agent aborted: ${(this.context.metadata?.interruption as { reason?: string } | undefined)?.reason ?? 'unknown cause'}`);
 
       if (this.pauseReasons.has('approval')) throw new Error(approvalWaitReason(APPROVAL_UNFINISHED_REASON, this.awaitedRequestId));
@@ -804,8 +842,9 @@ When a task matches one of these skills, load it with get_skill before starting 
         { durationMs, iterations: this.iteration, model: this.context.model, role: this.context.role },
       ).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to audit CLI completion'));
 
-      agentRepository.updateStatus(this.context.id, {
+      await agentRepository.updateStatus(this.context.id, {
         status: 'completed',
+        pendingGuidanceCount: this.pendingGuidanceCount(),
         iterations: this.iteration,
         totalTokens: this.totalTokens,
         billableTokens: this.billableTokensUsed,
@@ -846,14 +885,15 @@ When a task matches one of these skills, load it with get_skill before starting 
         this.context.userId, this.context.sessionId, this.context.id,
         { error: (error as Error).message, iteration: this.iteration, model: this.context.model, role: this.context.role },
       ).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to audit CLI failure'));
-      agentRepository.updateStatus(this.context.id, {
-        status, iterations: this.iteration, durationMs, totalTokens: this.totalTokens,
+      await agentRepository.updateStatus(this.context.id, {
+        status, pendingGuidanceCount: this.pendingGuidanceCount(), iterations: this.iteration, durationMs, totalTokens: this.totalTokens,
         billableTokens: this.billableTokensUsed,
         error: wasStopped ? undefined : (error as Error).message,
       }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist CLI terminal status'));
 
       throw error;
     } finally {
+      this.acceptingSteering = false;
       await this.commentaryDelivery;
       clearTimeout(this.approvalDeadline);
       permissionCleanup();
@@ -1235,6 +1275,15 @@ When a task matches one of these skills, load it with get_skill before starting 
         : [this.context.role, [...new Set(tools.filter(tool => tool.toolId !== TOOL_DISCOVERY_TOOL_ID).map(tool => tool.toolId ?? tool.name))].sort()];
       fingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, toolIdentity, credentialOwnerId ?? null]), instructions });
       let existing = opts?.forceCold ? null : await loadCliSession(this.context.sessionId, storeKey!, fingerprint);
+      // This metadata-only tool extension does not change the vendor conversation.
+      // Accept exactly the previous schema fingerprint; other tool/prompt changes still reset.
+      if (!existing && !opts?.forceCold && root && this.isCodex()) {
+        const legacyTools = tools.map(tool => [tool.name, tool.description,
+          tool.name === 'get_cli_run_context' ? { type: 'object', properties: {} } : tool.parameters])
+          .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+        const legacyFingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, legacyTools, credentialOwnerId ?? null]), instructions });
+        existing = await loadCliSession(this.context.sessionId, storeKey!, legacyFingerprint);
+      }
       // A root record without a cursor was never shown to hold the
       // conversation: a first run that died after the vendor named its thread
       // and before it answered. Its thread may hold nothing, and a resume sends
