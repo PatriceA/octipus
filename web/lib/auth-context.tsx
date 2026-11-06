@@ -4,7 +4,7 @@ import { createContext, useContext, useState, useEffect, useCallback, type React
 import { useRouter } from 'next/navigation';
 import { loginPathReturningTo } from '../../src/shared/return-to';
 import { isPublicPath } from './public-routes';
-import { api } from './api';
+import { api, ApiError } from './api';
 
 interface User {
   id: string;
@@ -89,21 +89,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       api.setToken(existingToken);
     }
 
-    // Try to get current user — works with both Bearer token and HttpOnly cookie
-    api.get<User>('/auth/me')
-      .then((data) => {
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    // A busy backend has not invalidated the login. Keep the loading gate
+    // closed and retry after its cooldown, without discarding credentials.
+    const validate = async () => {
+      try {
+        const data = await api.get<User>('/auth/me');
+        if (cancelled) return;
         setUser({ id: data.id, username: data.username, isAdmin: data.isAdmin, installModels: data.installModels });
-      })
-      .catch(() => {
-        // Token invalid/expired
+        setIsLoading(false);
+      } catch (error) {
+        if (cancelled) return;
+        if (error instanceof ApiError && error.status === 429) {
+          retryTimer = setTimeout(() => { void validate(); }, Math.max(1000, error.retryAfterMs) + Math.random() * 1000);
+          return;
+        }
         api.setToken(null);
         setToken(null);
         localStorage.removeItem('auth_token');
         localStorage.removeItem('assistant-user');
-      })
-      .finally(() => {
         setIsLoading(false);
-      });
+      }
+    };
+    void validate();
+    return () => { cancelled = true; clearTimeout(retryTimer); };
   }, []);
 
   return (

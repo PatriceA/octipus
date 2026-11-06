@@ -1,6 +1,7 @@
 import { test, expect } from './fixtures/auth';
 import { json, selectChatSession } from './fixtures/api-stubs';
 import { stubGateway } from './fixtures/gateway';
+import { STUB_USER, STUB_TOKEN } from './fixtures/auth';
 
 const controller = 'companion-controller';
 const settings = { enabled: true, modelName: 'DeepSeek supervisor', autonomy: 'coordinate', maxConcurrent: 2,
@@ -18,6 +19,20 @@ async function setup(page: import('@playwright/test').Page, includeController = 
   ] }));
   await page.route('**/api/sessions/*/messages**', route => json(route, 200, { messages: [] }));
 }
+
+test('a rate-limited login check on reload keeps credentials and opens Companion after cooldown', async ({ authenticatedPage: page }) => {
+  await setup(page);
+  let checks = 0;
+  await page.route('**/api/auth/me', route => {
+    if (++checks === 1) return route.fulfill({ status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': '1' }, body: JSON.stringify({ error: 'Too many requests', retryAfter: 1 }) });
+    return json(route, 200, STUB_USER);
+  });
+  await page.goto(`/chat?session=${controller}`);
+  await expect(page.getByRole('region', { name: 'Companion chat identity' })).toBeVisible();
+  expect(checks).toBeGreaterThan(1);
+  expect(await page.evaluate(() => localStorage.getItem('auth_token'))).toBe(STUB_TOKEN);
+  await expect(page).not.toHaveURL(/\/login/);
+});
 
 test('Companion has its own identity while direct sessions remain optional and survive reload', async ({ authenticatedPage: page }) => {
   await setup(page);
