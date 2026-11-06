@@ -104,6 +104,19 @@ function rawReadPattern(names: string[]): RegExp {
 const ACCESS_LAYER = 'access layer';
 const PERSONAL_READER = 'personal reader';
 const ALLOWLIST: Record<string, string> = {
+  'src/core/companion/authority.ts': 'Internal delegation revision check binds settings to the action owner/workspace; the caller separately validates the current personal scope before dispatch.',
+  'src/core/companion/user-control.ts': 'Post-authorization owner stop: reads only linkage predicates for the already authorized session and disables its supervision; returns no content.',
+  'src/core/companion/activation.ts': 'Internal maintenance activation validates the current personal owner and runtime binding; global ID/status probes protect all work from restart interruption.',
+  'src/core/companion/dispatcher.ts': 'Internal journal dispatcher joins current personal workspace owner and active user; session scope, generation, ownership link and authority are revalidated before dispatch.',
+  'src/core/companion/feedback.ts': 'App-only status notices bind enabled settings to current personal owner and same-scope goals/pipelines; emitted status is content-minimized.',
+  'src/core/companion/maintenance-evidence.ts': 'Maintenance acceptance validates the owned personal runtime binding; reviewer, parent and source worker bind the same owner and session.',
+  'src/core/companion/observation.ts': 'Durable supervisor wakes bind enabled current-owner personal settings and session generation; interrupted-root probes read IDs only.',
+  'src/core/companion/permissions.ts': 'Personal consent boundary: active local owner, personal workspace, owned non-room session, linked goal and current revision checked before grants.',
+  'src/core/companion/scheduling.ts': 'Internal owner/workspace-bound accounting and reservations; global checkout/runtime probes prevent conflicting work and return no content.',
+  'src/core/companion/service.ts': 'Post-repository control effects: scoped repository validates the owned personal goal/session; pipeline stops additionally bind owner, workspace and session.',
+  'src/core/companion/stalls.ts': 'Suspicion-only monitoring binds enabled settings to active owned goal/session/worker; progress metadata creates inspection events, never execution.',
+  'src/core/tasks/provenance.ts': 'Protection metadata only from owner-bound task source sessions; shared writes skip personal snapshots and the destination heartbeat must be personal and owned.',
+  'src/db/repositories/companion-supervision-repository.ts': 'Personal Companion access layer: assertScope requires the active local owner of an active personal workspace; source/session predicates reject rooms/groups and bind owner/workspace.',
   'src/core/agent/activity-tools.ts': 'Read-only diagnostic access layer: owner and exact workspace scope plus current target-session control access before returning identities/events.',
   'src/db/repositories/credential-remediation.ts': 'Administrative security cleanup, not an agent tool: server-owned owner predicates on every read and CAS mutation; reports only redacted metadata.',
 

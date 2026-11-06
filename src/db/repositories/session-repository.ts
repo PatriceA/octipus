@@ -7,6 +7,7 @@ import { assertNotRoomCreate, notInSharedWorkspace, personalChat } from './scope
 import { sessionsRemoved } from './session-lifecycle';
 
 /** Supervision owns recovery state even while a project waits for weeks. */
+// i2: correlated ownership predicate only; session reads using it retain their own personal/room scope.
 const notActivelySupervised = sql`NOT EXISTS (SELECT 1 FROM companion_session_links l JOIN companion_goals g ON g.id=l.goal_id
   WHERE l.session_id=${sessions.id} AND l.active AND l.ownership='owner' AND g.state NOT IN ('completed','cancelled')
   AND g.user_id=${sessions.userId} AND g.workspace_id=${sessions.workspaceId})`;

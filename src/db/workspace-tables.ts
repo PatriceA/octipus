@@ -51,6 +51,10 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   { table: 'cases', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   // Retention history of what a cleanup removed.
   { table: 'cleanup_audit_log', ownerColumn: 'user_id', transfer: 'n/a', purge: 'keep' },
+  // Companion configuration and grants are personal consent. A new workspace
+  // owner must authorize their own supervisor; goals cascade to links/actions on purge.
+  { table: 'companion_goals', ownerColumn: 'user_id', transfer: 'n/a', purge: 'delete' },
+  { table: 'companion_settings', ownerColumn: 'user_id', transfer: 'n/a', purge: 'delete' },
   { table: 'contacts', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   // Billing history: who spent what, where. Outlives the space.
   { table: 'cost_log', ownerColumn: 'user_id', transfer: 'n/a', purge: 'keep' },

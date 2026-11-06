@@ -102,7 +102,7 @@ describe('workspace transfer', () => {
       ids[table] = String(row.id);
     };
     await one('agent_events', `INSERT INTO agent_events (agent_id, session_id, type, user_id, workspace_id) VALUES ('a1', $1, 'started', $2, $3) RETURNING id`, [session.id, owner, ws]);
-    await one('agents', `INSERT INTO agents (id, session_id, user_id, workspace_id) VALUES ($1, $2, $3, $4) RETURNING id`, [`agent-${randomUUID()}`, session.id, owner, ws]);
+    await one('agents', `INSERT INTO agents (id, session_id, user_id, workspace_id, status) VALUES ($1, $2, $3, $4, 'completed') RETURNING id`, [`agent-${randomUUID()}`, session.id, owner, ws]);
     await one('background_jobs', `INSERT INTO background_jobs (kind, user_id, title, workspace_id) VALUES ('research', $1, 'job', $2) RETURNING id`, [owner, ws]);
     await one('cases', `INSERT INTO cases (user_id, title, workspace_id) VALUES ($1, 'c', $2) RETURNING id`, [owner, ws]);
     await one('contacts', `INSERT INTO contacts (user_id, name, workspace_id) VALUES ($1, 'k', $2) RETURNING id`, [owner, ws]);
@@ -164,6 +164,52 @@ describe('workspace transfer', () => {
     expect(n.owner).toBe(alice);
     const [s] = await q(`SELECT user_id FROM vault WHERE id = $1`, [userSecret.id]);
     expect(s.user_id).toBe(alice);
+  });
+
+  test('transfer retires personal Companion consent and releases supervision for the recipient', async () => {
+    const { getOrgWorkspaceManager } = await import('@/security/orgs');
+    const { CompanionSupervisionRepository } = await import('./repositories/companion-supervision-repository');
+    const mgr = getOrgWorkspaceManager();
+    const ws = await mgr.createWorkspace(alice, { slug: `comp-${rand(3)}`, name: 'Companion transfer' });
+    const repo = new CompanionSupervisionRepository({ userId: alice, workspaceId: ws.id });
+    const goal = await repo.create({ requestKey: randomUUID(), title: 'Original goal', request: 'Continue the project', outcome: 'Verified', acceptanceCriteria: ['Tests pass'] });
+    const [source] = await q(`INSERT INTO sessions (user_id, workspace_id, channel_type, channel_id) VALUES ($1,$2,'web',$3) RETURNING id`, [alice, ws.id, randomUUID()]);
+    await repo.adopt(goal.id, { expectedRevision: goal.revision, sessionId: source.id, purpose: 'Supervise' });
+    await q(`INSERT INTO companion_settings (user_id,workspace_id,enabled,approved_at) VALUES ($1,$2,true,now())`, [alice, ws.id]);
+    await q(`UPDATE companion_goals SET execution_policy=$2::jsonb WHERE id=$1`, [goal.id,JSON.stringify({ approvedBy:alice,approvedAt:new Date().toISOString(),profile:{executionScope:'run'} })]);
+    await q(`INSERT INTO companion_actions (goal_id,session_id,request_key,generation,kind,message) VALUES ($1,$2,$3,'','message_session','Old queued authority')`, [goal.id, source.id, randomUUID()]);
+    await mgr.transfer(alice, ws.id, bob);
+    const [settings] = await q(`SELECT user_id,enabled,approved_at FROM companion_settings WHERE workspace_id=$1`, [ws.id]);
+    expect(settings).toMatchObject({ user_id: alice, enabled: false, approved_at: null });
+    const [retained] = await q(`SELECT user_id,state,execution_policy FROM companion_goals WHERE id=$1`, [goal.id]);
+    expect(retained).toMatchObject({ user_id: alice, state: 'paused', execution_policy: null });
+    expect((await q(`SELECT status FROM companion_actions WHERE goal_id=$1`, [goal.id]))[0].status).toBe('cancelled');
+    expect((await q(`SELECT active FROM companion_session_links WHERE goal_id=$1`, [goal.id]))[0].active).toBe(false);
+    await expect(repo.read(goal.id)).rejects.toThrow('active personal workspace');
+    const recipient = new CompanionSupervisionRepository({ userId: bob, workspaceId: ws.id });
+    const next = await recipient.create({ requestKey: randomUUID(), title: 'Recipient goal', request: 'Supervise my project', outcome: 'Verified', acceptanceCriteria: ['Tests pass'] });
+    await expect(recipient.adopt(next.id, { expectedRevision: next.revision, sessionId: source.id, purpose: 'New owner supervision' })).resolves.toBeDefined();
+  });
+
+  test.each(['action-running','action-unknown','wake-running','wake-unknown','activation-queued','activation-launched','activation-restarted','activation-unknown','agent-running','pipeline-running','pipeline-awaiting_approval'])('transfer preserves reconciliation authority for %s', async pending => {
+    const { getOrgWorkspaceManager } = await import('@/security/orgs');
+    const mgr = getOrgWorkspaceManager();
+    const ws = await mgr.createWorkspace(alice, { slug: `busy-${rand(3)}`, name: 'Pending work' });
+    const [source] = await q(`INSERT INTO sessions (user_id,workspace_id,channel_type,channel_id) VALUES ($1,$2,'web',$3) RETURNING id`, [alice,ws.id,randomUUID()]);
+    const [goal] = await q(`INSERT INTO companion_goals (user_id,workspace_id,request_key,title,request,outcome,acceptance_criteria) VALUES ($1,$2,$3,'Goal','Work','Verified','[]') RETURNING id`, [alice,ws.id,randomUUID()]);
+    const [kind,status] = pending.split('-');
+    if(kind==='action') await q(`INSERT INTO companion_actions (goal_id,session_id,request_key,generation,kind,message,status) VALUES ($1,$2,$3,'','message_session','Pending',$4)`, [goal.id,source.id,randomUUID(),status]);
+    if(kind==='activation') await q(`INSERT INTO companion_activations (goal_id,session_id,request_key,authority_revision,binding,root,status) VALUES ($1,$2,$3,0,'binding','/tmp',$4)`, [goal.id,source.id,randomUUID(),status]);
+    if(kind==='agent') await q(`INSERT INTO agents (id,user_id,workspace_id,session_id,status) VALUES ($1,$2,$3,$4,'running')`, [randomUUID(),alice,ws.id,source.id]);
+    if(kind==='pipeline') await q(`INSERT INTO pipelines (root_agent_id,title,type,user_id,workspace_id,session_id,status) VALUES ('test-root','Pending project','plan',$1,$2,$3,$4)`, [alice,ws.id,source.id,status]);
+    if(kind==='wake') {
+      const [settings] = await q(`INSERT INTO companion_settings (user_id,workspace_id) VALUES ($1,$2) RETURNING id`, [alice,ws.id]);
+      await q(`INSERT INTO companion_wakes (settings_id,session_id,status,event_seqs,lease_token,lease_until) VALUES ($1,$2,$3,'[]',$4,now()+interval '1 minute')`, [settings.id,source.id,status,randomUUID()]);
+    }
+    await expect(mgr.transfer(alice,ws.id,bob)).rejects.toMatchObject({ code: 'workspace_busy' });
+    expect((await q(`SELECT user_id FROM workspaces WHERE id=$1`, [ws.id]))[0].user_id).toBe(alice);
+    expect((await q(`SELECT user_id FROM sessions WHERE id=$1`, [source.id]))[0].user_id).toBe(alice);
+    await q(`DELETE FROM companion_goals WHERE id=$1`, [goal.id]);
   });
 
   test('a transferred workspace secret decrypts for the recipient, not for the previous owner', async () => {

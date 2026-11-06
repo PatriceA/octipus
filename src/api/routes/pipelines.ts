@@ -1,3 +1,4 @@
+import { canActInSession } from '@/core/rooms/access';
 import type { Static } from '@sinclair/typebox';
 import { desc, eq, isNull, or } from 'drizzle-orm';
 import { type AgentScope, buildAgentContext, resolveAgentScope, withAgentUsage } from '@/core/agent/context';
@@ -617,7 +618,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       const parsed = proposedPipelinePermissionProfileSchema.safeParse(body.profile);
       if (!parsed.success) { set.status = 400; return { error: 'Invalid run permission profile' }; }
       const session = await sessionRepository.findById(pipeline.sessionId);
-      if (!session || session.userId !== user.id || (session.workspaceId ?? null) !== (pipeline.workspaceId ?? null)) { set.status = 404; return { error: 'Pipeline session not found' }; }
+      if (!session || !await canActInSession(session, user.id, 'personal_tool') || (session.workspaceId ?? null) !== (pipeline.workspaceId ?? null)) { set.status = 404; return { error: 'Pipeline session not found' }; }
       if (await (await import('@/security/workspace-fs')).isSharedWorkspaceId(pipeline.workspaceId)) { set.status = 403; return { error: 'Run-wide personal shell approval is unavailable in shared workspaces' }; }
       try {
         const fs = WorkspaceFS.forSession(session, { space: null }, { extraAllowedPrefixes: getConfig().workspace.additionalPaths });

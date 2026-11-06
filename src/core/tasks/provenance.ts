@@ -1,3 +1,4 @@
+import {canActInSession} from '@/core/rooms/access';
 import {and,eq,inArray,sql} from 'drizzle-orm';
 import {getDb} from '@/db/postgres';
 import {sessions} from '@/db/schema/sessions';
@@ -43,7 +44,7 @@ export async function persistHeartbeatTaskProvenance(userId:string,sessionId:str
  if(source.protectionLevel===1&&!Object.keys(source.flowLabel).length)return;
  const {sessionRepository}=await import('@/db/repositories/session-repository');let session=await sessionRepository.findById(sessionId);
  if(!session)session=await sessionRepository.create({id:sessionId,userId,channelType:'heartbeat',channelId:userId});
- if(session.userId!==userId)throw new Error('Heartbeat source session owner mismatch');
+ if(!await canActInSession(session,userId,'personal_tool'))throw new Error('Heartbeat source session owner mismatch');
  const [stored]=await getDb().update(sessions).set({protectionLevel:sql`greatest(coalesce(${sessions.protectionLevel},1),${source.protectionLevel})`,flowLabel:sql`coalesce(${sessions.flowLabel},'{}'::jsonb)||${JSON.stringify(source.flowLabel)}::jsonb`}).where(and(eq(sessions.id,sessionId),eq(sessions.userId,userId))).returning({id:sessions.id});
  if(!stored)throw new Error('Heartbeat source protection could not be persisted');observeTaskProvenance(sessionId,source);
 }

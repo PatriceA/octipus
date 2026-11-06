@@ -33,6 +33,7 @@ const ALLOWED: Record<string, string> = {
   'channels/taken-task-notices.ts': 'session owner vs the task owner',
   // A learning job, monitor or delivery against the row that queued it (all personal-only, refused in rooms).
   'core/learning/processor.ts': 'job owner vs its session',
+  'core/companion/dispatcher.ts': 'durable action goal owner vs its personal linked session; caller authority is separately revalidated',
   'core/monitors/service.ts': 'monitor owner vs its session',
   'core/monitors/delivery.ts': 'monitor owner vs its session',
   // An auth session (login), not a chat.

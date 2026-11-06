@@ -62,6 +62,7 @@ function errorStatus(err: OrgWorkspaceError): number {
       return 400;
     case 'slug_conflict':
     case 'files_conflict':
+    case 'workspace_busy':
       return 409;
     case 'not_admin':
       return 403;

@@ -663,7 +663,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 26 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 173 |
+| `api` | `core` | 174 |
 | `api` | `db` | 123 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |

@@ -24,7 +24,7 @@ process.env.LOG_LEVEL ??= 'error';
  */
 const PERSONAL_PREFIXES = [
   '/api/admin', '/api/agents', '/api/auth', '/api/backups', '/api/capabilities', '/api/channels', '/api/chat',
-  '/api/calendar', '/api/connectors', '/api/context-hooks', '/api/devices', '/api/digest', '/api/email', '/api/eval', '/api/evaluations',
+  '/api/calendar', '/api/companion', '/api/connectors', '/api/context-hooks', '/api/devices', '/api/digest', '/api/email', '/api/eval', '/api/evaluations',
   '/api/gateway', '/api/graph', '/api/health', '/api/heartbeat', '/api/hooks', '/api/invites', '/api/logs', '/api/mcp',
   '/api/me', '/api/memory', '/api/metrics', '/api/models', '/api/modules', '/api/onboarding', '/api/permission-requests', '/api/persona',
   '/api/pipelines', '/api/plugin-packages', '/api/plugins', '/api/reader', '/api/recurring-tasks', '/api/research', '/api/roles',

@@ -79,7 +79,8 @@ export class OrgWorkspaceError extends Error {
       | 'cannot_delete_default'
       | 'recipient_not_found'
       | 'cannot_transfer_to_self'
-      | 'files_conflict',
+      | 'files_conflict'
+      | 'workspace_busy',
     message: string,
   ) {
     super(message);
@@ -670,6 +671,28 @@ export class OrgWorkspaceManager {
         throw new OrgWorkspaceError('workspace_not_found', 'workspace disappeared mid-transfer');
       }
 
+      // The workspace row lock fences new Companion dispatch. Existing
+      // unknown outcomes must remain reconcilable by their original owner.
+      // A steering caller may have read its authority before the workspace
+      // lock. Lock existing journals too: it either claimed first (busy below)
+      // or sees its queued row cancelled after this transaction commits.
+      await tx.execute(sql`SELECT a.id FROM companion_actions a JOIN companion_goals g ON g.id=a.goal_id
+        WHERE g.workspace_id=${workspaceId} AND g.user_id=${actorUserId} FOR UPDATE OF a`);
+      await tx.execute(sql`SELECT id FROM companion_settings WHERE workspace_id=${workspaceId} AND user_id=${actorUserId} FOR UPDATE`);
+      await tx.execute(sql`SELECT a.id FROM companion_activations a JOIN companion_goals g ON g.id=a.goal_id
+        WHERE g.workspace_id=${workspaceId} AND g.user_id=${actorUserId} FOR UPDATE OF a`);
+      const pending = await tx.execute(sql`SELECT 1 AS busy WHERE
+        EXISTS (SELECT 1 FROM companion_actions a JOIN companion_goals g ON g.id=a.goal_id
+          WHERE g.workspace_id=${workspaceId} AND g.user_id=${actorUserId} AND a.status IN ('running','unknown'))
+        OR EXISTS (SELECT 1 FROM companion_activations a JOIN companion_goals g ON g.id=a.goal_id
+          WHERE g.workspace_id=${workspaceId} AND g.user_id=${actorUserId} AND a.status IN ('queued','launched','restarted','unknown'))
+        OR EXISTS (SELECT 1 FROM companion_wakes w JOIN companion_settings c ON c.id=w.settings_id
+          WHERE c.workspace_id=${workspaceId} AND c.user_id=${actorUserId} AND w.status IN ('running','unknown'))
+        OR EXISTS (SELECT 1 FROM agents WHERE workspace_id=${workspaceId} AND user_id=${actorUserId} AND status='running')
+        OR EXISTS (SELECT 1 FROM pipelines WHERE workspace_id=${workspaceId} AND user_id=${actorUserId} AND status IN ('running','awaiting_approval'))`);
+      const pendingRows = Array.isArray(pending) ? pending : (pending as { rows: unknown[] }).rows;
+      if (pendingRows.length) throw new OrgWorkspaceError('workspace_busy', 'Finish or reconcile running work before transferring this workspace');
+
       // Reassign the workspace's working state — every `move` table of
       // WORKSPACE_TABLES — to the recipient. Only the previous owner's
       // rows move: a row of another user stamped with this workspace
@@ -697,6 +720,20 @@ export class OrgWorkspaceManager {
           WHERE workspace_id = ${workspaceId} AND ${sql.identifier(t.ownerColumn)} = ${actorUserId}${filter}
         `);
       }
+
+      // Personal automation consent is not transferred with project content.
+      // Retire old supervision so it cannot revive on a later transfer back or
+      // keep the recipient from adopting their now-owned session. Preserve
+      // running/unknown action receipts for outcome reconciliation.
+      await tx.execute(sql`UPDATE companion_actions SET status='cancelled', updated_at=now()
+        WHERE status='queued' AND goal_id IN (SELECT id FROM companion_goals WHERE workspace_id=${workspaceId} AND user_id=${actorUserId})`);
+      await tx.execute(sql`UPDATE companion_session_links SET active=false, released_at=now()
+        WHERE active AND goal_id IN (SELECT id FROM companion_goals WHERE workspace_id=${workspaceId} AND user_id=${actorUserId})`);
+      await tx.execute(sql`UPDATE companion_goals SET execution_policy=NULL, revision=revision+1, updated_at=now(),
+        state=CASE WHEN state IN ('completed','cancelled') THEN state ELSE 'paused' END
+        WHERE workspace_id=${workspaceId} AND user_id=${actorUserId}`);
+      await tx.execute(sql`UPDATE companion_settings SET enabled=false, approved_at=NULL, revision=revision+1, updated_at=now()
+        WHERE workspace_id=${workspaceId} AND user_id=${actorUserId}`);
 
       try {
         moveWorkspaceFiles(from, to);

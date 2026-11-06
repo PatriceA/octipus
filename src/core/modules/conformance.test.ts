@@ -17,8 +17,8 @@ import { moduleOfPath, moduleOfTool } from './registry';
 /** Route prefixes of the core: always mounted, always answering. */
 const CORE_ROUTE_PREFIXES = [
   '/v1',
-  '/api/admin', '/api/agents', '/api/auth', '/api/backups', '/api/capabilities', 
-  '/api/chat', '/api/connectors', '/api/devices', '/api/digest', '/api/documents', 
+  '/api/admin', '/api/agents', '/api/auth', '/api/backups', '/api/capabilities',
+  '/api/chat', '/api/companion', '/api/connectors', '/api/devices', '/api/digest', '/api/documents',
   '/api/eval', '/api/evaluations', '/api/gateway', '/api/graph', '/api/health', '/api/heartbeat', '/api/hooks',
   '/api/invites', '/api/knowledge', '/api/logs', '/api/mcp', '/api/me', '/api/memory', '/api/metrics', '/api/models',
   '/api/modules', '/api/notes', '/api/notifications', '/api/onboarding', '/api/permission-requests', '/api/persona',
@@ -30,7 +30,7 @@ const CORE_ROUTE_PREFIXES = [
 
 /** Built-in tool containers of the core. */
 const CORE_TOOLS = [
-  'atlassian', 'browser', 'browser-ext', 'connections', 'data', 'docker', 'documents',
+  'atlassian', 'browser', 'browser-ext', 'companion', 'connections', 'data', 'docker', 'documents',
   'filesystem', 'git', 'github', 'gitlab', 'google-workspace', 'inline-ui', 'knowledge',
   'mcp_admin', 'microsoft365', 'monitor', 'notes', 'plan', 'repo_registry', 'scheduling',
   'shell', 'skill-distill', 'task_state', 'tasks', 'visual', 'websearch',
@@ -38,7 +38,7 @@ const CORE_TOOLS = [
 
 /** Sidebar pages of the core. */
 const CORE_PAGES = [
-  '/', '/chat', '/tasks', '/my-work', '/notifications', '/agents', '/notes', '/documents',
+  '/', '/chat', '/companion', '/tasks', '/my-work', '/notifications', '/agents', '/notes', '/documents',
   '/knowledge', '/pipelines', '/hooks', '/models', '/mcp', '/settings', '/tools',
   '/permissions', '/persona', '/memory', '/skills', '/topics', '/eval', '/secrets', '/admin/users',
   '/rooms', '/spaces/remote',
