@@ -240,6 +240,15 @@ async function main() {
       logger.error({ err }, 'capability probe failed — rootAgent will fall back to per-spawn probes');
     }
 
+    // Mint / refresh the MCP bootstrap api token so bin/octi can stamp it
+    // into .mcp.json (the legacy MASTER_KEY path was removed).
+    try {
+      const { ensureMcpBootstrapToken } = await import('@/security/mcp-token-bootstrap');
+      await ensureMcpBootstrapToken();
+    } catch (err) {
+      logger.error({ err }, 'MCP token bootstrap failed (non-fatal)');
+    }
+
     // Connect to MCP servers
     // Not awaited: a slow MCP server must not hold up boot. Agent tool lists
     // wait for it, bounded (MCPBridge.whenInitiallyConnected).
@@ -424,15 +433,6 @@ async function main() {
     // but every request was connection-refused). Hold it and stop it on shutdown.
     await startServer();
     logger.info('API server started');
-
-    // Mint / refresh the MCP bootstrap api token so bin/octi can stamp it
-    // into .mcp.json (the legacy MASTER_KEY path was removed).
-    try {
-      const { ensureMcpBootstrapToken } = await import('@/security/mcp-token-bootstrap');
-      await ensureMcpBootstrapToken();
-    } catch (err) {
-      logger.error({ err }, 'MCP token bootstrap failed (non-fatal)');
-    }
 
     // Role heartbeat leases left by turns that died with a previous run of
     // this server: all of them on PGlite / OCTIPUS_SINGLE_PROCESS=1; on

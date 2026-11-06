@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as yaml from 'js-yaml';
 import type { MCPServer } from '@/core/types';
 import type { MCPServerConnection } from '@/mcp/bridge';
 vi.mock('./cocoindex-embedding', () => ({ cocoIndexEmbeddingSettings: async () => ({
@@ -103,6 +104,82 @@ function fixture(options: {
     getServers: () => servers,
   };
 }
+
+describe('managed embedding authentication refresh', () => {
+  const managed: MCPServer = { id: 'cocoindex-code', name: 'CocoIndex Code', command: '/bin/ccc', cwd: '/workspace/repo', isEnabled: true,
+    env: { OCTIPUS_MANAGED_CONNECTOR: 'cocoindex-code', OCTIPUS_COCOINDEX_EMBEDDING_SOURCE: 'octipus' } };
+  function authenticationFixture(token = 'current-fixture-token') {
+    const f = fixture({ servers: [managed] });
+    const initial = { embedding: { provider: 'litellm', model: 'openai/existing-index-model' }, envs: { OPENAI_API_KEY: token, OPENAI_API_BASE: 'http://localhost:3005/api/connectors/cocoindex/document', OTHER: 'preserved' } };
+    vi.mocked(f.deps.readText).mockImplementation(async path => path.endsWith('mcp-token') ? 'current-fixture-token' : f.writes.get(path) ?? yaml.dump(initial));
+    return f;
+  }
+  test('rotated token is refreshed once before reconnect, without reindexing or changing the model', async () => {
+    const f = authenticationFixture('revoked-fixture-token');
+    expect(await f.service.refreshAuthentication(managed)).toBe(true);
+    expect(f.calls.map(call => call.args)).toEqual([['daemon', 'stop']]);
+    const [path, content] = [...f.writes][0];
+    expect(yaml.load(content)).toMatchObject({ embedding: { model: 'openai/existing-index-model' }, envs: { OPENAI_API_KEY: 'current-fixture-token', OTHER: 'preserved' } });
+    expect(f.deps.restrictFile).toHaveBeenCalledWith(path);
+    expect(await f.service.refreshAuthentication(managed)).toBe(false);
+    expect(f.calls).toHaveLength(1);
+  });
+  test('valid current authentication, local embeddings and unmanaged servers are left alone', async () => {
+    const f = authenticationFixture();
+    expect(await f.service.refreshAuthentication(managed)).toBe(false);
+    expect(await f.service.refreshAuthentication({ ...managed, env: {} })).toBe(false);
+    expect(await f.service.refreshAuthentication({ ...managed, env: { ...managed.env, OCTIPUS_COCOINDEX_EMBEDDING_SOURCE: 'local' } })).toBe(false);
+    expect(f.calls).toHaveLength(0); expect(f.writes.size).toBe(0);
+  });
+  test('parallel reconnect attempts refresh the daemon only once', async () => {
+    const f = authenticationFixture('revoked-fixture-token');
+    await Promise.all(Array.from({ length: 5 }, () => f.service.refreshAuthentication(managed)));
+    expect(f.calls).toHaveLength(1); expect(f.writes.size).toBe(1);
+  });
+  test('reconfiguration waits for an older refresh so its new model cannot be overwritten', async () => {
+    const f = authenticationFixture('revoked-fixture-token');
+    const stopped = deferred<void>();
+    const original = f.run.getMockImplementation()!;
+    let paused = false;
+    f.run.mockImplementation(async (...args) => {
+      const result = await original(...args);
+      if (args[1].join(' ') === 'daemon stop' && !paused) { paused = true; await stopped.promise; }
+      return result;
+    });
+    const refreshing = f.service.refreshAuthentication(managed);
+    await vi.waitFor(() => expect(paused).toBe(true));
+    const installing = f.service.install('/workspace/new-repo', undefined, 'octipus');
+    await Promise.resolve();
+    expect(f.writes.size).toBe(0);
+    stopped.resolve();
+    await refreshing; await installing; await f.service.waitForIdle();
+    const settings = [...f.writes].find(([path]) => path.endsWith('global_settings.yml'))![1];
+    expect(yaml.load(settings)).toMatchObject({ embedding: { model: 'openai/octipus-test' } });
+  });
+  test('a refresh cannot slip into the same-stack start of local reconfiguration or removal', async () => {
+    const installing = authenticationFixture('revoked-fixture-token');
+    const setup = installing.service.install('/workspace/new-repo', 'Snowflake/new-model', 'local');
+    await expect(installing.service.refreshAuthentication(managed)).rejects.toThrow('configuration is changing');
+    await setup; await installing.service.waitForIdle();
+    const removing = authenticationFixture('revoked-fixture-token');
+    const removal = removing.service.remove();
+    await expect(removing.service.refreshAuthentication(managed)).rejects.toThrow('configuration is changing');
+    await removal;
+  });
+  test('failed daemon stop does not record a successful refresh and can be retried', async () => {
+    const f = authenticationFixture('revoked-fixture-token');
+    f.run.mockRejectedValueOnce(new Error('stop failed'));
+    await expect(f.service.refreshAuthentication(managed)).rejects.toThrow('stop failed');
+    expect(f.writes.size).toBe(0);
+    expect(await f.service.refreshAuthentication(managed)).toBe(true);
+  });
+  test('parse errors never expose credential file content', async () => {
+    const f = authenticationFixture();
+    vi.mocked(f.deps.readText).mockImplementation(async path => path.endsWith('mcp-token') ? 'current-fixture-token' : 'envs: [secret-fixture-token');
+    await expect(f.service.refreshAuthentication(managed)).rejects.toThrow('Managed CocoIndex settings cannot be read');
+    expect(f.calls).toHaveLength(0);
+  });
+});
 
 // Posix-shaped FIXTURES, not posix-only logic: every expectation here is
 // written as `/home/test/...` and `/workspace/repo`, which `join` turns into

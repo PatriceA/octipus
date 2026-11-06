@@ -20,6 +20,7 @@ import { restrictToOwner } from '@/utils/file-acl';
 import { killProcessTree } from '@/utils/proc';
 import { writeFileAt } from '@/utils/fs-file';
 import { coreLogger } from '@/utils/logger';
+import { getMcpTokenPath } from '@/security/mcp-token-bootstrap';
 import { cocoIndexEmbeddingSettings } from './cocoindex-embedding';
 
 /** The launcher's filename. One constant, because a site that spelled it
@@ -254,6 +255,38 @@ export class CocoIndexService {
     );
   }
 
+  private authenticationRefresh: Promise<boolean> | null = null;
+
+  /** A managed daemon caches its API token; refresh rotations before connecting. */
+  async refreshAuthentication(server: MCPServer): Promise<boolean> {
+    if (server.id !== COCOINDEX_CONNECTOR_ID || !isManaged(server) || server.env?.OCTIPUS_COCOINDEX_EMBEDDING_SOURCE !== 'octipus') return false;
+    if (this.authenticationRefresh) return this.authenticationRefresh;
+    if (this.removeJob || (this.job && this.state.status !== 'connecting')) throw new Error('CocoIndex configuration is changing; retry connection after it settles');
+    this.authenticationRefresh = this.refreshManagedAuthentication(server).finally(() => { this.authenticationRefresh = null; });
+    return this.authenticationRefresh;
+  }
+
+  private async refreshManagedAuthentication(server: MCPServer): Promise<boolean> {
+    if (!server.cwd || !server.command) throw new Error('Managed CocoIndex runtime is incomplete');
+    const token = (await this.deps.readText(getMcpTokenPath())).trim();
+    if (!token) throw new Error('Current Octipus API token is unavailable');
+    const path = join(this.configDir(), 'global_settings.yml');
+    let settings: Record<string, unknown> | null;
+    try { settings = yaml.load(await this.deps.readText(path)) as Record<string, unknown> | null; }
+    catch { throw new Error('Managed CocoIndex settings cannot be read; reapply connector settings'); }
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Managed CocoIndex settings are invalid');
+    if (settings.envs !== undefined && (!settings.envs || typeof settings.envs !== 'object' || Array.isArray(settings.envs))) throw new Error('Managed CocoIndex environment settings are invalid');
+    const envs = settings.envs as Record<string, string> | undefined;
+    if (envs?.OPENAI_API_KEY === token) return false;
+    // Stop before changing the file: a failed stop leaves the mismatch visible
+    // for the next retry rather than claiming the daemon loaded the new token.
+    await this.deps.run(server.command, ['daemon', 'stop'], { cwd: server.cwd, env: this.managedEnvironment(server.cwd), timeoutMs: COMMAND_TIMEOUT_MS });
+    // Preserve the embedding model/index. Token rotation never rebuilds it.
+    await this.deps.writeFile(path, yaml.dump({ ...settings, envs: { ...envs, OPENAI_API_KEY: token } }, { noRefs: true, lineWidth: -1 }));
+    this.deps.restrictFile(path);
+    return true;
+  }
+
   private configDir(): string {
     return join(this.deps.homeDir, '.octipus', 'cocoindex-code');
   }
@@ -358,6 +391,8 @@ export class CocoIndexService {
       );
     }
     const shared = source === 'octipus' ? await cocoIndexEmbeddingSettings() : undefined;
+    // Drain an older credential refresh before this setup can mutate its file.
+    while (this.authenticationRefresh) await this.authenticationRefresh.catch(() => {});
     if (this.removeJob) throw new Error('CocoIndex Code connector removal is still in progress');
     if (this.job) return structuredClone(this.state);
     const model = shared?.model ?? assertEmbeddingModel(embeddingModel ?? COCOINDEX_DEFAULT_EMBEDDING_MODEL);
@@ -676,6 +711,7 @@ export class CocoIndexService {
   }
 
   async remove(): Promise<CocoIndexStatus> {
+    while (this.authenticationRefresh) await this.authenticationRefresh.catch(() => {});
     if (this.removeJob) return structuredClone(await this.removeJob);
     this.removeJob = this.runRemove();
     try { return structuredClone(await this.removeJob); }

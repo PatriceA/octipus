@@ -3,6 +3,9 @@ import { MCPBridge } from './bridge';
 import type { MCPServer } from '@/core/types';
 import type { MCPTransport, ErrorHandler, MessageHandler, CloseHandler } from './transports/interface';
 
+const managedAuth = vi.hoisted(() => ({ refresh: vi.fn() }));
+vi.mock('@/connectors/cocoindex', () => ({ getCocoIndexService: () => ({ refreshAuthentication: managedAuth.refresh }) }));
+
 const server: MCPServer = { id: 'broken', name: 'Broken integration', command: 'missing-mcp-server', isEnabled: true };
 
 function fakeTransport(failOnConnect = false) {
@@ -29,6 +32,27 @@ function fakeTransport(failOnConnect = false) {
 }
 
 describe('MCP connection failures stay local to the integration', () => {
+  const managed: MCPServer = { ...server, id: 'cocoindex-code', env: { OCTIPUS_MANAGED_CONNECTOR: 'cocoindex-code', OCTIPUS_COCOINDEX_EMBEDDING_SOURCE: 'octipus' } };
+  it('refreshes managed indexing credentials before starting the transport', async () => {
+    const order: string[] = [];
+    managedAuth.refresh.mockImplementation(async () => { order.push('refresh'); return true; });
+    const bridge = new MCPBridge();
+    const fake = fakeTransport(); fake.succeed();
+    fake.transport.connect = async () => { order.push('connect'); };
+    vi.spyOn(bridge as any, 'createTransport').mockReturnValue(fake.transport);
+    await bridge.connect(managed);
+    expect(order).toEqual(['refresh', 'connect']);
+    await bridge.disconnectAll();
+  });
+  it('does not start a managed client when credential refresh fails', async () => {
+    managedAuth.refresh.mockRejectedValueOnce(new Error('Refresh unavailable'));
+    const bridge = new MCPBridge();
+    const fake = fakeTransport(); const connect = vi.spyOn(fake.transport, 'connect');
+    vi.spyOn(bridge as any, 'createTransport').mockReturnValue(fake.transport);
+    await expect(bridge.connect(managed)).rejects.toThrow('Refresh unavailable');
+    expect(connect).not.toHaveBeenCalled();
+    expect(fake.transport.close).toHaveBeenCalledOnce();
+  });
   it.each([true, false])('rejects startup errors promptly without an error-event subscriber (during connect: %s)', async early => {
     const bridge = new MCPBridge();
     const fake = fakeTransport(early);

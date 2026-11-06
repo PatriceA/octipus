@@ -702,7 +702,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `core` | 1 |
 | `connectors` | `mcp` | 2 |
 | `connectors` | `models` | 2 |
-| `connectors` | `security` | 5 |
+| `connectors` | `security` | 6 |
 | `connectors` | `shared` | 1 |
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 2 |
@@ -747,6 +747,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `hooks` | `tools` | 1 |
 | `hooks` | `utils` | 8 |
 | `mcp` | `config` | 2 |
+| `mcp` | `connectors` | 1 |
 | `mcp` | `core` | 4 |
 | `mcp` | `security` | 7 |
 | `mcp` | `shared` | 3 |
@@ -848,6 +849,7 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - config <-> security
 - config <-> voice
 - connectors <-> core
+- connectors <-> mcp
 - connectors <-> security
 - core <-> db
 - core <-> extensions

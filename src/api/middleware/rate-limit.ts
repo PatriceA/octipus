@@ -54,13 +54,11 @@ export function isCredentialAttempt(path: string): boolean {
 export function isPublicFormPath(path: string): boolean {
   return path.startsWith('/api/forms/');
 }
-// Background indexing can issue hundreds of batches after a restart. It must
-// remain bounded without spending the interactive UI's allowance. Only the
-// authenticated admin-only indexing route gets this separate fixed bucket;
-// headers, credentials and arbitrary paths cannot create new buckets.
-export function apiRateWorkload(path: string, method: string, principal?: Principal): 'api' | 'indexing' {
-  return method === 'POST' && /^\/api\/connectors\/cocoindex\/(document|query)\/embeddings$/.test(path)
-    && !!principal && isAuthenticated(principal) && principal.isAdmin ? 'indexing' : 'api';
+// Indexing retries with a stale token must not consume the interactive UI's
+// allowance. The route gets a fixed bounded bucket even before authentication;
+// authorization still runs normally and rejects invalid credentials.
+export function apiRateWorkload(path: string, method: string): 'api' | 'indexing' {
+  return method === 'POST' && /^\/api\/connectors\/cocoindex\/(document|query)\/embeddings$/.test(path) ? 'indexing' : 'api';
 }
 
 const USER_QUOTA_WINDOW_SECS = 60;
@@ -178,7 +176,7 @@ export const rateLimitMiddleware = new Elysia({ name: 'rate-limit' }).onBeforeHa
     if (!url.pathname.startsWith('/api/') || url.pathname.startsWith('/api/health') || url.pathname.startsWith('/api/metrics')) return;
 
     const principal = (ctx as { principal?: Principal }).principal;
-    const workload = apiRateWorkload(url.pathname, request.method, principal);
+    const workload = apiRateWorkload(url.pathname, request.method);
 
     // ── Layer 1b: baseline per-IP cap on all /api/* (any mode) ──────
     if (BASELINE_IP_LIMIT > 0) {

@@ -19,7 +19,10 @@ const admin: Principal = { kind: 'user', userId: 'owner', username: 'owner', isA
 const indexing = '/api/connectors/cocoindex/document/embeddings';
 function app(principal: Principal = admin) {
   return new Elysia().derive(() => ({ principal })).use(rateLimitMiddleware)
-    .post(indexing, () => ({ ok: true }))
+    .post(indexing, ({ set }) => {
+      if (principal.kind === 'anonymous') { set.status = 401; return { error: 'Not authenticated' }; }
+      return { ok: true };
+    })
     .get('/api/companion/settings', () => ({ ok: true }));
 }
 const call = (server: ReturnType<typeof app>, path: string, method = 'GET') => server.handle(new Request(`http://localhost${path}`, { method }));
@@ -27,6 +30,13 @@ const call = (server: ReturnType<typeof app>, path: string, method = 'GET') => s
 beforeEach(() => { state.counts.clear(); state.quota = 1000; });
 
 describe('indexing and interactive API limits', () => {
+  test('a stale indexing token remains rejected and bounded without starving authenticated UI reads', async () => {
+    const indexer = app(ANONYMOUS_PRINCIPAL);
+    const browser = app();
+    for (let i = 0; i < 600; i++) expect((await call(indexer, indexing, 'POST')).status).toBe(401);
+    expect((await call(indexer, indexing, 'POST')).status).toBe(429);
+    expect((await call(browser, '/api/companion/settings')).status).toBe(200);
+  });
   test('an indexing burst is still capped without blocking the UI after restart', async () => {
     const server = app();
     for (let i = 0; i < 600; i++) expect((await call(server, indexing, 'POST')).status).toBe(200);
@@ -46,11 +56,9 @@ describe('indexing and interactive API limits', () => {
   });
 
   test('untrusted requests cannot choose or multiply workload buckets', () => {
-    expect(apiRateWorkload(indexing, 'POST', admin)).toBe('indexing');
-    expect(apiRateWorkload(indexing, 'POST', ANONYMOUS_PRINCIPAL)).toBe('api');
-    expect(apiRateWorkload(indexing, 'POST', { ...admin, isAdmin: false })).toBe('api');
-    expect(apiRateWorkload(indexing, 'GET', admin)).toBe('api');
-    expect(apiRateWorkload(`${indexing}/anything`, 'POST', admin)).toBe('api');
-    expect(apiRateWorkload('/api/models', 'POST', admin)).toBe('api');
+    expect(apiRateWorkload(indexing, 'POST')).toBe('indexing');
+    expect(apiRateWorkload(indexing, 'GET')).toBe('api');
+    expect(apiRateWorkload(`${indexing}/anything`, 'POST')).toBe('api');
+    expect(apiRateWorkload('/api/models', 'POST')).toBe('api');
   });
 });

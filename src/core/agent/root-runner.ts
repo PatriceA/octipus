@@ -1,3 +1,4 @@
+import { companionControllerLimits } from '@/core/companion/turn-limits';
 import { getCLIToolConfig } from '@/core/cli-agent-factory';
 import { buildRootAttachmentContext } from './image-attachments';
 import type { AttachedFileRef } from '@/core/session-files';
@@ -817,8 +818,10 @@ export async function runRootAgent(
     tools: turnTools,
     toolAdvertisement,
     // Full mode: agent.maxIterations (0 = unlimited) via agentManager.spawn.
-    maxIterations: supervisor ? 12 : isLite ? agentCfg.liteMaxIterations : undefined,
-    maxTokenBudget: companionTokenCap ?? supervisor?.turnTokenBudget,
+    ...(supervisor ? companionControllerLimits(scope.trigger, supervisor.turnTokenBudget, companionTokenCap) : {
+      maxIterations: isLite ? agentCfg.liteMaxIterations : undefined,
+      maxTokenBudget: companionTokenCap,
+    }),
     timeout: turnTimeout,
     // Seed the user's raw request so the spawner can forward it verbatim
     // to every child. Without this, children only see the root agent's

@@ -45,7 +45,7 @@ Full requests and acceptance criteria remain available through bounded source pa
 
 ## Resource controls
 
-Settings expose concurrent supervised sessions, daily tokens, tokens per turn, repair strategies and quiet hours. Goal scheduling supports dependencies and an optional goal budget. Dependencies must belong to the same workspace and cannot form a cycle.
+Settings expose concurrent supervised sessions, daily tokens, tokens per background turn, repair strategies and quiet hours. Direct owner-driven Companion chats inherit the normal configured agent token and iteration limits, including an unlimited token budget when configured. Reserved action and wake budgets remain enforced; unattended supervision retains its configured per-turn cap. Goal scheduling supports dependencies and an optional goal budget. Dependencies must belong to the same workspace and cannot form a cycle.
 
 Turn, observation and pipeline-stage reservations share workspace locking. Stage workers and their native child pools receive the available token slice. Timestamped usage charges the UTC day in which it occurred; legacy agent totals are a conservative fallback. Calls already in progress can exceed an estimate. Budget contention pauses at a saved checkpoint instead of classifying the project as failed.
 

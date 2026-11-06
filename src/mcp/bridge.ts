@@ -214,6 +214,10 @@ export class MCPBridge extends EventEmitter {
     };
 
     try {
+      if (server.id === 'cocoindex-code' && server.env?.OCTIPUS_MANAGED_CONNECTOR === 'cocoindex-code' && server.env?.OCTIPUS_COCOINDEX_EMBEDDING_SOURCE === 'octipus') {
+        const { getCocoIndexService } = await import('@/connectors/cocoindex');
+        await getCocoIndexService().refreshAuthentication(server);
+      }
       // Wire transport messages to protocol
       transport.onMessage((line) => {
         try {
