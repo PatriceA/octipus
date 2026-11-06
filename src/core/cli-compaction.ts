@@ -89,7 +89,10 @@ export async function compactCliConversation(session: Session, instructions: str
     } else if (adapter === 'Codex CLI') {
       if (instructions) throw new Error('Codex native compaction does not accept focus instructions; use /compact without arguments.');
       const servers = await discoverCodexMcpServers(cwd, env);
-      const args = ['app-server', ...servers.flatMap(server => ['-c', `mcp_servers.${JSON.stringify(server.name)}.enabled=false`])];
+      // Codex splits dotted override paths literally: a quoted name becomes
+      // a new, invalid server rather than disabling the configured one.
+      // Put quoted names inside a TOML table, as the agent launcher does.
+      const args = ['app-server', '-c', `mcp_servers={${servers.map(server => `${JSON.stringify(server.name)}={enabled=false}`).join(',')}}`];
       usage = await compactCodexThread(tool.binaryPath, args, { cwd, env, threadId: record.id });
     } else {
       throw new Error(`Native compaction is not supported for ${adapter}; the existing session was retained.`);
@@ -128,7 +131,7 @@ export function compactCodexThread(binary: string, args: string[], options: { cw
     child.on('error', () => finish(new Error('Could not start Codex compaction.')));
     child.stdin.on('error', () => finish(new Error('Codex compaction connection closed.')));
     child.stderr.resume(); // never echo provider output or credentials
-    child.on('close', () => finish(new Error('Codex exited before confirming compaction.')));
+    child.on('close', (code, signal) => finish(new Error(`Codex exited before confirming compaction (${signal ? `signal ${signal}` : `exit ${code ?? 'unknown'}`}); session retained.`)));
     child.stdout.on('data', chunk => {
       if (settled) return;
       buffer += chunk.toString();

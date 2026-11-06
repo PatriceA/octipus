@@ -1,15 +1,16 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { beforeEach, expect, test, vi } from 'vitest';
+import { parse as parseToml } from 'smol-toml';
 import type { Session } from '@/db/schema/sessions';
-const mock = vi.hoisted(() => ({ exec: vi.fn(), spawn: vi.fn(), owner: vi.fn(), latest: vi.fn(), tool: vi.fn(), kill: vi.fn(), row: vi.fn() }));
+const mock = vi.hoisted(() => ({ exec: vi.fn(), spawn: vi.fn(), owner: vi.fn(), latest: vi.fn(), tool: vi.fn(), kill: vi.fn(), row: vi.fn(), servers: vi.fn() }));
 vi.mock('node:child_process', () => ({ spawn: mock.spawn }));
 vi.mock('@/utils/proc', () => ({ killProcessTree: mock.kill }));
 vi.mock('@/models/providers/instrumented', () => ({ recordProviderUsage: vi.fn() }));
 vi.mock('@/models/providers/cli-provider', () => ({ acquireCliSlot: async () => () => {}, execCli: mock.exec, windowsShellQuote: (s: string) => s, windowsShellQuoter: () => (s: string) => s }));
 vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: { findById: mock.owner, findLatestRootForSession: mock.latest } }));
 vi.mock('./cli-agent-factory', () => ({ getCLIToolConfig: mock.tool, resolveCliModelEntry: mock.row }));
-vi.mock('./cli-adapters', () => ({ discoverCodexMcpServers: async () => [] }));
+vi.mock('./cli-adapters', () => ({ discoverCodexMcpServers: mock.servers }));
 vi.mock('./cli-session-store', () => ({ isChildCliSessionKey: (key: string) => key.includes('::'), cliSessionKeyAdapter: (key: string) => key.split('@@')[0] }));
 vi.mock('@/security/workspace-fs', () => ({ WorkspaceFS: { forSession: () => ({ root: '/session-workspace' }) }, sessionFsAccess: async () => ({ space: null }) }));
 import { compactCliConversation, compactCodexThread, rootCliConversation } from './cli-compaction';
@@ -21,6 +22,7 @@ beforeEach(() => {
   mock.latest.mockResolvedValue({ id: 'root' });
   mock.tool.mockReturnValue({ name: 'Claude Code', binaryPath: 'claude', modelProvider: 'anthropic' });
   mock.row.mockResolvedValue({ metadata: {} });
+  mock.servers.mockResolvedValue([]);
 });
 test('Claude compact resumes exact vendor ID and never mutates its record', async () => {
   const state = session();
@@ -107,4 +109,25 @@ test('Codex waits for the matching completed compaction turn, not the RPC acknow
   emit({ method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'compact', status: 'completed' } } });
   await running;
   expect(mock.kill).toHaveBeenCalled();
+});
+
+test('Codex compaction disables configured MCP servers with a single TOML table override', async () => {
+  const state = session();
+  state.context!.cliSessions = { 'Codex CLI': { ...record } };
+  mock.tool.mockReturnValue({ name: 'Codex CLI', binaryPath: 'codex', modelProvider: 'openai' });
+  mock.servers.mockResolvedValue([{ name: 'octipus' }, { name: 'project.server' }, { name: 'quoted"server' }]);
+  const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), pid: undefined });
+  mock.spawn.mockReturnValue(child);
+  const running = compactCliConversation(state, '', 'user');
+  const failed = expect(running).rejects.toThrow('exit 1');
+  await vi.waitFor(() => expect(mock.spawn).toHaveBeenCalled());
+  const [, args] = mock.spawn.mock.calls[0];
+  expect(args).toHaveLength(3);
+  expect(args.slice(0, 2)).toEqual(['app-server', '-c']);
+  expect(parseToml(args[2])).toEqual({ mcp_servers: {
+    octipus: { enabled: false }, 'project.server': { enabled: false }, 'quoted"server': { enabled: false },
+  } });
+  child.emit('close', 1, null);
+  await failed;
+  expect(state.context!.cliSessions['Codex CLI'].id).toBe(record.id);
 });
