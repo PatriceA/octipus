@@ -28,3 +28,12 @@ test('Companion can read todos in every mode and handle owner-requested todo wri
     }
   }
 });
+
+test('owner-requested conversation discovery is available without adoption and withheld from background turns', () => {
+  for (const mode of ['observe', 'coordinate', 'repair'] as const) for (const enabled of [false, true]) {
+    for (const name of ['companion__find_sessions', 'companion__read_session']) {
+      expect(companionControllerTools(mode, enabled, true).has(name)).toBe(true);
+      expect(companionControllerTools(mode, enabled, false).has(name)).toBe(false);
+    }
+  }
+});

@@ -42,6 +42,18 @@ async function mutationService(context: AgentContext, goalId?: string, operation
   }
   return s;
 }
+async function sessionReadService(context: AgentContext) {
+  if (context.trigger !== 'user') throw new Error('Reading unenrolled sessions requires an owner-requested turn');
+  return service(context);
+}
+async function carrySession(sessionId: string, context: AgentContext) {
+  const source = await persistCompanionSource({ userId: context.userId, workspaceId: context.workspaceId! }, sessionId);
+  raiseSessionLevel(context.sessionId, source.protectionLevel ?? 1);
+  observeFlow(context.sessionId, { toolId: 'companion', action: 'read' }, { taints: ['private', 'suspicious', ...(['secret'] as const).filter(flag => !!source.flowLabel?.[flag])] });
+  await persistCompanionSource({ userId: context.userId, workspaceId: context.workspaceId! }, context.sessionId);
+  return source;
+}
+
 export class CompanionTool extends BaseTool {
   readonly id = 'companion'; readonly name = 'Companion supervision'; readonly version = '1.0.0';
   readonly description = 'Own goals across project sessions. Start or adopt work, inspect progress, and send authorized instructions. Never create duplicate goals or sessions to retry a failed action; reuse request keys and inspect activity.';
@@ -50,9 +62,25 @@ export class CompanionTool extends BaseTool {
       permissions: [{ action: 'read', description: 'Inspect your supervised goals', defaultLevel: 'ALLOW' },
         { action: 'write', description: 'Create or change supervised goals', defaultLevel: 'ASK' },
         { action: 'execute', description: 'Start project sessions and send instructions under this goal', defaultLevel: 'ASK' }],
-      tools: ['list', 'read', 'create', 'update', 'adopt', 'start_session', 'message_session', 'control_session', 'inspect_session', 'detect_incident', 'advance_incident', 'verify_incident', 'start_maintenance', 'maintenance_run', 'activate', 'maintenance_check', 'maintenance_review', 'reconcile_activation', 'maintenance_inspect', 'read_part', 'heartbeat_status'].map(name => ({ name, description: name, parameters: {}, returns: 'Goal or action receipt' })) };
+      tools: ['find_sessions', 'read_session', 'list', 'read', 'create', 'update', 'adopt', 'start_session', 'message_session', 'control_session', 'inspect_session', 'detect_incident', 'advance_incident', 'verify_incident', 'start_maintenance', 'maintenance_run', 'activate', 'maintenance_check', 'maintenance_review', 'reconcile_activation', 'maintenance_inspect', 'read_part', 'heartbeat_status'].map(name => ({ name, description: name, parameters: {}, returns: 'Goal or action receipt' })) };
   }
   protected async registerTools() {
+    this.registerTool('find_sessions', 'Find existing personal conversations by title in this workspace, including sessions not adopted by Companion. Use when the owner names a session such as Life2. An empty goal list says nothing about whether that conversation exists. Matches are bounded; multiple matches require choosing the right session, not recreating it.',
+      z.toJSONSchema(z.object({ query: z.string().trim().min(1).max(200), limit: z.number().int().min(1).max(20).default(10) }), { io: 'input' }), async (args, context) => {
+        const input = z.object({ query: z.string().trim().min(1).max(200), limit: z.number().int().min(1).max(20).default(10) }).parse(args);
+        const result = await (await sessionReadService(context)).findSessions(input.query, input.limit);
+        for (const source of result.sessions) await carrySession(source.id, context);
+        return { sessions: result.sessions.map(({ id, title, status, updatedAt }) => ({ id, title: title?.slice(0, 300), status, updatedAt })), hasMore: result.hasMore,
+          note: 'These are existing conversations, not Companion goals. Read the selected session before reporting its progress. No work was adopted or restarted.' };
+      }, { permissionAction: 'read' });
+    this.registerTool('read_session', 'Read an existing personal conversation by its ID: recent human messages, workers, pipelines, remaining items and saved work-plan summary. No Companion goal is required. Use after find_sessions for current status. Does not adopt, resume or create work.',
+      z.toJSONSchema(z.object({ sessionId: z.uuid() }), { io: 'input' }), async (args, context) => {
+        const input = z.object({ sessionId: z.uuid() }).parse(args);
+        const s = await sessionReadService(context);
+        const result = await s.readSession(input.sessionId);
+        const source = await carrySession(input.sessionId, context);
+        return { ...result, protectionLevel: Math.max(result.protectionLevel, source.protectionLevel ?? 1), flowLabel: { ...result.flowLabel, ...source.flowLabel } };
+      }, { permissionAction: 'read' });
     this.registerTool('heartbeat_status', 'Check whether a role can pick up parked todo ideas on its next eligible heartbeat. Does not enable automation, grant permissions or start work. Normal heartbeat also respects quiet hours, budgets and task leases.',
       z.toJSONSchema(z.object({role:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).default('general')}),{io:'input'}),async(args,context)=>{
         const input=z.object({role:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).default('general')}).parse(args);
@@ -161,7 +189,7 @@ export class CompanionTool extends BaseTool {
         observeFlow(context.sessionId, { toolId: 'companion', action: 'read' }, { taints: ['private', 'suspicious', ...(['secret'] as const).filter(flag => !!result.flowLabel[flag])] });
         return result;
       }, { permissionAction: 'read' });
-    this.registerTool('list', 'List goals in the current personal workspace, including verified state and protection level.', createParameterSchema({}), async (_args, context) => {
+    this.registerTool('list', 'List enrolled Companion goals only, not all conversations. Use find_sessions when the owner names a chat/session. An empty result never establishes that a named conversation is missing.', createParameterSchema({}), async (_args, context) => {
       const goals = await service(context).listGoals(20); for (const goal of goals) {
         raiseSessionLevel(context.sessionId, goal.protectionLevel);
         observeFlow(context.sessionId, { toolId: 'companion', action: 'read' }, { taints: (['private', 'secret', 'suspicious'] as const).filter(flag => !!goal.flowLabel[flag]) });

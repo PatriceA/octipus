@@ -19,6 +19,12 @@ In the Companion conversation, ask “Put this idea on my todo list for the next
 
 Automatic pickup needs the heartbeat master switch, the selected role's agent and the owner's `tasks/write` ALLOW permission. Role agents are configured on the To-Do List page. A saved item is considered on the next **eligible scheduled role heartbeat**, rather than necessarily the next cron tick: quiet hours, budgets, active checkouts, blockers and higher-priority work can defer it. Creating the item does not silently enable automation or change permissions. Source protection levels and flow labels are snapshotted with parked tasks and inherited before heartbeat or task-pipeline model routing, including when the original conversation is deleted.
 
+## Existing conversations and status questions
+
+On an owner-requested turn, Companion can find personal conversations by title with `find_sessions` and read their workers, pipelines, remaining items, saved plan and recent messages with `read_session`. Existing conversations do not need to be enrolled first. The enrolled-goal list is not the session list; an empty goal list never proves that a named conversation is missing. Conversation status and pipeline status are distinct.
+
+A status question only reads evidence. An explicit request to unblock or continue work uses the existing action tools: reuse or create a supervision goal, adopt the existing session/pipeline, investigate the blocker, repair within configured authority, verify and continue the same execution. It preserves the original plan and completed work. Background supervision still watches enrolled work only; it cannot browse unrelated conversations. Discovery reads inherit source protection levels and flow labels before returning content.
+
 ## When Companion looks at sessions
 
 Companion watches sessions and pipelines enrolled through a goal; its execution links are durable subscriptions. Database triggers record meaningful goal, worker, pipeline and action changes in the same transaction as the source update. A lightweight service checks pending events every five seconds. It coalesces changes and wakes the controller model for relevant completion, failure, pause, decision/approval or uncertain-outcome events; ordinary progress does not require a model call on every check.
