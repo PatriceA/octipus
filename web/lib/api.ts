@@ -79,6 +79,11 @@ export class ApiError extends Error {
   }
 }
 
+export interface ReadOptions {
+  /** Polling callers can surface the cooldown through their own status/retry UI. */
+  retryRateLimit?: boolean;
+}
+
 class ApiClient {
   private token: string | null = null;
   /**
@@ -87,6 +92,7 @@ class ApiClient {
    * cleared, so no request leaves with the previous workspace's header.
    */
   private workspaceId: string | null = null;
+  private defaultWorkspaceId: string | null = null;
   /**
    * The selection is a space on another install (federation §8.3): its id
    * names a pointer row here, not a workspace, so no request carries it as
@@ -98,7 +104,7 @@ class ApiClient {
   private readPauseUntil = 0;
 
   setToken(token: string | null) {
-    if (token !== this.token) this.readPauseUntil = 0;
+    if (token !== this.token) { this.readPauseUntil = 0; this.defaultWorkspaceId = null; }
     this.token = token;
     if (token) {
       localStorage.setItem('auth_token', token);
@@ -120,6 +126,14 @@ class ApiClient {
     this.remote = kind === 'remote';
   }
 
+  /** An omitted workspace header already means this default on the server. */
+  setDefaultWorkspaceId(id: string | null) { this.defaultWorkspaceId = id; }
+
+  private sameWorkspace(header: string | null, remoteSelection: string | null): boolean {
+    if (remoteSelection !== (this.remote ? this.workspaceId : null)) return false;
+    return (header ?? this.defaultWorkspaceId) === (this.workspaceHeader() ?? this.defaultWorkspaceId);
+  }
+
   getWorkspaceId(): string | null {
     return this.workspaceId;
   }
@@ -132,7 +146,8 @@ class ApiClient {
   private async request<T>(
     method: string,
     path: string,
-    body?: unknown
+    body?: unknown,
+    readOptions: ReadOptions = {},
   ): Promise<T> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -144,6 +159,8 @@ class ApiClient {
     }
 
     const workspace = this.workspaceHeader();
+    const requestWorkspace = workspace ?? this.defaultWorkspaceId;
+    const remoteSelection = this.remote ? this.workspaceId : null;
     if (workspace) {
       headers['X-Octipus-Workspace'] = workspace;
     }
@@ -158,10 +175,10 @@ class ApiClient {
         // Queue reads during the shared cooldown instead of failing page-load
         // effects which have no retry loop of their own. Mutations never replay.
         while (Date.now() < this.readPauseUntil) {
-          if (this.readPauseUntil > readDeadline) throw new ApiError('Automatic refresh is paused briefly.', 429, this.readPauseUntil - Date.now());
+          if (readOptions.retryRateLimit === false || this.readPauseUntil > readDeadline) throw new ApiError('Automatic refresh is paused briefly.', 429, this.readPauseUntil - Date.now());
           await delay(Math.max(1, this.readPauseUntil - Date.now()) + Math.random() * 250);
         }
-        if (token !== this.getToken() || workspace !== this.workspaceHeader() || apiUrl !== getApiUrl()) throw new ApiError('The sign-in or workspace changed. Retry this read.', 409);
+        if (token !== this.getToken() || !this.sameWorkspace(requestWorkspace, remoteSelection) || apiUrl !== getApiUrl()) throw new ApiError('The sign-in or workspace changed. Retry this read.', 409, 0, { code: 'read_scope_changed' });
       }
       let response: Response;
       try {
@@ -191,7 +208,7 @@ class ApiClient {
 
       // A delayed read from a previous login, workspace or desktop backend
       // must neither replace current data nor expire the current login.
-      if (method === 'GET' && (token !== this.getToken() || workspace !== this.workspaceHeader() || apiUrl !== getApiUrl())) throw new ApiError('The sign-in or workspace changed. Retry this read.', 409);
+      if (method === 'GET' && (token !== this.getToken() || !this.sameWorkspace(requestWorkspace, remoteSelection) || apiUrl !== getApiUrl())) throw new ApiError('The sign-in or workspace changed. Retry this read.', 409, 0, { code: 'read_scope_changed' });
       if (!response.ok) {
         if (response.status === 401 && token === this.getToken() && apiUrl === getApiUrl()) {
           this.setToken(null);
@@ -216,7 +233,7 @@ class ApiClient {
           : 0;
         if (response.status === 429) {
           this.readPauseUntil = Math.max(this.readPauseUntil, Date.now() + retryAfterMs);
-          if (method === 'GET' && rateRetries++ < 1 && this.readPauseUntil <= readDeadline) continue;
+          if (method === 'GET' && readOptions.retryRateLimit !== false && rateRetries++ < 1 && this.readPauseUntil <= readDeadline) continue;
         }
         throw new ApiError(error.error || `HTTP ${response.status}`, response.status, retryAfterMs, error);
       }
@@ -225,8 +242,8 @@ class ApiClient {
     }
   }
 
-  get<T>(path: string): Promise<T> {
-    return this.request<T>('GET', path);
+  get<T>(path: string, options?: ReadOptions): Promise<T> {
+    return this.request<T>('GET', path, undefined, options);
   }
 
   post<T>(path: string, body?: unknown): Promise<T> {

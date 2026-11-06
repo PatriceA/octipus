@@ -2,7 +2,7 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { api, WORKSPACE_DENIED_EVENT, type WorkspaceDeniedDetail } from './api';
+import { api, ApiError, WORKSPACE_DENIED_EVENT, type WorkspaceDeniedDetail } from './api';
 import { useAuth } from './auth-context';
 import type { RemoteSpace } from './remote-spaces';
 
@@ -245,6 +245,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         }),
       ]);
       if (seq !== refreshSeq.current) return;
+      api.setDefaultWorkspaceId(wsRes.workspaces.find(workspace => workspace.isDefault)?.id ?? null);
       setWorkspaces(wsRes.workspaces);
       setSpaces(spaceRes.spaces);
       // An install that predates federation (or a proxy) can answer without
@@ -274,6 +275,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const changed = activeIdRef.current !== null && next?.id !== activeIdRef.current;
       select(next?.id ?? null);
       if (changed) queryClient.clear();
+    } catch (error) {
+      // Signing in or joining a space invalidates outstanding list reads.
+      // Their cancellation must not become an unhandled bootstrap rejection.
+      if (seq !== refreshSeq.current || (error instanceof ApiError && error.body.code === 'read_scope_changed')) return;
+      throw error;
     } finally {
       if (seq === refreshSeq.current) setIsLoading(false);
     }

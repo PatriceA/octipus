@@ -92,14 +92,15 @@ function activityLabel(action: string): string {
 export default function SpaceSettingsPage() {
   const { id = '' } = useParams<{ id: string }>();
   const { user } = useAuth();
-  const { refresh } = useWorkspace();
+  const { refresh, isLoading: workspaceLoading, activeWorkspace } = useWorkspace();
   const qc = useQueryClient();
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
 
   const spaceQ = useQuery({
-    queryKey: ['space', id, 'detail'],
+    queryKey: ['space', id, 'detail', activeWorkspace?.id],
     queryFn: () => api.get<Space>(`/spaces/${id}`),
+    enabled: !workspaceLoading && !!user,
     retry: false,
   });
   const space = spaceQ.data;
@@ -175,7 +176,7 @@ export default function SpaceSettingsPage() {
     onError,
   });
 
-  if (spaceQ.isLoading) return <div className="p-8 font-mono text-on-surface-variant">loading…</div>;
+  if (spaceQ.isPending) return <div className="p-8 font-mono text-on-surface-variant">loading…</div>;
   if (spaceQ.error || !space) {
     return (
       <div className="p-8 font-mono text-on-surface-variant" data-testid="space-missing">

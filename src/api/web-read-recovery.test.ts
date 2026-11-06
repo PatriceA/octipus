@@ -61,3 +61,61 @@ test('a read after a successful save always makes a fresh request', async () => 
   expect(current).toEqual({ value: 'after-save' });
   expect(reads).toBe(2);
 });
+
+
+test('polling reads surface cooldown immediately and recover without extra requests during the pause', async () => {
+  fixture.fetch.mockResolvedValueOnce(json({ error: 'Limited' }, 429)).mockResolvedValue(json({ messages: ['kept'] }));
+  await expect(api.get('/messages', { retryRateLimit: false })).rejects.toMatchObject({ status: 429, retryAfterMs: 1000 });
+  await expect(api.get('/messages', { retryRateLimit: false })).rejects.toMatchObject({ status: 429 });
+  expect(fixture.fetch).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(1500);
+  await expect(api.get('/messages', { retryRateLimit: false })).resolves.toEqual({ messages: ['kept'] });
+  expect(fixture.fetch).toHaveBeenCalledTimes(2);
+});
+
+
+test('learning the default workspace ID does not discard a response already read in that default', async () => {
+  let finish!: (response: Response) => void;
+  fixture.fetch.mockImplementation(() => new Promise<Response>(resolve => { finish = resolve; }));
+  const read = api.get('/models');
+  api.setDefaultWorkspaceId('default');
+  api.setWorkspaceId('default');
+  finish(json({ models: ['available'] }));
+  await expect(read).resolves.toEqual({ models: ['available'] });
+});
+
+test('a response from the default is still discarded when a different workspace is selected', async () => {
+  let finish!: (response: Response) => void;
+  fixture.fetch.mockImplementation(() => new Promise<Response>(resolve => { finish = resolve; }));
+  const read = api.get('/notes').catch(error => error);
+  api.setDefaultWorkspaceId('default');
+  api.setWorkspaceId('other');
+  finish(json({ notes: ['private-default-note'] }));
+  expect(await read).toMatchObject({ status: 409, body: { code: 'read_scope_changed' } });
+});
+
+
+test('a known default workspace stays bound to the original read if the default changes', async () => {
+  let finish!: (response: Response) => void;
+  fixture.fetch.mockImplementation(() => new Promise<Response>(resolve => { finish = resolve; }));
+  api.setDefaultWorkspaceId('original-default');
+  const read = api.get('/notes').catch(error => error);
+  api.setDefaultWorkspaceId('new-default');
+  api.setWorkspaceId('new-default');
+  finish(json({ notes: ['original-default-note'] }));
+  expect(await read).toMatchObject({ status: 409, body: { code: 'read_scope_changed' } });
+});
+
+
+test.each(['local-to-remote', 'remote-to-local', 'remote-to-remote'])('a %s selection change discards outstanding reads', async transition => {
+  let finish!: (response: Response) => void;
+  fixture.fetch.mockImplementation(() => new Promise<Response>(resolve => { finish = resolve; }));
+  api.setDefaultWorkspaceId('default');
+  if (transition === 'local-to-remote') api.setWorkspaceId('default');
+  else api.setWorkspaceId('first-remote', 'remote');
+  const read = api.get('/notes').catch(error => error);
+  if (transition === 'remote-to-local') api.setWorkspaceId('default');
+  else api.setWorkspaceId('next-remote', 'remote');
+  finish(json({ notes: ['old-selection-note'] }));
+  expect(await read).toMatchObject({ status: 409, body: { code: 'read_scope_changed' } });
+});

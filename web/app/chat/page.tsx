@@ -372,7 +372,7 @@ export default function ChatPage() {
     messageLoadsRef.current.set(sessionId, revision);
     try {
       const data = await api.get<{ messages: Array<{ id: string; role: string; content: string; createdAt: string; metadata?: { limit?: MessageMetadata['limit']; inlineUiProvenance?: { id: string } } | null }> }>(
-        `/sessions/${sessionId}/messages?roles=user,assistant,system&limit=10000`
+        `/sessions/${sessionId}/messages?roles=user,assistant,system&limit=10000`, { retryRateLimit: false }
       );
       const msgs = data?.messages?.length
         ? data.messages.map((m) => ({
