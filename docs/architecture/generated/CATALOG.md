@@ -709,13 +709,13 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 14 |
 | `core` | `config` | 67 |
 | `core` | `connectors` | 4 |
-| `core` | `db` | 460 |
+| `core` | `db` | 464 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 10 |
 | `core` | `models` | 128 |
 | `core` | `modules` | 2 |
-| `core` | `security` | 207 |
+| `core` | `security` | 208 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
 | `core` | `shared` | 55 |
@@ -740,7 +740,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `extensions` | `utils` | 4 |
 | `hooks` | `channels` | 4 |
 | `hooks` | `config` | 2 |
-| `hooks` | `core` | 18 |
+| `hooks` | `core` | 20 |
 | `hooks` | `db` | 16 |
 | `hooks` | `security` | 3 |
 | `hooks` | `shared` | 1 |
@@ -800,7 +800,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 3 |
 | `tools` | `connectors` | 2 |
-| `tools` | `core` | 123 |
+| `tools` | `core` | 125 |
 | `tools` | `db` | 41 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |

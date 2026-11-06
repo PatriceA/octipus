@@ -123,6 +123,8 @@ export async function runRoleTaskPipeline(input: {
   let pipelineId: string | undefined;
   let outcome: { status: string; summary: string };
   try {
+    const {taskProvenance,persistHeartbeatTaskProvenance}=await import('./provenance');
+    await persistHeartbeatTaskProvenance(userId,sessionId,await taskProvenance(userId,[task]));
     const context = await pipelineContext({ role, sessionId, userId, taskTitle: task.title });
     const { getAgentService } = await import('@/core/agent');
     const { withAgentUsage } = await import('@/core/agent/context');

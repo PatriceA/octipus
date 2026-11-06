@@ -14,3 +14,17 @@ test('controllers have no generic shell, file writer or child-delegation escape 
   expect(tools.has('companion__create')).toBe(false);
   expect(companionControllerTools('coordinate', true, true).has('companion__create')).toBe(true);
 });
+
+test('Companion can read todos in every mode and handle owner-requested todo writes without starting work',()=>{
+  for(const mode of ['observe','coordinate','repair'] as const){
+    for(const enabled of [false,true]){
+      const attended=companionControllerTools(mode,enabled,true),background=companionControllerTools(mode,enabled,false);
+      expect(attended.has('tasks__list_tasks')).toBe(true);expect(background.has('tasks__list_tasks')).toBe(true);
+      expect(attended.has('companion__heartbeat_status')).toBe(true);
+      for(const tool of ['tasks__create_task','tasks__add_tasks']){
+        expect(attended.has(tool)).toBe(true);expect(background.has(tool)).toBe(false);
+      }
+      for(const tool of ['tasks__update_task','tasks__complete_task','tasks__add_task_comment','tasks__checkout_task','shell__run','create_pipeline','spawn_child'])expect(attended.has(tool)).toBe(false);
+    }
+  }
+});

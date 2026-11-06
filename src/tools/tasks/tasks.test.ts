@@ -66,6 +66,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await (await import('@/core/tasks/wakeups')).flushWakeups();
   const { closeDb } = await import('@/db/postgres');
   await closeDb();
 });

@@ -81,6 +81,9 @@ export const tasks = pgTable('tasks', {
 }));
 
 export interface TaskSourceRef {
+  /** Snapshot retained when source sessions are deleted; inherited by task readers and heartbeats. */
+  protectionLevel?: number;
+  flowLabel?: Partial<Record<'private'|'secret'|'suspicious',string>>;
   sessionId?: string;
   messageId?: string;
   url?: string;

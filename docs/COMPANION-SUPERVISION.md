@@ -11,6 +11,20 @@ Companion accepts outcomes, starts or adopts project sessions, monitors committe
 
 Observation cannot dispatch project mutations. Coordination can start and steer owned sessions. Repair can use the configured maintenance runtime and verify an incident in its affected project runtime. Changing or disabling supervision revokes queued automatic actions. A deliberately paused session is never replaced or automatically resumed.
 
+## Todo inbox and heartbeat
+
+In the Companion conversation, ask “Put this idea on my todo list for the next heartbeat.” Companion can directly list todos and create an item or backlog on an owner-requested turn. It assigns deferred work to the requested role (`general` when unspecified), keeps the idea in the task notes and checks heartbeat readiness. Parking an idea does not start a project session immediately. Background supervision reads the board but does not create, edit, complete or check out todos; the role heartbeat owns task execution and its checkout lease.
+
+Automatic pickup needs the heartbeat master switch, the selected role's agent and the owner's `tasks/write` ALLOW permission. Role agents are configured on the To-Do List page. A saved item is considered on the next **eligible scheduled role heartbeat**, rather than necessarily the next cron tick: quiet hours, budgets, active checkouts, blockers and higher-priority work can defer it. Creating the item does not silently enable automation or change permissions. Source protection levels and flow labels are snapshotted with parked tasks and inherited before heartbeat or task-pipeline model routing, including when the original conversation is deleted.
+
+## When Companion looks at sessions
+
+Companion watches sessions and pipelines enrolled through a goal; its execution links are durable subscriptions. Database triggers record meaningful goal, worker, pipeline and action changes in the same transaction as the source update. A lightweight service checks pending events every five seconds. It coalesces changes and wakes the controller model for relevant completion, failure, pause, decision/approval or uncertain-outcome events; ordinary progress does not require a model call on every check.
+
+A separate scan runs at most once per minute for suspected stalls. It considers recorded progress, running command receipts, provider waits and approval waits; about thirty minutes without evidence of progress can request inspection. A stall suspicion does not itself stop or replay work. Events and consumption receipts survive backend restart and work with the browser closed. Budgets, concurrency and explicit pauses still control dispatch.
+
+This supervision mechanism is separate from the periodic heartbeat that consumes role-assigned todos. It also does not require the generic monitor tool to poll each conversation.
+
 ## Recovery and evidence
 
 Incidents preserve the affected execution, observed evidence, classification, repair strategies and current verification. Classifications are investigation hints; an authentication error does not prove that a sandbox lacks a key. A repair needs a fresh passing check in the affected runtime before resolution. Resolving a repair does not complete the goal: each acceptance criterion needs current scoped verification evidence.

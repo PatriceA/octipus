@@ -188,3 +188,14 @@ test('taskPipelineDescription names the task so the run can be traced back', () 
   expect(text.startsWith('Plan the offsite')).toBe(true);
   expect(text).toContain('Work-board task t1');
 });
+
+
+test('a freshly selected protected task raises pipeline protection beyond an earlier public gate',async()=>{
+ const id=await addTask('New confidential idea','Exact confidential notes');
+ await executeRaw(`UPDATE tasks SET source_ref='{"protectionLevel":4,"flowLabel":{"secret":"parked confidential idea"}}'::jsonb WHERE id='${id}'`);
+ await turn();expect(runs).toHaveLength(1);
+ const {rows}=await queryRaw(`SELECT protection_level,flow_label FROM sessions WHERE id='${sessionId}'`);
+ expect(rows[0]).toMatchObject({protection_level:4,flow_label:{secret:'parked confidential idea'}});
+ expect(runs[0].description).toContain('Exact confidential notes');
+ const {sessionProtectionLevel}=await import('@/core/protection/session-level');expect(sessionProtectionLevel(sessionId)).toBe(4);
+});

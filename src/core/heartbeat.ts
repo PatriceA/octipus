@@ -1,3 +1,4 @@
+import {taskProvenance,type TaskProvenance} from '@/core/tasks/provenance';
 /**
  * Heartbeat loop (WS2) — a periodic per-user agent turn that reviews standing
  * context and either acts or stays silent.
@@ -118,7 +119,7 @@ export function isWithinQuietHours(config: HeartbeatConfig, now: Date): boolean 
 // ── Probe (deterministic "anything pending?" — no LLM) ──────────────────────
 
 export interface HeartbeatProbe {
-  dueTasks: Array<{ title: string; dueAt: Date | null }>;
+  dueTasks: Array<{ title: string; dueAt: Date | null; sourceRef?:unknown }>;
   unreadNotifications: Array<{ title: string; type: string }>;
   /** Open PRs by the user whose latest checks are red (empty when the probe is off or gh is absent). */
   failingPullRequests: FailingPullRequest[];
@@ -209,7 +210,7 @@ async function probePendingWork(
   // is the floor, they are the reasons a person actually wants to be nudged.
   const [due, unread, failingPullRequests, upcoming, mail] = await Promise.all([
     db
-      .select({ title: tasks.title, dueAt: tasks.dueAt })
+      .select({ title: tasks.title, dueAt: tasks.dueAt, sourceRef:tasks.sourceRef })
       .from(tasks)
       .where(and(eq(tasks.userId, userId), notInSharedWorkspace(tasks.workspaceId), eq(tasks.status, 'open'), isNotNull(tasks.dueAt), lte(tasks.dueAt, now)))
       .limit(50),
@@ -312,7 +313,7 @@ export function heartbeatRole(hook: { trigger: string; triggerConfig: Hook['trig
 /** `trigger_config->>'role'` on the hooks table. */
 const hookRole = sql`${hooks.triggerConfig}->>'role'`;
 
-export interface RoleTask { id: string; title: string }
+export interface RoleTask { id: string; title: string;sourceRef?:unknown }
 
 /**
  * The owner's tasks assigned to `role` that an agent of it could check out
@@ -324,9 +325,9 @@ export interface RoleTask { id: string; title: string }
  * re-checks all of it atomically; this is only the "anything to do?" gate, so
  * a race here costs one refused checkout, never a double claim.
  */
-export async function probeRoleWork(userId: string, role: string): Promise<RoleTask[]> {
+export async function probeRoleWork(userId: string, role: string, includeSource=false): Promise<RoleTask[]> {
   return getDb()
-    .select({ id: tasks.id, title: tasks.title })
+    .select({ id: tasks.id, title: tasks.title,...(includeSource?{sourceRef:tasks.sourceRef}:{}) })
     .from(tasks)
     .where(and(
       eq(tasks.userId, userId),
@@ -563,9 +564,12 @@ export async function releaseHeldRoleTurnLeases(): Promise<number> {
  * there could be forged; membership here cannot.
  */
 const gatePassedContexts = new WeakSet<object>();
+const gateTaskSources=new WeakMap<object,TaskProvenance>();
+export function heartbeatTaskSource(context:object){return gateTaskSources.get(context);}
 
-export function markHeartbeatGatePassed(context: object): void {
+export function markHeartbeatGatePassed(context: object,source?:TaskProvenance): void {
   gatePassedContexts.add(context);
+  if(source)gateTaskSources.set(context,structuredClone(source));
 }
 
 export function heartbeatGatePassed(context: object): boolean {
@@ -688,6 +692,7 @@ export type HeartbeatDecision =
   | { run: false; reason: HeartbeatSkipReason };
 
 interface GateEvaluation {
+  taskProvenance?:TaskProvenance;
   decision: HeartbeatDecision;
   /** Runs already recorded today (post day-rollover reset), for the caller to persist. */
   runsToday: number;
@@ -787,7 +792,7 @@ export async function evaluateHeartbeatGate(
       if (leaseToken) await releaseRoleTurnLease(hook.id, leaseToken).catch(() => false);
     };
     try {
-      const ready = await probeRoleWork(hook.userId, role);
+      const ready = await probeRoleWork(hook.userId, role,true);
       if (ready.length === 0) {
         await giveBack();
         return skip('nothing_pending');
@@ -797,7 +802,7 @@ export async function evaluateHeartbeatGate(
         await giveBack();
         return { ...skip('tasks_permission_required'), boardPermissionMissing: true };
       }
-      return { decision: { run: true, message: renderRoleHeartbeatMessage(role, ready) }, runsToday, dayKey, seen: previouslySeen, boardPermissionMissing: false, leaseToken };
+      return { decision: { run: true, message: renderRoleHeartbeatMessage(role, ready) }, runsToday, dayKey, seen: previouslySeen, boardPermissionMissing: false, leaseToken,taskProvenance:await taskProvenance(hook.userId,ready) };
     } catch (err) {
       await giveBack();
       throw err;
@@ -831,7 +836,7 @@ export async function evaluateHeartbeatGate(
   if (!probeHasWork(probe)) return skip('nothing_pending', seen);
 
   const message = await buildHeartbeatMessage(hook.userId, renderChecklist(probe, config.quietHoursTimezone, hook.userId));
-  return { decision: { run: true, message }, runsToday, dayKey, seen, surfacedEmails: probe.newEmails ?? [] };
+  return { decision: { run: true, message }, runsToday, dayKey, seen, surfacedEmails: probe.newEmails ?? [],taskProvenance:await taskProvenance(hook.userId,probe.dueTasks) };
 }
 
 /** Run `fn` over `items` with at most `limit` in flight; every item runs, failures are the caller's. */
@@ -1256,7 +1261,7 @@ export async function maybeRunHeartbeats(
         timestamp: now,
       },
     };
-    markHeartbeatGatePassed(context);
+    markHeartbeatGatePassed(context,gate.taskProvenance);
     const settle = leaseToken ? holdRoleTurnLease(hook.id, leaseToken) : null;
 
     // Fire-and-forget: the turn can take minutes. A role turn stays in flight

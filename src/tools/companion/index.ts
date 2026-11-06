@@ -50,9 +50,19 @@ export class CompanionTool extends BaseTool {
       permissions: [{ action: 'read', description: 'Inspect your supervised goals', defaultLevel: 'ALLOW' },
         { action: 'write', description: 'Create or change supervised goals', defaultLevel: 'ASK' },
         { action: 'execute', description: 'Start project sessions and send instructions under this goal', defaultLevel: 'ASK' }],
-      tools: ['list', 'read', 'create', 'update', 'adopt', 'start_session', 'message_session', 'control_session', 'inspect_session', 'detect_incident', 'advance_incident', 'verify_incident', 'start_maintenance', 'maintenance_run', 'activate', 'maintenance_check', 'maintenance_review', 'reconcile_activation', 'maintenance_inspect', 'read_part'].map(name => ({ name, description: name, parameters: {}, returns: 'Goal or action receipt' })) };
+      tools: ['list', 'read', 'create', 'update', 'adopt', 'start_session', 'message_session', 'control_session', 'inspect_session', 'detect_incident', 'advance_incident', 'verify_incident', 'start_maintenance', 'maintenance_run', 'activate', 'maintenance_check', 'maintenance_review', 'reconcile_activation', 'maintenance_inspect', 'read_part', 'heartbeat_status'].map(name => ({ name, description: name, parameters: {}, returns: 'Goal or action receipt' })) };
   }
   protected async registerTools() {
+    this.registerTool('heartbeat_status', 'Check whether a role can pick up parked todo ideas on its next eligible heartbeat. Does not enable automation, grant permissions or start work. Normal heartbeat also respects quiet hours, budgets and task leases.',
+      z.toJSONSchema(z.object({role:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).default('general')}),{io:'input'}),async(args,context)=>{
+        const input=z.object({role:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).default('general')}).parse(args);
+        await service(context).readSettings();
+        observeFlow(context.sessionId,{toolId:'companion',action:'read'},{taints:['private']});
+        const {listRoleAgents}=await import('@/core/tasks/role-agents');const status=await listRoleAgents(context.userId);const role=status.roles.find(row=>row.role===input.role);
+        return {role:input.role,heartbeatEnabled:status.heartbeatEnabled,roleEnabled:role?.enabled??false,boardWritesAllowed:status.boardWritesAllowed,
+          readyForEligibleHeartbeat:status.heartbeatEnabled&&!!role?.enabled&&status.boardWritesAllowed,
+          note:'Assign the todo to this role. A ready task is considered at its next eligible heartbeat; quiet hours, budgets, active checkouts and higher-priority tasks can defer it. Configure role agents on the To-Do List page and heartbeat in Settings.'};
+      },{permissionAction:'read'});
     this.registerTool('read_part','Retrieve bounded pages of the full original request, outcome or acceptance criteria. Use this when the status view was truncated. All source content remains available.',
       z.toJSONSchema(z.object({id:z.uuid(),field:z.enum(['request','outcome','acceptanceCriteria']),offset:z.number().int().min(0).max(20000).default(0)}),{io:'input'}),async(args,context)=>{
         const input=z.object({id:z.uuid(),field:z.enum(['request','outcome','acceptanceCriteria']),offset:z.number().int().min(0).max(20000).default(0)}).parse(args);

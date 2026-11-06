@@ -1,3 +1,4 @@
+import {taskSourceRef,taskProvenance,observeTaskProvenance} from '@/core/tasks/provenance';
 import { auditTaskMutation, changedTaskFields, type TaskMutationOp } from '@/core/tasks/audit';
 import { addBacklog, parseBacklog } from '@/core/tasks/backlog';
 import { nextActions } from '@/core/tasks/next';
@@ -65,6 +66,7 @@ export class TasksTool extends BaseTool {
         if (args.view === 'next') {
           const limit = Math.max(1, Math.min(50, Math.trunc(Number(args.limit) || 10)));
           const { timezone, ranked } = await nextActions(principal, { category: args.category as string | undefined, limit });
+          observeTaskProvenance(context.sessionId,await taskProvenance(context.userId,ranked.map(row=>row.task)));
           return { timezone, tasks: ranked.map((r) => ({ ...summarize(r.task), bucket: r.bucket, reason: r.reason })) };
         }
         let dueBefore: Date | undefined;
@@ -85,6 +87,7 @@ export class TasksTool extends BaseTool {
           }),
           repo.listOwn({ statuses: [...ACTIVE_TASK_STATUSES], limit: 5000 }),
         ]);
+        observeTaskProvenance(context.sessionId,await taskProvenance(context.userId,[...tasks,...active]));
         const lookup = toLookup(active);
         return { tasks: nestTasks(tasks).map((t) => summarizeTree(t, lookup)) };
       },
@@ -123,7 +126,7 @@ export class TasksTool extends BaseTool {
             blockedBy: idList(args.blockedBy),
             ...assigneePatch(args.assigneeKind, args.assigneeRef),
             source: normalizeSource(args.source),
-            sourceRef: context.sessionId ? { sessionId: context.sessionId } : undefined,
+            sourceRef: context.sessionId ? await taskSourceRef(context) : undefined,
           };
           const task = await contentRepos(principal).tasks.create(values);
           await auditAgentTaskMutation(context, task.id, 'create', changedTaskFields(values));
@@ -156,7 +159,7 @@ export class TasksTool extends BaseTool {
         try {
           const added = await addBacklog(principal, parsed.items, {
             source: normalizeSource(args.source),
-            sourceRef: context.sessionId ? { sessionId: context.sessionId } : undefined,
+            sourceRef: context.sessionId ? await taskSourceRef(context) : undefined,
             onCreated: (task, values) => created.push({ taskId: task.id, change: changedTaskFields(values) }),
           });
           return { added: added.length, tasks: added.map((a) => ({ index: a.index, ...summarize(a.task) })) };

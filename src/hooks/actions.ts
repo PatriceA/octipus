@@ -376,6 +376,11 @@ async function executeSpawnAgent(
     : hook
     ? await resolveOwnedHookSessionId(context, hook)
     : resolveHookSessionId(context, hook);
+  const userId = hook?.userId || context.message?.userId || context.agent?.userId || 'system';
+  if(hook?.trigger==='heartbeat'){
+    const source=(await import('@/core/heartbeat')).heartbeatTaskSource(context);
+    if(source)await (await import('@/core/tasks/provenance')).persistHeartbeatTaskProvenance(userId,sessionId,source);
+  }
   if (minted && hook) {
     hook.sessionId = sessionId; // keep this run consistent with what we persist
     try {
@@ -385,7 +390,9 @@ async function executeSpawnAgent(
     }
   }
   // Use the hook owner's userId so notifications and permissions resolve correctly
-  const userId = hook?.userId || context.message?.userId || context.agent?.userId || 'system';
+
+
+
 
   // The turn's prompt carries text written by whoever triggered the event:
   // the session starts the turn as if it had read an issue comment itself, so
