@@ -37,22 +37,22 @@ export function AssistantContent({ content, untrusted, onOpenFile }: { content: 
   );
 }
 
-export function StreamingContent({ text }: { text: string }) {
+export function StreamingContent({ text, untrusted, onOpenFile }: { text: string; untrusted?: boolean; onOpenFile?: (path: string) => void }) {
   const host = useInlineUiHost();
   const fences = useMemo(() => (mentionsInlineUiLang(text) ? findInlineUiFences(text) : []), [text]);
-  if (fences.length === 0) return <div className="text-sm whitespace-pre-wrap break-words min-w-0">{text}</div>;
+  if (fences.length === 0) return <Markdown content={text} untrusted={untrusted} onOpenFile={onOpenFile} />;
   const parts: ReactNode[] = [];
   let cursor = 0;
   for (const fence of fences) {
     const before = text.slice(cursor, fence.start);
-    if (before.trim()) parts.push(<div key={`t${cursor}`} className="text-sm whitespace-pre-wrap break-words">{before}</div>);
+    if (before.trim()) parts.push(<Markdown key={`t${cursor}`} content={before} untrusted={untrusted} onOpenFile={onOpenFile} />);
     parts.push(host
       ? <InlineUiPreview key={`f${fence.start}`} title={fence.title} body={fence.body} height={fence.height} />
       : <p key={`f${fence.start}`} className="text-sm text-on-surface-variant">{inlineUiFallbackLine(fence.title)}</p>);
     cursor = fence.end;
   }
   const after = text.slice(cursor);
-  if (after.trim()) parts.push(<div key={`t${cursor}`} className="text-sm whitespace-pre-wrap break-words">{after}</div>);
+  if (after.trim()) parts.push(<Markdown key={`t${cursor}`} content={after} untrusted={untrusted} onOpenFile={onOpenFile} />);
   return <div className="min-w-0 flex-1 space-y-1" data-testid="inline-ui-streaming">{parts}</div>;
 }
 

@@ -17,7 +17,7 @@ import {
   Zap,
 } from 'lucide-react';
 import Link from 'next/link';
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { compareTimelineEntries } from '../../../src/shared/timeline-order';
 import { agentCompletionLabel, type AgentCompletionReason } from '../../../src/shared/agent-completion';
 import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
@@ -235,6 +235,21 @@ function LimitRefusalCard({ limit, fallback }: { limit: LimitRefusal; fallback: 
 // MessageBubble
 // ---------------------------------------------------------------------------
 
+const assistantBubbleClass = 'bg-surface-container border border-outline-variant/10 px-4 py-3 rounded-2xl rounded-tl-md shadow-xs text-on-surface min-w-0';
+
+/** The same author, avatar and message frame during streaming and after completion. */
+function AssistantMessageFrame({ name, appearance, state, animated, streaming = false, children }: {
+  name: string; appearance?: CompanionAppearance; state: CompanionState; animated: boolean; streaming?: boolean; children: ReactNode;
+}) {
+  return <div className="flex gap-3 py-1.5 group" data-role="assistant" data-streaming={streaming || undefined} data-testid={streaming ? 'companion-activity' : undefined}>
+    <div className="shrink-0 mt-1"><CompanionAvatar appearance={appearance} state={state} animated={animated} /></div>
+    <div className="flex flex-col gap-1 min-w-0 flex-1">
+      <span className="text-[11px] text-on-surface-variant">{name}</span>
+      {children}
+    </div>
+  </div>;
+}
+
 function MessageBubble({ message, untrusted, onOpenFile, companionName, companionAppearance, motionPaused }: { message: ChatMessageData; untrusted?: boolean; onOpenFile?: (path: string) => void; companionName: string; companionAppearance?: CompanionAppearance; motionPaused: boolean }) {
   const { role, content, timestamp, classification, metadata } = message;
   const timeStr = new Date(timestamp).toLocaleTimeString();
@@ -328,16 +343,15 @@ function MessageBubble({ message, untrusted, onOpenFile, companionName, companio
     // otherwise expressed as layout and colour. Without it, checking that an
     // answer arrived means matching page text — which matches the question the
     // moment it is echoed into the transcript.
-    <div className="flex gap-3 py-1.5 group" data-role="assistant">
-      <div className="shrink-0 mt-1">
-        <CompanionAvatar appearance={message.companion || message.companionName ? message.companion?.appearance : companionAppearance} state={metadata?.limit ? 'interrupted' : freshArrival ? 'done' : 'idle'} animated={freshArrival && !motionPaused} />
-      </div>
-      <div className="flex flex-col gap-1 min-w-0 flex-1">
-        <span className="text-[11px] text-on-surface-variant">{message.companion ? `${message.companion.name} · ${message.companion.ownerName}’s companion` : message.companionName ?? companionName}</span>
+    <AssistantMessageFrame
+      name={message.companion ? `${message.companion.name} · ${message.companion.ownerName}’s companion` : message.companionName ?? companionName}
+      appearance={message.companion || message.companionName ? message.companion?.appearance : companionAppearance}
+      state={metadata?.limit ? 'interrupted' : freshArrival ? 'done' : 'idle'} animated={freshArrival && !motionPaused}
+    >
         {metadata?.limit ? (
           <LimitRefusalCard limit={metadata.limit} fallback={content} />
         ) : (
-          <div className="bg-surface-container border border-outline-variant/10 px-4 py-3 rounded-2xl rounded-tl-md shadow-xs text-on-surface min-w-0">
+          <div className={assistantBubbleClass} data-testid="assistant-message-body">
             {/* Interactive answers render as blocks between the markdown parts. */}
             <AssistantContent content={content} untrusted={untrusted} onOpenFile={onOpenFile} />
           </div>
@@ -379,8 +393,7 @@ function MessageBubble({ message, untrusted, onOpenFile, companionName, companio
             </span>
           )}
         </div>
-      </div>
-    </div>
+    </AssistantMessageFrame>
   );
 }
 
@@ -861,8 +874,8 @@ interface MessageTimelineProps {
 
 // The timeline re-renders on every streamed token (the streaming text is one
 // of its props). Memoized rows skip that render when their own data has not
-// changed, so a token costs one text node instead of a markdown re-parse of
-// every message in the conversation.
+// changed, so only the in-progress reply is parsed rather than every message in
+// the conversation.
 const MemoMessageBubble = memo(MessageBubble);
 const MemoAgentActivityInline = memo(AgentActivityInline);
 const MemoTeamActivityInline = memo(TeamActivityInline);
@@ -1064,7 +1077,19 @@ export default function MessageTimeline({
       })}
 
       {/* One live companion; older transcript avatars remain still. */}
-      {(messages.length > 0 || isLoading || waitingForInput || listening || companionActivity || backgroundWorkRunning) && (
+      {streamingText ? (
+        <AssistantMessageFrame name={companionActivity?.name ?? companionName}
+          appearance={companionActivity ? companionActivity.appearance : companionAppearance}
+          state={!connected ? 'interrupted' : companionActivity?.state ?? (waitingForInput ? 'waiting' : 'working')}
+          animated={connected && !motionPaused} streaming>
+          {(!connected || waitingForInput) && <p role="status" className="text-sm text-on-surface-variant">
+            {!connected ? 'Connection lost — activity may be out of date.' : 'Waiting for your input'}
+          </p>}
+          <div className={assistantBubbleClass} data-testid="assistant-message-body">
+            <StreamingContent text={streamingText} untrusted={untrusted} onOpenFile={onOpenFile} />
+          </div>
+        </AssistantMessageFrame>
+      ) : (messages.length > 0 || isLoading || waitingForInput || listening || companionActivity || backgroundWorkRunning) && (
         <div className="flex items-start gap-3 py-3" data-testid="companion-activity">
           <CompanionAvatar appearance={companionActivity ? companionActivity.appearance : companionAppearance} state={!connected ? 'interrupted' : companionActivity?.state ?? (waitingForInput ? 'waiting' : isLoading || backgroundWorkRunning ? 'working' : listening ? 'listening' : 'idle')} animated={connected && !motionPaused} />
           <div className="min-w-0 flex-1">
@@ -1072,13 +1097,9 @@ export default function MessageTimeline({
             {(!connected || waitingForInput) && <p role="status" className="text-sm text-on-surface-variant mb-1">
               {!connected ? 'Connection lost — activity may be out of date.' : 'Waiting for your input'}
             </p>}
-            {streamingText ? (
-              <StreamingContent text={streamingText} />
-            ) : (
-              <span className="text-sm text-accent">
-                {!connected ? 'Reconnecting…' : companionActivity ? companionActivity.label : waitingForInput ? 'Review the pending request below.' : isLoading ? (statusMessage || 'Thinking...') : backgroundWorkRunning ? 'We’re still working. You can send a message anytime.' : listening ? 'Listening…' : 'Ready for your next idea.'}
-              </span>
-            )}
+            <span className="text-sm text-accent">
+              {!connected ? 'Reconnecting…' : companionActivity ? companionActivity.label : waitingForInput ? 'Review the pending request below.' : isLoading ? (statusMessage || 'Thinking...') : backgroundWorkRunning ? 'We’re still working. You can send a message anytime.' : listening ? 'Listening…' : 'Ready for your next idea.'}
+            </span>
           </div>
         </div>
       )}

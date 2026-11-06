@@ -134,9 +134,6 @@ class ApiClient {
     path: string,
     body?: unknown
   ): Promise<T> {
-    if (method === 'GET' && Date.now() < this.readPauseUntil) {
-      throw new ApiError('Automatic refresh is paused briefly.', 429, this.readPauseUntil - Date.now());
-    }
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -153,8 +150,19 @@ class ApiClient {
 
     const apiUrl = getApiUrl();
     const retryable = RETRYABLE_METHODS.has(method);
+    let rateRetries = 0;
+    const readDeadline = Date.now() + 120_000;
 
     for (let attempt = 0; ; attempt++) {
+      if (method === 'GET') {
+        // Queue reads during the shared cooldown instead of failing page-load
+        // effects which have no retry loop of their own. Mutations never replay.
+        while (Date.now() < this.readPauseUntil) {
+          if (this.readPauseUntil > readDeadline) throw new ApiError('Automatic refresh is paused briefly.', 429, this.readPauseUntil - Date.now());
+          await delay(Math.max(1, this.readPauseUntil - Date.now()) + Math.random() * 250);
+        }
+        if (token !== this.getToken() || workspace !== this.workspaceHeader() || apiUrl !== getApiUrl()) throw new ApiError('The sign-in or workspace changed. Retry this read.', 409);
+      }
       let response: Response;
       try {
         response = await fetch(`${apiUrl}${path}`, {
@@ -181,8 +189,11 @@ class ApiClient {
         continue;
       }
 
+      // A delayed read from a previous login, workspace or desktop backend
+      // must neither replace current data nor expire the current login.
+      if (method === 'GET' && (token !== this.getToken() || workspace !== this.workspaceHeader() || apiUrl !== getApiUrl())) throw new ApiError('The sign-in or workspace changed. Retry this read.', 409);
       if (!response.ok) {
-        if (response.status === 401) {
+        if (response.status === 401 && token === this.getToken() && apiUrl === getApiUrl()) {
           this.setToken(null);
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new Event('auth:expired'));
@@ -203,7 +214,10 @@ class ApiClient {
           ? (Number.isFinite(seconds) && seconds > 0 ? seconds * 1000
             : retryHeader && Number.isFinite(Date.parse(retryHeader)) ? Math.max(1000, Date.parse(retryHeader) - Date.now()) : 30_000)
           : 0;
-        if (response.status === 429) this.readPauseUntil = Date.now() + retryAfterMs;
+        if (response.status === 429) {
+          this.readPauseUntil = Math.max(this.readPauseUntil, Date.now() + retryAfterMs);
+          if (method === 'GET' && rateRetries++ < 1 && this.readPauseUntil <= readDeadline) continue;
+        }
         throw new ApiError(error.error || `HTTP ${response.status}`, response.status, retryAfterMs, error);
       }
 
