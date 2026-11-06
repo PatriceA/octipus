@@ -42,7 +42,8 @@ export class CompanionDispatcher {
       .where(and(eq(companionActions.status, 'queued'), sql`${companionActions.authorityRevision} IS NOT NULL`)).limit(100);
     for (const row of pending) if (!await companionActionAuthorized(row.action, row))
       await getDb().update(companionActions).set({ status: 'cancelled', result: 'Automatic delegation was revoked or reconfigured.', updatedAt: new Date() })
-        .where(and(eq(companionActions.id, row.action.id), eq(companionActions.status, 'queued')));
+        .where(and(eq(companionActions.id, row.action.id), eq(companionActions.status, 'queued'),
+          eq(companionActions.authoritySettingsId, row.action.authoritySettingsId!), eq(companionActions.authorityRevision, row.action.authorityRevision!)));
     await this.steerPending();
     if (this.running.size >= 8) return;
     const candidates = await getDb().select({ action: companionActions, userId: companionGoals.userId, workspaceId: companionGoals.workspaceId })
@@ -66,7 +67,7 @@ export class CompanionDispatcher {
         if (busy) return undefined;
         const prepared=await (await import('./scheduling')).prepareCompanionDispatch(tx,liveAction,candidate);
         if(!prepared)return;
-        return (await tx.update(companionActions).set({ tokenCap:prepared.tokenCap, status: 'running', leaseToken: token, leaseUntil: new Date(Date.now() + 90_000), updatedAt: new Date() })
+        return (await tx.update(companionActions).set({ tokenCap:prepared.tokenCap, status: 'running', result: null, leaseToken: token, leaseUntil: new Date(Date.now() + 90_000), updatedAt: new Date() })
           .where(and(eq(companionActions.id, candidate.action.id), eq(companionActions.status, 'queued'))).returning())[0];
       });
       if (!claimed) continue;

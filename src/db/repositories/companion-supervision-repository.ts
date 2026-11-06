@@ -413,6 +413,18 @@ export class CompanionSupervisionRepository {
           .where(and(eq(sessions.id, sessionId), eq(sessions.userId, this.scope.userId), eq(sessions.workspaceId, this.scope.workspaceId)));
       }
       const { enabled, modelName, autonomy, ...options } = data;
+      const oldOptions = companionSettingsSchema.parse(row.options);
+      const budgetOnly = enabled && row.enabled && modelName === row.modelName && autonomy === row.autonomy
+        && options.maxRepairAttempts === oldOptions.maxRepairAttempts && options.quietHoursStart === oldOptions.quietHoursStart
+        && options.quietHoursEnd === oldOptions.quietHoursEnd && options.timezone === oldOptions.timezone;
+      if (budgetOnly) {
+        // Resource tuning rechecks admission limits; it does not revoke the
+        // owner's still-queued instruction or confer new execution authority.
+        await tx.update(companionActions).set({ authorityRevision: row.revision + 1 }).where(and(
+          eq(companionActions.authoritySettingsId,row.id),eq(companionActions.authorityRevision,row.revision),eq(companionActions.status,'queued'),
+          inArray(companionActions.goalId,tx.select({id:companionGoals.id}).from(companionGoals).where(and(eq(companionGoals.userId,this.scope.userId),eq(companionGoals.workspaceId,this.scope.workspaceId)))),
+        ));
+      }
       await tx.update(companionSettings).set({ enabled, modelName, autonomy, options, supervisorSessionId: sessionId,
         revision: row.revision + 1, approvedAt: enabled ? new Date() : null, updatedAt: new Date() }).where(eq(companionSettings.id, row.id));
       return { ...data, settingsId: row.id, supervisorSessionId: sessionId, revision: row.revision + 1 };
@@ -539,17 +551,18 @@ export class CompanionSupervisionRepository {
     });
   }
 
-  async reopenIncident(id:string,incidentId:string,expectedRevision:number){
+  async reopenIncident(id:string,incidentId:string,expectedRevision:number,ownerTurnId?:string){
     if(this.authority)return fail('conflict','Only an explicit owner decision can extend repair attempts');
     return this.db().transaction(async tx=>{
       await this.assertScope(tx);const goal=await this.goal(tx,id,true);
       if(terminal(goal)||goal.state==='paused')return fail('conflict','Supervision is not active');
       const [incident]=await tx.select().from(companionIncidents).where(and(eq(companionIncidents.id,incidentId),eq(companionIncidents.goalId,id))).for('update');
+      if(ownerTurnId&&incident?.attemptApprovals.some(approval=>approval.ownerTurnId===ownerTurnId))return incident;
       if(!incident||incident.revision!==expectedRevision||incident.state!=='escalated'||incident.attemptAllowance>=1000)return fail('conflict','Incident changed or is not ready for another strategy');
       const source=await this.session(tx,incident.sessionId);if(source.status!=='active')return fail('conflict','Explicitly continue the paused execution first');
       const [owner]=await tx.select({id:companionSessionLinks.id}).from(companionSessionLinks).where(and(eq(companionSessionLinks.goalId,id),eq(companionSessionLinks.sessionId,source.id),eq(companionSessionLinks.active,true),eq(companionSessionLinks.ownership,'owner')));
       if(!owner)return fail('conflict','Recovery ownership has ended');
-      const [updated]=await tx.update(companionIncidents).set({state:'observed',attemptLimit:incident.strategies.length+1,attemptAllowance:incident.attemptAllowance+1,attemptApprovals:[...incident.attemptApprovals,{userId:this.scope.userId,at:new Date().toISOString(),additionalStrategies:1}],revision:incident.revision+1,updatedAt:new Date()}).where(eq(companionIncidents.id,incidentId)).returning();
+      const [updated]=await tx.update(companionIncidents).set({state:'observed',attemptLimit:incident.strategies.length+1,attemptAllowance:incident.attemptAllowance+1,attemptApprovals:[...incident.attemptApprovals,{userId:this.scope.userId,at:new Date().toISOString(),additionalStrategies:1,...(ownerTurnId?{ownerTurnId}:{})}],revision:incident.revision+1,updatedAt:new Date()}).where(eq(companionIncidents.id,incidentId)).returning();
       await tx.update(companionGoals).set({state:'active',revision:goal.revision+1,updatedAt:new Date()}).where(this.goalWhere(id));return updated;
     });
   }

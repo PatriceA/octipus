@@ -4,6 +4,6 @@ const writes = ['companion__update', 'companion__adopt', 'companion__start_sessi
 export function companionControllerTools(mode: 'observe' | 'coordinate' | 'repair', enabled: boolean, userTurn: boolean) {
   const discovery = userTurn ? ['companion__find_sessions', 'companion__read_session'] : [];
   const personalTaskWrites = userTurn ? ['tasks__create_task','tasks__add_tasks'] : [];
-  return new Set([...reads, ...discovery, ...personalTaskWrites, ...(enabled && mode !== 'observe' ? [...writes, ...(mode === 'repair' ? ['companion__verify_incident', 'companion__start_maintenance'] : []), ...(userTurn ? ['companion__create'] : [])] : []),
+  return new Set([...reads, ...discovery, ...personalTaskWrites, ...(enabled && mode !== 'observe' ? [...writes, ...(mode === 'repair' ? ['companion__verify_incident', 'companion__start_maintenance'] : []), ...(userTurn ? ['companion__create','companion__reopen_incident'] : [])] : []),
     'send_status_update', 'request_user_approval']);
 }

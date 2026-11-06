@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { companionActions, companionActivations, companionEvents, companionGoals, companionSettings, companionStageReservations, companionWakes } from '@/db/schema/companion-supervision';
+import { companionActivations, companionEvents, companionGoals, companionSettings, companionWakes } from '@/db/schema/companion-supervision';
 import { agents } from '@/db/schema/agents';
 import { sessions, sessionGeneration } from '@/db/schema/sessions';
 import { users } from '@/db/schema/users';
@@ -21,7 +21,7 @@ export async function tickCompanionObservation() {
   await (await import('./stalls')).scanCompanionStalls();
   await getDb().update(companionEvents).set({ consumedAt: new Date() }).where(and(isNull(companionEvents.consumedAt),
     inArray(companionEvents.goalId, getDb().select({ id: companionGoals.id }).from(companionGoals).where(inArray(companionGoals.state, ['completed', 'cancelled'])))));
-  await getDb().update(companionWakes).set({ status: 'unknown', result: 'The supervisor receipt was interrupted; inspect its session before continuing.', updatedAt: new Date() })
+  await getDb().update(companionWakes).set({ status: 'unknown', finishedAt: sql`${companionWakes.leaseUntil}`, result: 'The supervisor receipt was interrupted; inspect its session before continuing.', updatedAt: new Date() })
     .where(and(eq(companionWakes.status, 'running'), lte(companionWakes.leaseUntil, new Date())));
   // Controller turns have only journaled scoped operations. Inspect live roots;
   // close the interrupted observation without replay, then reconcile live goals.
@@ -62,9 +62,7 @@ export async function tickCompanionObservation() {
       if (!session || session.status !== 'active') return;
       const options=companionSettingsSchema.parse(live.options);
       const remaining=options.dailyTokenBudget-await (await import('./scheduling')).companionSpend({userId:live.userId,workspaceId:live.workspaceId},undefined,tx);
-      const reserved=await tx.select({cap:companionActions.tokenCap}).from(companionActions).innerJoin(companionGoals,eq(companionGoals.id,companionActions.goalId)).where(and(eq(companionGoals.userId,live.userId),eq(companionGoals.workspaceId,live.workspaceId),inArray(companionActions.status,['running','unknown'])));
-      const stages=await tx.select({tokens:companionStageReservations.tokens}).from(companionStageReservations).innerJoin(companionGoals,eq(companionGoals.id,companionStageReservations.goalId)).where(and(eq(companionGoals.userId,live.userId),eq(companionGoals.workspaceId,live.workspaceId)));
-      const cap=Math.min(options.turnTokenBudget,remaining-reserved.reduce((sum,row)=>sum+(row.cap??0),0)-stages.reduce((sum,row)=>sum+row.tokens,0));
+      const cap=Math.min(options.turnTokenBudget,remaining);
       if(cap<1000)return;
       const events = await tx.select({ event: companionEvents }).from(companionEvents).innerJoin(companionGoals, eq(companionGoals.id, companionEvents.goalId))
         .where(and(eq(companionGoals.userId, live.userId), eq(companionGoals.workspaceId, live.workspaceId), inArray(companionGoals.state, ['queued', 'active', 'waiting', 'needs_decision']),
@@ -118,14 +116,17 @@ async function runObservation(claimed: {
           isNull(workspaces.archivedAt), eq(users.isActive, true)));
       if (!receipt || !scope || !live?.enabled || live.revision !== settings.revision || session?.status !== 'active'
         || sessionGeneration(session.context) !== wake.generation) throw new Error('Companion observation was cancelled, reconfigured or cleared');
+      const [begun] = await getDb().update(companionWakes).set({ startedAt: new Date() })
+        .where(and(eq(companionWakes.id, wake.id), eq(companionWakes.leaseToken, wake.leaseToken), eq(companionWakes.status, 'running'))).returning({ id: companionWakes.id });
+      if (!begun) throw new Error('Companion observation receipt expired before execution');
       started = true;
     });
     getAgentService().publishResponse(wake.sessionId, settings.userId, result);
-    await getDb().update(companionWakes).set({ status: result.outcome === 'success' ? 'completed' : 'failed', result: result.response.slice(0, 8000), updatedAt: new Date() })
+    await getDb().update(companionWakes).set({ status: result.outcome === 'success' ? 'completed' : 'failed', finishedAt: new Date(), result: result.response.slice(0, 8000), updatedAt: new Date() })
       .where(and(eq(companionWakes.id, wake.id), eq(companionWakes.leaseToken, wake.leaseToken), eq(companionWakes.status, 'running')));
   } catch (error) {
     await getDb().transaction(async tx => {
-      const rows = await tx.update(companionWakes).set({ status: started ? 'unknown' : 'failed', result: (error as Error).message.slice(0, 1000), updatedAt: new Date() })
+      const rows = await tx.update(companionWakes).set({ status: started ? 'unknown' : 'failed', finishedAt: new Date(), result: (error as Error).message.slice(0, 1000), updatedAt: new Date() })
         .where(and(eq(companionWakes.id, wake.id), eq(companionWakes.leaseToken, wake.leaseToken), eq(companionWakes.status, 'running'))).returning({ id: companionWakes.id });
       if (!started && rows.length) {
         if (wake.eventSeqs.length) await tx.update(companionEvents).set({ consumedAt: null }).where(inArray(companionEvents.seq, wake.eventSeqs));

@@ -1445,7 +1445,7 @@ export class PipelineManager {
       const {and,eq,inArray,or,isNull}=await import('drizzle-orm');
       const [supervised]=await getDb().select({id:companionGoals.id}).from(companionGoals).innerJoin(companionSessionLinks,eq(companionSessionLinks.goalId,companionGoals.id)).where(and(eq(companionSessionLinks.sessionId,sessionId),or(isNull(companionSessionLinks.pipelineId),eq(companionSessionLinks.pipelineId,pipeline.id)),eq(companionSessionLinks.active,true),eq(companionSessionLinks.ownership,'owner'),eq(companionGoals.userId,pipeline.userId),eq(companionGoals.workspaceId,pipeline.workspaceId!),inArray(companionGoals.state,['active','queued','waiting'])));
       if(supervised && pipeline.workspaceId)companionExhausted=await (await import('@/core/companion/scheduling')).companionRemainingBudget({userId:pipeline.userId,workspaceId:pipeline.workspaceId},supervised.id)<1000;
-      const summary = companionExhausted?'Companion token budget exhausted. Checkpoint preserved; raise the goal/daily budget or wait for its next UTC day.':poolExhaustedSummary(pool, spent, byKey.get(cursor)?.name ?? cursor);
+      const summary = companionExhausted?'Explicit supervised goal token budget exhausted. Checkpoint preserved; update the goal budget to continue.':poolExhaustedSummary(pool, spent, byKey.get(cursor)?.name ?? cursor);
       // Finish only the active item's body and its loop-head bookkeeping.
       // A loop elsewhere in the graph must not exempt pre/post-loop work.
       const budgetNode = byKey.get(cursor);

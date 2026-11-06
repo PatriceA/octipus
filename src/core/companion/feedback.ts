@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { and, eq, inArray, isNull, gt, asc } from 'drizzle-orm';
+import { and, eq, inArray, isNull, gt, asc, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { companionGoals, companionIncidents, companionSettings } from '@/db/schema/companion-supervision';
+import { companionActions, companionGoals, companionIncidents, companionSessionLinks, companionSettings } from '@/db/schema/companion-supervision';
+import { pipelines } from '@/db/schema/pipelines';
 import { notifications } from '@/db/schema/notifications';
 import { users } from '@/db/schema/users';
 import { workspaces } from '@/db/schema/organizations';
@@ -30,6 +31,28 @@ export async function tickCompanionFeedback(now=new Date()) {
       .where(and(eq(companionGoals.userId,settings.userId),eq(companionGoals.workspaceId,settings.workspaceId),eq(companionGoals.state,'completed')));
     const incidents=await getDb().select({incident:companionIncidents}).from(companionIncidents).innerJoin(companionGoals,eq(companionGoals.id,companionIncidents.goalId))
       .where(and(eq(companionGoals.userId,settings.userId),eq(companionGoals.workspaceId,settings.workspaceId),inArray(companionIncidents.state,['resolved','escalated'])));
+    // A budget gate can prevent model wake-ups too. Report a blocked queued
+    // handoff deterministically; do not require another model call to notice it.
+    const waiting = await getDb().select({ actionId:companionActions.id,goalId:companionGoals.id }).from(companionActions)
+      .innerJoin(companionGoals,eq(companionGoals.id,companionActions.goalId))
+      .where(and(eq(companionGoals.userId,settings.userId),eq(companionGoals.workspaceId,settings.workspaceId),
+        inArray(companionGoals.state,['queued','active','waiting','needs_decision']),eq(companionActions.status,'queued'),sql`${companionActions.result} LIKE 'Waiting:%'`));
+    for(const item of waiting) await getDb().insert(notifications).values({id:notificationId(`waiting:${item.actionId}`),userId:settings.userId,workspaceId:settings.workspaceId,type:'companion',
+      title:'Companion handoff has not started',body:'A queued instruction is waiting on a prerequisite. Open Companion to see its delivery status and reason.',
+      metadata:{goalId:item.goalId,actionId:item.actionId,href:`/companion?goal=${item.goalId}`}}).onConflictDoNothing();
+    const failures = await getDb().select({ pipelineId:pipelines.id,attempt:sql<string>`coalesce((SELECT max(e.seq) FROM companion_events e WHERE e.goal_id=${companionGoals.id} AND e.source_id=${pipelines.id}::text AND e.kind='pipelines' AND e.state<>'failed'),0)::text`,goalId:companionGoals.id }).from(pipelines)
+      .innerJoin(companionSessionLinks,eq(companionSessionLinks.sessionId,pipelines.sessionId))
+      .innerJoin(companionGoals,eq(companionGoals.id,companionSessionLinks.goalId))
+      .where(and(eq(pipelines.userId,settings.userId),eq(pipelines.workspaceId,settings.workspaceId),eq(pipelines.status,'failed'),
+        eq(companionGoals.userId,settings.userId),eq(companionGoals.workspaceId,settings.workspaceId),eq(companionSessionLinks.active,true),
+        inArray(companionGoals.state,['queued','active','waiting','needs_decision']),
+        sql`(${companionSessionLinks.pipelineId}=${pipelines.id} OR (${companionSessionLinks.pipelineId} IS NULL AND NOT EXISTS(
+          SELECT 1 FROM pipelines newer WHERE newer.session_id=${pipelines.sessionId} AND newer.user_id=${settings.userId}
+            AND newer.workspace_id=${settings.workspaceId} AND (newer.created_at,newer.id)>(${pipelines.createdAt},${pipelines.id})
+        )))`));
+    for(const item of failures) await getDb().insert(notifications).values({id:notificationId(`failed:${item.goalId}:${item.pipelineId}:${item.attempt}`),userId:settings.userId,workspaceId:settings.workspaceId,type:'companion',
+      title:'Companion observed a failed pipeline',body:'A supervised pipeline needs attention. Its latest recorded failure is available in Companion; no successful continuation is implied.',
+      metadata:{goalId:item.goalId,pipelineId:item.pipelineId,href:`/companion?goal=${item.goalId}`}}).onConflictDoNothing();
     for(const item of [...goals.map(goal=>({id:goal.id,goalId:goal.id,state:goal.state})),...incidents.map(({incident})=>({id:incident.id,goalId:incident.goalId,state:incident.state}))]) {
       await getDb().insert(notifications).values({id:notificationId(`${item.id}:${item.state}`),userId:settings.userId,workspaceId:settings.workspaceId,type:'companion',
         title:item.state==='escalated'?'Companion needs a decision':'Companion progress verified',

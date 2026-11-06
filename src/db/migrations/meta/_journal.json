@@ -1170,6 +1170,13 @@
       "when": 1793880006000,
       "tag": "0166_companion_sources",
       "breakpoints": true
+    },
+    {
+      "idx": 167,
+      "version": "7",
+      "when": 1793966400000,
+      "tag": "0167_companion_wake_usage",
+      "breakpoints": true
     }
   ]
 }

@@ -132,6 +132,8 @@ export const companionWakes = pgTable('companion_wakes', {
   eventSeqs: jsonb('event_seqs').$type<number[]>().notNull(),
   leaseToken: uuid('lease_token').notNull(), leaseUntil: timestamp('lease_until', { withTimezone: true }).notNull(),
   result: text('result'),
+  startedAt: timestamp('started_at', { withTimezone: true }),
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [uniqueIndex('companion_wakes_active_idx').on(t.settingsId).where(sql`${t.status} IN ('running','unknown')`)]);
@@ -146,7 +148,7 @@ export const companionIncidents = pgTable('companion_incidents', {
   state: text('state').$type<'observed' | 'repairing' | 'verifying' | 'resolved' | 'escalated'>().notNull().default('observed'),
   attemptLimit:integer('attempt_limit'),
   attemptAllowance:integer('attempt_allowance').notNull().default(0),
-  attemptApprovals:jsonb('attempt_approvals').$type<Array<{userId:string;at:string;additionalStrategies:number}>>().notNull().default([]),
+  attemptApprovals:jsonb('attempt_approvals').$type<Array<{userId:string;at:string;additionalStrategies:number;ownerTurnId?:string}>>().notNull().default([]),
   strategies: jsonb('strategies').$type<string[]>().notNull().default([]),
   evidenceId: uuid('evidence_id'),
   revision: integer('revision').notNull().default(0),

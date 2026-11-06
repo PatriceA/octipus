@@ -62,6 +62,7 @@ beforeAll(async () => {
     ALTER TABLE pipelines ADD COLUMN summary text;
     ALTER TABLE pipelines ADD COLUMN current_node_key text;
     ALTER TABLE pipelines ADD COLUMN created_at timestamptz DEFAULT now();
+    ALTER TABLE pipelines ADD COLUMN updated_at timestamptz DEFAULT now();
     ALTER TABLE pipelines ADD COLUMN metadata jsonb DEFAULT '{}';
     CREATE TABLE agent_events(id serial PRIMARY KEY,agent_id text,user_id text,created_at timestamptz DEFAULT now());
     CREATE TABLE tool_actions(id uuid PRIMARY KEY,agent_id text,user_id text,status text,created_at timestamptz DEFAULT now());
@@ -76,6 +77,7 @@ beforeAll(async () => {
   await pg.exec(readFileSync('src/db/migrations/0164_companion_maintenance.sql', 'utf8'));
   await pg.exec(readFileSync('src/db/migrations/0165_companion_coordination.sql','utf8'));
   await pg.exec(readFileSync('src/db/migrations/0166_companion_sources.sql','utf8'));
+  await pg.exec(readFileSync('src/db/migrations/0167_companion_wake_usage.sql','utf8'));
   db = drizzle(pg);
   runtime.db = db;
 }, 30_000);
@@ -695,7 +697,7 @@ test('goal dependencies reject cycles and block only dependent work', async () =
 
 test('billable token budget preserves queued state without starting another worker',async()=>{
   await repository().saveSettings({enabled:false,dailyTokenBudget:1000},0);
-  const goal=await service().createGoal(request());const action=await repository().startSession(goal.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model'});
+  const goal=await service().createGoal(request({tokenBudget:1000}));const action=await repository().startSession(goal.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model'});
   await pg.query("INSERT INTO agents(id,session_id,user_id,workspace_id,status,total_tokens,billable_tokens) VALUES('spent',$1,$2,$3,'completed',200000,1000)",[action.sessionId,userId,workspaceId]);
   await new CompanionDispatcher().tick();expect(runtime.handle).not.toHaveBeenCalled();
   expect((await service().actions(goal.id))[0]).toMatchObject({status:'queued',result:expect.stringContaining('budget exhausted')});
@@ -753,7 +755,62 @@ test('daily token accounting charges today’s usage from a worker started yeste
  const goal=await service().createGoal(request());const action=await repository().startSession(goal.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model'});
  await pg.query("INSERT INTO agents(id,session_id,user_id,workspace_id,status,created_at,billable_tokens) VALUES('overnight',$1,$2,$3,'running',now()-interval '1 day',9000)",[action.sessionId,userId,workspaceId]);
  await pg.query("INSERT INTO cost_log(user_id,workspace_id,agent_id,session_id,input_tokens,output_tokens,cached_input_tokens) VALUES($1,$2,'overnight',$3,500,500,100)",[userId,workspaceId,action.sessionId]);
- const {companionSpend}=await import('@/core/companion/scheduling');expect(await companionSpend({userId,workspaceId})).toBe(900);
+ const {companionSpend}=await import('@/core/companion/scheduling');expect(await companionSpend({userId,workspaceId},goal.id)).toBe(900);
+});
+
+test('interactive controller chats do not exhaust the unattended dispatch pool', async () => {
+  const settings = await repository().saveSettings({ enabled:true,modelName:'local',autonomy:'coordinate',dailyTokenBudget:1000,turnTokenBudget:1000 },0);
+  await pg.query('INSERT INTO cost_log(user_id,workspace_id,session_id,input_tokens,output_tokens) VALUES($1,$2,$3,500000,500000)',[userId,workspaceId,settings.supervisorSessionId]);
+  const goal=await service().createGoal(request());
+  const action=await repository().startSession(goal.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model'});
+  const {companionSpend,prepareCompanionDispatch}=await import('@/core/companion/scheduling');
+  expect(await companionSpend({userId,workspaceId})).toBe(0);
+  expect(await db.transaction(tx=>prepareCompanionDispatch(tx as never,action,{userId,workspaceId}))).toEqual({tokenCap:null});
+});
+
+test('adoption charges new supervised work, not earlier personal execution history', async () => {
+  await pg.query("INSERT INTO agents(id,session_id,user_id,workspace_id,status,billable_tokens,created_at) VALUES('personal-history',$1,$2,$3,'completed',900000,now()-interval '1 hour')",[sessionId,userId,workspaceId]);
+  await pg.query("INSERT INTO cost_log(user_id,workspace_id,session_id,input_tokens,output_tokens,created_at) VALUES($1,$2,$3,900000,0,now()-interval '1 hour')",[userId,workspaceId,sessionId]);
+  const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+  const {companionSpend}=await import('@/core/companion/scheduling');
+  expect(await companionSpend({userId,workspaceId})).toBe(0);
+  expect(await companionSpend({userId,workspaceId},goal.id)).toBe(0);
+  await pg.query('INSERT INTO cost_log(user_id,workspace_id,session_id,input_tokens,output_tokens,cached_input_tokens) VALUES($1,$2,$3,500,100,100)',[userId,workspaceId,sessionId]);
+  expect(await companionSpend({userId,workspaceId})).toBe(0);
+  expect(await companionSpend({userId,workspaceId},goal.id)).toBe(500);
+});
+
+test('only actual background wake usage charges the controller against its daily pool', async () => {
+  const settings=await repository().saveSettings({enabled:true,modelName:'local',autonomy:'observe'},0);
+  await pg.query("INSERT INTO companion_wakes(id,settings_id,session_id,status,generation,event_seqs,lease_token,lease_until,created_at,updated_at,started_at,finished_at) VALUES($1,$2,$3,'completed','','[]',$4,now(),now()-interval '20 minutes',now()-interval '5 minutes',now()-interval '10 minutes',now()-interval '5 minutes')",[randomUUID(),settings.settingsId,settings.supervisorSessionId,randomUUID()]);
+  for(const [offset,tokens] of [['30 minutes',900000],['7 minutes',900],['1 minute',900000]] as const)
+    await pg.query('INSERT INTO cost_log(user_id,workspace_id,session_id,input_tokens,output_tokens,created_at) VALUES($1,$2,$3,$4,0,now()-$5::interval)',[userId,workspaceId,settings.supervisorSessionId,tokens,offset]);
+  expect(await(await import('@/core/companion/scheduling')).companionSpend({userId,workspaceId})).toBe(900);
+});
+
+test('blocked handoffs and failed pipelines notify once even without a model wake-up', async () => {
+  await repository().saveSettings({enabled:true,modelName:'local',autonomy:'coordinate',quietHoursStart:0,quietHoursEnd:0},0);
+  const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+  const action=await repository().queueMessage(goal.id,{requestKey:randomUUID(),sessionId,message:'Continue the existing session'});
+  await pg.query("UPDATE companion_actions SET result='Waiting: token budget exhausted' WHERE id=$1",[action.id]);
+  await pg.query("UPDATE pipelines SET status='failed' WHERE id=$1",[pipelineId]);
+  const {tickCompanionFeedback}=await import('@/core/companion/feedback');await tickCompanionFeedback();await tickCompanionFeedback();
+  const notices=(await pg.query<{title:string}>('SELECT title FROM notifications')).rows;
+  expect(notices.map(row=>row.title).sort()).toEqual(['Companion handoff has not started','Companion observed a failed pipeline']);
+  expect(runtime.handle).not.toHaveBeenCalled();
+});
+
+test('budget tuning preserves queued authority while changing autonomy still revokes it', async () => {
+  const settings=await repository().saveSettings({enabled:true,modelName:'local',autonomy:'coordinate'},0);
+  const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+  const automatic=new CompanionSupervisionRepository({userId,workspaceId},connection,{settingsId:settings.settingsId!,revision:settings.revision});
+  const action=await automatic.queueMessage(goal.id,{requestKey:randomUUID(),sessionId,message:'Continue existing work'});
+  const changed=await repository().saveSettings({enabled:true,modelName:'local',autonomy:'coordinate',dailyTokenBudget:200000},settings.revision);
+  const current=(await service().actions(goal.id)).find(row=>row.id===action.id)!;
+  const {companionActionAuthorized}=await import('@/core/companion/authority');
+  expect(current.authorityRevision).toBe(changed.revision);expect(await companionActionAuthorized(current,{userId,workspaceId})).toBe(true);
+  await repository().saveSettings({enabled:true,modelName:'local',autonomy:'observe',dailyTokenBudget:200000},changed.revision);
+  expect(await companionActionAuthorized(current,{userId,workspaceId})).toBe(false);
 });
 
 test('stage reservations clamp worker slices and reserve the shared goal balance',async()=>{
@@ -799,4 +856,76 @@ test('only an explicit owner decision reopens escalation for exactly one further
  expect(await repository().reopenIncident(goal.id,incident.id,2)).toMatchObject({state:'observed',attemptLimit:2,attemptApprovals:[{userId,additionalStrategies:1,at:expect.any(String)}]});
  await service().advanceIncident(goal.id,incident.id,{expectedRevision:3,strategy:'Second distinct strategy'});
  expect(await service().advanceIncident(goal.id,incident.id,{expectedRevision:4,strategy:'Third strategy not approved'})).toMatchObject({state:'escalated',strategies:['First strategy','Second distinct strategy']});
+});
+
+
+test('a depleted controller pool cannot stop a project pipeline or its instruction delivery',async()=>{
+ const settings=await repository().saveSettings({enabled:true,modelName:'local',autonomy:'coordinate',dailyTokenBudget:1000,turnTokenBudget:1000},0);
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ const action=await repository().queueMessage(goal.id,{requestKey:randomUUID(),sessionId,message:'Continue existing execution'});
+ await pg.query("INSERT INTO companion_wakes(settings_id,session_id,status,event_seqs,lease_token,lease_until,started_at,finished_at) VALUES($1,$2,'completed','[]',$3,now(),now()-interval '1 minute',now())",[settings.settingsId,settings.supervisorSessionId,randomUUID()]);
+ await pg.query('INSERT INTO cost_log(user_id,workspace_id,session_id,input_tokens,output_tokens) VALUES($1,$2,$3,2000,0)',[userId,workspaceId,settings.supervisorSessionId]);
+ // Put the cost inside the completed wake rather than just after its end.
+ await pg.query("UPDATE cost_log SET created_at=now()-interval '30 seconds'");
+ const {companionRemainingBudget,reserveCompanionStage,prepareCompanionDispatch}=await import('@/core/companion/scheduling');
+ expect(await companionRemainingBudget({userId,workspaceId})).toBe(0);
+ expect(await companionRemainingBudget({userId,workspaceId},goal.id)).toBe(Infinity);
+ expect(await reserveCompanionStage({userId,workspaceId},sessionId,pipelineId,500000)).toBeUndefined();
+ expect(await db.transaction(tx=>prepareCompanionDispatch(tx as never,action,{userId,workspaceId}))).toEqual({tokenCap:null});
+});
+
+test('queued or interrupted observations do not charge unrelated interactive usage',async()=>{
+ const settings=await repository().saveSettings({enabled:true,modelName:'local',autonomy:'observe'},0);
+ const wake=randomUUID();
+ await pg.query("INSERT INTO companion_wakes(id,settings_id,session_id,status,event_seqs,lease_token,lease_until,created_at) VALUES($1,$2,$3,'running','[]',$4,now()+interval '1 minute',now()-interval '10 minutes')",[wake,settings.settingsId,settings.supervisorSessionId,randomUUID()]);
+ await pg.query('INSERT INTO cost_log(user_id,workspace_id,session_id,input_tokens,output_tokens) VALUES($1,$2,$3,200000,0)',[userId,workspaceId,settings.supervisorSessionId]);
+ const {companionSpend}=await import('@/core/companion/scheduling');expect(await companionSpend({userId,workspaceId})).toBe(0);
+ await pg.query("UPDATE companion_wakes SET status='unknown',started_at=now()-interval '5 minutes',finished_at=now()-interval '1 minute' WHERE id=$1",[wake]);
+ expect(await companionSpend({userId,workspaceId})).toBe(0);
+});
+
+test('failed-pipeline feedback ignores metadata changes and superseded whole-session runs',async()=>{
+ await repository().saveSettings({enabled:true,modelName:'local',autonomy:'coordinate',quietHoursStart:0,quietHoursEnd:0},0);
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ await pg.query("UPDATE pipelines SET status='failed' WHERE id=$1",[pipelineId]);
+ const {tickCompanionFeedback}=await import('@/core/companion/feedback');await tickCompanionFeedback();
+ await pg.query("UPDATE pipelines SET updated_at=now()+interval '1 minute',metadata='{}' WHERE id=$1",[pipelineId]);await tickCompanionFeedback();
+ expect((await pg.query('SELECT id FROM notifications')).rows).toHaveLength(1);
+ await pg.query("DELETE FROM notifications");
+ const newer=randomUUID();await pg.query("INSERT INTO pipelines(id,user_id,workspace_id,session_id,status,created_at) VALUES($1,$2,$3,$4,'completed',now()+interval '1 minute')",[newer,userId,workspaceId,sessionId]);
+ await tickCompanionFeedback();expect((await pg.query('SELECT id FROM notifications')).rows).toHaveLength(0);
+ await pg.query('UPDATE companion_session_links SET pipeline_id=$1 WHERE goal_id=$2',[pipelineId,goal.id]);
+ await tickCompanionFeedback();expect((await pg.query('SELECT id FROM notifications')).rows).toHaveLength(1);
+});
+
+test('a stale cancellation snapshot cannot revoke an action migrated by resource tuning',async()=>{
+ const settings=await repository().saveSettings({enabled:true,modelName:'local',autonomy:'coordinate'},0);
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ const automatic=new CompanionSupervisionRepository({userId,workspaceId},connection,{settingsId:settings.settingsId!,revision:settings.revision});
+ const action=await automatic.queueMessage(goal.id,{requestKey:randomUUID(),sessionId,message:'Continue existing work'});
+ await pg.query('UPDATE companion_settings SET reconciled_revision=revision');await pg.query('UPDATE companion_events SET consumed_at=now()');
+ const authority=await import('@/core/companion/authority');
+ const check=vi.spyOn(authority,'companionActionAuthorized').mockImplementationOnce(async()=>{
+   await repository().saveSettings({enabled:true,modelName:'local',autonomy:'coordinate',dailyTokenBudget:200000},settings.revision);
+   return false;
+ });
+ try{await new CompanionDispatcher().tick();expect((await service().actions(goal.id)).find(row=>row.id===action.id)?.status).not.toBe('cancelled');}
+ finally{check.mockRestore();}
+});
+
+
+test('one owner turn can extend an incident only once, including after another exhaustion',async()=>{
+ await repository().saveSettings({enabled:false,maxRepairAttempts:1},0);
+ const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
+ await pg.query("UPDATE pipelines SET status='failed',summary='Device unavailable' WHERE id=$1",[pipelineId]);
+ const incident=(await service().detectIncident(goal.id,sessionId))!;
+ await repository().advanceIncident(goal.id,incident.id,{expectedRevision:0,strategy:'Initial inspection'});
+ await repository().advanceIncident(goal.id,incident.id,{expectedRevision:1,strategy:'Additional inspection'});
+ const turn='owner-message-one';
+ expect(await repository().reopenIncident(goal.id,incident.id,2,turn)).toMatchObject({state:'observed',attemptAllowance:1});
+ expect(await repository().reopenIncident(goal.id,incident.id,2,turn)).toMatchObject({state:'observed',attemptAllowance:1});
+ await repository().advanceIncident(goal.id,incident.id,{expectedRevision:3,strategy:'Owner requested fresh device inspection'});
+ await repository().advanceIncident(goal.id,incident.id,{expectedRevision:4,strategy:'Unapproved next attempt'});
+ expect(await repository().reopenIncident(goal.id,incident.id,5,turn)).toMatchObject({state:'escalated',attemptAllowance:1});
+ expect(await repository().reopenIncident(goal.id,incident.id,5,'owner-message-two')).toMatchObject({state:'observed',attemptAllowance:2});
 });

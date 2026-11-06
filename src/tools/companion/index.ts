@@ -62,7 +62,7 @@ export class CompanionTool extends BaseTool {
       permissions: [{ action: 'read', description: 'Inspect your supervised goals', defaultLevel: 'ALLOW' },
         { action: 'write', description: 'Create or change supervised goals', defaultLevel: 'ASK' },
         { action: 'execute', description: 'Start project sessions and send instructions under this goal', defaultLevel: 'ASK' }],
-      tools: ['find_sessions', 'read_session', 'list', 'read', 'create', 'update', 'adopt', 'start_session', 'message_session', 'control_session', 'inspect_session', 'detect_incident', 'advance_incident', 'verify_incident', 'start_maintenance', 'maintenance_run', 'activate', 'maintenance_check', 'maintenance_review', 'reconcile_activation', 'maintenance_inspect', 'read_part', 'heartbeat_status'].map(name => ({ name, description: name, parameters: {}, returns: 'Goal or action receipt' })) };
+      tools: ['find_sessions', 'read_session', 'list', 'read', 'create', 'update', 'adopt', 'start_session', 'message_session', 'control_session', 'inspect_session', 'detect_incident', 'reopen_incident', 'advance_incident', 'verify_incident', 'start_maintenance', 'maintenance_run', 'activate', 'maintenance_check', 'maintenance_review', 'reconcile_activation', 'maintenance_inspect', 'read_part', 'heartbeat_status'].map(name => ({ name, description: name, parameters: {}, returns: 'Goal or action receipt' })) };
   }
   protected async registerTools() {
     this.registerTool('find_sessions', 'Find existing personal conversations by title in this workspace, including sessions not adopted by Companion. Use when the owner names a session such as Life2. An empty goal list says nothing about whether that conversation exists. Matches are bounded; multiple matches require choosing the right session, not recreating it.',
@@ -175,6 +175,14 @@ export class CompanionTool extends BaseTool {
         const s = await mutationService(context, input.id); await carry(s, input.id, context);
         return s.detectIncident(input.id, input.sessionId);
       }, { permissionAction: 'write', injectSecrets: false });
+    this.registerTool('reopen_incident', 'Apply the owner’s explicit request to retry an escalated incident. Available only during an owner-requested turn, never a background wake. Reopens exactly one strategy; does not dispatch, grant shell access, replay unknown effects or mark recovery verified. Read current incident revision first. Do not use for a status question or without the owner asking to retry.',
+      z.toJSONSchema(z.object({ id:z.uuid(), incidentId:z.uuid(), expectedRevision:z.number().int().min(0) }),{io:'input'}), async(args,context)=>{
+        if(context.trigger!=='user')throw new Error('Reopening an escalated incident requires an explicit owner retry request');
+        const input=z.object({id:z.uuid(),incidentId:z.uuid(),expectedRevision:z.number().int().min(0)}).parse(args);
+        await mutationService(context,input.id);
+        const s=service(context);await carry(s,input.id,context);
+        return s.reopenIncident(input.id,input.incidentId,input.expectedRevision,context.id);
+      },{permissionAction:'execute'});
     this.registerTool('advance_incident', 'Record a distinct repair strategy before dispatch. A repeated or exhausted strategy escalates once. Resolve only with fresh passing verification in the affected session with detail.checkScope=incident:<incidentId>. A repair does not complete the goal.',
       z.toJSONSchema(z.object({ id: z.uuid(), incidentId: z.uuid(), expectedRevision: z.number().int().min(0), strategy: z.string().min(1).max(2000).optional(), evidenceId: z.uuid().optional() }).refine(v => !!v.strategy !== !!v.evidenceId), { io: 'input' }), async (args, context) => {
         const input = z.object({ id: z.uuid(), incidentId: z.uuid(), expectedRevision: z.number().int().min(0), strategy: z.string().min(1).max(2000).optional(), evidenceId: z.uuid().optional() }).refine(v => !!v.strategy !== !!v.evidenceId).parse(args);
@@ -241,7 +249,7 @@ export class CompanionTool extends BaseTool {
           else if (name === 'adopt') result = await s.adoptExecution(id, args.input);
           else result = await s.updateGoal(id, args.input);
           await carry(s, id, context);
-          return result;
+          return name === 'message_session' && result && typeof result === 'object' ? { ...result, deliveryNote: 'This is an instruction receipt, not proof that a session or pipeline resumed. Read current action delivery status and execution state before reporting that work started. Queued or waiting means not started.' } : result;
         }, { permissionAction: action, injectSecrets: false });
     }
   }

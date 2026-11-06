@@ -125,3 +125,9 @@ test('pending source protection and flow labels transfer before returning either
   await read(lifeId);
   expect(sessionProtectionLevel(callerId)).toBe(4);
 });
+
+
+test('background turns cannot apply owner incident retry decisions',async()=>{
+ await(await import('@/security/permissions')).getPermissionManager().setPermission(owner,'companion','execute','ALLOW');
+ await expect(tool.getTool('reopen_incident')!.execute({id:randomUUID(),incidentId:randomUUID(),expectedRevision:0},{...context,trigger:'monitor'})).rejects.toThrow('explicit owner retry request');
+});

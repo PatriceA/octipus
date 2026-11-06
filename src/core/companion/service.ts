@@ -43,7 +43,7 @@ export class CompanionService {
   authorizeGoal(id: string, profile: unknown, expectedRevision: number) { return this.repo.authorizeGoal(id, profile, expectedRevision); }
   incidents(id: string) { return this.repo.incidents(id); }
   detectIncident(id: string, sessionId: string) { return this.repo.detectIncident(id, sessionId); }
-  reopenIncident(id:string,incidentId:string,expectedRevision:number){return this.repo.reopenIncident(id,incidentId,expectedRevision);}
+  reopenIncident(id:string,incidentId:string,expectedRevision:number,ownerTurnId?:string){return this.repo.reopenIncident(id,incidentId,expectedRevision,ownerTurnId);}
   beginVerification(id: string, incidentId: string) { return this.repo.beginVerification(id, incidentId); }
   advanceIncident(id: string, incidentId: string, input: { expectedRevision: number; strategy?: string; evidenceId?: string }) { return this.repo.advanceIncident(id, incidentId, input); }
   actions(id: string) { return this.repo.actions(id); }
