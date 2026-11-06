@@ -101,6 +101,13 @@ async function seedSpaceRows(ws: string, author: string): Promise<{ sessionId: s
   await one('artifacts', `INSERT INTO artifacts (workspace_id, slug, title, type, created_by_user_id) VALUES ($1, $2, 'A', 'html', $3)`, [ws, `a-${rand(3)}`, author]);
   await one('background_jobs', `INSERT INTO background_jobs (kind, user_id, title, workspace_id) VALUES ('research', $1, 'job', $2)`, [author, ws]);
   await one('cases', `INSERT INTO cases (user_id, title, workspace_id) VALUES ($1, 'c', $2)`, [author, ws]);
+  // Companion is personal-only, but purge must also remove historical or
+  // incorrectly stamped rows, including their session/action child records.
+  const goalId = randomUUID();
+  await one('companion_goals', `INSERT INTO companion_goals (id,user_id,workspace_id,request_key,title,request,outcome,acceptance_criteria) VALUES ($1,$2,$3,$4,'Goal','Work','Verified','[]')`, [goalId,author,ws,randomUUID()]);
+  await one('companion_settings', `INSERT INTO companion_settings (user_id,workspace_id) VALUES ($1,$2)`, [author,ws]);
+  await q(`INSERT INTO companion_session_links (goal_id,session_id,purpose,active) VALUES ($1,$2,'Historical link',false)`, [goalId,session.id]);
+  await q(`INSERT INTO companion_actions (goal_id,session_id,request_key,generation,kind,message,status) VALUES ($1,$2,$3,'','message_session','Historical action','completed')`, [goalId,session.id,randomUUID()]);
   await one('contacts', `INSERT INTO contacts (user_id, name, workspace_id) VALUES ($1, 'k', $2)`, [author, ws]);
   const [recordType] = await q(`INSERT INTO record_types (user_id, key, name, workspace_id) VALUES ($1, $2, 't', $3) RETURNING id`, [author, `t_${rand(3)}`, ws]);
   seeded.add('record_types');
@@ -251,6 +258,7 @@ describe('purgeSpace', () => {
     }
     for (const [table, column] of [
       ['agents', 'session_id'], ['tool_actions', 'session_id'], ['run_events', 'run_id'],
+      ['companion_actions', 'session_id'], ['companion_session_links', 'session_id'],
       ['agent_approvals', 'session_id'], ['verification_evidence', 'session_id'], ['messages', 'session_id'],
     ]) {
       const [row] = await q(`SELECT count(*)::int AS n FROM ${table} WHERE ${column}::text = $1`, [sessionId]);
