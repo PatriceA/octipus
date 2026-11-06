@@ -73,3 +73,28 @@ describe('checkRedundant', () => {
     expect(d.checkRedundant(c()).tripped).toBe(false);
   });
 });
+
+
+describe('productive coordination is not same-name spam',()=>{
+  test('different Codemode scripts and scoped Companion calls remain available',()=>{
+    for(const name of ['codemode','companion__read_session','companion__inspect_session','companion__message_session']){
+      const detector=new ToolLoopDetector();
+      for(let step=0;step<12;step++){
+        const calls=call(name,{script:`await tools.companion__read_session({sessionId:"session-${step}"})`});
+        expect(detector.checkSameName(calls).tripped).toBe(false);
+        expect(detector.checkRepeat(calls).tripped).toBe(false);
+      }
+    }
+  });
+  test('identical Codemode calls still trigger the repeat guard',()=>{
+    const detector=new ToolLoopDetector();const calls=call('codemode',{script:'await tools.companion__list({})'});
+    expect(detector.checkRepeat(calls).tripped).toBe(false);
+    expect(detector.checkRepeat(calls).tripped).toBe(false);
+    expect(detector.checkRepeat(calls).tripped).toBe(true);
+  });
+  test('different status messages still trigger the spam guard',()=>{
+    const detector=new ToolLoopDetector();
+    for(let step=0;step<4;step++)expect(detector.checkSameName(call('send_status_update',{message:`Still checking ${step}`})).tripped).toBe(false);
+    expect(detector.checkSameName(call('send_status_update',{message:'Still checking again'})).tripped).toBe(true);
+  });
+});

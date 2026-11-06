@@ -38,6 +38,9 @@ const MAX_SAME_NAME_REPEATS = 5;
  * catches them.
  */
 const REPEAT_ALLOWED_TOOLS = new Set<string>([
+  // A wrapper for different scoped tool calls, not one repeated operation.
+  // Companion normally performs every step through this single name.
+  'codemode',
   'spawn_child',
   'collect_children',
   'create_pipeline',
@@ -52,7 +55,7 @@ const REPEAT_ALLOWED_TOOLS = new Set<string>([
  * many of these in sequence and tripping the same-name guard wastes
  * their progress.
  */
-const REPEAT_ALLOWED_PREFIXES = ['filesystem__', 'shell__', 'git__', 'web_', 'code__', 'search_'];
+const REPEAT_ALLOWED_PREFIXES = ['filesystem__', 'shell__', 'git__', 'web_', 'code__', 'search_', 'companion__'];
 
 /**
  * A call with identical arguments made this many times ANYWHERE in a run — not
