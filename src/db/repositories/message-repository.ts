@@ -1,3 +1,4 @@
+import { visibleMessages, withMessageVisibility } from './message-visibility';
 import { and, asc, desc, eq, gt, gte, inArray, lte, sql } from 'drizzle-orm';
 import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
@@ -14,7 +15,7 @@ export const CONTEXT_MESSAGE_CAP = 400;
 
 /** The rows of a session's transcript after a clear/checkpoint (`findContextMessages`). */
 function contextFilters(sessionId: string, since: string | undefined, after: { id: string; createdAt: string } | undefined, generation: string | undefined) {
-  const filters = [eq(messages.sessionId, sessionId), inArray(messages.role, ['user', 'assistant'])];
+  const filters = [visibleMessages, eq(messages.sessionId, sessionId), inArray(messages.role, ['user', 'assistant'])];
   if (generation !== undefined) {
     const legacy = since ? sql`${messages.createdAt} > ${since}::timestamptz` : sql`true`;
     filters.push(sql`(${messages.metadata}->>'sessionGeneration' = ${generation} OR (${messages.metadata}->>'sessionGeneration' IS NULL AND ${legacy}))`);
@@ -92,7 +93,7 @@ export class MessageRepository {
       .select()
       // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
       .from(messages)
-      .where(conditions)
+      .where(and(conditions,visibleMessages))
       .orderBy(asc(messages.createdAt))
       .limit(limit)
       .offset(offset);
@@ -108,7 +109,7 @@ export class MessageRepository {
     roles?: string[],
     since?: Date,
   ): Promise<Message[]> {
-    const filters = [eq(messages.sessionId, sessionId)];
+    const filters = [eq(messages.sessionId, sessionId),visibleMessages];
     if (roles?.length) {
       filters.push(inArray(messages.role, roles as ('system' | 'user' | 'assistant' | 'tool')[]));
     }
@@ -121,7 +122,7 @@ export class MessageRepository {
       .select()
       // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
       .from(messages)
-      .where(conditions)
+      .where(and(conditions,visibleMessages))
       .orderBy(desc(messages.createdAt))
       .limit(limit);
 
@@ -150,7 +151,7 @@ export class MessageRepository {
       .select()
       // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
       .from(messages)
-      .where(conditions)
+      .where(and(conditions,visibleMessages))
       .orderBy(asc(messages.createdAt))
       .limit(limit)
       .offset(offset);
@@ -162,7 +163,7 @@ export class MessageRepository {
       .select({ count: sql<number>`count(*)::int` })
       // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
       .from(messages)
-      .where(inArray(messages.sessionId, sessionIds));
+      .where(and(visibleMessages,inArray(messages.sessionId, sessionIds)));
     return result[0]?.count ?? 0;
   }
 
@@ -182,6 +183,7 @@ export class MessageRepository {
    * and announces the committed row on `messageEvents` (§6.4).
    */
   async createForGeneration(data: NewMessage, generation: string): Promise<Message | null> {
+    data=withMessageVisibility(data);
     await assertRoomAuthor([data]);
     const row = await this.db.transaction(async tx => {
       // i2: by session id, for the agent runtime that owns the session; user routes use ScopedMessageRepo
@@ -197,6 +199,7 @@ export class MessageRepository {
   }
 
   async create(data: NewMessage, generation?: string): Promise<Message> {
+    data=withMessageVisibility(data);
     if (generation !== undefined) {
       const row = await this.createForGeneration(data, generation);
       if (!row) throw new Error('Conversation was cleared before the turn could start');
@@ -216,6 +219,7 @@ export class MessageRepository {
   }
 
   async createMany(data: NewMessage[]): Promise<Message[]> {
+    data=data.map(withMessageVisibility);
     if (data.length === 0) return [];
     await assertRoomAuthor(data);
     const now = new Date();

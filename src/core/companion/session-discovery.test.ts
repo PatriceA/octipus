@@ -160,7 +160,7 @@ test('adoption receipts stay successful when a paused source cannot accept an au
  const source=randomUUID();await getDb().insert(sessions).values({id:source,userId:owner,workspaceId,channelType:'webchat',channelId:randomUUID(),status:'paused'});
  const goal=await repo.create({requestKey:randomUUID(),title:'Paused source',request:'Observe existing paused work',outcome:'Keep original execution',acceptanceCriteria:['Preserved']});
  const result=await tool.getTool('adopt')!.execute({id:goal.id,input:{expectedRevision:0,sessionId:source,pipelineId:null,purpose:'Supervise existing work'}},{...context,role:'companion',sessionId:settings.supervisorSessionId!,metadata:{companionAuthorityRevision:settings.revision}}) as {link:{id:string};briefing:{status:string}};
- expect(result.link.id).toBeTruthy();expect(result.briefing.status).toBe('not_requested');
+ expect(result.link.id).toBeTruthy();expect(result.briefing).toBeUndefined();
  expect((await repo.read(goal.id)).links).toHaveLength(1);expect(await repo.actions(goal.id)).toHaveLength(0);
  const pipelineGoal=await repo.create({requestKey:randomUUID(),title:'Pipeline-only supervision',request:'Observe pipeline',outcome:'Preserve scope',acceptanceCriteria:['Preserved']});
  const pipelineResult=await tool.getTool('adopt')!.execute({id:pipelineGoal.id,input:{expectedRevision:0,sessionId:lifeId,pipelineId,purpose:'Supervise only this pipeline'}},{...context,role:'companion',sessionId:settings.supervisorSessionId!,metadata:{companionAuthorityRevision:settings.revision}}) as {link:{pipelineId:string}};

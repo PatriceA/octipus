@@ -24,6 +24,7 @@ export interface RunContext {
   /** Internal, per-run briefing scope. Does not affect parallel pipeline workers. */
   readonly companionBriefingModel?: string;
   readonly companionBriefing?: boolean;
+  readonly companionObservation?: boolean;
   readonly companionBriefingBudget?: number;
   readonly sessionId?: string;
   readonly userId?: string;

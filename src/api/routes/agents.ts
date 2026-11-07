@@ -102,7 +102,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
         userId: a.userId,
         workspaceId: agentManager.get(a.id)?.getContext().workspaceId ?? null,
       })));
-      let liveAgents = listed.filter((_, i) => reachable[i]);
+      let liveAgents = listed.filter((a, i) => reachable[i] && !agentManager.get(a.id)?.getContext().metadata?.companionBriefing);
 
       const repos = contentRepos(principal);
 

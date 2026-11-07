@@ -246,7 +246,7 @@ export class AgentService {
      * renders, and model-facing notes already checked against the session.
      */
     inlineUi?: { renders?: readonly string[]; notes?: readonly string[]; provenanceId?: string },
-    internal?: { companionBriefingModel?:string; companionBriefing?:boolean;companionBriefingBudget?:number },
+    internal?: { companionObservation?:boolean; companionBriefingModel?:string; companionBriefing?:boolean;companionBriefingBudget?:number },
   ): Promise<TurnResult> {
     const turnTrigger = trigger ?? triggerForChannel(channel, !!groupTurn);
     // Controls must reach a running turn; queuing /stop behind it defeats cancellation.
@@ -282,6 +282,7 @@ export class AgentService {
       return runWithContext(
         {
           runId, sessionId, userId, channel: channel ?? 'api', origin: channel ?? 'api',
+          ...(internal?.companionObservation?{companionObservation:true}:{}),
           ...(internal?.companionBriefing?{companionBriefing:true,companionBriefingModel:internal.companionBriefingModel,companionBriefingBudget:internal.companionBriefingBudget}:{}),
           ...(inlineUi?.renders?.length ? { renders: inlineUi.renders } : {}),
           ...(inlineUi?.notes?.length ? { inlineUiNotes: inlineUi.notes } : {}),
@@ -1138,7 +1139,7 @@ export class AgentService {
         const { acknowledgeProviderTurn } = await import('@/core/cli-session-store');
         await acknowledgeProviderTurn(resolvedSessionId, agentId, persistedAnswer);
       }
-      await sessionRepository.incrementMessageCount(resolvedSessionId);
+      if(persistedAnswer.metadata?.visibility!=='internal')await sessionRepository.incrementMessageCount(resolvedSessionId);
 
       // A room is compacted by its transcript's size, as the requester of
       // this turn, funded by the install (§6.4).
@@ -1487,7 +1488,7 @@ export class AgentService {
 
   canSteer(sessionId: string): boolean {
     return getAgentManager().getBySession(sessionId).some(agent => agent.getStatus() === 'running'
-      && agent.getContext().root === true && !agent.getContext().metadata?.room && 'steer' in agent
+      && agent.getContext().root === true && !agent.getContext().metadata?.room && !agent.getContext().metadata?.companionBriefing && 'steer' in agent
       && (!('canAcceptSteering' in agent) || (agent as { canAcceptSteering(): boolean }).canAcceptSteering()));
   }
 
@@ -1498,7 +1499,7 @@ export class AgentService {
   steer(sessionId: string, message: import('@/core/types').AgentMessage): boolean {
     const agentManager = getAgentManager();
     const sessionAgents = agentManager.getBySession(sessionId);
-    const running = sessionAgents.find(a => a.getStatus() === 'running' && a.getContext().root === true && !a.getContext().metadata?.room);
+    const running = sessionAgents.find(a => a.getStatus() === 'running' && a.getContext().root === true && !a.getContext().metadata?.room && !a.getContext().metadata?.companionBriefing);
     if (!running) return false;
 
     // Only the root receives session steering and decides whether a child needs it.
@@ -1520,6 +1521,7 @@ export class AgentService {
     progress?: number,
     generation?: string,
   ): Promise<unknown> {
+    if(context.metadata?.companionBriefing===true)return {sent:false};
     const saved = await saveProgressMessage(message, context, generation);
     if (!saved) return { sent: false };
     this.emit({

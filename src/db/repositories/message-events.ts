@@ -24,6 +24,7 @@ class MessageEvents extends EventEmitter<MessageEventMap> {
   /** Announce committed rows. */
   announce(rows: readonly Message[]): void {
     for (const row of rows) {
+      if(row.metadata?.visibility==='internal')continue;
       try {
         this.emit('created', row);
       } catch (err) {

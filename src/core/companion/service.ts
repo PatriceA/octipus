@@ -57,7 +57,7 @@ export class CompanionService {
   async saveSettings(input: unknown, expectedRevision: number) {
     const { companionSettingsSchema } = await import('@/shared/companion-supervision');
     const data = companionSettingsSchema.parse(input);
-    if (data.enabled) {
+    if (data.enabled || data.modelName.trim()) {
       const model = await resolveModel({ userId: this.repo.scope.userId, name: data.modelName });
       if (!model || model.provider === 'cli' || !model.supportsTools || !canServeText(model) || /reasoner|thinking/.test(model.modelId))
         throw new CompanionSupervisionError('conflict', 'Choose an API or local text model with tools for the supervisor. Project sessions can use CLI models.');

@@ -400,7 +400,7 @@ export class AgentManager {
       // Streamed text deltas are transient: forward them, never buffer or
       // persist (one row per token would swamp agent_events).
       if ((event.data as { type?: string } | null)?.type === 'text_delta') {
-        for (const handler of this.eventHandlers) handler(event);
+        if(context.metadata?.companionBriefing!==true)for (const handler of this.eventHandlers) handler(event);
         return;
       }
       // Buffer the event for polling
@@ -428,6 +428,8 @@ export class AgentManager {
         data: event.data,
       }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-manager'));
 
+      // Internal handoff text remains in the audit trail, outside project chat streams.
+      if(context.metadata?.companionBriefing===true)return;
       // Forward to WebSocket / other handlers
       for (const handler of this.eventHandlers) {
         handler(event);

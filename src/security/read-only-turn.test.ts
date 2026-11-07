@@ -1,3 +1,4 @@
+import { runWithContext } from '@/core/run-context';
 import { afterEach, describe, expect, test } from 'vitest';
 import {
   beginReadOnlyTurn, endReadOnlyTurn, isReadOnlyTurn, readOnlyNotifyAllowed, readOnlyRefusal, resetReadOnlyTurns,
@@ -83,4 +84,13 @@ test('an explicit briefing context remains read-only outside ambient async stora
  expect(readOnlyRefusal(S,U,{toolId:'shell',action:'execute'},true)).toMatch(/read-only/);
  expect(readOnlyRefusal(S,U,{toolId:'filesystem',action:'read'},true)).toBeUndefined();
  expect(readOnlyRefusal(S,U,{toolId:'shell',action:'execute'})).toBeUndefined();
+});
+
+
+test('internal briefings cannot send their handoff to owner channels',()=>{
+ const call={toolId:'messaging',action:'send_to_user',args:{user_id:U,message:'Internal handoff'}};
+ runWithContext({runId:'brief',sessionId:S,companionBriefing:true},()=>{
+  expect(readOnlyRefusal(S,U,call)).toContain('internally');expect(readOnlyNotifyAllowed(S,U,call)).toBe(false);
+ });
+ expect(readOnlyRefusal(S,U,call,true)).toContain('internally');
 });

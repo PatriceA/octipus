@@ -135,10 +135,10 @@ test.skipIf(!sandboxAvailable)('engine observes a persisted blocker after restar
      }else if(incident?.state==='repairing'&&actions.some(action=>action.incidentId===incident.id&&action.status==='completed')){
       const proof=await call('verify_incident',{id:goal.id,incidentId:incident.id,command:'test -f engine-sdk',cwd:projectRoot}) as {evidenceId:string;passed:boolean};expect(proof.passed).toBe(true);
       await call('advance_incident',{id:goal.id,incidentId:incident.id,expectedRevision:incident.revision+1,evidenceId:proof.evidenceId});
-      await call('request_briefing',{id:goal.id,requestKey:randomUUID(),sessionId:original.sessionId});
+      await call('message_session',{id:goal.id,input:{requestKey:randomUUID(),sessionId:original.sessionId,message:'Continue the original milestone after the verified runtime repair.'}});
+
      }else if(incident?.state==='resolved'&&!acceptanceId){
-      const brief=actions.find(action=>action.kind==='request_briefing'&&action.sessionId===original.sessionId&&action.status==='completed');
-      if(brief&&!actions.some(action=>action.kind==='message_session'))await call('message_session',{id:goal.id,input:{requestKey:randomUUID(),sessionId:original.sessionId,briefingId:brief.id,message:'Continue the original milestone after the verified runtime repair.'}});
+      if(!actions.some(action=>action.kind==='message_session'))await call('message_session',{id:goal.id,input:{requestKey:randomUUID(),sessionId:original.sessionId,message:'Continue the original milestone after the verified runtime repair.'}});
      }else if(acceptanceId&&actions.every(action=>!['queued','running','unknown'].includes(action.status))){
       await call('update',{id:goal.id,input:{expectedRevision:detail.goal.revision,state:'completed',evidence:[{criterionIndex:0,evidenceId:acceptanceId,summary:'Fresh registered runtime gate passed after recovery'}]}});
      }

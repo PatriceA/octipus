@@ -95,7 +95,7 @@ export async function trySteerRunningRootAgent(sessionId: string, content: strin
   const mgr = getAgentManager();
   const target = mgr
     .getBySession(sessionId)
-    .filter((a) => a.getStatus() === 'running' && a.getContext().root === true)
+    .filter((a) => a.getStatus() === 'running' && a.getContext().root === true && !a.getContext().metadata?.companionBriefing)
     .find((a): a is typeof a & SteerableWorker => typeof (a as Partial<SteerableWorker>).steer === 'function');
   if (!target || target.canAcceptSteering?.() === false) return false;
   // A room turn is never steered: a member's post is stored once by the

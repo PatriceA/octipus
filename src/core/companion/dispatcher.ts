@@ -172,7 +172,7 @@ export class CompanionDispatcher {
         }
         return getAgentService().handleMessage(action.sessionId,scope.userId,action.message,'monitor',action.attachments,undefined,()=>authorize(),undefined,undefined,undefined,internal);
       })();
-      if('classification' in result)getAgentService().publishResponse(action.sessionId, scope.userId, result);
+      if(action.kind!=='request_briefing'&&'classification' in result)getAgentService().publishResponse(action.sessionId, scope.userId, result);
       const provenance = await persistCompanionSource(scope, action.sessionId);
       await getDb().update(companionActions).set({ status: result.outcome === 'success' ? 'completed' : 'failed',
         protectionLevel: provenance.protectionLevel ?? action.protectionLevel, flowLabel: provenance.flowLabel ?? action.flowLabel,

@@ -351,15 +351,15 @@ export class CompanionSupervisionRepository {
       if(terminal(goal)||goal.state==='paused'||source.status!=='active')return fail('conflict','Respect the owner pause before requesting a briefing');
       const [link]=await tx.select().from(companionSessionLinks).where(and(eq(companionSessionLinks.goalId,id),eq(companionSessionLinks.sessionId,source.id),eq(companionSessionLinks.active,true),eq(companionSessionLinks.ownership,'owner'),isNull(companionSessionLinks.pipelineId)));
       if(!link)return fail('not_found','An owned whole-session link is required');
+      if(link.origin==='created')return fail('conflict','Companion created this session and already has its starting context. Read its saved work instead of requesting an introductory briefing.');
       const [existing]=await tx.select().from(companionActions).where(and(eq(companionActions.goalId,id),eq(companionActions.requestKey,input.requestKey)));
       if(existing){if(existing.kind!=='request_briefing'||existing.sessionId!==source.id)return fail('conflict','Request key belongs to another action');return existing;}
       const [pending]=await tx.select().from(companionActions).where(and(eq(companionActions.goalId,id),eq(companionActions.sessionId,source.id),eq(companionActions.kind,'request_briefing'),eq(companionActions.generation,sessionGeneration(source.context)),inArray(companionActions.status,['queued','running','unknown']))).limit(1);
       if(pending)return pending;
       const contextKey=await this.briefingKey(tx,source);
-      const {COMPANION_BRIEFING_MAX_AGE_MS}=await import('@/core/companion/briefing');
       if(!input.refresh){
-        const [cached]=await tx.select().from(companionActions).where(and(eq(companionActions.goalId,id),eq(companionActions.sessionId,source.id),eq(companionActions.kind,'request_briefing'),eq(companionActions.status,'completed'),eq(companionActions.generation,sessionGeneration(source.context)),eq(companionActions.briefingContextKey,contextKey))).orderBy(desc(companionActions.updatedAt)).limit(1);
-        if(cached&&Date.now()-cached.updatedAt.getTime()<=COMPANION_BRIEFING_MAX_AGE_MS)return cached;
+        const [cached]=await tx.select().from(companionActions).where(and(eq(companionActions.goalId,id),eq(companionActions.sessionId,source.id),eq(companionActions.kind,'request_briefing'),eq(companionActions.status,'completed'),eq(companionActions.generation,sessionGeneration(source.context)))).orderBy(desc(companionActions.updatedAt)).limit(1);
+        if(cached)return cached;
       }
       const {COMPANION_BRIEFING_REQUEST}=await import('@/core/companion/briefing');
       return (await tx.insert(companionActions).values({goalId:id,sessionId:source.id,requestKey:input.requestKey,kind:'request_briefing',message:`${COMPANION_BRIEFING_REQUEST}\nGoal ID: ${id}\nProject session ID: ${source.id}\nIf history is clipped, use companion__read_report with these IDs to read the full earlier architecture report, paging until continuation is null.`,briefingContextKey:contextKey,
@@ -389,10 +389,9 @@ export class CompanionSupervisionRepository {
       const [link] = await tx.select({ id: companionSessionLinks.id }).from(companionSessionLinks).where(and(eq(companionSessionLinks.goalId, id),
         eq(companionSessionLinks.sessionId, data.sessionId), isNull(companionSessionLinks.pipelineId), eq(companionSessionLinks.active, true), eq(companionSessionLinks.ownership, 'owner')));
       if (!link) return fail('not_found', 'An owned whole-session link is required to send instructions');
-      if(this.authority?.requireBriefing){
-        const {COMPANION_BRIEFING_MAX_AGE_MS}=await import('@/core/companion/briefing');
-        const [brief]=data.briefingId?await tx.select().from(companionActions).where(and(eq(companionActions.id,data.briefingId),eq(companionActions.goalId,id),eq(companionActions.sessionId,data.sessionId),eq(companionActions.kind,'request_briefing'),eq(companionActions.status,'completed'),eq(companionActions.generation,sessionGeneration(sources.find(source=>source.id===data.sessionId)?.context)))).limit(1):[];
-        if(!brief||brief.briefingContextKey!==await this.briefingKey(tx,sources.find(source=>source.id===data.sessionId)!)||Date.now()-brief.updatedAt.getTime()>COMPANION_BRIEFING_MAX_AGE_MS)return fail('conflict','A current session briefing is required. Use request_briefing, read its complete report with read_report, then pass its briefingId. Do not prescribe a deployment target from inference.');
+      if(data.briefingId){
+          const [brief]=data.briefingId?await tx.select().from(companionActions).where(and(eq(companionActions.id,data.briefingId),eq(companionActions.goalId,id),eq(companionActions.sessionId,data.sessionId),eq(companionActions.kind,'request_briefing'),eq(companionActions.status,'completed'),eq(companionActions.generation,sessionGeneration(sources.find(source=>source.id===data.sessionId)?.context)))).limit(1):[];
+        if(!brief)return fail('conflict','The referenced briefing must be a completed report for this session and conversation generation.');
       }
       let repair: { incidentId: string; strategyIndex: number } | undefined;
       if (this.authority || data.incidentId) {
@@ -453,7 +452,7 @@ export class CompanionSupervisionRepository {
       const [row] = await tx.select().from(companionSettings).where(and(eq(companionSettings.userId, this.scope.userId), eq(companionSettings.workspaceId, this.scope.workspaceId))).for('update');
       if (row.revision !== expectedRevision) return fail('conflict', 'Companion settings changed; refresh before saving');
       let sessionId = row.supervisorSessionId;
-      if (data.enabled && !sessionId) {
+      if (data.modelName.trim() && !sessionId) {
         sessionId = randomUUID();
         await tx.insert(sessions).values({ id: sessionId, ...this.scope, title: 'Companion project coordination', channelType: 'webchat', channelId: `companion-controller:${row.id}`,
           pinned: true,

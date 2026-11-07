@@ -42,7 +42,7 @@ export function endReadOnlyTurn(sessionId: string): void {
 
 export function isReadOnlyTurn(sessionId: string | undefined): boolean {
   const run=getRunContext();
-  return !!sessionId && (active.has(sessionId)||(run?.sessionId===sessionId&&run.companionBriefing===true));
+  return !!sessionId && (active.has(sessionId)||(run?.sessionId===sessionId&&run?.companionBriefing===true));
 }
 
 /** Test seam. */
@@ -58,7 +58,8 @@ export function resetReadOnlyTurns(): void {
  * only, and only for that call.
  */
 export function readOnlyNotifyAllowed(sessionId: string | undefined, userId: string, call: ReadOnlyCall): boolean {
-  return isReadOnlyTurn(sessionId) && isOwnerOnlyDelivery(userId, call);
+  const run=getRunContext();
+  return !(run?.sessionId===sessionId&&run?.companionBriefing) && isReadOnlyTurn(sessionId) && isOwnerOnlyDelivery(userId, call);
 }
 
 /** Tool ids whose `read` / `list` / `search` actions only read. */
@@ -82,6 +83,8 @@ export interface ReadOnlyCall {
  */
 export function readOnlyRefusal(sessionId: string | undefined, userId: string, call: ReadOnlyCall, explicitReadOnly=false): string | undefined {
   if (!explicitReadOnly&&!isReadOnlyTurn(sessionId)) return undefined;
+  const run=getRunContext();
+  if((explicitReadOnly||(run?.sessionId===sessionId&&run?.companionBriefing))&&isOwnerOnlyDelivery(userId,call))return 'An internal briefing is a read-only turn; return its report internally instead of notifying the owner.';
   // The notify step: the same check the flow guard exempts (security/flow-guard.ts).
   if (isOwnerOnlyDelivery(userId, call)) return undefined;
   if (call.toolId.startsWith('cli-native:')) {

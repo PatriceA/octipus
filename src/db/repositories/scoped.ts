@@ -1,3 +1,4 @@
+import { visibleMessages } from './message-visibility';
 /**
  * Scoped repositories — Principal-bound facades over the raw repos.
  *
@@ -416,7 +417,7 @@ export class ScopedMessageRepo {
     offset = 0,
     roles?: string[],
   ): Promise<Message[]> {
-    const filters = [eq(messages.sessionId, sessionId), ...this.sessionFilter()];
+    const filters = [visibleMessages,eq(messages.sessionId, sessionId), ...this.sessionFilter()];
     if (roles?.length) {
       filters.push(inArray(messages.role, roles as ('system' | 'user' | 'assistant' | 'tool')[]));
     }
@@ -441,7 +442,7 @@ export class ScopedMessageRepo {
     roles?: string[],
   ): Promise<Message[]> {
     if (sessionIds.length === 0) return [];
-    const filters = [inArray(messages.sessionId, sessionIds), ...this.sessionFilter()];
+    const filters = [visibleMessages,inArray(messages.sessionId, sessionIds), ...this.sessionFilter()];
     if (roles?.length) {
       filters.push(inArray(messages.role, roles as ('system' | 'user' | 'assistant' | 'tool')[]));
     }
@@ -459,7 +460,7 @@ export class ScopedMessageRepo {
   /** Newest page, returned chronologically. The id cursor retains DB timestamp precision. */
   async findHistoryPage(sessionIds: string[], limit: number, roles?: string[], before?: string): Promise<Message[]> {
     if (!sessionIds.length) return [];
-    const filters = [inArray(messages.sessionId, sessionIds), ...this.sessionFilter()];
+    const filters = [visibleMessages,inArray(messages.sessionId, sessionIds), ...this.sessionFilter()];
     if (roles?.length) filters.push(inArray(messages.role, roles as Message['role'][]));
     if (before) {
       const cursor = alias(messages, 'history_cursor');
@@ -480,7 +481,7 @@ export class ScopedMessageRepo {
       .select({ count: sql<number>`count(*)::int` })
       .from(messages)
       .innerJoin(sessions, eq(messages.sessionId, sessions.id))
-      .where(and(inArray(messages.sessionId, sessionIds), ...this.sessionFilter()));
+      .where(and(visibleMessages,inArray(messages.sessionId, sessionIds), ...this.sessionFilter()));
     return rows[0]?.count ?? 0;
   }
 
@@ -597,7 +598,7 @@ export class ScopedAgentRepo {
     const [row] = await this.db
       .select({ c: count() })
       .from(agents)
-      .where(and(inArray(agents.sessionId, sessionIds), ...this.scope.own(agents, { byId: true })));
+      .where(and(inArray(agents.sessionId, sessionIds), sql`coalesce(${agents.metadata}->>'companionBriefing','false') <> 'true'`, ...this.scope.own(agents, { byId: true })));
     return row?.c ?? 0;
   }
 
@@ -605,7 +606,7 @@ export class ScopedAgentRepo {
     return this.db
       .select()
       .from(agents)
-      .where(and(eq(agents.sessionId, sessionId), ...this.scope.own(agents, { byId: true })))
+      .where(and(eq(agents.sessionId, sessionId), sql`coalesce(${agents.metadata}->>'companionBriefing','false') <> 'true'`, ...this.scope.own(agents, { byId: true })))
       .orderBy(desc(agents.createdAt))
       .limit(limit);
   }
@@ -621,7 +622,7 @@ export class ScopedAgentRepo {
     return this.db
       .select()
       .from(agents)
-      .where(and(inArray(agents.sessionId, sessionIds), ...this.scope.own(agents, { byId: true })))
+      .where(and(inArray(agents.sessionId, sessionIds), sql`coalesce(${agents.metadata}->>'companionBriefing','false') <> 'true'`, ...this.scope.own(agents, { byId: true })))
       .orderBy(desc(agents.createdAt))
       .limit(limit)
       .offset(offset);

@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { CompanionService } from '@/core/companion/service';
@@ -39,7 +38,7 @@ async function mutationService(context: AgentContext, goalId?: string, operation
     if (!settings.settingsId) throw new Error('Companion authority is unavailable');
     const { CompanionSupervisionRepository } = await import('@/db/repositories/companion-supervision-repository');
     const scope = { userId: context.userId, workspaceId: context.workspaceId! };
-    return new CompanionService(scope, new CompanionSupervisionRepository(scope, undefined, { settingsId: settings.settingsId, revision: settings.revision, requireBriefing:true }));
+    return new CompanionService(scope, new CompanionSupervisionRepository(scope, undefined, { settingsId: settings.settingsId, revision: settings.revision }));
   }
   return s;
 }
@@ -82,10 +81,12 @@ export class CompanionTool extends BaseTool {
         const source = await carrySession(input.sessionId, context);
         return { ...result, protectionLevel: Math.max(result.protectionLevel, source.protectionLevel ?? 1), flowLabel: { ...result.flowLabel, ...source.flowLabel } };
       }, { permissionAction: 'read' });
-    this.registerTool('request_briefing','Ask the existing project session for a read-only architecture/deployment/context summary BEFORE supervising unfamiliar work or after a long gap. Reuses an unchanged briefing for up to six hours; set refresh only for new architecture information or an explicit owner request. Does not consume an incident repair strategy or resume its pipeline. Uses a scoped API/local text model and read-only tools. Read the completed action report in full with read_report, then pass its ID as briefingId when giving instructions.',
+    this.registerTool('request_briefing','Request one internal read-only handoff for unfamiliar adopted work, only if you do not already know its context. Reuses the saved report for the conversation lifetime. Never brief sessions you created. Use refresh only when a full replacement handoff is specifically necessary; ordinary updates do not need one. Read the completed report with read_report.',
       z.toJSONSchema(z.object({id:z.uuid(),sessionId:z.uuid(),requestKey:z.uuid(),refresh:z.boolean().optional()}),{io:'input'}),async(args,context)=>{
         const input=z.object({id:z.uuid(),sessionId:z.uuid(),requestKey:z.uuid(),refresh:z.boolean().optional()}).parse(args);
         const s=await mutationService(context,input.id);await carry(s,input.id,context);await carrySession(input.sessionId,context);
+        const detail=await s.readGoal(input.id);
+        if(detail.links.some(link=>link.sessionId===input.sessionId&&link.origin==='created'))return {status:'not_needed',note:'You created this session; use its known context and saved work.'};
         return s.requestBriefing(input.id,input);
       },{permissionAction:'execute',injectSecrets:false});
     this.registerTool('read_report','Read the complete source-session assistant report or action result in pages. Use after inspect_session reports truncated:true. Omit messageId/actionId for the latest assistant report. Reuse the returned continuation messageId/actionId and offset until continuation is null; never infer missing architecture from a truncated preview.',
@@ -264,24 +265,11 @@ export class CompanionTool extends BaseTool {
           }
           else if (name === 'message_session') {
             const input=companionSessionMessageSchema.parse(args.input);
-            const {sessionRepository}=await import('@/db/repositories/session-repository');
-            const controller=await sessionRepository.findById(context.sessionId);
-            if(controller?.context?.companionSupervisor&&!input.briefingId)return {status:'briefing_required',note:'No instruction queued. First request_briefing for this existing session, read the full completed report with read_report, then resend an instruction grounded in that architecture with briefingId.'};
             result=await s.messageSession(id,{...input,sourceSessionId:context.sessionId});
           }
           else if (name === 'adopt') {
             const adopted=await s.adoptExecution(id,args.input);
-            const controller=context.role==='companion'||context.metadata.companionAuthorityRevision!==undefined;
-            result=adopted;
-            if(controller&&adopted.link.ownership==='owner'&&!adopted.link.pipelineId){
-              try{
-                const briefing=await s.requestBriefing(id,{sessionId:adopted.link.sessionId,requestKey:randomUUID()});
-                result={...adopted,briefing:{id:briefing.id,status:briefing.status},note:'First read-only session briefing requested. Read its complete report before giving project instructions.'};
-              }catch(error){
-                const known=(error as {code?:string}).code;
-                result={...adopted,briefing:{status:known==='conflict'||known==='not_found'?'not_requested':'unknown',reason:known==='conflict'||known==='not_found'?(error as Error).message:'Briefing receipt unavailable; inspect action journal before retrying.'},note:'Adoption is committed. No project instruction was sent.'};
-              }
-            }
+            result={...adopted,note:'Use the context you already know. For unfamiliar adopted work, request one read-only briefing and reuse its saved report. Do not brief sessions you created.'};
           }
           else result = await s.updateGoal(id, args.input);
           await carry(s, id, context);

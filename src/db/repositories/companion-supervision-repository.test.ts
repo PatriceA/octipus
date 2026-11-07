@@ -1042,11 +1042,11 @@ test('briefing requests fail closed without a configured supervisor and never co
  expect((await repository().incidents(goal.id))[0]).toMatchObject({state:'escalated',strategies:[]});
 });
 
-test('completed briefings are cached until owner context changes, and are required for controller instructions',async()=>{
+test('known context needs no mandatory briefing and one saved briefing survives routine changes',async()=>{
  const settings=await repository().saveSettings({enabled:true,modelName:'local',autonomy:'coordinate'},0);
  const goal=await service().createGoal(request());await repository().adopt(goal.id,adoption({pipelineId:null}));
  const auto=new CompanionSupervisionRepository({userId,workspaceId},connection,{settingsId:settings.settingsId!,revision:settings.revision,requireBriefing:true});
- await expect(auto.queueMessage(goal.id,{requestKey:randomUUID(),sessionId,message:'Activate gateway'})).rejects.toThrow('briefing is required');
+ expect(await auto.queueMessage(goal.id,{requestKey:randomUUID(),sessionId,message:'Check the known external gateway'})).toMatchObject({status:'queued'});
  const brief=await auto.requestBriefing(goal.id,{sessionId,requestKey:randomUUID()});
  await pg.query("UPDATE companion_actions SET status='completed',result='External deployment host; Appwrite intermediary' WHERE id=$1",[brief.id]);
  expect((await auto.requestBriefing(goal.id,{sessionId,requestKey:randomUUID()})).id).toBe(brief.id);
@@ -1054,8 +1054,8 @@ test('completed briefings are cached until owner context changes, and are requir
  expect((await auto.requestBriefing(goal.id,{sessionId,requestKey:randomUUID()})).id).toBe(brief.id);
  expect(await auto.queueMessage(goal.id,{requestKey:randomUUID(),sessionId,briefingId:brief.id,message:'Check the documented external host'})).toMatchObject({status:'queued'});
  await pg.query("INSERT INTO messages(session_id,role,content,metadata) VALUES($1,'user','Architecture changed','{\"trigger\":\"user\"}')",[sessionId]);
- await expect(auto.queueMessage(goal.id,{requestKey:randomUUID(),sessionId,briefingId:brief.id,message:'Use previous recipe'})).rejects.toThrow('briefing is required');
- expect((await auto.requestBriefing(goal.id,{sessionId,requestKey:randomUUID()})).id).not.toBe(brief.id);
+ expect(await auto.queueMessage(goal.id,{requestKey:randomUUID(),sessionId,briefingId:brief.id,message:'Inspect the changed facts'})).toMatchObject({status:'queued'});
+ expect((await auto.requestBriefing(goal.id,{sessionId,requestKey:randomUUID()})).id).toBe(brief.id);
 });
 
 test('briefing dispatch uses a read-only API binding and preserves the complete source report',async()=>{
@@ -1109,7 +1109,8 @@ test('routine work-plan status updates keep the cached architecture briefing',as
  expect((await repository().requestBriefing(goal.id,{sessionId,requestKey:randomUUID()})).id).toBe(first.id);
  plan.current!.goal='Architecture changed to another documented deployment target';
  await pg.query('UPDATE sessions SET metadata=$1 WHERE id=$2',[JSON.stringify({workPlan:plan}),sessionId]);
- expect((await repository().requestBriefing(goal.id,{sessionId,requestKey:randomUUID()})).id).not.toBe(first.id);
+ expect((await repository().requestBriefing(goal.id,{sessionId,requestKey:randomUUID()})).id).toBe(first.id);
+ expect((await repository().requestBriefing(goal.id,{sessionId,requestKey:randomUUID(),refresh:true})).id).not.toBe(first.id);
 });
 
 test('briefing coordination is budgeted without restricting ordinary project execution',async()=>{
@@ -1133,4 +1134,19 @@ test('successful briefing helpers cannot hide a failed standalone project execut
  expect((await repository().detectIncident(goal.id,sessionId))?.id).toBe(first.id);
  expect((await repository().inspectSession(goal.id,sessionId)).workers[0].id).toBe('failed-project');
  expect((await repository().readSession(sessionId)).workers[0].id).toBe('failed-project');
+});
+
+
+test('choosing an interactive Companion model creates its chat without enabling background work',async()=>{
+ const saved=await repository().saveSettings({enabled:false,modelName:'api',autonomy:'observe'},0);
+ expect(saved.enabled).toBe(false);expect(saved.supervisorSessionId).toBeTruthy();
+ const again=await repository().saveSettings({enabled:false,modelName:'api',autonomy:'observe'},saved.revision);
+ expect(again.supervisorSessionId).toBe(saved.supervisorSessionId);
+});
+
+test('Companion does not request introductory briefings for sessions it created',async()=>{
+ await repository().saveSettings({enabled:true,modelName:'api',autonomy:'coordinate'},0);
+ const goal=await service().createGoal(request());
+ const created=await repository().startSession(goal.id,{requestKey:randomUUID(),modelName:'api',expectedRevision:goal.revision});
+ await expect(repository().requestBriefing(goal.id,{sessionId:created.sessionId,requestKey:randomUUID()})).rejects.toThrow('already has its starting context');
 });

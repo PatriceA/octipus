@@ -1184,6 +1184,13 @@
       "when": 1793970000000,
       "tag": "0168_companion_briefings",
       "breakpoints": true
+    },
+    {
+      "idx": 169,
+      "version": "7",
+      "when": 1794038400000,
+      "tag": "0169_internal_companion_messages",
+      "breakpoints": true
     }
   ]
 }

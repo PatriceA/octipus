@@ -666,7 +666,7 @@ export class AgentWorker extends BaseAgentWorker {
       }, this.cacheGeneration);
       message.sourceMessageId = row.id;
       this.userCursor = row.id ? { id: row.id, createdAt: row.createdAt.toISOString() } : undefined;
-      await sessionRepository.incrementMessageCount(this.context.sessionId);
+      if(row.metadata?.visibility!=='internal')await sessionRepository.incrementMessageCount(this.context.sessionId);
     }
   }
 

@@ -36,6 +36,8 @@ export interface ToolCallData {
 }
 
 export interface MessageMetadata {
+  /** Internal supervision inputs and read-only handoffs are not chat messages. */
+  visibility?: 'internal';
   trigger?: import('@/core/types').AgentTrigger;
   companion?: CompanionIdentity;
   /** An intermediate public update, distinct from the completed turn's answer. */
