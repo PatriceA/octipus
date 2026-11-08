@@ -3,6 +3,7 @@ import { loadRepoGraph, redactRemoteUrl, type RepoOwner, repoToGraphNode, resolv
 import { findSymbols, outlineSymbols, type SymbolKind } from '@/core/repos/symbols';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { BaseTool, createParameterSchema } from '../base-tool';
+import { sessionRepository } from '@/db/repositories/session-repository';
 
 /**
  * repo_registry — the agent's map of a multi-repo suite.
@@ -161,6 +162,12 @@ export class RepoRegistryTool extends BaseTool {
       async (_args, context) => {
         const repos = await scanUserRepos(repoOwner(context));
         const edges = buildRepoEdges(repos.map(repoToGraphNode));
+        // The conversation's root prompt replays the suite as first seen
+        // (agent/prompt-builder.ts); a rescan is the explicit refresh.
+        if (context?.sessionId) {
+          await sessionRepository.setContextKey(context.sessionId, ['staticPrompt'], null)
+            .catch(() => { /* the next clear or checkpoint refreshes it anyway */ });
+        }
         return {
           scanned: repos.length,
           edges: edges.length,

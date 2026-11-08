@@ -183,6 +183,13 @@ export interface SessionContext {
    */
   toolGroups?: { generation: string; checkpointId?: string; ids: string[] };
   /**
+   * The root prompt's drifting session blocks (workspace listing, repo suite,
+   * AGENTS.md excerpt) as this conversation first saw them, replayed while the
+   * session tier keeps its shape (agent/prompt-builder.ts). Same lifetime as
+   * `toolGroups`; `scan_repos` drops it to refresh.
+   */
+  staticPrompt?: import('@/core/agent/prompt-builder').FrozenStatic | null;
+  /**
    * PLAN MODE — the session explores and proposes, and changes nothing.
    *
    * A session state rather than a role property, because it is the USER's

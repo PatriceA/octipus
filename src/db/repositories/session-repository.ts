@@ -282,7 +282,7 @@ export class SessionRepository {
 
   async clearContext(id: string): Promise<void> {
     await this.db.update(sessions).set({
-      context: sql`(coalesce(${sessions.context}, '{}'::jsonb) - ARRAY['checkpoint','compactionState','compactedSummary','cliSessions','nativeConversation','toolGroups','activeCommand','planningState']) || jsonb_build_object('clearedAt', ${new Date().toISOString()}::text, 'conversationGeneration', ${randomUUID()}::text)`,
+      context: sql`(coalesce(${sessions.context}, '{}'::jsonb) - ARRAY['checkpoint','compactionState','compactedSummary','cliSessions','nativeConversation','toolGroups','staticPrompt','activeCommand','planningState']) || jsonb_build_object('clearedAt', ${new Date().toISOString()}::text, 'conversationGeneration', ${randomUUID()}::text)`,
       updatedAt: new Date(),
     }).where(eq(sessions.id, id));
   }
