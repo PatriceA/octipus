@@ -45,6 +45,31 @@ describe('selectCoreToolIds', () => {
     expect(selectCoreToolIds(message, GENERAL)).not.toContain(group);
   });
 
+  // The groups the root role lists first. `companion` alone is ~8.8k tokens of
+  // schema; failing open made every root turn carry it.
+  const ROOT = ['companion', 'monitor', 'filesystem', 'shell', 'connections', ...GENERAL.slice(2)];
+
+  it('drops the heavy root-only groups when the message names none of them', () => {
+    const picked = selectCoreToolIds(FIX_TASK, ROOT);
+    expect(picked).not.toContain('companion');
+    expect(picked).not.toContain('monitor');
+    expect(picked).not.toContain('connections');
+    expect(selectCoreToolIds('hello, how are you?', ROOT)).toEqual(['filesystem', 'shell', 'skill-distill']);
+  });
+
+  it.each([
+    ['what is the status of my other session about the billing export?', 'companion'],
+    ['ask the companion to supervise the migration project', 'companion'],
+    ['park this idea for a later heartbeat', 'companion'],
+    ['unblock the stalled release session', 'companion'],
+    ['wait for the deploy to finish and tell me', 'monitor'],
+    ['let me know when the CI build is green', 'monitor'],
+    ['call the jenkins api with my connection', 'connections'],
+    ['push the branch to the remote', 'connections'],
+  ])('keeps %s -> %s', (message, group) => {
+    expect(selectCoreToolIds(message, ROOT)).toContain(group);
+  });
+
   it('fails open for a group with no trigger of its own', () => {
     // A group added to a role's core list but not to the intent table must
     // survive, or shipping a new tool silently loses it.

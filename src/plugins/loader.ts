@@ -66,7 +66,7 @@ function validateModule(mod: unknown, name: string): PluginModule {
 /**
  * Load a single plugin from a directory.
  */
-async function loadPlugin(dir: string): Promise<LoadedPlugin> {
+async function loadPlugin(dir: string, opts: { fresh?: boolean } = {}): Promise<LoadedPlugin> {
   const manifestPath = join(dir, 'plugin.json');
 
   // Read and parse manifest
@@ -85,7 +85,12 @@ async function loadPlugin(dir: string): Promise<LoadedPlugin> {
     throw new Error(`Plugin "${manifest.name}": entry file "${manifest.main}" not found in ${dir}`);
   }
 
-  const imported = await importModuleAt(entryPath);
+  // A reload must not get Node's cached module back: ESM caches by URL, so the
+  // same path returns the code that was loaded first, whatever is on disk now.
+  // The query makes it a new URL. Modules the entry imports itself are not
+  // re-evaluated, and every reload keeps its predecessor in memory — a
+  // development aid, not something to run in a loop.
+  const imported = await importModuleAt(entryPath, opts.fresh ? `reload=${Date.now()}` : undefined);
   const module = validateModule(imported.default ?? imported, manifest.name);
 
   return { manifest, module, directory: dir };
@@ -174,37 +179,39 @@ export function getLoadedPlugin(name: string): LoadedPlugin | undefined {
 
 /**
  * Reload a single plugin by name.
- * Unregisters the old plugin tool, re-imports the entry file, and re-registers.
- * Returns the newly loaded plugin.
+ *
+ * The fresh copy is imported (cache-busted) and initialized BEFORE the running
+ * one is touched, so a plugin that no longer parses or whose `initialize`
+ * throws leaves the old one loaded and serving. Only then is the old one
+ * retired: by `retire` when given — the API unregisters its tool, which shuts
+ * the module down — otherwise by its own `shutdown`. Either way it is shut down
+ * exactly once.
  */
-export async function reloadPlugin(name: string): Promise<LoadedPlugin> {
+export async function reloadPlugin(
+  name: string,
+  retire?: (previous: LoadedPlugin) => Promise<void>,
+): Promise<LoadedPlugin> {
   const existing = loadedPlugins.get(name);
   if (!existing) {
     throw new Error(`Plugin "${name}" is not loaded`);
   }
 
-  // Call shutdown on old module
-  if (existing.module.shutdown) {
-    await existing.module.shutdown();
+  const plugin = await loadPlugin(existing.directory, { fresh: true });
+  if (plugin.manifest.name !== name) {
+    throw new Error(`Plugin in ${existing.directory} is now named "${plugin.manifest.name}", not "${name}"; restart to load it under its new name`);
   }
 
-  // Remove from cache
-  loadedPlugins.delete(name);
-
-  // Re-load from the same directory
-  const plugin = await loadPlugin(existing.directory);
-
-  // Initialize
   const context: PluginContext = {
     logger: createChildLogger({ component: 'plugin', plugin: plugin.manifest.name }),
     config: {},
   };
-
   if (plugin.module.initialize) {
     await plugin.module.initialize(context);
   }
 
-  loadedPlugins.set(plugin.manifest.name, plugin);
+  loadedPlugins.set(name, plugin);
+  if (retire) await retire(existing);
+  else if (existing.module.shutdown) await existing.module.shutdown();
 
   pluginLogger.info(
     { name: plugin.manifest.name, version: plugin.manifest.version },

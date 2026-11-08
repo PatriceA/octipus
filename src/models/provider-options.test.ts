@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from 'vitest';
-import { applyProviderSettings, strictSchema } from './provider-options';
+import { applyProviderSettings, strictSchema, usesPromptCacheOptions } from './provider-options';
 const options = { model: 'gpt-5', messages: [], maxTokens: 4096, sessionId: 'session', userId: 'user' };
 afterEach(() => vi.unstubAllEnvs());
 test('preserves optional schema semantics', () => {
@@ -14,6 +14,20 @@ test('rejects invalid types and arrays without item schemas', () => {
 test('maps session cache affinity and reasoning', () => {
   const out = applyProviderSettings(options, 'openai', { reasoningEffort: 'low', cachePolicy: 'session' });
   expect(out.extraBody).toMatchObject({ reasoning_effort: 'low', prompt_cache_key: expect.stringMatching(/^octi-/), prompt_cache_retention: '24h' });
+});
+test('GPT-5.6+ gets prompt_cache_options.ttl instead of the replaced retention field', () => {
+  for (const model of ['gpt-5.6', 'gpt-5.6-mini', 'openai/gpt-5.10', 'gpt-6.1-sol']) {
+    expect(usesPromptCacheOptions(model), model).toBe(true);
+    const out = applyProviderSettings({ ...options, model }, 'openai', { cachePolicy: 'session' }).extraBody;
+    expect(out).toMatchObject({ prompt_cache_options: { ttl: '12h' } });
+    expect(out).not.toHaveProperty('prompt_cache_retention');
+  }
+  for (const model of ['gpt-5', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-4.1', 'gpt-5-chat-latest']) {
+    expect(usesPromptCacheOptions(model), model).toBe(false);
+    expect(applyProviderSettings({ ...options, model }, 'openai', { cachePolicy: 'session' }).extraBody).toMatchObject({ prompt_cache_retention: '24h' });
+  }
+  // A caller's own lifetime setting wins.
+  expect(applyProviderSettings({ ...options, model: 'gpt-5.6', extraBody: { prompt_cache_options: { ttl: '30m' } } }, 'openai', { cachePolicy: 'session' }).extraBody?.prompt_cache_options).toEqual({ ttl: '30m' });
 });
 test('OpenAI gets a session cache key by default, none when cache hints are off', () => {
   const byDefault = applyProviderSettings(options, 'openai');

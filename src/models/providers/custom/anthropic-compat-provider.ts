@@ -6,7 +6,7 @@ import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../../litellm-client';
 import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from '../http-retry';
 import type { ModelProvider, ProviderHealthStatus } from '../interface';
-import { buildCachedBlocks, type CacheTtl, cacheControl, cacheTtlFor, isAnthropicFamily, splitVolatileSystem } from '../prompt-cache';
+import { buildCachedBlocks, type CacheTtl, cacheControl, cacheTtlsFor, isAnthropicFamily, splitVolatileSystem } from '../prompt-cache';
 import { BaseCustomProvider, type ResolvedCustomConfig } from './base-custom-provider';
 import { foldCacheCounters } from '../usage';
 import { claudeToolChoice, dropClaudeSampling } from '../../claude-request';
@@ -140,9 +140,9 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
       max_tokens: options.maxTokens ?? CustomAnthropicCompatProvider.DEFAULT_MAX_TOKENS,
       stream: streaming,
     };
-    const ttl = cacheTtlFor(options.cachePolicy);
-    if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, (body.model as string) || options.model, ttl);
-    if (options.cachePolicy !== 'off' && options.historyCache !== false) markHistoryCacheBreakpoint(messages, Boolean(options.cacheScope), ttl);
+    const ttls = cacheTtlsFor(options.cachePolicy, options.cachePacing);
+    if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, (body.model as string) || options.model, ttls.prefix);
+    if (options.cachePolicy !== 'off' && options.historyCache !== false) markHistoryCacheBreakpoint(messages, Boolean(options.cacheScope), ttls.history);
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
     if (options.tools?.length) body.tools = toAnthropicTools(options.tools);
     // An Anthropic-shaped endpoint can serve a non-Claude model (self-hosted,

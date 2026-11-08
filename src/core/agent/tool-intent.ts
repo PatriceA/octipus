@@ -64,6 +64,17 @@ const INTENT: Record<string, RegExp> = {
   // would pin this group to every spawn.
   tasks: /\b(to-?do|todo|task\s+(list|board|tab)|backlog|checklist|track\s+(this|that|it)|remind\s+me)\b/i,
   messaging: /\b(message|messages|slack|teams|discord|chat|channel|notify|dm|send\s+(a|this|it|them))\b/i,
+  // The Companion toolbox is the heaviest group the root holds (26 tools,
+  // ~8.8k tokens of schema) and it used to fail open, so every root turn paid
+  // for it. The controller, briefing and maintenance paths build their own
+  // tool set (root-runner), so this only governs ordinary root turns, where it
+  // is wanted when the user talks about supervision or other sessions.
+  companion: /\b(companion|supervis\w*|briefings?|incidents?|unblock\w*|heartbeat|(other|project|existing|linked|that|my)\s+(sessions?|conversations?)|session\s+(status|title)|park\s+(this|that|it|the)|for\s+a?\s*later\s+heartbeat)\b/i,
+  // Waiting on background work: the root's routing prose sends "wait for the
+  // deploy and tell me" here (monitor__create).
+  monitor: /\b(monitor\w*|watch|wait(ing)?\s+(for|until)|notify\s+me|let\s+me\s+know\s+(when|once|if)|check\s+back|poll\w*|keep\s+an\s+eye|deploy\w*|rollout|build|ci|pipeline|job)\b/i,
+  // Operator-configured authenticated HTTP/Git connections.
+  connections: /\b(api|apis|connections?|endpoint|http|https?:|rest|graphql|jenkins|gitlab|github|push|fetch|remote|origin|credentials?|token|webhook)\b/i,
   repo_registry: /\b(repo|repos|repository|repositories|registry|clone|check\s*out|remote|origin)\b/i,
 };
 

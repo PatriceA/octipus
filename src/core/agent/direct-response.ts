@@ -212,6 +212,7 @@ async function directResponseInternal(
       sessionId,
       cacheScope: `root:${history.generation}`,
       historyCache: followsDirectReply,
+      cachePacing: 'human',
     });
 
     const tokens = result.usage?.totalTokens || 0;

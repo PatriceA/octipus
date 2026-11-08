@@ -2508,6 +2508,9 @@ export class AgentWorker extends BaseAgentWorker {
         // one role share the role prompt and tool block, and a key per agent
         // sent each of them to a different (cold) cache for that shared prefix.
         cacheScope: companionCacheScope(this.context,this.cacheGeneration) ?? (isRootAgent(this.context) ? `root:${this.cacheGeneration}` : `child:${this.context.role}`),
+        // An attended root turn waits on a person between requests; every
+        // other worker runs as a burst (`cacheTtlsFor`).
+        cachePacing: isRootAgent(this.context) && this.context.attended === true ? 'human' as const : 'machine' as const,
         tools: sentTools,
         ...(declareToolsOnly ? { toolChoice: 'none' as const } : {}),
         // G6: nullish coalescing — a configured temperature of 0 must survive

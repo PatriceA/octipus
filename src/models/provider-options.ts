@@ -29,6 +29,14 @@ export function strictSchema(schema: any): boolean {
   return true;
 }
 
+/**
+ * OpenAI models whose cache lifetime is set with `prompt_cache_options.ttl`
+ * rather than `prompt_cache_retention`: GPT-5.6 onward (and any GPT-6+).
+ */
+export function usesPromptCacheOptions(model: string): boolean {
+  return /(?:^|\/)gpt-(?:5\.(?:[6-9]|\d{2,})|[6-9])(?:\D|$)/i.test(model);
+}
+
 export function applyProviderSettings(options: CompletionOptions, provider: string, settings?: ProviderSettings): CompletionOptions {
   const extra = { ...options.extraBody };
   const controls = providerControls(
@@ -70,8 +78,13 @@ export function applyProviderSettings(options: CompletionOptions, provider: stri
     const key = cacheAffinityKey(options.sessionId, options.userId, options.cacheScope);
     if (key) extra.prompt_cache_key = key;
   }
-  if (provider === 'openai' && policy === 'session' && extra.prompt_cache_retention === undefined) {
-    extra.prompt_cache_retention = '24h';
+  if (provider === 'openai' && policy === 'session'
+    && extra.prompt_cache_retention === undefined && extra.prompt_cache_options === undefined) {
+    // GPT-5.6 and later replaced `prompt_cache_retention` with
+    // `prompt_cache_options.ttl` (`30m` | `12h`); sent the old field, the
+    // retry-without path silently dropped the extended lifetime on them.
+    if (usesPromptCacheOptions(options.model)) extra.prompt_cache_options = { ttl: '12h' };
+    else extra.prompt_cache_retention = '24h';
   }
   // Cache suppression is only an Octipus explicit-cache control. Upstream
   // automatic caching cannot universally be disabled by a client.

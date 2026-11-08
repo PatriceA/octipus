@@ -11,7 +11,7 @@ import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus, QuotaStatus } from './interface';
-import { applyAnthropicCacheControl, cacheTtlFor, isAnthropicFamily, logMissedCacheSplit } from './prompt-cache';
+import { applyAnthropicCacheControl, cacheTtlsFor, isAnthropicFamily, logMissedCacheSplit } from './prompt-cache';
 import { claudeToolChoice, dropClaudeSampling } from '../claude-request';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
@@ -111,7 +111,7 @@ export class OpenRouterProvider implements ModelProvider {
       : { ...(pinned ? { order: [pinned], allow_fallbacks: true } : {}), ...requireParameters };
     if (Object.keys(routing).length) body.provider = routing; else delete body.provider;
     if (options.cachePolicy !== 'off' && claude) {
-      const cached = applyAnthropicCacheControl(params.messages, String(body.model), { conversation: Boolean(options.cacheScope), history: options.historyCache, ttl: cacheTtlFor(options.cachePolicy) });
+      const cached = applyAnthropicCacheControl(params.messages, String(body.model), { conversation: Boolean(options.cacheScope), history: options.historyCache, ttls: cacheTtlsFor(options.cachePolicy, options.cachePacing) });
       if (!cached.system) logMissedCacheSplit(String(body.model));
     }
     return params;

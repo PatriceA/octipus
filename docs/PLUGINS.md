@@ -85,7 +85,12 @@ export default {
 
 1. Create your plugin directory in `extensions/`
 2. Write `plugin.json` and `index.ts`
-3. Restart the backend, or call `POST /api/plugins/:name/reload` to hot-reload
+3. Restart the backend, or call `POST /api/plugins/:name/reload` to hot-reload.
+   The reload imports a fresh copy of the entry file (modules it imports
+   itself are not re-evaluated) and initializes it before the running copy is
+   shut down, so a copy that fails to load leaves the old one serving and the
+   endpoint answers 500. Each reload keeps its predecessor in memory: it is a
+   development aid.
 4. Test via the tools API or by chatting with an agent
 
 ## Root agent hooks

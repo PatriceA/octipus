@@ -101,12 +101,17 @@ OpenAI-style tool schema in `ollama-provider.ts`). Two things to know:
 ### Lazy tool discovery
 
 Every advertised tool's full JSON schema is sent on **every** request. For a
-research worker that was ~12k tokens of schemas against a ~2.4k system prompt —
-and on a local iGPU that prefill re-runs every request (no cross-request
-server-side prompt caching), which took minutes and timed out the client. A
-benchmark later showed the same cost hits remote providers too: the root's
-standing prompt measured ~22k tokens, 73% of it tool JSON schema, billed in
-full on every fresh session since a cache prefix only helps within one.
+research worker that was ~12k tokens of schemas against a ~2.4k system prompt.
+Ollama reuses the KV cache of the prefix a request shares with the previous one
+while the model stays loaded, but the first request of a session, a model
+reload, or another agent's prompt in between (a swarm child on a one-slot
+server) re-prefills the whole block — on an iGPU that took minutes and timed out
+the client. A benchmark later showed the cost on remote providers too: the
+root's standing prompt measured ~22k tokens, 73% of it tool JSON schema. Hosted
+prompt caches are shared across requests with an identical prefix, so a fresh
+session only pays in full when its prefix differs from earlier ones — and the
+per-user and per-session parts of Octipus's prompt made that the common case.
+A stable prefix matters *more* on a local model, not less.
 
 **Lazy tool discovery** advertises only a
 small **core** set with full schema, plus two meta-tools — `list_tools` (names +

@@ -1,6 +1,7 @@
 import { Elysia, t } from '@/api/http';
 import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
+import { manifestTools } from '@octipus/plugin-sdk';
 import { getLoadedPlugin, getLoadedPlugins, PluginTool, reloadPlugin } from '@/plugins';
 import { getToolRegistry } from '@/tools/registry';
 
@@ -23,7 +24,7 @@ export const pluginRoutes = new Elysia({ prefix: '/plugins' })
           description: p.manifest.description,
           author: p.manifest.author,
           directory: p.directory,
-          tools: p.manifest.tools.map((t) => ({
+          tools: manifestTools(p.manifest).map((t) => ({
             name: t.name,
             description: t.description,
             parameters: t.parameters,
@@ -53,7 +54,7 @@ export const pluginRoutes = new Elysia({ prefix: '/plugins' })
         author: plugin.manifest.author,
         main: plugin.manifest.main,
         directory: plugin.directory,
-        tools: plugin.manifest.tools.map((t) => ({
+        tools: manifestTools(plugin.manifest).map((t) => ({
           name: t.name,
           description: t.description,
           parameters: t.parameters,
@@ -77,25 +78,22 @@ export const pluginRoutes = new Elysia({ prefix: '/plugins' })
       const oldToolId = `plugin-${params.name}`;
 
       try {
-        // Unregister the old plugin tool if it exists
-        if (registry.has(oldToolId)) {
-          await registry.unregister(oldToolId);
-        }
-
-        // Reload the plugin from disk
-        const plugin = await reloadPlugin(params.name);
-
-        // Re-register as a tool
-        const pluginTool = new PluginTool(plugin);
-        await registry.register(pluginTool);
+        // The running plugin keeps serving until its replacement has loaded;
+        // only then is its tool unregistered (which shuts its module down).
+        const plugin = await reloadPlugin(params.name, async (previous) => {
+          if (registry.has(oldToolId)) await registry.unregister(oldToolId);
+          else await previous.module.shutdown?.();
+        });
+        await registry.register(new PluginTool(plugin));
 
         return {
           message: `Plugin "${params.name}" reloaded successfully`,
           name: plugin.manifest.name,
           version: plugin.manifest.version,
-          tools: plugin.manifest.tools.length,
+          tools: manifestTools(plugin.manifest).length,
         };
       } catch (err) {
+        set.status = 500;
         return { error: `Failed to reload plugin: ${(err as Error).message}` };
       }
     },
