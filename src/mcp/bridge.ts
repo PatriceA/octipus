@@ -722,9 +722,9 @@ export class MCPBridge extends EventEmitter {
       this.intentionalDisconnects.add(serverId);
       this.clearReconnectTimer(serverId);
     }
-    for (const serverId of [...this.connections.keys()]) {
-      await this.disconnect(serverId);
-    }
+    // In parallel: each disconnect waits for its process to exit (up to the
+    // kill grace), and a shutdown should not add those waits up per server.
+    await Promise.allSettled([...this.connections.keys()].map((serverId) => this.disconnect(serverId)));
   }
 
   /**
