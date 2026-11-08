@@ -827,7 +827,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tui-pi` | `core` | 3 |
 | `tui-pi` | `shared` | 2 |
 | `tui-pi` | `voice` | 2 |
-| `utils` | `core` | 3 |
+| `utils` | `core` | 4 |
 | `utils` | `models` | 4 |
 | `utils` | `security` | 2 |
 | `visual` | `models` | 1 |

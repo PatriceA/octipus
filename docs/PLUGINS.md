@@ -126,7 +126,38 @@ export default function (octi) {
 }
 ```
 
-Events: `before-agent-start`, `tool:before` (rewrite `args` or short-circuit the call), `tool:after`, `spawn:before`, `spawn:after`. The hook is removed when the extension is disposed (`/reload`).
+Events: `before-agent-start`, `tool:before` (rewrite `args` or short-circuit the call), `tool:after`, `spawn:before`, `spawn:after`, `context` (transform the messages of one model request) and `compact:before` (supply a compaction summary). Payload types are `AgentHookEvents` in `src/core/agent/hooks.ts`. The hook is removed when the extension is disposed (`/reload`).
+
+#### `context`: transform one request's messages
+
+Fired in the agent loop right before each model request, for the root agent and for swarm children. Payload: `{ agent: { userId, sessionId, role, workspaceId, metadata, root }, model, messages, iteration }`.
+
+`messages` is a deep copy of the stored conversation. Replace or redact content, insert or append messages, or assign a new array: the worker sends the result for this request only. The stored conversation is never changed, so the next request, a compaction and the transcript start again from the original, and a hook cannot silently rewrite history. To keep a change, make it every time.
+
+```ts
+octi.hook('context', (ctx) => {
+  const last = ctx.messages.at(-1);
+  if (last?.role === 'tool') last.content = last.content.replace(/sk-[A-Za-z0-9]+/g, '[redacted]');
+});
+```
+
+**Prompt cache and signed reasoning.** Providers cache the request prefix. Anything a `context` hook changes in an earlier message breaks the prompt cache from that message on, on every request it changes, so the whole conversation after it is read uncached. Changing an earlier assistant turn also invalidates its signed reasoning on Claude (the API rejects or ignores reasoning whose turn no longer matches). Append messages, or touch only the newest one. A redaction that has to apply to old messages is cheaper as a `tool:before`/`tool:after` policy, before the text enters the conversation at all.
+
+With no `context` handler subscribed the request is the stored conversation itself: no copy is made.
+
+#### `compact:before`: supply a compaction summary
+
+Fired before a compaction summary is produced, on every path: the agent loop's own compaction (`source: 'agent'`: proactive, regular and context-overflow), a chat session checkpoint (`'session'`: `/compact` and the automatic pass between turns) and a room checkpoint (`'room'`, once per transcript chunk). Payload: `{ agent: { userId, sessionId, … }, source, messagesToSummarize, previousSummary?, userInstructions?, summary? }`.
+
+`messagesToSummarize` is a frozen copy of what the summary replaces. Set `summary` to supply the summary yourself; the model summariser is then not called, and the log says a hook supplied it. The text goes through the same packaging as a model summary (the `[Context Summary …]` header and the cumulative file-operations list) and is capped at the summariser's output budget (`HOOK_SUMMARY_MAX_CHARS`, about 6,000 tokens). An empty or whitespace `summary` counts as none.
+
+```ts
+octi.hook('compact:before', async (ctx) => {
+  ctx.summary = await mySummariser(ctx.messagesToSummarize, ctx.previousSummary, ctx.userInstructions);
+});
+```
+
+A compaction rewrites the start of the conversation, so the prompt cache starts over after it whoever wrote the summary.
 
 Hooks can rewrite what the agent does, so `octi.hook` throws unless the operator trusts the extension: list each trusted extension's entry file or directory, by absolute path, in `extensions.trusted` (or `OCTIPUS_TRUSTED_EXTENSIONS`, comma-separated). The list is read once, before the first extension's code runs, so changing it needs a restart; relative entries are ignored; paths are compared by real path, decided before the extension is imported, so an extension with the same name somewhere else is not trusted. Observing events (`octi.on`) and adding commands need no trust.
 
@@ -134,7 +165,7 @@ What this gate is and is not: it keeps an extension that was not meant to steer 
 
 Behaviour to know when writing a hook:
 
-- `before-agent-start`, `tool:after` and `spawn:after` handlers that throw are logged and skipped. `tool:before` and `spawn:before` are fail-closed: a handler that throws blocks the call or spawn.
+- `before-agent-start`, `context`, `compact:before`, `tool:after` and `spawn:after` handlers that throw are logged and skipped (a `compact:before` that throws leaves the built-in summariser to run). Changes a handler made to the payload before it threw stay. `tool:before` and `spawn:before` are fail-closed: a handler that throws blocks the call or spawn.
 - A `tool:before` short-circuit (`ctx.shortCircuit = { result }`) answers the call without running the tool, and without its permission check. Rewritten `args` are permission-checked as usual.
 - Extension hooks are registered after the built-in persona hook, so a `before-agent-start` hook sees, and could change, the persona block. Leave `SECURITY_PREAMBLE` alone.
 

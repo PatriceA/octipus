@@ -40,7 +40,9 @@ export interface ExtensionAPI {
   /**
    * Hook the agent loop (core/agent/hooks.ts): `before-agent-start` (the root
    * system prompt), `tool:before` (rewrite args or short-circuit a call),
-   * `tool:after`, `spawn:before` / `spawn:after`. Only for an extension the
+   * `tool:after`, `spawn:before` / `spawn:after`, `context` (transform the
+   * messages of one model request; never the stored history) and
+   * `compact:before` (supply a compaction summary). Only for an extension the
    * operator trusts (`extensions.trusted`); anything else throws. Removed when
    * the extension is disposed. Returns the unregister function.
    */

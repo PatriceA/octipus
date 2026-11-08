@@ -241,6 +241,8 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
         requireSuccess: true,
         // `/compact` is waited on; an automatic pass between turns is not.
         priority: manual ? 'interactive' : 'background',
+        // `compact:before` may supply this summary instead of the model.
+        hook: { source: 'session', agent: { userId: history.session.userId, sessionId, workspaceId: history.session.workspaceId ?? null, metadata: { manual } } },
       });
     } catch (err) {
       await failed();
@@ -332,9 +334,11 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
  * since the last pass, all of them are summarized, none skipped.
  */
 async function compactRoom(sessionId: string, options: MaybeCompactSessionOptions): Promise<boolean> {
-  if (!options.requesterId) throw new Error('Room compaction needs the requester of the turn that triggered it');
+  const { requesterId } = options;
+  if (!requesterId) throw new Error('Room compaction needs the requester of the turn that triggered it');
   const history = await readSessionHistory(sessionId);
   if (!history.session) return false;
+  const hookAgent = { userId: requesterId, sessionId, workspaceId: history.session.workspaceId ?? null };
   const { isBefore } = await import('@/core/session-history');
   const before = options.before;
   const rows = before ? history.rows.filter((row) => isBefore(row, before)) : history.rows;
@@ -377,6 +381,7 @@ async function compactRoom(sessionId: string, options: MaybeCompactSessionOption
           requireSuccess: true,
           // A room compacts ahead of the turn that waits on it.
           priority: 'interactive',
+          hook: { source: 'room', agent: hookAgent },
         }),
       );
     } catch (err) {
