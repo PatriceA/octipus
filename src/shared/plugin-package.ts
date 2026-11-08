@@ -82,10 +82,12 @@ export interface PluginManifest {
  * - `not_enforced` — no sandbox wraps it on this platform (sandbox off, no
  *   bwrap/firejail on Linux, no sandbox-exec on macOS, Windows): the
  *   declared hosts are advice, and a package with hosts is only pointed at
- *   the proxy.
+ *   the proxy;
+ * - `refused` — `security.shellSandbox` is `required` and no runner can
+ *   enforce it here, so the server is not started at all.
  */
 export interface PluginNetworkStatus {
-  state: 'offline' | 'restricted' | 'not_enforced';
+  state: 'offline' | 'restricted' | 'not_enforced' | 'refused';
   /** A sentence for the operator. */
   detail: string;
 }

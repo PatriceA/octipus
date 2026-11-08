@@ -53,7 +53,7 @@ import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { type PluginPackageRow, pluginPackages } from '@/db/schema/plugin-packages';
 import { getMCPBridge, PLUGIN_SERVER_PREFIX } from '@/mcp/bridge';
-import { activeSandboxRunner } from '@/security/shell-sandbox';
+import { activeSandboxRunner, getSandboxMode } from '@/security/shell-sandbox';
 import { SYSTEM_USER_ID } from '@/security/principal';
 import { getVault } from '@/security/vault';
 import type { MCPServer } from '@/shared/mcp-server';
@@ -586,8 +586,11 @@ async function currentSigner(row: PluginPackageRow): Promise<string | null> {
  * runner (bwrap/firejail on Linux, sandbox-exec on macOS) can take direct
  * network away; without one the declared hosts are advice.
  */
-export function networkStatus(m: PluginManifest, runner = activeSandboxRunner({ allowSeatbelt: true })): PluginNetworkStatus {
+export function networkStatus(m: PluginManifest, runner = activeSandboxRunner({ allowSeatbelt: true }), mode = getSandboxMode()): PluginNetworkStatus {
   const hosts = m.network ?? [];
+  if (!runner && mode === 'required') {
+    return { state: 'refused', detail: `Not started: security.shellSandbox is required and no sandbox can wrap the server here (${NO_RUNNER}).` };
+  }
   if (runner) {
     return hosts.length === 0
       ? { state: 'offline', detail: `No network: the sandbox (${runner}) runs the server without one.` }

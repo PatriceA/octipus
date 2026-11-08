@@ -41,3 +41,13 @@ test('auto: the same package launches with the advisory proxy, not enforced', as
     rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+test('own Node binary: listed under $HOME or /opt, not for a system install', async () => {
+  const { ownNodeBinary } = await import('./stdio');
+  expect(ownNodeBinary('/home/u/.nvm/versions/node/v24.1.0/bin/node')).toEqual(['/home/u/.nvm/versions/node/v24.1.0/bin/node']);
+  expect(ownNodeBinary('/opt/hostedtoolcache/node/24.1.0/x64/bin/node')).toEqual(['/opt/hostedtoolcache/node/24.1.0/x64/bin/node']);
+  expect(ownNodeBinary('/usr/bin/node')).toEqual([]);
+  expect(ownNodeBinary('/usr/local/bin/node')).toEqual([]);
+  expect(ownNodeBinary('/bin/node')).toEqual([]);
+  expect(ownNodeBinary('/lib64/node')).toEqual([]);
+});

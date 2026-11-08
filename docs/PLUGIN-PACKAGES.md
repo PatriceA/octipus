@@ -326,7 +326,8 @@ Under `security.shellSandbox: required`, a package that declares hosts where
 no runner can enforce them (Windows; Linux or macOS with no runner found) is
 **not started**: its server fails to connect with "the network of plugin
 package … cannot be enforced on this platform". Under `auto` it starts with
-the advisory proxy, as in the table.
+the advisory proxy, as in the table. The status reads `refused` then, for a
+package with or without hosts.
 
 Host names are resolved by Octipus, not the package, once per request. If any
 address a declared host resolves to is loopback, private (RFC 1918),

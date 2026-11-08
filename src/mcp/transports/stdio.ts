@@ -57,6 +57,18 @@ export interface SandboxedLaunch {
 }
 
 /**
+ * Octipus's own Node binary, when the sandbox would not show it anyway. A
+ * system install (/usr, /bin, /sbin, /lib*) is visible under every runner,
+ * and listing it is harmful under firejail, which only whitelists paths under
+ * home, /opt, /srv, /var and the like (a /usr entry is refused or hides the
+ * shared libraries). One under $HOME (nvm, a CI tool cache) or /opt must be
+ * listed, or a package started with it cannot run.
+ */
+export function ownNodeBinary(execPath = process.execPath): string[] {
+  return /^\/(?:usr|bin|sbin|lib(?:32|64|x32)?)\//.test(execPath) ? [] : [execPath];
+}
+
+/**
  * Wrap `argv` for the sandbox, starting the egress proxy when the server
  * declares hosts. Exported for tests.
  */
@@ -75,7 +87,7 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
     // Octipus's own Node binary stays readable, as on the egress path: a
     // package started with it (e.g. under nvm, or a CI tool cache in $HOME)
     // must not fail to start just because it declares no hosts.
-    const wrapped = wrapCommand(argv, { ...mounts, allowNetwork: sandbox.allowNetwork, path: env.PATH, extraReadOnly: [process.execPath] });
+    const wrapped = wrapCommand(argv, { ...mounts, allowNetwork: sandbox.allowNetwork, path: env.PATH, extraReadOnly: ownNodeBinary() });
     return { argv: wrapped.argv, env, networkEnforced: wrapped.wrapped, proxy: null, cleanup: wrapped.cleanup };
   }
   // macOS (sandbox-exec): no network namespace to bridge into, so the
@@ -89,7 +101,7 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
   try {
     if (seatbelt) {
       const wrapped = wrapCommand(argv, {
-        ...mounts, allowNetwork: false, loopbackPorts: [proxy.port], path: env.PATH, extraReadOnly: [process.execPath],
+        ...mounts, allowNetwork: false, loopbackPorts: [proxy.port], path: env.PATH, extraReadOnly: ownNodeBinary(),
       });
       if (wrapped.wrapped) {
         return { argv: wrapped.argv, env: { ...env, ...proxyEnv(proxy.url) }, networkEnforced: true, proxy, cleanup: () => { wrapped.cleanup(); void proxy.close(); } };
@@ -99,7 +111,7 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
       // socket mounted in and this Node binary to run the launcher.
       const wrapped = wrapCommand(bridgedArgv(argv, proxy.socketPath), {
         ...mounts, allowNetwork: false, path: env.PATH,
-        extraReadOnly: [process.execPath], extraReadWrite: [...writable, proxy.socketDir],
+        extraReadOnly: ownNodeBinary(), extraReadWrite: [...writable, proxy.socketDir],
       });
       if (wrapped.wrapped) {
         return { argv: wrapped.argv, env, networkEnforced: true, proxy, cleanup: () => { wrapped.cleanup(); void proxy.close(); } };

@@ -16,7 +16,7 @@ vi.mock('@/security/shell-sandbox', async (original) => ({
   activeSandboxRunner: (o?: { allowSeatbelt?: boolean }) => (o?.allowSeatbelt ? 'sandbox-exec' : null),
 }));
 
-import { prepareSandboxedLaunch } from './stdio';
+import { ownNodeBinary, prepareSandboxedLaunch } from './stdio';
 
 beforeEach(() => { wrapCommand.mockReset(); });
 
@@ -31,7 +31,7 @@ test('declared hosts: wrapped with network off but the proxy port, proxy variabl
     expect(launch.proxy?.socketPath).toBeNull();
     const opts = wrapCommand.mock.calls[0][1];
     expect(opts).toMatchObject({ workspaceRoot: '/pkg', allowSeatbelt: true, workspaceReadOnly: true, extraReadWrite: [dataDir], allowNetwork: false, loopbackPorts: [launch.proxy?.port] });
-    expect(opts.extraReadOnly).toEqual([process.execPath]);
+    expect(opts.extraReadOnly).toEqual(ownNodeBinary());
     // The command itself, no launcher in between.
     expect(launch.argv).toEqual(['/usr/bin/sandbox-exec', '-p', '(version 1)', 'node', 'server.mjs']);
     expect(launch.env.HTTPS_PROXY).toBe(launch.proxy?.url);
@@ -52,5 +52,5 @@ test('no hosts: wrapped with no network and no proxy', async () => {
   expect(launch.proxy).toBeNull();
   expect(launch.networkEnforced).toBe(true);
   expect(launch.env).toBe(env);
-  expect(wrapCommand.mock.calls[0][1]).toEqual({ workspaceRoot: '/pkg', allowSeatbelt: true, workspaceReadOnly: true, allowNetwork: false, path: '/usr/bin', extraReadOnly: [process.execPath] });
+  expect(wrapCommand.mock.calls[0][1]).toEqual({ workspaceRoot: '/pkg', allowSeatbelt: true, workspaceReadOnly: true, allowNetwork: false, path: '/usr/bin', extraReadOnly: ownNodeBinary() });
 });
