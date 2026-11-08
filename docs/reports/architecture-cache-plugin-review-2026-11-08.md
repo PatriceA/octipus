@@ -636,7 +636,11 @@ chats, a long tool loop, a plan-mode toggle and an overnight heartbeat.
 | Companion controller prompt in `companion/controller-prompt.md` (byte-identical) and its token-cap queries in a repository function (§3.3 item 2); the session row read once where it was read twice (attachment turn, swarm spawn, worker spawn) | done | `root-runner.ts`, `db/repositories/companion-token-cap.ts` |
 | Trusted extensions may hook the agent loop (§7.3 tier 2, first slice): `octi.hook` exposes `before-agent-start`, `tool:before/after` and `spawn:before/after`, only for extensions listed by real path in `extensions.trusted` | done | `extensions/api.ts` |
 | Persisted tool bytes (§9.2 item 1, second half) | deferred: decide on the `tools_changed` cause of `octipus_prompt_cache_breaks_total`. Freezing every description would put the whole tool text in the session row | — |
-| The remaining session-row reads (generation checks before and after a run are deliberate); plugin tier 1 (MCP egress per host, signing), typed `context` / `session_before_compact` hooks, the legacy `plugin.json` converter (§7.3) | open | §3.3, §7.3 |
+| Plugin packages, network (§7.3 tier 1): a per-package egress proxy allowing only declared hosts. Private, loopback and metadata addresses are refused and the checked IP is pinned. Enforced on Linux under bwrap/firejail with the package directory read-only and a separate data directory; elsewhere the proxy is advisory (`network.state` says so) | done. macOS/Windows enforcement is still open. | `security/egress-proxy.ts`, `plugins/packages/service.ts` |
+| Plugin packages, content pinning (§7.3 tier 1): a content hash recorded at install, upgrade and approval, and checked before every start. A mismatch refuses the start (audited); approval names the hash the admin reviewed | done. Signing over the hash is still open (C15). | `plugins/packages/integrity.ts`, `mcp/bridge.ts` |
+| Typed `context` hook (the outgoing request copy only, fail-closed) and `compact:before` (custom summary, fail-open), through `octi.hook` (§7.3) | done | `core/agent/hooks.ts`, `utils/context-compaction.ts` |
+| Legacy `plugin.json` converter (`octi plugin convert`, which reads the plugin and does not run it) and a deprecation warning in the legacy loader (§7.3) | done | `plugins/convert.ts` |
+| The remaining session-row reads | the generation checks before and after a run stay deliberately | §3.3 |
 
 ### References
 
