@@ -199,7 +199,9 @@ export function loadFromEnvLegacy(): Partial<Config> {
     },
     plugins: {
       trustedPublishers: defaultConfig.plugins!.trustedPublishers,
+      revokedKeys: defaultConfig.plugins!.revokedKeys,
       requireSignature: process.env.PLUGINS_REQUIRE_SIGNATURE === 'true',
+      registries: defaultConfig.plugins!.registries,
     },
     protection: {
       remoteAtLevel3: process.env.PROTECTION_REMOTE_AT_LEVEL3 === 'true',

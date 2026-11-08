@@ -127,10 +127,11 @@ package root enter the listing, so the copy hashed at install hashes the same
 as the installed directory.
 
 Install and upgrade copy the package into a staging directory beside the
-installed one and hash **the copy**, before it replaces anything; the row (new
+installed one and hash **the copy**, and check its signature, before they touch
+anything installed; only then is an upgraded package disabled. The row (new
 manifest, version and hash) is written in the same transaction that swaps the
-files in. A failure while copying, hashing or swapping leaves the old files and
-the old row together (an upgrade stays disabled).
+files in. A refused or failed upgrade leaves the old files and the old row
+together, and a package that was enabled is enabled (and running) again.
 
 Before **every start** of the package's server — host start, enable, restart
 after a change, reconnect after a crash — the hash is recomputed. A restart
@@ -143,11 +144,17 @@ mismatch)"* with the hash its files have now as `actualHash`, the log names
 the package with the recorded and the actual hash, and the audit log gets one
 `content_mismatch` row (with both hashes) per package and pair of hashes — a
 reconnect loop does not repeat it. Enabling a disabled package whose files do
-not match is refused as well, naming both hashes. A server already running
-keeps running until its next start.
+not match is refused as well, naming both hashes (the `409` body carries
+`actualHash`). A **disabled** package is not started, so its view checks
+instead: once it has a recorded hash, every view hashes its files and shows the
+same problem and `actualHash` on a mismatch, so its content can be reviewed and
+approved before enabling it. A server already running keeps running until its
+next start.
 
 To accept the new content, review the files that hash to `actualHash` and
-approve **that hash**:
+approve **that hash** — on the web page (Admin → Plugin packages shows the
+recorded and the actual hash, and "Approve this content" sends the hash shown),
+with `octi plugin approve <name> --hash sha256:<actualHash>`, or through the API:
 
 ```
 PATCH /api/plugin-packages/:name { "approveContent": "sha256:<actualHash>" }
@@ -204,7 +211,8 @@ the files after signing, the manifest included, invalidates the signature.
 Keep the `.key` file secret (it is written `0600`); `keygen` never overwrites a
 file. `sign` refuses a package with a symbolic link or special file anywhere
 in it (as install does) and writes the signature through a temporary file and
-a rename, never through a link.
+a rename, never through a link. The temporary file is made in the package's
+parent directory, so a `sign` that dies half-way leaves nothing in the package.
 
 Because the signature file is outside the content hash, it is held on its own,
 whatever `requireSignature` says:
@@ -229,7 +237,11 @@ config file):
 
 ```json
 "plugins": {
-  "trustedPublishers": [{ "name": "Acme GmbH", "publicKey": "-----BEGIN PUBLIC KEY-----\n…\n-----END PUBLIC KEY-----" }],
+  "trustedPublishers": [
+    { "name": "Acme GmbH", "publicKey": "-----BEGIN PUBLIC KEY-----\n…\n-----END PUBLIC KEY-----", "notAfter": "2027-12-31" },
+    { "name": "Acme GmbH (2025 key)", "publicKey": "…", "revoked": true }
+  ],
+  "revokedKeys": ["ed25519:<64 hex>"],
   "requireSignature": false
 }
 ```
@@ -237,6 +249,23 @@ config file):
 `publicKey` is the PEM from `keygen` (`acme.pub`), or base64 of the raw 32-byte
 key or of its DER SPKI. An entry whose key cannot be read is logged and trusts
 nothing.
+
+A key stops being trusted three ways, each a config change that applies to the
+next check (no restart):
+
+- **`revoked: true`** on its entry: the key was withdrawn (leaked, replaced).
+  The entry stays, so a package signed by it is shown as *signed by a revoked
+  key* of that publisher rather than by an unknown one.
+- **`revokedKeys`**: key ids (`ed25519:<64 hex>`, what `keygen` prints and
+  `octipus-plugin.sig` names), revoked whether or not an entry lists them —
+  for a key you never trusted but want named as revoked, or to revoke without
+  touching the publisher list. A key listed twice is revoked if any listing
+  revokes it.
+- **`notAfter`**: an ISO date (`2027-12-31`, read as the start of that day,
+  UTC) or date-time with a zone (`2027-12-31T18:00:00+01:00`). After it the key
+  trusts nothing. A signature carries no time of signing, so expiry ends the
+  key's trust for **everything** it signed, not only for later signatures:
+  re-sign with the new key before the old one expires.
 
 **Install and upgrade** check the signature on the staging copy, against the
 hash recorded for it:
@@ -246,27 +275,52 @@ hash recorded for it:
 | valid, by a trusted key | installed; `signedBy` names the publisher | installed; `signedBy` names the publisher |
 | invalid (malformed, or does not match the files) | refused (`400`) | refused (`400`) |
 | by a key not in `trustedPublishers` | installed as unsigned, with a warning in the response (`warnings`) | refused (`400`) |
+| by a revoked key | refused (`400`) | refused (`400`) |
+| by an expired key | installed as unsigned, with a warning | refused (`400`) |
 | none | installed as unsigned | refused (`400`) |
 
-A refused upgrade leaves the old files and row as they were (still
-disabled). The publisher who signed is recorded on the row
+A [remote install](#remote-install) accepts only the first row, whatever
+`requireSignature` says.
+
+A refused upgrade leaves the old files and row as they were, enabled if they
+were. An upgrade must also keep its publisher and not go back:
+
+- **Same signer.** When the installed version is signed by a trusted
+  publisher, an upgrade signed by another key (or not signed by a trusted
+  one) is refused (`409`) unless the request says `"allowSignerChange": true`;
+  the `upgraded` audit row then records `signerChange` (both publishers and
+  key ids). Re-signing with a rotated key is such a change.
+- **Not older.** A version lower than the installed one (semantic version
+  order, a pre-release before its release) is refused (`409`) unless
+  `"allowDowngrade": true`; the audit row records `downgrade: true`.
+
+The publisher who signed is recorded on the row
 (`plugin_packages.signed_by`, and in the `installed`/`upgraded` audit rows,
 with the key id).
 
-`signedBy` in the package view is **recomputed for every view**: the
-publisher of a valid signature over the recorded content hash, by a key in
-`trustedPublishers` now, in the signature file that was approved with it (one
-small file read and one verification; the package is not re-hashed). A key
-removed from the config, or a replaced signature file, shows as `null` at
-once; the row's `signed_by` keeps what held at install or approval.
+`signedBy` and `signature` in the package view are **recomputed for every
+view**: the signature over the recorded content hash, checked against the keys
+trusted now, in the signature file that was approved with it (one small file
+read and one verification; the package is not re-hashed). `signature` is
+`{ status, keyId, publisher, detail }` with `status` one of `valid`,
+`unsigned`, `unknown_key`, `revoked`, `expired`, `invalid` or `changed` (not
+the signature file approved with the content); `signedBy` is the publisher
+when it is `valid`, else `null`. A key removed, revoked or expired, or a
+replaced signature file, shows at once; the row's `signed_by` keeps what held
+at install or approval.
 
-**Every start** checks the content hash as before. With `requireSignature`
+**Every start** checks the content hash as before. A package signed by a
+**revoked** key does not start, whatever `requireSignature` says (audit op
+`signature_revoked`, once per package and key), and enabling it or approving
+its content is refused: remove the signature file and approve the content as
+unsigned, or have it signed again with a trusted key. With `requireSignature`
 on, the files must also carry a valid signature by a key trusted **now**: a
-package with none, or whose key was removed from the config, does not start
-(the problem says why; audit op `signature_refused`, once per package, hash
-and reason), and enabling it is refused. With `requireSignature` off, starts do
-not check who signed, but the signature file is still checked as described
-above.
+package with none, or whose key was removed from the config or expired, does
+not start (the problem says why; audit op `signature_refused`, once per
+package, hash and reason), and enabling it is refused. With `requireSignature`
+off, an expired, unknown or removed key is advice: the package keeps running
+and its view shows the state. The signature file is checked as described above
+in every case.
 
 **Approving changed content** (`approveContent`) records who signed the new
 content: `signedBy` becomes the publisher if a valid trusted signature covers
@@ -276,12 +330,22 @@ and reads as invalid). If the publisher signs the new content, approving it
 records them again. With `requireSignature` on, approving content without a
 valid trusted signature is refused (`409`).
 
-**Rotating a key** is a config change: add the new key to
-`trustedPublishers` (as its own entry, or replacing the old one once every
-installed package is signed with the new key), re-sign and upgrade the
-packages, then remove the old entry. With `requireSignature` on, a package
-still signed by a removed key stops at its next start; with it off, the
-package keeps running and its view shows `signedBy: null`.
+**Rotating a key** is a config change:
+
+1. The publisher makes a new key (`octi plugin keygen`) and publishes its
+   `.pub`.
+2. Add it to `trustedPublishers` as its own entry, beside the old one.
+3. The publisher re-signs the packages with the new key; upgrade them (from a
+   directory, a URL or a registry).
+4. Retire the old key: give its entry a `notAfter` for a planned rotation, or
+   `revoked: true` at once for a leaked key (or list its key id in
+   `revokedKeys`). Keep the entry rather than deleting it, so the view names
+   the packages still signed by it as revoked or expired instead of unknown.
+
+A package still signed by a revoked key stops at its next start. One signed by
+an expired or removed key stops too with `requireSignature` on; with it off, it
+keeps running and its view shows the state (`signedBy: null`). Upgrading to
+the re-signed version is a change of signer: pass `allowSignerChange`.
 
 What a signature guarantees: the files are byte for byte what the holder of
 that key signed, under that name and version. What it does not:
@@ -290,10 +354,93 @@ that key signed, under that name and version. What it does not:
   as an unsigned package (sandbox, network, declared tools and effects), and
   an admin still reads what it declares before enabling it;
 - that the key is still in the publisher's hands — a leaked key signs
-  anything until it is removed from `trustedPublishers`; there is no
-  revocation list or expiry;
-- anything about where the package came from: installing still takes a
-  directory on the server; fetching packages remotely is not here yet.
+  anything until it is revoked or expires here; nothing tells a host a key
+  was revoked (no online revocation list): each host's config has to say so;
+- anything about where the package came from: a URL or registry only says
+  where the bytes were fetched; the signature says who made them.
+
+## Remote install
+
+```
+POST /api/plugin-packages { "url": "https://plugins.example.com/finapi-1.2.0.tar.gz", "sha256": "sha256:<hex>" }
+```
+
+Admins only, like a directory install. The tarball (`.tar.gz`) is:
+
+1. **Fetched** over https through the SSRF guard every fetch of a
+   user-supplied URL uses (`fetchGuarded`): the host is resolved and every
+   address checked against private, loopback, link-local and other reserved
+   ranges, and the connection is pinned to the checked address. Redirects
+   are followed by hand, at most three, each https and checked again. A URL
+   with credentials in it is refused. At most 50 MB is read, and the
+   download times out after a minute.
+2. **Checked** against `sha256` when given (with or without the `sha256:`
+   prefix; a registry install always gives the index's), before anything is
+   unpacked. A mismatch is refused (`400`).
+3. **Unpacked** into a fresh directory under
+   `<workspace.rootPath>/plugin-downloads` by a minimal tar reader (POSIX
+   ustar, with pax and GNU long names) that takes regular files and
+   directories only. The whole archive is refused on a symbolic or hard link,
+   a device, a FIFO, any other entry type, a pax `linkpath`, an absolute path,
+   a drive letter, a backslash, a `..` segment, a NUL, a path given twice, or
+   a file where a directory is. Files are written new (never through anything
+   already there) with mode 0644, or 0755 when the archive marks them
+   executable. The unpacked size and file count have the limits of a
+   directory install (200 MB, 20,000 files), and the gunzip output is capped
+   before anything is read, so a compression bomb stops early. The package is
+   the archive root when `octipus-plugin.json` is there, or its single
+   top-level directory (`package/` from `npm pack`, `<name>-<version>/` from
+   `tar`).
+4. **Installed** like a directory (staging copy, content hash, signature,
+   swap), except that it **must carry a valid signature by a trusted
+   publisher**, whatever `requireSignature` says: unsigned, unknown, expired,
+   revoked or invalid is refused (`400`), and nothing is left behind. The
+   `installed`/`upgraded` audit row records the URL as `source`.
+
+`"upgrade": true` replaces an installed package, as from a directory. The
+download directory is removed whether the install succeeds or not.
+
+## Registries
+
+A registry is an https URL serving a JSON index:
+
+```json
+{
+  "packages": [
+    {
+      "name": "finapi",
+      "version": "1.2.0",
+      "description": "Reads balances and transactions of connected bank accounts.",
+      "url": "https://plugins.example.com/finapi-1.2.0.tar.gz",
+      "sha256": "<64 hex, the sha256 of the tarball>"
+    }
+  ]
+}
+```
+
+A host lists the registries it reads in the config:
+
+```json
+"plugins": { "registries": [{ "name": "Acme", "url": "https://plugins.example.com/index.json" }] }
+```
+
+`GET /api/plugin-packages/registry` (admins) fetches every index the same way
+as a tarball (https, the SSRF guard, at most 1 MB), keeps each for a minute,
+and answers `{ packages: [{ registry, name, version, description, url,
+sha256, installedVersion }], errors: [{ registry, error }] }`. An entry with a
+bad name or version, a non-https URL or no sha256 is skipped (and logged); a
+registry that cannot be read is listed in `errors` while the others still
+show. Admin → Plugin packages → **Browse** lists them; Install (or Upgrade,
+for an installed package) is a remote install with the entry's `url`,
+`sha256`, `name` and `version`: a tarball whose manifest names another package
+or version than the entry is refused (`400`), so an entry cannot install
+something other than what it lists. `name` and `version` may be sent with any
+install (`POST /api/plugin-packages`) to the same effect.
+
+A registry is trusted only to point at tarballs: the index is not signed, and
+what installs is decided by the package's own signature against
+`trustedPublishers`. A registry can offer a package you do not trust; it
+cannot make you install one.
 
 ## Network
 
@@ -359,7 +506,16 @@ Under the sandbox the proxy's Unix socket lives in a fresh directory under
 path is too long for a socket), never under `/tmp`: firejail runs with
 `--private-tmp`, which hides the host's `/tmp` whatever is whitelisted, and
 bwrap mounts a per-start scratch directory over `/tmp`. Both runners mount the
-socket directory by its own path.
+socket directory by its own path, and both set `TMPDIR=/tmp` (the private one).
+
+bwrap needs unprivileged user namespaces. Hosts that restrict them through
+AppArmor — Ubuntu 23.10 and later, 24.04 included, with
+`kernel.apparmor_restrict_unprivileged_userns=1` — need an AppArmor profile
+for `/usr/bin/bwrap` that allows `userns`, or that sysctl set to `0`; otherwise
+bwrap cannot start and the server fails to launch (see
+[MULTI-USER.md](architecture/MULTI-USER.md#operator-runbook)). firejail is
+setuid and not affected. `src/security/shell-sandbox.linux.e2e.test.ts` checks
+both runners for real; CI runs it on Ubuntu.
 
 ### macOS: sandbox-exec
 
@@ -409,11 +565,14 @@ unwrapped (`not_enforced`) and `required` refuses to start the server.
 
 ## Installing and managing
 
-Admins only. A package installs from a directory on the server, signed or not
-([Signed packages](#signed-packages)); remote install and the marketplace
-(plan point C15) come later.
+Admins only, on the web page (Admin → Plugin packages, and Browse for the
+registries), from the command line (`octi plugin list`, `octi plugin
+approve`) or through the API. A package installs from a directory on the
+server, signed or not ([Signed packages](#signed-packages)), or from an https
+tarball, signed by a trusted publisher ([Remote install](#remote-install)).
 
-1. **Install:** `POST /api/plugin-packages { "path": "/opt/plugins/finapi" }`.
+1. **Install:** `POST /api/plugin-packages { "path": "/opt/plugins/finapi" }`,
+   or `{ "url": "https://…/finapi-1.2.0.tar.gz", "sha256": "…" }`.
    The directory is copied into the plugin directory (no symbolic links, at most
    200 MB and 20,000 files) and its signature checked. The package starts
    **disabled**, so its tools, effects, hosts and protection level can be read
@@ -425,21 +584,41 @@ Admins only. A package installs from a directory on the server, signed or not
    while a required setting or secret has no value; settings and `enabled` in
    one PATCH are saved together or not at all. A required secret of an enabled
    package cannot be removed; disable it first.
-4. **Upgrade:** install again with `"upgrade": true`. The package is disabled
-   before any file is replaced and stays disabled until enabled again, since
-   its tools may have changed. Each setting the new version still declares and
+4. **Upgrade:** install again with `"upgrade": true` (`"allowSignerChange"`
+   and `"allowDowngrade"` for another publisher or an older version, see
+   [Signed packages](#signed-packages)). Once the new files are copied and
+   checked, the package is disabled before any file is replaced and stays
+   disabled until enabled again, since its tools may have changed. Each setting the new version still declares and
    accepts is kept; a new required setting must be set before enabling.
    The new files' hash replaces the old one.
 5. **Approve changed content:** `PATCH /api/plugin-packages/:name
    { "approveContent": "sha256:<reviewed hash>" }` after a hash mismatch
-   ([Content pinning](#content-pinning)).
+   ([Content pinning](#content-pinning)), or "Approve this content" on the
+   web page, or `octi plugin approve <name> [--hash sha256:<hex>]`.
 6. **Uninstall:** `DELETE /api/plugin-packages/:name` removes the server, the
    files, the data directory, the row and the secrets.
 
 `GET /api/plugin-packages` lists installed packages with their manifest,
 settings, which secrets are set, whether the server is connected, why it is
 not when it should be, whether its network is enforced (`network`), its
-content hash and who signed it (`signedBy`).
+content hash (and `actualHash` on a mismatch), who signed it (`signedBy`) and
+the signature state (`signature`).
+
+### From the command line
+
+```
+octi plugin list
+octi plugin approve finapi --hash sha256:<actualHash>
+octi plugin approve finapi            # shows the actual hash and asks (at a terminal only)
+```
+
+Both call the running backend at `http://localhost:$API_PORT` (3005 by
+default) with the bearer token in `OCTIPUS_API_TOKEN` (an admin's API token,
+Settings → API Tokens; [API.md](API.md#getting-an-api-token)), as `octi
+persona` does. `list` shows each package's state, signature, network state and
+its recorded and actual hash. `approve` without `--hash` refuses when it
+cannot ask (not a terminal) and prints the command to run after reviewing; a
+`409` (the files changed again) is shown and exits non-zero.
 
 Every change is in the audit log (`resource_type = plugin_package`).
 
@@ -447,11 +626,13 @@ Every change is in the audit log (`resource_type = plugin_package`).
 
 - Packages reporting events back (a new invoice in DATEV opening a case):
   plan point C2b.
-- Remote install, a registry and the marketplace page: C15. Signing exists
-  ([Signed packages](#signed-packages)); a package still installs from a
-  directory on the server. No key revocation list or expiry: a key is trusted
-  while it is listed in `plugins.trustedPublishers`.
-- A web page for plugin packages.
+- Signed registry indexes, search, ratings or publisher pages: a registry is
+  a flat list, trusted only to point at tarballs ([Registries](#registries)).
+- Online revocation: a revoked key is revoked on a host only when that host's
+  config says so (`revoked`, `revokedKeys`, `notAfter`).
+- Settings, secrets and uninstall on the web page: it shows packages,
+  enables and disables them, installs and approves content; the rest is the
+  API.
 - Network enforcement on Windows: the egress proxy is advisory there (no
   built-in runner; see [Network](#network)).
 - In a shared space, plugin tools follow the rules of personal connections

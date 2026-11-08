@@ -10,15 +10,16 @@ import {
   setSecret,
   uninstall,
 } from '@/plugins/packages/service';
+import { installFromUrl, listRegistry } from '@/plugins/packages/remote';
 import { apiLogger } from '@/utils/logger';
 
 const STATUS: Record<PluginPackageError['code'], number> = { not_found: 404, exists: 409, invalid: 400, incomplete: 409, conflict: 409 };
 
 /** A refused change: its status and every problem; anything else is logged and a 500. */
-function refused(err: unknown, set: { status?: number | string }): { error: string; problems?: string[] } {
+function refused(err: unknown, set: { status?: number | string }): { error: string; problems?: string[]; actualHash?: string } {
   if (err instanceof PluginPackageError) {
     set.status = STATUS[err.code];
-    return { error: err.message, problems: err.problems };
+    return { error: err.message, problems: err.problems, ...err.details };
   }
   apiLogger.error({ err }, 'plugin-packages: change failed');
   set.status = 500;
@@ -28,8 +29,9 @@ function refused(err: unknown, set: { status?: number | string }): { error: stri
 /**
  * Plugin packages (docs/PLUGIN-PACKAGES.md): install-wide, admins only.
  * Installing takes a directory on the server, signed or not (signature checked
- * against plugins.trustedPublishers; the marketplace, plan point
- * C15, will fetch signed packages later); a package starts disabled.
+ * against plugins.trustedPublishers), or an https tarball, which must carry a
+ * valid trusted signature; `GET /registry` lists what plugins.registries
+ * offer. A package starts disabled.
  */
 export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   .use(apiContext)
@@ -44,13 +46,40 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
     { detail: { tags: ['plugin-packages'] } },
   )
 
+  // What plugins.registries list (each index cached briefly), with the version installed here.
+  .get(
+    '/registry',
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
+      return listRegistry();
+    },
+    { detail: { tags: ['plugin-packages'] } },
+  )
+
   .post(
     '/',
     async ({ user, principal, body, set }) => {
       const denied = adminDenied({ set, user, principal });
       if (denied) return denied;
+      if ((body.path === undefined) === (body.url === undefined)) {
+        set.status = 400;
+        return { error: 'Give either path (a directory on the server) or url (an https .tar.gz)' };
+      }
+      if (body.sha256 !== undefined && body.url === undefined) {
+        set.status = 400;
+        return { error: 'sha256 checks a download; it goes with url' };
+      }
       try {
-        const row = await installFromDirectory(body.path, principal.userId, { upgrade: body.upgrade === true });
+        const upgrade = body.upgrade === true;
+        const common = {
+          upgrade,
+          ...(body.allowSignerChange === true ? { allowSignerChange: true } : {}),
+          ...(body.allowDowngrade === true ? { allowDowngrade: true } : {}),
+        };
+        const row = body.url !== undefined
+          ? await installFromUrl(body.url, principal.userId, { ...common, sha256: body.sha256, name: body.name, version: body.version })
+          : await installFromDirectory(body.path as string, principal.userId, { ...common, expect: { name: body.name, version: body.version } });
         return { name: row.name, version: row.version, enabled: row.enabled, contentHash: row.contentHash, signedBy: row.signedBy, warnings: row.warnings, manifest: row.manifest };
       } catch (err) {
         return refused(err, set);
@@ -59,8 +88,19 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
     {
       body: t.Object({
         /** An absolute path on the server to the package directory. */
-        path: t.String({ minLength: 1, maxLength: 1000, pattern: '^(/|[A-Za-z]:\\\\)' }),
+        path: t.Optional(t.String({ minLength: 1, maxLength: 1000, pattern: '^(/|[A-Za-z]:\\\\)' })),
+        /** Or an https URL of a .tar.gz; it must carry a valid signature by a trusted publisher. */
+        url: t.Optional(t.String({ minLength: 9, maxLength: 2000, pattern: '^https://' })),
+        /** With url: the sha256 the tarball must hash to (`sha256:<hex>` or bare hex), checked before it is unpacked. */
+        sha256: t.Optional(t.String({ maxLength: 71, pattern: '^(sha256:)?[0-9a-fA-F]{64}$' })),
+        /** The name and version the package must have (what a registry entry promised); refused (400) on a mismatch. */
+        name: t.Optional(t.String({ minLength: 1, maxLength: 50 })),
+        version: t.Optional(t.String({ minLength: 1, maxLength: 100 })),
         upgrade: t.Optional(t.Boolean()),
+        /** An upgrade signed by another key than the installed version (refused, 409, without it; audited). */
+        allowSignerChange: t.Optional(t.Boolean()),
+        /** An upgrade to an older version (refused, 409, without it; audited). */
+        allowDowngrade: t.Optional(t.Boolean()),
       }),
       detail: { tags: ['plugin-packages'] },
     },

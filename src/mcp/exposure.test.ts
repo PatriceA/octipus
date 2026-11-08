@@ -5,6 +5,7 @@
  */
 import { describe, expect, test, vi } from 'vitest';
 import type { AgentContext, MCPServer } from '@/core/types';
+import { MCP_META_TOOL_NAMES, toolCacheTier } from '@/core/agent/tool-split';
 import { MCPBridge } from './bridge';
 import { mcpToolKey, mcpToolNames } from './exposure';
 
@@ -208,5 +209,19 @@ describe('exposure review fixes', () => {
       id: 's', server, status: 'connected', tools: [{ name: 'bare', description: 'no schema', inputSchema: {} }], resources: [], prompts: [],
     });
     expect(bridge.getScriptTools()[0].parameters).toEqual({ type: 'object', properties: {} });
+  });
+
+  test('the meta-tools are MCP_META_TOOL_NAMES, with the same definitions whatever servers are connected', () => {
+    const meta = (bridge: MCPBridge) => bridge.getLazyToolHandlers().filter((h) => !h.name.startsWith('mcp__'));
+    const definitions = (bridge: MCPBridge) => meta(bridge)
+      .map((h) => JSON.stringify({ name: h.name, description: h.description, parameters: h.parameters, toolId: h.toolId }));
+    const one = bridgeWith({ toolExposure: { search: 'direct' } });
+    const other = bridgeWith({ id: 'crm', name: 'CRM', exposure: 'direct' }, ['lookup']);
+    expect(definitions(one)).toEqual(definitions(other));
+    expect(new Set(meta(one).map((h) => h.name))).toEqual(MCP_META_TOOL_NAMES);
+    // Shared tier for the meta-tools; the direct tools stay per runtime.
+    for (const h of one.getLazyToolHandlers()) expect(toolCacheTier(h, true)).toBe(h.name.startsWith('mcp__') ? 'variable' : 'shared');
+    // All or none: with no server connected the bridge registers none of them.
+    expect(new MCPBridge().getLazyToolHandlers()).toEqual([]);
   });
 });

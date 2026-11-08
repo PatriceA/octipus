@@ -5,16 +5,29 @@
  * hash, and public keys are read as PEM, raw base64 or SPKI base64.
  */
 import { createPublicKey } from 'node:crypto';
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+
+// `rename` and `writeFile` pass through unless a test makes them fail (`renameHook`, `writeHook`).
+let renameHook: ((from: string, to: string) => void) | undefined;
+let writeHook: ((path: string) => void) | undefined;
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    rename: async (from: string, to: string) => { renameHook?.(from, to); return actual.rename(from, to); },
+    writeFile: async (...args: Parameters<typeof actual.writeFile>) => { writeHook?.(String(args[0])); return actual.writeFile(...args); },
+  };
+});
 import { hashPackageContent, SIGNATURE_FILE } from './integrity';
 import {
   checkPackageSignature,
   checkSignature,
   generateSigningKey,
   keyFingerprint,
+  parseNotAfter,
   parsePublicKey,
   readSignatureFile,
   serializeSignature,
@@ -45,6 +58,8 @@ function pkg(): string {
 }
 
 afterEach(() => {
+  renameHook = undefined;
+  writeHook = undefined;
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -172,6 +187,75 @@ describe('signing and verifying', () => {
   });
 });
 
+describe('the temporary signature file', () => {
+  /** A package in a parent directory of its own, so both can be listed. */
+  function nested(): { parent: string; dir: string } {
+    const parent = mkdtempSync(join(tmpdir(), 'octipus-signature-parent-'));
+    dirs.push(parent);
+    const dir = join(parent, 'demo');
+    mkdirSync(dir);
+    writeFileSync(join(dir, 'octipus-plugin.json'), JSON.stringify(MANIFEST));
+    writeFileSync(join(dir, 'server.mjs'), 'console.log(1)\n');
+    return { parent, dir };
+  }
+
+  test('is written outside the package: between the write and the rename the package holds no extra file', async () => {
+    const { parent, dir } = nested();
+    const before = await hashPackageContent(dir, MANIFEST);
+    let seen: { pkg: string[]; from: string } | undefined;
+    renameHook = (from) => { seen = { pkg: readdirSync(dir).sort(), from }; };
+    const { contentHash } = await signPackage(dir, publisher.privateKeyPem);
+    expect(seen?.pkg).toEqual(['octipus-plugin.json', 'server.mjs']);
+    expect(join(seen?.from as string, '..')).toBe(parent);
+    expect(contentHash).toBe(before);
+    expect(readdirSync(parent)).toEqual(['demo']);
+    expect(readdirSync(dir).sort()).toEqual(['octipus-plugin.json', SIGNATURE_FILE, 'server.mjs']);
+  });
+
+  test('a failed rename leaves nothing in the package or its parent', async () => {
+    const { parent, dir } = nested();
+    const before = await hashPackageContent(dir, MANIFEST);
+    renameHook = () => { throw Object.assign(new Error('simulated rename failure'), { code: 'EIO' }); };
+    await expect(signPackage(dir, publisher.privateKeyPem)).rejects.toThrow('simulated rename failure');
+    expect(readdirSync(dir).sort()).toEqual(['octipus-plugin.json', 'server.mjs']);
+    expect(readdirSync(parent)).toEqual(['demo']);
+    expect(await hashPackageContent(dir, MANIFEST)).toBe(before);
+  });
+
+  test('an unwritable parent: the temporary file goes inside the package and is gone afterwards', async () => {
+    const { parent, dir } = nested();
+    const before = await hashPackageContent(dir, MANIFEST);
+    const writes: string[] = [];
+    writeHook = (path) => {
+      writes.push(path);
+      if (join(path, '..') === parent) throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    };
+    let seen: string | undefined;
+    renameHook = (from) => { seen = from; };
+    const { contentHash } = await signPackage(dir, publisher.privateKeyPem);
+    expect(writes).toHaveLength(2);
+    expect(join(seen as string, '..')).toBe(dir);
+    expect(contentHash).toBe(before);
+    expect(readdirSync(parent)).toEqual(['demo']);
+    expect(readdirSync(dir).sort()).toEqual(['octipus-plugin.json', SIGNATURE_FILE, 'server.mjs']);
+    expect(await checkPackageSignature(dir, before, TRUSTED)).toMatchObject({ status: 'valid' });
+
+    // A failed rename in the fallback cleans up too.
+    rmSync(join(dir, SIGNATURE_FILE));
+    renameHook = () => { throw Object.assign(new Error('simulated rename failure'), { code: 'EIO' }); };
+    await expect(signPackage(dir, publisher.privateKeyPem)).rejects.toThrow('simulated rename failure');
+    expect(readdirSync(dir).sort()).toEqual(['octipus-plugin.json', 'server.mjs']);
+  });
+
+  test('a rename across filesystems is reported, and cleaned up', async () => {
+    const { parent, dir } = nested();
+    renameHook = () => { throw Object.assign(new Error('cross-device link'), { code: 'EXDEV' }); };
+    await expect(signPackage(dir, publisher.privateKeyPem)).rejects.toThrow(/another filesystem/);
+    expect(readdirSync(parent)).toEqual(['demo']);
+    expect(readdirSync(dir).sort()).toEqual(['octipus-plugin.json', 'server.mjs']);
+  });
+});
+
 describe('public keys', () => {
   test('are read as PEM, raw base64 or SPKI base64, all with one fingerprint', () => {
     const der = createPublicKey(publisher.publicKeyPem).export({ format: 'der', type: 'spki' });
@@ -193,5 +277,72 @@ describe('public keys', () => {
 
   test('signing refuses a key that is not an Ed25519 private key', () => {
     expect(() => signContentHash('sha256:00', publisher.publicKeyPem)).toThrow(/private key/);
+  });
+});
+
+describe('revoked and expired keys', () => {
+  const HASH = `sha256:${'ab'.repeat(32)}`;
+  const text = serializeSignature(signContentHash(HASH, publisher.privateKeyPem));
+
+  test('a revoked entry trusts nothing: a valid signature by it reads as revoked', () => {
+    const keys = trustedKeys([{ name: 'Acme', publicKey: publisher.publicKeyPem, revoked: true }]);
+    expect(checkSignature(HASH, text, keys)).toEqual({ status: 'revoked', keyId: publisher.keyId, publisher: 'Acme', detail: expect.stringContaining('revoked') });
+  });
+
+  test('plugins.revokedKeys revokes a listed key, and one with no entry at all', () => {
+    const listed = trustedKeys(TRUSTED, undefined, { revokedKeys: [publisher.keyId] });
+    expect(checkSignature(HASH, text, listed)).toMatchObject({ status: 'revoked', publisher: 'Acme' });
+    const unlisted = trustedKeys([], undefined, { revokedKeys: [publisher.keyId] });
+    expect(checkSignature(HASH, text, unlisted)).toMatchObject({ status: 'revoked', publisher: null, keyId: publisher.keyId });
+    // Another key is untouched.
+    expect(checkSignature(HASH, text, trustedKeys(TRUSTED, undefined, { revokedKeys: [other.keyId] })).status).toBe('valid');
+  });
+
+  test('notAfter: trusted until then, expired after; a date alone is its start (UTC)', () => {
+    const entry = [{ name: 'Acme', publicKey: publisher.publicKeyPem, notAfter: '2027-01-01' }];
+    expect(checkSignature(HASH, text, trustedKeys(entry, undefined, { now: new Date('2026-12-31T23:59:59Z') })).status).toBe('valid');
+    expect(checkSignature(HASH, text, trustedKeys(entry, undefined, { now: new Date('2027-01-01T00:00:01Z') })))
+      .toMatchObject({ status: 'expired', publisher: 'Acme', detail: expect.stringContaining('2027-01-01T00:00:00.000Z') });
+    const withTime = [{ name: 'Acme', publicKey: publisher.publicKeyPem, notAfter: '2027-01-01T12:00:00+02:00' }];
+    expect(checkSignature(HASH, text, trustedKeys(withTime, undefined, { now: new Date('2027-01-01T10:30:00Z') })).status).toBe('expired');
+  });
+
+  test('an impossible calendar date (2027-02-30) is not read as a later day', () => {
+    const reported: string[] = [];
+    const keys = trustedKeys([{ name: 'Acme', publicKey: publisher.publicKeyPem, notAfter: '2027-02-30' }], (_n, reason) => reported.push(reason), { now: new Date('2026-01-01T00:00:00Z') });
+    expect(checkSignature(HASH, text, keys).status).toBe('expired');
+    expect(reported).toEqual([expect.stringContaining('not an ISO date')]);
+    expect(parseNotAfter('2027-02-30')).toBeNull();
+    expect(parseNotAfter('2028-02-29')?.toISOString()).toBe('2028-02-29T00:00:00.000Z');
+    expect(parseNotAfter('2027-02-29T10:00:00Z')).toBeNull();
+  });
+
+  test('an unreadable notAfter trusts nothing and is reported', () => {
+    const reported: string[] = [];
+    const keys = trustedKeys([{ name: 'Acme', publicKey: publisher.publicKeyPem, notAfter: 'next year' }], (_n, reason) => reported.push(reason));
+    expect(checkSignature(HASH, text, keys).status).toBe('expired');
+    expect(reported).toEqual([expect.stringContaining('not an ISO date')]);
+  });
+
+  test('a key listed twice: the revocation wins, whichever comes first', () => {
+    for (const list of [
+      [{ name: 'Acme', publicKey: publisher.publicKeyPem }, { name: 'Acme (old)', publicKey: publisher.publicKeyPem, revoked: true }],
+      [{ name: 'Acme (old)', publicKey: publisher.publicKeyPem, revoked: true }, { name: 'Acme', publicKey: publisher.publicKeyPem }],
+    ]) {
+      expect(checkSignature(HASH, text, trustedKeys(list)).status).toBe('revoked');
+    }
+  });
+
+  test('a signature that does not verify is invalid, even by a revoked key', () => {
+    const keys = trustedKeys([{ name: 'Acme', publicKey: publisher.publicKeyPem, revoked: true }]);
+    expect(checkSignature(`sha256:${'cd'.repeat(32)}`, text, keys).status).toBe('invalid');
+  });
+
+  test('rotation: the new key is trusted while the old one is revoked', async () => {
+    const dir = pkg();
+    await signPackage(dir, other.privateKeyPem);
+    const contentHash = await hashPackageContent(dir, MANIFEST);
+    const rotated = [{ name: 'Acme', publicKey: publisher.publicKeyPem, revoked: true }, { name: 'Acme 2027', publicKey: other.publicKeyPem }];
+    expect(await checkPackageSignature(dir, contentHash, rotated)).toEqual({ status: 'valid', publisher: 'Acme 2027', keyId: other.keyId });
   });
 });

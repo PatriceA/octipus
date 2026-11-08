@@ -67,14 +67,14 @@ export function orderByGroup(handlers: ToolHandler[], groupOrder: readonly strin
  * differs between two users, or changes while a conversation runs, ends the
  * prefix they can share at its position:
  *
- *  - `shared`: the install's built-ins, the meta-tools and the discovery and
- *    self-report tools: the same bytes for every user of a role on this
- *    install.
+ *  - `shared`: the install's built-ins, the meta-tools, the MCP meta-tools
+ *    (`MCP_META_TOOL_NAMES`) and the discovery and self-report tools: the
+ *    same bytes for every user of a role on this install.
  *  - `variable`: what differs per user or session, or changes at runtime.
  *    Connector tools (per user), the inline-UI tool (per user and client),
- *    MCP tools (servers connect, reconnect and change what they expose;
- *    plugin packages run as `plugin-*` MCP servers and are enabled and
- *    disabled at runtime), extension tools (`ext_*`, loaded and unloaded at
+ *    direct MCP tools (`mcp__<server>__<tool>`: servers connect, reconnect
+ *    and change what they expose; plugin packages run as `plugin-*` MCP
+ *    servers and are enabled and disabled at runtime), extension tools (`ext_*`, loaded and unloaded at
  *    runtime) and plugin containers (`plugin-*`).
  *  - `sticky`: on the lazy path, the groups the message selects
  *    (`isIntentGatedGroup`). They differ between conversations and grow
@@ -83,13 +83,28 @@ export function orderByGroup(handlers: ToolHandler[], groupOrder: readonly strin
  */
 export type ToolCacheTier = 'shared' | 'variable' | 'sticky';
 
+/**
+ * The MCP bridge's meta-tools (`getLazyToolHandlers`, `resourceHandlers`):
+ * fixed names, descriptions and schemas that name no server, so they are the
+ * same bytes for every user whatever is connected. The bridge registers them
+ * all or none, on whether any server of the install is connected — install-
+ * wide state, not per user. In a space session `withoutPersonalOnlyTools`
+ * drops `mcp_list_resources`, as it drops other personal-only tools; that
+ * differs by session kind, not by user. `src/mcp/exposure.test.ts` holds the
+ * bridge to this list and to constant definitions.
+ */
+export const MCP_META_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'mcp_list_tools', 'mcp_call_tool', 'mcp_list_resources', 'mcp_read_resource', 'mcp_get_prompt', 'mcp_read_result',
+]);
+
 /** Tools offered only while some per-thread state holds (open taken tasks). */
 const CONDITIONAL_TOOLS = new Set(['complete_taken_task']);
 
 export function toolCacheTier(handler: ToolHandler, lazy: boolean): ToolCacheTier {
   const id = handler.toolId;
   if (CONDITIONAL_TOOLS.has(handler.name)) return 'variable';
-  if (id === 'mcp' || id === 'connector' || id === 'inline-ui' || id?.startsWith('ext_') || id?.startsWith('plugin-')) return 'variable';
+  if (id === 'mcp') return MCP_META_TOOL_NAMES.has(handler.name) ? 'shared' : 'variable';
+  if (id === 'connector' || id === 'inline-ui' || id?.startsWith('ext_') || id?.startsWith('plugin-')) return 'variable';
   if (lazy && isIntentGatedGroup(id)) return 'sticky';
   return 'shared';
 }

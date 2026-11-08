@@ -1,6 +1,7 @@
 /**
  * C3 for the tool block: two users of one install, with different per-user
- * and runtime tools (connectors, MCP, extension tools, the inline-UI tool) and
+ * and runtime tools (connectors, direct MCP tools, extension tools, the
+ * inline-UI tool) and
  * different sticky lazy groups, send the same bytes up to and including the
  * tools breakpoint, because those tools come after the ones the install
  * shares (`orderForCache`) and the breakpoint sits on the last shared one.
@@ -28,10 +29,17 @@ const builtins = [
 const discovery = [h('list_tools', 'tool_discovery'), h('describe_tool', 'tool_discovery')];
 const meta = [h('spawn_child'), h('collect_children')];
 const selfReport = h('capabilities', 'self_report');
+/**
+ * The MCP bridge's meta-tools, in its order: install-wide (present for every
+ * user once any server is connected) with definitions that name no server.
+ */
+const mcpMeta = ['mcp_list_resources', 'mcp_read_resource', 'mcp_get_prompt', 'mcp_read_result', 'mcp_list_tools', 'mcp_call_tool'].map((n) => h(n, 'mcp'));
 
 /**
  * One user's registered tools, in the root's registration order: built-ins,
- * then MCP (where `getToolsForRole` appends it), the inline-UI tool, the
+ * then MCP (where `getToolsForRole` appends it: the bridge's direct tools,
+ * which differ here as servers change, then its meta-tools, which every user
+ * of the install gets), the inline-UI tool, the
  * discovery and meta-tools, the self-report tool; connectors and extension
  * tools where a worker gets them (after the role's tools).
  */
@@ -39,8 +47,8 @@ function registered(user: 'alice' | 'bob'): ToolHandler[] {
   const alice = user === 'alice';
   return [
     ...builtins,
-    ...(alice ? [h('mcp__crm__lookup', 'mcp'), h('mcp_list_tools', 'mcp'), h('mcp_call_tool', 'mcp')] : []),
-    ...(alice ? [h('mcp__plugin_weather__forecast', 'mcp')] : []),
+    ...(alice ? [h('mcp__crm__lookup', 'mcp'), h('mcp__plugin_weather__forecast', 'mcp')] : []),
+    ...mcpMeta,
     ...(alice ? [h('ext_quotes__get', 'ext_quotes')] : [h('ext_tides__get', 'ext_tides')]),
     ...(alice ? [h('gmail_search', 'connector')] : [h('slack_post', 'connector'), h('slack_read', 'connector')]),
     ...(alice ? [h('inline_ui_ask', 'inline-ui')] : []),
@@ -112,18 +120,22 @@ describe('(a) first-party Claude with tool search', () => {
     expect((a.tools as Tool[]).find((t) => t.cache_control)?.name).toBe('capabilities');
   });
 
-  test('the per-user tools and direct MCP tools are deferred; the inline-UI tool and MCP meta-tools are in the floor, after the breakpoint', () => {
+  test('the per-user tools and direct MCP tools are deferred; the MCP meta-tools are loaded before the breakpoint, the inline-UI tool after it', () => {
     on();
     const tools = nativeBody(request('alice', aliceLazy)).tools as Tool[];
     const deferred = tools.filter((t) => t.defer_loading).map((t) => t.name);
     expect(deferred).toEqual(expect.arrayContaining(['gmail_search', 'ext_quotes__get', 'notes__search', 'websearch__search', 'mcp__crm__lookup']));
     const loaded = tools.filter((t) => !t.defer_loading).map((t) => t.name);
     const mark = tools.findIndex((t) => t.cache_control);
-    // Loaded and per-user: after the breakpoint.
-    for (const name of ['inline_ui_ask', 'mcp_list_tools']) {
+    // Loaded and shared: before the breakpoint.
+    for (const name of ['mcp_list_tools', 'mcp_call_tool', 'mcp_read_result']) {
       expect(loaded).toContain(name);
-      expect(tools.findIndex((t) => t.name === name)).toBeGreaterThan(mark);
+      expect(tools.findIndex((t) => t.name === name)).toBeLessThan(mark);
     }
+    // Loaded and per-user: after the breakpoint.
+    expect(loaded).toContain('inline_ui_ask');
+    expect(tools.findIndex((t) => t.name === 'inline_ui_ask')).toBeGreaterThan(mark);
+    expect(deferred).toContain('mcp__plugin_weather__forecast');
   });
 
   test('four breakpoints at most: tools, install, system end, history', () => {
@@ -151,8 +163,10 @@ describe('(b) first-party Claude without tool search', () => {
     off();
     const names = request('alice', aliceLazy).declarableTools.map(toolName);
     expect(names).toEqual([
-      'filesystem__read_file', 'shell__run', 'skill_distill', 'list_tools', 'describe_tool', 'spawn_child', 'collect_children', 'capabilities',
-      'mcp__crm__lookup', 'mcp_list_tools', 'mcp_call_tool', 'mcp__plugin_weather__forecast', 'inline_ui_ask',
+      'filesystem__read_file', 'shell__run', 'skill_distill',
+      'mcp_list_resources', 'mcp_read_resource', 'mcp_get_prompt', 'mcp_read_result', 'mcp_list_tools', 'mcp_call_tool',
+      'list_tools', 'describe_tool', 'spawn_child', 'collect_children', 'capabilities',
+      'mcp__crm__lookup', 'mcp__plugin_weather__forecast', 'inline_ui_ask',
       'websearch__search',
     ]);
   });

@@ -18,13 +18,16 @@
  * package row beside the content hash (service.ts), checked at every start.
  *
  * The host trusts the keys listed in `plugins.trustedPublishers`; a signature
- * by any other key proves nothing here. What a valid signature says: these
- * exact files are what the holder of that key signed. Not that they are safe.
+ * by any other key proves nothing here. An entry can be revoked (`revoked:
+ * true`, or its key id in `plugins.revokedKeys`) or expire (`notAfter`): its
+ * key then trusts nothing, and a signature by it reads as `revoked` or
+ * `expired`, never valid. What a valid signature says: these exact files are
+ * what the holder of that key signed. Not that they are safe.
  */
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, type KeyObject, randomBytes, sign, verify } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { PLUGIN_MANIFEST_FILE } from '@/shared/plugin-package';
 import { hashPackageContent, SIGNATURE_FILE } from './integrity';
 import { parseManifest } from './manifest';
@@ -46,6 +49,26 @@ export interface TrustedPublisher {
   name: string;
   /** PEM (SPKI), or base64 of the raw 32-byte key or of its DER SPKI. */
   publicKey: string;
+  /** ISO date or date-time after which the key trusts nothing (a date alone: its start, UTC). */
+  notAfter?: string;
+  /** The key was withdrawn (leaked, replaced): it trusts nothing, and a signature by it shows as revoked. */
+  revoked?: boolean;
+}
+
+/** A key the host knows: trusted, or listed but revoked or expired (`untrusted`). A key revoked only by id has no key object. */
+export interface KnownKey {
+  name: string;
+  key: KeyObject | null;
+  untrusted: null | { status: 'revoked' | 'expired'; detail: string };
+}
+
+/** The known keys by key id (`trustedKeys`). */
+export type KeyRing = Map<string, KnownKey>;
+
+/** Revocation and the clock, beside the publishers (`plugins.revokedKeys`; `now` for tests). */
+export interface KeyTrustOptions {
+  revokedKeys?: readonly string[];
+  now?: Date;
 }
 
 /** The contents of `octipus-plugin.sig`. */
@@ -66,6 +89,7 @@ export type SignatureCheck =
   | { status: 'unsigned' }
   | { status: 'invalid'; reason: string }
   | { status: 'unknown_key'; keyId: string }
+  | { status: 'revoked' | 'expired'; keyId: string; publisher: string | null; detail: string }
   | { status: 'valid'; publisher: string; keyId: string };
 
 export class SignatureError extends Error {
@@ -179,6 +203,13 @@ export function parseSignatureFile(text: string): SignatureFile {
  * special files, as install requires), hash it (the signature file left out)
  * and write `octipus-plugin.sig` through a temporary file and a rename, never
  * through a link. Signing again replaces the signature.
+ *
+ * The temporary file is made in the package's PARENT directory, not in the
+ * package: a crash between the write and the rename (where no cleanup runs)
+ * would otherwise leave a stray file in the package and change its content
+ * hash. The parent is on the same filesystem in practice, so the rename stays
+ * atomic; a package directory that is itself a mount point fails with EXDEV
+ * and is reported. On any failure the temporary file is removed.
  */
 export async function signPackage(dir: string, privateKeyPem: string): Promise<{ contentHash: string; keyId: string; file: string }> {
   await checkPackageTree(dir);
@@ -191,32 +222,99 @@ export async function signPackage(dir: string, privateKeyPem: string): Promise<{
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
-  const temp = join(dir, `.${SIGNATURE_FILE}.${process.pid}-${randomBytes(6).toString('hex')}`);
+  const abs = resolve(dir);
+  if (dirname(abs) === abs) throw new SignatureError('a filesystem root cannot be signed as a package');
+  const suffix = `${process.pid}-${randomBytes(6).toString('hex')}`;
+  const temp = join(dirname(abs), `.${basename(abs)}.${SIGNATURE_FILE}.${suffix}`);
   try {
+    // `wx`: never through a file or link already at that name.
     await writeFile(temp, serializeSignature(sig), { flag: 'wx', mode: 0o644 });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'EACCES' && code !== 'EPERM') throw err;
+    // The parent is not writable (/opt/plugins owned by root, the package by
+    // its author): write the temporary file inside the package instead. If
+    // the process dies between the write and the rename, that file stays
+    // behind; it is part of the content hash, so the package then reads as
+    // changed until it is removed and signed again.
+    const inside = join(abs, `.${SIGNATURE_FILE}.${suffix}`);
+    try {
+      await writeFile(inside, serializeSignature(sig), { flag: 'wx', mode: 0o644 });
+      await rename(inside, file);
+    } finally {
+      await rm(inside, { force: true }).catch(() => {});
+    }
+    return { contentHash, keyId: sig.keyId, file };
+  }
+  try {
     await rename(temp, file);
   } catch (err) {
     await rm(temp, { force: true }).catch(() => {});
+    if ((err as NodeJS.ErrnoException).code === 'EXDEV') {
+      throw new SignatureError(`${dir} is on another filesystem than its parent directory, where the signature is written first; sign a copy of the package that is not a mount point`);
+    }
     throw err;
   }
   return { contentHash, keyId: sig.keyId, file };
 }
 
+/** Whether `value` is a key id (`ed25519:<64 hex>`), the form `plugins.revokedKeys` lists. */
+export function isKeyId(value: unknown): value is string {
+  return typeof value === 'string' && KEY_ID_RE.test(value);
+}
+
+/** The instant a `notAfter` value names (a date alone: its start, UTC), or null when it is not an ISO date. */
+export function parseNotAfter(value: string): Date | null {
+  const text = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/.test(text)) return null;
+  const at = new Date(text);
+  if (Number.isNaN(at.getTime())) return null;
+  // `new Date` rolls 2027-02-30 over to March 2: the calendar date must survive the round trip.
+  const [y, m, d] = text.slice(0, 10).split('-').map(Number);
+  const day = new Date(Date.UTC(y, m - 1, d));
+  if (day.getUTCFullYear() !== y || day.getUTCMonth() !== m - 1 || day.getUTCDate() !== d) return null;
+  return at;
+}
+
 /**
- * The trusted keys by key id. An entry whose key cannot be read is skipped
- * and reported (`onInvalid`): it trusts nothing, so a package it signed reads
- * as signed by an unknown key.
+ * The known keys by key id. An entry whose key cannot be read is skipped and
+ * reported (`onInvalid`): it trusts nothing, so a package it signed reads as
+ * signed by an unknown key. An entry that is revoked, whose key id is in
+ * `revokedKeys`, or whose `notAfter` has passed (or cannot be read) is kept
+ * as untrusted, so a signature by it says why it no longer counts. When a
+ * key is listed twice, a revocation or expiry wins over a trusting entry. A
+ * key id in `revokedKeys` with no entry is known as revoked, without a key.
  */
-export function trustedKeys(publishers: readonly TrustedPublisher[], onInvalid?: (name: string, reason: string) => void): Map<string, { name: string; key: KeyObject }> {
-  const keys = new Map<string, { name: string; key: KeyObject }>();
+export function trustedKeys(publishers: readonly TrustedPublisher[], onInvalid?: (name: string, reason: string) => void, opts: KeyTrustOptions = {}): KeyRing {
+  const keys: KeyRing = new Map();
+  const now = (opts.now ?? new Date()).getTime();
+  const revokedIds = new Set(opts.revokedKeys ?? []);
   for (const p of publishers) {
+    let key: KeyObject;
     try {
-      const key = parsePublicKey(p.publicKey);
-      const id = keyFingerprint(key);
-      if (!keys.has(id)) keys.set(id, { name: p.name, key });
+      key = parsePublicKey(p.publicKey);
     } catch (err) {
       onInvalid?.(p.name, (err as Error).message);
+      continue;
     }
+    const id = keyFingerprint(key);
+    let untrusted: KnownKey['untrusted'] = null;
+    if (p.revoked === true || revokedIds.has(id)) {
+      untrusted = { status: 'revoked', detail: `the key of ${p.name} (${id}) is revoked` };
+    } else if (p.notAfter !== undefined) {
+      const until = parseNotAfter(p.notAfter);
+      if (until === null) {
+        onInvalid?.(p.name, `notAfter "${p.notAfter}" is not an ISO date; the key trusts nothing`);
+        untrusted = { status: 'expired', detail: `the key of ${p.name} (${id}) has an unreadable notAfter ("${p.notAfter}")` };
+      } else if (now > until.getTime()) {
+        untrusted = { status: 'expired', detail: `the key of ${p.name} (${id}) expired at ${until.toISOString()}` };
+      }
+    }
+    const existing = keys.get(id);
+    if (!existing || (existing.untrusted === null && untrusted !== null)) keys.set(id, { name: p.name, key, untrusted });
+  }
+  for (const id of revokedIds) {
+    if (!keys.has(id)) keys.set(id, { name: id, key: null, untrusted: { status: 'revoked', detail: `the key ${id} is in plugins.revokedKeys` } });
   }
   return keys;
 }
@@ -249,19 +347,29 @@ export async function readSignatureFile(dir: string): Promise<SignatureOnDisk | 
   }
 }
 
-/** Check a signature against a content hash and the trusted keys (null: unsigned). */
-export function verifySignature(contentHash: string, sig: SignatureFile | null, trusted: Map<string, { name: string; key: KeyObject }>): SignatureCheck {
+/**
+ * Check a signature against a content hash and the known keys (null:
+ * unsigned). A signature that does not verify is `invalid`, whoever's key it
+ * names; one that verifies by a revoked or expired key is `revoked` or
+ * `expired`, never valid. A key revoked only by id (no key object) cannot be
+ * verified and is `revoked` outright.
+ */
+export function verifySignature(contentHash: string, sig: SignatureFile | null, trusted: KeyRing): SignatureCheck {
   if (sig === null) return { status: 'unsigned' };
   const known = trusted.get(sig.keyId);
   if (!known) return { status: 'unknown_key', keyId: sig.keyId };
+  if (known.key === null) {
+    return { status: 'revoked', keyId: sig.keyId, publisher: null, detail: known.untrusted?.detail ?? `the key ${sig.keyId} is revoked` };
+  }
   if (!verify(null, message(contentHash), known.key, Buffer.from(sig.signature, 'base64'))) {
     return { status: 'invalid', reason: `The signature by ${known.name} (${sig.keyId}) does not match the package content` };
   }
+  if (known.untrusted) return { status: known.untrusted.status, keyId: sig.keyId, publisher: known.name, detail: known.untrusted.detail };
   return { status: 'valid', publisher: known.name, keyId: sig.keyId };
 }
 
-/** Check the text of a signature file (null: none) against a content hash and the trusted keys. */
-export function checkSignature(contentHash: string, text: string | null, trusted: Map<string, { name: string; key: KeyObject }>): SignatureCheck {
+/** Check the text of a signature file (null: none) against a content hash and the known keys. */
+export function checkSignature(contentHash: string, text: string | null, trusted: KeyRing): SignatureCheck {
   if (text === null) return { status: 'unsigned' };
   try {
     return verifySignature(contentHash, parseSignatureFile(text), trusted);
@@ -277,8 +385,9 @@ export function checkSignatureOnDisk(
   contentHash: string,
   publishers: readonly TrustedPublisher[],
   onInvalidKey?: (name: string, reason: string) => void,
+  opts?: KeyTrustOptions,
 ): SignatureCheck {
-  return verifySignature(contentHash, onDisk?.file ?? null, trustedKeys(publishers, onInvalidKey));
+  return verifySignature(contentHash, onDisk?.file ?? null, trustedKeys(publishers, onInvalidKey, opts));
 }
 
 /** Read and check the signature file of a package directory against its content hash. */
@@ -287,6 +396,7 @@ export async function checkPackageSignature(
   contentHash: string,
   publishers: readonly TrustedPublisher[],
   onInvalidKey?: (name: string, reason: string) => void,
+  opts?: KeyTrustOptions,
 ): Promise<SignatureCheck> {
   let onDisk: SignatureOnDisk | null;
   try {
@@ -295,5 +405,5 @@ export async function checkPackageSignature(
     if (err instanceof SignatureError) return { status: 'invalid', reason: err.message };
     throw err;
   }
-  return checkSignatureOnDisk(onDisk, contentHash, publishers, onInvalidKey);
+  return checkSignatureOnDisk(onDisk, contentHash, publishers, onInvalidKey, opts);
 }

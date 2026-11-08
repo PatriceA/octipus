@@ -6,12 +6,15 @@
  *   octi plugin convert <dir>    Convert a legacy plugin into a plugin package.
  *   octi plugin keygen <prefix>  Make an Ed25519 signing key pair.
  *   octi plugin sign <dir> --key <file>  Sign a plugin package (octipus-plugin.sig).
+ *   octi plugin list             Installed packages (through the running backend).
+ *   octi plugin approve <name> [--hash sha256:…]  Approve a package's changed content.
  *
  * Delegated from bin/octi.ts. Uses the published validation kit so authors and
  * the host run identical checks.
  */
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { validatePlugin } from '@octipus/plugin-sdk/testing';
 import { ConvertError, convertLegacyPlugin } from '@/plugins/convert';
@@ -19,6 +22,7 @@ import { ManifestError } from '@/plugins/packages/manifest';
 import { generateSigningKey, SignatureError, signPackage } from '@/plugins/packages/signature';
 import { PackageTreeError } from '@/plugins/packages/tree';
 import { PLUGIN_TOOL_EFFECTS, type PluginToolEffect } from '@/shared/plugin-package';
+import { approveCommand, listCommand, type PluginApiIo } from './plugin-api';
 
 const HELP = `octi plugin — plugin tooling
 
@@ -38,6 +42,15 @@ Usage:
                                 Sign a plugin package: writes <dir>/octipus-plugin.sig
                                 over its content hash. Sign last: any later change to
                                 the files invalidates the signature.
+  octi plugin list              Installed plugin packages: state, signature, network,
+                                approved and actual content hash.
+  octi plugin approve <name> [--hash sha256:<hex>]
+                                Approve a package's changed content. Without --hash it
+                                shows the actual hash and asks (at a terminal only).
+                                Refused when the files no longer hash to it.
+
+list and approve call the running backend (http://localhost:$API_PORT, 3005 by
+default) with the admin API token in OCTIPUS_API_TOKEN (Settings → API Tokens).
 `;
 
 async function runKeygen(argv: string[]): Promise<never> {
@@ -87,6 +100,40 @@ async function runSign(argv: string[]): Promise<never> {
     process.stderr.write(`\n❌ ${dir} was not signed.\n`);
     process.exit(1);
   }
+}
+
+function apiIo(): PluginApiIo {
+  return {
+    fetch,
+    env: process.env,
+    out: (t) => process.stdout.write(t),
+    err: (t) => process.stderr.write(t),
+    interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
+    ask: async (question) => {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        return await rl.question(question);
+      } finally {
+        rl.close();
+      }
+    },
+  };
+}
+
+async function runApprove(argv: string[]): Promise<never> {
+  let values: { hash?: string };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { hash: { type: 'string' } } }));
+  } catch (err) {
+    process.stderr.write(`octi plugin approve: ${(err as Error).message}\n\n${HELP}`);
+    process.exit(2);
+  }
+  if (positionals.length !== 1) {
+    process.stderr.write(`octi plugin approve: expected <name> [--hash sha256:<hex>]\n\n${HELP}`);
+    process.exit(2);
+  }
+  process.exit(await approveCommand(apiIo(), positionals[0], values.hash));
 }
 
 async function runValidate(dir: string): Promise<never> {
@@ -177,6 +224,12 @@ async function main(): Promise<void> {
       break;
     case 'sign':
       await runSign(rest);
+      break;
+    case 'list':
+      process.exit(await listCommand(apiIo()));
+      break;
+    case 'approve':
+      await runApprove(rest);
       break;
     case undefined:
     case 'help':

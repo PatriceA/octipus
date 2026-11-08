@@ -44,6 +44,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     { href: '/admin/destinations', label: 'Notification destinations' },
     { href: '/admin/group-channels', label: 'Group channels' },
     { href: '/admin/federation', label: 'Federation' },
+    { href: '/admin/plugins', label: 'Plugin packages' },
     { href: '/admin/audit', label: 'Audit log' },
   ].filter((t) => pageOn(t.href));
 

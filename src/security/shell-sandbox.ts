@@ -176,6 +176,17 @@ export function _resetSandboxDetectionForTests(): void {
   detectedCache.clear();
 }
 
+/**
+ * Test-only: make detection return `runner` at `binary` (both cache entries)
+ * until the next `_resetSandboxDetectionForTests`. Detection itself prefers
+ * bwrap over firejail; the Linux end-to-end test uses this to run each
+ * installed runner in turn. Production never calls it.
+ */
+export function _forceSandboxRunnerForTests(runner: SandboxRunner, binary: string): void {
+  detectedCache.set(false, { runner, binary });
+  detectedCache.set(true, { runner, binary });
+}
+
 /** Read the configured sandbox mode. Defaults to 'off' if config
  *  isn't loaded. */
 export function getSandboxMode(): SandboxMode {
@@ -231,6 +242,10 @@ function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): 
     '--ro-bind-try', join(homedir(), '.local/go'), join(homedir(), '.local/go'),
     '--ro-bind-try', join(homedir(), 'go/bin'), join(homedir(), 'go/bin'),
     '--setenv', 'PATH', commandPath,
+    // The private /tmp below is the only scratch there is: a host TMPDIR
+    // (e.g. under /run/user or $HOME) is not mounted, and the read-only root
+    // would refuse writes to it (seen in shell-sandbox.linux.e2e.test.ts).
+    '--setenv', 'TMPDIR', '/tmp',
     '--setenv', 'PLAYWRIGHT_BROWSERS_PATH', process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0],
     ...(androidSdk ? ['--setenv', 'ANDROID_HOME', androidSdk, '--setenv', 'ANDROID_SDK_ROOT', androidSdk] : []),
     // Per-spawn scratch (the legacy /tmp/assistant- prefix lives here).
@@ -314,7 +329,9 @@ function buildFirejailArgs(binary: string, options: WrapOptions): string[] {
     for (const path of new Set([tool.path, tool.resolvedPath])) args.push(`--whitelist=${path}`, `--read-only=${path}`);
   }
   const cliPath = [...new Set(cliTools.map(tool => tool.path.slice(0, tool.path.lastIndexOf('/'))))];
-  args.push(`--env=PATH=${[...cliPath, runtimePath(options.path)].join(':')}`, `--env=PLAYWRIGHT_BROWSERS_PATH=${process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0]}`);
+  // TMPDIR: the private /tmp, as with bwrap; a host TMPDIR outside it would
+  // land in firejail's throwaway home or not exist at all.
+  args.push(`--env=PATH=${[...cliPath, runtimePath(options.path)].join(':')}`, '--env=TMPDIR=/tmp', `--env=PLAYWRIGHT_BROWSERS_PATH=${process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0]}`);
   if (androidSdk) args.push(`--env=ANDROID_HOME=${androidSdk}`, `--env=ANDROID_SDK_ROOT=${androidSdk}`);
   // Whitelisted, not bound: firejail shows these only where its whitelist
   // reaches (home, /run/user, /srv, /opt, /var, ...). Never put one under

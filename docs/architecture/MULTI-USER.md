@@ -954,12 +954,13 @@ Profile (bubblewrap, the preferred backend):
 - `--remount-ro /` keeps synthetic, unmounted parent directories read-only so
   writes cannot appear successful and then disappear on sandbox teardown.
 - Per-spawn `--bind <fresh-tmp> /tmp` for transient writes
-  (cleaned up by `cleanup()`).
+  (cleaned up by `cleanup()`), and `TMPDIR=/tmp` so a host `TMPDIR`
+  (not mounted, read-only under `--remount-ro /`) is not inherited.
 - `--proc /proc`, `--dev /dev`, `--chdir <workspace>`.
 
 firejail backend: `--noprofile --private-tmp --private-dev
---noroot --seccomp --whitelist=<workspaceRoot>` plus `--net=none`
-when `allowNetwork` is false.
+--noroot --seccomp --whitelist=<workspaceRoot> --env=TMPDIR=/tmp` plus
+`--net=none` when `allowNetwork` is false.
 
 sandbox-exec backend (macOS): `/usr/bin/sandbox-exec -p <profile>
 /usr/bin/env PATH=... TMPDIR=<scratch> ... <command>`, with a Seatbelt
@@ -1019,6 +1020,40 @@ SHELL_SANDBOX=required
 
 Verify with `npx vitest run src/security/shell-sandbox.test.ts` —
 the `describe.skipIf(!hasBwrap)` blocks should run and pass.
+
+**Hosts that restrict unprivileged user namespaces.** bwrap needs an
+unprivileged user namespace. Ubuntu 23.10 and later (24.04 included, and
+GitHub's `ubuntu-latest` runners) ship
+`kernel.apparmor_restrict_unprivileged_userns=1`, under which bwrap fails
+with `setting up uid map: Permission denied` (or `No permissions to create
+new namespace`) unless the binary has an AppArmor profile that grants
+`userns`. Either install such a profile, e.g.
+`/etc/apparmor.d/bwrap`:
+
+```
+abi <abi/4.0>,
+include <tunables/global>
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+  include if exists <local/bwrap>
+}
+```
+
+then `sudo apparmor_parser -r /etc/apparmor.d/bwrap`; or turn the
+restriction off host-wide with
+`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` (persist it
+in `/etc/sysctl.d/`). The profile is the narrower choice. firejail is setuid
+and is not affected.
+
+**End-to-end check.** `src/security/shell-sandbox.linux.e2e.test.ts` runs
+each installed runner (bwrap, firejail) for real: a plugin package server
+launch with the egress proxy (read-only package directory, writable data
+directory and `/tmp`, no `$HOME` or `~/.ssh`, the proxy only through the
+launcher bridge, no other TCP or DNS) and a shell-tool wrap under
+`required`. CI runs it on Ubuntu with both runners installed
+(`.github/workflows/install-smoke.yml`, with `OCTIPUS_SANDBOX_E2E=required`
+so a runner that cannot start fails instead of being skipped). Run it on a
+host with `npx vitest run --project unit src/security/shell-sandbox.linux.e2e.test.ts`.
 
 ## Phase 3f — Docker per-user isolation (labels + network)
 

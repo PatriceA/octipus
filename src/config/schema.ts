@@ -844,6 +844,10 @@ export const configSchema = z.object({
    * one signed by a key not listed here, at install, upgrade, approval and
    * every start. Rotating a key is a config change: list the new key (beside
    * the old one while packages signed with it are installed), then drop the old.
+   * An entry can expire (`notAfter`) or be revoked (`revoked`, or its key id
+   * in `revokedKeys`): its key then trusts nothing, and a remote install
+   * signed by it is refused. `registries` are https JSON indexes of packages
+   * (docs/PLUGIN-PACKAGES.md#registries).
    * Env: PLUGINS_REQUIRE_SIGNATURE.
    */
   plugins: z.object({
@@ -851,8 +855,26 @@ export const configSchema = z.object({
       name: z.string().min(1).max(100),
       /** Ed25519 public key: PEM (SPKI), or base64 of the raw 32 bytes or of the DER SPKI. */
       publicKey: z.string().min(1).max(2000),
+      /** ISO date (`2027-01-01`) or date-time with a zone after which the key trusts nothing. */
+      notAfter: z.string().regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/, 'an ISO date (YYYY-MM-DD) or date-time with a zone')
+        .refine((v) => {
+          if (Number.isNaN(new Date(v).getTime())) return false;
+          const [y, m, d] = v.slice(0, 10).split('-').map(Number);
+          const day = new Date(Date.UTC(y, m - 1, d));
+          return day.getUTCFullYear() === y && day.getUTCMonth() === m - 1 && day.getUTCDate() === d;
+        }, 'not a real date')
+        .optional(),
+      /** The key was withdrawn: it trusts nothing. */
+      revoked: z.boolean().optional(),
     })).default([]),
+    /** Key ids (`ed25519:<64 hex>`, as `octi plugin keygen` prints) that trust nothing, whether listed above or not. */
+    revokedKeys: z.array(z.string().regex(/^ed25519:[0-9a-f]{64}$/, 'a key id, ed25519:<64 hex>')).default([]),
     requireSignature: z.boolean().default(false),
+    /** Package indexes to browse (https only): `{ packages: [{ name, version, description, url, sha256 }] }`. */
+    registries: z.array(z.object({
+      name: z.string().min(1).max(100),
+      url: z.string().url().max(2000).refine((v) => v.startsWith('https://'), 'a registry is reached over https'),
+    })).default([]),
   }).prefault({}),
   oauth: oauthConfigSchema,
   rateLimit: rateLimitConfigSchema,

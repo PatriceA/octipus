@@ -6,7 +6,7 @@
  * Two links joined by an in-memory socket pair under real sealing keys.
  */
 import { randomBytes } from 'node:crypto';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { LinkRequestError, type LinkSocket, MAX_FRAMES_PER_SECOND, MAX_IN_FLIGHT_REQUESTS, PeerLink, SEND_QUEUE_CAP_BYTES, sealedWireLimit, sendQueueCap, VISITOR_FRAMES_PER_SECOND } from './link';
 import { CLOSE, closeReason } from './protocol';
 import { deriveLinkKeys, generateEphemeral, type HandshakeFields, SealedChannel } from './seal';
@@ -125,25 +125,49 @@ describe('requests in flight', () => {
 });
 
 describe('visitor pacing', () => {
+  // On a fake clock: the pace reads `Date.now()` when it lets a frame go and
+  // the test reads it again when the frame reaches the socket. On a real clock
+  // a millisecond can tick between the two reads (a loaded machine makes that
+  // likely), so a sliding second measured by the test held 41 frames although
+  // the pace's own second held 40. Here the clock only moves when the test
+  // moves it, so both read the same instant and the result does not depend
+  // on the machine's speed.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'setImmediate', 'clearImmediate'] });
+  });
+  afterEach(() => {
+    // Closed while their timers are still the fake ones they were made with.
+    for (const l of links.splice(0)) l.close(CLOSE.normal, 'done');
+    vi.useRealTimers();
+  });
+
   test('a burst over the host\'s frame rate waits in the queue instead of closing the link', async () => {
     expect(VISITOR_FRAMES_PER_SECOND).toBeLessThan(MAX_FRAMES_PER_SECOND);
     const { host, visitor, vs } = pair();
-    // Delivered as sent, in order: arrival is then exactly what the pace
-    // controls (a loaded test machine's setImmediate would add its own bunching).
+    // Delivered as sent, in order: arrival is then exactly what the pace controls.
     const sent: number[] = [];
     vs.send = (data, cb) => { sent.push(Date.now()); host.receive(data); cb?.(); };
     const burst = 2 * MAX_FRAMES_PER_SECOND;
     let settled = 0;
-    const results = await Promise.allSettled(Array.from({ length: burst }, () => visitor.request('ping', {}, { timeoutMs: 5_000 }).finally(() => { settled++; })));
+    const all = Promise.allSettled(Array.from({ length: burst }, () => visitor.request('ping', {}, { timeoutMs: 5_000 }).finally(() => { settled++; })));
+    const start = Date.now();
+    // Three paced seconds carry the burst; the answers follow on immediates.
+    // Well inside every request's 5 s timeout.
+    await vi.advanceTimersByTimeAsync(3_000);
     // Without the pace the host closes the link (4429) at the 61st frame of a second.
     expect(host.closed, 'the host closed the link').toBe(false);
+    // Every request settled within those three seconds, before any timeout.
     expect(settled).toBe(burst);
+    const results = await all;
     // Busy answers past the in-flight cap are fine; a lost or timed-out request is not.
     expect(results.filter((r) => r.status === 'rejected' && (r.reason as LinkRequestError).code !== 'busy')).toEqual([]);
     expect(sent).toHaveLength(burst);
     for (const t of sent) expect(sent.filter((u) => u >= t && u < t + 1000).length).toBeLessThanOrEqual(VISITOR_FRAMES_PER_SECOND);
+    // Exactly the budget per second: 40 at once, 40 a second later, 40 after that.
+    const perSecond = [0, 1, 2].map((s) => sent.filter((u) => u - start >= 1000 * s && u - start < 1000 * (s + 1)).length);
+    expect(perSecond).toEqual([VISITOR_FRAMES_PER_SECOND, VISITOR_FRAMES_PER_SECOND, burst - 2 * VISITOR_FRAMES_PER_SECOND]);
     expect(sent[burst - 1] - sent[0]).toBeGreaterThanOrEqual(1000);
-  }, 15_000);
+  });
 
   test('the host is not paced: its events reach the visitor at once', async () => {
     const { host, visitor } = pair();
@@ -152,9 +176,10 @@ describe('visitor pacing', () => {
     (visitor as any).opts.onEvent = () => { got++; };
     const started = Date.now();
     for (let i = 0; i < 2 * MAX_FRAMES_PER_SECOND; i++) host.sendEvent('m', 'c', { i });
-    await new Promise((r) => setTimeout(r, 200));
+    // Only the socket's own next-tick delivery runs; no time passes.
+    await vi.advanceTimersByTimeAsync(0);
     expect(got).toBe(2 * MAX_FRAMES_PER_SECOND);
-    expect(Date.now() - started).toBeLessThan(1000);
+    expect(Date.now()).toBe(started);
   });
 });
 

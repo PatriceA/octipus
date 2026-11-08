@@ -92,6 +92,37 @@ export interface PluginNetworkStatus {
   detail: string;
 }
 
+/** The signature state of a package's approved content (docs/PLUGIN-PACKAGES.md#signed-packages). */
+export interface PluginSignatureStatus {
+  status: 'valid' | 'unsigned' | 'unknown_key' | 'revoked' | 'expired' | 'invalid' | 'changed';
+  keyId: string | null;
+  /** The publisher named in plugins.trustedPublishers, when the key is listed there. */
+  publisher: string | null;
+  /** A sentence for the operator. */
+  detail: string;
+}
+
+/** A package one of `plugins.registries` lists (`GET /api/plugin-packages/registry`). */
+export interface PluginRegistryEntry {
+  /** The registry's `name` in the config. */
+  registry: string;
+  name: string;
+  version: string;
+  description: string | null;
+  /** The https tarball (.tar.gz). */
+  url: string;
+  /** The sha256 of the tarball, `sha256:<hex>`, checked before it is unpacked. */
+  sha256: string;
+  /** The version installed here, or null. */
+  installedVersion: string | null;
+}
+
+export interface PluginRegistryListing {
+  packages: PluginRegistryEntry[];
+  /** Registries that could not be read, and why; their packages are missing from the list. */
+  errors: Array<{ registry: string; error: string }>;
+}
+
 export interface PluginPackageView {
   name: string;
   version: string;
@@ -125,6 +156,14 @@ export interface PluginPackageView {
    * signature file, or content approved without a signature.
    */
   signedBy: string | null;
+  /**
+   * The signature over `contentHash` now, in words and by state (null before
+   * the first start of a package installed before pinning): `valid`,
+   * `unsigned`, `unknown_key`, `revoked` or `expired` (a key withdrawn in
+   * `plugins.trustedPublishers` / `plugins.revokedKeys`), `invalid`, or
+   * `changed` (not the signature file approved with the content).
+   */
+  signature: PluginSignatureStatus | null;
   installedBy: string | null;
   installedAt: string;
   updatedAt: string;

@@ -104,8 +104,8 @@ describe('signed plugin packages', () => {
     expect((await svc.packageView(NAME)).signedBy).toBe('Acme');
     expect((await auditOps('installed')).at(-1)).toMatchObject({ signedBy: 'Acme', keyId: acme.keyId });
 
-    // An upgrade with no signature is unsigned.
-    const unsigned = await svc.installFromDirectory(await copyOfFixture(undefined, '1.0.1'), admin, { upgrade: true });
+    // An upgrade with no signature is unsigned (and, after a signed version, a change of signer).
+    const unsigned = await svc.installFromDirectory(await copyOfFixture(undefined, '1.0.1'), admin, { upgrade: true, allowSignerChange: true });
     expect([unsigned.version, unsigned.signedBy, unsigned.warnings]).toEqual(['1.0.1', null, []]);
 
     // Signed by a key nobody trusts: installed as unsigned, with a warning.

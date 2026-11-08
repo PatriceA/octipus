@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import type { ToolHandler } from '@/core/agent-base';
-import { isLongTailHandler, orderByGroup, orderForCache, splitRoleTools, toolCacheTier } from './tool-split';
+import { isLongTailHandler, MCP_META_TOOL_NAMES, orderByGroup, orderForCache, splitRoleTools, toolCacheTier } from './tool-split';
 
 const handler = (name: string, toolId?: string): ToolHandler => ({
   name,
@@ -194,5 +194,16 @@ describe('orderForCache', () => {
     expect(toolCacheTier({ name: 'complete_taken_task', description: '', parameters: {}, execute: async () => null } as never, true)).toBe('variable');
     expect(toolCacheTier(handler('distill', 'skill-distill'), true)).toBe('shared');
     expect(toolCacheTier(handler('list_tools', 'tool_discovery'), true)).toBe('shared');
+  });
+
+  test('the MCP meta-tools are shared; direct and plugin MCP tools are not', () => {
+    for (const name of MCP_META_TOOL_NAMES) expect(toolCacheTier(handler(name, 'mcp'), true)).toBe('shared');
+    expect(toolCacheTier(handler('mcp__crm__lookup', 'mcp'), true)).toBe('variable');
+    expect(toolCacheTier(handler('mcp__plugin_weather__forecast', 'mcp'), false)).toBe('variable');
+    // A meta-tool's name under another group is not an MCP meta-tool.
+    expect(toolCacheTier(handler('mcp_call_tool', 'connector'), true)).toBe('variable');
+    const { tools, sharedCount } = orderForCache([handler('mcp__crm__lookup', 'mcp'), handler('mcp_list_tools', 'mcp'), handler('read_file', 'filesystem')], { lazy: true });
+    expect(tools.map((h) => h.name)).toEqual(['mcp_list_tools', 'read_file', 'mcp__crm__lookup']);
+    expect(sharedCount).toBe(2);
   });
 });
