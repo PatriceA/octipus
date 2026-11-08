@@ -33,21 +33,65 @@ export const REPEATED_CONTEXT_NOTE =
  * already carries, plus `REPEATED_CONTEXT_NOTE` when any went.
  */
 export function omitRepeatedContext(promptContext: string, blocks: readonly unknown[] | undefined, history: readonly AgentMessage[]): string {
-  if (!promptContext || !blocks?.length) return promptContext;
-  const earlier = history
-    .filter((m) => m.role === 'user' && typeof m.content === 'string')
-    .map((m) => m.content as string);
-  if (!earlier.length) return promptContext;
+  return withoutRepeatedContext(promptContext, blocks, history).text;
+}
+
+/** `omitRepeatedContext`, also naming the blocks it left out. */
+export function withoutRepeatedContext(
+  promptContext: string,
+  blocks: readonly unknown[] | undefined,
+  history: readonly AgentMessage[],
+): { text: string; omitted: string[] } {
+  const unchanged = { text: promptContext, omitted: [] };
+  if (!promptContext || !blocks?.length) return unchanged;
+  const earlier = userContents(history);
+  if (!earlier.length) return unchanged;
   let out = promptContext;
-  let omitted = 0;
+  const omitted: string[] = [];
   for (const raw of blocks) {
     if (typeof raw !== 'string') continue;
     const block = raw.trim();
     if (block.length < MIN_BLOCK_CHARS || !out.includes(block)) continue;
     if (!earlier.some((content) => content.includes(block))) continue;
     out = out.replace(block, '');
-    omitted++;
+    omitted.push(block);
   }
-  if (!omitted) return promptContext;
-  return `${out.replace(/\n{3,}/g, '\n\n').trim()}\n\n${REPEATED_CONTEXT_NOTE}`;
+  if (!omitted.length) return unchanged;
+  return { text: `${out.replace(/\n{3,}/g, '\n\n').trim()}\n\n${REPEATED_CONTEXT_NOTE}`, omitted };
+}
+
+/** This turn's user message as sent, and the blocks left out of it. */
+export interface OmittedContext {
+  content: string;
+  omitted: string[];
+}
+
+/**
+ * After an in-turn compaction: put back into this turn's user message every
+ * omitted block that no other user message in `history` carries any more. The
+ * decision to omit was made against the history at the start of the turn; a
+ * compaction that summarizes the earlier copy would otherwise leave the note
+ * pointing at nothing until the next turn. The compaction has already
+ * rewritten the prefix, so changing this message costs no cache.
+ *
+ * The message is found by its content (a compaction may copy messages), and
+ * rewritten in place. Returns the state to keep for the next compaction, or
+ * undefined once nothing is left out (or the message itself was compacted).
+ */
+export function restoreOmittedContext(history: AgentMessage[], turn: OmittedContext): OmittedContext | undefined {
+  const message = history.find((m) => m.role === 'user' && m.content === turn.content);
+  if (!message) return undefined;
+  const others = userContents(history.filter((m) => m !== message));
+  const missing = turn.omitted.filter((block) => !others.some((content) => content.includes(block)));
+  if (!missing.length) return turn;
+  const still = turn.omitted.filter((block) => !missing.includes(block));
+  const replacement = [missing.join('\n\n'), still.length ? REPEATED_CONTEXT_NOTE : ''].filter(Boolean).join('\n\n');
+  message.content = turn.content.replace(REPEATED_CONTEXT_NOTE, replacement);
+  return still.length ? { content: message.content, omitted: still } : undefined;
+}
+
+function userContents(history: readonly AgentMessage[]): string[] {
+  return history
+    .filter((m) => m.role === 'user' && typeof m.content === 'string')
+    .map((m) => m.content as string);
 }

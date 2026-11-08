@@ -39,19 +39,23 @@ export function isLongTailHandler(handler: ToolHandler, coreToolIds: string[]): 
 }
 
 /**
- * `handlers` with the groups named in `groupOrder` moved to the end, in that
- * order; everything else keeps its place ahead of them. Stable within a group.
- * See `ToolAdvertisement.groupOrder`.
+ * `handlers` with the groups named in `groupOrder` first, in that order, and
+ * everything else after them in its original order. Stable within a group.
+ *
+ * Groups first because what follows them varies between turns on its own: MCP
+ * servers reconnect or change what they expose, the inline-UI tool follows the
+ * client, some meta-tools exist only on some turns. In front, any of those
+ * would shift every group tool behind it. See `ToolAdvertisement.groupOrder`.
  */
 export function orderByGroup(handlers: ToolHandler[], groupOrder: readonly string[]): ToolHandler[] {
   const rank = new Map(groupOrder.map((id, i) => [id, i]));
-  const head = handlers.filter((h) => h.toolId === undefined || !rank.has(h.toolId));
-  const tail = handlers
+  const grouped = handlers
     .map((h, i) => ({ h, i, r: h.toolId === undefined ? undefined : rank.get(h.toolId) }))
     .filter((x): x is { h: ToolHandler; i: number; r: number } => x.r !== undefined)
     .sort((a, b) => a.r - b.r || a.i - b.i)
     .map((x) => x.h);
-  return [...head, ...tail];
+  const rest = handlers.filter((h) => h.toolId === undefined || !rank.has(h.toolId));
+  return [...grouped, ...rest];
 }
 
 export interface SplitTools {

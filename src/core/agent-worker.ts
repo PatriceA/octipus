@@ -1,4 +1,4 @@
-import { omitRepeatedContext, REPEATABLE_CONTEXT_KEY } from './agent/repeated-context';
+import { type OmittedContext, REPEATABLE_CONTEXT_KEY, restoreOmittedContext, withoutRepeatedContext } from './agent/repeated-context';
 import { orderByGroup } from './agent/tool-split';
 import { companionCacheScope } from '@/core/companion/history';
 import { createHash } from 'node:crypto';
@@ -644,9 +644,10 @@ export class AgentWorker extends BaseAgentWorker {
   async addUserMessage(content: string): Promise<void> {
     // A retrieved block an earlier turn still in view carries is not sent again
     // (`repeated-context.ts`); the stored row records what was actually sent.
-    const promptContext = omitRepeatedContext(this.pendingPromptContext.trim(), this.context.metadata?.[REPEATABLE_CONTEXT_KEY] as unknown[] | undefined, this.messages);
+    const { text: promptContext, omitted } = withoutRepeatedContext(this.pendingPromptContext.trim(), this.context.metadata?.[REPEATABLE_CONTEXT_KEY] as unknown[] | undefined, this.messages);
     this.pendingPromptContext = '';
     const message: AgentMessage = { role: 'user', content: [promptContext, content].filter(Boolean).join('\n\n'), timestamp: new Date() };
+    this.omittedContext = omitted.length ? { content: message.content as string, omitted } : undefined;
     this.messages.push(message);
 
     // Only persist for the root agent — and never in a room, where the
@@ -1312,6 +1313,7 @@ export class AgentWorker extends BaseAgentWorker {
           // A summary replaces the start of the history: no signed reasoning
           // after it matches its conversation any more.
           this.messages = this.withoutStaleReasoning(proactiveCompacted);
+          this.restoreOmittedContext();
           agentLogger.info({
             agentId: this.context.id, iteration: this.iteration,
             messagesRemoved: proactiveRemoved, totalTokens: this.totalTokensUsed,
@@ -1332,6 +1334,7 @@ export class AgentWorker extends BaseAgentWorker {
 
       if (removed > 0) {
         this.messages = this.withoutStaleReasoning(compactedMessages);
+        this.restoreOmittedContext();
         agentLogger.info({
           agentId: this.context.id, sessionId: this.context.sessionId,
           iteration: this.iteration, elapsedMs: this.elapsed(),
@@ -1418,6 +1421,7 @@ export class AgentWorker extends BaseAgentWorker {
           });
           // Both rewrites above edit earlier turns: no signed reasoning stays.
           this.messages = this.withoutStaleReasoning(compacted);
+          this.restoreOmittedContext();
           continue;
         }
 
@@ -2162,6 +2166,14 @@ export class AgentWorker extends BaseAgentWorker {
    * with its thinking block: removing it is the 400. Turn-boundary edits
    * (snapshot, compaction) strip regardless; no round is in flight there.
    */
+  /** Retrieved blocks this turn's message left out because an earlier turn carried them (`repeated-context.ts`). */
+  private omittedContext: OmittedContext | undefined;
+
+  /** After a compaction: put back any omitted block whose earlier copy it summarized away. */
+  private restoreOmittedContext(): void {
+    if (this.omittedContext) this.omittedContext = restoreOmittedContext(this.messages, this.omittedContext);
+  }
+
   private withoutStaleReasoning(messages: AgentMessage[], from?: number): AgentMessage[] {
     return this.manualThinking ? messages : stripSignedReasoning(messages, from);
   }

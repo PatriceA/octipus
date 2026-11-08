@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { AgentMessage } from '@/core/types';
-import { omitRepeatedContext, REPEATED_CONTEXT_NOTE } from './repeated-context';
+import { omitRepeatedContext, REPEATED_CONTEXT_NOTE, restoreOmittedContext, withoutRepeatedContext } from './repeated-context';
 
 const memory = '\n\nKnown about the user (long-term memory):\n- (preference) Prefers TypeScript over JavaScript for new services.\n- (fact) Works on the billing export pipeline.';
 const note = '\n\n<context-note title="House style">\nA note the user asked to show you on every turn: their own context and preferences.\nUse British spelling. Keep answers short.\n</context-note>\n';
@@ -50,5 +50,49 @@ describe('retrieved blocks already in view are not sent again', () => {
     const history = [user(turn(date, '\n\nshort block'))];
     const ctx = turn(date, '\n\nshort block');
     expect(omitRepeatedContext(ctx, ['\n\nshort block', 42], history)).toBe(ctx);
+  });
+});
+
+describe('an in-turn compaction that summarizes the earlier copy', () => {
+  const earlier = user(`${turn(date, memory, note)}\n\nfirst question`);
+  const start = () => {
+    const sent = withoutRepeatedContext(turn('\n\nCURRENT DATE & TIME: later', memory, note), [memory, note], [earlier]);
+    const message = user(`${sent.text}\n\nsecond question`);
+    return { message, state: { content: message.content as string, omitted: sent.omitted } };
+  };
+
+  test('puts the blocks back into this turn\'s message', () => {
+    const { message, state } = start();
+    const summary: AgentMessage = { role: 'system', content: '[Context Summary] the user asked a first question', timestamp: new Date() };
+    // A compaction may copy the message: it is found by content, not identity.
+    const history = [summary, { ...message }];
+    expect(restoreOmittedContext(history, state)).toBeUndefined();
+    expect(history[1].content).toContain('Prefers TypeScript');
+    expect(history[1].content).toContain('British spelling');
+    expect(history[1].content).not.toContain(REPEATED_CONTEXT_NOTE);
+    expect(history[1].content).toContain('second question');
+  });
+
+  test('leaves the message alone while the earlier copy is still in view', () => {
+    const { message, state } = start();
+    const history = [earlier, message];
+    expect(restoreOmittedContext(history, state)).toBe(state);
+    expect(message.content).toContain(REPEATED_CONTEXT_NOTE);
+  });
+
+  test('restores only what went, and keeps the note for what is still above', () => {
+    const { message, state } = start();
+    const keepsNote = user(`${turn(date, note)}\n\nolder question`);
+    const history = [keepsNote, message];
+    const next = restoreOmittedContext(history, state);
+    expect(message.content).toContain('Prefers TypeScript');
+    expect(message.content).not.toContain('British spelling');
+    expect(message.content).toContain(REPEATED_CONTEXT_NOTE);
+    expect(next?.omitted).toEqual([note.trim()]);
+  });
+
+  test('a message that was itself compacted away ends the tracking', () => {
+    const { state } = start();
+    expect(restoreOmittedContext([user('summary only')], state)).toBeUndefined();
   });
 });

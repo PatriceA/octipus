@@ -125,16 +125,22 @@ describe('discoverOnly', () => {
 });
 
 describe('orderByGroup', () => {
-  test('ordered groups go last, in that order; everything else keeps its place ahead of them', () => {
+  test('ordered groups go first, in that order; everything else follows in its place', () => {
     const names = orderByGroup(HANDLERS, ['filesystem', 'websearch']).map((h) => h.name);
-    expect(names).toEqual(['kb_search', 'save_artifact', 'mcp_list_tools', 'spawn_child', 'read_file', 'write_file', 'web_search']);
+    expect(names).toEqual(['read_file', 'write_file', 'web_search', 'kb_search', 'save_artifact', 'mcp_list_tools', 'spawn_child']);
   });
 
-  test('a group appended to the order leaves every earlier tool where it was', () => {
+  test('a group used later follows the earlier groups, which keep their bytes', () => {
     // Before: the conversation has not reached for web search, so it is not advertised.
     const before = orderByGroup(HANDLERS.filter((h) => h.toolId !== 'websearch'), ['filesystem']).map((h) => h.name);
     const after = orderByGroup(HANDLERS, ['filesystem', 'websearch']).map((h) => h.name);
-    expect(after.slice(0, -1)).toEqual(before);
-    expect(after.at(-1)).toBe('web_search');
+    expect(after.slice(0, 2)).toEqual(before.slice(0, 2));
+    expect(after[2]).toBe('web_search');
+  });
+
+  test('a tool outside the groups changing does not move any group tool', () => {
+    const withMcp = orderByGroup(HANDLERS, ['filesystem', 'websearch']).map((h) => h.name);
+    const withoutMcp = orderByGroup(HANDLERS.filter((h) => h.toolId !== 'mcp'), ['filesystem', 'websearch']).map((h) => h.name);
+    expect(withoutMcp.slice(0, 3)).toEqual(withMcp.slice(0, 3));
   });
 });

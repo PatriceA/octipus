@@ -58,6 +58,21 @@ describe('partitioning above the per-key rate', () => {
     expect(p.key({ ...base, sessionId: 's7' })).toBe(p.key({ ...base, sessionId: 's7' }));
   });
 
+  test('the first split keeps bucket 0 on the unpartitioned key: about half the sessions do not move', () => {
+    const c = clock();
+    const p = new CacheKeyPartitioner(c.now);
+    const single = p.key({ ...base, sessionId: 's0' });
+    for (let i = 0; i < REQUESTS_PER_MINUTE_PER_KEY * 2 - 1; i++) p.key({ ...base, sessionId: sessions[i] });
+    // Measuring counts too: at one call every 3 s (20 a minute) the family
+    // stays at exactly two partitions while every session is asked.
+    c.advance(61_000);
+    const keys = sessions.map((s) => { c.advance(3000); return p.key({ ...base, sessionId: s }); });
+    expect(new Set(keys).size).toBe(2);
+    const unmoved = keys.filter((k) => k === single).length;
+    expect(unmoved).toBeGreaterThan(sessions.length * 0.3);
+    expect(unmoved).toBeLessThan(sessions.length * 0.7);
+  });
+
   test('a quiet minute does not reshuffle a busy family; a long quiet does', () => {
     const c = clock();
     const p = new CacheKeyPartitioner(c.now);

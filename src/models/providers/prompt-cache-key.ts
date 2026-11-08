@@ -76,20 +76,24 @@ export class CacheKeyPartitioner {
     if (!inputs.sessionId) return undefined;
     const family = digest(`${inputs.model}\n${scopeKind(inputs.cacheScope)}\n${toolSignature(inputs.tools)}`).slice(0, 24);
     const partitions = this.record(family);
-    if (partitions === 1) return `octi-${family}`;
-    const bucket = Number.parseInt(digest(`${inputs.userId ?? ''}:${inputs.sessionId}`).slice(0, 8), 16) % partitions;
-    return `octi-${family}-${bucket}`;
+    const bucket = partitions === 1 ? 0 : Number.parseInt(digest(`${inputs.userId ?? ''}:${inputs.sessionId}`).slice(0, 8), 16) % partitions;
+    // Bucket 0 keeps the unpartitioned key, so the first split (1 → 2) moves
+    // half the sessions rather than all of them.
+    return bucket === 0 ? `octi-${family}` : `octi-${family}-${bucket}`;
   }
 
   /** How many partitions the family has after this request. */
   private record(family: string): number {
     const now = this.now();
     let state = this.families.get(family);
-    if (!state) {
+    // Re-inserted on every use, so the Map's order is least recently used
+    // first and eviction drops an idle family, not the busiest old one.
+    if (state) this.families.delete(family);
+    else {
       if (this.families.size >= MAX_FAMILIES) this.dropIdle(now);
       state = { hits: [], partitions: 1, changedAt: now };
-      this.families.set(family, state);
     }
+    this.families.set(family, state);
     state.hits.push(now);
     while (state.hits.length && state.hits[0] <= now - WINDOW_MS) state.hits.shift();
     const wanted = Math.min(MAX_PARTITIONS, nextPowerOfTwo(Math.ceil(state.hits.length / REQUESTS_PER_MINUTE_PER_KEY)));
@@ -108,7 +112,7 @@ export class CacheKeyPartitioner {
       const last = state.hits[state.hits.length - 1] ?? 0;
       if (now - last > SHRINK_HOLD_MS) this.families.delete(family);
     }
-    // Still full: every family is busy. Drop the oldest; it re-forms at one partition.
+    // Still full: every family is busy. Drop the least recently used; it re-forms at one partition.
     if (this.families.size >= MAX_FAMILIES) this.families.delete(this.families.keys().next().value as string);
   }
 }

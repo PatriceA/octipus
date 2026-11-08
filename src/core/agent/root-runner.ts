@@ -552,8 +552,9 @@ export async function runRootAgent(
         // it reported tools the model could not see, and over-counted by one
         // for every discoverOnly handler.
         turnTools = [...lazyCore, selfReport(lazyCore.filter((t) => !isLongTailHandler(t, lazyCoreToolIds)))];
-        // The sticky groups go last, in the order the conversation first used
-        // them: a group added mid-conversation is appended, not inserted.
+        // The sticky groups go first, in the order the conversation first used
+        // them: a group added mid-conversation follows the earlier groups
+        // instead of being inserted between them.
         toolAdvertisement = { mode: 'lazy', coreToolIds: lazyCoreToolIds, groupOrder: rootCoreToolIds };
         rootAllowedToolIds.add('tool_discovery');
         coreLogger.info(

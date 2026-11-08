@@ -114,8 +114,8 @@ export function selectCoreToolIds(message: string, coreToolIds: readonly string[
  *
  * Always a subset of the role's list. The order is first-advertised, not the
  * role's: the root advertises its groups in this order (`groupOrder`), so a
- * group a conversation reaches for later is APPENDED to the tool list and the
- * tools before it stay a reusable cached prefix. Inserted in role order, it
+ * group a conversation reaches for later comes after every earlier group and
+ * the groups before it stay a reusable cached prefix. Inserted in role order, it
  * shifted every later tool and the prefix broke at the insertion point.
  */
 export function stickyCoreToolIds(

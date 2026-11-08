@@ -532,7 +532,7 @@ async function summarize(
 
     const budget = summaryBudgetTokens(removedMessages);
     const fromContinuation = options?.continuation
-      ? await summarizeAsContinuation(options.continuation, summaryModel, budget, fileOps, options)
+      ? await summarizeAsContinuation(options.continuation, summaryModel, budget, fileOps, options, keptAfter(options.continuation.messages, removedMessages))
       : undefined;
     if (fromContinuation) return summaryResult(fromContinuation, removedMessages.length, fileOps, options);
 
@@ -604,6 +604,12 @@ function summaryResult(
   return options ? { message, summaryText: text, fileOps } : message;
 }
 
+/** How many non-system messages of `messages` survive compaction (are not in `removed`). */
+function keptAfter(messages: AgentMessage[], removed: AgentMessage[]): number {
+  const gone = new Set(removed);
+  return messages.filter((m) => m.role !== 'system' && !gone.has(m)).length;
+}
+
 /** Bounds of the summary's output budget (`summaryBudgetTokens`). */
 export const SUMMARY_MIN_TOKENS = 1_024;
 export const SUMMARY_MAX_TOKENS = 6_000;
@@ -629,9 +635,16 @@ async function summarizeAsContinuation(
   budget: number,
   fileOps: { read: string[]; written: string[]; edited: string[] },
   options: CreateLLMSummaryOptions,
+  kept: number,
 ): Promise<string | undefined> {
+  // The budget is sized to what is replaced, so say where that ends: the
+  // most recent messages stay verbatim after the summary, and re-describing
+  // them spends the budget twice.
+  const scope = kept > 0
+    ? `of this conversation up to, but not including, the last ${kept} message${kept === 1 ? '' : 's'}; the summary replaces the earlier messages and those last ${kept} stay verbatim after it, so mention them only as far as continuity needs`
+    : 'of this whole conversation so far; it replaces the earlier messages';
   const instruction = [
-    'Pause the task. Write a checkpoint summary of this whole conversation so far; it will replace the earlier messages, and work resumes from it. Do not call tools and do not continue the task in this reply.',
+    `Pause the task. Write a checkpoint summary ${scope}. Work resumes from it. Do not call tools and do not continue the task in this reply.`,
     SUMMARY_STRUCTURE,
     `Cumulative file activity: read ${fileOps.read.join(', ') || 'none'}; written ${fileOps.written.join(', ') || 'none'}; edited ${fileOps.edited.join(', ') || 'none'}.`,
     options.userInstructions?.trim() ? `User instructions for this summary: ${options.userInstructions.trim()}` : '',

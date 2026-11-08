@@ -92,10 +92,6 @@ export interface BuildSummarizationPromptOptions {
 }
 
 /**
- * Build the summarization prompt. Supports iterative chaining (carries
- * the previous summary forward) and user-supplied instructions.
- */
-/**
  * The checkpoint's sections. A narrative "under 500 words" lost exactly what a
  * resumed agent needs — exact paths, commands, errors, the user's own
  * constraints — so the summary is structured, and the user's requests are kept
@@ -116,6 +112,10 @@ export function summaryLengthGuidance(budgetTokens?: number): string {
   return `Be complete but dense: at most about ${words} words. Write facts, not a conversation.`;
 }
 
+/**
+ * Build the summarization prompt. Supports iterative chaining (carries
+ * the previous summary forward) and user-supplied instructions.
+ */
 export function buildSummarizationPrompt(
   serialized: string,
   fileOps: CompactionResult['fileOperations'],
