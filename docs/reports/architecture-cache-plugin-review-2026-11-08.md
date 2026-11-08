@@ -460,7 +460,8 @@ Two tiers, with one manifest that names its tier:
   - `docs/PLUGINS.md:88`: hot reload (P1).
   - README: the 12,357-token standing-prompt figure (C1).
   - `docs/AGENT-ARCHITECTURE.md`: steering "as a system-level message" (it is
-    an appended user turn tagged `SYSTEM:`).
+    appended as a `user` turn before the next call:
+    `gateway/message-handler.ts:117`, `agent-worker.ts:2616`).
 
 ## 9. Comparison with DeepSeek Harness, Hermes Agent, Odysseus and Pi
 
