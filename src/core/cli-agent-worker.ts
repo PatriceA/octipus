@@ -1,3 +1,4 @@
+import { takeWarmSignal } from './swarm/leader-first';
 import { runPermissionProfile } from '@/security/pipeline-permissions';
 import { personalBuildCaches } from '@/security/build-caches';
 import { redactedCommand } from '@/utils/command-log';
@@ -644,6 +645,9 @@ When a task matches one of these skills, load it with get_skill before starting 
   }
 
   async run(userMessage?: string): Promise<string> {
+    // A vendor CLI shares no provider prefix with its siblings: a fan-out it
+    // leads lets them start now (`leader-first.ts`).
+    takeWarmSignal()?.();
     this.activeRuns++;
     try {
       return await (isRootAgent(this.context)

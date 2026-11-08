@@ -1,5 +1,6 @@
 import { type OmittedContext, REPEATABLE_CONTEXT_KEY, restoreOmittedContext, withoutRepeatedContext } from './agent/repeated-context';
 import { orderByGroup } from './agent/tool-split';
+import { takeWarmSignal } from './swarm/leader-first';
 import { companionCacheScope } from '@/core/companion/history';
 import { createHash } from 'node:crypto';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
@@ -18,7 +19,7 @@ import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { type CompletionOptions, type CompletionResult, getLiteLLMClient } from '@/models/litellm-client';
 import { billableTokens } from '@/models/billable-tokens';
-import { collectStream } from '@/models/stream-collect';
+import { collectStream, type StreamProgress } from '@/models/stream-collect';
 import { getModelRegistry } from '@/models/model-registry';
 import { modelCandidates } from './agent/model-selector';
 import { localOnlyLevel, localRowInstead, ProtectionRoutingError, PSEUDONYMIZED } from './protection/routing';
@@ -693,7 +694,7 @@ export class AgentWorker extends BaseAgentWorker {
         await this.loadHistory();
         this.messages = [...system, ...this.messages];
         return this.runInternal(userMessage);
-      }) : this.runInternal(userMessage)));
+      }) : this.runChild(userMessage)));
     } finally {
       this.activeRuns--;
       this.permissionWaitCleanup?.();
@@ -701,6 +702,12 @@ export class AgentWorker extends BaseAgentWorker {
       this.parentSignalCleanup?.();
       this.parentSignalCleanup = null;
     }
+  }
+
+  /** A child's run: the first one started inside a fan-out leader's scope is that leader (`leader-first.ts`). */
+  private runChild(userMessage?: string): Promise<string> {
+    this.prefixWarm ??= takeWarmSignal();
+    return this.runInternal(userMessage);
   }
 
   private async runInternal(userMessage?: string): Promise<string> {
@@ -2651,20 +2658,44 @@ export class AgentWorker extends BaseAgentWorker {
    * like any completion error.
    */
   private async completeViaTarget(target: CompletionTarget, providerName: string, opts: CompletionOptions): Promise<CompletionResult> {
-    const streaming = isRootAgent(this.context) && getConfig().agent?.streaming !== false && typeof target.stream === 'function';
-    if (!streaming) return target.complete(opts);
-    const progress = { chunks: 0 };
+    const root = isRootAgent(this.context);
+    // A fan-out leader streams its first call too, silently: its first chunk
+    // is when the provider holds the prefix its waiting siblings will read.
+    const leader = !root && this.prefixWarm !== undefined;
+    const streaming = (root && getConfig().agent?.streaming !== false || leader) && typeof target.stream === 'function';
+    if (!streaming) {
+      try {
+        return await target.complete(opts);
+      } finally {
+        this.firePrefixWarm();
+      }
+    }
+    const progress: StreamProgress = { chunks: 0, ...(leader ? { onFirst: () => this.firePrefixWarm() } : {}) };
     try {
       return await collectStream(
-        target.stream(opts), opts, providerName,
-        (delta) => this.emit('thought', { type: 'text_delta', delta, iteration: this.iteration }),
+        target.stream!(opts), opts, providerName,
+        root ? (delta) => this.emit('thought', { type: 'text_delta', delta, iteration: this.iteration }) : undefined,
         progress,
       );
     } catch (err) {
       if (progress.chunks > 0 || this.abortController.signal.aborted) throw err;
       agentLogger.warn({ err, model: opts.model, provider: providerName }, 'Stream failed before its first chunk — completing without streaming');
       return target.complete(opts);
+    } finally {
+      this.firePrefixWarm();
     }
+  }
+
+  /**
+   * Set when this worker is the leader of a fan-out (`leader-first.ts`): fired
+   * once, on its first chunk or first completion, to start its siblings.
+   */
+  private prefixWarm: (() => void) | undefined;
+
+  private firePrefixWarm(): void {
+    const fire = this.prefixWarm;
+    this.prefixWarm = undefined;
+    fire?.();
   }
 
   /**

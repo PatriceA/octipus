@@ -1,4 +1,5 @@
 import { formatAttemptHistory } from './attempt-history';
+import { leaderFirst, prefixFamilyKey } from './leader-first';
 import { randomUUID } from 'crypto';
 import { classifyMessage } from '@/core/agent/classifier';
 import { ROLE_CONFIGS } from '@/core/agent/roles';
@@ -401,7 +402,10 @@ export function createSpawnChildTool(
       const onWorkerStarted = (agentId: string) => { pending.agentId = agentId; };
       const promise = (async () => {
         try {
-          return await spawner.spawnChild(parent, params, context, { ...internal, onWorkerStarted });
+          // Siblings of one role and lane start after the first has written the
+          // shared prefix to the provider cache (leader-first.ts).
+          return await leaderFirst(prefixFamilyKey(parent.id, params.role, params.topic),
+            () => spawner.spawnChild(parent, params, context, { ...internal, onWorkerStarted }));
         } catch (err) {
           coreLogger.error(
             { err, parentNodeId: parent.id, topic: params.topic, subtopic: params.subtopic },
@@ -426,7 +430,8 @@ export function createSpawnChildTool(
     // ── Await fallback (no detach budget / no hooks) ─────────────────
     try {
       params.mode = 'await';
-      const result = await spawner.spawnChild(parent, params, context, internal);
+      const result = await leaderFirst(prefixFamilyKey(parent.id, params.role, params.topic),
+        () => spawner.spawnChild(parent, params, context, internal));
       return formatChildResult(result);
     } catch (err) {
       coreLogger.error(
