@@ -155,6 +155,8 @@ const SPACE_ACTING = [
   'DELETE /api/spaces/:id/memory/:entryId',
   'GET /api/sessions/:id/learning', 'POST /api/sessions/:id/learning', 'POST /api/sessions/:id/monitors/events',
   'GET /api/sessions/:id/monitors', 'POST /api/sessions/:id/monitors/:monitorId/control', 'GET /api/sessions', 'GET /api/sessions/:id',
+  // Context inspector: the session owner only (canActInSession settings), never a room member.
+  'GET /api/sessions/:id/context',
   'GET /api/sessions/:id/plan', 'POST /api/sessions/:id/plan/feedback', 'POST /api/sessions', 'PATCH /api/sessions/:id',
   'DELETE /api/sessions/:id', 'GET /api/sessions/:id/messages', 'POST /api/sessions/:id/attachments', 'GET /api/sessions/:id/files',
   'PUT /api/sessions/:id/files', 'GET /api/sessions/:id/changes', 'GET /api/sessions/:id/changes/diff', 'POST /api/sessions/:id/complete',
