@@ -18,10 +18,12 @@ const HELP = `octi plugin — plugin tooling
 
 Usage:
   octi plugin validate <dir>    Validate a plugin directory against the contract
-  octi plugin convert <legacy-dir> [--out <dir>] [--effect <tool>=<read|write|external>]... [--network <host>]...
+  octi plugin convert <legacy-dir> [--out <dir>] [--effect <tool>=<read|write|external>]... [--network <host>]... [--check-handlers]
                                 Convert a legacy plugin (plugin.json) into a plugin
                                 package (octipus-plugin.json + MCP server). Every tool
                                 is "external" (always ask) unless --effect lowers it.
+                                --check-handlers imports the plugin here to check every
+                                tool has a handler: that runs its code with your rights.
 `;
 
 async function runValidate(dir: string): Promise<never> {
@@ -49,7 +51,7 @@ async function runConvert(argv: string[]): Promise<never> {
     process.exit(2);
   }
   try {
-    const result = await convertLegacyPlugin(parsed.dir, { outDir: parsed.out, effects: parsed.effects, network: parsed.network });
+    const result = await convertLegacyPlugin(parsed.dir, { outDir: parsed.out, effects: parsed.effects, network: parsed.network, checkHandlers: parsed.checkHandlers });
     for (const w of result.warnings) process.stdout.write(`  ⚠ ${w}\n`);
     const m = result.manifest;
     process.stdout.write(`\n✅ Wrote the plugin package "${m.name}" ${m.version} to ${result.outDir}\n`);
@@ -66,7 +68,7 @@ async function runConvert(argv: string[]): Promise<never> {
   }
 }
 
-function parseConvertArgs(argv: string[]): { dir: string; out?: string; effects: Record<string, PluginToolEffect>; network: string[] } {
+function parseConvertArgs(argv: string[]): { dir: string; out?: string; effects: Record<string, PluginToolEffect>; network: string[]; checkHandlers: boolean } {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -74,6 +76,7 @@ function parseConvertArgs(argv: string[]): { dir: string; out?: string; effects:
       out: { type: 'string', short: 'o' },
       effect: { type: 'string', multiple: true },
       network: { type: 'string', multiple: true },
+      'check-handlers': { type: 'boolean' },
     },
   });
   if (positionals.length !== 1) throw new Error(positionals.length ? 'expected one <legacy-dir>' : 'missing <legacy-dir>');
@@ -85,7 +88,7 @@ function parseConvertArgs(argv: string[]): { dir: string; out?: string; effects:
     }
     effects[tool] = effect as PluginToolEffect;
   }
-  return { dir: positionals[0], out: values.out, effects, network: values.network ?? [] };
+  return { dir: positionals[0], out: values.out, effects, network: values.network ?? [], checkHandlers: values['check-handlers'] === true };
 }
 
 async function main(): Promise<void> {

@@ -185,7 +185,7 @@ writes, into an output directory that must be missing or empty (default
 | `octipus-plugin.json` | The package manifest: name, version, description and author from `plugin.json`; one entry per tool; `server: node server.mjs`. Checked against the package contract before anything is written. |
 | `server.mjs` | A generated, dependency-free MCP server over stdio. It imports `legacy/<main>`, calls `initialize` with a logger and an empty config as the legacy loader did, lists each tool with its parameters as JSON Schema, and dispatches `tools/call` to `module.tools[name]`. A thrown handler becomes an `isError` result. Logs, the plugin's and its `console`, go out as MCP log messages, since the host reads stderr as a transport error. |
 | `package.json` | `"type": "module"`. |
-| `legacy/` | A copy of the plugin directory (without `.git`). |
+| `legacy/` | A copy of the plugin directory (without `.git` and `node_modules/.bin`). |
 
 The defaults are the most conservative ones the package format allows:
 
@@ -213,9 +213,13 @@ when the plugin:
   user, while a package declares its own secrets, set by an admin and handed
   over as environment variables, so convert those by hand;
 - imports files outside its directory, imports a relative path without a file
-  extension (plain Node needs one), or contains a symbolic link;
+  extension (plain Node needs one), or contains a symbolic link (also under
+  `node_modules`, apart from its `.bin` shims, which are not copied);
+- has more than 500 code files outside `node_modules` (the scan would be
+  partial);
 - has a tool name MCP cannot carry, a parameter type with no JSON Schema
-  equivalent, a declared tool with no handler, or a name the package format
+  equivalent, a declared tool with no handler (with `--check-handlers`), or a
+  name the package format
   refuses (lower-case, `a-z0-9-`; `octipus`, `mcp`, `system`, `plugin` are
   reserved);
 - has an entry that plain Node cannot load (`.tsx`, `.jsx`).
@@ -223,8 +227,14 @@ when the plugin:
 It warns, without refusing, about `capabilities.commands` and `events` (the
 legacy host never read them), `process.env` reads (a package sees only a
 minimal environment plus its settings and secrets), child processes, and
-stdout writes. To check the handlers, it imports the entry module once, which
-runs its top-level code as `octi plugin validate` does, but not `initialize`.
+stdout writes.
+
+Converting runs none of the plugin's code: it reads the sources. Pass
+`--check-handlers` to also import the entry module once and check that every
+declared tool has a handler; that runs its top-level code (not `initialize`)
+in the CLI process, with your environment and no sandbox, so do it only for a
+plugin you have read. Without it, a tool with no handler fails when called.
+Dependencies under `node_modules` are copied but not scanned.
 
 A TypeScript entry runs through Node's built-in type stripping (Node 22.18 or
 newer), so it must use erasable syntax only: no `enum`, `namespace` or

@@ -6,13 +6,13 @@
  * synthetic plugins.
  */
 import { type ChildProcess, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { afterAll, describe, expect, test, vi } from 'vitest';
 import exampleModule from '../../extensions/example-plugin/index';
-import { ConvertError, convertLegacyPlugin, toJsonSchema } from './convert';
+import { ConvertError, convertLegacyPlugin, renderServer, toJsonSchema } from './convert';
 import { parseManifest } from './packages/manifest';
 
 const EXAMPLE = resolve(__dirname, '..', '..', 'extensions', 'example-plugin');
@@ -72,7 +72,7 @@ function writePlugin(manifest: Record<string, unknown>, files: Record<string, st
 
 async function refusal(dir: string, opts: Parameters<typeof convertLegacyPlugin>[1] = {}): Promise<string[]> {
   try {
-    await convertLegacyPlugin(dir, { outDir: join(tmp('octipus-out-'), 'pkg'), ...opts });
+    await convertLegacyPlugin(dir, { outDir: join(tmp('octipus-out-'), 'pkg'), checkHandlers: true, ...opts });
   } catch (err) {
     if (err instanceof ConvertError) return err.problems;
     throw err;
@@ -211,6 +211,55 @@ export default { name: 'needs-host', tools: { t: async () => getVault() } };`,
 
   test('a missing plugin.json', async () => {
     expect(await refusal(tmp('octipus-empty-'))).toEqual([expect.stringMatching(/^no plugin\.json in /)]);
+  });
+});
+
+describe('convertLegacyPlugin: running nothing it has not been asked to', () => {
+  test('the handlers are not imported unless asked: the plugin\'s top-level code does not run', async () => {
+    const marker = join(tmp('octipus-marker-'), 'ran');
+    const dir = writePlugin({ name: 'quiet', tools: [tool('ok')] }, {
+      'index.mjs': `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(marker)}, 'x');\nexport default { name: 'quiet', tools: { ok: async () => 1 } };`,
+    });
+    const result = await convertLegacyPlugin(dir, { outDir: join(tmp('octipus-out-'), 'pkg') });
+    expect(existsSync(marker)).toBe(false);
+    expect(result.warnings.some((w) => w.includes('--check-handlers'))).toBe(true);
+
+    await convertLegacyPlugin(dir, { outDir: join(tmp('octipus-out-'), 'pkg'), checkHandlers: true });
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  test('a link under node_modules is refused; node_modules/.bin shims are left out', async () => {
+    const dir = writePlugin({ name: 'linked', tools: [tool('ok')] }, {
+      'index.mjs': `export default { name: 'linked', tools: { ok: async () => 1 } };`,
+      'node_modules/dep/index.js': 'module.exports = 1;',
+    });
+    mkdirSync(join(dir, 'node_modules', '.bin'));
+    symlinkSync('../dep/index.js', join(dir, 'node_modules', '.bin', 'dep'));
+    const outDir = join(tmp('octipus-out-'), 'pkg');
+    await convertLegacyPlugin(dir, { outDir });
+    expect(existsSync(join(outDir, 'legacy', 'node_modules', 'dep', 'index.js'))).toBe(true);
+    expect(existsSync(join(outDir, 'legacy', 'node_modules', '.bin'))).toBe(false);
+
+    symlinkSync('dep', join(dir, 'node_modules', 'alias'));
+    const problems = await refusal(dir);
+    expect(problems.some((p) => p.includes(join('node_modules', 'alias')) && p.includes('symbolic link'))).toBe(true);
+  });
+
+  test('an entry path with "#" still loads, and a newline cannot leave the header comment', async () => {
+    const dir = writePlugin({ name: 'hashy', tools: [tool('ok')], main: 'lib#1/index.mjs', version: '1.0.0' }, {
+      'lib#1/index.mjs': `export default { name: 'hashy', tools: { ok: async () => 'fine' } };`,
+    });
+    const outDir = join(tmp('octipus-out-'), 'pkg');
+    await convertLegacyPlugin(dir, { outDir });
+    const server = startServer(outDir);
+    await server.request('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '0' } });
+    const call = await server.request('tools/call', { name: 'ok', arguments: { x: 'y' } });
+    expect((call.result as { content: Array<{ text: string }> }).content[0].text).toBe('fine');
+    server.child.stdin?.end();
+    await new Promise((res) => server.child.once('exit', res));
+
+    const header = renderServer({ name: 'n', version: '1', entry: './legacy/a\nprocess.exit(1)//.mjs', tools: [] }).split('\n').slice(0, 4);
+    expect(header.every((line) => line.startsWith('//'))).toBe(true);
   });
 });
 
