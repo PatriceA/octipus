@@ -25,6 +25,7 @@ import {
 } from './custom/anthropic-compat-provider';
 import { claudeToolChoice, dropClaudeSampling } from '../claude-request';
 import { cacheTtlsFor } from './prompt-cache';
+import { withToolSearch } from './tool-search';
 import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from './http-retry';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
 import { normalizeUsage } from './usage';
@@ -252,7 +253,11 @@ export class AnthropicProvider implements ModelProvider {
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
     // Tool choice and sampling are set by `configureAnthropicBody`.
     if (options.tools?.length) {
-      const tools = toAnthropicTools(options.tools);
+      // Native tool search (tool-search.ts): the long tail deferred, so the
+      // tool block is the same bytes for the whole conversation.
+      const tools = options.deferredTools?.length
+        ? withToolSearch(toAnthropicTools(options.tools), new Set(options.deferredTools))
+        : toAnthropicTools(options.tools);
       if (options.cachePolicy !== 'off') markToolsCacheBreakpoint(tools, ttls.prefix);
       body.tools = tools;
     }

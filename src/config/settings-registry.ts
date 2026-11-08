@@ -422,6 +422,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     legacyEnvVars: ['ORCHESTRATOR_LAZY_TOOLS'],
   },
   {
+    key: 'agent.nativeToolSearch',
+    category: 'agent',
+    valueType: 'boolean',
+    defaultValue: true,
+    description:
+      'With lazy tool discovery on a first-party Claude model: send every tool and defer the long tail behind Anthropic\'s tool search, so the tool block stays identical for the whole conversation. Turn off to use the core set plus list_tools/describe_tool there too.',
+    isSecret: false,
+    envVar: 'AGENT_NATIVE_TOOL_SEARCH',
+  },
+  {
     key: 'agent.liteMaxIterations',
     category: 'agent',
     valueType: 'number',

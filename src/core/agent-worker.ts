@@ -1,5 +1,7 @@
 import { type OmittedContext, REPEATABLE_CONTEXT_KEY, restoreOmittedContext, withoutRepeatedContext } from './agent/repeated-context';
-import { orderByGroup } from './agent/tool-split';
+import { orderByGroup, TOOL_DISCOVERY_TOOL_ID } from './agent/tool-split';
+import { CORE_TOOL_FLOOR } from './agent/tool-intent';
+import { supportsNativeToolSearch } from '@/models/providers/tool-search';
 import { takeWarmSignal } from './swarm/leader-first';
 import { FORK_KEY, type ForkSeed } from './swarm/fork';
 import type { CachePacing } from '@/models/providers/prompt-cache';
@@ -230,6 +232,8 @@ export class AgentWorker extends BaseAgentWorker {
    * thinking can't starve the tool call a second time.
    */
   private lengthRetried: boolean = false;
+  /** `pause_turn` resumes this run (server tools); see the loop. */
+  private pauseTurnResumes = 0;
   /** The one repair round of an interactive answer that cannot be shown (spec G3) was used. */
   private inlineUiRepaired = false;
   /** Set when the FINAL turn was cut off by the token limit — see `wasTruncated`. */
@@ -1787,6 +1791,16 @@ export class AgentWorker extends BaseAgentWorker {
         continue;
       }
 
+      // A server tool (Anthropic's tool search) paused the turn: the paused
+      // assistant content is already in the history, and sending it back is
+      // how the API resumes. Bounded, so a provider that keeps pausing cannot
+      // hold the loop.
+      if (completion.finishReason === 'pause_turn' && !completion.toolCalls?.length && this.pauseTurnResumes < 3) {
+        this.pauseTurnResumes++;
+        agentLogger.info({ agentId: this.context.id, iteration: this.iteration }, 'Model paused a server-tool turn; resuming');
+        continue;
+      }
+
       // G5: a truncated ('length') or MALFORMED_FUNCTION_CALL turn that surfaced
       // as prose is a native-call problem, not a prompt problem — retry the
       // model ONCE with more headroom before the text-parse/toolshim fallbacks
@@ -2280,6 +2294,23 @@ export class AgentWorker extends BaseAgentWorker {
   }
 
   /**
+   * The tool names to defer behind Anthropic's server-side tool search, or
+   * undefined when this request does not use it: only on the lazy path, a
+   * first-party Anthropic row, a model with tool search, and the setting on.
+   * Deferred is everything outside a FIXED floor — the core floor groups, the
+   * discovery and self-report tools, and the tool-group-less meta-tools —
+   * never the sticky selection, which would change what is loaded mid-way.
+   */
+  private nativeToolSearchDeferrals(model: { provider?: string | null; modelId: string }): string[] | undefined {
+    const advertisement = this.config.toolAdvertisement;
+    if (advertisement?.mode !== 'lazy' || model.provider !== 'anthropic') return undefined;
+    if (getConfig().agent?.nativeToolSearch === false || !supportsNativeToolSearch(model.modelId)) return undefined;
+    const floor = [...CORE_TOOL_FLOOR, TOOL_DISCOVERY_TOOL_ID, 'self_report', 'inline-ui'];
+    const deferred = Array.from(this.toolExecutor.getTools().values()).filter((tool) => isLongTailHandler(tool, floor)).map((tool) => tool.name);
+    return deferred.length ? deferred : undefined;
+  }
+
+  /**
    * Tool handlers advertised to the model this turn. Lazy mode (set by the
    * spawner) trims long-tail handlers from the advertised schema array; they
    * stay registered and callable by name. `full` (the default) is unchanged.
@@ -2535,7 +2566,11 @@ export class AgentWorker extends BaseAgentWorker {
     const model = (await this.followProtectionLevel(bound)) ?? bound;
 
     const litellmModel = model.modelId;
-    const advertisedTools = this.getAdvertisedToolHandlers();
+    // First-party Claude on the lazy path: every tool, the long tail deferred
+    // behind the API's tool search (providers/tool-search.ts), so the tool
+    // block never changes during the conversation.
+    const deferredTools = this.nativeToolSearchDeferrals(model);
+    const advertisedTools = deferredTools ? Array.from(this.toolExecutor.getTools().values()) : this.getAdvertisedToolHandlers();
     const declarableTools: ChatCompletionTool[] = advertisedTools.map((tool) => ({
       type: 'function' as const,
       function: {
@@ -2638,6 +2673,7 @@ export class AgentWorker extends BaseAgentWorker {
         // `attended`) yields to live turns at the rate limiter.
         ...(this.context.attended === false ? { priority: 'background' as const } : {}),
         tools: sentTools,
+        ...(deferredTools && sentTools?.length ? { deferredTools } : {}),
         // `tool_choice` is part of Claude's message-level cache key: flipping it
         // from auto to none for the final call re-read the whole conversation
         // uncached. A Claude request keeps auto — the reporting reminder in the
