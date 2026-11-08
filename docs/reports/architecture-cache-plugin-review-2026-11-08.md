@@ -282,7 +282,9 @@ or alternating listen and user turns in a space, resets the full prefix. On
 Claude that also discards the thinking bound to it. **Fix:** keep the array
 and deny at the permission layer. The plan directive is already in the
 volatile tier. Children can still be denied write tools through the same
-overlay.
+overlay. *(Found during implementation: the worker and swarm spawners already
+read the session's plan flag and space role and strip their children's set,
+which is built once and never flips, so only the root needs the overlay.)*
 
 **C7. Sticky core growth.** Each newly needed group resets the cache once
 (`tool-intent.ts:100`). This is bounded at six groups, but it is pure loss on
@@ -315,8 +317,10 @@ prompt size, not reuse.
 `think`, and the native branch at `ollama-provider.ts:156` serves only
 `think:false` and JSON mode, so a tool loop never takes it. The
 official compatibility page lists no `keep_alive`, no `num_ctx` and no
-`tool_choice`. The configured `ollama.keepAlive` (`:286`) therefore never
-reaches tool loops. Octipus also plans with the model row's window, e.g.
+`tool_choice`. *(Corrected during implementation: Octipus does attach the
+configured `ollama.keepAlive` to `/v1` requests (`ollama-provider.ts:744`),
+and current Ollama honours it there; it is undocumented, not absent. The
+`num_ctx` half of this finding stands.)* Octipus also plans with the model row's window, e.g.
 40,960 (`agent-manager.ts:305`), while Ollama allocates its default 4,096
 unless the operator sets `OLLAMA_CONTEXT_LENGTH`, so the prompt is truncated
 silently, against the "fail loud" rule. `docs/OLLAMA.md:105` says local prefill
@@ -358,6 +362,10 @@ derive the priority from the `requestType` that callers already set
 (`compaction`, `compaction-map`, …). For local endpoints add a per-endpoint
 gate, as Odysseus does (§9): the foreground cancels in-flight background calls,
 and background work waits for a quiet period after the stream ends.
+*(Found during implementation: agent turns did not pass through the router's
+rate limiter or its request metrics at all, only direct router calls did. Both
+the priority gate and `recordLlmRequest` now sit in the instrumented provider
+wrapper, which every call crosses.)*
 
 ## 6. Prompt generation
 
@@ -597,6 +605,26 @@ Responses and Gemini explicit caches *(known)* by hand.
 Measure each change before and after with `cache_read` / `cache_creation`
 totals per session and time to first token, over a fixed session mix: short
 chats, a long tool loop, a plan-mode toggle and an overnight heartbeat.
+
+### Implementation status (branch `ccr-c3873536-snjite`, PR #467)
+
+| Finding | Status | Where |
+|---|---|---|
+| C1 intent gating for `companion`, `monitor`, `connections` | done | `tool-intent.ts` |
+| C2 compaction as a continuation of the warm prefix, sectioned, sized to what it replaces | done | `utils/context-compaction.ts` |
+| C3 OpenAI key per prefix family, partitioned above ~15 RPM | done (key granularity). The layered install-wide static tier is still open. | `providers/prompt-cache-key.ts` |
+| C4 1h prefix / 5m history on attended turns; tools breakpoint | done | `providers/prompt-cache.ts`, `anthropic-provider.ts` |
+| C5 no `tool_choice` flip on the final call (Claude) | done | `agent-worker.ts` |
+| C6 plan mode and space write-withholding as a call-time refusal on the root | done | `tool-executor.ts`, `root-runner.ts` |
+| C7 new groups appended after earlier ones | done (ordering). Provider-native deferral (`defer_loading`, `allowed_tools`) is still open. | `tool-intent.ts`, `tool-split.ts` |
+| C8 unchanged retrieved blocks not replayed | done | `agent/repeated-context.ts` |
+| C9 order-sensitive prefix signature, `octipus_prompt_cache_breaks_total` | done | `models/cache-break.ts` |
+| C10 native `/api/chat` with pinned `num_ctx`, fail loud on overflow | done | `ollama-provider.ts` |
+| C11 frontier families never lite | done | `prompt-tier.ts` |
+| C12 `prompt_cache_options.ttl` on GPT-5.6+ | done | `provider-options.ts` |
+| C13 background priority, local-runner foreground gate | done | `rate-limiter.ts`, `local-gate.ts` |
+| P1–P3, P5 plugin reload and manifest fixes | done | `plugins/loader.ts`, `api/routes/plugins.ts` |
+| Leader-first fan-out, cache-parity forks, persisted static tier, pi-ai evaluation | open | §9.2 |
 
 ### References
 
