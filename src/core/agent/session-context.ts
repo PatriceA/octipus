@@ -17,6 +17,7 @@ import {
   type SessionContextResponse,
   tokensByCategory,
 } from '@/shared/prompt-composition';
+import { contextLimits } from '@/utils/context-compaction';
 import { getLatestComposition } from './prompt-composition';
 
 /** Turns on the growth chart. */
@@ -91,5 +92,6 @@ export async function readSessionContext(sessionId: string): Promise<SessionCont
     agentId = newest.agentId;
   }
 
-  return { latest, turns, usage: await firstRequestUsage(agentId) };
+  const limits = latest?.contextWindow ? contextLimits(latest.contextWindow) : null;
+  return { latest, turns, usage: await firstRequestUsage(agentId), limits };
 }

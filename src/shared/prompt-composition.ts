@@ -148,6 +148,12 @@ export interface SessionContextResponse {
   }) | null;
   turns: PromptTurnPoint[];
   usage: ProviderInputUsage | null;
+  /**
+   * Where the latest request's window starts losing context: older tool
+   * outputs are cut past `toolTrimTokens`, older history summarised past
+   * `summaryTokens`. Null when the window is not known.
+   */
+  limits?: { toolTrimTokens: number; summaryTokens: number } | null;
 }
 
 /** Tokens per category, in PROMPT_CATEGORIES order, zero-sized categories omitted. */

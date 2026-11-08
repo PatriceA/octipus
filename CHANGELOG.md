@@ -363,6 +363,11 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Agents at a glance.** The sidebar's Mission control item shows runs
+  working now and approvals waiting (`GET /api/agents/pulse`); the chat shows
+  the agents a session spawned in a strip above the conversation, each opening
+  its run; the context inspector's bar marks where older tool output is cut and
+  where history is summarised.
 - **Run detail: why a run exists.** Opening a run shows its provenance chain
   (what started the tree, the hook, the heartbeat check that passed, the
   pipeline or Companion goal, the parent), its run tree, and the prompt its

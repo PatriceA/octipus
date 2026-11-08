@@ -58,7 +58,7 @@ beforeEach(async () => {
 
 test('an unmeasured session has nothing to show, and says so with null rather than zeros', async () => {
   await userRow(randomUUID(), 'a', '2026-11-08T09:00:00Z', { trigger: 'user' });
-  expect(await readSessionContext(sessionId)).toEqual({ latest: null, turns: [], usage: null });
+  expect(await readSessionContext(sessionId)).toEqual({ latest: null, turns: [], usage: null, limits: null });
 });
 
 test('turns come oldest first; after a restart the latest has sizes but no text', async () => {
@@ -75,6 +75,8 @@ test('turns come oldest first; after a restart the latest has sizes but no text'
     [second, 3_000, { role: 100, conversation: 2_900 }],
   ]);
   expect(context.latest).toMatchObject({ messageId: second, textAvailable: false, totals: { tokens: 3_000 } });
+  // A 200k window cuts older tool output at half and summarises from 100k.
+  expect(context.limits).toEqual({ toolTrimTokens: 100_000, summaryTokens: 100_000 });
   // The first request of that turn, the one the estimate was made for.
   expect(context.usage).toMatchObject({ inputTokens: 2900, cachedInputTokens: 2000 });
 });

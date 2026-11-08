@@ -102,6 +102,13 @@ export interface MissionControlResponse {
   upcoming: MissionUpcoming[];
 }
 
+/** `GET /api/agents/pulse`: the sidebar's live and needs-you counts. */
+export interface AgentPulse {
+  live: number;
+  /** Null when approvals could not be read. */
+  pendingApprovals: number | null;
+}
+
 /** One role on the Roster (`GET /api/agents/roster`). */
 export interface RosterRole {
   role: string;
