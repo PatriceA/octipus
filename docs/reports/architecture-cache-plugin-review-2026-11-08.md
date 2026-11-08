@@ -624,7 +624,9 @@ chats, a long tool loop, a plan-mode toggle and an overnight heartbeat.
 | C12 `prompt_cache_options.ttl` on GPT-5.6+ | done | `provider-options.ts` |
 | C13 background priority, local-runner foreground gate | done | `rate-limiter.ts`, `local-gate.ts` |
 | P1–P3, P5 plugin reload and manifest fixes | done | `plugins/loader.ts`, `api/routes/plugins.ts` |
-| Leader-first fan-out, cache-parity forks, persisted static tier, pi-ai evaluation | open | §9.2 |
+| Leader-first fan-out (§9.2 item 5): siblings of one role and lane start after the first one's first streamed chunk, capped at 20 s | done | `swarm/leader-first.ts` |
+| Cache-parity forks (§9.2 item 6): `spawn_child` with `fork: true` continues the parent's conversation on its model and tools; never for an independent child (reviewer, verify lane, maintenance review) | done | `swarm/fork.ts`, `agent-worker.ts` |
+| Persisted static tier and tool bytes, pi-ai evaluation | open | §9.2 items 1, 11 |
 
 ### References
 
