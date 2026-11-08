@@ -363,6 +363,13 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **`octi plugin convert`: legacy plugins become plugin packages.** It wraps a
+  legacy `plugin.json` plugin's handlers in a generated MCP server and writes
+  an `octipus-plugin.json` with every tool `external` until lowered, refusing
+  plugins that need the host (hooks, the vault, host imports). The legacy
+  in-process loader is deprecated and warns once per plugin. See
+  [docs/PLUGINS.md](docs/PLUGINS.md#converting-to-a-plugin-package).
+
 - **Roster: roles as agents.** *Agents → Roster* lists the root agent and every
   specialist role with its lane, tools, heartbeat switch (next check and latest
   decision), assigned to-dos and today's runs. New route:

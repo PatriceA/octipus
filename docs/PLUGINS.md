@@ -1,5 +1,11 @@
 # Plugin System
 
+> **Deprecated.** The in-process plugins on this page are deprecated in favour
+> of [plugin packages](PLUGIN-PACKAGES.md). They still load and behave as
+> before, but the loader logs a one-time warning per plugin naming the
+> converter. Convert one with `octi plugin convert <dir>`; see
+> [Converting to a plugin package](#converting-to-a-plugin-package).
+
 > For connections to other systems (DATEV, banks, Meta…) use a
 > [plugin package](PLUGIN-PACKAGES.md): it runs as its own process with a
 > minimal environment and declared tool effects. The plugins on this page run
@@ -132,6 +138,71 @@ Behaviour to know when writing a hook:
 - A `tool:before` short-circuit (`ctx.shortCircuit = { result }`) answers the call without running the tool, and without its permission check. Rewritten `args` are permission-checked as usual.
 - Extension hooks are registered after the built-in persona hook, so a `before-agent-start` hook sees, and could change, the persona block. Leave `SECURITY_PREAMBLE` alone.
 
+## Converting to a plugin package
+
+```bash
+octi plugin convert extensions/my-plugin --out ./my-plugin-package \
+  --effect lookup=read --network api.example.com
+```
+
+The converter wraps the plugin's handlers rather than rewriting them. It
+writes, into an output directory that must be missing or empty (default
+`./<name>-package`):
+
+| File | What it is |
+|---|---|
+| `octipus-plugin.json` | The package manifest: name, version, description and author from `plugin.json`; one entry per tool; `server: node server.mjs`. Checked against the package contract before anything is written. |
+| `server.mjs` | A generated, dependency-free MCP server over stdio. It imports `legacy/<main>`, calls `initialize` with a logger and an empty config as the legacy loader did, lists each tool with its parameters as JSON Schema, and dispatches `tools/call` to `module.tools[name]`. A thrown handler becomes an `isError` result. Logs, the plugin's and its `console`, go out as MCP log messages, since the host reads stderr as a transport error. |
+| `package.json` | `"type": "module"`. |
+| `legacy/` | A copy of the plugin directory (without `.git`). |
+
+The defaults are the most conservative ones the package format allows:
+
+- **Effects:** every tool is `external` (always ASK, never unattended). Lower
+  a tool with `--effect <tool>=read|write` once you have read its handler.
+- **Network:** `[]`, unless `plugin.json` has a `network` host list or you pass
+  `--network <host>` (repeatable). A plugin whose code uses the network
+  (`fetch`, `http`/`https`/`net`, `WebSocket`, a client package) with no hosts
+  declared is refused.
+- **Protection ceiling:** `maxProtection` 1 when the package declares a host,
+  4 when it declares none, the host's own defaults for those cases, written
+  out explicitly.
+
+Parameters go from the flat legacy map to JSON Schema: each entry becomes a
+property with its `type`, `description` and `default`, and `required: true`
+entries go into `required`.
+
+The converter **refuses**, listing every reason at once and writing nothing,
+when the plugin:
+
+- imports host internals at runtime (`@/…`, or `@octipus/…` other than
+  `import type`), registers a root agent hook (`getAgentHooks`), or reads the
+  vault (`getVault`): a package runs outside the server and cannot reach them;
+- declares `secrets`: legacy secrets are vault names resolved per calling
+  user, while a package declares its own secrets, set by an admin and handed
+  over as environment variables, so convert those by hand;
+- imports files outside its directory, imports a relative path without a file
+  extension (plain Node needs one), or contains a symbolic link;
+- has a tool name MCP cannot carry, a parameter type with no JSON Schema
+  equivalent, a declared tool with no handler, or a name the package format
+  refuses (lower-case, `a-z0-9-`; `octipus`, `mcp`, `system`, `plugin` are
+  reserved);
+- has an entry that plain Node cannot load (`.tsx`, `.jsx`).
+
+It warns, without refusing, about `capabilities.commands` and `events` (the
+legacy host never read them), `process.env` reads (a package sees only a
+minimal environment plus its settings and secrets), child processes, and
+stdout writes. To check the handlers, it imports the entry module once, which
+runs its top-level code as `octi plugin validate` does, but not `initialize`.
+
+A TypeScript entry runs through Node's built-in type stripping (Node 22.18 or
+newer), so it must use erasable syntax only: no `enum`, `namespace` or
+parameter properties. Compile it to JavaScript first otherwise.
+
+Then install the package as any other: `POST /api/plugin-packages { "path":
+"<out>" }` ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#installing-and-managing)),
+and remove the plugin from `extensions/` so its tools are not offered twice.
+
 ## Example Plugin
 
 See `extensions/example-plugin/` for a working example with a greeting tool and a calculator.
@@ -143,6 +214,7 @@ See `extensions/example-plugin/` for a working example with a greeting tool and 
 | `src/plugins/types.ts` | Plugin type definitions |
 | `src/plugins/loader.ts` | Plugin discovery and loading |
 | `src/plugins/plugin-tool.ts` | BaseTool wrapper for plugins |
+| `src/plugins/convert.ts` | `octi plugin convert`: legacy plugin to plugin package |
 | `src/plugins/index.ts` | Barrel exports |
 | `src/api/routes/plugins.ts` | REST API routes |
 | `extensions/` | Plugin directory (create plugins here) |

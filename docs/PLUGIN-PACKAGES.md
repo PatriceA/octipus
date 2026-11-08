@@ -8,7 +8,9 @@ fenced in by Octipus. This is point C2 of the
 
 Plugin packages are not the older in-process plugins of [PLUGINS.md](PLUGINS.md),
 which run inside the server with its full rights. Use a package for anything
-that talks to the outside world or handles credentials.
+that talks to the outside world or handles credentials. Those plugins are
+deprecated; `octi plugin convert <dir>` turns one into a package
+([PLUGINS.md](PLUGINS.md#converting-to-a-plugin-package)).
 
 ## What a package is
 

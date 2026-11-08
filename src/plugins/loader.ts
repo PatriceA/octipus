@@ -43,6 +43,23 @@ function validateManifest(raw: unknown, dir: string): PluginManifest {
   return manifest;
 }
 
+/** Plugins already warned about, so a reload does not repeat it. */
+const deprecationWarned = new Set<string>();
+
+/**
+ * The legacy loader is deprecated in favour of plugin packages
+ * (docs/PLUGIN-PACKAGES.md), which run out of process with declared effects.
+ * Warn once per plugin and name the converter; loading is unchanged.
+ */
+function warnDeprecated(name: string, dir: string): void {
+  if (deprecationWarned.has(name)) return;
+  deprecationWarned.add(name);
+  pluginLogger.warn(
+    { dir, plugin: name },
+    `Legacy in-process plugin "${name}" is deprecated: convert it to a plugin package with \`octi plugin convert ${dir}\` (docs/PLUGINS.md#converting-to-a-plugin-package)`,
+  );
+}
+
 /**
  * Validate the module default export from a plugin entry file.
  */
@@ -77,6 +94,7 @@ async function loadPlugin(dir: string, opts: { fresh?: boolean } = {}): Promise<
 
   const rawManifest = await manifestFile.json();
   const manifest = validateManifest(rawManifest, dir);
+  warnDeprecated(manifest.name, dir);
 
   // Resolve and import the entry file
   const entryPath = join(dir, manifest.main);
