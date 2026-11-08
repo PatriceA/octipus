@@ -56,6 +56,8 @@ import { type PipelineTemplate, pipelineTemplates } from '../schema/pipeline-tem
 import { type Pipeline, pipelines } from '../schema/pipelines';
 import { type NewSession, type Session, sessions } from '../schema/sessions';
 import { costLog } from '../schema/models';
+import { type HeartbeatCheck, heartbeatChecks } from '../schema/heartbeat-checks';
+import { hookExecutions } from '../schema/hook-executions';
 import { type TaskComment, taskComments } from '../schema/task-comments';
 import { type NewTask, type Task, tasks } from '../schema/tasks';
 import { workspaces } from '../schema/organizations';
@@ -961,6 +963,27 @@ export class ScopedHookRepo {
       .from(hooks)
       .where(and(...filters.filter((f): f is SQL => f !== undefined)))
       .orderBy(desc(hooks.createdAt));
+  }
+  /** Executions of the principal's own hooks since `since`, oldest first (Triggers page). */
+  async executionsSince(hookIds: string[], since: Date): Promise<Array<{ hookId: string | null; status: string; error: string | null; createdAt: Date }>> {
+    if (hookIds.length === 0) return [];
+    return this.db
+      .select({ hookId: hookExecutions.hookId, status: hookExecutions.status, error: hookExecutions.error, createdAt: hookExecutions.createdAt })
+      .from(hookExecutions)
+      .where(and(inArray(hookExecutions.hookId, hookIds), eq(hookExecutions.userId, this.principal.userId), gte(hookExecutions.createdAt, since)))
+      .orderBy(asc(hookExecutions.createdAt))
+      .limit(2_000);
+  }
+
+  /** Heartbeat gate decisions on the principal's own hooks since `since`, oldest first. */
+  async heartbeatChecksSince(hookIds: string[], since: Date): Promise<HeartbeatCheck[]> {
+    if (hookIds.length === 0) return [];
+    return this.db
+      .select()
+      .from(heartbeatChecks)
+      .where(and(inArray(heartbeatChecks.hookId, hookIds), eq(heartbeatChecks.userId, this.principal.userId), gte(heartbeatChecks.checkedAt, since)))
+      .orderBy(asc(heartbeatChecks.checkedAt))
+      .limit(2_000);
   }
 }
 

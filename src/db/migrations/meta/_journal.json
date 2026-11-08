@@ -1198,6 +1198,13 @@
       "when": 1794139200000,
       "tag": "0170_agent_origin",
       "breakpoints": true
+    },
+    {
+      "idx": 171,
+      "version": "7",
+      "when": 1794142800000,
+      "tag": "0171_heartbeat_checks",
+      "breakpoints": true
     }
   ]
 }

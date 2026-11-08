@@ -354,6 +354,14 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Triggers page and recorded heartbeat decisions.** *Agents → Triggers*
+  shows every heartbeat, schedule, webhook and event hook with what it did
+  today on a timeline, the heartbeat funnel (checks → skip reasons → turns
+  started) and, per heartbeat, why it did or did not run. Each gate decision is
+  now stored in `heartbeat_checks` (migration `0171_heartbeat_checks`, ids and a
+  reason only, pruned after 14 days) instead of a debug log line. New route:
+  `GET /api/agents/triggers`. See [docs/HEARTBEAT.md](docs/HEARTBEAT.md#seeing-what-it-decided).
+
 - **Mission control and an Agents section.** The sidebar has an *Agents* group
   (Mission control, pipelines, hooks & schedules). Mission control lists every
   agent run of the day with what started it — you in chat, another agent, the

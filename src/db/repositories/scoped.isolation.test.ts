@@ -264,6 +264,24 @@ describe('ScopedAgentRepo cross-tenant isolation', () => {
     expect(await alice.agents.spendSince(since)).toBeCloseTo(0.25);
     expect(await alice.agents.listOwnSince(new Date(Date.now() + 60_000))).toEqual([]);
   });
+
+  test('Triggers reads: only own hooks\' heartbeat decisions and executions', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    const aliceHook = '33333333-3333-3333-3333-333333333333';
+    const bobHook = '44444444-4444-4444-4444-444444444444';
+    await executeRaw(`INSERT INTO hooks (id, user_id, name, trigger, action, trigger_config, action_config) VALUES
+      ('${aliceHook}', '${aliceId}', 'alice hb', 'heartbeat', 'spawn_agent', '{}'::jsonb, '{}'::jsonb),
+      ('${bobHook}', '${bobId}', 'bob hb', 'heartbeat', 'spawn_agent', '{}'::jsonb, '{}'::jsonb)`);
+    await executeRaw(`INSERT INTO heartbeat_checks (hook_id, user_id, ran, reason) VALUES
+      ('${aliceHook}', '${aliceId}', false, 'nothing_pending'), ('${bobHook}', '${bobId}', true, NULL)`);
+    await executeRaw(`INSERT INTO hook_executions (hook_id, user_id, source, status) VALUES
+      ('${aliceHook}', '${aliceId}', 'hook', 'success'), ('${bobHook}', '${bobId}', 'hook', 'error')`);
+    const alice = await asAlice();
+    const since = new Date(Date.now() - 86_400_000);
+    // Even asked for Bob's hook id, Alice gets her own rows only.
+    expect((await alice.hooks.heartbeatChecksSince([aliceHook, bobHook], since)).map((c) => [c.hookId, c.reason])).toEqual([[aliceHook, 'nothing_pending']]);
+    expect((await alice.hooks.executionsSince([aliceHook, bobHook], since)).map((x) => [x.hookId, x.status])).toEqual([[aliceHook, 'success']]);
+  });
 });
 
 describe('ScopedDocumentRepo cross-tenant isolation', () => {

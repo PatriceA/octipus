@@ -92,6 +92,12 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
     const { readMissionControl } = await import('@/core/mission-control');
     return readMissionControl(principal, user.id);
   }, { detail: { tags: ['agents'] } })
+  // Triggers: what starts agents without the user typing, and what each decided today.
+  .get('/triggers', async ({ user, principal, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const { readTriggers } = await import('@/core/triggers-overview');
+    return readTriggers(principal);
+  }, { detail: { tags: ['agents'] } })
   // List all agents (in-memory live + DB history)
   .get(
     '/',

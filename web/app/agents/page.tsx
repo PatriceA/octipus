@@ -173,7 +173,7 @@ export default function MissionControlPage() {
           <section aria-labelledby="next-h" className="min-w-0 flex-[1_1_300px] space-y-3">
             <div className="flex items-baseline justify-between">
               <h2 id="next-h" className="text-base font-semibold">Up next</h2>
-              <Link href="/hooks" className="text-xs font-semibold text-primary">Hooks & schedules →</Link>
+              <Link href="/agents/triggers" className="text-xs font-semibold text-primary">All triggers →</Link>
             </div>
             {data.upcoming.length === 0
               ? <p className="rounded-lg border border-outline-variant/60 bg-surface-container p-4 text-sm text-on-surface-variant">No schedule or heartbeat is enabled.</p>

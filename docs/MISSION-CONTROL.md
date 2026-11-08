@@ -52,3 +52,22 @@ control shows them as **Not recorded** rather than guessing.
 `GET /api/agents/overview` returns the data. It reads through the principal's
 scoped repositories: the user's own agents, hooks and spend in the current
 workspace.
+
+## Triggers
+
+**Agents → Triggers** (`/agents/triggers`, `GET /api/agents/triggers`) lists
+everything that starts an agent without the user typing — heartbeats,
+schedules, webhooks and event hooks — and what each decided today:
+
+- **Today** — one lane per trigger: runs, failures, heartbeat checks that
+  skipped, and the next run.
+- **Heartbeat checks today** — the funnel: checks, minus each skip reason in the
+  order the gate tests them, equals turns started. Skipped checks use no model
+  tokens.
+- **Why did it run, or not?** — a heartbeat's latest decisions with their
+  reasons (from `heartbeat_checks`, see [HEARTBEAT.md](HEARTBEAT.md#seeing-what-it-decided)).
+- **All triggers** — type, what it starts (a role or an action), cadence,
+  today's runs and failures, next run and whether it is on. Editing stays in
+  *Hooks & schedules*.
+
+Session monitors and Companion goals are not on this page yet.
