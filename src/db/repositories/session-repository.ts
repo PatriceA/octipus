@@ -68,13 +68,30 @@ function boundCliSessions(ctx: SQL, prefixes: string[], max: number) {
     ) AS t WHERE NOT t.matched OR t.rank <= ${max}))`;
 }
 
+/**
+ * A session row as callers read it: the snapshot column back inside
+ * `context.nativeConversation` (schema `nativeConversation`). A row written
+ * before the column existed still carries it in `context` and is read as is.
+ */
+export function withNativeConversation<T extends Session | null | undefined>(row: T): T {
+  if (!row || !row.nativeConversation) return row;
+  return { ...row, context: { ...(row.context ?? {}), nativeConversation: row.nativeConversation } };
+}
+
+/** `context` without the snapshot, which is written to its own column. */
+function contextWithoutSnapshot<C extends Record<string, unknown> | null | undefined>(context: C): C {
+  if (!context || !('nativeConversation' in context)) return context;
+  const { nativeConversation: _snapshot, ...rest } = context as Record<string, unknown>;
+  return rest as C;
+}
+
 export class SessionRepository {
   private get db() { return getDb(); }
 
   async findById(id: string): Promise<Session | null> {
     // i2: by session id (or the caller's own channel key), for the runtime that owns the session; user routes use ScopedSessionRepo
     const result = await this.db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
-    return result[0] ?? null;
+    return withNativeConversation(result[0] ?? null);
   }
 
   async findByUserAndChannel(
@@ -167,15 +184,18 @@ export class SessionRepository {
   }
 
   async update(id: string, data: Partial<NewSession>): Promise<Session | null> {
+    // A read-spread-write of `context` carries the mapped-in snapshot back:
+    // it is not written into `context` again (its column is the copy).
+    const set = data.context ? { ...data, context: contextWithoutSnapshot(data.context as Record<string, unknown>) as typeof data.context } : data;
     const result = await this.db
       .update(sessions)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...set, updatedAt: new Date() })
       .where(eq(sessions.id, id))
       .returning();
 
     // Archived: its live state (the gateway replay buffer) goes.
     if (result[0] && data.status === 'completed') sessionsRemoved([id]);
-    return result[0] ?? null;
+    return withNativeConversation(result[0] ?? null);
   }
 
   /**
@@ -263,7 +283,13 @@ export class SessionRepository {
     id: string, generation: string, patch: Record<string, unknown>,
     opts?: { keepCliSessionPrefixes?: string[] },
   ): Promise<boolean> {
-    let context = sql`coalesce(${sessions.context}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`;
+    // The snapshot goes to its own column in the same statement, so the
+    // generation guard covers both; a legacy copy in `context` is dropped.
+    const snapshot = 'nativeConversation' in patch ? { value: patch.nativeConversation ?? null } : undefined;
+    const contextPatch = snapshot ? contextWithoutSnapshot(patch) : patch;
+    let context = snapshot
+      ? sql`(coalesce(${sessions.context}, '{}'::jsonb) - 'nativeConversation') || ${JSON.stringify(contextPatch)}::jsonb`
+      : sql`coalesce(${sessions.context}, '{}'::jsonb) || ${JSON.stringify(contextPatch)}::jsonb`;
     // Same statement: `cliSessions` keeps only the keys starting with one of
     // these prefixes (child task sessions); every other entry is dropped.
     if (opts?.keepCliSessionPrefixes) {
@@ -274,6 +300,7 @@ export class SessionRepository {
     }
     const result = await this.db.update(sessions).set({
       context,
+      ...(snapshot ? { nativeConversation: snapshot.value as Session['nativeConversation'] } : {}),
       updatedAt: new Date(),
     }).where(and(eq(sessions.id, id), inGeneration(generation)))
       .returning({ id: sessions.id });
@@ -283,6 +310,7 @@ export class SessionRepository {
   async clearContext(id: string): Promise<void> {
     await this.db.update(sessions).set({
       context: sql`(coalesce(${sessions.context}, '{}'::jsonb) - ARRAY['checkpoint','compactionState','compactedSummary','cliSessions','nativeConversation','toolGroups','staticPrompt','activeCommand','planningState']) || jsonb_build_object('clearedAt', ${new Date().toISOString()}::text, 'conversationGeneration', ${randomUUID()}::text)`,
+      nativeConversation: null,
       updatedAt: new Date(),
     }).where(eq(sessions.id, id));
   }

@@ -1191,6 +1191,13 @@
       "when": 1794038400000,
       "tag": "0169_internal_companion_messages",
       "breakpoints": true
+    },
+    {
+      "idx": 170,
+      "version": "7",
+      "when": 1794042000000,
+      "tag": "0170_session_native_conversation",
+      "breakpoints": true
     }
   ]
 }

@@ -37,6 +37,15 @@ export const sessions = pgTable('sessions', {
   title: text('title'),
   status: sessionStatusEnum('status').default('active').notNull(),
   context: jsonb('context').$type<SessionContext>().default({}),
+  /**
+   * The native conversation snapshot (`SessionContext.nativeConversation`),
+   * up to a million characters, in its own column. In `context` it was
+   * rewritten by every small context patch (the active agent, the topic, the
+   * tool groups, every turn); an UPDATE that does not touch this column reuses
+   * its stored value. The repository maps it back into `context` on read and
+   * splits it out on write, so callers keep reading `context.nativeConversation`.
+   */
+  nativeConversation: jsonb('native_conversation').$type<NonNullable<SessionContext['nativeConversation']>>(),
   metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
   messageCount: integer('message_count').default(0).notNull(),
   tokenCount: integer('token_count').default(0).notNull(),

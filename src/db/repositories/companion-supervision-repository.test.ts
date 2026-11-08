@@ -52,6 +52,7 @@ beforeAll(async () => {
     ALTER TABLE sessions ADD COLUMN pinned boolean DEFAULT false;
     ALTER TABLE sessions ADD COLUMN created_at timestamptz DEFAULT now();
     ALTER TABLE sessions ADD COLUMN completed_at timestamptz;
+    ALTER TABLE sessions ADD COLUMN native_conversation jsonb;
     CREATE TABLE pipelines(id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id), workspace_id uuid, session_id uuid NOT NULL REFERENCES sessions(id), status text DEFAULT 'running');
     CREATE TABLE tasks(id uuid PRIMARY KEY, user_id uuid REFERENCES users(id), workspace_id uuid);
     CREATE TABLE verification_evidence(id uuid PRIMARY KEY, session_id uuid, pipeline_id uuid, passed boolean,
