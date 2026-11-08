@@ -640,7 +640,8 @@ export class SwarmSpawner {
     // After `resolveChildTools`, and after the connector handlers above,
     // because this is the first point the child's set is final.
     {
-      const planSession = await sessionRepository.findById(parentContext.sessionId);
+      // The row read above for the maintenance check: one read per spawn.
+      const planSession = maintenanceSession;
       if (isPlanMode(planSession?.context as { planMode?: boolean } | undefined)) {
         const before = childTools.length;
         childTools = stripMutatingTools(childTools);
