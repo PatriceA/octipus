@@ -756,9 +756,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `mcp` | `config` | 2 |
 | `mcp` | `connectors` | 1 |
 | `mcp` | `core` | 4 |
-| `mcp` | `security` | 7 |
+| `mcp` | `security` | 8 |
 | `mcp` | `shared` | 3 |
-| `mcp` | `utils` | 4 |
+| `mcp` | `utils` | 5 |
 | `models` | `config` | 10 |
 | `models` | `core` | 37 |
 | `models` | `db` | 14 |
@@ -770,10 +770,10 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `plugins` | `core` | 3 |
 | `plugins` | `db` | 3 |
 | `plugins` | `mcp` | 1 |
-| `plugins` | `security` | 1 |
-| `plugins` | `shared` | 2 |
+| `plugins` | `security` | 3 |
+| `plugins` | `shared` | 3 |
 | `plugins` | `tools` | 1 |
-| `plugins` | `utils` | 4 |
+| `plugins` | `utils` | 5 |
 | `security` | `api` | 1 |
 | `security` | `config` | 17 |
 | `security` | `connectors` | 3 |
@@ -782,7 +782,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `mcp` | 2 |
 | `security` | `shared` | 5 |
 | `security` | `tools` | 4 |
-| `security` | `utils` | 32 |
+| `security` | `utils` | 34 |
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
 | `services` | `core` | 5 |
@@ -829,7 +829,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tui-pi` | `core` | 3 |
 | `tui-pi` | `shared` | 2 |
 | `tui-pi` | `voice` | 2 |
-| `utils` | `core` | 3 |
+| `utils` | `core` | 4 |
 | `utils` | `models` | 4 |
 | `utils` | `security` | 2 |
 | `visual` | `models` | 1 |

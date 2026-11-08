@@ -86,6 +86,8 @@ if "%COMMAND%"=="stop" goto :cmd_stop
 if "%COMMAND%"=="restart" goto :cmd_restart
 if "%COMMAND%"=="status" goto :cmd_status
 if "%COMMAND%"=="doctor" goto :cmd_doctor
+if "%COMMAND%"=="plugin" goto :cmd_plugin
+if "%COMMAND%"=="plugins" goto :cmd_plugin
 if "%COMMAND%"=="logs" goto :cmd_logs
 if "%COMMAND%"=="open" goto :cmd_open
 if "%COMMAND%"=="web" goto :cmd_open
@@ -670,6 +672,13 @@ cd /d "%PROJECT_DIR%"
 npx tsx --import ./scripts/md-loader.mjs scripts/doctor.ts %~2 %~3 %~4 %~5 %~6 %~7 %~8
 exit /b %errorlevel%
 
+:: ─── Plugin tooling (validate, convert) ───────────────────────────────────────
+:cmd_plugin
+set "OCTI_USER_CWD=%CD%"
+cd /d "%PROJECT_DIR%"
+npx tsx --import ./scripts/md-loader.mjs scripts/plugin.ts %~2 %~3 %~4 %~5 %~6 %~7 %~8 %~9
+exit /b %errorlevel%
+
 :: ─── Desktop (Tauri thin client) ────────────────────────────────────────────
 :: Launch the Tauri desktop app. It is a thin CLIENT: it does NOT run its own
 :: backend — it connects to whatever Octipus backend you point it at (local
@@ -934,6 +943,7 @@ echo     restart [client] Stop everything, then start again the same way
 echo     stop             Stop all Octipus processes
 echo     status           Show running state and service health
 echo     doctor [--json]  Run environment health checks (what's wired, what's missing)
+echo     plugin ^<validate^|convert^> ...  Validate a plugin, or convert a legacy plugin
 echo     logs [--web]     Tail backend logs (--web for web UI)
 echo     update [--dry-run] Update this installation from its existing source
 echo     uninstall        Remove Octipus ^(keeps data; --purge wipes everything^)

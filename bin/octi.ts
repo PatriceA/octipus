@@ -154,6 +154,8 @@ async function delegateScript(scriptRelPath: string, args: string[]): Promise<ne
   }
   // Node directly, not `npx tsx`: no wrapper process between us and the script
   // (signals reach it), and no `npx.cmd` shim to trip Windows' no-shell spawn.
+  // The script runs from the project; paths the user typed are relative to where they ran octi.
+  process.env.OCTI_USER_CWD = process.cwd();
   const code = await runInherit(process.execPath, ['--import', 'tsx', '--import', './scripts/md-loader.mjs', scriptPath, ...args], projectDir);
   process.exit(code);
 }

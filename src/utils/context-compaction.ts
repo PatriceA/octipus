@@ -6,6 +6,7 @@ import {
   mergeFileOperations,
   serializeConversation,
 } from '@/core/context-compaction';
+import { type CompactHookContext, getAgentHooks, type HookAgentContext } from '@/core/agent/hooks';
 import type { AgentMessage } from '@/core/types';
 import type { CompletionOptions } from '@/models/litellm-client';
 import { getLiteLLMClient } from '@/models/litellm-client';
@@ -497,6 +498,11 @@ export interface CreateLLMSummaryOptions {
    * a different row sharing the id (coworking spec §8.1).
    */
   summaryModelName?: string;
+  /**
+   * Who is compacting, for the `compact:before` hook (core/agent/hooks.ts).
+   * Without it the hook still fires, with only `userId` known.
+   */
+  hook?: { agent: HookAgentContext; source: CompactHookContext['source'] };
 }
 
 export interface CreateLLMSummaryResult {
@@ -539,6 +545,7 @@ async function summarize(
   summaryModel: string,
   options?: CreateLLMSummaryOptions,
 ): Promise<AgentMessage | CreateLLMSummaryResult> {
+  const supplied = await hookSummary(removedMessages, options);
   try {
     const client = getLiteLLMClient();
 
@@ -547,6 +554,7 @@ async function summarize(
     const fileOps = options?.previousFileOps
       ? mergeFileOperations(options.previousFileOps, currentOps)
       : currentOps;
+    if (supplied !== undefined) return summaryResult(supplied, removedMessages.length, fileOps, options);
 
     const budget = summaryBudgetTokens(removedMessages);
     const fromContinuation = options?.continuation
@@ -605,6 +613,89 @@ async function summarize(
   }
 }
 
+/**
+ * Run `compact:before` and return the summary a handler supplied, if any.
+ * Fail-open: `fire` logs and skips a throwing handler, and an empty or
+ * non-string `summary` counts as none — the built-in summariser runs.
+ */
+async function hookSummary(removed: AgentMessage[], options?: CreateLLMSummaryOptions): Promise<string | undefined> {
+  const hooks = getAgentHooks();
+  if (!hooks.has('compact:before')) return undefined;
+  const ctx: CompactHookContext = {
+    agent: options?.hook?.agent ?? { userId: options?.userId ?? '', sessionId: options?.continuation?.sessionId ?? '' },
+    source: options?.hook?.source ?? 'agent',
+    messagesToSummarize: frozenCopy(removed),
+    previousSummary: options?.previousSummary,
+    userInstructions: options?.userInstructions,
+  };
+  await hooks.fire('compact:before', ctx);
+  const text = typeof ctx.summary === 'string' ? ctx.summary.trim() : '';
+  if (!text) return undefined;
+  const cap = hookSummaryMaxChars(removed);
+  const capped = text.length > cap ? `${text.slice(0, cap)}\n[... summary truncated]` : text;
+  coreLogger.info(
+    { source: ctx.source, sessionId: ctx.agent.sessionId, messages: removed.length, chars: capped.length, truncated: capped !== text },
+    'compact:before hook supplied the compaction summary; model summariser skipped',
+  );
+  return capped;
+}
+
+/**
+ * Ceiling on a hook summary for `removed`, in characters: the output budget
+ * the model summariser would get for the same messages (`summaryBudgetTokens`,
+ * ~4 characters a token), never above `HOOK_SUMMARY_MAX_CHARS`. A summary
+ * longer than what it replaces would undo the pass.
+ */
+export function hookSummaryMaxChars(removed: AgentMessage[]): number {
+  return Math.min(HOOK_SUMMARY_MAX_CHARS, summaryBudgetTokens(removed) * 4);
+}
+
+/**
+ * A deep, deep-frozen copy of `messages` for a hook to read: nothing in it is
+ * shared with the live history (nested content parts, tool calls and their
+ * arguments, provider payloads), so a handler cannot change the history
+ * through it. `structuredClone` first; for a payload it refuses (a function,
+ * a class instance), a plain recursive copy that leaves such values out.
+ */
+function frozenCopy(messages: AgentMessage[]): readonly Readonly<AgentMessage>[] {
+  let copy: AgentMessage[];
+  try {
+    copy = structuredClone(messages);
+  } catch {
+    copy = plainCopy(messages, new WeakMap()) as AgentMessage[];
+  }
+  return deepFreeze(copy);
+}
+
+function plainCopy(value: unknown, seen: WeakMap<object, unknown>): unknown {
+  if (value === null || typeof value !== 'object') return typeof value === 'function' || typeof value === 'symbol' ? undefined : value;
+  if (seen.has(value)) return seen.get(value);
+  if (value instanceof Date) return new Date(value.getTime());
+  if (Array.isArray(value)) {
+    const out: unknown[] = [];
+    seen.set(value, out);
+    for (const item of value) out.push(plainCopy(item, seen));
+    return out;
+  }
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return undefined;
+  const out: Record<string, unknown> = {};
+  seen.set(value, out);
+  for (const [key, item] of Object.entries(value)) {
+    const copied = plainCopy(item, seen);
+    if (copied !== undefined) out[key] = copied;
+  }
+  return out;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const item of Object.values(value)) deepFreeze(item);
+  }
+  return value;
+}
+
 /** The summary as the caller's overload expects it, with the file-ops appendix. */
 function summaryResult(
   text: string, removedCount: number, fileOps: { read: string[]; written: string[]; edited: string[] }, options?: CreateLLMSummaryOptions,
@@ -631,6 +722,14 @@ function keptAfter(messages: AgentMessage[], removed: AgentMessage[]): number {
 /** Bounds of the summary's output budget (`summaryBudgetTokens`). */
 export const SUMMARY_MIN_TOKENS = 1_024;
 export const SUMMARY_MAX_TOKENS = 6_000;
+/**
+ * Absolute ceiling on a hook-supplied summary, in characters: the model
+ * summariser's largest output budget (`SUMMARY_MAX_TOKENS`) at ~4 characters
+ * a token. The cap actually applied is `hookSummaryMaxChars`, sized to what
+ * is replaced. A summary is re-sent on every later request; an unbounded one
+ * would undo the pass.
+ */
+export const HOOK_SUMMARY_MAX_CHARS = SUMMARY_MAX_TOKENS * 4;
 
 /**
  * The summary's output budget: a fifth of the history it replaces, within
@@ -762,6 +861,7 @@ export async function compactMessagesWithSummary(
     summaryModelName: options.summaryModelName,
     continuation: options.continuation,
     priority: options.priority,
+    hook: options.hook,
   });
   const summary = result.message;
   if (iterative) {

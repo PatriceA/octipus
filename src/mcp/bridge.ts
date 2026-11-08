@@ -92,12 +92,31 @@ export class MCPBridge extends EventEmitter {
   private pluginServers: MCPServer[] = [];
   /** Why a plugin server is not connected, by server id. */
   private pluginProblems: Map<string, string> = new Map();
+  /**
+   * Checked before every start of a plugin server, reconnects included: the
+   * reason it may not start (its files changed since they were approved), or
+   * null. Set by the plugin service (`setPluginStartGuard`).
+   */
+  private pluginStartGuard: ((server: MCPServer) => Promise<string | null>) | null = null;
   /** The plugin sync in flight; the next one waits for it. */
   private pluginSync: Promise<void> = Promise.resolve();
   // Auto-reconnect state for unexpected transport closes (server crash / OS kill).
   private reconnectAttempts: Map<string, number> = new Map();
   private reconnectTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private intentionalDisconnects: Set<string> = new Set();
+  /**
+   * Connects in flight, by server id. A connect awaits the plugin start guard
+   * (a database read and a hash of the package) and, on a restart, the old
+   * process's exit before it registers; a second connect meanwhile (an
+   * on-demand reconnect racing the backoff timer, say) joins this one instead
+   * of spawning a second child.
+   */
+  private connecting: Map<string, Promise<MCPServerConnection>> = new Map();
+  /**
+   * Connections being closed, by server id: unregistered, their process not
+   * yet exited. A connect of the same server waits for it (`retire`).
+   */
+  private retiring: Map<string, Promise<void>> = new Map();
   private configMutation: Promise<void> = Promise.resolve();
   /** The boot-time connect (`startConnectAll`), which spawns wait on (`whenInitiallyConnected`). */
   private initialConnect: Promise<void> | null = null;
@@ -107,6 +126,8 @@ export class MCPBridge extends EventEmitter {
   private static readonly MAX_RECONNECT_ATTEMPTS = 6;
   private static readonly RECONNECT_BASE_MS = 1_000;
   private static readonly RECONNECT_MAX_MS = 30_000;
+  /** How long a closed server process gets to exit before it is killed. */
+  private static readonly EXIT_GRACE_MS = 3_000;
 
   /**
    * Load MCP server configurations from JSON file (if configured) or database.
@@ -184,8 +205,74 @@ export class MCPBridge extends EventEmitter {
     if (server.id.startsWith(PLUGIN_SERVER_PREFIX) && !server.plugin) {
       throw new Error(`MCP server id "${server.id}" belongs to plugin packages; it is not started from an MCP server config`);
     }
-    if (this.connections.has(server.id)) {
-      return this.connections.get(server.id)!;
+    // A process still exiting could rewrite the files the start check hashes.
+    const retiring = this.retiring.get(server.id);
+    if (retiring) await retiring;
+    const existing = this.connections.get(server.id);
+    if (existing) return existing;
+    return this.joinConnect(server.id, () => this.startConnection(server));
+  }
+
+  /** The connect in flight for `serverId`, or a new one from `start`, shared by every caller meanwhile. */
+  private joinConnect(serverId: string, start: () => Promise<MCPServerConnection>): Promise<MCPServerConnection> {
+    const inflight = this.connecting.get(serverId);
+    if (inflight) return inflight;
+    const run: Promise<MCPServerConnection> = start().finally(() => {
+      if (this.connecting.get(serverId) === run) this.connecting.delete(serverId);
+    });
+    this.connecting.set(serverId, run);
+    return run;
+  }
+
+  /**
+   * Restart a server: drop the registered connection, wait for its process to
+   * exit, then connect afresh, so the start check (the plugin content hash)
+   * never runs while the old process lives. Concurrent restarts share the
+   * wait (`retire`) and the connect (`joinConnect`).
+   */
+  private async restart(server: MCPServer): Promise<MCPServerConnection> {
+    await this.retire(server.id);
+    if (this.intentionalDisconnects.has(server.id)) throw new Error(`MCP server ${server.id} was disconnected while restarting`);
+    return this.connect(server);
+  }
+
+  /**
+   * Unregister a server's connection and close it; resolves once its process
+   * has exited. A close already under way for the server is shared.
+   */
+  private retire(serverId: string): Promise<void> {
+    const pending = this.retiring.get(serverId);
+    const stale = this.connections.get(serverId);
+    if (!stale) return pending ?? Promise.resolve();
+    // Unregister FIRST, so the stale onClose identity guard sees it gone.
+    this.connections.delete(serverId);
+    const closed = Promise.all([pending, this.closeTransport(stale.transport)]);
+    stale.protocol.cleanup();
+    const run: Promise<void> = closed.then(() => {}).finally(() => {
+      if (this.retiring.get(serverId) === run) this.retiring.delete(serverId);
+    });
+    this.retiring.set(serverId, run);
+    return run;
+  }
+
+  /** Close a transport and, where it runs a process, wait until that has exited (killed after EXIT_GRACE_MS). */
+  private async closeTransport(transport: MCPTransport): Promise<void> {
+    if (!transport.closeAndWait) {
+      transport.close();
+      return;
+    }
+    await transport.closeAndWait(MCPBridge.EXIT_GRACE_MS).catch((err: unknown) => coreLogger.warn({ err }, 'MCP transport close failed'));
+  }
+
+  private async startConnection(server: MCPServer): Promise<MCPServerConnection> {
+    const registered = this.connections.get(server.id);
+    if (registered) return registered;
+    if (server.plugin && this.pluginStartGuard) {
+      const refusal = await this.pluginStartGuard(server);
+      if (refusal) {
+        this.pluginProblems.set(server.id, refusal);
+        throw new Error(refusal);
+      }
     }
 
     coreLogger.info({ serverId: server.id, transport: server.transport || 'stdio' }, 'Connecting to MCP server');
@@ -350,7 +437,8 @@ export class MCPBridge extends EventEmitter {
       connection.status = 'error';
       connection.error = (error as Error).message;
       protocol.cleanup();
-      transport.close();
+      // Wait for the child to go, so a retry never runs beside it.
+      await this.closeTransport(transport);
       coreLogger.error({ err: error, serverId: server.id, errorMessage: (error as Error).message }, 'Failed to connect to MCP server');
       throw error;
     }
@@ -415,6 +503,11 @@ export class MCPBridge extends EventEmitter {
     });
   }
 
+  /** Set the check run before every start of a plugin server (see `pluginStartGuard`). */
+  setPluginStartGuard(guard: ((server: MCPServer) => Promise<string | null>) | null): void {
+    this.pluginStartGuard = guard;
+  }
+
   /** Why a plugin server is not connected, or null. */
   pluginProblem(serverId: string): string | null {
     return this.pluginProblems.get(serverId) ?? null;
@@ -445,9 +538,19 @@ export class MCPBridge extends EventEmitter {
     this.intentionalDisconnects.add(serverId);
     this.clearReconnectTimer(serverId);
     this.reconnectAttempts.delete(serverId);
+    // A connect in flight would register (and spawn) after this returned.
+    const inflight = this.connecting.get(serverId);
+    if (inflight) {
+      await inflight.catch(() => {});
+      this.intentionalDisconnects.add(serverId);
+    }
 
     const connection = this.connections.get(serverId);
-    if (!connection) return;
+    if (!connection) {
+      // A restart may be waiting for the old process: so does this.
+      await this.retiring.get(serverId);
+      return;
+    }
 
     try {
       const send = (message: string) => {
@@ -459,9 +562,8 @@ export class MCPBridge extends EventEmitter {
       // Ignore errors during shutdown
     }
 
-    connection.transport.close();
-    connection.protocol.cleanup();
-    this.connections.delete(serverId);
+    // Returns once the process has exited, so its files can be replaced safely.
+    await this.retire(serverId);
 
     coreLogger.info({ serverId }, 'MCP server disconnected');
   }
@@ -481,18 +583,18 @@ export class MCPBridge extends EventEmitter {
    */
   async ensureConnected(serverId: string): Promise<void> {
     if (this.connections.get(serverId)?.status === 'connected') return;
+    const inflight = this.connecting.get(serverId);
+    if (inflight) {
+      await inflight.catch((err: unknown) => coreLogger.warn({ err, serverId }, 'On-demand MCP reconnect failed'));
+      return;
+    }
     const server = this.configOf(serverId);
     if (!server || !server.isEnabled || this.intentionalDisconnects.has(serverId)) return;
-    const stale = this.connections.get(serverId);
-    if (stale) {
-      this.connections.delete(serverId);
-      stale.transport.close();
-      stale.protocol.cleanup();
-    }
+    if (server.id.startsWith(PLUGIN_SERVER_PREFIX) && !server.plugin) return;
     this.clearReconnectTimer(serverId);
     this.reconnectAttempts.delete(serverId);
     try {
-      await this.connect(server);
+      await this.restart(server);
       getMcpCircuitBreaker().reset(serverId);
     } catch (err) {
       coreLogger.warn({ err, serverId }, 'On-demand MCP reconnect failed');
@@ -522,19 +624,15 @@ export class MCPBridge extends EventEmitter {
     const timer = setTimeout(() => {
       this.reconnectTimers.delete(server.id);
       if (this.intentionalDisconnects.has(server.id)) return;
-      // Drop the stale connection FIRST so both connect()'s has-check and the
-      // stale onClose identity-guard see it gone before we close the transport.
-      const stale = this.connections.get(server.id);
-      if (stale) {
-        this.connections.delete(server.id);
-        stale.transport.close();
-        stale.protocol.cleanup();
-      }
       const latest = this.configOf(server.id);
-      if (!latest?.isEnabled) return;
-      this.connect(latest).catch((err: unknown) => {
+      if (!latest?.isEnabled) {
+        void this.retire(server.id);
+        return;
+      }
+      // An on-demand reconnect already under way is joined, not doubled.
+      this.restart(latest).catch((err: unknown) => {
         coreLogger.error({ err, serverId: server.id }, 'MCP reconnect attempt failed');
-        this.scheduleReconnect(server);
+        if (!this.intentionalDisconnects.has(server.id)) this.scheduleReconnect(server);
       });
     }, delay);
     // Don't let a pending reconnect keep the process alive.
@@ -624,9 +722,9 @@ export class MCPBridge extends EventEmitter {
       this.intentionalDisconnects.add(serverId);
       this.clearReconnectTimer(serverId);
     }
-    for (const serverId of [...this.connections.keys()]) {
-      await this.disconnect(serverId);
-    }
+    // In parallel: each disconnect waits for its process to exit (up to the
+    // kill grace), and a shutdown should not add those waits up per server.
+    await Promise.allSettled([...this.connections.keys()].map((serverId) => this.disconnect(serverId)));
   }
 
   /**

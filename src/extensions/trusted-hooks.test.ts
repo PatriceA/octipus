@@ -69,4 +69,18 @@ describe('octi.hook', () => {
     await getAgentHooks().fire('tool:before', { ...ctx, args: {} } as never);
     expect(seen).toEqual(['read_file']);
   });
+
+  test('the context and compact:before events are hookable, typed by AgentHookEvents', async () => {
+    vi.spyOn(config, 'getConfig').mockReturnValue({ extensions: { trusted: [homeExt] } } as never);
+    const { api, loaded } = buildExtensionContext('audit', join(homeExt, 'index.ts'), new GatewayEventBus());
+    api.hook('context', (ctx) => { ctx.messages.push({ role: 'user', content: `iteration ${ctx.iteration}`, timestamp: new Date() }); });
+    api.hook('compact:before', (ctx) => { ctx.summary = `${ctx.messagesToSummarize.length} messages`; });
+    expect(getAgentHooks().has('context')).toBe(true);
+    const compact = { agent: { userId: 'u', sessionId: 's' }, source: 'agent' as const, messagesToSummarize: [] };
+    await getAgentHooks().fire('compact:before', compact);
+    expect((compact as { summary?: string }).summary).toBe('0 messages');
+    await loaded.dispose();
+    expect(getAgentHooks().has('context')).toBe(false);
+    expect(getAgentHooks().has('compact:before')).toBe(false);
+  });
 });

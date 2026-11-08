@@ -1,4 +1,6 @@
 import { coreLogger } from '@/utils/logger';
+// Type-only: erased at runtime, so it adds no import cycle (see HookAgentContext).
+import type { AgentMessage } from '@/core/types';
 import type { AgentRole } from './types';
 
 /**
@@ -141,6 +143,80 @@ export interface HookAgentContext {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Fired in the agent loop right before each model request (Pi's `context`
+ * event): transform the messages THIS request sends.
+ *
+ * `messages` is a deep copy of the stored conversation. A handler may replace
+ * or redact content, drop, insert or append messages, or assign a new array;
+ * the worker sends the result for this one request and never writes it back,
+ * so a hook cannot silently rewrite history — the next request starts again
+ * from the stored conversation.
+ *
+ * Prompt cache: providers cache the request prefix. Anything changed in an
+ * earlier message breaks the cache from that message on, every request, for
+ * as long as the hook keeps changing it; and changing an earlier assistant
+ * turn invalidates its signed reasoning on Claude (the provider rejects or
+ * drops it). Append, or touch only the newest message, whenever you can.
+ *
+ * Signed reasoning: from the first message a handler changed (or dropped,
+ * or inserted before) on, the outgoing copy carries no Claude signed
+ * reasoning, so an edit to an earlier turn cannot send a stale thinking block.
+ *
+ * Fail-closed: a handler that throws aborts the request with a
+ * `HookFailedError` naming the hook, as `tool:before` and `spawn:before` do.
+ * A half-applied redaction is never sent, and the run fails. If the
+ * conversation cannot be deep-copied (an uncloneable provider payload) the
+ * hook is not fired for that request; the stored conversation is sent and a
+ * warning is logged once per agent. Zero cost when nothing is subscribed.
+ */
+export interface ContextHookContext {
+  agent: HookAgentContext & { root?: boolean };
+  /** The model id the request goes to. */
+  model: string;
+  /** Mutable copy of what this request sends. */
+  messages: AgentMessage[];
+  /** The agent loop iteration this request belongs to. */
+  iteration: number;
+}
+
+/**
+ * Fired before a compaction summary is produced (Pi's
+ * `session_before_compact`): set `summary` to supply a custom summary instead
+ * of the model summariser.
+ *
+ * Fires on every compaction path: the agent loop's own (`source: 'agent'`,
+ * proactive, regular and overflow), a chat session's checkpoint (`'session'`,
+ * `/compact` and the automatic pass between turns) and a room's (`'room'`).
+ * A supplied summary goes through the same packaging as a model one (the
+ * `[Context Summary …]` header and the cumulative file-ops appendix) and is
+ * capped at the output budget the model summariser would get for these same
+ * messages (`summaryBudgetTokens`, at ~4 characters a token, never above
+ * `HOOK_SUMMARY_MAX_CHARS`). An empty or whitespace summary is
+ * ignored. Fail-open: a throwing handler is logged and skipped; when no
+ * handler supplied a summary the built-in summariser runs.
+ */
+export interface CompactHookContext {
+  agent: HookAgentContext;
+  source: 'agent' | 'session' | 'room';
+  /** What the summary replaces. A deep-frozen deep copy: nothing in it can be mutated, and the history is never shared. */
+  readonly messagesToSummarize: readonly Readonly<AgentMessage>[];
+  /** The previous checkpoint's summary, when this pass chains onto one. */
+  readonly previousSummary?: string;
+  /** Free-form `/compact <instructions>`. */
+  readonly userInstructions?: string;
+  /** Set by a handler to supply the summary; the model summariser is then not called. */
+  summary?: string;
+}
+
+/** A fail-closed hook handler threw (`fireFailClosed`): the guarded work did not run. */
+export class HookFailedError extends Error {
+  constructor(readonly event: AgentHookEvent, cause: unknown) {
+    super(`${event} hook failed: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = 'HookFailedError';
+  }
+}
+
 export type HookHandler<T> = (ctx: T) => Promise<void> | void;
 
 export type AgentHookEvents = {
@@ -149,6 +225,8 @@ export type AgentHookEvents = {
   'tool:after': ToolResultContext;
   'spawn:before': SpawnDispatchContext;
   'spawn:after': SpawnResultContext;
+  context: ContextHookContext;
+  'compact:before': CompactHookContext;
 };
 
 export type AgentHookEvent = keyof AgentHookEvents;
@@ -188,6 +266,28 @@ class AgentHookRegistry {
   }
 
   /**
+   * Like `fire`, but fail-closed: the first handler that throws stops the
+   * chain and the call rejects with a `HookFailedError` naming the event.
+   * For transforming events whose half-applied result must not be used
+   * (`context`: a redaction that crashed halfway).
+   */
+  async fireFailClosed<E extends AgentHookEvent>(
+    event: E,
+    ctx: AgentHookEvents[E],
+  ): Promise<AgentHookEvents[E]> {
+    const list = this.handlers.get(event);
+    if (!list || list.length === 0) return ctx;
+    for (const handler of [...list]) {
+      try {
+        await handler(ctx as unknown);
+      } catch (err) {
+        throw new HookFailedError(event, err);
+      }
+    }
+    return ctx;
+  }
+
+  /**
    * Waterfall dispatch — around-middleware semantics, for the events whose
    * payload is `ShortCircuitable`.
    *
@@ -220,6 +320,15 @@ class AgentHookRegistry {
   /** Test hook — remove every subscriber. */
   _clearForTesting(): void {
     this.handlers.clear();
+  }
+
+  /**
+   * Whether anything subscribes to `event`. Call sites whose payload is
+   * expensive to build (`context` deep-copies the conversation) check this
+   * first, so the unsubscribed path costs one Map lookup.
+   */
+  has(event: AgentHookEvent): boolean {
+    return (this.handlers.get(event)?.length ?? 0) > 0;
   }
 
   /** Count handlers registered for an event (test helper). */

@@ -12,7 +12,7 @@ import {
 } from '@/plugins/packages/service';
 import { apiLogger } from '@/utils/logger';
 
-const STATUS: Record<PluginPackageError['code'], number> = { not_found: 404, exists: 409, invalid: 400, incomplete: 409 };
+const STATUS: Record<PluginPackageError['code'], number> = { not_found: 404, exists: 409, invalid: 400, incomplete: 409, conflict: 409 };
 
 /** A refused change: its status and every problem; anything else is logged and a 500. */
 function refused(err: unknown, set: { status?: number | string }): { error: string; problems?: string[] } {
@@ -50,7 +50,7 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
       if (denied) return denied;
       try {
         const row = await installFromDirectory(body.path, principal.userId, { upgrade: body.upgrade === true });
-        return { name: row.name, version: row.version, enabled: row.enabled, manifest: row.manifest };
+        return { name: row.name, version: row.version, enabled: row.enabled, contentHash: row.contentHash, manifest: row.manifest };
       } catch (err) {
         return refused(err, set);
       }
@@ -71,7 +71,7 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
       const denied = adminDenied({ set, user, principal });
       if (denied) return denied;
       try {
-        await configure(params.name, { settings: body.settings, enabled: body.enabled }, principal.userId);
+        await configure(params.name, { settings: body.settings, enabled: body.enabled, approveContent: body.approveContent }, principal.userId);
         return await packageView(params.name);
       } catch (err) {
         return refused(err, set);
@@ -81,6 +81,13 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
       params: t.Object({ name: t.String({ maxLength: 50 }) }),
       body: t.Object({
         enabled: t.Optional(t.Boolean()),
+        /**
+         * Accept the package's files after a hash mismatch: the hash the admin
+         * reviewed (`sha256:<hex>`, the view's `actualHash`). Refused (409)
+         * unless the files hash to it now. A boolean is refused (400) with a
+         * message asking for the hash; it is accepted here only to say so.
+         */
+        approveContent: t.Optional(t.Union([t.String({ maxLength: 100 }), t.Boolean()])),
         settings: t.Optional(t.Record(t.String({ maxLength: 50 }), t.Unknown())),
       }),
       detail: { tags: ['plugin-packages'] },

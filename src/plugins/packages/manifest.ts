@@ -17,8 +17,12 @@ const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const ENV_KEY_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 /** An MCP tool name: what the bridge addresses as `<server>.<tool>`. */
 const TOOL_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
-/** A host name, optionally with a leading `*.` for its subdomains. */
-const HOST_RE = /^(\*\.)?([a-z0-9-]+\.)+[a-z]{2,63}$/i;
+/**
+ * A host name, optionally with a leading `*.` for its subdomains and a
+ * trailing `:port`. Without a port the egress proxy allows 443 and 80.
+ */
+const HOST_RE = /^(\*\.)?([a-z0-9-]+\.)+[a-z]{2,63}(:([1-9]\d{0,4}))?$/i;
+const hostPortOk = (h: string) => { const port = /:(\d+)$/.exec(h)?.[1]; return port === undefined || Number(port) <= 65535; };
 
 /** Names a package may not use: they would read as the host's own MCP servers. */
 const RESERVED_NAMES = new Set(['octipus', 'mcp', 'system', 'plugin']);
@@ -45,7 +49,8 @@ export const manifestSchema = z.object({
     }).strict(),
   ).refine((tools) => Object.keys(tools).length > 0, 'tools: declare at least one tool')
     .refine((tools) => Object.keys(tools).length <= 200, 'tools: at most 200'),
-  network: z.array(z.string().regex(HOST_RE, 'network: host names such as api.example.com or *.example.com')).max(50).optional(),
+  network: z.array(z.string().regex(HOST_RE, 'network: host names such as api.example.com, *.example.com or api.example.com:8443')
+    .refine(hostPortOk, 'network: a port is 1-65535')).max(50).optional(),
   maxProtection: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).optional(),
   settings: fieldListSchema.optional(),
   secrets: z.array(z.object({

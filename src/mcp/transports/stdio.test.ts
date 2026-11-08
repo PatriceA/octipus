@@ -141,6 +141,38 @@ describe('StdioTransport', () => {
     expect(() => t.send('after-close')).toThrow(/not connected/);
   });
 
+  test('closeAndWait resolves once the child has exited', async () => {
+    const t = makeTransport('cat');
+    await t.connect();
+    const child = (t as unknown as { process: { pid: number; exitCode: number | null; signalCode: string | null } }).process;
+    await t.closeAndWait(2000);
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+    expect(() => process.kill(child.pid, 0)).toThrow();
+  });
+
+  test('closeAndWait kills a child that ignores SIGTERM after the grace period', async () => {
+    const t = makeTransport(process.execPath, ['-e', "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000);"]);
+    const lines: string[] = [];
+    t.onMessage((m) => lines.push(m));
+    await t.connect();
+    await waitFor(() => (lines.includes('ready') ? true : undefined), 5000);
+    const child = (t as unknown as { process: { pid: number; signalCode: string | null } }).process;
+    const started = Date.now();
+    await t.closeAndWait(200);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(150);
+    expect(child.signalCode).toBe('SIGKILL');
+    expect(() => process.kill(child.pid, 0)).toThrow();
+  });
+
+  test('closeAndWait after the child already exited returns at once', async () => {
+    const t = makeTransport('true');
+    let closed = false;
+    t.onClose(() => { closed = true; });
+    await t.connect();
+    await waitFor(() => (closed ? true : undefined));
+    await t.closeAndWait(5000);
+  });
+
   test('env option is passed to child process', async () => {
     const t = makeTransport('sh', ['-c', 'printf "%s\\n" "$STDIO_TEST_VAR"']);
     (t as any).options.env = { STDIO_TEST_VAR: 'hello-env' };

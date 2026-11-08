@@ -8,6 +8,7 @@ import { FORK_KEY, type ForkSeed } from './swarm/fork';
 import type { CachePacing } from '@/models/providers/prompt-cache';
 import { companionCacheScope } from '@/core/companion/history';
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
 import { usageContextOf } from '@/core/agent/context';
 import { limitKindOf } from '@/core/errors/limit-refusal';
@@ -60,6 +61,7 @@ import { DriftDetector } from './agent-worker/drift-detector';
 import { FailureStreakDetector, failureStreakNudge, failureStreakStop } from './agent-worker/failure-streak-detector';
 import { ToolLoopDetector } from './agent-worker/tool-loop-detector';
 import { isRootAgent } from './types';
+import { getAgentHooks, HookFailedError } from './agent/hooks';
 import type { AgentMessage, ToolCall } from './types';
 import { omitGroupTranscripts } from '@/core/channels/group-context';
 import { omitSpaceTurnContext } from '@/core/spaces/turn-context';
@@ -1414,6 +1416,7 @@ export class AgentWorker extends BaseAgentWorker {
           summaryModelName: this.context.modelName,
           userId: this.context.userId,
           ...this.summaryContext(),
+          hook: this.compactHook(),
         });
         if (proactiveRemoved > 0) {
           // A summary replaces the start of the history: no signed reasoning
@@ -1436,6 +1439,7 @@ export class AgentWorker extends BaseAgentWorker {
         summaryModelName: this.context.modelName,
         userId: this.context.userId,
         ...this.summaryContext(),
+        hook: this.compactHook(),
       });
 
       if (removed > 0) {
@@ -1492,7 +1496,9 @@ export class AgentWorker extends BaseAgentWorker {
         // way. The EAI_AGAIN DNS blip is deliberately excluded — see isFatalConnectionError —
         // so it falls through to the transient-retry path below.
         // Confidential content and no local model: stop and say so (never retried).
-        if (err instanceof ProtectionRoutingError) {
+        // A fail-closed `context` hook threw: nothing was sent, and retrying
+        // would only run the broken handler again.
+        if (err instanceof ProtectionRoutingError || err instanceof HookFailedError) {
           this.emit('error', { error: errMsg, recoverable: false });
           throw err;
         }
@@ -1524,6 +1530,7 @@ export class AgentWorker extends BaseAgentWorker {
             userId: this.context.userId,
             // Over the window already: a continuation of it would overflow too.
             priority: this.turnPriority(),
+            hook: this.compactHook(),
           });
           // Both rewrites above edit earlier turns: no signed reasoning stays.
           this.messages = this.withoutStaleReasoning(compacted);
@@ -2317,7 +2324,72 @@ export class AgentWorker extends BaseAgentWorker {
     const shape = this.lastRequestShape;
     const fits = this.estimateRequestTokens() + SUMMARY_MAX_TOKENS < this.config.contextWindowSize * 0.95;
     if (!shape || !fits) return { priority };
+    // The stored conversation, not what a `context` hook made of the last
+    // request (`requestMessages`). Cache: the hook is meant to append or touch
+    // the newest message, so the stored history shares the cached prefix up
+    // to the hook's edit — which a compaction then replaces anyway. Re-running
+    // the hook here would fire it outside a model turn and lose the message
+    // identity `keptAfter` counts by. A summary is the `compact:before` hook's
+    // to shape (docs/PLUGINS.md): the standalone summarizer reads the stored
+    // conversation too.
     return { priority, continuation: { messages: this.messages, tools: shape.tools, cacheScope: shape.cacheScope, cachePacing: shape.cachePacing, sessionId: this.context.sessionId } };
+  }
+
+  /** Who this worker is, as the agent hooks (core/agent/hooks.ts) see it. */
+  private hookAgent(): import('@/core/agent/hooks').HookAgentContext & { root: boolean } {
+    return {
+      userId: this.context.userId,
+      sessionId: this.context.sessionId,
+      role: this.context.role,
+      workspaceId: this.context.workspaceId ?? null,
+      metadata: this.context.metadata as Record<string, unknown> | undefined,
+      root: isRootAgent(this.context),
+    };
+  }
+
+  /** The in-loop compaction's `compact:before` identity. */
+  private compactHook(): import('@/utils/context-compaction').CreateLLMSummaryOptions['hook'] {
+    return { source: 'agent', agent: this.hookAgent() };
+  }
+
+  /**
+   * The messages this request sends: the stored conversation, or, when a
+   * `context` hook is subscribed, what it made of a deep copy of it.
+   *
+   * Never written back to `this.messages`: a hook transforms one request and
+   * cannot silently rewrite the history the next request, a compaction or the
+   * transcript start from. Cache: whatever a hook changes in an earlier message
+   * breaks the provider prompt cache from that message on — hooks should
+   * append, or touch only the newest message (docs/PLUGINS.md).
+   *
+   * Signed reasoning: `guardSignedReasoning` ran on the stored conversation,
+   * before the hook. A Claude thinking block is bound to every message before
+   * it, so from the first message the hook changed, dropped or inserted
+   * before on, the outgoing copy drops its signed reasoning.
+   *
+   * Fail-closed: a handler that throws rejects with `HookFailedError` and
+   * nothing is sent — a redaction that crashed halfway must not go out half
+   * applied. For the same reason a conversation that cannot be deep-copied
+   * (something uncloneable in an opaque provider payload) fails the request:
+   * sending it unhooked would skip a redaction, and a shallow copy would let a
+   * handler mutate the live history through it. So does a handler that leaves
+   * `messages` not an array.
+   */
+  private async requestMessages(model: string): Promise<AgentMessage[]> {
+    const hooks = getAgentHooks();
+    if (!hooks.has('context')) return this.messages;
+    let copy: AgentMessage[];
+    try {
+      copy = structuredClone(this.messages);
+    } catch (err) {
+      throw new HookFailedError('context', new Error(`the conversation cannot be copied for the hook (${(err as Error).message})`));
+    }
+    const ctx = await hooks.fireFailClosed('context', { agent: this.hookAgent(), model, messages: copy, iteration: this.iteration });
+    if (!Array.isArray(ctx.messages)) throw new HookFailedError('context', new Error('a handler left messages not an array'));
+    const sent = ctx.messages;
+    let firstChanged = 0;
+    while (firstChanged < sent.length && firstChanged < this.messages.length && isDeepStrictEqual(sent[firstChanged], this.messages[firstChanged])) firstChanged++;
+    return firstChanged < sent.length ? this.withoutStaleReasoning(sent, firstChanged) : sent;
   }
 
   /** The previous request of this worker's conversation, for `classifyCacheBreak`. */
@@ -2705,7 +2777,8 @@ export class AgentWorker extends BaseAgentWorker {
     const completionOpts = applyTopicParamOverrides(
       {
         model: litellmModel,
-        messages: this.messages,
+        // `context` hooks transform this request only (`requestMessages`).
+        messages: await this.requestMessages(litellmModel),
         // Provider cache affinity (OpenAI/Mistral prompt_cache_key, Grok
         // x-grok-conv-id, OpenRouter's endpoint pin), hashed with the session
         // and user. A child scopes by its ROLE, not its agent id: siblings of
