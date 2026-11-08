@@ -30,7 +30,7 @@ test('a failed refresh retains the last value and marks it stale', async ({ auth
 test('five navigation groups expose advanced pages and keep deep links', async ({ authenticatedPage: page }) => {
   await page.goto('/');
   const nav = page.locator('aside nav');
-  for (const name of ['Work', 'Library', 'Automations', 'Connections', 'Settings']) {
+  for (const name of ['Work', 'Agents', 'Library', 'Connections', 'Settings']) {
     await expect(nav.locator('summary').filter({ hasText: new RegExp(`^${name}$`) })).toBeVisible();
   }
   await nav.locator('summary').filter({ hasText: /^Settings$/ }).focus();

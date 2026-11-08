@@ -354,6 +354,40 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Roster: roles as agents.** *Agents → Roster* lists the root agent and every
+  specialist role with its lane, tools, heartbeat switch (next check and latest
+  decision), assigned to-dos and today's runs. New route:
+  `GET /api/agents/roster`. See [docs/MISSION-CONTROL.md](docs/MISSION-CONTROL.md#roster).
+
+- **Triggers page and recorded heartbeat decisions.** *Agents → Triggers*
+  shows every heartbeat, schedule, webhook and event hook with what it did
+  today on a timeline, the heartbeat funnel (checks → skip reasons → turns
+  started) and, per heartbeat, why it did or did not run. Each gate decision is
+  now stored in `heartbeat_checks` (migration `0171_heartbeat_checks`, ids and a
+  reason only, pruned after 14 days) instead of a debug log line. New route:
+  `GET /api/agents/triggers`. See [docs/HEARTBEAT.md](docs/HEARTBEAT.md#seeing-what-it-decided).
+
+- **Mission control and an Agents section.** The sidebar has an *Agents* group
+  (Mission control, pipelines, hooks & schedules). Mission control lists every
+  agent run of the day with what started it — you in chat, another agent, the
+  heartbeat, a schedule, a webhook, a pipeline or Companion — plus what is
+  running now, approvals waiting, recorded spend and the next scheduled runs.
+  Agents now record their origin (`agents.source`, `agents.origin`, migration
+  `0170_agent_origin`); older rows show *Not recorded*. The previous agent list
+  moved to *Run history* (`/agents/history`). New route:
+  `GET /api/agents/overview`. See [docs/MISSION-CONTROL.md](docs/MISSION-CONTROL.md).
+
+- **Context inspector in the web chat.** A *Context* panel shows how full the
+  root agent's context window was at the start of the latest turn and what
+  filled it, in nine fixed categories (guardrails, role & persona, delegation,
+  workspace, tool definitions, skills, turn context, conversation, other), with
+  caps marked, the provider's reported input beside the estimate, growth by
+  turn, the text of each section for the latest turn, and a *Compact
+  conversation* button. Sizes are stored with each turn's user message
+  (`metadata.promptComposition`, sizes only); the text stays in memory. New
+  route: `GET /api/sessions/:id/context` (owner only). See
+  [docs/CONTEXT-INSPECTOR.md](docs/CONTEXT-INSPECTOR.md).
+
 - **The pipeline plan loop is visible and configurable.** In the template
   editor, a step can be marked **Writes the plan** or **Repeat for each plan
   item**. The list, the graph and the run view frame the steps that repeat and

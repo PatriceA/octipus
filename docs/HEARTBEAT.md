@@ -53,6 +53,21 @@ channel** (so the run is tagged `origin='heartbeat'` for audit), seeded with the
 pending checklist plus your standing instructions. **Silence is the default:** an
 empty probe costs zero tokens.
 
+## Seeing what it decided
+
+Every gate decision of a due heartbeat is kept in `heartbeat_checks`: when it
+checked, whether it started a turn, the skip reason when it did not
+(`quiet_hours`, `daily_cap`, `quota`, `spend_budget`, `in_flight`,
+`nothing_pending`, `tasks_permission_required`) and, for a role heartbeat, how
+many to-dos were ready. Ids, a reason and a count only — no task titles, mail or
+PR text. Rows older than 14 days are pruned by the heartbeat itself; a failed
+write is logged and never stops the tick.
+
+**Agents → Triggers** (`/agents/triggers`) shows them: a timeline of today's
+checks and runs per trigger, the day's funnel (checks → each skip reason →
+turns started), and for each heartbeat the last decisions with their reasons
+and the next check. See [MISSION-CONTROL.md](MISSION-CONTROL.md#triggers).
+
 ## Inbox watch
 
 With **Watch my inbox** on (Settings → Heartbeat, `triggerConfig.watchEmail`

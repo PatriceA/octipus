@@ -65,6 +65,7 @@ import { omitGroupTranscripts } from '@/core/channels/group-context';
 import { omitSpaceTurnContext } from '@/core/spaces/turn-context';
 import { inlineUiRepairMessage, storeInlineUiBlocks, stubInlineUiFences } from '@/core/inline-ui/extract';
 import { getRunContext } from '@/core/run-context';
+import { measureRootRequest, recordLatestComposition, takeStagedRootPrompt, withoutText } from '@/core/agent/prompt-composition';
 import { transformOutsideInlineUiFences, withoutInlineUiFences } from '@/shared/inline-ui';
 import { type CacheProbe, classifyCacheBreak, type PrefixSignature, prefixSignature } from '@/models/cache-break';
 import { recordPromptCacheBreak } from '@/core/telemetry';
@@ -695,6 +696,7 @@ export class AgentWorker extends BaseAgentWorker {
     this.pendingPromptContext = '';
     const message: AgentMessage = { role: 'user', content: [promptContext, content].filter(Boolean).join('\n\n'), timestamp: new Date() };
     this.omittedContext = omitted.length ? { content: message.content as string, omitted } : undefined;
+    const composition = this.measurePromptComposition(content, omitted);
     this.messages.push(message);
 
     // Only persist for the root agent — and never in a room, where the
@@ -709,6 +711,7 @@ export class AgentWorker extends BaseAgentWorker {
       const metadata = {
         trigger:this.context.trigger,
         ...(storedContext ? { promptContext: storedContext } : {}),
+        ...(composition ? { promptComposition: withoutText(composition) } : {}),
         ...(provenance ? { inlineUiProvenance: { id: provenance } } : {}),
       };
       const row = await messageRepository.create({
@@ -719,9 +722,33 @@ export class AgentWorker extends BaseAgentWorker {
         metadata: Object.keys(metadata).length ? metadata : undefined,
       }, this.cacheGeneration);
       message.sourceMessageId = row.id;
+      if (composition) recordLatestComposition(this.context.sessionId, { agentId: this.context.id, messageId: row.id, composition });
       this.userCursor = row.id ? { id: row.id, createdAt: row.createdAt.toISOString() } : undefined;
       if(row.metadata?.visibility!=='internal')await sessionRepository.incrementMessageCount(this.context.sessionId);
     }
+  }
+
+  /**
+   * The root's request, by category, at the moment it is complete: the staged
+   * system parts, the tools this request advertises, the history loaded under
+   * the session lock and the new message (Context inspector). Measured once per
+   * turn — a mid-run injection is not a new turn — and never for a worker.
+   * Recorded in memory here so a turn that stores no user row (a room) is
+   * still shown; `addUserMessage` attaches the stored row's id.
+   */
+  private measurePromptComposition(userText: string, omitted: readonly string[] = []) {
+    if (!isRootAgent(this.context)) return undefined;
+    const staged = takeStagedRootPrompt(this.context.id);
+    if (!staged) return undefined;
+    const composition = measureRootRequest({
+      staged,
+      tools: this.toolExecutor.toolsDisabled ? [] : this.getAdvertisedToolHandlers(),
+      history: this.messages,
+      userText,
+      omitted,
+    });
+    recordLatestComposition(this.context.sessionId, { agentId: this.context.id, composition });
+    return composition;
   }
 
   override isSettling(): boolean {

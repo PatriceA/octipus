@@ -1,4 +1,5 @@
 import { and, desc, eq, sql } from 'drizzle-orm';
+import { withAgentOrigin } from '@/core/agent-origin';
 import { EventEmitter } from 'events';
 import type { TriggerType } from '@/core/types';
 import { getDb } from '@/db/postgres';
@@ -116,7 +117,9 @@ export class HookManager extends EventEmitter {
       hook = await this.getHook(hookId);
       if (!hook || !hook.isEnabled) return [];
     }
-    const result = await this.runHook(hook, event, context, options);
+    // Every agent this hook starts records it (Mission control's "Started by").
+    const source = options.manualTest ? 'manual' : hook.trigger === 'heartbeat' ? 'heartbeat' : hook.trigger === 'webhook' ? 'webhook' : 'schedule';
+    const result = await withAgentOrigin({ source, hookId: hook.id, hookName: hook.name }, () => this.runHook(hook!, event, context, options));
     return result ? [result] : [];
   }
 

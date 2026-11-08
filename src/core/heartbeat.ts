@@ -54,11 +54,12 @@ import {taskProvenance,type TaskProvenance} from '@/core/tasks/provenance';
 import { isJobOn } from '@/core/modules/registry';
 import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import type { HeartbeatConfig } from '@/config/schema';
 import { getDb } from '@/db/postgres';
 import { type Hook, hooks, SERVER_TRIGGER_CONFIG_KEYS } from '@/db/schema/hooks';
+import { heartbeatChecks } from '@/db/schema/heartbeat-checks';
 import { notifications } from '@/db/schema/notifications';
 import { tasks } from '@/db/schema/tasks';
 import { users } from '@/db/schema/users';
@@ -708,6 +709,8 @@ interface GateEvaluation {
   leaseToken?: string;
   /** Mail this run is given, for the caller to mark surfaced before it fires. */
   surfacedEmails?: InboxItem[];
+  /** Role hooks that reached the probe: the role's ready to-dos. */
+  readyTasks?: number;
 }
 
 /** Read the per-hook daily-run counter, resetting it when the calendar day rolls over. */
@@ -795,14 +798,14 @@ export async function evaluateHeartbeatGate(
       const ready = await probeRoleWork(hook.userId, role,true);
       if (ready.length === 0) {
         await giveBack();
-        return skip('nothing_pending');
+        return { ...skip('nothing_pending'), readyTasks: 0 };
       }
       const allowed = await (deps.boardWritesAllowed ?? defaultBoardWritesAllowed)(hook);
       if (!allowed) {
         await giveBack();
-        return { ...skip('tasks_permission_required'), boardPermissionMissing: true };
+        return { ...skip('tasks_permission_required'), boardPermissionMissing: true, readyTasks: ready.length };
       }
-      return { decision: { run: true, message: renderRoleHeartbeatMessage(role, ready) }, runsToday, dayKey, seen: previouslySeen, boardPermissionMissing: false, leaseToken,taskProvenance:await taskProvenance(hook.userId,ready) };
+      return { decision: { run: true, message: renderRoleHeartbeatMessage(role, ready) }, runsToday, dayKey, seen: previouslySeen, boardPermissionMissing: false, leaseToken,taskProvenance:await taskProvenance(hook.userId,ready), readyTasks: ready.length };
     } catch (err) {
       await giveBack();
       throw err;
@@ -1228,6 +1231,7 @@ export async function maybeRunHeartbeats(
     }
 
     if (notifyPermission) await notifyBoardPermissionRequired(hook, role ?? '');
+    await recordHeartbeatCheck(hook, now, gate);
 
     // Mail the turn is about to be given is marked surfaced first: a turn
     // that dies before it marks the mail handled leaves it to come back
@@ -1286,6 +1290,37 @@ export async function maybeRunHeartbeats(
       }
     }
   });
+  await pruneHeartbeatChecks(now);
+}
+
+/** How long gate decisions are kept for the Triggers page. */
+export const HEARTBEAT_CHECK_RETENTION_DAYS = 14;
+
+/**
+ * Keep the gate's decision (docs/HEARTBEAT.md, "Seeing what it decided").
+ * Measurement only: a failed write is logged and the tick goes on.
+ */
+async function recordHeartbeatCheck(hook: Hook, now: Date, gate: GateEvaluation): Promise<void> {
+  try {
+    await getDb().insert(heartbeatChecks).values({
+      hookId: hook.id,
+      userId: hook.userId,
+      checkedAt: now,
+      ran: gate.decision.run,
+      reason: gate.decision.run ? null : gate.decision.reason,
+      readyTasks: gate.readyTasks ?? null,
+    });
+  } catch (err) {
+    coreLogger.warn({ err, hookId: hook.id }, 'Heartbeat decision not recorded (the Triggers page will miss this check)');
+  }
+}
+
+async function pruneHeartbeatChecks(now: Date): Promise<void> {
+  try {
+    await getDb().delete(heartbeatChecks).where(lt(heartbeatChecks.checkedAt, new Date(now.getTime() - HEARTBEAT_CHECK_RETENTION_DAYS * 86_400_000)));
+  } catch (err) {
+    coreLogger.warn({ err }, 'Old heartbeat decisions could not be pruned');
+  }
 }
 
 /**

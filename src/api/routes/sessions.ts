@@ -13,6 +13,7 @@ import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { readSessionFile, SessionFileError, writeSessionFile } from '@/core/session-files';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import { canActInSession } from '@/core/rooms/access';
 import { contentRepos } from '@/db/repositories/content';
 import { isAuthenticated } from '@/security/principal';
 import { spaceAccessOf, WorkspaceFS } from '@/security/workspace-fs';
@@ -167,6 +168,20 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       detail: { tags: ['sessions'] },
     }
   )
+
+  // What the root agent's requests were made of, by category (Context
+  // inspector). The prompt text is the owner's alone, as session usage is:
+  // not a room member's, not an admin's.
+  .get('/:id/context', async ({ user, principal, params, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const session = await sessionRepository.findById(params.id);
+    if (!(await canActInSession(session, user.id, 'settings'))) { set.status = 404; return { error: 'Session not found' }; }
+    const { readSessionContext } = await import('@/core/agent/session-context');
+    return readSessionContext(params.id);
+  }, {
+    params: t.Object({ id: t.String({ pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' }) }),
+    detail: { tags: ['sessions'] },
+  })
 
   // Plans share the session's ownership rules and remain available after reload.
   .get('/:id/plan', async ({ user, principal, params, set }) => {

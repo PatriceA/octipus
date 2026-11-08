@@ -30,6 +30,7 @@ import SidePanel from '@/components/chat/side-panel';
 import MonitorPanel from '@/components/chat/monitor-panel';
 import LearningPanel from '@/components/chat/learning-panel';
 import WorkPlanPanel from '@/components/chat/work-plan-panel';
+import ContextPanel from '@/components/chat/context-panel';
 import { GlobalPermissionBanner } from '@/components/global-permission-banner';
 import type { SwarmTreeEvent } from '@/components/swarm-tree';
 import { useVoiceRealtime } from '@/hooks/useVoiceRealtime';
@@ -2265,6 +2266,7 @@ export default function ChatPage() {
           <MonitorPanel key={`monitors-${activeSessionId ?? 'new'}`} sessionId={activeSessionId} />
           <LearningPanel sessionId={activeSessionId} />
           <WorkPlanPanel key={activeSessionId ?? 'new'} sessionId={activeSessionId} running={isLoading} onPlanMode={enabled => { void sendMessage(enabled ? '/plan on' : '/plan off'); }} />
+          <ContextPanel key={`context-${activeSessionId ?? 'new'}`} sessionId={activeSessionId} running={isLoading} onCompact={() => { void sendMessage('/compact'); }} />
           {showSidePanel && <details open className="border-t border-outline-variant/50 p-4"><summary className="cursor-pointer text-sm text-on-surface-variant">Activity & settings</summary>
           <SidePanel
             totalTokens={sessionTotalTokens}

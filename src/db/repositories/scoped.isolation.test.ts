@@ -247,6 +247,41 @@ describe('ScopedAgentRepo cross-tenant isolation', () => {
     const result = await alice.agents.findBySession(bobSession.id);
     expect(result).toEqual([]);
   });
+
+  test('Mission control reads: own runs of the day with origin, own cost and spend only', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    // The migrated columns hold what the spawn recorded.
+    await executeRaw(`UPDATE agents SET source = 'heartbeat', origin = '{"source":"heartbeat","hookName":"writer heartbeat"}'::jsonb WHERE id = 'agent-alice'`);
+    await executeRaw(`INSERT INTO cost_log (user_id, agent_id, model_name, input_tokens, output_tokens, total_cost)
+      VALUES ('${aliceId}', 'agent-alice', 'm', 10, 5, 0.25), ('${bobId}', 'agent-alice', 'm', 10, 5, 9), ('${bobId}', 'agent-bob', 'm', 10, 5, 4)`);
+    const alice = await asAlice();
+    const since = new Date(Date.now() - 86_400_000);
+    const runs = await alice.agents.listOwnSince(since);
+    expect(runs.map((r) => r.id)).toEqual(['agent-alice']);
+    expect(runs[0]).toMatchObject({ source: 'heartbeat', origin: { hookName: 'writer heartbeat' } });
+    // Bob's row on Alice's agent id and Bob's own agent are not hers to see.
+    expect([...(await alice.agents.costByAgent(['agent-alice', 'agent-bob']))]).toEqual([['agent-alice', 0.25]]);
+    expect(await alice.agents.spendSince(since)).toBeCloseTo(0.25);
+    expect(await alice.agents.listOwnSince(new Date(Date.now() + 60_000))).toEqual([]);
+  });
+
+  test('Triggers reads: only own hooks\' heartbeat decisions and executions', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    const aliceHook = '33333333-3333-3333-3333-333333333333';
+    const bobHook = '44444444-4444-4444-4444-444444444444';
+    await executeRaw(`INSERT INTO hooks (id, user_id, name, trigger, action, trigger_config, action_config) VALUES
+      ('${aliceHook}', '${aliceId}', 'alice hb', 'heartbeat', 'spawn_agent', '{}'::jsonb, '{}'::jsonb),
+      ('${bobHook}', '${bobId}', 'bob hb', 'heartbeat', 'spawn_agent', '{}'::jsonb, '{}'::jsonb)`);
+    await executeRaw(`INSERT INTO heartbeat_checks (hook_id, user_id, ran, reason) VALUES
+      ('${aliceHook}', '${aliceId}', false, 'nothing_pending'), ('${bobHook}', '${bobId}', true, NULL)`);
+    await executeRaw(`INSERT INTO hook_executions (hook_id, user_id, source, status) VALUES
+      ('${aliceHook}', '${aliceId}', 'hook', 'success'), ('${bobHook}', '${bobId}', 'hook', 'error')`);
+    const alice = await asAlice();
+    const since = new Date(Date.now() - 86_400_000);
+    // Even asked for Bob's hook id, Alice gets her own rows only.
+    expect((await alice.hooks.heartbeatChecksSince([aliceHook, bobHook], since)).map((c) => [c.hookId, c.reason])).toEqual([[aliceHook, 'nothing_pending']]);
+    expect((await alice.hooks.executionsSince([aliceHook, bobHook], since)).map((x) => [x.hookId, x.status])).toEqual([[aliceHook, 'success']]);
+  });
 });
 
 describe('ScopedDocumentRepo cross-tenant isolation', () => {

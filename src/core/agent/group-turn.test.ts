@@ -200,7 +200,11 @@ describe('group-channel turns', () => {
     expect(turnContextArg()).toContain('asked you to take this on: it is task task-1 "Draft the notes"');
     expect(turnContextArg()).toContain('Tasks you took on in this thread: task-1');
     // runRootAgent(…, extraSystemContext, workspaceId, outputDirective, extras)
-    expect(fx.root.mock.calls[0]![11]).toEqual({ takenTasks: [{ id: 'task-1', title: 'Draft the notes' }] });
+    const extras = fx.root.mock.calls[0]![11] as { takenTasks: unknown; turnContextParts: Array<{ label: string; text: string }> };
+    expect(extras.takenTasks).toEqual([{ id: 'task-1', title: 'Draft the notes' }]);
+    // The labelled pieces the Context inspector shows add up to the block the agent reads.
+    expect(extras.turnContextParts.map((p) => p.text).join('')).toBe(turnContextArg());
+    expect(extras.turnContextParts.find((p) => p.text.includes('Tasks you took on'))?.label).toBe('Group conversation');
   });
 
   test('forwards original attachment references for model-aware root delivery', async () => {
@@ -219,6 +223,6 @@ describe('group-channel turns', () => {
   test('a 1:1 session never looks for taken tasks', async () => {
     fx.taken = [{ id: 'task-1', title: 'x' }];
     await new AgentService().handleMessage('dm-session', 'user', 'hello there friend, summarise my week', 'slack');
-    expect(fx.root.mock.calls[0]![11]).toEqual({ takenTasks: [] });
+    expect(fx.root.mock.calls[0]![11]).toMatchObject({ takenTasks: [] });
   });
 });
