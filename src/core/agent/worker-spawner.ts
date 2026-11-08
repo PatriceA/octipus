@@ -38,6 +38,7 @@ import { shouldUseLazyDiscovery } from './lazy-tools';
 import type { ModelSelector } from './model-selector';
 import { isPlanMode, stripMutatingTools } from './plan-mode';
 import { estimateToolSchemaTokens, logPromptComposition } from './prompt-budget';
+import { FILE_CHANGES_REFUSED_KEY } from '@/core/tool-executor';
 import { PromptBuilder } from './prompt-builder';
 import { type DeclaredPurpose, toolsetGaps } from './role-contract';
 import { formatCriticalRules, getBoundConnectorIds, getRoleConfig, getToolsForRole, SECURITY_PREAMBLE } from './roles';
@@ -97,7 +98,11 @@ const AGENTS_MD_GUIDE_TOKEN_BUDGET = 2000;
  *
  * Copied key by key so the escalation is opt-in rather than opt-out.
  */
-export function pipelineMetadata(metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+export function pipelineMetadata(metadata: Record<string, unknown> | undefined, opts: { planMode?: boolean } = {}): Record<string, unknown> | undefined {
+  // Plan mode's refusal is the worker's own (the session is planning), not
+  // anything copied from the caller: the executor then refuses repository
+  // writes too, which the file-writer strip cannot see.
+  if (opts.planMode) return { ...pipelineMetadata(metadata), [FILE_CHANGES_REFUSED_KEY]: 'plan_mode' };
   if (!metadata) return undefined;
   const { pipelineId, nodeKey, hostServices, resumeKey, attemptId } = metadata as Record<string, unknown>;
   const sourceFiles=Array.isArray(metadata.companionSourceFiles)?metadata.companionSourceFiles.slice(0,20).filter((file):file is import('@/core/session-files').AttachedFileRef=>!!file&&typeof file==='object'&&typeof (file as {path?:unknown}).path==='string').map(({path,version,protectionLevel})=>({path,version,protectionLevel})):[];
@@ -376,11 +381,16 @@ export async function spawnWorker(
   //
   // Read from the session so it holds however deep the delegation went —
   // delegation is exactly where an agent short of a tool looks next.
+  let planModeWorker = false;
   {
     const planSession = await sessionRepository.findById(context.sessionId);
     if (isPlanMode(planSession?.context as import('@/db/schema/sessions').SessionContext | undefined)) {
       const before = roleTools.length;
       roleTools = stripMutatingTools(roleTools);
+      // And the executor's plan-mode rule for what the strip cannot see:
+      // repository writes (git, GitHub, GitLab). On the WORKER's metadata:
+      // `context` is the caller's.
+      planModeWorker = true;
       coreLogger.info(
         { role: agentRole, from: before, to: roleTools.length },
         'Plan mode: file-mutating tools withheld from worker',
@@ -1024,7 +1034,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     // forwarding them the agent's own metadata is empty and the `plan` tool
     // answers "Not running inside a pipeline" — which silently disables every
     // `producesPlan`/`loopOverPlan` (foreach) stage.
-    contextMetadata: pipelineMetadata(context.metadata),
+    contextMetadata: pipelineMetadata(context.metadata, { planMode: planModeWorker }),
   }).catch((err: unknown) => {
     // A worker that never started still closes its context-hook record.
     void finishContextTurn(contextTurn, { outcome: 'error' });
@@ -1328,6 +1338,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       systemPrompt,
       tools: workerTools,
       toolAdvertisement,
+      planMode: planModeWorker,
       onCounters: overrides?.onCounters,
       onTokens: overrides?.onTokens,
       maxTokenBudget: overrides?.maxTokenBudget,
@@ -1364,6 +1375,8 @@ interface WorkerRespawnContext {
   systemPrompt: string;
   tools: import('@/core/agent-base').ToolHandler[];
   toolAdvertisement: import('@/core/agent-base').ToolAdvertisement;
+  /** The failed worker ran in plan mode; its replacement does too. */
+  planMode?: boolean;
   /** Caller's side-effect sink — the respawned worker reports through it too. */
   onCounters?: (counters: import('@/core/swarm/receipt').SideEffectCounters | null) => void;
   /** Caller's token sink. Called once per worker that ran, so a failed attempt
@@ -1499,7 +1512,7 @@ export async function handleWorkerFailure(
       tools: respawnCtx.tools,
       toolAdvertisement: respawnCtx.toolAdvertisement,
       maxTokenBudget: respawnCtx.maxTokenBudget,
-      contextMetadata: pipelineMetadata(context.metadata),
+      contextMetadata: pipelineMetadata(context.metadata, { planMode: respawnCtx.planMode === true }),
       parentSignal: recoverySignal,
     });
     respawnCtx.onWorkerReady?.(retryWorker);

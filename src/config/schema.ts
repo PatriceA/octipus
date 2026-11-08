@@ -307,6 +307,12 @@ export const agentConfigSchema = z.object({
    */
   smallModelMaxTools: z.number().min(1).max(50).default(7),
   lazyToolDiscovery: z.boolean().default(true),
+  /**
+   * On the lazy path with a first-party Claude model: send every tool, defer
+   * the long tail behind Anthropic's tool search, and keep the tool block
+   * identical for the whole conversation (providers/tool-search.ts).
+   */
+  nativeToolSearch: z.boolean().default(true),
   /** Hard wall-clock for one root turn (ms). */
   turnTimeoutMs: z.number().min(0).default(36_000_000), // 10 hours
   /** Root-turn wall-clock when the turn was triggered by a hook (ms). */

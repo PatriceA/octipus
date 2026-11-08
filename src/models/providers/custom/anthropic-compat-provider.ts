@@ -403,9 +403,10 @@ export function markHistoryCacheBreakpoint(messages: AnthropicMessage[], convers
   // `cache_control` on a `thinking` / `redacted_thinking` block is a 400, so
   // mark the last block that can carry one. A turn that is nothing but
   // thinking gets no breakpoint rather than a rejected request.
+  // Nor on a server tool's own blocks (tool search): replayed as returned.
   const last = [...prev.content]
     .reverse()
-    .find((b) => b.type !== 'thinking' && b.type !== 'redacted_thinking') as
+    .find((b) => b.type !== 'thinking' && b.type !== 'redacted_thinking' && b.type !== 'server_tool_use' && b.type !== 'tool_search_tool_result') as
       | { cache_control?: ReturnType<typeof cacheControl> }
       | undefined;
   if (!last) return false;
@@ -421,9 +422,15 @@ export function markHistoryCacheBreakpoint(messages: AnthropicMessage[], convers
  * system, history).
  */
 export function markToolsCacheBreakpoint(tools: Array<Record<string, unknown>>, ttl?: CacheTtl): boolean {
-  if (tools.length === 0) return false;
-  tools[tools.length - 1] = { ...tools[tools.length - 1], cache_control: cacheControl(ttl) };
-  return true;
+  // The last tool that is loaded into the prefix: a `defer_loading` tool
+  // cannot carry `cache_control` (400), and is outside the prefix anyway; a
+  // server tool (tool search) has no schema of its own to anchor on.
+  for (let i = tools.length - 1; i >= 0; i--) {
+    if (tools[i].defer_loading === true || !('input_schema' in tools[i])) continue;
+    tools[i] = { ...tools[i], cache_control: cacheControl(ttl) };
+    return true;
+  }
+  return false;
 }
 
 /** Translate OpenAI tool schema → Anthropic tool schema (`input_schema`). */

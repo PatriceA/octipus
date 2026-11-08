@@ -17,6 +17,12 @@ import { modelLogger } from '@/utils/logger';
 
 export interface CompletionOptions {
   model: string;
+  /**
+   * Tool names to send with `defer_loading` behind Anthropic's server-side
+   * tool search (providers/tool-search.ts). First-party Anthropic provider
+   * only; every other provider ignores it and sends the tools as given.
+   */
+  deferredTools?: string[];
   cachePolicy?: 'default' | 'off' | 'session';
   /** Logical agent conversation and clear generation, for provider affinity. */
   cacheScope?: string;
