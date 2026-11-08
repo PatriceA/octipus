@@ -1,6 +1,6 @@
 import { anthropicNativeMessagesEnabled, type ProviderSettings, providerControls } from '@/shared/provider-settings';
 import type { CompletionOptions } from './litellm-client';
-import { cacheAffinityKey } from './providers/usage';
+import { promptCacheKey } from './providers/prompt-cache-key';
 import { isAnthropicFamily } from './providers/prompt-cache';
 
 /** Only opt schemas into strict mode when doing so preserves optionality. */
@@ -62,10 +62,11 @@ export function applyProviderSettings(options: CompletionOptions, provider: stri
     extra.thinking = { type: 'enabled', budget_tokens: settings.thinkingBudget };
   }
   // OpenAI routes a request to a cached prefix by `prompt_cache_key` combined
-  // with the prefix itself; without one, every session sharing the system
-  // prompt lands on the same machines and overflows them. Same session ⇒ same
-  // key, so it is sent by default on the direct provider (Grok and Mistral do
-  // the same in their providers) — it used to need `cachePolicy: 'session'`.
+  // with the prefix itself. The key names the prefix FAMILY (model, agent kind,
+  // tool names), so sessions that share the expensive part of the prompt share
+  // a cache, and splits a family into stable per-session buckets only above
+  // OpenAI's ~15 requests a minute per key (`prompt-cache-key.ts`). Sent by
+  // default on the direct provider — it used to need `cachePolicy: 'session'`.
   // `session` adds the 24-hour retention, for conversations whose turns are
   // further apart than the in-memory cache lives. Behind a LiteLLM proxy or a
   // custom OpenAI-compatible endpoint the upstream is unknown and an older one
@@ -75,7 +76,7 @@ export function applyProviderSettings(options: CompletionOptions, provider: stri
     ? policy !== 'off'
     : (provider === 'litellm' || provider === 'custom-openai') && policy === 'session' && !isAnthropicFamily(options.model);
   if (sendsKey && extra.prompt_cache_key === undefined) {
-    const key = cacheAffinityKey(options.sessionId, options.userId, options.cacheScope);
+    const key = promptCacheKey(options);
     if (key) extra.prompt_cache_key = key;
   }
   if (provider === 'openai' && policy === 'session'

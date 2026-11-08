@@ -245,7 +245,7 @@ session and cache scope (`root:<generation>` for the root agent,
 
 | Provider | Sent |
 | --- | --- |
-| OpenAI | `prompt_cache_key` by default (off with `cachePolicy: 'off'`); `session` adds `prompt_cache_retention: '24h'`, dropped (and retried once) for a model that rejects it |
+| OpenAI | `prompt_cache_key` by default (off with `cachePolicy: 'off'`), naming the prefix family (model, agent kind, tool names) so sessions that share a prefix share a cache, split into stable per-session buckets only above ~15 requests a minute per family; `session` adds `prompt_cache_retention: '24h'` (`prompt_cache_options: { ttl: '12h' }` on GPT-5.6+), dropped (and retried once) for a model that rejects it |
 | Grok | `x-grok-conv-id` header |
 | Mistral | `prompt_cache_key` |
 | OpenRouter | the key as `user`, plus a per-conversation endpoint pin (below) |

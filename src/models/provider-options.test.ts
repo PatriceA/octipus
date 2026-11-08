@@ -29,7 +29,7 @@ test('GPT-5.6+ gets prompt_cache_options.ttl instead of the replaced retention f
   // A caller's own lifetime setting wins.
   expect(applyProviderSettings({ ...options, model: 'gpt-5.6', extraBody: { prompt_cache_options: { ttl: '30m' } } }, 'openai', { cachePolicy: 'session' }).extraBody?.prompt_cache_options).toEqual({ ttl: '30m' });
 });
-test('OpenAI gets a session cache key by default, none when cache hints are off', () => {
+test('OpenAI gets a prefix-family cache key by default, none when cache hints are off', () => {
   const byDefault = applyProviderSettings(options, 'openai');
   expect(byDefault.extraBody?.prompt_cache_key).toMatch(/^octi-/);
   expect(byDefault.extraBody).not.toHaveProperty('prompt_cache_retention');
@@ -39,6 +39,10 @@ test('OpenAI gets a session cache key by default, none when cache hints are off'
     .toBe(applyProviderSettings({ ...options, cacheScope: 'root:' }, 'openai').extraBody?.prompt_cache_key);
   expect(applyProviderSettings({ ...options, cacheScope: 'child:research' }, 'openai').extraBody?.prompt_cache_key)
     .not.toBe(applyProviderSettings({ ...options, cacheScope: 'root:' }, 'openai').extraBody?.prompt_cache_key);
+  // Another session with the same prefix family shares the key: that is the
+  // cross-session reuse a per-session key made impossible.
+  expect(applyProviderSettings({ ...options, sessionId: 'other', userId: 'someone-else', cacheScope: 'root:' }, 'openai').extraBody?.prompt_cache_key)
+    .toBe(applyProviderSettings({ ...options, cacheScope: 'root:' }, 'openai').extraBody?.prompt_cache_key);
   // A caller's own key wins.
   expect(applyProviderSettings({ ...options, extraBody: { prompt_cache_key: 'mine' } }, 'openai').extraBody?.prompt_cache_key).toBe('mine');
 });
