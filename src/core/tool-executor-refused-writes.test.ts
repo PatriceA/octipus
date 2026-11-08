@@ -97,4 +97,14 @@ describe('plan mode also refuses repository writes', () => {
     expect(execute).not.toHaveBeenCalled();
     expect(String(msg.content)).toMatch(/Plan mode is on: .* changes a repository/);
   });
+
+  test('an action computed from the arguments is refused when it writes (git branch with a name)', async () => {
+    const execute = vi.fn(async () => 'ran');
+    const exec = new ToolExecutor(makeContext({ [FILE_CHANGES_REFUSED_KEY]: 'plan_mode' }), () => {});
+    exec.registerTool({ name: 'git__branch', toolId: 'git', description: 'b', parameters: {}, execute,
+      permissionAction: (args: Record<string, unknown>) => (args.name ? 'write' : 'read') });
+    const [msg] = await exec.handleToolCalls([{ id: '1', name: 'git__branch', arguments: { name: 'feat', checkout: true } }]);
+    expect(execute).not.toHaveBeenCalled();
+    expect(String(msg.content)).toMatch(/Plan mode is on/);
+  });
 });

@@ -34,7 +34,7 @@ import { shouldUseLazyDiscovery } from './lazy-tools';
 import { selectLaneWithDecision } from './lane-intent';
 import { selectCoreToolIds, stickyCoreToolIds } from './tool-intent';
 import { isPlanMode, PLAN_MODE_DIRECTIVE } from './plan-mode';
-import { FILE_CHANGE_TOOLS, FILE_CHANGES_REFUSED_KEY, type FileChangeRefusalReason } from '@/core/tool-executor';
+import { FILE_CHANGE_TOOLS, FILE_CHANGES_REFUSED_KEY, type FileChangeRefusalReason, REPO_WRITER_TOOL_IDS } from '@/core/tool-executor';
 import { REPEATABLE_CONTEXT_KEY } from './repeated-context';
 import { isLongTailHandler } from './tool-split';
 import { buildCapabilitiesHandler } from '@/tools/self-report';
@@ -478,8 +478,10 @@ export async function runRootAgent(
       role: rootAgentRole,
       ...(fileChangesRefused ? {
         refused: {
-          reason: fileChangesRefused === 'plan_mode' ? 'plan mode: nothing is changed (git, GitHub and GitLab writes are refused too)' : 'this space role may not change files',
-          tools: rootTools.filter((t) => FILE_CHANGE_TOOLS.has(t.name)).map((t) => t.name),
+          reason: fileChangesRefused === 'plan_mode' ? 'plan mode: nothing is changed (built-in git, GitHub and GitLab writes are refused too; an action computed from its arguments is refused when it writes)' : 'this space role may not change files',
+          tools: rootTools.filter((t) => FILE_CHANGE_TOOLS.has(t.name)
+            || (fileChangesRefused === 'plan_mode' && t.toolId !== undefined && REPO_WRITER_TOOL_IDS.has(t.toolId)
+              && t.replaySafety !== 'read_only' && typeof t.permissionAction === 'string' && t.permissionAction !== 'read')).map((t) => t.name),
         },
       } : {}),
     });

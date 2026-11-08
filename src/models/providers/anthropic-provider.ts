@@ -25,7 +25,7 @@ import {
 } from './custom/anthropic-compat-provider';
 import { claudeToolChoice, dropClaudeSampling } from '../claude-request';
 import { cacheTtlsFor } from './prompt-cache';
-import { withToolSearch } from './tool-search';
+import { withoutSearchBlocks, withToolSearch } from './tool-search';
 import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from './http-retry';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
 import { normalizeUsage } from './usage';
@@ -39,7 +39,7 @@ const ANTHROPIC_VERSION = '2023-06-01';
  * explicit rollback to the OpenAI-compat `/v1/chat/completions` endpoint, which
  * has no prompt caching.
  */
-function nativeMessagesEnabled(): boolean {
+export function nativeMessagesEnabled(): boolean {
   return anthropicNativeMessagesEnabled(process.env.ANTHROPIC_NATIVE_MESSAGES);
 }
 
@@ -239,6 +239,7 @@ export class AnthropicProvider implements ModelProvider {
    * tag so failover classification is identical to the compat path. */
   private buildNativeBody(options: CompletionOptions, stream: boolean): Record<string, unknown> {
     const { system, messages } = toAnthropicMessages(transformMessagesForProvider(options.messages, this.name));
+    if (!options.deferredTools?.length) withoutSearchBlocks(messages as unknown as Array<{ role: string; content: unknown }>);
     const body: Record<string, unknown> = {
       model: options.model,
       messages,

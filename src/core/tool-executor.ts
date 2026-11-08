@@ -98,7 +98,7 @@ export type FileChangeRefusalReason = 'plan_mode' | 'space_role';
  * allowlist of reads, not a list of writes: an action added to one of these
  * later is refused in plan mode until it is declared `read`.
  */
-const REPO_WRITER_TOOL_IDS = new Set(['git', 'github', 'gitlab']);
+export const REPO_WRITER_TOOL_IDS = new Set(['git', 'github', 'gitlab']);
 
 const FILE_CHANGE_REFUSALS: Record<FileChangeRefusalReason, string> = {
   plan_mode: 'Plan mode is on: file-changing tools are refused for this turn. Finish the plan and submit it with exit_plan_mode; nothing was written.',

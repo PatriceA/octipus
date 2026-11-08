@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import type { CompletionOptions } from '../litellm-client';
 import { AnthropicProvider } from './anthropic-provider';
 import { markHistoryCacheBreakpoint, markToolsCacheBreakpoint } from './custom/anthropic-compat-provider';
-import { supportsNativeToolSearch, TOOL_SEARCH_TOOL, withToolSearch } from './tool-search';
+import { supportsNativeToolSearch, TOOL_SEARCH_TOOL, withoutSearchBlocks, withToolSearch } from './tool-search';
 
 const buildBody = (o: CompletionOptions) =>
   (new AnthropicProvider() as unknown as { buildNativeBody(o: CompletionOptions, s: boolean): Record<string, unknown> })
@@ -70,5 +70,28 @@ describe('the request with tool search', () => {
     markHistoryCacheBreakpoint(messages as never, false);
     const blocks = messages[0].content as Array<Record<string, unknown>>;
     expect(blocks.filter((b) => b.cache_control).map((b) => b.type)).toEqual(['text']);
+  });
+});
+
+describe('a request without the search tool', () => {
+  const searched = () => [{
+    role: 'assistant',
+    content: [
+      { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_bm25', input: { query: 'notes' } },
+      { type: 'tool_search_tool_result', tool_use_id: 'srvtoolu_1', content: { type: 'tool_search_tool_search_result', tool_references: [] } },
+      { type: 'text', text: 'found it' },
+    ] as Array<Record<string, unknown>>,
+  }];
+
+  test('drops earlier search blocks it can no longer search with, and keeps the rest of the turn', () => {
+    const messages = searched();
+    withoutSearchBlocks(messages);
+    expect(messages[0].content.map((b) => b.type)).toEqual(['text']);
+  });
+
+  test('a turn of nothing but search blocks is left whole: an empty turn is rejected', () => {
+    const messages = [{ role: 'assistant', content: searched()[0].content.slice(0, 2) }];
+    withoutSearchBlocks(messages);
+    expect(messages[0].content).toHaveLength(2);
   });
 });

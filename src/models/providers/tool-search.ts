@@ -11,11 +11,13 @@
  * is sent on every request; the long tail is marked `defer_loading`, which the
  * API keeps out of the prompt prefix entirely. A tool the model finds through
  * the search tool is appended inline in the conversation as a `tool_reference`
- * (replayed with the rest of the assistant content), so the tool block is the
- * same bytes from the first turn to the last.
+ * (replayed with the rest of the assistant content), so a tool the conversation
+ * reaches for later no longer changes the tool block: the deferred tools add
+ * nothing to the prefix, and the loaded set is a fixed floor.
  *
  * The non-deferred set must itself never change for a conversation, so it is
- * a fixed floor (`NATIVE_TOOL_SEARCH_FLOOR`), not the sticky selection.
+ * a fixed floor (`AgentWorker.nativeToolSearchDeferrals`), not the sticky
+ * selection.
  * Docs: platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
  * (GA, no beta header; Claude 4.5 and later).
  */
@@ -30,6 +32,24 @@ export const TOOL_SEARCH_TOOL = { type: 'tool_search_tool_bm25_20251119', name: 
 export function supportsNativeToolSearch(modelId: string): boolean {
   const id = modelId.toLowerCase().replace(/^.*\//, '').replace(/^anthropic\./, '');
   return /^claude-(?:fable|mythos)-/.test(id) || /^claude-(?:opus|sonnet|haiku)-(?:[5-9]|4-[5-9])(?:\D|$)/.test(id);
+}
+
+/** The blocks a tool search leaves in an assistant turn. */
+const SEARCH_BLOCK_TYPES = new Set(['server_tool_use', 'tool_search_tool_result']);
+
+/**
+ * Drop earlier tool-search blocks from replayed assistant turns, for a request
+ * that does not declare the search tool (the setting turned off, the lazy path
+ * left): a search result for a tool the request cannot search is not one the
+ * API is guaranteed to accept. Mutates `messages`.
+ */
+export function withoutSearchBlocks(messages: Array<{ role: string; content: unknown }>): void {
+  for (const message of messages) {
+    if (message.role !== 'assistant' || !Array.isArray(message.content)) continue;
+    const kept = (message.content as Array<{ type?: string }>).filter((block) => !SEARCH_BLOCK_TYPES.has(String(block.type)));
+    // A turn of nothing but search blocks keeps them: an empty content array is rejected.
+    if (kept.length && kept.length !== message.content.length) message.content = kept;
+  }
 }
 
 /**

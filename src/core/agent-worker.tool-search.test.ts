@@ -45,6 +45,16 @@ describe('native tool search deferrals', () => {
     expect(worker(advertisement).nativeToolSearchDeferrals(model)).toBeUndefined();
   });
 
+  test('not when the native Messages path is off: the fallback would send the whole catalog undeferred', () => {
+    vi.spyOn(config, 'getConfig').mockReturnValue({ agent: { nativeToolSearch: true } } as never);
+    vi.stubEnv('ANTHROPIC_NATIVE_MESSAGES', '0');
+    try {
+      expect(worker(lazy).nativeToolSearchDeferrals({ provider: 'anthropic', modelId: 'claude-opus-5-5' })).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   test('not when the operator switched it off', () => {
     vi.spyOn(config, 'getConfig').mockReturnValue({ agent: { nativeToolSearch: false } } as never);
     expect(worker(lazy).nativeToolSearchDeferrals({ provider: 'anthropic', modelId: 'claude-opus-5-5' })).toBeUndefined();

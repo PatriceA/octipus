@@ -2,6 +2,7 @@ import { type OmittedContext, REPEATABLE_CONTEXT_KEY, restoreOmittedContext, wit
 import { orderByGroup, TOOL_DISCOVERY_TOOL_ID } from './agent/tool-split';
 import { CORE_TOOL_FLOOR } from './agent/tool-intent';
 import { supportsNativeToolSearch } from '@/models/providers/tool-search';
+import { nativeMessagesEnabled as anthropicNativeMessagesOn } from '@/models/providers/anthropic-provider';
 import { takeWarmSignal } from './swarm/leader-first';
 import { FORK_KEY, type ForkSeed } from './swarm/fork';
 import type { CachePacing } from '@/models/providers/prompt-cache';
@@ -234,6 +235,8 @@ export class AgentWorker extends BaseAgentWorker {
   private lengthRetried: boolean = false;
   /** `pause_turn` resumes this run (server tools); see the loop. */
   private pauseTurnResumes = 0;
+  /** The next request resumes a paused turn: the loop appends nothing before it. */
+  private resumingPause = false;
   /** The one repair round of an interactive answer that cannot be shown (spec G3) was used. */
   private inlineUiRepaired = false;
   /** Set when the FINAL turn was cut off by the token limit — see `wasTruncated`. */
@@ -1197,11 +1200,13 @@ export class AgentWorker extends BaseAgentWorker {
         });
       }
 
-      this.drainSteeringQueue();
+      const resumingPause = this.resumingPause;
+      this.resumingPause = false;
+      if (!resumingPause) this.drainSteeringQueue();
 
       // Feedback is user input, never a system instruction. A running tool is
       // allowed to finish; the next model call receives the new revision.
-      if (isRootAgent(this.context) && this.toolExecutor.getTools().has('update_work_plan')) {
+      if (!resumingPause && isRootAgent(this.context) && this.toolExecutor.getTools().has('update_work_plan')) {
         try {
           const state = await workPlanRepository.read(this.context.sessionId, this.context.userId);
           if (state.revision !== this.visiblePlanRevision) {
@@ -1231,7 +1236,7 @@ export class AgentWorker extends BaseAgentWorker {
       // turns without calling collect_children, inject a reminder. Cheap
       // way to prevent the 22h-shell anti-pattern: agents forgetting the
       // side tasks they kicked off.
-      if (this.detached.count() > 0 && this.iteration > 0 && this.iteration % 5 === 0) {
+      if (!resumingPause && this.detached.count() > 0 && this.iteration > 0 && this.iteration % 5 === 0) {
         const pending = this.detached.list();
         const list = pending
           .map((pc) => `${pc.childId} (topic: ${pc.topic}${pc.subtopic ? '/' + pc.subtopic : ''}, running ${Math.round((Date.now() - pc.startedAt) / 1000)}s)`)
@@ -1797,6 +1802,9 @@ export class AgentWorker extends BaseAgentWorker {
       // hold the loop.
       if (completion.finishReason === 'pause_turn' && !completion.toolCalls?.length && this.pauseTurnResumes < 3) {
         this.pauseTurnResumes++;
+        // The resume is the paused content sent back as it is: nothing may be
+        // appended after it (steering, the plan refresh, reminders) first.
+        this.resumingPause = true;
         agentLogger.info({ agentId: this.context.id, iteration: this.iteration }, 'Model paused a server-tool turn; resuming');
         continue;
       }
@@ -2305,6 +2313,9 @@ export class AgentWorker extends BaseAgentWorker {
     const advertisement = this.config.toolAdvertisement;
     if (advertisement?.mode !== 'lazy' || model.provider !== 'anthropic') return undefined;
     if (getConfig().agent?.nativeToolSearch === false || !supportsNativeToolSearch(model.modelId)) return undefined;
+    // Only the native Messages path sends `defer_loading`; the OpenAI-shaped
+    // fallback would send the whole catalog with nothing deferred.
+    if (!anthropicNativeMessagesOn()) return undefined;
     const floor = [...CORE_TOOL_FLOOR, TOOL_DISCOVERY_TOOL_ID, 'self_report', 'inline-ui'];
     const deferred = Array.from(this.toolExecutor.getTools().values()).filter((tool) => isLongTailHandler(tool, floor)).map((tool) => tool.name);
     return deferred.length ? deferred : undefined;

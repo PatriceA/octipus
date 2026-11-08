@@ -153,7 +153,8 @@ export class GitTool extends BaseTool {
           current: b.startsWith('*'),
         }));
       },
-      { permissionAction: 'read' }
+      // Listing reads; a `name` creates a branch (and `checkout` moves HEAD).
+      { permissionAction: (args) => (args.name ? 'write' : 'read') }
     );
 
     this.registerTool(
@@ -230,7 +231,8 @@ export class GitTool extends BaseTool {
         const result = await this.git(gitArgs, args.path as string);
         return { action, output: result };
       },
-      { permissionAction: 'write' }
+      // `list` only reads; save, pop and drop change the working tree.
+      { permissionAction: (args) => ((args.action as string) === 'list' ? 'read' : 'write') }
     );
 
     this.registerTool(
