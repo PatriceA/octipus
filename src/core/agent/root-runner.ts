@@ -34,7 +34,7 @@ import { shouldUseLazyDiscovery } from './lazy-tools';
 import { selectLaneWithDecision } from './lane-intent';
 import { selectCoreToolIds, stickyCoreToolIds } from './tool-intent';
 import { isPlanMode, PLAN_MODE_DIRECTIVE } from './plan-mode';
-import { FILE_CHANGES_REFUSED_KEY, type FileChangeRefusalReason } from '@/core/tool-executor';
+import { FILE_CHANGE_TOOLS, FILE_CHANGES_REFUSED_KEY, type FileChangeRefusalReason } from '@/core/tool-executor';
 import { REPEATABLE_CONTEXT_KEY } from './repeated-context';
 import { isLongTailHandler } from './tool-split';
 import { buildCapabilitiesHandler } from '@/tools/self-report';
@@ -476,6 +476,12 @@ export async function runRootAgent(
       userId,
       model: modelName,
       role: rootAgentRole,
+      ...(fileChangesRefused ? {
+        refused: {
+          reason: fileChangesRefused === 'plan_mode' ? 'plan mode: nothing is changed (git, GitHub and GitLab writes are refused too)' : 'this space role may not change files',
+          tools: rootTools.filter((t) => FILE_CHANGE_TOOLS.has(t.name)).map((t) => t.name),
+        },
+      } : {}),
     });
 
   if (supervisor) {

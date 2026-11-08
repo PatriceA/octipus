@@ -77,3 +77,24 @@ describe('file changes refused on a turn that may not make them', () => {
     expect(write).toHaveBeenCalledOnce();
   });
 });
+
+describe('plan mode also refuses repository writes', () => {
+  const repoTool = (name: string, toolId: string, permissionAction: string, replaySafety?: 'read_only'): ToolHandler => ({
+    name, toolId, description: name, parameters: {}, permissionAction, ...(replaySafety ? { replaySafety } : {}),
+    execute: async () => 'ran',
+  });
+
+  test.each([
+    ['git__commit', 'git', 'write'],
+    ['git__push', 'git', 'push'],
+    ['github__create_pull_request', 'github', 'write'],
+    ['gitlab__merge', 'gitlab', 'manage'],
+  ])('%s (%s/%s) is refused before it runs', async (name, toolId, action) => {
+    const execute = vi.fn(async () => 'ran');
+    const exec = new ToolExecutor(makeContext({ [FILE_CHANGES_REFUSED_KEY]: 'plan_mode' }), () => {});
+    exec.registerTool({ ...repoTool(name, toolId, action), execute });
+    const [msg] = await exec.handleToolCalls([{ id: '1', name, arguments: {} }]);
+    expect(execute).not.toHaveBeenCalled();
+    expect(String(msg.content)).toMatch(/Plan mode is on: .* changes a repository/);
+  });
+});

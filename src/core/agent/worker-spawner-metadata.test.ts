@@ -40,6 +40,12 @@ describe('pipeline stage spawns', () => {
 });
 
 describe('pipelineMetadata', () => {
+  it('marks a planning session\'s worker with plan mode\'s refusal, whatever the caller carried', () => {
+    expect(pipelineMetadata(undefined, { planMode: true })).toEqual({ fileChangesRefused: 'plan_mode' });
+    expect(pipelineMetadata({ pipelineId: 'p', isAdmin: true }, { planMode: true })).toEqual({ pipelineId: 'p', fileChangesRefused: 'plan_mode' });
+    expect(pipelineMetadata({ fileChangesRefused: 'plan_mode' })).toBeUndefined();
+  });
+
   it('passes the two pipeline keys through', () => {
     expect(pipelineMetadata({ pipelineId: 'p1', nodeKey: 'n1' })).toEqual({ pipelineId: 'p1', nodeKey: 'n1' });
   });

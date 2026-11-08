@@ -60,9 +60,10 @@ there.
 
 Change nothing. No writing or editing files, no creating or deleting them, no
 commits, no formatters or code generation that rewrites tracked files, no
-installs, no configuration changes. The file-writing tools refuse every call
-this turn; the shell does not, so a redirect (\`>\`, \`tee\`), an \`-i\` flag or a
-commit would still work. Do not use them. That restraint is the mode.
+installs, no configuration changes. The file-writing tools and the git,
+GitHub and GitLab writes refuse every call this turn; the shell does not, so a
+redirect (\`>\`, \`tee\`), an \`-i\` flag or a commit from the shell would still
+work. Do not use them. That restraint is the mode.
 
 The visible work plan describes the FUTURE IMPLEMENTATION, not your planning
 activity. Before submitting, use \`get_work_plan\` then \`update_work_plan\` to

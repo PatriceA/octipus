@@ -34,6 +34,12 @@ export interface SelfReportContext {
   /** The model actually serving this turn, and the role it is serving as. */
   model?: string;
   role?: string;
+  /**
+   * Handlers that stay declared but refuse every call this turn (plan mode,
+   * a space role that may not write), and why. Without it the report listed
+   * them as callable.
+   */
+  refused?: { reason: string; tools: string[] };
 }
 
 /** Group handler names by the toolbox that registered them. */
@@ -137,6 +143,7 @@ export function buildCapabilitiesHandler(ctx: SelfReportContext): ToolHandler {
           advertised: ctx.advertised.length,
           callable: ctx.registered.length,
           byToolbox: byToolbox(ctx.registered),
+          ...(ctx.refused?.tools.length ? { refusedThisTurn: { reason: ctx.refused.reason, tools: [...ctx.refused.tools].sort() } } : {}),
         };
       }
       if (want('mcp')) report.mcpServers = await safely('mcp', mcpSection);
