@@ -24,7 +24,7 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, type KeyObject, randomBytes, sign, verify } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { PLUGIN_MANIFEST_FILE } from '@/shared/plugin-package';
 import { hashPackageContent, SIGNATURE_FILE } from './integrity';
 import { parseManifest } from './manifest';
@@ -179,6 +179,13 @@ export function parseSignatureFile(text: string): SignatureFile {
  * special files, as install requires), hash it (the signature file left out)
  * and write `octipus-plugin.sig` through a temporary file and a rename, never
  * through a link. Signing again replaces the signature.
+ *
+ * The temporary file is made in the package's PARENT directory, not in the
+ * package: a crash between the write and the rename (where no cleanup runs)
+ * would otherwise leave a stray file in the package and change its content
+ * hash. The parent is on the same filesystem in practice, so the rename stays
+ * atomic; a package directory that is itself a mount point fails with EXDEV
+ * and is reported. On any failure the temporary file is removed.
  */
 export async function signPackage(dir: string, privateKeyPem: string): Promise<{ contentHash: string; keyId: string; file: string }> {
   await checkPackageTree(dir);
@@ -191,12 +198,18 @@ export async function signPackage(dir: string, privateKeyPem: string): Promise<{
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
-  const temp = join(dir, `.${SIGNATURE_FILE}.${process.pid}-${randomBytes(6).toString('hex')}`);
+  const abs = resolve(dir);
+  if (dirname(abs) === abs) throw new SignatureError('a filesystem root cannot be signed as a package');
+  const temp = join(dirname(abs), `.${basename(abs)}.${SIGNATURE_FILE}.${process.pid}-${randomBytes(6).toString('hex')}`);
   try {
+    // `wx`: never through a file or link already at that name.
     await writeFile(temp, serializeSignature(sig), { flag: 'wx', mode: 0o644 });
     await rename(temp, file);
   } catch (err) {
     await rm(temp, { force: true }).catch(() => {});
+    if ((err as NodeJS.ErrnoException).code === 'EXDEV') {
+      throw new SignatureError(`${dir} is on another filesystem than its parent directory, where the signature is written first; sign a copy of the package that is not a mount point`);
+    }
     throw err;
   }
   return { contentHash, keyId: sig.keyId, file };

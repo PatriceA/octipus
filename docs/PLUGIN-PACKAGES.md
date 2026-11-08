@@ -204,7 +204,8 @@ the files after signing, the manifest included, invalidates the signature.
 Keep the `.key` file secret (it is written `0600`); `keygen` never overwrites a
 file. `sign` refuses a package with a symbolic link or special file anywhere
 in it (as install does) and writes the signature through a temporary file and
-a rename, never through a link.
+a rename, never through a link. The temporary file is made in the package's
+parent directory, so a `sign` that dies half-way leaves nothing in the package.
 
 Because the signature file is outside the content hash, it is held on its own,
 whatever `requireSignature` says:

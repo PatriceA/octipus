@@ -5,10 +5,17 @@
  * hash, and public keys are read as PEM, raw base64 or SPKI base64.
  */
 import { createPublicKey } from 'node:crypto';
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+
+// `rename` passes through unless a test makes it fail (`renameHook`).
+let renameHook: ((from: string, to: string) => void) | undefined;
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, rename: async (from: string, to: string) => { renameHook?.(from, to); return actual.rename(from, to); } };
+});
 import { hashPackageContent, SIGNATURE_FILE } from './integrity';
 import {
   checkPackageSignature,
@@ -45,6 +52,7 @@ function pkg(): string {
 }
 
 afterEach(() => {
+  renameHook = undefined;
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -169,6 +177,50 @@ describe('signing and verifying', () => {
     const base = await hashPackageContent(nested, MANIFEST);
     writeFileSync(join(nested, 'lib', SIGNATURE_FILE), '{}');
     expect(await hashPackageContent(nested, MANIFEST)).not.toBe(base);
+  });
+});
+
+describe('the temporary signature file', () => {
+  /** A package in a parent directory of its own, so both can be listed. */
+  function nested(): { parent: string; dir: string } {
+    const parent = mkdtempSync(join(tmpdir(), 'octipus-signature-parent-'));
+    dirs.push(parent);
+    const dir = join(parent, 'demo');
+    mkdirSync(dir);
+    writeFileSync(join(dir, 'octipus-plugin.json'), JSON.stringify(MANIFEST));
+    writeFileSync(join(dir, 'server.mjs'), 'console.log(1)\n');
+    return { parent, dir };
+  }
+
+  test('is written outside the package: between the write and the rename the package holds no extra file', async () => {
+    const { parent, dir } = nested();
+    const before = await hashPackageContent(dir, MANIFEST);
+    let seen: { pkg: string[]; from: string } | undefined;
+    renameHook = (from) => { seen = { pkg: readdirSync(dir).sort(), from }; };
+    const { contentHash } = await signPackage(dir, publisher.privateKeyPem);
+    expect(seen?.pkg).toEqual(['octipus-plugin.json', 'server.mjs']);
+    expect(join(seen?.from as string, '..')).toBe(parent);
+    expect(contentHash).toBe(before);
+    expect(readdirSync(parent)).toEqual(['demo']);
+    expect(readdirSync(dir).sort()).toEqual(['octipus-plugin.json', SIGNATURE_FILE, 'server.mjs']);
+  });
+
+  test('a failed rename leaves nothing in the package or its parent', async () => {
+    const { parent, dir } = nested();
+    const before = await hashPackageContent(dir, MANIFEST);
+    renameHook = () => { throw Object.assign(new Error('simulated rename failure'), { code: 'EIO' }); };
+    await expect(signPackage(dir, publisher.privateKeyPem)).rejects.toThrow('simulated rename failure');
+    expect(readdirSync(dir).sort()).toEqual(['octipus-plugin.json', 'server.mjs']);
+    expect(readdirSync(parent)).toEqual(['demo']);
+    expect(await hashPackageContent(dir, MANIFEST)).toBe(before);
+  });
+
+  test('a rename across filesystems is reported, and cleaned up', async () => {
+    const { parent, dir } = nested();
+    renameHook = () => { throw Object.assign(new Error('cross-device link'), { code: 'EXDEV' }); };
+    await expect(signPackage(dir, publisher.privateKeyPem)).rejects.toThrow(/another filesystem/);
+    expect(readdirSync(parent)).toEqual(['demo']);
+    expect(readdirSync(dir).sort()).toEqual(['octipus-plugin.json', 'server.mjs']);
   });
 });
 
