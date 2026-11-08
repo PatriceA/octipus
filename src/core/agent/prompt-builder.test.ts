@@ -23,8 +23,12 @@ describe('tiers', () => {
     expect(() => new PromptBuilder().add('turn', 'date', DATE).add('session', 'late', 'z')).toThrow(/wider tier/);
   });
 
-  test('a static block carrying the date marker is refused: the worker would split inside it', () => {
-    expect(() => new PromptBuilder().add('session', 'workspace', `oops${DATE}`)).toThrow(/date marker/);
+  test('a static block carrying the date marker (a user\'s AGENTS.md, a persona fact) is escaped, not thrown', () => {
+    const b = new PromptBuilder().add('session', 'agents-md', `Our prompt says:${DATE}`).add('turn', 'date', DATE);
+    const split = splitVolatileSystem(b.build());
+    // Split at the real date line, after the whole static block.
+    expect(split?.staticPart).toBe(b.staticParts().join(''));
+    expect(split?.staticPart).toContain('Our prompt says:\n \nCURRENT DATE');
   });
 
   test('the built prompt splits at the turn tier exactly, and empty blocks are dropped', () => {
@@ -77,6 +81,13 @@ describe('the drifting session blocks are replayed for the conversation', () => 
     const b = rootPrompt('- api\n- web', { inlineUi: true });
     expect(b.freezeDrift(frozen, scope).replayed).toBe(false);
     expect(b.build()).toContain('- web');
+  });
+
+  test('a change to an input of the drifting blocks (a guest\'s folder scope) rebuilds it', () => {
+    const { frozen } = rootPrompt('- api\n- web').freezeDrift(undefined, { ...scope, shapeInputs: ['api', 'web'] });
+    const b = rootPrompt('- api');
+    expect(b.freezeDrift(frozen, { ...scope, shapeInputs: ['api'] }).replayed).toBe(false);
+    expect(b.build()).not.toContain('- web');
   });
 
   test('a dropped frozen value (scan_repos) rebuilds it', () => {

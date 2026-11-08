@@ -20,8 +20,12 @@
  *
  * Tiers only ever narrow: adding a wider tier after a narrower one throws,
  * because that part could never be shared as its label claims — that is the
- * misplacement the two arrays let through. A static part that contains the
- * date-line marker throws too: the worker would split the prompt there.
+ * misplacement the two arrays let through, and a programmer's mistake a test
+ * catches. A static part that happens to contain the date-line marker is
+ * different: that text can be a user's (a persona fact, an AGENTS.md that
+ * documents a prompt), so it is escaped and logged rather than thrown — the
+ * worker would otherwise split the prompt inside it, and a throw would fail
+ * every turn of that session.
  *
  * Each tier has a fingerprint and a token count (`summary`), so a cache break
  * can be traced to the tier, and the label of the part, that moved.
@@ -36,6 +40,7 @@
 
 import { createHash } from 'node:crypto';
 import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
+import { coreLogger } from '@/utils/logger';
 import { estimateTokens } from '@/utils/token-count';
 
 export type PromptTier = 'install' | 'user' | 'session' | 'turn';
@@ -69,6 +74,11 @@ export interface TierSummary {
 
 const fingerprint = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16);
 
+/** The marker's blank line becomes a line holding one space: the same to a reader, no longer the split point. */
+function escapeMarker(text: string): string {
+  return text.replace(new RegExp(VOLATILE_MARKER.source, 'g'), (m) => m.replace('\n\n', '\n \n'));
+}
+
 export class PromptBuilder {
   private parts: PromptPart[] = [];
 
@@ -80,7 +90,8 @@ export class PromptBuilder {
       throw new Error(`PromptBuilder: "${label}" (${tier}) after "${last.label}" (${last.tier}) — a wider tier cannot follow a narrower one`);
     }
     if (tier !== 'turn' && VOLATILE_MARKER.test(text)) {
-      throw new Error(`PromptBuilder: "${label}" (${tier}) contains the turn-tier date marker; the worker would split the prompt inside it`);
+      coreLogger.warn({ label, tier }, 'PromptBuilder: a static block contained the date-line marker; escaped so the prompt is not split inside it');
+      text = escapeMarker(text);
     }
     this.parts.push({ tier, label, text, ...(opts.drifts ? { drifts: true } : {}) });
     return this;
@@ -131,9 +142,12 @@ export class PromptBuilder {
    * change to the session tier's shape — a space role, dev mode, the
    * inline-UI offer, a dropped tool group — rebuild the drifting parts too.
    */
-  freezeDrift(frozen: FrozenStatic | undefined, scope: { generation: string; checkpointId?: string }): { frozen: FrozenStatic; replayed: boolean } {
+  freezeDrift(
+    frozen: FrozenStatic | undefined,
+    scope: { generation: string; checkpointId?: string; /** Inputs of the drifting parts that must rebuild them when they change (a guest's folder scope). */ shapeInputs?: unknown },
+  ): { frozen: FrozenStatic; replayed: boolean } {
     const session = this.parts.filter((p) => p.tier === 'session');
-    const shape = fingerprint(JSON.stringify(session.map((p) => [p.label, p.drifts ? '' : p.text])));
+    const shape = fingerprint(JSON.stringify([session.map((p) => [p.label, p.drifts ? '' : p.text]), scope.shapeInputs ?? null]));
     const sameConversation = frozen && frozen.generation === scope.generation && frozen.checkpointId === scope.checkpointId;
     if (sameConversation && frozen.shape === shape) {
       for (const part of session) {

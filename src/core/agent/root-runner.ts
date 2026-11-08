@@ -640,8 +640,10 @@ export async function runRootAgent(
   // that is not registered and burn iterations it does not have. Say what is
   // missing, and what to do instead.
   //
-  // Session tier, so it follows the delegation text below — which is also what
-  // "any instruction above" should cover.
+  // Turn tier: the cap follows each message's tool selection, so in the
+  // session tier it changed the session's shape (and rebuilt its replayed
+  // blocks) whenever the dropped groups did. After everything static, which
+  // is also what "any instruction above" should cover.
   const droppedGroupsNote = droppedToolGroups.length > 0
     ? `\n\nNOT AVAILABLE THIS TURN (your model's tool budget): ${droppedToolGroups.join(', ')}. ` +
       'Ignore any instruction above that tells you to use them — calling one will fail. ' +
@@ -660,7 +662,6 @@ export async function runRootAgent(
   // they were, and the routing table gained the sentence about what NOT to
   // delegate — the root holds those tools itself.
   if (!isLite && !supervisor) prompt.add('user', 'delegation-mechanics', `\n\n${delegationPrompt}`);
-  prompt.add('session', 'dropped-tool-groups', droppedGroupsNote);
   volatileParts.push(buildTopicHint(isLite, classification));
   if (classification.type === 'ambiguous') {
     volatileParts.push(`\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise resolve only the uncertainty needed to choose direct work or a specialist; do not start a broad investigation just to route the task. If the user explicitly tells you to delegate, always do so.`);
@@ -770,7 +771,10 @@ export async function runRootAgent(
       }
       wsContext += `\n\nIMPORTANT: When the user references "this project" or a project by name, resolve it to the FULL ABSOLUTE PATH and include that path explicitly in every worker task description. For example, if the user says "audit this project (octipus)", your task descriptions must say "audit the project at ${wsRoot}/octipus". Workers do NOT know which project the user means unless you tell them the exact path.`;
       wsContext += `\n\nWhen a repo is flagged "(has AGENTS.md)", tell the worker to read that repo's AGENTS.md first — it is the curated guide to the repo's structure and commands. For cross-repo work, name every repo involved and its path.`;
-      // Drifts: a new top-level directory changes the listing.
+      // Drifts: a new top-level directory changes the listing. Replayed as
+      // the conversation first saw it, so it says so: a project cloned
+      // mid-conversation is found by listing the workspace.
+      wsContext += `\nThis listing is as of the start of this conversation; list the workspace directory for anything added since.`;
       prompt.add('session', 'workspace-listing', wsContext, { drifts: true });
     } catch (err) {
       // The per-user nested root may not exist yet (new user who hasn't
@@ -799,7 +803,8 @@ export async function runRootAgent(
   {
     const generation = sessionGeneration(sessionCtx);
     const checkpointId = sessionCtx?.checkpoint?.generation === generation ? sessionCtx.checkpoint.entryId : undefined;
-    const { frozen, replayed } = prompt.freezeDrift(sessionCtx?.staticPrompt ?? undefined, { generation, checkpointId });
+    // A guest's folder scope filters the listing: narrowing it rebuilds it.
+    const { frozen, replayed } = prompt.freezeDrift(sessionCtx?.staticPrompt ?? undefined, { generation, checkpointId, shapeInputs: space?.scope?.folders ?? null });
     if (!replayed) {
       try {
         await sessionRepository.patchContextIfGeneration(sessionId, generation, { staticPrompt: frozen });
@@ -813,6 +818,7 @@ export async function runRootAgent(
   // Append the volatile per-turn context (date, summary, history) after the
   // whole static/semi-static instruction block — keeps the prefix cacheable.
   for (const part of volatileParts) prompt.add('turn', 'turn-context', part);
+  prompt.add('turn', 'dropped-tool-groups', droppedGroupsNote);
   systemPrompt = prompt.build();
 
   const advertisedTools =
