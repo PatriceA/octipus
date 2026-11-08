@@ -291,5 +291,11 @@ describe('the native conversation snapshot in its own column', () => {
     const session = await freshSession('native-3');
     await getDb().update(sessions).set({ context: { nativeConversation: snapshot(4) } as never }).where(eq(sessions.id, session.id));
     expect((await sessionRepository.findById(session.id))!.context?.nativeConversation).toMatchObject({ messages: [{ content: 'turn 4' }] });
+    // A read-spread-write moves it to the column instead of dropping it.
+    const ctx = (await sessionRepository.findById(session.id))!.context!;
+    await sessionRepository.update(session.id, { context: { ...ctx, currentTopic: 'y' } });
+    const [raw] = await getDb().select().from(sessions).where(eq(sessions.id, session.id));
+    expect(raw.context).not.toHaveProperty('nativeConversation');
+    expect(raw.nativeConversation).toMatchObject({ messages: [{ content: 'turn 4' }] });
   });
 });

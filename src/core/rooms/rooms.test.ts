@@ -886,9 +886,10 @@ describe('the space turn context is never stored with a turn', () => {
       `SELECT metadata FROM messages WHERE session_id = $1 AND role = 'user' ORDER BY created_at DESC LIMIT 1`, [panel.id]);
     expect(row.metadata?.promptContext ?? '').toContain('CURRENT DATE');
     expect(JSON.stringify(row.metadata)).not.toMatch(/HERON|Lisbon|SPACE TURN CONTEXT/);
-    const [session] = await q<{ context: Record<string, unknown> }>(`SELECT context FROM sessions WHERE id = $1`, [panel.id]);
-    expect(session.context.nativeConversation).toBeTruthy();
-    expect(JSON.stringify(session.context.nativeConversation)).not.toMatch(/HERON|Lisbon/);
+    // The snapshot has its own column (migration 0170).
+    const [session] = await q<{ native_conversation: unknown }>(`SELECT native_conversation FROM sessions WHERE id = $1`, [panel.id]);
+    expect(session.native_conversation).toBeTruthy();
+    expect(JSON.stringify(session.native_conversation)).not.toMatch(/HERON|Lisbon/);
 
     // Carol leaves the room and the entry is retracted: her next turn has
     // neither, not even from the replayed history.
@@ -901,7 +902,7 @@ describe('the space turn context is never stored with a turn', () => {
     expect(seen).not.toMatch(/HERON|Lisbon|LINKED ROOM/);
     // A cold launch from the stored rows (no snapshot) has neither either.
     const { readSessionHistory } = await import('@/core/session-history');
-    await q(`UPDATE sessions SET context = context - 'nativeConversation' WHERE id = $1`, [panel.id]);
+    await q(`UPDATE sessions SET native_conversation = NULL, context = context - 'nativeConversation' WHERE id = $1`, [panel.id]);
     const history = await readSessionHistory(panel.id);
     expect(JSON.stringify(history.messages)).not.toMatch(/HERON|Lisbon/);
     await call('editor', 'POST', `/api/spaces/${spaceId}/rooms/${privateId}/members/${carolId}`);

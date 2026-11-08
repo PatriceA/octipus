@@ -75,6 +75,11 @@ function boundCliSessions(ctx: SQL, prefixes: string[], max: number) {
  */
 export function withNativeConversation<T extends Session | null | undefined>(row: T): T {
   if (!row || !row.nativeConversation) return row;
+  // During a rolling deploy an instance without the migration can still write
+  // the snapshot into `context`: the later of the two is the conversation.
+  const legacy = row.context?.nativeConversation;
+  const lastAt = (s: { messages?: Array<{ timestamp?: string }> } | undefined) => s?.messages?.at(-1)?.timestamp ?? '';
+  if (legacy && lastAt(legacy) > lastAt(row.nativeConversation)) return row;
   return { ...row, context: { ...(row.context ?? {}), nativeConversation: row.nativeConversation } };
 }
 
@@ -184,9 +189,13 @@ export class SessionRepository {
   }
 
   async update(id: string, data: Partial<NewSession>): Promise<Session | null> {
-    // A read-spread-write of `context` carries the mapped-in snapshot back:
-    // it is not written into `context` again (its column is the copy).
-    const set = data.context ? { ...data, context: contextWithoutSnapshot(data.context as Record<string, unknown>) as typeof data.context } : data;
+    // A read-spread-write of `context` carries the mapped-in snapshot back: it
+    // goes to its column, not into `context` again. Written rather than dropped,
+    // so a row from before the column (snapshot only in `context`) keeps it.
+    const carried = (data.context as Record<string, unknown> | undefined)?.nativeConversation as Session['nativeConversation'] | undefined;
+    const set = data.context
+      ? { ...data, context: contextWithoutSnapshot(data.context as Record<string, unknown>) as typeof data.context, ...(carried ? { nativeConversation: carried } : {}) }
+      : data;
     const result = await this.db
       .update(sessions)
       .set({ ...set, updatedAt: new Date() })
