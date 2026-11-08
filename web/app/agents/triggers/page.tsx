@@ -21,9 +21,11 @@ const KIND_LABEL: Record<string, string> = {
   heartbeat: 'Heartbeat', schedule: 'Schedule', webhook: 'Webhook', message_received: 'On message',
   agent_started: 'On agent start', agent_completed: 'On agent finish', agent_failed: 'On agent failure',
   tool_executed: 'On tool use', permission_requested: 'On approval request',
+  monitor: 'Monitor', companion: 'Companion goal',
 };
 const KIND_CHIP: Record<string, string> = {
   heartbeat: 'border-tertiary/50 text-tertiary', schedule: 'border-warning/50 text-warning', webhook: 'border-accent/50 text-accent',
+  monitor: 'border-primary-dim/60 text-primary-dim', companion: 'border-primary/50 text-primary',
 };
 
 function isTriggers(value: unknown): value is TriggersResponse {
@@ -46,6 +48,8 @@ function cadence(t: TriggerSummary): string {
   if (t.kind === 'heartbeat') return t.intervalMinutes ? `checks every ${t.intervalMinutes} min` : 'checks at the configured interval';
   if (t.kind === 'schedule') return 'on its schedule';
   if (t.kind === 'webhook') return 'when the webhook is called';
+  if (t.kind === 'monitor') return t.intervalMinutes ? `checks every ${t.intervalMinutes} min, wakes its session on a change` : 'wakes its session on a change';
+  if (t.kind === 'companion') return 'dispatches work while the goal is active';
   return 'on its event';
 }
 
@@ -63,13 +67,13 @@ export default function TriggersPage() {
   const unavailable = isError || errorUpdatedAt > dataUpdatedAt;
   const heartbeats = (data?.triggers ?? []).filter((t) => t.kind === 'heartbeat');
   const [explain, setExplain] = useState<string | null>(null);
-  const explained = heartbeats.find((t) => t.hookId === explain) ?? heartbeats[0];
+  const explained = heartbeats.find((t) => t.id === explain) ?? heartbeats[0];
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Triggers"
-        description="Everything that starts an agent without you typing: heartbeats, schedules, webhooks and event hooks. Each shows what it decided today, and a heartbeat says why it did not run."
+        description="Everything that starts an agent without you typing: heartbeats, schedules, webhooks, event hooks, session monitors and Companion goals. Each shows what it did today, and a heartbeat says why it did not run."
         actions={<Link href="/hooks" className="rounded-lg border border-outline-variant px-3 py-2 text-sm hover:bg-surface-container">Edit in Hooks & schedules</Link>}
       />
       {unavailable && <div role="status" className="flex items-center gap-2 text-sm text-warning">
@@ -97,8 +101,8 @@ export default function TriggersPage() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 id="why-h" className="text-base font-semibold">Why did it run, or not?</h2>
               {heartbeats.length > 1 && <label className="flex items-center gap-2 text-xs text-on-surface-variant">Heartbeat
-                <select value={explained?.hookId} onChange={(e) => setExplain(e.target.value)} className="h-8 rounded-lg px-2 text-xs">
-                  {heartbeats.map((h) => <option key={h.hookId} value={h.hookId}>{h.name}</option>)}
+                <select value={explained?.id} onChange={(e) => setExplain(e.target.value)} className="h-8 rounded-lg px-2 text-xs">
+                  {heartbeats.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
                 </select>
               </label>}
             </div>
@@ -129,10 +133,10 @@ export default function TriggersPage() {
                 const ran = t.events.filter((e) => e.kind === 'ran').length;
                 const failed = t.events.filter((e) => e.kind === 'failed').length;
                 const skippedCount = t.events.filter((e) => e.kind === 'skipped').length;
-                return <tr key={t.hookId} className="border-t border-outline-variant/40">
+                return <tr key={t.id} className="border-t border-outline-variant/40">
                   <td className="px-4 py-2.5"><span className={cn('inline-flex h-6 items-center whitespace-nowrap rounded-xs border px-2 text-[11px] font-semibold', KIND_CHIP[t.kind] ?? 'border-outline-variant text-on-surface-variant')}>{KIND_LABEL[t.kind] ?? t.kind}</span></td>
-                  <td className="px-4 py-2.5 font-medium">{t.name}</td>
-                  <td className="px-4 py-2.5 text-on-surface-variant">{t.role ? `${t.role} (role agent)` : t.action.replace(/_/g, ' ')}</td>
+                  <td className="px-4 py-2.5 font-medium"><Link href={t.href} className="hover:text-primary">{t.name}</Link></td>
+                  <td className="px-4 py-2.5 text-on-surface-variant">{t.kind === 'monitor' ? `its session's agent (${t.action})` : t.role ? `${t.role} (role agent)` : t.action.replace(/_/g, ' ')}</td>
                   <td className="px-4 py-2.5 text-on-surface-variant">{cadence(t)}</td>
                   <td className="px-4 py-2.5 text-xs">
                     {ran + failed + skippedCount === 0 ? <span className="text-on-surface-variant">nothing yet</span>
@@ -140,7 +144,7 @@ export default function TriggersPage() {
                     {t.lastError && failed === 0 && <span className="block text-error">last error: {t.lastError}</span>}
                   </td>
                   <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs">{t.enabled && t.nextRunAt ? hhmm(t.nextRunAt) : '—'}</td>
-                  <td className="px-4 py-2.5 text-xs">{t.enabled ? <span className="text-tertiary">on</span> : <span className="text-on-surface-variant">off</span>}</td>
+                  <td className="px-4 py-2.5 text-xs">{t.state ? <span className={t.enabled ? 'text-tertiary' : 'text-on-surface-variant'}>{t.state.replace(/_/g, ' ')}</span> : t.enabled ? <span className="text-tertiary">on</span> : <span className="text-on-surface-variant">off</span>}</td>
                 </tr>;
               })}</tbody>
             </table>
@@ -193,7 +197,7 @@ function Timeline({ data }: { data: TriggersResponse }) {
             <span className="absolute right-0">24</span>
           </div>
         </div>
-        {lanes.map((t) => <div key={t.hookId} className="flex items-center gap-3 border-t border-outline-variant/40 py-1.5">
+        {lanes.map((t) => <div key={t.id} className="flex items-center gap-3 border-t border-outline-variant/40 py-1.5">
           <span className="w-48 shrink-0 min-w-0"><span className="block truncate text-xs font-semibold">{t.name}</span><span className="block text-[11px] text-on-surface-variant">{KIND_LABEL[t.kind] ?? t.kind}</span></span>
           <div className="relative h-6 flex-1" role="img" aria-label={`${t.name}: ${t.events.filter((e) => e.kind === 'ran').length} ran, ${t.events.filter((e) => e.kind === 'skipped').length} skipped, ${t.events.filter((e) => e.kind === 'failed').length} failed today`}>
             <span className="absolute inset-x-0 top-3 h-px bg-outline-variant" />

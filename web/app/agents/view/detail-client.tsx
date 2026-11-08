@@ -15,6 +15,7 @@ import { useAgentEvents } from '@/hooks/useAgentEvents';
 import { api } from '@/lib/api';
 import { agentCompletionLabel, type AgentCompletionReason } from '../../../../src/shared/agent-completion';
 import { useWorkspaceId } from '@/lib/workspace-context';
+import { RunInsight } from './run-insight';
 
 interface AgentDetail {
   id: string;
@@ -246,6 +247,8 @@ export default function AgentDetailPage() {
           </button>
         )}
       </div>
+
+      <RunInsight agentId={agentId} />
 
       {/* Pipeline stepper (if applicable) */}
       {pipelineData?.pipeline && pipelineData.nodes && (

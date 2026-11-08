@@ -92,6 +92,14 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
     const { readMissionControl } = await import('@/core/mission-control');
     return readMissionControl(principal, user.id);
   }, { detail: { tags: ['agents'] } })
+  // Run detail: why one run exists, its tree, and the prompt it was given.
+  .get('/:id/run', async ({ user, principal, params, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const { readRunDetail } = await import('@/core/run-detail');
+    const detail = await readRunDetail(principal, params.id);
+    if (!detail) { set.status = 404; return { error: 'Agent not found' }; }
+    return detail;
+  }, { params: t.Object({ id: t.String({ minLength: 1, maxLength: 200 }) }), detail: { tags: ['agents'] } })
   // Roster: every role as an agent the user manages (docs/MISSION-CONTROL.md).
   .get('/roster', async ({ user, principal, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }

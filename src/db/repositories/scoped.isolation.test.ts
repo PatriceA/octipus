@@ -282,6 +282,28 @@ describe('ScopedAgentRepo cross-tenant isolation', () => {
     expect((await alice.hooks.heartbeatChecksSince([aliceHook, bobHook], since)).map((c) => [c.hookId, c.reason])).toEqual([[aliceHook, 'nothing_pending']]);
     expect((await alice.hooks.executionsSince([aliceHook, bobHook], since)).map((x) => [x.hookId, x.status])).toEqual([[aliceHook, 'success']]);
   });
+
+  test('Triggers reads: only own monitors and Companion goals', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(`INSERT INTO monitors (user_id, session_id, role, name, continuation, source, interval_seconds, deadline) VALUES
+      ('${aliceId}', '${aliceSession.id}', 'general', 'alice monitor', 'c', '{}'::jsonb, 600, now() + interval '1 day'),
+      ('${bobId}', '${bobSession.id}', 'general', 'bob monitor', 'c', '{}'::jsonb, 600, now() + interval '1 day')`);
+    const alice = await asAlice();
+    expect((await alice.hooks.monitorsOwn()).map((m) => m.name)).toEqual(['alice monitor']);
+    // No goal of Bob's is visible, nor any action of it.
+    expect((await alice.hooks.companionGoalsOwn()).every((g) => g.title !== 'bob goal')).toBe(true);
+    expect(await alice.hooks.companionActionsSince(['55555555-5555-5555-5555-555555555555'], new Date(0))).toEqual([]);
+  });
+
+  test('Run view: a root run\'s stored prompt sizes are read through its session', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(`INSERT INTO messages (session_id, role, content, agent_id, metadata) VALUES
+      ('${aliceSession.id}', 'user', 'q', 'root-a', '{"promptComposition":{"version":1,"who":"alice"}}'::jsonb),
+      ('${bobSession.id}', 'user', 'q', 'root-b', '{"promptComposition":{"version":1,"who":"bob"}}'::jsonb)`);
+    const alice = await asAlice();
+    expect(await alice.messages.promptCompositionOf(aliceSession.id, 'root-a')).toMatchObject({ who: 'alice' });
+    expect(await alice.messages.promptCompositionOf(bobSession.id, 'root-b')).toBeNull();
+  });
 });
 
 describe('ScopedDocumentRepo cross-tenant isolation', () => {

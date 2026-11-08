@@ -215,3 +215,19 @@ describe('latest composition', () => {
     expect(getLatestComposition('s-59')?.agentId).toBe('a-59');
   });
 });
+
+describe('agentPromptParts', () => {
+  test('a worker prompt splits into guardrails, role, the per-run tail and what the manager appends, losing nothing', async () => {
+    const { agentPromptParts } = await import('./prompt-parts');
+    const prompt = `${SECURITY_PREAMBLE}${OUTPUT_FORMATTING_RULES}You research.\n\nCURRENT DATE & TIME: now\nUSER CONTEXT: x`;
+    const parts = agentPromptParts(prompt, 'research', { selectedSkills: 'SKILL' });
+    expect(parts.map((p) => [p.tier, p.category, p.label])).toEqual([
+      ['static', 'guardrails', 'Security preamble'],
+      ['static', 'guardrails', 'Output formatting'],
+      ['static', 'role', 'research role prompt'],
+      ['volatile', 'turn', 'Per-run context (date, profile, memories, workspace)'],
+      ['static', 'skills', 'Selected skills'],
+    ]);
+    expect(parts.slice(0, 4).map((p) => p.text).join('')).toBe(prompt);
+  });
+});

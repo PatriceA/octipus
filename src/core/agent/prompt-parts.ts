@@ -6,6 +6,7 @@
 import { promptPart, type PromptPart, type PromptTagger } from './prompt-composition';
 import { OUTPUT_FORMATTING_RULES, SECURITY_PREAMBLE } from './roles';
 import { VAULT_USAGE_GUIDANCE } from './vault-guidance';
+import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
 
 /**
  * The fixed guardrails, whatever a `before-agent-start` hook put after the
@@ -74,4 +75,22 @@ export function categorizeBuilderParts(
       : opts.notes[b.label] ?? {};
     return [promptPart(tier, known.category, known.label, b.text, note)];
   });
+}
+
+/**
+ * A worker's, swarm child's or pipeline stage's system prompt by category,
+ * as the agent manager has it at spawn: the role's base prompt split as for
+ * the root, the per-run tail (date, profile, memories, git status…) after the
+ * cache split, then what the manager appends.
+ */
+export function agentPromptParts(systemPrompt: string, role: string, appended: { mcpSection?: string; selectedSkills?: string } = {}): PromptPart[] {
+  const at = systemPrompt.match(VOLATILE_MARKER)?.index;
+  const stable = at === undefined ? systemPrompt : systemPrompt.slice(0, at);
+  const tail = at === undefined ? '' : systemPrompt.slice(at);
+  return [
+    ...(stable ? splitBasePrompt(stable, `${role} role prompt`) : []),
+    ...(tail ? [promptPart('volatile', 'turn', 'Per-run context (date, profile, memories, workspace)', tail)] : []),
+    ...(appended.mcpSection ? [promptPart('static', 'tools', 'MCP servers', `\n\n${appended.mcpSection}`)] : []),
+    ...(appended.selectedSkills ? [promptPart('static', 'skills', 'Selected skills', appended.selectedSkills)] : []),
+  ];
 }
