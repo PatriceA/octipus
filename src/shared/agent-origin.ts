@@ -135,3 +135,24 @@ export interface RosterResponse {
   /** The server's heartbeat switch. */
   heartbeatEnabled: boolean;
 }
+
+/** `GET /api/agents/:id/run`: why a run exists, where it sits in its tree, and what its prompt held. */
+export interface RunDetailResponse {
+  id: string;
+  role: string;
+  root: boolean;
+  status: MissionRun['status'];
+  sessionId: string;
+  sessionTitle: string | null;
+  createdAt: string;
+  origin: AgentOrigin | null;
+  /** The provenance chain, outermost first: what started the tree, then each step down to this run. */
+  chain: Array<{ kind: 'source' | 'hook' | 'heartbeat' | 'pipeline' | 'goal' | 'parent'; label: string; detail: string | null; href: string | null }>;
+  parent: { id: string; role: string; root: boolean } | null;
+  children: Array<{ id: string; role: string; status: MissionRun['status']; totalTokens: number }>;
+  /** The run's measured prompt; null when it was not measured (CLI models, older runs). */
+  prompt: (Omit<import('./prompt-composition').PromptComposition, 'sections'> & {
+    sections: import('./prompt-composition').PromptSectionWithText[];
+    textAvailable: boolean;
+  }) | null;
+}

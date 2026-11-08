@@ -31,11 +31,17 @@ export interface TriggerEvent {
 }
 
 export interface TriggerSummary {
-  hookId: string;
+  /** The hook's, monitor's or Companion goal's id. */
+  id: string;
   name: string;
-  /** The hook's trigger: heartbeat, schedule, webhook, message_received… */
+  /** A hook's trigger (heartbeat, schedule, webhook, message_received…), or `monitor`, or `companion`. */
   kind: string;
+  /** What it starts: a hook's action, a monitor's role, Companion's dispatch. */
   action: string;
+  /** Where it is managed: a monitor's session, the Companion page, Hooks & schedules. */
+  href: string;
+  /** A monitor's or goal's own state (armed, paused, active, waiting…), when it has one. */
+  state: string | null;
   enabled: boolean;
   /** The role a role heartbeat wakes. */
   role: string | null;

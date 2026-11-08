@@ -15,7 +15,7 @@ import {
 } from '../../../src/shared/prompt-composition';
 
 /** One fixed colour per category, from the Deep Sea tokens; never reused for two. */
-const CATEGORY_COLOR: Record<PromptCategory, string> = {
+export const CATEGORY_COLOR: Record<PromptCategory, string> = {
   guardrails: 'bg-accent-dim',
   role: 'bg-primary',
   delegation: 'bg-primary-dim',
@@ -27,14 +27,14 @@ const CATEGORY_COLOR: Record<PromptCategory, string> = {
   other: 'bg-secondary-dim',
 };
 
-const TIER_LABEL: Record<PromptTier, string> = {
+export const TIER_LABEL: Record<PromptTier, string> = {
   static: 'cached prefix',
   tools: 'sent every request',
   volatile: 'this turn',
   history: 'history',
 };
 
-function compact(n: number): string {
+export function compact(n: number): string {
   return n >= 10_000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k` : n.toLocaleString('en-US');
 }
 
@@ -167,7 +167,7 @@ export default function ContextPanel({ sessionId, running, onCompact }: Props) {
   </section>;
 }
 
-function CompositionBar({ sections, scale, selected, onSelect }: {
+export function CompositionBar({ sections, scale, selected, onSelect }: {
   sections: PromptSectionWithText[];
   scale: number;
   selected: PromptCategory | null;

@@ -58,6 +58,8 @@ import { type NewSession, type Session, sessions } from '../schema/sessions';
 import { costLog } from '../schema/models';
 import { type HeartbeatCheck, heartbeatChecks } from '../schema/heartbeat-checks';
 import { hookExecutions } from '../schema/hook-executions';
+import { monitors } from '../schema/monitors';
+import { companionActions, companionGoals } from '../schema/companion-supervision';
 import { type TaskComment, taskComments } from '../schema/task-comments';
 import { type NewTask, type Task, tasks } from '../schema/tasks';
 import { workspaces } from '../schema/organizations';
@@ -435,6 +437,22 @@ export class ScopedMessageRepo {
       .offset(offset);
 
     return rows.map((r) => r.m);
+  }
+
+  /**
+   * The prompt sizes a root run stored on the user message it answered
+   * (docs/CONTEXT-INSPECTOR.md), through the same session filter.
+   */
+  async promptCompositionOf(sessionId: string, agentId: string): Promise<unknown> {
+    const [row] = await this.db
+      .select({ composition: sql<unknown>`${messages.metadata}->'promptComposition'` })
+      .from(messages)
+      .innerJoin(sessions, eq(messages.sessionId, sessions.id))
+      .where(and(eq(messages.sessionId, sessionId), eq(messages.agentId, agentId), eq(messages.role, 'user'),
+        sql`${messages.metadata} ? 'promptComposition'`, ...this.sessionFilter()))
+      .orderBy(asc(messages.createdAt))
+      .limit(1);
+    return row?.composition ?? null;
   }
 
   /** Aggregate across multiple sibling sessions; each session is checked individually. */
@@ -972,6 +990,47 @@ export class ScopedHookRepo {
       .from(hookExecutions)
       .where(and(inArray(hookExecutions.hookId, hookIds), eq(hookExecutions.userId, this.principal.userId), gte(hookExecutions.createdAt, since)))
       .orderBy(asc(hookExecutions.createdAt))
+      .limit(2_000);
+  }
+
+  /**
+   * The principal's session monitors in this workspace (Triggers page): a
+   * monitor wakes its session's agent when what it watches changes. Scoped
+   * through the session, which carries the workspace.
+   */
+  async monitorsOwn(limit = 50) {
+    return this.db
+      .select({
+        id: monitors.id, name: monitors.name, role: monitors.role, status: monitors.status,
+        intervalSeconds: monitors.intervalSeconds, nextCheckAt: monitors.nextCheckAt, lastCheckedAt: monitors.lastCheckedAt,
+        deadline: monitors.deadline, lastError: monitors.lastError, sessionId: monitors.sessionId, sessionTitle: sessions.title,
+      })
+      .from(monitors)
+      .innerJoin(sessions, eq(sessions.id, monitors.sessionId))
+      .where(and(eq(monitors.userId, this.principal.userId), workspaceFilter(this.principal, sessions.workspaceId)))
+      .orderBy(desc(monitors.updatedAt))
+      .limit(limit);
+  }
+
+  /** The principal's Companion goals in this workspace, newest first (Triggers page). */
+  async companionGoalsOwn(limit = 50) {
+    return this.db
+      .select({ id: companionGoals.id, title: companionGoals.title, state: companionGoals.state, updatedAt: companionGoals.updatedAt })
+      .from(companionGoals)
+      .where(and(eq(companionGoals.userId, this.principal.userId), workspaceFilter(this.principal, companionGoals.workspaceId)))
+      .orderBy(desc(companionGoals.updatedAt))
+      .limit(limit);
+  }
+
+  /** Actions of the principal's own goals since `since`, oldest first. */
+  async companionActionsSince(goalIds: string[], since: Date) {
+    if (goalIds.length === 0) return [];
+    return this.db
+      .select({ goalId: companionActions.goalId, kind: companionActions.kind, status: companionActions.status, createdAt: companionActions.createdAt })
+      .from(companionActions)
+      .innerJoin(companionGoals, eq(companionGoals.id, companionActions.goalId))
+      .where(and(inArray(companionActions.goalId, goalIds), eq(companionGoals.userId, this.principal.userId), gte(companionActions.createdAt, since)))
+      .orderBy(asc(companionActions.createdAt))
       .limit(2_000);
   }
 

@@ -1,13 +1,17 @@
 /**
  * The worker end of the Context inspector: the root's user message carries
  * the request's sizes by category, measured with the history the worker
- * loaded and the tools it advertises; workers and unstaged agents carry none.
+ * loaded and the tools it advertises; a worker's sizes go on its agent row
+ * (run view); an unstaged agent carries none.
  */
 import { beforeEach, expect, test, vi } from 'vitest';
 import type { Message } from '@/db/schema/messages';
 import type { AgentMessage } from './types';
 
-const fixture = vi.hoisted(() => ({ rows: [] as Message[] }));
+const fixture = vi.hoisted(() => ({ rows: [] as Message[], agentMeta: [] as Array<[string, Record<string, unknown>]> }));
+vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: {
+  mergeMetadata: async (id: string, patch: Record<string, unknown>) => { fixture.agentMeta.push([id, patch]); },
+} }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { incrementMessageCount: async () => {} } }));
 vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: {
   create: async (data: object) => {
@@ -18,9 +22,9 @@ vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: {
 } }));
 
 import { AgentWorker } from './agent-worker';
-import { _resetPromptCompositionForTesting, bindStagedRootPrompt, getLatestComposition, promptPart, stageRootPrompt } from './agent/prompt-composition';
+import { _resetPromptCompositionForTesting, bindStagedRootPrompt, getAgentComposition, getLatestComposition, promptPart, stageAgentPrompt, stageRootPrompt } from './agent/prompt-composition';
 
-beforeEach(() => { fixture.rows = []; _resetPromptCompositionForTesting(); });
+beforeEach(() => { fixture.rows = []; fixture.agentMeta = []; _resetPromptCompositionForTesting(); });
 
 function worker(id: string, root: boolean) {
   return new AgentWorker({ space: null, trigger: 'user', funding: 'own', id, sessionId: 'session', userId: 'user', model: 'm', role: 'general', topic: 'test',
@@ -59,10 +63,17 @@ test('measured once: a second user message in the same run carries no compositio
   expect(fixture.rows.map((r) => !!r.metadata?.promptComposition)).toEqual([true, false]);
 });
 
-test('a worker is never measured, even with a staged prompt under its id', async () => {
-  stageRootPrompt('session', { parts: [promptPart('static', 'role', 'r', 'role')], role: 'general', model: 'm' });
-  bindStagedRootPrompt('session', 'child-1');
-  await worker('child-1', false).addUserMessage('task');
+test('a worker is measured with its brief and no history; its sizes go on its agent row, not a message', async () => {
+  stageAgentPrompt('child-1', { parts: [promptPart('static', 'role', 'research role prompt', 'You research.')], role: 'research', model: 'm' });
+  const w = worker('child-1', false);
+  history(w, [{ role: 'system', content: 'You research.', timestamp: new Date() }]);
+  await w.addUserMessage('YOUR TASK: compare two stores');
   expect(fixture.rows).toHaveLength(0);
   expect(getLatestComposition('session')).toBeUndefined();
+  const [[id, patch]] = fixture.agentMeta;
+  expect(id).toBe('child-1');
+  const stored = patch.promptComposition as { sections: Array<{ label: string; text?: string }> };
+  expect(stored.sections.map((s) => s.label)).toEqual(['research role prompt', 'Brief']);
+  expect(stored.sections.some((s) => 'text' in s)).toBe(false);
+  expect(getAgentComposition('child-1')?.sections.find((s) => s.label === 'Brief')?.text).toBe('YOUR TASK: compare two stores');
 });
