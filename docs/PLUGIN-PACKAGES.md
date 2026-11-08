@@ -45,7 +45,7 @@ server (any language) that the manifest says how to start:
 | `version`, `apiVersion` | Semantic versions. This host reads `apiVersion` 1.x up to 1.0: the same MAJOR, a MINOR no newer than the host's. |
 | `server` | `command` and `args`, run in the package directory over stdio. Optional `requestTimeoutMs`. |
 | `tools` | Every tool the server offers, with its `effect` (below). At least one. |
-| `network` | The hosts it talks to. Shown at install; the sandbox gives the package network only when it lists at least one. |
+| `network` | The hosts it talks to (`api.example.com`, `*.example.com` for its subdomains, `api.example.com:8443` for one port). Shown at install; the package reaches only these, on 443 and 80 unless a port is given — enforced only under the sandbox ([Network](#network)). |
 | `maxProtection` | The highest protection level (1-4) of data it may see. A call from a conversation holding content above it is refused ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md#plugin-calls-c6d)). Left out: 1 for a package with `network` hosts, 4 for one without. |
 | `settings` | Non-secret settings as [record type fields](RECORDS.md#record-types), handed to the server as `OCTIPUS_SETTING_<KEY>`. |
 | `secrets` | Credentials, stored in the vault, handed to the server as environment variables under their own `key`. |
@@ -78,9 +78,11 @@ An enabled package runs as the MCP server `plugin-<name>`:
   provider keys, no master key, no database URL, no other variable.
 - **The sandbox, when it is on.** With `security.shellSandbox` set to `auto`
   or `required`, the server runs under bwrap or firejail with its directory as
-  the only writable one, and with network only if `network` lists a host. With
-  the sandbox `off` (the default), it runs unwrapped; the declared hosts are
-  then shown, not enforced.
+  the only writable one and no direct network; the hosts in `network` are
+  reached through the egress proxy ([Network](#network)). With the sandbox
+  `off` (the default), it runs unwrapped; the declared hosts are then advice,
+  not enforced.
+- **Network only to its declared hosts** — see [Network](#network).
 - **Not part of the MCP server list.** It does not appear among the servers on
   the MCP page and cannot be edited, removed or toggled there. Ids starting
   with `plugin-` belong to packages: adding such a server by hand is refused,
@@ -139,6 +141,34 @@ in the sandbox) will read as modified on its next start; it should keep its
 runtime state elsewhere (a temp directory), or be approved again.
 Signatures over the hash come with signed packages (C15).
 
+## Network
+
+Each running package with `network` hosts gets its own egress proxy inside the
+Octipus process: an HTTP proxy on `127.0.0.1` (an ephemeral port) that accepts
+`CONNECT` (HTTPS and other TCP) and plain-HTTP forwarding only to a declared
+host — an exact name, or any subdomain for `*.example.com` (not the apex;
+declare it too) — on 443 and 80, or on exactly the port an entry names.
+Everything else is answered `403` and logged with the package name and the
+host ("Plugin package network request refused"). The server is started with
+`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` (and the lower-case forms) pointing at
+the proxy and `NO_PROXY` cleared.
+
+What that holds depends on the platform:
+
+| Where | A package with hosts | A package without hosts | Status `network.state` |
+|---|---|---|---|
+| Linux, sandbox `auto`/`required`, bwrap or firejail found | Enforced: the server has its own network namespace with only loopback. The proxy's Unix socket is mounted in, and a small launcher (run with Octipus's own Node binary) bridges the namespace's `127.0.0.1` to it, so the proxy is the only way out. | Offline: no network at all. | `restricted` / `offline` |
+| Linux with the sandbox `off` (the default), or no runner found | **Not enforced.** The proxy variables point well-behaved HTTP clients at the proxy, but a direct connection still works. | Not enforced: nothing blocks the network. | `not_enforced` |
+| macOS, Windows | **Not enforced**, as above: neither bwrap nor firejail exists there. | Not enforced. | `not_enforced` |
+
+`GET /api/plugin-packages` reports this per package as `network`
+(`{ state, detail }`), so an operator sees "Network not enforced on this
+platform" where the hosts are only advice. A client that ignores proxy
+variables (some SDKs, raw sockets) fails under the sandbox and goes direct
+without it — run packages with `security.shellSandbox` on where that matters.
+Host names are resolved by Octipus, not the package; a declared host that
+resolves to an internal address is reached like any other.
+
 ## Installing and managing
 
 Admins only. A package installs from a directory on the server; the
@@ -167,8 +197,8 @@ marketplace (plan point C15) will fetch signed packages instead.
    files, the row and the secrets.
 
 `GET /api/plugin-packages` lists installed packages with their manifest,
-settings, which secrets are set, whether the server is connected, and why it is
-not when it should be.
+settings, which secrets are set, whether the server is connected, why it is
+not when it should be, and whether its network is enforced (`network`).
 
 Every change is in the audit log (`resource_type = plugin_package`).
 
@@ -179,5 +209,7 @@ Every change is in the audit log (`resource_type = plugin_package`).
 - Signed packages, remote install and the marketplace page: C15. Until then a
   package is pinned by its content hash only ([Content pinning](#content-pinning)).
 - A web page for plugin packages.
+- Network enforcement off Linux (macOS `sandbox-exec`, Windows): the egress
+  proxy is advisory there.
 - In a shared space, plugin tools follow the rules of personal connections
   (reads allowed, writes asked or refused); space-level packages come later.

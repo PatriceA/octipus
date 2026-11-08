@@ -98,6 +98,11 @@ describe('plugin packages', () => {
     }
     const { packageDir } = await import('./service');
     expect(report.cwd).toBe(packageDir('echo-plugin'));
+    // It declares api.example.com: with the sandbox off it is pointed at the
+    // egress proxy (advisory), and the status says network is not enforced.
+    expect(report.names).toEqual(expect.arrayContaining(['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY']));
+    const { packageView } = await import('./service');
+    expect((await packageView('echo-plugin')).network.state).toBe('not_enforced');
   });
 
   test('only declared tools are listed; an undeclared one is refused', async () => {

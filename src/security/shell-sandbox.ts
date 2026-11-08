@@ -273,6 +273,16 @@ function buildFirejailArgs(binary: string, options: WrapOptions): string[] {
 }
 
 /**
+ * The runner `wrapCommand` would use right now, or null when it would run
+ * the command unwrapped (sandbox `off`, or `auto` with no runner found). In
+ * `required` mode with no runner it is null too: `wrapCommand` then throws.
+ */
+export function activeSandboxRunner(): SandboxRunner | null {
+  if (getSandboxMode() === 'off') return null;
+  return detectRunner()?.runner ?? null;
+}
+
+/**
  * Wrap an `argv` array in the configured sandbox. When the sandbox
  * is `off`, returns the original argv with `wrapped: false`. When
  * `required` and no runner is available, throws — the caller should

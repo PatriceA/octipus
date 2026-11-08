@@ -16,8 +16,10 @@
  *   `plugin:<name>:<KEY>`, handed over under their own key) — no provider
  *   key, master key or database URL of the host;
  * - in the shell sandbox when `security.shellSandbox` is on, with its
- *   directory as the only writable one and network only when it declares a
- *   host;
+ *   directory as the only writable one and no direct network; a package that
+ *   declares hosts reaches only those, through a per-package egress proxy
+ *   (src/security/egress-proxy.ts). Without a sandbox (off, no runner, macOS,
+ *   Windows) the proxy is advisory and the status says "not enforced";
  * - with only its declared tools reachable, each permitted by its declared
  *   effect (src/security/mcp-authorization.ts).
  *
@@ -38,9 +40,10 @@ import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { type PluginPackageRow, pluginPackages } from '@/db/schema/plugin-packages';
 import { getMCPBridge, PLUGIN_SERVER_PREFIX } from '@/mcp/bridge';
+import { activeSandboxRunner } from '@/security/shell-sandbox';
 import { getVault } from '@/security/vault';
 import type { MCPServer } from '@/shared/mcp-server';
-import { PLUGIN_MANIFEST_FILE, type PluginManifest, type PluginPackageView } from '@/shared/plugin-package';
+import { PLUGIN_MANIFEST_FILE, type PluginManifest, type PluginNetworkStatus, type PluginPackageView } from '@/shared/plugin-package';
 import { coreLogger } from '@/utils/logger';
 import { CONTENT_MISMATCH_PROBLEM, hashPackageContent, verifyPackageContent } from './integrity';
 import { ManifestError, parseManifest, settingEnvName } from './manifest';
@@ -350,12 +353,31 @@ function viewOf(row: PluginPackageRow, secrets: string[]): PluginPackageView {
     settings: row.settings,
     secretsSet: secrets,
     problem: row.enabled ? bridge.pluginProblem(serverId) : null,
+    network: networkStatus(row.manifest),
     connected: bridge.isConnected(serverId),
     contentHash: row.contentHash,
     installedBy: row.installedBy,
     installedAt: row.installedAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+/**
+ * How a package's network is held on this host, decided the same way the
+ * transport decides at start (`prepareSandboxedLaunch`): only a sandbox
+ * runner can take direct network away; without one the declared hosts are
+ * advice.
+ */
+export function networkStatus(m: PluginManifest, runner = activeSandboxRunner()): PluginNetworkStatus {
+  const hosts = m.network ?? [];
+  if (runner) {
+    return hosts.length === 0
+      ? { state: 'offline', detail: `No network: the sandbox (${runner}) runs the server without one.` }
+      : { state: 'restricted', detail: `Only ${hosts.join(', ')}: the sandbox (${runner}) has no direct network, and the egress proxy allows only the declared hosts.` };
+  }
+  return hosts.length === 0
+    ? { state: 'not_enforced', detail: 'Network not enforced on this platform: no sandbox wraps the server (security.shellSandbox off, or no bwrap/firejail), so nothing stops it from connecting.' }
+    : { state: 'not_enforced', detail: `Network not enforced on this platform: no sandbox wraps the server (security.shellSandbox off, or no bwrap/firejail). It is pointed at an egress proxy that allows only ${hosts.join(', ')}, but it can still connect directly.` };
 }
 
 /** Every installed package, for the admin API. */
@@ -393,7 +415,12 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
     cwd: dir,
     env,
     isolatedEnv: true,
-    sandbox: { root: dir, allowNetwork: (m.network ?? []).length > 0 },
+    // Hosts go through the egress proxy; direct network stays off wherever the
+    // sandbox can turn it off. allowNetwork is kept for a sandbox without egress support.
+    sandbox: {
+      root: dir, allowNetwork: (m.network ?? []).length > 0,
+      ...((m.network ?? []).length > 0 ? { egress: { label: row.name, hosts: [...(m.network ?? [])] } } : {}),
+    },
     requestTimeoutMs: m.server.requestTimeoutMs,
     isEnabled: row.enabled,
     // Declared tools are reachable through mcp_list_tools / mcp_call_tool;

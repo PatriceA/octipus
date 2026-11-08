@@ -58,6 +58,10 @@ export interface MCPServer extends McpExposureConfig {
   plugin?: PluginBinding;
   /** Hand a stdio server only its `env` and a minimal host environment. */
   isolatedEnv?: boolean;
-  /** Run a stdio server in the shell sandbox with `root` as its only writable directory. */
-  sandbox?: { root: string; allowNetwork: boolean };
+  /**
+   * Run a stdio server in the shell sandbox with `root` as its only writable
+   * directory. `egress` limits its network to those hosts through a proxy
+   * (src/security/egress-proxy.ts).
+   */
+  sandbox?: { root: string; allowNetwork: boolean; egress?: { label: string; hosts: string[] } };
 }

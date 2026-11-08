@@ -73,6 +73,22 @@ export interface PluginManifest {
 }
 
 /** An installed package as the API returns it. */
+/**
+ * How a package's network is held on this host (docs/PLUGIN-PACKAGES.md#network):
+ *
+ * - `offline` — it declares no host and the sandbox gives it no network;
+ * - `restricted` — it declares hosts and reaches only those, through the
+ *   egress proxy, with direct network off in the sandbox;
+ * - `not_enforced` — no sandbox wraps it on this platform (sandbox off, no
+ *   bwrap/firejail, macOS, Windows): the declared hosts are advice, and a
+ *   package with hosts is only pointed at the proxy.
+ */
+export interface PluginNetworkStatus {
+  state: 'offline' | 'restricted' | 'not_enforced';
+  /** A sentence for the operator. */
+  detail: string;
+}
+
 export interface PluginPackageView {
   name: string;
   version: string;
@@ -83,6 +99,8 @@ export interface PluginPackageView {
   secretsSet: string[];
   /** Why the package is not running, when it should be. */
   problem: string | null;
+  /** Whether its network is actually limited on this host, and how. */
+  network: PluginNetworkStatus;
   /** Whether its MCP server is connected right now. */
   connected: boolean;
   /**

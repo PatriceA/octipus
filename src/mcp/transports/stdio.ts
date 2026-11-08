@@ -1,6 +1,8 @@
 import { type ChildProcess, spawn } from 'child_process';
 import { buildChildEnv, buildIsolatedChildEnv } from '@/security/child-env';
+import { bridgedArgv, type EgressProxy, proxyEnv, startEgressProxy } from '@/security/egress-proxy';
 import { wrapCommand } from '@/security/shell-sandbox';
+import { coreLogger } from '@/utils/logger';
 import { killProcessTree, windowsCmdShim } from '@/utils/proc';
 import type { CloseHandler, ErrorHandler, MCPTransport, MessageHandler } from './interface';
 
@@ -16,8 +18,65 @@ export interface StdioTransportOptions {
    * Run the child in the shell sandbox (`security.shellSandbox`), with `root`
    * as its only writable directory. With the sandbox off, it runs unwrapped
    * (the mode decides, as for the shell tool).
+   *
+   * With `egress`, network is limited to its hosts through an in-process
+   * proxy (src/security/egress-proxy.ts): enforced when the sandbox wraps the
+   * child (no network namespace route but the proxy), advisory otherwise
+   * (only the proxy variables point the child at it). `allowNetwork` is then
+   * ignored: direct network stays off whenever the sandbox can turn it off.
    */
-  sandbox?: { root: string; allowNetwork: boolean };
+  sandbox?: StdioSandbox;
+}
+
+export interface StdioSandbox {
+  root: string;
+  allowNetwork: boolean;
+  /** Per-host egress: who the traffic belongs to and the hosts it may reach. */
+  egress?: { label: string; hosts: string[] };
+}
+
+/** What `prepareSandboxedLaunch` decided: the argv and env to spawn, and what to clean up. */
+export interface SandboxedLaunch {
+  argv: string[];
+  env: Record<string, string>;
+  /** Whether network is actually limited to the egress hosts (or off). */
+  networkEnforced: boolean;
+  proxy: EgressProxy | null;
+  cleanup: () => void;
+}
+
+/**
+ * Wrap `argv` for the sandbox, starting the egress proxy when the server
+ * declares hosts. Exported for tests.
+ */
+export async function prepareSandboxedLaunch(argv: string[], env: Record<string, string>, sandbox: StdioSandbox): Promise<SandboxedLaunch> {
+  const egress = sandbox.egress && sandbox.egress.hosts.length > 0 ? sandbox.egress : null;
+  if (!egress) {
+    const wrapped = wrapCommand(argv, { workspaceRoot: sandbox.root, allowNetwork: sandbox.allowNetwork, path: env.PATH });
+    return { argv: wrapped.argv, env, networkEnforced: wrapped.wrapped, proxy: null, cleanup: wrapped.cleanup };
+  }
+  const proxy = await startEgressProxy({ label: egress.label, allowed: egress.hosts, unixSocket: process.platform !== 'win32' });
+  try {
+    if (proxy.socketPath && proxy.socketDir) {
+      // Inside the sandbox: no network namespace route out, only the proxy
+      // socket mounted in and this Node binary to run the launcher.
+      const wrapped = wrapCommand(bridgedArgv(argv, proxy.socketPath), {
+        workspaceRoot: sandbox.root, allowNetwork: false, path: env.PATH,
+        extraReadOnly: [process.execPath], extraReadWrite: [proxy.socketDir],
+      });
+      if (wrapped.wrapped) {
+        return { argv: wrapped.argv, env, networkEnforced: true, proxy, cleanup: () => { wrapped.cleanup(); void proxy.close(); } };
+      }
+    }
+    // No sandbox (off, no runner, macOS, Windows): the proxy is advice only.
+    // A client that ignores HTTP(S)_PROXY still connects directly.
+    coreLogger.warn({ pkg: egress.label, hosts: egress.hosts },
+      'Plugin package network not enforced on this platform: no sandbox wraps the server, so the egress proxy is advisory');
+    return { argv, env: { ...env, ...proxyEnv(proxy.url) }, networkEnforced: false, proxy, cleanup: () => { void proxy.close(); } };
+  } catch (err) {
+    await proxy.close();
+    throw err;
+  }
 }
 
 /**
@@ -39,20 +98,28 @@ export class StdioTransport implements MCPTransport {
   async connect(): Promise<void> {
     const env = this.options.isolatedEnv ? buildIsolatedChildEnv(this.options.env) : buildChildEnv(this.options.env);
     let argv = [this.options.command, ...(this.options.args || [])];
+    let childEnv = env;
     if (this.options.sandbox) {
-      const wrapped = wrapCommand(argv, { workspaceRoot: this.options.sandbox.root, allowNetwork: this.options.sandbox.allowNetwork, path: env.PATH });
-      argv = wrapped.argv;
-      this.sandboxCleanup = wrapped.cleanup;
+      const launch = await prepareSandboxedLaunch(argv, env, this.options.sandbox);
+      argv = launch.argv;
+      childEnv = launch.env;
+      this.sandboxCleanup = launch.cleanup;
     }
-    const run = windowsCmdShim(argv, env, process.platform, this.options.cwd);
-    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- operator-configured MCP server; shell only for a Windows .cmd with every arg quoted (windowsCmdShim)
-    this.process = spawn(run.argv[0], run.argv.slice(1), {
-      cwd: this.options.cwd,
-      env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: run.shell,
-      windowsHide: true,
-    });
+    const run = windowsCmdShim(argv, childEnv, process.platform, this.options.cwd);
+    try {
+      // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- operator-configured MCP server; shell only for a Windows .cmd with every arg quoted (windowsCmdShim)
+      this.process = spawn(run.argv[0], run.argv.slice(1), {
+        cwd: this.options.cwd,
+        env: childEnv,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        shell: run.shell,
+        windowsHide: true,
+      });
+    } catch (err) {
+      this.sandboxCleanup?.();
+      this.sandboxCleanup = null;
+      throw err;
+    }
 
     this.process.stdout!.on('data', (data: Buffer) => {
       this.buffer += data.toString();

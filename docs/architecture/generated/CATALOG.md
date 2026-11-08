@@ -754,9 +754,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `mcp` | `config` | 2 |
 | `mcp` | `connectors` | 1 |
 | `mcp` | `core` | 4 |
-| `mcp` | `security` | 7 |
+| `mcp` | `security` | 8 |
 | `mcp` | `shared` | 3 |
-| `mcp` | `utils` | 4 |
+| `mcp` | `utils` | 5 |
 | `models` | `config` | 10 |
 | `models` | `core` | 37 |
 | `models` | `db` | 14 |
@@ -768,7 +768,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `plugins` | `core` | 3 |
 | `plugins` | `db` | 3 |
 | `plugins` | `mcp` | 1 |
-| `plugins` | `security` | 1 |
+| `plugins` | `security` | 2 |
 | `plugins` | `shared` | 2 |
 | `plugins` | `tools` | 1 |
 | `plugins` | `utils` | 4 |
@@ -780,7 +780,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `mcp` | 2 |
 | `security` | `shared` | 5 |
 | `security` | `tools` | 4 |
-| `security` | `utils` | 32 |
+| `security` | `utils` | 33 |
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
 | `services` | `core` | 5 |
