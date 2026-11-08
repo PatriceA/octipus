@@ -2512,7 +2512,12 @@ export class AgentWorker extends BaseAgentWorker {
         // other worker runs as a burst (`cacheTtlsFor`).
         cachePacing: isRootAgent(this.context) && this.context.attended === true ? 'human' as const : 'machine' as const,
         tools: sentTools,
-        ...(declareToolsOnly ? { toolChoice: 'none' as const } : {}),
+        // `tool_choice` is part of Claude's message-level cache key: flipping it
+        // from auto to none for the final call re-read the whole conversation
+        // uncached. A Claude request keeps auto — the reporting reminder in the
+        // last turn says tools are over, and calls it makes anyway are not run
+        // (`toolsDisabled`). Other providers take the explicit none.
+        ...(declareToolsOnly && !claudeModel ? { toolChoice: 'none' as const } : {}),
         // G6: nullish coalescing — a configured temperature of 0 must survive
         // (|| turned it into 0.7, hurting small-model tool-call fidelity).
         temperature: model.defaultTemperature ?? 0.7,
