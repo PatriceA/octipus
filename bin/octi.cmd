@@ -943,7 +943,7 @@ echo     restart [client] Stop everything, then start again the same way
 echo     stop             Stop all Octipus processes
 echo     status           Show running state and service health
 echo     doctor [--json]  Run environment health checks (what's wired, what's missing)
-echo     plugin ^<validate^|convert^> ...  Validate a plugin, or convert a legacy plugin
+echo     plugin ^<validate^|convert^|sign^|list^|approve^> ...  Plugin tooling; list and approve installed packages
 echo     logs [--web]     Tail backend logs (--web for web UI)
 echo     update [--dry-run] Update this installation from its existing source
 echo     uninstall        Remove Octipus ^(keeps data; --purge wipes everything^)

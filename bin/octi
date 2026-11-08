@@ -1316,7 +1316,7 @@ cmd_help() {
   echo -e "    stop             Stop all Octipus processes"
   echo -e "    status           Show running state and service health"
   echo -e "    doctor [--json]  Run environment health checks (what's wired, what's missing)"
-  echo -e "    plugin <validate|convert> ...  Validate a plugin, or convert a legacy plugin to a package"
+  echo -e "    plugin <validate|convert|sign|list|approve> ...  Plugin tooling; list and approve installed packages"
   echo -e "    logs [--web]     Tail backend logs (--web for web UI logs)"
   echo -e "    recovery         Recovery mode state, URL and token (keep the token for when you are away)"
   echo -e "    update [--dry-run] Update this installation from its existing source"
