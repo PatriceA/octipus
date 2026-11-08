@@ -21,6 +21,7 @@ import { useState } from 'react';
 import { useModuleOn } from '@/lib/modules';
 import { PageHeader } from '@/components/ui/page-header';
 import { ApiTokensTab } from '@/components/settings/api-tokens-tab';
+import { EnvironmentsTab } from '@/components/settings/environments-tab';
 import { CliToolsTab } from '@/components/settings/cli-tools-tab';
 import { ChannelsTab } from '@/components/settings/channels-tab';
 import { ConfigurationTab } from '@/components/settings/configuration-tab';
@@ -48,7 +49,7 @@ export default function SettingsPage() {
     { id: 'general', label: 'General', icon: Settings },
     { id: 'modules', label: 'Modules', icon: Boxes },
     { id: 'configuration', label: 'Configuration', icon: Sliders },
-    { id: 'cli-tools', label: 'CLI tools', icon: Sliders },
+    { id: 'environments', label: 'Environments & Access', icon: Sliders },
     { id: 'integrations', label: 'Integrations', icon: Plug },
     ...(mailOn ? [{ id: 'mailboxes', label: 'Mailboxes', icon: Mail }] : []),
     ...(channelsOn ? [{ id: 'channels', label: 'Channels', icon: MessageSquare }] : []),
@@ -99,6 +100,7 @@ export default function SettingsPage() {
           {activeTab === 'general' && <GeneralTab />}
           {activeTab === 'modules' && <ModulesTab />}
           {activeTab === 'configuration' && <ConfigurationTab />}
+          {activeTab === 'environments' && <EnvironmentsTab />}
           {activeTab === 'cli-tools' && <CliToolsTab />}
           {activeTab === 'integrations' && <IntegrationsTab />}
           {activeTab === 'mailboxes' && mailOn && <MailboxManager />}

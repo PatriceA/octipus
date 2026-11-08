@@ -1,3 +1,4 @@
+import { executionEnvironmentsSchema } from '@/shared/execution-environment';
 import { companionMaintenanceSchema } from '@/shared/companion-maintenance';
 import { isIP } from 'node:net';
 import { homedir } from 'node:os';
@@ -98,6 +99,7 @@ export const securityConfigSchema = z.object({
    * `auto` uses sandbox-exec only for plugin package servers; shell
    * commands use it only under `required`.
    */
+  executionEnvironments: executionEnvironmentsSchema.default([]),
   shellSandbox: z.enum(['off', 'auto', 'required']).default('off'),
   /** Expose only the host SSH agent socket and known_hosts to personal shell runs. */
   shellSshAgent: z.boolean().default(false),

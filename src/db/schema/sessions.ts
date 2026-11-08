@@ -115,6 +115,8 @@ export interface CompactionState {
 }
 
 export interface SessionContext {
+  /** Owner-selected execution profile; validated again at every tool call. */
+  executionEnvironmentId?: string;
   /** Dedicated controller session. Its model has only the scoped Companion toolbox. */
   companionSupervisor?: { modelName: string };
   /** Explicit persistent model binding for a Companion-created project session. */

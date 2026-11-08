@@ -9,7 +9,8 @@ export class ConnectionsTool extends BaseTool {
   readonly name = 'Authenticated connections';
   readonly version = '1.0.0';
   readonly description = 'Use operator-configured HTTP API and Git connections with named vault credentials, without exposing credentials to tools or scripts';
-  getManifest(): ToolManifest { return { id: this.id, name: this.name, version: this.version, description: this.description, permissions: [
+  getManifest(): ToolManifest { return {
+      execution: { kind: 'connection' }, id: this.id, name: this.name, version: this.version, description: this.description, permissions: [
     { action: 'read', description: 'List authorized profiles and read HTTP APIs using GET', defaultLevel: 'ALLOW' },
     { action: 'request', description: 'Send an authenticated HTTP API request to an approved service', defaultLevel: 'ASK' },
     { action: 'fetch', description: 'Fetch Git refs into an approved local repository', defaultLevel: 'ASK' },

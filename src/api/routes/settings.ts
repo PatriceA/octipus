@@ -1,3 +1,9 @@
+import { requireScope } from '@/security/principal';
+import { API_SCOPES } from '@/security/scopes';
+import { executionEnvironmentSchema, executionEnvironmentsSchema } from '@/shared/execution-environment';
+import { realpathSync } from 'node:fs';
+import { hostname, userInfo } from 'node:os';
+import { getConfig } from '@/config';
 import { discoverCliKubeconfigs, inspectCliKubeconfig, type CliKubeconfig } from '@/security/cli-kubeconfig';
 import { discoverCliRuntimes, inspectCliRuntime, type CliRuntime } from '@/security/cli-runtimes';
 import { Elysia, t } from '@/api/http';
@@ -26,6 +32,64 @@ const MODULES_ELSEWHERE = 'Modules are switched in Settings → Modules (PUT /ap
 
 export const settingsRoutes = new Elysia({ prefix: '/settings' })
   .use(apiContext)
+
+  .get('/execution-environments', async ({ user, principal, set }) => {
+    if (!user?.isAdmin || !requireScope(principal, API_SCOPES.READ)) { set.status = 403; return { error: 'Admin access required' }; }
+    const environments = executionEnvironmentsSchema.parse(await getSettingsService().get('security.executionEnvironments') ?? []);
+    const credentials = (await getVault().list(user.id)).filter(entry => entry.credentialType !== 'login').map(entry => ({ name: entry.name, runtimeAllowed: !entry.allowedAgents?.length && (!entry.allowedTools?.length || entry.allowedTools.includes('execution-environment')) }));
+    return { environments: environments.filter(entry => entry.userId === user.id), credentials, userId: user.id, machine: hostname(), account: userInfo().username,
+      legacy: { sandbox: getConfig().security.shellSandbox, cliTools: getConfig().security.cliRuntimes, kubeconfigs: getConfig().security.cliKubeconfigs.filter(entry => entry.userId === user.id),
+        note: 'Existing settings remain active for sessions without a configured environment.' } };
+  })
+  .put('/execution-environments/:id', async ({ user, principal, params, body, set }) => {
+    if (!user?.isAdmin || !requireScope(principal, API_SCOPES.ADMIN)) { set.status = 403; return { error: 'Admin access required' }; }
+    try {
+      const profile = executionEnvironmentSchema.parse(body);
+      if (profile.id !== params.id || profile.userId !== user.id) throw new Error('Choose your own account and the matching environment ID');
+      if (profile.enabled && profile.workspaceId) {
+        const { getDb } = await import('@/db/postgres');
+        const { workspaces } = await import('@/db/schema/organizations');
+        const { eq } = await import('drizzle-orm');
+        const [workspace] = await getDb().select().from(workspaces).where(eq(workspaces.id, profile.workspaceId));
+        if (!workspace || workspace.userId !== user.id || workspace.kind !== 'personal') throw new Error('Choose your own personal workspace');
+      }
+      if (profile.enabled && profile.backend !== 'ssh') profile.roots = [...new Set(profile.roots.map(root => {
+        const path = realpathSync(root); if (!statSync(path).isDirectory()) throw new Error('Choose existing project folders'); return path;
+      }))];
+      const secrets = await getVault().list(user.id);
+      for (const binding of profile.enabled ? profile.credentials : []) {
+        const secret = secrets.find(entry => entry.name === binding.secret && entry.workspaceId === profile.workspaceId) ?? secrets.find(entry => entry.name === binding.secret && entry.workspaceId === null && entry.scope === 'user');
+        if (!secret || secret.credentialType === 'login' || secret.allowedAgents?.length || (secret.allowedTools?.length && !secret.allowedTools.includes('execution-environment'))) throw new Error(`Secret ${binding.secret} is unavailable for execution environments. Allow it in Secrets first.`);
+      }
+      let savedProfile = profile;
+      await getSettingsService().update('security.executionEnvironments', current => {
+        const entries = (current ?? []) as Array<{ id: string; revision?: number; userId: string }>;
+        const previous = entries.find(entry => entry.id === profile.id);
+        if (previous && previous.userId !== user.id) throw new Error('Environment belongs to another account');
+        if (previous && (previous.revision ?? 0) !== profile.revision) throw new Error('Environment changed. Refresh before saving.');
+        savedProfile = { ...profile, revision: (previous?.revision ?? 0) + 1 };
+        const retained = entries.filter(entry => entry.id !== profile.id).map(entry => profile.enabled && profile.isDefault && entry.userId === profile.userId && (entry as { workspaceId?: string | null }).workspaceId === profile.workspaceId
+          ? { ...entry, isDefault: false } : entry);
+        return executionEnvironmentsSchema.parse([...retained, savedProfile]);
+      }, user.id);
+      await auditRepository.log({ userId: user.id, action: 'settings_changed', resourceType: 'execution_environment', resourceId: profile.id,
+        details: { backend: profile.backend, roots: profile.roots, approval: profile.approval, background: profile.background, hostIdentity: profile.hostIdentity } });
+      return { environment: savedProfile };
+    } catch (error) { set.status = 400; return { error: error instanceof Error ? error.message : 'Invalid environment' }; }
+  }, { body: t.Record(t.String(), t.Unknown()) })
+  .delete('/execution-environments/:id', async ({ user, principal, params, set }) => {
+    if (!user?.isAdmin || !requireScope(principal, API_SCOPES.ADMIN)) { set.status = 403; return { error: 'Admin access required' }; }
+    await getSettingsService().update('security.executionEnvironments', current => ((current ?? []) as Array<{ id: string; userId: string }>).filter(entry => entry.id !== params.id || entry.userId !== user.id), user.id);
+    await auditRepository.log({ userId: user.id, action: 'settings_changed', resourceType: 'execution_environment', resourceId: params.id, details: { operation: 'remove' } });
+    return { success: true };
+  })
+  .post('/execution-environments/:id/test', async ({ user, principal, params, body, set }) => {
+    if (!user?.isAdmin || !requireScope(principal, API_SCOPES.ADMIN)) { set.status = 403; return { error: 'Admin access required' }; }
+    const profiles = executionEnvironmentsSchema.parse(await getSettingsService().get('security.executionEnvironments') ?? []);
+    const profile = profiles.find(entry => entry.id === params.id && entry.userId === user.id);
+    if (!profile?.enabled) { set.status = 404; return { error: 'Enabled environment not found' }; }
+    return (await import('@/security/environment-readiness')).checkEnvironmentReadiness(profile, body.command);
+  }, { body: t.Object({ command: t.Optional(t.String({ maxLength: 4000 })) }) })
 
   .get('/companion-maintenance', async ({ user, set }) => {
     if (!user?.isAdmin) { set.status = 403; return { error: 'Admin access required' }; }
@@ -294,6 +358,7 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
       if (!def) {
         return { error: `Unknown setting: ${key}` };
       }
+      if (key === 'security.executionEnvironments') return { error: 'Manage execution environments in Settings → Environments & Access' };
       if (key === MODULES_SETTING) return { error: MODULES_ELSEWHERE };
 
       // Validate workspace paths before saving
@@ -364,6 +429,7 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
           errors[key] = `Unknown setting: ${key}`;
           continue;
         }
+        if (key === 'security.executionEnvironments') { errors[key] = 'Manage execution environments in Settings → Environments & Access'; continue; }
         if (key === MODULES_SETTING) {
           errors[key] = MODULES_ELSEWHERE;
           continue;

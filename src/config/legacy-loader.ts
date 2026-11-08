@@ -48,6 +48,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       ...(process.env.OCTIPUS_OLLAMA_CONTEXT_LENGTH ? { contextLength: parseInt(process.env.OCTIPUS_OLLAMA_CONTEXT_LENGTH, 10) } : {}),
     },
     security: {
+      executionEnvironments: [],
       masterKey: process.env.MASTER_KEY || '',
       jwtSecret: process.env.JWT_SECRET || '',
       sessionSecret: process.env.SESSION_SECRET || '',

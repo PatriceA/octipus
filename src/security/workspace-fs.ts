@@ -1,3 +1,4 @@
+import { executionEnvironmentFor, pathInEnvironment } from './execution-environments';
 /**
  * WorkspaceFS — per-user filesystem sandbox.
  *
@@ -443,6 +444,13 @@ export class WorkspaceFS {
     // A space without the turn's membership: no folder at all (fail closed;
     // the approval path refuses such a turn's tools anyway).
     if (isKnownSharedWorkspace(context.workspaceId)) return WorkspaceFS.forSpace(context.workspaceId as string, { guestFolders: [] });
+    const environment = executionEnvironmentFor(context);
+    if (environment?.backend === 'ssh') return WorkspaceFS.forRequest(agentPrincipal(context), options);
+    if (environment) {
+      const root = typeof context.metadata?.projectPath === 'string' ? pathResolve(context.metadata.projectPath) : environment.roots[0];
+      if (!environment.roots.some(folder => pathInEnvironment(folder, root))) throw new WorkspaceFsError('OUTSIDE_ROOT', 'Project is outside the selected environment folders');
+      return WorkspaceFS.withRoot(root, { ...options, extraAllowedPrefixes: environment.roots });
+    }
     const project = context.metadata?.projectPath;
     return WorkspaceFS.forRequest(agentPrincipal(context), {
       ...options,
@@ -486,6 +494,12 @@ export class WorkspaceFS {
    * the same (pre-existing) trust decision that lets the CLI agent run
    * with that directory as cwd; this helper adds no new reach.
    */
+  /** Uploaded chat documents are control-plane files, independent of a remote project. */
+  static forSessionAttachments(session: { userId: string; workspaceId?: string | null; context?: unknown }, access: SessionFsAccess): WorkspaceFS {
+    const environment = !access.space ? executionEnvironmentFor({ userId: session.userId, workspaceId: session.workspaceId, metadata: (session.context ?? {}) as Record<string, unknown> }) : undefined;
+    return environment?.backend === 'ssh' ? WorkspaceFS.forPrincipal(agentPrincipal(session)) : WorkspaceFS.forSession(session, access);
+  }
+
   static forSession(
     session: { userId: string; workspaceId?: string | null; context?: unknown },
     access: SessionFsAccess,
@@ -508,9 +522,16 @@ export class WorkspaceFS {
       return WorkspaceFS.forSpace(session.workspaceId as string, { dataRoot: options.dataRoot, guestFolders });
     }
     const ctx = session.context as
-      | { devMode?: boolean; projectPath?: string; companion?:{sourceFiles?:Array<{path:string}>} }
+      | { devMode?: boolean; projectPath?: string; executionEnvironmentId?: string; companion?:{sourceFiles?:Array<{path:string}>} }
       | null
       | undefined;
+    const environment = executionEnvironmentFor({ userId: session.userId, workspaceId: session.workspaceId, metadata: ctx ?? {} });
+    if (environment?.backend === 'ssh') throw new WorkspaceFsError('INVALID_INPUT', 'This session uses a remote environment. Use the remote filesystem tools.');
+    if (environment) {
+      const root = ctx?.projectPath ? pathResolve(ctx.projectPath) : environment.roots[0];
+      if (!environment.roots.some(folder => pathInEnvironment(folder, root))) throw new WorkspaceFsError('OUTSIDE_ROOT', 'Project is outside the selected environment folders');
+      return WorkspaceFS.withRoot(root, { ...options, extraAllowedPrefixes: environment.roots });
+    }
     if (ctx?.devMode && ctx.projectPath) {
       return WorkspaceFS.withRoot(pathResolve(ctx.projectPath),{...options,extraAllowedPrefixes:[...(options.extraAllowedPrefixes??[]),...(ctx.companion?.sourceFiles??[]).map(file=>pathResolve(file.path))]});
     }
