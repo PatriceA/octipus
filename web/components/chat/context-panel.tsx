@@ -82,6 +82,7 @@ export default function ContextPanel({ sessionId, running, onCompact }: Props) {
   // Bar scale: the model's window when known, else this request itself.
   const scale = contextWindow && contextWindow >= used ? contextWindow : used;
   const pct = contextWindow ? Math.round((used / contextWindow) * 100) : null;
+  const marks = contextWindow && contextWindow >= used ? limitMarks(data?.limits ?? null) : [];
 
   return <section className="context-panel border-t border-outline-variant/50 p-4 space-y-3" aria-label="Context">
     <button type="button" className="flex w-full items-start justify-between gap-3 text-left" aria-expanded={open} onClick={() => setOpen(!open)}>
@@ -97,7 +98,10 @@ export default function ContextPanel({ sessionId, running, onCompact }: Props) {
       <span className="text-xs text-primary shrink-0">{open ? 'Collapse' : 'Open'}</span>
     </button>
 
-    {latest && <CompositionBar sections={latest.sections} scale={scale} selected={selected} onSelect={(c) => { setOpen(true); setSelected(c === selected ? null : c); }} />}
+    {latest && <CompositionBar sections={latest.sections} scale={scale} selected={selected} marks={marks} onSelect={(c) => { setOpen(true); setSelected(c === selected ? null : c); }} />}
+    {latest && marks.length > 0 && <p className="text-[11px] text-on-surface-variant">
+      {marks.map((m, i) => <span key={m.label}>{i > 0 && ' · '}<span aria-hidden>│ </span>~{compact(m.at)}: {m.label}{used > m.at ? ' (passed)' : ''}</span>)}
+    </p>}
 
     {unavailable && <div role="status" className="text-xs text-warning">
       Context update unavailable{latest ? '; showing the last measurement' : ''}.
@@ -167,16 +171,29 @@ export default function ContextPanel({ sessionId, running, onCompact }: Props) {
   </section>;
 }
 
-export function CompositionBar({ sections, scale, selected, onSelect }: {
+/** Lines on the bar where the window starts losing context, merged when they fall together. */
+export function limitMarks(limits: SessionContextResponse['limits']): Array<{ at: number; label: string }> {
+  if (!limits) return [];
+  if (limits.toolTrimTokens === limits.summaryTokens) return [{ at: limits.toolTrimTokens, label: 'older tool output cut and history summarised' }];
+  return [{ at: limits.toolTrimTokens, label: 'older tool output cut' }, { at: limits.summaryTokens, label: 'older history summarised' }];
+}
+
+export function CompositionBar({ sections, scale, selected, onSelect, marks = [] }: {
   sections: PromptSectionWithText[];
   scale: number;
   selected: PromptCategory | null;
   onSelect: (c: PromptCategory) => void;
+  /** Token positions to draw as lines, e.g. where compaction starts. */
+  marks?: Array<{ at: number; label: string }>;
 }) {
   const byCategory = tokensByCategory(sections);
   const used = Object.values(byCategory).reduce((n, t) => n + (t ?? 0), 0);
   if (!scale) return null;
-  return <div className="flex h-3 w-full gap-px overflow-hidden rounded-xs bg-surface-container-highest" role="group" aria-label="Context by category">
+  const shown = marks.filter((m) => m.at > 0 && m.at < scale);
+  return <div className="relative">
+  {shown.map((m) => <span key={m.label} data-testid="context-limit-mark" title={`~${compact(m.at)}: ${m.label}`}
+    className="pointer-events-none absolute -bottom-1 -top-1 z-10 w-px bg-on-surface/70" style={{ left: `${(m.at / scale) * 100}%` }} />)}
+  <div className="flex h-3 w-full gap-px overflow-hidden rounded-xs bg-surface-container-highest" role="group" aria-label="Context by category">
     {PROMPT_CATEGORIES.filter((c) => (byCategory[c] ?? 0) > 0).map((c) => {
       const tokens = byCategory[c] ?? 0;
       return <button key={c} type="button" onClick={() => onSelect(c)}
@@ -186,6 +203,7 @@ export function CompositionBar({ sections, scale, selected, onSelect }: {
         className={cn('h-full shrink-0 cursor-pointer', CATEGORY_COLOR[c], selected && selected !== c && 'opacity-40')} />;
     })}
     {used < scale && <span aria-hidden className="flex-1" />}
+  </div>
   </div>;
 }
 

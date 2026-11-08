@@ -10,7 +10,7 @@ import {
   truncateOldestToolOutputs,
   usableContextWindow,
 } from './context-compaction';
-import { estimateTokens } from './context-compaction';
+import { contextLimits, estimateTokens } from './context-compaction';
 
 describe('estimateTokens (real tokenizer)', () => {
   test('empty string is zero', () => {
@@ -246,5 +246,14 @@ describe('usableContextWindow', () => {
     expect(usableContextWindow(null, 32_000)).toBe(32_000);
     expect(usableContextWindow(undefined, 32_000)).toBe(32_000);
     expect(usableContextWindow(999, 32_000)).toBe(32_000);
+  });
+});
+
+describe('contextLimits', () => {
+  test('tool output is cut at half the window; history summarised at 100k or 80%, whichever comes first', () => {
+    expect(contextLimits(200_000)).toEqual({ toolTrimTokens: 100_000, summaryTokens: 100_000 });
+    expect(contextLimits(1_000_000)).toEqual({ toolTrimTokens: 500_000, summaryTokens: 100_000 });
+    expect(contextLimits(32_000)).toEqual({ toolTrimTokens: 16_000, summaryTokens: 25_600 });
+    expect(contextLimits(0)).toBeNull();
   });
 });

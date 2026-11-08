@@ -53,6 +53,17 @@ control shows them as **Not recorded** rather than guessing.
 scoped repositories: the user's own agents, hooks and spend in the current
 workspace.
 
+### In the sidebar and the chat
+
+- The **Mission control** item in the sidebar shows how many runs are working
+  now and, in coral, how many approvals wait on the user (`GET
+  /api/agents/pulse`, polled every 10 s). A folded *Agents* group shows the
+  same on its heading. Live runs come from the worker registry and count only
+  when the principal's scoped repository finds their row.
+- The **chat** shows the agents its turns spawned in a strip above the
+  conversation: role (or pipeline stage), state and tokens, working ones first,
+  each opening its run view.
+
 ## Triggers
 
 **Agents → Triggers** (`/agents/triggers`, `GET /api/agents/triggers`) lists

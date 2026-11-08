@@ -13,7 +13,7 @@ import { scopedRepos } from '@/db/repositories/scoped';
 import type { AgentRecord } from '@/db/schema/agents';
 import type { Principal } from '@/security/principal';
 import { readAgentCompletionReason } from '@/shared/agent-completion';
-import type { AgentSource, MissionControlResponse, MissionRun, MissionUpcoming } from '@/shared/agent-origin';
+import type { AgentPulse, AgentSource, MissionControlResponse, MissionRun, MissionUpcoming } from '@/shared/agent-origin';
 import { coreLogger } from '@/utils/logger';
 
 /** Runs listed; a busy day past this shows its newest. */
@@ -115,4 +115,23 @@ export async function readMissionControl(principal: Principal, userId: string, n
     pendingApprovals: pending === null ? null : pending.length,
     upcoming,
   };
+}
+
+/**
+ * The sidebar's pulse: how many of the user's runs are working now, and how
+ * many approvals wait on them. Live runs come from the worker registry and
+ * are kept only when the principal's scoped repository finds their row, so a
+ * run in another workspace is not counted.
+ */
+export async function readAgentPulse(principal: Principal, userId: string): Promise<AgentPulse> {
+  const repos = contentRepos(principal);
+  const running = getAgentManager().list().filter((a) => a.userId === userId && a.status === 'running');
+  const [visible, pending] = await Promise.all([
+    Promise.all(running.map((a) => repos.agents.findById(a.id))),
+    import('@/security/permissions').then(({ getPermissionManager }) => getPermissionManager().getPendingRequests(userId)).catch((err) => {
+      coreLogger.warn({ err, userId }, 'Agent pulse: pending approvals could not be read');
+      return null;
+    }),
+  ]);
+  return { live: visible.filter(Boolean).length, pendingApprovals: pending === null ? null : pending.length };
 }

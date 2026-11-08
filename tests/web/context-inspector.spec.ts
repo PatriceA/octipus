@@ -28,12 +28,16 @@ const turns = [
 test('the context inspector shows what the latest request held, by category, with the text the model read', async ({ authenticatedPage: page }) => {
   await page.route('**/api/sessions/sess-1/context', (route) => json(route, 200, {
     latest, turns, usage: { inputTokens: 63_904, cachedInputTokens: 9_400, cacheCreationTokens: 0, at: '2026-11-08T10:02:15Z' },
+    limits: { toolTrimTokens: 100_000, summaryTokens: 100_000 },
   }));
   await page.goto('/chat');
   await selectChatSession(page, 'sess-1');
 
   const panel = page.getByRole('region', { name: 'Context' });
   await expect(panel).toContainText('~64.8k of 200k · 32% full');
+  // Where the window starts losing context: one line, since both fall at 100k on a 200k window.
+  await expect(panel.getByTestId('context-limit-mark')).toHaveCount(1);
+  await expect(panel).toContainText('~100k: older tool output cut and history summarised');
   await panel.getByRole('button', { name: /Open$/ }).click();
   await expect(panel).toContainText('The provider counted 63,904 input tokens for that request, 9,400 from cache.');
 

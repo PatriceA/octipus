@@ -33,7 +33,7 @@ import { applyTopicParamOverrides, getTopicConfig } from '@/models/topic-config'
 import { getConfig } from '@/config';
 import { writePromptDump } from './prompt-dumps';
 import type { ModelConfigEntry } from '@/db/schema/models';
-import { compactMessagesWithSummary, CONTEXT_OVERFLOW_TRUNCATED_MARKER, SUMMARY_MAX_TOKENS, DEFAULT_TOOL_OUTPUT_SOFT_CAP, shouldCompactToolOutputs, stripSignedReasoning, truncateOldestToolOutputs } from '@/utils/context-compaction';
+import { AUTO_COMPACT_FILL, AUTO_COMPACT_TOKENS, compactMessagesWithSummary, CONTEXT_OVERFLOW_TRUNCATED_MARKER, SUMMARY_MAX_TOKENS, DEFAULT_TOOL_OUTPUT_SOFT_CAP, shouldCompactToolOutputs, stripSignedReasoning, truncateOldestToolOutputs } from '@/utils/context-compaction';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { BaseAgentWorker } from './agent-base';
 import { contentStorageOffFor } from './agent/audience';
@@ -1401,11 +1401,11 @@ export class AgentWorker extends BaseAgentWorker {
 
       // Proactive compaction: when cumulative input tokens exceed threshold, compact aggressively
       // This prevents context window overflow before it happens (inspired by claw-code-parity's 100K threshold)
-      const AUTO_COMPACT_THRESHOLD = 100_000;
+      const AUTO_COMPACT_THRESHOLD = AUTO_COMPACT_TOKENS;
       // Compaction below summarises on the agent's model: the right one first,
       // once a summary is near (both thresholds below are higher than this).
       if (this.estimateRequestTokens() > Math.min(AUTO_COMPACT_THRESHOLD, this.config.contextWindowSize * 0.6)) await this.followProtectionLevel();
-      if (this.estimateRequestTokens() > Math.min(AUTO_COMPACT_THRESHOLD, this.config.contextWindowSize * 0.8) && this.messages.length > 10) {
+      if (this.estimateRequestTokens() > Math.min(AUTO_COMPACT_THRESHOLD, this.config.contextWindowSize * AUTO_COMPACT_FILL) && this.messages.length > 10) {
         const { messages: proactiveCompacted, removed: proactiveRemoved } = await compactMessagesWithSummary(this.messages, {
           maxTokens: Math.floor(this.config.contextWindowSize * 0.6),
           preserveSystemMessages: true,

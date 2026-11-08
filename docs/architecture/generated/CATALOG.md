@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-631 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
+632 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -69,6 +69,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/agents/:id/stop` | `src/api/routes/agents.ts` |
 | GET | `/api/agents/activity` | `src/api/routes/agents.ts` |
 | GET | `/api/agents/overview` | `src/api/routes/agents.ts` |
+| GET | `/api/agents/pulse` | `src/api/routes/agents.ts` |
 | GET | `/api/agents/roster` | `src/api/routes/agents.ts` |
 | POST | `/api/agents/route` | `src/api/routes/agents.ts` |
 | GET | `/api/agents/triggers` | `src/api/routes/agents.ts` |
@@ -668,7 +669,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 26 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 180 |
+| `api` | `core` | 181 |
 | `api` | `db` | 123 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
@@ -720,13 +721,13 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `mcp` | 10 |
 | `core` | `models` | 134 |
 | `core` | `modules` | 2 |
-| `core` | `security` | 209 |
+| `core` | `security` | 210 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
 | `core` | `shared` | 60 |
 | `core` | `skills` | 11 |
 | `core` | `tools` | 29 |
-| `core` | `utils` | 230 |
+| `core` | `utils` | 231 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
 | `db` | `core` | 24 |

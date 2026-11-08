@@ -161,6 +161,24 @@ export const DEFAULT_TOOL_OUTPUT_SOFT_CAP = 10;
  */
 export const TOOL_OUTPUT_COMPACTION_FILL = 0.5;
 
+/** Request size past which a worker summarises older history, whatever its window (agent-worker.ts). */
+export const AUTO_COMPACT_TOKENS = 100_000;
+/** Fraction of the window at which a worker summarises older history, when that comes first. */
+export const AUTO_COMPACT_FILL = 0.8;
+
+/**
+ * Where a request of this window starts losing context: older tool outputs
+ * are cut, then older history is summarised. Shown as lines on the context
+ * inspector's bar (docs/CONTEXT-INSPECTOR.md).
+ */
+export function contextLimits(contextWindowSize: number): { toolTrimTokens: number; summaryTokens: number } | null {
+  if (!(contextWindowSize > 0)) return null;
+  return {
+    toolTrimTokens: Math.floor(contextWindowSize * TOOL_OUTPUT_COMPACTION_FILL),
+    summaryTokens: Math.floor(Math.min(AUTO_COMPACT_TOKENS, contextWindowSize * AUTO_COMPACT_FILL)),
+  };
+}
+
 /**
  * The window to run an agent against. A registered model's own `context_window`
  * wins, but it comes from a DB column an admin can set to anything — and every

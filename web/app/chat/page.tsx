@@ -30,6 +30,7 @@ import SidePanel from '@/components/chat/side-panel';
 import MonitorPanel from '@/components/chat/monitor-panel';
 import LearningPanel from '@/components/chat/learning-panel';
 import WorkPlanPanel from '@/components/chat/work-plan-panel';
+import { AgentStrip } from '@/components/chat/agent-strip';
 import ContextPanel from '@/components/chat/context-panel';
 import { GlobalPermissionBanner } from '@/components/global-permission-banner';
 import type { SwarmTreeEvent } from '@/components/swarm-tree';
@@ -2142,6 +2143,7 @@ export default function ChatPage() {
         </section>}
         {activeSessionId && <SessionCost sessionId={activeSessionId} />}
         {activeSessionId && <SkillUsage key={activeSessionId} sessionId={activeSessionId} running={isLoading} />}
+        <AgentStrip agents={trackedAgents} />
         {activeSessionId && historyErrors[activeSessionId] && <div role="status" data-testid="chat-sync-status"
           className="mx-4 my-2 rounded border border-outline-variant/30 bg-surface-container px-3 py-2 text-xs text-on-surface-variant">
           <p>{historyErrors[activeSessionId]}</p>

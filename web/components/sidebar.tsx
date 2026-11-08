@@ -36,15 +36,18 @@ import {
   Wrench,
   Zap,
 } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useState } from 'react';
 import { usePathname } from 'next/navigation';
+import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { usePageOn } from '@/lib/modules';
 import { useRooms } from '@/lib/rooms';
 import { useSidebarStore } from '@/lib/sidebar-store';
 import { cn } from '@/lib/utils';
 import { useWorkspace } from '@/lib/workspace-context';
+import type { AgentPulse } from '../../src/shared/agent-origin';
 
 interface NavItem {
   name: string;
@@ -53,6 +56,8 @@ interface NavItem {
   badge?: string;
   /** Unread count (rooms), shown when above zero. */
   count?: number;
+  /** Mission control's pulse: runs working now, and approvals waiting on the user. */
+  pulse?: AgentPulse;
   /** Install configuration: shown to admins only (the routes behind it are admin-only). */
   adminOnly?: boolean;
 }
@@ -123,6 +128,7 @@ export function Sidebar() {
   const { activeWorkspace } = useWorkspace();
   const spaceId = activeWorkspace?.kind === 'shared' ? activeWorkspace.id : null;
   const rooms = useRooms(spaceId);
+  const pulse = usePulse(!!user, activeWorkspace?.id ?? null);
   const unread = (rooms.data ?? []).reduce((sum, r) => sum + (r.muted ? 0 : r.unreadCount), 0);
   // Pages of a module that is off (docs/MODULES.md) are left out, and a
   // group left without pages goes too.
@@ -131,6 +137,9 @@ export function Sidebar() {
   const groups = navGroups.map(g => ({ ...g, items: g.items.filter(item => (!item.adminOnly || user?.isAdmin) && !offPage(item.href)) })).map(group => {
     if (group.label === 'Settings' && user?.isAdmin) {
       return { ...group, items: [...group.items, { name: 'users', href: '/admin/users', icon: Users }] };
+    }
+    if (group.label === 'Agents' && pulse) {
+      return { ...group, items: group.items.map((item) => item.href === '/agents' ? { ...item, pulse } : item) };
     }
     if (group.label === 'Work' && spaceId) {
       const items = [...group.items];
@@ -185,9 +194,11 @@ export function Sidebar() {
           (here just rendered inline so it's keyboard-readable). */}
       <nav onClick={event => { if (event.target instanceof Element && event.target.closest('a')) setMobileOpen(false); }} className="flex-1 overflow-y-auto py-3 px-1.5 space-y-3">
         {groups.map((group) => (
-          <details key={`${group.label}:${collapsed}`} open={group.items.some(item => item.href === activeHref)}>
+          <details key={`${group.label}:${collapsed}`} className="group/nav" open={group.items.some(item => item.href === activeHref)}>
             <summary className="px-2 py-2 text-xs cursor-pointer text-on-surface hover:text-primary" title={group.label}>
               {collapsed ? group.label.slice(0, 1) : group.label}
+              {/* Shown on the heading too, so a folded Agents group still says something is working. */}
+              {!collapsed && group.items.some((i) => i.pulse) && <span className="float-right group-open/nav:hidden"><PulseChips pulse={group.items.find((i) => i.pulse)!.pulse!} heading /></span>}
             </summary>
             <div>
               {group.items.map((item) => {
@@ -221,13 +232,19 @@ export function Sidebar() {
                         •
                       </span>
                     )}
-                    <item.icon className="shrink-0 w-4 h-4" />
+                    <span className="relative shrink-0">
+                      <item.icon className="w-4 h-4" />
+                      {collapsed && item.pulse && (item.pulse.live > 0 || !!item.pulse.pendingApprovals) && (
+                        <span aria-hidden className={cn('absolute -right-1 -top-1 h-2 w-2 rounded-full', item.pulse.pendingApprovals ? 'bg-accent' : 'bg-tertiary animate-pulse')} />
+                      )}
+                    </span>
                     {!collapsed && <span className="truncate">{item.name}</span>}
                     {!collapsed && !!item.count && (
                       <span data-testid={`nav-unread-${item.name}`} className="ml-auto rounded-sm bg-primary px-1.5 text-[10px] font-semibold text-on-primary">
                         {item.count}
                       </span>
                     )}
+                    {!collapsed && item.pulse && <PulseChips pulse={item.pulse} />}
                     {!collapsed && item.badge && (
                       <span className="ml-auto rounded-sm border border-primary/40 bg-primary/10 px-1.5 py-0 text-[9px] font-semibold uppercase tracking-wider text-primary">
                         {item.badge}
@@ -246,4 +263,31 @@ export function Sidebar() {
     </aside>
     </>
   );
+}
+
+/** Runs working now and approvals waiting, for the Mission control item. */
+function usePulse(enabled: boolean, workspaceId: string | null): AgentPulse | undefined {
+  const { data } = useQuery({
+    queryKey: ['agent-pulse', workspaceId],
+    enabled,
+    queryFn: async () => {
+      const r = await api.get<Partial<AgentPulse>>('/agents/pulse');
+      return typeof r?.live === 'number' ? { live: r.live, pendingApprovals: typeof r.pendingApprovals === 'number' ? r.pendingApprovals : null } : undefined;
+    },
+    refetchInterval: 10_000,
+    retry: false,
+  });
+  return data ?? undefined;
+}
+
+function PulseChips({ pulse, heading = false }: { pulse: AgentPulse; heading?: boolean }) {
+  if (!pulse.live && !pulse.pendingApprovals) return null;
+  return <span className={cn('flex items-center gap-1', !heading && 'ml-auto')}>
+    {pulse.live > 0 && <span data-testid={heading ? undefined : 'nav-live-agents'} title={`${pulse.live} working now`} aria-label={`${pulse.live} working now`}
+      className="inline-flex items-center gap-1 rounded-sm border border-tertiary/50 px-1 text-[10px] font-semibold text-tertiary">
+      <span aria-hidden className="h-1.5 w-1.5 animate-pulse rounded-full bg-tertiary" />{pulse.live}
+    </span>}
+    {!!pulse.pendingApprovals && <span data-testid={heading ? undefined : 'nav-needs-you'} title={`${pulse.pendingApprovals} waiting on you`} aria-label={`${pulse.pendingApprovals} waiting on you`}
+      className="rounded-sm bg-accent px-1.5 text-[10px] font-semibold text-on-accent">{pulse.pendingApprovals}</span>}
+  </span>;
 }

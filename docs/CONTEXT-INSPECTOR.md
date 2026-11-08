@@ -10,6 +10,12 @@ actually read.
 - **Fill.** Estimated tokens of the latest request against the model's context
   window (`~64.8k of 200k · 32% full`). When the model registry does not know
   the window, the bar shows each part's share of the request instead and says so.
+- **Where context starts to go.** Lines on the bar mark where a worker starts
+  cutting older tool outputs (half the window) and summarising older history
+  (100k tokens or 80% of the window, whichever comes first), from
+  `contextLimits` in `src/utils/context-compaction.ts`, the same numbers the
+  worker uses. On a 200k window both fall at 100k and show as one line. A line
+  the request has passed is marked *passed*.
 - **Categories.** Every part of the request is in one of nine fixed categories,
   each with its own colour:
 

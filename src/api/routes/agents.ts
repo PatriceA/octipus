@@ -92,6 +92,12 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
     const { readMissionControl } = await import('@/core/mission-control');
     return readMissionControl(principal, user.id);
   }, { detail: { tags: ['agents'] } })
+  // The sidebar's pulse: runs working now and approvals waiting (docs/MISSION-CONTROL.md).
+  .get('/pulse', async ({ user, principal, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const { readAgentPulse } = await import('@/core/mission-control');
+    return readAgentPulse(principal, user.id);
+  }, { detail: { tags: ['agents'] } })
   // Run detail: why one run exists, its tree, and the prompt it was given.
   .get('/:id/run', async ({ user, principal, params, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
