@@ -8,6 +8,7 @@ import { FORK_KEY, type ForkSeed } from './swarm/fork';
 import type { CachePacing } from '@/models/providers/prompt-cache';
 import { companionCacheScope } from '@/core/companion/history';
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
 import { usageContextOf } from '@/core/agent/context';
 import { limitKindOf } from '@/core/errors/limit-refusal';
@@ -60,7 +61,7 @@ import { DriftDetector } from './agent-worker/drift-detector';
 import { FailureStreakDetector, failureStreakNudge, failureStreakStop } from './agent-worker/failure-streak-detector';
 import { ToolLoopDetector } from './agent-worker/tool-loop-detector';
 import { isRootAgent } from './types';
-import { getAgentHooks } from './agent/hooks';
+import { getAgentHooks, HookFailedError } from './agent/hooks';
 import type { AgentMessage, ToolCall } from './types';
 import { omitGroupTranscripts } from '@/core/channels/group-context';
 import { omitSpaceTurnContext } from '@/core/spaces/turn-context';
@@ -1487,7 +1488,9 @@ export class AgentWorker extends BaseAgentWorker {
         // way. The EAI_AGAIN DNS blip is deliberately excluded — see isFatalConnectionError —
         // so it falls through to the transient-retry path below.
         // Confidential content and no local model: stop and say so (never retried).
-        if (err instanceof ProtectionRoutingError) {
+        // A fail-closed `context` hook threw: nothing was sent, and retrying
+        // would only run the broken handler again.
+        if (err instanceof ProtectionRoutingError || err instanceof HookFailedError) {
           this.emit('error', { error: errMsg, recoverable: false });
           throw err;
         }
@@ -2313,6 +2316,14 @@ export class AgentWorker extends BaseAgentWorker {
     const shape = this.lastRequestShape;
     const fits = this.estimateRequestTokens() + SUMMARY_MAX_TOKENS < this.config.contextWindowSize * 0.95;
     if (!shape || !fits) return { priority };
+    // The stored conversation, not what a `context` hook made of the last
+    // request (`requestMessages`). Cache: the hook is meant to append or touch
+    // the newest message, so the stored history shares the cached prefix up
+    // to the hook's edit — which a compaction then replaces anyway. Re-running
+    // the hook here would fire it outside a model turn and lose the message
+    // identity `keptAfter` counts by. A summary is the `compact:before` hook's
+    // to shape (docs/PLUGINS.md): the standalone summarizer reads the stored
+    // conversation too.
     return { priority, continuation: { messages: this.messages, tools: shape.tools, cacheScope: shape.cacheScope, cachePacing: shape.cachePacing, sessionId: this.context.sessionId } };
   }
 
@@ -2340,9 +2351,19 @@ export class AgentWorker extends BaseAgentWorker {
    * Never written back to `this.messages`: a hook transforms one request and
    * cannot silently rewrite the history the next request, a compaction or the
    * transcript start from. Cache: whatever a hook changes in an earlier message
-   * breaks the provider prompt cache from that message on, and a changed
-   * earlier assistant turn invalidates its signed reasoning on Claude — hooks
-   * should append, or touch only the newest message (docs/PLUGINS.md).
+   * breaks the provider prompt cache from that message on — hooks should
+   * append, or touch only the newest message (docs/PLUGINS.md).
+   *
+   * Signed reasoning: `guardSignedReasoning` ran on the stored conversation,
+   * before the hook. A Claude thinking block is bound to every message before
+   * it, so from the first message the hook changed, dropped or inserted
+   * before on, the outgoing copy drops its signed reasoning.
+   *
+   * Fail-closed: a handler that throws rejects with `HookFailedError` and
+   * nothing is sent — a redaction that crashed halfway must not go out half
+   * applied. A conversation that cannot be deep-copied (something uncloneable
+   * in an opaque provider payload) is sent as stored without firing the hook:
+   * a shallow copy would let a handler mutate the live history through it.
    */
   private async requestMessages(model: string): Promise<AgentMessage[]> {
     const hooks = getAgentHooks();
@@ -2350,18 +2371,26 @@ export class AgentWorker extends BaseAgentWorker {
     let copy: AgentMessage[];
     try {
       copy = structuredClone(this.messages);
-    } catch {
-      // Something uncloneable in an opaque provider payload: copy what a
-      // handler can reach without sharing the arrays it would mutate.
-      copy = this.messages.map((m) => ({ ...m, ...(m.toolCalls ? { toolCalls: m.toolCalls.map((c) => ({ ...c, arguments: { ...c.arguments } })) } : {}) }));
+    } catch (err) {
+      if (!this.warnedUncloneableContext) {
+        this.warnedUncloneableContext = true;
+        agentLogger.warn({ err, agentId: this.context.id }, 'context hook skipped: the conversation cannot be deep-copied; sending it unchanged');
+      }
+      return this.messages;
     }
-    const ctx = await hooks.fire('context', { agent: this.hookAgent(), model, messages: copy, iteration: this.iteration });
+    const ctx = await hooks.fireFailClosed('context', { agent: this.hookAgent(), model, messages: copy, iteration: this.iteration });
     if (!Array.isArray(ctx.messages)) {
       agentLogger.warn({ agentId: this.context.id }, 'context hook left messages not an array; sending the stored conversation');
       return this.messages;
     }
-    return ctx.messages;
+    const sent = ctx.messages;
+    let firstChanged = 0;
+    while (firstChanged < sent.length && firstChanged < this.messages.length && isDeepStrictEqual(sent[firstChanged], this.messages[firstChanged])) firstChanged++;
+    return firstChanged < sent.length ? this.withoutStaleReasoning(sent, firstChanged) : sent;
   }
+
+  /** The `context` hook was skipped once for an uncloneable conversation (logged once). */
+  private warnedUncloneableContext = false;
 
   /** The previous request of this worker's conversation, for `classifyCacheBreak`. */
   private lastCacheProbe: CacheProbe | undefined;

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { AgentWorker } from '@/core/agent-worker';
-import { getAgentHooks } from '@/core/agent/hooks';
+import { getAgentHooks, HookFailedError } from '@/core/agent/hooks';
+import { agentLogger } from '@/utils/logger';
 import type { AgentContext, AgentMessage } from '@/core/types';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
@@ -86,11 +87,76 @@ describe('context hook', () => {
     expect(clone).not.toHaveBeenCalled();
   });
 
-  test('a throwing handler is logged and skipped (fail-open)', async () => {
-    getAgentHooks().register('context', () => { throw new Error('broken extension'); });
-    getAgentHooks().register('context', (c) => { c.messages.push({ role: 'user', content: 'after', timestamp: new Date() }); });
+  test('a throwing handler fails the request (fail-closed): nothing is sent, the error names the hook', async () => {
+    getAgentHooks().register('context', (c) => {
+      c.messages[1].content = 'my key is [redacted]';
+      c.messages[3].content = 'half-done';
+      throw new Error('broken extension');
+    });
+    const after = vi.fn();
+    getAgentHooks().register('context', after);
+    const w = new AgentWorker(ctx, cfg) as unknown as Priv;
+    w.messages = stored.map((m) => ({ ...m }));
+    const err = await w.getCompletion().then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(HookFailedError);
+    expect((err as Error).message).toBe('context hook failed: broken extension');
+    expect(sent).toHaveLength(0);
+    expect(after).not.toHaveBeenCalled();
+    expect(w.messages.map((m) => m.content)).toEqual(stored.map((m) => m.content));
+  });
+
+  test('an uncloneable conversation: the hook is skipped, the stored conversation is sent, one warning', async () => {
+    const handler = vi.fn((c: { messages: AgentMessage[] }) => { c.messages[1].content = 'mutated'; });
+    getAgentHooks().register('context', handler);
+    vi.spyOn(globalThis, 'structuredClone').mockImplementation(() => { throw new DOMException('could not be cloned', 'DataCloneError'); });
+    const warn = vi.spyOn(agentLogger, 'warn');
+    const w = new AgentWorker(ctx, cfg) as unknown as Priv;
+    w.messages = stored.map((m) => ({ ...m }));
+    await w.getCompletion();
+    await w.getCompletion();
+    expect(handler).not.toHaveBeenCalled();
+    expect(sent[0].map((m) => m.content)).toEqual(stored.map((m) => m.content));
+    expect(w.messages[1].content).toBe('my key is sk-SECRET');
+    expect(warn.mock.calls.filter(([, msg]) => String(msg).startsWith('context hook skipped'))).toHaveLength(1);
+  });
+});
+
+describe('context hook and signed reasoning', () => {
+  const thinking = (n: number) => ({ anthropicContent: [{ type: 'thinking', thinking: `t${n}`, signature: `sig${n}` }, { type: 'text', text: `a${n}` }] });
+  beforeEach(() => {
+    stored = [
+      { role: 'system', content: 'You are helpful.', timestamp: new Date() },
+      { role: 'user', content: 'q1', timestamp: new Date() },
+      { role: 'assistant', content: 'a1', providerRaw: thinking(1), timestamp: new Date() },
+      { role: 'user', content: 'q2', timestamp: new Date() },
+      { role: 'assistant', content: 'a2', providerRaw: thinking(2), timestamp: new Date() },
+      { role: 'user', content: 'q3', timestamp: new Date() },
+    ];
+  });
+  const signed = () => (sent[0] as Array<{ providerRaw?: { anthropicContent?: Array<{ type: string }> } }>)
+    .map((m) => m.providerRaw?.anthropicContent?.some((b) => b.type === 'thinking') ?? false);
+
+  test('appending or editing only the newest message keeps every signed block', async () => {
+    getAgentHooks().register('context', (c) => {
+      c.messages.at(-1)!.content = 'q3 (redacted)';
+      c.messages.push({ role: 'user', content: 'reminder', timestamp: new Date() });
+    });
+    await request();
+    expect(signed()).toEqual([false, false, true, false, true, false, false]);
+  });
+
+  test('an edit to an earlier turn drops signed reasoning from that message on, in the request only', async () => {
+    getAgentHooks().register('context', (c) => { c.messages[3].content = 'q2 (redacted)'; });
     const w = await request();
-    expect(sent[0].map((m) => m.content)).toEqual([...stored.map((m) => m.content), 'after']);
-    expect(w.messages).toHaveLength(5);
+    expect(signed()).toEqual([false, false, true, false, false, false]);
+    // The stored conversation keeps its reasoning.
+    expect(w.messages[4].providerRaw).toEqual(thinking(2));
+  });
+
+  test('an edited assistant turn loses its own signed reasoning', async () => {
+    getAgentHooks().register('context', (c) => { c.messages[2].content = 'a1 (rewritten)'; });
+    const w = await request();
+    expect(signed()).toEqual([false, false, false, false, false, false]);
+    expect(w.messages[2].providerRaw).toEqual(thinking(1));
   });
 });

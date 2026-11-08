@@ -141,7 +141,11 @@ octi.hook('context', (ctx) => {
 });
 ```
 
-**Prompt cache and signed reasoning.** Providers cache the request prefix. Anything a `context` hook changes in an earlier message breaks the prompt cache from that message on, on every request it changes, so the whole conversation after it is read uncached. Changing an earlier assistant turn also invalidates its signed reasoning on Claude (the API rejects or ignores reasoning whose turn no longer matches). Append messages, or touch only the newest one. A redaction that has to apply to old messages is cheaper as a `tool:before`/`tool:after` policy, before the text enters the conversation at all.
+**Prompt cache and signed reasoning.** Providers cache the request prefix. Anything a `context` hook changes in an earlier message breaks the prompt cache from that message on, on every request it changes, so the whole conversation after it is read uncached. Claude's signed reasoning is bound to every message before it, so from the first message a hook changed, dropped or inserted before on, the worker leaves signed reasoning out of that request (the stored conversation keeps it); an edit to an early turn costs the model its earlier thinking as well as the cache. Append messages, or touch only the newest one. A redaction that has to apply to old messages is cheaper as a `tool:before`/`tool:after` policy, before the text enters the conversation at all.
+
+**Failure.** `context` is fail-closed, like `tool:before` and `spawn:before`: a handler that throws stops the request before anything is sent, and the run fails with `context hook failed: <message>` (`HookFailedError`). Later handlers do not run, and edits made before the throw are discarded, so a redaction that crashed halfway never goes out. If the conversation cannot be deep-copied (an uncloneable provider payload), the hook is not fired for that request and the stored conversation is sent; a warning is logged once per agent.
+
+**Compaction.** The hook shapes model requests of the agent loop only. A compaction summary is written from the stored conversation, whether the model continues the conversation to write it or a standalone summariser does; shape or replace it with `compact:before`.
 
 With no `context` handler subscribed the request is the stored conversation itself: no copy is made.
 
@@ -149,7 +153,7 @@ With no `context` handler subscribed the request is the stored conversation itse
 
 Fired before a compaction summary is produced, on every path: the agent loop's own compaction (`source: 'agent'`: proactive, regular and context-overflow), a chat session checkpoint (`'session'`: `/compact` and the automatic pass between turns) and a room checkpoint (`'room'`, once per transcript chunk). Payload: `{ agent: { userId, sessionId, … }, source, messagesToSummarize, previousSummary?, userInstructions?, summary? }`.
 
-`messagesToSummarize` is a frozen copy of what the summary replaces. Set `summary` to supply the summary yourself; the model summariser is then not called, and the log says a hook supplied it. The text goes through the same packaging as a model summary (the `[Context Summary …]` header and the cumulative file-operations list) and is capped at the summariser's output budget (`HOOK_SUMMARY_MAX_CHARS`, about 6,000 tokens). An empty or whitespace `summary` counts as none.
+`messagesToSummarize` is a deep, deep-frozen copy of what the summary replaces: tool calls, their arguments and provider payloads included, nothing is shared with the history, and any write to it throws. Set `summary` to supply the summary yourself; the model summariser is then not called, and the log says a hook supplied it. The text goes through the same packaging as a model summary (the `[Context Summary …]` header and the cumulative file-operations list) and is capped at the output budget the model summariser would get for the same messages: a fifth of their tokens, between about 1,000 and 6,000 tokens, at about 4 characters a token (`hookSummaryMaxChars`; never more than `HOOK_SUMMARY_MAX_CHARS`). A longer summary is cut and marked `[... summary truncated]`. An empty or whitespace `summary` counts as none.
 
 ```ts
 octi.hook('compact:before', async (ctx) => {
@@ -165,7 +169,7 @@ What this gate is and is not: it keeps an extension that was not meant to steer 
 
 Behaviour to know when writing a hook:
 
-- `before-agent-start`, `context`, `compact:before`, `tool:after` and `spawn:after` handlers that throw are logged and skipped (a `compact:before` that throws leaves the built-in summariser to run). Changes a handler made to the payload before it threw stay. `tool:before` and `spawn:before` are fail-closed: a handler that throws blocks the call or spawn.
+- `before-agent-start`, `compact:before`, `tool:after` and `spawn:after` handlers that throw are logged and skipped (a `compact:before` that throws leaves the built-in summariser to run). Changes a handler made to the payload before it threw stay. `tool:before`, `spawn:before` and `context` are fail-closed: a handler that throws blocks the call, the spawn or the model request.
 - A `tool:before` short-circuit (`ctx.shortCircuit = { result }`) answers the call without running the tool, and without its permission check. Rewritten `args` are permission-checked as usual.
 - Extension hooks are registered after the built-in persona hook, so a `before-agent-start` hook sees, and could change, the persona block. Leave `SECURITY_PREAMBLE` alone.
 

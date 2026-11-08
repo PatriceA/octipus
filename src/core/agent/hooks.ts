@@ -159,8 +159,16 @@ export interface HookAgentContext {
  * turn invalidates its signed reasoning on Claude (the provider rejects or
  * drops it). Append, or touch only the newest message, whenever you can.
  *
- * Fail-open: a throwing handler is logged and skipped, like
- * `before-agent-start`. Zero cost when nothing is subscribed.
+ * Signed reasoning: from the first message a handler changed (or dropped,
+ * or inserted before) on, the outgoing copy carries no Claude signed
+ * reasoning, so an edit to an earlier turn cannot send a stale thinking block.
+ *
+ * Fail-closed: a handler that throws aborts the request with a
+ * `HookFailedError` naming the hook, as `tool:before` and `spawn:before` do.
+ * A half-applied redaction is never sent, and the run fails. If the
+ * conversation cannot be deep-copied (an uncloneable provider payload) the
+ * hook is not fired for that request; the stored conversation is sent and a
+ * warning is logged once per agent. Zero cost when nothing is subscribed.
  */
 export interface ContextHookContext {
   agent: HookAgentContext & { root?: boolean };
@@ -182,14 +190,16 @@ export interface ContextHookContext {
  * `/compact` and the automatic pass between turns) and a room's (`'room'`).
  * A supplied summary goes through the same packaging as a model one (the
  * `[Context Summary …]` header and the cumulative file-ops appendix) and is
- * capped at the summariser's output budget. An empty or whitespace summary is
+ * capped at the output budget the model summariser would get for these same
+ * messages (`summaryBudgetTokens`, at ~4 characters a token, never above
+ * `HOOK_SUMMARY_MAX_CHARS`). An empty or whitespace summary is
  * ignored. Fail-open: a throwing handler is logged and skipped; when no
  * handler supplied a summary the built-in summariser runs.
  */
 export interface CompactHookContext {
   agent: HookAgentContext;
   source: 'agent' | 'session' | 'room';
-  /** What the summary replaces. A frozen copy: mutating it changes nothing. */
+  /** What the summary replaces. A deep-frozen deep copy: nothing in it can be mutated, and the history is never shared. */
   readonly messagesToSummarize: readonly Readonly<AgentMessage>[];
   /** The previous checkpoint's summary, when this pass chains onto one. */
   readonly previousSummary?: string;
@@ -197,6 +207,14 @@ export interface CompactHookContext {
   readonly userInstructions?: string;
   /** Set by a handler to supply the summary; the model summariser is then not called. */
   summary?: string;
+}
+
+/** A fail-closed hook handler threw (`fireFailClosed`): the guarded work did not run. */
+export class HookFailedError extends Error {
+  constructor(readonly event: AgentHookEvent, cause: unknown) {
+    super(`${event} hook failed: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = 'HookFailedError';
+  }
 }
 
 export type HookHandler<T> = (ctx: T) => Promise<void> | void;
@@ -242,6 +260,28 @@ class AgentHookRegistry {
         await handler(ctx as unknown);
       } catch (err) {
         coreLogger.error({ err, event }, 'rootAgent hook handler failed — continuing');
+      }
+    }
+    return ctx;
+  }
+
+  /**
+   * Like `fire`, but fail-closed: the first handler that throws stops the
+   * chain and the call rejects with a `HookFailedError` naming the event.
+   * For transforming events whose half-applied result must not be used
+   * (`context`: a redaction that crashed halfway).
+   */
+  async fireFailClosed<E extends AgentHookEvent>(
+    event: E,
+    ctx: AgentHookEvents[E],
+  ): Promise<AgentHookEvents[E]> {
+    const list = this.handlers.get(event);
+    if (!list || list.length === 0) return ctx;
+    for (const handler of [...list]) {
+      try {
+        await handler(ctx as unknown);
+      } catch (err) {
+        throw new HookFailedError(event, err);
       }
     }
     return ctx;
