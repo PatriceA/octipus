@@ -367,13 +367,15 @@ export function createSpawnChildTool(
     // that spawned it. This does not forbid the child, it costs one call to ask
     // for it: call again and it goes through. Delegating a clear specialist task
     // BEFORE reading anything is never challenged.
-    if (filesRead > 0 && hooks?.takeSpawnChallenge?.()) {
+    // A fork inherits what was read, so the challenge's reason does not apply.
+    if (filesRead > 0 && !params.fork && hooks?.takeSpawnChallenge?.()) {
       return `spawn_child — one check before a child starts: you have already read ${filesRead} file(s) this turn. ` +
         'A child inherits none of that. It pays a fresh system prompt and re-reads what you have read, and on a ' +
         'bounded job that costs more than finishing it. If you can do this yourself with edit_file and shell, do ' +
         'that now and do not call spawn_child again. If a child really is the cheaper path — separate scope, work ' +
         'you cannot verify yourself, or more than one file of genuinely independent work — call spawn_child again ' +
-        'with the same arguments and it will start.';
+        'with the same arguments and it will start. To hand a side task what you have already read, pass fork: true: ' +
+        'the child continues this conversation instead of starting over.';
     }
 
     const pendingCap = hooks?.maxPendingDetached() ?? 0;
@@ -404,8 +406,9 @@ export function createSpawnChildTool(
         try {
           // Siblings of one role and lane start after the first has written the
           // shared prefix to the provider cache (leader-first.ts).
-          return await leaderFirst(prefixFamilyKey(parent.id, params.role, params.topic),
-            () => spawner.spawnChild(parent, params, context, { ...internal, onWorkerStarted }));
+          const start = () => spawner.spawnChild(parent, params, context, { ...internal, onWorkerStarted });
+          // A fork reads the prefix its parent already cached: nothing to wait for.
+          return await (params.fork ? start() : leaderFirst(prefixFamilyKey(parent.id, params.role, params.topic), start));
         } catch (err) {
           coreLogger.error(
             { err, parentNodeId: parent.id, topic: params.topic, subtopic: params.subtopic },
@@ -430,8 +433,8 @@ export function createSpawnChildTool(
     // ── Await fallback (no detach budget / no hooks) ─────────────────
     try {
       params.mode = 'await';
-      const result = await leaderFirst(prefixFamilyKey(parent.id, params.role, params.topic),
-        () => spawner.spawnChild(parent, params, context, internal));
+      const start = () => spawner.spawnChild(parent, params, context, internal);
+      const result = await (params.fork ? start() : leaderFirst(prefixFamilyKey(parent.id, params.role, params.topic), start));
       return formatChildResult(result);
     } catch (err) {
       coreLogger.error(
@@ -544,6 +547,14 @@ export function createSpawnChildTool(
         parallelGroup: {
           type: 'string',
           description: 'Same group in the same LLM turn = parent will Promise.all the calls.',
+        },
+        fork: {
+          type: 'boolean',
+          description:
+            'Run the child as a FORK of this conversation: it starts with everything you have read so far, on your model '
+            + 'and tools, and reads your cached prompt instead of paying a fresh one. Use it for a side task that needs '
+            + 'what you already know (check another part of the same code, draft one section while you write another). '
+            + 'A fork cannot delegate. Omit for a specialist with its own role prompt and tools.',
         },
         resumeKey: {
           type: 'string',
@@ -743,7 +754,11 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
     scorers: parsedScorers.scorers.length > 0 ? parsedScorers.scorers : undefined,
     plan: parsedPlan.plan,
     resumeKey: resumeKey || undefined,
+    ...(args.fork === true ? { fork: true } : {}),
   };
+  // A planned child is a mechanical executor on its own lane model; a fork is
+  // the parent's conversation on the parent's model. One child cannot be both.
+  if (params.fork && params.plan?.length) return { error: 'fork and plan cannot be combined: a fork continues your conversation, a plan runs on the executor lane' };
 
   return { params };
 }

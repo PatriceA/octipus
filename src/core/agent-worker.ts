@@ -1,6 +1,8 @@
 import { type OmittedContext, REPEATABLE_CONTEXT_KEY, restoreOmittedContext, withoutRepeatedContext } from './agent/repeated-context';
 import { orderByGroup } from './agent/tool-split';
 import { takeWarmSignal } from './swarm/leader-first';
+import { FORK_KEY, type ForkSeed } from './swarm/fork';
+import type { CachePacing } from '@/models/providers/prompt-cache';
 import { companionCacheScope } from '@/core/companion/history';
 import { createHash } from 'node:crypto';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
@@ -36,7 +38,7 @@ import type { ToolHandler } from './agent-base';
 import { recordModelToolCall } from './agent/model-capability';
 import { ensureChildRelay } from './agent/output-guard';
 import { isLongTailHandler } from './agent/tool-split';
-import { buildCodemodeHandler } from '@/tools/codemode';
+import { buildCodemodeHandler, CODEMODE_TOOL_NAME } from '@/tools/codemode';
 import { getMCPBridge } from '@/mcp/bridge';
 import { ClassifiedError, isFatalConnectionError, isTransientDnsError } from './errors/classification';
 import { formatCollectedResults } from './swarm/collect-tool';
@@ -577,6 +579,43 @@ export class AgentWorker extends BaseAgentWorker {
     return this.toolExecutor.getSideEffectCounters();
   }
 
+  /**
+   * What a cache-parity fork of this run inherits (`spawn_child` with `fork`):
+   * the conversation up to, not including, the assistant turn in flight (the
+   * one whose tool call is spawning the fork), so it is exactly what this run's
+   * last request sent; the registered handlers in their order; how they are
+   * advertised; and the model and cache routing that request used. The
+   * `codemode` handler is left out: it is bound to this worker's executor, and
+   * the fork registers its own from the same model.
+   */
+  forkSnapshot(): ForkSeed {
+    let end = this.messages.length;
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i];
+      if (m.role === 'assistant' && m.toolCalls?.length) { end = i; break; }
+      if (m.role !== 'tool') break;
+    }
+    return {
+      messages: this.messages.slice(0, end).map((m) => ({ ...m })),
+      tools: Array.from(this.toolExecutor.getTools().values()).filter((t) => t.name !== CODEMODE_TOOL_NAME),
+      toolAdvertisement: this.config.toolAdvertisement,
+      model: this.context.model,
+      modelName: this.context.modelName,
+      cacheScope: this.requestCacheScope(),
+      cachePacing: this.requestCachePacing(),
+    };
+  }
+
+  /**
+   * Start from another run's conversation instead of a system prompt (a fork).
+   * Signed reasoning is kept only on the model that signed it.
+   */
+  seedConversation(seed: Pick<ForkSeed, 'messages' | 'model'>): void {
+    const sameModel = seed.model === this.context.model;
+    this.messages = seed.messages.map((m) => (sameModel ? { ...m } : { ...m, providerRaw: undefined }));
+    this.pendingPromptContext = '';
+  }
+
   registerTool(tool: import('./agent-base').ToolHandler): void {
     this.toolExecutor.registerTool(tool);
   }
@@ -702,6 +741,22 @@ export class AgentWorker extends BaseAgentWorker {
       this.parentSignalCleanup?.();
       this.parentSignalCleanup = null;
     }
+  }
+
+  /**
+   * Provider cache routing for this run's requests. A fork routes as the run it
+   * forked (`FORK_KEY`): its prefix is that run's, so its cache is too.
+   */
+  private requestCacheScope(): string {
+    const fork = this.context.metadata?.[FORK_KEY] as { cacheScope?: string } | undefined;
+    if (fork?.cacheScope) return fork.cacheScope;
+    return companionCacheScope(this.context, this.cacheGeneration) ?? (isRootAgent(this.context) ? `root:${this.cacheGeneration}` : `child:${this.context.role}`);
+  }
+
+  private requestCachePacing(): CachePacing {
+    const fork = this.context.metadata?.[FORK_KEY] as { cachePacing?: CachePacing } | undefined;
+    if (fork?.cachePacing) return fork.cachePacing;
+    return isRootAgent(this.context) && this.context.attended === true ? 'human' : 'machine';
   }
 
   /** A child's run: the first one started inside a fan-out leader's scope is that leader (`leader-first.ts`). */
@@ -2165,14 +2220,6 @@ export class AgentWorker extends BaseAgentWorker {
     this.lastPrefixFingerprint = fingerprint;
   }
 
-  /**
-   * `stripSignedReasoning` for an edit made inside the agent loop — except
-   * under manual thinking (`budget_tokens`). Only models from before the
-   * conversation-binding check accept that mode, so nothing there needs
-   * removing, and those models require a tool round still in flight to start
-   * with its thinking block: removing it is the 400. Turn-boundary edits
-   * (snapshot, compaction) strip regardless; no round is in flight there.
-   */
   /** Retrieved blocks this turn's message left out because an earlier turn carried them (`repeated-context.ts`). */
   private omittedContext: OmittedContext | undefined;
 
@@ -2181,6 +2228,14 @@ export class AgentWorker extends BaseAgentWorker {
     if (this.omittedContext) this.omittedContext = restoreOmittedContext(this.messages, this.omittedContext);
   }
 
+  /**
+   * `stripSignedReasoning` for an edit made inside the agent loop — except
+   * under manual thinking (`budget_tokens`). Only models from before the
+   * conversation-binding check accept that mode, so nothing there needs
+   * removing, and those models require a tool round still in flight to start
+   * with its thinking block: removing it is the 400. Turn-boundary edits
+   * (snapshot, compaction) strip regardless; no round is in flight there.
+   */
   private withoutStaleReasoning(messages: AgentMessage[], from?: number): AgentMessage[] {
     return this.manualThinking ? messages : stripSignedReasoning(messages, from);
   }
@@ -2575,10 +2630,10 @@ export class AgentWorker extends BaseAgentWorker {
         // and user. A child scopes by its ROLE, not its agent id: siblings of
         // one role share the role prompt and tool block, and a key per agent
         // sent each of them to a different (cold) cache for that shared prefix.
-        cacheScope: companionCacheScope(this.context,this.cacheGeneration) ?? (isRootAgent(this.context) ? `root:${this.cacheGeneration}` : `child:${this.context.role}`),
+        cacheScope: this.requestCacheScope(),
         // An attended root turn waits on a person between requests; every
         // other worker runs as a burst (`cacheTtlsFor`).
-        cachePacing: isRootAgent(this.context) && this.context.attended === true ? 'human' as const : 'machine' as const,
+        cachePacing: this.requestCachePacing(),
         // A run nobody is attending (heartbeat, cron, hooks — children inherit
         // `attended`) yields to live turns at the rate limiter.
         ...(this.context.attended === false ? { priority: 'background' as const } : {}),

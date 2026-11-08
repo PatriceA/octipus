@@ -130,6 +130,15 @@ describe('validateSpawnChildArgs', () => {
     }
   });
 
+  test('fork is passed through only as an explicit true, and never with a plan', () => {
+    const forked = validateSpawnChildArgs({ ...valid, fork: true });
+    expect('params' in forked && forked.params.fork).toBe(true);
+    const notForked = validateSpawnChildArgs({ ...valid, fork: 'yes' });
+    expect('params' in notForked && notForked.params.fork).toBeFalsy();
+    const both = validateSpawnChildArgs({ ...valid, fork: true, plan: ['edit a.ts'] });
+    expect(both).toMatchObject({ error: expect.stringMatching(/fork and plan/) });
+  });
+
   test('rejects missing topic', () => {
     const r = validateSpawnChildArgs({ ...valid, topic: '' });
     expect('error' in r).toBe(true);

@@ -6,6 +6,8 @@ import { isResumableCliModel } from '@/core/cli-agent-factory';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { isPlanMode, stripMutatingTools } from '@/core/agent/plan-mode';
 import type { AgentWorker, ToolHandler } from '@/core/agent-worker';
+import { FORK_KEY, FORK_REFUSED_TOOLS_KEY, type ForkSeed, forkRefusedTools, forkTaskMessage } from './fork';
+import { FILE_CHANGES_REFUSED_KEY } from '@/core/tool-executor';
 import type { GatewayHub } from '@/core/gateway/hub';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { getAgentHooks } from '@/core/agent/hooks';
@@ -902,24 +904,34 @@ export class SwarmSpawner {
     // in total, however many had finished.
     parent.budget.fanOut.used++;
 
+    // A fork (swarm/fork.ts) keeps everything above — validation, budget,
+    // role bookkeeping, worktree — and swaps what the model sees for the
+    // parent's own: its conversation, handlers, advertisement and model. A
+    // parent that cannot be forked (a vendor CLI) gets an ordinary child.
+    const fork = params.fork ? this.forkSeedOf(parentContext) : undefined;
+    if (params.fork && !fork) coreLogger.info({ parentAgentId: parentContext.id }, 'spawn_child fork: parent run cannot be forked; starting an ordinary child');
+
     const result = await releaseOnThrow(() => this.runChildWithRetry({
       parent,
       parentContext,
       childDepth,
       childKind,
       childRole,
-      childModel,
-      childModelName,
+      childModel: fork?.model ?? childModel,
+      childModelName: fork?.modelName ?? childModelName,
       childLane,
-      childTools,
-      childToolAdvertisement,
-      systemPrompt: childSystemPrompt,
+      childTools: fork?.tools ?? childTools,
+      childToolAdvertisement: fork ? fork.toolAdvertisement : childToolAdvertisement,
+      systemPrompt: fork ? undefined : childSystemPrompt,
       budget,
       topicPath,
       subtopic: params.subtopic,
       brief,
       briefHash,
-      childMessage: finalChildMessage,
+      childMessage: fork
+        ? [forkTaskMessage(params.taskBrief, params.expectedOutput), guarded.action === 'warn' ? securityReminder : ''].filter(Boolean).join('\n\n')
+        : finalChildMessage,
+      ...(fork ? { fork } : {}),
       reason: internal.reason ?? 'normal',
       spawnMode: params.mode ?? 'await',
       scorers: params.scorers,
@@ -982,6 +994,13 @@ export class SwarmSpawner {
     return result;
   }
 
+  /** The parent run's fork seed, when it is a native worker of this process. */
+  private forkSeedOf(parentContext: AgentContext): ForkSeed | undefined {
+    // Duck-typed: a vendor CLI worker has no conversation of ours to fork.
+    const worker = getAgentManager().get(parentContext.id) as Partial<Pick<AgentWorker, 'forkSnapshot'>> | undefined;
+    return typeof worker?.forkSnapshot === 'function' ? worker.forkSnapshot() : undefined;
+  }
+
   // ── Child run + retry orchestration ────────────────────────────────
 
   private async runChildWithRetry(opts: {
@@ -1004,6 +1023,8 @@ export class SwarmSpawner {
     /** What the child ADVERTISES; `childTools` stays the registered set. */
     childToolAdvertisement?: ToolAdvertisement;
     systemPrompt?: string;
+    /** A fork of the parent's run (swarm/fork.ts): seeds the worker with its conversation. */
+    fork?: ForkSeed;
     expertId?: string;
     budget: NodeBudget;
     topicPath: string;
@@ -1606,7 +1627,9 @@ export class SwarmSpawner {
     // tool-level enforcement, not just instruction-following (weak executor
     // models under-weight instructions). Tracking/persistence below key off
     // `childId`, not `childNode`, so a null childNode is safe here.
-    if (opts.childDepth === 1 && !opts.brief.plan?.length) {
+    // A fork keeps the parent's handlers, these included, refused at call time
+    // (swarm/fork.ts): new ones would change the tool bytes it shares.
+    if (opts.childDepth === 1 && !opts.brief.plan?.length && !opts.fork) {
       childNode = {
         id: '__pending__',
         rootSessionId: opts.parent.rootSessionId,
@@ -1691,6 +1714,7 @@ export class SwarmSpawner {
         systemPrompt: opts.systemPrompt,
         tools,
         toolAdvertisement: opts.childToolAdvertisement,
+        ...(opts.fork ? { fork: opts.fork } : {}),
         maxTokenBudget: opts.budget.tokens.cap,
         timeout: opts.budget.wallClockMs.cap,
         parentAgentId: opts.parent.id,
@@ -1717,6 +1741,7 @@ export class SwarmSpawner {
           ...stageChildMetadata(opts.parentContext.metadata as Record<string, unknown> | undefined),
           ...treeMetadata,
           ...(opts.resumeKey ? { resumeKey: opts.resumeKey } : {}),
+          ...(opts.fork ? forkMetadata(opts.fork, opts.parentContext) : {}),
         },
       });
     } catch (err) {
@@ -2995,4 +3020,18 @@ export function preferEarlierAttempt(current: ChildResult, retried: ChildResult)
   const effects = retried.receipt?.sideEffects;
   if (!effects || (retried.receipt?.unavailable.length ?? 0) > 0) return false;
   return effects.filesChanged === 0 && effects.commandsRun === 0;
+}
+
+/**
+ * A fork's context metadata: route its requests as the parent's, refuse the
+ * parent-bound handlers it inherits, and keep a refusal of file changes the
+ * parent's turn is under (plan mode, a space role that may not write).
+ */
+function forkMetadata(fork: ForkSeed, parentContext: AgentContext): Record<string, unknown> {
+  const fileChanges = (parentContext.metadata as Record<string, unknown> | undefined)?.[FILE_CHANGES_REFUSED_KEY];
+  return {
+    [FORK_KEY]: { cacheScope: fork.cacheScope, cachePacing: fork.cachePacing },
+    [FORK_REFUSED_TOOLS_KEY]: forkRefusedTools(fork.tools),
+    ...(fileChanges ? { [FILE_CHANGES_REFUSED_KEY]: fileChanges } : {}),
+  };
 }

@@ -270,6 +270,12 @@ export interface AgentNode {
 
 /** Params accepted by `spawn_child` tool (after validation). */
 export interface SpawnChildParams {
+  /**
+   * Continue the parent's conversation instead of starting from a role prompt
+   * (swarm/fork.ts): same model, tools and prefix, so the child reads the
+   * parent's cached prompt and knows what the parent has read.
+   */
+  fork?: boolean;
   routePolicy?: { primaryModel?: string; allowBackup?: boolean };
   expertId?: string;
   role?: AgentRole;

@@ -28,6 +28,7 @@ import type { AgentEvent, ToolHandler } from './agent-base';
 import type { AgentContext, AgentMessage, ToolCall, ToolResult } from './types';
 import type { ToolBatchOutcome } from './agent-worker/failure-streak-detector';
 import { readOnlyNotifyAllowed, readOnlyRefusal } from '@/security/read-only-turn';
+import { FORK_REFUSAL, FORK_REFUSED_TOOLS_KEY } from '@/core/swarm/fork';
 
 const MAX_CONSECUTIVE_TOOL_ERRORS = 3;
 /** Errors that describe a server's momentary state (down, restarting, cooling off), never a failure streak. */
@@ -615,6 +616,10 @@ export class ToolExecutor {
     if (refused && FILE_CHANGE_TOOLS.has(call.name)) {
       return FILE_CHANGE_REFUSALS[refused] ?? FILE_CHANGE_REFUSALS.plan_mode;
     }
+    // A fork keeps its parent's run-bound handlers declared for cache parity
+    // and runs none of them (swarm/fork.ts).
+    const forkRefused = this.context.metadata?.[FORK_REFUSED_TOOLS_KEY];
+    if (Array.isArray(forkRefused) && forkRefused.includes(call.name)) return FORK_REFUSAL;
     const bareName = call.name.includes('__') ? (call.name.split('__').pop() as string) : call.name;
     const action = typeof tool.permissionAction === 'function'
       ? tool.permissionAction(call.arguments)
