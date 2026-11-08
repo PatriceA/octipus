@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import type { ToolHandler } from '@/core/agent-base';
-import { isLongTailHandler, splitRoleTools } from './tool-split';
+import { isLongTailHandler, orderByGroup, splitRoleTools } from './tool-split';
 
 const handler = (name: string, toolId?: string): ToolHandler => ({
   name,
@@ -121,5 +121,20 @@ describe('discoverOnly', () => {
   test('keeps it in the tail even when its name is in the core set', () => {
     // The advertisement list must not be able to drag it back into view.
     expect(isLongTailHandler(hidden('create_pipeline'), ['create_pipeline'])).toBe(true);
+  });
+});
+
+describe('orderByGroup', () => {
+  test('ordered groups go last, in that order; everything else keeps its place ahead of them', () => {
+    const names = orderByGroup(HANDLERS, ['filesystem', 'websearch']).map((h) => h.name);
+    expect(names).toEqual(['kb_search', 'save_artifact', 'mcp_list_tools', 'spawn_child', 'read_file', 'write_file', 'web_search']);
+  });
+
+  test('a group appended to the order leaves every earlier tool where it was', () => {
+    // Before: the conversation has not reached for web search, so it is not advertised.
+    const before = orderByGroup(HANDLERS.filter((h) => h.toolId !== 'websearch'), ['filesystem']).map((h) => h.name);
+    const after = orderByGroup(HANDLERS, ['filesystem', 'websearch']).map((h) => h.name);
+    expect(after.slice(0, -1)).toEqual(before);
+    expect(after.at(-1)).toBe('web_search');
   });
 });

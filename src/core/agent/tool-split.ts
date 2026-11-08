@@ -38,6 +38,22 @@ export function isLongTailHandler(handler: ToolHandler, coreToolIds: string[]): 
   return !coreToolIds.includes(id);
 }
 
+/**
+ * `handlers` with the groups named in `groupOrder` moved to the end, in that
+ * order; everything else keeps its place ahead of them. Stable within a group.
+ * See `ToolAdvertisement.groupOrder`.
+ */
+export function orderByGroup(handlers: ToolHandler[], groupOrder: readonly string[]): ToolHandler[] {
+  const rank = new Map(groupOrder.map((id, i) => [id, i]));
+  const head = handlers.filter((h) => h.toolId === undefined || !rank.has(h.toolId));
+  const tail = handlers
+    .map((h, i) => ({ h, i, r: h.toolId === undefined ? undefined : rank.get(h.toolId) }))
+    .filter((x): x is { h: ToolHandler; i: number; r: number } => x.r !== undefined)
+    .sort((a, b) => a.r - b.r || a.i - b.i)
+    .map((x) => x.h);
+  return [...head, ...tail];
+}
+
 export interface SplitTools {
   core: ToolHandler[];
   longTail: ToolHandler[];

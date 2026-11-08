@@ -102,7 +102,7 @@ describe('stickyCoreToolIds', () => {
   const role = ['filesystem', 'shell', 'websearch', 'notes', 'messaging'];
   const scope = { generation: 'g1', checkpointId: 'c1' };
 
-  test('a group stays once the conversation advertised it, in the role order', () => {
+  test('a group stays once the conversation advertised it', () => {
     const first = stickyCoreToolIds(['filesystem', 'shell', 'websearch'], role, undefined, scope);
     expect(first).toEqual({ ids: ['filesystem', 'shell', 'websearch'], changed: true });
     // "thanks, summarize" names no web search: it stays advertised.
@@ -110,6 +110,17 @@ describe('stickyCoreToolIds', () => {
     expect(second).toEqual({ ids: ['filesystem', 'shell', 'websearch'], changed: false });
     const third = stickyCoreToolIds(['filesystem', 'shell', 'notes'], role, { ...scope, ids: second.ids }, scope);
     expect(third).toEqual({ ids: ['filesystem', 'shell', 'websearch', 'notes'], changed: true });
+  });
+
+  test('a group reached for later is appended, not inserted in role order', () => {
+    // `websearch` sorts before `notes` in the role list; inserted there, it
+    // would shift every notes tool and break the cached prefix at that point.
+    const stored = { ...scope, ids: ['filesystem', 'shell', 'notes'] };
+    expect(stickyCoreToolIds(['filesystem', 'shell', 'websearch'], role, stored, scope))
+      .toEqual({ ids: ['filesystem', 'shell', 'notes', 'websearch'], changed: true });
+    // A fresh conversation starts in role order.
+    expect(stickyCoreToolIds(['filesystem', 'shell', 'websearch', 'notes'], role, undefined, scope).ids)
+      .toEqual(['filesystem', 'shell', 'websearch', 'notes']);
   });
 
   test('a clear or a checkpoint lets the list shrink again (the cache resets there anyway)', () => {

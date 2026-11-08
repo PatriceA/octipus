@@ -99,8 +99,9 @@ export function selectCoreToolIds(message: string, coreToolIds: readonly string[
 
 /**
  * The core groups to advertise this turn, given what earlier turns of the
- * same conversation advertised: this message's selection, plus every group
- * already advertised since the last clear or checkpoint.
+ * same conversation advertised: every group already advertised since the last
+ * clear or checkpoint, in the order it was first advertised, then this
+ * message's new groups in role order.
  *
  * Per-message selection alone made the tool list follow the wording of each
  * message — "search for X", then "thanks, summarize", then "search for Y" —
@@ -111,7 +112,11 @@ export function selectCoreToolIds(message: string, coreToolIds: readonly string[
  * holds for short conversations, and a clear or checkpoint (which resets the
  * cache anyway) lets the list shrink again.
  *
- * Always a subset of the role's list, in the role's order (`selectCoreToolIds`).
+ * Always a subset of the role's list. The order is first-advertised, not the
+ * role's: the root advertises its groups in this order (`groupOrder`), so a
+ * group a conversation reaches for later is APPENDED to the tool list and the
+ * tools before it stay a reusable cached prefix. Inserted in role order, it
+ * shifted every later tool and the prefix broke at the insertion point.
  */
 export function stickyCoreToolIds(
   selected: readonly string[],
@@ -120,7 +125,8 @@ export function stickyCoreToolIds(
   scope: { generation: string; checkpointId?: string },
 ): { ids: string[]; changed: boolean } {
   const previous = stored && stored.generation === scope.generation && stored.checkpointId === scope.checkpointId ? stored.ids : [];
-  const ids = coreToolIds.filter((id) => selected.includes(id) || previous.includes(id));
+  const kept = previous.filter((id) => coreToolIds.includes(id));
+  const ids = [...kept, ...coreToolIds.filter((id) => selected.includes(id) && !kept.includes(id))];
   const changed = !stored || stored.generation !== scope.generation || stored.checkpointId !== scope.checkpointId
     || ids.length !== stored.ids.length || ids.some((id, i) => stored.ids[i] !== id);
   return { ids, changed };

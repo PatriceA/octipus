@@ -1,4 +1,5 @@
 import { omitRepeatedContext, REPEATABLE_CONTEXT_KEY } from './agent/repeated-context';
+import { orderByGroup } from './agent/tool-split';
 import { companionCacheScope } from '@/core/companion/history';
 import { createHash } from 'node:crypto';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
@@ -2213,9 +2214,9 @@ export class AgentWorker extends BaseAgentWorker {
   private getAdvertisedToolHandlers(): ToolHandler[] {
     const advertisement = this.config.toolAdvertisement ?? { mode: 'full' };
     const registeredTools = Array.from(this.toolExecutor.getTools().values());
-    return advertisement.mode === 'lazy'
-      ? registeredTools.filter((tool) => !isLongTailHandler(tool, advertisement.coreToolIds))
-      : registeredTools;
+    if (advertisement.mode !== 'lazy') return registeredTools;
+    const advertised = registeredTools.filter((tool) => !isLongTailHandler(tool, advertisement.coreToolIds));
+    return advertisement.groupOrder?.length ? orderByGroup(advertised, advertisement.groupOrder) : advertised;
   }
 
   /**
