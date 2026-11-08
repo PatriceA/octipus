@@ -7,7 +7,7 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { TASK_CHECKOUT_TTL_MS } from '@/core/tasks/checkout';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -284,6 +284,9 @@ describe('maybeRunHeartbeats', () => {
     deps.github.runGh = async () => { ghCalls += 1; return redPr(); };
     await heartbeat.maybeRunHeartbeats(NOON, deps, cfg());
     expect(ghCalls).toBe(1);
+    const { heartbeatChecks } = await import('@/db/schema/heartbeat-checks');
+    const checks = await db.select().from(heartbeatChecks).where(inArray(heartbeatChecks.hookId, [h1.id, h2.id]));
+    expect(checks.map((c) => [c.ran, c.reason])).toEqual([[false, 'nothing_pending'], [false, 'nothing_pending']]);
     for (const id of [h1.id, h2.id]) {
       const [row] = await db.select().from(hooksSchema).where(eq(hooksSchema.id, id));
       expect(row.triggerConfig.heartbeatSeen).toEqual(seen);
@@ -608,6 +611,12 @@ describe('role heartbeats', () => {
       await heartbeat.maybeRunHeartbeats(NOON, deps, cfg());
       expect(fired.map((f) => f.hookId)).toEqual([hook.id]);
       expect((await hookRow(hook.id)).triggerConfig.heartbeatPermissionNotified).toBe(false);
+      // Each decision is kept, with its reason, for the Triggers page.
+      const { heartbeatChecks } = await import('@/db/schema/heartbeat-checks');
+      const checks = await db.select().from(heartbeatChecks).where(eq(heartbeatChecks.hookId, hook.id));
+      expect(checks.map((c) => [c.ran, c.reason, c.readyTasks])).toEqual([
+        [false, 'tasks_permission_required', 1], [false, 'tasks_permission_required', 1], [true, null, 1],
+      ]);
     } finally {
       restore();
       await db.delete(toolPermissions);

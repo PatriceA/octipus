@@ -28,6 +28,8 @@ import { truncateLinesToTokens } from '@/utils/token-count';
 import { getAgentHooks } from './hooks';
 import { estimateToolSchemaTokens, logPromptComposition, recordContextFill } from './prompt-budget';
 import { PromptBuilder } from './prompt-builder';
+import { PromptTagger, stageRootPrompt, turnContextParts } from './prompt-composition';
+import { categorizeBuilderParts } from './prompt-parts';
 import { buildSecurityReminder } from './input-guard';
 import { createMetaTools } from './meta-tools';
 import { shouldUseLazyDiscovery } from './lazy-tools';
@@ -206,6 +208,12 @@ export interface RootRunExtras {
    * Directives are never listed: an instruction is repeated on purpose.
    */
   repeatableContext?: string[];
+  /**
+   * `extraSystemContext` as labelled pieces (memory, each context hook, space
+   * and group context), for the Context inspector. Ignored unless they add up
+   * to that string exactly.
+   */
+  turnContextParts?: ReadonlyArray<{ label: string; text: string }>;
 }
 
 /**
@@ -603,7 +611,18 @@ export async function runRootAgent(
   // user attached, the reminder by whether this message was flagged), so
   // they ride in the same volatile tier rather than the cacheable static
   // prefix.
-  const volatileParts: string[] = buildPreHookVolatileParts(supervisor&&scope.trigger!=='user'?'':extraSystemContext, guardFlags);
+  const turnBlock = supervisor&&scope.trigger!=='user'?'':extraSystemContext;
+  const volatileParts: string[] = buildPreHookVolatileParts(turnBlock, guardFlags);
+  // Which category each per-turn part belongs to, for the Context inspector.
+  const tagger = new PromptTagger();
+  tagger.tag('volatile', 'turn', 'Current date & time', volatileParts[0]);
+  tagger.tagSplit(turnBlock, turnContextParts(turnBlock, [
+    ...(extras.turnContextParts ?? []),
+    ...(attachments.context ? [{ label: 'Attachments', text: attachments.context }] : []),
+  ]));
+  if (guardFlags.length > 0) tagger.tag('volatile', 'guardrails', 'Security alert (input flagged)', volatileParts[volatileParts.length - 1]);
+  // What a static block's sizes leave out: caps and cuts, by builder label.
+  const blockNotes: Record<string, { status?: 'truncated' | 'capped'; note?: string }> = {};
 
   // Fire the before-agent-start hook so extensions and built-in
   // modules (persona, project context) can mutate the system
@@ -670,18 +689,18 @@ export async function runRootAgent(
   // they were, and the routing table gained the sentence about what NOT to
   // delegate — the root holds those tools itself.
   if (!isLite && !supervisor) prompt.add('user', 'delegation-mechanics', `\n\n${delegationPrompt}`);
-  volatileParts.push(buildTopicHint(isLite, classification));
+  volatileParts.push(tagger.tag('volatile', 'turn', 'Topic hint', buildTopicHint(isLite, classification)));
   if (classification.type === 'ambiguous') {
-    volatileParts.push(`\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise resolve only the uncertainty needed to choose direct work or a specialist; do not start a broad investigation just to route the task. If the user explicitly tells you to delegate, always do so.`);
+    volatileParts.push(tagger.tag('volatile', 'turn', 'Ambiguous request note', `\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise resolve only the uncertainty needed to choose direct work or a specialist; do not start a broad investigation just to route the task. If the user explicitly tells you to delegate, always do so.`));
   }
 
   // Chat/work split (Thread 3): tell the root agent whether to deliver in
   // chat or as a file. Empty for the default-inline case, so unchanged.
-  volatileParts.push(buildOutputDirective(outputDirective.mode, outputDirective.forced));
+  volatileParts.push(tagger.tag('volatile', 'turn', 'Output directive', buildOutputDirective(outputDirective.mode, outputDirective.forced)));
   // What happened to interactive answers in the user's client, and where this
   // message came from (ids and enums only, checked against the session).
   const inlineUiNotes = getRunContext()?.inlineUiNotes;
-  if (inlineUiNotes?.length) volatileParts.push(`\n\n${inlineUiNotes.join('\n')}`);
+  if (inlineUiNotes?.length) volatileParts.push(tagger.tag('volatile', 'turn', 'Interactive answer notes', `\n\n${inlineUiNotes.join('\n')}`));
 
   // Inject workspace awareness
   const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
@@ -692,7 +711,7 @@ export async function runRootAgent(
   // because it is a property of this session right now rather than of the
   // install, and a per-session block in the static tier costs the whole prefix
   // a cache write every turn.
-  if (isPlanMode(sessionCtx)) volatileParts.push(PLAN_MODE_DIRECTIVE);
+  if (isPlanMode(sessionCtx)) volatileParts.push(tagger.tag('volatile', 'turn', 'Plan mode', PLAN_MODE_DIRECTIVE));
 
   if (isDevMode) {
     // Dev mode: focused on a specific project
@@ -706,6 +725,7 @@ export async function runRootAgent(
       const { loadAgentsMd } = await import('./agents-md');
       const guide = await loadAgentsMd(projectPath);
       if (guide) {
+        if (guide.length > 500) blockNotes['dev-project'] = { status: 'truncated', note: `AGENTS.md: first 500 of ${guide.length.toLocaleString('en-US')} chars` };
         wsContext += `\nProject overview (from AGENTS.md): ${guide.slice(0, 500)}`;
       }
     } catch (err) { coreLogger.error({ err }, 'silent failure in service'); }
@@ -756,6 +776,9 @@ export async function runRootAgent(
         suite += ` Dependencies are declared direct package relationships, not a complete impact analysis. Inspect API contracts and runtime connections separately. Repo maps and symbols are scan-time snapshots; refresh with scan_repos after code or manifest changes.`;
         if (ambiguousPackages.length) suite += ` Multiple repositories publish the same package; dependency edges are incomplete for: ${ambiguousPackages.slice(0, 20).join(', ')}${ambiguousPackages.length > 20 ? ' (and more)' : ''}. Use explicit repository paths.`;
         // Drifts: a rescan or a new repo changes it (scan_repos refreshes it).
+        blockNotes['workspace-suite'] = truncated || shown.length < repos.length
+          ? { status: 'capped', note: `${shown.length} of ${repos.length} repos · cap ${REPO_SUITE_TOKEN_BUDGET.toLocaleString('en-US')} tokens` }
+          : { note: `${repos.length} repos` };
         prompt.add('session', 'workspace-suite', suite, { drifts: true });
         injectedSuite = true;
       }
@@ -803,6 +826,7 @@ export async function runRootAgent(
   // whether a session is offered interactive answers rarely changes.
   if (inlineUi) prompt.add('session', 'inline-ui', INLINE_UI_PROMPT);
 
+  let driftReplayed = false;
   // The drifting session blocks (workspace listing, repo suite, AGENTS.md
   // excerpt) are replayed as this conversation first saw them, so a new
   // directory on disk does not rewrite the cached prefix on every following
@@ -821,6 +845,7 @@ export async function runRootAgent(
       }
     }
     coreLogger.debug({ sessionId, replayed, tiers: prompt.summary() }, 'Root prompt tiers');
+    driftReplayed = replayed;
   }
 
   // Append the volatile per-turn context (date, summary, history) after the
@@ -855,6 +880,21 @@ export async function runRootAgent(
     },
     { static: prompt.staticParts(), volatile: prompt.turnParts() },
   ));
+  // The same blocks, by category, for the Context inspector (the agent
+  // manager adds skills and MCP servers, the worker tools and history).
+  // Read off the builder after the drift replay: what is sent, not what was built.
+  stageRootPrompt(sessionId, {
+    parts: categorizeBuilderParts(prompt.blocks(), {
+      roleLabel: supervisor ? 'Companion supervisor prompt' : `${rootAgentRole} role prompt${isLite ? ' (lite)' : ''}`,
+      notes: blockNotes,
+      replayed: driftReplayed,
+      tagger,
+    }),
+    role: rootAgentRole,
+    model: modelName,
+    ...(modelMeta?.contextWindow ? { contextWindow: modelMeta.contextWindow } : {}),
+    ...(toolAdvertisement.mode === 'lazy' ? { registeredToolCount: turnTools.length } : {}),
+  });
 
   // Hook-triggered tasks get a longer timeout since they run unattended.
   const agentConfig = getConfig().agent;

@@ -34,6 +34,7 @@ import {
   Users,
   Webhook,
   Wrench,
+  Zap,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
@@ -70,7 +71,14 @@ const navGroups: NavGroup[] = [
     { name: 'my work', href: '/my-work', icon: ClipboardList },
     { name: 'inbox', href: '/notifications', icon: Bell },
     { name: 'research', href: '/research', icon: Telescope },
-    { name: 'agent activity', href: '/agents', icon: Bot },
+  ] },
+  // Everything that runs agents, whoever starts them (docs/MISSION-CONTROL.md).
+  { label: 'Agents', items: [
+    { name: 'mission control', href: '/agents', icon: Bot },
+    { name: 'roster', href: '/agents/roster', icon: Users },
+    { name: 'triggers', href: '/agents/triggers', icon: Zap },
+    { name: 'pipelines', href: '/pipelines', icon: GitBranch },
+    { name: 'hooks & schedules', href: '/hooks', icon: Webhook },
   ] },
   { label: 'Business', items: [
     { name: 'cases', href: '/cases', icon: FolderKanban },
@@ -84,10 +92,6 @@ const navGroups: NavGroup[] = [
     { name: 'knowledge', href: '/knowledge', icon: Brain },
     { name: 'recall', href: '/recall', icon: Sparkles },
     { name: 'artifacts', href: '/artifacts', icon: Globe, badge: 'BETA' },
-  ] },
-  { label: 'Automations', items: [
-    { name: 'pipelines', href: '/pipelines', icon: GitBranch },
-    { name: 'hooks & schedules', href: '/hooks', icon: Webhook },
   ] },
   { label: 'Connections', items: [
     { name: 'models', href: '/models', icon: Cpu },
@@ -141,6 +145,10 @@ export function Sidebar() {
     }
     return group;
   }).filter((group) => group.items.length > 0);
+  // The most specific item wins: /agents/triggers lights "triggers", not "mission control" too.
+  const activeHref = groups.flatMap((g) => g.items.map((i) => i.href))
+    .filter((href) => href === '/' ? pathname === '/' : pathname === href || pathname.startsWith(`${href}/`) || pathname.startsWith(href))
+    .sort((a, b) => b.length - a.length)[0];
 
   return (
     <>
@@ -177,16 +185,13 @@ export function Sidebar() {
           (here just rendered inline so it's keyboard-readable). */}
       <nav onClick={event => { if (event.target instanceof Element && event.target.closest('a')) setMobileOpen(false); }} className="flex-1 overflow-y-auto py-3 px-1.5 space-y-3">
         {groups.map((group) => (
-          <details key={`${group.label}:${collapsed}`} open={group.items.some(item => item.href === '/' ? pathname === '/' : pathname.startsWith(item.href))}>
+          <details key={`${group.label}:${collapsed}`} open={group.items.some(item => item.href === activeHref)}>
             <summary className="px-2 py-2 text-xs cursor-pointer text-on-surface hover:text-primary" title={group.label}>
               {collapsed ? group.label.slice(0, 1) : group.label}
             </summary>
             <div>
               {group.items.map((item) => {
-                const isActive =
-                  item.href === '/'
-                    ? pathname === '/'
-                    : pathname.startsWith(item.href);
+                const isActive = item.href === activeHref;
                 return (
                   <Link
                     key={item.name}

@@ -21,6 +21,7 @@ export * from './email-handled';
 export * from './context-hooks';
 export * from './embeddings';
 export * from './evaluations';
+export * from './heartbeat-checks';
 export * from './hook-executions';
 export * from './hooks';
 export * from './hook-thread-sessions';

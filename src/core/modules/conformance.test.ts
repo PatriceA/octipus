@@ -38,7 +38,7 @@ const CORE_TOOLS = [
 
 /** Sidebar pages of the core. */
 const CORE_PAGES = [
-  '/', '/chat', '/companion', '/tasks', '/my-work', '/notifications', '/agents', '/notes', '/documents',
+  '/', '/chat', '/companion', '/tasks', '/my-work', '/notifications', '/agents', '/agents/roster', '/agents/triggers', '/notes', '/documents',
   '/knowledge', '/pipelines', '/hooks', '/models', '/mcp', '/settings', '/tools',
   '/permissions', '/persona', '/memory', '/skills', '/topics', '/eval', '/secrets', '/admin/users',
   '/rooms', '/spaces/remote',

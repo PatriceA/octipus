@@ -886,7 +886,7 @@ describe('the space turn context is never stored with a turn', () => {
       `SELECT metadata FROM messages WHERE session_id = $1 AND role = 'user' ORDER BY created_at DESC LIMIT 1`, [panel.id]);
     expect(row.metadata?.promptContext ?? '').toContain('CURRENT DATE');
     expect(JSON.stringify(row.metadata)).not.toMatch(/HERON|Lisbon|SPACE TURN CONTEXT/);
-    // The snapshot has its own column (migration 0170).
+    // The snapshot has its own column (migration 0172).
     const [session] = await q<{ native_conversation: unknown }>(`SELECT native_conversation FROM sessions WHERE id = $1`, [panel.id]);
     expect(session.native_conversation).toBeTruthy();
     expect(JSON.stringify(session.native_conversation)).not.toMatch(/HERON|Lisbon/);

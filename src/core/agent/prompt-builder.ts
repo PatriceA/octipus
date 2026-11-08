@@ -105,6 +105,11 @@ export class PromptBuilder {
     return this;
   }
 
+  /** Every part as it stands, in order (the Context inspector categorises them by label). */
+  blocks(): readonly Readonly<PromptPart>[] {
+    return this.parts.map((p) => ({ ...p }));
+  }
+
   /** The parts of the cacheable prefix (every tier but `turn`), in order. */
   staticParts(): string[] {
     return this.parts.filter((p) => p.tier !== 'turn').map((p) => p.text);

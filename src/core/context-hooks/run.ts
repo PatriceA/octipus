@@ -33,10 +33,12 @@ export interface ContextHooksOutcome {
   text: string;
   /** Each injected hook's block, in order: `text` is their concatenation. */
   blocks: string[];
+  /** `blocks` with each hook's name, for the Context inspector. */
+  labelledBlocks: Array<{ label: string; text: string }>;
   turn: ContextTurnHandle | null;
 }
 
-const NONE: ContextHooksOutcome = { text: '', blocks: [], turn: null };
+const NONE: ContextHooksOutcome = { text: '', blocks: [], labelledBlocks: [], turn: null };
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -85,6 +87,7 @@ export async function runContextHooks(
 
   let budget = settings.maxTokens;
   const texts: string[] = [];
+  const labelledBlocks: ContextHooksOutcome['labelledBlocks'] = [];
   const records: ContextHookRunRecord[] = [];
   const citable: ContextHookItem[] = [];
   for (const { hook, latencyMs, result: ran } of results) {
@@ -94,6 +97,7 @@ export async function runContextHooks(
     }
     if (result.status === 'injected' && result.text) {
       texts.push(result.text);
+      labelledBlocks.push({ label: `Context hook: ${hook.name}`, text: result.text });
       budget -= result.tokens;
       if (hook.kind !== 'notes_index') citable.push(...result.items);
     }
@@ -128,7 +132,7 @@ export async function runContextHooks(
   } catch (err) {
     coreLogger.warn({ err, userId: input.userId }, 'context hooks: turn record not saved (measurement only)');
   }
-  return { text, blocks: texts.filter(Boolean), turn };
+  return { text, blocks: texts.filter(Boolean), labelledBlocks, turn };
 }
 
 /**
