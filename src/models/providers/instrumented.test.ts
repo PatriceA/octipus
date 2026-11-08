@@ -7,6 +7,7 @@ vi.mock('../model-registry', () => ({ getModelRegistry: () => ({ getModel: mocks
 // Accounting, not routing: the protection gate has its own tests (core/protection/routing.test.ts).
 vi.mock('@/core/protection/routing', () => ({ assertMayLeave: async () => undefined, PSEUDONYMIZED: {}, pseudonymsFor: async () => mocks.pseudonyms }));
 import { instrumentProvider, SYSTEM_USAGE_USER, withProviderUsageContext } from './instrumented';
+import { renderMetrics } from '@/core/telemetry';
 import type { CompletionOptions, CompletionResult } from '../litellm-client';
 import type { ModelProvider } from './interface';
 const options: CompletionOptions = { model: 'test', messages: [], userId: '11111111-1111-1111-1111-111111111111', sessionId: '22222222-2222-2222-2222-222222222222' };
@@ -17,6 +18,16 @@ function provider(): ModelProvider {
 }
 beforeEach(() => { vi.clearAllMocks(); mocks.pseudonyms = undefined; mocks.access.mockResolvedValue(undefined); mocks.lookup.mockResolvedValue({ metadata: { extraBody: { think: false } } }); mocks.log.mockResolvedValue({}); });
 describe('provider accounting boundary', () => {
+  test('request and cached-token metrics are recorded for a direct provider call', async () => {
+    // Agent turns call their provider directly; the metrics used to be recorded
+    // only by the router, which they never pass through.
+    const cached = { ...result, usage: { ...result.usage, inputTokens: 5_000, cacheReadTokens: 4_000 } };
+    const p = { ...provider(), name: 'deepseek', complete: vi.fn(async () => cached) } as ModelProvider;
+    await instrumentProvider(p).complete({ ...options, model: 'metrics-probe' });
+    const out = await renderMetrics(1, 1);
+    expect(out).toMatch(/octipus_llm_requests_total\{provider="deepseek",model="actual",status="success"\} 1/);
+    expect(out).toMatch(/octipus_llm_cached_tokens_total\{provider="deepseek",model="actual"\} 4000/);
+  });
   test('one completion row with session attribution and legitimate zero charge', async () => {
     const p = instrumentProvider(provider());
     expect(await p.complete(options)).toBe(result);

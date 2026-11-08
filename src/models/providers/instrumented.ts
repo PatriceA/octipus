@@ -5,6 +5,7 @@ import { modelLogger } from '@/utils/logger';
 import { applyProviderSettings } from '../provider-options';
 import { type Pseudonyms, StreamRestorer } from '@/core/protection/pseudonymize';
 import { getLocalModelGate, localRunnerKey } from '../local-gate';
+import { recordLlmRequest } from '@/core/telemetry';
 import { requestPriority } from '../rate-limiter';
 
 export type ProviderUsageContext = Pick<CompletionOptions, 'userId' | 'sessionId' | 'agentId' | 'modelConfigName' | 'accountingMetadata' | 'workspaceId' | 'funding'>;
@@ -232,18 +233,33 @@ export async function accountCompletion(options: CompletionOptions, provider: st
   const prepared = provider === 'cli' ? options : await prepare(options, provider);
   let observed: Pick<CompletionResult, 'usage' | 'model' | 'requestId'> | undefined;
   const leave = await enterLocalRunner(prepared, provider);
+  const started = Date.now();
   try {
     const result = await run({ ...prepared, accountingOwner: true, accountingResponse: value => { observed = value; } });
+    recordRequestMetrics(provider, result.model || prepared.model, 'success', started, result.usage);
     await recordProviderUsage(prepared, provider, result);
     const p = pseudonymized.get(prepared);
     return p ? restoreResult(result, p) : result;
   } catch (err) {
     // Preserve a received/billable response even if decoding tool arguments fails.
+    recordRequestMetrics(provider, prepared.model, 'error', started);
     if (observed) await recordProviderUsage(prepared, provider, observed, true);
     throw err;
   } finally {
     leave();
   }
+}
+
+/**
+ * The request, latency and token metrics (`telemetry.ts`). Recorded here, the
+ * boundary every provider call crosses: the router used to record them, and
+ * agent turns — which call their provider directly — never reached it, so the
+ * cache-hit metrics described only the OpenAI-compatible API and evals.
+ */
+function recordRequestMetrics(provider: string, model: string, status: 'success' | 'error', started: number, usage?: CompletionResult['usage']): void {
+  recordLlmRequest(provider, model, status, (Date.now() - started) / 1000, usage && {
+    prompt: usage.inputTokens, completion: usage.outputTokens, cached: usage.cacheReadTokens,
+  });
 }
 
 /** Foreground priority on a local runner (`local-gate.ts`); a no-op elsewhere. */
@@ -261,6 +277,7 @@ export async function* accountStream(options: CompletionOptions, provider: strin
   let completed = false;
   const restorer = streamRestorerFor(pseudonymized.get(prepared));
   const leave = await enterLocalRunner(prepared, provider);
+  const started = Date.now();
   try {
     for await (const chunk of run({ ...prepared, accountingOwner: true })) {
       if (chunk.usage) usage = chunk.usage;
@@ -275,6 +292,7 @@ export async function* accountStream(options: CompletionOptions, provider: strin
     completed = true;
   } finally {
     leave();
+    recordRequestMetrics(provider, model, completed ? 'success' : 'error', started, completed ? usage : undefined);
     await recordProviderUsage(prepared, provider, { usage, model, requestId }, !completed);
   }
 }

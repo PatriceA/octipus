@@ -58,6 +58,8 @@ import { omitSpaceTurnContext } from '@/core/spaces/turn-context';
 import { inlineUiRepairMessage, storeInlineUiBlocks, stubInlineUiFences } from '@/core/inline-ui/extract';
 import { getRunContext } from '@/core/run-context';
 import { transformOutsideInlineUiFences, withoutInlineUiFences } from '@/shared/inline-ui';
+import { type CacheProbe, classifyCacheBreak, type PrefixSignature, prefixSignature } from '@/models/cache-break';
+import { recordPromptCacheBreak } from '@/core/telemetry';
 
 // Re-export types for backward compatibility
 export type { AgentEvent, AgentEventHandler, AgentWorkerConfig, ToolHandler } from './agent-base';
@@ -2156,6 +2158,22 @@ export class AgentWorker extends BaseAgentWorker {
     return this.manualThinking ? messages : stripSignedReasoning(messages, from);
   }
 
+  /** The previous request of this worker's conversation, for `classifyCacheBreak`. */
+  private lastCacheProbe: CacheProbe | undefined;
+
+  /** Name, log and count a lost prompt-cache prefix (`cache-break.ts`). */
+  private observeCacheBreak(provider: string, current: PrefixSignature & { at: number }, usage: CompletionResult['usage']): void {
+    const cause = classifyCacheBreak(this.lastCacheProbe, current, usage, provider);
+    if (cause) {
+      recordPromptCacheBreak(provider, cause);
+      const log = { agentId: this.context.id, sessionId: this.context.sessionId, provider, model: current.model, cause,
+        previousInputTokens: this.lastCacheProbe?.inputTokens, cacheReadTokens: usage.cacheReadTokens ?? 0 };
+      if (cause === 'unexplained_miss') agentLogger.info(log, 'Prompt cache missed on an unchanged prefix');
+      else agentLogger.debug(log, 'Prompt prefix changed; the provider cache starts over');
+    }
+    this.lastCacheProbe = { ...current, inputTokens: usage.inputTokens };
+  }
+
   /**
    * Tool handlers advertised to the model this turn. Lazy mode (set by the
    * spawner) trims long-tail handlers from the advertised schema array; they
@@ -2554,7 +2572,10 @@ export class AgentWorker extends BaseAgentWorker {
         providerName = model.provider;
       }
     }
+    const sentAt = Date.now();
+    const signature = prefixSignature(litellmModel, completionOpts.tools, this.messages.filter((m) => m.role === 'system').map((m) => m.content));
     const result = await this.completeViaTarget(target, providerName, completionOpts);
+    this.observeCacheBreak(providerName, { ...signature, at: sentAt }, result.usage);
 
 
     const octiMessage: AgentMessage = {
