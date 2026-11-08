@@ -501,6 +501,10 @@ export function buildSeatbeltProfile(options: WrapOptions, inputs: SeatbeltInput
     '(allow ipc-posix-shm-read-data (ipc-posix-name "apple.shm.notification_center"))',
     // Files: metadata anywhere, contents only where listed.
     '(allow file-read-metadata)',
+    // The root directory itself (a literal: nothing under it). dyld reads it
+    // while starting every process; denied, each one aborts (SIGABRT) before
+    // main — seen on the macOS CI runner for /bin/echo and node alike.
+    '(allow file-read-data (literal "/"))',
     `(allow file-read* file-map-executable ${subpaths(SEATBELT_SYSTEM_READ)})`,
     // Package-manager data and configs stay closed, but for public CA bundles.
     `(deny file-read* file-map-executable file-write* ${subpaths(SEATBELT_PREFIX_DENY)})`,

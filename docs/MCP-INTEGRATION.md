@@ -87,7 +87,7 @@ still passes the permission checks in [Execution permissions](#execution-permiss
 | `exposure` | What the model gets | Use it for |
 |---|---|---|
 | `deferred` (default) | Nothing up front. `mcp_list_tools` lists the tools; `mcp_call_tool` calls them. | Most servers. This is how every server behaved before exposure existed. |
-| `direct` | Each tool declared as its own tool, `mcp__<server>__<tool>`, with its full schema, on every request. | A few tools the agent uses constantly. Each one costs prompt tokens on every request. |
+| `direct` | Each tool declared as its own tool, `mcp__<server>__<tool>`, with its full schema, on every request. On first-party Claude with tool search (`agent.nativeToolSearch`) it is sent deferred: out of the prompt until the model searches for it. | A few tools the agent uses constantly. Each one costs prompt tokens on every request (except deferred under tool search). |
 | `codemode` | Left out of `mcp_list_tools`. Codemode scripts call each tool as `tools.mcp__<server>__<tool>(args)` and find it with `searchTools()`, so neither the schema nor the results enter the conversation. | Large servers, and tools whose results need filtering. |
 | `hidden` | Nothing. The bridge refuses the call, from any path. A hidden server also offers no resources or prompts. | Servers or tools that must stay unavailable. |
 

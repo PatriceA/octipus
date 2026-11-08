@@ -1,5 +1,5 @@
 import { type OmittedContext, REPEATABLE_CONTEXT_KEY, restoreOmittedContext, withoutRepeatedContext } from './agent/repeated-context';
-import { orderByGroup, TOOL_DISCOVERY_TOOL_ID } from './agent/tool-split';
+import { orderForCache, TOOL_DISCOVERY_TOOL_ID } from './agent/tool-split';
 import { CORE_TOOL_FLOOR } from './agent/tool-intent';
 import { supportsNativeToolSearch } from '@/models/providers/tool-search';
 import { nativeMessagesEnabled as anthropicNativeMessagesOn } from '@/models/providers/anthropic-provider';
@@ -169,6 +169,11 @@ export function startBlockedHeartbeat(
 
 /** What a completion is asked of: a direct provider or the LiteLLM client (both expose the same pair). */
 type CompletionTarget = Pick<import('@/models/providers/interface').ModelProvider, 'complete' | 'stream'>;
+
+/** One MCP server tool exposed under its own name (`direct` exposure), not an MCP meta-tool. */
+function isDirectMcpTool(tool: ToolHandler): boolean {
+  return tool.toolId === 'mcp' && tool.name.startsWith('mcp__');
+}
 
 export class AgentWorker extends BaseAgentWorker {
   private toolExecutor: ToolExecutor;
@@ -2425,7 +2430,14 @@ export class AgentWorker extends BaseAgentWorker {
     // fallback would send the whole catalog with nothing deferred.
     if (!anthropicNativeMessagesOn()) return undefined;
     const floor = [...CORE_TOOL_FLOOR, TOOL_DISCOVERY_TOOL_ID, 'self_report', 'inline-ui'];
-    const deferred = Array.from(this.toolExecutor.getTools().values()).filter((tool) => isLongTailHandler(tool, floor)).map((tool) => tool.name);
+    // Direct MCP tools (`mcp__<server>__<tool>`) are deferred too: a server
+    // that reconnects or changes what it exposes mid-conversation would
+    // otherwise change the loaded floor, and with it this conversation's
+    // cached prefix. The model finds them through the search tool; the MCP
+    // meta-tools (`mcp_list_tools`, ...) stay loaded, so it knows they exist.
+    const deferred = Array.from(this.toolExecutor.getTools().values())
+      .filter((tool) => isLongTailHandler(tool, floor) || isDirectMcpTool(tool))
+      .map((tool) => tool.name);
     return deferred.length ? deferred : undefined;
   }
 
@@ -2436,11 +2448,50 @@ export class AgentWorker extends BaseAgentWorker {
    * Shared by the completion call and toolshim so both see the same tool set.
    */
   private getAdvertisedToolHandlers(): ToolHandler[] {
+    return this.advertisedToolsInCacheOrder().tools;
+  }
+
+  /**
+   * The advertised tools in cache order (`orderForCache`): the tools every
+   * user of the install shares, then the per-user and runtime-variable ones,
+   * then the message-selected groups. `sharedCount` goes to the provider,
+   * which puts the tool block's breakpoint on the last shared tool.
+   */
+  /**
+   * The tool declarations of a request to `model`, in cache order, with how
+   * many leading ones are shared across the users of the install and, for
+   * first-party Claude on the lazy path, which to defer.
+   */
+  private requestTools(model: { provider?: string | null; modelId: string }): { declarableTools: ChatCompletionTool[]; sharedToolCount: number; deferredTools: string[] | undefined } {
+    // First-party Claude on the lazy path: every tool, the long tail deferred
+    // behind the API's tool search (providers/tool-search.ts), so the tool
+    // block never changes during the conversation.
+    const deferredTools = this.nativeToolSearchDeferrals(model);
+    // In cache order either way (`orderForCache`). With tool search, the
+    // deferred tools are outside the prefix; the loaded ones are the fixed
+    // floor, whose shared part comes first and carries the breakpoint. The
+    // sticky groups are all deferred there, so they keep their registered
+    // order: nothing in that request follows the conversation.
+    const { tools, sharedCount } = deferredTools
+      ? orderForCache(Array.from(this.toolExecutor.getTools().values()), { lazy: true })
+      : this.advertisedToolsInCacheOrder();
+    const declarableTools: ChatCompletionTool[] = tools.map((tool) => ({
+      type: 'function' as const,
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      },
+    }));
+    return { declarableTools, sharedToolCount: sharedCount, deferredTools };
+  }
+
+  private advertisedToolsInCacheOrder(): { tools: ToolHandler[]; sharedCount: number } {
     const advertisement = this.config.toolAdvertisement ?? { mode: 'full' };
     const registeredTools = Array.from(this.toolExecutor.getTools().values());
-    if (advertisement.mode !== 'lazy') return registeredTools;
+    if (advertisement.mode !== 'lazy') return orderForCache(registeredTools, { lazy: false });
     const advertised = registeredTools.filter((tool) => !isLongTailHandler(tool, advertisement.coreToolIds));
-    return advertisement.groupOrder?.length ? orderByGroup(advertised, advertisement.groupOrder) : advertised;
+    return orderForCache(advertised, { lazy: true, groupOrder: advertisement.groupOrder });
   }
 
   /**
@@ -2685,19 +2736,7 @@ export class AgentWorker extends BaseAgentWorker {
     const model = (await this.followProtectionLevel(bound)) ?? bound;
 
     const litellmModel = model.modelId;
-    // First-party Claude on the lazy path: every tool, the long tail deferred
-    // behind the API's tool search (providers/tool-search.ts), so the tool
-    // block never changes during the conversation.
-    const deferredTools = this.nativeToolSearchDeferrals(model);
-    const advertisedTools = deferredTools ? Array.from(this.toolExecutor.getTools().values()) : this.getAdvertisedToolHandlers();
-    const declarableTools: ChatCompletionTool[] = advertisedTools.map((tool) => ({
-      type: 'function' as const,
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters,
-      },
-    }));
+    const { declarableTools, sharedToolCount, deferredTools } = this.requestTools(model);
     const tools: ChatCompletionTool[] = this.toolExecutor.toolsDisabled ? [] : declarableTools;
 
     this.emit('thought', { model: litellmModel, messageCount: this.messages.length });
@@ -2794,6 +2833,9 @@ export class AgentWorker extends BaseAgentWorker {
         ...(this.context.attended === false ? { priority: 'background' as const } : {}),
         tools: sentTools,
         ...(deferredTools && sentTools?.length ? { deferredTools } : {}),
+        // The first `sharedToolCount` tools are the same for every user of
+        // the install; the tool block's breakpoint goes on the last of them.
+        ...(sentTools?.length ? { sharedToolCount } : {}),
         // `tool_choice` is part of Claude's message-level cache key: flipping it
         // from auto to none for the final call re-read the whole conversation
         // uncached. A Claude request keeps auto — the reporting reminder in the

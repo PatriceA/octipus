@@ -20,6 +20,7 @@ import { checkModelCapabilities } from '@/models/capability-gate';
 import { getCostTracker } from '@/models/cost-tracker';
 import { getHealthChecker } from '@/models/health-checker';
 import { getLiteLLMClient } from '@/models/litellm-client';
+import { isExtensionModel, isExtensionModelName, listExtensionModels } from '@/models/extension-models';
 import { getModelRegistry } from '@/models/model-registry';
 import { getProviderRouter } from '@/models/providers';
 import { getQuotaTracker } from '@/models/quota-tracker';
@@ -37,6 +38,9 @@ import { uniqueViolation } from '@/db/unique-violation';
  */
 const PERSONAL_ROW_REFUSAL = 'This is a personal model; only its owner manages it (Settings → My models)';
 
+/** Extension rows (`ext/`, octi.registerProvider) belong to the extension that registered them. */
+const EXTENSION_ROW_REFUSAL = 'This model was registered by an extension; it is managed by that extension (removed when the extension is unloaded)';
+
 /**
  * List models visible to the user: for an admin every install row (incl.
  * disabled), for anyone else the install/org rows they may use — plus, for
@@ -47,13 +51,14 @@ const PERSONAL_ROW_REFUSAL = 'This is a personal model; only its owner manages i
 export async function listModels(userId: string, isAdmin: boolean) {
   const registry = getModelRegistry();
   const models = isAdmin
-    ? [...await registry.getAllModelsIncludeDisabled(), ...await registry.getPersonalModels(userId)]
+    ? [...await registry.getAllModelsIncludeDisabled(), ...listExtensionModels(), ...await registry.getPersonalModels(userId)]
     : await registry.getModelsForUser(userId);
 
   const anthropicNative = anthropicNativeMessagesEnabled(process.env.ANTHROPIC_NATIVE_MESSAGES);
   return {
     models: models.map((m) => isAdmin || m.ownerUserId === userId ? {
       id: m.id,
+      ...(isExtensionModel(m) ? { extension: true } : {}),
       name: m.name,
       provider: m.provider,
       modelId: m.modelId,
@@ -192,6 +197,7 @@ export async function registerModel(body: Record<string, unknown>) {
   // `u/` namespace personal rows are named in.
   if ('ownerUserId' in body) return { error: 'ownerUserId cannot be set here; personal models are added under /api/me/models' };
   if (name.startsWith('u/')) return { error: 'Model names starting with "u/" are reserved for personal models' };
+  if (isExtensionModelName(name) || isExtensionModelName(modelId)) return { error: 'Model names and ids starting with "ext/" are reserved for extension-registered models' };
 
   // Validate OpenRouter model IDs must contain a slash (provider/model format)
   if (provider === 'openrouter' && !modelId.includes('/')) {
@@ -254,6 +260,7 @@ export async function updateModel(name: string, body: Record<string, unknown>) {
   } = body;
 
   for (const key of ['costPerInputToken', 'costPerOutputToken']) if (body[key] != null && (typeof body[key] !== 'number' || !Number.isFinite(body[key]) || (body[key] as number) < 0)) return { status: 400 as const, error: `${key} must be a finite nonnegative number.` };
+  if (isExtensionModelName(name)) return { status: 403 as const, error: EXTENSION_ROW_REFUSAL };
   try {
     const registry = getModelRegistry();
     const existing = await registry.getModel(name);
@@ -291,6 +298,7 @@ async function isPersonalRow(name: string): Promise<boolean> {
 }
 
 export async function deleteModel(name: string) {
+  if (isExtensionModelName(name)) return { deleted: false, error: EXTENSION_ROW_REFUSAL };
   if (await isPersonalRow(name)) return { deleted: false, error: PERSONAL_ROW_REFUSAL };
   const registry = getModelRegistry();
   const deleted = await registry.deleteModel(name);
@@ -298,6 +306,7 @@ export async function deleteModel(name: string) {
 }
 
 export async function setDefaultModel(name: string) {
+  if (isExtensionModelName(name)) return { success: false, error: EXTENSION_ROW_REFUSAL };
   if (await isPersonalRow(name)) return { success: false, error: PERSONAL_ROW_REFUSAL };
   const registry = getModelRegistry();
   const success = await registry.setDefaultModel(name);

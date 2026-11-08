@@ -11,6 +11,7 @@
  */
 
 import type { ToolHandler } from '@/core/agent-base';
+import { isIntentGatedGroup } from './tool-intent';
 
 /**
  * Tool groups that are ALWAYS core regardless of a role's `coreToolIds`:
@@ -46,6 +47,8 @@ export function isLongTailHandler(handler: ToolHandler, coreToolIds: string[]): 
  * servers reconnect or change what they expose, the inline-UI tool follows the
  * client, some meta-tools exist only on some turns. In front, any of those
  * would shift every group tool behind it. See `ToolAdvertisement.groupOrder`.
+ * `orderForCache` applies it to the sticky tier only, after the tools every
+ * user of the install shares.
  */
 export function orderByGroup(handlers: ToolHandler[], groupOrder: readonly string[]): ToolHandler[] {
   const rank = new Map(groupOrder.map((id, i) => [id, i]));
@@ -56,6 +59,59 @@ export function orderByGroup(handlers: ToolHandler[], groupOrder: readonly strin
     .map((x) => x.h);
   const rest = handlers.filter((h) => h.toolId === undefined || !rank.has(h.toolId));
   return [...grouped, ...rest];
+}
+
+/**
+ * Where a tool sits in the tool block, for prompt caching across the users of
+ * one install (C3, C7). Tools are the first bytes of a request, so a tool that
+ * differs between two users, or changes while a conversation runs, ends the
+ * prefix they can share at its position:
+ *
+ *  - `shared`: the install's built-ins, the meta-tools and the discovery and
+ *    self-report tools: the same bytes for every user of a role on this
+ *    install.
+ *  - `variable`: what differs per user or session, or changes at runtime.
+ *    Connector tools (per user), the inline-UI tool (per user and client),
+ *    MCP tools (servers connect, reconnect and change what they expose;
+ *    plugin packages run as `plugin-*` MCP servers and are enabled and
+ *    disabled at runtime), extension tools (`ext_*`, loaded and unloaded at
+ *    runtime) and plugin containers (`plugin-*`).
+ *  - `sticky`: on the lazy path, the groups the message selects
+ *    (`isIntentGatedGroup`). They differ between conversations and grow
+ *    during one, so they go last, in the order the conversation first used
+ *    them: a group used later is appended at the tail.
+ */
+export type ToolCacheTier = 'shared' | 'variable' | 'sticky';
+
+/** Tools offered only while some per-thread state holds (open taken tasks). */
+const CONDITIONAL_TOOLS = new Set(['complete_taken_task']);
+
+export function toolCacheTier(handler: ToolHandler, lazy: boolean): ToolCacheTier {
+  const id = handler.toolId;
+  if (CONDITIONAL_TOOLS.has(handler.name)) return 'variable';
+  if (id === 'mcp' || id === 'connector' || id === 'inline-ui' || id?.startsWith('ext_') || id?.startsWith('plugin-')) return 'variable';
+  if (lazy && isIntentGatedGroup(id)) return 'sticky';
+  return 'shared';
+}
+
+/**
+ * `handlers` as [shared] [variable] [sticky] (`toolCacheTier`), stable within
+ * each tier; the sticky tier follows `groupOrder` (first-advertised) when one
+ * is given. `sharedCount` is how many leading tools are shared: the provider
+ * puts the tool block's cache breakpoint on the last loaded one of them
+ * (`markToolsCacheBreakpoint`), so that entry is the same bytes for every
+ * user of the install.
+ *
+ * Only the order changes, never the set.
+ */
+export function orderForCache(
+  handlers: ToolHandler[],
+  options: { lazy: boolean; groupOrder?: readonly string[] },
+): { tools: ToolHandler[]; sharedCount: number } {
+  const tiers: Record<ToolCacheTier, ToolHandler[]> = { shared: [], variable: [], sticky: [] };
+  for (const handler of handlers) tiers[toolCacheTier(handler, options.lazy)].push(handler);
+  const sticky = options.groupOrder?.length ? orderByGroup(tiers.sticky, options.groupOrder) : tiers.sticky;
+  return { tools: [...tiers.shared, ...tiers.variable, ...sticky], sharedCount: tiers.shared.length };
 }
 
 export interface SplitTools {

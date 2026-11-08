@@ -322,6 +322,13 @@ platform" where the hosts are only advice. A client that ignores proxy
 variables (some SDKs, raw sockets) fails under the sandbox and goes direct
 without it — run packages with `security.shellSandbox` on where that matters.
 
+Under `security.shellSandbox: required`, a package that declares hosts where
+no runner can enforce them (Windows; Linux or macOS with no runner found) is
+**not started**: its server fails to connect with "the network of plugin
+package … cannot be enforced on this platform". Under `auto` it starts with
+the advisory proxy, as in the table. The status reads `refused` then, for a
+package with or without hosts.
+
 Host names are resolved by Octipus, not the package, once per request. If any
 address a declared host resolves to is loopback, private (RFC 1918),
 link-local (including the cloud metadata address `169.254.169.254`), CGNAT

@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from 'child_process';
 import { mkdir } from 'node:fs/promises';
 import { buildChildEnv, buildIsolatedChildEnv } from '@/security/child-env';
 import { bridgedArgv, type EgressProxy, proxyEnv, startEgressProxy } from '@/security/egress-proxy';
-import { activeSandboxRunner, wrapCommand } from '@/security/shell-sandbox';
+import { activeSandboxRunner, getSandboxMode, wrapCommand } from '@/security/shell-sandbox';
 import { coreLogger } from '@/utils/logger';
 import { killProcessTree, windowsCmdShim } from '@/utils/proc';
 import type { CloseHandler, ErrorHandler, MCPTransport, MessageHandler } from './interface';
@@ -57,6 +57,18 @@ export interface SandboxedLaunch {
 }
 
 /**
+ * Octipus's own Node binary, when the sandbox would not show it anyway. A
+ * system install (/usr, /bin, /sbin, /lib*) is visible under every runner,
+ * and listing it is harmful under firejail, which only whitelists paths under
+ * home, /opt, /srv, /var and the like (a /usr entry is refused or hides the
+ * shared libraries). One under $HOME (nvm, a CI tool cache) or /opt must be
+ * listed, or a package started with it cannot run.
+ */
+export function ownNodeBinary(execPath = process.execPath): string[] {
+  return /^\/(?:usr|bin|sbin|lib(?:32|64|x32)?)\//.test(execPath) ? [] : [execPath];
+}
+
+/**
  * Wrap `argv` for the sandbox, starting the egress proxy when the server
  * declares hosts. Exported for tests.
  */
@@ -72,7 +84,10 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
   };
   const egress = sandbox.egress && sandbox.egress.hosts.length > 0 ? sandbox.egress : null;
   if (!egress) {
-    const wrapped = wrapCommand(argv, { ...mounts, allowNetwork: sandbox.allowNetwork, path: env.PATH });
+    // Octipus's own Node binary stays readable, as on the egress path: a
+    // package started with it (e.g. under nvm, or a CI tool cache in $HOME)
+    // must not fail to start just because it declares no hosts.
+    const wrapped = wrapCommand(argv, { ...mounts, allowNetwork: sandbox.allowNetwork, path: env.PATH, extraReadOnly: ownNodeBinary() });
     return { argv: wrapped.argv, env, networkEnforced: wrapped.wrapped, proxy: null, cleanup: wrapped.cleanup };
   }
   // macOS (sandbox-exec): no network namespace to bridge into, so the
@@ -86,7 +101,7 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
   try {
     if (seatbelt) {
       const wrapped = wrapCommand(argv, {
-        ...mounts, allowNetwork: false, loopbackPorts: [proxy.port], path: env.PATH, extraReadOnly: [process.execPath],
+        ...mounts, allowNetwork: false, loopbackPorts: [proxy.port], path: env.PATH, extraReadOnly: ownNodeBinary(),
       });
       if (wrapped.wrapped) {
         return { argv: wrapped.argv, env: { ...env, ...proxyEnv(proxy.url) }, networkEnforced: true, proxy, cleanup: () => { wrapped.cleanup(); void proxy.close(); } };
@@ -96,14 +111,19 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
       // socket mounted in and this Node binary to run the launcher.
       const wrapped = wrapCommand(bridgedArgv(argv, proxy.socketPath), {
         ...mounts, allowNetwork: false, path: env.PATH,
-        extraReadOnly: [process.execPath], extraReadWrite: [...writable, proxy.socketDir],
+        extraReadOnly: ownNodeBinary(), extraReadWrite: [...writable, proxy.socketDir],
       });
       if (wrapped.wrapped) {
         return { argv: wrapped.argv, env, networkEnforced: true, proxy, cleanup: () => { wrapped.cleanup(); void proxy.close(); } };
       }
     }
     // No sandbox (off, no runner, Windows): the proxy is advice only.
-    // A client that ignores HTTP(S)_PROXY still connects directly.
+    // A client that ignores HTTP(S)_PROXY still connects directly. Under
+    // `required` that is not good enough: refuse, as the no-hosts path does
+    // when wrapCommand finds no runner (Windows has none).
+    if (getSandboxMode() === 'required') {
+      throw new Error(`security.shellSandbox=required: the network of plugin package "${egress.label}" cannot be enforced on this platform (no sandbox runner), so it is not started`);
+    }
     coreLogger.warn({ pkg: egress.label, hosts: egress.hosts },
       'Plugin package network not enforced on this platform: no sandbox wraps the server, so the egress proxy is advisory');
     return { argv, env: { ...env, ...proxyEnv(proxy.url) }, networkEnforced: false, proxy, cleanup: () => { void proxy.close(); } };

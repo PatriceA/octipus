@@ -84,6 +84,16 @@ const INTENT: Record<string, RegExp> = {
 };
 
 /**
+ * True for a group the message decides (an entry in the table above, outside
+ * the floor). On the lazy path these are the groups that differ between
+ * conversations of one role, so `orderForCache` puts them after everything
+ * the users of an install share.
+ */
+export function isIntentGatedGroup(id: string | undefined): boolean {
+  return id !== undefined && !CORE_TOOL_FLOOR.includes(id) && Object.hasOwn(INTENT, id);
+}
+
+/**
  * The core groups to advertise for this message.
  *
  * `coreToolIds` is the role's own list; the result is always a subset of it.

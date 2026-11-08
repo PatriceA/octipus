@@ -323,7 +323,7 @@ describe('launching a sandboxed server', () => {
 
   test.skipIf(process.platform === 'win32')('with a sandbox, direct network stays off, the files are read-only, and only the data dir and proxy socket are writable', async () => {
     wrapCommand.mockImplementation((argv: string[]) => ({ wrapped: true, runner: 'bwrap', argv: ['bwrap', '--unshare-net', '--', ...argv], cleanup: () => {} }));
-    const { prepareSandboxedLaunch } = await import('@/mcp/transports/stdio');
+    const { ownNodeBinary, prepareSandboxedLaunch } = await import('@/mcp/transports/stdio');
     const scratch = mkdtempSync(join(tmpdir(), 'eg-'));
     const dataDir = join(scratch, 'plugin-data', 'demo-pkg');
     const runDir = join(scratch, 'plugin-run');
@@ -340,7 +340,7 @@ describe('launching a sandboxed server', () => {
       // under the run directory, not /tmp (firejail's --private-tmp hides that).
       expect(existsSync(dataDir)).toBe(true);
       expect(launch.proxy?.socketDir?.startsWith(runDir)).toBe(true);
-      expect(opts.extraReadOnly).toEqual([process.execPath]);
+      expect(opts.extraReadOnly).toEqual(ownNodeBinary());
       expect(launch.argv.slice(0, 4)).toEqual(['bwrap', '--unshare-net', '--', process.execPath]);
       expect(launch.argv).toContain(launch.proxy?.socketPath);
       expect(launch.argv.slice(-2)).toEqual(['node', 'server.mjs']);
@@ -355,13 +355,13 @@ describe('launching a sandboxed server', () => {
 
   test('a server without hosts is wrapped exactly as before: no proxy, no variables', async () => {
     wrapCommand.mockImplementation((argv: string[]) => ({ wrapped: true, runner: 'bwrap', argv: ['bwrap', '--unshare-net', '--', ...argv], cleanup: () => {} }));
-    const { prepareSandboxedLaunch } = await import('@/mcp/transports/stdio');
+    const { ownNodeBinary, prepareSandboxedLaunch } = await import('@/mcp/transports/stdio');
     const env = { PATH: '/usr/bin' };
     const launch = await prepareSandboxedLaunch(['node', 'server.mjs'], env, { root: '/pkg', allowNetwork: false });
     expect(launch.proxy).toBeNull();
     expect(launch.env).toBe(env);
     expect(launch.argv).toEqual(['bwrap', '--unshare-net', '--', 'node', 'server.mjs']);
-    expect(wrapCommand).toHaveBeenCalledWith(['node', 'server.mjs'], { workspaceRoot: '/pkg', allowSeatbelt: true, allowNetwork: false, path: '/usr/bin' });
+    expect(wrapCommand).toHaveBeenCalledWith(['node', 'server.mjs'], { workspaceRoot: '/pkg', allowSeatbelt: true, allowNetwork: false, path: '/usr/bin', extraReadOnly: ownNodeBinary() });
   });
 });
 
@@ -401,10 +401,13 @@ describe('the server a package runs as', () => {
     // macOS: Seatbelt holds the line the same way.
     expect(networkStatus(m, 'sandbox-exec').state).toBe('restricted');
     expect(networkStatus(base, 'sandbox-exec').state).toBe('offline');
-    const advisory = networkStatus(m, null);
+    const advisory = networkStatus(m, null, 'auto');
     expect(advisory.state).toBe('not_enforced');
     expect(advisory.detail).toMatch(/Network not enforced on this platform/);
-    expect(networkStatus(base, null).state).toBe('not_enforced');
+    expect(networkStatus(base, null, 'off').state).toBe('not_enforced');
+    // `required` with no runner: the server is not started at all.
+    for (const manifest of [m, base]) expect(networkStatus(manifest, null, 'required').state).toBe('refused');
+    expect(networkStatus(m, 'bwrap', 'required').state).toBe('restricted');
   });
 
   test('manifest hosts may carry a port; a bad one is refused', async () => {

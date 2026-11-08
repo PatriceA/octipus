@@ -23,6 +23,13 @@ export interface CompletionOptions {
    * only; every other provider ignores it and sends the tools as given.
    */
   deferredTools?: string[];
+  /**
+   * How many leading entries of `tools` are the same for every user of the
+   * install (`orderForCache`): the providers that mark the tool block put its
+   * cache breakpoint on the last loaded one of them, not on the last tool.
+   * Unset: on the last loaded tool.
+   */
+  sharedToolCount?: number;
   cachePolicy?: 'default' | 'off' | 'session';
   /** Logical agent conversation and clear generation, for provider affinity. */
   cacheScope?: string;

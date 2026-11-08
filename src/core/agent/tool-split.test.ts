@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import type { ToolHandler } from '@/core/agent-base';
-import { isLongTailHandler, orderByGroup, splitRoleTools } from './tool-split';
+import { isLongTailHandler, orderByGroup, orderForCache, splitRoleTools, toolCacheTier } from './tool-split';
 
 const handler = (name: string, toolId?: string): ToolHandler => ({
   name,
@@ -142,5 +142,57 @@ describe('orderByGroup', () => {
     const withMcp = orderByGroup(HANDLERS, ['filesystem', 'websearch']).map((h) => h.name);
     const withoutMcp = orderByGroup(HANDLERS.filter((h) => h.toolId !== 'mcp'), ['filesystem', 'websearch']).map((h) => h.name);
     expect(withoutMcp.slice(0, 3)).toEqual(withMcp.slice(0, 3));
+  });
+});
+
+describe('orderForCache', () => {
+  const MIXED: ToolHandler[] = [
+    handler('web_search', 'websearch'),
+    handler('mcp__crm__lookup', 'mcp'),
+    handler('read_file', 'filesystem'),
+    handler('gmail_search', 'connector'),
+    handler('ext_quotes__get', 'ext_quotes'),
+    handler('kb_search', 'knowledge'),
+    handler('inline_ui_ask', 'inline-ui'),
+    handler('weather', 'plugin-weather'),
+    handler('save_artifact', 'artifacts'),
+    handler('spawn_child'),
+  ];
+
+  test('shared, then per-user and runtime, then the message-selected groups in first-used order', () => {
+    const { tools, sharedCount } = orderForCache(MIXED, { lazy: true, groupOrder: ['filesystem', 'knowledge', 'websearch'] });
+    expect(tools.map((h) => h.name)).toEqual([
+      'read_file', 'save_artifact', 'spawn_child',
+      'mcp__crm__lookup', 'gmail_search', 'ext_quotes__get', 'inline_ui_ask', 'weather',
+      'kb_search', 'web_search',
+    ]);
+    expect(sharedCount).toBe(3);
+  });
+
+  test('full advertisement: no sticky tier, the message-selected groups stay shared', () => {
+    const { tools, sharedCount } = orderForCache(MIXED, { lazy: false });
+    expect(tools.slice(0, sharedCount).map((h) => h.name)).toEqual(['web_search', 'read_file', 'kb_search', 'save_artifact', 'spawn_child']);
+  });
+
+  test('only the order changes, never the set', () => {
+    const { tools } = orderForCache(MIXED, { lazy: true, groupOrder: ['websearch'] });
+    const byName = (a: ToolHandler, b: ToolHandler) => a.name.localeCompare(b.name);
+    expect([...tools].sort(byName)).toEqual([...MIXED].sort(byName));
+  });
+
+  test('stable: the same input gives the same order, and per-user tools never move a shared one', () => {
+    const full = orderForCache(MIXED, { lazy: true });
+    expect(orderForCache(MIXED, { lazy: true }).tools).toEqual(full.tools);
+    const withoutUser = orderForCache(MIXED.filter((h) => toolCacheTier(h, true) !== 'variable'), { lazy: true });
+    expect(withoutUser.sharedCount).toBe(full.sharedCount);
+    expect(withoutUser.tools.slice(0, withoutUser.sharedCount)).toEqual(full.tools.slice(0, full.sharedCount));
+  });
+
+  test('the floor groups and the discovery tools are shared on the lazy path too', () => {
+    expect(toolCacheTier(handler('run', 'shell'), true)).toBe('shared');
+    // Offered only while the thread has open taken tasks: never in the shared prefix.
+    expect(toolCacheTier({ name: 'complete_taken_task', description: '', parameters: {}, execute: async () => null } as never, true)).toBe('variable');
+    expect(toolCacheTier(handler('distill', 'skill-distill'), true)).toBe('shared');
+    expect(toolCacheTier(handler('list_tools', 'tool_discovery'), true)).toBe('shared');
   });
 });
