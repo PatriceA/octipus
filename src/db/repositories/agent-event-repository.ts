@@ -1,4 +1,4 @@
-import { and, eq, gt, lt } from 'drizzle-orm';
+import { and, eq, gt, inArray, lt, or, sql } from 'drizzle-orm';
 import { getRunId } from '@/core/run-context';
 import { getDb } from '../postgres';
 import { type AgentEventRecord, agentEvents, type NewAgentEventRecord } from '../schema/agent-events';
@@ -34,6 +34,24 @@ export class AgentEventRepository {
       .where(conditions)
       .orderBy(agentEvents.id)
       .limit(200);
+  }
+
+  /**
+   * What a run ended with and the files its tools wrote: its `complete` and
+   * `error` events and its `file_change` actions (emitted only after a write
+   * tool succeeded), oldest first. The run view's outcome (docs/MISSION-CONTROL.md).
+   */
+  async outcomeEvents(agentId: string, limit = 500): Promise<Array<Pick<AgentEventRecord, 'type' | 'data' | 'createdAt'>>> {
+    return this.db
+      .select({ type: agentEvents.type, data: agentEvents.data, createdAt: agentEvents.createdAt })
+      // i2: by agent id; the run view reads the agent through the scoped repo first
+      .from(agentEvents)
+      .where(and(eq(agentEvents.agentId, agentId), or(
+        inArray(agentEvents.type, ['complete', 'error']),
+        and(eq(agentEvents.type, 'action'), sql`${agentEvents.data}->>'type' = 'file_change'`),
+      )))
+      .orderBy(agentEvents.id)
+      .limit(limit);
   }
 
   async findBySession(sessionId: string): Promise<AgentEventRecord[]> {

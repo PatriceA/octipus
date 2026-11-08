@@ -14,6 +14,7 @@ import { AGENT_SOURCE_LABEL, type MissionRun, type RunDetailResponse } from '@/s
 import type { PromptComposition } from '@/shared/prompt-composition';
 import { getAgentManager } from './agent-manager';
 import { getAgentComposition, getLatestComposition } from './agent/prompt-composition';
+import { readRunOutcome } from './run-outcome';
 
 function isComposition(value: unknown): value is PromptComposition {
   const v = value as Partial<PromptComposition> | null;
@@ -75,11 +76,15 @@ export async function readRunDetail(principal: Principal, agentId: string): Prom
     else if (isComposition(agent.metadata?.promptComposition)) prompt = { ...(agent.metadata.promptComposition as PromptComposition), textAvailable: false };
   }
 
+  const status = live(agent.id, agent.status);
+  const cost = (await repos.agents.costByAgent([agent.id])).get(agent.id) ?? null;
+  const outcome = await readRunOutcome(agent, root, status, cost);
+
   return {
     id: agent.id,
     role: agent.role,
     root,
-    status: live(agent.id, agent.status),
+    status,
     sessionId: agent.sessionId,
     sessionTitle: sessionRow?.title ?? null,
     createdAt: agent.createdAt.toISOString(),
@@ -89,6 +94,7 @@ export async function readRunDetail(principal: Principal, agentId: string): Prom
     children: siblings
       .filter((a) => a.parentAgentId === agent.id)
       .map((a) => ({ id: a.id, role: a.role, status: live(a.id, a.status), totalTokens: a.totalTokens ?? 0 })),
+    outcome,
     prompt,
   };
 }

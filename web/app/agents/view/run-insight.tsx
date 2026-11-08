@@ -9,6 +9,7 @@ import { Modal } from '@/components/ui/modal';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useWorkspaceId } from '@/lib/workspace-context';
+import { RunOutcomePanel } from './run-outcome';
 import type { RunDetailResponse } from '../../../../src/shared/agent-origin';
 import { PROMPT_CATEGORIES, PROMPT_CATEGORY_INFO, type PromptCategory, type PromptSectionWithText, tokensByCategory } from '../../../../src/shared/prompt-composition';
 
@@ -55,6 +56,7 @@ export function RunInsight({ agentId }: { agentId: string }) {
   const scale = prompt?.contextWindow && prompt.contextWindow >= used ? prompt.contextWindow : used;
 
   return <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(300px,1fr))]">
+    {data.outcome && <RunOutcomePanel outcome={data.outcome} />}
     <section aria-label="Why this run exists" className="space-y-3 rounded-lg border border-outline-variant/60 bg-surface-container p-4">
       <h2 className="text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant">Why this run exists</h2>
       {data.chain.length === 0

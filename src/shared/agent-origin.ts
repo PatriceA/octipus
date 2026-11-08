@@ -143,6 +143,27 @@ export interface RosterResponse {
   heartbeatEnabled: boolean;
 }
 
+/** What a run ended with, what its tools wrote, what it said it wrote, and the checks it was held to. */
+export interface RunOutcome {
+  status: MissionRun['status'];
+  completionReason: string | null;
+  error: string | null;
+  durationMs: number | null;
+  totalTokens: number;
+  /** Null when no priced request was recorded. */
+  costUsd: number | null;
+  /** The run's final answer, clipped; null when it recorded none. */
+  answer: string | null;
+  answerClipped: boolean;
+  /** Files a write tool recorded as written (from `file_change` events), last action per path. */
+  files: Array<{ path: string; action: string; at: string }>;
+  /** Paths the answer says were saved; `confirmed` only when a recorded write matches. */
+  claims: Array<{ path: string; confirmed: boolean }>;
+  toolCalls: Array<{ name: string; count: number }>;
+  /** Rows of `verification_evidence` that judged this run. */
+  checks: Array<{ kind: string; passed: boolean; stage: string | null; summary: string | null; at: string }>;
+}
+
 /** `GET /api/agents/:id/run`: why a run exists, where it sits in its tree, and what its prompt held. */
 export interface RunDetailResponse {
   id: string;
@@ -157,6 +178,7 @@ export interface RunDetailResponse {
   chain: Array<{ kind: 'source' | 'hook' | 'heartbeat' | 'pipeline' | 'goal' | 'parent'; label: string; detail: string | null; href: string | null }>;
   parent: { id: string; role: string; root: boolean } | null;
   children: Array<{ id: string; role: string; status: MissionRun['status']; totalTokens: number }>;
+  outcome: RunOutcome;
   /** The run's measured prompt; null when it was not measured (CLI models, older runs). */
   prompt: (Omit<import('./prompt-composition').PromptComposition, 'sections'> & {
     sections: import('./prompt-composition').PromptSectionWithText[];
