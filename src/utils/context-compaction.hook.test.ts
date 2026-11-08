@@ -109,7 +109,9 @@ describe('compact:before', () => {
 
   test('a long history: the cap stops at the absolute ceiling', async () => {
     getAgentHooks().register('compact:before', (c) => { c.summary = 'y'.repeat(HOOK_SUMMARY_MAX_CHARS + 500); });
-    const long = Array.from({ length: 40 }, (_, i) => msg(i % 2 ? 'assistant' : 'user', 'z'.repeat(20_000)));
+    // Prose, not one 20k-char run of a letter: BPE on a single unbroken run is
+    // quadratic and took ~19s under load, which this test is not about.
+    const long = Array.from({ length: 40 }, (_, i) => msg(i % 2 ? 'assistant' : 'user', `turn ${i}: ${'the quick brown fox jumps over the lazy dog. '.repeat(450)}`));
     expect(hookSummaryMaxChars(long)).toBe(HOOK_SUMMARY_MAX_CHARS);
     const result = await createLLMSummary(long, 'm', { hook: { source: 'agent', agent } });
     expect(result.summaryText).toBe(`${'y'.repeat(HOOK_SUMMARY_MAX_CHARS)}\n[... summary truncated]`);
