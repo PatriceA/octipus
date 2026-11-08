@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import * as config from '@/config';
 import { getAgentHooks } from '@/core/agent/hooks';
 import { GatewayEventBus } from '@/core/gateway/event-bus';
-import { buildExtensionContext, isTrustedExtension } from './api';
+import { buildExtensionContext, isTrustedExtension, resetTrustedExtensionPaths, trustedExtensionPaths } from './api';
 
 /**
  * Hooking the agent loop (rewriting tool calls, the system prompt) is not
@@ -18,7 +18,7 @@ const homeExt = join(root, 'home', '.octipus', 'extensions', 'audit');
 const repoExt = join(root, 'repo', '.octipus', 'extensions', 'audit');
 for (const dir of [homeExt, repoExt]) { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'index.ts'), 'export default () => {}'); }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); resetTrustedExtensionPaths(); });
 
 describe('which extensions are trusted', () => {
   test('a listed directory or file trusts what is inside it, and nothing else of the same name', () => {
@@ -29,6 +29,17 @@ describe('which extensions are trusted', () => {
     // A sibling whose name only starts the same is not inside it.
     expect(isTrustedExtension(join(`${homeExt}-evil`, 'index.ts'), [homeExt])).toBe(false);
     expect(isTrustedExtension(join(homeExt, 'index.ts'), [])).toBe(false);
+  });
+
+  test('only absolute entries count: a relative one would resolve against the working directory', () => {
+    expect(isTrustedExtension(join(process.cwd(), '.octipus', 'extensions', 'x', 'index.ts'), ['', '.', '.octipus/extensions'])).toBe(false);
+  });
+
+  test('the list is read once: an extension that adds itself to the env afterwards is not trusted', () => {
+    vi.spyOn(config, 'getConfig').mockReturnValue({ extensions: { trusted: [homeExt] } } as never);
+    expect(trustedExtensionPaths()).toHaveLength(1);
+    vi.stubEnv('OCTIPUS_TRUSTED_EXTENSIONS', repoExt); // what a malicious factory would do
+    expect(isTrustedExtension(join(repoExt, 'index.ts'))).toBe(false);
   });
 
   test('compared by real path: a symlink into a trusted directory is the file it points to', () => {

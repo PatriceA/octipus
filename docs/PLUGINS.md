@@ -122,7 +122,15 @@ export default function (octi) {
 
 Events: `before-agent-start`, `tool:before` (rewrite `args` or short-circuit the call), `tool:after`, `spawn:before`, `spawn:after`. The hook is removed when the extension is disposed (`/reload`).
 
-Hooks run in-process and can rewrite what the agent does, so `octi.hook` throws unless the operator trusts the extension. A project's `.octipus/extensions` arrives with whatever repository was cloned. List each trusted extension's entry file or directory, by absolute path, in `extensions.trusted` (or `OCTIPUS_TRUSTED_EXTENSIONS`, comma-separated). Paths are compared by real path, so an extension with the same name somewhere else is not trusted. Observing events (`octi.on`) and adding commands need no trust.
+Hooks can rewrite what the agent does, so `octi.hook` throws unless the operator trusts the extension: list each trusted extension's entry file or directory, by absolute path, in `extensions.trusted` (or `OCTIPUS_TRUSTED_EXTENSIONS`, comma-separated). The list is read once, before the first extension's code runs, so changing it needs a restart; relative entries are ignored; paths are compared by real path, decided before the extension is imported, so an extension with the same name somewhere else is not trusted. Observing events (`octi.on`) and adding commands need no trust.
+
+What this gate is and is not: it keeps an extension that was not meant to steer the agent from doing so. It is not a sandbox. Every extension, trusted or not, is in-process code with the server's privileges from the moment it loads, and `<cwd>/.octipus/extensions` loads automatically, so install only extensions you would run yourself.
+
+Behaviour to know when writing a hook:
+
+- `before-agent-start`, `tool:after` and `spawn:after` handlers that throw are logged and skipped. `tool:before` and `spawn:before` are fail-closed: a handler that throws blocks the call or spawn.
+- A `tool:before` short-circuit (`ctx.shortCircuit = { result }`) answers the call without running the tool, and without its permission check. Rewritten `args` are permission-checked as usual.
+- Extension hooks are registered after the built-in persona hook, so a `before-agent-start` hook sees, and could change, the persona block. Leave `SECURITY_PREAMBLE` alone.
 
 ## Example Plugin
 

@@ -104,6 +104,23 @@ describe('Extension Discovery + Loader', () => {
     await loaded?.dispose();
   });
 
+  test('a factory that throws leaves nothing registered behind', async () => {
+    const dir = join(cwd, '.octipus', 'extensions');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'halfway.ts');
+    writeFileSync(file, [
+      `export default function (api) {`,
+      `  api.registerCommand({ name: 'halfwaycmd', description: 'x', handler: async () => ({ text: 'still here' }) });`,
+      `  throw new Error('init failed after registering');`,
+      `}`,
+    ].join('\n'));
+
+    expect(await loadExtension({ name: 'halfway', entryPath: file }, bus)).toBeUndefined();
+    const { getCommandRegistry } = await import('@/core/gateway/commands');
+    const result = await getCommandRegistry().execute('/halfwaycmd', { userId: 'u', sessionId: 's', clientType: 'tui', trustLevel: 'user' });
+    expect(result?.text).not.toBe('still here');
+  });
+
   test('loadExtension returns undefined when file has no default export', async () => {
     const dir = join(cwd, '.octipus', 'extensions');
     mkdirSync(dir, { recursive: true });
