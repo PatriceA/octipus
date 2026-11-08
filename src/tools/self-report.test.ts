@@ -57,6 +57,17 @@ describe('reporting the tool surface', () => {
     });
   });
 
+  test('tools refused this turn (plan mode) are named as refused, not only as callable', async () => {
+    const registered = [handler('filesystem__write_file', 'filesystem'), handler('filesystem__read_file', 'filesystem')];
+    const out = await run(
+      buildCapabilitiesHandler(ctx({ registered, refused: { reason: 'plan mode', tools: ['filesystem__write_file'] } })),
+      { section: 'tools' },
+    );
+    expect((out.tools as { refusedThisTurn?: unknown }).refusedThisTurn).toEqual({ reason: 'plan mode', tools: ['filesystem__write_file'] });
+    const plain = await run(buildCapabilitiesHandler(ctx({ registered })), { section: 'tools' });
+    expect(plain.tools).not.toHaveProperty('refusedThisTurn');
+  });
+
   test('a handler with no toolbox is still reported, not dropped', async () => {
     const out = await run(
       buildCapabilitiesHandler(ctx({ registered: [handler('spawn_child')] })),

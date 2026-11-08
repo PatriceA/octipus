@@ -25,6 +25,7 @@ import {
 } from './custom/anthropic-compat-provider';
 import { claudeToolChoice, dropClaudeSampling } from '../claude-request';
 import { cacheTtlsFor } from './prompt-cache';
+import { withoutSearchBlocks, withToolSearch } from './tool-search';
 import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from './http-retry';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
 import { normalizeUsage } from './usage';
@@ -38,7 +39,7 @@ const ANTHROPIC_VERSION = '2023-06-01';
  * explicit rollback to the OpenAI-compat `/v1/chat/completions` endpoint, which
  * has no prompt caching.
  */
-function nativeMessagesEnabled(): boolean {
+export function nativeMessagesEnabled(): boolean {
   return anthropicNativeMessagesEnabled(process.env.ANTHROPIC_NATIVE_MESSAGES);
 }
 
@@ -238,6 +239,7 @@ export class AnthropicProvider implements ModelProvider {
    * tag so failover classification is identical to the compat path. */
   private buildNativeBody(options: CompletionOptions, stream: boolean): Record<string, unknown> {
     const { system, messages } = toAnthropicMessages(transformMessagesForProvider(options.messages, this.name));
+    if (!options.deferredTools?.length) withoutSearchBlocks(messages as unknown as Array<{ role: string; content: unknown }>);
     const body: Record<string, unknown> = {
       model: options.model,
       messages,
@@ -252,7 +254,11 @@ export class AnthropicProvider implements ModelProvider {
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
     // Tool choice and sampling are set by `configureAnthropicBody`.
     if (options.tools?.length) {
-      const tools = toAnthropicTools(options.tools);
+      // Native tool search (tool-search.ts): the long tail deferred, so the
+      // tool block is the same bytes for the whole conversation.
+      const tools = options.deferredTools?.length
+        ? withToolSearch(toAnthropicTools(options.tools), new Set(options.deferredTools))
+        : toAnthropicTools(options.tools);
       if (options.cachePolicy !== 'off') markToolsCacheBreakpoint(tools, ttls.prefix);
       body.tools = tools;
     }

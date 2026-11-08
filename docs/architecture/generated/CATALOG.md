@@ -717,7 +717,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 10 |
-| `core` | `models` | 131 |
+| `core` | `models` | 133 |
 | `core` | `modules` | 2 |
 | `core` | `security` | 209 |
 | `core` | `services` | 2 |

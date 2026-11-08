@@ -616,7 +616,7 @@ chats, a long tool loop, a plan-mode toggle and an overnight heartbeat.
 | C4 1h prefix / 5m history on attended turns; tools breakpoint | done | `providers/prompt-cache.ts`, `anthropic-provider.ts` |
 | C5 no `tool_choice` flip on the final call (Claude) | done | `agent-worker.ts` |
 | C6 plan mode and space write-withholding as a call-time refusal on the root | done | `tool-executor.ts`, `root-runner.ts` |
-| C7 new groups appended after earlier ones | done (ordering). Provider-native deferral (`defer_loading`, `allowed_tools`) is still open. | `tool-intent.ts`, `tool-split.ts` |
+| C7 new groups appended after earlier ones; on first-party Claude, every tool sent with the long tail deferred behind Anthropic's tool search (`agent.nativeToolSearch`), so the tool block never changes in a conversation | done. OpenAI `allowed_tools` is still open. | `tool-intent.ts`, `tool-split.ts`, `providers/tool-search.ts` |
 | C8 unchanged retrieved blocks not replayed | done | `agent/repeated-context.ts` |
 | C9 order-sensitive prefix signature, `octipus_prompt_cache_breaks_total` | done | `models/cache-break.ts` |
 | C10 native `/api/chat` with pinned `num_ctx`, fail loud on overflow | done | `ollama-provider.ts` |
@@ -626,7 +626,10 @@ chats, a long tool loop, a plan-mode toggle and an overnight heartbeat.
 | P1–P3, P5 plugin reload and manifest fixes | done | `plugins/loader.ts`, `api/routes/plugins.ts` |
 | Leader-first fan-out (§9.2 item 5): siblings of one role and lane start after the first one's first streamed chunk, capped at 20 s | done | `swarm/leader-first.ts` |
 | Cache-parity forks (§9.2 item 6): `spawn_child` with `fork: true` continues the parent's conversation on its model and tools; never for an independent child (reviewer, verify lane, maintenance review) | done | `swarm/fork.ts`, `agent-worker.ts` |
-| Persisted static tier and tool bytes, pi-ai evaluation | open | §9.2 items 1, 11 |
+| Typed `PromptBuilder` (§3.3 item 1): install, user, session and turn tiers with a fingerprint and token count each; a wider tier after a narrower one throws, a static block carrying the date marker is escaped. Root and worker prompts use it (the worker's pipeline run-scope block had landed after the date line) | done (#469) | `agent/prompt-builder.ts` |
+| Persisted static tier (§9.2 item 1): the drifting session blocks (workspace listing, repo suite, AGENTS.md excerpt) are replayed per conversation while the session tier keeps its shape; a clear, a checkpoint, a shape change or `scan_repos` rebuilds them | done (#469) | `SessionContext.staticPrompt` |
+| Plan mode refuses git, GitHub and GitLab writes (an allowlist of reads), at every delegation depth; `capabilities` names the refused tools | done | `tool-executor.ts` |
+| Persisted tool bytes; the persona after the role template so the template is shared across users; the direct-response and Companion builders on `PromptBuilder`; OpenAI `allowed_tools`; pi-ai evaluation | open | §9.2 items 1, 11 |
 
 ### References
 

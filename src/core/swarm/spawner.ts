@@ -709,7 +709,9 @@ export class SwarmSpawner {
     // child reaches the equivalent `octipus_get_skill` over MCP. Idempotent —
     // registerTool is keyed by name.
     const { buildSkillLoaderHandlers } = await import('@/tools/skill-loader');
-    childTools.push(...buildSkillLoaderHandlers());
+    // After the space filter above, so filtered again: `update_skill` is
+    // personal-only (and refused at call time in a space regardless).
+    childTools.push(...(parentContext.space ? withoutPersonalOnlyTools(buildSkillLoaderHandlers()) : buildSkillLoaderHandlers()));
     if (['qa', 'review'].includes(childRole)) {
       const { buildTestContainerHandlers } = await import('@/tools/test-container');
       childTools.push(...buildTestContainerHandlers());
@@ -1763,6 +1765,10 @@ export class SwarmSpawner {
           ...stageChildMetadata(opts.parentContext.metadata as Record<string, unknown> | undefined),
           ...treeMetadata,
           ...(opts.resumeKey ? { resumeKey: opts.resumeKey } : {}),
+          // The parent's refusal (plan mode, a space role that may not
+          // write) holds at every depth: the strip above covers the file
+          // writers, this covers the rest of the executor's rule (repo writes).
+          ...inheritedRefusal(opts.parentContext),
           ...(opts.fork ? forkMetadata(opts.fork, opts.parentContext) : {}),
         },
       });
@@ -3042,6 +3048,12 @@ export function preferEarlierAttempt(current: ChildResult, retried: ChildResult)
   const effects = retried.receipt?.sideEffects;
   if (!effects || (retried.receipt?.unavailable.length ?? 0) > 0) return false;
   return effects.filesChanged === 0 && effects.commandsRun === 0;
+}
+
+/** The parent's file-change refusal, for a child's context metadata. */
+function inheritedRefusal(parentContext: AgentContext): Record<string, unknown> {
+  const reason = (parentContext.metadata as Record<string, unknown> | undefined)?.[FILE_CHANGES_REFUSED_KEY];
+  return reason ? { [FILE_CHANGES_REFUSED_KEY]: reason } : {};
 }
 
 /**

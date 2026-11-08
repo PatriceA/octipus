@@ -91,6 +91,15 @@ export const FILE_CHANGE_TOOLS = new Set([
 export const FILE_CHANGES_REFUSED_KEY = 'fileChangesRefused';
 export type FileChangeRefusalReason = 'plan_mode' | 'space_role';
 
+/**
+ * Toolboxes whose non-read actions change a repository or a hosted project
+ * (commits, branches, pushes, merges, issues, comments). Plan mode refuses
+ * them alongside the file writers: "no commits" was only an instruction. An
+ * allowlist of reads, not a list of writes: an action added to one of these
+ * later is refused in plan mode until it is declared `read`.
+ */
+export const REPO_WRITER_TOOL_IDS = new Set(['git', 'github', 'gitlab']);
+
 const FILE_CHANGE_REFUSALS: Record<FileChangeRefusalReason, string> = {
   plan_mode: 'Plan mode is on: file-changing tools are refused for this turn. Finish the plan and submit it with exit_plan_mode; nothing was written.',
   space_role: 'This turn may not change files in this space: file-changing tools are refused. Nothing was written.',
@@ -615,6 +624,13 @@ export class ToolExecutor {
     const refused = this.context.metadata?.[FILE_CHANGES_REFUSED_KEY] as FileChangeRefusalReason | undefined;
     if (refused && FILE_CHANGE_TOOLS.has(call.name)) {
       return FILE_CHANGE_REFUSALS[refused] ?? FILE_CHANGE_REFUSALS.plan_mode;
+    }
+    if (refused === 'plan_mode' && tool.toolId && REPO_WRITER_TOOL_IDS.has(tool.toolId) && tool.replaySafety !== 'read_only') {
+      const bare = call.name.includes('__') ? (call.name.split('__').pop() as string) : call.name;
+      const act = typeof tool.permissionAction === 'function' ? tool.permissionAction(call.arguments) : tool.permissionAction || bare;
+      if (act !== 'read') {
+        return `Plan mode is on: ${call.name} changes a repository or project (${act}), and plan mode changes nothing. Reading is fine; put the change in the plan and submit it with exit_plan_mode.`;
+      }
     }
     // A fork keeps its parent's run-bound handlers declared for cache parity
     // and runs none of them (swarm/fork.ts).

@@ -149,6 +149,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       smallModelMaxTools: parseInt(env('AGENT_SMALL_MODEL_MAX_TOOLS', 'ORCHESTRATOR_SMALL_MODEL_MAX_TOOLS') || '7', 10),
       pipelineTokenBudget: parseInt(process.env.PIPELINE_TOKEN_BUDGET || '2000000', 10),
       lazyToolDiscovery: env('AGENT_LAZY_TOOLS', 'ORCHESTRATOR_LAZY_TOOLS') !== 'false',
+      nativeToolSearch: process.env.AGENT_NATIVE_TOOL_SEARCH !== 'false',
       turnTimeoutMs: parseInt(env('AGENT_TURN_TIMEOUT_MS', 'ORCHESTRATOR_TIMEOUT_MS') || '36000000', 10),
       hookTurnTimeoutMs: parseInt(env('AGENT_HOOK_TURN_TIMEOUT_MS', 'ORCHESTRATOR_HOOK_TIMEOUT_MS') || '36000000', 10),
     },

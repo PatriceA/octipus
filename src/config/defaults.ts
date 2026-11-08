@@ -90,6 +90,8 @@ export const defaultConfig: Partial<Config> = {
      * was tool JSON schema. Set false to put the full block back everywhere.
      */
     lazyToolDiscovery: true,
+    /** Defer the long tail behind Anthropic's tool search on first-party Claude. */
+    nativeToolSearch: true,
     /** Root-turn timeout for interactive channels (10 h). */
     turnTimeoutMs: 36_000_000,
     /** Root-turn timeout for unattended hook-triggered runs (10 h). */
