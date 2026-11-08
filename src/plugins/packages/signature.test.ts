@@ -247,3 +247,60 @@ describe('public keys', () => {
     expect(() => signContentHash('sha256:00', publisher.publicKeyPem)).toThrow(/private key/);
   });
 });
+
+describe('revoked and expired keys', () => {
+  const HASH = `sha256:${'ab'.repeat(32)}`;
+  const text = serializeSignature(signContentHash(HASH, publisher.privateKeyPem));
+
+  test('a revoked entry trusts nothing: a valid signature by it reads as revoked', () => {
+    const keys = trustedKeys([{ name: 'Acme', publicKey: publisher.publicKeyPem, revoked: true }]);
+    expect(checkSignature(HASH, text, keys)).toEqual({ status: 'revoked', keyId: publisher.keyId, publisher: 'Acme', detail: expect.stringContaining('revoked') });
+  });
+
+  test('plugins.revokedKeys revokes a listed key, and one with no entry at all', () => {
+    const listed = trustedKeys(TRUSTED, undefined, { revokedKeys: [publisher.keyId] });
+    expect(checkSignature(HASH, text, listed)).toMatchObject({ status: 'revoked', publisher: 'Acme' });
+    const unlisted = trustedKeys([], undefined, { revokedKeys: [publisher.keyId] });
+    expect(checkSignature(HASH, text, unlisted)).toMatchObject({ status: 'revoked', publisher: null, keyId: publisher.keyId });
+    // Another key is untouched.
+    expect(checkSignature(HASH, text, trustedKeys(TRUSTED, undefined, { revokedKeys: [other.keyId] })).status).toBe('valid');
+  });
+
+  test('notAfter: trusted until then, expired after; a date alone is its start (UTC)', () => {
+    const entry = [{ name: 'Acme', publicKey: publisher.publicKeyPem, notAfter: '2027-01-01' }];
+    expect(checkSignature(HASH, text, trustedKeys(entry, undefined, { now: new Date('2026-12-31T23:59:59Z') })).status).toBe('valid');
+    expect(checkSignature(HASH, text, trustedKeys(entry, undefined, { now: new Date('2027-01-01T00:00:01Z') })))
+      .toMatchObject({ status: 'expired', publisher: 'Acme', detail: expect.stringContaining('2027-01-01T00:00:00.000Z') });
+    const withTime = [{ name: 'Acme', publicKey: publisher.publicKeyPem, notAfter: '2027-01-01T12:00:00+02:00' }];
+    expect(checkSignature(HASH, text, trustedKeys(withTime, undefined, { now: new Date('2027-01-01T10:30:00Z') })).status).toBe('expired');
+  });
+
+  test('an unreadable notAfter trusts nothing and is reported', () => {
+    const reported: string[] = [];
+    const keys = trustedKeys([{ name: 'Acme', publicKey: publisher.publicKeyPem, notAfter: 'next year' }], (_n, reason) => reported.push(reason));
+    expect(checkSignature(HASH, text, keys).status).toBe('expired');
+    expect(reported).toEqual([expect.stringContaining('not an ISO date')]);
+  });
+
+  test('a key listed twice: the revocation wins, whichever comes first', () => {
+    for (const list of [
+      [{ name: 'Acme', publicKey: publisher.publicKeyPem }, { name: 'Acme (old)', publicKey: publisher.publicKeyPem, revoked: true }],
+      [{ name: 'Acme (old)', publicKey: publisher.publicKeyPem, revoked: true }, { name: 'Acme', publicKey: publisher.publicKeyPem }],
+    ]) {
+      expect(checkSignature(HASH, text, trustedKeys(list)).status).toBe('revoked');
+    }
+  });
+
+  test('a signature that does not verify is invalid, even by a revoked key', () => {
+    const keys = trustedKeys([{ name: 'Acme', publicKey: publisher.publicKeyPem, revoked: true }]);
+    expect(checkSignature(`sha256:${'cd'.repeat(32)}`, text, keys).status).toBe('invalid');
+  });
+
+  test('rotation: the new key is trusted while the old one is revoked', async () => {
+    const dir = pkg();
+    await signPackage(dir, other.privateKeyPem);
+    const contentHash = await hashPackageContent(dir, MANIFEST);
+    const rotated = [{ name: 'Acme', publicKey: publisher.publicKeyPem, revoked: true }, { name: 'Acme 2027', publicKey: other.publicKeyPem }];
+    expect(await checkPackageSignature(dir, contentHash, rotated)).toEqual({ status: 'valid', publisher: 'Acme 2027', keyId: other.keyId });
+  });
+});

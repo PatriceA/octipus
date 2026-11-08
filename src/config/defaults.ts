@@ -139,7 +139,9 @@ export const defaultConfig: Partial<Config> = {
   },
   plugins: {
     trustedPublishers: [],
+    revokedKeys: [],
     requireSignature: false,
+    registries: [],
   },
   protection: {
     remoteAtLevel3: false,

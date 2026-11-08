@@ -57,11 +57,11 @@ import { activeSandboxRunner, getSandboxMode } from '@/security/shell-sandbox';
 import { SYSTEM_USER_ID } from '@/security/principal';
 import { getVault } from '@/security/vault';
 import type { MCPServer } from '@/shared/mcp-server';
-import { PLUGIN_MANIFEST_FILE, type PluginManifest, type PluginNetworkStatus, type PluginPackageView } from '@/shared/plugin-package';
+import { PLUGIN_MANIFEST_FILE, type PluginManifest, type PluginNetworkStatus, type PluginPackageView, type PluginSignatureStatus } from '@/shared/plugin-package';
 import { coreLogger } from '@/utils/logger';
 import { CONTENT_MISMATCH_PROBLEM, hashPackageContent, isContentHash, verifyPackageContent } from './integrity';
 import { ManifestError, parseManifest, settingEnvName } from './manifest';
-import { checkSignatureOnDisk, readSignatureFile, SIGNATURE_FILE, type SignatureCheck, SignatureError } from './signature';
+import { checkSignatureOnDisk, readSignatureFile, SIGNATURE_FILE, type SignatureCheck, SignatureError, type TrustedPublisher } from './signature';
 import { checkPackageTree, PackageTreeError } from './tree';
 
 export class PluginPackageError extends Error {
@@ -147,10 +147,10 @@ async function requireRow(name: string): Promise<PluginPackageRow> {
   return row;
 }
 
-/** The signing policy in force (`plugins.*`), read at each check so a config change applies to the next one. */
-function signingPolicy(): { publishers: ReadonlyArray<{ name: string; publicKey: string }>; required: boolean } {
+/** The signing policy in force (`plugins.*`), read at each check so a config change (a revoked key, say) applies to the next one. */
+function signingPolicy(): { publishers: readonly TrustedPublisher[]; revokedKeys: readonly string[]; required: boolean } {
   const plugins = getConfig().plugins;
-  return { publishers: plugins?.trustedPublishers ?? [], required: plugins?.requireSignature === true };
+  return { publishers: plugins?.trustedPublishers ?? [], revokedKeys: plugins?.revokedKeys ?? [], required: plugins?.requireSignature === true };
 }
 
 /**
@@ -167,9 +167,10 @@ interface SignatureState {
 async function signatureState(dir: string, contentHash: string): Promise<SignatureState> {
   try {
     const onDisk = await readSignatureFile(dir);
-    const check = checkSignatureOnDisk(onDisk, contentHash, signingPolicy().publishers, (publisher, reason) => {
+    const policy = signingPolicy();
+    const check = checkSignatureOnDisk(onDisk, contentHash, policy.publishers, (publisher, reason) => {
       coreLogger.warn({ publisher, reason }, 'A key in plugins.trustedPublishers cannot be read; it trusts nothing');
-    });
+    }, { revokedKeys: policy.revokedKeys });
     return { sha256: onDisk?.sha256 ?? null, check, malformed: null };
   } catch (err) {
     if (err instanceof SignatureError) return { sha256: null, check: { status: 'invalid', reason: err.message }, malformed: err.message };
@@ -185,29 +186,34 @@ function signatureShortfall(name: string, check: Exclude<SignatureCheck, { statu
   switch (check.status) {
     case 'unsigned': return `${name} is not signed (no ${SIGNATURE_FILE})`;
     case 'unknown_key': return `${name} is signed by a key that is not in plugins.trustedPublishers (${check.keyId})`;
+    case 'revoked': return `${name} is signed by a revoked key: ${check.detail}`;
+    case 'expired': return `${name} is signed by an expired key: ${check.detail}`;
     case 'invalid': return `The signature of ${name} is invalid: ${check.reason}`;
   }
 }
 
 /**
  * The signature of files about to be installed: who signed them, or the
- * refusal. An invalid signature is always refused; unsigned files or an
- * unknown key are refused under `plugins.requireSignature` and otherwise
- * installed as unsigned (an unknown key with a warning).
+ * refusal. An invalid signature, or one by a revoked key, is always refused;
+ * unsigned files, an unknown key or an expired one are refused under
+ * `plugins.requireSignature` (or `requireTrusted`, a remote install) and
+ * otherwise installed as unsigned (an unknown or expired key with a warning).
  */
 async function acceptSignature(
   dir: string,
   name: string,
   contentHash: string,
+  requireTrusted = false,
 ): Promise<{ signedBy: string | null; keyId: string | null; signatureHash: string | null; warnings: string[] }> {
   const state = await signatureState(dir, contentHash);
   const { check, sha256: signatureHash } = state;
   if (check.status === 'valid') return { signedBy: check.publisher, keyId: check.keyId, signatureHash, warnings: [] };
   const shortfall = signatureShortfall(name, check);
-  if (check.status === 'invalid') throw new PluginPackageError('invalid', `${shortfall}; not installed`);
+  if (check.status === 'invalid' || check.status === 'revoked') throw new PluginPackageError('invalid', `${shortfall}; not installed`);
+  if (requireTrusted) throw new PluginPackageError('invalid', `${shortfall}; a package installed from a URL must carry a valid signature by a trusted publisher`);
   if (signingPolicy().required) throw new PluginPackageError('invalid', `${shortfall}; plugins.requireSignature accepts only packages signed by a trusted publisher`);
-  if (check.status === 'unknown_key') {
-    coreLogger.warn({ pkg: name, keyId: check.keyId }, 'Plugin package signed by an untrusted key; installed as unsigned');
+  if (check.status === 'unknown_key' || check.status === 'expired') {
+    coreLogger.warn({ pkg: name, keyId: check.keyId, status: check.status }, 'Plugin package signed by an untrusted key; installed as unsigned');
     return { signedBy: null, keyId: check.keyId, signatureHash, warnings: [`${shortfall}: installed as unsigned`] };
   }
   return { signedBy: null, keyId: null, signatureHash, warnings: [] };
@@ -230,11 +236,14 @@ async function acceptSignature(
  * together. The signature is checked on the same staging copy, against that
  * hash (`acceptSignature`); a refused one fails the install the same way.
  * `warnings` says what was accepted with a caveat (an untrusted key).
+ * `requireTrustedSignature` refuses anything but a valid trusted signature,
+ * whatever `plugins.requireSignature` says (a remote install, ./remote.ts);
+ * `source` (its URL) goes into the audit row.
  */
 export async function installFromDirectory(
   sourceDir: string,
   actorUserId: string,
-  opts: { upgrade?: boolean } = {},
+  opts: { upgrade?: boolean; requireTrustedSignature?: boolean; source?: string } = {},
 ): Promise<PluginPackageRow & { warnings: string[] }> {
   const source = resolve(sourceDir);
   const manifest = await readManifest(source);
@@ -275,7 +284,7 @@ export async function installFromDirectory(
     await cp(source, staging, { recursive: true, errorOnExist: true, verbatimSymlinks: true });
     // Hashed as copied, so what the admin installs is what is pinned.
     contentHash = await hashPackageContent(staging, manifest);
-    signature = await acceptSignature(staging, manifest.name, contentHash);
+    signature = await acceptSignature(staging, manifest.name, contentHash, opts.requireTrustedSignature === true);
     await getMCPBridge().disconnect(serverId);
     row = await db.transaction(async (tx) => {
       const [updated] = await tx.update(pluginPackages)
@@ -302,6 +311,7 @@ export async function installFromDirectory(
   forgetMismatches(manifest.name);
   await audit(actorUserId, previous ? 'upgraded' : 'installed', manifest.name, {
     version: manifest.version, from: previous?.version ?? null, contentHash, signedBy: signature.signedBy, keyId: signature.keyId,
+    ...(opts.source ? { source: opts.source } : {}),
   });
   await syncPluginServers();
   return { ...row, warnings: signature.warnings };
@@ -528,6 +538,7 @@ async function secretsSet(row: PluginPackageRow, entries?: SystemSecretList): Pr
 
 async function viewOf(row: PluginPackageRow, secrets: string[]): Promise<PluginPackageView> {
   const bridge = getMCPBridge();
+  const signature = await currentSignature(row);
   const serverId = `${PLUGIN_SERVER_PREFIX}${row.name}`;
   const problem = row.enabled ? bridge.pluginProblem(serverId) : null;
   // Only on a mismatch, so a listing does not hash every package: what the
@@ -551,7 +562,8 @@ async function viewOf(row: PluginPackageRow, secrets: string[]): Promise<PluginP
     connected: bridge.isConnected(serverId),
     contentHash: row.contentHash,
     actualHash,
-    signedBy: await currentSigner(row),
+    signedBy: signature?.status === 'valid' ? signature.publisher : null,
+    signature,
     installedBy: row.installedBy,
     installedAt: row.installedAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -562,21 +574,33 @@ async function viewOf(row: PluginPackageRow, secrets: string[]): Promise<PluginP
 const NO_RUNNER = 'security.shellSandbox off, no bwrap/firejail on Linux, no /usr/bin/sandbox-exec on macOS, or Windows, which has none';
 
 /**
- * Who signs the package's approved content now: the publisher of a valid
- * signature over the recorded hash, by a key trusted now, in the signature
- * file that was approved with it. Recomputed for every view (one small file
- * read and one verification, no re-hash), so a key removed from
- * `plugins.trustedPublishers` or a replaced signature file shows at once;
+ * The signature over the package's approved content now: checked against the
+ * recorded hash and the keys trusted now, in the signature file that was
+ * approved with it (`changed` when it is another one). Recomputed for every
+ * view (one small file read and one verification, no re-hash), so a key
+ * removed, revoked or expired, or a replaced signature file shows at once;
  * the row's `signedBy` is what it was at install or approval (also audited).
+ * Null before the first start of a package installed before pinning.
  */
-async function currentSigner(row: PluginPackageRow): Promise<string | null> {
+async function currentSignature(row: PluginPackageRow): Promise<PluginSignatureStatus | null> {
   if (row.contentHash === null) return null;
   try {
     const sig = await signatureState(packageDir(row.name), row.contentHash);
-    return sig.check.status === 'valid' && sig.sha256 === row.signatureHash ? sig.check.publisher : null;
+    if (sig.sha256 !== row.signatureHash) {
+      return { status: 'changed', keyId: null, publisher: null, detail: `${SIGNATURE_FILE} changed since the content was approved` };
+    }
+    const c = sig.check;
+    switch (c.status) {
+      case 'valid': return { status: 'valid', keyId: c.keyId, publisher: c.publisher, detail: `Signed by ${c.publisher}` };
+      case 'unsigned': return { status: 'unsigned', keyId: null, publisher: null, detail: 'Not signed' };
+      case 'unknown_key': return { status: 'unknown_key', keyId: c.keyId, publisher: null, detail: `Signed by a key not in plugins.trustedPublishers (${c.keyId})` };
+      case 'revoked':
+      case 'expired': return { status: c.status, keyId: c.keyId, publisher: c.publisher, detail: `Signed, but ${c.detail}` };
+      case 'invalid': return { status: 'invalid', keyId: null, publisher: null, detail: c.reason };
+    }
   } catch (err) {
     coreLogger.warn({ err, pkg: row.name }, 'Plugin package signature could not be read for its view');
-    return null;
+    return { status: 'invalid', keyId: null, publisher: null, detail: `Could not read the signature: ${(err as Error).message}` };
   }
 }
 

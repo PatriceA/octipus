@@ -1276,7 +1276,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     valueType: 'json',
     defaultValue: [],
     description:
-      'Publishers whose signed plugin packages are trusted: [{ "name": "...", "publicKey": "<Ed25519 public key, PEM or base64>" }]. A package signed by one of these keys shows who signed it; an invalid signature is always refused. Rotate a key by listing the new one, then removing the old.',
+      'Publishers whose signed plugin packages are trusted: [{ "name": "...", "publicKey": "<Ed25519 public key, PEM or base64>", "notAfter": "2027-12-31" (optional), "revoked": true (optional) }]. A package signed by one of these keys shows who signed it; an invalid signature is always refused. A revoked or expired entry trusts nothing. Rotate a key by listing the new one, then revoking or removing the old.',
+    isSecret: false,
+  },
+  {
+    key: 'plugins.revokedKeys',
+    category: 'security',
+    valueType: 'string_array',
+    defaultValue: [],
+    description:
+      'Signing key ids (ed25519:<64 hex>) that trust nothing, listed in plugins.trustedPublishers or not: a package signed by one is refused at install and, under plugins.requireSignature, at every start.',
     isSecret: false,
   },
   {
@@ -1288,6 +1297,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
       'Run only plugin packages signed by a trusted publisher: an unsigned package, or one signed by an unlisted key, is refused at install, upgrade and content approval, and does not start.',
     isSecret: false,
     envVar: 'PLUGINS_REQUIRE_SIGNATURE',
+  },
+  {
+    key: 'plugins.registries',
+    category: 'security',
+    valueType: 'json',
+    defaultValue: [],
+    description:
+      'Plugin package indexes to browse: [{ "name": "...", "url": "https://.../index.json" }]. Each index lists { packages: [{ name, version, description, url, sha256 }] }; installing from one downloads the https tarball, checks its sha256 and requires a valid signature by a trusted publisher.',
+    isSecret: false,
   },
 
   // ── Protection levels (docs/PROTECTION-LEVELS.md) ──
