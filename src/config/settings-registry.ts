@@ -170,6 +170,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'OLLAMA_KEEP_ALIVE',
   },
+  {
+    key: 'ollama.contextLength',
+    category: 'ollama',
+    valueType: 'number',
+    defaultValue: null,
+    description: 'Context window (num_ctx) Ollama allocates for every call, e.g. 32768. Unset leaves the server default (4096 unless OLLAMA_CONTEXT_LENGTH is set), which silently truncates long prompts. Set, calls go through native /api/chat and a prompt that cannot fit fails with a clear error.',
+    isSecret: false,
+    envVar: 'OCTIPUS_OLLAMA_CONTEXT_LENGTH',
+  },
 
   // ── Telegram ──
   {

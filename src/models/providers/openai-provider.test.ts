@@ -43,4 +43,13 @@ describe('OpenAIProvider — extended prompt-cache retention', () => {
     await expect(provider(failing).complete(options('gpt-other'))).rejects.toBeTruthy();
     expect(failing).toHaveBeenCalledTimes(1);
   });
+
+  test('the GPT-5.6+ prompt_cache_options field gets the same retry-without treatment', async () => {
+    const create = vi.fn().mockRejectedValueOnce({ status: 400, message: "Unsupported parameter: 'prompt_cache_options'." }).mockResolvedValue(reply);
+    const opts: CompletionOptions = { ...options('gpt-5.6-test'), extraBody: { prompt_cache_key: 'octi-k', prompt_cache_options: { ttl: '12h' } } };
+    await expect(provider(create).complete(opts)).resolves.toMatchObject({ content: 'ok' });
+    expect(create.mock.calls[0][0].prompt_cache_options).toEqual({ ttl: '12h' });
+    expect(create.mock.calls[1][0]).not.toHaveProperty('prompt_cache_options');
+    expect(create.mock.calls[1][0].prompt_cache_key).toBe('octi-k');
+  });
 });

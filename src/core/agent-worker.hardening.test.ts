@@ -731,3 +731,43 @@ test('a run whose every tool call keeps failing is nudged, then made to report',
     expect(seen[1]).toContain('Tools are now disabled');
   } finally { spies.forEach(spy => spy.mockRestore()); }
 });
+
+describe('the final call after tools end keeps the cached prefix', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  // `tool_choice` is part of Claude's message-level cache key, so flipping it to
+  // `none` for the reporting call re-read the whole conversation uncached.
+  test.each([
+    ['claude-sonnet-5-5', 'litellm', undefined],
+    ['gpt-5.4', 'litellm', 'none'],
+  ] as const)('%s on %s sends toolChoice %s once tools are disabled', async (modelId, provider, expected) => {
+    vi.spyOn(getModelRegistry(), 'getModelByModelId').mockResolvedValue({
+      name: modelId, modelId, provider, metadata: null, supportsTools: true,
+    } as never);
+    vi.spyOn(getModelRegistry(), 'getModelForTopic').mockResolvedValue(undefined as never);
+    vi.spyOn(modelKey, 'resolveModelKey').mockResolvedValue(undefined);
+    const seen: Array<{ toolChoice?: string; tools?: unknown[] }> = [];
+    vi.spyOn(getLiteLLMClient(), 'complete').mockImplementation((async (opts: { toolChoice?: string; tools?: unknown[] }) => {
+      seen.push({ toolChoice: opts.toolChoice, tools: opts.tools });
+      return completion('done');
+    }) as never);
+
+    const worker = new AgentWorker(mkCtx({ model: modelId }), cfg());
+    worker.registerTools([{ name: 'probe', description: 'p', parameters: { type: 'object', properties: {} }, execute: async () => 'x' }]);
+    const priv = worker as unknown as {
+      messages: import('@/core/types').AgentMessage[];
+      getCompletion: () => Promise<CompletionResult>;
+      toolExecutor: { disableTools: () => void };
+    };
+    priv.messages = [
+      { role: 'user', content: 'go', timestamp: new Date() },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'probe', arguments: {} }], timestamp: new Date() },
+      { role: 'tool', toolCallId: 'c1', content: 'x', timestamp: new Date() },
+    ];
+    priv.toolExecutor.disableTools();
+    await priv.getCompletion();
+    // Tools stay declared either way: the history references them.
+    expect(seen[0].tools).toHaveLength(1);
+    expect(seen[0].toolChoice).toBe(expected);
+  });
+});

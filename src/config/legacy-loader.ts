@@ -45,6 +45,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       requestTimeout: parseInt(process.env.OLLAMA_REQUEST_TIMEOUT || '300000', 10),
       keepAlive: process.env.OLLAMA_KEEP_ALIVE || '10m',
       unifiedMemory: process.env.OLLAMA_UNIFIED_MEMORY === 'true',
+      ...(process.env.OCTIPUS_OLLAMA_CONTEXT_LENGTH ? { contextLength: parseInt(process.env.OCTIPUS_OLLAMA_CONTEXT_LENGTH, 10) } : {}),
     },
     security: {
       masterKey: process.env.MASTER_KEY || '',

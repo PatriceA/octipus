@@ -76,6 +76,8 @@ export function extractFileOperations(messages: AgentMessage[]): CompactionResul
 }
 
 export interface BuildSummarizationPromptOptions {
+  /** Output budget of the summary call, which the length guidance follows. */
+  budgetTokens?: number;
   /**
    * Summary text from the previous compaction pass. When present, the LLM
    * is asked to produce a *combined* summary that subsumes it rather than
@@ -90,6 +92,27 @@ export interface BuildSummarizationPromptOptions {
 }
 
 /**
+ * The checkpoint's sections. A narrative "under 500 words" lost exactly what a
+ * resumed agent needs — exact paths, commands, errors, the user's own
+ * constraints — so the summary is structured, and the user's requests are kept
+ * in their words.
+ */
+export const SUMMARY_STRUCTURE = `Use these sections, each as a short list; omit a section only if it has nothing:
+1. What the user asked for — the goal and every request, in the user's own words where they matter
+2. Constraints and preferences the user stated
+3. Key decisions made, and why
+4. What was accomplished — with exact file paths, commands, ids and results
+5. Errors hit and how they were resolved (or not)
+6. What's still pending or in progress — the next concrete step
+7. Critical context — facts, values or identifiers the work cannot continue without`;
+
+/** Length guidance sized to the history being replaced (`summaryBudgetTokens`). */
+export function summaryLengthGuidance(budgetTokens?: number): string {
+  const words = Math.round((budgetTokens ?? 700) * 0.7);
+  return `Be complete but dense: at most about ${words} words. Write facts, not a conversation.`;
+}
+
+/**
  * Build the summarization prompt. Supports iterative chaining (carries
  * the previous summary forward) and user-supplied instructions.
  */
@@ -101,11 +124,7 @@ export function buildSummarizationPrompt(
   const sections: string[] = [];
 
   sections.push(`Summarize the following conversation between a user and an AI assistant.
-Focus on:
-1. What the user asked for
-2. Key decisions made
-3. What was accomplished
-4. What's still pending or in progress`);
+${SUMMARY_STRUCTURE}`);
 
   if (options.userInstructions?.trim()) {
     sections.push(`User instructions for this summary (apply alongside the standard focus):
@@ -124,7 +143,7 @@ ${options.previousSummary.trim()}
 - Files written: ${fileOps.written.join(', ') || 'none'}
 - Files edited: ${fileOps.edited.join(', ') || 'none'}`);
 
-  sections.push(`Keep the summary concise (under 500 words). Write as a factual narrative, not as a conversation.
+  sections.push(`${summaryLengthGuidance(options.budgetTokens)}
 
 ---
 ${serialized}

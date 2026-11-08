@@ -45,6 +45,47 @@ describe('selectCoreToolIds', () => {
     expect(selectCoreToolIds(message, GENERAL)).not.toContain(group);
   });
 
+  // The groups the root role lists first. `companion` alone is ~8.8k tokens of
+  // schema; failing open made every root turn carry it.
+  const ROOT = ['companion', 'monitor', 'filesystem', 'shell', 'connections', ...GENERAL.slice(2)];
+
+  it('drops the heavy root-only groups when the message names none of them', () => {
+    const picked = selectCoreToolIds(FIX_TASK, ROOT);
+    expect(picked).not.toContain('companion');
+    expect(picked).not.toContain('monitor');
+    expect(picked).not.toContain('connections');
+    expect(selectCoreToolIds('hello, how are you?', ROOT)).toEqual(['filesystem', 'shell', 'skill-distill']);
+  });
+
+  it.each([
+    ['what is the status of my other session about the billing export?', 'companion'],
+    ['ask the companion to supervise the migration project', 'companion'],
+    ['park this idea for a later heartbeat', 'companion'],
+    ['unblock the stalled release session', 'companion'],
+    ['wait for the deploy to finish and tell me', 'monitor'],
+    ['let me know when the CI build is green', 'monitor'],
+    ['call the jenkins api with my connection', 'connections'],
+    ['push the branch to the remote', 'connections'],
+    ['curl https://status.example.com/health', 'connections'],
+    ['curl https://status.example.com/health', 'websearch'],
+  ])('keeps %s -> %s', (message, group) => {
+    expect(selectCoreToolIds(message, ROOT)).toContain(group);
+  });
+
+  // Ordinary words before they are toolboxes: the selection is sticky, so one
+  // false hit keeps the group for the rest of the conversation.
+  it.each([
+    ['build me a landing page', 'monitor'],
+    ['good job, now refactor the parser', 'monitor'],
+    ['watch out for off-by-one errors', 'monitor'],
+    ['summarize the rest of the file', 'connections'],
+    ['the API layer is slow, profile it', 'connections'],
+    ['fetch the latest value from the cache in the function', 'connections'],
+    ['the token count is too high', 'connections'],
+  ])('does not keep %s -> %s', (message, group) => {
+    expect(selectCoreToolIds(message, ROOT)).not.toContain(group);
+  });
+
   it('fails open for a group with no trigger of its own', () => {
     // A group added to a role's core list but not to the intent table must
     // survive, or shipping a new tool silently loses it.
@@ -61,7 +102,7 @@ describe('stickyCoreToolIds', () => {
   const role = ['filesystem', 'shell', 'websearch', 'notes', 'messaging'];
   const scope = { generation: 'g1', checkpointId: 'c1' };
 
-  test('a group stays once the conversation advertised it, in the role order', () => {
+  test('a group stays once the conversation advertised it', () => {
     const first = stickyCoreToolIds(['filesystem', 'shell', 'websearch'], role, undefined, scope);
     expect(first).toEqual({ ids: ['filesystem', 'shell', 'websearch'], changed: true });
     // "thanks, summarize" names no web search: it stays advertised.
@@ -69,6 +110,17 @@ describe('stickyCoreToolIds', () => {
     expect(second).toEqual({ ids: ['filesystem', 'shell', 'websearch'], changed: false });
     const third = stickyCoreToolIds(['filesystem', 'shell', 'notes'], role, { ...scope, ids: second.ids }, scope);
     expect(third).toEqual({ ids: ['filesystem', 'shell', 'websearch', 'notes'], changed: true });
+  });
+
+  test('a group reached for later is appended, not inserted in role order', () => {
+    // `websearch` sorts before `notes` in the role list; inserted there, it
+    // would shift every notes tool and break the cached prefix at that point.
+    const stored = { ...scope, ids: ['filesystem', 'shell', 'notes'] };
+    expect(stickyCoreToolIds(['filesystem', 'shell', 'websearch'], role, stored, scope))
+      .toEqual({ ids: ['filesystem', 'shell', 'notes', 'websearch'], changed: true });
+    // A fresh conversation starts in role order.
+    expect(stickyCoreToolIds(['filesystem', 'shell', 'websearch', 'notes'], role, undefined, scope).ids)
+      .toEqual(['filesystem', 'shell', 'websearch', 'notes']);
   });
 
   test('a clear or a checkpoint lets the list shrink again (the cache resets there anyway)', () => {

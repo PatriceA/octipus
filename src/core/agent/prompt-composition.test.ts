@@ -158,6 +158,17 @@ describe('measureRootRequest', () => {
     expect(tokensByCategory(c.sections).turn).toBe(10);
   });
 
+  test('a retrieved block the turn did not repeat is not counted; the note that replaced it is', () => {
+    const memory = '\n\nKnown about the user (long-term memory):\n' + 'm'.repeat(400);
+    const c = measureRootRequest({
+      staged: { parts: [promptPart('volatile', 'turn', 'Long-term memory', memory), promptPart('volatile', 'turn', 'Current date & time', 'd'.repeat(40))], role: 'general', model: 'm' },
+      tools: [], history: [], userText: 'q', omitted: [memory.trim()],
+    });
+    const turn = c.sections.filter((s) => s.category === 'turn').map((s) => [s.label, s.note]);
+    expect(turn).toHaveLength(2);
+    expect(turn).toEqual(expect.arrayContaining([['Current date & time', undefined], ['Not repeated (already in the conversation)', 'Long-term memory']]));
+  });
+
   test('the stored form keeps sizes and drops every text', () => {
     const stored = withoutText(measure());
     expect(JSON.stringify(stored)).not.toContain('rrrr');

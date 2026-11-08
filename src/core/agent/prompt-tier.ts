@@ -49,6 +49,41 @@ const FRONTIER_CLOUD_PROVIDERS = new Set([
 ]);
 
 /**
+ * Local weight runners: an untagged id there (`deepseek-r1` is Ollama's 8B
+ * default) says nothing about size, so the family table below never applies.
+ */
+const LOCAL_RUNNER_PROVIDERS = new Set(['ollama', 'lmstudio', 'llamacpp', 'llama.cpp']);
+
+/**
+ * Model families that exist only as hosted frontier models. A proxy or custom
+ * endpoint (`litellm`, `custom-openai`, `custom-anthropic`, …) fronting one of
+ * these is as capable as the vendor's own API, and was throttled to lite —
+ * a trimmed prompt, one delegation and an 8-iteration cap — for the provider's
+ * name alone. Open-weight lookalikes are excluded on purpose: `gpt-oss`,
+ * `gemma`, `deepseek-r1` distills, plain `qwen`/`glm` sizes all carry or imply
+ * a parameter count instead.
+ */
+const FRONTIER_FAMILY = new RegExp([
+  'claude-',
+  'gpt-(?:4o|4\\.1|4\\.5|[5-9])',
+  'o[1-9](?:-|$)',
+  'gemini-',
+  'grok-',
+  'deepseek-(?:chat|reasoner|v[3-9])',
+  'kimi-k[2-9]',
+  'glm-(?:4\\.[5-9]|[5-9])',
+  'mistral-(?:large|medium)',
+  'qwen[0-9.]*-(?:max|plus)',
+  'command-(?:r-plus|a)',
+].map((p) => `(?:^|/)${p}`).join('|'), 'i');
+
+/** Whether a model id names a hosted frontier family (see FRONTIER_FAMILY). */
+export function isFrontierFamily(modelId: string, provider?: string): boolean {
+  if (provider && LOCAL_RUNNER_PROVIDERS.has(provider.toLowerCase())) return false;
+  return FRONTIER_FAMILY.test(modelId);
+}
+
+/**
  * Map a parameter count to a mode using the configured thresholds. Shared by
  * the live selector and the hwfit recommend annotation so the wizard preview
  * and the runtime decision never disagree.
@@ -134,6 +169,13 @@ export function resolvePromptTier(
       coreLogger.debug(
         { modelId: model.modelId, provider },
         'No size for cloud model — prompt tier = full',
+      );
+      return 'full';
+    }
+    if (isFrontierFamily(model.modelId, provider)) {
+      coreLogger.debug(
+        { modelId: model.modelId, provider },
+        'No size, but a hosted frontier model family — prompt tier = full',
       );
       return 'full';
     }

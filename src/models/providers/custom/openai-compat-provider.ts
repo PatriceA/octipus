@@ -12,7 +12,7 @@ import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from '../interface';
 import { BaseCustomProvider, type ResolvedCustomConfig } from './base-custom-provider';
-import { applyAnthropicCacheControl, cacheTtlFor, isAnthropicFamily, logMissedCacheSplit } from '../prompt-cache';
+import { applyAnthropicCacheControl, cacheTtlsFor, isAnthropicFamily, logMissedCacheSplit } from '../prompt-cache';
 import { claudeToolChoice, dropClaudeSampling } from '../../claude-request';
 import { isPrivateEndpoint, type DecisionAnswers, type DecisionRequest } from '@/models/decision';
 import { systemOneDecide } from '@/models/systemone-decision';
@@ -300,7 +300,7 @@ function applyClaudeGatewayPolicy(params: ChatCompletionCreateParams, options: C
   const model = String(params.model);
   const claude = isAnthropicFamily(model);
   if (claude && options.cachePolicy !== 'off') {
-    const cached = applyAnthropicCacheControl(params.messages, model, { conversation: Boolean(options.cacheScope), history: options.historyCache, ttl: cacheTtlFor(options.cachePolicy) });
+    const cached = applyAnthropicCacheControl(params.messages, model, { conversation: Boolean(options.cacheScope), history: options.historyCache, ttls: cacheTtlsFor(options.cachePolicy) });
     if (!cached.system) logMissedCacheSplit(model);
   }
   if (options.tools?.length) {

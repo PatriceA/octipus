@@ -21,7 +21,19 @@ export interface AgentEvent {
  */
 export type ToolAdvertisement =
   | { mode: 'full' }
-  | { mode: 'lazy'; coreToolIds: string[] };
+  | {
+    mode: 'lazy';
+    coreToolIds: string[];
+    /**
+     * Groups whose handlers are advertised FIRST, in this order, ahead of every
+     * other advertised handler (`orderByGroup`). The root passes its sticky
+     * groups in the order the conversation first used them, so a group added
+     * mid-conversation goes after the earlier groups instead of between them:
+     * those stay a byte-identical prefix that a provider cache (or a local
+     * server's KV) can still reuse.
+     */
+    groupOrder?: string[];
+  };
 
 export interface AgentWorkerConfig {
   maxIterations: number;

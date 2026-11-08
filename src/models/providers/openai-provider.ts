@@ -65,30 +65,37 @@ function omitsTemperature(model: string): boolean {
  */
 const noExtendedRetention = new Set<string>();
 
-/** A 400 naming `prompt_cache_retention`: the model does not offer it. */
+/** The request fields that set an extended cache lifetime, old and GPT-5.6+ form. */
+const RETENTION_FIELDS = ['prompt_cache_retention', 'prompt_cache_options'] as const;
+
+/** A 400 naming a cache-lifetime field: the model does not offer it. */
 export function isUnsupportedRetentionError(err: unknown): boolean {
   const e = err as { status?: number; message?: unknown } | undefined;
-  return e?.status === 400 && /prompt_cache_retention/i.test(String(e.message ?? ''));
+  return e?.status === 400 && /prompt_cache_(?:retention|options)/i.test(String(e.message ?? ''));
 }
 
+function withoutRetention(params: Record<string, unknown>): Record<string, unknown> {
+  const rest = { ...params };
+  for (const field of RETENTION_FIELDS) delete rest[field];
+  return rest;
+}
+
+const hasRetention = (params: Record<string, unknown>) => RETENTION_FIELDS.some((f) => params[f] !== undefined);
+
 /**
- * Send `params`, retrying once without `prompt_cache_retention` when the model
+ * Send `params`, retrying once without the cache-lifetime field when the model
  * rejects it. Errors pass through unchanged otherwise.
  */
 async function createWithRetentionFallback<T>(params: Record<string, unknown>, send: (p: Record<string, unknown>) => Promise<T>): Promise<T> {
   const model = String(params.model);
-  if (params.prompt_cache_retention !== undefined && noExtendedRetention.has(model)) {
-    const { prompt_cache_retention: _unsupported, ...rest } = params;
-    params = rest;
-  }
+  if (hasRetention(params) && noExtendedRetention.has(model)) params = withoutRetention(params);
   try {
     return await send(params);
   } catch (err) {
-    if (params.prompt_cache_retention === undefined || !isUnsupportedRetentionError(err)) throw err;
+    if (!hasRetention(params) || !isUnsupportedRetentionError(err)) throw err;
     noExtendedRetention.add(model);
     modelLogger.warn({ model, provider: 'openai' }, 'Model does not offer extended prompt-cache retention; retrying without it');
-    const { prompt_cache_retention: _unsupported, ...rest } = params;
-    return send(rest);
+    return send(withoutRetention(params));
   }
 }
 

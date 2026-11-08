@@ -65,8 +65,33 @@ describe('resolvePromptTier', () => {
     expect(resolvePromptTier({ modelId: 'qwen2.5:32b' }, cfg)).toBe('full');
   });
 
-  test('auto: unknown size with no provider falls back to lite', () => {
-    expect(resolvePromptTier({ modelId: 'gpt-4o' }, cfg)).toBe('lite');
+  test('auto: unknown size and unknown family with no provider falls back to lite', () => {
+    expect(resolvePromptTier({ modelId: 'my-custom-model' }, cfg)).toBe('lite');
+  });
+
+  test('auto: a hosted frontier family behind a proxy or custom endpoint → full', () => {
+    // Claude or GPT through LiteLLM used to run a lite root capped at 8 iterations.
+    for (const [modelId, provider] of [
+      ['claude-sonnet-5-5', 'litellm'],
+      ['anthropic/claude-opus-5', 'custom-anthropic'],
+      ['gpt-5.4', 'custom-openai'],
+      ['openai/o3-mini', 'litellm'],
+      ['gemini-3-pro', 'litellm'],
+      ['deepseek-v4-flash', 'custom-openai'],
+      ['kimi-k2-thinking', 'litellm'],
+      ['gpt-4o', undefined],
+    ] as const) {
+      expect(resolvePromptTier({ modelId, provider }, cfg), `${provider}/${modelId}`).toBe('full');
+    }
+  });
+
+  test('auto: open-weight lookalikes and local runners do not get the family promotion', () => {
+    expect(resolvePromptTier({ modelId: 'gpt-oss', provider: 'litellm' }, cfg)).toBe('lite');
+    expect(resolvePromptTier({ modelId: 'gemma3', provider: 'custom-openai' }, cfg)).toBe('lite');
+    expect(resolvePromptTier({ modelId: 'deepseek-r1', provider: 'ollama' }, cfg)).toBe('lite');
+    expect(resolvePromptTier({ modelId: 'deepseek-v3', provider: 'ollama' }, cfg)).toBe('lite');
+    // A parsed size still wins over the family.
+    expect(resolvePromptTier({ modelId: 'claude-distill-7b', provider: 'litellm' }, cfg)).toBe('lite');
   });
 
   test('auto: unknown size on a cloud provider → full, not lite (RC7)', () => {

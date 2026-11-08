@@ -52,7 +52,9 @@ export const CORE_TOOL_FLOOR: readonly string[] = ['filesystem', 'shell', 'skill
  * Only the expensive groups have entries. Everything else fails open.
  */
 const INTENT: Record<string, RegExp> = {
-  websearch: /\b(search|google|web|online|internet|latest|news|look\s*up|lookup|browse|url|https?:)\b/i,
+  // `https?://` sits outside the word-boundary group: `\b` after a colon needs
+  // a word character there, so inside it a URL never matched.
+  websearch: /\b(search|google|web|online|internet|latest|news|look\s*up|lookup|browse|url)\b|https?:\/\//i,
   knowledge: /\b(knowledge|kb|rag|embedding|prior\s+work|what\s+do\s+we\s+know|documentation|docs)\b/i,
   // Not a bare `note`: "note that", "worth noting" and "please note" are
   // ordinary English and would keep this group on most messages. The phrases
@@ -64,7 +66,21 @@ const INTENT: Record<string, RegExp> = {
   // would pin this group to every spawn.
   tasks: /\b(to-?do|todo|task\s+(list|board|tab)|backlog|checklist|track\s+(this|that|it)|remind\s+me)\b/i,
   messaging: /\b(message|messages|slack|teams|discord|chat|channel|notify|dm|send\s+(a|this|it|them))\b/i,
+  // The Companion toolbox is the heaviest group the root holds (26 tools,
+  // ~8.8k tokens of schema) and it used to fail open, so every root turn paid
+  // for it. The controller, briefing and maintenance paths build their own
+  // tool set (root-runner), so this only governs ordinary root turns, where it
+  // is wanted when the user talks about supervision or other sessions.
+  companion: /\b(companion|supervis\w*|briefings?|incidents?|unblock\w*|heartbeat|(other|project|existing|linked|that|my)\s+(sessions?|conversations?)|session\s+(status|title)|park\s+(this|that|it|the)|for\s+a?\s*later\s+heartbeat)\b/i,
   repo_registry: /\b(repo|repos|repository|repositories|registry|clone|check\s*out|remote|origin)\b/i,
+  // Waiting on background work: the root's routing prose sends "wait for the
+  // deploy and tell me" here (monitor__create). Phrases, not `build`/`job`/
+  // `watch` alone: "build me a page" and "good job" are not waits, and one
+  // false hit keeps the group for the whole conversation (sticky).
+  monitor: /\b(monitor\w*|watch\s+(for|the|it|this|that|until)|keep\s+an\s+eye|wait(ing)?\s+(for|until)|notify\s+me|let\s+me\s+know\s+(when|once|if)|check\s+back|poll(ing)?\s+(the|it|for|until)|deploy(ment)?\s+(finishes|is\s+done|completes|lands|status)|(build|ci|job|pipeline|run|workflow)\s+(finishes|is\s+(done|green|red)|completes|passes|fails|status))\b/i,
+  // Operator-configured authenticated HTTP/Git connections. Phrases again:
+  // "the API layer" or "summarize the rest" is not a call to a service.
+  connections: /\b(connections?|authenticated\s+(api|request|http)|(call|query|hit|request|use)\s+(the|an|our|my|their)?\s*[\w.-]*\s*(api|endpoint)|(api|http)\s+(request|call)|jenkins|webhook|credentials?|git\s+(push|fetch)|push\s+(it\s+|the\s+\w+\s+|this\s+)?to\s+(the\s+)?(remote|origin))\b|https?:\/\//i,
 };
 
 /**
@@ -83,8 +99,9 @@ export function selectCoreToolIds(message: string, coreToolIds: readonly string[
 
 /**
  * The core groups to advertise this turn, given what earlier turns of the
- * same conversation advertised: this message's selection, plus every group
- * already advertised since the last clear or checkpoint.
+ * same conversation advertised: every group already advertised since the last
+ * clear or checkpoint, in the order it was first advertised, then this
+ * message's new groups in role order.
  *
  * Per-message selection alone made the tool list follow the wording of each
  * message — "search for X", then "thanks, summarize", then "search for Y" —
@@ -95,7 +112,11 @@ export function selectCoreToolIds(message: string, coreToolIds: readonly string[
  * holds for short conversations, and a clear or checkpoint (which resets the
  * cache anyway) lets the list shrink again.
  *
- * Always a subset of the role's list, in the role's order (`selectCoreToolIds`).
+ * Always a subset of the role's list. The order is first-advertised, not the
+ * role's: the root advertises its groups in this order (`groupOrder`), so a
+ * group a conversation reaches for later comes after every earlier group and
+ * the groups before it stay a reusable cached prefix. Inserted in role order, it
+ * shifted every later tool and the prefix broke at the insertion point.
  */
 export function stickyCoreToolIds(
   selected: readonly string[],
@@ -104,7 +125,8 @@ export function stickyCoreToolIds(
   scope: { generation: string; checkpointId?: string },
 ): { ids: string[]; changed: boolean } {
   const previous = stored && stored.generation === scope.generation && stored.checkpointId === scope.checkpointId ? stored.ids : [];
-  const ids = coreToolIds.filter((id) => selected.includes(id) || previous.includes(id));
+  const kept = previous.filter((id) => coreToolIds.includes(id));
+  const ids = [...kept, ...coreToolIds.filter((id) => selected.includes(id) && !kept.includes(id))];
   const changed = !stored || stored.generation !== scope.generation || stored.checkpointId !== scope.checkpointId
     || ids.length !== stored.ids.length || ids.some((id, i) => stored.ids[i] !== id);
   return { ids, changed };

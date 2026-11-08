@@ -285,7 +285,7 @@ Steering messages allow users to inject corrections or guidance into a running a
 1. Client sends `{ type: 'steer', sessionId, content }` over the WebSocket gateway
 2. The message is queued on the session
 3. After the current tool call completes, the queue is drained
-4. Steering content is injected as a system-level message before the next LLM call
+4. Steering content is appended to the conversation as a user turn before the next LLM call (the end of the history, so the cached prefix is untouched)
 
 ### When to Use
 

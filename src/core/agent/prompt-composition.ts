@@ -25,6 +25,7 @@
  */
 import type { AgentMessage } from '@/core/types';
 import { sectionLabel } from './prompt-budget';
+import { REPEATED_CONTEXT_NOTE } from './repeated-context';
 import {
   PROMPT_CATEGORIES,
   type PromptCategory,
@@ -260,9 +261,24 @@ export function measureRootRequest(input: {
   tools: ReadonlyArray<ToolSchema>;
   history: ReadonlyArray<AgentMessage>;
   userText: string;
+  /**
+   * Retrieved blocks this turn left out because an earlier message in the
+   * conversation still carries them (`repeated-context.ts`), as the worker
+   * trimmed them. They were not sent, so they are not counted; the note that
+   * replaced them is.
+   */
+  omitted?: readonly string[];
   measuredAt?: Date;
 }): MeasuredComposition {
-  const { staged } = input;
+  const omitted = new Set(input.omitted ?? []);
+  const left = input.staged.parts.filter((p) => p.tier === 'volatile' && omitted.has(p.text.trim()));
+  const staged: StagedRootPrompt = left.length === 0 ? input.staged : {
+    ...input.staged,
+    parts: [
+      ...input.staged.parts.filter((p) => !left.includes(p)),
+      promptPart('volatile', 'turn', 'Not repeated (already in the conversation)', REPEATED_CONTEXT_NOTE, { note: left.map((p) => p.label).join(', ') }),
+    ],
+  };
   // Staged parts largest first; tools and history keep the order their
   // builders gave (largest tools, then the folded rest; checkpoint first).
   const stagedSections = staged.parts

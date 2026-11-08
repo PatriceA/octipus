@@ -213,7 +213,7 @@ think you need to break one, open an issue first.
 - **Channel** → `src/channels/<name>/`. Must speak the gateway protocol; no
   channel-specific root agent hooks. One line in `CHANNEL_MODULES` in
   `src/channels/discovery.ts`.
-- **Plugin / extension** → a directory under `extensions/` (in OCTIPUS_HOME) with
+- **Plugin / extension** → a directory under `extensions/` (resolved from the backend's working directory) with
   `plugin.json` + `index.ts`; loaded by `src/plugins/loader.ts`. See the
   `plugin-development` skill and `docs/PLUGINS.md`.
 - **Persona** → a YAML file in `personas/`; loaded by `src/core/personas/`.

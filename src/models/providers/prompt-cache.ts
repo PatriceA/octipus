@@ -41,18 +41,43 @@ export function splitVolatileSystem(system: string, _model?: string): { staticPa
 
 /**
  * Cache lifetime for an Anthropic breakpoint: the default five minutes, or an
- * hour. `cachePolicy: 'session'` (a model setting) asks for the hour: a write
- * costs 2x instead of 1.25x, and the entry survives the gaps between a user's
- * messages in a long session, where five minutes expires between turns.
+ * hour. A one-hour write costs 2x base input instead of 1.25x, and pays off
+ * when the entry is read again after a gap longer than five minutes.
  */
 export type CacheTtl = '1h' | undefined;
 
-export function cacheTtlFor(policy: 'default' | 'off' | 'session' | undefined): CacheTtl {
-  return policy === 'session' ? '1h' : undefined;
+/**
+ * Who paces the requests of this conversation. A person (an attended root
+ * turn) leaves gaps of minutes between messages; a machine (children,
+ * pipeline stages, heartbeat, cron, hooks) sends its requests in a burst.
+ */
+export type CachePacing = 'human' | 'machine';
+
+/** Lifetimes per breakpoint tier: the stable prefix (tools + system) and the rolling history. */
+export interface CacheTtls { prefix: CacheTtl; history: CacheTtl }
+
+/**
+ * The lifetimes a request's breakpoints get.
+ *
+ *  - `session` (a model setting): an hour on every breakpoint, so the history
+ *    also survives the gaps between a user's turns.
+ *  - default, human-paced: an hour on the stable prefix only. The prefix is
+ *    re-read on every turn of every session of the role, so a 5-minute entry
+ *    is rewritten after almost every human pause — Hermes Agent measured 63% of
+ *    interactive cache writes as cold rewrites after a 5–60 minute gap. The
+ *    history keeps 5 minutes: it is written anew on every tool iteration.
+ *  - default, machine-paced: 5 minutes everywhere. A burst reads its entries
+ *    back within seconds, and an hour there only buys the 2x write.
+ *
+ * Mixing is legal because the hour always sits on the earlier breakpoint:
+ * Anthropic requires longer-lived entries before shorter ones.
+ */
+export function cacheTtlsFor(policy: 'default' | 'off' | 'session' | undefined, pacing?: CachePacing): CacheTtls {
+  if (policy === 'session') return { prefix: '1h', history: '1h' };
+  return { prefix: pacing === 'human' ? '1h' : undefined, history: undefined };
 }
 
-/** The `cache_control` marker. Every breakpoint of a request gets the same TTL:
- * Anthropic requires longer-lived entries to come before shorter ones. */
+/** The `cache_control` marker for one breakpoint. */
 export function cacheControl(ttl?: CacheTtl): { type: 'ephemeral'; ttl?: '1h' } {
   return ttl ? { type: 'ephemeral', ttl } : { type: 'ephemeral' };
 }
@@ -101,14 +126,14 @@ export function isAnthropicFamily(model: string): boolean {
 export function applyAnthropicCacheControl(
   messages: ChatCompletionMessageParam[],
   model?: string,
-  opts?: { conversation?: boolean; history?: boolean; ttl?: CacheTtl },
+  opts?: { conversation?: boolean; history?: boolean; ttls?: CacheTtls },
 ): { system: boolean; history: boolean } {
   let system = false;
   for (const msg of messages) {
     if (msg.role !== 'system' || typeof msg.content !== 'string') continue;
     const split = splitVolatileSystem(msg.content, model);
     if (!split) continue;
-    (msg as { content: unknown }).content = buildCachedBlocks(split, opts?.ttl);
+    (msg as { content: unknown }).content = buildCachedBlocks(split, opts?.ttls?.prefix);
     system = true;
     break;
   }
@@ -123,11 +148,12 @@ export function applyAnthropicCacheControl(
   // the settled history the way this did before — which for a 1-message
   // one-shot means no second breakpoint at all.
   let history = false;
+  const historyTtl = opts?.ttls?.history;
   for (let i = opts?.history === false ? -1 : messages.length - (opts?.conversation ? 1 : 2); i >= 0; i--) {
     const msg = messages[i];
     if (msg.role === 'system') continue;
     if (typeof msg.content === 'string') {
-      (msg as { content: unknown }).content = [{ type: 'text', text: msg.content, cache_control: cacheControl(opts?.ttl) }];
+      (msg as { content: unknown }).content = [{ type: 'text', text: msg.content, cache_control: cacheControl(historyTtl) }];
       history = true;
       break;
     }
@@ -136,7 +162,7 @@ export function applyAnthropicCacheControl(
       // the native path does.
       const lastIndex = msg.content.length - 1;
       (msg as { content: unknown }).content = msg.content.map((block, index) => index === lastIndex
-        ? { ...block, cache_control: cacheControl(opts?.ttl) } : block);
+        ? { ...block, cache_control: cacheControl(historyTtl) } : block);
       history = true;
       break;
     }

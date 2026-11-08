@@ -15,6 +15,8 @@ import { modelLogger } from '@/utils/logger';
 export interface StreamProgress {
   /** Chunks seen so far. Zero after a failure means nothing reached the caller and a non-streaming retry is safe. */
   chunks: number;
+  /** Called once, on the first chunk: the provider has prefilled the prompt by then. */
+  onFirst?: () => void;
 }
 
 export async function collectStream(
@@ -40,6 +42,7 @@ export async function collectStream(
 
   for await (const chunk of chunks) {
     progress.chunks++;
+    if (progress.chunks === 1) progress.onFirst?.();
     if (chunk.content) { content += chunk.content; onDelta?.(chunk.content); }
     if (chunk.toolCallDelta) {
       const { id, name, arguments: args } = chunk.toolCallDelta;

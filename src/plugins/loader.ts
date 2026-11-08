@@ -66,7 +66,7 @@ function validateModule(mod: unknown, name: string): PluginModule {
 /**
  * Load a single plugin from a directory.
  */
-async function loadPlugin(dir: string): Promise<LoadedPlugin> {
+async function loadPlugin(dir: string, opts: { fresh?: boolean } = {}): Promise<LoadedPlugin> {
   const manifestPath = join(dir, 'plugin.json');
 
   // Read and parse manifest
@@ -85,7 +85,12 @@ async function loadPlugin(dir: string): Promise<LoadedPlugin> {
     throw new Error(`Plugin "${manifest.name}": entry file "${manifest.main}" not found in ${dir}`);
   }
 
-  const imported = await importModuleAt(entryPath);
+  // A reload must not get Node's cached module back: ESM caches by URL, so the
+  // same path returns the code that was loaded first, whatever is on disk now.
+  // The query makes it a new URL. Modules the entry imports itself are not
+  // re-evaluated, and every reload keeps its predecessor in memory — a
+  // development aid, not something to run in a loop.
+  const imported = await importModuleAt(entryPath, opts.fresh ? `reload=${Date.now()}` : undefined);
   const module = validateModule(imported.default ?? imported, manifest.name);
 
   return { manifest, module, directory: dir };
@@ -172,44 +177,84 @@ export function getLoadedPlugin(name: string): LoadedPlugin | undefined {
   return loadedPlugins.get(name);
 }
 
+/** Why a reload was refused or failed; `status` is the HTTP answer for it. */
+export class PluginReloadError extends Error {
+  constructor(message: string, readonly status: 404 | 409 | 500, readonly restored = false, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'PluginReloadError';
+  }
+}
+
+/** How the caller swaps the plugin's tool around a reload (the API's registry). */
+export interface ReloadHooks {
+  /** Take the running copy out of service; it must end with the module shut down. Default: its `shutdown`. */
+  retire?: (previous: LoadedPlugin) => Promise<void>;
+  /** Put the previous copy back in service after the new one failed to initialize. */
+  restore?: (previous: LoadedPlugin) => Promise<void>;
+}
+
+/** Plugins with a reload in flight: a second one would retire a copy the first already retired. */
+const reloading = new Set<string>();
+
+function contextFor(plugin: LoadedPlugin): PluginContext {
+  return { logger: createChildLogger({ component: 'plugin', plugin: plugin.manifest.name }), config: {} };
+}
+
 /**
  * Reload a single plugin by name.
- * Unregisters the old plugin tool, re-imports the entry file, and re-registers.
- * Returns the newly loaded plugin.
+ *
+ *  1. Import and validate a fresh, cache-busted copy. A copy that does not
+ *     parse or validate leaves the running one untouched.
+ *  2. Retire the running copy (`hooks.retire`, else its `shutdown`), so a
+ *     plugin that binds a port or takes a lock in `initialize` can do so again.
+ *  3. Initialize the fresh copy. If that throws, the fresh copy is shut down
+ *     (its partial resources released) and the previous one is initialized and
+ *     restored; the error says whether that worked.
+ *
+ * The plugin map changes only once a copy is initialized, and each copy is
+ * shut down at most once. Concurrent reloads of one plugin are refused.
  */
-export async function reloadPlugin(name: string): Promise<LoadedPlugin> {
+export async function reloadPlugin(name: string, hooks: ReloadHooks = {}): Promise<LoadedPlugin> {
   const existing = loadedPlugins.get(name);
-  if (!existing) {
-    throw new Error(`Plugin "${name}" is not loaded`);
+  if (!existing) throw new PluginReloadError(`Plugin "${name}" is not loaded`, 404);
+  if (reloading.has(name)) throw new PluginReloadError(`Plugin "${name}" is already being reloaded`, 409);
+  reloading.add(name);
+  try {
+    let plugin: LoadedPlugin;
+    try {
+      plugin = await loadPlugin(existing.directory, { fresh: true });
+    } catch (err) {
+      throw new PluginReloadError(`Plugin "${name}" could not be loaded; the running copy is unchanged: ${(err as Error).message}`, 500, true, { cause: err });
+    }
+    if (plugin.manifest.name !== name) {
+      throw new PluginReloadError(`Plugin in ${existing.directory} is now named "${plugin.manifest.name}", not "${name}"; restart to load it under its new name`, 409, true);
+    }
+
+    await (hooks.retire ? hooks.retire(existing) : existing.module.shutdown?.());
+
+    try {
+      await plugin.module.initialize?.(contextFor(plugin));
+    } catch (err) {
+      await plugin.module.shutdown?.().catch((e: unknown) => pluginLogger.warn({ err: e, plugin: name }, 'Failed plugin copy did not shut down cleanly'));
+      let restored = false;
+      try {
+        await existing.module.initialize?.(contextFor(existing));
+        await hooks.restore?.(existing);
+        restored = true;
+      } catch (restoreErr) {
+        loadedPlugins.delete(name);
+        pluginLogger.error({ err: restoreErr, plugin: name }, 'Previous plugin copy could not be restored; plugin unloaded');
+      }
+      throw new PluginReloadError(
+        `Plugin "${name}" failed to initialize: ${(err as Error).message}. ${restored ? 'The previous copy was restored.' : 'The previous copy could not be restored; the plugin is unloaded.'}`,
+        500, restored, { cause: err },
+      );
+    }
+
+    loadedPlugins.set(name, plugin);
+    pluginLogger.info({ name: plugin.manifest.name, version: plugin.manifest.version }, 'Plugin reloaded');
+    return plugin;
+  } finally {
+    reloading.delete(name);
   }
-
-  // Call shutdown on old module
-  if (existing.module.shutdown) {
-    await existing.module.shutdown();
-  }
-
-  // Remove from cache
-  loadedPlugins.delete(name);
-
-  // Re-load from the same directory
-  const plugin = await loadPlugin(existing.directory);
-
-  // Initialize
-  const context: PluginContext = {
-    logger: createChildLogger({ component: 'plugin', plugin: plugin.manifest.name }),
-    config: {},
-  };
-
-  if (plugin.module.initialize) {
-    await plugin.module.initialize(context);
-  }
-
-  loadedPlugins.set(plugin.manifest.name, plugin);
-
-  pluginLogger.info(
-    { name: plugin.manifest.name, version: plugin.manifest.version },
-    'Plugin reloaded',
-  );
-
-  return plugin;
 }
