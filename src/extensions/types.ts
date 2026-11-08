@@ -104,10 +104,12 @@ export interface ExtensionCommandDef {
 }
 
 /**
- * What a tool does, which decides the permission action it is checked under:
- * `read` → `read` (allowed by default, no mutation journal), `write` → `write`
- * (asks by default), `external` → `external` (asks, and marked dangerous so a
- * broad allow rule does not lift it).
+ * What a tool does. It decides the defaults and the flow-guard contract, and
+ * the tool is checked under the action `<effect>:<id>` (one policy per tool). `read`:
+ * allowed by default, no mutation journal. `write`: asks by default.
+ * `external`: asks, and marked dangerous so a broad allow rule does not lift
+ * it. The flow guard treats every result as untrusted, `write` and `external`
+ * as write egress and `read` as query egress (security/flow-guard.ts).
  */
 export type ExtensionToolEffect = 'read' | 'write' | 'external';
 

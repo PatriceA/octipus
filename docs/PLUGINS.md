@@ -159,17 +159,19 @@ octi.registerTool({
 });
 ```
 
-The tool is registered in the tool registry as `ext_<extension>__<id>` (an extension named `stocks` gives `ext_stocks__quote`), inside one tool group per extension, `ext_<extension>`. The extension name is lower-cased and every run of other characters becomes one `_`. `id` is lower-case letters, digits and single underscores, starting with a letter, and the whole name must fit the providers' 64-character limit. Collisions are refused with an error, never resolved by overwriting: a second tool with the same id, or a group already held by anything (another extension whose name maps to the same group, a plugin or a built-in; built-ins never start with `ext_`). `parameters` is a JSON Schema object; its `required` list is enforced before the handler runs. `ctx` is `{ userId, sessionId, role, workspaceId }`. The return value is the tool result; a throw is a failed call.
+The tool is registered in the tool registry as `ext_<extension>__<id>` (an extension named `stocks` gives `ext_stocks__quote`), inside one tool group per extension, `ext_<extension>`. The extension name is used as it is, so it must already be lower-case letters, digits and single underscores, starting with a letter: an extension named `my-stocks` or `Stocks` cannot register tools until its file or directory is renamed (`my_stocks`). Names are not slugged because a slug is not one-to-one (`foo-bar` and `foo_bar` would share a group and its permission policies). `id` is lower-case letters, digits and single underscores, starting with a letter, and the whole name must fit the providers' 64-character limit. Collisions are refused with an error, never resolved by overwriting: a second tool with the same id, or a group already held by anything (a plugin or a built-in; built-ins never start with `ext_`). If registering the group fails, the group is released and every later `registerTool` call of that extension throws. `parameters` is a JSON Schema object; its `required` list is enforced before the handler runs. `ctx` is `{ userId, sessionId, role, workspaceId }`. The return value is the tool result; a throw is a failed call.
 
 Every call goes through the same middleware as a built-in tool: `tool:before`/`tool:after`, the permission check, approval, the audit row and mutation recovery. `effect` decides the permission action:
 
-| `effect` | Permission action | Default | Notes |
+| `effect` | Permission action (tool `quote`) | Default | Notes |
 |----------|-------------------|---------|-------|
-| `read` | `read` | ALLOW | Read-only: no mutation journal. |
-| `write` | `write` | ASK | |
-| `external` | `external` | ASK, `dangerous` | A broad allow rule (`ext_stocks(*)`) does not lift it; only an explicit stored policy for that tool group and action does, as for any dangerous built-in action. |
+| `read` | `read:quote` | ALLOW | Read-only: no mutation journal. |
+| `write` | `write:quote` | ASK | |
+| `external` | `external:quote` | ASK, `dangerous` | A broad allow rule (`ext_stocks(*)`) does not lift it; only an explicit stored policy for that tool does, as for any dangerous built-in action. |
 
-Users and admins set policies on the group like any tool (`toolId` `ext_stocks`, action `read` / `write` / `external`).
+The action is per tool, `<effect>:<id>`, so a stored policy (an "always allow" answer to an approval, or one an admin sets on `toolId` `ext_stocks`, action `write:trade`) covers exactly one tool, never the extension's other tools or tools it adds later.
+
+**Flow guard.** Every extension tool result marks the session `suspicious` (untrusted code produced it), whatever the effect, so it is never less strict than an MCP tool. `write` and `external` tools are write egress: after the session mixed private data with untrusted content, or read credential material, they need approval even when their level is ALLOW. A `read` tool is query egress, like a web search: it receives its arguments and is usually a lookup against a remote service, so it asks after the session read credential material.
 
 To give agents the tools, list the group in a role's tools (`ext_stocks`), as for a plugin's `plugin-<name>`. On a role with a core tool set, lazy discovery puts the group in the long tail: `list_tools` lists the tools and `describe_tool` returns their schema. `octi.registerTool` returns a function that removes that one tool; disposing the extension (`/reload`, shutdown) removes the group. A worker that started before the dispose still holds the handler; calling it answers `{ error: "… is no longer registered" }` without running the extension's code. An untrusted extension's `registerTool` throws, like its `hook`.
 

@@ -44,10 +44,10 @@ describe('octi.registerTool', () => {
     const registry = getToolRegistry();
     const handler = registry.findTool('ext_stocks__quote');
     expect(handler?.toolId).toBe('ext_stocks');
-    expect(handler?.permissionAction).toBe('read');
+    expect(handler?.permissionAction).toBe('read:quote');
     expect(handler?.parameters).toEqual(quote.parameters);
     const manifest = registry.get('ext_stocks')!.getManifest();
-    expect(manifest.permissions).toEqual([EFFECT_PERMISSIONS.read]);
+    expect(manifest.permissions).toEqual([{ action: 'read:quote', ...EFFECT_PERMISSIONS.read }]);
     expect(manifest.tools.map((t) => t.name)).toEqual(['quote']);
     expect(manifest.tools[0].parameters.symbol).toMatchObject({ type: 'string', required: true });
   });
@@ -58,29 +58,31 @@ describe('octi.registerTool', () => {
     expect(getToolRegistry().has('ext_stocks')).toBe(false);
   });
 
-  test('effect decides the permission action; external is dangerous so a broad allow rule does not lift it', async () => {
+  test('each tool has its own permission action <effect>:<id>; external is dangerous', async () => {
     const { api } = ext();
     api.registerTool(quote);
     api.registerTool({ ...quote, id: 'trade', effect: 'write' });
     api.registerTool({ ...quote, id: 'notify_broker', effect: 'external' });
     await flush();
     const registry = getToolRegistry();
-    expect(registry.findTool('ext_stocks__trade')?.permissionAction).toBe('write');
+    expect(registry.findTool('ext_stocks__trade')?.permissionAction).toBe('write:trade');
     expect(registry.findTool('ext_stocks__trade')?.replaySafety).toBeUndefined();
     expect(registry.findTool('ext_stocks__quote')?.replaySafety).toBe('read_only');
-    expect(registry.findTool('ext_stocks__notify_broker')?.permissionAction).toBe('external');
+    expect(registry.findTool('ext_stocks__notify_broker')?.permissionAction).toBe('external:notify_broker');
     const perms = registry.get('ext_stocks')!.getManifest().permissions;
-    expect(perms.find((p) => p.action === 'write')?.defaultLevel).toBe('ASK');
-    expect(perms.find((p) => p.action === 'external')).toMatchObject({ defaultLevel: 'ASK', dangerous: true });
+    // One entry per tool: a stored policy for one tool never covers another.
+    expect(perms.map((p) => p.action)).toEqual(['read:quote', 'write:trade', 'external:notify_broker']);
+    expect(perms.find((p) => p.action === 'read:quote')?.defaultLevel).toBe('ALLOW');
+    expect(perms.find((p) => p.action === 'write:trade')?.defaultLevel).toBe('ASK');
+    expect(perms.find((p) => p.action === 'external:notify_broker')).toMatchObject({ defaultLevel: 'ASK', dangerous: true });
   });
 
   test('ids are name-spaced and collisions are refused', async () => {
     const { api } = ext();
     api.registerTool(quote);
     expect(() => api.registerTool(quote)).toThrow(/already registered/);
-    // Another extension whose name maps onto the same group.
-    const other = ext('Stocks!');
-    expect(extensionToolGroup('Stocks!')).toBe('ext_stocks');
+    // Another extension of the same name (a group already held).
+    const other = ext('stocks');
     expect(() => other.api.registerTool({ ...quote, id: 'other' })).toThrow(/tool group ext_stocks is already registered/);
     // The second extension was refused as a whole; the first is untouched.
     await flush();
@@ -90,7 +92,26 @@ describe('octi.registerTool', () => {
 
   test('a built-in id cannot be shadowed: the group always starts with ext_', () => {
     expect(extensionToolGroup('filesystem')).toBe('ext_filesystem');
-    expect(extensionToolGroup('a--b__c')).toBe('ext_a_b_c');
+  });
+
+  test('the group mapping is injective: a name that would need slugging is refused', () => {
+    // foo-bar and foo_bar would both be ext_foo_bar, sharing tools and policies.
+    for (const bad of ['foo-bar', 'Foo', 'a__b', '1x', 'x.y', '']) {
+      expect(() => extensionToolGroup(bad)).toThrow(/name must be lower-case letters/);
+      expect(() => ext(bad).api.registerTool(quote)).toThrow(/cannot register tools/);
+    }
+    expect(extensionToolGroup('foo_bar')).toBe('ext_foo_bar');
+  });
+
+  test('a failed group registration is released and later registerTool calls throw', async () => {
+    const registry = getToolRegistry();
+    const spy = vi.spyOn(registry, 'register').mockImplementationOnce(async () => { throw new Error('init failed'); });
+    const { api } = ext();
+    api.registerTool(quote);
+    await flush();
+    spy.mockRestore();
+    expect(registry.findTool('ext_stocks__quote')).toBeUndefined();
+    expect(() => api.registerTool({ ...quote, id: 'trade', effect: 'write' })).toThrow(/registering its tool group failed \(init failed\)/);
   });
 
   test('bad definitions are refused before anything is registered', () => {

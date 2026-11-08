@@ -33,8 +33,36 @@ describe('classifyFlow', () => {
     [{ toolId: 'cli-native:Bash', action: 'Bash', args: { command: 'git push origin main' } }, { taints: [], egress: 'write' }],
     // Codex reports command executions under a derived name; the command decides.
     [{ toolId: 'cli-native:read_file', action: 'read_file', args: { command: 'cat .env' } }, { taints: ['secret'] }],
+    // Extension tools (`octi.registerTool`): by the effect in `<effect>:<id>`;
+    // every result is outsider text, and no extension tool is less strict than MCP.
+    [{ toolId: 'ext_stocks', action: 'read:quote' }, { taints: ['suspicious'], egress: 'read' }],
+    [{ toolId: 'ext_stocks', action: 'write:trade' }, { taints: ['suspicious'], egress: 'write' }],
+    [{ toolId: 'ext_stocks', action: 'external:notify' }, { taints: ['suspicious'], egress: 'write' }],
+    [{ toolId: 'ext_stocks', action: 'something' }, { taints: ['suspicious'], egress: 'write' }],
   ])('%j', (call, expected) => {
     expect(classifyFlow(call)).toEqual(expected);
+  });
+});
+
+describe('extension tools and the flow guard', () => {
+  it('an extension read marks the session suspicious, so private + extension output + egress asks', () => {
+    observeFlow(S, { toolId: 'google-workspace', action: 'drive_read' });
+    observeFlow(S, { toolId: 'ext_stocks', action: 'read:quote' });
+    expect(getFlowLabel(S)).toMatchObject({ private: true, suspicious: true });
+    expect(guard({ toolId: 'messaging', action: 'send' })).toMatchObject({ level: 'ASK', source: 'flow-guard' });
+  });
+
+  it('an external extension tool is egress: it asks after private + untrusted content', () => {
+    observeFlow(S, { toolId: 'google-workspace', action: 'drive_read' });
+    observeFlow(S, { toolId: 'websearch', action: 'fetch' });
+    const res = guard({ toolId: 'ext_stocks', action: 'external:notify' });
+    expect(res).toMatchObject({ level: 'ASK', source: 'flow-guard' });
+    expect(guard({ toolId: 'ext_stocks', action: 'write:trade' })).toMatchObject({ level: 'ASK' });
+  });
+
+  it('even an extension read asks once the session read credentials', () => {
+    observeFlow(S, { toolId: 'filesystem', action: 'read', args: { path: '.env' } });
+    expect(guard({ toolId: 'ext_stocks', action: 'read:quote' })).toMatchObject({ level: 'ASK' });
   });
 });
 

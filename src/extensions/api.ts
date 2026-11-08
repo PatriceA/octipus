@@ -85,6 +85,7 @@ export function buildExtensionContext(
   let disposed = false;
   let toolContainer: ExtensionToolContainer | undefined;
   const pendingToolWork: Promise<void>[] = [];
+  let toolRegistrationError: string | undefined;
 
   const api: ExtensionAPI = {
     name,
@@ -198,6 +199,9 @@ export function buildExtensionContext(
       if (!trusted) {
         throw new Error(`extension "${name}" may not register tools: it is not listed in extensions.trusted (${entryPath})`);
       }
+      if (toolRegistrationError) {
+        throw new Error(`extension "${name}" cannot register tools: registering its tool group failed (${toolRegistrationError})`);
+      }
       if (toolContainer) {
         toolContainer.add(def);
       } else {
@@ -205,8 +209,13 @@ export function buildExtensionContext(
         // definition leaves nothing registered.
         const container = new ExtensionToolContainer(name, logger);
         container.add(def);
-        pendingToolWork.push(registerContainer(container).catch((err) => {
+        pendingToolWork.push(registerContainer(container).catch(async (err) => {
           logger.error({ err, toolGroup: container.id }, 'registering the extension tool group failed');
+          // Nothing may go on adding tools to a group the registry does not
+          // serve: release the half-registered group and refuse later calls.
+          toolRegistrationError = err instanceof Error ? err.message : String(err);
+          if (toolContainer === container) toolContainer = undefined;
+          await unregisterContainer(container).catch(() => {});
         }));
         toolContainer = container;
       }

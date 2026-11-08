@@ -20,27 +20,42 @@ import type { ExtensionToolDef, ExtensionToolEffect } from './types';
  * manifest below, approval, audit and mutation recovery.
  */
 
-/** The permission action each effect checks under, and its defaults. */
-export const EFFECT_PERMISSIONS: Record<ExtensionToolEffect, ToolPermission> = {
-  // `read` is one of the read-only actions (`isReadOnlyAction`): no mutation
-  // journal, allowed unless a policy says otherwise.
-  read: { action: 'read', description: 'Read-only extension tools', defaultLevel: 'ALLOW' },
-  write: { action: 'write', description: 'Extension tools that change state', defaultLevel: 'ASK' },
+/**
+ * Defaults per effect. The permission ACTION is per tool, `<effect>:<id>`
+ * (`toolAction`), so a stored policy ("always allow") attaches to one tool and
+ * never covers the extension's other or later tools.
+ */
+export const EFFECT_PERMISSIONS: Record<ExtensionToolEffect, Omit<ToolPermission, 'action'>> = {
+  // Read-only: no mutation journal, allowed unless a policy says otherwise.
+  read: { description: 'Read-only extension tool', defaultLevel: 'ALLOW' },
+  write: { description: 'Extension tool that changes state', defaultLevel: 'ASK' },
   // Reaches outside the host (network, other systems). Dangerous: a broad
   // allow rule does not lift it, so it asks unless the user stored an explicit
-  // policy for exactly this tool and action.
-  external: { action: 'external', description: 'Extension tools with external effects', defaultLevel: 'ASK', dangerous: true },
+  // policy for exactly this tool.
+  external: { description: 'Extension tool with external effects', defaultLevel: 'ASK', dangerous: true },
 };
+
+/** The permission action a tool checks under: `read:quote`, `external:send`. */
+export function toolAction(effect: ExtensionToolEffect, id: string): string {
+  return `${effect}:${id}`;
+}
 
 const TOOL_ID_RE = /^[a-z][a-z0-9_]*$/;
 /** Provider limit on a function name (Anthropic, OpenAI). */
 const MAX_TOOL_NAME = 64;
 
-/** `ext_<name>` with every run of characters outside [a-z0-9] collapsed to one `_`. */
+/**
+ * `ext_<name>`. The name is used as it is, never slugged: a mapping such as
+ * `foo-bar` → `foo_bar` would put two extensions in one group (and under one
+ * set of permission policies). A name that is not already lower-case letters,
+ * digits and single underscores is refused; rename the extension's file or
+ * directory.
+ */
 export function extensionToolGroup(extensionName: string): string {
-  const slug = extensionName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-  if (!slug) throw new Error(`extension "${extensionName}" has no name usable as a tool group`);
-  return `ext_${slug}`;
+  if (!TOOL_ID_RE.test(extensionName) || extensionName.includes('__')) {
+    throw new Error(`extension "${extensionName}" cannot register tools: its name must be lower-case letters, digits and single underscores, starting with a letter (rename its file or directory)`);
+  }
+  return `ext_${extensionName}`;
 }
 
 interface RegisteredExtensionTool {
@@ -63,14 +78,13 @@ export class ExtensionToolContainer extends BaseTool {
   }
 
   getManifest(): ToolManifest {
-    const effects = new Set([...this.defs.values()].map(({ def }) => def.effect));
     return {
       id: this.id,
       name: this.name,
       version: this.version,
       description: this.description,
       author: `extension:${this.extensionName}`,
-      permissions: [...effects].map((effect) => EFFECT_PERMISSIONS[effect]),
+      permissions: [...this.defs.values()].map(({ def }) => ({ action: toolAction(def.effect, def.id), ...EFFECT_PERMISSIONS[def.effect] })),
       tools: [...this.defs.values()].map(({ def }) => ({
         name: def.id,
         description: def.description,
@@ -102,7 +116,7 @@ export class ExtensionToolContainer extends BaseTool {
     const parameters = def.parameters ?? { type: 'object', properties: {} };
     if (parameters.type !== 'object') throw new Error(`registerTool(${def.id}): parameters must be a JSON Schema with type "object"`);
 
-    const action = EFFECT_PERMISSIONS[def.effect].action;
+    const action = toolAction(def.effect, def.id);
     this.defs.set(def.id, { def });
     this.registerTool(def.id, def.description, parameters, async (args, context) => {
       // A worker that started before the extension was disposed still holds

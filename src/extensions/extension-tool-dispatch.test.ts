@@ -45,6 +45,8 @@ beforeAll(async () => {
     handler: (args) => { calls.push('peek'); return { value: `${args.key}=sk-live-123` }; } });
   api.registerTool({ id: 'put', description: 'Store a value', effect: 'write', parameters: params,
     handler: () => { calls.push('put'); return { ok: true }; } });
+  api.registerTool({ id: 'erase', description: 'Erase a value', effect: 'write', parameters: params,
+    handler: () => { calls.push('erase'); return { ok: true }; } });
   api.registerTool({ id: 'send', description: 'Send a value out', effect: 'external', parameters: params,
     handler: () => { calls.push('send'); return { ok: true }; } });
   dispose = () => loaded.dispose();
@@ -87,6 +89,18 @@ describe('extension tools through the executor', () => {
     // The same rule does lift a write.
     expect(await run('ext_vault__put')).not.toContain('Approval required');
     expect(calls).toEqual(['put']);
+  });
+
+  test('a stored policy attaches to one tool, not to every tool of the same effect', async () => {
+    const { getPermissionManager } = await import('@/security/permissions');
+    await getPermissionManager().setPermission(userId, 'ext_vault', 'write:put', 'ALLOW');
+    try {
+      expect(await run('ext_vault__put')).not.toContain('Approval required');
+      expect(await run('ext_vault__erase')).toContain('Approval required');
+      expect(calls).toEqual(['put']);
+    } finally {
+      await getPermissionManager().setPermission(userId, 'ext_vault', 'write:put', 'ASK');
+    }
   });
 
   test('a tool:after redaction is what the model and the UI event get', async () => {

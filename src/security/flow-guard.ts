@@ -172,8 +172,30 @@ export function classifyFlow(call: FlowCall): FlowContract {
       // External servers: results are outsider text; non-read verbs may send.
       return MCP_READ_VERB_RE.test(action) ? { taints: ['suspicious'] } : { taints: ['suspicious'], egress: 'write' };
     default:
+      if (toolId.startsWith(EXTENSION_TOOL_PREFIX)) return extensionToolFlow(action);
       return { taints };
   }
+}
+
+/** Tool groups of `octi.registerTool` (src/extensions/tools.ts): `ext_<extension>`. */
+const EXTENSION_TOOL_PREFIX = 'ext_';
+
+/**
+ * An extension tool, by the effect its permission action declares
+ * (`<effect>:<id>`). At least as strict as MCP: its output was produced by
+ * code that is not ours and may carry text from anywhere, so every result is
+ * `suspicious`, whatever the effect. `write` may change state elsewhere and
+ * `external` reaches outside the host, so both can carry session data out
+ * (`write` egress). A read is still arbitrary code that receives its
+ * arguments, and a typical one is a lookup against some remote service, so
+ * it counts as query egress (`read`, like a web search): it asks after the
+ * session has seen a secret. An action with no recognised effect gets the
+ * strictest contract.
+ */
+function extensionToolFlow(action: string): FlowContract {
+  const effect = action.split(':', 1)[0];
+  if (effect === 'read') return { taints: ['suspicious'], egress: 'read' };
+  return { taints: ['suspicious'], egress: 'write' };
 }
 
 // ── Session labels ──────────────────────────────────────────────────────────
