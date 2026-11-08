@@ -71,3 +71,24 @@ schedules, webhooks and event hooks — and what each decided today:
   *Hooks & schedules*.
 
 Session monitors and Companion goals are not on this page yet.
+
+## Roster
+
+**Agents → Roster** (`/agents/roster`, `GET /api/agents/roster`) shows every
+role as an agent the user manages: the root agent (Octipus, which answers chat)
+and each specialist role, including a role only seen on older to-dos or hooks
+(marked *not in the registry*). For each:
+
+- what it is for (the role's description), its lane, tool groups and whether it
+  is read-only;
+- how it starts — delegated to from chat or a pipeline, and its **heartbeat**
+  switch (the same toggle as the to-do board's role-agents panel, `PUT
+  /api/tasks/role-agents`), with its check interval, next check and the latest
+  decision from `heartbeat_checks`;
+- its assigned to-dos (open of total), flagged *waiting* when its heartbeat is
+  off;
+- today's runs and the latest one, with what started it.
+
+A banner says when the server's heartbeat is switched off or `tasks/write` is
+not allowed, since either stops every role heartbeat. Role prompts and lane
+bindings are edited on *Topics*.

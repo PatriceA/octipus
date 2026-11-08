@@ -30,6 +30,7 @@ const AgentsPage = lazy(() => import('./app/agents/page'));
 const AgentsViewPage = lazy(() => import('./app/agents/view/page'));
 const AgentsHistoryPage = lazy(() => import('./app/agents/history/page'));
 const AgentsTriggersPage = lazy(() => import('./app/agents/triggers/page'));
+const AgentsRosterPage = lazy(() => import('./app/agents/roster/page'));
 const ArtifactsPage = lazy(() => import('./app/artifacts/page'));
 const ArtifactsNewPage = lazy(() => import('./app/artifacts/new/page'));
 const ArtifactsViewPage = lazy(() => import('./app/artifacts/view/page'));
@@ -138,6 +139,7 @@ const router = createBrowserRouter([
       { path: 'agents/view', element: <AgentsViewPage /> },
       { path: 'agents/history', element: <AgentsHistoryPage /> },
       { path: 'agents/triggers', element: <AgentsTriggersPage /> },
+      { path: 'agents/roster', element: <AgentsRosterPage /> },
       { path: 'artifacts', element: <ArtifactsPage /> },
       { path: 'artifacts/new', element: <ArtifactsNewPage /> },
       { path: 'artifacts/view', element: <ArtifactsViewPage /> },

@@ -101,3 +101,37 @@ export interface MissionControlResponse {
   pendingApprovals: number | null;
   upcoming: MissionUpcoming[];
 }
+
+/** One role on the Roster (`GET /api/agents/roster`). */
+export interface RosterRole {
+  role: string;
+  /** The root agent's role (`general`): it answers chat; it takes no to-dos. */
+  root: boolean;
+  description: string | null;
+  /** The lane its model comes from. */
+  lane: string;
+  toolGroups: number;
+  readOnly: boolean;
+  /** In the registry; a role only seen on old to-dos or hooks is not. */
+  known: boolean;
+  heartbeat: {
+    enabled: boolean;
+    hookId: string | null;
+    nextCheckAt: string | null;
+    intervalMinutes: number | null;
+    /** The latest decision today, from `heartbeat_checks`. */
+    lastCheck: { at: string; ran: boolean; reason: string | null } | null;
+  };
+  tasks: { active: number; total: number };
+  runsToday: number;
+  liveRuns: number;
+  lastRun: { id: string; status: MissionRun['status']; createdAt: string; title: string | null; source: AgentSource | null } | null;
+}
+
+export interface RosterResponse {
+  roles: RosterRole[];
+  /** tasks/write is ALLOW; without it no role heartbeat can work its to-dos. */
+  boardWritesAllowed: boolean;
+  /** The server's heartbeat switch. */
+  heartbeatEnabled: boolean;
+}

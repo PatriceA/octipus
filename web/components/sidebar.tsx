@@ -75,6 +75,7 @@ const navGroups: NavGroup[] = [
   // Everything that runs agents, whoever starts them (docs/MISSION-CONTROL.md).
   { label: 'Agents', items: [
     { name: 'mission control', href: '/agents', icon: Bot },
+    { name: 'roster', href: '/agents/roster', icon: Users },
     { name: 'triggers', href: '/agents/triggers', icon: Zap },
     { name: 'pipelines', href: '/pipelines', icon: GitBranch },
     { name: 'hooks & schedules', href: '/hooks', icon: Webhook },

@@ -354,6 +354,11 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Roster: roles as agents.** *Agents → Roster* lists the root agent and every
+  specialist role with its lane, tools, heartbeat switch (next check and latest
+  decision), assigned to-dos and today's runs. New route:
+  `GET /api/agents/roster`. See [docs/MISSION-CONTROL.md](docs/MISSION-CONTROL.md#roster).
+
 - **Triggers page and recorded heartbeat decisions.** *Agents → Triggers*
   shows every heartbeat, schedule, webhook and event hook with what it did
   today on a timeline, the heartbeat funnel (checks → skip reasons → turns
