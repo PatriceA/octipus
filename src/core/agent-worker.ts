@@ -2361,9 +2361,11 @@ export class AgentWorker extends BaseAgentWorker {
    *
    * Fail-closed: a handler that throws rejects with `HookFailedError` and
    * nothing is sent — a redaction that crashed halfway must not go out half
-   * applied. A conversation that cannot be deep-copied (something uncloneable
-   * in an opaque provider payload) is sent as stored without firing the hook:
-   * a shallow copy would let a handler mutate the live history through it.
+   * applied. For the same reason a conversation that cannot be deep-copied
+   * (something uncloneable in an opaque provider payload) fails the request:
+   * sending it unhooked would skip a redaction, and a shallow copy would let a
+   * handler mutate the live history through it. So does a handler that leaves
+   * `messages` not an array.
    */
   private async requestMessages(model: string): Promise<AgentMessage[]> {
     const hooks = getAgentHooks();
@@ -2372,25 +2374,15 @@ export class AgentWorker extends BaseAgentWorker {
     try {
       copy = structuredClone(this.messages);
     } catch (err) {
-      if (!this.warnedUncloneableContext) {
-        this.warnedUncloneableContext = true;
-        agentLogger.warn({ err, agentId: this.context.id }, 'context hook skipped: the conversation cannot be deep-copied; sending it unchanged');
-      }
-      return this.messages;
+      throw new HookFailedError('context', new Error(`the conversation cannot be copied for the hook (${(err as Error).message})`));
     }
     const ctx = await hooks.fireFailClosed('context', { agent: this.hookAgent(), model, messages: copy, iteration: this.iteration });
-    if (!Array.isArray(ctx.messages)) {
-      agentLogger.warn({ agentId: this.context.id }, 'context hook left messages not an array; sending the stored conversation');
-      return this.messages;
-    }
+    if (!Array.isArray(ctx.messages)) throw new HookFailedError('context', new Error('a handler left messages not an array'));
     const sent = ctx.messages;
     let firstChanged = 0;
     while (firstChanged < sent.length && firstChanged < this.messages.length && isDeepStrictEqual(sent[firstChanged], this.messages[firstChanged])) firstChanged++;
     return firstChanged < sent.length ? this.withoutStaleReasoning(sent, firstChanged) : sent;
   }
-
-  /** The `context` hook was skipped once for an uncloneable conversation (logged once). */
-  private warnedUncloneableContext = false;
 
   /** The previous request of this worker's conversation, for `classifyCacheBreak`. */
   private lastCacheProbe: CacheProbe | undefined;

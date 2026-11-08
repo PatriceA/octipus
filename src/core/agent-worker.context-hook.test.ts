@@ -105,19 +105,18 @@ describe('context hook', () => {
     expect(w.messages.map((m) => m.content)).toEqual(stored.map((m) => m.content));
   });
 
-  test('an uncloneable conversation: the hook is skipped, the stored conversation is sent, one warning', async () => {
+  test('an uncloneable conversation fails the request: nothing is sent unhooked', async () => {
     const handler = vi.fn((c: { messages: AgentMessage[] }) => { c.messages[1].content = 'mutated'; });
     getAgentHooks().register('context', handler);
     vi.spyOn(globalThis, 'structuredClone').mockImplementation(() => { throw new DOMException('could not be cloned', 'DataCloneError'); });
-    const warn = vi.spyOn(agentLogger, 'warn');
     const w = new AgentWorker(ctx, cfg) as unknown as Priv;
     w.messages = stored.map((m) => ({ ...m }));
-    await w.getCompletion();
-    await w.getCompletion();
+    const err = await w.getCompletion().then(() => undefined, (e: unknown) => e);
+    expect(err).toBeInstanceOf(HookFailedError);
+    expect((err as Error).message).toMatch(/^context hook failed: the conversation cannot be copied/);
     expect(handler).not.toHaveBeenCalled();
-    expect(sent[0].map((m) => m.content)).toEqual(stored.map((m) => m.content));
+    expect(sent).toHaveLength(0);
     expect(w.messages[1].content).toBe('my key is sk-SECRET');
-    expect(warn.mock.calls.filter(([, msg]) => String(msg).startsWith('context hook skipped'))).toHaveLength(1);
   });
 });
 
