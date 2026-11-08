@@ -157,6 +157,14 @@ export function bindStagedRootPrompt(
   capped(stagedByAgent, agentId, { ...staged, parts });
 }
 
+/**
+ * A worker, a swarm child or a pipeline stage: its whole system prompt is
+ * known at spawn (agent manager), so it is staged under the agent directly.
+ */
+export function stageAgentPrompt(agentId: string, staged: StagedRootPrompt): void {
+  capped(stagedByAgent, agentId, staged);
+}
+
 /** Step 3: the worker takes its staged prompt, once. */
 export function takeStagedRootPrompt(agentId: string): StagedRootPrompt | undefined {
   const staged = stagedByAgent.get(agentId);
@@ -261,6 +269,8 @@ export function measureRootRequest(input: {
   tools: ReadonlyArray<ToolSchema>;
   history: ReadonlyArray<AgentMessage>;
   userText: string;
+  /** What the user message is: the root's "Your new message", a child's brief. */
+  userLabel?: string;
   /**
    * Retrieved blocks this turn left out because an earlier message in the
    * conversation still carries them (`repeated-context.ts`), as the worker
@@ -292,7 +302,7 @@ export function measureRootRequest(input: {
     ...stagedSections,
     ...toolSections(input.tools),
     ...historySections(input.history),
-    ...(input.userText ? [section('conversation', 'volatile', 'Your new message', input.userText.length, { text: input.userText })] : []),
+    ...(input.userText ? [section('conversation', 'volatile', input.userLabel ?? 'Your new message', input.userText.length, { text: input.userText })] : []),
   ];
   const order = (c: PromptCategory) => PROMPT_CATEGORIES.indexOf(c);
   // Stable: within a category the order above holds.
@@ -354,9 +364,26 @@ export function getLatestComposition(sessionId: string): LatestComposition | und
   return latestBySession.get(sessionId);
 }
 
+/** A non-root agent's measured prompt with text, by agent id (run view); sizes are stored on its row. */
+const latestByAgent = new Map<string, MeasuredComposition>();
+
+export function recordAgentComposition(agentId: string, composition: MeasuredComposition): void {
+  capped(latestByAgent, agentId, composition);
+  while (latestByAgent.size > MAX_STAGED) {
+    const oldest = latestByAgent.keys().next().value;
+    if (oldest === undefined) break;
+    latestByAgent.delete(oldest);
+  }
+}
+
+export function getAgentComposition(agentId: string): MeasuredComposition | undefined {
+  return latestByAgent.get(agentId);
+}
+
 /** Test helper. */
 export function _resetPromptCompositionForTesting(): void {
   stagedBySession.clear();
   stagedByAgent.clear();
   latestBySession.clear();
+  latestByAgent.clear();
 }

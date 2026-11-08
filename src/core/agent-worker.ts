@@ -65,7 +65,7 @@ import { omitGroupTranscripts } from '@/core/channels/group-context';
 import { omitSpaceTurnContext } from '@/core/spaces/turn-context';
 import { inlineUiRepairMessage, storeInlineUiBlocks, stubInlineUiFences } from '@/core/inline-ui/extract';
 import { getRunContext } from '@/core/run-context';
-import { measureRootRequest, recordLatestComposition, takeStagedRootPrompt, withoutText } from '@/core/agent/prompt-composition';
+import { measureRootRequest, recordAgentComposition, recordLatestComposition, takeStagedRootPrompt, withoutText } from '@/core/agent/prompt-composition';
 import { transformOutsideInlineUiFences, withoutInlineUiFences } from '@/shared/inline-ui';
 import { type CacheProbe, classifyCacheBreak, type PrefixSignature, prefixSignature } from '@/models/cache-break';
 import { recordPromptCacheBreak } from '@/core/telemetry';
@@ -729,20 +729,28 @@ export class AgentWorker extends BaseAgentWorker {
   }
 
   /**
-   * The root's request, by category, at the moment it is complete: the staged
-   * system parts, the tools this request advertises, the history loaded under
-   * the session lock and the new message (Context inspector). Measured once per
-   * turn — a mid-run injection is not a new turn — and never for a worker.
-   * Recorded in memory here so a turn that stores no user row (a room) is
-   * still shown; `addUserMessage` attaches the stored row's id.
+   * This agent's request, by category, at the moment it is complete
+   * (Context inspector, run view): the staged system parts, the tools this
+   * request advertises and the message. The root adds the history loaded
+   * under the session lock, and its sizes ride on the stored user row
+   * (`addUserMessage`); a worker or child has no history, and its sizes go on
+   * its agent row. Measured once per run: a mid-run injection is not a turn.
    */
   private measurePromptComposition(userText: string, omitted: readonly string[] = []) {
-    if (!isRootAgent(this.context)) return undefined;
     const staged = takeStagedRootPrompt(this.context.id);
     if (!staged) return undefined;
+    const tools = this.toolExecutor.toolsDisabled ? [] : this.getAdvertisedToolHandlers();
+    if (!isRootAgent(this.context)) {
+      // A worker or child: no conversation history, its brief is the message.
+      const composition = measureRootRequest({ staged, tools, history: [], userText, userLabel: 'Brief' });
+      recordAgentComposition(this.context.id, composition);
+      void agentRepository.mergeMetadata(this.context.id, { promptComposition: withoutText(composition) }).catch((err: unknown) =>
+        agentLogger.warn({ err, agentId: this.context.id }, 'Prompt sizes not stored on the agent row (the run view will miss them)'));
+      return undefined;
+    }
     const composition = measureRootRequest({
       staged,
-      tools: this.toolExecutor.toolsDisabled ? [] : this.getAdvertisedToolHandlers(),
+      tools,
       history: this.messages,
       userText,
       omitted,

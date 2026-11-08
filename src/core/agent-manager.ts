@@ -1,6 +1,6 @@
 import { getConfig } from '@/config';
 import { withoutOffModules } from '@/core/modules/prompt';
-import { bindStagedRootPrompt, promptPart } from './agent/prompt-composition';
+import { bindStagedRootPrompt, promptPart, stageAgentPrompt } from './agent/prompt-composition';
 import { getAmbientOrigin, resolveAgentOrigin } from './agent-origin';
 import { getRunContext } from './run-context';
 import { assertCliSpaceMode } from './cli-adapters';
@@ -472,6 +472,16 @@ export class AgentManager {
       const systemPrompt = mcpSection ? withStaticSection(filteredPrompt ?? '', mcpSection) : filteredPrompt;
       // The root runner staged its prompt by category; apply the same rewrite,
       // add what is appended here, and hand it to this agent (Context inspector).
+      if (!context.root && filteredPrompt) {
+        // Loaded here, not at the top: the splitter needs the role constants.
+        const { agentPromptParts } = await import('./agent/prompt-parts');
+        stageAgentPrompt(agentId, {
+          parts: agentPromptParts(filteredPrompt, context.role, { mcpSection, selectedSkills }),
+          role: context.role,
+          model: routedModel,
+          ...(modelEntry?.contextWindow ? { contextWindow: modelEntry.contextWindow } : {}),
+        });
+      }
       if (context.root) {
         bindStagedRootPrompt(options.sessionId, agentId, {
           rewrite: withoutOffModules,

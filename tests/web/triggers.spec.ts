@@ -8,15 +8,19 @@ const at = (h: number, m = 0) => new Date(day.getTime() + (h * 60 + m) * 60_000)
 const triggers = {
   since: day.toISOString(), now: at(10, 5),
   triggers: [
-    { hookId: 'hb', name: 'writer heartbeat', kind: 'heartbeat', action: 'spawn_agent', enabled: true, role: 'writer', nextRunAt: at(10, 40), intervalMinutes: 60, lastExecutedAt: at(9, 40), lastError: null,
+    { id: 'hb', name: 'writer heartbeat', kind: 'heartbeat', action: 'spawn_agent', href: '/hooks', state: null, enabled: true, role: 'writer', nextRunAt: at(10, 40), intervalMinutes: 60, lastExecutedAt: at(9, 40), lastError: null,
       events: [
         { at: at(6, 40), kind: 'skipped', reason: 'quiet_hours', readyTasks: null },
         { at: at(7, 40), kind: 'skipped', reason: 'nothing_pending', readyTasks: 0 },
         { at: at(8, 40), kind: 'skipped', reason: 'tasks_permission_required', readyTasks: 2 },
         { at: at(9, 40), kind: 'ran', reason: null, readyTasks: 2 },
       ] },
-    { hookId: 'ci', name: 'CI triage', kind: 'webhook', action: 'spawn_agent', enabled: true, role: null, nextRunAt: null, intervalMinutes: null, lastExecutedAt: at(8, 12), lastError: 'gh auth expired',
+    { id: 'ci', name: 'CI triage', kind: 'webhook', action: 'spawn_agent', href: '/hooks', state: null, enabled: true, role: null, nextRunAt: null, intervalMinutes: null, lastExecutedAt: at(8, 12), lastError: 'gh auth expired',
       events: [{ at: at(8, 12), kind: 'failed', reason: 'gh auth expired', readyTasks: null }] },
+    { id: 'mon', name: 'PR 412 checks', kind: 'monitor', action: 'general', href: '/chat?session=s1', state: 'armed', enabled: true, role: 'general', nextRunAt: at(11, 30), intervalMinutes: 30, lastExecutedAt: at(10, 0), lastError: null,
+      events: [{ at: at(10, 0), kind: 'skipped', reason: 'checked', readyTasks: null }] },
+    { id: 'goal', name: 'Vendor pricing', kind: 'companion', action: 'dispatch to a project session', href: '/companion', state: 'needs_decision', enabled: true, role: null, nextRunAt: null, intervalMinutes: null, lastExecutedAt: null, lastError: null,
+      events: [{ at: at(9, 5), kind: 'ran', reason: 'start session', readyTasks: null }] },
   ],
   funnel: { checks: 4, ran: 1, skipped: { quiet_hours: 1, nothing_pending: 1, tasks_permission_required: 1 } },
 };
@@ -45,6 +49,14 @@ test('the triggers page shows what each trigger decided today and why a heartbea
   const row = page.getByRole('row', { name: /CI triage/ });
   await expect(row).toContainText('1 failed');
   await expect(page.getByRole('row', { name: /writer heartbeat/ })).toContainText('writer (role agent)');
+  const monitor = page.getByRole('row', { name: /PR 412 checks/ });
+  await expect(monitor).toContainText('Monitor');
+  await expect(monitor).toContainText('checks every 30 min, wakes its session on a change');
+  await expect(monitor.getByRole('link', { name: 'PR 412 checks' })).toHaveAttribute('href', '/chat?session=s1');
+  const goal = page.getByRole('row', { name: /Vendor pricing/ });
+  await expect(goal).toContainText('Companion goal');
+  await expect(goal).toContainText('needs decision');
+  await expect(goal).toContainText('1 ran');
   // The page's nav item is the active one, not Mission control too.
   await expect(page.locator('aside nav').getByRole('link', { name: 'triggers' })).toHaveAttribute('aria-current', 'page');
   await expect(page.locator('aside nav').getByRole('link', { name: 'mission control' })).not.toHaveAttribute('aria-current', 'page');

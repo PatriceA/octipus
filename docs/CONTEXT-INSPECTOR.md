@@ -63,6 +63,15 @@ three steps (`src/core/agent/prompt-composition.ts`):
    moment system messages, advertised tools and the history loaded under the
    session lock all exist — measures the whole request once.
 
+A **worker** (spawn_child, heartbeat role agent, pipeline stage) is measured the
+same way: the agent manager stages its system prompt split at the volatile
+marker (role prompt as the static prefix, the per-run date, profile, memories
+and workspace as turn context) plus MCP servers and skills, and the worker
+measures it with its brief as the user message and no history. Its sizes go on
+its agent row (`agents.metadata.promptComposition`); its text stays in memory
+for the 200 most recently measured workers. The [run view](MISSION-CONTROL.md#run-detail)
+shows it.
+
 ## What is stored
 
 - The **sizes** (category, tier, label, characters, estimated tokens, cap
@@ -78,8 +87,7 @@ rule: the session's owner only. A room member or an admin gets *not found*.
 
 ## Not measured
 
-- Workers, swarm children and pipeline stages (they have their own prompts and
-  no session history).
+- Forked workers, seeded with their parent's conversation, and CLI-model workers.
 - CLI-model root turns, which build their own prompt, and casual direct replies
   that skip the agent loop.
 

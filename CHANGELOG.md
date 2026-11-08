@@ -363,6 +363,14 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Run detail: why a run exists.** Opening a run shows its provenance chain
+  (what started the tree, the hook, the heartbeat check that passed, the
+  pipeline or Companion goal, the parent), its run tree, and the prompt its
+  first request held by category (`GET /api/agents/:id/run`). Workers are now
+  measured too: their sizes are stored on the agent row.
+- **Triggers covers monitors and Companion goals.** *Agents → Triggers* lists
+  session monitors (interval, last check, the session they wake) and open
+  Companion goals (their actions today as runs) beside hooks.
 - **Roster: roles as agents.** *Agents → Roster* lists the root agent and every
   specialist role with its lane, tools, heartbeat switch (next check and latest
   decision), assigned to-dos and today's runs. New route:

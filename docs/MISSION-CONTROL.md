@@ -57,7 +57,8 @@ workspace.
 
 **Agents → Triggers** (`/agents/triggers`, `GET /api/agents/triggers`) lists
 everything that starts an agent without the user typing — heartbeats,
-schedules, webhooks and event hooks — and what each decided today:
+schedules, webhooks, event hooks, session monitors and Companion goals — and
+what each decided today:
 
 - **Today** — one lane per trigger: runs, failures, heartbeat checks that
   skipped, and the next run.
@@ -70,7 +71,31 @@ schedules, webhooks and event hooks — and what each decided today:
   today's runs and failures, next run and whether it is on. Editing stays in
   *Hooks & schedules*.
 
-Session monitors and Companion goals are not on this page yet.
+A **session monitor** is listed with its interval and the session whose agent it
+wakes on a change; its last check today is a lane event (a failure when the
+check recorded an error) and its name opens the session. A **Companion goal**
+that is open, or closed today, is listed with its state; each Companion action
+today is a run (or a failure) on its lane, and its name opens *Companion*.
+
+## Run detail
+
+Opening a run (`/agents/view?id=…`, `GET /api/agents/:id/run`) shows, above
+its event timeline:
+
+- **Why this run exists** — the provenance chain, outermost first: what started
+  the tree (the *Started by* source and channel), the hook, the heartbeat check
+  that passed just before the run (with its ready to-dos), the pipeline or
+  Companion goal, and the parent that spawned it. Each step links to where it is
+  managed. A run from before origins were recorded says so.
+- **Run tree** — its parent, itself and the workers it spawned, each linking to
+  its own run view.
+- **Prompt** — what its first request held, by category, as in the
+  [context inspector](CONTEXT-INSPECTOR.md): the root's sizes from the user
+  message it answered, a worker's from its agent row. Section text can be read
+  while the process still holds it.
+
+The read goes through the principal's scoped repositories: another user's run
+is *not found*.
 
 ## Roster
 

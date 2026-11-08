@@ -48,6 +48,13 @@ export class AgentRepository {
     }).where(eq(agents.id, id));
   }
 
+  /** Merge `patch` into the agent's metadata (the measured prompt of a worker, for the run view). */
+  async mergeMetadata(id: string, patch: Record<string, unknown>): Promise<void> {
+    await this.db.update(agents)
+      .set({ metadata: sql`coalesce(${agents.metadata}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb` })
+      .where(eq(agents.id, id));
+  }
+
   async findById(id: string): Promise<AgentRecord | null> {
     // i2: by agent id, for the worker that runs it and system callers; user routes use ScopedAgentRepo
     const result = await this.db.select().from(agents).where(eq(agents.id, id)).limit(1);
