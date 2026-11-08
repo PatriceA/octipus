@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from 'child_process';
+import { mkdir } from 'node:fs/promises';
 import { buildChildEnv, buildIsolatedChildEnv } from '@/security/child-env';
 import { bridgedArgv, type EgressProxy, proxyEnv, startEgressProxy } from '@/security/egress-proxy';
 import { wrapCommand } from '@/security/shell-sandbox';
@@ -16,7 +17,8 @@ export interface StdioTransportOptions {
   isolatedEnv?: boolean;
   /**
    * Run the child in the shell sandbox (`security.shellSandbox`), with `root`
-   * as its only writable directory. With the sandbox off, it runs unwrapped
+   * as its only writable directory — or, with `readOnlyRoot`, read-only and
+   * `writable` as the writable ones. With the sandbox off, it runs unwrapped
    * (the mode decides, as for the shell tool).
    *
    * With `egress`, network is limited to its hosts through an in-process
@@ -31,8 +33,16 @@ export interface StdioTransportOptions {
 export interface StdioSandbox {
   root: string;
   allowNetwork: boolean;
-  /** Per-host egress: who the traffic belongs to and the hosts it may reach. */
-  egress?: { label: string; hosts: string[] };
+  /** Mount `root` read-only inside the sandbox (a plugin package's files). */
+  readOnlyRoot?: boolean;
+  /** Writable directories inside the sandbox, created at launch (a package's data directory). */
+  writable?: string[];
+  /**
+   * Per-host egress: who the traffic belongs to, the hosts it may reach, and
+   * where the proxy's socket directory goes (`runDir`; not under /tmp, see
+   * `EgressProxyOptions.socketParent`).
+   */
+  egress?: { label: string; hosts: string[]; runDir?: string };
 }
 
 /** What `prepareSandboxedLaunch` decided: the argv and env to spawn, and what to clean up. */
@@ -50,19 +60,28 @@ export interface SandboxedLaunch {
  * declares hosts. Exported for tests.
  */
 export async function prepareSandboxedLaunch(argv: string[], env: Record<string, string>, sandbox: StdioSandbox): Promise<SandboxedLaunch> {
+  const writable = sandbox.writable ?? [];
+  for (const dir of writable) await mkdir(dir, { recursive: true });
+  const mounts = {
+    workspaceRoot: sandbox.root,
+    ...(sandbox.readOnlyRoot ? { workspaceReadOnly: true } : {}),
+    ...(writable.length > 0 ? { extraReadWrite: writable } : {}),
+  };
   const egress = sandbox.egress && sandbox.egress.hosts.length > 0 ? sandbox.egress : null;
   if (!egress) {
-    const wrapped = wrapCommand(argv, { workspaceRoot: sandbox.root, allowNetwork: sandbox.allowNetwork, path: env.PATH });
+    const wrapped = wrapCommand(argv, { ...mounts, allowNetwork: sandbox.allowNetwork, path: env.PATH });
     return { argv: wrapped.argv, env, networkEnforced: wrapped.wrapped, proxy: null, cleanup: wrapped.cleanup };
   }
-  const proxy = await startEgressProxy({ label: egress.label, allowed: egress.hosts, unixSocket: process.platform !== 'win32' });
+  const proxy = await startEgressProxy({
+    label: egress.label, allowed: egress.hosts, unixSocket: process.platform !== 'win32', socketParent: egress.runDir,
+  });
   try {
     if (proxy.socketPath && proxy.socketDir) {
       // Inside the sandbox: no network namespace route out, only the proxy
       // socket mounted in and this Node binary to run the launcher.
       const wrapped = wrapCommand(bridgedArgv(argv, proxy.socketPath), {
-        workspaceRoot: sandbox.root, allowNetwork: false, path: env.PATH,
-        extraReadOnly: [process.execPath], extraReadWrite: [proxy.socketDir],
+        ...mounts, allowNetwork: false, path: env.PATH,
+        extraReadOnly: [process.execPath], extraReadWrite: [...writable, proxy.socketDir],
       });
       if (wrapped.wrapped) {
         return { argv: wrapped.argv, env, networkEnforced: true, proxy, cleanup: () => { wrapped.cleanup(); void proxy.close(); } };

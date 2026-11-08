@@ -96,8 +96,13 @@ describe('plugin packages', () => {
     for (const secret of ['MASTER_KEY', 'JWT_SECRET', 'SESSION_SECRET', 'DATABASE_URL', 'DATA_DIR', 'WORKSPACE_PATH', 'STORAGE_MODE']) {
       expect(report.names).not.toContain(secret);
     }
-    const { packageDir } = await import('./service');
+    const { packageDir, pluginDataDir } = await import('./service');
     expect(report.cwd).toBe(packageDir('echo-plugin'));
+    // Its runtime state goes to a data directory of its own, outside its
+    // (read-only under the sandbox, hash-pinned) files; created at start.
+    expect(report.names).toContain('OCTIPUS_PLUGIN_DATA_DIR');
+    expect(existsSync(pluginDataDir('echo-plugin'))).toBe(true);
+    expect(pluginDataDir('echo-plugin').startsWith(packageDir('echo-plugin'))).toBe(false);
     // It declares api.example.com: with the sandbox off it is pointed at the
     // egress proxy (advisory), and the status says network is not enforced.
     expect(report.names).toEqual(expect.arrayContaining(['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY']));
@@ -240,7 +245,7 @@ describe('plugin packages', () => {
     await expect(bridge.addServer({ id: 'plugin-fake', name: 'x', command: 'node', isEnabled: true })).rejects.toThrow(/belong to plugin packages/);
   });
 
-  test('disable stops the server; uninstall removes files, row and secrets', async () => {
+  test('disable stops the server; uninstall removes files, data, row and secrets', async () => {
     const svc = await import('./service');
     const { getMCPBridge } = await import('@/mcp/bridge');
     const { getVault } = await import('@/security/vault');
@@ -248,6 +253,7 @@ describe('plugin packages', () => {
     expect(getMCPBridge().isConnected(SERVER)).toBe(false);
     await svc.uninstall('echo-plugin', admin);
     expect(existsSync(svc.packageDir('echo-plugin'))).toBe(false);
+    expect(existsSync(svc.pluginDataDir('echo-plugin'))).toBe(false);
     expect(await svc.listPackages()).toEqual([]);
     expect(await getVault().getSystemSecret(svc.secretName('echo-plugin', 'ECHO_TOKEN'))).toBeNull();
     await expect(svc.uninstall('echo-plugin', admin)).rejects.toMatchObject({ code: 'not_found' });

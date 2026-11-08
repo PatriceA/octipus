@@ -60,8 +60,12 @@ export interface MCPServer extends McpExposureConfig {
   isolatedEnv?: boolean;
   /**
    * Run a stdio server in the shell sandbox with `root` as its only writable
-   * directory. `egress` limits its network to those hosts through a proxy
-   * (src/security/egress-proxy.ts).
+   * directory, or with `readOnlyRoot` read-only and `writable` as the
+   * writable ones. `egress` limits its network to those hosts through a proxy
+   * (src/security/egress-proxy.ts), its socket under `runDir`.
    */
-  sandbox?: { root: string; allowNetwork: boolean; egress?: { label: string; hosts: string[] } };
+  sandbox?: {
+    root: string; allowNetwork: boolean; readOnlyRoot?: boolean; writable?: string[];
+    egress?: { label: string; hosts: string[]; runDir?: string };
+  };
 }

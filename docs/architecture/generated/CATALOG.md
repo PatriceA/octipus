@@ -780,7 +780,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `mcp` | 2 |
 | `security` | `shared` | 5 |
 | `security` | `tools` | 4 |
-| `security` | `utils` | 33 |
+| `security` | `utils` | 34 |
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
 | `services` | `core` | 5 |

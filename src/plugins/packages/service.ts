@@ -16,8 +16,10 @@
  *   `plugin:<name>:<KEY>`, handed over under their own key) — no provider
  *   key, master key or database URL of the host;
  * - in the shell sandbox when `security.shellSandbox` is on, with its
- *   directory as the only writable one and no direct network; a package that
- *   declares hosts reaches only those, through a per-package egress proxy
+ *   directory read-only, its data directory (`pluginDataDir`,
+ *   `OCTIPUS_PLUGIN_DATA_DIR`) as the only writable one and no direct
+ *   network; a package that declares hosts reaches only those, through a
+ *   per-package egress proxy
  *   (src/security/egress-proxy.ts). Without a sandbox (off, no runner, macOS,
  *   Windows) the proxy is advisory and the status says "not enforced";
  * - with only its declared tools reachable, each permitted by its declared
@@ -68,6 +70,24 @@ export function pluginsRoot(): string {
 /** The directory of one installed package. */
 export function packageDir(name: string): string {
   return join(pluginsRoot(), name);
+}
+
+/**
+ * The writable data directory of one installed package, outside its files
+ * (which are read-only in the sandbox and pinned by hash). Handed to the
+ * server as `OCTIPUS_PLUGIN_DATA_DIR`; created when the server starts.
+ */
+export function pluginDataDir(name: string): string {
+  return join(resolve(getConfig().workspace.rootPath), 'plugin-data', name);
+}
+
+/**
+ * Where the egress proxies put their Unix sockets: under the workspace, which
+ * both sandbox runners mount by path — not /tmp, which firejail's
+ * `--private-tmp` hides.
+ */
+function pluginRunDir(): string {
+  return join(resolve(getConfig().workspace.rootPath), 'plugin-run');
 }
 
 /** The vault name of one of a package's secrets. */
@@ -221,6 +241,7 @@ export async function uninstall(name: string, actorUserId: string): Promise<void
   await getMCPBridge().disconnect(`${PLUGIN_SERVER_PREFIX}${name}`);
   await getDb().delete(pluginPackages).where(eq(pluginPackages.name, name));
   await rm(packageDir(name), { recursive: true, force: true });
+  await rm(pluginDataDir(name), { recursive: true, force: true });
   const entries = (row.manifest.secrets ?? []).length > 0 ? await getVault().list('system') : [];
   for (const s of row.manifest.secrets ?? []) await deleteSecret(name, s.key, entries);
   await audit(actorUserId, 'uninstalled', name, { version: row.version });
@@ -406,6 +427,9 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
     if (value !== null) env[s.key] = value;
   }
   const dir = packageDir(row.name);
+  const dataDir = pluginDataDir(row.name);
+  // Set last, so no secret can claim the name.
+  env.OCTIPUS_PLUGIN_DATA_DIR = dataDir;
   return {
     id: `${PLUGIN_SERVER_PREFIX}${row.name}`,
     name: m.title,
@@ -415,11 +439,12 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
     cwd: dir,
     env,
     isolatedEnv: true,
+    // Its files are read-only in the sandbox; it writes to its data directory.
     // Hosts go through the egress proxy; direct network stays off wherever the
     // sandbox can turn it off. allowNetwork is kept for a sandbox without egress support.
     sandbox: {
-      root: dir, allowNetwork: (m.network ?? []).length > 0,
-      ...((m.network ?? []).length > 0 ? { egress: { label: row.name, hosts: [...(m.network ?? [])] } } : {}),
+      root: dir, readOnlyRoot: true, writable: [dataDir], allowNetwork: (m.network ?? []).length > 0,
+      ...((m.network ?? []).length > 0 ? { egress: { label: row.name, hosts: [...(m.network ?? [])], runDir: pluginRunDir() } } : {}),
     },
     requestTimeoutMs: m.server.requestTimeoutMs,
     isEnabled: row.enabled,

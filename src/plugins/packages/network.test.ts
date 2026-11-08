@@ -5,8 +5,11 @@
  * local servers on 127.0.0.1 — no internet needed.
  */
 import { spawn } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer, request, type Server } from 'node:http';
-import { type AddressInfo, connect } from 'node:net';
+import { type AddressInfo, connect, type Socket } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const wrapCommand = vi.fn();
@@ -28,26 +31,38 @@ let upstream: Server;
 let upstreamPort: number;
 let otherPort: number;
 let other: Server;
+let echo: Server;
+let echoPort: number;
+let hanging: Server;
+let hangingPort: number;
+/** Server-side sockets of `hanging`, to see when the proxy drops them. */
+const hangingSockets: Socket[] = [];
 
 beforeAll(async () => {
   const listen = (s: Server) => new Promise<number>((r) => s.listen(0, '127.0.0.1', () => r((s.address() as AddressInfo).port)));
   upstream = createServer((req, res) => res.end(`hello from upstream ${req.url}`));
   other = createServer((_req, res) => res.end('should never be reached'));
+  echo = createServer((req, res) => res.writeHead(200, { connection: 'keep-alive, x-hop', 'x-hop': 'secret', 'keep-alive': 'timeout=77' }).end(JSON.stringify(req.headers)));
+  hanging = createServer(() => { /* never answers */ });
+  hanging.on('connection', (s) => hangingSockets.push(s));
   upstreamPort = await listen(upstream);
   otherPort = await listen(other);
+  echoPort = await listen(echo);
+  hangingPort = await listen(hanging);
 });
 
 afterAll(async () => {
-  await Promise.all([upstream, other].map((s) => new Promise((r) => s.close(r))));
+  for (const s of hangingSockets) s.destroy();
+  await Promise.all([upstream, other, echo, hanging].map((s) => new Promise((r) => s.close(r))));
 });
 
 /** A plain-HTTP request forwarded through the proxy. */
-function forward(proxyPort: number, url: string): Promise<{ status: number; body: string }> {
+function forward(proxyPort: number, url: string, headers: Record<string, string> = {}): Promise<{ status: number; body: string; headers: Record<string, unknown> }> {
   return new Promise((resolve, reject) => {
-    const req = request({ host: '127.0.0.1', port: proxyPort, path: url, method: 'GET' }, (res) => {
+    const req = request({ host: '127.0.0.1', port: proxyPort, path: url, method: 'GET', headers }, (res) => {
       let body = '';
       res.on('data', (c) => { body += c; });
-      res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body, headers: res.headers }));
     });
     req.on('error', reject);
     req.end();
@@ -96,12 +111,23 @@ describe('host matching', () => {
   });
 });
 
+/** Wait until `check` holds (a socket closing happens a tick or two later). */
+async function until(check: () => boolean, ms = 2000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > end) throw new Error('timed out waiting');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 describe('egress proxy', () => {
+  // These run against servers on 127.0.0.1, so they opt in to private
+  // addresses (a test-only option); the refusal is tested below without it.
   test('forwards and tunnels to a declared host; refuses an undeclared one with 403 and logs it', async () => {
     const warn = vi.spyOn(coreLogger, 'warn');
-    const proxy = await startEgressProxy({ label: 'demo-pkg', allowed: [`127.0.0.1:${upstreamPort}`] });
+    const proxy = await startEgressProxy({ label: 'demo-pkg', allowed: [`127.0.0.1:${upstreamPort}`], allowPrivateAddresses: true });
     try {
-      expect(await forward(proxy.port, `http://127.0.0.1:${upstreamPort}/x`)).toEqual({ status: 200, body: 'hello from upstream /x' });
+      expect(await forward(proxy.port, `http://127.0.0.1:${upstreamPort}/x`)).toMatchObject({ status: 200, body: 'hello from upstream /x' });
       expect(await tunnel(proxy.port, `127.0.0.1:${upstreamPort}`)).toContain('hello from upstream /tunnelled');
 
       const refused = await forward(proxy.port, `http://127.0.0.1:${otherPort}/x`);
@@ -117,8 +143,125 @@ describe('egress proxy', () => {
     }
   });
 
+  test('a declared host that resolves to a private address is refused by default, and logged with the address', async () => {
+    const warn = vi.spyOn(coreLogger, 'warn');
+    const proxy = await startEgressProxy({ label: 'demo-pkg', allowed: [`127.0.0.1:${upstreamPort}`, `localhost:${upstreamPort}`] });
+    try {
+      for (const host of ['127.0.0.1', 'localhost']) {
+        const refused = await forward(proxy.port, `http://${host}:${upstreamPort}/x`);
+        expect(refused.status).toBe(403);
+        expect(refused.body).toMatch(/private or reserved address/);
+        expect(refused.body).not.toContain('hello from upstream');
+        expect(await tunnel(proxy.port, `${host}:${upstreamPort}`)).toMatch(/^HTTP\/1\.1 403/);
+      }
+      expect(warn).toHaveBeenCalledWith(expect.objectContaining({ pkg: 'demo-pkg', host: '127.0.0.1', port: upstreamPort, address: '127.0.0.1' }),
+        expect.stringContaining('private address'));
+    } finally {
+      warn.mockRestore();
+      await proxy.close();
+    }
+  });
+
+  test('one private address among public ones is enough to refuse', async () => {
+    for (const addresses of [['93.184.216.34', '10.0.0.5'], ['93.184.216.34', '169.254.169.254'], ['::ffff:127.0.0.1'], ['fd00:ec2::254'], ['100.64.0.1'], ['0.0.0.0'], ['::']]) {
+      const proxy = await startEgressProxy({ label: 'demo-pkg', allowed: ['api.example.com:8080'], resolve: async () => addresses });
+      try {
+        expect((await forward(proxy.port, 'http://api.example.com:8080/')).status).toBe(403);
+        expect(await tunnel(proxy.port, 'api.example.com:8080')).toMatch(/^HTTP\/1\.1 403/);
+      } finally {
+        await proxy.close();
+      }
+    }
+  });
+
+  test('the connection goes to the address that was checked: the name is resolved once and never again', async () => {
+    // `pinned.invalid` does not exist in DNS: reaching the upstream at all
+    // shows the socket used the checked address, not a fresh resolution.
+    const resolve = vi.fn(async () => ['127.0.0.1']);
+    const proxy = await startEgressProxy({ label: 'demo-pkg', allowed: [`pinned.invalid:${upstreamPort}`], resolve, allowPrivateAddresses: true });
+    try {
+      expect(await forward(proxy.port, `http://pinned.invalid:${upstreamPort}/p`)).toMatchObject({ status: 200, body: 'hello from upstream /p' });
+      expect(resolve).toHaveBeenCalledTimes(1);
+      expect(await tunnel(proxy.port, `pinned.invalid:${upstreamPort}`)).toContain('hello from upstream /tunnelled');
+      expect(resolve).toHaveBeenCalledTimes(2);
+      expect(resolve).toHaveBeenCalledWith('pinned.invalid');
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  test('plain HTTP: the Host header is the target, hop-by-hop headers stay on their hop', async () => {
+    const proxy = await startEgressProxy({ label: 'demo-pkg', allowed: [`pinned.invalid:${echoPort}`], resolve: async () => ['127.0.0.1'], allowPrivateAddresses: true });
+    try {
+      const res = await forward(proxy.port, `http://pinned.invalid:${echoPort}/h`, {
+        host: 'internal.example.org', connection: 'keep-alive, x-secret', 'x-secret': 'leak', 'keep-alive': 'timeout=5',
+        'proxy-authorization': 'Basic Zm9vOmJhcg==', 'proxy-connection': 'keep-alive', te: 'trailers', upgrade: 'websocket', 'x-kept': 'yes',
+      });
+      expect(res.status).toBe(200);
+      const seen = JSON.parse(res.body) as Record<string, string>;
+      expect(seen.host).toBe(`pinned.invalid:${echoPort}`);
+      expect(seen['x-kept']).toBe('yes');
+      for (const h of ['x-secret', 'keep-alive', 'proxy-authorization', 'proxy-connection', 'te', 'upgrade', 'transfer-encoding']) expect(seen[h]).toBeUndefined();
+      // The response's hop headers (and what its Connection lists) stay upstream too.
+      expect(res.headers['x-hop']).toBeUndefined();
+      expect(res.headers['keep-alive']).not.toBe('timeout=77');
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  test('plain HTTP: the upstream request ends when the client goes away, and close() aborts one in flight', async () => {
+    const proxy = await startEgressProxy({ label: 'demo-pkg', allowed: [`127.0.0.1:${hangingPort}`], allowPrivateAddresses: true });
+    try {
+      // The client gives up: the upstream socket is dropped.
+      const before = hangingSockets.length;
+      const req = request({ host: '127.0.0.1', port: proxy.port, path: `http://127.0.0.1:${hangingPort}/a`, method: 'GET' });
+      req.on('error', () => {});
+      req.end();
+      await until(() => hangingSockets.length > before);
+      const first = hangingSockets[hangingSockets.length - 1];
+      req.destroy();
+      await until(() => first.destroyed);
+
+      // The proxy closes: an in-flight upstream request is aborted with it.
+      const req2 = request({ host: '127.0.0.1', port: proxy.port, path: `http://127.0.0.1:${hangingPort}/b`, method: 'GET' });
+      req2.on('error', () => {});
+      req2.end();
+      await until(() => hangingSockets.length > before + 1);
+      const second = hangingSockets[hangingSockets.length - 1];
+      await proxy.close();
+      await until(() => second.destroyed);
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  test.skipIf(process.platform === 'win32')('the socket directory goes under the parent it is given; one too long for a socket path is not used', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'eg-'));
+    try {
+      const proxy = await startEgressProxy({ label: 'demo-pkg', allowed: [], unixSocket: true, socketParent: join(parent, 'run') });
+      try {
+        expect(proxy.socketDir?.startsWith(join(parent, 'run'))).toBe(true);
+        expect(existsSync(proxy.socketPath as string)).toBe(true);
+      } finally {
+        await proxy.close();
+      }
+      expect(existsSync(proxy.socketDir as string)).toBe(false);
+      const long = join(parent, 'x'.repeat(120));
+      const fallback = await startEgressProxy({ label: 'demo-pkg', allowed: [], unixSocket: true, socketParent: long });
+      try {
+        expect(fallback.socketDir?.startsWith(long)).toBe(false);
+        expect((fallback.socketPath as string).length).toBeLessThan(108);
+      } finally {
+        await fallback.close();
+      }
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
   test.skipIf(process.platform === 'win32')('the sandbox launcher reaches the proxy over its Unix socket and points the command at it', async () => {
-    const proxy = await startEgressProxy({ label: 'demo-pkg', allowed: [`127.0.0.1:${upstreamPort}`], unixSocket: true });
+    const proxy = await startEgressProxy({ label: 'demo-pkg', allowed: [`127.0.0.1:${upstreamPort}`], unixSocket: true, allowPrivateAddresses: true });
     try {
       expect(proxy.socketPath).toBeTruthy();
       // The command a sandboxed package would run: it only knows HTTP_PROXY.
@@ -166,24 +309,37 @@ describe('launching a sandboxed server', () => {
       expect(launch.env.NO_PROXY).toBe('');
       expect(launch.env.no_proxy).toBe('');
       expect(launch.env.PATH).toBe('/usr/bin');
-      // The proxy it points at is live and holds the line.
-      expect((await forward(Number(new URL(url).port), `http://127.0.0.1:${upstreamPort}/`)).status).toBe(200);
+      // The proxy it points at is live and holds the line: undeclared hosts
+      // are refused, and the transport never lets a declared one reach a
+      // private address (here 127.0.0.1).
+      const declared = await forward(Number(new URL(url).port), `http://127.0.0.1:${upstreamPort}/`);
+      expect(declared.status).toBe(403);
+      expect(declared.body).toMatch(/private or reserved address/);
       expect((await forward(Number(new URL(url).port), `http://127.0.0.1:${otherPort}/`)).status).toBe(403);
     } finally {
       launch.cleanup();
     }
   });
 
-  test.skipIf(process.platform === 'win32')('with a sandbox, direct network stays off and only the proxy socket is mounted in', async () => {
+  test.skipIf(process.platform === 'win32')('with a sandbox, direct network stays off, the files are read-only, and only the data dir and proxy socket are writable', async () => {
     wrapCommand.mockImplementation((argv: string[]) => ({ wrapped: true, runner: 'bwrap', argv: ['bwrap', '--unshare-net', '--', ...argv], cleanup: () => {} }));
     const { prepareSandboxedLaunch } = await import('@/mcp/transports/stdio');
+    const scratch = mkdtempSync(join(tmpdir(), 'eg-'));
+    const dataDir = join(scratch, 'plugin-data', 'demo-pkg');
+    const runDir = join(scratch, 'plugin-run');
     const launch = await prepareSandboxedLaunch(['node', 'server.mjs'], { PATH: '/usr/bin' },
-      { root: '/pkg', allowNetwork: true, egress: { label: 'demo-pkg', hosts: ['api.example.com'] } });
+      { root: '/pkg', readOnlyRoot: true, writable: [dataDir], allowNetwork: true, egress: { label: 'demo-pkg', hosts: ['api.example.com'], runDir } });
     try {
       expect(launch.networkEnforced).toBe(true);
       const opts = wrapCommand.mock.calls[0][1];
       expect(opts.allowNetwork).toBe(false);
-      expect(opts.extraReadWrite).toEqual([launch.proxy?.socketDir]);
+      expect(opts.workspaceRoot).toBe('/pkg');
+      expect(opts.workspaceReadOnly).toBe(true);
+      expect(opts.extraReadWrite).toEqual([dataDir, launch.proxy?.socketDir]);
+      // The data directory exists by the time the server starts; the socket is
+      // under the run directory, not /tmp (firejail's --private-tmp hides that).
+      expect(existsSync(dataDir)).toBe(true);
+      expect(launch.proxy?.socketDir?.startsWith(runDir)).toBe(true);
       expect(opts.extraReadOnly).toEqual([process.execPath]);
       expect(launch.argv.slice(0, 4)).toEqual(['bwrap', '--unshare-net', '--', process.execPath]);
       expect(launch.argv).toContain(launch.proxy?.socketPath);
@@ -192,6 +348,8 @@ describe('launching a sandboxed server', () => {
       expect(launch.env.HTTPS_PROXY).toBeUndefined();
     } finally {
       launch.cleanup();
+      await launch.proxy?.close();
+      rmSync(scratch, { recursive: true, force: true });
     }
   });
 
@@ -219,14 +377,17 @@ describe('the server a package runs as', () => {
   test('no network: fully offline, no egress, maxProtection 4', async () => {
     const { serverFor } = await import('./service');
     const server = await serverFor(row(base) as never);
-    expect(server.sandbox).toEqual({ root: expect.stringContaining('demo-pkg'), allowNetwork: false });
+    expect(server.sandbox).toEqual({
+      root: '/srv/octipus/plugin-packages/demo-pkg', readOnlyRoot: true, writable: ['/srv/octipus/plugin-data/demo-pkg'], allowNetwork: false,
+    });
+    expect(server.env?.OCTIPUS_PLUGIN_DATA_DIR).toBe('/srv/octipus/plugin-data/demo-pkg');
     expect(server.plugin?.maxProtection).toBe(4);
   });
 
   test('declared hosts go to the egress proxy; maxProtection still 1 when undeclared', async () => {
     const { serverFor } = await import('./service');
     const server = await serverFor(row({ ...base, network: ['api.example.com', '*.cdn.example.com:8443'] }) as never);
-    expect(server.sandbox?.egress).toEqual({ label: 'demo-pkg', hosts: ['api.example.com', '*.cdn.example.com:8443'] });
+    expect(server.sandbox?.egress).toEqual({ label: 'demo-pkg', hosts: ['api.example.com', '*.cdn.example.com:8443'], runDir: '/srv/octipus/plugin-run' });
     expect(server.plugin?.maxProtection).toBe(1);
     const declared = await serverFor(row({ ...base, network: ['api.example.com'], maxProtection: 3 }) as never);
     expect(declared.plugin?.maxProtection).toBe(3);

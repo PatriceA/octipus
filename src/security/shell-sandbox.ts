@@ -57,6 +57,9 @@ export interface WrapOptions {
   sshAgent?: ShellSshAgent;
   /** Workspace root that should be writable inside the sandbox. */
   workspaceRoot: string;
+  /** Mount the workspace root read-only instead (a plugin package's own
+   *  files: it writes only to the `extraReadWrite` data directory). */
+  workspaceReadOnly?: boolean;
   /** Allow network access. Defaults to `false` — sandboxed shells
    *  typically don't need network. */
   allowNetwork?: boolean;
@@ -183,8 +186,8 @@ function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): 
     // Bound BEFORE the workspace so that workspaces under /tmp aren't
     // shadowed by this overlay — order matters in bwrap.
     '--bind', scratch, '/tmp',
-    // Read-write the workspace root.
-    '--bind', options.workspaceRoot, options.workspaceRoot,
+    // Read-write the workspace root (read-only when asked).
+    options.workspaceReadOnly ? '--ro-bind' : '--bind', options.workspaceRoot, options.workspaceRoot,
     // Standard pseudo filesystems.
     '--proc', '/proc',
     '--dev', '/dev',
@@ -194,6 +197,9 @@ function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): 
   for (const p of options.extraReadOnly ?? []) {
     args.push('--ro-bind-try', p, p);
   }
+  // Bound by path after the /tmp scratch, so a path anywhere (the egress
+  // proxy's socket directory under the workspace, a package's data
+  // directory) shows up as itself, read-write.
   for (const p of options.extraReadWrite ?? []) {
     args.push('--bind-try', p, p);
   }
@@ -243,6 +249,7 @@ function buildFirejailArgs(binary: string, options: WrapOptions): string[] {
     '--noroot',
     '--seccomp',
     `--whitelist=${options.workspaceRoot}`,
+    ...(options.workspaceReadOnly ? [`--read-only=${options.workspaceRoot}`] : []),
   ];
   if (!options.allowNetwork) {
     args.push('--net=none');
@@ -258,6 +265,9 @@ function buildFirejailArgs(binary: string, options: WrapOptions): string[] {
   const cliPath = [...new Set(cliTools.map(tool => tool.path.slice(0, tool.path.lastIndexOf('/'))))];
   args.push(`--env=PATH=${[...cliPath, runtimePath(options.path)].join(':')}`, `--env=PLAYWRIGHT_BROWSERS_PATH=${process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0]}`);
   if (androidSdk) args.push(`--env=ANDROID_HOME=${androidSdk}`, `--env=ANDROID_SDK_ROOT=${androidSdk}`);
+  // Whitelisted, not bound: firejail shows these only where its whitelist
+  // reaches (home, /run/user, /srv, /opt, /var, ...). Never put one under
+  // /tmp: `--private-tmp` above hides the host's /tmp whatever is listed.
   for (const p of options.extraReadWrite ?? []) {
     args.push(`--whitelist=${p}`);
   }

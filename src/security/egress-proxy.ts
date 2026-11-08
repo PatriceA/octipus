@@ -11,6 +11,13 @@
  * (`api.example.com:8443`) — and answers everything else 403, logging the
  * refusal with the package and the host.
  *
+ * A declared host is resolved once, here; if any address is loopback,
+ * private, link-local, CGNAT, unique-local, unspecified, IPv4-mapped private
+ * or a metadata address (`isPrivateIP`), the request is refused 403. The
+ * connection goes to the checked address, so a second resolution cannot
+ * rebind it. A CONNECT tunnel cannot see the TLS server name (SNI), so a
+ * client can front another name served from the same address: a known limit.
+ *
  * Where it is enforced and where it is only advice:
  *
  * - **Linux with bwrap or firejail** (`security.shellSandbox` `auto` or
@@ -25,12 +32,14 @@
  *   listener. Well-behaved HTTP clients honour it, but nothing stops a direct
  *   connection: advisory only. The package's status says so.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
-import { createServer as createHttpServer, type IncomingMessage, request as httpRequest, type ServerResponse } from 'node:http';
+import { lookup } from 'node:dns/promises';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { createServer as createHttpServer, type IncomingHttpHeaders, type IncomingMessage, request as httpRequest, type ServerResponse } from 'node:http';
 import { connect as netConnect, createServer as createNetServer, isIP, type Server as NetServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { coreLogger } from '@/utils/logger';
+import { assertPublicAddress, pinnedLookup } from '@/utils/sanitize';
 
 /** Ports a host entry without a port allows. */
 const DEFAULT_PORTS = [443, 80];
@@ -87,6 +96,31 @@ export function proxyEnv(url: string): Record<string, string> {
   };
 }
 
+/** Resolve a host name to its addresses (all of them, both families). */
+export type EgressResolver = (host: string) => Promise<string[]>;
+
+const systemResolver: EgressResolver = async (host) =>
+  (await lookup(host, { all: true, verbatim: true })).map((a) => a.address);
+
+/**
+ * Headers that belong to one hop (RFC 9110 §7.6.1) and never cross the
+ * proxy, in either direction. `transfer-encoding` goes too: Node frames the
+ * forwarded body itself (content-length when it is known, chunked when not).
+ */
+const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade']);
+
+/** `headers` without the hop-by-hop ones, `Proxy-*` and whatever `Connection` lists. */
+export function stripHopByHop(headers: IncomingHttpHeaders): IncomingHttpHeaders {
+  const listed = new Set(String(headers.connection ?? '').split(',').map((t) => t.trim().toLowerCase()).filter(Boolean));
+  const out: IncomingHttpHeaders = {};
+  for (const [name, value] of Object.entries(headers)) {
+    const n = name.toLowerCase();
+    if (HOP_BY_HOP.has(n) || listed.has(n) || n.startsWith('proxy-')) continue;
+    out[n] = value;
+  }
+  return out;
+}
+
 export interface EgressProxyOptions {
   /** Who the traffic belongs to, for the refusal log (a package name). */
   label: string;
@@ -94,6 +128,22 @@ export interface EgressProxyOptions {
   allowed: readonly string[];
   /** Also listen on a Unix socket, for a sandbox without network (not on Windows). */
   unixSocket?: boolean;
+  /**
+   * Where to create the socket's directory (see `socketDirFor`). Not /tmp:
+   * firejail runs with `--private-tmp`, which hides the host's /tmp from the
+   * sandbox whatever is whitelisted under it, and bwrap mounts a per-spawn
+   * scratch over /tmp. The transport passes a directory under the Octipus
+   * workspace, which both runners mount by path like the package directory.
+   */
+  socketParent?: string;
+  /** How declared hosts are resolved. Tests inject one; the default is the system resolver. */
+  resolve?: EgressResolver;
+  /**
+   * Test-only: let a declared host resolve to a loopback/private address, so
+   * tests can run against servers on 127.0.0.1. Never set from a manifest or
+   * by the transport — production always refuses private addresses.
+   */
+  allowPrivateAddresses?: boolean;
 }
 
 export interface EgressProxy {
@@ -107,17 +157,74 @@ export interface EgressProxy {
   close(): Promise<void>;
 }
 
+/** Longest socket path created: sun_path is 108 bytes on Linux, 104 on macOS. */
+const MAX_SOCKET_PATH = 100;
+
+/**
+ * A fresh private directory for the proxy socket: under `parent` when the
+ * path fits in sun_path, else under `$XDG_RUNTIME_DIR` (`/run/user/<uid>`,
+ * which bwrap mounts by path and firejail can whitelist), and only as a last
+ * resort under the temp directory — where firejail's `--private-tmp` may
+ * hide it, which the warning says.
+ */
+function socketDirFor(parent: string | undefined, label: string): string {
+  const fits = (base: string) => join(base, 'egress-XXXXXX', 'proxy.sock').length < MAX_SOCKET_PATH;
+  for (const base of [parent, process.env.XDG_RUNTIME_DIR].filter((b): b is string => !!b)) {
+    if (!fits(base)) continue;
+    try {
+      mkdirSync(base, { recursive: true, mode: 0o700 });
+      return mkdtempSync(join(base, 'egress-'));
+    } catch { /* try the next */ }
+  }
+  const tmp = fits(tmpdir()) ? tmpdir() : '/tmp';
+  // Worth a warning only when a parent was asked for and could not be used.
+  if (parent !== undefined) {
+    coreLogger.warn({ pkg: label, dir: tmp }, 'Egress proxy socket falls back to the temp directory; firejail\'s --private-tmp may hide it from the sandbox');
+  }
+  return mkdtempSync(join(tmp, 'octipus-egress-'));
+}
+
 /** Start a proxy that lets through only `allowed`. */
 export async function startEgressProxy(options: EgressProxyOptions): Promise<EgressProxy> {
   const { label, allowed } = options;
-  const open = new Set<Socket>();
-  const track = (s: Socket) => { open.add(s); s.once('close', () => open.delete(s)); };
+  const resolveHost = options.resolve ?? systemResolver;
+  /** Every live socket and upstream request, so close() can abort them. */
+  const open = new Set<{ destroy(): unknown }>();
+  const track = <T extends { destroy(): unknown; once(event: 'close', fn: () => void): unknown }>(s: T): T => {
+    open.add(s);
+    s.once('close', () => open.delete(s));
+    return s;
+  };
 
   const refuse = (host: string, port: number, kind: string) => {
     coreLogger.warn({ pkg: label, host, port, kind }, 'Plugin package network request refused: host not declared in its manifest');
   };
 
-  const server = createHttpServer((req: IncomingMessage, res: ServerResponse) => {
+  /**
+   * Resolve a declared host once and check every address. Returns the
+   * address to connect to — the connection uses it, never the name, so a
+   * second resolution (DNS rebinding) cannot swap in another — or why not.
+   */
+  const vet = async (host: string, port: number, kind: string): Promise<{ ip: string } | { status: 403 | 502; message: string }> => {
+    let addresses: string[];
+    try {
+      addresses = await resolveHost(host);
+    } catch (err) {
+      return { status: 502, message: `Could not resolve ${host}: ${(err as Error).message}` };
+    }
+    if (addresses.length === 0) return { status: 502, message: `Could not resolve ${host}` };
+    if (!options.allowPrivateAddresses) {
+      for (const address of addresses) {
+        if (!assertPublicAddress(address).ok) {
+          coreLogger.warn({ pkg: label, host, port, address, kind }, 'Plugin package network request refused: declared host resolves to a private address');
+          return { status: 403, message: `Host ${host} resolves to a private or reserved address (${address}); refused` };
+        }
+      }
+    }
+    return { ip: addresses[0] };
+  };
+
+  const server = createHttpServer(async (req: IncomingMessage, res: ServerResponse) => {
     let target: URL;
     try {
       target = new URL(req.url ?? '');
@@ -136,21 +243,33 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
       res.writeHead(403, { 'content-type': 'text/plain' }).end(`Host ${host}:${port} is not declared in this package's network list\n`);
       return;
     }
-    const headers = { ...req.headers };
-    delete headers['proxy-authorization'];
-    delete headers['proxy-connection'];
-    const upstream = httpRequest({ host, port, method: req.method, path: `${target.pathname}${target.search}`, headers }, (up) => {
-      res.writeHead(up.statusCode ?? 502, up.headers);
+    const vetted = await vet(host, port, 'http');
+    if (res.destroyed) return;
+    if (!('ip' in vetted)) {
+      res.writeHead(vetted.status, { 'content-type': 'text/plain' }).end(`${vetted.message}\n`);
+      return;
+    }
+    // The Host the server sees is the target's, never what the client sent
+    // (which could name another virtual host on the same address).
+    const headers = { ...stripHopByHop(req.headers), host: target.host };
+    const upstream = track(httpRequest({
+      host, port, method: req.method, path: `${target.pathname}${target.search}`, headers,
+      // Connect to the vetted address; no pooling, so every socket is this request's.
+      lookup: pinnedLookup(vetted.ip), agent: false,
+    }, (up) => {
+      res.writeHead(up.statusCode ?? 502, stripHopByHop(up.headers));
       up.pipe(res);
-    });
+    }));
     upstream.on('error', (err) => {
       if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' }).end(`Upstream error: ${err.message}\n`);
       else res.destroy();
     });
+    // The client went away (or the response is done): nothing more to fetch.
+    res.on('close', () => upstream.destroy());
     req.pipe(upstream);
   });
 
-  server.on('connect', (req: IncomingMessage, client: Socket, head: Buffer) => {
+  server.on('connect', async (req: IncomingMessage, client: Socket, head: Buffer) => {
     track(client);
     client.on('error', () => client.destroy());
     const authority = parseAuthority(req.url ?? '');
@@ -163,8 +282,21 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
       client.end('HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n\r\nHost not declared in this package\'s network list\n');
       return;
     }
-    const upstream = netConnect(authority.port, authority.host);
-    track(upstream);
+    // Hold bytes a client sends before the tunnel is up (resolution is
+    // async); `pipe` resumes it, and a refusal resumes it to see the close.
+    client.pause();
+    const vetted = await vet(authority.host, authority.port, 'connect');
+    if (client.destroyed) return;
+    if (!('ip' in vetted)) {
+      client.resume();
+      const reason = vetted.status === 403 ? 'Forbidden' : 'Bad Gateway';
+      client.end(`HTTP/1.1 ${vetted.status} ${reason}\r\nContent-Type: text/plain\r\n\r\n${vetted.message}\n`);
+      return;
+    }
+    // The checked address, not the name: nothing is resolved again. The
+    // tunnel cannot see which name the TLS client then asks for (SNI); see
+    // docs/PLUGIN-PACKAGES.md#network.
+    const upstream = track(netConnect({ host: vetted.ip, port: authority.port }));
     let established = false;
     upstream.once('connect', () => {
       established = true;
@@ -174,7 +306,7 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
       client.pipe(upstream);
     });
     upstream.on('error', () => {
-      if (!established && client.writable) client.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+      if (!established && client.writable) client.resume().end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
       else client.destroy();
     });
     client.on('close', () => upstream.destroy());
@@ -193,9 +325,7 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
   let socketDir: string | null = null;
   let socketPath: string | null = null;
   if (options.unixSocket && process.platform !== 'win32') {
-    // sun_path is ~108 bytes; fall back to /tmp when TMPDIR is long.
-    const base = join(tmpdir(), 'octipus-egress-XXXXXX/proxy.sock').length < 100 ? tmpdir() : '/tmp';
-    socketDir = mkdtempSync(join(base, 'octipus-egress-'));
+    socketDir = socketDirFor(options.socketParent, label);
     socketPath = join(socketDir, 'proxy.sock');
     unix = createNetServer((socket) => server.emit('connection', socket));
     await new Promise<void>((resolve, reject) => {
