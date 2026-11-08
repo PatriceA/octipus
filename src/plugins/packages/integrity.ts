@@ -12,7 +12,10 @@
  * the package name and version, then one line per entry sorted by its
  * relative path (`/`-separated), each with the sha256 of the file's bytes.
  * Directory order, timestamps and permissions do not count; any byte, any
- * added, removed or renamed file does.
+ * added, removed or renamed file does. Nothing is left out: a cache directory
+ * a build tool writes on its own is still a place running code could stage
+ * executable content in. Only paths relative to the package root enter the
+ * listing, so a staging copy hashes the same as the installed directory.
  */
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
@@ -22,19 +25,6 @@ import { join } from 'node:path';
 /** The prefix of a recorded hash; a later format would get a new one. */
 export const CONTENT_HASH_PREFIX = 'sha256:';
 const FORMAT = 'octipus-plugin-content/v1';
-
-/**
- * Directories left out of the hash, as relative paths at any depth. Only
- * caches that build tools write by themselves (babel, eslint, esbuild and
- * friends keep theirs in `node_modules/.cache`): their content is derived,
- * never run as the package's code, and would otherwise read as a change on
- * every start of a package that builds on the fly.
- */
-const IGNORED_DIRS = ['node_modules/.cache'];
-
-function ignored(rel: string): boolean {
-  return IGNORED_DIRS.some((d) => rel === d || rel.endsWith(`/${d}`));
-}
 
 function fileHash(path: string): Promise<string> {
   return new Promise((resolvePromise, reject) => {
@@ -55,7 +45,7 @@ export async function contentListing(dir: string, identity: { name: string; vers
       const childAbs = join(abs, name);
       const info = await lstat(childAbs);
       if (info.isDirectory()) {
-        if (!ignored(childRel)) await walk(childAbs, childRel);
+        await walk(childAbs, childRel);
       } else if (info.isFile()) {
         entries.push([childRel, `file ${await fileHash(childAbs)}`]);
       } else if (info.isSymbolicLink()) {
@@ -89,6 +79,11 @@ export type ContentCheck =
 
 /** The problem shown for a package whose files changed since they were approved. */
 export const CONTENT_MISMATCH_PROBLEM = 'Modified since it was approved (hash mismatch); approve its content to run it';
+
+/** Whether `value` is a content hash in the recorded form (`sha256:<64 hex>`). */
+export function isContentHash(value: unknown): value is string {
+  return typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.test(value);
+}
 
 /**
  * Compare a package directory against the hash recorded for it. With no

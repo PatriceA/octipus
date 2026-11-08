@@ -195,6 +195,26 @@ export class StdioTransport implements MCPTransport {
     this.closeHandlers.push(handler);
   }
 
+  /**
+   * Close, then wait for the child to exit: SIGKILL after `graceMs` if the
+   * terminate signal was not enough, and give up waiting (logged) shortly
+   * after that.
+   */
+  async closeAndWait(graceMs = 3000): Promise<void> {
+    const child = this.process;
+    this.close();
+    if (!child || child.exitCode !== null || child.signalCode !== null) return;
+    const exited = new Promise<boolean>((done) => {
+      child.once('exit', () => done(true));
+      child.once('error', () => done(true));
+    });
+    const within = (ms: number) => Promise.race([exited, new Promise<boolean>((done) => setTimeout(() => done(false), ms).unref())]);
+    if (await within(graceMs)) return;
+    if (process.platform === 'win32') killProcessTree(child.pid, child);
+    else child.kill('SIGKILL');
+    if (!(await within(2000))) coreLogger.warn({ pid: child.pid, command: this.options.command }, 'MCP server process did not exit after SIGKILL');
+  }
+
   close(): void {
     if (this.process) {
       // Windows: taskkill /T, or the cmd.exe wrapper of an `npx` server dies

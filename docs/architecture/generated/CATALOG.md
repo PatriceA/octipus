@@ -768,7 +768,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `plugins` | `core` | 3 |
 | `plugins` | `db` | 3 |
 | `plugins` | `mcp` | 1 |
-| `plugins` | `security` | 2 |
+| `plugins` | `security` | 3 |
 | `plugins` | `shared` | 3 |
 | `plugins` | `tools` | 1 |
 | `plugins` | `utils` | 5 |

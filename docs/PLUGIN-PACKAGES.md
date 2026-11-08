@@ -117,33 +117,52 @@ sha256 over:  octipus-plugin-content/v1
 
 Every file counts — any changed byte, added, removed or renamed file changes
 the hash — but not directory order, timestamps or permissions. A symbolic link
-(refused at install) counts by its target. Only `node_modules/.cache`, at any
-depth, is left out: build tools write their caches there on their own, and
-nothing in it is the package's code.
+(refused at install) counts by its target. Nothing is left out — not even
+`node_modules/.cache`: a cache a build tool writes on its own is still a place
+running code could stage executable content in. Only paths relative to the
+package root enter the listing, so the copy hashed at install hashes the same
+as the installed directory.
+
+Install and upgrade copy the package into a staging directory beside the
+installed one and hash **the copy**, before it replaces anything; the row (new
+manifest, version and hash) is written in the same transaction that swaps the
+files in. A failure while copying, hashing or swapping leaves the old files and
+the old row together (an upgrade stays disabled).
 
 Before **every start** of the package's server — host start, enable, restart
-after a change, reconnect after a crash — the hash is recomputed. On a
-mismatch the server is not started; the package keeps `enabled` but shows the
-problem *"Modified since it was approved (hash mismatch)"*, and the log names
-the package with the recorded and the actual hash. Enabling a disabled package
-whose files do not match is refused as well. A server already running keeps
-running until its next start.
+after a change, reconnect after a crash — the hash is recomputed. A restart
+first waits for the old process to exit (it is killed after 3 seconds), so it
+cannot still be writing while the new start is checked; concurrent starts of
+the same server (an on-demand reconnect and the backoff timer) share one check
+and one process. On a mismatch the server is not started; the package keeps
+`enabled` but shows the problem *"Modified since it was approved (hash
+mismatch)"* with the hash its files have now as `actualHash`, the log names
+the package with the recorded and the actual hash, and the audit log gets one
+`content_mismatch` row (with both hashes) per package and pair of hashes — a
+reconnect loop does not repeat it. Enabling a disabled package whose files do
+not match is refused as well, naming both hashes. A server already running
+keeps running until its next start.
 
-To accept the new content (after reading what changed):
+To accept the new content, review the files that hash to `actualHash` and
+approve **that hash**:
 
 ```
-PATCH /api/plugin-packages/:name { "approveContent": true }
+PATCH /api/plugin-packages/:name { "approveContent": "sha256:<actualHash>" }
 ```
 
-This records the hash of the files as they are now (audit op
-`content_approved`, with the old and new hash) and starts the package if it is
-enabled; `{ "approveContent": true, "enabled": true }` does both in one write.
-Reinstalling with `"upgrade": true` also records a fresh hash.
+The files are hashed again when the request arrives: only if they still hash
+to the reviewed value is it recorded (audit op `content_approved`, with the old
+and new hash) and the package started if it is enabled; otherwise the request
+is refused with `409` naming the actual hash, and nothing changes.
+`{ "approveContent": "sha256:…", "enabled": true }` approves and enables in
+one write. `"approveContent": true` is refused (`400`): pass the hash you
+reviewed. Reinstalling with `"upgrade": true` also records a fresh hash.
 
 A package installed **before pinning existed** has no hash. Its first start
-records the current one and logs that once (trust on first use), so existing
-installs keep running after the update; from then on it is checked like any
-other.
+records the current one, logs it and writes the audit op
+`content_pinned_first_use` (with the hash) once (trust on first use), so
+existing installs keep running after the update; from then on it is checked
+like any other.
 
 A package keeps its runtime state in its data directory
 (`OCTIPUS_PLUGIN_DATA_DIR`), which is not hashed. Under the sandbox its own
@@ -232,7 +251,7 @@ marketplace (plan point C15) will fetch signed packages instead.
    accepts is kept; a new required setting must be set before enabling.
    The new files' hash replaces the old one.
 5. **Approve changed content:** `PATCH /api/plugin-packages/:name
-   { "approveContent": true }` after a hash mismatch
+   { "approveContent": "sha256:<reviewed hash>" }` after a hash mismatch
    ([Content pinning](#content-pinning)).
 6. **Uninstall:** `DELETE /api/plugin-packages/:name` removes the server, the
    files, the data directory, the row and the secrets.

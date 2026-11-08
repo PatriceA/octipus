@@ -108,6 +108,12 @@ export interface PluginPackageView {
    * null until the first start of a package installed before pinning.
    */
   contentHash: string | null;
+  /**
+   * What its files hash to now, when they do not match `contentHash` (the
+   * problem is the hash mismatch): the hash to review and approve with
+   * `approveContent`. Null otherwise.
+   */
+  actualHash: string | null;
   installedBy: string | null;
   installedAt: string;
   updatedAt: string;

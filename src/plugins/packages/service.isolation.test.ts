@@ -25,6 +25,34 @@ vi.mock('@/core/modules/registry', async (original) => {
   return { ...actual, isModuleOn: (id: string) => (id === 'protection' ? protectionOn : actual.isModuleOn(id)) };
 });
 
+// Content hashing, failing on demand and noting the directories it hashed.
+const hashing = vi.hoisted(() => ({ fail: false, dirs: [] as string[] }));
+vi.mock('./integrity', async (original) => {
+  const actual = await original<typeof import('./integrity')>();
+  return {
+    ...actual,
+    hashPackageContent: async (dir: string, id: { name: string; version: string }) => {
+      hashing.dirs.push(dir);
+      if (hashing.fail) throw new Error('hashing failed (test)');
+      return actual.hashPackageContent(dir, id);
+    },
+  };
+});
+
+/** The audit ops written for the echo package, oldest first. */
+async function auditOps(op?: string): Promise<Array<{ op: string; userId: string; details: Record<string, unknown> }>> {
+  const { queryRaw } = await import('@/db/postgres');
+  const { rows } = await queryRaw(
+    `SELECT user_id, details FROM audit_log WHERE resource_type = 'plugin_package' AND resource_id = 'echo-plugin' ORDER BY created_at`,
+  );
+  return rows
+    .map((r: { user_id: string; details: unknown }) => {
+      const details = (typeof r.details === 'string' ? JSON.parse(r.details) : r.details) as Record<string, unknown>;
+      return { op: String(details.op), userId: r.user_id, details };
+    })
+    .filter((r: { op: string }) => op === undefined || r.op === op);
+}
+
 const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
 process.env.JWT_SECRET ??= `test-jwt-${rand(24)}`;
@@ -176,8 +204,14 @@ describe('plugin packages', () => {
     manifest.version = '1.1.0';
     manifest.settings.push({ key: 'account', label: 'Account', type: 'text', required: true });
     writeFileSync(join(v2, 'octipus-plugin.json'), JSON.stringify(manifest));
+    hashing.dirs.length = 0;
     const row = await svc.installFromDirectory(v2, admin, { upgrade: true });
     expect([row.version, row.enabled, row.settings]).toEqual(['1.1.0', false, { region: 'eu' }]);
+    // Hashed in the staging copy before the swap, and the same as the installed files.
+    expect(hashing.dirs).toHaveLength(1);
+    expect(hashing.dirs[0]).toContain('echo-plugin.installing-');
+    const { hashPackageContent } = await import('./integrity');
+    expect(row.contentHash).toBe(await hashPackageContent(svc.packageDir('echo-plugin'), { name: 'echo-plugin', version: '1.1.0' }));
     await expect(svc.setEnabled('echo-plugin', true, admin)).rejects.toThrow(/Account/);
     await svc.configure('echo-plugin', { settings: { account: 'A-1' }, enabled: true }, admin);
     expect((await svc.packageView('echo-plugin')).connected).toBe(true);
@@ -200,18 +234,38 @@ describe('plugin packages', () => {
     expect(view.enabled).toBe(true);
     expect(view.problem).toMatch(/modified since it was approved \(hash mismatch\)/i);
     expect(view.contentHash).toBe(approved);
-    // An on-demand reconnect is refused the same way.
+    // The view shows what the files hash to now, to review and approve.
+    const { hashPackageContent } = await import('./integrity');
+    const actual = await hashPackageContent(svc.packageDir('echo-plugin'), { name: 'echo-plugin', version: view.version });
+    expect(view.actualHash).toBe(actual);
+    expect(view.actualHash).not.toBe(approved);
+    // An on-demand reconnect is refused the same way, and audited only once.
+    await bridge.ensureConnected(SERVER);
     await bridge.ensureConnected(SERVER);
     expect(bridge.isConnected(SERVER)).toBe(false);
+    const mismatches = await auditOps('content_mismatch');
+    expect(mismatches).toHaveLength(1);
+    expect(mismatches[0].userId).toBe('system');
+    expect(mismatches[0].details).toMatchObject({ recorded: approved, actual });
     // Enabling again does not accept the new content either.
     await svc.setEnabled('echo-plugin', false, admin);
-    await expect(svc.setEnabled('echo-plugin', true, admin)).rejects.toThrow(/hash mismatch/);
+    await expect(svc.setEnabled('echo-plugin', true, admin)).rejects.toThrow(/hash mismatch: recorded sha256:[0-9a-f]{64}, actual sha256:/);
 
-    await svc.configure('echo-plugin', { approveContent: true, enabled: true }, admin);
+    // Approval takes the reviewed hash, not true, and only while the files still hash to it.
+    await expect(svc.configure('echo-plugin', { approveContent: true, enabled: true }, admin)).rejects.toMatchObject({ code: 'invalid' });
+    appendFileSync(join(svc.packageDir('echo-plugin'), 'server.mjs'), '\n// changed after review\n');
+    await expect(svc.configure('echo-plugin', { approveContent: actual, enabled: true }, admin)).rejects.toMatchObject({ code: 'conflict' });
+    expect((await svc.packageView('echo-plugin')).contentHash).toBe(approved);
+    expect(await auditOps('content_approved')).toHaveLength(0);
+
+    const reviewed = await hashPackageContent(svc.packageDir('echo-plugin'), { name: 'echo-plugin', version: view.version });
+    await svc.configure('echo-plugin', { approveContent: reviewed, enabled: true }, admin);
     view = await svc.packageView('echo-plugin');
     expect(view.connected).toBe(true);
     expect(view.problem).toBeNull();
-    expect(view.contentHash).not.toBe(approved);
+    expect(view.actualHash).toBeNull();
+    expect(view.contentHash).toBe(reviewed);
+    expect((await auditOps('content_approved')).map((a) => a.details)).toEqual([expect.objectContaining({ from: approved, to: reviewed })]);
   });
 
   test('a package installed before pinning records its hash on first start', async () => {
@@ -226,6 +280,40 @@ describe('plugin packages', () => {
     const view = await svc.packageView('echo-plugin');
     expect(view.connected).toBe(true);
     expect(view.contentHash).toBe(await hashPackageContent(svc.packageDir('echo-plugin'), { name: 'echo-plugin', version: view.version }));
+    const pinned = await auditOps('content_pinned_first_use');
+    expect(pinned).toHaveLength(1);
+    expect(pinned[0]).toMatchObject({ userId: 'system', details: { hash: view.contentHash, version: view.version } });
+    // A later start finds the hash recorded: no second row.
+    await getMCPBridge().disconnect(SERVER);
+    await svc.syncPluginServers();
+    expect((await svc.packageView('echo-plugin')).connected).toBe(true);
+    expect(await auditOps('content_pinned_first_use')).toHaveLength(1);
+  });
+
+  test('an upgrade whose files cannot be hashed leaves the old files and row together', async () => {
+    const svc = await import('./service');
+    const { cpSync, readdirSync, readFileSync, writeFileSync } = await import('node:fs');
+    const before = await svc.packageView('echo-plugin');
+    const v3 = mkdtempSync(join(tmpdir(), 'octipus-plugin-v3-'));
+    cpSync(svc.packageDir('echo-plugin'), v3, { recursive: true });
+    const manifest = JSON.parse(readFileSync(join(v3, 'octipus-plugin.json'), 'utf8'));
+    manifest.version = '1.2.0';
+    writeFileSync(join(v3, 'octipus-plugin.json'), JSON.stringify(manifest));
+    writeFileSync(join(v3, 'server.mjs'), 'process.exit(3)\n');
+    hashing.fail = true;
+    try {
+      await expect(svc.installFromDirectory(v3, admin, { upgrade: true })).rejects.toThrow(/hashing failed/);
+    } finally {
+      hashing.fail = false;
+    }
+    const after = await svc.packageView('echo-plugin');
+    expect([after.version, after.contentHash, after.enabled]).toEqual([before.version, before.contentHash, false]);
+    expect(JSON.parse(readFileSync(join(svc.packageDir('echo-plugin'), 'octipus-plugin.json'), 'utf8')).version).toBe(before.version);
+    expect(readFileSync(join(svc.packageDir('echo-plugin'), 'server.mjs'), 'utf8')).not.toContain('process.exit(3)');
+    expect(readdirSync(svc.pluginsRoot())).toEqual(['echo-plugin']);
+    // The old row still pins the old files: it enables and starts.
+    await svc.setEnabled('echo-plugin', true, admin);
+    expect((await svc.packageView('echo-plugin')).connected).toBe(true);
   });
 
   test('an operator MCP config claiming a plugin id is never used for the package', async () => {

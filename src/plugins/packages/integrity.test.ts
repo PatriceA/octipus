@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
-import { contentListing, hashPackageContent, verifyPackageContent } from './integrity';
+import { contentListing, hashPackageContent, isContentHash, verifyPackageContent } from './integrity';
 
 const ID = { name: 'demo', version: '1.0.0' };
 const dirs: string[] = [];
@@ -66,14 +66,27 @@ describe('hashPackageContent', () => {
     expect(await hashPackageContent(dir, { ...ID, name: 'other' })).not.toBe(base);
   });
 
-  test('leaves out node_modules/.cache only', async () => {
+  test('leaves nothing out, node_modules/.cache included', async () => {
     const dir = pkg(FILES);
     const base = await hashPackageContent(dir, ID);
     mkdirSync(join(dir, 'node_modules/.cache/babel'), { recursive: true });
-    writeFileSync(join(dir, 'node_modules/.cache/babel/x.json'), '{}');
-    expect(await hashPackageContent(dir, ID)).toBe(base);
+    writeFileSync(join(dir, 'node_modules/.cache/babel/x.js'), 'staged()');
+    const withCache = await hashPackageContent(dir, ID);
+    expect(withCache).not.toBe(base);
+    expect(await contentListing(dir, ID)).toContain('"node_modules/.cache/babel/x.js"');
     writeFileSync(join(dir, 'node_modules/dep.js'), 'dep');
-    expect(await hashPackageContent(dir, ID)).not.toBe(base);
+    expect(await hashPackageContent(dir, ID)).not.toBe(withCache);
+  });
+
+  test('depends only on paths relative to the package root (a staging copy hashes the same)', async () => {
+    const dir = pkg(FILES);
+    const base = await hashPackageContent(dir, ID);
+    const parent = mkdtempSync(join(tmpdir(), 'octipus-integrity-moved-'));
+    dirs.push(parent);
+    const moved = join(parent, 'demo.installing-1-2');
+    renameSync(dir, moved);
+    expect(await hashPackageContent(moved, ID)).toBe(base);
+    expect(await contentListing(moved, ID)).not.toContain(parent);
   });
 
   test('a symbolic link that appears after install changes the hash', async () => {
@@ -132,5 +145,14 @@ describe('verifyPackageContent', () => {
     expect(recorded).toEqual([await hashPackageContent(dir, ID)]);
     writeFileSync(join(dir, 'lib/a.js'), 'tampered');
     expect((await verifyPackageContent(dir, { ...ID, contentHash: recorded[0] }, async () => {})).status).toBe('mismatch');
+  });
+});
+
+describe('isContentHash', () => {
+  test('accepts only the recorded form', async () => {
+    expect(isContentHash(await hashPackageContent(pkg(FILES), ID))).toBe(true);
+    for (const v of [true, false, null, '', 'sha256:', `sha256:${'A'.repeat(64)}`, `sha512:${'a'.repeat(64)}`, `sha256:${'a'.repeat(63)}`, `sha256:${'a'.repeat(64)}\n`]) {
+      expect(isContentHash(v)).toBe(false);
+    }
   });
 });
