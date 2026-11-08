@@ -71,6 +71,28 @@ export interface ExtensionAPI {
   registerTool(def: ExtensionToolDef): () => void;
 
   /**
+   * Register a model endpoint on one of the existing custom-provider kinds
+   * (`openai-compatible` -> `custom-openai`, `anthropic-compatible` ->
+   * `custom-anthropic`, `gemini-compatible` -> `custom-gemini`). Not provider
+   * code: each model becomes an in-memory model row named
+   * `ext/<extension>/<id>/<model id>` that the existing custom provider serves.
+   * The rows can be chosen by name or model id (`/model`, an agent's model);
+   * they are never a default, a topic binding or a fallback.
+   *
+   * `baseUrl` must be https and resolve to public addresses only (checked now
+   * and on every request; redirects are not followed). The key is the NAME of
+   * a system vault secret (`apiKeySecret`), never the key itself.
+   *
+   * Trusted extensions only (`extensions.trusted`): an untrusted one, an
+   * invalid definition or an id already registered throws synchronously. The
+   * returned promise settles once the endpoint's DNS check and the collision
+   * check against configured models have passed (rejects otherwise, leaving
+   * nothing registered) and resolves to the unregister function. Removed on
+   * dispose.
+   */
+  registerProvider(def: ExtensionProviderDef): Promise<() => void>;
+
+  /**
    * Register a teardown callback. All `on()` subscriptions are cleaned up
    * automatically; use this for any extra resources (timers, file watchers).
    */
@@ -122,6 +144,46 @@ export interface ExtensionToolDef {
   effect: ExtensionToolEffect;
   /** Its return value is the tool result (JSON-serialisable). A throw is a failed call. */
   handler: (args: Record<string, unknown>, ctx: ExtensionToolContext) => unknown | Promise<unknown>;
+}
+
+export type ExtensionProviderKind = 'openai-compatible' | 'anthropic-compatible' | 'gemini-compatible';
+
+export interface ExtensionProviderModelDef {
+  /** The model id sent upstream. */
+  id: string;
+  contextWindow: number;
+  /** Output-token ceiling (also the per-request default). */
+  maxOutput: number;
+  supportsTools?: boolean;
+  supportsVision?: boolean;
+  supportsStreaming?: boolean;
+  /** USD per 1M input tokens, for cost tracking. Default 0. */
+  costPerMillionInput?: number;
+  /** USD per 1M output tokens, for cost tracking. Default 0. */
+  costPerMillionOutput?: number;
+  description?: string;
+}
+
+export interface ExtensionProviderDef {
+  /** Lower-case letters, digits and hyphens, starting with a letter; not a built-in provider name. */
+  id: string;
+  /** Shown in model descriptions. */
+  label?: string;
+  kind: ExtensionProviderKind;
+  /** https only; public addresses only. No credentials, query or fragment. */
+  baseUrl: string;
+  /** The name of the system vault secret holding the key. Required. */
+  apiKeySecret: string;
+  /**
+   * The header the key goes in. Default per kind: `Authorization: Bearer`
+   * (OpenAI), `x-api-key` (Anthropic), `x-goog-api-key` (Gemini).
+   */
+  authHeader?: string;
+  /** Request path instead of the kind's default (e.g. `/openai/v1/chat/completions`). */
+  path?: string;
+  /** Extra non-credential headers sent on every request. */
+  headers?: Record<string, string>;
+  models: ExtensionProviderModelDef[];
 }
 
 export interface ExtensionToolContext {

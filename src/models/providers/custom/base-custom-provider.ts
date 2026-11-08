@@ -1,6 +1,7 @@
 import { classifyError } from '@/core/errors/classification';
 import type { CustomProviderConfig, ModelConfigEntry, ModelMetadata } from '@/db/schema/models';
 import type { CompletionOptions } from '../../litellm-client';
+import { isExtensionModel } from '@/models/extension-models';
 import { modelLogger } from '@/utils/logger';
 import { fetchGuarded } from '@/utils/sanitize';
 import { providerUsageUserId } from '../instrumented';
@@ -101,7 +102,9 @@ export abstract class BaseCustomProvider {
     // row, the owner's vault for a personal one — never under the requester.
     const apiKey = options?.apiKey || (model.ownerUserId
       ? await this.resolvePersonalApiKey(model, providerUsageUserId(options ?? {}))
-      : await this.resolveApiKey(model.apiKeyRef));
+      : isExtensionModel(model)
+        ? await this.resolveExtensionApiKey(model)
+        : await this.resolveApiKey(model.apiKeyRef));
 
     return {
       baseUrl: model.endpoint.replace(/\/+$/, ''),
@@ -119,9 +122,29 @@ export abstract class BaseCustomProvider {
     return key;
   }
 
-  /** The fetch for this row's endpoint: SSRF-guarded for a personal row, plain otherwise. */
+  /**
+   * An extension row's key (`octi.registerProvider`): the system vault entry
+   * it names, and nothing else — no `env:` reference and no
+   * `<PROVIDER>_API_KEY` fallback, which would hand the install's own
+   * custom-provider key to the extension's endpoint.
+   */
+  private async resolveExtensionApiKey(model: ModelConfigEntry): Promise<string> {
+    const ref = model.apiKeyRef;
+    if (!ref || ref.startsWith('env:')) {
+      throw classifyError(new Error(`Custom provider: extension model '${model.name}' names no vault secret`), this.providerName);
+    }
+    const { getVault } = await import('@/security/vault');
+    const key = await getVault().getByName('system', ref);
+    if (!key) throw classifyError(new Error(`Custom provider: vault secret '${ref}' for extension model '${model.name}' is not set`), this.providerName);
+    return key;
+  }
+
+  /**
+   * The fetch for this row's endpoint: SSRF-guarded for a personal row and
+   * for an extension row (neither endpoint was typed by an admin), plain otherwise.
+   */
   protected fetchFor(cfg: ResolvedCustomConfig): typeof fetch {
-    return cfg.model?.ownerUserId ? personalEndpointFetch : fetch;
+    return cfg.model?.ownerUserId || isExtensionModel(cfg.model) ? personalEndpointFetch : fetch;
   }
 
   /**

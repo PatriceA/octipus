@@ -15,6 +15,7 @@ import type {
   LoadedExtension,
 } from './types';
 import { ExtensionToolContainer, registerContainer, unregisterContainer } from './tools';
+import { activateExtensionProvider, buildExtensionProviderRows, deactivateExtensionProvider } from './providers';
 
 /** The hook contract version an extension sees as `octi.hookApiVersion`. */
 export const OCTI_HOOK_API_VERSION = AGENT_HOOK_API_VERSION;
@@ -86,6 +87,9 @@ export function buildExtensionContext(
   let toolContainer: ExtensionToolContainer | undefined;
   const pendingToolWork: Promise<void>[] = [];
   let toolRegistrationError: string | undefined;
+  /** Provider id -> its live row names (empty while its checks run). */
+  const providers = new Map<string, string[]>();
+  const pendingProviderWork: Promise<unknown>[] = [];
 
   const api: ExtensionAPI = {
     name,
@@ -222,6 +226,43 @@ export function buildExtensionContext(
       const container = toolContainer;
       return () => { container.remove(def.id); };
     },
+
+    registerProvider(def) {
+      if (disposed) {
+        logger.warn(`registerProvider(${def?.id}) ignored — extension already disposed`);
+        return Promise.resolve(() => {});
+      }
+      if (!trusted) {
+        throw new Error(`extension "${name}" may not register providers: it is not listed in extensions.trusted (${entryPath})`);
+      }
+      const { providerId, rows } = buildExtensionProviderRows(name, def);
+      if (providers.has(def.id)) throw new Error(`extension "${name}" registerProvider: id '${def.id}' is already registered`);
+      providers.set(def.id, []);
+      const unregister = () => {
+        const names = providers.get(def.id);
+        if (!names) return;
+        providers.delete(def.id);
+        deactivateExtensionProvider(names);
+      };
+      const work = activateExtensionProvider(name, rows).then(
+        (names) => {
+          // Disposed (or unregistered) while the checks ran: never go live.
+          if (disposed || !providers.has(def.id)) {
+            deactivateExtensionProvider(names);
+            return () => {};
+          }
+          providers.set(def.id, names);
+          logger.info({ provider: providerId, models: names }, 'extension registered a model provider endpoint');
+          return unregister;
+        },
+        (err) => {
+          providers.delete(def.id);
+          throw err;
+        },
+      );
+      pendingProviderWork.push(work.catch(() => {}));
+      return work;
+    },
   };
 
   const loaded: LoadedExtension = {
@@ -239,6 +280,9 @@ export function buildExtensionContext(
         try { cmdRegistry.unregister(cmdName); } catch (err) { logger.warn({ err, cmdName }, 'unregister command failed'); }
       }
       commandNames.length = 0;
+      await Promise.allSettled(pendingProviderWork);
+      for (const names of providers.values()) deactivateExtensionProvider(names);
+      providers.clear();
       if (toolContainer) {
         await Promise.allSettled(pendingToolWork);
         try { await unregisterContainer(toolContainer); } catch (err) { logger.warn({ err }, 'unregister tools failed'); }

@@ -175,9 +175,39 @@ The action is per tool, `<effect>:<id>`, so a stored policy (an "always allow" a
 
 To give agents the tools, list the group in a role's tools (`ext_stocks`), as for a plugin's `plugin-<name>`. On a role with a core tool set, lazy discovery puts the group in the long tail: `list_tools` lists the tools and `describe_tool` returns their schema. `octi.registerTool` returns a function that removes that one tool; disposing the extension (`/reload`, shutdown) removes the group. A worker that started before the dispose still holds the handler; calling it answers `{ error: "… is no longer registered" }` without running the extension's code. An untrusted extension's `registerTool` throws, like its `hook`.
 
-#### Not provided: `registerProvider`
+#### `octi.registerProvider`: add a model endpoint (trusted extensions only)
 
-Registering model providers from an extension is deferred. A provider is not a registry entry: the router builds its fixed provider list once, provider ids are a closed union (`ProviderId`) that the circuit breakers, the generated model catalog (`npm run catalog`), pricing, the setup flow and the credential vault each key on, and a provider receives the full prompt, every tool result and the provider credentials. An in-process seam for that is a contract across all of those, not a small addition here. A model behind an OpenAI-, Anthropic- or Gemini-compatible endpoint can be added today as a custom provider (`custom-openai`, `custom-anthropic`, `custom-gemini`; `src/models/providers/custom/`), with no extension code.
+```ts
+const off = await octi.registerProvider({
+  id: 'gateway',                       // lower-case letters, digits, hyphens
+  kind: 'openai-compatible',           // or 'anthropic-compatible' | 'gemini-compatible'
+  baseUrl: 'https://llm.example.com',  // https, public addresses only
+  apiKeySecret: 'acme_gateway_key',    // the NAME of a system vault secret
+  headers: { 'X-Team': 'research' },   // optional, never credentials
+  models: [{ id: 'acme-large', contextWindow: 200_000, maxOutput: 8192, costPerMillionInput: 1, costPerMillionOutput: 4 }],
+});
+```
+
+This registers an endpoint, not provider code. Each kind is one of the custom providers an admin can already configure (`openai-compatible` is `custom-openai`, `anthropic-compatible` is `custom-anthropic`, `gemini-compatible` is `custom-gemini`; `src/models/providers/custom/`), and each model becomes an in-memory model row on that provider, named `ext/<extension>/<id>/<model id>` (`ext/acme/gateway/acme-large`). The router, the custom provider, rate limiting, circuit breaking, protection routing and cost tracking serve it as they serve a configured custom provider. `ProviderId`, the generated model catalog, the pricing tables, the setup flow and the circuit-breaker keys are unchanged: the rows share the `custom-openai` / `custom-anthropic` / `custom-gemini` rate-limit and breaker lane with configured custom models.
+
+What is supported:
+
+- **Choosing the model explicitly**: by row name or model id (`/model ext/acme/gateway/acme-large`, an agent's or a pipeline stage's model). The rows appear in a user's model list (`/models`, the pickers). They are install rows, visible to whoever may use the install's models.
+- **Endpoint**: `baseUrl` must be `https://`, carry no credentials, query or fragment, and not name localhost or a private, loopback, link-local or ambiguous IP literal. Registration then resolves the host and refuses it when any address is private (`validateExternalUrl`), and every request goes through the SSRF-guarded fetch personal models use: re-resolved, pinned to the checked address, redirects not followed. These are the personal-endpoint rules, stricter than an admin-configured custom row (which may point at a local server). A local endpoint is configured by an admin as a custom provider instead.
+- **Key**: `apiKeySecret` names a secret in the system vault, read at request time. A raw key (`apiKey`), an `env:` reference and credential headers (`Authorization`, `x-api-key`, `Cookie`, …) are refused. Unlike an admin-configured custom row there is no `CUSTOM_OPENAI_API_KEY`-style env fallback: a missing secret fails the call rather than sending the install's key to the extension's endpoint. The key goes in the kind's usual header (`Authorization: Bearer`, `x-api-key`, `x-goog-api-key`); `authHeader` names another.
+- **Options**: `path` replaces the kind's default request path; per model, `supportsTools` (default true), `supportsVision` (false), `supportsStreaming` (true), `costPerMillionInput` / `costPerMillionOutput` (USD, default 0), `description`.
+- **Collisions** are refused, never resolved by overwriting: an id spelled like a built-in provider (`openai`, `custom-openai`, …), the same id twice in one extension, a model id another extension serves, or a model id an install row in the database already has. The `ext/` name namespace is reserved: the model registry refuses to create or rename a database row into it.
+- **Lifecycle**: invalid definitions and an untrusted extension throw synchronously. The returned promise resolves to the unregister function once the DNS and database checks pass, and rejects otherwise with nothing registered. Disposing the extension (`/reload`, shutdown) removes its rows; a request already running finishes.
+
+What is not supported:
+
+- **Provider code.** No custom request/response handling, auth flows (OAuth, request signing), or protocols other than the three kinds.
+- **Defaults, topic bindings and automatic selection.** The rows never become the install default, a topic's primary or backup, or a fallback, and they are left out of the list automatic model selection and the health checker read (`getAllModels`). The topic binding and default live in the database, which the rows are not in.
+- **Editing in the admin registry**, embeddings, OCR and the native decision API (`decisionProtocol`, which needs a local endpoint).
+- **Personal or org-scoped rows**: the rows are install-wide.
+- **Persistence**: the rows exist while the extension is loaded.
+
+A trusted extension runs in the process and could reach the vault and the network on its own; these rules keep the key out of its source, keep its endpoint off the internal network, and keep its models from replacing the ones an admin configured.
 
 #### `context`: transform one request's messages
 
@@ -214,7 +244,7 @@ octi.hook('compact:before', async (ctx) => {
 
 A compaction rewrites the start of the conversation, so the prompt cache starts over after it whoever wrote the summary.
 
-Hooks and tools can rewrite what the agent does, so `octi.hook` and `octi.registerTool` throw unless the operator trusts the extension: list each trusted extension's entry file or directory, by absolute path, in `extensions.trusted` (or `OCTIPUS_TRUSTED_EXTENSIONS`, comma-separated). The list is read once, before the first extension's code runs, so changing it needs a restart; relative entries are ignored; paths are compared by real path, decided before the extension is imported, so an extension with the same name somewhere else is not trusted. Observing events (`octi.on`) and adding slash commands (`octi.registerCommand`) need no trust.
+Hooks, tools and providers can rewrite what the agent does or see all of it, so `octi.hook`, `octi.registerTool` and `octi.registerProvider` throw unless the operator trusts the extension: list each trusted extension's entry file or directory, by absolute path, in `extensions.trusted` (or `OCTIPUS_TRUSTED_EXTENSIONS`, comma-separated). The list is read once, before the first extension's code runs, so changing it needs a restart; relative entries are ignored; paths are compared by real path, decided before the extension is imported, so an extension with the same name somewhere else is not trusted. Observing events (`octi.on`) and adding slash commands (`octi.registerCommand`) need no trust.
 
 What this gate is and is not: it keeps an extension that was not meant to steer the agent from doing so. It is not a sandbox. Every extension, trusted or not, is in-process code with the server's privileges from the moment it loads, and `<cwd>/.octipus/extensions` loads automatically, so install only extensions you would run yourself.
 
@@ -314,7 +344,8 @@ See `extensions/example-plugin/` for a working example with a greeting tool and 
 | `src/plugins/index.ts` | Barrel exports |
 | `src/api/routes/plugins.ts` | REST API routes |
 | `extensions/` | Plugin directory (create plugins here) |
-| `src/extensions/api.ts` | The `octi` API of user extensions: `on`, `registerCommand`, `hook`, `registerTool`, `hookApiVersion` |
+| `src/extensions/api.ts` | The `octi` API of user extensions: `on`, `registerCommand`, `hook`, `registerTool`, `registerProvider`, `hookApiVersion` |
+| `src/extensions/providers.ts` | `registerProvider` validation and registration; the rows live in `src/models/extension-models.ts` |
 | `src/extensions/tools.ts` | Extension tool groups (`ext_<extension>`) in the tool registry |
 | `src/core/agent/hooks.ts` | Hook events, payloads and `AGENT_HOOK_API_VERSION` |
 
