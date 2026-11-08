@@ -216,7 +216,7 @@ handlers are reused unchanged.
 - **Heartbeat.** `ping`/`pong` every `heartbeatSeconds`; 3 missed pings close the link.
 - **Reconnect.** B reconnects with exponential backoff (1 s up to 60 s, with jitter) while a local user has the space open or an agent turn needs the link. The backoff starts over only after a link stayed up 30 s. A host that refused the link (4403, 4409) is not redialled until the next explicit request or retain. Turning visiting off closes the links and stops the redials; turning it back on redials every host still retained. A dial that completes after visiting went off is closed, not used.
 - **Per-link limits.**
-  - 60 frames per second.
+  - 60 frames per second, counted by the host on arrival. The visitor paces its own frames to at most 40 per second on the link, so a burst (a busy tab, an agent turn, every member of the install on the one shared link) waits briefly in its send queue instead of tripping 4429 and closing the link for everyone.
   - `space.join`: 5 per minute per link, and 20 per hour per source IP.
 - **Close codes.**
 

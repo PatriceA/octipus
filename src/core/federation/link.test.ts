@@ -7,7 +7,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import { afterEach, describe, expect, test } from 'vitest';
-import { LinkRequestError, type LinkSocket, MAX_IN_FLIGHT_REQUESTS, PeerLink, SEND_QUEUE_CAP_BYTES, sealedWireLimit, sendQueueCap } from './link';
+import { LinkRequestError, type LinkSocket, MAX_FRAMES_PER_SECOND, MAX_IN_FLIGHT_REQUESTS, PeerLink, SEND_QUEUE_CAP_BYTES, sealedWireLimit, sendQueueCap, VISITOR_FRAMES_PER_SECOND } from './link';
 import { CLOSE, closeReason } from './protocol';
 import { deriveLinkKeys, generateEphemeral, type HandshakeFields, SealedChannel } from './seal';
 
@@ -121,6 +121,40 @@ describe('requests in flight', () => {
     while (gates.length < 1) await new Promise((r) => setImmediate(r));
     gates.splice(0).forEach((open) => open());
     expect(await later).toEqual({});
+  });
+});
+
+describe('visitor pacing', () => {
+  test('a burst over the host\'s frame rate waits in the queue instead of closing the link', async () => {
+    expect(VISITOR_FRAMES_PER_SECOND).toBeLessThan(MAX_FRAMES_PER_SECOND);
+    const { host, visitor, vs } = pair();
+    // Delivered as sent, in order: arrival is then exactly what the pace
+    // controls (a loaded test machine's setImmediate would add its own bunching).
+    const sent: number[] = [];
+    vs.send = (data, cb) => { sent.push(Date.now()); host.receive(data); cb?.(); };
+    const burst = 2 * MAX_FRAMES_PER_SECOND;
+    let settled = 0;
+    const results = await Promise.allSettled(Array.from({ length: burst }, () => visitor.request('ping', {}, { timeoutMs: 5_000 }).finally(() => { settled++; })));
+    // Without the pace the host closes the link (4429) at the 61st frame of a second.
+    expect(host.closed, 'the host closed the link').toBe(false);
+    expect(settled).toBe(burst);
+    // Busy answers past the in-flight cap are fine; a lost or timed-out request is not.
+    expect(results.filter((r) => r.status === 'rejected' && (r.reason as LinkRequestError).code !== 'busy')).toEqual([]);
+    expect(sent).toHaveLength(burst);
+    for (const t of sent) expect(sent.filter((u) => u >= t && u < t + 1000).length).toBeLessThanOrEqual(VISITOR_FRAMES_PER_SECOND);
+    expect(sent[burst - 1] - sent[0]).toBeGreaterThanOrEqual(1000);
+  }, 15_000);
+
+  test('the host is not paced: its events reach the visitor at once', async () => {
+    const { host, visitor } = pair();
+    let got = 0;
+    // biome-ignore lint/suspicious/noExplicitAny: reach the event hook for the count
+    (visitor as any).opts.onEvent = () => { got++; };
+    const started = Date.now();
+    for (let i = 0; i < 2 * MAX_FRAMES_PER_SECOND; i++) host.sendEvent('m', 'c', { i });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(got).toBe(2 * MAX_FRAMES_PER_SECOND);
+    expect(Date.now() - started).toBeLessThan(1000);
   });
 });
 
