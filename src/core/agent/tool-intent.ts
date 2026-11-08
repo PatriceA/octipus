@@ -52,7 +52,9 @@ export const CORE_TOOL_FLOOR: readonly string[] = ['filesystem', 'shell', 'skill
  * Only the expensive groups have entries. Everything else fails open.
  */
 const INTENT: Record<string, RegExp> = {
-  websearch: /\b(search|google|web|online|internet|latest|news|look\s*up|lookup|browse|url|https?:)\b/i,
+  // `https?://` sits outside the word-boundary group: `\b` after a colon needs
+  // a word character there, so inside it a URL never matched.
+  websearch: /\b(search|google|web|online|internet|latest|news|look\s*up|lookup|browse|url)\b|https?:\/\//i,
   knowledge: /\b(knowledge|kb|rag|embedding|prior\s+work|what\s+do\s+we\s+know|documentation|docs)\b/i,
   // Not a bare `note`: "note that", "worth noting" and "please note" are
   // ordinary English and would keep this group on most messages. The phrases
@@ -70,12 +72,15 @@ const INTENT: Record<string, RegExp> = {
   // tool set (root-runner), so this only governs ordinary root turns, where it
   // is wanted when the user talks about supervision or other sessions.
   companion: /\b(companion|supervis\w*|briefings?|incidents?|unblock\w*|heartbeat|(other|project|existing|linked|that|my)\s+(sessions?|conversations?)|session\s+(status|title)|park\s+(this|that|it|the)|for\s+a?\s*later\s+heartbeat)\b/i,
-  // Waiting on background work: the root's routing prose sends "wait for the
-  // deploy and tell me" here (monitor__create).
-  monitor: /\b(monitor\w*|watch|wait(ing)?\s+(for|until)|notify\s+me|let\s+me\s+know\s+(when|once|if)|check\s+back|poll\w*|keep\s+an\s+eye|deploy\w*|rollout|build|ci|pipeline|job)\b/i,
-  // Operator-configured authenticated HTTP/Git connections.
-  connections: /\b(api|apis|connections?|endpoint|http|https?:|rest|graphql|jenkins|gitlab|github|push|fetch|remote|origin|credentials?|token|webhook)\b/i,
   repo_registry: /\b(repo|repos|repository|repositories|registry|clone|check\s*out|remote|origin)\b/i,
+  // Waiting on background work: the root's routing prose sends "wait for the
+  // deploy and tell me" here (monitor__create). Phrases, not `build`/`job`/
+  // `watch` alone: "build me a page" and "good job" are not waits, and one
+  // false hit keeps the group for the whole conversation (sticky).
+  monitor: /\b(monitor\w*|watch\s+(for|the|it|this|that|until)|keep\s+an\s+eye|wait(ing)?\s+(for|until)|notify\s+me|let\s+me\s+know\s+(when|once|if)|check\s+back|poll(ing)?\s+(the|it|for|until)|deploy(ment)?\s+(finishes|is\s+done|completes|lands|status)|(build|ci|job|pipeline|run|workflow)\s+(finishes|is\s+(done|green|red)|completes|passes|fails|status))\b/i,
+  // Operator-configured authenticated HTTP/Git connections. Phrases again:
+  // "the API layer" or "summarize the rest" is not a call to a service.
+  connections: /\b(connections?|authenticated\s+(api|request|http)|(call|query|hit|request|use)\s+(the|an|our|my|their)?\s*[\w.-]*\s*(api|endpoint)|(api|http)\s+(request|call)|jenkins|webhook|credentials?|git\s+(push|fetch)|push\s+(it\s+|the\s+\w+\s+|this\s+)?to\s+(the\s+)?(remote|origin))\b|https?:\/\//i,
 };
 
 /**

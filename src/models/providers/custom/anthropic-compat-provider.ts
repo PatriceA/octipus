@@ -140,15 +140,23 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
       max_tokens: options.maxTokens ?? CustomAnthropicCompatProvider.DEFAULT_MAX_TOKENS,
       stream: streaming,
     };
-    const ttls = cacheTtlsFor(options.cachePolicy, options.cachePacing);
+    // No pacing-based hour here: an Anthropic-shaped endpoint other than
+    // api.anthropic.com (a gateway, a non-Claude model) may not accept `ttl`.
+    const ttls = cacheTtlsFor(options.cachePolicy);
     if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, (body.model as string) || options.model, ttls.prefix);
     if (options.cachePolicy !== 'off' && options.historyCache !== false) markHistoryCacheBreakpoint(messages, Boolean(options.cacheScope), ttls.history);
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
-    if (options.tools?.length) body.tools = toAnthropicTools(options.tools);
     // An Anthropic-shaped endpoint can serve a non-Claude model (self-hosted,
     // proxied): the Claude-only rules (`claude-request.ts`) stay off for it,
     // and its sampling parameters still reach it (Messages takes [0, 1]).
     const claude = isAnthropicFamily(String(body.model));
+    if (options.tools?.length) {
+      const tools = toAnthropicTools(options.tools);
+      // A tool-level marker only where the model is Claude; another model's
+      // Anthropic-compatible API may reject it.
+      if (claude && options.cachePolicy !== 'off') markToolsCacheBreakpoint(tools, ttls.prefix);
+      body.tools = tools;
+    }
     if (!claude && options.temperature != null) body.temperature = Math.max(0, Math.min(1, options.temperature));
     if (!claude && options.topP != null) body.top_p = options.topP;
     if (options.extraBody) Object.assign(body, options.extraBody);
@@ -402,6 +410,19 @@ export function markHistoryCacheBreakpoint(messages: AnthropicMessage[], convers
       | undefined;
   if (!last) return false;
   last.cache_control = cacheControl(ttl);
+  return true;
+}
+
+/**
+ * Put a breakpoint after the tool block: tools are the head of the prefix and
+ * its largest part, and identical across sessions of a role whose system
+ * prompt differs (persona, workspace), which this lets them share. Mutates the
+ * last tool; a no-op on an empty list. Third of four breakpoints (tools,
+ * system, history).
+ */
+export function markToolsCacheBreakpoint(tools: Array<Record<string, unknown>>, ttl?: CacheTtl): boolean {
+  if (tools.length === 0) return false;
+  tools[tools.length - 1] = { ...tools[tools.length - 1], cache_control: cacheControl(ttl) };
   return true;
 }
 

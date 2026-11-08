@@ -300,7 +300,7 @@ function applyClaudeGatewayPolicy(params: ChatCompletionCreateParams, options: C
   const model = String(params.model);
   const claude = isAnthropicFamily(model);
   if (claude && options.cachePolicy !== 'off') {
-    const cached = applyAnthropicCacheControl(params.messages, model, { conversation: Boolean(options.cacheScope), history: options.historyCache, ttls: cacheTtlsFor(options.cachePolicy, options.cachePacing) });
+    const cached = applyAnthropicCacheControl(params.messages, model, { conversation: Boolean(options.cacheScope), history: options.historyCache, ttls: cacheTtlsFor(options.cachePolicy) });
     if (!cached.system) logMissedCacheSplit(model);
   }
   if (options.tools?.length) {

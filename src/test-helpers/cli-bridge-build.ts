@@ -22,7 +22,12 @@ export function ensureCliBridgeBuilt(root = resolve(import.meta.dirname, '../..'
   }
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
   const result = spawnSync(npm, ['run', 'build'], { cwd: bridge, stdio: 'inherit', shell: process.platform === 'win32' });
-  if (result.status !== 0) throw new Error(`[test setup] building mcp-server failed (exit ${result.status}); the CLI suites need mcp-server/dist`);
+  // A warning, not a throw: a broken bridge build must fail the CLI suites
+  // that need it, not abort a run of unrelated tests before it starts.
+  if (result.status !== 0) {
+    console.warn(`[test setup] building mcp-server failed (exit ${result.status}); the CLI suites need mcp-server/dist`);
+    return 'missing';
+  }
   return 'built';
 }
 

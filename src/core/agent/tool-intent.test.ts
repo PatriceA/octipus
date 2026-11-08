@@ -66,8 +66,24 @@ describe('selectCoreToolIds', () => {
     ['let me know when the CI build is green', 'monitor'],
     ['call the jenkins api with my connection', 'connections'],
     ['push the branch to the remote', 'connections'],
+    ['curl https://status.example.com/health', 'connections'],
+    ['curl https://status.example.com/health', 'websearch'],
   ])('keeps %s -> %s', (message, group) => {
     expect(selectCoreToolIds(message, ROOT)).toContain(group);
+  });
+
+  // Ordinary words before they are toolboxes: the selection is sticky, so one
+  // false hit keeps the group for the rest of the conversation.
+  it.each([
+    ['build me a landing page', 'monitor'],
+    ['good job, now refactor the parser', 'monitor'],
+    ['watch out for off-by-one errors', 'monitor'],
+    ['summarize the rest of the file', 'connections'],
+    ['the API layer is slow, profile it', 'connections'],
+    ['fetch the latest value from the cache in the function', 'connections'],
+    ['the token count is too high', 'connections'],
+  ])('does not keep %s -> %s', (message, group) => {
+    expect(selectCoreToolIds(message, ROOT)).not.toContain(group);
   });
 
   it('fails open for a group with no trigger of its own', () => {

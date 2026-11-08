@@ -2,7 +2,7 @@ import { Elysia, t } from '@/api/http';
 import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
 import { manifestTools } from '@octipus/plugin-sdk';
-import { getLoadedPlugin, getLoadedPlugins, PluginTool, reloadPlugin } from '@/plugins';
+import { getLoadedPlugin, getLoadedPlugins, PluginReloadError, PluginTool, reloadPlugin } from '@/plugins';
 import { getToolRegistry } from '@/tools/registry';
 
 export const pluginRoutes = new Elysia({ prefix: '/plugins' })
@@ -78,11 +78,15 @@ export const pluginRoutes = new Elysia({ prefix: '/plugins' })
       const oldToolId = `plugin-${params.name}`;
 
       try {
-        // The running plugin keeps serving until its replacement has loaded;
-        // only then is its tool unregistered (which shuts its module down).
-        const plugin = await reloadPlugin(params.name, async (previous) => {
-          if (registry.has(oldToolId)) await registry.unregister(oldToolId);
-          else await previous.module.shutdown?.();
+        // The running copy keeps serving until a fresh one has loaded; its tool
+        // is then unregistered (which shuts its module down) and comes back if
+        // the fresh copy fails to initialize (`reloadPlugin`).
+        const plugin = await reloadPlugin(params.name, {
+          retire: async (previous) => {
+            if (registry.has(oldToolId)) await registry.unregister(oldToolId);
+            else await previous.module.shutdown?.();
+          },
+          restore: async (previous) => { await registry.register(new PluginTool(previous)); },
         });
         await registry.register(new PluginTool(plugin));
 
@@ -93,8 +97,11 @@ export const pluginRoutes = new Elysia({ prefix: '/plugins' })
           tools: manifestTools(plugin.manifest).length,
         };
       } catch (err) {
-        set.status = 500;
-        return { error: `Failed to reload plugin: ${(err as Error).message}` };
+        set.status = err instanceof PluginReloadError ? err.status : 500;
+        return {
+          error: `Failed to reload plugin: ${(err as Error).message}`,
+          ...(err instanceof PluginReloadError ? { restored: err.restored } : {}),
+        };
       }
     },
     {

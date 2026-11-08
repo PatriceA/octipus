@@ -59,6 +59,9 @@ export class PluginTool extends BaseTool {
           try {
             return await handler(args, { config });
           } catch (err) {
+            // Typed refusals (not executed, policy) keep their type: the
+            // executor records those as never run, not as a failed run.
+            if (err instanceof ToolNotExecutedError) throw err;
             throw new Error(`Plugin tool error: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
           }
         },

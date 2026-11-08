@@ -111,7 +111,7 @@ export class OpenRouterProvider implements ModelProvider {
       : { ...(pinned ? { order: [pinned], allow_fallbacks: true } : {}), ...requireParameters };
     if (Object.keys(routing).length) body.provider = routing; else delete body.provider;
     if (options.cachePolicy !== 'off' && claude) {
-      const cached = applyAnthropicCacheControl(params.messages, String(body.model), { conversation: Boolean(options.cacheScope), history: options.historyCache, ttls: cacheTtlsFor(options.cachePolicy, options.cachePacing) });
+      const cached = applyAnthropicCacheControl(params.messages, String(body.model), { conversation: Boolean(options.cacheScope), history: options.historyCache, ttls: cacheTtlsFor(options.cachePolicy) });
       if (!cached.system) logMissedCacheSplit(String(body.model));
     }
     return params;

@@ -15,6 +15,7 @@ import {
   bindReplayedThinking,
   buildCachedSystem,
   markHistoryCacheBreakpoint,
+  markToolsCacheBreakpoint,
   configureAnthropicBody,
   parseAnthropicResponse,
   parseAnthropicSseStream,
@@ -23,7 +24,7 @@ import {
   toAnthropicTools,
 } from './custom/anthropic-compat-provider';
 import { claudeToolChoice, dropClaudeSampling } from '../claude-request';
-import { cacheControl, cacheTtlsFor } from './prompt-cache';
+import { cacheTtlsFor } from './prompt-cache';
 import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from './http-retry';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
 import { normalizeUsage } from './usage';
@@ -243,6 +244,8 @@ export class AnthropicProvider implements ModelProvider {
       max_tokens: options.maxTokens || 4096,
       stream,
     };
+    // First-party API: the pacing-based hour on the stable prefix is supported
+    // here (proxies and compatible endpoints keep the policy's lifetimes).
     const ttls = cacheTtlsFor(options.cachePolicy, options.cachePacing);
     if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, options.model, ttls.prefix);
     if (options.cachePolicy !== 'off' && options.historyCache !== false) markHistoryCacheBreakpoint(messages, Boolean(options.cacheScope), ttls.history);
@@ -250,11 +253,7 @@ export class AnthropicProvider implements ModelProvider {
     // Tool choice and sampling are set by `configureAnthropicBody`.
     if (options.tools?.length) {
       const tools = toAnthropicTools(options.tools);
-      // A breakpoint after the tool block: tools are the head of the prefix
-      // and the largest part of it, and identical across sessions of a role
-      // whose system prompt differs (persona, workspace) — this lets those
-      // sessions share it. Third of four breakpoints (tools, system, history).
-      if (options.cachePolicy !== 'off') tools[tools.length - 1] = { ...tools[tools.length - 1], cache_control: cacheControl(ttls.prefix) };
+      if (options.cachePolicy !== 'off') markToolsCacheBreakpoint(tools, ttls.prefix);
       body.tools = tools;
     }
     if (options.extraBody) Object.assign(body, options.extraBody);

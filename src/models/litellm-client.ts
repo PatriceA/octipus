@@ -23,7 +23,8 @@ export interface CompletionOptions {
   /**
    * Who paces this conversation's requests (`cacheTtlsFor`): an attended root
    * turn is `human` and keeps its stable prefix cached for an hour; anything
-   * else defaults to the 5-minute entry.
+   * else defaults to the 5-minute entry. Honored by the first-party Anthropic
+   * provider only — proxies and compatible endpoints may not accept `ttl`.
    */
   cachePacing?: import('@/models/providers/prompt-cache').CachePacing;
   /**
@@ -512,7 +513,7 @@ export class LiteLLMClient {
     // Anthropic prompt caching (Phase A1): the proxy forwards `cache_control`
     // content blocks to Anthropic upstreams, so cache the static prefix.
     if (options.cachePolicy !== 'off' && claude) {
-      const cached = applyAnthropicCacheControl(params.messages, model, { conversation: Boolean(options.cacheScope), history: options.historyCache, ttls: cacheTtlsFor(options.cachePolicy, options.cachePacing) });
+      const cached = applyAnthropicCacheControl(params.messages, model, { conversation: Boolean(options.cacheScope), history: options.historyCache, ttls: cacheTtlsFor(options.cachePolicy) });
       if (!cached.system) logMissedCacheSplit(model);
     }
     if (options.tools?.length) {
