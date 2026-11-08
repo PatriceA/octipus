@@ -170,6 +170,11 @@ export function startBlockedHeartbeat(
 /** What a completion is asked of: a direct provider or the LiteLLM client (both expose the same pair). */
 type CompletionTarget = Pick<import('@/models/providers/interface').ModelProvider, 'complete' | 'stream'>;
 
+/** One MCP server tool exposed under its own name (`direct` exposure), not an MCP meta-tool. */
+function isDirectMcpTool(tool: ToolHandler): boolean {
+  return tool.toolId === 'mcp' && tool.name.startsWith('mcp__');
+}
+
 export class AgentWorker extends BaseAgentWorker {
   private toolExecutor: ToolExecutor;
   private abortController: AbortController;
@@ -2425,7 +2430,14 @@ export class AgentWorker extends BaseAgentWorker {
     // fallback would send the whole catalog with nothing deferred.
     if (!anthropicNativeMessagesOn()) return undefined;
     const floor = [...CORE_TOOL_FLOOR, TOOL_DISCOVERY_TOOL_ID, 'self_report', 'inline-ui'];
-    const deferred = Array.from(this.toolExecutor.getTools().values()).filter((tool) => isLongTailHandler(tool, floor)).map((tool) => tool.name);
+    // Direct MCP tools (`mcp__<server>__<tool>`) are deferred too: a server
+    // that reconnects or changes what it exposes mid-conversation would
+    // otherwise change the loaded floor, and with it this conversation's
+    // cached prefix. The model finds them through the search tool; the MCP
+    // meta-tools (`mcp_list_tools`, ...) stay loaded, so it knows they exist.
+    const deferred = Array.from(this.toolExecutor.getTools().values())
+      .filter((tool) => isLongTailHandler(tool, floor) || isDirectMcpTool(tool))
+      .map((tool) => tool.name);
     return deferred.length ? deferred : undefined;
   }
 

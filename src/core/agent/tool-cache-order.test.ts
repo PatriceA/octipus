@@ -112,15 +112,15 @@ describe('(a) first-party Claude with tool search', () => {
     expect((a.tools as Tool[]).find((t) => t.cache_control)?.name).toBe('capabilities');
   });
 
-  test('the per-user tools are deferred, except the inline-UI tool, which is in the floor and after the breakpoint', () => {
+  test('the per-user tools and direct MCP tools are deferred; the inline-UI tool and MCP meta-tools are in the floor, after the breakpoint', () => {
     on();
     const tools = nativeBody(request('alice', aliceLazy)).tools as Tool[];
     const deferred = tools.filter((t) => t.defer_loading).map((t) => t.name);
-    expect(deferred).toEqual(expect.arrayContaining(['gmail_search', 'ext_quotes__get', 'notes__search', 'websearch__search']));
+    expect(deferred).toEqual(expect.arrayContaining(['gmail_search', 'ext_quotes__get', 'notes__search', 'websearch__search', 'mcp__crm__lookup']));
     const loaded = tools.filter((t) => !t.defer_loading).map((t) => t.name);
     const mark = tools.findIndex((t) => t.cache_control);
     // Loaded and per-user: after the breakpoint.
-    for (const name of ['inline_ui_ask', 'mcp_list_tools', 'mcp__crm__lookup']) {
+    for (const name of ['inline_ui_ask', 'mcp_list_tools']) {
       expect(loaded).toContain(name);
       expect(tools.findIndex((t) => t.name === name)).toBeGreaterThan(mark);
     }

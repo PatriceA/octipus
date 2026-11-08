@@ -141,8 +141,12 @@ before. Only the order changes; the set of tools a request declares does not.
 
 With Anthropic's tool search (`agent.nativeToolSearch`, the lazy path on
 first-party Claude), every tool outside a fixed floor is sent with
-`defer_loading` and stays out of the prefix: connector and extension tools and
-the sticky groups are deferred. The floor's shared tools come first and carry
+`defer_loading` and stays out of the prefix: connector and extension tools,
+direct MCP tools (`mcp__<server>__<tool>`) and the sticky groups are deferred.
+The MCP meta-tools stay loaded, so a server that reconnects or changes its
+tools mid-conversation no longer rewrites that conversation's cached prefix;
+the model finds a direct MCP tool through the search tool before its first
+call. The floor's shared tools come first and carry
 the breakpoint; the inline-UI tool and the MCP tools are in the floor
 (`mcp` is an always-core group) and follow it.
 
