@@ -1,3 +1,4 @@
+import { omitRepeatedContext, REPEATABLE_CONTEXT_KEY } from './agent/repeated-context';
 import { companionCacheScope } from '@/core/companion/history';
 import { createHash } from 'node:crypto';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
@@ -640,7 +641,9 @@ export class AgentWorker extends BaseAgentWorker {
   }
 
   async addUserMessage(content: string): Promise<void> {
-    const promptContext = this.pendingPromptContext.trim();
+    // A retrieved block an earlier turn still in view carries is not sent again
+    // (`repeated-context.ts`); the stored row records what was actually sent.
+    const promptContext = omitRepeatedContext(this.pendingPromptContext.trim(), this.context.metadata?.[REPEATABLE_CONTEXT_KEY] as unknown[] | undefined, this.messages);
     this.pendingPromptContext = '';
     const message: AgentMessage = { role: 'user', content: [promptContext, content].filter(Boolean).join('\n\n'), timestamp: new Date() };
     this.messages.push(message);

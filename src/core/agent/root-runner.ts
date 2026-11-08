@@ -34,6 +34,7 @@ import { selectLaneWithDecision } from './lane-intent';
 import { selectCoreToolIds, stickyCoreToolIds } from './tool-intent';
 import { isPlanMode, PLAN_MODE_DIRECTIVE } from './plan-mode';
 import { FILE_CHANGES_REFUSED_KEY, type FileChangeRefusalReason } from '@/core/tool-executor';
+import { REPEATABLE_CONTEXT_KEY } from './repeated-context';
 import { isLongTailHandler } from './tool-split';
 import { buildCapabilitiesHandler } from '@/tools/self-report';
 import { modelCandidates, type ModelSelector, warmConversationOf } from './model-selector';
@@ -197,6 +198,13 @@ export interface RootRunExtras {
    * stop that lands before the agent is registered is not lost.
    */
   signal?: AbortSignal;
+  /**
+   * The retrieved blocks inside this turn's context (the memory block, each
+   * context hook's block), verbatim. The worker leaves out any that an earlier
+   * turn still in the conversation already carries (`REPEATABLE_CONTEXT_KEY`).
+   * Directives are never listed: an instruction is repeated on purpose.
+   */
+  repeatableContext?: string[];
 }
 
 /**
@@ -862,6 +870,7 @@ export async function runRootAgent(
       ...(remoteRoom ? { remoteRoom: true, [CONTENT_STORAGE_OFF_KEY]: true } : {}),
       ...(inlineUi ? { inlineUiOffered: true } : {}),
       ...(fileChangesRefused ? { [FILE_CHANGES_REFUSED_KEY]: fileChangesRefused } : {}),
+      ...(extras.repeatableContext?.length ? { [REPEATABLE_CONTEXT_KEY]: extras.repeatableContext } : {}),
     },
   });
 

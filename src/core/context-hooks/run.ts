@@ -31,10 +31,12 @@ export interface ContextTurnHandle {
 
 export interface ContextHooksOutcome {
   text: string;
+  /** Each injected hook's block, in order: `text` is their concatenation. */
+  blocks: string[];
   turn: ContextTurnHandle | null;
 }
 
-const NONE: ContextHooksOutcome = { text: '', turn: null };
+const NONE: ContextHooksOutcome = { text: '', blocks: [], turn: null };
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -126,7 +128,7 @@ export async function runContextHooks(
   } catch (err) {
     coreLogger.warn({ err, userId: input.userId }, 'context hooks: turn record not saved (measurement only)');
   }
-  return { text, turn };
+  return { text, blocks: texts.filter(Boolean), turn };
 }
 
 /**
