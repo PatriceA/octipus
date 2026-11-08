@@ -77,6 +77,17 @@ describe('octi plugin list', () => {
     expect(backendBase({})).toBe('http://localhost:3005');
     expect(backendBase({ API_PORT: '8080' })).toBe('http://localhost:8080');
   });
+
+  test('an API_PORT that is not a port is refused before any request (the token stays home)', async () => {
+    for (const port of ['1@evil.example', '80/x', '0', '65536', '123456', ' 80', 'abc']) {
+      expect(() => backendBase({ API_PORT: port }), port).toThrow(/API_PORT must be a port number/);
+      const h = harness({ token: 'secret' });
+      h.io.env.API_PORT = port;
+      expect(await listCommand(h.io), port).toBe(2);
+      expect(await approveCommand(h.io, 'finapi', ACTUAL), port).toBe(2);
+      expect(h.requests, port).toEqual([]);
+    }
+  });
 });
 
 describe('octi plugin approve', () => {

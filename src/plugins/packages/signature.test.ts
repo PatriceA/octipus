@@ -10,11 +10,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-// `rename` passes through unless a test makes it fail (`renameHook`).
+// `rename` and `writeFile` pass through unless a test makes them fail (`renameHook`, `writeHook`).
 let renameHook: ((from: string, to: string) => void) | undefined;
+let writeHook: ((path: string) => void) | undefined;
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...actual, rename: async (from: string, to: string) => { renameHook?.(from, to); return actual.rename(from, to); } };
+  return {
+    ...actual,
+    rename: async (from: string, to: string) => { renameHook?.(from, to); return actual.rename(from, to); },
+    writeFile: async (...args: Parameters<typeof actual.writeFile>) => { writeHook?.(String(args[0])); return actual.writeFile(...args); },
+  };
 });
 import { hashPackageContent, SIGNATURE_FILE } from './integrity';
 import {
@@ -22,6 +27,7 @@ import {
   checkSignature,
   generateSigningKey,
   keyFingerprint,
+  parseNotAfter,
   parsePublicKey,
   readSignatureFile,
   serializeSignature,
@@ -53,6 +59,7 @@ function pkg(): string {
 
 afterEach(() => {
   renameHook = undefined;
+  writeHook = undefined;
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -215,6 +222,31 @@ describe('the temporary signature file', () => {
     expect(await hashPackageContent(dir, MANIFEST)).toBe(before);
   });
 
+  test('an unwritable parent: the temporary file goes inside the package and is gone afterwards', async () => {
+    const { parent, dir } = nested();
+    const before = await hashPackageContent(dir, MANIFEST);
+    const writes: string[] = [];
+    writeHook = (path) => {
+      writes.push(path);
+      if (join(path, '..') === parent) throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    };
+    let seen: string | undefined;
+    renameHook = (from) => { seen = from; };
+    const { contentHash } = await signPackage(dir, publisher.privateKeyPem);
+    expect(writes).toHaveLength(2);
+    expect(join(seen as string, '..')).toBe(dir);
+    expect(contentHash).toBe(before);
+    expect(readdirSync(parent)).toEqual(['demo']);
+    expect(readdirSync(dir).sort()).toEqual(['octipus-plugin.json', SIGNATURE_FILE, 'server.mjs']);
+    expect(await checkPackageSignature(dir, before, TRUSTED)).toMatchObject({ status: 'valid' });
+
+    // A failed rename in the fallback cleans up too.
+    rmSync(join(dir, SIGNATURE_FILE));
+    renameHook = () => { throw Object.assign(new Error('simulated rename failure'), { code: 'EIO' }); };
+    await expect(signPackage(dir, publisher.privateKeyPem)).rejects.toThrow('simulated rename failure');
+    expect(readdirSync(dir).sort()).toEqual(['octipus-plugin.json', 'server.mjs']);
+  });
+
   test('a rename across filesystems is reported, and cleaned up', async () => {
     const { parent, dir } = nested();
     renameHook = () => { throw Object.assign(new Error('cross-device link'), { code: 'EXDEV' }); };
@@ -273,6 +305,16 @@ describe('revoked and expired keys', () => {
       .toMatchObject({ status: 'expired', publisher: 'Acme', detail: expect.stringContaining('2027-01-01T00:00:00.000Z') });
     const withTime = [{ name: 'Acme', publicKey: publisher.publicKeyPem, notAfter: '2027-01-01T12:00:00+02:00' }];
     expect(checkSignature(HASH, text, trustedKeys(withTime, undefined, { now: new Date('2027-01-01T10:30:00Z') })).status).toBe('expired');
+  });
+
+  test('an impossible calendar date (2027-02-30) is not read as a later day', () => {
+    const reported: string[] = [];
+    const keys = trustedKeys([{ name: 'Acme', publicKey: publisher.publicKeyPem, notAfter: '2027-02-30' }], (_n, reason) => reported.push(reason), { now: new Date('2026-01-01T00:00:00Z') });
+    expect(checkSignature(HASH, text, keys).status).toBe('expired');
+    expect(reported).toEqual([expect.stringContaining('not an ISO date')]);
+    expect(parseNotAfter('2027-02-30')).toBeNull();
+    expect(parseNotAfter('2028-02-29')?.toISOString()).toBe('2028-02-29T00:00:00.000Z');
+    expect(parseNotAfter('2027-02-29T10:00:00Z')).toBeNull();
   });
 
   test('an unreadable notAfter trusts nothing and is reported', () => {

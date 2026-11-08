@@ -29,7 +29,7 @@ describe('plugins config', () => {
       expect(plugins({ trustedPublishers: [{ name: 'Acme', publicKey: KEY, notAfter }] }).success, notAfter).toBe(true);
     }
     expect(plugins({ trustedPublishers: [{ name: 'Acme', publicKey: KEY, revoked: true }] }).success).toBe(true);
-    for (const notAfter of ['next year', '2027-13-45', '01.01.2027', '2027-01-01T00:00']) {
+    for (const notAfter of ['next year', '2027-13-45', '2027-02-30', '2027-04-31T00:00:00Z', '01.01.2027', '2027-01-01T00:00']) {
       expect(plugins({ trustedPublishers: [{ name: 'Acme', publicKey: KEY, notAfter }] }).success, notAfter).toBe(false);
     }
   });

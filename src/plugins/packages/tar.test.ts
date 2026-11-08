@@ -78,6 +78,9 @@ describe('extractTarGz', () => {
     await refused([{ name: 'odd', type: 'Z' }], /unknown type/);
     await refused([MANIFEST, { name: 'a.js', data: '1' }, { name: './a.js', data: '2' }], /twice/);
     await refused([{ name: 'dir/', type: '5' }, { name: 'dir', data: 'x' }], /collides/);
+    // A file, then a directory of the same name (or under it): refused, not a raw EEXIST.
+    await refused([{ name: 'dir', data: 'x' }, { name: 'dir/', type: '5' }], /collides/);
+    await refused([{ name: 'dir', data: 'x' }, { name: 'dir/sub/', type: '5' }], /collides/);
   });
 
   test('refuses a corrupt header, a truncated archive and something that is not gzip', async () => {

@@ -857,7 +857,12 @@ export const configSchema = z.object({
       publicKey: z.string().min(1).max(2000),
       /** ISO date (`2027-01-01`) or date-time with a zone after which the key trusts nothing. */
       notAfter: z.string().regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/, 'an ISO date (YYYY-MM-DD) or date-time with a zone')
-        .refine((v) => !Number.isNaN(new Date(v).getTime()), 'not a real date')
+        .refine((v) => {
+          if (Number.isNaN(new Date(v).getTime())) return false;
+          const [y, m, d] = v.slice(0, 10).split('-').map(Number);
+          const day = new Date(Date.UTC(y, m - 1, d));
+          return day.getUTCFullYear() === y && day.getUTCMonth() === m - 1 && day.getUTCDate() === d;
+        }, 'not a real date')
         .optional(),
       /** The key was withdrawn: it trusts nothing. */
       revoked: z.boolean().optional(),

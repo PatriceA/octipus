@@ -25,7 +25,12 @@ export interface PluginApiIo {
 
 /** The backend's base URL, as `octi capabilities`, `octi persona` and `octi doctor` reach it. */
 export function backendBase(env: NodeJS.ProcessEnv): string {
-  return `http://localhost:${env.API_PORT || env.PORT || '3005'}`;
+  const port = env.API_PORT || env.PORT || '3005';
+  // Only a port: `1@evil.example` would send the bearer token to another host.
+  if (!/^\d{1,5}$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
+    throw new CliError(`API_PORT must be a port number (1-65535), not ${JSON.stringify(port)}`, 2);
+  }
+  return `http://localhost:${port}`;
 }
 
 function authHeaders(env: NodeJS.ProcessEnv): Record<string, string> {

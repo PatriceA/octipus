@@ -224,10 +224,29 @@ export async function signPackage(dir: string, privateKeyPem: string): Promise<{
   }
   const abs = resolve(dir);
   if (dirname(abs) === abs) throw new SignatureError('a filesystem root cannot be signed as a package');
-  const temp = join(dirname(abs), `.${basename(abs)}.${SIGNATURE_FILE}.${process.pid}-${randomBytes(6).toString('hex')}`);
+  const suffix = `${process.pid}-${randomBytes(6).toString('hex')}`;
+  const temp = join(dirname(abs), `.${basename(abs)}.${SIGNATURE_FILE}.${suffix}`);
   try {
     // `wx`: never through a file or link already at that name.
     await writeFile(temp, serializeSignature(sig), { flag: 'wx', mode: 0o644 });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'EACCES' && code !== 'EPERM') throw err;
+    // The parent is not writable (/opt/plugins owned by root, the package by
+    // its author): write the temporary file inside the package instead. If
+    // the process dies between the write and the rename, that file stays
+    // behind; it is part of the content hash, so the package then reads as
+    // changed until it is removed and signed again.
+    const inside = join(abs, `.${SIGNATURE_FILE}.${suffix}`);
+    try {
+      await writeFile(inside, serializeSignature(sig), { flag: 'wx', mode: 0o644 });
+      await rename(inside, file);
+    } finally {
+      await rm(inside, { force: true }).catch(() => {});
+    }
+    return { contentHash, keyId: sig.keyId, file };
+  }
+  try {
     await rename(temp, file);
   } catch (err) {
     await rm(temp, { force: true }).catch(() => {});
@@ -249,7 +268,12 @@ export function parseNotAfter(value: string): Date | null {
   const text = value.trim();
   if (!/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/.test(text)) return null;
   const at = new Date(text);
-  return Number.isNaN(at.getTime()) ? null : at;
+  if (Number.isNaN(at.getTime())) return null;
+  // `new Date` rolls 2027-02-30 over to March 2: the calendar date must survive the round trip.
+  const [y, m, d] = text.slice(0, 10).split('-').map(Number);
+  const day = new Date(Date.UTC(y, m - 1, d));
+  if (day.getUTCFullYear() !== y || day.getUTCMonth() !== m - 1 || day.getUTCDate() !== d) return null;
+  return at;
 }
 
 /**

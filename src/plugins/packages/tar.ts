@@ -193,7 +193,13 @@ export async function extractTarGz(gz: Buffer, dest: string, limits: TarLimits =
     const target = resolve(root, ...entry.path.split('/'));
     if (!target.startsWith(root + sep)) throw new TarError(`An entry leaves the package directory (${JSON.stringify(entry.path)})`);
     if (entry.kind === 'dir') {
-      await mkdir(target, { recursive: true });
+      try {
+        await mkdir(target, { recursive: true });
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'EEXIST' || code === 'ENOTDIR') throw new TarError(`The archive's ${JSON.stringify(entry.path)} collides with another entry`);
+        throw err;
+      }
       continue;
     }
     if (seen.has(entry.path)) throw new TarError(`The archive contains ${JSON.stringify(entry.path)} twice`);
