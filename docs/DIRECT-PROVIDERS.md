@@ -95,7 +95,9 @@ editor does not assume that every compatible server implements vendor extras.
 **Anthropic:** native Messages is the default. A request carries at most four
 cache breakpoints, Anthropic's limit:
 
-1. the last tool definition (`markToolsCacheBreakpoint`);
+1. the last tool definition every user of the install shares
+   (`markToolsCacheBreakpoint`, with the agent's `sharedToolCount`; see the
+   tool order below);
 2. the end of the **install tier** of the system prompt — security preamble,
    role prompt and delegation text, the same bytes for every user of the
    install (`PromptBuilder.installPrefix()`, sent as its own system message
@@ -113,10 +115,44 @@ cache breakpoints, Anthropic's limit:
 
 The newest turn is deliberately left outside every breakpoint. On an attended
 turn 1–3 get a one-hour lifetime and the history five minutes (one-hour entries
-must precede shorter ones). Tools precede the system prompt in Anthropic's
-prefix, so the install block is shared only between requests whose tool arrays
-are byte-identical: a per-user MCP server or a different set of sticky lazy
-tool groups makes everything after the tools a different prefix. The same split (`src/models/providers/prompt-cache.ts`,
+must precede shorter ones).
+
+**Tool order.** Tools precede the system prompt in every provider's prefix, so
+the agent sends them in three tiers (`orderForCache` in
+`src/core/agent/tool-split.ts`), stable within each:
+
+1. *shared*: the install's built-in tools, the meta-tools (`spawn_child`, …),
+   `list_tools`/`describe_tool` and `capabilities`, in registration order;
+2. *per-user and runtime*: connector tools (per user), the inline-UI tool (per
+   user and client), MCP tools (servers connect and change what they expose;
+   plugin packages are MCP servers), extension tools (`ext_*`);
+3. *sticky*: on the lazy path, the groups the message selected
+   (`isIntentGatedGroup`), in the order the conversation first used them, so a
+   group used later is appended at the tail.
+
+Breakpoint 1 sits on the last tool of the first tier, so two users of an
+install with different connectors, MCP servers, extension tools or sticky
+groups read the same tools entry. The system breakpoints after it are still
+per-user: an entry there requires every byte before it, the per-user tools
+included, to match. For the same user nothing is lost — a breakpoint caches
+the prefix up to it and a request reads the longest prefix it finds among its
+breakpoints, so the system and history breakpoints cover the per-user tools as
+before. Only the order changes; the set of tools a request declares does not.
+
+With Anthropic's tool search (`agent.nativeToolSearch`, the lazy path on
+first-party Claude), every tool outside a fixed floor is sent with
+`defer_loading` and stays out of the prefix: connector and extension tools and
+the sticky groups are deferred. The floor's shared tools come first and carry
+the breakpoint; the inline-UI tool and the MCP tools are in the floor
+(`mcp` is an always-core group) and follow it.
+
+Measured on a model of the root's assembly (`tool-cache-order.test.ts`), two
+users whose connectors, MCP tools, extension tools, inline-UI offer and sticky
+groups all differ send byte-identical tools up to and including breakpoint 1
+in all three cases: native with tool search, native without it (lazy or full),
+and the leading `sharedToolCount` entries of an OpenAI-compatible request.
+
+The same split (`src/models/providers/prompt-cache.ts`,
 `applyAnthropicCacheControl`) also applies to the OpenAI-compat pass-through —
 LiteLLM and OpenRouter — restricted to Anthropic-family models
 (`isAnthropicFamily`: a `claude` id or an `anthropic/` path segment); there the

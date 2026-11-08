@@ -259,7 +259,10 @@ export class AnthropicProvider implements ModelProvider {
       const tools = options.deferredTools?.length
         ? withToolSearch(toAnthropicTools(options.tools), new Set(options.deferredTools))
         : toAnthropicTools(options.tools);
-      if (options.cachePolicy !== 'off') markToolsCacheBreakpoint(tools, ttls.prefix);
+      // On the last tool every user of the install shares (C3); the search
+      // tool, when present, comes first and shifts the count by one.
+      const sharedEnd = options.sharedToolCount === undefined ? undefined : options.sharedToolCount + (options.deferredTools?.length ? 1 : 0);
+      if (options.cachePolicy !== 'off') markToolsCacheBreakpoint(tools, ttls.prefix, sharedEnd);
       body.tools = tools;
     }
     if (options.extraBody) Object.assign(body, options.extraBody);

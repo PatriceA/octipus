@@ -154,7 +154,7 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
       const tools = toAnthropicTools(options.tools);
       // A tool-level marker only where the model is Claude; another model's
       // Anthropic-compatible API may reject it.
-      if (claude && options.cachePolicy !== 'off') markToolsCacheBreakpoint(tools, ttls.prefix);
+      if (claude && options.cachePolicy !== 'off') markToolsCacheBreakpoint(tools, ttls.prefix, options.sharedToolCount);
       body.tools = tools;
     }
     if (!claude && options.temperature != null) body.temperature = Math.max(0, Math.min(1, options.temperature));
@@ -437,16 +437,33 @@ export function markHistoryCacheBreakpoint(messages: AnthropicMessage[], convers
  * tool (an MCP server, a sticky lazy group) makes the install block behind it
  * a different prefix too.
  */
-export function markToolsCacheBreakpoint(tools: Array<Record<string, unknown>>, ttl?: CacheTtl): boolean {
+export function markToolsCacheBreakpoint(tools: Array<Record<string, unknown>>, ttl?: CacheTtl, sharedEnd?: number): boolean {
   // The last tool that is loaded into the prefix: a `defer_loading` tool
   // cannot carry `cache_control` (400), and is outside the prefix anyway; a
   // server tool (tool search) has no schema of its own to anchor on.
-  for (let i = tools.length - 1; i >= 0; i--) {
-    if (tools[i].defer_loading === true || !('input_schema' in tools[i])) continue;
-    tools[i] = { ...tools[i], cache_control: cacheControl(ttl) };
-    return true;
-  }
-  return false;
+  //
+  // With `sharedEnd` (C3), the last loaded one before it: the tools from
+  // there on differ per user or session (`orderForCache`), and a breakpoint
+  // after them writes an entry no other user's request can read. On the one
+  // before them, every user of the install reads the same entry.
+  //
+  // Nothing is lost for the same user. A breakpoint caches the whole prefix
+  // up to it, and a request reads the longest prefix it finds an entry for
+  // among its breakpoints; the system breakpoints that follow already cover
+  // the per-user tools (an entry there needs every byte before it, per-user
+  // tools included, to match). A breakpoint on the last tool added an entry
+  // no request reads when the system breakpoints hit, and a cross-user miss
+  // when they do not. The count stays four: tools, install, system, history.
+  const mark = (from: number): boolean => {
+    for (let i = from - 1; i >= 0; i--) {
+      if (tools[i].defer_loading === true || !('input_schema' in tools[i])) continue;
+      tools[i] = { ...tools[i], cache_control: cacheControl(ttl) };
+      return true;
+    }
+    return false;
+  };
+  // No shared tool loaded (all deferred, or none at all): the last loaded tool, as before.
+  return (sharedEnd !== undefined && mark(Math.min(sharedEnd, tools.length))) || mark(tools.length);
 }
 
 /** Translate OpenAI tool schema → Anthropic tool schema (`input_schema`). */

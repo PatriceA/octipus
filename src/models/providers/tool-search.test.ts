@@ -95,3 +95,41 @@ describe('a request without the search tool', () => {
     expect(messages[0].content).toHaveLength(2);
   });
 });
+
+describe('the tools breakpoint with a shared count (C3)', () => {
+  const tools = (): Array<Record<string, unknown>> => [
+    { ...TOOL_SEARCH_TOOL },
+    { name: 'read_file', input_schema: {} },
+    { name: 'notes__search', input_schema: {}, defer_loading: true },
+    { name: 'capabilities', input_schema: {} },
+    { name: 'inline_ui_ask', input_schema: {} },
+    { name: 'gmail_search', input_schema: {}, defer_loading: true },
+  ];
+  const marked = (list: Array<Record<string, unknown>>) => list.filter((t) => 'cache_control' in t).map((t) => t.name);
+
+  test('on the last loaded shared tool, not the last loaded tool', () => {
+    const list = tools();
+    expect(markToolsCacheBreakpoint(list, undefined, 4)).toBe(true);
+    expect(marked(list)).toEqual(['capabilities']);
+  });
+
+  test('skips a deferred shared tool', () => {
+    const list = tools();
+    markToolsCacheBreakpoint(list, undefined, 3);
+    expect(marked(list)).toEqual(['read_file']);
+  });
+
+  test('no loaded shared tool: the last loaded tool, as without a count', () => {
+    const list = tools();
+    markToolsCacheBreakpoint(list, undefined, 1);
+    expect(marked(list)).toEqual(['inline_ui_ask']);
+  });
+
+  test('the native request counts the search tool in front of the shared tools', () => {
+    const body = buildBody({
+      model: 'claude-opus-5-5', maxTokens: 1000, messages: [{ role: 'user', content: 'hi' }] as CompletionOptions['messages'],
+      tools: [fn('read_file'), fn('capabilities'), fn('inline_ui_ask')], deferredTools: ['nothing_here'], sharedToolCount: 2,
+    });
+    expect(marked(body.tools as Array<Record<string, unknown>>)).toEqual(['capabilities']);
+  });
+});
