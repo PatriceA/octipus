@@ -919,22 +919,22 @@ the workspace.
 ### Config flag (`security.shellSandbox`)
 
 - `'off'` (default) — no wrapping; behavior matches pre-3e.
-- `'auto'` — wrap when `bwrap` or `firejail` is on PATH; fall back
-  to unsandboxed execution when not.
+- `'auto'` — wrap when `bwrap` or `firejail` (Linux) or
+  `/usr/bin/sandbox-exec` (macOS) is found; fall back to unsandboxed
+  execution when not.
 - `'required'` — wrap when available; **refuse** to spawn when no
   runner is found (operational deployments use this once they've
   installed a runner).
 
-Environment override: `SHELL_SANDBOX=auto|required`. Linux-only;
-on macOS/Windows the runners aren't typically available, so `auto`
-reduces to `off`.
+Environment override: `SHELL_SANDBOX=auto|required`. Windows has
+no runner, so there `auto` reduces to `off`.
 
 ### `wrapCommand(argv, options)` (`src/security/shell-sandbox.ts`)
 
 Returns `{ wrapped, runner, argv, cleanup }`:
 - `wrapped`: false when sandbox is `off` or no runner is found in
   `auto` mode.
-- `runner`: `'bwrap' | 'firejail' | null`.
+- `runner`: `'bwrap' | 'firejail' | 'sandbox-exec' | null`.
 - `argv`: the wrapped command line (or original if not wrapped).
 - `cleanup()`: removes the per-spawn `/tmp` scratch dir; safe to
   call even when `wrapped` is false.
@@ -957,6 +957,18 @@ Profile (bubblewrap, the preferred backend):
 firejail backend: `--noprofile --private-tmp --private-dev
 --noroot --seccomp --whitelist=<workspaceRoot>` plus `--net=none`
 when `allowNetwork` is false.
+
+sandbox-exec backend (macOS): `/usr/bin/sandbox-exec -p <profile>
+/usr/bin/env PATH=... TMPDIR=<scratch> ... <command>`, with a Seatbelt
+profile from `buildSeatbeltProfile`: `(deny default)`; file metadata
+anywhere, contents only under system/runtime directories, the workspace
+and the writable paths; writes only to the workspace (unless
+`workspaceReadOnly`, which adds a final `deny file-write*`), the scratch
+dir and `extraReadWrite`; no network unless `allowNetwork`, or
+`loopbackPorts` for outbound TCP to exactly those localhost ports (the
+plugin egress proxy). Paths are escaped as SBPL string literals. Apple
+marks sandbox-exec deprecated, but still ships it; see
+[PLUGIN-PACKAGES.md](../PLUGIN-PACKAGES.md#macos-sandbox-exec).
 
 Runner detection is cached after first lookup (operators don't
 install/remove sandbox runners while the server is up).

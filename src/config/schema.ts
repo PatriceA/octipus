@@ -84,18 +84,17 @@ export const securityConfigSchema = z.object({
   passkeyOrigin: z.string().url().default('http://localhost:3000'),
   /**
    * Shell sandbox — Phase 3e. Wraps shell-tool spawns in a process
-   * sandbox (bubblewrap or firejail) so a compromised agent can't
-   * read/write outside the configured workspace.
+   * sandbox (bubblewrap or firejail on Linux, sandbox-exec on macOS) so a
+   * compromised agent can't read/write outside the configured workspace.
    *
    *   - `'off'` (default) — no wrapping; behavior matches pre-3e.
-   *   - `'auto'` — wrap when bwrap/firejail is on PATH; fall back to
+   *   - `'auto'` — wrap when a runner is found; fall back to
    *     unsandboxed run if not.
    *   - `'required'` — wrap when available; refuse to spawn if no
    *     runner is found. Operational deployments use this once
    *     they've installed a runner.
    *
-   * Linux-only; on macOS/Windows the runners aren't available so
-   * `auto` reduces to `off`.
+   * Windows has no runner, so there `auto` reduces to `off`.
    */
   shellSandbox: z.enum(['off', 'auto', 'required']).default('off'),
   /** Expose only the host SSH agent socket and known_hosts to personal shell runs. */

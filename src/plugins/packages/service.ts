@@ -458,11 +458,14 @@ async function viewOf(row: PluginPackageRow, secrets: string[]): Promise<PluginP
   };
 }
 
+/** Why no runner wraps the server: off, none found, or Windows (no built-in one). */
+const NO_RUNNER = 'security.shellSandbox off, no bwrap/firejail on Linux, no /usr/bin/sandbox-exec on macOS, or Windows, which has none';
+
 /**
  * How a package's network is held on this host, decided the same way the
  * transport decides at start (`prepareSandboxedLaunch`): only a sandbox
- * runner can take direct network away; without one the declared hosts are
- * advice.
+ * runner (bwrap/firejail on Linux, sandbox-exec on macOS) can take direct
+ * network away; without one the declared hosts are advice.
  */
 export function networkStatus(m: PluginManifest, runner = activeSandboxRunner()): PluginNetworkStatus {
   const hosts = m.network ?? [];
@@ -472,8 +475,8 @@ export function networkStatus(m: PluginManifest, runner = activeSandboxRunner())
       : { state: 'restricted', detail: `Only ${hosts.join(', ')}: the sandbox (${runner}) has no direct network, and the egress proxy allows only the declared hosts.` };
   }
   return hosts.length === 0
-    ? { state: 'not_enforced', detail: 'Network not enforced on this platform: no sandbox wraps the server (security.shellSandbox off, or no bwrap/firejail), so nothing stops it from connecting.' }
-    : { state: 'not_enforced', detail: `Network not enforced on this platform: no sandbox wraps the server (security.shellSandbox off, or no bwrap/firejail). It is pointed at an egress proxy that allows only ${hosts.join(', ')}, but it can still connect directly.` };
+    ? { state: 'not_enforced', detail: `Network not enforced on this platform: no sandbox wraps the server (${NO_RUNNER}), so nothing stops it from connecting.` }
+    : { state: 'not_enforced', detail: `Network not enforced on this platform: no sandbox wraps the server (${NO_RUNNER}). It is pointed at an egress proxy that allows only ${hosts.join(', ')}, but it can still connect directly.` };
 }
 
 /** Every installed package, for the admin API. */

@@ -12,6 +12,14 @@ import { androidSdkPaths, browserRuntimeMounts, browserRuntimePaths, runtimePath
  *     user namespaces). Preferred when available.
  *   - firejail — also Linux-only, requires setuid binary on most
  *     distros. Fallback.
+ *   - sandbox-exec — macOS only: `/usr/bin/sandbox-exec` with a Seatbelt
+ *     (SBPL) profile generated per spawn (`buildSeatbeltProfile`). Apple
+ *     marks sandbox-exec deprecated, but it still ships with every macOS
+ *     release and is what the system's own services use underneath; if a
+ *     release ever drops it, detection finds nothing and `auto` falls back
+ *     to unwrapped (and `required` refuses), as on a Linux host without
+ *     bwrap. Windows has no comparable built-in runner (AppContainer and
+ *     job objects need a native helper), so nothing wraps there.
  *
  * Activation is gated by `config.security.shellSandbox`:
  *
@@ -42,14 +50,13 @@ import { androidSdkPaths, browserRuntimeMounts, browserRuntimePaths, runtimePath
  * tool's `useShell` / `unsafe` paths set when the user has opted in
  * to a less-restrictive run).
  */
-import { existsSync } from 'node:fs';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { getConfig } from '@/config';
 import { coreLogger } from '@/utils/logger';
 
-export type SandboxRunner = 'bwrap' | 'firejail';
+export type SandboxRunner = 'bwrap' | 'firejail' | 'sandbox-exec';
 export type SandboxMode = 'off' | 'auto' | 'required';
 
 export interface WrapOptions {
@@ -63,6 +70,13 @@ export interface WrapOptions {
   /** Allow network access. Defaults to `false` — sandboxed shells
    *  typically don't need network. */
   allowNetwork?: boolean;
+  /**
+   * With network otherwise off, TCP ports on loopback the command may still
+   * connect to: the egress proxy's listener on macOS, which has no network
+   * namespace to bridge into (see `buildSeatbeltProfile`). Only sandbox-exec
+   * honours it; bwrap and firejail reach the proxy through its Unix socket.
+   */
+  loopbackPorts?: number[];
   /** Server-authorized host USB access for device tests; not implied by network access. */
   allowHostUsb?: boolean;
   /** Additional read-only paths to expose (e.g. /Users for macOS-style
@@ -99,20 +113,24 @@ export interface WrapResult {
  */
 const KNOWN_BWRAP = ['/usr/bin/bwrap', '/usr/local/bin/bwrap', '/bin/bwrap'];
 const KNOWN_FIREJAIL = ['/usr/bin/firejail', '/usr/local/bin/firejail', '/bin/firejail'];
+/** Only the system copy: a sandbox-exec found anywhere else is not Apple's. */
+const KNOWN_SANDBOX_EXEC = ['/usr/bin/sandbox-exec'];
 
 let detectedCache: { runner: SandboxRunner; binary: string } | null | undefined;
 
 export function detectRunner(): { runner: SandboxRunner; binary: string } | null {
   if (detectedCache !== undefined) return detectedCache;
-  for (const path of KNOWN_BWRAP) {
-    if (existsSync(path)) {
-      detectedCache = { runner: 'bwrap', binary: path };
-      return detectedCache;
-    }
-  }
-  for (const path of KNOWN_FIREJAIL) {
-    if (existsSync(path)) {
-      detectedCache = { runner: 'firejail', binary: path };
+  // macOS first looks for Seatbelt; elsewhere sandbox-exec is never used.
+  // Windows finds none of these paths, so nothing wraps there.
+  const candidates: Array<[SandboxRunner, string[]]> = [
+    ...(process.platform === 'darwin' ? [['sandbox-exec', KNOWN_SANDBOX_EXEC] as [SandboxRunner, string[]]] : []),
+    ['bwrap', KNOWN_BWRAP],
+    ['firejail', KNOWN_FIREJAIL],
+  ];
+  for (const [runner, paths] of candidates) {
+    const binary = paths.find((path) => existsSync(path));
+    if (binary) {
+      detectedCache = { runner, binary };
       return detectedCache;
     }
   }
@@ -283,6 +301,204 @@ function buildFirejailArgs(binary: string, options: WrapOptions): string[] {
 }
 
 /**
+ * Quote `value` as an SBPL string literal. SBPL is read by a Scheme reader:
+ * a string is `"..."` in which `\` and `"` must be escaped, and `\n`, `\r`
+ * and `\t` stand for those characters. Any other control character is
+ * refused rather than passed through, so a path can never end the literal
+ * and add a rule of its own.
+ */
+export function sbplString(value: string): string {
+  if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) {
+    throw new Error(`Sandbox path contains a control character: ${JSON.stringify(value)}`);
+  }
+  const escaped = value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t');
+  return `"${escaped}"`;
+}
+
+/** `path` with its symbolic links resolved, or as given when it does not exist. */
+function realpathOr(path: string): string {
+  try { return realpathSync(path); } catch { return path; }
+}
+
+/**
+ * Every spelling of `path` Seatbelt may see. Seatbelt matches the resolved
+ * path of the file, so `/tmp/x` is `/private/tmp/x` and `/var/folders/...`
+ * is `/private/var/folders/...`: list the given form, the resolved form and,
+ * for a path that does not exist yet, the `/private` form of those macOS
+ * top-level links.
+ */
+function seatbeltPaths(path: string): string[] {
+  const forms = [path, realpathOr(path)];
+  if (/^\/(?:tmp|var|etc)(?:\/|$)/.test(path)) forms.push(`/private${path}`);
+  return [...new Set(forms)];
+}
+
+const subpaths = (paths: string[]) => [...new Set(paths.flatMap(seatbeltPaths))].map((p) => `(subpath ${sbplString(p)})`).join(' ');
+const literals = (paths: string[]) => [...new Set(paths.flatMap(seatbeltPaths))].map((p) => `(literal ${sbplString(p)})`).join(' ');
+
+/**
+ * System and runtime directories any sandboxed command may read (and map
+ * executable code from): the macOS counterpart of bwrap's read-only /usr,
+ * /lib, /bin, /etc and /opt. `/System` includes the dyld shared cache on
+ * current releases (under /System/Volumes/Preboot/Cryptexes);
+ * /private/var/db/dyld holds it on older ones. /private/var/db/timezone
+ * holds the zoneinfo /etc/localtime points into, and /private/var/select the
+ * /bin/sh selection. Homebrew lives in /opt/homebrew (Apple silicon) or
+ * /usr/local (Intel), both covered.
+ */
+const SEATBELT_SYSTEM_READ = [
+  '/System', '/usr', '/bin', '/sbin', '/opt',
+  '/Library/Apple', '/Library/Frameworks', '/Library/Developer/CommandLineTools',
+  '/Applications/Xcode.app/Contents/Developer',
+  '/private/etc', '/private/var/db/timezone', '/private/var/db/dyld', '/private/var/select',
+];
+
+/**
+ * Mach services every process needs to start and look up its own user:
+ * directory services (getpwuid), the notification center and logging,
+ * preferences. Deliberately short: a mach service runs outside the sandbox,
+ * and some (nsurlsessiond, for one) would make network requests for the
+ * caller. With network on, the DNS and network-configuration services are
+ * added — DNS answers can carry data out, so they stay off otherwise.
+ */
+const SEATBELT_MACH_BASE = [
+  'com.apple.system.opendirectoryd.libinfo', 'com.apple.system.DirectoryService.libinfo_v1',
+  'com.apple.system.notification_center', 'com.apple.system.logger', 'com.apple.logd',
+  'com.apple.cfprefsd.daemon', 'com.apple.cfprefsd.agent',
+];
+const SEATBELT_MACH_NETWORK = [
+  'com.apple.dnssd.service', 'com.apple.SystemConfiguration.configd',
+  'com.apple.SystemConfiguration.DNSConfiguration', 'com.apple.trustd', 'com.apple.trustd.agent',
+];
+
+/** What `buildSeatbeltProfile` needs beyond `WrapOptions`. */
+export interface SeatbeltInputs {
+  /** The per-spawn scratch directory (the command's TMPDIR), writable. */
+  scratch: string;
+  /** User-level runtime directories to expose read-only (as bwrap does). */
+  runtimeDirs: string[];
+  /** Approved CLI runtimes' paths (`approvedCliRuntimes`), read-only. */
+  cliPaths: string[];
+}
+
+/**
+ * The Seatbelt (SBPL) profile sandbox-exec runs a command under on macOS.
+ *
+ * Everything is denied (`deny default`), then allowed back:
+ *
+ * - **Processes:** exec, fork, signals and process info within the sandbox,
+ *   sysctl reads, preference reads, and the short mach-service list above.
+ * - **Reading:** file *metadata* anywhere (path resolution — realpath, the
+ *   module lookup that walks up parent directories — stats every ancestor;
+ *   this reveals names, sizes and times, never contents). File *contents*
+ *   only under the system directories above, the user runtime directories,
+ *   `extraReadOnly`, the workspace, the writable directories and a few
+ *   devices (/dev/null, /dev/zero, /dev/random, /dev/urandom, /dev/tty,
+ *   /dev/fd). The rest of the home directory, ~/.ssh included, is unreadable.
+ * - **Writing:** only the scratch directory, `extraReadWrite`, the
+ *   workspace unless `workspaceReadOnly`, and the character devices above.
+ *   A read-only workspace also gets an explicit `deny file-write*` as the
+ *   last rule (SBPL applies the last matching rule), so it stays read-only
+ *   even if a writable path contains it.
+ * - **Network:** none at all by default — no TCP, no UDP, no Unix socket,
+ *   no DNS. `allowNetwork` allows all of it. `loopbackPorts` allows outbound
+ *   TCP to exactly those ports on localhost and nothing else.
+ *
+ * Why the egress proxy is reached by TCP port here and not, as on Linux,
+ * through its Unix socket and a bridge: macOS has no network namespace, so
+ * a bridge's "127.0.0.1" inside the sandbox is the host's loopback. The
+ * bridge would need a listening port of its own, and the profile — written
+ * before the bridge picks one — could only allow loopback broadly, letting
+ * the server reach any local service. Allowing only the proxy's port is
+ * narrower and needs no launcher: direct egress to anything else, the
+ * internet or another local port, is refused by the kernel.
+ */
+export function buildSeatbeltProfile(options: WrapOptions, inputs: SeatbeltInputs): string {
+  const readOnly = [...SEATBELT_SYSTEM_READ, ...inputs.runtimeDirs, ...inputs.cliPaths, ...(options.extraReadOnly ?? [])];
+  const writable = [inputs.scratch, ...(options.extraReadWrite ?? [])];
+  const mach = [...SEATBELT_MACH_BASE, ...(options.allowNetwork ? SEATBELT_MACH_NETWORK : [])];
+  const lines: string[] = [
+    '(version 1)',
+    '(deny default)',
+    // Processes: run programs, but touch only processes in this sandbox.
+    '(allow process-exec process-fork)',
+    '(allow signal (target same-sandbox))',
+    '(allow process-info* (target same-sandbox))',
+    '(allow sysctl-read)',
+    '(allow user-preference-read)',
+    `(allow mach-lookup ${mach.map((n) => `(global-name ${sbplString(n)})`).join(' ')})`,
+    '(allow ipc-posix-shm-read-data (ipc-posix-name "apple.shm.notification_center"))',
+    // Files: metadata anywhere, contents only where listed.
+    '(allow file-read-metadata)',
+    `(allow file-read* file-map-executable ${subpaths(readOnly)})`,
+    '(allow file-read* (literal "/dev/random") (literal "/dev/urandom"))',
+    '(allow file-read* file-write-data file-ioctl (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (literal "/dev/dtracehelper") (subpath "/dev/fd"))',
+    `(allow file-read* file-write* file-map-executable ${subpaths(writable)})`,
+    options.workspaceReadOnly
+      ? `(allow file-read* file-map-executable ${subpaths([options.workspaceRoot])})`
+      : `(allow file-read* file-write* file-map-executable ${subpaths([options.workspaceRoot])})`,
+  ];
+  if (options.allowNetwork) {
+    lines.push('(allow network*)');
+  } else {
+    // Nothing but these loopback ports (the egress proxy).
+    for (const port of options.loopbackPorts ?? []) {
+      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`Invalid loopback port for the sandbox: ${port}`);
+      lines.push(`(allow network-outbound (remote ip "localhost:${port}"))`);
+    }
+  }
+  if (options.sshAgent) {
+    // The agent socket only: connecting to a Unix socket is network-outbound.
+    lines.push(`(allow network-outbound ${seatbeltPaths(options.sshAgent.socket).map((p) => `(remote unix-socket (path-literal ${sbplString(p)}))`).join(' ')})`);
+    lines.push(`(allow file-read* file-write-data ${literals([options.sshAgent.socket])})`);
+    if (options.sshAgent.knownHosts) lines.push(`(allow file-read* ${literals([options.sshAgent.knownHosts])})`);
+  }
+  if (options.allowHostUsb) {
+    // USB devices are reached through IOKit user clients.
+    lines.push('(allow iokit-open)');
+  }
+  if (options.workspaceReadOnly) {
+    // Last, so it wins over any writable path that contains the workspace.
+    lines.push(`(deny file-write* ${subpaths([options.workspaceRoot])})`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * sandbox-exec argv: the generated profile, then `/usr/bin/env` to set what
+ * bwrap's `--setenv` sets (PATH, TMPDIR pointing at the scratch directory —
+ * there is no private /tmp to mount over — and the runtime variables). The
+ * command follows; a command name containing `=` would be read by env as an
+ * assignment, which no real executable path does.
+ */
+function buildSandboxExecArgs(binary: string, options: WrapOptions, scratch: string): string[] {
+  const androidSdk = androidSdkPaths()[0];
+  const cliTools = approvedCliRuntimes();
+  const runtimeDirs = ['.local/bin', '.local/lib', '.local/share/uv/tools', '.local/share/uv/python',
+    '.npm-global/bin', '.npm-global/lib/node_modules', '.local/go', 'go/bin'].map((path) => join(homedir(), path));
+  const projectBin = join(options.workspaceRoot, '.venv', 'bin');
+  const cliPath = [...new Set(cliTools.map((tool) => dirname(tool.path)))];
+  const commandPath = [...cliPath, existsSync(projectBin) ? projectBin : '', runtimePath(options.path)].filter(Boolean).join(':');
+  const profile = buildSeatbeltProfile(options, {
+    scratch, runtimeDirs, cliPaths: cliTools.flatMap((tool) => [tool.path, tool.resolvedPath]),
+  });
+  return [
+    binary, '-p', profile,
+    '/usr/bin/env',
+    `PATH=${commandPath}`,
+    `TMPDIR=${scratch}/`,
+    `PLAYWRIGHT_BROWSERS_PATH=${process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0]}`,
+    ...(androidSdk ? [`ANDROID_HOME=${androidSdk}`, `ANDROID_SDK_ROOT=${androidSdk}`] : []),
+    ...(options.sshAgent ? [`SSH_AUTH_SOCK=${options.sshAgent.socket}`] : []),
+  ];
+}
+
+/**
  * The runner `wrapCommand` would use right now, or null when it would run
  * the command unwrapped (sandbox `off`, or `auto` with no runner found). In
  * `required` mode with no runner it is null too: `wrapCommand` then throws.
@@ -313,12 +529,12 @@ export function wrapCommand(argv: string[], options: WrapOptions): WrapResult {
   if (!detected) {
     if (mode === 'required') {
       throw new Error(
-        'security.shellSandbox=required but no sandbox runner (bwrap or firejail) was found on PATH',
+        'security.shellSandbox=required but no sandbox runner (bwrap or firejail on Linux, /usr/bin/sandbox-exec on macOS) was found',
       );
     }
     coreLogger.warn(
       { mode },
-      'security.shellSandbox=auto: no bwrap/firejail found; running unsandboxed',
+      'security.shellSandbox=auto: no sandbox runner (bwrap/firejail/sandbox-exec) found; running unsandboxed',
     );
     return { wrapped: false, runner: null, argv, cleanup: () => {} };
   }
@@ -330,6 +546,19 @@ export function wrapCommand(argv: string[], options: WrapOptions): WrapResult {
       wrapped: true,
       runner: 'bwrap',
       argv: [...sbArgs, ...argv],
+      cleanup: () => {
+        try { require('node:fs').rmSync(scratch, { recursive: true, force: true }); }
+        catch { /* best effort */ }
+      },
+    };
+  }
+
+  if (detected.runner === 'sandbox-exec') {
+    const scratch = realpathOr(mkdtempSync(join(tmpdir(), 'octipus-shell-')));
+    return {
+      wrapped: true,
+      runner: 'sandbox-exec',
+      argv: [...buildSandboxExecArgs(detected.binary, options, scratch), ...argv],
       cleanup: () => {
         try { require('node:fs').rmSync(scratch, { recursive: true, force: true }); }
         catch { /* best effort */ }

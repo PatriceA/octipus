@@ -27,7 +27,13 @@
  *   listens on the namespace's 127.0.0.1 and forwards to it before starting
  *   the server with the proxy variables. Nothing else leaves the namespace,
  *   so the proxy is the only way out: enforced.
- * - **Sandbox off (the default), no runner found, macOS, Windows**: the
+ * - **macOS with sandbox-exec** (same setting): no network namespace exists,
+ *   so there is nothing to bridge into — a bridge's 127.0.0.1 would be the
+ *   host's. No Unix socket is opened; the Seatbelt profile
+ *   (`buildSeatbeltProfile` in shell-sandbox.ts) denies all network but
+ *   outbound TCP to this proxy's loopback port, and the server gets the proxy
+ *   variables pointing at that port directly: enforced.
+ * - **Sandbox off (the default), no runner found, Windows**: the
  *   server runs unwrapped with HTTP(S)_PROXY / ALL_PROXY pointing at the TCP
  *   listener. Well-behaved HTTP clients honour it, but nothing stops a direct
  *   connection: advisory only. The package's status says so.

@@ -85,9 +85,10 @@ An enabled package runs as the MCP server `plugin-<name>`:
   databases, tokens it refreshes): its own directory is read-only under the
   sandbox and pinned by hash ([Content pinning](#content-pinning)).
 - **The sandbox, when it is on.** With `security.shellSandbox` set to `auto`
-  or `required`, the server runs under bwrap or firejail with its directory
-  mounted **read-only** (bwrap `--ro-bind`, firejail `--read-only`), its data
-  directory as the only writable one, and no direct network; the hosts in
+  or `required`, the server runs under bwrap or firejail (Linux) or
+  `sandbox-exec` (macOS) with its directory **read-only** (bwrap `--ro-bind`,
+  firejail `--read-only`, a Seatbelt `deny file-write*`), its data directory
+  as the only writable one, and no direct network; the hosts in
   `network` are reached through the egress proxy ([Network](#network)). With
   the sandbox `off` (the default), it runs unwrapped; its directory is then
   writable and the declared hosts are advice, not enforced.
@@ -188,8 +189,9 @@ What that holds depends on the platform:
 | Where | A package with hosts | A package without hosts | Status `network.state` |
 |---|---|---|---|
 | Linux, sandbox `auto`/`required`, bwrap or firejail found | Enforced: the server has its own network namespace with only loopback. The proxy's Unix socket is mounted in, and a small launcher (run with Octipus's own Node binary) bridges the namespace's `127.0.0.1` to it, so the proxy is the only way out. | Offline: no network at all. | `restricted` / `offline` |
-| Linux with the sandbox `off` (the default), or no runner found | **Not enforced.** The proxy variables point well-behaved HTTP clients at the proxy, but a direct connection still works. | Not enforced: nothing blocks the network. | `not_enforced` |
-| macOS, Windows | **Not enforced**, as above: neither bwrap nor firejail exists there. | Not enforced. | `not_enforced` |
+| macOS, sandbox `auto`/`required`, `/usr/bin/sandbox-exec` present | Enforced: the server runs under a generated Seatbelt profile that denies all network except outbound TCP to the proxy's own port on `localhost`, and the proxy variables point at that port. Anything else — another host, another local port, a Unix socket, DNS — is refused by the kernel. | Offline: the profile allows no network at all. | `restricted` / `offline` |
+| Linux or macOS with the sandbox `off` (the default), or no runner found | **Not enforced.** The proxy variables point well-behaved HTTP clients at the proxy, but a direct connection still works. | Not enforced: nothing blocks the network. | `not_enforced` |
+| Windows | **Not enforced**, as above: Windows has no built-in runner comparable to bwrap or Seatbelt (AppContainer and job-object network limits need a native helper Octipus does not ship). | Not enforced. | `not_enforced` |
 
 `GET /api/plugin-packages` reports this per package as `network`
 (`{ state, detail }`), so an operator sees "Network not enforced on this
@@ -228,6 +230,38 @@ path is too long for a socket), never under `/tmp`: firejail runs with
 `--private-tmp`, which hides the host's `/tmp` whatever is whitelisted, and
 bwrap mounts a per-start scratch directory over `/tmp`. Both runners mount the
 socket directory by its own path.
+
+### macOS: sandbox-exec
+
+On macOS the sandbox is `/usr/bin/sandbox-exec` with a Seatbelt (SBPL)
+profile written for each start (`buildSeatbeltProfile` in
+`src/security/shell-sandbox.ts`). It starts from `(deny default)` and allows
+back only:
+
+- **Files:** metadata (names, sizes, times) anywhere, because path resolution
+  stats every parent directory; contents only under the system and runtime
+  directories (`/System`, `/usr`, `/bin`, `/sbin`, `/opt`, `/private/etc`,
+  `/private/var/db/timezone`, the Command Line Tools, the user-level runtime
+  directories the Linux sandbox also exposes, and Octipus's own Node binary),
+  the package directory and the writable ones. The package directory is
+  read-only — the profile ends with an explicit `deny file-write*` for it.
+  Writable: the data directory and a per-start scratch directory, which is
+  the server's `TMPDIR` (there is no private `/tmp` to mount over). The rest
+  of the home directory is unreadable.
+- **Network:** nothing without hosts. With hosts, outbound TCP to
+  `localhost:<proxy port>` only. Unlike Linux, there is no network namespace,
+  so the Unix-socket bridge is not used: its "loopback" would be the host's,
+  and the profile would have to allow loopback broadly for the bridge's own
+  port, which would let the server reach any local service. Allowing exactly
+  the proxy's port is narrower. DNS stays off too: the proxy resolves names.
+- **Processes:** exec, fork and signals within the sandbox, sysctl and
+  preference reads, and a short list of system services (directory services,
+  logging, notifications, preferences).
+
+Apple marks `sandbox-exec` as deprecated, but it ships with every current
+macOS release and is used by the system and by other developer tools. If a
+future release removes it, detection finds nothing: `auto` then runs
+unwrapped (`not_enforced`) and `required` refuses to start the server.
 
 ## Installing and managing
 
@@ -269,7 +303,7 @@ Every change is in the audit log (`resource_type = plugin_package`).
 - Signed packages, remote install and the marketplace page: C15. Until then a
   package is pinned by its content hash only ([Content pinning](#content-pinning)).
 - A web page for plugin packages.
-- Network enforcement off Linux (macOS `sandbox-exec`, Windows): the egress
-  proxy is advisory there.
+- Network enforcement on Windows: the egress proxy is advisory there (no
+  built-in runner; see [Network](#network)).
 - In a shared space, plugin tools follow the rules of personal connections
   (reads allowed, writes asked or refused); space-level packages come later.

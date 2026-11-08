@@ -398,6 +398,9 @@ describe('the server a package runs as', () => {
     const m = { ...base, network: ['api.example.com'] };
     expect(networkStatus(m, 'bwrap').state).toBe('restricted');
     expect(networkStatus(base, 'firejail').state).toBe('offline');
+    // macOS: Seatbelt holds the line the same way.
+    expect(networkStatus(m, 'sandbox-exec').state).toBe('restricted');
+    expect(networkStatus(base, 'sandbox-exec').state).toBe('offline');
     const advisory = networkStatus(m, null);
     expect(advisory.state).toBe('not_enforced');
     expect(advisory.detail).toMatch(/Network not enforced on this platform/);

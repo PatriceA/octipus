@@ -80,8 +80,9 @@ export interface PluginManifest {
  * - `restricted` — it declares hosts and reaches only those, through the
  *   egress proxy, with direct network off in the sandbox;
  * - `not_enforced` — no sandbox wraps it on this platform (sandbox off, no
- *   bwrap/firejail, macOS, Windows): the declared hosts are advice, and a
- *   package with hosts is only pointed at the proxy.
+ *   bwrap/firejail on Linux, no sandbox-exec on macOS, Windows): the
+ *   declared hosts are advice, and a package with hosts is only pointed at
+ *   the proxy.
  */
 export interface PluginNetworkStatus {
   state: 'offline' | 'restricted' | 'not_enforced';
