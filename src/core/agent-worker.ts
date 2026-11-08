@@ -2761,7 +2761,11 @@ export class AgentWorker extends BaseAgentWorker {
     }
     this.lastRequestShape = { tools: completionOpts.tools, cacheScope: completionOpts.cacheScope, cachePacing: completionOpts.cachePacing };
     const sentAt = Date.now();
-    const signature = prefixSignature(litellmModel, completionOpts.tools, this.messages.filter((m) => m.role === 'system').map((m) => m.content));
+    // Deferred tools (native tool search) are outside the prompt prefix: a
+    // change among them is not a cache break, so they are not in the signature.
+    const deferredSet = deferredTools ? new Set(deferredTools) : undefined;
+    const loadedTools = deferredSet ? completionOpts.tools?.filter((t) => t.type !== 'function' || !deferredSet.has(t.function.name)) : completionOpts.tools;
+    const signature = prefixSignature(litellmModel, loadedTools, this.messages.filter((m) => m.role === 'system').map((m) => m.content));
     const result = await this.completeViaTarget(target, providerName, completionOpts);
     this.observeCacheBreak(providerName, { ...signature, at: sentAt }, result.usage);
 

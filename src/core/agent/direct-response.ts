@@ -2,6 +2,7 @@ import { isJobOn } from '@/core/modules/registry';
 import { readSessionHistory, withSessionConversation } from '@/core/session-history';
 import { buildSelectedSkillPrompt } from '@/skills/selection';
 import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
+import { PromptBuilder } from './prompt-builder';
 import { getResponseCache } from '@/core/response-cache';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
@@ -18,8 +19,14 @@ import { appendSources, type ResponseMetadata } from './types';
 import { omitSpaceTurnContext } from '@/core/spaces/turn-context';
 
 /**
- * Assemble a direct-response system prompt from its components.
- * Exported for testing the prompt caching split.
+ * Assemble a direct-response system prompt from its components, in typed
+ * tiers (prompt-builder.ts). Exported for testing the prompt caching split.
+ *
+ * The user profile used to sit after the date line, so it rode in the
+ * per-turn tail — and, since that tail is stored with every user row and
+ * replayed, it was repeated once per turn in the history. It is user tier
+ * now, in the cached system part; the date, the guard reminder and the
+ * retrieved context stay per turn.
  */
 export function buildDirectResponseSystem(args: {
   persona: string;
@@ -30,17 +37,15 @@ export function buildDirectResponseSystem(args: {
   userProfile?: string;
   extraSystemContext?: string;
 }): string {
-  const devHint = args.devHint ?? '';
-  let basePrompt = SECURITY_PREAMBLE + args.persona + devHint + '\n\n' + args.dateContext;
-  if (args.guardFlags) {
-    basePrompt += args.guardFlags;
-  }
-  if (args.userProfile) {
-    basePrompt += args.userProfile;
-  }
-  const summary = args.summary;
-  const extraSystemContext = args.extraSystemContext ?? '';
-  return (summary ? `${basePrompt}\n\nPrevious conversation summary:\n${summary}` : basePrompt) + extraSystemContext;
+  return new PromptBuilder()
+    .add('user', 'persona', SECURITY_PREAMBLE + args.persona)
+    .add('user', 'user-profile', args.userProfile)
+    .add('session', 'dev-hint', args.devHint)
+    .add('session', 'summary', args.summary ? `\n\nPrevious conversation summary:\n${args.summary}` : '')
+    .add('turn', 'date', `\n\n${args.dateContext}`)
+    .add('turn', 'guard', args.guardFlags)
+    .add('turn', 'retrieved', args.extraSystemContext)
+    .build();
 }
 
 /**

@@ -89,6 +89,21 @@ describe('every prompt-assembly site is splittable', () => {
     });
     expect(splitVolatileSystem(system)).not.toBeNull();
   });
+
+  test('the direct-response user profile is in the cached part, not the per-turn tail', async () => {
+    const { buildDirectResponseSystem } = await import('@/core/agent/direct-response');
+    const split = splitVolatileSystem(buildDirectResponseSystem({
+      persona: 'x'.repeat(5000),
+      dateContext: 'CURRENT DATE/TIME: 2026-09-15T10:00:00Z',
+      userProfile: '\n\nUSER CONTEXT:\nName: Ada',
+      guardFlags: '\n\nSECURITY REMINDER: flagged',
+      extraSystemContext: '\n\nKnown about the user: likes tea',
+    }));
+    expect(split?.staticPart).toContain('USER CONTEXT');
+    expect(split?.volatilePart).not.toContain('USER CONTEXT');
+    expect(split?.volatilePart).toContain('SECURITY REMINDER');
+    expect(split?.volatilePart).toContain('likes tea');
+  });
 });
 
 describe('applyAnthropicCacheControl — settled history', () => {
