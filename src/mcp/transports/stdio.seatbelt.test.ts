@@ -52,5 +52,5 @@ test('no hosts: wrapped with no network and no proxy', async () => {
   expect(launch.proxy).toBeNull();
   expect(launch.networkEnforced).toBe(true);
   expect(launch.env).toBe(env);
-  expect(wrapCommand.mock.calls[0][1]).toEqual({ workspaceRoot: '/pkg', allowSeatbelt: true, workspaceReadOnly: true, allowNetwork: false, path: '/usr/bin' });
+  expect(wrapCommand.mock.calls[0][1]).toEqual({ workspaceRoot: '/pkg', allowSeatbelt: true, workspaceReadOnly: true, allowNetwork: false, path: '/usr/bin', extraReadOnly: [process.execPath] });
 });

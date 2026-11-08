@@ -72,7 +72,10 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
   };
   const egress = sandbox.egress && sandbox.egress.hosts.length > 0 ? sandbox.egress : null;
   if (!egress) {
-    const wrapped = wrapCommand(argv, { ...mounts, allowNetwork: sandbox.allowNetwork, path: env.PATH });
+    // Octipus's own Node binary stays readable, as on the egress path: a
+    // package started with it (e.g. under nvm, or a CI tool cache in $HOME)
+    // must not fail to start just because it declares no hosts.
+    const wrapped = wrapCommand(argv, { ...mounts, allowNetwork: sandbox.allowNetwork, path: env.PATH, extraReadOnly: [process.execPath] });
     return { argv: wrapped.argv, env, networkEnforced: wrapped.wrapped, proxy: null, cleanup: wrapped.cleanup };
   }
   // macOS (sandbox-exec): no network namespace to bridge into, so the
