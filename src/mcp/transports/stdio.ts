@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from 'child_process';
 import { mkdir } from 'node:fs/promises';
 import { buildChildEnv, buildIsolatedChildEnv } from '@/security/child-env';
 import { bridgedArgv, type EgressProxy, proxyEnv, startEgressProxy } from '@/security/egress-proxy';
-import { activeSandboxRunner, wrapCommand } from '@/security/shell-sandbox';
+import { activeSandboxRunner, getSandboxMode, wrapCommand } from '@/security/shell-sandbox';
 import { coreLogger } from '@/utils/logger';
 import { killProcessTree, windowsCmdShim } from '@/utils/proc';
 import type { CloseHandler, ErrorHandler, MCPTransport, MessageHandler } from './interface';
@@ -103,7 +103,12 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
       }
     }
     // No sandbox (off, no runner, Windows): the proxy is advice only.
-    // A client that ignores HTTP(S)_PROXY still connects directly.
+    // A client that ignores HTTP(S)_PROXY still connects directly. Under
+    // `required` that is not good enough: refuse, as the no-hosts path does
+    // when wrapCommand finds no runner (Windows has none).
+    if (getSandboxMode() === 'required') {
+      throw new Error(`security.shellSandbox=required: the network of plugin package "${egress.label}" cannot be enforced on this platform (no sandbox runner), so it is not started`);
+    }
     coreLogger.warn({ pkg: egress.label, hosts: egress.hosts },
       'Plugin package network not enforced on this platform: no sandbox wraps the server, so the egress proxy is advisory');
     return { argv, env: { ...env, ...proxyEnv(proxy.url) }, networkEnforced: false, proxy, cleanup: () => { void proxy.close(); } };
