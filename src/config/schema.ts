@@ -822,6 +822,19 @@ export const configSchema = z.object({
     /** Most tokens all of a turn's hooks together may inject. */
     maxTokens: z.number().int().min(100).max(8000).default(2000),
   }).prefault({}),
+  /**
+   * In-process extensions (`.octipus/extensions`, src/extensions). Every
+   * extension may observe gateway events and add commands; only a TRUSTED one
+   * may hook the agent loop (`octi.hook`: rewrite the system prompt, rewrite
+   * or refuse tool calls, see results, gate spawns), because a project's
+   * `.octipus/extensions` arrives with whatever repository was cloned.
+   * Absolute paths of an extension's entry file or its directory; compared by
+   * real path, so a same-named extension elsewhere is not trusted.
+   * Env: OCTIPUS_TRUSTED_EXTENSIONS (comma-separated).
+   */
+  extensions: z.object({
+    trusted: z.array(z.string()).default([]),
+  }).prefault({}),
   oauth: oauthConfigSchema,
   rateLimit: rateLimitConfigSchema,
   swarm: swarmConfigSchema.prefault({}),

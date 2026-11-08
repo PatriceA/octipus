@@ -108,6 +108,22 @@ getAgentHooks().register('before-agent-start', (ctx) => {
 
 Handlers run sequentially in registration order. A thrown handler is logged and swallowed so a broken plugin can't poison the root agent. **Do not** strip or rewrite `SECURITY_PREAMBLE` — DESIGN.md house rule #6.
 
+### From an extension: `octi.hook` (trusted extensions only)
+
+An extension (`~/.octipus/extensions` or a project's `.octipus/extensions`) reaches the same hooks without importing host internals:
+
+```ts
+export default function (octi) {
+  octi.hook('tool:before', (ctx) => {
+    if (ctx.toolId === 'shell') ctx.args.command = String(ctx.args.command).replace(/sk-[A-Za-z0-9]+/g, '[redacted]');
+  });
+}
+```
+
+Events: `before-agent-start`, `tool:before` (rewrite `args` or short-circuit the call), `tool:after`, `spawn:before`, `spawn:after`. The hook is removed when the extension is disposed (`/reload`).
+
+Hooks run in-process and can rewrite what the agent does, so `octi.hook` throws unless the operator trusts the extension. A project's `.octipus/extensions` arrives with whatever repository was cloned. List each trusted extension's entry file or directory, by absolute path, in `extensions.trusted` (or `OCTIPUS_TRUSTED_EXTENSIONS`, comma-separated). Paths are compared by real path, so an extension with the same name somewhere else is not trusted. Observing events (`octi.on`) and adding commands need no trust.
+
 ## Example Plugin
 
 See `extensions/example-plugin/` for a working example with a greeting tool and a calculator.

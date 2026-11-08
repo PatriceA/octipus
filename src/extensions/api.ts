@@ -4,12 +4,39 @@ import type { GatewayEventBus } from '@/core/gateway/event-bus';
 import type { GatewayEvent } from '@/core/gateway/protocol';
 import { matchesPattern } from '@/core/gateway/protocol';
 import { createChildLogger } from '@/utils/logger';
+import { realpathSync } from 'node:fs';
+import { isAbsolute, relative } from 'node:path';
+import { getAgentHooks } from '@/core/agent/hooks';
+import { getConfig } from '@/config';
 import type {
   ExtensionAPI,
   ExtensionCommandDef,
   ExtensionEventHandler,
   LoadedExtension,
 } from './types';
+
+/** The real path, or the path as given when it does not resolve (a deleted file is trusted by nothing). */
+function real(path: string): string {
+  try { return realpathSync(path); } catch { return path; }
+}
+
+/**
+ * Whether the operator trusts this extension to hook the agent loop: its
+ * entry file, or a directory containing it, is listed in `extensions.trusted`
+ * (or OCTIPUS_TRUSTED_EXTENSIONS), compared by real path.
+ */
+export function isTrustedExtension(entryPath: string, trusted?: readonly string[]): boolean {
+  const list = trusted ?? [
+    ...(getConfig().extensions?.trusted ?? []),
+    ...(process.env.OCTIPUS_TRUSTED_EXTENSIONS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+  ];
+  if (!list.length) return false;
+  const entry = real(entryPath);
+  return list.some((item) => {
+    const rel = relative(real(item), entry);
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  });
+}
 
 /**
  * Build a fresh ExtensionAPI bound to the given event bus, plus a
@@ -108,6 +135,20 @@ export function buildExtensionContext(
 
     onDispose(fn) {
       disposeCallbacks.push(fn);
+    },
+
+    hook(event, handler) {
+      if (disposed) {
+        logger.warn(`hook(${event}) ignored — extension already disposed`);
+        return () => {};
+      }
+      if (!isTrustedExtension(entryPath)) {
+        throw new Error(`extension "${name}" may not hook the agent loop: it is not listed in extensions.trusted (${entryPath})`);
+      }
+      const off = getAgentHooks().register(event, handler);
+      unsubscribers.push(off);
+      logger.info({ event }, 'extension hooked the agent loop');
+      return off;
     },
   };
 
