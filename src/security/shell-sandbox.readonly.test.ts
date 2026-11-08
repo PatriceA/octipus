@@ -9,7 +9,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 let fakeRunner: string | null = null;
 vi.mock('node:fs', async (original) => {
   const actual = await original<typeof import('node:fs')>();
-  const KNOWN = ['/usr/bin/bwrap', '/usr/local/bin/bwrap', '/bin/bwrap', '/usr/bin/firejail', '/usr/local/bin/firejail', '/bin/firejail'];
+  const KNOWN = ['/usr/bin/sandbox-exec', '/usr/bin/bwrap', '/usr/local/bin/bwrap', '/bin/bwrap', '/usr/bin/firejail', '/usr/local/bin/firejail', '/bin/firejail'];
   const existsSync = (p: import('node:fs').PathLike) => (KNOWN.includes(String(p)) ? String(p) === fakeRunner : actual.existsSync(p));
   return { ...actual, existsSync, default: { ...actual, existsSync } };
 });

@@ -27,7 +27,7 @@ import { coreLogger } from '@/utils/logger';
 import { truncateLinesToTokens } from '@/utils/token-count';
 import { getAgentHooks } from './hooks';
 import { estimateToolSchemaTokens, logPromptComposition, recordContextFill } from './prompt-budget';
-import { PromptBuilder } from './prompt-builder';
+import { asTrailingBlock, PromptBuilder } from './prompt-builder';
 import { PromptTagger, stageRootPrompt, turnContextParts } from './prompt-composition';
 import { categorizeBuilderParts } from './prompt-parts';
 import { buildSecurityReminder } from './input-guard';
@@ -137,6 +137,29 @@ export function buildTopicHint(
  */
 export function assembleSystemPrompt(staticParts: string[], volatileParts: string[]): string {
   return [...staticParts, ...volatileParts].filter(Boolean).join('');
+}
+
+/**
+ * Separate what the `before-agent-start` hook added to the role prompt (the
+ * persona: name, tone, the user's facts) from the role prompt itself, so the
+ * role prompt can open the install tier that every user shares and the
+ * addition can follow it in the user tier.
+ *
+ * Recognised shapes: the persona hook's (inserted right after
+ * SECURITY_PREAMBLE, or prepended whole), and an addition appended at the end.
+ * Anything else a hook did (a rewrite of the role text) is returned as `null`:
+ * the whole result then stays one user-tier block, as before.
+ */
+export function splitHookedRolePrompt(base: string, hooked: string): { install: string; user: string } | null {
+  if (hooked === base) return { install: base, user: '' };
+  if (hooked.length < base.length) return null;
+  if (base.startsWith(SECURITY_PREAMBLE) && hooked.startsWith(SECURITY_PREAMBLE)) {
+    const body = base.slice(SECURITY_PREAMBLE.length);
+    if (hooked.endsWith(body)) return { install: base, user: hooked.slice(SECURITY_PREAMBLE.length, hooked.length - body.length) };
+  }
+  if (hooked.startsWith(base)) return { install: base, user: hooked.slice(base.length) };
+  if (hooked.endsWith(base)) return { install: base, user: hooked.slice(0, hooked.length - base.length) };
+  return null;
 }
 
 /** Per-turn date, memory, attachments and security guidance, outside stable instructions. */
@@ -638,14 +661,22 @@ export async function runRootAgent(
     // the volatile tier to keep the cacheable prefix stable. Read-only.
     turnContext: volatileParts.slice(1).join(''),
   });
-  systemPrompt = hookCtx.systemPrompt;
-
   // From here the prompt is assembled into labelled, tiered parts
   // (prompt-builder.ts), so `logPromptComposition` can say WHICH block costs
-  // what and a cache break can be traced to the tier that moved. The persona
-  // sits inside the role prompt (after the security preamble), so the prefix
-  // is per-user from its first block on.
-  const prompt = new PromptBuilder().add('user', 'role-prompt', systemPrompt);
+  // what and a cache break can be traced to the tier that moved.
+  //
+  // Install tier first (C3): the role prompt and the delegation text are the
+  // same bytes for every user of this install, so they open the prefix and the
+  // provider caches them as one unit every user's sessions read. The persona
+  // the hook inserted after the security preamble moves after them, into the
+  // user tier — it was the first per-user byte, and everything behind it was
+  // per-user too. A supervisor prompt carries its project's autonomy level,
+  // and a hook rewrite that is not a plain addition cannot be separated: both
+  // stay one user-tier block, as before.
+  const hookedSplit = supervisor ? null : splitHookedRolePrompt(systemPrompt, hookCtx.systemPrompt);
+  systemPrompt = hookCtx.systemPrompt;
+  const roleTier = hookedSplit ? 'install' : 'user';
+  const prompt = new PromptBuilder().add(roleTier, 'role-prompt', hookedSplit ? hookedSplit.install : systemPrompt);
 
   // Workers load the canonical checkpoint and transcript under the session
   // lock, so the root no longer renders either — but the user-visible
@@ -675,7 +706,7 @@ export async function runRootAgent(
       'If the request needs one, spawn_child to a specialist that holds it.'
     : '';
 
-  if (!supervisor) prompt.add('user', 'delegation-policy', buildDelegationPolicy(isLite));
+  if (!supervisor) prompt.add(roleTier, 'delegation-policy', buildDelegationPolicy(isLite));
   // The delegation mechanics — how spawn_child/collect_children actually behave,
   // which role fits which task, the read-only clause, the no-respawn rule. Full
   // tier only: lite's whole delegation contract is "once, then relay", and a
@@ -686,7 +717,9 @@ export async function runRootAgent(
   // you know" is what the phase deleted; the mechanics below are as true now as
   // they were, and the routing table gained the sentence about what NOT to
   // delegate — the root holds those tools itself.
-  if (!isLite && !supervisor) prompt.add('user', 'delegation-mechanics', `\n\n${delegationPrompt}`);
+  if (!isLite && !supervisor) prompt.add(roleTier, 'delegation-mechanics', `\n\n${delegationPrompt}`);
+  // The persona (and anything else the hook appended): the first per-user block.
+  if (hookedSplit) prompt.add('user', 'persona', asTrailingBlock(hookedSplit.user));
   volatileParts.push(tagger.tag('volatile', 'turn', 'Topic hint', buildTopicHint(isLite, classification)));
   if (classification.type === 'ambiguous') {
     volatileParts.push(tagger.tag('volatile', 'turn', 'Ambiguous request note', `\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise resolve only the uncertainty needed to choose direct work or a specialist; do not start a broad investigation just to route the task. If the user explicitly tells you to delegate, always do so.`));
@@ -917,6 +950,8 @@ export async function runRootAgent(
     // TTL before failing. See `channelCanPrompt`.
     attended: channelCanPrompt(channel),
     systemPrompt,
+    // Where the install tier ends: the provider caches it as its own unit (C3).
+    sharedPrefix: prompt.installPrefix(),
     tools: turnTools,
     toolAdvertisement,
     // Full mode: agent.maxIterations (0 = unlimited) via agentManager.spawn.

@@ -12,6 +12,15 @@ import { users } from './users';
  * `contentHash` pins the package's files as approved (src/plugins/packages/integrity.ts):
  * recorded at install, upgrade and content approval, checked before every
  * start. Null for a package installed before pinning; its first start records it.
+ *
+ * `signedBy` names the trusted publisher (`plugins.trustedPublishers`) whose
+ * valid signature covered that hash (src/plugins/packages/signature.ts); null
+ * for unsigned content, a key not trusted, or content an admin approved
+ * without a valid signature. It is what held at install or approval; the
+ * package view recomputes it. `signatureHash` is the sha256 of the signature
+ * file's bytes recorded with `contentHash` (null: no signature file): the
+ * file is outside the content hash, so it is pinned on its own and compared
+ * before every start.
  */
 export const pluginPackages = pgTable('plugin_packages', {
   name: text('name').primaryKey(),
@@ -19,6 +28,8 @@ export const pluginPackages = pgTable('plugin_packages', {
   manifest: jsonb('manifest').$type<PluginManifest>().notNull(),
   enabled: boolean('enabled').default(false).notNull(),
   contentHash: text('content_hash'),
+  signedBy: text('signed_by'),
+  signatureHash: text('signature_hash'),
   settings: jsonb('settings').$type<Record<string, string | number | boolean>>().default({}).notNull(),
   installedBy: uuid('installed_by').references(() => users.id, { onDelete: 'set null' }),
   installedAt: timestamp('installed_at', { withTimezone: true }).defaultNow().notNull(),

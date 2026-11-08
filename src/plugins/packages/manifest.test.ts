@@ -48,4 +48,9 @@ describe('plugin manifest', () => {
   test('settings become OCTIPUS_SETTING_<KEY>', () => {
     expect(settingEnvName('region')).toBe('OCTIPUS_SETTING_REGION');
   });
+
+  test('the server may not be started from the signature file', () => {
+    expect(problems({ ...FIXTURE, server: { command: 'node', args: ['octipus-plugin.sig'] } })).toEqual([expect.stringMatching(/may not name octipus-plugin\.sig/)]);
+    expect(problems({ ...FIXTURE, server: { command: './OCTIPUS-PLUGIN.SIG' } })).toEqual([expect.stringMatching(/may not name/)]);
+  });
 });

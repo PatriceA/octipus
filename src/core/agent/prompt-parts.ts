@@ -44,6 +44,7 @@ export const BUILDER_LABELS: Record<string, { category: PromptPart['category']; 
   'role-prompt': { category: 'role', label: 'Role prompt' },
   'delegation-policy': { category: 'delegation', label: 'Delegation policy' },
   'delegation-mechanics': { category: 'delegation', label: 'Delegation guide' },
+  'persona': { category: 'role', label: 'Persona' },
   'dev-project': { category: 'workspace', label: 'Dev-mode project' },
   'workspace-suite': { category: 'workspace', label: 'Repo map' },
   'workspace-listing': { category: 'workspace', label: 'Workspace folders' },

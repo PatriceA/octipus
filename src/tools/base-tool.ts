@@ -1,10 +1,10 @@
-import { ToolNotExecutedError, ToolPolicyRefusalError } from '@/core/tool-execution-error';
+import { markToolExecutionUncertain, ToolNotExecutedError, ToolPolicyRefusalError, uncertainExecutionRecord } from '@/core/tool-execution-error';
 import { redactedCommand } from '@/utils/command-log';
 import { rememberRunDecision } from '@/security/pipeline-permissions';
 import { actionRecovery, isReadOnlyAction } from '@/core/action-recovery';
 import { assertExecutionActive, getExecutionSignal } from '@/core/execution-scope';
 import type { ToolHandler } from '@/core/agent-worker';
-import { getAgentHooks } from '@/core/agent/hooks';
+import { getAgentHooks, type ToolResultContext } from '@/core/agent/hooks';
 import { toolOffMessage } from '@/core/modules/registry';
 import { isCancellationError } from '@/core/swarm/errors';
 import { recordToolExecution } from '@/core/telemetry';
@@ -173,7 +173,9 @@ export abstract class BaseTool {
     if (before.shortCircuit) {
       const sc = before.shortCircuit;
       const denied = 'deny' in sc;
-      await hooks.fire('tool:after', {
+      // A substituted result is a result like any other: `tool:after` may
+      // redact or replace it.
+      const answered = await fireToolAfter({
         toolId: this.id,
         toolName,
         args: before.args,
@@ -185,7 +187,7 @@ export abstract class BaseTool {
       // A denial is an error, never an empty success — the model must see that
       // the work did not happen.
       if (denied) throw new Error(`Tool ${this.id}.${toolName} denied by policy: ${sc.deny}`);
-      return sc.result;
+      return answered;
     }
     // A `tool:before` handler may have rewritten the arguments.
     args = before.args;
@@ -250,11 +252,13 @@ export abstract class BaseTool {
     toolLogger.debug({ toolId: this.id, tool: toolName }, 'Executing tool');
 
     // WS4 observability — count + time every dispatch. `finally` fires on both
-    // the success returns (incl. the secret-redaction branch) and the throw.
+    // the success path and the throw.
     const execStart = Date.now();
     let execStatus: 'success' | 'error' | 'cancelled' = 'success';
     let execResult: unknown;
     let execError: unknown;
+    let threw = false;
+    let durationMs = 0;
     try {
       if (authorizationSource.startsWith('approval:')) await rememberRunDecision(context, { toolId: this.id, action, toolName, args }, undefined, authorizationSource.slice('approval:'.length));
       const result = options?.readOnly || options?.recoverySafe || isReadOnlyAction(action)
@@ -269,9 +273,8 @@ export abstract class BaseTool {
         });
       execResult = result;
       toolLogger.debug({ toolId: this.id, tool: toolName }, 'Tool executed successfully');
-
-      return result;
     } catch (error) {
+      threw = true;
       execError = error;
       if (isCancellationError(error)) {
         // Aborted by the agent's cancellation — not a real failure.
@@ -288,26 +291,28 @@ export abstract class BaseTool {
         execStatus = 'error';
         toolLogger.error({ err: error, toolId: this.id, tool: toolName }, 'Tool execution failed');
       }
-      throw error;
     } finally {
-      const durationMs = Date.now() - execStart;
+      durationMs = Date.now() - execStart;
       recordToolExecution(toolName, execStatus, durationMs / 1000);
-      // ── Dispatch waterfall: `tool:after` ──────────────────────────
-      // Observational, so it uses `fire` (a bad subscriber is logged and
-      // swallowed): a metrics or tracing hook must never turn a successful
-      // tool call into a failure. `result` is read-only here: the return value
-      // is already committed by the time this `finally` runs.
-      await hooks.fire('tool:after', {
-        toolId: this.id,
-        toolName,
-        args,
-        agent: hookAgent,
-        status: execStatus,
-        result: execResult,
-        error: execError,
-        durationMs,
-      });
     }
+    // ── Dispatch waterfall: `tool:after` ──────────────────────────
+    // Fired on every outcome. On success its handlers may replace the result
+    // (redaction) and the value they leave is what this dispatch returns, so
+    // the model, the UI and the audit row all get the same thing; a throwing
+    // handler withholds it (fail-closed, see `fireToolAfter`). On failure it
+    // is observational and the original error is rethrown.
+    const answered = await fireToolAfter({
+      toolId: this.id,
+      toolName,
+      args,
+      agent: hookAgent,
+      status: execStatus,
+      result: execResult,
+      error: execError,
+      durationMs,
+    });
+    if (threw) throw execError;
+    return answered;
   }
 
   /**
@@ -330,6 +335,48 @@ export abstract class BaseTool {
   async shutdown(): Promise<void> {
     toolLogger.debug({ toolId: this.id }, 'Tool shutting down');
   }
+}
+
+/**
+ * Fire `tool:after` and return the value the dispatch answers with.
+ *
+ * - Success: handlers run in order, fail-closed (`fireFailClosed`), and may
+ *   assign `ctx.result`. The value left there is returned. A handler that
+ *   throws withholds the result: the call answers `{ error }` naming the hook,
+ *   since a redaction that crashed halfway must not leak what it was hiding.
+ *   Returned rather than thrown because the tool DID run (a throw would read
+ *   as "not executed" to the side-effect counters and invite a retry).
+ * - Any other outcome: observational (`fire`: logged and skipped); there is no
+ *   result to replace and the caller rethrows the original error.
+ *
+ * Exported for tests.
+ */
+export async function fireToolAfter(ctx: ToolResultContext): Promise<unknown> {
+  const hooks = getAgentHooks();
+  const original = ctx.result;
+  if (ctx.status !== 'success') {
+    await hooks.fire('tool:after', ctx);
+    return original;
+  }
+  if (!hooks.has('tool:after')) return original;
+  let answered: unknown;
+  try {
+    await hooks.fireFailClosed('tool:after', ctx);
+    answered = ctx.result;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    toolLogger.error({ err, toolId: ctx.toolId, tool: ctx.toolName }, 'tool:after hook failed — result withheld');
+    answered = { error: `${reason}. ${ctx.toolId}.${ctx.toolName} ran, but its result was withheld because the hook failed; check the outcome before running it again.` };
+  }
+  // An execution the recovery journal could not confirm is tracked by the
+  // identity of its result (`markToolExecutionUncertain`); keep that mark on
+  // whatever replaces it, boxing a primitive so it has an identity.
+  const uncertain = answered === original ? undefined : uncertainExecutionRecord(original);
+  if (uncertain) {
+    if (answered === null || (typeof answered !== 'object' && typeof answered !== 'function')) answered = { result: answered };
+    markToolExecutionUncertain(answered, uncertain);
+  }
+  return answered;
 }
 
 /**

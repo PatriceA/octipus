@@ -88,19 +88,38 @@ export interface ToolDispatchContext extends ShortCircuitable {
   agent: HookAgentContext;
 }
 
-/** Fired after a tool executes, on every outcome including denial. */
+/**
+ * Fired after a tool executes, on every outcome including denial.
+ *
+ * Result replacement (redact / annotate). On a `success` outcome a handler may
+ * assign `ctx.result`; the value left there after the last handler is what the
+ * dispatch returns, so it is what the model sees, what the UI's completion
+ * event previews, what the audit row stores and what the `tool_post` hooks
+ * receive. Nothing downstream sees the original. Output a tool streams to the
+ * UI WHILE it runs (live shell output, progress events) left before this fires
+ * and is not covered. Covers tools dispatched through `BaseTool` (built-ins,
+ * plugins, extension tools); MCP calls and the agent's own orchestration tools
+ * do not fire `tool:before`/`tool:after`.
+ *
+ * Failure, by outcome:
+ * - `success`: fail-CLOSED. A handler that throws stops the chain and the
+ *   result is withheld: the call returns `{ error }` naming the hook (and the
+ *   extension, for `octi.hook`) and saying the tool ran. A redaction that
+ *   crashed halfway must not leak what it was redacting. Returned, not thrown:
+ *   the tool did run, and a throw reads as "did not happen" to the side-effect
+ *   counters and invites a blind retry of a write.
+ * - `error` / `cancelled` / `denied`: fail-open, logged and skipped. There is
+ *   no result to withhold, the original error propagates, and assigning
+ *   `ctx.result` changes nothing.
+ */
 export interface ToolResultContext {
   toolId: string;
   toolName: string;
   args: Record<string, unknown>;
   agent: HookAgentContext;
   status: 'success' | 'error' | 'cancelled' | 'denied';
-  /**
-   * The value the tool returned. READ-ONLY: `tool:after` fires after the return
-   * value is committed, so mutating this changes nothing. Rewriting a result
-   * needs a `tool:result` seam that does not exist yet — do not fake it here.
-   */
-  readonly result?: unknown;
+  /** The value the tool returned. Assign to replace it (success only; see above). */
+  result?: unknown;
   error?: unknown;
   durationMs: number;
 }
@@ -217,7 +236,17 @@ export class HookFailedError extends Error {
   }
 }
 
-export type HookHandler<T> = (ctx: T) => Promise<void> | void;
+/**
+ * Version of the hook contract: the event names in `AgentHookEvents`, the
+ * shape of their payloads and each event's failure mode. Stable within a major
+ * version: a payload may GAIN a field, but no field is removed, renamed or
+ * given another meaning, and no event switches between fail-open and
+ * fail-closed. Anything else bumps this number. Extensions read it as
+ * `octi.hookApiVersion` (`OCTI_HOOK_API_VERSION`).
+ */
+export const AGENT_HOOK_API_VERSION = 1;
+
+export type HookHandler<T> =(ctx: T) => Promise<void> | void;
 
 export type AgentHookEvents = {
   'before-agent-start': BuildSystemPromptOptions;

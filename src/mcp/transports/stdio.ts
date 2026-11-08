@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from 'child_process';
 import { mkdir } from 'node:fs/promises';
 import { buildChildEnv, buildIsolatedChildEnv } from '@/security/child-env';
 import { bridgedArgv, type EgressProxy, proxyEnv, startEgressProxy } from '@/security/egress-proxy';
-import { wrapCommand } from '@/security/shell-sandbox';
+import { activeSandboxRunner, wrapCommand } from '@/security/shell-sandbox';
 import { coreLogger } from '@/utils/logger';
 import { killProcessTree, windowsCmdShim } from '@/utils/proc';
 import type { CloseHandler, ErrorHandler, MCPTransport, MessageHandler } from './interface';
@@ -23,7 +23,8 @@ export interface StdioTransportOptions {
    *
    * With `egress`, network is limited to its hosts through an in-process
    * proxy (src/security/egress-proxy.ts): enforced when the sandbox wraps the
-   * child (no network namespace route but the proxy), advisory otherwise
+   * child (Linux: no network namespace route but the proxy; macOS: a Seatbelt
+   * profile that allows only the proxy's loopback port), advisory otherwise
    * (only the proxy variables point the child at it). `allowNetwork` is then
    * ignored: direct network stays off whenever the sandbox can turn it off.
    */
@@ -64,6 +65,8 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
   for (const dir of writable) await mkdir(dir, { recursive: true });
   const mounts = {
     workspaceRoot: sandbox.root,
+    // A package server may use sandbox-exec on macOS under `auto` too.
+    allowSeatbelt: true,
     ...(sandbox.readOnlyRoot ? { workspaceReadOnly: true } : {}),
     ...(writable.length > 0 ? { extraReadWrite: writable } : {}),
   };
@@ -72,11 +75,23 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
     const wrapped = wrapCommand(argv, { ...mounts, allowNetwork: sandbox.allowNetwork, path: env.PATH });
     return { argv: wrapped.argv, env, networkEnforced: wrapped.wrapped, proxy: null, cleanup: wrapped.cleanup };
   }
+  // macOS (sandbox-exec): no network namespace to bridge into, so the
+  // Seatbelt profile allows outbound TCP to the proxy's own loopback port and
+  // nothing else, and the server is pointed at it directly (see
+  // buildSeatbeltProfile). Linux runners reach the proxy by its Unix socket.
+  const seatbelt = activeSandboxRunner({ allowSeatbelt: true }) === 'sandbox-exec';
   const proxy = await startEgressProxy({
-    label: egress.label, allowed: egress.hosts, unixSocket: process.platform !== 'win32', socketParent: egress.runDir,
+    label: egress.label, allowed: egress.hosts, unixSocket: process.platform !== 'win32' && !seatbelt, socketParent: egress.runDir,
   });
   try {
-    if (proxy.socketPath && proxy.socketDir) {
+    if (seatbelt) {
+      const wrapped = wrapCommand(argv, {
+        ...mounts, allowNetwork: false, loopbackPorts: [proxy.port], path: env.PATH, extraReadOnly: [process.execPath],
+      });
+      if (wrapped.wrapped) {
+        return { argv: wrapped.argv, env: { ...env, ...proxyEnv(proxy.url) }, networkEnforced: true, proxy, cleanup: () => { wrapped.cleanup(); void proxy.close(); } };
+      }
+    } else if (proxy.socketPath && proxy.socketDir) {
       // Inside the sandbox: no network namespace route out, only the proxy
       // socket mounted in and this Node binary to run the launcher.
       const wrapped = wrapCommand(bridgedArgv(argv, proxy.socketPath), {
@@ -87,7 +102,7 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
         return { argv: wrapped.argv, env, networkEnforced: true, proxy, cleanup: () => { wrapped.cleanup(); void proxy.close(); } };
       }
     }
-    // No sandbox (off, no runner, macOS, Windows): the proxy is advice only.
+    // No sandbox (off, no runner, Windows): the proxy is advice only.
     // A client that ignores HTTP(S)_PROXY still connects directly.
     coreLogger.warn({ pkg: egress.label, hosts: egress.hosts },
       'Plugin package network not enforced on this platform: no sandbox wraps the server, so the egress proxy is advisory');

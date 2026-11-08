@@ -1219,6 +1219,13 @@
       "when": 1794150000000,
       "tag": "0173_plugin_package_content_hash",
       "breakpoints": true
+    },
+    {
+      "idx": 174,
+      "version": "7",
+      "when": 1794153600000,
+      "tag": "0174_plugin_package_signed_by",
+      "breakpoints": true
     }
   ]
 }

@@ -4,14 +4,20 @@
  *
  *   octi plugin validate <dir>   Validate a plugin against the contract.
  *   octi plugin convert <dir>    Convert a legacy plugin into a plugin package.
+ *   octi plugin keygen <prefix>  Make an Ed25519 signing key pair.
+ *   octi plugin sign <dir> --key <file>  Sign a plugin package (octipus-plugin.sig).
  *
  * Delegated from bin/octi.ts. Uses the published validation kit so authors and
  * the host run identical checks.
  */
+import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { validatePlugin } from '@octipus/plugin-sdk/testing';
 import { ConvertError, convertLegacyPlugin } from '@/plugins/convert';
+import { ManifestError } from '@/plugins/packages/manifest';
+import { generateSigningKey, SignatureError, signPackage } from '@/plugins/packages/signature';
+import { PackageTreeError } from '@/plugins/packages/tree';
 import { PLUGIN_TOOL_EFFECTS, type PluginToolEffect } from '@/shared/plugin-package';
 
 const HELP = `octi plugin — plugin tooling
@@ -24,7 +30,64 @@ Usage:
                                 is "external" (always ask) unless --effect lowers it.
                                 --check-handlers imports the plugin here to check every
                                 tool has a handler: that runs its code with your rights.
+  octi plugin keygen <out-prefix>
+                                Make an Ed25519 key pair: <out-prefix>.key (private,
+                                keep it secret) and <out-prefix>.pub (public, for
+                                plugins.trustedPublishers). Never overwrites a file.
+  octi plugin sign <dir> --key <private-key-file>
+                                Sign a plugin package: writes <dir>/octipus-plugin.sig
+                                over its content hash. Sign last: any later change to
+                                the files invalidates the signature.
 `;
+
+async function runKeygen(argv: string[]): Promise<never> {
+  if (argv.length !== 1) {
+    process.stderr.write(`octi plugin keygen: expected one <out-prefix>\n\n${HELP}`);
+    process.exit(2);
+  }
+  const prefix = resolve(argv[0]);
+  const { privateKeyPem, publicKeyPem, keyId } = generateSigningKey();
+  try {
+    // 'wx': never overwrite a key someone may already have published.
+    await writeFile(`${prefix}.key`, privateKeyPem, { flag: 'wx', mode: 0o600 });
+    await writeFile(`${prefix}.pub`, publicKeyPem, { flag: 'wx', mode: 0o644 });
+  } catch (err) {
+    process.stderr.write(`octi plugin keygen: ${(err as Error).message}\n`);
+    process.exit(1);
+  }
+  process.stdout.write(`✅ Wrote ${prefix}.key (private: keep it secret) and ${prefix}.pub\n`);
+  process.stdout.write(`   key id: ${keyId}\n\n`);
+  process.stdout.write('Trust it on a host with plugins.trustedPublishers:\n');
+  process.stdout.write(`${JSON.stringify([{ name: '<publisher name>', publicKey: publicKeyPem.trim() }], null, 2)}\n`);
+  process.exit(0);
+}
+
+async function runSign(argv: string[]): Promise<never> {
+  let values: { key?: string };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { key: { type: 'string', short: 'k' } } }));
+  } catch (err) {
+    process.stderr.write(`octi plugin sign: ${(err as Error).message}\n\n${HELP}`);
+    process.exit(2);
+  }
+  if (positionals.length !== 1 || !values.key) {
+    process.stderr.write(`octi plugin sign: expected <dir> --key <private-key-file>\n\n${HELP}`);
+    process.exit(2);
+  }
+  const dir = resolve(positionals[0]);
+  try {
+    const { contentHash, keyId, file } = await signPackage(dir, await readFile(resolve(values.key), 'utf8'));
+    process.stdout.write(`✅ Signed ${dir}\n   content hash: ${contentHash}\n   key id: ${keyId}\n   wrote ${file}\n`);
+    process.exit(0);
+  } catch (err) {
+    const problems = err instanceof ManifestError ? err.problems : [(err as Error).message];
+    if (!(err instanceof ManifestError || err instanceof SignatureError || err instanceof PackageTreeError || err instanceof SyntaxError || (err as NodeJS.ErrnoException).code)) throw err;
+    for (const p of problems) process.stderr.write(`  ✗ ${p}\n`);
+    process.stderr.write(`\n❌ ${dir} was not signed.\n`);
+    process.exit(1);
+  }
+}
 
 async function runValidate(dir: string): Promise<never> {
   const abs = resolve(dir);
@@ -108,6 +171,12 @@ async function main(): Promise<void> {
     }
     case 'convert':
       await runConvert(rest);
+      break;
+    case 'keygen':
+      await runKeygen(rest);
+      break;
+    case 'sign':
+      await runSign(rest);
       break;
     case undefined:
     case 'help':

@@ -361,7 +361,7 @@ describe('launching a sandboxed server', () => {
     expect(launch.proxy).toBeNull();
     expect(launch.env).toBe(env);
     expect(launch.argv).toEqual(['bwrap', '--unshare-net', '--', 'node', 'server.mjs']);
-    expect(wrapCommand).toHaveBeenCalledWith(['node', 'server.mjs'], { workspaceRoot: '/pkg', allowNetwork: false, path: '/usr/bin' });
+    expect(wrapCommand).toHaveBeenCalledWith(['node', 'server.mjs'], { workspaceRoot: '/pkg', allowSeatbelt: true, allowNetwork: false, path: '/usr/bin' });
   });
 });
 
@@ -398,6 +398,9 @@ describe('the server a package runs as', () => {
     const m = { ...base, network: ['api.example.com'] };
     expect(networkStatus(m, 'bwrap').state).toBe('restricted');
     expect(networkStatus(base, 'firejail').state).toBe('offline');
+    // macOS: Seatbelt holds the line the same way.
+    expect(networkStatus(m, 'sandbox-exec').state).toBe('restricted');
+    expect(networkStatus(base, 'sandbox-exec').state).toBe('offline');
     const advisory = networkStatus(m, null);
     expect(advisory.state).toBe('not_enforced');
     expect(advisory.detail).toMatch(/Network not enforced on this platform/);

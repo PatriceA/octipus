@@ -16,6 +16,11 @@
  * a build tool writes on its own is still a place running code could stage
  * executable content in. Only paths relative to the package root enter the
  * listing, so a staging copy hashes the same as the installed directory.
+ *
+ * One file is left out: the signature (`octipus-plugin.sig`, a regular file in
+ * the package root, ./signature.ts), since it signs this hash and cannot be
+ * part of it. It is not code the package runs, and swapping it changes no
+ * byte the server sees; whether it is valid is checked on its own.
  */
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
@@ -25,6 +30,8 @@ import { join } from 'node:path';
 /** The prefix of a recorded hash; a later format would get a new one. */
 export const CONTENT_HASH_PREFIX = 'sha256:';
 const FORMAT = 'octipus-plugin-content/v1';
+/** The signature file in the package root (./signature.ts), the one file the hash leaves out. */
+export const SIGNATURE_FILE = 'octipus-plugin.sig';
 
 function fileHash(path: string): Promise<string> {
   return new Promise((resolvePromise, reject) => {
@@ -47,6 +54,7 @@ export async function contentListing(dir: string, identity: { name: string; vers
       if (info.isDirectory()) {
         await walk(childAbs, childRel);
       } else if (info.isFile()) {
+        if (childRel === SIGNATURE_FILE) continue;
         entries.push([childRel, `file ${await fileHash(childAbs)}`]);
       } else if (info.isSymbolicLink()) {
         // Install refuses links; one that appears later must change the hash.

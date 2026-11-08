@@ -39,9 +39,9 @@ import type { ModelSelector } from './model-selector';
 import { isPlanMode, stripMutatingTools } from './plan-mode';
 import { estimateToolSchemaTokens, logPromptComposition } from './prompt-budget';
 import { FILE_CHANGES_REFUSED_KEY } from '@/core/tool-executor';
-import { PromptBuilder } from './prompt-builder';
+import { asTrailingBlock, PromptBuilder } from './prompt-builder';
 import { type DeclaredPurpose, toolsetGaps } from './role-contract';
-import { formatCriticalRules, getBoundConnectorIds, getRoleConfig, getToolsForRole, SECURITY_PREAMBLE } from './roles';
+import { formatCriticalRules, getBoundConnectorIds, getRoleConfig, getToolsForRole } from './roles';
 import type { TurnEvent } from './service';
 import { applyToolCap, isSmallModel } from './small-model';
 import { selectCoreToolIds } from './tool-intent';
@@ -604,7 +604,12 @@ export async function spawnWorker(
   // carries it, the SECURITY_PREAMBLE with them. The swarm path always appended;
   // these two now agree.
   const roleTemplate = (finalIsSmall && roleConfig.liteSystemPromptTemplate) || roleConfig.systemPromptTemplate;
-  let base = (overrides?.systemPrompt || roleTemplate) + formatCriticalRules(roleConfig.criticalRules ?? []);
+  const base = (overrides?.systemPrompt || roleTemplate) + formatCriticalRules(roleConfig.criticalRules ?? []);
+  // The role template and the fixed worker guidance below are the same bytes
+  // for every user of this install: the install tier (C3), cached as its own
+  // unit. A caller's own prompt is not known to be.
+  const baseTier = overrides?.systemPrompt ? 'user' : 'install';
+  let armPersonaBlock = '';
 
   // ── Per-arm persona shadowing (wave 4) ──────────────────────────
   // The host persona has always been root agent-only. An arm the user has
@@ -612,17 +617,16 @@ export async function spawnWorker(
   // instead; every other arm is untouched and carries no persona block at all,
   // so this costs nothing until it is switched on.
   //
-  // Placed like the root agent's block (`personas/persona-hook.ts`): AFTER
-  // SECURITY_PREAMBLE, before the role prompt, so the security rules stay the
-  // first thing the model reads (DESIGN.md rule #6). STATIC — it changes only
-  // when the binding does, so it belongs in the cacheable prefix.
+  // Placed like the root agent's block (`root-runner.ts`): after the install
+  // tier, as the first user-tier block — it is this user's binding, and in
+  // front of the role prompt it made every byte behind it per-user. The
+  // security preamble still opens the prompt (DESIGN.md rule #6). STATIC — it
+  // changes only when the binding does, so it belongs in the cacheable prefix.
   try {
     const { resolvePersonaForArm } = await import('@/core/personas/resolver');
     const armPersona = await resolvePersonaForArm(context.userId, agentRole);
     if (armPersona) {
-      base = base.startsWith(SECURITY_PREAMBLE)
-        ? SECURITY_PREAMBLE + armPersona.promptBlock + base.slice(SECURITY_PREAMBLE.length)
-        : armPersona.promptBlock + base;
+      armPersonaBlock = asTrailingBlock(armPersona.promptBlock);
       coreLogger.info(
         { role: agentRole, persona: armPersona.presetId },
         'Arm persona applied — this worker speaks in a shadowed voice',
@@ -884,7 +888,10 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     ? '\n\nRun profile scope: always pass an explicit absolute cwd to shell__run; the actual directory must remain in an approved repository. Read pipelineApproval.executionScope from get_cli_run_context. With executionScope=run, the owner approved shell work, new scripts, remote deployment, cleanup, verification and network/credential use for this run: no command list or new per-command consent is needed. Do not infer missing approval from an empty or absent commands list. Only executionScope=commands uses the legacy pipelineApproval.commands allowlist. Existing DENY rules, filesystem and shared-workspace restrictions remain authoritative. Historical refusals are not fresh decisions after a profile repair: use the current permission check and actual execution result. A policy refusal is not a process failure or missing environment.\n\nPipeline approval gates: request_user_approval and coordinator plan updates are not stage tools. If the item asks for user approval, return a handoff with blockedOnDecision: {itemId, question, options?}, using the current item id or a pending decision item. Include the tested change and evidence. The coordinator presents the approval and parks the stage; do not probe unavailable tools or call this an environment block. For a future date, return deferredUntil (ISO timestamp) and deferredReason instead of manufacturing edits.'
     : '';
   const prompt = new PromptBuilder();
-  for (const part of staticParts) prompt.add('user', 'worker-static', part);
+  // The base and the fixed guidance are one tier (install, unless a caller
+  // supplied the prompt); the arm persona follows them as the user tier.
+  for (const part of staticParts) prompt.add(baseTier, 'worker-static', part);
+  prompt.add('user', 'arm-persona', armPersonaBlock);
   for (const part of semiStaticParts) prompt.add('session', 'worker-semi-static', part);
   prompt.add('session', 'pipeline-scope', pipelineScope);
   for (const part of volatileParts) prompt.add('turn', 'worker-volatile', part);
@@ -1028,6 +1035,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     modelName: finalModelEntry?.name,
     role: agentRole,
     systemPrompt,
+    sharedPrefix: prompt.installPrefix(),
     tools: workerTools,
     toolAdvertisement,
     parentAgentId: overrides?.swarmParent?.id,
@@ -1339,6 +1347,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     return handleWorkerFailure(error as Error, worker, workerId, finalModel, agentRole, roleConfig, lane, task, input, context, startTime, deps, {
       modelName: finalModelEntry?.name,
       systemPrompt,
+      sharedPrefix: prompt.installPrefix(),
       tools: workerTools,
       toolAdvertisement,
       planMode: planModeWorker,
@@ -1376,6 +1385,8 @@ interface WorkerRespawnContext {
   /** Row identity of the failed model — the transient retry reruns that exact row. */
   modelName?: string;
   systemPrompt: string;
+  /** The install tier of `systemPrompt` (`SpawnOptions.sharedPrefix`). */
+  sharedPrefix?: string;
   tools: import('@/core/agent-base').ToolHandler[];
   toolAdvertisement: import('@/core/agent-base').ToolAdvertisement;
   /** The failed worker ran in plan mode; its replacement does too. */
@@ -1512,6 +1523,7 @@ export async function handleWorkerFailure(
       modelName,
       role: agentRole,
       systemPrompt: respawnCtx.systemPrompt,
+      sharedPrefix: respawnCtx.sharedPrefix,
       tools: respawnCtx.tools,
       toolAdvertisement: respawnCtx.toolAdvertisement,
       maxTokenBudget: respawnCtx.maxTokenBudget,

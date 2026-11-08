@@ -953,7 +953,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     valueType: 'string',
     defaultValue: 'off',
     description:
-      'Confine shell commands with bubblewrap/firejail: off (no confinement), auto (use a runner when one is on PATH, otherwise run unconfined), required (refuse to run commands when no runner is found). Sandboxed commands get a read-only OS, a writable workspace and no network unless the call asks for it.',
+      'Confine shell commands with bubblewrap/firejail (Linux) or sandbox-exec (macOS): off (no confinement), auto (use a runner when one is on PATH, otherwise run unconfined; on macOS only plugin package servers use sandbox-exec, shell commands stay unconfined), required (refuse to run commands when no runner is found; on macOS shell commands use sandbox-exec). Sandboxed commands get a read-only OS, a writable workspace and no network unless the call asks for it.',
     isSecret: false,
     envVar: 'SHELL_SANDBOX',
   },
@@ -1267,6 +1267,27 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     description: 'The modules that are on (Settings → Modules). Empty: the core only.',
     isSecret: false,
     envVar: 'MODULES_ENABLED',
+  },
+
+  // ── Plugin packages (docs/PLUGIN-PACKAGES.md#signed-packages) ──
+  {
+    key: 'plugins.trustedPublishers',
+    category: 'security',
+    valueType: 'json',
+    defaultValue: [],
+    description:
+      'Publishers whose signed plugin packages are trusted: [{ "name": "...", "publicKey": "<Ed25519 public key, PEM or base64>" }]. A package signed by one of these keys shows who signed it; an invalid signature is always refused. Rotate a key by listing the new one, then removing the old.',
+    isSecret: false,
+  },
+  {
+    key: 'plugins.requireSignature',
+    category: 'security',
+    valueType: 'boolean',
+    defaultValue: false,
+    description:
+      'Run only plugin packages signed by a trusted publisher: an unsigned package, or one signed by an unlisted key, is refused at install, upgrade and content approval, and does not start.',
+    isSecret: false,
+    envVar: 'PLUGINS_REQUIRE_SIGNATURE',
   },
 
   // ── Protection levels (docs/PROTECTION-LEVELS.md) ──

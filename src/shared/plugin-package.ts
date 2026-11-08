@@ -80,8 +80,9 @@ export interface PluginManifest {
  * - `restricted` — it declares hosts and reaches only those, through the
  *   egress proxy, with direct network off in the sandbox;
  * - `not_enforced` — no sandbox wraps it on this platform (sandbox off, no
- *   bwrap/firejail, macOS, Windows): the declared hosts are advice, and a
- *   package with hosts is only pointed at the proxy.
+ *   bwrap/firejail on Linux, no sandbox-exec on macOS, Windows): the
+ *   declared hosts are advice, and a package with hosts is only pointed at
+ *   the proxy.
  */
 export interface PluginNetworkStatus {
   state: 'offline' | 'restricted' | 'not_enforced';
@@ -114,6 +115,14 @@ export interface PluginPackageView {
    * `approveContent`. Null otherwise.
    */
   actualHash: string | null;
+  /**
+   * The trusted publisher (`plugins.trustedPublishers`) whose valid signature
+   * covers `contentHash` (docs/PLUGIN-PACKAGES.md#signed-packages), recomputed
+   * for each view against the keys trusted now and the approved signature
+   * file; null for unsigned content, an untrusted or removed key, a changed
+   * signature file, or content approved without a signature.
+   */
+  signedBy: string | null;
   installedBy: string | null;
   installedAt: string;
   updatedAt: string;

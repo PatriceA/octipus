@@ -27,8 +27,9 @@ function refused(err: unknown, set: { status?: number | string }): { error: stri
 
 /**
  * Plugin packages (docs/PLUGIN-PACKAGES.md): install-wide, admins only.
- * Installing takes a directory on the server (the marketplace, plan point
- * C15, will fetch signed packages instead); a package starts disabled.
+ * Installing takes a directory on the server, signed or not (signature checked
+ * against plugins.trustedPublishers; the marketplace, plan point
+ * C15, will fetch signed packages later); a package starts disabled.
  */
 export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   .use(apiContext)
@@ -50,7 +51,7 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
       if (denied) return denied;
       try {
         const row = await installFromDirectory(body.path, principal.userId, { upgrade: body.upgrade === true });
-        return { name: row.name, version: row.version, enabled: row.enabled, contentHash: row.contentHash, manifest: row.manifest };
+        return { name: row.name, version: row.version, enabled: row.enabled, contentHash: row.contentHash, signedBy: row.signedBy, warnings: row.warnings, manifest: row.manifest };
       } catch (err) {
         return refused(err, set);
       }

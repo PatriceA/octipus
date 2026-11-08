@@ -146,6 +146,13 @@ export interface AgentMessage {
    * the provider that produced it.
    */
   providerRaw?: Record<string, unknown>;
+  /**
+   * A system message that ends the install tier (C3): the prefix every user of
+   * this install shares. A provider with explicit breakpoints (Anthropic) puts
+   * one at its end, so requests of different users and sessions read it from
+   * one cache entry. Ignored by providers whose caching is automatic.
+   */
+  cacheBreak?: boolean;
 }
 
 export interface ToolCall {

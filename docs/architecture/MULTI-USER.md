@@ -919,22 +919,25 @@ the workspace.
 ### Config flag (`security.shellSandbox`)
 
 - `'off'` (default) — no wrapping; behavior matches pre-3e.
-- `'auto'` — wrap when `bwrap` or `firejail` is on PATH; fall back
-  to unsandboxed execution when not.
-- `'required'` — wrap when available; **refuse** to spawn when no
-  runner is found (operational deployments use this once they've
+- `'auto'` — wrap when `bwrap` or `firejail` (Linux) is found; fall
+  back to unsandboxed execution when not. On macOS, `auto` wraps only
+  plugin package servers (`allowSeatbelt`) with `/usr/bin/sandbox-exec`;
+  shell commands stay unwrapped.
+- `'required'` — wrap when available (on macOS, sandbox-exec for shell
+  commands too); **refuse** to spawn when no runner is found (operational deployments use this once they've
   installed a runner).
 
-Environment override: `SHELL_SANDBOX=auto|required`. Linux-only;
-on macOS/Windows the runners aren't typically available, so `auto`
-reduces to `off`.
+Environment override: `SHELL_SANDBOX=auto|required`. Windows has
+no runner, so there `auto` reduces to `off`. `detectRunner()` without
+`{ allowSeatbelt: true }` never reports sandbox-exec, so callers that ask
+"is there a runner?" see none on macOS under `auto`, as before.
 
 ### `wrapCommand(argv, options)` (`src/security/shell-sandbox.ts`)
 
 Returns `{ wrapped, runner, argv, cleanup }`:
 - `wrapped`: false when sandbox is `off` or no runner is found in
   `auto` mode.
-- `runner`: `'bwrap' | 'firejail' | null`.
+- `runner`: `'bwrap' | 'firejail' | 'sandbox-exec' | null`.
 - `argv`: the wrapped command line (or original if not wrapped).
 - `cleanup()`: removes the per-spawn `/tmp` scratch dir; safe to
   call even when `wrapped` is false.
@@ -957,6 +960,23 @@ Profile (bubblewrap, the preferred backend):
 firejail backend: `--noprofile --private-tmp --private-dev
 --noroot --seccomp --whitelist=<workspaceRoot>` plus `--net=none`
 when `allowNetwork` is false.
+
+sandbox-exec backend (macOS): `/usr/bin/sandbox-exec -p <profile>
+/usr/bin/env PATH=... TMPDIR=<scratch> ... <command>`, with a Seatbelt
+profile from `buildSeatbeltProfile`: `(deny default)`; file metadata
+anywhere, contents only under system/runtime directories (package-manager
+prefixes' program directories only; their `var` and `etc` denied but for
+CA bundles), the workspace and the writable paths; writes only to the
+workspace (unless `workspaceReadOnly`, which adds a `deny file-write*`
+placed before the writable paths' allow, so a writable directory inside
+it stays writable as with bwrap), the scratch dir and `extraReadWrite`;
+preferences only in the global domain; no network unless `allowNetwork`, or
+`loopbackPorts` for outbound TCP to exactly those localhost ports (the
+plugin egress proxy). Paths are escaped as SBPL string literals. It is chosen only when the
+caller passes `allowSeatbelt` (plugin package servers) or the mode is
+`required`. Apple
+marks sandbox-exec deprecated, but still ships it; see
+[PLUGIN-PACKAGES.md](../PLUGIN-PACKAGES.md#macos-sandbox-exec).
 
 Runner detection is cached after first lookup (operators don't
 install/remove sandbox runners while the server is up).

@@ -85,9 +85,10 @@ An enabled package runs as the MCP server `plugin-<name>`:
   databases, tokens it refreshes): its own directory is read-only under the
   sandbox and pinned by hash ([Content pinning](#content-pinning)).
 - **The sandbox, when it is on.** With `security.shellSandbox` set to `auto`
-  or `required`, the server runs under bwrap or firejail with its directory
-  mounted **read-only** (bwrap `--ro-bind`, firejail `--read-only`), its data
-  directory as the only writable one, and no direct network; the hosts in
+  or `required`, the server runs under bwrap or firejail (Linux) or
+  `sandbox-exec` (macOS) with its directory **read-only** (bwrap `--ro-bind`,
+  firejail `--read-only`, a Seatbelt `deny file-write*`), its data directory
+  as the only writable one, and no direct network; the hosts in
   `network` are reached through the egress proxy ([Network](#network)). With
   the sandbox `off` (the default), it runs unwrapped; its directory is then
   writable and the declared hosts are advice, not enforced.
@@ -116,7 +117,9 @@ sha256 over:  octipus-plugin-content/v1
 ```
 
 Every file counts — any changed byte, added, removed or renamed file changes
-the hash — but not directory order, timestamps or permissions. A symbolic link
+the hash — but not directory order, timestamps or permissions. The one file
+left out is the signature, `octipus-plugin.sig` in the package root, since it
+signs this hash; it is pinned on its own instead ([Signed packages](#signed-packages)). A symbolic link
 (refused at install) counts by its target. Nothing is left out — not even
 `node_modules/.cache`: a cache a build tool writes on its own is still a place
 running code could stage executable content in. Only paths relative to the
@@ -169,7 +172,128 @@ A package keeps its runtime state in its data directory
 directory is read-only, so a write there fails; without the sandbox a package
 that writes into its own directory reads as modified on its next start and
 must be approved again.
-Signatures over the hash come with signed packages (C15).
+
+## Signed packages
+
+A publisher can sign a package, and a host can trust the publisher's key. The
+signature covers the content hash above, so it covers every file of the
+package, its name and its version.
+
+```
+octi plugin keygen ./acme                       # writes acme.key (private) and acme.pub
+octi plugin sign ./my-package --key ./acme.key  # writes my-package/octipus-plugin.sig
+```
+
+`octipus-plugin.sig` is JSON, in exactly the form `octi plugin sign` writes
+(these three keys in this order, two-space indented, a trailing newline):
+
+```json
+{
+  "alg": "ed25519",
+  "keyId": "ed25519:<sha256 hex of the raw public key>",
+  "signature": "<base64 of the 64-byte signature>"
+}
+```
+
+The signature is Ed25519 (no new dependency: `node:crypto`) over the bytes
+`octipus-plugin-signature/v1\n<content hash>`, the `sha256:<hex>` string
+behind a fixed prefix, so a signature made for this cannot pass as one over
+anything else the key signs. The signature file is the one file the content
+hash leaves out, so signing does not change the hash. Sign last: any change to
+the files after signing, the manifest included, invalidates the signature.
+Keep the `.key` file secret (it is written `0600`); `keygen` never overwrites a
+file. `sign` refuses a package with a symbolic link or special file anywhere
+in it (as install does) and writes the signature through a temporary file and
+a rename, never through a link.
+
+Because the signature file is outside the content hash, it is held on its own,
+whatever `requireSignature` says:
+
+- **Canonical form only.** Anything else — another key, another order or
+  spacing, more than 1 KiB, a key id or signature of the wrong shape, a link
+  or a directory in its place — is refused at install, at approval, at
+  enabling and at every start (audit op `signature_file_refused`). The file
+  has no room for content a package could run.
+- **Pinned.** The sha256 of its bytes (`plugin_packages.signature_hash`;
+  null when there is none) is recorded with the content hash at install,
+  upgrade, approval and a first-use pin, and compared before every start. A
+  signature file that appeared, disappeared or changed refuses the start like
+  a content mismatch (problem *"octipus-plugin.sig changed since the content
+  was approved"*, audit op `signature_file_mismatch` once per pair of hashes,
+  enabling refused); approving the content records the new one.
+- **Not a server entry.** A manifest whose `server.command` or `server.args`
+  names `octipus-plugin.sig` is refused.
+
+The host trusts the keys in `plugins.trustedPublishers` (Settings, or the
+config file):
+
+```json
+"plugins": {
+  "trustedPublishers": [{ "name": "Acme GmbH", "publicKey": "-----BEGIN PUBLIC KEY-----\n…\n-----END PUBLIC KEY-----" }],
+  "requireSignature": false
+}
+```
+
+`publicKey` is the PEM from `keygen` (`acme.pub`), or base64 of the raw 32-byte
+key or of its DER SPKI. An entry whose key cannot be read is logged and trusts
+nothing.
+
+**Install and upgrade** check the signature on the staging copy, against the
+hash recorded for it:
+
+| Signature | `requireSignature` off (default) | `requireSignature` on |
+| --- | --- | --- |
+| valid, by a trusted key | installed; `signedBy` names the publisher | installed; `signedBy` names the publisher |
+| invalid (malformed, or does not match the files) | refused (`400`) | refused (`400`) |
+| by a key not in `trustedPublishers` | installed as unsigned, with a warning in the response (`warnings`) | refused (`400`) |
+| none | installed as unsigned | refused (`400`) |
+
+A refused upgrade leaves the old files and row as they were (still
+disabled). The publisher who signed is recorded on the row
+(`plugin_packages.signed_by`, and in the `installed`/`upgraded` audit rows,
+with the key id).
+
+`signedBy` in the package view is **recomputed for every view**: the
+publisher of a valid signature over the recorded content hash, by a key in
+`trustedPublishers` now, in the signature file that was approved with it (one
+small file read and one verification; the package is not re-hashed). A key
+removed from the config, or a replaced signature file, shows as `null` at
+once; the row's `signed_by` keeps what held at install or approval.
+
+**Every start** checks the content hash as before. With `requireSignature`
+on, the files must also carry a valid signature by a key trusted **now**: a
+package with none, or whose key was removed from the config, does not start
+(the problem says why; audit op `signature_refused`, once per package, hash
+and reason), and enabling it is refused. With `requireSignature` off, starts do
+not check who signed, but the signature file is still checked as described
+above.
+
+**Approving changed content** (`approveContent`) records who signed the new
+content: `signedBy` becomes the publisher if a valid trusted signature covers
+it, and is cleared otherwise. An admin's approval makes the content the admin's,
+not the publisher's (a signature left from before the change no longer matches
+and reads as invalid). If the publisher signs the new content, approving it
+records them again. With `requireSignature` on, approving content without a
+valid trusted signature is refused (`409`).
+
+**Rotating a key** is a config change: add the new key to
+`trustedPublishers` (as its own entry, or replacing the old one once every
+installed package is signed with the new key), re-sign and upgrade the
+packages, then remove the old entry. With `requireSignature` on, a package
+still signed by a removed key stops at its next start; with it off, the
+package keeps running and its view shows `signedBy: null`.
+
+What a signature guarantees: the files are byte for byte what the holder of
+that key signed, under that name and version. What it does not:
+
+- that the code is safe or does what it says — it runs with the same limits
+  as an unsigned package (sandbox, network, declared tools and effects), and
+  an admin still reads what it declares before enabling it;
+- that the key is still in the publisher's hands — a leaked key signs
+  anything until it is removed from `trustedPublishers`; there is no
+  revocation list or expiry;
+- anything about where the package came from: installing still takes a
+  directory on the server; fetching packages remotely is not here yet.
 
 ## Network
 
@@ -188,8 +312,9 @@ What that holds depends on the platform:
 | Where | A package with hosts | A package without hosts | Status `network.state` |
 |---|---|---|---|
 | Linux, sandbox `auto`/`required`, bwrap or firejail found | Enforced: the server has its own network namespace with only loopback. The proxy's Unix socket is mounted in, and a small launcher (run with Octipus's own Node binary) bridges the namespace's `127.0.0.1` to it, so the proxy is the only way out. | Offline: no network at all. | `restricted` / `offline` |
-| Linux with the sandbox `off` (the default), or no runner found | **Not enforced.** The proxy variables point well-behaved HTTP clients at the proxy, but a direct connection still works. | Not enforced: nothing blocks the network. | `not_enforced` |
-| macOS, Windows | **Not enforced**, as above: neither bwrap nor firejail exists there. | Not enforced. | `not_enforced` |
+| macOS, sandbox `auto`/`required`, `/usr/bin/sandbox-exec` present | Enforced: the server runs under a generated Seatbelt profile that denies all network except outbound TCP to the proxy's own port on `localhost`, and the proxy variables point at that port. Anything else — another host, another local port, a Unix socket, DNS — is refused by the kernel. | Offline: the profile allows no network at all. | `restricted` / `offline` |
+| Linux or macOS with the sandbox `off` (the default), or no runner found | **Not enforced.** The proxy variables point well-behaved HTTP clients at the proxy, but a direct connection still works. | Not enforced: nothing blocks the network. | `not_enforced` |
+| Windows | **Not enforced**, as above: Windows has no built-in runner comparable to bwrap or Seatbelt (AppContainer and job-object network limits need a native helper Octipus does not ship). | Not enforced. | `not_enforced` |
 
 `GET /api/plugin-packages` reports this per package as `network`
 (`{ state, detail }`), so an operator sees "Network not enforced on this
@@ -229,15 +354,63 @@ path is too long for a socket), never under `/tmp`: firejail runs with
 bwrap mounts a per-start scratch directory over `/tmp`. Both runners mount the
 socket directory by its own path.
 
+### macOS: sandbox-exec
+
+On macOS the sandbox is `/usr/bin/sandbox-exec` with a Seatbelt (SBPL)
+profile written for each start (`buildSeatbeltProfile` in
+`src/security/shell-sandbox.ts`). Package servers use it under both `auto`
+and `required`. The shell tool uses it only under `required` (where it would
+otherwise refuse to run); under `auto`, shell commands on macOS keep running
+unwrapped as before. The profile starts from `(deny default)` and allows back
+only:
+
+- **Files:** metadata (names, sizes, times) anywhere, because path resolution
+  stats every parent directory; contents only under the system and runtime
+  directories (`/System`, `/bin`, `/sbin`, `/usr/{bin,sbin,lib,libexec,share}`,
+  `/private/etc`, `/private/var/db/timezone`, the Command Line Tools, the
+  user-level runtime directories the Linux sandbox also exposes, and Octipus's
+  own Node binary), the package directory and the writable ones.
+  Under the Homebrew and MacPorts prefixes (`/opt/homebrew`, `/usr/local`,
+  `/opt/local`) only the program directories are readable (`bin`, `sbin`,
+  `lib`, `libexec`, `share`, `opt`, `Cellar`, `Frameworks`); their `var`
+  (Postgres, MySQL, Redis data — possibly Octipus's own database) and `etc`
+  (service configs) are denied explicitly, except the public CA bundles
+  (`etc/ca-certificates`, `etc/openssl@3/cert.pem` and `certs`).
+  The package directory is read-only: an explicit `deny file-write*` for it,
+  followed by the allow for the writable paths (the last matching rule wins),
+  so a writable directory inside it would stay writable, as with bwrap.
+  Writable: the data directory and a per-start scratch directory, which is
+  the server's `TMPDIR` (there is no private `/tmp` to mount over). The rest
+  of the home directory is unreadable.
+- **Network:** nothing without hosts. With hosts, outbound TCP to
+  `localhost:<proxy port>` only. Unlike Linux, there is no network namespace,
+  so the Unix-socket bridge is not used: its "loopback" would be the host's,
+  and the profile would have to allow loopback broadly for the bridge's own
+  port, which would let the server reach any local service. Allowing exactly
+  the proxy's port is narrower. DNS stays off too: the proxy resolves names.
+- **Processes:** exec, fork and signals within the sandbox, sysctl reads,
+  and a short list of system services (directory services, logging,
+  notifications, preferences). Preferences are readable only in the global
+  domain (`kCFPreferencesAnyApplication`: locale and similar settings), not
+  other apps' domains, which can hold tokens. Node does not read preferences
+  itself; no other domain is known to be needed, so none is listed.
+
+Apple marks `sandbox-exec` as deprecated, but it ships with every current
+macOS release and is used by the system and by other developer tools. If a
+future release removes it, detection finds nothing: `auto` then runs
+unwrapped (`not_enforced`) and `required` refuses to start the server.
+
 ## Installing and managing
 
-Admins only. A package installs from a directory on the server; the
-marketplace (plan point C15) will fetch signed packages instead.
+Admins only. A package installs from a directory on the server, signed or not
+([Signed packages](#signed-packages)); remote install and the marketplace
+(plan point C15) come later.
 
 1. **Install:** `POST /api/plugin-packages { "path": "/opt/plugins/finapi" }`.
    The directory is copied into the plugin directory (no symbolic links, at most
-   200 MB and 20,000 files). The package starts **disabled**, so its tools,
-   effects, hosts and protection level can be read first.
+   200 MB and 20,000 files) and its signature checked. The package starts
+   **disabled**, so its tools, effects, hosts and protection level can be read
+   first. The response has `signedBy` and any `warnings`.
 2. **Configure:** `PATCH /api/plugin-packages/:name { "settings": {...} }`, and
    `PUT /api/plugin-packages/:name/secrets/:key { "value": "..." }` for each
    secret (`null` removes it). Secret values are never returned.
@@ -258,7 +431,8 @@ marketplace (plan point C15) will fetch signed packages instead.
 
 `GET /api/plugin-packages` lists installed packages with their manifest,
 settings, which secrets are set, whether the server is connected, why it is
-not when it should be, and whether its network is enforced (`network`).
+not when it should be, whether its network is enforced (`network`), its
+content hash and who signed it (`signedBy`).
 
 Every change is in the audit log (`resource_type = plugin_package`).
 
@@ -266,10 +440,12 @@ Every change is in the audit log (`resource_type = plugin_package`).
 
 - Packages reporting events back (a new invoice in DATEV opening a case):
   plan point C2b.
-- Signed packages, remote install and the marketplace page: C15. Until then a
-  package is pinned by its content hash only ([Content pinning](#content-pinning)).
+- Remote install, a registry and the marketplace page: C15. Signing exists
+  ([Signed packages](#signed-packages)); a package still installs from a
+  directory on the server. No key revocation list or expiry: a key is trusted
+  while it is listed in `plugins.trustedPublishers`.
 - A web page for plugin packages.
-- Network enforcement off Linux (macOS `sandbox-exec`, Windows): the egress
-  proxy is advisory there.
+- Network enforcement on Windows: the egress proxy is advisory there (no
+  built-in runner; see [Network](#network)).
 - In a shared space, plugin tools follow the rules of personal connections
   (reads allowed, writes asked or refused); space-level packages come later.

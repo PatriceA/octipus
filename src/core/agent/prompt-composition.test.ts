@@ -68,7 +68,7 @@ describe('PromptTagger', () => {
 
   test('every PromptBuilder block the root runner adds has a category', () => {
     const source = readFileSync(new URL('./root-runner.ts', import.meta.url), 'utf8');
-    const labels = [...source.matchAll(/prompt\.add\(\s*'[a-z]+',\s*'([a-z-]+)'/g)].map((m) => m[1]);
+    const labels = [...source.matchAll(/\.add\(\s*(?:'[a-z]+'|[a-zA-Z]+),\s*'([a-z-]+)'/g)].map((m) => m[1]);
     expect(labels.length).toBeGreaterThan(8);
     expect(labels.filter((l) => !(l in BUILDER_LABELS))).toEqual([]);
   });
