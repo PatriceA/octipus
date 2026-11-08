@@ -73,6 +73,29 @@ export const FILE_CHANGE_TOOLS = new Set([
 ]);
 
 /**
+ * `AgentContext.metadata` key: this turn's file-changing handlers stay DECLARED
+ * but every call to one is refused before anything runs. Value: why
+ * (`FileChangeRefusalReason`).
+ *
+ * Plan mode and a space turn that may not write used to strip the handlers from
+ * the tool list instead. The tool list is the first thing in the prompt, so
+ * `/plan on`, `/plan off`, or a shared session alternating between a member's
+ * turn and a commenter's turn changed it, and every change was a cold provider
+ * cache for the whole conversation (on Claude, every earlier thinking block
+ * invalid as well). A refusal here costs one failed call if the model ignores
+ * the directive; the strip cost the whole cached prefix every time the mode
+ * flipped. Workers still strip (worker-spawner): a child's tool list is built
+ * once and never flips.
+ */
+export const FILE_CHANGES_REFUSED_KEY = 'fileChangesRefused';
+export type FileChangeRefusalReason = 'plan_mode' | 'space_role';
+
+const FILE_CHANGE_REFUSALS: Record<FileChangeRefusalReason, string> = {
+  plan_mode: 'Plan mode is on: file-changing tools are refused for this turn. Finish the plan and submit it with exit_plan_mode; nothing was written.',
+  space_role: 'This turn may not change files in this space: file-changing tools are refused. Nothing was written.',
+};
+
+/**
  * Minimum run of base64-alphabet characters treated as an embedded binary blob.
  * 1 KB of base64 ≈ 768 bytes — far past any identifier, hash, or token that
  * legitimately appears in tool output, and well short of a real screenshot.
@@ -580,10 +603,18 @@ export class ToolExecutor {
     return this.buildToolMessages(toolCalls, results);
   }
 
-  /** Why a read-only turn refuses `call`, or undefined (security/read-only-turn.ts). */
+  /**
+   * Why this turn refuses `call` before it runs, or undefined: a file change on
+   * a turn that may not make one (`FILE_CHANGES_REFUSED_KEY`), or anything but
+   * a read on a read-only turn (security/read-only-turn.ts).
+   */
   private readOnlyRefusalFor(call: ToolCall): string | undefined {
     const tool = this.tools.get(call.name);
     if (!tool) return undefined; // reported as unknown below
+    const refused = this.context.metadata?.[FILE_CHANGES_REFUSED_KEY] as FileChangeRefusalReason | undefined;
+    if (refused && FILE_CHANGE_TOOLS.has(call.name)) {
+      return FILE_CHANGE_REFUSALS[refused] ?? FILE_CHANGE_REFUSALS.plan_mode;
+    }
     const bareName = call.name.includes('__') ? (call.name.split('__').pop() as string) : call.name;
     const action = typeof tool.permissionAction === 'function'
       ? tool.permissionAction(call.arguments)

@@ -1260,7 +1260,8 @@ When a task matches one of these skills, load it with get_skill before starting 
       // toggle — the moment its explored context matters most.
       const run = { model, workingDirectory: workspaceCwd };
       // The file-changing tools are left out for the same reason: plan mode and
-      // a withheld-writes space turn strip exactly these, and the bridge lists
+      // a withheld-writes space turn refuse (root) or strip (worker) exactly
+      // these, and the bridge lists
       // the live tool set to the vendor on every invocation anyway.
       const tools = [...this.toolExecutor.getTools().values()].filter(tool => !FILE_CHANGE_TOOLS.has(tool.name));
       // Everything before VOLATILE_MARKER. For a keyed child that is its role
