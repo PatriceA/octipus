@@ -40,7 +40,7 @@ const hangingSockets: Socket[] = [];
 
 beforeAll(async () => {
   const listen = (s: Server) => new Promise<number>((r) => s.listen(0, '127.0.0.1', () => r((s.address() as AddressInfo).port)));
-  upstream = createServer((req, res) => res.end(`hello from upstream ${req.url}`));
+  upstream = createServer((req, res) => res.writeHead(200, { 'content-type': 'text/plain' }).end(`hello from upstream ${req.url}`));
   other = createServer((_req, res) => res.end('should never be reached'));
   echo = createServer((req, res) => res.writeHead(200, { connection: 'keep-alive, x-hop', 'x-hop': 'secret', 'keep-alive': 'timeout=77' }).end(JSON.stringify(req.headers)));
   hanging = createServer(() => { /* never answers */ });
