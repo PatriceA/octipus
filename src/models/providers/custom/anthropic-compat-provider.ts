@@ -132,7 +132,7 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
     streaming: boolean,
   ): { url: string; body: Record<string, unknown>; headers: Record<string, string> } {
     // A10: id normalization + pairing enforcement before Anthropic conversion.
-    const { system, messages } = toAnthropicMessages(transformMessagesForProvider(options.messages, this.name));
+    const { system, messages, sharedEnd } = toAnthropicMessages(transformMessagesForProvider(options.messages, this.name));
 
     const body: Record<string, unknown> = {
       model: cfg.model?.modelId || options.model,
@@ -143,7 +143,7 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
     // No pacing-based hour here: an Anthropic-shaped endpoint other than
     // api.anthropic.com (a gateway, a non-Claude model) may not accept `ttl`.
     const ttls = cacheTtlsFor(options.cachePolicy);
-    if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, (body.model as string) || options.model, ttls.prefix);
+    if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, (body.model as string) || options.model, ttls.prefix, sharedEnd);
     if (options.cachePolicy !== 'off' && options.historyCache !== false) markHistoryCacheBreakpoint(messages, Boolean(options.cacheScope), ttls.history);
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
     // An Anthropic-shaped endpoint can serve a non-Claude model (self-hosted,
@@ -277,17 +277,23 @@ type AnthropicSystem =
  * git, history) stays uncached. Falls back to a plain string when there's no
  * volatile marker or the static prefix is too small to cache. Shares the split
  * with the OpenAI-compat pass-through (LiteLLM/OpenRouter) via prompt-cache.
+ *
+ * `sharedEnd` (from `toAnthropicMessages`) is where the install tier ends
+ * (C3): the static prefix is then two cached blocks, the first identical for
+ * every user of the install.
  */
-export function buildCachedSystem(system: string, model?: string, ttl?: CacheTtl): AnthropicSystem {
+export function buildCachedSystem(system: string, model?: string, ttl?: CacheTtl, sharedEnd?: number): AnthropicSystem {
   const split = splitVolatileSystem(system, model);
   if (!split) return system;
-  return buildCachedBlocks(split, ttl);
+  return buildCachedBlocks(split, ttl, sharedEnd);
 }
 
 /**
  * Convert our internal AgentMessage[] into Anthropic's `system` + `messages`.
  *
- * - system messages are concatenated into the top-level `system` string.
+ * - system messages are concatenated into the top-level `system` string;
+ *   `sharedEnd` is where the first one flagged `cacheBreak` (the install
+ *   tier, C3) ends in it.
  * - assistant tool calls become `tool_use` blocks.
  * - tool results become `tool_result` blocks on a user turn.
  *
@@ -295,8 +301,10 @@ export function buildCachedSystem(system: string, model?: string, ttl?: CacheTtl
  * same-role messages (notably a user message followed by tool results, or
  * several parallel tool results) are merged into one turn with combined blocks.
  */
-export function toAnthropicMessages(messages: AgentMessage[]): { system?: string; messages: AnthropicMessage[] } {
+export function toAnthropicMessages(messages: AgentMessage[]): { system?: string; messages: AnthropicMessage[]; sharedEnd?: number } {
   const systems: string[] = [];
+  /** Where the first `cacheBreak` system message ends in the joined `system` (C3). */
+  let sharedEnd: number | undefined;
   const out: AnthropicMessage[] = [];
 
   const pushMerged = (role: 'user' | 'assistant', blocks: AnthropicBlock[]) => {
@@ -314,7 +322,10 @@ export function toAnthropicMessages(messages: AgentMessage[]): { system?: string
 
   for (const msg of messages) {
     if (msg.role === 'system') {
-      if (msg.content?.trim()) systems.push(msg.content);
+      if (msg.content?.trim()) {
+        systems.push(msg.content);
+        if (msg.cacheBreak && sharedEnd === undefined) sharedEnd = systems.reduce((n, text) => n + text.length, 0) + 2 * (systems.length - 1);
+      }
       continue;
     }
 
@@ -379,7 +390,7 @@ export function toAnthropicMessages(messages: AgentMessage[]): { system?: string
     });
   }
 
-  return { system: systems.length ? systems.join('\n\n') : undefined, messages: out };
+  return { system: systems.length ? systems.join('\n\n') : undefined, messages: out, ...(sharedEnd !== undefined ? { sharedEnd } : {}) };
 }
 
 /**
@@ -389,7 +400,8 @@ export function toAnthropicMessages(messages: AgentMessage[]): { system?: string
  * breakpoint: it is the only part that changed, and marking it would write a
  * new cache entry per turn instead of reading the previous one.
  *
- * Anthropic allows four breakpoints; with the system split this is the second.
+ * Anthropic allows four breakpoints: tools, the install tier, the system
+ * prompt's end and this one (C3, C4).
  */
 export function markHistoryCacheBreakpoint(messages: AnthropicMessage[], conversation?: boolean, ttl?: CacheTtl): boolean {
   // The newest turn is only worth a cache WRITE (1.25x base input) when a later
@@ -418,8 +430,12 @@ export function markHistoryCacheBreakpoint(messages: AnthropicMessage[], convers
  * Put a breakpoint after the tool block: tools are the head of the prefix and
  * its largest part, and identical across sessions of a role whose system
  * prompt differs (persona, workspace), which this lets them share. Mutates the
- * last tool; a no-op on an empty list. Third of four breakpoints (tools,
- * system, history).
+ * last tool; a no-op on an empty list. One of four breakpoints: tools, the
+ * install tier (`buildCachedSystem` with `sharedEnd`), the system prompt's
+ * end, and the history. Sharing across users holds only while their tool
+ * arrays are byte-identical: tools precede the system prompt, so a per-user
+ * tool (an MCP server, a sticky lazy group) makes the install block behind it
+ * a different prefix too.
  */
 export function markToolsCacheBreakpoint(tools: Array<Record<string, unknown>>, ttl?: CacheTtl): boolean {
   // The last tool that is loaded into the prefix: a `defer_loading` tool

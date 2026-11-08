@@ -11,7 +11,10 @@
  * which is what a provider cache keys on:
  *
  *  - `install` — identical for every user of this install (no persona, no
- *    workspace, no session state before it);
+ *    workspace, no session state before it). Its end is sent as a system
+ *    block of its own with an Anthropic breakpoint (`installPrefix`,
+ *    `splitSharedPrefix`, `AgentMessage.cacheBreak`), so every user's
+ *    requests read it from one cache entry (C3);
  *  - `user`    — identical for this user's conversations;
  *  - `session` — identical for this conversation;
  *  - `turn`    — this turn only. It starts at the date line and rides in front
@@ -79,6 +82,32 @@ function escapeMarker(text: string): string {
   return text.replace(new RegExp(VOLATILE_MARKER.source, 'g'), (m) => m.replace('\n\n', '\n \n'));
 }
 
+/**
+ * Split an assembled system prompt at the end of its install tier
+ * (`PromptBuilder.installPrefix()`, C3) into the two system messages a worker
+ * holds: the shared prefix, which providers with explicit breakpoints cache as
+ * its own unit (`AgentMessage.cacheBreak`), and the rest. `null` — keep one
+ * message — when the prefix is no longer the prompt's start (an off module cut
+ * into it) or no static text follows it (the system breakpoint already sits at
+ * the install tier's end).
+ *
+ * Providers join system messages with a blank line, so the one the rest opens
+ * with is dropped: the text the model reads is unchanged.
+ */
+export function splitSharedPrefix(prompt: string, prefix: string | undefined): { shared: string; rest: string } | null {
+  if (!prefix || !prompt.startsWith(prefix)) return null;
+  const rest = prompt.slice(prefix.length);
+  const staticEnd = rest.match(VOLATILE_MARKER)?.index ?? rest.length;
+  if (!rest.slice(0, staticEnd).trim()) return null;
+  return { shared: prefix, rest: rest.startsWith('\n\n') ? rest.slice(2) : rest };
+}
+
+/** A user-tier addition placed after the install tier: its own paragraph, whatever its original edges. */
+export function asTrailingBlock(text: string): string {
+  const trimmed = text.trim();
+  return trimmed ? `\n\n${trimmed}` : '';
+}
+
 export class PromptBuilder {
   private parts: PromptPart[] = [];
 
@@ -113,6 +142,28 @@ export class PromptBuilder {
   /** The parts of the cacheable prefix (every tier but `turn`), in order. */
   staticParts(): string[] {
     return this.parts.filter((p) => p.tier !== 'turn').map((p) => p.text);
+  }
+
+  /**
+   * The cacheable prefix as one text per static tier present, in order
+   * (install, user, session). Joined they are `staticParts().join('')`. A
+   * provider with explicit breakpoints puts one at the end of the install
+   * entry, so every user of the install shares it (`AgentMessage.cacheBreak`).
+   */
+  staticBlocksByTier(): Array<{ tier: Exclude<PromptTier, 'turn'>; text: string }> {
+    const out: Array<{ tier: Exclude<PromptTier, 'turn'>; text: string }> = [];
+    for (const part of this.parts) {
+      if (part.tier === 'turn') continue;
+      const last = out.at(-1);
+      if (last?.tier === part.tier) last.text += part.text;
+      else out.push({ tier: part.tier, text: part.text });
+    }
+    return out;
+  }
+
+  /** The install tier's text: the prefix every user of this install shares ('' when none). */
+  installPrefix(): string {
+    return this.staticBlocksByTier().find((b) => b.tier === 'install')?.text ?? '';
   }
 
   /** The turn tier's parts, in order. */

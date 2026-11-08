@@ -1,6 +1,7 @@
 import { getConfig } from '@/config';
 import { withoutOffModules } from '@/core/modules/prompt';
 import { bindStagedRootPrompt, promptPart, stageAgentPrompt } from './agent/prompt-composition';
+import { splitSharedPrefix } from './agent/prompt-builder';
 import { getAmbientOrigin, resolveAgentOrigin } from './agent-origin';
 import { getRunContext } from './run-context';
 import { assertCliSpaceMode } from './cli-adapters';
@@ -92,6 +93,12 @@ export interface SpawnOptions {
   /** A person is waiting on this turn (see `AgentContext.attended`). */
   attended?: boolean;
   systemPrompt?: string;
+  /**
+   * The install tier of `systemPrompt` (`PromptBuilder.installPrefix()`): a
+   * prefix identical for every user of this install. Sent as its own cached
+   * system block (`splitSharedPrefix`), so their requests share it.
+   */
+  sharedPrefix?: string;
   tools?: ToolHandler[];
   timeout?: number;
   maxIterations?: number;
@@ -493,7 +500,15 @@ export class AgentManager {
       }
       const intoTail = !context.root && typeof context.metadata.resumeKey === 'string' && isCLI && isResumableCliModel(routedModel)
         && !!selectedSkills && !!systemPrompt && VOLATILE_MARKER.test(systemPrompt);
-      if (systemPrompt) {
+      // The install tier as its own system message (C3). Native workers only:
+      // a CLI vendor takes one instruction text and caches it its own way.
+      const shared = worker instanceof AgentWorker && systemPrompt && options.sharedPrefix
+        ? splitSharedPrefix(systemPrompt, withoutOffModules(options.sharedPrefix))
+        : null;
+      if (shared && worker instanceof AgentWorker) {
+        worker.addSystemMessage(shared.shared, { cacheBreak: true });
+        worker.addSystemMessage(shared.rest);
+      } else if (systemPrompt) {
         worker.addSystemMessage(intoTail ? `${systemPrompt}${selectedSkills}` : systemPrompt);
       }
       if (selectedSkills && !intoTail) worker.addSystemMessage(selectedSkills);

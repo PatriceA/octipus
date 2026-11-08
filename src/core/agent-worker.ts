@@ -672,7 +672,8 @@ export class AgentWorker extends BaseAgentWorker {
   private cacheGeneration = '';
   private checkpointId?: string;
   private userCursor?: { id: string; createdAt: string };
-  addSystemMessage(content: string): void {
+  /** `cacheBreak`: this message ends the install tier, cached as its own unit (`AgentMessage.cacheBreak`). */
+  addSystemMessage(content: string, opts: { cacheBreak?: boolean } = {}): void {
     if (this.context.status === 'running') {
       // Mid-run injection (detached-child results, collect_children reminders).
       // It lands as an appended turn rather than a new system message, because
@@ -688,7 +689,7 @@ export class AgentWorker extends BaseAgentWorker {
       content = content.slice(0, boundary);
     }
     const index = this.messages.findIndex(m => m.role !== 'system');
-    this.messages.splice(index < 0 ? this.messages.length : index, 0, { role: 'system', content, timestamp: new Date() });
+    this.messages.splice(index < 0 ? this.messages.length : index, 0, { role: 'system', content, timestamp: new Date(), ...(opts.cacheBreak ? { cacheBreak: true } : {}) });
   }
 
   async addUserMessage(content: string): Promise<void> {

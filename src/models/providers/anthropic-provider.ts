@@ -238,7 +238,7 @@ export class AnthropicProvider implements ModelProvider {
    * caching the OpenAI-compat path can't. Errors keep the 'anthropic' provider
    * tag so failover classification is identical to the compat path. */
   private buildNativeBody(options: CompletionOptions, stream: boolean): Record<string, unknown> {
-    const { system, messages } = toAnthropicMessages(transformMessagesForProvider(options.messages, this.name));
+    const { system, messages, sharedEnd } = toAnthropicMessages(transformMessagesForProvider(options.messages, this.name));
     if (!options.deferredTools?.length) withoutSearchBlocks(messages as unknown as Array<{ role: string; content: unknown }>);
     const body: Record<string, unknown> = {
       model: options.model,
@@ -249,7 +249,7 @@ export class AnthropicProvider implements ModelProvider {
     // First-party API: the pacing-based hour on the stable prefix is supported
     // here (proxies and compatible endpoints keep the policy's lifetimes).
     const ttls = cacheTtlsFor(options.cachePolicy, options.cachePacing);
-    if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, options.model, ttls.prefix);
+    if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, options.model, ttls.prefix, sharedEnd);
     if (options.cachePolicy !== 'off' && options.historyCache !== false) markHistoryCacheBreakpoint(messages, Boolean(options.cacheScope), ttls.history);
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
     // Tool choice and sampling are set by `configureAnthropicBody`.

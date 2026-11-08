@@ -92,8 +92,16 @@ type CachedBlock = { type: 'text'; text: string; cache_control?: ReturnType<type
  * (buildCachedSystem) and the OpenAI-compat message content (below) use it, so
  * the two wire shapes can't drift out of lockstep.
  */
-export function buildCachedBlocks(split: { staticPart: string; volatilePart: string }, ttl?: CacheTtl): CachedBlock[] {
-  const blocks: CachedBlock[] = [{ type: 'text', text: split.staticPart, cache_control: cacheControl(ttl) }];
+export function buildCachedBlocks(split: { staticPart: string; volatilePart: string }, ttl?: CacheTtl, sharedEnd?: number): CachedBlock[] {
+  // The install tier as its own cached block (C3): the prefix every user of
+  // the install shares, ending at a breakpoint of its own. One such break at
+  // most, so the request stays within four (tools, install, system, history).
+  const blocks: CachedBlock[] = sharedEnd !== undefined && sharedEnd > 0 && sharedEnd < split.staticPart.length
+    ? [
+      { type: 'text', text: split.staticPart.slice(0, sharedEnd), cache_control: cacheControl(ttl) },
+      { type: 'text', text: split.staticPart.slice(sharedEnd), cache_control: cacheControl(ttl) },
+    ]
+    : [{ type: 'text', text: split.staticPart, cache_control: cacheControl(ttl) }];
   if (split.volatilePart) blocks.push({ type: 'text', text: split.volatilePart });
   return blocks;
 }
@@ -116,10 +124,11 @@ export function isAnthropicFamily(model: string): boolean {
  * Rewrite the FIRST system message that spans the static/volatile boundary into
  * OpenAI-style content blocks carrying an Anthropic `cache_control` ephemeral
  * breakpoint. Mutates `messages` in place; a no-op (leaves the plain string)
- * when nothing is cacheable. Only the first splittable system message is marked
- * — one breakpoint is all the assembled prompt needs, and it keeps us well
- * under Anthropic's 4-breakpoint cap even if a request carries several system
- * turns. Only call this for Anthropic-family models — other upstreams may
+ * when nothing is cacheable. The first splittable system message is marked —
+ * for an agent that is its install tier (C3), the prefix every user of the
+ * install shares — and the last system message directly after it, when there
+ * is one: at most two system breakpoints plus the history one, under
+ * Anthropic's cap of four. Only call this for Anthropic-family models — other upstreams may
  * reject the field. Returns true if a breakpoint was applied (used by tests;
  * callers may log it).
  */
@@ -129,13 +138,26 @@ export function applyAnthropicCacheControl(
   opts?: { conversation?: boolean; history?: boolean; ttls?: CacheTtls },
 ): { system: boolean; history: boolean } {
   let system = false;
-  for (const msg of messages) {
-    if (msg.role !== 'system' || typeof msg.content !== 'string') continue;
+  const mark = (msg: ChatCompletionMessageParam): boolean => {
+    if (msg.role !== 'system' || typeof msg.content !== 'string') return false;
     const split = splitVolatileSystem(msg.content, model);
-    if (!split) continue;
+    if (!split) return false;
     (msg as { content: unknown }).content = buildCachedBlocks(split, opts?.ttls?.prefix);
-    system = true;
-    break;
+    return true;
+  };
+  let first = -1;
+  for (let i = 0; i < messages.length; i++) {
+    if (mark(messages[i])) { first = i; system = true; break; }
+  }
+  // The leading system messages of an agent are the install tier, the rest
+  // of its prompt and its selected skills, in that order (C3). The first
+  // carries the breakpoint every user of the install shares; the last of the
+  // run ends the conversation's whole system prefix, as the native path's
+  // second system breakpoint does. Two at most, plus the history one below.
+  if (first >= 0) {
+    let last = first;
+    while (last + 1 < messages.length && messages[last + 1].role === 'system') last++;
+    if (last > first) mark(messages[last]);
   }
 
   // Write through the latest eligible input so the next request can reuse it.

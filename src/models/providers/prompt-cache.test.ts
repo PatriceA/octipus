@@ -68,15 +68,29 @@ describe('applyAnthropicCacheControl', () => {
     expect(messages[0].content).toBe('');
   });
 
-  test('marks only the FIRST splittable system message (stays under the 4-breakpoint cap)', () => {
+  test('marks the first system message (the install tier) and the last of the run: two system breakpoints at most (C3)', () => {
     const big = 'S'.repeat(5000) + VOLATILE;
     const messages: ChatCompletionMessageParam[] = [
       { role: 'system', content: big },
       { role: 'system', content: big },
+      { role: 'system', content: big },
+      { role: 'user', content: 'earlier' },
+      { role: 'user', content: 'now' },
     ];
-    expect(applyAnthropicCacheControl(messages).system).toBe(true);
-    expect(Array.isArray(messages[0].content)).toBe(true); // first rewritten
-    expect(messages[1].content).toBe(big); // second left as-is → single breakpoint
+    expect(applyAnthropicCacheControl(messages, 'claude-x', { conversation: true })).toEqual({ system: true, history: true });
+    expect(Array.isArray(messages[0].content)).toBe(true); // the shared prefix
+    expect(messages[1].content).toBe(big); // the middle is left as-is
+    expect(Array.isArray(messages[2].content)).toBe(true); // the end of the system prefix
+    const breakpoints = JSON.stringify(messages).split('cache_control').length - 1;
+    expect(breakpoints).toBe(3);
+    expect(breakpoints).toBeLessThanOrEqual(4);
+  });
+
+  test('a single system message keeps a single system breakpoint', () => {
+    const big = 'S'.repeat(5000) + VOLATILE;
+    const messages: ChatCompletionMessageParam[] = [{ role: 'system', content: big }, { role: 'user', content: 'hi' }];
+    applyAnthropicCacheControl(messages);
+    expect(JSON.stringify(messages[0]).split('cache_control').length - 1).toBe(1);
   });
 });
 

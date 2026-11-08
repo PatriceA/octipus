@@ -12,12 +12,15 @@ import { resolvePersonaForUser } from './resolver';
  *
  * Subscription contract: when `before-agent-start` fires for the turn's ROOT
  * agent, we inject the resolved persona block AFTER the
- * SECURITY_PREAMBLE and BEFORE the role prompt. Layer order:
+ * SECURITY_PREAMBLE and BEFORE the role prompt. The root runner then moves
+ * the block behind the install tier (`splitHookedRolePrompt`, C3), so the
+ * prompt the model reads is:
  *
  *   SECURITY_PREAMBLE  (untouched — DESIGN.md rule #6)
- *   PERSONA            (this module — name, tone, voice rules, user facts)
  *   ROLE PROMPT        (the root role's prompt.md, untouched)
- *   (memory, session summary, etc. — appended downstream)
+ *   DELEGATION         (policy and mechanics — with the above, the install tier)
+ *   PERSONA            (this module — name, tone, voice rules, user facts)
+ *   (workspace, memory, session summary, etc. — appended downstream)
  *
  * Specialist children are out of scope: persona is host-level only.
  * We bail when the hook fires for anything but the root agent.

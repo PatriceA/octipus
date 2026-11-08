@@ -92,19 +92,40 @@ editor does not assume that every compatible server implements vendor extras.
 
 ## Caching and native protocols
 
-**Anthropic:** native Messages is the default. Stable system-prompt prefixes use
-an explicit cache breakpoint, and a second breakpoint marks the settled
-conversation history — the last non-system turn before the newest one — so an
-agent loop's accumulated tool results are re-read at cache rates instead of
-full price on iterations 2..N (`markHistoryCacheBreakpoint` in
-`src/models/providers/custom/anthropic-compat-provider.ts`). The newest turn is
-deliberately left outside both breakpoints. That's 2 of Anthropic's 4-breakpoint
-limit. The same split (`src/models/providers/prompt-cache.ts`,
+**Anthropic:** native Messages is the default. A request carries at most four
+cache breakpoints, Anthropic's limit:
+
+1. the last tool definition (`markToolsCacheBreakpoint`);
+2. the end of the **install tier** of the system prompt — security preamble,
+   role prompt and delegation text, the same bytes for every user of the
+   install (`PromptBuilder.installPrefix()`, sent as its own system message
+   flagged `cacheBreak` and its own system content block), so different users'
+   and sessions' requests read it from one cache entry (about 5.8k tokens for
+   the full root tier, 2.4k for lite). The persona and everything per-user or
+   per-session follows it;
+3. the end of the static system prompt (user and session tiers: persona,
+   workspace, inline-UI rules);
+4. the settled conversation history — the last non-system turn before the
+   newest one — so an agent loop's accumulated tool results are re-read at
+   cache rates instead of full price on iterations 2..N
+   (`markHistoryCacheBreakpoint` in
+   `src/models/providers/custom/anthropic-compat-provider.ts`).
+
+The newest turn is deliberately left outside every breakpoint. On an attended
+turn 1–3 get a one-hour lifetime and the history five minutes (one-hour entries
+must precede shorter ones). Tools precede the system prompt in Anthropic's
+prefix, so the install block is shared only between requests whose tool arrays
+are byte-identical: a per-user MCP server or a different set of sticky lazy
+tool groups makes everything after the tools a different prefix. The same split (`src/models/providers/prompt-cache.ts`,
 `applyAnthropicCacheControl`) also applies to the OpenAI-compat pass-through —
 LiteLLM and OpenRouter — restricted to Anthropic-family models
-(`isAnthropicFamily`: a `claude` id or an `anthropic/` path segment). Passing
-`cachePolicy: 'off'` on a completion call now genuinely disables both
-breakpoints on every path, including LiteLLM/OpenRouter, which previously had
+(`isAnthropicFamily`: a `claude` id or an `anthropic/` path segment); there the
+install tier is the first system message and the last leading system message
+ends the prefix, so it marks both, plus the history (no tool breakpoint). OpenAI,
+Gemini and the other automatic prefix caches need no marker: the install tier is
+simply the first system text they receive. Passing
+`cachePolicy: 'off'` on a completion call now genuinely disables every
+breakpoint on every path, including LiteLLM/OpenRouter, which previously had
 no such gate; a caller that leaves `cachePolicy` unset is unaffected. The
 static prefix only caches once it clears the model's minimum cacheable size
 (`minCacheableChars` in `prompt-cache.ts`): ~1024 tokens (4000 chars) for
