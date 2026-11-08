@@ -89,6 +89,9 @@ function parseConvertArgs(argv: string[]): { dir: string; out?: string; effects:
 }
 
 async function main(): Promise<void> {
+  // The launchers start this from the project directory; paths on the command
+  // line (and the default --out) are the user's, relative to where they ran it.
+  if (process.env.OCTI_USER_CWD) process.chdir(process.env.OCTI_USER_CWD);
   const [sub, ...rest] = process.argv.slice(2);
   switch (sub) {
     case 'validate': {

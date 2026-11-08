@@ -136,10 +136,10 @@ async function delegateBash(args: string[]): Promise<never> {
 }
 
 /** Spawn with the parent's stdio and resolve with the exit code. */
-function runInherit(command: string, args: string[], cwd: string): Promise<number> {
+function runInherit(command: string, args: string[], cwd: string, env?: Record<string, string>): Promise<number> {
   return new Promise((resolve) => {
     // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell); this launcher only ever spawns `bash` on the repo's own bin/octi with the user's own CLI argv
-    const child = spawn(command, args, { stdio: 'inherit', cwd });
+    const child = spawn(command, args, { stdio: 'inherit', cwd, ...(env ? { env: { ...process.env, ...env } } : {}) });
     child.on('close', (code, signal) => resolve(code ?? (signal ? 128 : 1)));
     child.on('error', () => resolve(127));
   });
@@ -154,7 +154,7 @@ async function delegateScript(scriptRelPath: string, args: string[]): Promise<ne
   }
   // Node directly, not `npx tsx`: no wrapper process between us and the script
   // (signals reach it), and no `npx.cmd` shim to trip Windows' no-shell spawn.
-  const code = await runInherit(process.execPath, ['--import', 'tsx', '--import', './scripts/md-loader.mjs', scriptPath, ...args], projectDir);
+  const code = await runInherit(process.execPath, ['--import', 'tsx', '--import', './scripts/md-loader.mjs', scriptPath, ...args], projectDir, { OCTI_USER_CWD: process.cwd() });
   process.exit(code);
 }
 

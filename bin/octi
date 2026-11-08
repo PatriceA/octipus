@@ -1267,6 +1267,14 @@ cmd_doctor() {
   exec npx tsx --import ./scripts/md-loader.mjs scripts/doctor.ts "$@"
 }
 
+cmd_plugin() {
+  # The script runs from the project (its imports resolve there); the user's
+  # directory goes along so `octi plugin convert ./my-plugin` means theirs.
+  local user_cwd="$PWD"
+  cd "$PROJECT_DIR"
+  OCTI_USER_CWD="$user_cwd" exec npx tsx --import ./scripts/md-loader.mjs scripts/plugin.ts "$@"
+}
+
 cmd_recovery() {
   init_state_dir
   print_banner
@@ -1308,6 +1316,7 @@ cmd_help() {
   echo -e "    stop             Stop all Octipus processes"
   echo -e "    status           Show running state and service health"
   echo -e "    doctor [--json]  Run environment health checks (what's wired, what's missing)"
+  echo -e "    plugin <validate|convert> ...  Validate a plugin, or convert a legacy plugin to a package"
   echo -e "    logs [--web]     Tail backend logs (--web for web UI logs)"
   echo -e "    recovery         Recovery mode state, URL and token (keep the token for when you are away)"
   echo -e "    update [--dry-run] Update this installation from its existing source"
@@ -1535,6 +1544,7 @@ main() {
     edit)    cmd_edit "$@" ;;
     status)  cmd_status ;;
     doctor)  cmd_doctor "$@" ;;
+    plugin|plugins) cmd_plugin "$@" ;;
     logs)    cmd_logs "$@" ;;
     recovery) cmd_recovery ;;
     open|web|webui) cmd_open ;;
