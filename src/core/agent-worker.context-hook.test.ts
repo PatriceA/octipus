@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { AgentWorker } from '@/core/agent-worker';
 import { getAgentHooks, HookFailedError } from '@/core/agent/hooks';
-import { agentLogger } from '@/utils/logger';
 import type { AgentContext, AgentMessage } from '@/core/types';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
