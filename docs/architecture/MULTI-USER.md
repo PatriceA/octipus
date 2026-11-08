@@ -919,15 +919,18 @@ the workspace.
 ### Config flag (`security.shellSandbox`)
 
 - `'off'` (default) — no wrapping; behavior matches pre-3e.
-- `'auto'` — wrap when `bwrap` or `firejail` (Linux) or
-  `/usr/bin/sandbox-exec` (macOS) is found; fall back to unsandboxed
-  execution when not.
-- `'required'` — wrap when available; **refuse** to spawn when no
-  runner is found (operational deployments use this once they've
+- `'auto'` — wrap when `bwrap` or `firejail` (Linux) is found; fall
+  back to unsandboxed execution when not. On macOS, `auto` wraps only
+  plugin package servers (`allowSeatbelt`) with `/usr/bin/sandbox-exec`;
+  shell commands stay unwrapped.
+- `'required'` — wrap when available (on macOS, sandbox-exec for shell
+  commands too); **refuse** to spawn when no runner is found (operational deployments use this once they've
   installed a runner).
 
 Environment override: `SHELL_SANDBOX=auto|required`. Windows has
-no runner, so there `auto` reduces to `off`.
+no runner, so there `auto` reduces to `off`. `detectRunner()` without
+`{ allowSeatbelt: true }` never reports sandbox-exec, so callers that ask
+"is there a runner?" see none on macOS under `auto`, as before.
 
 ### `wrapCommand(argv, options)` (`src/security/shell-sandbox.ts`)
 
@@ -966,7 +969,9 @@ and the writable paths; writes only to the workspace (unless
 `workspaceReadOnly`, which adds a final `deny file-write*`), the scratch
 dir and `extraReadWrite`; no network unless `allowNetwork`, or
 `loopbackPorts` for outbound TCP to exactly those localhost ports (the
-plugin egress proxy). Paths are escaped as SBPL string literals. Apple
+plugin egress proxy). Paths are escaped as SBPL string literals. It is chosen only when the
+caller passes `allowSeatbelt` (plugin package servers) or the mode is
+`required`. Apple
 marks sandbox-exec deprecated, but still ships it; see
 [PLUGIN-PACKAGES.md](../PLUGIN-PACKAGES.md#macos-sandbox-exec).
 

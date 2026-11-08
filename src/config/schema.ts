@@ -94,7 +94,9 @@ export const securityConfigSchema = z.object({
    *     runner is found. Operational deployments use this once
    *     they've installed a runner.
    *
-   * Windows has no runner, so there `auto` reduces to `off`.
+   * Windows has no runner, so there `auto` reduces to `off`. On macOS,
+   * `auto` uses sandbox-exec only for plugin package servers; shell
+   * commands use it only under `required`.
    */
   shellSandbox: z.enum(['off', 'auto', 'required']).default('off'),
   /** Expose only the host SSH agent socket and known_hosts to personal shell runs. */

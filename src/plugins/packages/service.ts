@@ -467,7 +467,7 @@ const NO_RUNNER = 'security.shellSandbox off, no bwrap/firejail on Linux, no /us
  * runner (bwrap/firejail on Linux, sandbox-exec on macOS) can take direct
  * network away; without one the declared hosts are advice.
  */
-export function networkStatus(m: PluginManifest, runner = activeSandboxRunner()): PluginNetworkStatus {
+export function networkStatus(m: PluginManifest, runner = activeSandboxRunner({ allowSeatbelt: true })): PluginNetworkStatus {
   const hosts = m.network ?? [];
   if (runner) {
     return hosts.length === 0

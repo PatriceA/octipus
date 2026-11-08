@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 let fakeRunner: string | null = null;
+let sandboxMode: 'auto' | 'required' = 'required';
 vi.mock('node:fs', async (original) => {
   const actual = await original<typeof import('node:fs')>();
   const KNOWN = ['/usr/bin/sandbox-exec', '/usr/bin/bwrap', '/usr/local/bin/bwrap', '/bin/bwrap', '/usr/bin/firejail', '/usr/local/bin/firejail', '/bin/firejail'];
@@ -15,7 +16,7 @@ vi.mock('node:fs', async (original) => {
 });
 vi.mock('@/config', async (original) => ({
   ...(await original<typeof import('@/config')>()),
-  getConfig: () => ({ security: { shellSandbox: 'required' } }),
+  getConfig: () => ({ security: { shellSandbox: sandboxMode } }),
 }));
 
 import { _resetSandboxDetectionForTests, activeSandboxRunner, buildSeatbeltProfile, detectRunner, sbplString, wrapCommand } from '@/security/shell-sandbox';
@@ -27,7 +28,7 @@ const inputs = { scratch: '/private/var/folders/xy/T/octipus-shell-abc', runtime
 const realPlatform = process.platform;
 const setPlatform = (p: NodeJS.Platform) => Object.defineProperty(process, 'platform', { value: p, configurable: true });
 
-afterEach(() => { fakeRunner = null; setPlatform(realPlatform); _resetSandboxDetectionForTests(); });
+afterEach(() => { fakeRunner = null; sandboxMode = 'required'; setPlatform(realPlatform); _resetSandboxDetectionForTests(); });
 
 /** The rules of a profile, one per line. */
 const rules = (profile: string) => profile.trim().split('\n');
@@ -145,14 +146,46 @@ describe('the Seatbelt profile', () => {
 describe('wrapCommand on darwin', () => {
   beforeEach(() => { setPlatform('darwin'); _resetSandboxDetectionForTests(); });
 
-  test('detects /usr/bin/sandbox-exec, and nothing when it is missing', () => {
+  test('detects /usr/bin/sandbox-exec only when Seatbelt is allowed, and nothing when it is missing', () => {
     fakeRunner = '/usr/bin/sandbox-exec';
-    expect(detectRunner()).toEqual({ runner: 'sandbox-exec', binary: '/usr/bin/sandbox-exec' });
+    expect(detectRunner({ allowSeatbelt: true })).toEqual({ runner: 'sandbox-exec', binary: '/usr/bin/sandbox-exec' });
+    // Callers that do not ask (tests keyed off `detectRunner() !== null`,
+    // scorers) see no runner on macOS, as before.
+    expect(detectRunner()).toBeNull();
+    // `required` allows it for everyone.
     expect(activeSandboxRunner()).toBe('sandbox-exec');
     _resetSandboxDetectionForTests();
     fakeRunner = null;
-    expect(detectRunner()).toBeNull();
+    expect(detectRunner({ allowSeatbelt: true })).toBeNull();
     expect(() => wrapCommand(['true'], { workspaceRoot: pkg })).toThrow(/sandbox-exec/);
+  });
+
+  test('auto: the shell tool stays unwrapped, a package server is wrapped', () => {
+    sandboxMode = 'auto';
+    fakeRunner = '/usr/bin/sandbox-exec';
+    expect(activeSandboxRunner()).toBeNull();
+    expect(activeSandboxRunner({ allowSeatbelt: true })).toBe('sandbox-exec');
+    const shell = wrapCommand(['ls'], { workspaceRoot: pkg });
+    expect(shell).toMatchObject({ wrapped: false, runner: null, argv: ['ls'] });
+    const server = wrapCommand(['node', 'server.mjs'], { workspaceRoot: pkg, workspaceReadOnly: true, allowSeatbelt: true });
+    try {
+      expect(server.wrapped).toBe(true);
+      expect(server.runner).toBe('sandbox-exec');
+      expect(server.argv[0]).toBe('/usr/bin/sandbox-exec');
+    } finally {
+      server.cleanup();
+    }
+  });
+
+  test('required: the shell tool is wrapped too (it would otherwise refuse to run)', () => {
+    fakeRunner = '/usr/bin/sandbox-exec';
+    const shell = wrapCommand(['ls'], { workspaceRoot: pkg });
+    try {
+      expect(shell.wrapped).toBe(true);
+      expect(shell.runner).toBe('sandbox-exec');
+    } finally {
+      shell.cleanup();
+    }
   });
 
   test('argv: sandbox-exec -p <profile> /usr/bin/env <vars> <command>', () => {
@@ -194,6 +227,6 @@ describe('wrapCommand on darwin', () => {
     setPlatform('linux');
     _resetSandboxDetectionForTests();
     fakeRunner = '/usr/bin/sandbox-exec';
-    expect(detectRunner()).toBeNull();
+    expect(detectRunner({ allowSeatbelt: true })).toBeNull();
   });
 });

@@ -13,7 +13,10 @@ import { androidSdkPaths, browserRuntimeMounts, browserRuntimePaths, runtimePath
  *   - firejail — also Linux-only, requires setuid binary on most
  *     distros. Fallback.
  *   - sandbox-exec — macOS only: `/usr/bin/sandbox-exec` with a Seatbelt
- *     (SBPL) profile generated per spawn (`buildSeatbeltProfile`). Apple
+ *     (SBPL) profile generated per spawn (`buildSeatbeltProfile`). Used for
+ *     plugin package servers under `auto`/`required` (`allowSeatbelt`), and
+ *     for everything else (the shell tool) only under `required`: under
+ *     `auto`, macOS shell commands still run unwrapped as before. Apple
  *     marks sandbox-exec deprecated, but it still ships with every macOS
  *     release and is what the system's own services use underneath; if a
  *     release ever drops it, detection finds nothing and `auto` falls back
@@ -77,6 +80,13 @@ export interface WrapOptions {
    * honours it; bwrap and firejail reach the proxy through its Unix socket.
    */
   loopbackPorts?: number[];
+  /**
+   * May sandbox-exec (macOS) wrap this command even under `auto`? Plugin
+   * package servers set it. The shell tool does not: its Seatbelt use is
+   * limited to `required`, where it would otherwise refuse to run, so `auto`
+   * on macOS keeps running shell commands unwrapped as it always has.
+   */
+  allowSeatbelt?: boolean;
   /** Server-authorized host USB access for device tests; not implied by network access. */
   allowHostUsb?: boolean;
   /** Additional read-only paths to expose (e.g. /Users for macOS-style
@@ -116,31 +126,54 @@ const KNOWN_FIREJAIL = ['/usr/bin/firejail', '/usr/local/bin/firejail', '/bin/fi
 /** Only the system copy: a sandbox-exec found anywhere else is not Apple's. */
 const KNOWN_SANDBOX_EXEC = ['/usr/bin/sandbox-exec'];
 
-let detectedCache: { runner: SandboxRunner; binary: string } | null | undefined;
+type Detected = { runner: SandboxRunner; binary: string };
+/** One cache per `allowSeatbelt` value. */
+const detectedCache = new Map<boolean, Detected | null>();
 
-export function detectRunner(): { runner: SandboxRunner; binary: string } | null {
-  if (detectedCache !== undefined) return detectedCache;
-  // macOS first looks for Seatbelt; elsewhere sandbox-exec is never used.
-  // Windows finds none of these paths, so nothing wraps there.
+export interface DetectOptions {
+  /**
+   * Also consider sandbox-exec (macOS only). Off by default, so every caller
+   * that asks "is there a runner?" without saying so — the shell tool under
+   * `auto`, scorers, tests keyed off `detectRunner() !== null` — sees on macOS
+   * what it saw before sandbox-exec support existed: none.
+   */
+  allowSeatbelt?: boolean;
+}
+
+export function detectRunner(options: DetectOptions = {}): Detected | null {
+  const allowSeatbelt = options.allowSeatbelt === true;
+  const cached = detectedCache.get(allowSeatbelt);
+  if (cached !== undefined) return cached;
+  // macOS first looks for Seatbelt when allowed; elsewhere sandbox-exec is
+  // never used. Windows finds none of these paths, so nothing wraps there.
   const candidates: Array<[SandboxRunner, string[]]> = [
-    ...(process.platform === 'darwin' ? [['sandbox-exec', KNOWN_SANDBOX_EXEC] as [SandboxRunner, string[]]] : []),
+    ...(allowSeatbelt && process.platform === 'darwin' ? [['sandbox-exec', KNOWN_SANDBOX_EXEC] as [SandboxRunner, string[]]] : []),
     ['bwrap', KNOWN_BWRAP],
     ['firejail', KNOWN_FIREJAIL],
   ];
   for (const [runner, paths] of candidates) {
     const binary = paths.find((path) => existsSync(path));
     if (binary) {
-      detectedCache = { runner, binary };
-      return detectedCache;
+      const found = { runner, binary };
+      detectedCache.set(allowSeatbelt, found);
+      return found;
     }
   }
-  detectedCache = null;
+  detectedCache.set(allowSeatbelt, null);
   return null;
+}
+
+/**
+ * Whether sandbox-exec may be used: when the caller allows it (plugin
+ * package servers), or under `required`, where the alternative is refusing.
+ */
+function seatbeltAllowed(mode: SandboxMode, allowSeatbelt: boolean | undefined): boolean {
+  return allowSeatbelt === true || mode === 'required';
 }
 
 /** Test-only: reset the runner cache so a test can force re-detection. */
 export function _resetSandboxDetectionForTests(): void {
-  detectedCache = undefined;
+  detectedCache.clear();
 }
 
 /** Read the configured sandbox mode. Defaults to 'off' if config
@@ -503,9 +536,10 @@ function buildSandboxExecArgs(binary: string, options: WrapOptions, scratch: str
  * the command unwrapped (sandbox `off`, or `auto` with no runner found). In
  * `required` mode with no runner it is null too: `wrapCommand` then throws.
  */
-export function activeSandboxRunner(): SandboxRunner | null {
-  if (getSandboxMode() === 'off') return null;
-  return detectRunner()?.runner ?? null;
+export function activeSandboxRunner(options: DetectOptions = {}): SandboxRunner | null {
+  const mode = getSandboxMode();
+  if (mode === 'off') return null;
+  return detectRunner({ allowSeatbelt: seatbeltAllowed(mode, options.allowSeatbelt) })?.runner ?? null;
 }
 
 /**
@@ -525,7 +559,7 @@ export function wrapCommand(argv: string[], options: WrapOptions): WrapResult {
     return { wrapped: false, runner: null, argv, cleanup: () => {} };
   }
 
-  const detected = detectRunner();
+  const detected = detectRunner({ allowSeatbelt: seatbeltAllowed(mode, options.allowSeatbelt) });
   if (!detected) {
     if (mode === 'required') {
       throw new Error(

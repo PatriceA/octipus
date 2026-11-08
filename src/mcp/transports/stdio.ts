@@ -65,6 +65,8 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
   for (const dir of writable) await mkdir(dir, { recursive: true });
   const mounts = {
     workspaceRoot: sandbox.root,
+    // A package server may use sandbox-exec on macOS under `auto` too.
+    allowSeatbelt: true,
     ...(sandbox.readOnlyRoot ? { workspaceReadOnly: true } : {}),
     ...(writable.length > 0 ? { extraReadWrite: writable } : {}),
   };
@@ -77,7 +79,7 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
   // Seatbelt profile allows outbound TCP to the proxy's own loopback port and
   // nothing else, and the server is pointed at it directly (see
   // buildSeatbeltProfile). Linux runners reach the proxy by its Unix socket.
-  const seatbelt = activeSandboxRunner() === 'sandbox-exec';
+  const seatbelt = activeSandboxRunner({ allowSeatbelt: true }) === 'sandbox-exec';
   const proxy = await startEgressProxy({
     label: egress.label, allowed: egress.hosts, unixSocket: process.platform !== 'win32' && !seatbelt, socketParent: egress.runDir,
   });

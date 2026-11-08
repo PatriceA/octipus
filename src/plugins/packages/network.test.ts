@@ -361,7 +361,7 @@ describe('launching a sandboxed server', () => {
     expect(launch.proxy).toBeNull();
     expect(launch.env).toBe(env);
     expect(launch.argv).toEqual(['bwrap', '--unshare-net', '--', 'node', 'server.mjs']);
-    expect(wrapCommand).toHaveBeenCalledWith(['node', 'server.mjs'], { workspaceRoot: '/pkg', allowNetwork: false, path: '/usr/bin' });
+    expect(wrapCommand).toHaveBeenCalledWith(['node', 'server.mjs'], { workspaceRoot: '/pkg', allowSeatbelt: true, allowNetwork: false, path: '/usr/bin' });
   });
 });
 

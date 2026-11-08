@@ -235,8 +235,11 @@ socket directory by its own path.
 
 On macOS the sandbox is `/usr/bin/sandbox-exec` with a Seatbelt (SBPL)
 profile written for each start (`buildSeatbeltProfile` in
-`src/security/shell-sandbox.ts`). It starts from `(deny default)` and allows
-back only:
+`src/security/shell-sandbox.ts`). Package servers use it under both `auto`
+and `required`. The shell tool uses it only under `required` (where it would
+otherwise refuse to run); under `auto`, shell commands on macOS keep running
+unwrapped as before. The profile starts from `(deny default)` and allows back
+only:
 
 - **Files:** metadata (names, sizes, times) anywhere, because path resolution
   stats every parent directory; contents only under the system and runtime
