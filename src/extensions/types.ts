@@ -38,6 +38,18 @@ export interface ExtensionAPI {
   notify(message: string, level?: 'info' | 'warn' | 'error', sessionId?: string): void;
 
   /**
+   * Hook the agent loop (core/agent/hooks.ts): `before-agent-start` (the root
+   * system prompt), `tool:before` (rewrite args or short-circuit a call),
+   * `tool:after`, `spawn:before` / `spawn:after`. Only for an extension the
+   * operator trusts (`extensions.trusted`); anything else throws. Removed when
+   * the extension is disposed. Returns the unregister function.
+   */
+  hook<E extends import('@/core/agent/hooks').AgentHookEvent>(
+    event: E,
+    handler: import('@/core/agent/hooks').HookHandler<import('@/core/agent/hooks').AgentHookEvents[E]>,
+  ): () => void;
+
+  /**
    * Register a teardown callback. All `on()` subscriptions are cleaned up
    * automatically; use this for any extra resources (timers, file watchers).
    */

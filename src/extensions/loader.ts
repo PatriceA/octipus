@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import type { GatewayEventBus } from '@/core/gateway/event-bus';
 import { coreLogger } from '@/utils/logger';
-import { buildExtensionContext } from './api';
+import { buildExtensionContext, isTrustedExtension } from './api';
 import type { ExtensionFactory, LoadedExtension } from './types';
 
 /**
@@ -110,6 +110,9 @@ export async function loadExtension(
     // mtime/now-stamped query. If this still doesn't bust the cache, the
     // restart is still needed — but for the common case it gives users the
     // hot-reload they expect.
+    // Trust is decided here, before the module's code runs: decided inside
+    // its factory, the extension could have arranged to pass.
+    const trusted = isTrustedExtension(entry.entryPath);
     let mod: unknown;
     try {
       mod = await importModuleAt(entry.entryPath, `v=${Date.now()}`);
@@ -124,8 +127,15 @@ export async function loadExtension(
       return undefined;
     }
 
-    const { api, loaded } = buildExtensionContext(entry.name, entry.entryPath, eventBus);
-    await factory(api);
+    const { api, loaded } = buildExtensionContext(entry.name, entry.entryPath, eventBus, trusted);
+    try {
+      await factory(api);
+    } catch (err) {
+      // What the factory registered before it threw would otherwise stay
+      // registered (and be added again on every /reload).
+      await loaded.dispose().catch(() => {});
+      throw err;
+    }
 
     coreLogger.info({ name: entry.name, dir: dirname(entry.entryPath) }, 'extension loaded');
     return loaded;
