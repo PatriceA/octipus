@@ -146,11 +146,22 @@ This trips people up because there are **two** context settings:
    side only.
 2. **`num_ctx` / `OLLAMA_CONTEXT_LENGTH`** (Ollama). How large a KV context
    Ollama actually allocates for the model. **Ollama's default is only 4096
-   tokens** — far smaller than Octipus's 32000. Octipus does not force `num_ctx`
-   per request, so if you leave Ollama at its default, long prompts (system
-   prompt + tools + history) get **silently truncated** and tool calls degrade.
+   tokens** — far smaller than Octipus's 32000. Left at its default, long
+   prompts (system prompt + tools + history) get **silently truncated** and
+   tool calls degrade.
 
-**Set Ollama's context yourself** to match your work and VRAM:
+**Pin it from Octipus** with `ollama.contextLength` (Settings → Ollama, or
+`OCTIPUS_OLLAMA_CONTEXT_LENGTH`), e.g. `32768`. Every Ollama call then goes
+through native `/api/chat` (the OpenAI-compatible `/v1` endpoint cannot carry
+`num_ctx`) with that one value — one window for every call, so the runner never
+reloads the model to change it — and still streams. A prompt that cannot fit
+fails with a context-overflow error before it is sent, which the agent loop
+answers by compacting, instead of being cut. Without the setting, Octipus
+detects a prompt Ollama evidently truncated (the reported prompt is far
+smaller than what was sent and sits just under a default window) and logs an
+error naming the fix.
+
+Or **set Ollama's context on the server** to match your work and VRAM:
 
 ```bash
 # Global, applies to all models (Ollama ≥ 0.6):
