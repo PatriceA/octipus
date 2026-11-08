@@ -12,24 +12,32 @@
  * hash string (`sha256:<hex>`, which already binds the package name, version
  * and every file), behind a prefix so a signature made for this cannot be
  * mistaken for one over anything else the same key signs. The signature file
- * is the one file the content hash leaves out.
+ * is the one file the content hash leaves out, so it is held tightly instead:
+ * only the canonical form `octi plugin sign` writes is accepted (exactly these
+ * three keys, at most 1 KiB), and the sha256 of its bytes is pinned on the
+ * package row beside the content hash (service.ts), checked at every start.
  *
  * The host trusts the keys listed in `plugins.trustedPublishers`; a signature
  * by any other key proves nothing here. What a valid signature says: these
  * exact files are what the holder of that key signed. Not that they are safe.
  */
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, type KeyObject, sign, verify } from 'node:crypto';
-import { lstat, readFile, writeFile } from 'node:fs/promises';
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, type KeyObject, randomBytes, sign, verify } from 'node:crypto';
+import { constants } from 'node:fs';
+import { lstat, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PLUGIN_MANIFEST_FILE } from '@/shared/plugin-package';
 import { hashPackageContent, SIGNATURE_FILE } from './integrity';
 import { parseManifest } from './manifest';
+import { checkPackageTree } from './tree';
 
 export { SIGNATURE_FILE } from './integrity';
 
 const MESSAGE_PREFIX = 'octipus-plugin-signature/v1\n';
-/** A signature file larger than this is not one (it holds three short strings). */
-const MAX_SIGNATURE_BYTES = 4096;
+/** A signature file larger than this is not one (the canonical form is about 200 bytes). */
+const MAX_SIGNATURE_BYTES = 1024;
+const KEY_ID_RE = /^ed25519:[0-9a-f]{64}$/;
+/** Base64 of exactly 64 bytes, padded. */
+const SIGNATURE_RE = /^[A-Za-z0-9+/]{86}==$/;
 /** The DER prefix of an Ed25519 SubjectPublicKeyInfo; the 32 raw key bytes follow. */
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
@@ -45,6 +53,12 @@ export interface SignatureFile {
   alg: 'ed25519';
   keyId: string;
   signature: string;
+}
+
+/** A signature file read from a package: its contents and the sha256 of its bytes (`sha256:<hex>`, pinned on the row). */
+export interface SignatureOnDisk {
+  file: SignatureFile;
+  sha256: string;
 }
 
 /** What `checkPackageSignature` found. */
@@ -126,15 +140,65 @@ export function generateSigningKey(): { privateKeyPem: string; publicKeyPem: str
 }
 
 /**
- * Sign a package directory in place: hash it (the signature file left out)
- * and write `octipus-plugin.sig`. Signing again replaces the signature.
+ * The one form a signature file may have, byte for byte: the three keys in
+ * this order, two-space indented, with a trailing newline (what `octi plugin
+ * sign` writes). Anything else is refused, so the file — the one the content
+ * hash leaves out — has no room for other content.
+ */
+export function serializeSignature(sig: SignatureFile): string {
+  return `${JSON.stringify({ alg: sig.alg, keyId: sig.keyId, signature: sig.signature }, null, 2)}\n`;
+}
+
+/** Parse a signature file, refusing anything but the canonical form (`serializeSignature`). */
+export function parseSignatureFile(text: string): SignatureFile {
+  if (Buffer.byteLength(text, 'utf8') > MAX_SIGNATURE_BYTES) throw new SignatureError(`${SIGNATURE_FILE} is larger than ${MAX_SIGNATURE_BYTES} bytes`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new SignatureError(`${SIGNATURE_FILE} is not valid JSON`);
+  }
+  const sig = parsed as Record<string, unknown> | null;
+  const keys = typeof sig === 'object' && sig !== null && !Array.isArray(sig) ? Object.keys(sig) : [];
+  if (
+    keys.length !== 3 || sig === null
+    || sig.alg !== 'ed25519'
+    || typeof sig.keyId !== 'string' || !KEY_ID_RE.test(sig.keyId)
+    || typeof sig.signature !== 'string' || !SIGNATURE_RE.test(sig.signature)
+    || Buffer.from(sig.signature, 'base64').length !== 64
+  ) {
+    throw new SignatureError(`${SIGNATURE_FILE} must be exactly { "alg": "ed25519", "keyId": "ed25519:<64 hex>", "signature": "<base64 of 64 bytes>" }`);
+  }
+  const file: SignatureFile = { alg: 'ed25519', keyId: sig.keyId, signature: sig.signature };
+  if (serializeSignature(file) !== text) throw new SignatureError(`${SIGNATURE_FILE} is not in the canonical form \`octi plugin sign\` writes; sign the package again`);
+  return file;
+}
+
+/**
+ * Sign a package directory in place: check its tree (no symbolic links or
+ * special files, as install requires), hash it (the signature file left out)
+ * and write `octipus-plugin.sig` through a temporary file and a rename, never
+ * through a link. Signing again replaces the signature.
  */
 export async function signPackage(dir: string, privateKeyPem: string): Promise<{ contentHash: string; keyId: string; file: string }> {
+  await checkPackageTree(dir);
   const manifest = parseManifest(JSON.parse(await readFile(join(dir, PLUGIN_MANIFEST_FILE), 'utf8')));
   const contentHash = await hashPackageContent(dir, manifest);
   const sig = signContentHash(contentHash, privateKeyPem);
   const file = join(dir, SIGNATURE_FILE);
-  await writeFile(file, `${JSON.stringify(sig, null, 2)}\n`);
+  try {
+    if (!(await lstat(file)).isFile()) throw new SignatureError(`${file} exists and is not a regular file`);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
+  const temp = join(dir, `.${SIGNATURE_FILE}.${process.pid}-${randomBytes(6).toString('hex')}`);
+  try {
+    await writeFile(temp, serializeSignature(sig), { flag: 'wx', mode: 0o644 });
+    await rename(temp, file);
+  } catch (err) {
+    await rm(temp, { force: true }).catch(() => {});
+    throw err;
+  }
   return { contentHash, keyId: sig.keyId, file };
 }
 
@@ -157,56 +221,79 @@ export function trustedKeys(publishers: readonly TrustedPublisher[], onInvalid?:
   return keys;
 }
 
-/** The signature file of a package directory, as text; null when there is none. Throws `SignatureError` for one that cannot be a signature. */
-export async function readSignatureFile(dir: string): Promise<string | null> {
+/**
+ * The signature file of a package directory, or null when there is none.
+ * Opened without following a link; throws `SignatureError` for anything that
+ * is not a regular file in the canonical form.
+ */
+export async function readSignatureFile(dir: string): Promise<SignatureOnDisk | null> {
   const path = join(dir, SIGNATURE_FILE);
-  let info: Awaited<ReturnType<typeof lstat>>;
+  let handle: Awaited<ReturnType<typeof open>>;
   try {
-    info = await lstat(path);
+    handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return null;
+    if (code === 'ELOOP') throw new SignatureError(`${SIGNATURE_FILE} is a symbolic link`);
     throw err;
   }
-  if (!info.isFile()) throw new SignatureError(`${SIGNATURE_FILE} is not a regular file`);
-  if (info.size > MAX_SIGNATURE_BYTES) throw new SignatureError(`${SIGNATURE_FILE} is larger than ${MAX_SIGNATURE_BYTES} bytes`);
-  return readFile(path, 'utf8');
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) throw new SignatureError(`${SIGNATURE_FILE} is not a regular file`);
+    if (info.size > MAX_SIGNATURE_BYTES) throw new SignatureError(`${SIGNATURE_FILE} is larger than ${MAX_SIGNATURE_BYTES} bytes`);
+    const bytes = await handle.readFile();
+    if (bytes.length > MAX_SIGNATURE_BYTES) throw new SignatureError(`${SIGNATURE_FILE} is larger than ${MAX_SIGNATURE_BYTES} bytes`);
+    return { file: parseSignatureFile(bytes.toString('utf8')), sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}` };
+  } finally {
+    await handle.close();
+  }
 }
 
-/** Check the text of a signature file against a content hash and the trusted keys. */
-export function checkSignature(contentHash: string, text: string | null, trusted: Map<string, { name: string; key: KeyObject }>): SignatureCheck {
-  if (text === null) return { status: 'unsigned' };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return { status: 'invalid', reason: `${SIGNATURE_FILE} is not valid JSON` };
-  }
-  const sig = parsed as Partial<SignatureFile> | null;
-  if (typeof sig !== 'object' || sig === null || sig.alg !== 'ed25519' || typeof sig.keyId !== 'string' || typeof sig.signature !== 'string') {
-    return { status: 'invalid', reason: `${SIGNATURE_FILE} must be { "alg": "ed25519", "keyId": "…", "signature": "<base64>" }` };
-  }
+/** Check a signature against a content hash and the trusted keys (null: unsigned). */
+export function verifySignature(contentHash: string, sig: SignatureFile | null, trusted: Map<string, { name: string; key: KeyObject }>): SignatureCheck {
+  if (sig === null) return { status: 'unsigned' };
   const known = trusted.get(sig.keyId);
   if (!known) return { status: 'unknown_key', keyId: sig.keyId };
-  const bytes = Buffer.from(sig.signature, 'base64');
-  if (bytes.length !== 64 || !verify(null, message(contentHash), known.key, bytes)) {
+  if (!verify(null, message(contentHash), known.key, Buffer.from(sig.signature, 'base64'))) {
     return { status: 'invalid', reason: `The signature by ${known.name} (${sig.keyId}) does not match the package content` };
   }
   return { status: 'valid', publisher: known.name, keyId: sig.keyId };
 }
 
-/** Check the signature file of a package directory against its content hash. */
+/** Check the text of a signature file (null: none) against a content hash and the trusted keys. */
+export function checkSignature(contentHash: string, text: string | null, trusted: Map<string, { name: string; key: KeyObject }>): SignatureCheck {
+  if (text === null) return { status: 'unsigned' };
+  try {
+    return verifySignature(contentHash, parseSignatureFile(text), trusted);
+  } catch (err) {
+    if (err instanceof SignatureError) return { status: 'invalid', reason: err.message };
+    throw err;
+  }
+}
+
+/** Check a signature file already read (`readSignatureFile`) against a content hash and the publishers. */
+export function checkSignatureOnDisk(
+  onDisk: SignatureOnDisk | null,
+  contentHash: string,
+  publishers: readonly TrustedPublisher[],
+  onInvalidKey?: (name: string, reason: string) => void,
+): SignatureCheck {
+  return verifySignature(contentHash, onDisk?.file ?? null, trustedKeys(publishers, onInvalidKey));
+}
+
+/** Read and check the signature file of a package directory against its content hash. */
 export async function checkPackageSignature(
   dir: string,
   contentHash: string,
   publishers: readonly TrustedPublisher[],
   onInvalidKey?: (name: string, reason: string) => void,
 ): Promise<SignatureCheck> {
-  let text: string | null;
+  let onDisk: SignatureOnDisk | null;
   try {
-    text = await readSignatureFile(dir);
+    onDisk = await readSignatureFile(dir);
   } catch (err) {
     if (err instanceof SignatureError) return { status: 'invalid', reason: err.message };
     throw err;
   }
-  return checkSignature(contentHash, text, trustedKeys(publishers, onInvalidKey));
+  return checkSignatureOnDisk(onDisk, contentHash, publishers, onInvalidKey);
 }

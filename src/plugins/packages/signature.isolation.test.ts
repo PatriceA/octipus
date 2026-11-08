@@ -167,12 +167,17 @@ describe('signed plugin packages', () => {
     await bridge.ensureConnected(SERVER);
     expect(await auditOps('signature_refused')).toHaveLength(1);
 
-    // Signed in place: the content hash is unchanged (the signature file is not part of it), so it starts.
+    // Signed in place: the content hash is unchanged (the signature file is not part of it),
+    // but the signature file is pinned on its own, so it starts once its content is approved again.
     await signPackage(svc.packageDir(NAME), acme.privateKeyPem);
     await bridge.disconnect(SERVER);
     await svc.syncPluginServers();
     view = await svc.packageView(NAME);
-    expect([view.connected, view.problem]).toEqual([true, null]);
+    expect(view.problem).toBe(svc.SIGNATURE_FILE_CHANGED_PROBLEM);
+    expect(view.actualHash).toBe(view.contentHash);
+    await svc.approveContent(NAME, view.contentHash as string, admin);
+    view = await svc.packageView(NAME);
+    expect([view.connected, view.problem, view.signedBy]).toEqual([true, null, 'Acme']);
 
     // The publisher's key is dropped from the config (rotated out): the next start is refused.
     await policy({ trusted: [{ name: 'Acme (new key)', publicKey: stranger.publicKeyPem }] });
@@ -181,6 +186,7 @@ describe('signed plugin packages', () => {
     view = await svc.packageView(NAME);
     expect(view.connected).toBe(false);
     expect(view.problem).toMatch(/not in plugins\.trustedPublishers/);
+    expect(view.signedBy).toBeNull();
 
     // Enabling again is refused the same way.
     await svc.setEnabled(NAME, false, admin);
@@ -212,5 +218,64 @@ describe('signed plugin packages', () => {
     await svc.approveContent(NAME, actual, admin);
     view = await svc.packageView(NAME);
     expect([view.contentHash, view.signedBy, view.connected]).toEqual([actual, 'Acme', true]);
+  });
+
+  test('the signature file is pinned at every start, whatever requireSignature says', async () => {
+    const svc = await import('./service');
+    const { getMCPBridge } = await import('@/mcp/bridge');
+    const { readSignatureFile, serializeSignature } = await import('./signature');
+    const bridge = getMCPBridge();
+    // Audit rows outlive earlier tests' installs: count what this one adds.
+    const mismatchesBefore = (await auditOps('signature_file_mismatch')).length;
+    const refusedBefore = (await auditOps('signature_file_refused')).length;
+    await installAndEnable(await copyOfFixture());
+    const restart = async () => {
+      await bridge.disconnect(SERVER);
+      await svc.syncPluginServers();
+      return svc.packageView(NAME);
+    };
+
+    // A canonical signature appears in an unsigned package: refused until approved, and audited once.
+    const { cpSync } = await import('node:fs');
+    const donor = await copyOfFixture(stranger.privateKeyPem);
+    cpSync(join(donor, 'octipus-plugin.sig'), join(svc.packageDir(NAME), 'octipus-plugin.sig'));
+    let view = await restart();
+    expect([view.connected, view.problem]).toEqual([false, svc.SIGNATURE_FILE_CHANGED_PROBLEM]);
+    await bridge.ensureConnected(SERVER);
+    expect(await auditOps('signature_file_mismatch')).toHaveLength(mismatchesBefore + 1);
+    await svc.setEnabled(NAME, false, admin);
+    await expect(svc.setEnabled(NAME, true, admin)).rejects.toMatchObject({ code: 'incomplete', message: expect.stringMatching(/changed since its content was approved/) });
+
+    // Not canonical (room for other content): refused at start and at approval, with requireSignature off.
+    const onDisk = await readSignatureFile(svc.packageDir(NAME));
+    writeFileSync(join(svc.packageDir(NAME), 'octipus-plugin.sig'), serializeSignature(onDisk!.file).replace('\n}', ',\n  "code": "require(\'child_process\')"\n}'));
+    await expect(svc.approveContent(NAME, view.contentHash as string, admin)).rejects.toMatchObject({ code: 'invalid' });
+    await expect(svc.setEnabled(NAME, true, admin)).rejects.toMatchObject({ code: 'incomplete', message: expect.stringMatching(/exactly/) });
+    // As if it had stayed enabled: the next start refuses it.
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(`UPDATE plugin_packages SET enabled = true WHERE name = '${NAME}'`);
+    view = await restart();
+    expect(view.connected).toBe(false);
+    expect(view.problem).toMatch(/exactly/);
+    expect(await auditOps('signature_file_refused')).toHaveLength(refusedBefore + 1);
+
+    // Put the canonical one back and approve it: it starts, and the view shows no trusted signer (unknown key).
+    writeFileSync(join(svc.packageDir(NAME), 'octipus-plugin.sig'), serializeSignature(onDisk!.file));
+    await svc.approveContent(NAME, view.contentHash as string, admin);
+    view = await restart();
+    expect([view.connected, view.problem, view.signedBy]).toEqual([true, null, null]);
+  });
+
+  test('the view recomputes signedBy against the keys trusted now', async () => {
+    const svc = await import('./service');
+    await svc.installFromDirectory(await copyOfFixture(acme.privateKeyPem), admin);
+    expect((await svc.packageView(NAME)).signedBy).toBe('Acme');
+    await policy({ trusted: [] });
+    expect((await svc.packageView(NAME)).signedBy).toBeNull();
+    const { queryRaw } = await import('@/db/postgres');
+    const { rows } = await queryRaw(`SELECT signed_by FROM plugin_packages WHERE name = '${NAME}'`);
+    expect(rows[0].signed_by).toBe('Acme');
+    await policy({ trusted: [{ name: 'Acme', publicKey: acme.publicKeyPem }] });
+    expect((await svc.packageView(NAME)).signedBy).toBe('Acme');
   });
 });

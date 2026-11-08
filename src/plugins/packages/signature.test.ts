@@ -5,7 +5,7 @@
  * hash, and public keys are read as PEM, raw base64 or SPKI base64.
  */
 import { createPublicKey } from 'node:crypto';
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
@@ -16,6 +16,8 @@ import {
   generateSigningKey,
   keyFingerprint,
   parsePublicKey,
+  readSignatureFile,
+  serializeSignature,
   signContentHash,
   signPackage,
   trustedKeys,
@@ -94,14 +96,55 @@ describe('signing and verifying', () => {
     const bytes = Buffer.from(sig.signature, 'base64');
     bytes[0] ^= 1;
     const keys = trustedKeys(TRUSTED);
-    expect(checkSignature(contentHash, JSON.stringify({ ...sig, signature: bytes.toString('base64') }), keys).status).toBe('invalid');
+    expect(checkSignature(contentHash, serializeSignature({ ...sig, signature: bytes.toString('base64') }), keys).status).toBe('invalid');
     // Made with another key but naming the trusted one.
     const forged = signContentHash(contentHash, other.privateKeyPem);
-    expect(checkSignature(contentHash, JSON.stringify({ ...forged, keyId: publisher.keyId }), keys).status).toBe('invalid');
+    expect(checkSignature(contentHash, serializeSignature({ ...forged, keyId: publisher.keyId }), keys).status).toBe('invalid');
     // Malformed files.
     expect(checkSignature(contentHash, 'not json', keys).status).toBe('invalid');
     expect(checkSignature(contentHash, JSON.stringify({ ...sig, alg: 'rsa' }), keys).status).toBe('invalid');
     expect(checkSignature(contentHash, JSON.stringify({ ...sig, signature: 'AAAA' }), keys).status).toBe('invalid');
+  });
+
+  test('only the canonical form of the signature file is accepted', async () => {
+    const dir = pkg();
+    const { contentHash } = await signPackage(dir, publisher.privateKeyPem);
+    const text = readFileSync(join(dir, SIGNATURE_FILE), 'utf8');
+    const sig = JSON.parse(text);
+    const keys = trustedKeys(TRUSTED);
+    expect(text).toBe(serializeSignature(sig));
+    expect(checkSignature(contentHash, text, keys).status).toBe('valid');
+    const refused = [
+      JSON.stringify(sig), // compact
+      `${JSON.stringify({ keyId: sig.keyId, alg: sig.alg, signature: sig.signature }, null, 2)}\n`, // reordered
+      serializeSignature(sig).replace('\n}', ',\n  "payload": "console.log(1)"\n}'), // an extra key
+      `${JSON.stringify({ ...sig, payload: 'x' }, null, 2)}\n`,
+      serializeSignature(sig).trimEnd(), // no trailing newline
+      `${serializeSignature(sig)}${' '.repeat(2000)}`, // over 1 KiB
+      serializeSignature({ ...sig, keyId: 'ed25519:XYZ' }),
+      serializeSignature({ ...sig, signature: sig.signature.replace('==', '=A') }),
+    ];
+    for (const variant of refused) expect(checkSignature(contentHash, variant, keys).status).toBe('invalid');
+    // On disk the same way, and its bytes are hashed for the row.
+    expect((await readSignatureFile(dir))?.sha256).toMatch(/^sha256:[0-9a-f]{64}$/);
+    writeFileSync(join(dir, SIGNATURE_FILE), refused[2]);
+    await expect(readSignatureFile(dir)).rejects.toThrow(/exactly/);
+    expect((await checkPackageSignature(dir, contentHash, TRUSTED)).status).toBe('invalid');
+  });
+
+  test('a signature file that is a link is refused; signing refuses links anywhere in the package', async () => {
+    const dir = pkg();
+    const outside = join(mkdtempSync(join(tmpdir(), 'octipus-sig-outside-')), 'target');
+    dirs.push(join(outside, '..'));
+    writeFileSync(outside, 'host file');
+    symlinkSync(outside, join(dir, SIGNATURE_FILE));
+    await expect(readSignatureFile(dir)).rejects.toThrow(/symbolic link/);
+    await expect(signPackage(dir, publisher.privateKeyPem)).rejects.toThrow(/symbolic link/);
+    expect(readFileSync(outside, 'utf8')).toBe('host file');
+
+    const linked = pkg();
+    symlinkSync(outside, join(linked, 'lib', 'evil.js'));
+    await expect(signPackage(linked, publisher.privateKeyPem)).rejects.toThrow(/symbolic link/);
   });
 
   test('a signature by a key that is not trusted is an unknown key; none at all is unsigned', async () => {

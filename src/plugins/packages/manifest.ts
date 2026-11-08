@@ -6,6 +6,7 @@
  */
 import { z } from 'zod';
 import { fieldListSchema } from '@/core/records/fields';
+import { SIGNATURE_FILE } from './integrity';
 import {
   PLUGIN_PACKAGE_API_VERSION,
   PLUGIN_TOOL_EFFECTS,
@@ -60,6 +61,11 @@ export const manifestSchema = z.object({
     required: z.boolean().optional(),
   }).strict()).max(20).optional(),
 }).strict().superRefine((m, ctx) => {
+  // The signature file is the one file the content hash leaves out: the server may not be started from it.
+  const sigName = SIGNATURE_FILE.toLowerCase();
+  if ([m.server.command, ...(m.server.args ?? [])].some((part) => part.toLowerCase().includes(sigName))) {
+    ctx.addIssue({ code: 'custom', message: `server: the command and its args may not name ${SIGNATURE_FILE} (it is not covered by the content hash)` });
+  }
   const keys = new Set<string>();
   for (const s of m.secrets ?? []) {
     if (keys.has(s.key)) ctx.addIssue({ code: 'custom', message: `secrets: "${s.key}" is declared twice` });

@@ -117,8 +117,10 @@ export interface PluginPackageView {
   actualHash: string | null;
   /**
    * The trusted publisher (`plugins.trustedPublishers`) whose valid signature
-   * covers `contentHash` (docs/PLUGIN-PACKAGES.md#signed-packages); null for
-   * unsigned content, an untrusted key, or content approved without one.
+   * covers `contentHash` (docs/PLUGIN-PACKAGES.md#signed-packages), recomputed
+   * for each view against the keys trusted now and the approved signature
+   * file; null for unsigned content, an untrusted or removed key, a changed
+   * signature file, or content approved without a signature.
    */
   signedBy: string | null;
   installedBy: string | null;

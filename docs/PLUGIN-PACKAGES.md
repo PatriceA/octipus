@@ -119,7 +119,7 @@ sha256 over:  octipus-plugin-content/v1
 Every file counts — any changed byte, added, removed or renamed file changes
 the hash — but not directory order, timestamps or permissions. The one file
 left out is the signature, `octipus-plugin.sig` in the package root, since it
-signs this hash ([Signed packages](#signed-packages)). A symbolic link
+signs this hash; it is pinned on its own instead ([Signed packages](#signed-packages)). A symbolic link
 (refused at install) counts by its target. Nothing is left out — not even
 `node_modules/.cache`: a cache a build tool writes on its own is still a place
 running code could stage executable content in. Only paths relative to the
@@ -184,10 +184,15 @@ octi plugin keygen ./acme                       # writes acme.key (private) and 
 octi plugin sign ./my-package --key ./acme.key  # writes my-package/octipus-plugin.sig
 ```
 
-`octipus-plugin.sig` is JSON:
+`octipus-plugin.sig` is JSON, in exactly the form `octi plugin sign` writes
+(these three keys in this order, two-space indented, a trailing newline):
 
 ```json
-{ "alg": "ed25519", "keyId": "ed25519:<sha256 hex of the raw public key>", "signature": "<base64>" }
+{
+  "alg": "ed25519",
+  "keyId": "ed25519:<sha256 hex of the raw public key>",
+  "signature": "<base64 of the 64-byte signature>"
+}
 ```
 
 The signature is Ed25519 (no new dependency: `node:crypto`) over the bytes
@@ -197,7 +202,27 @@ anything else the key signs. The signature file is the one file the content
 hash leaves out, so signing does not change the hash. Sign last: any change to
 the files after signing, the manifest included, invalidates the signature.
 Keep the `.key` file secret (it is written `0600`); `keygen` never overwrites a
-file.
+file. `sign` refuses a package with a symbolic link or special file anywhere
+in it (as install does) and writes the signature through a temporary file and
+a rename, never through a link.
+
+Because the signature file is outside the content hash, it is held on its own,
+whatever `requireSignature` says:
+
+- **Canonical form only.** Anything else — another key, another order or
+  spacing, more than 1 KiB, a key id or signature of the wrong shape, a link
+  or a directory in its place — is refused at install, at approval, at
+  enabling and at every start (audit op `signature_file_refused`). The file
+  has no room for content a package could run.
+- **Pinned.** The sha256 of its bytes (`plugin_packages.signature_hash`;
+  null when there is none) is recorded with the content hash at install,
+  upgrade, approval and a first-use pin, and compared before every start. A
+  signature file that appeared, disappeared or changed refuses the start like
+  a content mismatch (problem *"octipus-plugin.sig changed since the content
+  was approved"*, audit op `signature_file_mismatch` once per pair of hashes,
+  enabling refused); approving the content records the new one.
+- **Not a server entry.** A manifest whose `server.command` or `server.args`
+  names `octipus-plugin.sig` is refused.
 
 The host trusts the keys in `plugins.trustedPublishers` (Settings, or the
 config file):
@@ -225,15 +250,23 @@ hash recorded for it:
 
 A refused upgrade leaves the old files and row as they were (still
 disabled). The publisher who signed is recorded on the row
-(`plugin_packages.signed_by`, `signedBy` in the package view and in the
-`installed`/`upgraded` audit rows, with the key id).
+(`plugin_packages.signed_by`, and in the `installed`/`upgraded` audit rows,
+with the key id).
+
+`signedBy` in the package view is **recomputed for every view**: the
+publisher of a valid signature over the recorded content hash, by a key in
+`trustedPublishers` now, in the signature file that was approved with it (one
+small file read and one verification; the package is not re-hashed). A key
+removed from the config, or a replaced signature file, shows as `null` at
+once; the row's `signed_by` keeps what held at install or approval.
 
 **Every start** checks the content hash as before. With `requireSignature`
 on, the files must also carry a valid signature by a key trusted **now**: a
 package with none, or whose key was removed from the config, does not start
 (the problem says why; audit op `signature_refused`, once per package, hash
 and reason), and enabling it is refused. With `requireSignature` off, starts do
-not look at the signature.
+not check who signed, but the signature file is still checked as described
+above.
 
 **Approving changed content** (`approveContent`) records who signed the new
 content: `signedBy` becomes the publisher if a valid trusted signature covers
@@ -247,9 +280,8 @@ valid trusted signature is refused (`409`).
 `trustedPublishers` (as its own entry, or replacing the old one once every
 installed package is signed with the new key), re-sign and upgrade the
 packages, then remove the old entry. With `requireSignature` on, a package
-still signed by a removed key stops at its next start. `signedBy` is recorded
-at install, upgrade and approval; with `requireSignature` off it is not
-re-checked when the config changes later.
+still signed by a removed key stops at its next start; with it off, the
+package keeps running and its view shows `signedBy: null`.
 
 What a signature guarantees: the files are byte for byte what the holder of
 that key signed, under that name and version. What it does not:

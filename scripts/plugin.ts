@@ -17,6 +17,7 @@ import { validatePlugin } from '@octipus/plugin-sdk/testing';
 import { ConvertError, convertLegacyPlugin } from '@/plugins/convert';
 import { ManifestError } from '@/plugins/packages/manifest';
 import { generateSigningKey, SignatureError, signPackage } from '@/plugins/packages/signature';
+import { PackageTreeError } from '@/plugins/packages/tree';
 import { PLUGIN_TOOL_EFFECTS, type PluginToolEffect } from '@/shared/plugin-package';
 
 const HELP = `octi plugin — plugin tooling
@@ -81,7 +82,7 @@ async function runSign(argv: string[]): Promise<never> {
     process.exit(0);
   } catch (err) {
     const problems = err instanceof ManifestError ? err.problems : [(err as Error).message];
-    if (!(err instanceof ManifestError || err instanceof SignatureError || err instanceof SyntaxError || (err as NodeJS.ErrnoException).code)) throw err;
+    if (!(err instanceof ManifestError || err instanceof SignatureError || err instanceof PackageTreeError || err instanceof SyntaxError || (err as NodeJS.ErrnoException).code)) throw err;
     for (const p of problems) process.stderr.write(`  ✗ ${p}\n`);
     process.stderr.write(`\n❌ ${dir} was not signed.\n`);
     process.exit(1);
