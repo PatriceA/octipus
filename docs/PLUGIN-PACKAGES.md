@@ -359,7 +359,16 @@ Under the sandbox the proxy's Unix socket lives in a fresh directory under
 path is too long for a socket), never under `/tmp`: firejail runs with
 `--private-tmp`, which hides the host's `/tmp` whatever is whitelisted, and
 bwrap mounts a per-start scratch directory over `/tmp`. Both runners mount the
-socket directory by its own path.
+socket directory by its own path, and both set `TMPDIR=/tmp` (the private one).
+
+bwrap needs unprivileged user namespaces. Hosts that restrict them through
+AppArmor — Ubuntu 23.10 and later, 24.04 included, with
+`kernel.apparmor_restrict_unprivileged_userns=1` — need an AppArmor profile
+for `/usr/bin/bwrap` that allows `userns`, or that sysctl set to `0`; otherwise
+bwrap cannot start and the server fails to launch (see
+[MULTI-USER.md](architecture/MULTI-USER.md#operator-runbook)). firejail is
+setuid and not affected. `src/security/shell-sandbox.linux.e2e.test.ts` checks
+both runners for real; CI runs it on Ubuntu.
 
 ### macOS: sandbox-exec
 

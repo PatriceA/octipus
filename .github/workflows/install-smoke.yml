@@ -51,6 +51,51 @@ jobs:
       - name: Setup → doctor → boot → health
         run: bash scripts/smoke-test.sh
 
+  # The Linux counterpart of the Seatbelt step above: bubblewrap and firejail
+  # run for real (src/security/shell-sandbox.linux.e2e.test.ts), a plugin
+  # package launch through the egress proxy's Unix-socket bridge and a
+  # shell-tool wrap, once per runner. Every other job sees the runners faked.
+  linux-sandbox:
+    name: Linux sandbox end-to-end (bwrap, firejail)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node (+ dependency cache)
+        uses: ./.github/actions/node-setup
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install bubblewrap and firejail
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap firejail
+
+      # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor
+      # (kernel.apparmor_restrict_unprivileged_userns=1), so bwrap cannot set
+      # up its sandbox for the runner user. Hosts like this need an AppArmor
+      # profile for bwrap or this sysctl (docs/architecture/MULTI-USER.md,
+      # "Operator runbook"); a throwaway CI VM takes the sysctl. firejail is
+      # setuid and needs neither.
+      - name: Allow unprivileged user namespaces (bwrap)
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --version
+          firejail --version | head -n 1
+
+      # `required`: a runner that is installed but cannot start a sandbox
+      # fails the step instead of being skipped.
+      - name: Linux sandbox end-to-end (bwrap, firejail)
+        env:
+          OCTIPUS_SANDBOX_E2E: required
+        run: npx vitest run --project unit src/security/shell-sandbox.linux.e2e.test.ts
+
   # The PowerShell installer and the batch launcher had no CI at all: three
   # Windows-only breaks (capability installs, missing commands, orphaned shim)
   # shipped unnoticed. This runs the real installer against the checkout and
