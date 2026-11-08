@@ -59,3 +59,23 @@ describe('truncateLinesToTokens', () => {
     kept.forEach((l) => expect(l.endsWith(`repo-${lines.indexOf(l)}`)).toBe(true));
   });
 });
+
+describe('long unbroken runs', () => {
+  test('a 20k-character run of one letter is counted quickly', () => {
+    const run = 'z'.repeat(20_000);
+    const started = Date.now();
+    const n = estimateTokens(`${run} tail`);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(n).toBeGreaterThan(20_000 / 16);
+    expect(n).toBeLessThan(20_000);
+  });
+
+  test('text without long runs counts exactly as before; truncation of a long run still decodes to a prefix of it', () => {
+    const prose = 'the quick brown fox jumps over the lazy dog. '.repeat(100);
+    expect(estimateTokens(prose)).toBeGreaterThan(900);
+    const run = `start ${'q'.repeat(5_000)} end`;
+    const cut = truncateToTokens(run, 50);
+    expect(cut.endsWith('…[truncated]')).toBe(true);
+    expect(run.startsWith(cut.replace(/\n…\[truncated\]$/, '').trimEnd())).toBe(true);
+  });
+});

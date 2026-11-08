@@ -30,6 +30,36 @@ function getEncoder(): Tiktoken | null {
   return encoder;
 }
 
+// BPE merges within one pre-token, and the tokenizer's pre-split leaves an
+// unbroken run of letters (or of one repeated character) as a single pre-token,
+// so encoding one is worse than linear: 20,000 copies of one letter took ~19 s,
+// a 256-character piece takes milliseconds. Tool
+// output can hold such runs (base64, minified code, a line of '=' signs). So
+// any run of non-whitespace longer than this is encoded in pieces. The ids
+// still decode to the same text; the count can differ by about one token per
+// piece, which is noise for a budget estimate.
+const MAX_RUN = 256;
+const LONG_RUN = new RegExp(`\\S{${MAX_RUN + 1},}`, 'g');
+
+function encodeIds(enc: Tiktoken, text: string): number[] {
+  LONG_RUN.lastIndex = 0;
+  if (!LONG_RUN.test(text)) return enc.encode(text);
+  const ids: number[] = [];
+  const push = (part: string) => {
+    if (part) for (const id of enc.encode(part)) ids.push(id);
+  };
+  let last = 0;
+  // matchAll copies lastIndex, which test() just moved past the first match.
+  LONG_RUN.lastIndex = 0;
+  for (const m of text.matchAll(LONG_RUN)) {
+    push(text.slice(last, m.index));
+    for (let i = 0; i < m[0].length; i += MAX_RUN) push(m[0].slice(i, i + MAX_RUN));
+    last = m.index + m[0].length;
+  }
+  push(text.slice(last));
+  return ids;
+}
+
 // Callers re-estimate the same (often large, append-only) strings repeatedly,
 // so encoding is memoized by content string — unchanged text becomes a cache
 // hit and only new text is BPE-encoded. The keys ARE the strings, so the cache
@@ -66,7 +96,7 @@ export function estimateTokens(content: string): number {
   const enc = getEncoder();
   if (enc) {
     try {
-      count = enc.encode(content).length;
+      count = encodeIds(enc, content).length;
     } catch {
       count = Math.ceil(content.length / 4);
     }
@@ -106,7 +136,7 @@ export function truncateToTokens(text: string, budget: number): string {
     const keepChars = Math.max(0, (budget - 4) * 4);
     return `${text.slice(0, keepChars).trimEnd()}${TRUNCATION_MARKER}`;
   }
-  const ids = enc.encode(text);
+  const ids = encodeIds(enc, text);
   if (ids.length <= budget) return text;
   // Reserve the marker's tokens so the TOTAL stays within budget.
   const markerTokens = enc.encode(TRUNCATION_MARKER).length;
