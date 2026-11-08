@@ -239,6 +239,8 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
         userInstructions: options.userInstructions,
         userId: history.session.userId,
         requireSuccess: true,
+        // `/compact` is waited on; an automatic pass between turns is not.
+        priority: manual ? 'interactive' : 'background',
       });
     } catch (err) {
       await failed();
@@ -373,6 +375,8 @@ async function compactRoom(sessionId: string, options: MaybeCompactSessionOption
           userInstructions: options.userInstructions,
           userId: options.requesterId,
           requireSuccess: true,
+          // A room compacts ahead of the turn that waits on it.
+          priority: 'interactive',
         }),
       );
     } catch (err) {

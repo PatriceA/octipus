@@ -1,5 +1,7 @@
 import {
   buildSummarizationPrompt,
+  SUMMARY_STRUCTURE,
+  summaryLengthGuidance,
   extractFileOperations,
   mergeFileOperations,
   serializeConversation,
@@ -35,6 +37,7 @@ async function condenseForSummary(
   requireSuccess = false,
   /** Registry row of `summaryModel` (coworking spec §8.1) — a personal row carries its owner's key. */
   summaryModelName?: string,
+  priority?: import('@/models/rate-limiter').RequestPriority,
 ): Promise<string> {
   // Single-pass zone: a history at most ~2× the single-pass size loses little
   // to a plain head-slice, and map-reduce (N map calls + reduce) isn't worth
@@ -61,6 +64,7 @@ async function condenseForSummary(
     model: summaryModel,
     modelConfigName: summaryModelName,
     requestType:'compaction-map',
+    ...(priority ? { priority } : {}),
     userId,
     messages: [
       {
@@ -103,7 +107,7 @@ async function condenseForSummary(
   const reduced = partials.join('\n\n');
   if (requireSuccess && reduced.length > SUMMARY_INPUT_CHARS) {
     if (reduced.length >= serialized.length) throw new Error('Checkpoint reduction made no progress');
-    return condenseForSummary(reduced, summaryModel, userId, true, summaryModelName);
+    return condenseForSummary(reduced, summaryModel, userId, true, summaryModelName, priority);
   }
   return reduced;
 }
@@ -434,7 +438,31 @@ export function slidingWindowCompact(
   return [...systemMessages, ...recentMessages];
 }
 
+/**
+ * The live conversation a summary can be asked of: the exact messages and tool
+ * list the agent's last request sent. Summarizing as a continuation of it — the
+ * same prefix with the instruction appended as the last user turn — reads the
+ * whole history from the provider's prompt cache, where a separate summarizer
+ * prompt over serialized text re-read it cold in up to dozens of map calls.
+ */
+export interface SummaryContinuation {
+  messages: AgentMessage[];
+  tools?: import('openai/resources/chat/completions').ChatCompletionTool[];
+  /** Keep the conversation's own tool choice: Claude caches messages per tool_choice. */
+  toolChoice?: 'auto' | 'none';
+  cacheScope?: string;
+  cachePacing?: import('@/models/providers/prompt-cache').CachePacing;
+  sessionId?: string;
+}
+
 export interface CreateLLMSummaryOptions {
+  /** Summarize as a continuation of this conversation (see SummaryContinuation). */
+  continuation?: SummaryContinuation;
+  /**
+   * Queue priority of the summary calls. Compaction inside a live turn blocks
+   * that turn and is interactive; one between turns is background (default).
+   */
+  priority?: import('@/models/rate-limiter').RequestPriority;
   /** Durable checkpoint callers must not publish a lossy fallback after failure. */
   requireSuccess?: boolean;
   /** Previous compaction's summary, threaded in for iterative chaining. */
@@ -502,13 +530,20 @@ async function summarize(
       ? mergeFileOperations(options.previousFileOps, currentOps)
       : currentOps;
 
+    const budget = summaryBudgetTokens(removedMessages);
+    const fromContinuation = options?.continuation
+      ? await summarizeAsContinuation(options.continuation, summaryModel, budget, fileOps, options)
+      : undefined;
+    if (fromContinuation) return summaryResult(fromContinuation, removedMessages.length, fileOps, options);
+
     const serialized = serializeConversation(removedMessages);
     // Map-reduce condense so long histories keep fidelity instead of losing
     // everything past the first ~8 KB to a silent slice.
-    const condensed = await condenseForSummary(serialized, summaryModel, options?.userId, options?.requireSuccess, options?.summaryModelName);
+    const condensed = await condenseForSummary(serialized, summaryModel, options?.userId, options?.requireSuccess, options?.summaryModelName, options?.priority);
     const prompt = buildSummarizationPrompt(condensed, fileOps, {
       previousSummary: options?.previousSummary,
       userInstructions: options?.userInstructions,
+      budgetTokens: budget,
     });
 
     const result = await client.complete({
@@ -517,6 +552,7 @@ async function summarize(
       userId: options?.userId,
       // An install-topic call: stamped `install` in cost_log (D13).
       requestType: 'compaction',
+      ...(options?.priority ? { priority: options.priority } : {}),
       messages: [
         {
           role: 'system',
@@ -532,26 +568,11 @@ async function summarize(
         },
       ],
       temperature: 0.3,
-      maxTokens: 500,
+      maxTokens: budget,
     });
 
     if (options?.requireSuccess && (!result.content.trim() || result.finishReason === 'length')) throw new Error('Checkpoint summary was empty or truncated');
-    const fileOpsSection = [
-      fileOps.read.length > 0 ? `Files read: ${fileOps.read.join(', ')}` : null,
-      fileOps.written.length > 0 ? `Files written: ${fileOps.written.join(', ')}` : null,
-      fileOps.edited.length > 0 ? `Files edited: ${fileOps.edited.join(', ')}` : null,
-    ].filter(Boolean).join('\n');
-
-    const message: AgentMessage = {
-      role: 'system',
-      content: `[Context Summary - ${removedMessages.length} earlier messages compacted]\n\n${result.content}${fileOpsSection ? '\n\n' + fileOpsSection : ''}`,
-      timestamp: new Date(),
-    };
-
-    if (options) {
-      return { message, summaryText: result.content, fileOps };
-    }
-    return message;
+    return summaryResult(result.content, removedMessages.length, fileOps, options);
   } catch (error) {
     // Fall back to keyword-based summary
     if (options?.requireSuccess) throw error;
@@ -563,6 +584,82 @@ async function summarize(
       return { message: fallback, summaryText: fallback.content, fileOps: merged };
     }
     return fallback;
+  }
+}
+
+/** The summary as the caller's overload expects it, with the file-ops appendix. */
+function summaryResult(
+  text: string, removedCount: number, fileOps: { read: string[]; written: string[]; edited: string[] }, options?: CreateLLMSummaryOptions,
+): AgentMessage | CreateLLMSummaryResult {
+  const fileOpsSection = [
+      fileOps.read.length > 0 ? `Files read: ${fileOps.read.join(', ')}` : null,
+      fileOps.written.length > 0 ? `Files written: ${fileOps.written.join(', ')}` : null,
+      fileOps.edited.length > 0 ? `Files edited: ${fileOps.edited.join(', ')}` : null,
+  ].filter(Boolean).join('\n');
+  const message: AgentMessage = {
+    role: 'system',
+    content: `[Context Summary - ${removedCount} earlier messages compacted]\n\n${text}${fileOpsSection ? '\n\n' + fileOpsSection : ''}`,
+    timestamp: new Date(),
+  };
+  return options ? { message, summaryText: text, fileOps } : message;
+}
+
+/** Bounds of the summary's output budget (`summaryBudgetTokens`). */
+export const SUMMARY_MIN_TOKENS = 1_024;
+export const SUMMARY_MAX_TOKENS = 6_000;
+
+/**
+ * The summary's output budget: a fifth of the history it replaces, within
+ * [1k, 6k]. The flat 500 tokens it used to get turned an hour of tool work
+ * into a paragraph.
+ */
+export function summaryBudgetTokens(removed: AgentMessage[]): number {
+  return Math.max(SUMMARY_MIN_TOKENS, Math.min(SUMMARY_MAX_TOKENS, Math.round(calculateTotalTokens(removed) * 0.2)));
+}
+
+/**
+ * Summarize by continuing the live conversation (SummaryContinuation): its own
+ * prefix, read from cache, plus one instruction. Returns undefined — the caller
+ * falls back to the standalone summarizer — when the reply is empty, cut off,
+ * or a tool call instead of text.
+ */
+async function summarizeAsContinuation(
+  continuation: SummaryContinuation,
+  model: string,
+  budget: number,
+  fileOps: { read: string[]; written: string[]; edited: string[] },
+  options: CreateLLMSummaryOptions,
+): Promise<string | undefined> {
+  const instruction = [
+    'Pause the task. Write a checkpoint summary of this whole conversation so far; it will replace the earlier messages, and work resumes from it. Do not call tools and do not continue the task in this reply.',
+    SUMMARY_STRUCTURE,
+    `Cumulative file activity: read ${fileOps.read.join(', ') || 'none'}; written ${fileOps.written.join(', ') || 'none'}; edited ${fileOps.edited.join(', ') || 'none'}.`,
+    options.userInstructions?.trim() ? `User instructions for this summary: ${options.userInstructions.trim()}` : '',
+    summaryLengthGuidance(budget),
+  ].filter(Boolean).join('\n\n');
+  try {
+    const result = await getLiteLLMClient().complete({
+      model,
+      modelConfigName: options.summaryModelName,
+      userId: options.userId,
+      requestType: 'compaction',
+      ...(options.priority ? { priority: options.priority } : {}),
+      sessionId: continuation.sessionId,
+      cacheScope: continuation.cacheScope,
+      cachePacing: continuation.cachePacing,
+      messages: [...continuation.messages, { role: 'user', content: `SYSTEM: ${instruction}`, timestamp: new Date() }],
+      ...(continuation.tools?.length ? { tools: continuation.tools, ...(continuation.toolChoice ? { toolChoice: continuation.toolChoice } : {}) } : {}),
+      temperature: 0.3,
+      maxTokens: budget,
+    });
+    if (result.toolCalls?.length || result.finishReason === 'length' || !result.content.trim()) {
+      coreLogger.warn({ model, finishReason: result.finishReason, toolCalls: result.toolCalls?.length ?? 0 }, 'Continuation summary unusable; using the standalone summarizer');
+      return undefined;
+    }
+    return result.content.trim();
+  } catch (err) {
+    coreLogger.warn({ err, model }, 'Continuation summary failed; using the standalone summarizer');
+    return undefined;
   }
 }
 
@@ -623,25 +720,22 @@ export async function compactMessagesWithSummary(
   // Detect iterative-summary intent to pick the structured-result overload.
   const iterative = Boolean(options.previousSummary || options.previousFileOps || options.userInstructions);
 
-  let summary: AgentMessage;
   let summaryText: string | undefined;
   let mergedFileOps: { read: string[]; written: string[]; edited: string[] } | undefined;
 
+  const result = await createLLMSummary(nonSystemRemoved, model, {
+    previousSummary: options.previousSummary,
+    previousFileOps: options.previousFileOps,
+    userInstructions: options.userInstructions,
+    userId: options.userId,
+    summaryModelName: options.summaryModelName,
+    continuation: options.continuation,
+    priority: options.priority,
+  });
+  const summary = result.message;
   if (iterative) {
-    const result = await createLLMSummary(nonSystemRemoved, model, {
-      previousSummary: options.previousSummary,
-      previousFileOps: options.previousFileOps,
-      userInstructions: options.userInstructions,
-      userId: options.userId,
-      summaryModelName: options.summaryModelName,
-    });
-    summary = result.message;
     summaryText = result.summaryText;
     mergedFileOps = result.fileOps;
-  } else {
-    summary = options.summaryModelName
-      ? (await createLLMSummary(nonSystemRemoved, model, { userId: options.userId, summaryModelName: options.summaryModelName })).message
-      : await createLLMSummary(nonSystemRemoved, model);
   }
 
   // Insert summary after system messages

@@ -25,7 +25,7 @@ import { applyTopicParamOverrides, getTopicConfig } from '@/models/topic-config'
 import { getConfig } from '@/config';
 import { writePromptDump } from './prompt-dumps';
 import type { ModelConfigEntry } from '@/db/schema/models';
-import { compactMessagesWithSummary, CONTEXT_OVERFLOW_TRUNCATED_MARKER, DEFAULT_TOOL_OUTPUT_SOFT_CAP, shouldCompactToolOutputs, stripSignedReasoning, truncateOldestToolOutputs } from '@/utils/context-compaction';
+import { compactMessagesWithSummary, CONTEXT_OVERFLOW_TRUNCATED_MARKER, SUMMARY_MAX_TOKENS, DEFAULT_TOOL_OUTPUT_SOFT_CAP, shouldCompactToolOutputs, stripSignedReasoning, truncateOldestToolOutputs } from '@/utils/context-compaction';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { BaseAgentWorker } from './agent-base';
 import { contentStorageOffFor } from './agent/audience';
@@ -1302,6 +1302,7 @@ export class AgentWorker extends BaseAgentWorker {
           summaryModel: this.context.model,
           summaryModelName: this.context.modelName,
           userId: this.context.userId,
+          ...this.summaryContext(),
         });
         if (proactiveRemoved > 0) {
           // A summary replaces the start of the history: no signed reasoning
@@ -1322,6 +1323,7 @@ export class AgentWorker extends BaseAgentWorker {
         summaryModel: this.context.model,
         summaryModelName: this.context.modelName,
         userId: this.context.userId,
+        ...this.summaryContext(),
       });
 
       if (removed > 0) {
@@ -1407,6 +1409,8 @@ export class AgentWorker extends BaseAgentWorker {
             summaryModel: this.context.model,
             summaryModelName: this.context.modelName,
             userId: this.context.userId,
+            // Over the window already: a continuation of it would overflow too.
+            priority: this.turnPriority(),
           });
           // Both rewrites above edit earlier turns: no signed reasoning stays.
           this.messages = this.withoutStaleReasoning(compacted);
@@ -2158,6 +2162,29 @@ export class AgentWorker extends BaseAgentWorker {
     return this.manualThinking ? messages : stripSignedReasoning(messages, from);
   }
 
+  /** What the last request of this run sent besides its messages (`summaryContext`). */
+  private lastRequestShape: { tools?: ChatCompletionTool[]; cacheScope?: string; cachePacing?: import('@/models/providers/prompt-cache').CachePacing } | undefined;
+
+  /** A compaction inside this run blocks it: it queues as the run does. */
+  private turnPriority(): 'interactive' | 'background' {
+    return this.context.attended === false ? 'background' : 'interactive';
+  }
+
+  /**
+   * How an in-run compaction summarizes: as a continuation of this very
+   * conversation (its last request's tools and cache scope, the instruction
+   * appended), so the provider reads the history back from its prompt cache —
+   * when there was a request to continue, and room in the window for the
+   * summary on top of it. Otherwise the standalone summarizer runs.
+   */
+  private summaryContext(): Pick<import('@/utils/context-compaction').CreateLLMSummaryOptions, 'continuation' | 'priority'> {
+    const priority = this.turnPriority();
+    const shape = this.lastRequestShape;
+    const fits = this.estimateRequestTokens() + SUMMARY_MAX_TOKENS < this.config.contextWindowSize * 0.95;
+    if (!shape || !fits) return { priority };
+    return { priority, continuation: { messages: this.messages, tools: shape.tools, cacheScope: shape.cacheScope, cachePacing: shape.cachePacing, sessionId: this.context.sessionId } };
+  }
+
   /** The previous request of this worker's conversation, for `classifyCacheBreak`. */
   private lastCacheProbe: CacheProbe | undefined;
 
@@ -2572,6 +2599,7 @@ export class AgentWorker extends BaseAgentWorker {
         providerName = model.provider;
       }
     }
+    this.lastRequestShape = { tools: completionOpts.tools, cacheScope: completionOpts.cacheScope, cachePacing: completionOpts.cachePacing };
     const sentAt = Date.now();
     const signature = prefixSignature(litellmModel, completionOpts.tools, this.messages.filter((m) => m.role === 'system').map((m) => m.content));
     const result = await this.completeViaTarget(target, providerName, completionOpts);
