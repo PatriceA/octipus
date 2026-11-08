@@ -4,6 +4,8 @@ import type { ModelProvider } from './interface';
 import { modelLogger } from '@/utils/logger';
 import { applyProviderSettings } from '../provider-options';
 import { type Pseudonyms, StreamRestorer } from '@/core/protection/pseudonymize';
+import { getLocalModelGate, localRunnerKey } from '../local-gate';
+import { requestPriority } from '../rate-limiter';
 
 export type ProviderUsageContext = Pick<CompletionOptions, 'userId' | 'sessionId' | 'agentId' | 'modelConfigName' | 'accountingMetadata' | 'workspaceId' | 'funding'>;
 const usageContext = new AsyncLocalStorage<ProviderUsageContext>();
@@ -229,6 +231,7 @@ export async function accountCompletion(options: CompletionOptions, provider: st
   if (provider === 'cli') await assertCliMayRun(options);
   const prepared = provider === 'cli' ? options : await prepare(options, provider);
   let observed: Pick<CompletionResult, 'usage' | 'model' | 'requestId'> | undefined;
+  const leave = await enterLocalRunner(prepared, provider);
   try {
     const result = await run({ ...prepared, accountingOwner: true, accountingResponse: value => { observed = value; } });
     await recordProviderUsage(prepared, provider, result);
@@ -238,7 +241,16 @@ export async function accountCompletion(options: CompletionOptions, provider: st
     // Preserve a received/billable response even if decoding tool arguments fails.
     if (observed) await recordProviderUsage(prepared, provider, observed, true);
     throw err;
+  } finally {
+    leave();
   }
+}
+
+/** Foreground priority on a local runner (`local-gate.ts`); a no-op elsewhere. */
+async function enterLocalRunner(options: CompletionOptions, provider: string): Promise<() => void> {
+  const key = localRunnerKey(provider, options.endpoint);
+  if (!key) return () => {};
+  return getLocalModelGate().enter(key, requestPriority(options), options.signal);
 }
 
 export async function* accountStream(options: CompletionOptions, provider: string, run: (o: CompletionOptions) => AsyncGenerator<StreamChunk>): AsyncGenerator<StreamChunk> {
@@ -248,6 +260,7 @@ export async function* accountStream(options: CompletionOptions, provider: strin
   let requestId: string | undefined;
   let completed = false;
   const restorer = streamRestorerFor(pseudonymized.get(prepared));
+  const leave = await enterLocalRunner(prepared, provider);
   try {
     for await (const chunk of run({ ...prepared, accountingOwner: true })) {
       if (chunk.usage) usage = chunk.usage;
@@ -261,6 +274,7 @@ export async function* accountStream(options: CompletionOptions, provider: strin
     if (restorer) yield* restorer.end();
     completed = true;
   } finally {
+    leave();
     await recordProviderUsage(prepared, provider, { usage, model, requestId }, !completed);
   }
 }

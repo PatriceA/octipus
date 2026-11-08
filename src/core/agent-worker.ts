@@ -2511,6 +2511,9 @@ export class AgentWorker extends BaseAgentWorker {
         // An attended root turn waits on a person between requests; every
         // other worker runs as a burst (`cacheTtlsFor`).
         cachePacing: isRootAgent(this.context) && this.context.attended === true ? 'human' as const : 'machine' as const,
+        // A run nobody is attending (heartbeat, cron, hooks — children inherit
+        // `attended`) yields to live turns at the rate limiter.
+        ...(this.context.attended === false ? { priority: 'background' as const } : {}),
         tools: sentTools,
         // `tool_choice` is part of Claude's message-level cache key: flipping it
         // from auto to none for the final call re-read the whole conversation

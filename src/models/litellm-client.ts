@@ -28,6 +28,13 @@ export interface CompletionOptions {
    */
   cachePacing?: import('@/models/providers/prompt-cache').CachePacing;
   /**
+   * Queue priority at the provider's rate limiter (`requestPriority`). Unset:
+   * derived from `requestType` (compaction, memory extraction, … are
+   * background). On a local runner, background calls also wait for the
+   * foreground to go quiet.
+   */
+  priority?: import('@/models/rate-limiter').RequestPriority;
+  /**
    * `false`: cache the system prefix only, no breakpoint in the conversation.
    * For a request the next one is unlikely to continue (a casual reply between
    * agent turns, which run on another prompt): a history breakpoint there is a

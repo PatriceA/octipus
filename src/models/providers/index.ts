@@ -6,7 +6,7 @@ import { classifyError, ClassifiedError, FailoverReason } from '@/core/errors/cl
 import { CircuitOpenError, getCircuitBreakerRegistry } from '../circuit-breaker';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import { transformMessagesForProvider } from '../message-transform';
-import { getRateLimitManager, } from '../rate-limiter';
+import { getRateLimitManager, requestPriority } from '../rate-limiter';
 import { adjustMaxTokensForThinking, supportsThinking, type ThinkingLevel } from '../thinking-budget';
 import { AnthropicProvider } from './anthropic-provider';
 import { CLIProvider } from './cli-provider';
@@ -270,7 +270,7 @@ export class ProviderRouter {
 
     // Acquire rate limit token
     const rateLimiter = getRateLimitManager();
-    const token = await rateLimiter.acquire(rateLimitKey);
+    const token = await rateLimiter.acquire(rateLimitKey, requestPriority(options));
 
     const startTime = Date.now();
     try {
@@ -362,7 +362,7 @@ export class ProviderRouter {
 
     // Acquire rate limit token
     const rateLimiter = getRateLimitManager();
-    const token = await rateLimiter.acquire(rateLimitKey);
+    const token = await rateLimiter.acquire(rateLimitKey, requestPriority(options));
 
     const startTime = Date.now();
     try {
@@ -470,7 +470,7 @@ export class ProviderRouter {
 
   private async completeViaFallback(options: CompletionOptions): Promise<CompletionResult> {
     const fallback = this.getLiteLLM();
-    const token = await getRateLimitManager().acquire('litellm');
+    const token = await getRateLimitManager().acquire('litellm', requestPriority(options));
     const startTime = Date.now();
     try {
       const result = await fallback.complete(options);
@@ -498,7 +498,7 @@ export class ProviderRouter {
 
   private async *streamViaFallback(options: CompletionOptions): AsyncGenerator<StreamChunk> {
     const fallback = this.getLiteLLM();
-    const token = await getRateLimitManager().acquire('litellm');
+    const token = await getRateLimitManager().acquire('litellm', requestPriority(options));
     const startTime = Date.now();
     try {
       yield* fallback.stream(options);

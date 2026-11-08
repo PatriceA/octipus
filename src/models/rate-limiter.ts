@@ -17,6 +17,20 @@ export interface RateLimitConfig {
 
 export type RequestPriority = 'interactive' | 'background';
 
+/**
+ * Model calls nobody is waiting on. They used to acquire as `interactive`
+ * like everything else — no call site passed a priority — so a compaction
+ * map or a memory extraction competed on equal terms with the user's turn.
+ */
+const BACKGROUND_REQUEST_TYPES = new Set(['compaction', 'compaction-map', 'memory_extraction', 'learning-review']);
+
+/** The priority of one call: explicit, else from its request type. */
+export function requestPriority(options: { priority?: RequestPriority; requestType?: string }): RequestPriority {
+  if (options.priority) return options.priority;
+  return options.requestType && BACKGROUND_REQUEST_TYPES.has(options.requestType) ? 'background' : 'interactive';
+}
+
+
 interface QueuedRequest {
   priority: RequestPriority;
   resolve: () => void;
@@ -440,6 +454,7 @@ export class RateLimitError extends Error {
 
 export class RateLimitManager {
   private limiters = new Map<string, ProviderRateLimiter>();
+
   private globalConcurrency = 0;
   private globalMax: number;
   private queueTimeout: number;

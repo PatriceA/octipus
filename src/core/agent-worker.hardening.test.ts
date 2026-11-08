@@ -752,7 +752,7 @@ describe('the final call after tools end keeps the cached prefix', () => {
       return completion('done');
     }) as never);
 
-    const worker = new AgentWorker(mkCtx({ model: modelId, funding: 'install' }), cfg());
+    const worker = new AgentWorker(mkCtx({ model: modelId }), cfg());
     worker.registerTools([{ name: 'probe', description: 'p', parameters: { type: 'object', properties: {} }, execute: async () => 'x' }]);
     const priv = worker as unknown as {
       messages: import('@/core/types').AgentMessage[];
