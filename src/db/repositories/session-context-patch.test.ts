@@ -239,3 +239,63 @@ test('a clear distinguishes new and old rows created in the same millisecond', a
   expect(next.conversationGeneration).not.toBe(context.conversationGeneration);
   expect(await sessionRepository.patchContextIfGeneration(session.id, context.conversationGeneration!, { nativeConversation: {} })).toBe(false);
 });
+
+describe('the native conversation snapshot in its own column', () => {
+  const snapshot = (n: number) => ({ generation: 'g', model: 'm', messages: [{ role: 'user' as const, content: `turn ${n}`, timestamp: '2026-11-08T00:00:00.000Z' }] });
+
+  test('written to the column, read back inside context, untouched by small context patches', async () => {
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const { getDb } = await import('@/db/postgres');
+    const { sessions } = await import('@/db/schema/sessions');
+    const { eq } = await import('drizzle-orm');
+    const session = await freshSession('native-1');
+    const generation = (await import('@/db/schema/sessions')).sessionGeneration((await sessionRepository.findById(session.id))!.context);
+
+    expect(await sessionRepository.patchContextIfGeneration(session.id, generation, { nativeConversation: snapshot(1), toolGroups: { generation, ids: ['shell'] } })).toBe(true);
+    const [raw] = await getDb().select().from(sessions).where(eq(sessions.id, session.id));
+    // Stored once, in the column; `context` keeps only the small keys.
+    expect(raw.nativeConversation).toMatchObject({ messages: [{ content: 'turn 1' }] });
+    expect(raw.context).not.toHaveProperty('nativeConversation');
+    expect((await sessionRepository.findById(session.id))!.context?.nativeConversation).toMatchObject({ messages: [{ content: 'turn 1' }] });
+
+    // A read-spread-write of context does not copy the snapshot back into it.
+    const ctx = (await sessionRepository.findById(session.id))!.context!;
+    await sessionRepository.update(session.id, { context: { ...ctx, currentTopic: 'x' } });
+    const [after] = await getDb().select().from(sessions).where(eq(sessions.id, session.id));
+    expect(after.context).not.toHaveProperty('nativeConversation');
+    expect(after.nativeConversation).toMatchObject({ messages: [{ content: 'turn 1' }] });
+
+    // A patch that clears it (compaction without a tail) clears the column.
+    await sessionRepository.patchContextIfGeneration(session.id, generation, { nativeConversation: null });
+    expect((await sessionRepository.findById(session.id))!.context?.nativeConversation).toBeUndefined();
+  });
+
+  test('a clear drops it, and the generation guard covers it', async () => {
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const session = await freshSession('native-2');
+    const { sessionGeneration } = await import('@/db/schema/sessions');
+    const generation = sessionGeneration((await sessionRepository.findById(session.id))!.context);
+    await sessionRepository.patchContextIfGeneration(session.id, generation, { nativeConversation: snapshot(2) });
+    await sessionRepository.clearContext(session.id);
+    expect((await sessionRepository.findById(session.id))!.context?.nativeConversation).toBeUndefined();
+    // A write from the cleared generation is refused, snapshot included.
+    expect(await sessionRepository.patchContextIfGeneration(session.id, generation, { nativeConversation: snapshot(3) })).toBe(false);
+    expect((await sessionRepository.findById(session.id))!.context?.nativeConversation).toBeUndefined();
+  });
+
+  test('a row from before the column (snapshot still in context) is read as it is', async () => {
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const { getDb } = await import('@/db/postgres');
+    const { sessions } = await import('@/db/schema/sessions');
+    const { eq } = await import('drizzle-orm');
+    const session = await freshSession('native-3');
+    await getDb().update(sessions).set({ context: { nativeConversation: snapshot(4) } as never }).where(eq(sessions.id, session.id));
+    expect((await sessionRepository.findById(session.id))!.context?.nativeConversation).toMatchObject({ messages: [{ content: 'turn 4' }] });
+    // A read-spread-write moves it to the column instead of dropping it.
+    const ctx = (await sessionRepository.findById(session.id))!.context!;
+    await sessionRepository.update(session.id, { context: { ...ctx, currentTopic: 'y' } });
+    const [raw] = await getDb().select().from(sessions).where(eq(sessions.id, session.id));
+    expect(raw.context).not.toHaveProperty('nativeConversation');
+    expect(raw.nativeConversation).toMatchObject({ messages: [{ content: 'turn 4' }] });
+  });
+});

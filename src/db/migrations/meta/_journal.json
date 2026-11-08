@@ -1205,6 +1205,13 @@
       "when": 1794142800000,
       "tag": "0171_heartbeat_checks",
       "breakpoints": true
+    },
+    {
+      "idx": 172,
+      "version": "7",
+      "when": 1794146400000,
+      "tag": "0172_session_native_conversation",
+      "breakpoints": true
     }
   ]
 }
