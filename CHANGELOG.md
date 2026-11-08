@@ -139,6 +139,15 @@ labels reflect blast radius, not contract guarantees.
 
 ### Fixed
 
+- **A burst of remote-space frames no longer closes the federation link.** The
+  host closes a link that sends more than 60 frames in a second (4429), and the
+  visiting install never paced what it sent on the link every one of its
+  members shares. A quick burst — a tab reading a space, an agent turn — cut
+  the link for all of them until the redial. The visitor now sends at most 40
+  frames per second per link; the rest wait in the send queue, in order. This
+  was the cause of the intermittent `visitor-residency.test.ts` timeout
+  ("timed out waiting for doc.sync through B").
+
 - **Long sessions keep their prompt cache.** Several things rewrote the start
   of a conversation every turn or two, so everything after the system prompt
   was re-read uncached: session compaction ran after every turn once a session

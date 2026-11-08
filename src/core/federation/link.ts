@@ -17,6 +17,11 @@
  *    max(4 MiB, 2 × the largest sealed frame) close the link with 4429, so a
  *    peer that stops reading cannot grow our memory, while one frame at the
  *    configured cap always fits;
+ *  - the visitor paces what it sends to at most VISITOR_FRAMES_PER_SECOND in
+ *    any second, below the host's limit: a burst (one tab reading a space,
+ *    an agent turn, every member on the install sharing the one link) waits
+ *    in the send queue for a moment instead of closing the link for all of
+ *    them with 4429;
  *  - the peer's requests in flight: at most 32 answered at once, any more
  *    are answered `busy` without running, so a peer cannot pile up handlers.
  *
@@ -51,6 +56,13 @@ export const MAX_IN_FLIGHT_REQUESTS = 32;
 const SOCKET_HIGH_WATER_BYTES = 1024 * 1024;
 /** Inbound frames per second one link may send. */
 export const MAX_FRAMES_PER_SECOND = 60;
+/**
+ * Outbound frames per second a visitor sends on one link: a third below the
+ * host's MAX_FRAMES_PER_SECOND, which the host counts on ARRIVAL, so frames
+ * the network delivers bunched do not cross it. Frames over the budget wait
+ * in the send queue, in order.
+ */
+export const VISITOR_FRAMES_PER_SECOND = 40;
 /** Heartbeats missed in a row before the link is closed. */
 export const MAX_MISSED_PINGS = 3;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -130,6 +142,9 @@ export class PeerLink {
   private closedWith: { code: number; reason: string } | null = null;
   private rateWindowStart = 0;
   private rateCount = 0;
+  /** Visitor only: when each frame of the last second was handed to the socket. */
+  private readonly sentAt: number[] = [];
+  private paceTimer: NodeJS.Timeout | null = null;
   private heartbeat: NodeJS.Timeout | null = null;
   private awaitingPong = false;
   private missedPings = 0;
@@ -275,6 +290,8 @@ export class PeerLink {
     this.closedWith = { code, reason };
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.heartbeat = null;
+    if (this.paceTimer) clearTimeout(this.paceTimer);
+    this.paceTimer = null;
     this.queue.length = 0;
     this.queueBytes = 0;
     for (const [id, p] of this.pending) {
@@ -350,11 +367,12 @@ export class PeerLink {
       this.close(CLOSE.limit, 'send queue full');
       return false;
     }
-    if (this.queue.length === 0 && this.socket.bufferedAmount < SOCKET_HIGH_WATER_BYTES) {
+    if (this.queue.length === 0 && this.socket.bufferedAmount < SOCKET_HIGH_WATER_BYTES && this.paced()) {
       this.socket.send(wire, (err) => this.written(err));
     } else {
       this.queue.push(wire);
       this.queueBytes += wire.length;
+      this.resumeWhenPaced();
     }
     return true;
   }
@@ -365,11 +383,38 @@ export class PeerLink {
       if (!this.closedWith) log.warn({ err, peer: this.peerInstanceId }, 'Federation socket write failed');
       return;
     }
-    while (!this.closedWith && this.queue.length > 0 && this.socket.bufferedAmount < SOCKET_HIGH_WATER_BYTES) {
+    while (!this.closedWith && this.queue.length > 0 && this.socket.bufferedAmount < SOCKET_HIGH_WATER_BYTES && this.paced()) {
       const wire = this.queue.shift() as string;
       this.queueBytes -= wire.length;
       this.socket.send(wire, (e) => this.written(e));
     }
+    this.resumeWhenPaced();
+  }
+
+  /**
+   * Whether one more frame may go now; true counts it. Only a visitor paces
+   * (the host's own events are not rate-limited by the visitor). A sliding
+   * second, so no second the host measures holds more than the budget.
+   */
+  private paced(): boolean {
+    if (this.role !== 'visitor') return true;
+    const now = Date.now();
+    while (this.sentAt.length > 0 && now - this.sentAt[0] >= 1000) this.sentAt.shift();
+    if (this.sentAt.length >= VISITOR_FRAMES_PER_SECOND) return false;
+    this.sentAt.push(now);
+    return true;
+  }
+
+  /** Frames held back by the pace go when the oldest frame of the second ages out. */
+  private resumeWhenPaced(): void {
+    if (this.closedWith || this.paceTimer || this.queue.length === 0 || this.role !== 'visitor') return;
+    if (this.sentAt.length < VISITOR_FRAMES_PER_SECOND) return;
+    const wait = Math.max(1, this.sentAt[0] + 1000 - Date.now());
+    this.paceTimer = setTimeout(() => {
+      this.paceTimer = null;
+      this.written();
+    }, wait);
+    this.paceTimer.unref?.();
   }
 
   private beat(): void {
