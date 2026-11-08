@@ -57,13 +57,14 @@ async function request<T>(io: PluginApiIo, method: string, path: string, body?: 
   } catch (err) {
     throw new CliError(`backend unreachable at ${base} (${(err as Error).message}). Run \`octi start\` first.`);
   }
-  const data = await res.json().catch(() => ({})) as { error?: string; problems?: string[] };
+  const data = await res.json().catch(() => ({})) as { error?: string; problems?: string[]; actualHash?: string };
   if (res.status === 401 || res.status === 403) {
     throw new CliError(`the backend refused (${res.status}): set OCTIPUS_API_TOKEN to an admin API token (Settings → API Tokens).`);
   }
   if (!res.ok) {
     const problems = (data.problems ?? []).filter((p) => p !== data.error);
-    throw new CliError([data.error ?? `HTTP ${res.status}`, ...problems.map((p) => `  ${p}`)].join('\n'));
+    const next = data.actualHash ? [`  the files hash to ${data.actualHash} now; review them, then: octi plugin approve <name> --hash ${data.actualHash}`] : [];
+    throw new CliError([data.error ?? `HTTP ${res.status}`, ...problems.map((p) => `  ${p}`), ...next].join('\n'));
   }
   return data as T;
 }

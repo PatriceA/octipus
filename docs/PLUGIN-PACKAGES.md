@@ -127,10 +127,11 @@ package root enter the listing, so the copy hashed at install hashes the same
 as the installed directory.
 
 Install and upgrade copy the package into a staging directory beside the
-installed one and hash **the copy**, before it replaces anything; the row (new
+installed one and hash **the copy**, and check its signature, before they touch
+anything installed; only then is an upgraded package disabled. The row (new
 manifest, version and hash) is written in the same transaction that swaps the
-files in. A failure while copying, hashing or swapping leaves the old files and
-the old row together (an upgrade stays disabled).
+files in. A refused or failed upgrade leaves the old files and the old row
+together, and a package that was enabled is enabled (and running) again.
 
 Before **every start** of the package's server — host start, enable, restart
 after a change, reconnect after a crash — the hash is recomputed. A restart
@@ -143,8 +144,12 @@ mismatch)"* with the hash its files have now as `actualHash`, the log names
 the package with the recorded and the actual hash, and the audit log gets one
 `content_mismatch` row (with both hashes) per package and pair of hashes — a
 reconnect loop does not repeat it. Enabling a disabled package whose files do
-not match is refused as well, naming both hashes. A server already running
-keeps running until its next start.
+not match is refused as well, naming both hashes (the `409` body carries
+`actualHash`). A **disabled** package is not started, so its view checks
+instead: once it has a recorded hash, every view hashes its files and shows the
+same problem and `actualHash` on a mismatch, so its content can be reviewed and
+approved before enabling it. A server already running keeps running until its
+next start.
 
 To accept the new content, review the files that hash to `actualHash` and
 approve **that hash** — on the web page (Admin → Plugin packages shows the
@@ -277,8 +282,19 @@ hash recorded for it:
 A [remote install](#remote-install) accepts only the first row, whatever
 `requireSignature` says.
 
-A refused upgrade leaves the old files and row as they were (still
-disabled). The publisher who signed is recorded on the row
+A refused upgrade leaves the old files and row as they were, enabled if they
+were. An upgrade must also keep its publisher and not go back:
+
+- **Same signer.** When the installed version is signed by a trusted
+  publisher, an upgrade signed by another key (or not signed by a trusted
+  one) is refused (`409`) unless the request says `"allowSignerChange": true`;
+  the `upgraded` audit row then records `signerChange` (both publishers and
+  key ids). Re-signing with a rotated key is such a change.
+- **Not older.** A version lower than the installed one (semantic version
+  order, a pre-release before its release) is refused (`409`) unless
+  `"allowDowngrade": true`; the audit row records `downgrade: true`.
+
+The publisher who signed is recorded on the row
 (`plugin_packages.signed_by`, and in the `installed`/`upgraded` audit rows,
 with the key id).
 
@@ -293,15 +309,18 @@ when it is `valid`, else `null`. A key removed, revoked or expired, or a
 replaced signature file, shows at once; the row's `signed_by` keeps what held
 at install or approval.
 
-**Every start** checks the content hash as before. With `requireSignature`
+**Every start** checks the content hash as before. A package signed by a
+**revoked** key does not start, whatever `requireSignature` says (audit op
+`signature_revoked`, once per package and key), and enabling it or approving
+its content is refused: remove the signature file and approve the content as
+unsigned, or have it signed again with a trusted key. With `requireSignature`
 on, the files must also carry a valid signature by a key trusted **now**: a
-package with none, or whose key was removed from the config, revoked or
-expired, does not start (the problem says why; audit op `signature_refused`,
-once per package, hash and reason), and enabling it is refused. With
-`requireSignature` off, starts do not check who signed — a package whose key
-was revoked keeps running, and its view shows `signature.status: "revoked"`;
-turn `requireSignature` on, or disable the package, to stop it — but the
-signature file is still checked as described above.
+package with none, or whose key was removed from the config or expired, does
+not start (the problem says why; audit op `signature_refused`, once per
+package, hash and reason), and enabling it is refused. With `requireSignature`
+off, an expired, unknown or removed key is advice: the package keeps running
+and its view shows the state. The signature file is checked as described above
+in every case.
 
 **Approving changed content** (`approveContent`) records who signed the new
 content: `signedBy` becomes the publisher if a valid trusted signature covers
@@ -323,9 +342,10 @@ valid trusted signature is refused (`409`).
    `revokedKeys`). Keep the entry rather than deleting it, so the view names
    the packages still signed by it as revoked or expired instead of unknown.
 
-With `requireSignature` on, a package still signed by a revoked, expired or
-removed key stops at its next start; with it off, it keeps running and its
-view shows the state (`signedBy: null`).
+A package still signed by a revoked key stops at its next start. One signed by
+an expired or removed key stops too with `requireSignature` on; with it off, it
+keeps running and its view shows the state (`signedBy: null`). Upgrading to
+the re-signed version is a change of signer: pass `allowSignerChange`.
 
 What a signature guarantees: the files are byte for byte what the holder of
 that key signed, under that name and version. What it does not:
@@ -411,8 +431,11 @@ sha256, installedVersion }], errors: [{ registry, error }] }`. An entry with a
 bad name or version, a non-https URL or no sha256 is skipped (and logged); a
 registry that cannot be read is listed in `errors` while the others still
 show. Admin → Plugin packages → **Browse** lists them; Install (or Upgrade,
-for an installed package) is a remote install with the entry's `url` and
-`sha256`.
+for an installed package) is a remote install with the entry's `url`,
+`sha256`, `name` and `version`: a tarball whose manifest names another package
+or version than the entry is refused (`400`), so an entry cannot install
+something other than what it lists. `name` and `version` may be sent with any
+install (`POST /api/plugin-packages`) to the same effect.
 
 A registry is trusted only to point at tarballs: the index is not signed, and
 what installs is decided by the package's own signature against
@@ -561,9 +584,11 @@ tarball, signed by a trusted publisher ([Remote install](#remote-install)).
    while a required setting or secret has no value; settings and `enabled` in
    one PATCH are saved together or not at all. A required secret of an enabled
    package cannot be removed; disable it first.
-4. **Upgrade:** install again with `"upgrade": true`. The package is disabled
-   before any file is replaced and stays disabled until enabled again, since
-   its tools may have changed. Each setting the new version still declares and
+4. **Upgrade:** install again with `"upgrade": true` (`"allowSignerChange"`
+   and `"allowDowngrade"` for another publisher or an older version, see
+   [Signed packages](#signed-packages)). Once the new files are copied and
+   checked, the package is disabled before any file is replaced and stays
+   disabled until enabled again, since its tools may have changed. Each setting the new version still declares and
    accepts is kept; a new required setting must be set before enabling.
    The new files' hash replaces the old one.
 5. **Approve changed content:** `PATCH /api/plugin-packages/:name

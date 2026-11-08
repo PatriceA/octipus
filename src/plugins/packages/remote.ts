@@ -123,12 +123,14 @@ function downloadsRoot(): string {
  * Download an https tarball (`.tar.gz`), check it against `sha256` when
  * given, unpack it and install it (`installFromDirectory`) with a valid
  * trusted signature required. With `upgrade`, it replaces the installed
- * package of the same name.
+ * package of the same name (see `installFromDirectory` for downgrades and a
+ * change of signer). `name` and `version` (a registry entry's) must match the
+ * package's manifest.
  */
 export async function installFromUrl(
   url: string,
   actorUserId: string,
-  opts: { upgrade?: boolean; sha256?: string } = {},
+  opts: { upgrade?: boolean; sha256?: string; name?: string; version?: string; allowSignerChange?: boolean; allowDowngrade?: boolean } = {},
 ): Promise<PluginPackageRow & { warnings: string[] }> {
   let expected: string | null = null;
   if (opts.sha256 !== undefined) {
@@ -157,7 +159,14 @@ export async function installFromUrl(
       if (err instanceof TarError) throw new PluginPackageError('invalid', `${err.message}; not installed`);
       throw err;
     }
-    return await installFromDirectory(root, actorUserId, { upgrade: opts.upgrade, requireTrustedSignature: true, source: url });
+    return await installFromDirectory(root, actorUserId, {
+      upgrade: opts.upgrade,
+      requireTrustedSignature: true,
+      source: url,
+      expect: { name: opts.name, version: opts.version },
+      allowSignerChange: opts.allowSignerChange,
+      allowDowngrade: opts.allowDowngrade,
+    });
   } finally {
     await rm(work, { recursive: true, force: true }).catch((err: unknown) => coreLogger.warn({ err, dir: work }, 'Could not remove a plugin download'));
   }

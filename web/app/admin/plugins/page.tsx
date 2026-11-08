@@ -112,7 +112,8 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
   const toggle = useMutation({
     mutationFn: (enabled: boolean) => api.patch<PluginPackageView>(`/plugin-packages/${encodeURIComponent(pkg.name)}`, { enabled }),
     onSuccess: () => { setError(null); void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY }); },
-    onError: (err: Error) => setError(err.message),
+    // A refusal can come from files changed since the page loaded: reload, so the review shows.
+    onError: (err: Error) => { setError(err.message); void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY }); },
   });
   const hosts = pkg.manifest.network ?? [];
   return (

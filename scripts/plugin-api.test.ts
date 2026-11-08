@@ -102,6 +102,9 @@ describe('octi plugin approve', () => {
     const h = harness({ patch: () => [409, { error: `The files of finapi hash to sha256:${'c'.repeat(64)}, not to the reviewed ${ACTUAL}`, problems: ['approveContent: reviewed …'] }] });
     expect(await approveCommand(h.io, 'finapi', ACTUAL)).toBe(1);
     expect(h.err.join('')).toContain(`hash to sha256:${'c'.repeat(64)}`);
+    const withHash = harness({ patch: () => [409, { error: 'changed', actualHash: `sha256:${'c'.repeat(64)}` }] });
+    expect(await approveCommand(withHash.io, 'finapi', ACTUAL)).toBe(1);
+    expect(withHash.err.join('')).toContain(`--hash sha256:${'c'.repeat(64)}`);
   });
 
   test('without --hash at a terminal: shows the actual hash, asks, and approves that one on yes', async () => {

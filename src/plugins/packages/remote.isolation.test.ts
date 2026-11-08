@@ -8,7 +8,7 @@
  * Backed by ephemeral PGlite; the fixture package runs as a real MCP server.
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest';
@@ -70,6 +70,13 @@ async function auditOps(op: string): Promise<Array<Record<string, unknown>>> {
   return rows
     .map((r: { details: unknown }) => (typeof r.details === 'string' ? JSON.parse(r.details) : r.details) as Record<string, unknown>)
     .filter((d: Record<string, unknown>) => d.op === op);
+}
+
+/** Give the fixture the setting and secret it requires, so it can be enabled. */
+async function installed(): Promise<void> {
+  const svc = await import('./service');
+  await svc.updateSettings(NAME, { region: 'eu' }, admin);
+  await svc.setSecret(NAME, 'ECHO_TOKEN', 'tok', admin);
 }
 
 /** Nothing of a refused install is left: no row, no files, no unpacked download. */
@@ -197,36 +204,148 @@ describe('revoked and expired keys on installed packages', () => {
     expect(row.warnings).toEqual([expect.stringMatching(/expired key.*installed as unsigned/)]);
   });
 
-  test('revoking the key of an installed package: shown in the view, and with requireSignature it no longer starts', async () => {
+  test('revoking the key of an installed package stops it whatever requireSignature says; expiry only under requireSignature', async () => {
     const svc = await import('./service');
     const { getMCPBridge } = await import('@/mcp/bridge');
     const { installFromUrl } = await import('./remote');
     const url = 'https://plugins.example.com/echo.tgz';
     await serveFixture(url, { key: acme.privateKeyPem });
     await installFromUrl(url, admin);
-    await svc.updateSettings(NAME, { region: 'eu' }, admin);
-    await svc.setSecret(NAME, 'ECHO_TOKEN', 'tok', admin);
-    await policy({ requireSignature: true });
+    await installed();
     await svc.setEnabled(NAME, true, admin);
     expect((await svc.packageView(NAME)).connected).toBe(true);
+    const restart = async () => {
+      await getMCPBridge().disconnect(SERVER);
+      await svc.syncPluginServers();
+      return svc.packageView(NAME);
+    };
+    const revokedBefore = (await auditOps('signature_revoked')).length;
 
-    await policy({ revokedKeys: [acme.keyId] });
+    // requireSignature off: a revoked key still stops it, audited once per package and key.
+    await policy({ requireSignature: false, revokedKeys: [acme.keyId] });
     let view = await svc.packageView(NAME);
     expect([view.signedBy, view.signature?.status, view.signature?.publisher]).toEqual([null, 'revoked', 'Acme']);
-    await getMCPBridge().disconnect(SERVER);
-    await svc.syncPluginServers();
-    view = await svc.packageView(NAME);
+    view = await restart();
     expect(view.connected).toBe(false);
-    expect(view.problem).toMatch(/revoked key.*requireSignature/);
-    expect((await auditOps('signature_refused')).at(-1)).toMatchObject({ status: 'revoked' });
+    expect(view.problem).toMatch(/revoked key.*does not start/);
+    await getMCPBridge().ensureConnected(SERVER);
+    await restart();
+    expect(await auditOps('signature_revoked')).toHaveLength(revokedBefore + 1);
+    expect((await auditOps('signature_revoked')).at(-1)).toMatchObject({ keyId: acme.keyId, publisher: 'Acme' });
 
-    // Expiry by date stops it the same way.
+    // Enabling and approving are refused the same way.
+    await svc.setEnabled(NAME, false, admin);
+    await expect(svc.setEnabled(NAME, true, admin)).rejects.toMatchObject({ code: 'incomplete', message: expect.stringMatching(/revoked key/) });
+    await expect(svc.approveContent(NAME, view.contentHash as string, admin)).rejects.toMatchObject({ code: 'incomplete', message: expect.stringMatching(/revoked key/) });
+
+    // Expired is advice without requireSignature: it runs, and the view says so.
     await policy({ revokedKeys: [], trusted: [{ ...ACME, notAfter: '2020-01-01T00:00:00Z' }] });
-    await getMCPBridge().disconnect(SERVER);
-    await svc.syncPluginServers();
+    await svc.setEnabled(NAME, true, admin);
+    view = await restart();
+    expect([view.connected, view.signature?.status]).toEqual([true, 'expired']);
+    // With requireSignature it stops.
+    await policy({ requireSignature: true });
+    view = await restart();
+    expect(view.connected).toBe(false);
+    expect(view.problem).toMatch(/expired key.*requireSignature/);
+  });
+});
+
+describe('upgrades', () => {
+  test('a registry entry is bound to the name and version it lists', async () => {
+    const { installFromUrl } = await import('./remote');
+    const url = 'https://plugins.example.com/echo.tgz';
+    await serveFixture(url, { key: acme.privateKeyPem });
+    await expect(installFromUrl(url, admin, { name: 'finapi', version: '1.0.0' })).rejects.toMatchObject({ code: 'invalid', message: expect.stringMatching(/"echo-plugin", not the expected "finapi"/) });
+    await expect(installFromUrl(url, admin, { name: NAME, version: '9.9.9' })).rejects.toMatchObject({ code: 'invalid', message: expect.stringMatching(/version 1.0.0, not the expected 9.9.9/) });
+    await nothingLeft();
+    expect((await installFromUrl(url, admin, { name: NAME, version: '1.0.0' })).name).toBe(NAME);
+  });
+
+  test('an upgrade by another key, or unsigned after a signed version, needs allowSignerChange (audited)', async () => {
+    const svc = await import('./service');
+    const { installFromUrl } = await import('./remote');
+    await policy({ trusted: [ACME, { name: 'Stranger', publicKey: stranger.publicKeyPem }] });
+    await serveFixture('https://plugins.example.com/echo-1.0.0.tgz', { key: acme.privateKeyPem });
+    await installFromUrl('https://plugins.example.com/echo-1.0.0.tgz', admin);
+    await installed();
+    await svc.setEnabled(NAME, true, admin);
+
+    await serveFixture('https://plugins.example.com/echo-1.1.0.tgz', { key: stranger.privateKeyPem, version: '1.1.0' });
+    await expect(installFromUrl('https://plugins.example.com/echo-1.1.0.tgz', admin, { upgrade: true }))
+      .rejects.toMatchObject({ code: 'conflict', message: expect.stringMatching(/signed by Acme, this upgrade by Stranger.*allowSignerChange/) });
+    // Refused before anything was touched: still enabled and running the old version.
+    let view = await svc.packageView(NAME);
+    expect([view.version, view.enabled, view.connected]).toEqual(['1.0.0', true, true]);
+
+    // Unsigned, from a directory: a signer change too.
+    const dir = mkdtempSync(join(tmpdir(), 'octipus-remote-dir-'));
+    cpSync(FIXTURE_DIR, dir, { recursive: true });
+    const manifest = JSON.parse(readFileSync(join(dir, 'octipus-plugin.json'), 'utf8'));
+    writeFileSync(join(dir, 'octipus-plugin.json'), JSON.stringify({ ...manifest, version: '1.2.0' }));
+    await expect(svc.installFromDirectory(dir, admin, { upgrade: true })).rejects.toMatchObject({ code: 'conflict', message: expect.stringMatching(/not signed by a trusted publisher/) });
+
+    const row = await installFromUrl('https://plugins.example.com/echo-1.1.0.tgz', admin, { upgrade: true, allowSignerChange: true });
+    expect([row.version, row.signedBy]).toEqual(['1.1.0', 'Stranger']);
+    expect((await auditOps('upgraded')).at(-1)).toMatchObject({ signerChange: { from: 'Acme', to: 'Stranger', fromKeyId: acme.keyId, toKeyId: stranger.keyId } });
     view = await svc.packageView(NAME);
-    expect([view.connected, view.signature?.status]).toEqual([false, 'expired']);
-    expect(view.problem).toMatch(/expired key/);
+    expect(view.enabled).toBe(false);
+
+    // Same key again: no override needed.
+    await serveFixture('https://plugins.example.com/echo-1.1.1.tgz', { key: stranger.privateKeyPem, version: '1.1.1' });
+    expect((await installFromUrl('https://plugins.example.com/echo-1.1.1.tgz', admin, { upgrade: true })).version).toBe('1.1.1');
+  });
+
+  test('a lower version needs allowDowngrade (audited)', async () => {
+    const { installFromUrl } = await import('./remote');
+    await serveFixture('https://plugins.example.com/echo-2.0.0.tgz', { key: acme.privateKeyPem, version: '2.0.0' });
+    await installFromUrl('https://plugins.example.com/echo-2.0.0.tgz', admin);
+    await serveFixture('https://plugins.example.com/echo-2.0.0-rc.1.tgz', { key: acme.privateKeyPem, version: '2.0.0-rc.1' });
+    await expect(installFromUrl('https://plugins.example.com/echo-2.0.0-rc.1.tgz', admin, { upgrade: true }))
+      .rejects.toMatchObject({ code: 'conflict', message: expect.stringMatching(/older than the installed 2.0.0.*allowDowngrade/) });
+    expect((await installFromUrl('https://plugins.example.com/echo-2.0.0-rc.1.tgz', admin, { upgrade: true, allowDowngrade: true })).version).toBe('2.0.0-rc.1');
+    expect((await auditOps('upgraded')).at(-1)).toMatchObject({ downgrade: true, from: '2.0.0' });
+  });
+
+  test('a refused upgrade (unsigned or junk tarball) leaves an enabled package enabled and running', async () => {
+    const svc = await import('./service');
+    const { installFromUrl } = await import('./remote');
+    await serveFixture('https://plugins.example.com/echo.tgz', { key: acme.privateKeyPem });
+    await installFromUrl('https://plugins.example.com/echo.tgz', admin);
+    await installed();
+    await svc.setEnabled(NAME, true, admin);
+    await serveFixture('https://plugins.example.com/unsigned.tgz', { version: '1.5.0' });
+    served.files.set('https://plugins.example.com/junk.tgz', 'not a tarball');
+    for (const url of ['https://plugins.example.com/unsigned.tgz', 'https://plugins.example.com/junk.tgz']) {
+      await expect(installFromUrl(url, admin, { upgrade: true })).rejects.toMatchObject({ code: 'invalid' });
+      const view = await svc.packageView(NAME);
+      expect([url, view.version, view.enabled, view.connected, view.problem]).toEqual([url, '1.0.0', true, true, null]);
+    }
+  });
+});
+
+describe('a disabled package whose files changed', () => {
+  test('shows the actual hash, the enable refusal carries it, and approving it lets it be enabled', async () => {
+    const svc = await import('./service');
+    const { installFromUrl } = await import('./remote');
+    await serveFixture('https://plugins.example.com/echo.tgz', { key: acme.privateKeyPem });
+    await installFromUrl('https://plugins.example.com/echo.tgz', admin);
+    await installed();
+    const before = await svc.packageView(NAME);
+    expect([before.problem, before.actualHash]).toEqual([null, null]);
+
+    appendFileSync(join(svc.packageDir(NAME), 'server.mjs'), '\n// edited while disabled\n');
+    const view = await svc.packageView(NAME);
+    expect(view.problem).toMatch(/hash mismatch/);
+    expect(view.actualHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(view.actualHash).not.toBe(view.contentHash);
+    const refusal = await svc.setEnabled(NAME, true, admin).catch((e: unknown) => e);
+    expect(refusal).toMatchObject({ code: 'incomplete', details: { actualHash: view.actualHash } });
+
+    await svc.approveContent(NAME, view.actualHash as string, admin);
+    await svc.setEnabled(NAME, true, admin);
+    const after = await svc.packageView(NAME);
+    expect([after.contentHash, after.connected, after.actualHash]).toEqual([view.actualHash, true, null]);
   });
 });
 

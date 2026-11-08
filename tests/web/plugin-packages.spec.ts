@@ -120,7 +120,7 @@ test.describe('plugin packages', () => {
     await expect(page.getByRole('button', { name: 'Upgrade finapi 1.0.0' })).toBeDisabled();
     await page.getByRole('button', { name: 'Install datev 2.0.0' }).click();
     await expect(page.getByText('Installed datev 2.0.0, signed by Acme')).toBeVisible();
-    expect(posts).toEqual([{ url: 'https://plugins.example.com/datev-2.0.0.tar.gz', sha256: sha }]);
+    expect(posts).toEqual([{ url: 'https://plugins.example.com/datev-2.0.0.tar.gz', sha256: sha, name: 'datev', version: '2.0.0' }]);
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/admin-plugin-browse.png`, fullPage: true });
   });
 });

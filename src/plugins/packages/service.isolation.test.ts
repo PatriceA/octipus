@@ -307,7 +307,7 @@ describe('plugin packages', () => {
       hashing.fail = false;
     }
     const after = await svc.packageView('echo-plugin');
-    expect([after.version, after.contentHash, after.enabled]).toEqual([before.version, before.contentHash, false]);
+    expect([after.version, after.contentHash, after.enabled]).toEqual([before.version, before.contentHash, before.enabled]);
     expect(JSON.parse(readFileSync(join(svc.packageDir('echo-plugin'), 'octipus-plugin.json'), 'utf8')).version).toBe(before.version);
     expect(readFileSync(join(svc.packageDir('echo-plugin'), 'server.mjs'), 'utf8')).not.toContain('process.exit(3)');
     expect(readdirSync(svc.pluginsRoot())).toEqual(['echo-plugin']);

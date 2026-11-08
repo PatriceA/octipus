@@ -32,7 +32,7 @@ export default function AdminPluginBrowsePage() {
   });
   const install = useMutation({
     mutationFn: (e: PluginRegistryEntry) => api.post<PluginInstallResult>('/plugin-packages', {
-      url: e.url, sha256: e.sha256, ...(e.installedVersion !== null ? { upgrade: true } : {}),
+      url: e.url, sha256: e.sha256, name: e.name, version: e.version, ...(e.installedVersion !== null ? { upgrade: true } : {}),
     }),
     onSuccess: (res, e) => {
       setMessages((m) => ({ ...m, [entryKey(e)]: { kind: 'ok', text: `Installed ${res.name} ${res.version}, signed by ${res.signedBy ?? '?'}; enable it on the packages page.` } }));

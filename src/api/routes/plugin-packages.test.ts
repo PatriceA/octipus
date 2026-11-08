@@ -76,12 +76,12 @@ describe('plugin package routes', () => {
   test('an admin installs from a path or from a URL with its sha256, and lists the registries', async () => {
     fixture.user = ADMIN;
     expect((await call('POST', '/', { path: '/opt/plugins/demo', upgrade: true })).status).toBe(200);
-    const res = await call('POST', '/', { url: 'https://plugins.example.com/demo.tar.gz', sha256: SHA });
+    const res = await call('POST', '/', { url: 'https://plugins.example.com/demo.tar.gz', sha256: SHA, name: 'demo', version: '1.0.0', allowSignerChange: true });
     expect([res.status, res.body.signedBy]).toEqual([200, 'Acme']);
     expect((await call('GET', '/registry')).body).toEqual({ packages: [], errors: [] });
     expect(fixture.calls).toEqual([
-      { fn: 'installFromDirectory', args: ['/opt/plugins/demo', ADMIN.id, { upgrade: true }] },
-      { fn: 'installFromUrl', args: ['https://plugins.example.com/demo.tar.gz', ADMIN.id, { upgrade: false, sha256: SHA }] },
+      { fn: 'installFromDirectory', args: ['/opt/plugins/demo', ADMIN.id, { upgrade: true, expect: { name: undefined, version: undefined } }] },
+      { fn: 'installFromUrl', args: ['https://plugins.example.com/demo.tar.gz', ADMIN.id, { upgrade: false, allowSignerChange: true, sha256: SHA, name: 'demo', version: '1.0.0' }] },
       { fn: 'listRegistry', args: [] },
     ]);
   });
