@@ -4,18 +4,26 @@
  * for as long as the extension is loaded and are removed on its dispose.
  *
  * Each row is an ordinary install row on one of the existing custom-provider
- * kinds (`custom-openai`, `custom-anthropic`, `custom-gemini`), so the router,
- * the custom providers, the rate limiter and the circuit breakers serve it the
- * way they serve a custom provider an admin configured. What sets it apart:
+ * kinds (`custom-openai`, `custom-anthropic`, `custom-gemini`), so the router
+ * and the custom providers serve it the way they serve a custom provider an
+ * admin configured. What sets it apart:
  *
- * - it is named in the reserved `ext/` namespace (`ext/<extension>/<id>/<model>`),
- *   which no database row may take (`ModelRegistry.registerModel` refuses it);
- * - it is reached only by explicit choice (by name or model id): never a
- *   default, a topic binding, a fallback, nor in `getAllModels()` (the list
- *   automatic selection picks from);
- * - its endpoint is reached through the SSRF-guarded fetch personal rows use
- *   (https, public addresses only, no redirects), and its key comes from the
- *   system vault by name with no env fallback (`base-custom-provider.ts`).
+ * - it is reachable ONLY by its exact name, `ext/<extension>/<id>/<model>`.
+ *   Its `modelId` is that same name: a bare vendor id (`gpt-4o`,
+ *   `llama-3.3-70b`) never matches it, so it can neither capture a request
+ *   meant for a built-in provider or a personal row, nor be picked by a
+ *   lookup by model id. The id sent upstream is kept beside it
+ *   (`getExtensionRoute`) and swapped in by the custom provider;
+ * - the `ext/` namespace is reserved: no database row may take it as a name
+ *   or a model id (`ModelRegistry`);
+ * - it is never a default, a topic binding, a fallback, nor in
+ *   `getAllModels()` (the list automatic selection picks from);
+ * - it has its own rate-limit bucket and circuit breaker, keyed by its
+ *   logical provider id `ext:<extension>:<id>` (`providerKey`), so a flaky
+ *   extension endpoint never opens the breaker of an admin's custom models;
+ * - its endpoint is reached through the SSRF-guarded fetch personal rows use,
+ *   and its key comes from the extension's own vault namespace with no env
+ *   fallback (`base-custom-provider.ts`).
  */
 import type { ModelConfigEntry } from '@/db/schema/models';
 
@@ -32,44 +40,52 @@ export function isExtensionModel(row: Pick<ModelConfigEntry, 'name'> | null | un
   return isExtensionModelName(row?.name);
 }
 
-const rows = new Map<string, ModelConfigEntry>();
+/** How an extension row is served: the id sent upstream and its rate-limit / breaker key. */
+export interface ExtensionRoute {
+  upstreamModelId: string;
+  /** `ext:<extension>:<id>`. */
+  providerKey: string;
+}
 
-/**
- * Add rows, all or none. Throws when a name or a model id is already served
- * by another extension row: a model id must resolve to one row.
- */
-export function addExtensionModels(entries: readonly ModelConfigEntry[]): void {
+export interface ExtensionModelEntry extends ExtensionRoute {
+  row: ModelConfigEntry;
+}
+
+const entries = new Map<string, { row: ModelConfigEntry; route: ExtensionRoute }>();
+
+/** Add rows, all or none. Throws when a name is already registered. */
+export function addExtensionModels(add: readonly ExtensionModelEntry[]): void {
   const names = new Set<string>();
-  const ids = new Set<string>();
-  for (const entry of entries) {
-    if (!isExtensionModelName(entry.name)) throw new Error(`extension model '${entry.name}' must be named under '${EXTENSION_MODEL_PREFIX}'`);
-    if (rows.has(entry.name) || names.has(entry.name)) throw new Error(`extension model '${entry.name}' is already registered`);
-    const owner = findExtensionModelByModelId(entry.modelId);
-    if (owner || ids.has(entry.modelId)) throw new Error(`model id '${entry.modelId}' is already served by extension model '${owner?.name ?? entry.name}'`);
-    names.add(entry.name);
-    ids.add(entry.modelId);
+  for (const { row } of add) {
+    if (!isExtensionModelName(row.name)) throw new Error(`extension model '${row.name}' must be named under '${EXTENSION_MODEL_PREFIX}'`);
+    if (row.modelId !== row.name) throw new Error(`extension model '${row.name}' must use its name as its model id`);
+    if (entries.has(row.name) || names.has(row.name)) throw new Error(`extension model '${row.name}' is already registered`);
+    names.add(row.name);
   }
-  for (const entry of entries) rows.set(entry.name, Object.freeze({ ...entry }) as ModelConfigEntry);
+  for (const { row, upstreamModelId, providerKey } of add) {
+    entries.set(row.name, { row: Object.freeze({ ...row }) as ModelConfigEntry, route: Object.freeze({ upstreamModelId, providerKey }) });
+  }
 }
 
 export function removeExtensionModels(names: readonly string[]): void {
-  for (const name of names) rows.delete(name);
+  for (const name of names) entries.delete(name);
 }
 
-export function getExtensionModel(name: string): ModelConfigEntry | null {
-  return rows.get(name) ?? null;
+/** The row with exactly this name. */
+export function getExtensionModel(name: string | null | undefined): ModelConfigEntry | null {
+  return (name && entries.get(name)?.row) || null;
 }
 
-export function findExtensionModelByModelId(modelId: string): ModelConfigEntry | null {
-  for (const row of rows.values()) if (row.modelId === modelId) return row;
-  return null;
+/** How the row with exactly this name is served. */
+export function getExtensionRoute(name: string | null | undefined): ExtensionRoute | null {
+  return (name && entries.get(name)?.route) || null;
 }
 
 export function listExtensionModels(): ModelConfigEntry[] {
-  return [...rows.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return [...entries.values()].map((e) => e.row).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** Test seam. */
 export function _clearExtensionModelsForTesting(): void {
-  rows.clear();
+  entries.clear();
 }

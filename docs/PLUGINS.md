@@ -179,35 +179,43 @@ To give agents the tools, list the group in a role's tools (`ext_stocks`), as fo
 
 ```ts
 const off = await octi.registerProvider({
-  id: 'gateway',                       // lower-case letters, digits, hyphens
-  kind: 'openai-compatible',           // or 'anthropic-compatible' | 'gemini-compatible'
-  baseUrl: 'https://llm.example.com',  // https, public addresses only
-  apiKeySecret: 'acme_gateway_key',    // the NAME of a system vault secret
-  headers: { 'X-Team': 'research' },   // optional, never credentials
+  id: 'gateway',                         // lower-case letters, digits, hyphens
+  kind: 'openai-compatible',             // or 'anthropic-compatible' | 'gemini-compatible'
+  baseUrl: 'https://llm.example.com',    // https, public addresses only
+  apiKeySecret: 'ext.acme.gateway_key',  // the NAME of a system vault secret, in ext.<extension>.
+  headers: { 'X-Team': 'research' },     // optional, never credentials
   models: [{ id: 'acme-large', contextWindow: 200_000, maxOutput: 8192, costPerMillionInput: 1, costPerMillionOutput: 4 }],
 });
 ```
 
-This registers an endpoint, not provider code. Each kind is one of the custom providers an admin can already configure (`openai-compatible` is `custom-openai`, `anthropic-compatible` is `custom-anthropic`, `gemini-compatible` is `custom-gemini`; `src/models/providers/custom/`), and each model becomes an in-memory model row on that provider, named `ext/<extension>/<id>/<model id>` (`ext/acme/gateway/acme-large`). The router, the custom provider, rate limiting, circuit breaking, protection routing and cost tracking serve it as they serve a configured custom provider. `ProviderId`, the generated model catalog, the pricing tables, the setup flow and the circuit-breaker keys are unchanged: the rows share the `custom-openai` / `custom-anthropic` / `custom-gemini` rate-limit and breaker lane with configured custom models.
+This registers an endpoint, not provider code. Each kind is one of the custom providers an admin can already configure (`openai-compatible` is `custom-openai`, `anthropic-compatible` is `custom-anthropic`, `gemini-compatible` is `custom-gemini`; `src/models/providers/custom/`), and each model becomes an in-memory model row on that provider, named `ext/<extension>/<id>/<model id>` (`ext/acme/gateway/acme-large`). The router, the custom provider, protection routing and cost tracking serve it as they serve a configured custom provider. `ProviderId`, the generated model catalog, the pricing tables and the setup flow are unchanged.
 
 What is supported:
 
-- **Choosing the model explicitly**: by row name or model id (`/model ext/acme/gateway/acme-large`, an agent's or a pipeline stage's model). The rows appear in a user's model list (`/models`, the pickers). They are install rows, visible to whoever may use the install's models.
+- **Choosing the model by its exact name**: `/model ext/acme/gateway/acme-large`, an agent's or a pipeline stage's model, `model: "ext/acme/gateway/acme-large"` on the OpenAI-compatible API. The row's model id is that same name, and the id the extension registered (`acme-large`) is only what goes upstream. So a bare vendor id never reaches an extension row: `gpt-4o` still goes to the built-in provider, and a user's personal row (or an admin's row) with the same model id still serves that id. The rows appear in a user's model list (`/models`, the pickers) and in the admin listing, marked `extension: true`. They are install rows, visible to whoever may use the install's models.
 - **Endpoint**: `baseUrl` must be `https://`, carry no credentials, query or fragment, and not name localhost or a private, loopback, link-local or ambiguous IP literal. Registration then resolves the host and refuses it when any address is private (`validateExternalUrl`), and every request goes through the SSRF-guarded fetch personal models use: re-resolved, pinned to the checked address, redirects not followed. These are the personal-endpoint rules, stricter than an admin-configured custom row (which may point at a local server). A local endpoint is configured by an admin as a custom provider instead.
-- **Key**: `apiKeySecret` names a secret in the system vault, read at request time. A raw key (`apiKey`), an `env:` reference and credential headers (`Authorization`, `x-api-key`, `Cookie`, …) are refused. Unlike an admin-configured custom row there is no `CUSTOM_OPENAI_API_KEY`-style env fallback: a missing secret fails the call rather than sending the install's key to the extension's endpoint. The key goes in the kind's usual header (`Authorization: Bearer`, `x-api-key`, `x-goog-api-key`); `authHeader` names another.
+- **Key**: `apiKeySecret` names a system vault secret in the extension's own namespace, `ext.<extension>.<name>` (`<name>`: letters, digits, `_` and `-`), read at request time. Any other secret is refused, so an extension cannot send the install's provider keys, connector tokens or plugin secrets to its endpoint (a lookup by name does not apply a secret's `allowedTools` / `allowedAgents`); so are reserved system secrets, a raw key (`apiKey`), an `env:` reference and credential headers (`Authorization`, `x-api-key`, `Cookie`, …). Unlike an admin-configured custom row there is no `CUSTOM_OPENAI_API_KEY`-style env fallback: a missing secret fails the call. The key goes in the kind's usual header (`Authorization: Bearer`, `x-api-key`, `x-goog-api-key`); `authHeader` names another, but never a transport, cookie or proxy header. An extension whose name is not letters, digits, `_` and `-` cannot register providers. An admin stores the key as a system-level secret:
+
+  ```bash
+  curl -X POST http://localhost:3005/api/vault \
+    -H "Authorization: Bearer $OCTIPUS_API_TOKEN" -H 'Content-Type: application/json' \
+    -d '{ "name": "ext.acme.gateway_key", "value": "<the key>", "credentialType": "api_key", "systemLevel": true }'
+  ```
+
+- **Its own rate-limit bucket and circuit breaker**, keyed by the logical provider id `ext:<extension>:<id>` (`ext:acme:gateway`). A failing extension endpoint opens its own breaker, never the `custom-openai` / `custom-anthropic` / `custom-gemini` one the admin's custom models share.
 - **Options**: `path` replaces the kind's default request path; per model, `supportsTools` (default true), `supportsVision` (false), `supportsStreaming` (true), `costPerMillionInput` / `costPerMillionOutput` (USD, default 0), `description`.
-- **Collisions** are refused, never resolved by overwriting: an id spelled like a built-in provider (`openai`, `custom-openai`, …), the same id twice in one extension, a model id another extension serves, or a model id an install row in the database already has. The `ext/` name namespace is reserved: the model registry refuses to create or rename a database row into it.
-- **Lifecycle**: invalid definitions and an untrusted extension throw synchronously. The returned promise resolves to the unregister function once the DNS and database checks pass, and rejects otherwise with nothing registered. Disposing the extension (`/reload`, shutdown) removes its rows; a request already running finishes.
+- **Collisions** are refused, never resolved by overwriting: an id spelled like a built-in provider (`openai`, `custom-openai`, …), the same id twice in one extension, or a database row already holding the `ext/` name. Two extensions may register the same upstream id: their names differ. The `ext/` namespace is reserved: the model registry and the admin routes refuse to create a database row with an `ext/` name or model id, and refuse to update, enable or disable, delete or make default an extension row.
+- **Lifecycle**: the definition is copied when the call is made (it must be plain data). Invalid definitions and an untrusted extension throw synchronously. The returned promise resolves to the unregister function once the DNS and database checks pass, and rejects otherwise with nothing registered; a refusal or failure is also logged, for an extension that does not await it. Disposing the extension (`/reload`, shutdown) removes its rows; a request already running finishes.
 
 What is not supported:
 
 - **Provider code.** No custom request/response handling, auth flows (OAuth, request signing), or protocols other than the three kinds.
 - **Defaults, topic bindings and automatic selection.** The rows never become the install default, a topic's primary or backup, or a fallback, and they are left out of the list automatic model selection and the health checker read (`getAllModels`). The topic binding and default live in the database, which the rows are not in.
-- **Editing in the admin registry**, embeddings, OCR and the native decision API (`decisionProtocol`, which needs a local endpoint).
+- **Reaching a row by its upstream id**, editing it in the admin registry, embeddings, OCR and the native decision API (`decisionProtocol`, which needs a local endpoint).
 - **Personal or org-scoped rows**: the rows are install-wide.
 - **Persistence**: the rows exist while the extension is loaded.
 
-A trusted extension runs in the process and could reach the vault and the network on its own; these rules keep the key out of its source, keep its endpoint off the internal network, and keep its models from replacing the ones an admin configured.
+A trusted extension runs in the process and could reach the vault and the network on its own; these rules keep the key out of its source, keep its endpoint off the internal network, keep it from borrowing the install's other secrets through the provider path, and keep its models from capturing traffic meant for the ones an admin or a user configured.
 
 #### `context`: transform one request's messages
 

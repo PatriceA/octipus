@@ -1,7 +1,7 @@
 import { classifyError } from '@/core/errors/classification';
 import type { CustomProviderConfig, ModelConfigEntry, ModelMetadata } from '@/db/schema/models';
 import type { CompletionOptions } from '../../litellm-client';
-import { isExtensionModel } from '@/models/extension-models';
+import { getExtensionRoute, isExtensionModel } from '@/models/extension-models';
 import { modelLogger } from '@/utils/logger';
 import { fetchGuarded } from '@/utils/sanitize';
 import { providerUsageUserId } from '../instrumented';
@@ -106,11 +106,14 @@ export abstract class BaseCustomProvider {
         ? await this.resolveExtensionApiKey(model)
         : await this.resolveApiKey(model.apiKeyRef));
 
+    // An extension row's model id is its `ext/` name; upstream gets the id the
+    // extension registered.
+    const route = isExtensionModel(model) ? getExtensionRoute(model.name) : null;
     return {
       baseUrl: model.endpoint.replace(/\/+$/, ''),
       apiKey,
       custom,
-      model,
+      model: route ? { ...model, modelId: route.upstreamModelId } : model,
     };
   }
 

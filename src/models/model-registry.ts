@@ -5,7 +5,7 @@ import { getDb } from '@/db/postgres';
 import { Cache } from '@/db/cache';
 import { type ModelConfigEntry, modelConfig, type NewModelConfigEntry, userModelBindings } from '@/db/schema/models';
 import { getCapabilitiesForModel, type ModelCapabilities } from '@/models/capabilities';
-import { EXTENSION_MODEL_PREFIX, findExtensionModelByModelId, getExtensionModel, isExtensionModelName, listExtensionModels } from '@/models/extension-models';
+import { EXTENSION_MODEL_PREFIX, getExtensionModel, isExtensionModelName, listExtensionModels } from '@/models/extension-models';
 import { SINGLE_MODEL_CHAT_TOPICS } from '@/models/single-model-binding';
 import { canonicalTopic } from '@/models/topics';
 import { getUserOrgIds } from '@/services/org-membership';
@@ -26,9 +26,13 @@ export function isPersonalModel(row: Pick<ModelConfigEntry, 'ownerUserId'>): boo
   return row.ownerUserId != null;
 }
 
-/** The `ext/` namespace belongs to extension rows (extension-models.ts); no database row may take it. */
-function assertNotExtensionName(name: string): void {
-  if (isExtensionModelName(name)) throw new Error(`Model names starting with "${EXTENSION_MODEL_PREFIX}" are reserved for extension-registered models`);
+/**
+ * The `ext/` namespace belongs to extension rows (extension-models.ts): no
+ * database row may take it as a name or a model id, and the admin write paths
+ * never act on an extension row (the extension owns it; disposing removes it).
+ */
+function assertNotExtensionName(name: string | null | undefined): void {
+  if (isExtensionModelName(name)) throw new Error(`Model names and ids starting with "${EXTENSION_MODEL_PREFIX}" are reserved for extension-registered models`);
 }
 
 export class ModelRegistry {
@@ -101,9 +105,10 @@ export class ModelRegistry {
    * own personal rows. Another user's personal row is never returned.
    */
   async getModelByModelId(modelId: string, opts: { userId?: string } = {}): Promise<ModelConfigEntry | null> {
-    // Extension rows come after the database's install rows: one can never
-    // shadow a row an admin configured.
-    const install = await this.getInstallModelByModelId(modelId) ?? findExtensionModelByModelId(modelId);
+    // An extension row's model id is its exact `ext/` name (extension-models.ts):
+    // only that name reaches it, and no database row may use it.
+    if (isExtensionModelName(modelId)) return getExtensionModel(modelId);
+    const install = await this.getInstallModelByModelId(modelId);
     if (install || !opts.userId) return install;
     const own = await this.db
       .select()
@@ -157,6 +162,7 @@ export class ModelRegistry {
 
   /** Same as `getModelVisibleTo`, keyed by provider model id (install rows first). */
   async getModelByModelIdVisibleTo(modelId: string, userId: string): Promise<ModelConfigEntry | null> {
+    if (isExtensionModelName(modelId)) return this.getModelVisibleTo(modelId, userId);
     const rows = await this.db
       .select()
       .from(modelConfig)
@@ -165,8 +171,7 @@ export class ModelRegistry {
     for (const row of rows) {
       if (await this.isVisibleTo(row, userId)) return row;
     }
-    const ext = findExtensionModelByModelId(modelId);
-    return ext && (await this.isVisibleTo(ext, userId)) ? ext : null;
+    return null;
   }
 
   private async isVisibleTo(row: ModelConfigEntry, userId: string): Promise<boolean> {
@@ -182,7 +187,8 @@ export class ModelRegistry {
    * never considered.
    */
   async isRegistered(nameOrId: string, userId: string): Promise<boolean> {
-    if (getExtensionModel(nameOrId) || findExtensionModelByModelId(nameOrId)) return true;
+    // An extension row by its exact name only (its model id is that name).
+    if (isExtensionModelName(nameOrId)) return getExtensionModel(nameOrId) !== null;
     const rows = await this.db
       .select({ id: modelConfig.id })
       .from(modelConfig)
@@ -408,6 +414,7 @@ export class ModelRegistry {
    */
   async registerModel(data: NewModelConfigEntry): Promise<ModelConfigEntry> {
     assertNotExtensionName(data.name);
+    assertNotExtensionName(data.modelId);
     const result = await this.db.insert(modelConfig).values(data).returning();
     modelLogger.info({ model: data.name, provider: data.provider }, 'Model registered');
 
@@ -434,7 +441,9 @@ export class ModelRegistry {
    * Update model configuration
    */
   async updateModel(name: string, data: Partial<NewModelConfigEntry>): Promise<ModelConfigEntry | null> {
+    assertNotExtensionName(name);
     if (data.name !== undefined) assertNotExtensionName(data.name);
+    if (data.modelId !== undefined) assertNotExtensionName(data.modelId);
     const result = await this.db
       .update(modelConfig)
       .set({ ...data, updatedAt: new Date() })
@@ -453,6 +462,7 @@ export class ModelRegistry {
    * Enable/disable a model
    */
   async setModelEnabled(name: string, enabled: boolean): Promise<boolean> {
+    assertNotExtensionName(name);
     const result = await this.db
       .update(modelConfig)
       .set({ isEnabled: enabled, updatedAt: new Date() })
@@ -472,8 +482,11 @@ export class ModelRegistry {
    * Set a model as the default
    */
   async setDefaultModel(name: string): Promise<boolean> {
+    assertNotExtensionName(name);
     const [target] = await this.db.select({ ownerUserId: modelConfig.ownerUserId }).from(modelConfig).where(eq(modelConfig.name, name)).limit(1);
-    if (target && isPersonalModel(target)) {
+    // No such row: leave the current default in place.
+    if (!target) return false;
+    if (isPersonalModel(target)) {
       throw new Error(`Model '${name}' is a personal model and cannot be the install default`);
     }
     // First, unset current default
@@ -509,6 +522,7 @@ export class ModelRegistry {
    * Delete a model configuration
    */
   async deleteModel(name: string): Promise<boolean> {
+    assertNotExtensionName(name);
     const result = await this.db.delete(modelConfig).where(eq(modelConfig.name, name)).returning();
 
     if (result.length > 0) {

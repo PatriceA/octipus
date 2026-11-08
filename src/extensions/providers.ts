@@ -13,15 +13,19 @@
  * (services/personal-models.ts), the strictest the custom providers have:
  * https only, no private / loopback / link-local address (checked here and on
  * every request), no redirects followed, and the key only as the name of a
- * system vault secret — never a raw key, an `env:` reference or an auth header.
+ * system vault secret in the extension's own namespace (`ext.<extension>.<name>`)
+ * — never a raw key, an `env:` reference, another secret of the install
+ * (a provider key, a connector token), or an auth header.
  */
 import { randomUUID } from 'node:crypto';
 import type { ModelConfigEntry, CustomProviderConfig, ModelMetadata } from '@/db/schema/models';
 import {
   addExtensionModels,
   EXTENSION_MODEL_PREFIX,
+  type ExtensionModelEntry,
   removeExtensionModels,
 } from '@/models/extension-models';
+import { isReservedSecretName } from '@/security/vault';
 import { getModelRegistry } from '@/models/model-registry';
 import { isIpLiteral, isPrivateIP, looksLikeNonStandardIpLiteral, validateExternalUrl } from '@/utils/sanitize';
 import type { ExtensionProviderDef, ExtensionProviderKind } from './types';
@@ -56,7 +60,10 @@ const FORBIDDEN_HEADERS = new Set([
 ]);
 
 const PROVIDER_ID = /^[a-z][a-z0-9-]{0,39}$/;
-const VAULT_SECRET = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+/** The part of `ext.<extension>.<name>` after the extension's prefix. */
+const SECRET_SUFFIX = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+/** Extension names usable in a row name and a secret namespace. */
+const EXTENSION_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const HEADER_NAME = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/;
 const PATH = /^\/[A-Za-z0-9._~/{}:-]{0,255}$/;
@@ -98,11 +105,18 @@ export function checkBaseUrl(extension: string, baseUrl: unknown): string {
   return `${url.origin}${url.pathname}`.replace(/\/+$/, '');
 }
 
+/** The vault namespace an extension's provider keys live in: `ext.<extension>.`. */
+export function extensionSecretPrefix(extension: string): string {
+  return `ext.${extension}.`;
+}
+
 /**
  * Validate a definition and build its rows. Throws on anything invalid,
- * naming the extension. Pure: registers nothing.
+ * naming the extension. Pure: registers nothing. `def` is the caller's
+ * private copy (api.ts clones it), so nothing can change under the checks.
  */
-export function buildExtensionProviderRows(extension: string, def: ExtensionProviderDef): { providerId: string; rows: ModelConfigEntry[] } {
+export function buildExtensionProviderRows(extension: string, def: ExtensionProviderDef): { providerId: string; entries: ExtensionModelEntry[] } {
+  if (!EXTENSION_NAME.test(extension)) fail(extension, 'the extension name must be letters, digits, _ and - to register providers; rename its file or directory');
   if (!def || typeof def !== 'object') fail(extension, 'a definition object is required');
   const id = def.id;
   if (typeof id !== 'string' || !PROVIDER_ID.test(id)) fail(extension, 'id must be lower-case letters, digits and hyphens, starting with a letter (at most 40)');
@@ -113,13 +127,26 @@ export function buildExtensionProviderRows(extension: string, def: ExtensionProv
 
   const raw = def as unknown as Record<string, unknown>;
   if ('apiKey' in raw || 'key' in raw || 'token' in raw) fail(extension, 'a raw key is not accepted; store it in the vault and name it in apiKeySecret');
+  // Only the extension's own namespace: naming any system secret would let it
+  // send the install's provider keys or connector tokens to its endpoint, past
+  // the secret's allowedTools / allowedAgents (getByName does not check them).
   const secret = def.apiKeySecret;
-  if (typeof secret !== 'string' || !VAULT_SECRET.test(secret)) fail(extension, 'apiKeySecret must name a system vault secret (letters, digits, _ . -)');
+  const prefix = extensionSecretPrefix(extension);
+  if (typeof secret !== 'string' || !secret.startsWith(prefix) || !SECRET_SUFFIX.test(secret.slice(prefix.length))) {
+    fail(extension, `apiKeySecret must name a system vault secret '${prefix}<name>' (letters, digits, _ and - after the prefix)`);
+  }
+  if (isReservedSecretName(secret)) fail(extension, `apiKeySecret '${secret}' is a reserved system secret`);
 
   let auth = DEFAULT_AUTH[kind];
   if (def.authHeader !== undefined) {
     if (typeof def.authHeader !== 'string' || !HEADER_NAME.test(def.authHeader)) fail(extension, 'authHeader must be a header name');
-    auth = def.authHeader.toLowerCase() === 'authorization' ? { type: 'bearer' } : { type: 'header', headerName: def.authHeader };
+    const lower = def.authHeader.toLowerCase();
+    // `authorization` means Bearer; the key headers each kind knows are fine;
+    // a transport or cookie header is not where a key goes.
+    if (lower !== 'authorization' && !['x-api-key', 'api-key', 'x-goog-api-key'].includes(lower) && (FORBIDDEN_HEADERS.has(lower) || lower.startsWith('proxy-'))) {
+      fail(extension, `authHeader '${def.authHeader}' may not carry the key`);
+    }
+    auth = lower === 'authorization' ? { type: 'bearer' } : { type: 'header', headerName: def.authHeader };
   }
 
   const extraHeaders: Record<string, string> = {};
@@ -143,7 +170,7 @@ export function buildExtensionProviderRows(extension: string, def: ExtensionProv
   const custom: CustomProviderConfig = { auth, ...(def.path ? { pathOverride: def.path } : {}), ...(Object.keys(extraHeaders).length ? { extraHeaders } : {}) };
   const now = new Date();
   const seen = new Set<string>();
-  const rows = models.map((m): ModelConfigEntry => {
+  const entries = models.map((m): ExtensionModelEntry => {
     if (!m || typeof m !== 'object' || typeof m.id !== 'string' || !MODEL_ID.test(m.id)) fail(extension, 'each model needs an id (letters, digits and . _ : / @ + -)');
     if (m.id.startsWith('u/') || m.id.startsWith(EXTENSION_MODEL_PREFIX)) fail(extension, `model id '${m.id}' is in a reserved namespace`);
     if (seen.has(m.id)) fail(extension, `model '${m.id}' is listed twice`);
@@ -159,11 +186,14 @@ export function buildExtensionProviderRows(extension: string, def: ExtensionProv
       customProvider: custom,
       description: m.description ?? `${def.label ?? id} (registered by extension "${extension}")`,
     };
-    return {
+    // The row's model id is its name: nothing but that exact name reaches it
+    // (extension-models.ts); the registered id is what goes upstream.
+    const name = `${EXTENSION_MODEL_PREFIX}${extension}/${id}/${m.id}`;
+    const row: ModelConfigEntry = {
       id: randomUUID(),
-      name: `${EXTENSION_MODEL_PREFIX}${extension}/${id}/${m.id}`,
+      name,
       provider: PROVIDER_KINDS[kind],
-      modelId: m.id,
+      modelId: name,
       endpoint: baseUrl,
       apiKeyRef: secret,
       orgId: null,
@@ -187,8 +217,9 @@ export function buildExtensionProviderRows(extension: string, def: ExtensionProv
       createdAt: now,
       updatedAt: now,
     };
+    return { row, upstreamModelId: m.id, providerKey: providerId };
   });
-  return { providerId, rows };
+  return { providerId, entries };
 }
 
 /**
@@ -196,7 +227,8 @@ export function buildExtensionProviderRows(extension: string, def: ExtensionProv
  * collision check against the database, then the rows go live. Returns the
  * row names (to remove on dispose).
  */
-export async function activateExtensionProvider(extension: string, rows: readonly ModelConfigEntry[]): Promise<string[]> {
+export async function activateExtensionProvider(extension: string, entries: readonly ExtensionModelEntry[]): Promise<string[]> {
+  const rows = entries.map((e) => e.row);
   const endpoint = rows[0]?.endpoint;
   if (endpoint) {
     const check = await validateExternalUrl(endpoint);
@@ -204,14 +236,14 @@ export async function activateExtensionProvider(extension: string, rows: readonl
   }
   const registry = getModelRegistry();
   for (const row of rows) {
-    // A model id an admin configured always resolves to the admin's row; an
-    // extension may not add an ambiguous second one.
+    // The registry refuses `ext/` names and ids for new rows; one written
+    // before that (or by hand) must not be shadowed silently.
     if (await registry.databaseRowExists({ name: row.name, modelId: row.modelId })) {
-      fail(extension, `model '${row.modelId}' collides with a configured model`);
+      fail(extension, `model '${row.name}' collides with a configured model`);
     }
   }
   try {
-    addExtensionModels(rows);
+    addExtensionModels(entries);
   } catch (err) {
     fail(extension, err instanceof Error ? err.message : String(err));
   }

@@ -1,4 +1,5 @@
 import { instrumentProvider } from './instrumented';
+import { getExtensionRoute, isExtensionModelName } from '../extension-models';
 import { getConfig } from '@/config';
 import { coreLogger, modelLogger } from '@/utils/logger';
 import { classifyError, ClassifiedError, FailoverReason } from '@/core/errors/classification';
@@ -50,7 +51,15 @@ export { ZaiProvider } from './zai-provider';
  * Resolve the rate-limit provider key from a ModelProvider + model name.
  * CLI providers use per-tool keys; others use the provider name.
  */
-function resolveRateLimitKey(provider: ModelProvider, model: string): string {
+export function resolveRateLimitKey(provider: ModelProvider, model: string, modelConfigName?: string): string {
+  // An extension row (octi.registerProvider) has its own bucket and breaker,
+  // `ext:<extension>:<id>`: a flaky extension endpoint must not open the
+  // breaker every admin-configured custom model shares.
+  const extName = [modelConfigName, model].find(isExtensionModelName);
+  if (extName) {
+    const route = getExtensionRoute(extName);
+    if (route) return route.providerKey;
+  }
   if (provider.type === 'cli') {
     const lower = model.toLowerCase();
     if (lower.includes('claude')) return 'cli-claude';
@@ -228,7 +237,7 @@ export class ProviderRouter {
   /** Complete with automatic provider selection, rate limiting, and circuit breaking */
   async complete(options: CompletionOptions): Promise<CompletionResult> {
     const provider = await this.resolveProvider(options.model, options);
-    const rateLimitKey = resolveRateLimitKey(provider, options.model);
+    const rateLimitKey = resolveRateLimitKey(provider, options.model, options.modelConfigName);
 
     // Apply thinking budget for reasoning models
     options = await this.applyThinkingBudget(options);
@@ -323,7 +332,7 @@ export class ProviderRouter {
   /** Stream with automatic provider selection, rate limiting, and circuit breaking */
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
     const provider = await this.resolveProvider(options.model, options);
-    const rateLimitKey = resolveRateLimitKey(provider, options.model);
+    const rateLimitKey = resolveRateLimitKey(provider, options.model, options.modelConfigName);
 
     // Apply thinking budget and message transformation (same as complete())
     options = await this.applyThinkingBudget(options);

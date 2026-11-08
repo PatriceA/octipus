@@ -118,6 +118,7 @@ async function checkEndpoint(provider: string, endpoint: string | undefined): Pr
 
 function checkModelId(provider: string, modelId: string): void {
   if (modelId.startsWith('u/')) throw new PersonalModelError(400, 'A model id cannot start with "u/"');
+  if (modelId.startsWith('ext/')) throw new PersonalModelError(400, 'A model id cannot start with "ext/" (reserved for extension-registered models)');
   if (provider === 'openrouter' && !modelId.includes('/')) {
     throw new PersonalModelError(400, `OpenRouter models need the "provider/model" form, got "${modelId}"`);
   }

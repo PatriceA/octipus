@@ -2,7 +2,7 @@ import { estimateCost } from './pricing';
 import { and, desc, eq, gte, isNull, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { Cache } from '@/db/cache';
-import { findExtensionModelByModelId, getExtensionModel } from './extension-models';
+import { getExtensionModel } from './extension-models';
 import { type CostFunding, type CostLogEntry, costLog, modelConfig, type NewCostLogEntry } from '@/db/schema/models';
 import { costSourceAggregates } from '@/db/cost-source';
 import { modelLogger } from '@/utils/logger';
@@ -106,8 +106,9 @@ export class CostTracker {
     // arbitrary alias's rates or provider account.
     const row = (lookupByModelId ? undefined : rows.find(row => row.name === name)) ?? (rows.length === 1 ? rows[0] : undefined);
     if (row || rows.length > 1) return row;
-    // An extension row (octi.registerProvider) is priced from its in-memory row.
-    const ext = (lookupByModelId ? null : getExtensionModel(name)) ?? findExtensionModelByModelId(name);
+    // An extension row (octi.registerProvider) is priced from its in-memory row,
+    // by its exact name (which is also its model id).
+    const ext = getExtensionModel(name);
     return ext && (!provider || ext.provider === provider) ? ext : undefined;
   }
 

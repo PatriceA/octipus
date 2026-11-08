@@ -227,36 +227,56 @@ export function buildExtensionContext(
       return () => { container.remove(def.id); };
     },
 
-    registerProvider(def) {
+    registerProvider(input) {
       if (disposed) {
-        logger.warn(`registerProvider(${def?.id}) ignored — extension already disposed`);
+        logger.warn(`registerProvider(${input?.id}) ignored — extension already disposed`);
         return Promise.resolve(() => {});
       }
       if (!trusted) {
         throw new Error(`extension "${name}" may not register providers: it is not listed in extensions.trusted (${entryPath})`);
       }
-      const { providerId, rows } = buildExtensionProviderRows(name, def);
-      if (providers.has(def.id)) throw new Error(`extension "${name}" registerProvider: id '${def.id}' is already registered`);
-      providers.set(def.id, []);
+      // One private copy, validated and used from here on: the extension
+      // cannot change the definition (or answer differently from a getter)
+      // between a check and its use.
+      let def: typeof input;
+      try {
+        def = structuredClone(input);
+      } catch (err) {
+        logger.warn({ err }, 'registerProvider refused: the definition is not plain data');
+        throw new Error(`extension "${name}" registerProvider: the definition must be plain data (${err instanceof Error ? err.message : String(err)})`);
+      }
+      let built: ReturnType<typeof buildExtensionProviderRows>;
+      try {
+        built = buildExtensionProviderRows(name, def);
+        if (providers.has(def.id)) throw new Error(`extension "${name}" registerProvider: id '${def.id}' is already registered`);
+      } catch (err) {
+        logger.warn({ err, provider: def?.id }, 'registerProvider refused');
+        throw err;
+      }
+      const { providerId, entries } = built;
+      const id = def.id;
+      providers.set(id, []);
       const unregister = () => {
-        const names = providers.get(def.id);
+        const names = providers.get(id);
         if (!names) return;
-        providers.delete(def.id);
+        providers.delete(id);
         deactivateExtensionProvider(names);
       };
-      const work = activateExtensionProvider(name, rows).then(
+      const work = activateExtensionProvider(name, entries).then(
         (names) => {
           // Disposed (or unregistered) while the checks ran: never go live.
-          if (disposed || !providers.has(def.id)) {
+          if (disposed || !providers.has(id)) {
             deactivateExtensionProvider(names);
             return () => {};
           }
-          providers.set(def.id, names);
+          providers.set(id, names);
           logger.info({ provider: providerId, models: names }, 'extension registered a model provider endpoint');
           return unregister;
         },
         (err) => {
-          providers.delete(def.id);
+          providers.delete(id);
+          // The extension may not await the promise: say it here too.
+          logger.warn({ err, provider: providerId }, 'registerProvider failed; nothing was registered');
           throw err;
         },
       );

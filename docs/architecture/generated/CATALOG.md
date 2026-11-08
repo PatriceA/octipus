@@ -746,6 +746,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `extensions` | `config` | 1 |
 | `extensions` | `core` | 3 |
 | `extensions` | `models` | 2 |
+| `extensions` | `security` | 1 |
 | `extensions` | `tools` | 2 |
 | `extensions` | `utils` | 5 |
 | `hooks` | `channels` | 4 |
@@ -790,7 +791,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `services` | `config` | 3 |
 | `services` | `core` | 5 |
 | `services` | `db` | 12 |
-| `services` | `models` | 19 |
+| `services` | `models` | 20 |
 | `services` | `security` | 4 |
 | `services` | `setup` | 1 |
 | `services` | `shared` | 2 |
