@@ -83,8 +83,12 @@ export function orderByGroup(handlers: ToolHandler[], groupOrder: readonly strin
  */
 export type ToolCacheTier = 'shared' | 'variable' | 'sticky';
 
+/** Tools offered only while some per-thread state holds (open taken tasks). */
+const CONDITIONAL_TOOLS = new Set(['complete_taken_task']);
+
 export function toolCacheTier(handler: ToolHandler, lazy: boolean): ToolCacheTier {
   const id = handler.toolId;
+  if (CONDITIONAL_TOOLS.has(handler.name)) return 'variable';
   if (id === 'mcp' || id === 'connector' || id === 'inline-ui' || id?.startsWith('ext_') || id?.startsWith('plugin-')) return 'variable';
   if (lazy && isIntentGatedGroup(id)) return 'sticky';
   return 'shared';

@@ -190,6 +190,8 @@ describe('orderForCache', () => {
 
   test('the floor groups and the discovery tools are shared on the lazy path too', () => {
     expect(toolCacheTier(handler('run', 'shell'), true)).toBe('shared');
+    // Offered only while the thread has open taken tasks: never in the shared prefix.
+    expect(toolCacheTier({ name: 'complete_taken_task', description: '', parameters: {}, execute: async () => null } as never, true)).toBe('variable');
     expect(toolCacheTier(handler('distill', 'skill-distill'), true)).toBe('shared');
     expect(toolCacheTier(handler('list_tools', 'tool_discovery'), true)).toBe('shared');
   });
