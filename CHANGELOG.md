@@ -354,6 +354,16 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Mission control and an Agents section.** The sidebar has an *Agents* group
+  (Mission control, pipelines, hooks & schedules). Mission control lists every
+  agent run of the day with what started it — you in chat, another agent, the
+  heartbeat, a schedule, a webhook, a pipeline or Companion — plus what is
+  running now, approvals waiting, recorded spend and the next scheduled runs.
+  Agents now record their origin (`agents.source`, `agents.origin`, migration
+  `0170_agent_origin`); older rows show *Not recorded*. The previous agent list
+  moved to *Run history* (`/agents/history`). New route:
+  `GET /api/agents/overview`. See [docs/MISSION-CONTROL.md](docs/MISSION-CONTROL.md).
+
 - **Context inspector in the web chat.** A *Context* panel shows how full the
   root agent's context window was at the start of the latest turn and what
   filled it, in nine fixed categories (guardrails, role & persona, delegation,

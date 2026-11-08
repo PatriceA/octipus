@@ -51,6 +51,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [RAG.md](RAG.md) | The knowledge base: auto-indexing and hybrid (BM25 + vector) search. Also long-term memory retrieval — what goes in the block of user facts every turn, and how it is ordered. |
 | [CONTEXT-HOOKS.md](CONTEXT-HOOKS.md) | What is put in front of every agent before it starts (knowledge-base recall, the notes index, context notes), and the numbers on how agents use it, with a recall eval. |
 | [CONTEXT-INSPECTOR.md](CONTEXT-INSPECTOR.md) | The chat's Context panel: what the root agent's request was made of, by category, how full the context window is, and the text the model read. |
+| [MISSION-CONTROL.md](MISSION-CONTROL.md) | Mission control: every agent run of the day and what started it (chat, another agent, heartbeat, schedule, webhook, pipeline, Companion). |
 | [KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md) | Notes, `[[wikilinks]]`, authored edges, graph traversal, Obsidian/Canvas interop. |
 | [DOCUMENTS.md](DOCUMENTS.md) | Document ingestion, OCR, management, and exporting a deliverable as .docx / .xlsx. |
 | [DATA-TOOLS.md](DATA-TOOLS.md) | Read-only SQL against a registered database or a workspace CSV, and how a connection is registered. |

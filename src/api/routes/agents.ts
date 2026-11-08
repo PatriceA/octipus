@@ -86,6 +86,12 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
     }
   }, { query: t.Object({ sessionId: t.String(), agentId: t.Optional(t.String()), dispatchId: t.Optional(t.String()),
     afterAgentId: t.Optional(t.String()), afterEventId: t.Optional(t.String()), includeEvents: t.Optional(t.String()), limit: t.Optional(t.String()) }), detail: { tags: ['agents'] } })
+  // Mission control: today's runs, whoever started them (docs/MISSION-CONTROL.md).
+  .get('/overview', async ({ user, principal, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const { readMissionControl } = await import('@/core/mission-control');
+    return readMissionControl(principal, user.id);
+  }, { detail: { tags: ['agents'] } })
   // List all agents (in-memory live + DB history)
   .get(
     '/',

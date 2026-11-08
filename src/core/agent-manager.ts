@@ -1,6 +1,8 @@
 import { getConfig } from '@/config';
 import { withoutOffModules } from '@/core/modules/prompt';
 import { bindStagedRootPrompt, promptPart } from './agent/prompt-composition';
+import { getAmbientOrigin, resolveAgentOrigin } from './agent-origin';
+import { getRunContext } from './run-context';
 import { assertCliSpaceMode } from './cli-adapters';
 import { can, SpaceError } from '@/security/space-access';
 import { buildSelectedSkillPrompt } from '@/skills/selection';
@@ -487,6 +489,15 @@ export class AgentManager {
       routedTopic
     );
 
+    // What started it, for Mission control: the ambient origin of the entry
+    // point (hook, pipeline, Companion goal), else the parent or the channel.
+    const origin = resolveAgentOrigin({
+      parentAgentId: options.parentAgentId,
+      trigger: options.trigger,
+      channel: getRunContext()?.channel,
+      ambient: getAmbientOrigin(),
+    });
+
     // Persist agent snapshot to DB. Pass the in-memory context.createdAt
     // explicitly — the column default (NOW()) fires at *insert* time, which
     // for a fire-and-forget call can land seconds after the agent actually
@@ -511,6 +522,8 @@ export class AgentManager {
         },
         status: 'running',
         createdAt: context.createdAt,
+        source: origin.source,
+        origin,
       });
     } catch (err) {
       const causes = [err, (err as {cause?:unknown})?.cause];

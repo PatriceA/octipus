@@ -70,7 +70,12 @@ const navGroups: NavGroup[] = [
     { name: 'my work', href: '/my-work', icon: ClipboardList },
     { name: 'inbox', href: '/notifications', icon: Bell },
     { name: 'research', href: '/research', icon: Telescope },
-    { name: 'agent activity', href: '/agents', icon: Bot },
+  ] },
+  // Everything that runs agents, whoever starts them (docs/MISSION-CONTROL.md).
+  { label: 'Agents', items: [
+    { name: 'mission control', href: '/agents', icon: Bot },
+    { name: 'pipelines', href: '/pipelines', icon: GitBranch },
+    { name: 'hooks & schedules', href: '/hooks', icon: Webhook },
   ] },
   { label: 'Business', items: [
     { name: 'cases', href: '/cases', icon: FolderKanban },
@@ -84,10 +89,6 @@ const navGroups: NavGroup[] = [
     { name: 'knowledge', href: '/knowledge', icon: Brain },
     { name: 'recall', href: '/recall', icon: Sparkles },
     { name: 'artifacts', href: '/artifacts', icon: Globe, badge: 'BETA' },
-  ] },
-  { label: 'Automations', items: [
-    { name: 'pipelines', href: '/pipelines', icon: GitBranch },
-    { name: 'hooks & schedules', href: '/hooks', icon: Webhook },
   ] },
   { label: 'Connections', items: [
     { name: 'models', href: '/models', icon: Cpu },

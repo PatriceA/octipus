@@ -1,4 +1,5 @@
 import type { PipelineReplayReceipt, PipelineReplayScope } from '@/shared/pipeline-replay';
+import { withAgentOrigin } from '@/core/agent-origin';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
 import { pipelineNewDenialSummary } from './pipeline-status';
 import { stageHostServices, stageEnvironmentReason, stagePolicyRepairReason, StageEnvironmentError, coordinatorCriterion, coordinatorCriterionSatisfied } from './pipeline-environment';
@@ -1160,7 +1161,12 @@ export class PipelineManager {
    * scattered through this method — which is what the old nested
    * stage-loop-plus-retry-while-loop was.
    */
-  private async runGraph(args: {
+  /** Every agent a pipeline walk spawns records the pipeline as its origin (Mission control). */
+  private runGraph(args: Parameters<PipelineManager['runGraphInner']>[0]): ReturnType<PipelineManager['runGraphInner']> {
+    return withAgentOrigin({ pipelineId: args.pipeline.id }, () => this.runGraphInner(args));
+  }
+
+  private async runGraphInner(args: {
     pipeline: Pipeline;
     graph: PipelineGraph;
     built: ReturnType<typeof buildStagesFromTemplate>;

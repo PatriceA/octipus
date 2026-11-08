@@ -29,11 +29,13 @@ import type { Hook } from '@/db/schema/hooks';
 
 const executed: string[] = [];
 const contexts: unknown[] = [];
+const origins: unknown[] = [];
 vi.mock('./actions', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./actions')>()),
   executeAction: vi.fn(async (hook: Hook, context: unknown) => {
     executed.push(hook.name);
     contexts.push(context);
+    origins.push((await import('@/core/agent-origin')).getAmbientOrigin());
     const deny = (hook.actionConfig as Record<string, unknown> | null)?.deny === true;
     return { success: true, data: deny ? { deny: true, message: `denied by ${hook.name}` } : { ran: hook.name } };
   }),
@@ -350,6 +352,8 @@ describe('schedule targeting and counters', () => {
     const row = await manager.getHook(ids['alice-disabled-later']);
     const results = await manager.triggerHook(ids['alice-disabled-later'], event, {}, { claimedRow: row! });
     expect(results.map((r) => r.hookId)).toEqual([ids['alice-disabled-later']]);
+    // Whatever the action spawns records this hook as what started it (Mission control).
+    expect(origins.at(-1)).toEqual({ source: 'schedule', hookId: ids['alice-disabled-later'], hookName: row!.name });
   });
 });
 

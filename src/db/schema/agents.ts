@@ -37,6 +37,14 @@ export const agents = pgTable('agents', {
   parentAgentId: text('parent_agent_id'),
   /** 1:1 link to `swarm_nodes.id` (nullable — only set when the agent is part of a swarm). */
   swarmNodeId: text('swarm_node_id'),
+  /**
+   * What started the agent (`AgentSource`: chat, spawned, heartbeat, schedule,
+   * webhook, pipeline, companion…). NULL on rows written before it was
+   * recorded: unknown, never assumed.
+   */
+  source: text('source').$type<import('@/shared/agent-origin').AgentSource>(),
+  /** The details behind `source`: channel, hook, pipeline, Companion goal (ids only). */
+  origin: jsonb('origin').$type<import('@/shared/agent-origin').AgentOrigin>(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   completedAt: timestamp('completed_at', { withTimezone: true }),
 }, (table) => ({
@@ -44,6 +52,8 @@ export const agents = pgTable('agents', {
   userIdx: index('agents_user_id_idx').on(table.userId),
   statusIdx: index('agents_status_idx').on(table.status),
   createdAtIdx: index('agents_created_at_idx').on(table.createdAt),
+  /** Mission control: one user's runs of a day, newest first. */
+  userCreatedIdx: index('agents_user_created_idx').on(table.userId, table.createdAt),
 }));
 
 export type AgentRecord = typeof agents.$inferSelect;

@@ -1,4 +1,5 @@
 import { companionActionAuthorized } from './authority';
+import { withAgentOrigin } from '@/core/agent-origin';
 import { randomUUID } from 'node:crypto';
 import { and, eq, inArray, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
@@ -153,7 +154,8 @@ export class CompanionDispatcher {
         observeFlow(action.sessionId,{toolId:'companion',action:'read'},{taints:(['private','secret','suspicious'] as const).filter(flag=>!!goal.flowLabel[flag])});
         if(markStarted){if(action.kind==='request_briefing')await service.markBriefingStart(action.goalId,action.id);started = true;}
       };
-      const result=action.kind==='resume_pipeline'?await (async()=>{
+      // Agents this action starts record the goal (Mission control).
+      const result=await withAgentOrigin({source:'companion',goalId:action.goalId},async()=>action.kind==='resume_pipeline'?await (async()=>{
         await authorize(false);if(!action.pipelineId)throw new Error('Captured pipeline was deleted');
         const {pipelineRepository}=await import('@/db/repositories/pipeline-repository');const run=await pipelineRepository.findById(action.pipelineId);
         if(!run||run.sessionId!==action.sessionId||run.userId!==scope.userId||run.workspaceId!==scope.workspaceId)throw new Error('Captured pipeline is unavailable');
@@ -171,7 +173,7 @@ export class CompanionDispatcher {
           internal={companionBriefing:true,companionBriefingModel:settings.modelName,companionBriefingBudget:settings.turnTokenBudget};
         }
         return getAgentService().handleMessage(action.sessionId,scope.userId,action.message,'monitor',action.attachments,undefined,()=>authorize(),undefined,undefined,undefined,internal);
-      })();
+      })());
       if(action.kind!=='request_briefing'&&'classification' in result)getAgentService().publishResponse(action.sessionId, scope.userId, result);
       const provenance = await persistCompanionSource(scope, action.sessionId);
       await getDb().update(companionActions).set({ status: result.outcome === 'success' ? 'completed' : 'failed',

@@ -446,6 +446,11 @@ export async function stubHooks(page: Page): Promise<void> {
 
 export async function stubAgents(page: Page): Promise<void> {
   await page.route('**/api/agents**', (route) => json(route, 200, { agents: [] }));
+  // Registered after the catch-all, so it wins for Mission control's read.
+  await page.route('**/api/agents/overview', (route) => json(route, 200, {
+    since: '2026-11-08T00:00:00.000Z', runs: [], counts: { live: 0, today: 0, failedToday: 0, bySource: {} },
+    spendTodayUsd: 0, pendingApprovals: 0, upcoming: [],
+  }));
 }
 
 export async function stubDocuments(page: Page): Promise<void> {

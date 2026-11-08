@@ -55,6 +55,7 @@ import { type Notification, notifications } from '../schema/notifications';
 import { type PipelineTemplate, pipelineTemplates } from '../schema/pipeline-templates';
 import { type Pipeline, pipelines } from '../schema/pipelines';
 import { type NewSession, type Session, sessions } from '../schema/sessions';
+import { costLog } from '../schema/models';
 import { type TaskComment, taskComments } from '../schema/task-comments';
 import { type NewTask, type Task, tasks } from '../schema/tasks';
 import { workspaces } from '../schema/organizations';
@@ -539,6 +540,46 @@ export class ScopedAgentRepo {
       .orderBy(desc(agents.createdAt))
       .limit(limit)
       .offset(offset);
+  }
+
+  /**
+   * Mission control: the principal's agents started since `since`, newest
+   * first, with the title of the session each ran in. Companion briefings are
+   * internal and left out, as they are from the session lists.
+   */
+  async listOwnSince(since: Date, limit = 200): Promise<Array<AgentRecord & { sessionTitle: string | null }>> {
+    const rows = await this.db
+      .select({ agent: agents, sessionTitle: sessions.title })
+      .from(agents)
+      .leftJoin(sessions, eq(sessions.id, agents.sessionId))
+      .where(and(
+        ...this.scope.own(agents),
+        gte(agents.createdAt, since),
+        sql`coalesce(${agents.metadata}->>'companionBriefing','false') <> 'true'`,
+      ))
+      .orderBy(desc(agents.createdAt))
+      .limit(limit);
+    return rows.map((r) => ({ ...r.agent, sessionTitle: r.sessionTitle ?? null }));
+  }
+
+  /** Recorded cost per agent, the principal's own requests only. An agent with no priced request is absent. */
+  async costByAgent(agentIds: string[]): Promise<Map<string, number>> {
+    if (agentIds.length === 0) return new Map();
+    const rows = await this.db
+      .select({ agentId: costLog.agentId, cost: sql<number>`coalesce(sum(${costLog.totalCost}), 0)::float8` })
+      .from(costLog)
+      .where(and(inArray(costLog.agentId, agentIds), eq(costLog.userId, this.principal.userId)))
+      .groupBy(costLog.agentId);
+    return new Map(rows.filter((r) => r.agentId).map((r) => [r.agentId as string, Number(r.cost)]));
+  }
+
+  /** Recorded spend of the principal since `since` (requests without a price add nothing). */
+  async spendSince(since: Date): Promise<number> {
+    const [row] = await this.db
+      .select({ cost: sql<number>`coalesce(sum(${costLog.totalCost}), 0)::float8` })
+      .from(costLog)
+      .where(and(eq(costLog.userId, this.principal.userId), gte(costLog.createdAt, since)));
+    return Number(row?.cost ?? 0);
   }
 
   /**

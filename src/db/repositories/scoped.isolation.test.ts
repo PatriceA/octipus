@@ -247,6 +247,23 @@ describe('ScopedAgentRepo cross-tenant isolation', () => {
     const result = await alice.agents.findBySession(bobSession.id);
     expect(result).toEqual([]);
   });
+
+  test('Mission control reads: own runs of the day with origin, own cost and spend only', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    // The migrated columns hold what the spawn recorded.
+    await executeRaw(`UPDATE agents SET source = 'heartbeat', origin = '{"source":"heartbeat","hookName":"writer heartbeat"}'::jsonb WHERE id = 'agent-alice'`);
+    await executeRaw(`INSERT INTO cost_log (user_id, agent_id, model_name, input_tokens, output_tokens, total_cost)
+      VALUES ('${aliceId}', 'agent-alice', 'm', 10, 5, 0.25), ('${bobId}', 'agent-alice', 'm', 10, 5, 9), ('${bobId}', 'agent-bob', 'm', 10, 5, 4)`);
+    const alice = await asAlice();
+    const since = new Date(Date.now() - 86_400_000);
+    const runs = await alice.agents.listOwnSince(since);
+    expect(runs.map((r) => r.id)).toEqual(['agent-alice']);
+    expect(runs[0]).toMatchObject({ source: 'heartbeat', origin: { hookName: 'writer heartbeat' } });
+    // Bob's row on Alice's agent id and Bob's own agent are not hers to see.
+    expect([...(await alice.agents.costByAgent(['agent-alice', 'agent-bob']))]).toEqual([['agent-alice', 0.25]]);
+    expect(await alice.agents.spendSince(since)).toBeCloseTo(0.25);
+    expect(await alice.agents.listOwnSince(new Date(Date.now() + 60_000))).toEqual([]);
+  });
 });
 
 describe('ScopedDocumentRepo cross-tenant isolation', () => {

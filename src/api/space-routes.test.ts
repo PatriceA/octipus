@@ -155,6 +155,8 @@ const SPACE_ACTING = [
   'DELETE /api/spaces/:id/memory/:entryId',
   'GET /api/sessions/:id/learning', 'POST /api/sessions/:id/learning', 'POST /api/sessions/:id/monitors/events',
   'GET /api/sessions/:id/monitors', 'POST /api/sessions/:id/monitors/:monitorId/control', 'GET /api/sessions', 'GET /api/sessions/:id',
+  // Mission control: the principal's own agents, hooks and spend through its scoped repositories.
+  'GET /api/agents/overview (by target)',
   // Context inspector: the session owner only (canActInSession settings), never a room member.
   'GET /api/sessions/:id/context',
   'GET /api/sessions/:id/plan', 'POST /api/sessions/:id/plan/feedback', 'POST /api/sessions', 'PATCH /api/sessions/:id',
