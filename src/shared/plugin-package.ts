@@ -115,6 +115,12 @@ export interface PluginPackageView {
    * `approveContent`. Null otherwise.
    */
   actualHash: string | null;
+  /**
+   * The trusted publisher (`plugins.trustedPublishers`) whose valid signature
+   * covers `contentHash` (docs/PLUGIN-PACKAGES.md#signed-packages); null for
+   * unsigned content, an untrusted key, or content approved without one.
+   */
+  signedBy: string | null;
   installedBy: string | null;
   installedAt: string;
   updatedAt: string;

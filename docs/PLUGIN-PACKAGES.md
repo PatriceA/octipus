@@ -117,7 +117,9 @@ sha256 over:  octipus-plugin-content/v1
 ```
 
 Every file counts — any changed byte, added, removed or renamed file changes
-the hash — but not directory order, timestamps or permissions. A symbolic link
+the hash — but not directory order, timestamps or permissions. The one file
+left out is the signature, `octipus-plugin.sig` in the package root, since it
+signs this hash ([Signed packages](#signed-packages)). A symbolic link
 (refused at install) counts by its target. Nothing is left out — not even
 `node_modules/.cache`: a cache a build tool writes on its own is still a place
 running code could stage executable content in. Only paths relative to the
@@ -170,7 +172,96 @@ A package keeps its runtime state in its data directory
 directory is read-only, so a write there fails; without the sandbox a package
 that writes into its own directory reads as modified on its next start and
 must be approved again.
-Signatures over the hash come with signed packages (C15).
+
+## Signed packages
+
+A publisher can sign a package, and a host can trust the publisher's key. The
+signature covers the content hash above, so it covers every file of the
+package, its name and its version.
+
+```
+octi plugin keygen ./acme                       # writes acme.key (private) and acme.pub
+octi plugin sign ./my-package --key ./acme.key  # writes my-package/octipus-plugin.sig
+```
+
+`octipus-plugin.sig` is JSON:
+
+```json
+{ "alg": "ed25519", "keyId": "ed25519:<sha256 hex of the raw public key>", "signature": "<base64>" }
+```
+
+The signature is Ed25519 (no new dependency: `node:crypto`) over the bytes
+`octipus-plugin-signature/v1\n<content hash>`, the `sha256:<hex>` string
+behind a fixed prefix, so a signature made for this cannot pass as one over
+anything else the key signs. The signature file is the one file the content
+hash leaves out, so signing does not change the hash. Sign last: any change to
+the files after signing, the manifest included, invalidates the signature.
+Keep the `.key` file secret (it is written `0600`); `keygen` never overwrites a
+file.
+
+The host trusts the keys in `plugins.trustedPublishers` (Settings, or the
+config file):
+
+```json
+"plugins": {
+  "trustedPublishers": [{ "name": "Acme GmbH", "publicKey": "-----BEGIN PUBLIC KEY-----\n…\n-----END PUBLIC KEY-----" }],
+  "requireSignature": false
+}
+```
+
+`publicKey` is the PEM from `keygen` (`acme.pub`), or base64 of the raw 32-byte
+key or of its DER SPKI. An entry whose key cannot be read is logged and trusts
+nothing.
+
+**Install and upgrade** check the signature on the staging copy, against the
+hash recorded for it:
+
+| Signature | `requireSignature` off (default) | `requireSignature` on |
+| --- | --- | --- |
+| valid, by a trusted key | installed; `signedBy` names the publisher | installed; `signedBy` names the publisher |
+| invalid (malformed, or does not match the files) | refused (`400`) | refused (`400`) |
+| by a key not in `trustedPublishers` | installed as unsigned, with a warning in the response (`warnings`) | refused (`400`) |
+| none | installed as unsigned | refused (`400`) |
+
+A refused upgrade leaves the old files and row as they were (still
+disabled). The publisher who signed is recorded on the row
+(`plugin_packages.signed_by`, `signedBy` in the package view and in the
+`installed`/`upgraded` audit rows, with the key id).
+
+**Every start** checks the content hash as before. With `requireSignature`
+on, the files must also carry a valid signature by a key trusted **now**: a
+package with none, or whose key was removed from the config, does not start
+(the problem says why; audit op `signature_refused`, once per package, hash
+and reason), and enabling it is refused. With `requireSignature` off, starts do
+not look at the signature.
+
+**Approving changed content** (`approveContent`) records who signed the new
+content: `signedBy` becomes the publisher if a valid trusted signature covers
+it, and is cleared otherwise. An admin's approval makes the content the admin's,
+not the publisher's (a signature left from before the change no longer matches
+and reads as invalid). If the publisher signs the new content, approving it
+records them again. With `requireSignature` on, approving content without a
+valid trusted signature is refused (`409`).
+
+**Rotating a key** is a config change: add the new key to
+`trustedPublishers` (as its own entry, or replacing the old one once every
+installed package is signed with the new key), re-sign and upgrade the
+packages, then remove the old entry. With `requireSignature` on, a package
+still signed by a removed key stops at its next start. `signedBy` is recorded
+at install, upgrade and approval; with `requireSignature` off it is not
+re-checked when the config changes later.
+
+What a signature guarantees: the files are byte for byte what the holder of
+that key signed, under that name and version. What it does not:
+
+- that the code is safe or does what it says — it runs with the same limits
+  as an unsigned package (sandbox, network, declared tools and effects), and
+  an admin still reads what it declares before enabling it;
+- that the key is still in the publisher's hands — a leaked key signs
+  anything until it is removed from `trustedPublishers`; there is no
+  revocation list or expiry;
+- anything about where the package came from: installing still takes a
+  directory on the server; fetching packages remotely is not here yet.
 
 ## Network
 
@@ -268,13 +359,15 @@ unwrapped (`not_enforced`) and `required` refuses to start the server.
 
 ## Installing and managing
 
-Admins only. A package installs from a directory on the server; the
-marketplace (plan point C15) will fetch signed packages instead.
+Admins only. A package installs from a directory on the server, signed or not
+([Signed packages](#signed-packages)); remote install and the marketplace
+(plan point C15) come later.
 
 1. **Install:** `POST /api/plugin-packages { "path": "/opt/plugins/finapi" }`.
    The directory is copied into the plugin directory (no symbolic links, at most
-   200 MB and 20,000 files). The package starts **disabled**, so its tools,
-   effects, hosts and protection level can be read first.
+   200 MB and 20,000 files) and its signature checked. The package starts
+   **disabled**, so its tools, effects, hosts and protection level can be read
+   first. The response has `signedBy` and any `warnings`.
 2. **Configure:** `PATCH /api/plugin-packages/:name { "settings": {...} }`, and
    `PUT /api/plugin-packages/:name/secrets/:key { "value": "..." }` for each
    secret (`null` removes it). Secret values are never returned.
@@ -295,7 +388,8 @@ marketplace (plan point C15) will fetch signed packages instead.
 
 `GET /api/plugin-packages` lists installed packages with their manifest,
 settings, which secrets are set, whether the server is connected, why it is
-not when it should be, and whether its network is enforced (`network`).
+not when it should be, whether its network is enforced (`network`), its
+content hash and who signed it (`signedBy`).
 
 Every change is in the audit log (`resource_type = plugin_package`).
 
@@ -303,8 +397,10 @@ Every change is in the audit log (`resource_type = plugin_package`).
 
 - Packages reporting events back (a new invoice in DATEV opening a case):
   plan point C2b.
-- Signed packages, remote install and the marketplace page: C15. Until then a
-  package is pinned by its content hash only ([Content pinning](#content-pinning)).
+- Remote install, a registry and the marketplace page: C15. Signing exists
+  ([Signed packages](#signed-packages)); a package still installs from a
+  directory on the server. No key revocation list or expiry: a key is trusted
+  while it is listed in `plugins.trustedPublishers`.
 - A web page for plugin packages.
 - Network enforcement on Windows: the egress proxy is advisory there (no
   built-in runner; see [Network](#network)).

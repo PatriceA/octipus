@@ -836,6 +836,24 @@ export const configSchema = z.object({
   extensions: z.object({
     trusted: z.array(z.string()).default([]),
   }).prefault({}),
+  /**
+   * Plugin packages (docs/PLUGIN-PACKAGES.md#signed-packages). Install and
+   * upgrade check a package's signature (`octipus-plugin.sig`, Ed25519 over
+   * its content hash) against these publishers' keys; an invalid signature is
+   * always refused. `requireSignature` also refuses an unsigned package, or
+   * one signed by a key not listed here, at install, upgrade, approval and
+   * every start. Rotating a key is a config change: list the new key (beside
+   * the old one while packages signed with it are installed), then drop the old.
+   * Env: PLUGINS_REQUIRE_SIGNATURE.
+   */
+  plugins: z.object({
+    trustedPublishers: z.array(z.object({
+      name: z.string().min(1).max(100),
+      /** Ed25519 public key: PEM (SPKI), or base64 of the raw 32 bytes or of the DER SPKI. */
+      publicKey: z.string().min(1).max(2000),
+    })).default([]),
+    requireSignature: z.boolean().default(false),
+  }).prefault({}),
   oauth: oauthConfigSchema,
   rateLimit: rateLimitConfigSchema,
   swarm: swarmConfigSchema.prefault({}),

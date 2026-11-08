@@ -1269,6 +1269,27 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'MODULES_ENABLED',
   },
 
+  // ── Plugin packages (docs/PLUGIN-PACKAGES.md#signed-packages) ──
+  {
+    key: 'plugins.trustedPublishers',
+    category: 'security',
+    valueType: 'json',
+    defaultValue: [],
+    description:
+      'Publishers whose signed plugin packages are trusted: [{ "name": "...", "publicKey": "<Ed25519 public key, PEM or base64>" }]. A package signed by one of these keys shows who signed it; an invalid signature is always refused. Rotate a key by listing the new one, then removing the old.',
+    isSecret: false,
+  },
+  {
+    key: 'plugins.requireSignature',
+    category: 'security',
+    valueType: 'boolean',
+    defaultValue: false,
+    description:
+      'Run only plugin packages signed by a trusted publisher: an unsigned package, or one signed by an unlisted key, is refused at install, upgrade and content approval, and does not start.',
+    isSecret: false,
+    envVar: 'PLUGINS_REQUIRE_SIGNATURE',
+  },
+
   // ── Protection levels (docs/PROTECTION-LEVELS.md) ──
   {
     key: 'protection.remoteAtLevel3',

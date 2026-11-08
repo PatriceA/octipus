@@ -33,6 +33,12 @@
  * recomputes it; a package modified since then does not start until an admin
  * approves its content (`configure` with `approveContent`: the hash the
  * admin reviewed, accepted only while the files still hash to it).
+ *
+ * A package may be signed (./signature.ts): Ed25519 over its content hash,
+ * by a key in `plugins.trustedPublishers`. Install and upgrade refuse an
+ * invalid signature and record who signed (`signedBy`); with
+ * `plugins.requireSignature` they also refuse an unsigned package or an
+ * unknown key, and so do content approval, enabling and every start.
  */
 import { cp, lstat, mkdir, readdir, readFile, rename, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -51,6 +57,7 @@ import { PLUGIN_MANIFEST_FILE, type PluginManifest, type PluginNetworkStatus, ty
 import { coreLogger } from '@/utils/logger';
 import { CONTENT_MISMATCH_PROBLEM, hashPackageContent, isContentHash, verifyPackageContent } from './integrity';
 import { ManifestError, parseManifest, settingEnvName } from './manifest';
+import { checkPackageSignature, SIGNATURE_FILE, type SignatureCheck } from './signature';
 
 /** Largest package a directory install copies (bytes). */
 const MAX_PACKAGE_BYTES = 200 * 1024 * 1024;
@@ -155,6 +162,47 @@ async function requireRow(name: string): Promise<PluginPackageRow> {
   return row;
 }
 
+/** The signing policy in force (`plugins.*`), read at each check so a config change applies to the next one. */
+function signingPolicy(): { publishers: ReadonlyArray<{ name: string; publicKey: string }>; required: boolean } {
+  const plugins = getConfig().plugins;
+  return { publishers: plugins?.trustedPublishers ?? [], required: plugins?.requireSignature === true };
+}
+
+/** The signature of a package directory checked against `contentHash` and the trusted publishers. */
+function signatureOf(dir: string, contentHash: string): Promise<SignatureCheck> {
+  return checkPackageSignature(dir, contentHash, signingPolicy().publishers, (publisher, reason) => {
+    coreLogger.warn({ publisher, reason }, 'A key in plugins.trustedPublishers cannot be read; it trusts nothing');
+  });
+}
+
+/** Why a signature check does not give a trusted signature, in words. */
+function signatureShortfall(name: string, check: Exclude<SignatureCheck, { status: 'valid' }>): string {
+  switch (check.status) {
+    case 'unsigned': return `${name} is not signed (no ${SIGNATURE_FILE})`;
+    case 'unknown_key': return `${name} is signed by a key that is not in plugins.trustedPublishers (${check.keyId})`;
+    case 'invalid': return `The signature of ${name} is invalid: ${check.reason}`;
+  }
+}
+
+/**
+ * The signature of files about to be installed: who signed them, or the
+ * refusal. An invalid signature is always refused; unsigned files or an
+ * unknown key are refused under `plugins.requireSignature` and otherwise
+ * installed as unsigned (an unknown key with a warning).
+ */
+async function acceptSignature(dir: string, name: string, contentHash: string): Promise<{ signedBy: string | null; keyId: string | null; warnings: string[] }> {
+  const check = await signatureOf(dir, contentHash);
+  if (check.status === 'valid') return { signedBy: check.publisher, keyId: check.keyId, warnings: [] };
+  const shortfall = signatureShortfall(name, check);
+  if (check.status === 'invalid') throw new PluginPackageError('invalid', `${shortfall}; not installed`);
+  if (signingPolicy().required) throw new PluginPackageError('invalid', `${shortfall}; plugins.requireSignature accepts only packages signed by a trusted publisher`);
+  if (check.status === 'unknown_key') {
+    coreLogger.warn({ pkg: name, keyId: check.keyId }, 'Plugin package signed by an untrusted key; installed as unsigned');
+    return { signedBy: null, keyId: check.keyId, warnings: [`${shortfall}: installed as unsigned`] };
+  }
+  return { signedBy: null, keyId: null, warnings: [] };
+}
+
 /**
  * Install a package from a local directory. With `upgrade`, an installed
  * package of the same name is replaced: its settings stay, and it is disabled
@@ -169,9 +217,15 @@ async function requireRow(name: string): Promise<PluginPackageRow> {
  * (the hash depends only on paths relative to the package root), and the row
  * — new manifest, version and hash — is written in the same transaction that
  * swaps the files in: if either fails, the old files and the old row stay
- * together.
+ * together. The signature is checked on the same staging copy, against that
+ * hash (`acceptSignature`); a refused one fails the install the same way.
+ * `warnings` says what was accepted with a caveat (an untrusted key).
  */
-export async function installFromDirectory(sourceDir: string, actorUserId: string, opts: { upgrade?: boolean } = {}): Promise<PluginPackageRow> {
+export async function installFromDirectory(
+  sourceDir: string,
+  actorUserId: string,
+  opts: { upgrade?: boolean } = {},
+): Promise<PluginPackageRow & { warnings: string[] }> {
   const source = resolve(sourceDir);
   const manifest = await readManifest(source);
   await checkTree(source);
@@ -205,15 +259,17 @@ export async function installFromDirectory(sourceDir: string, actorUserId: strin
   const swap = { done: false, backup: null as string | null };
   let row: PluginPackageRow;
   let contentHash: string;
+  let signature: Awaited<ReturnType<typeof acceptSignature>>;
   try {
     await mkdir(pluginsRoot(), { recursive: true });
     await cp(source, staging, { recursive: true, errorOnExist: true, verbatimSymlinks: true });
     // Hashed as copied, so what the admin installs is what is pinned.
     contentHash = await hashPackageContent(staging, manifest);
+    signature = await acceptSignature(staging, manifest.name, contentHash);
     await getMCPBridge().disconnect(serverId);
     row = await db.transaction(async (tx) => {
       const [updated] = await tx.update(pluginPackages)
-        .set({ version: manifest.version, manifest, enabled: false, settings, contentHash, installedBy: actorUserId, updatedAt: new Date() })
+        .set({ version: manifest.version, manifest, enabled: false, settings, contentHash, signedBy: signature.signedBy, installedBy: actorUserId, updatedAt: new Date() })
         .where(eq(pluginPackages.name, manifest.name))
         .returning();
       if (!updated) throw new PluginPackageError('not_found', `Plugin package not found: ${manifest.name}`);
@@ -234,9 +290,11 @@ export async function installFromDirectory(sourceDir: string, actorUserId: strin
   }
   if (swap.backup) await rm(swap.backup, { recursive: true, force: true }).catch((err: unknown) => coreLogger.warn({ err, dir: swap.backup }, 'Could not remove the previous package files'));
   forgetMismatches(manifest.name);
-  await audit(actorUserId, previous ? 'upgraded' : 'installed', manifest.name, { version: manifest.version, from: previous?.version ?? null, contentHash });
+  await audit(actorUserId, previous ? 'upgraded' : 'installed', manifest.name, {
+    version: manifest.version, from: previous?.version ?? null, contentHash, signedBy: signature.signedBy, keyId: signature.keyId,
+  });
   await syncPluginServers();
-  return row;
+  return { ...row, warnings: signature.warnings };
 }
 
 /**
@@ -303,6 +361,10 @@ export async function uninstall(name: string, actorUserId: string): Promise<void
  * (`sha256:<hex>`, the view's `actualHash`): it is recorded only if the files
  * hash to it now, so what is approved is what was reviewed, not whatever is
  * on disk by the time the request arrives (`conflict` otherwise).
+ * Approved content is the publisher's only if it carries a valid trusted
+ * signature: `signedBy` becomes that publisher, or null. Under
+ * `plugins.requireSignature`, approving or enabling content without one is
+ * refused (`incomplete`).
  * Nothing is saved when a check fails.
  */
 export async function configure(
@@ -334,6 +396,14 @@ export async function configure(
     }
   }
   let contentHash = row.contentHash;
+  let signedBy = row.signedBy;
+  const required = signingPolicy().required;
+  /** Under requireSignature: refuse unless the files carry a valid trusted signature over `hash`. */
+  const refuseUnsigned = (check: SignatureCheck, doing: string): void => {
+    if (!required || check.status === 'valid') return;
+    throw new PluginPackageError('incomplete',
+      `${signatureShortfall(name, check)}; plugins.requireSignature refuses ${doing} it until it carries a valid signature by a trusted publisher`);
+  };
   const approving = typeof change.approveContent === 'string' ? change.approveContent : null;
   if (approving) {
     const actual = await hashPackageContent(packageDir(name), row);
@@ -343,18 +413,28 @@ export async function configure(
         [`approveContent: reviewed ${approving}, actual ${actual}`]);
     }
     contentHash = actual;
-  } else if (enabled && !row.enabled && row.contentHash !== null) {
-    const actual = await hashPackageContent(packageDir(name), row);
-    if (actual !== row.contentHash) {
-      throw new PluginPackageError('incomplete',
-        `${name} was modified since it was approved (hash mismatch: recorded ${row.contentHash}, actual ${actual}); approve its content before enabling it`,
-        [`contentHash: recorded ${row.contentHash}, actual ${actual}`]);
+    // Approved content is the publisher's only if their signature covers it. A
+    // signature left from before the change no longer matches: it reads as
+    // invalid, and signedBy clears.
+    const check = await signatureOf(packageDir(name), actual);
+    refuseUnsigned(check, 'approving');
+    signedBy = check.status === 'valid' ? check.publisher : null;
+  } else if (enabled && !row.enabled) {
+    let actual: string | null = null;
+    if (row.contentHash !== null) {
+      actual = await hashPackageContent(packageDir(name), row);
+      if (actual !== row.contentHash) {
+        throw new PluginPackageError('incomplete',
+          `${name} was modified since it was approved (hash mismatch: recorded ${row.contentHash}, actual ${actual}); approve its content before enabling it`,
+          [`contentHash: recorded ${row.contentHash}, actual ${actual}`]);
+      }
     }
+    if (required) refuseUnsigned(await signatureOf(packageDir(name), actual ?? await hashPackageContent(packageDir(name), row)), 'enabling');
   }
-  const [updated] = await getDb().update(pluginPackages).set({ settings, enabled, contentHash, updatedAt: new Date() }).where(eq(pluginPackages.name, name)).returning();
+  const [updated] = await getDb().update(pluginPackages).set({ settings, enabled, contentHash, signedBy, updatedAt: new Date() }).where(eq(pluginPackages.name, name)).returning();
   if (approving) {
     forgetMismatches(name);
-    await audit(actorUserId, 'content_approved', name, { version: row.version, from: row.contentHash, to: contentHash });
+    await audit(actorUserId, 'content_approved', name, { version: row.version, from: row.contentHash, to: contentHash, signedBy, previousSignedBy: row.signedBy });
   }
   if (change.settings !== undefined) await audit(actorUserId, 'settings_changed', name, { keys: Object.keys(change.settings as object) });
   if (change.enabled !== undefined && change.enabled !== row.enabled) await audit(actorUserId, enabled ? 'enabled' : 'disabled', name, { version: row.version });
@@ -452,6 +532,7 @@ async function viewOf(row: PluginPackageRow, secrets: string[]): Promise<PluginP
     connected: bridge.isConnected(serverId),
     contentHash: row.contentHash,
     actualHash,
+    signedBy: row.signedBy,
     installedBy: row.installedBy,
     installedAt: row.installedAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -537,7 +618,7 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
   };
 }
 
-/** Refused starts already audited, as `<package>\n<recorded>\n<actual>`. */
+/** Refused starts already audited, as `<package>\n<recorded>\n<actual>` (or `<package>\nsignature\n<hash>\n<reason>`). */
 const mismatchesAudited = new Set<string>();
 const MAX_MISMATCHES_REMEMBERED = 1000;
 
@@ -559,7 +640,9 @@ async function auditQuietly(op: string, name: string, details: Record<string, un
  * The check before every start of a package's server: its files against the
  * hash recorded when they were approved. The reason it may not start, or
  * null. A package with no recorded hash (installed before pinning) has the
- * current one recorded and starts: trust on first use, logged once.
+ * current one recorded and starts: trust on first use, logged once. Under
+ * `plugins.requireSignature` the files must also carry a valid signature by a
+ * publisher trusted now (a key dropped from the config stops its packages).
  */
 export async function checkBeforeStart(server: MCPServer): Promise<string | null> {
   const name = server.plugin?.package;
@@ -591,6 +674,27 @@ export async function checkBeforeStart(server: MCPServer): Promise<string | null
       await auditQuietly('content_mismatch', name, { version: row.version, recorded: check.recorded, actual: check.actual });
     }
     return CONTENT_MISMATCH_PROBLEM;
+  }
+  if (signingPolicy().required) {
+    let signature: SignatureCheck;
+    try {
+      signature = await signatureOf(packageDir(name), check.hash);
+    } catch (err) {
+      coreLogger.error({ err, pkg: name }, 'Plugin package signature could not be read; not started');
+      return `Could not check the package signature: ${(err as Error).message}`;
+    }
+    if (signature.status !== 'valid') {
+      const shortfall = signatureShortfall(name, signature);
+      coreLogger.warn({ pkg: name, version: row.version, status: signature.status }, 'Plugin package has no valid trusted signature (plugins.requireSignature); not started');
+      // Once per (package, hash, reason), like a mismatch.
+      const key = `${name}\nsignature\n${check.hash}\n${shortfall}`;
+      if (!mismatchesAudited.has(key)) {
+        if (mismatchesAudited.size >= MAX_MISMATCHES_REMEMBERED) mismatchesAudited.clear();
+        mismatchesAudited.add(key);
+        await auditQuietly('signature_refused', name, { version: row.version, hash: check.hash, status: signature.status, reason: shortfall });
+      }
+      return `${shortfall}; plugins.requireSignature runs only packages signed by a trusted publisher`;
+    }
   }
   return null;
 }
