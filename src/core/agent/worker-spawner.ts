@@ -38,6 +38,7 @@ import { shouldUseLazyDiscovery } from './lazy-tools';
 import type { ModelSelector } from './model-selector';
 import { isPlanMode, stripMutatingTools } from './plan-mode';
 import { estimateToolSchemaTokens, logPromptComposition } from './prompt-budget';
+import { PromptBuilder } from './prompt-builder';
 import { type DeclaredPurpose, toolsetGaps } from './role-contract';
 import { formatCriticalRules, getBoundConnectorIds, getRoleConfig, getToolsForRole, SECURITY_PREAMBLE } from './roles';
 import type { TurnEvent } from './service';
@@ -861,8 +862,20 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   // Ordering within a tier is unchanged; only cross-tier position moves. The
   // last static index is the natural cache breakpoint for explicit-cache
   // providers (Phase 2b).
-  const staticPrefix = staticParts.join('');
-  let systemPrompt = staticPrefix + semiStaticParts.join('') + volatileParts.join('');
+  //
+  // Through the typed builder (prompt-builder.ts): it refuses a static block
+  // that carries the date marker. The pipeline run-scope block used to be
+  // appended AFTER the volatile tail, so it rode in the per-turn part instead
+  // of the cacheable prefix every stage of the run shares; it is session tier.
+  const pipelineScope = typeof context.metadata?.pipelineId === 'string'
+    ? '\n\nRun profile scope: always pass an explicit absolute cwd to shell__run; the actual directory must remain in an approved repository. Read pipelineApproval.executionScope from get_cli_run_context. With executionScope=run, the owner approved shell work, new scripts, remote deployment, cleanup, verification and network/credential use for this run: no command list or new per-command consent is needed. Do not infer missing approval from an empty or absent commands list. Only executionScope=commands uses the legacy pipelineApproval.commands allowlist. Existing DENY rules, filesystem and shared-workspace restrictions remain authoritative. Historical refusals are not fresh decisions after a profile repair: use the current permission check and actual execution result. A policy refusal is not a process failure or missing environment.\n\nPipeline approval gates: request_user_approval and coordinator plan updates are not stage tools. If the item asks for user approval, return a handoff with blockedOnDecision: {itemId, question, options?}, using the current item id or a pending decision item. Include the tested change and evidence. The coordinator presents the approval and parks the stage; do not probe unavailable tools or call this an environment block. For a future date, return deferredUntil (ISO timestamp) and deferredReason instead of manufacturing edits.'
+    : '';
+  const prompt = new PromptBuilder();
+  for (const part of staticParts) prompt.add('user', 'worker-static', part);
+  for (const part of semiStaticParts) prompt.add('session', 'worker-semi-static', part);
+  prompt.add('session', 'pipeline-scope', pipelineScope);
+  for (const part of volatileParts) prompt.add('turn', 'worker-volatile', part);
+  const systemPrompt = prompt.build();
 
   // What did we just build? Measured per section so an over-long prompt names
   // its own biggest contributor instead of just reporting a total.
@@ -874,7 +887,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       toolCount: roleTools.length,
       toolSchemaTokens: estimateToolSchemaTokens(roleTools),
     },
-    { static: staticParts, semiStatic: semiStaticParts, volatile: volatileParts },
+    { static: staticParts, semiStatic: [...semiStaticParts, ...(pipelineScope ? [pipelineScope] : [])], volatile: volatileParts },
   );
 
   // ── Swarm wiring (pipeline stages) ──────────────────────────────
@@ -885,7 +898,6 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   // worker id once `agentManager.spawn` returns; `createSpawnChildTool`
   // closes over the node by reference, so the tool sees the real id by
   // the time it can be invoked.
-  if (typeof context.metadata?.pipelineId === 'string') systemPrompt += '\n\nRun profile scope: always pass an explicit absolute cwd to shell__run; the actual directory must remain in an approved repository. Read pipelineApproval.executionScope from get_cli_run_context. With executionScope=run, the owner approved shell work, new scripts, remote deployment, cleanup, verification and network/credential use for this run: no command list or new per-command consent is needed. Do not infer missing approval from an empty or absent commands list. Only executionScope=commands uses the legacy pipelineApproval.commands allowlist. Existing DENY rules, filesystem and shared-workspace restrictions remain authoritative. Historical refusals are not fresh decisions after a profile repair: use the current permission check and actual execution result. A policy refusal is not a process failure or missing environment.\n\nPipeline approval gates: request_user_approval and coordinator plan updates are not stage tools. If the item asks for user approval, return a handoff with blockedOnDecision: {itemId, question, options?}, using the current item id or a pending decision item. Include the tested change and evidence. The coordinator presents the approval and parks the stage; do not probe unavailable tools or call this an environment block. For a future date, return deferredUntil (ISO timestamp) and deferredReason instead of manufacturing edits.';
   let stageNode: AgentNode | null = null;
   let stageDelegation: ReturnType<typeof createStageDelegation> | undefined;
   if (overrides?.swarmParent) {
