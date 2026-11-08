@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-632 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
+633 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -415,6 +415,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | DELETE | `/api/plugin-packages/:name` | `src/api/routes/plugin-packages.ts` |
 | PATCH | `/api/plugin-packages/:name` | `src/api/routes/plugin-packages.ts` |
 | PUT | `/api/plugin-packages/:name/secrets/:key` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/registry` | `src/api/routes/plugin-packages.ts` |
 | GET | `/api/plugins` | `src/api/routes/plugins.ts` |
 | GET | `/api/plugins/:name` | `src/api/routes/plugins.ts` |
 | POST | `/api/plugins/:name/reload` | `src/api/routes/plugins.ts` |
@@ -675,7 +676,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 4 |
 | `api` | `models` | 39 |
-| `api` | `plugins` | 2 |
+| `api` | `plugins` | 3 |
 | `api` | `security` | 156 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 21 |
@@ -770,14 +771,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `models` | `services` | 1 |
 | `models` | `shared` | 4 |
 | `models` | `utils` | 43 |
-| `plugins` | `config` | 1 |
+| `plugins` | `config` | 2 |
 | `plugins` | `core` | 3 |
-| `plugins` | `db` | 3 |
+| `plugins` | `db` | 5 |
 | `plugins` | `mcp` | 1 |
 | `plugins` | `security` | 3 |
-| `plugins` | `shared` | 4 |
+| `plugins` | `shared` | 5 |
 | `plugins` | `tools` | 1 |
-| `plugins` | `utils` | 5 |
+| `plugins` | `utils` | 7 |
 | `security` | `api` | 1 |
 | `security` | `config` | 17 |
 | `security` | `connectors` | 3 |
