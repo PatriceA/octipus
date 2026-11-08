@@ -148,6 +148,11 @@ export class AgentManager {
   }
   private eventHandlers: Set<(event: AgentEvent) => void> = new Set();
   private globalTools: Map<string, ToolHandler> = new Map();
+
+  /** Names of the tools every worker registers (`registerGlobalTool`). */
+  globalToolNames(): string[] {
+    return [...this.globalTools.keys()];
+  }
   /** Per-agent event ring buffer for polling (max 200 events per agent) */
   private eventBuffers: Map<string, BufferedEvent[]> = new Map();
   private eventSeqCounter: number = 0;

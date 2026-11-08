@@ -2717,7 +2717,9 @@ export class AgentWorker extends BaseAgentWorker {
     // A fan-out leader streams its first call too, silently: its first chunk
     // is when the provider holds the prefix its waiting siblings will read.
     const leader = !root && this.prefixWarm !== undefined;
-    const streaming = (root && getConfig().agent?.streaming !== false || leader) && typeof target.stream === 'function';
+    // `agent.streaming: false` switches it off for both: an operator who
+    // disabled streaming for a provider meant every call.
+    const streaming = (root || leader) && getConfig().agent?.streaming !== false && typeof target.stream === 'function';
     if (!streaming) {
       try {
         return await target.complete(opts);

@@ -48,9 +48,26 @@ export interface ForkSeed {
   cachePacing: CachePacing;
 }
 
-/** The inherited handlers a fork refuses: those bound to the parent run (no tool group). */
-export function forkRefusedTools(tools: readonly ToolHandler[]): string[] {
-  return tools.filter((t) => t.toolId === undefined).map((t) => t.name);
+/**
+ * The inherited handlers a fork refuses: those bound to the parent run — no
+ * tool group, and not one of the process-wide tools every worker registers
+ * (`globalNames`: the skill loaders, the work-plan reader), which act on the
+ * calling worker's own context.
+ */
+export function forkRefusedTools(tools: readonly ToolHandler[], globalNames: ReadonlySet<string> = new Set()): string[] {
+  return tools.filter((t) => t.toolId === undefined && !globalNames.has(t.name)).map((t) => t.name);
+}
+
+/**
+ * Whether a child may be a fork. Never one that is meant to be INDEPENDENT of
+ * its parent: a reviewer, the verify lane, a maintenance review. A fork is the
+ * parent's own conversation on the parent's model holding the parent's tools:
+ * a second opinion from it is not one, and in a maintenance session it would
+ * hold the review and activation tools the review child is cut down from —
+ * the implementer approving its own change.
+ */
+export function forkAllowed(child: { role: string; topic?: string; maintenanceReview: boolean }): boolean {
+  return !child.maintenanceReview && child.role !== 'review' && child.topic !== 'verify';
 }
 
 /** The fork's one new message: the task, and what it is. */

@@ -340,7 +340,12 @@ export function createSpawnChildTool(
     // depth-1 agent on a small local model is equally unable to hold the role
     // choice but keeps its full schema, so it sets `weakModel` alone. Without
     // this the role-fit rewrite was live at exactly one call site.
-    const internal = { rootIsLite: opts?.weakModel ?? opts?.lite === true, dispatchId: randomUUID() };
+    const internal = {
+      rootIsLite: opts?.weakModel ?? opts?.lite === true, dispatchId: randomUUID(),
+      // Taken now, before any await: the parent's last request is what a fork
+      // must repeat, and a detached spawn returns before its body runs.
+      ...(params.fork ? { forkSeed: spawner.forkSeedOf(context) } : {}),
+    };
 
     // Reading is evidence of prior investigation, not proof that the root can
     // finish the task. Require a bounded context transfer instead of allowing

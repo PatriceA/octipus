@@ -6,7 +6,7 @@ import { isResumableCliModel } from '@/core/cli-agent-factory';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { isPlanMode, stripMutatingTools } from '@/core/agent/plan-mode';
 import type { AgentWorker, ToolHandler } from '@/core/agent-worker';
-import { FORK_KEY, FORK_REFUSED_TOOLS_KEY, type ForkSeed, forkRefusedTools, forkTaskMessage } from './fork';
+import { FORK_KEY, FORK_REFUSED_TOOLS_KEY, type ForkSeed, forkAllowed, forkRefusedTools, forkTaskMessage } from './fork';
 import { FILE_CHANGES_REFUSED_KEY } from '@/core/tool-executor';
 import type { GatewayHub } from '@/core/gateway/hub';
 import { getGatewayHub } from '@/core/gateway/hub';
@@ -164,6 +164,12 @@ function readTaskAncestry(metadata: Record<string, unknown> | undefined): string
 /** Options accepted by spawnChild internally — extends the tool params. */
 export interface SpawnChildInternalOpts {
   dispatchId?: string;
+  /**
+   * The parent's fork seed, taken when `spawn_child` was called, before any
+   * await: by the time the spawn body reaches it, a detached spawn has
+   * returned and the parent may have moved on (swarm/fork.ts).
+   */
+  forkSeed?: ForkSeed;
   /** Used by `escalate_to_other_lane` to pick a different expert. */
   excludeExpertId?: string;
   /** Tag logged on spawn — distinguishes normal spawns from escalation. */
@@ -467,6 +473,8 @@ export class SwarmSpawner {
       // Explicit execution plan (optional). Presence routes the child to the
       // lane's executorModel and switches it to mechanical-execution mode.
       plan: params.plan,
+      // A fork of the same brief is a different child: part of the fingerprint.
+      ...(params.fork ? { fork: true } : {}),
     };
 
     // ── Cycle protection (Phase 2) ──────────────────────────────────
@@ -908,8 +916,12 @@ export class SwarmSpawner {
     // role bookkeeping, worktree — and swaps what the model sees for the
     // parent's own: its conversation, handlers, advertisement and model. A
     // parent that cannot be forked (a vendor CLI) gets an ordinary child.
-    const fork = params.fork ? this.forkSeedOf(parentContext) : undefined;
-    if (params.fork && !fork) coreLogger.info({ parentAgentId: parentContext.id }, 'spawn_child fork: parent run cannot be forked; starting an ordinary child');
+    // Never for a child meant to be independent of its parent (`forkAllowed`).
+    const independent = !forkAllowed({ role: childRole, topic: params.topic, maintenanceReview });
+    const fork = params.fork && !independent ? internal.forkSeed ?? this.forkSeedOf(parentContext) : undefined;
+    if (params.fork && !fork) {
+      coreLogger.info({ parentAgentId: parentContext.id, childRole, independent }, 'spawn_child fork: not forkable here; starting an ordinary child');
+    }
 
     const result = await releaseOnThrow(() => this.runChildWithRetry({
       parent,
@@ -931,7 +943,9 @@ export class SwarmSpawner {
       childMessage: fork
         ? [forkTaskMessage(params.taskBrief, params.expectedOutput), guarded.action === 'warn' ? securityReminder : ''].filter(Boolean).join('\n\n')
         : finalChildMessage,
-      ...(fork ? { fork } : {}),
+      // What an attempt on another model runs instead: a fork seed belongs
+      // to the parent's model, and a vendor CLI cannot be seeded at all.
+      ...(fork ? { fork, ordinary: { childTools, childToolAdvertisement, systemPrompt: childSystemPrompt, childMessage: finalChildMessage } } : {}),
       reason: internal.reason ?? 'normal',
       spawnMode: params.mode ?? 'await',
       scorers: params.scorers,
@@ -995,7 +1009,7 @@ export class SwarmSpawner {
   }
 
   /** The parent run's fork seed, when it is a native worker of this process. */
-  private forkSeedOf(parentContext: AgentContext): ForkSeed | undefined {
+  forkSeedOf(parentContext: AgentContext): ForkSeed | undefined {
     // Duck-typed: a vendor CLI worker has no conversation of ours to fork.
     const worker = getAgentManager().get(parentContext.id) as Partial<Pick<AgentWorker, 'forkSnapshot'>> | undefined;
     return typeof worker?.forkSnapshot === 'function' ? worker.forkSnapshot() : undefined;
@@ -1025,6 +1039,8 @@ export class SwarmSpawner {
     systemPrompt?: string;
     /** A fork of the parent's run (swarm/fork.ts): seeds the worker with its conversation. */
     fork?: ForkSeed;
+    /** The ordinary child a fork falls back to on another model (`singleSpawnAndRun`). */
+    ordinary?: { childTools: ToolHandler[]; childToolAdvertisement?: ToolAdvertisement; systemPrompt?: string; childMessage: string };
     expertId?: string;
     budget: NodeBudget;
     topicPath: string;
@@ -1582,6 +1598,12 @@ export class SwarmSpawner {
     opts: Parameters<SwarmSpawner['runChildWithRetry']>[0],
     isCrashRetry: boolean,
   ): Promise<ChildResult> {
+    // A retry on a backup model is not a fork any more: the seed is bound to
+    // the parent's model (and a vendor CLI cannot be seeded). Run the ordinary
+    // child that the fork replaced, with its own role prompt and tools.
+    if (opts.fork && opts.childModel !== opts.fork.model && opts.ordinary) {
+      opts = { ...opts, ...opts.ordinary, fork: undefined, ordinary: undefined };
+    }
     opts.dispatchId ??= randomUUID();
     opts.requestedModel ??= opts.childModel;
     opts.attempts ??= [];
@@ -3031,7 +3053,7 @@ function forkMetadata(fork: ForkSeed, parentContext: AgentContext): Record<strin
   const fileChanges = (parentContext.metadata as Record<string, unknown> | undefined)?.[FILE_CHANGES_REFUSED_KEY];
   return {
     [FORK_KEY]: { cacheScope: fork.cacheScope, cachePacing: fork.cachePacing },
-    [FORK_REFUSED_TOOLS_KEY]: forkRefusedTools(fork.tools),
+    [FORK_REFUSED_TOOLS_KEY]: forkRefusedTools(fork.tools, new Set(getAgentManager().globalToolNames())),
     ...(fileChanges ? { [FILE_CHANGES_REFUSED_KEY]: fileChanges } : {}),
   };
 }

@@ -8,7 +8,8 @@ import { getLiteLLMClient, type CompletionResult } from '@/models/litellm-client
 import { getModelRegistry } from '@/models/model-registry';
 import * as modelKey from '@/models/model-key';
 import { FILE_CHANGES_REFUSED_KEY } from './tool-executor';
-import { FORK_KEY, FORK_REFUSAL, FORK_REFUSED_TOOLS_KEY, forkRefusedTools, forkTaskMessage } from './swarm/fork';
+import { FORK_KEY, FORK_REFUSAL, FORK_REFUSED_TOOLS_KEY, forkAllowed, forkRefusedTools, forkTaskMessage } from './swarm/fork';
+import { taskFingerprint } from './swarm/call-graph';
 
 /**
  * A cache-parity fork is only worth having if its first request IS its
@@ -132,5 +133,25 @@ describe('a fork reads its parent\'s cached prefix', () => {
     expect((fork as unknown as Priv).messages[0].providerRaw).toBeUndefined();
     fork.seedConversation({ messages, model: 'gpt-5.6' });
     expect((fork as unknown as Priv).messages[0].providerRaw).toEqual({ thinking: 'signed' });
+  });
+});
+
+describe('where a fork is not allowed or not the same child', () => {
+  test('a child meant to be independent is never a fork', () => {
+    expect(forkAllowed({ role: 'coding', topic: 'build', maintenanceReview: false })).toBe(true);
+    // The implementer reviewing its own change through a fork of itself.
+    expect(forkAllowed({ role: 'review', topic: 'build', maintenanceReview: true })).toBe(false);
+    expect(forkAllowed({ role: 'review', maintenanceReview: false })).toBe(false);
+    expect(forkAllowed({ role: 'coding', topic: 'verify', maintenanceReview: false })).toBe(false);
+  });
+
+  test('process-wide tools act on the calling worker and are not refused', () => {
+    const globals = [handler('get_skill'), handler('list_skills')];
+    expect(forkRefusedTools([...tools, ...globals], new Set(['get_skill', 'list_skills']))).toEqual(['spawn_child', 'exit_plan_mode']);
+  });
+
+  test('a fork of a brief is a different child from the same brief unforked', () => {
+    const brief = { originalUserRequest: 'r', topicPath: 'a/b', parentSummary: '', ancestry: [], taskBrief: 't', constraints: [], inputArtifacts: [], expectedOutput: { shape: 'summary' as const, maxTokens: 10 }, forbidden: [] };
+    expect(taskFingerprint({ ...brief, fork: true })).not.toBe(taskFingerprint(brief));
   });
 });
