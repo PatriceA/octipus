@@ -4,12 +4,60 @@ import type { GatewayEventBus } from '@/core/gateway/event-bus';
 import type { GatewayEvent } from '@/core/gateway/protocol';
 import { matchesPattern } from '@/core/gateway/protocol';
 import { createChildLogger } from '@/utils/logger';
+import { realpathSync } from 'node:fs';
+import { isAbsolute, relative } from 'node:path';
+import { getAgentHooks } from '@/core/agent/hooks';
+import { getConfig } from '@/config';
 import type {
   ExtensionAPI,
   ExtensionCommandDef,
   ExtensionEventHandler,
   LoadedExtension,
 } from './types';
+
+/** The real path, or the path as given when it does not resolve (a deleted file is trusted by nothing). */
+function real(path: string): string {
+  try { return realpathSync(path); } catch { return path; }
+}
+
+let trustedSnapshot: readonly string[] | undefined;
+
+/**
+ * The trusted list, read ONCE — before the first extension's code runs — and
+ * kept for the life of the process. Read at call time instead, an extension
+ * could add itself to OCTIPUS_TRUSTED_EXTENSIONS (or re-point its symlink)
+ * inside its own factory and then pass. Changing the list needs a restart.
+ * Only absolute entries count: a relative one (or '') would resolve against
+ * the working directory, which is where project extensions live.
+ */
+export function trustedExtensionPaths(): readonly string[] {
+  trustedSnapshot ??= Object.freeze([
+    ...(getConfig().extensions?.trusted ?? []),
+    ...(process.env.OCTIPUS_TRUSTED_EXTENSIONS ?? '').split(',').map((s) => s.trim()),
+  ].filter((item) => item && isAbsolute(item)).map(real));
+  return trustedSnapshot;
+}
+
+/** Test seam. */
+export function resetTrustedExtensionPaths(): void {
+  trustedSnapshot = undefined;
+}
+
+/**
+ * Whether the operator trusts this extension to hook the agent loop: its
+ * entry file, or a directory containing it, is in the trusted list, compared
+ * by real path. The loader decides this at discovery, before the extension's
+ * code runs (`buildExtensionContext`'s `trusted`).
+ */
+export function isTrustedExtension(entryPath: string, trusted: readonly string[] = trustedExtensionPaths()): boolean {
+  const list = trusted.filter((item) => item && isAbsolute(item));
+  if (!list.length) return false;
+  const entry = real(entryPath);
+  return list.some((item) => {
+    const rel = relative(real(item), entry);
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  });
+}
 
 /**
  * Build a fresh ExtensionAPI bound to the given event bus, plus a
@@ -23,6 +71,8 @@ export function buildExtensionContext(
   name: string,
   entryPath: string,
   eventBus: GatewayEventBus,
+  /** Decided before the extension's code runs (`isTrustedExtension`). */
+  trusted: boolean = isTrustedExtension(entryPath),
 ): { api: ExtensionAPI; loaded: LoadedExtension } {
   const logger = createChildLogger({ component: 'extension', extension: name });
   const unsubscribers: Array<() => void> = [];
@@ -108,6 +158,20 @@ export function buildExtensionContext(
 
     onDispose(fn) {
       disposeCallbacks.push(fn);
+    },
+
+    hook(event, handler) {
+      if (disposed) {
+        logger.warn(`hook(${event}) ignored — extension already disposed`);
+        return () => {};
+      }
+      if (!trusted) {
+        throw new Error(`extension "${name}" may not hook the agent loop: it is not listed in extensions.trusted (${entryPath})`);
+      }
+      const off = getAgentHooks().register(event, handler);
+      unsubscribers.push(off);
+      logger.info({ event }, 'extension hooked the agent loop');
+      return off;
     },
   };
 

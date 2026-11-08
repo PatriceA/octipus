@@ -633,7 +633,10 @@ chats, a long tool loop, a plan-mode toggle and an overnight heartbeat.
 | Native conversation snapshot in its own column (§3.3 item 3, first step): small context patches no longer rewrite it; same row, so the generation guard still covers both | done | `sessions.native_conversation`, migration 0172 |
 | pi-ai evaluation (§9.2 item 11): do not replace the provider layer; at most a pinned adapter for OpenAI Responses, measured against the current path | done | [pi-ai evaluation](pi-ai-evaluation-2026-11-08.md) |
 | OpenAI `allowed_tools`; the persona after the role template | decided against for now: `allowed_tools` sends the whole ~16k-token schema block on every request where the lazy set sends a few thousand; moving the persona shares the template only across users of one install and moves the identity text | — |
-| Persisted tool bytes; the Companion builder on `PromptBuilder`; the remaining session-row reads (§3.3 item 3); plugin consolidation (§7.3) | open | §3.3, §7.3, §9.2 item 1 |
+| Companion controller prompt in `companion/controller-prompt.md` (byte-identical) and its token-cap queries in a repository function (§3.3 item 2); the session row read once where it was read twice (attachment turn, swarm spawn, worker spawn) | done | `root-runner.ts`, `db/repositories/companion-token-cap.ts` |
+| Trusted extensions may hook the agent loop (§7.3 tier 2, first slice): `octi.hook` exposes `before-agent-start`, `tool:before/after` and `spawn:before/after`, only for extensions listed by real path in `extensions.trusted` | done | `extensions/api.ts` |
+| Persisted tool bytes (§9.2 item 1, second half) | deferred: decide on the `tools_changed` cause of `octipus_prompt_cache_breaks_total`. Freezing every description would put the whole tool text in the session row | — |
+| The remaining session-row reads (generation checks before and after a run are deliberate); plugin tier 1 (MCP egress per host, signing), typed `context` / `session_before_compact` hooks, the legacy `plugin.json` converter (§7.3) | open | §3.3, §7.3 |
 
 ### References
 

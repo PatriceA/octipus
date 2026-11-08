@@ -108,6 +108,30 @@ getAgentHooks().register('before-agent-start', (ctx) => {
 
 Handlers run sequentially in registration order. A thrown handler is logged and swallowed so a broken plugin can't poison the root agent. **Do not** strip or rewrite `SECURITY_PREAMBLE` — DESIGN.md house rule #6.
 
+### From an extension: `octi.hook` (trusted extensions only)
+
+An extension (`~/.octipus/extensions` or a project's `.octipus/extensions`) reaches the same hooks without importing host internals:
+
+```ts
+export default function (octi) {
+  octi.hook('tool:before', (ctx) => {
+    if (ctx.toolId === 'shell') ctx.args.command = String(ctx.args.command).replace(/sk-[A-Za-z0-9]+/g, '[redacted]');
+  });
+}
+```
+
+Events: `before-agent-start`, `tool:before` (rewrite `args` or short-circuit the call), `tool:after`, `spawn:before`, `spawn:after`. The hook is removed when the extension is disposed (`/reload`).
+
+Hooks can rewrite what the agent does, so `octi.hook` throws unless the operator trusts the extension: list each trusted extension's entry file or directory, by absolute path, in `extensions.trusted` (or `OCTIPUS_TRUSTED_EXTENSIONS`, comma-separated). The list is read once, before the first extension's code runs, so changing it needs a restart; relative entries are ignored; paths are compared by real path, decided before the extension is imported, so an extension with the same name somewhere else is not trusted. Observing events (`octi.on`) and adding commands need no trust.
+
+What this gate is and is not: it keeps an extension that was not meant to steer the agent from doing so. It is not a sandbox. Every extension, trusted or not, is in-process code with the server's privileges from the moment it loads, and `<cwd>/.octipus/extensions` loads automatically, so install only extensions you would run yourself.
+
+Behaviour to know when writing a hook:
+
+- `before-agent-start`, `tool:after` and `spawn:after` handlers that throw are logged and skipped. `tool:before` and `spawn:before` are fail-closed: a handler that throws blocks the call or spawn.
+- A `tool:before` short-circuit (`ctx.shortCircuit = { result }`) answers the call without running the tool, and without its permission check. Rewritten `args` are permission-checked as usual.
+- Extension hooks are registered after the built-in persona hook, so a `before-agent-start` hook sees, and could change, the persona block. Leave `SECURITY_PREAMBLE` alone.
+
 ## Example Plugin
 
 See `extensions/example-plugin/` for a working example with a greeting tool and a calculator.

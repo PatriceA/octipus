@@ -382,8 +382,11 @@ export async function spawnWorker(
   // Read from the session so it holds however deep the delegation went —
   // delegation is exactly where an agent short of a tool looks next.
   let planModeWorker = false;
+  // Read once per worker: the plan-mode check here and the session context
+  // below used to read the row twice, milliseconds apart.
+  let planSession: Awaited<ReturnType<typeof sessionRepository.findById>> = null;
   {
-    const planSession = await sessionRepository.findById(context.sessionId);
+    planSession = await sessionRepository.findById(context.sessionId);
     if (isPlanMode(planSession?.context as import('@/db/schema/sessions').SessionContext | undefined)) {
       const before = roleTools.length;
       roleTools = stripMutatingTools(roleTools);
@@ -649,7 +652,7 @@ export async function spawnWorker(
     volatileParts.push('\n\n# Topic Skills\n' + topicSkillFragment);
   }
   // Determine if this is a dev mode session
-  const session = await sessionRepository.findById(context.sessionId);
+  const session = planSession;
   const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
   // Personal memories and profile facts never reach a worker of a space,
   // room or group session (D10, I7): the same audience the root turn reads.
