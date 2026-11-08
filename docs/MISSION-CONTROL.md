@@ -100,6 +100,20 @@ its event timeline:
   managed. A run from before origins were recorded says so.
 - **Run tree** — its parent, itself and the workers it spawned, each linking to
   its own run view.
+- **Outcome and evidence** — status, completion reason or error, duration,
+  tokens and recorded cost, then:
+  - *Deliverables*: the files a write tool recorded (`file_change` events,
+    emitted only after the tool succeeded), and the files the run's answer says
+    it saved. A claimed file is *write recorded* only when a recorded write
+    matches it — the same path, a path ending in it, or the same file name,
+    since `write_file` relocates paths — and otherwise reads **missing**.
+    Claims are taken only from a path after a save verb (*saved*, *wrote*,
+    *created* …) in the same sentence.
+  - *Checks*: the `verification_evidence` rows that judged the run — a worker's
+    by its id or swarm node, or its pipeline's within its lifetime; the root's
+    are every check of its turn. With none, the panel says the result is the
+    model's word.
+  - The final answer (first 4,000 characters).
 - **Prompt** — what its first request held, by category, as in the
   [context inspector](CONTEXT-INSPECTOR.md): the root's sizes from the user
   message it answered, a worker's from its agent row. Section text can be read

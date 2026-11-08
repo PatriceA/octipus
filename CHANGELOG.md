@@ -363,6 +363,9 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Run outcome and evidence.** The run view shows how a run ended, the files
+  its tools recorded writing, the files its answer says it saved — *missing*
+  until a recorded write matches — and the verification checks that judged it.
 - **Agents at a glance.** The sidebar's Mission control item shows runs
   working now and approvals waiting (`GET /api/agents/pulse`); the chat shows
   the agents a session spawned in a strip above the conversation, each opening

@@ -15,6 +15,7 @@ vi.mock('@/db/repositories/content', () => ({ contentRepos: () => ({
   agents: {
     findById: async (id: string) => fixture.agents.get(id) ?? null,
     findBySession: async () => [...fixture.agents.values()],
+    costByAgent: async () => new Map([['w', 0.12]]),
   },
   sessions: { findById: async () => ({ title: 'Release notes' }) },
   messages: { promptCompositionOf: async () => fixture.stored },
@@ -36,6 +37,7 @@ vi.mock('./agent/prompt-composition', () => ({
   getAgentComposition: (id: string) => fixture.inMemory.get(id),
   getLatestComposition: () => fixture.latest,
 }));
+vi.mock('./run-outcome', () => ({ readRunOutcome: async (_a: unknown, root: boolean, status: string, cost: number | null) => ({ root, status, costUsd: cost }) }));
 import { readRunDetail } from './run-detail';
 
 const principal = { kind: 'user', userId: 'u' } as never;
@@ -60,6 +62,7 @@ test('a heartbeat worker: chain from hook to the decision that ran at its start,
   ]);
   expect(r).toMatchObject({ sessionTitle: 'Release notes', parent: { id: 'root', root: true }, children: [{ id: 'c', role: 'research', status: 'running', totalTokens: 1200 }] });
   expect(r?.prompt).toMatchObject({ textAvailable: false, sections: [{ label: 'writing role prompt' }] });
+  expect(r?.outcome).toEqual({ root: false, status: 'completed', costUsd: 0.12 });
 });
 
 test('the prompt comes from memory with text while held, else from what was stored', async () => {
