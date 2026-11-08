@@ -27,6 +27,8 @@ import { coreLogger } from '@/utils/logger';
 import { truncateLinesToTokens } from '@/utils/token-count';
 import { getAgentHooks } from './hooks';
 import { estimateToolSchemaTokens, logPromptComposition, recordContextFill } from './prompt-budget';
+import { PromptTagger, stageRootPrompt, turnContextParts } from './prompt-composition';
+import { splitBasePrompt } from './prompt-parts';
 import { buildSecurityReminder } from './input-guard';
 import { createMetaTools } from './meta-tools';
 import { shouldUseLazyDiscovery } from './lazy-tools';
@@ -196,6 +198,12 @@ export interface RootRunExtras {
    * stop that lands before the agent is registered is not lost.
    */
   signal?: AbortSignal;
+  /**
+   * `extraSystemContext` as labelled pieces (memory, each context hook, space
+   * and group context), for the Context inspector. Ignored unless they add up
+   * to that string exactly.
+   */
+  turnContextParts?: ReadonlyArray<{ label: string; text: string }>;
 }
 
 /**
@@ -581,7 +589,16 @@ export async function runRootAgent(
   // user attached, the reminder by whether this message was flagged), so
   // they ride in the same volatile tier rather than the cacheable static
   // prefix.
-  const volatileParts: string[] = buildPreHookVolatileParts(supervisor&&scope.trigger!=='user'?'':extraSystemContext, guardFlags);
+  const turnBlock = supervisor&&scope.trigger!=='user'?'':extraSystemContext;
+  const volatileParts: string[] = buildPreHookVolatileParts(turnBlock, guardFlags);
+  // Which category each part belongs to, for the Context inspector.
+  const tagger = new PromptTagger();
+  tagger.tag('volatile', 'turn', 'Current date & time', volatileParts[0]);
+  tagger.tagSplit(turnBlock, turnContextParts(turnBlock, [
+    ...(extras.turnContextParts ?? []),
+    ...(attachments.context ? [{ label: 'Attachments', text: attachments.context }] : []),
+  ]));
+  if (guardFlags.length > 0) tagger.tag('volatile', 'guardrails', 'Security alert (input flagged)', volatileParts[volatileParts.length - 1]);
 
   // Fire the before-agent-start hook so extensions and built-in
   // modules (persona, project context) can mutate the system
@@ -607,6 +624,7 @@ export async function runRootAgent(
   // audit; the root agent's own turn — the one the measured pass put at
   // ~8.4k tokens for a one-line question — never did.
   const staticParts: string[] = [systemPrompt];
+  tagger.tagSplit(systemPrompt, splitBasePrompt(systemPrompt, supervisor ? 'Companion supervisor prompt' : `${rootAgentRole} role prompt${isLite ? ' (lite)' : ''}`));
 
   // Workers load the canonical checkpoint and transcript under the session
   // lock, so the root no longer renders either — but the user-visible
@@ -626,14 +644,14 @@ export async function runRootAgent(
   // that is not registered and burn iterations it does not have. Say what is
   // missing, and what to do instead.
   if (droppedToolGroups.length > 0) {
-    staticParts.push(
+    staticParts.push(tagger.tag('static', 'tools', 'Tool groups left out this turn',
       `\n\nNOT AVAILABLE THIS TURN (your model's tool budget): ${droppedToolGroups.join(', ')}. ` +
       'Ignore any instruction above that tells you to use them — calling one will fail. ' +
       'If the request needs one, spawn_child to a specialist that holds it.',
-    );
+    ));
   }
 
-  if(!supervisor)staticParts.push(buildDelegationPolicy(isLite));
+  if(!supervisor)staticParts.push(tagger.tag('static', 'delegation', 'Delegation policy', buildDelegationPolicy(isLite)));
   // The delegation mechanics — how spawn_child/collect_children actually behave,
   // which role fits which task, the read-only clause, the no-respawn rule. Full
   // tier only: lite's whole delegation contract is "once, then relay", and a
@@ -644,19 +662,19 @@ export async function runRootAgent(
   // you know" is what the phase deleted; the mechanics below are as true now as
   // they were, and the routing table gained the sentence about what NOT to
   // delegate — the root holds those tools itself.
-  if (!isLite&&!supervisor) staticParts.push(`\n\n${delegationPrompt}`);
-  volatileParts.push(buildTopicHint(isLite, classification));
+  if (!isLite&&!supervisor) staticParts.push(tagger.tag('static', 'delegation', 'Delegation guide', `\n\n${delegationPrompt}`));
+  volatileParts.push(tagger.tag('volatile', 'turn', 'Topic hint', buildTopicHint(isLite, classification)));
   if (classification.type === 'ambiguous') {
-    volatileParts.push(`\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise resolve only the uncertainty needed to choose direct work or a specialist; do not start a broad investigation just to route the task. If the user explicitly tells you to delegate, always do so.`);
+    volatileParts.push(tagger.tag('volatile', 'turn', 'Ambiguous request note', `\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise resolve only the uncertainty needed to choose direct work or a specialist; do not start a broad investigation just to route the task. If the user explicitly tells you to delegate, always do so.`));
   }
 
   // Chat/work split (Thread 3): tell the root agent whether to deliver in
   // chat or as a file. Empty for the default-inline case, so unchanged.
-  volatileParts.push(buildOutputDirective(outputDirective.mode, outputDirective.forced));
+  volatileParts.push(tagger.tag('volatile', 'turn', 'Output directive', buildOutputDirective(outputDirective.mode, outputDirective.forced)));
   // What happened to interactive answers in the user's client, and where this
   // message came from (ids and enums only, checked against the session).
   const inlineUiNotes = getRunContext()?.inlineUiNotes;
-  if (inlineUiNotes?.length) volatileParts.push(`\n\n${inlineUiNotes.join('\n')}`);
+  if (inlineUiNotes?.length) volatileParts.push(tagger.tag('volatile', 'turn', 'Interactive answer notes', `\n\n${inlineUiNotes.join('\n')}`));
 
   // Inject workspace awareness
   const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
@@ -667,13 +685,14 @@ export async function runRootAgent(
   // because it is a property of this session right now rather than of the
   // install, and a per-session block in the static tier costs the whole prefix
   // a cache write every turn.
-  if (isPlanMode(sessionCtx)) volatileParts.push(PLAN_MODE_DIRECTIVE);
+  if (isPlanMode(sessionCtx)) volatileParts.push(tagger.tag('volatile', 'turn', 'Plan mode', PLAN_MODE_DIRECTIVE));
 
   if (isDevMode) {
     // Dev mode: focused on a specific project
     const projectPath = sessionCtx!.projectPath!;
     const projectName = sessionCtx!.projectName || projectPath.split(/[/\\]/).pop() || 'project';
     let wsContext = `\n\nDEV MODE SESSION — Project: ${projectName}`;
+    let agentsMdChars = 0;
     wsContext += `\nProject path: ${projectPath}`;
 
     // Load the curated AGENTS.md guide for the root agent (lightweight brief)
@@ -681,13 +700,16 @@ export async function runRootAgent(
       const { loadAgentsMd } = await import('./agents-md');
       const guide = await loadAgentsMd(projectPath);
       if (guide) {
+        agentsMdChars = guide.length;
         wsContext += `\nProject overview (from AGENTS.md): ${guide.slice(0, 500)}`;
       }
     } catch (err) { coreLogger.error({ err }, 'silent failure in service'); }
 
     wsContext += `\n\nAll worker tasks MUST target this project. Always include the full path "${projectPath}" in every worker task description. The user does not need to specify the project — it is implicit.`;
     wsContext += `\n\nUse create_pipeline when ordered implementation and verification stages justify their cost, or the user requests that workflow; do not add research stages that repeat completed investigation.`;
-    staticParts.push(wsContext);
+    staticParts.push(tagger.tag('static', 'workspace', 'Dev-mode project', wsContext, agentsMdChars > 500
+      ? { status: 'truncated', note: `AGENTS.md: first 500 of ${agentsMdChars.toLocaleString('en-US')} chars` }
+      : {}));
   } else {
     // Normal mode: generic workspace awareness.
     // Advertise the turn workspace's sandbox root (the same one the filesystem
@@ -729,7 +751,9 @@ export async function runRootAgent(
         suite += `\n\nUse the repo_registry tool (list_repos / get_repo / repo_dependents) to navigate this suite efficiently — read a repo's map before its files. Route each worker to a repo by its ABSOLUTE PATH and tell it to read that repo's AGENTS.md first. For a cross-repo change, call repo_dependents on a library before editing it and name every affected repo in the worker tasks.`;
         suite += ` Dependencies are declared direct package relationships, not a complete impact analysis. Inspect API contracts and runtime connections separately. Repo maps and symbols are scan-time snapshots; refresh with scan_repos after code or manifest changes.`;
         if (ambiguousPackages.length) suite += ` Multiple repositories publish the same package; dependency edges are incomplete for: ${ambiguousPackages.slice(0, 20).join(', ')}${ambiguousPackages.length > 20 ? ' (and more)' : ''}. Use explicit repository paths.`;
-        staticParts.push(suite);
+        staticParts.push(tagger.tag('static', 'workspace', 'Repo map', suite, truncated || shown.length < repos.length
+          ? { status: 'capped', note: `${shown.length} of ${repos.length} repos · cap ${REPO_SUITE_TOKEN_BUDGET.toLocaleString('en-US')} tokens` }
+          : { note: `${repos.length} repos` }));
         injectedSuite = true;
       }
     } catch (err) {
@@ -752,12 +776,12 @@ export async function runRootAgent(
       }
       wsContext += `\n\nIMPORTANT: When the user references "this project" or a project by name, resolve it to the FULL ABSOLUTE PATH and include that path explicitly in every worker task description. For example, if the user says "audit this project (octipus)", your task descriptions must say "audit the project at ${wsRoot}/octipus". Workers do NOT know which project the user means unless you tell them the exact path.`;
       wsContext += `\n\nWhen a repo is flagged "(has AGENTS.md)", tell the worker to read that repo's AGENTS.md first — it is the curated guide to the repo's structure and commands. For cross-repo work, name every repo involved and its path.`;
-      staticParts.push(wsContext);
+      staticParts.push(tagger.tag('static', 'workspace', 'Workspace folders', wsContext, dirs.length > 30 ? { note: `${dirs.length} folders: too many to list` } : {}));
     } catch (err) {
       // The per-user nested root may not exist yet (new user who hasn't
       // written a file). Fall back to a bare workspace line; not fatal.
       coreLogger.debug({ err, wsRoot }, 'workspace readdir skipped — root may not exist yet');
-      staticParts.push(`\nWORKSPACE: ${wsRoot}`);
+      staticParts.push(tagger.tag('static', 'workspace', 'Workspace root', `\nWORKSPACE: ${wsRoot}`));
     }
   }
   // A space session: where the agent is, what the role allows, and why the
@@ -765,12 +789,12 @@ export async function runRootAgent(
   if (space) {
     const { getSpace } = await import('@/core/spaces/service');
     const { name } = await getSpace({ userId }, space.workspaceId);
-    staticParts.push(spaceSessionNotice(name, space.role, can(space.role, 'run_agent_write'), extras.room ? { title: extras.room.title } : undefined));
+    staticParts.push(tagger.tag('static', 'workspace', 'Shared space notice', spaceSessionNotice(name, space.role, can(space.role, 'run_agent_write'), extras.room ? { title: extras.room.title } : undefined)));
   }
 
   // Static, not volatile: the volatile part is stored with every user row, and
   // whether a session is offered interactive answers rarely changes.
-  if (inlineUi) staticParts.push(INLINE_UI_PROMPT);
+  if (inlineUi) staticParts.push(tagger.tag('static', 'guardrails', 'Interactive answer rules', INLINE_UI_PROMPT));
 
   // Append the volatile per-turn context (date, summary, history) after the
   // whole static/semi-static instruction block — keeps the prefix cacheable.
@@ -802,6 +826,15 @@ export async function runRootAgent(
     },
     { static: staticParts.filter(Boolean), volatile: volatileParts.filter(Boolean) },
   ));
+  // The same parts, by category, for the Context inspector: the agent manager
+  // adds skills and MCP servers, the worker adds tools and history.
+  stageRootPrompt(sessionId, {
+    parts: tagger.resolve(staticParts, volatileParts),
+    role: rootAgentRole,
+    model: modelName,
+    ...(modelMeta?.contextWindow ? { contextWindow: modelMeta.contextWindow } : {}),
+    ...(toolAdvertisement.mode === 'lazy' ? { registeredToolCount: turnTools.length } : {}),
+  });
 
   // Hook-triggered tasks get a longer timeout since they run unattended.
   const agentConfig = getConfig().agent;

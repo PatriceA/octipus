@@ -31,10 +31,12 @@ export interface ContextTurnHandle {
 
 export interface ContextHooksOutcome {
   text: string;
+  /** `text` per hook, in order, for the Context inspector. */
+  blocks: Array<{ label: string; text: string }>;
   turn: ContextTurnHandle | null;
 }
 
-const NONE: ContextHooksOutcome = { text: '', turn: null };
+const NONE: ContextHooksOutcome = { text: '', blocks: [], turn: null };
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -83,6 +85,7 @@ export async function runContextHooks(
 
   let budget = settings.maxTokens;
   const texts: string[] = [];
+  const blocks: ContextHooksOutcome['blocks'] = [];
   const records: ContextHookRunRecord[] = [];
   const citable: ContextHookItem[] = [];
   for (const { hook, latencyMs, result: ran } of results) {
@@ -92,6 +95,7 @@ export async function runContextHooks(
     }
     if (result.status === 'injected' && result.text) {
       texts.push(result.text);
+      blocks.push({ label: `Context hook: ${hook.name}`, text: result.text });
       budget -= result.tokens;
       if (hook.kind !== 'notes_index') citable.push(...result.items);
     }
@@ -126,7 +130,7 @@ export async function runContextHooks(
   } catch (err) {
     coreLogger.warn({ err, userId: input.userId }, 'context hooks: turn record not saved (measurement only)');
   }
-  return { text, turn };
+  return { text, blocks, turn };
 }
 
 /**

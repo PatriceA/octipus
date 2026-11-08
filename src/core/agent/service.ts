@@ -966,7 +966,7 @@ export class AgentService {
       // nor where the session's text may not be copied anywhere. Started
       // here so it runs while memory is retrieved; it never throws.
       const contextHooksRun = sharedAudience || audience.contentStorageOff
-        ? Promise.resolve({ text: '', turn: null })
+        ? Promise.resolve({ text: '', blocks: [], turn: null })
         : runContextHooks({
           event: 'turn_start', userId, workspaceId, sessionId: resolvedSessionId,
           space: scope.space, query: message, role: 'general', channel,
@@ -1075,6 +1075,12 @@ export class AgentService {
           ...(attachedFiles.length ? { attachedFiles } : {}),
           ...(isRoom && postedMessageId ? { room: { postedMessageId, title: session.title ?? 'Room' } } : {}),
           ...(signal ? { signal } : {}),
+          turnContextParts: [
+            { label: 'Long-term memory', text: memoryBlock },
+            ...contextHooks.blocks,
+            { label: 'Shared space context', text: spaceContext },
+            { label: 'Group conversation', text: groupContextBlock },
+          ],
         },
       );
       // …and a turn stopped while it ran stores no answer.

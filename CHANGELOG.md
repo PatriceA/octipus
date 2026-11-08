@@ -354,6 +354,17 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Context inspector in the web chat.** A *Context* panel shows how full the
+  root agent's context window was at the start of the latest turn and what
+  filled it, in nine fixed categories (guardrails, role & persona, delegation,
+  workspace, tool definitions, skills, turn context, conversation, other), with
+  caps marked, the provider's reported input beside the estimate, growth by
+  turn, the text of each section for the latest turn, and a *Compact
+  conversation* button. Sizes are stored with each turn's user message
+  (`metadata.promptComposition`, sizes only); the text stays in memory. New
+  route: `GET /api/sessions/:id/context` (owner only). See
+  [docs/CONTEXT-INSPECTOR.md](docs/CONTEXT-INSPECTOR.md).
+
 - **The pipeline plan loop is visible and configurable.** In the template
   editor, a step can be marked **Writes the plan** or **Repeat for each plan
   item**. The list, the graph and the run view frame the steps that repeat and

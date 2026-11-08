@@ -1,5 +1,6 @@
 import { getConfig } from '@/config';
 import { withoutOffModules } from '@/core/modules/prompt';
+import { bindStagedRootPrompt, promptPart } from './agent/prompt-composition';
 import { assertCliSpaceMode } from './cli-adapters';
 import { can, SpaceError } from '@/security/space-access';
 import { buildSelectedSkillPrompt } from '@/skills/selection';
@@ -49,9 +50,14 @@ export function withStaticSection(prompt: string, section: string): string {
  * end of the cacheable prefix. Anyone else gets the prompt unchanged.
  */
 export function withMcpServersSection(systemPrompt: string | undefined, tools: ToolHandler[] | undefined, codemode: boolean): string | undefined {
-  if (!tools?.some((t) => t.name === 'mcp_list_tools')) return systemPrompt;
-  const section = getMCPBridge().serversSection({ codemode });
+  const section = mcpServersSectionFor(tools, codemode);
   return section ? withStaticSection(systemPrompt ?? '', section) : systemPrompt;
+}
+
+/** The MCP servers section a worker holding these tools is given, or ''. */
+function mcpServersSectionFor(tools: ToolHandler[] | undefined, codemode: boolean): string {
+  if (!tools?.some((t) => t.name === 'mcp_list_tools')) return '';
+  return getMCPBridge().serversSection({ codemode }) || '';
 }
 
 /** Union type for all agent worker implementations */
@@ -446,7 +452,20 @@ export class AgentManager {
     // them, and a selection change does not touch the stable part its vendor
     // session is fingerprinted on. Everyone else keeps them as their own message.
     // Text of a module that is off never reaches the agent (docs/MODULES.md).
-    const systemPrompt = withMcpServersSection(options.systemPrompt === undefined ? undefined : withoutOffModules(options.systemPrompt), options.tools, workerConfig.codemode === true);
+    const mcpSection = mcpServersSectionFor(options.tools, workerConfig.codemode === true);
+    const filteredPrompt = options.systemPrompt === undefined ? undefined : withoutOffModules(options.systemPrompt);
+    const systemPrompt = mcpSection ? withStaticSection(filteredPrompt ?? '', mcpSection) : filteredPrompt;
+    // The root runner staged its prompt by category; apply the same rewrite,
+    // add what is appended here, and hand it to this agent (Context inspector).
+    if (context.root) {
+      bindStagedRootPrompt(options.sessionId, agentId, {
+        rewrite: withoutOffModules,
+        add: [
+          ...(mcpSection ? [promptPart('static', 'tools', 'MCP servers', `\n\n${mcpSection}`)] : []),
+          ...(selectedSkills ? [promptPart('static', 'skills', 'Selected skills', selectedSkills)] : []),
+        ],
+      });
+    }
     const intoTail = !context.root && typeof context.metadata.resumeKey === 'string' && isCLI && isResumableCliModel(routedModel)
       && !!selectedSkills && !!systemPrompt && VOLATILE_MARKER.test(systemPrompt);
     if (systemPrompt) {

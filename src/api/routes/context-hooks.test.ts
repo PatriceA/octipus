@@ -227,7 +227,7 @@ describe('a run', () => {
     settings.enabled = false;
     try {
       const off = await run('website pricing');
-      expect(off).toEqual({ text: '', turn: null });
+      expect(off).toEqual({ text: '', blocks: [], turn: null });
     } finally {
       settings.enabled = true;
     }
