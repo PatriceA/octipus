@@ -374,22 +374,48 @@ function seatbeltPaths(path: string): string[] {
 const subpaths = (paths: string[]) => [...new Set(paths.flatMap(seatbeltPaths))].map((p) => `(subpath ${sbplString(p)})`).join(' ');
 const literals = (paths: string[]) => [...new Set(paths.flatMap(seatbeltPaths))].map((p) => `(literal ${sbplString(p)})`).join(' ');
 
+/** Package-manager prefixes: Homebrew (Apple silicon, Intel) and MacPorts. */
+const SEATBELT_PREFIXES = ['/opt/homebrew', '/usr/local', '/opt/local'];
+
 /**
  * System and runtime directories any sandboxed command may read (and map
  * executable code from): the macOS counterpart of bwrap's read-only /usr,
- * /lib, /bin, /etc and /opt. `/System` includes the dyld shared cache on
- * current releases (under /System/Volumes/Preboot/Cryptexes);
- * /private/var/db/dyld holds it on older ones. /private/var/db/timezone
- * holds the zoneinfo /etc/localtime points into, and /private/var/select the
- * /bin/sh selection. Homebrew lives in /opt/homebrew (Apple silicon) or
- * /usr/local (Intel), both covered.
+ * /lib, /bin and /etc. `/System` includes the dyld shared cache on current
+ * releases (under /System/Volumes/Preboot/Cryptexes); /private/var/db/dyld
+ * holds it on older ones. /private/var/db/timezone holds the zoneinfo
+ * /etc/localtime points into, and /private/var/select the /bin/sh selection.
+ *
+ * Not all of /usr or /opt: under a package-manager prefix only the program
+ * directories are listed (`bin`, `sbin`, `lib`, `libexec`, `share`, `opt`,
+ * `Cellar`, `Frameworks`), never `var` or `etc` — that is where Homebrew
+ * keeps Postgres, MySQL and Redis data and service configs with passwords
+ * (`SEATBELT_PREFIX_DENY` denies them again explicitly).
  */
 const SEATBELT_SYSTEM_READ = [
-  '/System', '/usr', '/bin', '/sbin', '/opt',
+  '/System', '/bin', '/sbin',
+  '/usr/bin', '/usr/sbin', '/usr/lib', '/usr/libexec', '/usr/share', '/usr/standalone',
+  ...SEATBELT_PREFIXES.flatMap((prefix) => ['bin', 'sbin', 'lib', 'libexec', 'share', 'opt', 'Cellar', 'Frameworks'].map((dir) => `${prefix}/${dir}`)),
   '/Library/Apple', '/Library/Frameworks', '/Library/Developer/CommandLineTools',
   '/Applications/Xcode.app/Contents/Developer',
   '/private/etc', '/private/var/db/timezone', '/private/var/db/dyld', '/private/var/select',
 ];
+
+/**
+ * Denied after the allows above (SBPL applies the last matching rule), in
+ * case a link or a later release puts them under an allowed path: a prefix's
+ * `var` (databases, logs) and `etc` (service configs).
+ */
+const SEATBELT_PREFIX_DENY = SEATBELT_PREFIXES.flatMap((prefix) => [`${prefix}/var`, `${prefix}/etc`]);
+
+/**
+ * Inside a prefix's `etc`, the public CA bundles only, so TLS in a
+ * Homebrew-linked tool (curl, Python) still verifies certificates when
+ * network is allowed. Allowed after the deny.
+ */
+const SEATBELT_PREFIX_CERTS = SEATBELT_PREFIXES.flatMap((prefix) => [
+  `${prefix}/etc/ca-certificates`, `${prefix}/etc/openssl@3/cert.pem`, `${prefix}/etc/openssl@3/certs`,
+  `${prefix}/etc/openssl@1.1/cert.pem`, `${prefix}/etc/openssl@1.1/certs`,
+]);
 
 /**
  * Mach services every process needs to start and look up its own user:
@@ -425,19 +451,26 @@ export interface SeatbeltInputs {
  * Everything is denied (`deny default`), then allowed back:
  *
  * - **Processes:** exec, fork, signals and process info within the sandbox,
- *   sysctl reads, preference reads, and the short mach-service list above.
+ *   sysctl reads and the short mach-service list above. Preferences: only
+ *   the global domain (`kCFPreferencesAnyApplication`: locale, measurement
+ *   units, the settings CoreFoundation reads for any process), never
+ *   another app's domain, some of which hold tokens. Node itself does not
+ *   read preferences; nothing else is known to be needed, so no further
+ *   domain is listed.
  * - **Reading:** file *metadata* anywhere (path resolution — realpath, the
  *   module lookup that walks up parent directories — stats every ancestor;
  *   this reveals names, sizes and times, never contents). File *contents*
- *   only under the system directories above, the user runtime directories,
+ *   only under the system directories above (with package-manager `var` and
+ *   `etc` denied, but for CA bundles), the user runtime directories,
  *   `extraReadOnly`, the workspace, the writable directories and a few
  *   devices (/dev/null, /dev/zero, /dev/random, /dev/urandom, /dev/tty,
  *   /dev/fd). The rest of the home directory, ~/.ssh included, is unreadable.
  * - **Writing:** only the scratch directory, `extraReadWrite`, the
  *   workspace unless `workspaceReadOnly`, and the character devices above.
- *   A read-only workspace also gets an explicit `deny file-write*` as the
- *   last rule (SBPL applies the last matching rule), so it stays read-only
- *   even if a writable path contains it.
+ *   A read-only workspace also gets an explicit `deny file-write*`, placed
+ *   before the writable paths' allow (SBPL applies the last matching rule):
+ *   a writable directory inside the workspace stays writable, as a later
+ *   `--bind` inside a `--ro-bind` does with bwrap.
  * - **Network:** none at all by default — no TCP, no UDP, no Unix socket,
  *   no DNS. `allowNetwork` allows all of it. `loopbackPorts` allows outbound
  *   TCP to exactly those ports on localhost and nothing else.
@@ -452,7 +485,7 @@ export interface SeatbeltInputs {
  * internet or another local port, is refused by the kernel.
  */
 export function buildSeatbeltProfile(options: WrapOptions, inputs: SeatbeltInputs): string {
-  const readOnly = [...SEATBELT_SYSTEM_READ, ...inputs.runtimeDirs, ...inputs.cliPaths, ...(options.extraReadOnly ?? [])];
+  const readOnly = [...inputs.runtimeDirs, ...inputs.cliPaths, ...(options.extraReadOnly ?? [])];
   const writable = [inputs.scratch, ...(options.extraReadWrite ?? [])];
   const mach = [...SEATBELT_MACH_BASE, ...(options.allowNetwork ? SEATBELT_MACH_NETWORK : [])];
   const lines: string[] = [
@@ -463,18 +496,26 @@ export function buildSeatbeltProfile(options: WrapOptions, inputs: SeatbeltInput
     '(allow signal (target same-sandbox))',
     '(allow process-info* (target same-sandbox))',
     '(allow sysctl-read)',
-    '(allow user-preference-read)',
+    '(allow user-preference-read (preference-domain "kCFPreferencesAnyApplication"))',
     `(allow mach-lookup ${mach.map((n) => `(global-name ${sbplString(n)})`).join(' ')})`,
     '(allow ipc-posix-shm-read-data (ipc-posix-name "apple.shm.notification_center"))',
     // Files: metadata anywhere, contents only where listed.
     '(allow file-read-metadata)',
-    `(allow file-read* file-map-executable ${subpaths(readOnly)})`,
+    `(allow file-read* file-map-executable ${subpaths(SEATBELT_SYSTEM_READ)})`,
+    // Package-manager data and configs stay closed, but for public CA bundles.
+    `(deny file-read* file-map-executable file-write* ${subpaths(SEATBELT_PREFIX_DENY)})`,
+    `(allow file-read* ${subpaths(SEATBELT_PREFIX_CERTS)})`,
+    // Paths the caller asked for come after the deny, so they win.
+    ...(readOnly.length > 0 ? [`(allow file-read* file-map-executable ${subpaths(readOnly)})`] : []),
     '(allow file-read* (literal "/dev/random") (literal "/dev/urandom"))',
     '(allow file-read* file-write-data file-ioctl (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (literal "/dev/dtracehelper") (subpath "/dev/fd"))',
-    `(allow file-read* file-write* file-map-executable ${subpaths(writable)})`,
     options.workspaceReadOnly
       ? `(allow file-read* file-map-executable ${subpaths([options.workspaceRoot])})`
       : `(allow file-read* file-write* file-map-executable ${subpaths([options.workspaceRoot])})`,
+    // A read-only workspace: deny writes, then allow the writable paths, so
+    // one inside the workspace stays writable (as with bwrap).
+    ...(options.workspaceReadOnly ? [`(deny file-write* ${subpaths([options.workspaceRoot])})`] : []),
+    `(allow file-read* file-write* file-map-executable ${subpaths(writable)})`,
   ];
   if (options.allowNetwork) {
     lines.push('(allow network*)');
@@ -494,10 +535,6 @@ export function buildSeatbeltProfile(options: WrapOptions, inputs: SeatbeltInput
   if (options.allowHostUsb) {
     // USB devices are reached through IOKit user clients.
     lines.push('(allow iokit-open)');
-  }
-  if (options.workspaceReadOnly) {
-    // Last, so it wins over any writable path that contains the workspace.
-    lines.push(`(deny file-write* ${subpaths([options.workspaceRoot])})`);
   }
   return `${lines.join('\n')}\n`;
 }

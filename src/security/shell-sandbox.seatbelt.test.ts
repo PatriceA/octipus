@@ -34,6 +34,22 @@ afterEach(() => { fakeRunner = null; sandboxMode = 'required'; setPlatform(realP
 const rules = (profile: string) => profile.trim().split('\n');
 const networkRules = (profile: string) => rules(profile).filter((r) => r.includes('network'));
 
+/**
+ * A minimal evaluator for the file rules: SBPL applies the last rule whose
+ * operation and path filter match, and `(deny default)` otherwise. Only
+ * `subpath` / `literal` filters on `file-read*` / `file-write*` are read.
+ */
+function fileAccess(profile: string, op: 'file-read*' | 'file-write*', path: string): 'allow' | 'deny' {
+  let verdict: 'allow' | 'deny' = 'deny';
+  for (const line of rules(profile)) {
+    const m = /^\((allow|deny) ([^()]*?)\s*(\(.*)?\)$/.exec(line);
+    if (!m || !m[2].split(/\s+/).includes(op) || !m[3]) continue;
+    const filters = [...m[3].matchAll(/\((subpath|literal) "((?:[^"\\]|\\.)*)"\)/g)].map((f) => ({ kind: f[1], path: f[2].replace(/\\(.)/g, '$1') }));
+    if (filters.some((f) => (f.kind === 'literal' ? path === f.path : path === f.path || path.startsWith(`${f.path}/`)))) verdict = m[1] as 'allow' | 'deny';
+  }
+  return verdict;
+}
+
 describe('SBPL string literals', () => {
   test('plain paths are quoted as they are', () => {
     expect(sbplString('/usr/lib')).toBe('"/usr/lib"');
@@ -100,16 +116,28 @@ describe('the Seatbelt profile', () => {
     expect(profile).toContain('(global-name "com.apple.dnssd.service")');
   });
 
-  test('read-only package dir: readable, never writable, and the deny is the last rule', () => {
+  test('read-only package dir: readable, never writable; the data dir and scratch are writable', () => {
     const profile = buildSeatbeltProfile({ workspaceRoot: pkg, workspaceReadOnly: true, extraReadWrite: [data] }, inputs);
     const r = rules(profile);
     const writes = r.filter((l) => l.includes('file-write*') && l.startsWith('(allow'));
     expect(writes.some((l) => l.includes(`(subpath "${pkg}")`))).toBe(false);
     expect(r).toContain(`(allow file-read* file-map-executable (subpath "${pkg}"))`);
-    expect(r.at(-1)).toBe(`(deny file-write* (subpath "${pkg}"))`);
-    // The data directory and the scratch are the writable ones.
-    const writable = writes.find((l) => l.includes(inputs.scratch));
-    expect(writable).toContain(`(subpath "${data}")`);
+    expect(r).toContain(`(deny file-write* (subpath "${pkg}"))`);
+    expect(fileAccess(profile, 'file-read*', `${pkg}/server.mjs`)).toBe('allow');
+    expect(fileAccess(profile, 'file-write*', `${pkg}/server.mjs`)).toBe('deny');
+    expect(fileAccess(profile, 'file-write*', pkg)).toBe('deny');
+    for (const p of [`${data}/state.db`, `${inputs.scratch}/x`]) expect(fileAccess(profile, 'file-write*', p)).toBe('allow');
+    expect(fileAccess(profile, 'file-write*', '/srv/octipus/other')).toBe('deny');
+  });
+
+  test('a writable dir inside a read-only workspace stays writable (as with bwrap), the rest does not', () => {
+    const inner = `${pkg}/.cache`;
+    const profile = buildSeatbeltProfile({ workspaceRoot: pkg, workspaceReadOnly: true, extraReadWrite: [inner] }, inputs);
+    expect(fileAccess(profile, 'file-write*', `${inner}/a`)).toBe('allow');
+    expect(fileAccess(profile, 'file-write*', `${pkg}/server.mjs`)).toBe('deny');
+    const r = rules(profile);
+    expect(r.findIndex((l) => l.startsWith('(deny file-write*') && l.includes(`"${pkg}"`)))
+      .toBeLessThan(r.findIndex((l) => l.startsWith('(allow') && l.includes('file-write*') && l.includes(`"${inner}"`)));
   });
 
   test('a writable workspace is read-write and has no deny', () => {
@@ -120,15 +148,47 @@ describe('the Seatbelt profile', () => {
 
   test('reads only the system and runtime paths, not the home directory', () => {
     const profile = buildSeatbeltProfile({ workspaceRoot: pkg, extraReadOnly: ['/opt/node/bin/node'] }, { ...inputs, runtimeDirs: ['/Users/me/.local/bin'] });
-    const read = rules(profile).find((l) => l.startsWith('(allow file-read* file-map-executable (subpath "/System")'));
-    expect(read).toBeDefined();
-    for (const p of ['/System', '/usr', '/bin', '/private/etc', '/private/var/db/timezone', '/Users/me/.local/bin', '/opt/node/bin/node']) {
-      expect(read).toContain(`(subpath "${p}")`);
+    for (const p of ['/System/Library/x', '/usr/bin/env', '/usr/lib/libSystem.B.dylib', '/bin/sh', '/private/etc/hosts',
+      '/private/var/db/timezone/zoneinfo/UTC', '/Users/me/.local/bin/tool', '/opt/node/bin/node']) {
+      expect(fileAccess(profile, 'file-read*', p), p).toBe('allow');
     }
+    for (const p of ['/Users/me/.ssh/id_ed25519', '/Users/me/Documents/a', '/opt/other/secret', '/private/var/root/x']) {
+      expect(fileAccess(profile, 'file-read*', p), p).toBe('deny');
+    }
+    // Not the whole of /usr or /opt.
+    expect(profile).not.toMatch(/\(subpath "\/usr"\)|\(subpath "\/opt"\)/);
     expect(profile).not.toMatch(/\(subpath "\/Users"\)|\(subpath "\/Users\/me"\)/);
     // File contents are listed; only metadata is global.
     expect(rules(profile)).toContain('(allow file-read-metadata)');
     expect(rules(profile).filter((l) => /^\(allow file-read\*\)$/.test(l))).toEqual([]);
+  });
+
+  test('package-manager programs are readable; their var (databases) and etc (configs) are not, but CA bundles are', () => {
+    const profile = buildSeatbeltProfile({ workspaceRoot: pkg }, inputs);
+    for (const prefix of ['/opt/homebrew', '/usr/local']) {
+      for (const p of [`${prefix}/bin/node`, `${prefix}/lib/libssl.dylib`, `${prefix}/Cellar/node/24.0.0/bin/node`, `${prefix}/opt/openssl@3/lib/x.dylib`, `${prefix}/share/zsh/x`]) {
+        expect(fileAccess(profile, 'file-read*', p), p).toBe('allow');
+      }
+      for (const p of [`${prefix}/var/postgresql@16/base/1/1259`, `${prefix}/var/mysql/ibdata1`, `${prefix}/var/db/redis/dump.rdb`,
+        `${prefix}/etc/redis.conf`, `${prefix}/etc/my.cnf`, `${prefix}/etc/openssl@3/openssl.cnf`]) {
+        expect(fileAccess(profile, 'file-read*', p), p).toBe('deny');
+      }
+      for (const p of [`${prefix}/etc/ca-certificates/cert.pem`, `${prefix}/etc/openssl@3/cert.pem`]) {
+        expect(fileAccess(profile, 'file-read*', p), p).toBe('allow');
+      }
+      expect(fileAccess(profile, 'file-write*', `${prefix}/etc/ca-certificates/cert.pem`)).toBe('deny');
+    }
+  });
+
+  test('a path the caller asks for wins over the package-manager deny', () => {
+    const profile = buildSeatbeltProfile({ workspaceRoot: '/opt/homebrew/var/ws' }, inputs);
+    expect(fileAccess(profile, 'file-write*', '/opt/homebrew/var/ws/a')).toBe('allow');
+    expect(fileAccess(profile, 'file-read*', '/opt/homebrew/var/postgresql@16/x')).toBe('deny');
+  });
+
+  test("preferences: the global domain only, never another app's", () => {
+    const r = rules(buildSeatbeltProfile({ workspaceRoot: pkg }, inputs));
+    expect(r.filter((l) => l.includes('user-preference-read'))).toEqual(['(allow user-preference-read (preference-domain "kCFPreferencesAnyApplication"))']);
   });
 
   test('macOS top-level links get their /private spelling too', () => {
@@ -198,7 +258,7 @@ describe('wrapCommand on darwin', () => {
       const profile = out.argv[2];
       expect(profile.startsWith('(version 1)\n(deny default)\n')).toBe(true);
       expect(networkRules(profile)).toEqual(['(allow network-outbound (remote ip "localhost:43123"))']);
-      expect(rules(profile).at(-1)).toBe(`(deny file-write* (subpath "${pkg}"))`);
+      expect(fileAccess(profile, 'file-write*', `${pkg}/server.mjs`)).toBe('deny');
       expect(out.argv[3]).toBe('/usr/bin/env');
       const vars = out.argv.slice(4, -2);
       expect(vars.every((v) => /^[A-Z_]+=/.test(v))).toBe(true);

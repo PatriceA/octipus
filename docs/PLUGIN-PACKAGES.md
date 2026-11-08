@@ -334,11 +334,19 @@ only:
 
 - **Files:** metadata (names, sizes, times) anywhere, because path resolution
   stats every parent directory; contents only under the system and runtime
-  directories (`/System`, `/usr`, `/bin`, `/sbin`, `/opt`, `/private/etc`,
-  `/private/var/db/timezone`, the Command Line Tools, the user-level runtime
-  directories the Linux sandbox also exposes, and Octipus's own Node binary),
-  the package directory and the writable ones. The package directory is
-  read-only — the profile ends with an explicit `deny file-write*` for it.
+  directories (`/System`, `/bin`, `/sbin`, `/usr/{bin,sbin,lib,libexec,share}`,
+  `/private/etc`, `/private/var/db/timezone`, the Command Line Tools, the
+  user-level runtime directories the Linux sandbox also exposes, and Octipus's
+  own Node binary), the package directory and the writable ones.
+  Under the Homebrew and MacPorts prefixes (`/opt/homebrew`, `/usr/local`,
+  `/opt/local`) only the program directories are readable (`bin`, `sbin`,
+  `lib`, `libexec`, `share`, `opt`, `Cellar`, `Frameworks`); their `var`
+  (Postgres, MySQL, Redis data — possibly Octipus's own database) and `etc`
+  (service configs) are denied explicitly, except the public CA bundles
+  (`etc/ca-certificates`, `etc/openssl@3/cert.pem` and `certs`).
+  The package directory is read-only: an explicit `deny file-write*` for it,
+  followed by the allow for the writable paths (the last matching rule wins),
+  so a writable directory inside it would stay writable, as with bwrap.
   Writable: the data directory and a per-start scratch directory, which is
   the server's `TMPDIR` (there is no private `/tmp` to mount over). The rest
   of the home directory is unreadable.
@@ -348,9 +356,12 @@ only:
   and the profile would have to allow loopback broadly for the bridge's own
   port, which would let the server reach any local service. Allowing exactly
   the proxy's port is narrower. DNS stays off too: the proxy resolves names.
-- **Processes:** exec, fork and signals within the sandbox, sysctl and
-  preference reads, and a short list of system services (directory services,
-  logging, notifications, preferences).
+- **Processes:** exec, fork and signals within the sandbox, sysctl reads,
+  and a short list of system services (directory services, logging,
+  notifications, preferences). Preferences are readable only in the global
+  domain (`kCFPreferencesAnyApplication`: locale and similar settings), not
+  other apps' domains, which can hold tokens. Node does not read preferences
+  itself; no other domain is known to be needed, so none is listed.
 
 Apple marks `sandbox-exec` as deprecated, but it ships with every current
 macOS release and is used by the system and by other developer tools. If a

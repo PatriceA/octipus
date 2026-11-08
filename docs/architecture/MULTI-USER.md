@@ -964,10 +964,13 @@ when `allowNetwork` is false.
 sandbox-exec backend (macOS): `/usr/bin/sandbox-exec -p <profile>
 /usr/bin/env PATH=... TMPDIR=<scratch> ... <command>`, with a Seatbelt
 profile from `buildSeatbeltProfile`: `(deny default)`; file metadata
-anywhere, contents only under system/runtime directories, the workspace
-and the writable paths; writes only to the workspace (unless
-`workspaceReadOnly`, which adds a final `deny file-write*`), the scratch
-dir and `extraReadWrite`; no network unless `allowNetwork`, or
+anywhere, contents only under system/runtime directories (package-manager
+prefixes' program directories only; their `var` and `etc` denied but for
+CA bundles), the workspace and the writable paths; writes only to the
+workspace (unless `workspaceReadOnly`, which adds a `deny file-write*`
+placed before the writable paths' allow, so a writable directory inside
+it stays writable as with bwrap), the scratch dir and `extraReadWrite`;
+preferences only in the global domain; no network unless `allowNetwork`, or
 `loopbackPorts` for outbound TCP to exactly those localhost ports (the
 plugin egress proxy). Paths are escaped as SBPL string literals. It is chosen only when the
 caller passes `allowSeatbelt` (plugin package servers) or the mode is
