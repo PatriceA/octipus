@@ -40,7 +40,8 @@ export interface ExtensionAPI {
   /**
    * Hook the agent loop (core/agent/hooks.ts): `before-agent-start` (the root
    * system prompt), `tool:before` (rewrite args or short-circuit a call),
-   * `tool:after`, `spawn:before` / `spawn:after`, `context` (transform the
+   * `tool:after` (replace or redact a successful result), `spawn:before` /
+   * `spawn:after`, `context` (transform the
    * messages of one model request; never the stored history) and
    * `compact:before` (supply a compaction summary). Only for an extension the
    * operator trusts (`extensions.trusted`); anything else throws. Removed when
@@ -50,6 +51,24 @@ export interface ExtensionAPI {
     event: E,
     handler: import('@/core/agent/hooks').HookHandler<import('@/core/agent/hooks').AgentHookEvents[E]>,
   ): () => void;
+
+  /**
+   * Version of the `hook` contract (`AGENT_HOOK_API_VERSION`): event names,
+   * payload shapes and failure modes are stable within it. Check it when your
+   * extension depends on a payload field.
+   */
+  readonly hookApiVersion: number;
+
+  /**
+   * Register a tool the agents can call, as `ext_<extension>__<id>` in the
+   * tool group `ext_<extension>` (list that group in a role's tools to give it
+   * the tool). It runs through the same middleware as a built-in: hooks, the
+   * permission check for its `effect`, approval, audit. Trusted extensions
+   * only (`extensions.trusted`); anything else throws, as does an invalid
+   * definition or an id already taken. Removed on dispose. Returns the
+   * unregister function.
+   */
+  registerTool(def: ExtensionToolDef): () => void;
 
   /**
    * Register a teardown callback. All `on()` subscriptions are cleaned up
@@ -82,6 +101,32 @@ export interface ExtensionCommandDef {
    */
   minTrustLevel?: 'user' | 'local' | 'system' | 'agent';
   handler: (ctx: ExtensionCommandContext) => Promise<{ text: string; ephemeral?: boolean }>;
+}
+
+/**
+ * What a tool does, which decides the permission action it is checked under:
+ * `read` → `read` (allowed by default, no mutation journal), `write` → `write`
+ * (asks by default), `external` → `external` (asks, and marked dangerous so a
+ * broad allow rule does not lift it).
+ */
+export type ExtensionToolEffect = 'read' | 'write' | 'external';
+
+export interface ExtensionToolDef {
+  /** Lower-case letters, digits and single underscores, starting with a letter. */
+  id: string;
+  description: string;
+  /** JSON Schema of the arguments, `type: 'object'`. Its `required` list is enforced before the handler runs. */
+  parameters?: { type: 'object'; properties?: Record<string, unknown>; required?: string[]; [key: string]: unknown };
+  effect: ExtensionToolEffect;
+  /** Its return value is the tool result (JSON-serialisable). A throw is a failed call. */
+  handler: (args: Record<string, unknown>, ctx: ExtensionToolContext) => unknown | Promise<unknown>;
+}
+
+export interface ExtensionToolContext {
+  userId: string;
+  sessionId: string;
+  role?: string;
+  workspaceId?: string | null;
 }
 
 export interface ExtensionCommandContext {

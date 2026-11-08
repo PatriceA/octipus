@@ -6,7 +6,7 @@ import { matchesPattern } from '@/core/gateway/protocol';
 import { createChildLogger } from '@/utils/logger';
 import { realpathSync } from 'node:fs';
 import { isAbsolute, relative } from 'node:path';
-import { getAgentHooks } from '@/core/agent/hooks';
+import { AGENT_HOOK_API_VERSION, getAgentHooks } from '@/core/agent/hooks';
 import { getConfig } from '@/config';
 import type {
   ExtensionAPI,
@@ -14,6 +14,10 @@ import type {
   ExtensionEventHandler,
   LoadedExtension,
 } from './types';
+import { ExtensionToolContainer, registerContainer, unregisterContainer } from './tools';
+
+/** The hook contract version an extension sees as `octi.hookApiVersion`. */
+export const OCTI_HOOK_API_VERSION = AGENT_HOOK_API_VERSION;
 
 /** The real path, or the path as given when it does not resolve (a deleted file is trusted by nothing). */
 function real(path: string): string {
@@ -79,10 +83,13 @@ export function buildExtensionContext(
   const commandNames: string[] = [];
   const disposeCallbacks: Array<() => void | Promise<void>> = [];
   let disposed = false;
+  let toolContainer: ExtensionToolContainer | undefined;
+  const pendingToolWork: Promise<void>[] = [];
 
   const api: ExtensionAPI = {
     name,
     logger,
+    hookApiVersion: OCTI_HOOK_API_VERSION,
 
     on(pattern: string, handler: ExtensionEventHandler): () => void {
       if (disposed) {
@@ -168,10 +175,43 @@ export function buildExtensionContext(
       if (!trusted) {
         throw new Error(`extension "${name}" may not hook the agent loop: it is not listed in extensions.trusted (${entryPath})`);
       }
-      const off = getAgentHooks().register(event, handler);
+      // A failure names the extension: a fail-closed event's error (and the
+      // withheld `tool:after` result) says whose hook it was.
+      const named: typeof handler = async (ctx) => {
+        try {
+          await handler(ctx);
+        } catch (err) {
+          throw new Error(`extension "${name}": ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+        }
+      };
+      const off = getAgentHooks().register(event, named);
       unsubscribers.push(off);
       logger.info({ event }, 'extension hooked the agent loop');
       return off;
+    },
+
+    registerTool(def) {
+      if (disposed) {
+        logger.warn(`registerTool(${def?.id}) ignored — extension already disposed`);
+        return () => {};
+      }
+      if (!trusted) {
+        throw new Error(`extension "${name}" may not register tools: it is not listed in extensions.trusted (${entryPath})`);
+      }
+      if (toolContainer) {
+        toolContainer.add(def);
+      } else {
+        // Validate the first tool before claiming the group, so a bad
+        // definition leaves nothing registered.
+        const container = new ExtensionToolContainer(name, logger);
+        container.add(def);
+        pendingToolWork.push(registerContainer(container).catch((err) => {
+          logger.error({ err, toolGroup: container.id }, 'registering the extension tool group failed');
+        }));
+        toolContainer = container;
+      }
+      const container = toolContainer;
+      return () => { container.remove(def.id); };
     },
   };
 
@@ -190,6 +230,11 @@ export function buildExtensionContext(
         try { cmdRegistry.unregister(cmdName); } catch (err) { logger.warn({ err, cmdName }, 'unregister command failed'); }
       }
       commandNames.length = 0;
+      if (toolContainer) {
+        await Promise.allSettled(pendingToolWork);
+        try { await unregisterContainer(toolContainer); } catch (err) { logger.warn({ err }, 'unregister tools failed'); }
+        toolContainer = undefined;
+      }
       for (const cb of disposeCallbacks) {
         try { await cb(); } catch (err) { logger.warn({ err }, 'onDispose callback failed'); }
       }

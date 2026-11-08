@@ -742,8 +742,10 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `eval` | `models` | 8 |
 | `eval` | `security` | 2 |
 | `eval` | `utils` | 5 |
+| `extensions` | `capabilities` | 1 |
 | `extensions` | `config` | 1 |
 | `extensions` | `core` | 3 |
+| `extensions` | `tools` | 2 |
 | `extensions` | `utils` | 4 |
 | `hooks` | `channels` | 4 |
 | `hooks` | `config` | 2 |

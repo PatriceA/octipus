@@ -1,4 +1,4 @@
-export { buildExtensionContext } from './api';
+export { buildExtensionContext, OCTI_HOOK_API_VERSION } from './api';
 export { discoverExtensions, loadExtension } from './loader';
 export {
   ExtensionRegistry,
@@ -12,5 +12,8 @@ export type {
   ExtensionEventContext,
   ExtensionEventHandler,
   ExtensionFactory,
+  ExtensionToolContext,
+  ExtensionToolDef,
+  ExtensionToolEffect,
   LoadedExtension,
 } from './types';
