@@ -96,6 +96,8 @@ export interface SpawnOptions {
   contextMetadata?: Record<string, unknown>;
   /** Lazy tool discovery mode; decided by the spawner. Defaults to full. */
   toolAdvertisement?: import('./agent-base').ToolAdvertisement;
+  /** Start from this parent conversation instead of `systemPrompt` (swarm/fork.ts). */
+  fork?: import('./swarm/fork').ForkSeed;
 }
 
 export interface AgentInfo {
@@ -146,6 +148,11 @@ export class AgentManager {
   }
   private eventHandlers: Set<(event: AgentEvent) => void> = new Set();
   private globalTools: Map<string, ToolHandler> = new Map();
+
+  /** Names of the tools every worker registers (`registerGlobalTool`). */
+  globalToolNames(): string[] {
+    return [...this.globalTools.keys()];
+  }
   /** Per-agent event ring buffer for polling (max 200 events per agent) */
   private eventBuffers: Map<string, BufferedEvent[]> = new Map();
   private eventSeqCounter: number = 0;
@@ -446,13 +453,20 @@ export class AgentManager {
     // them, and a selection change does not touch the stable part its vendor
     // session is fingerprinted on. Everyone else keeps them as their own message.
     // Text of a module that is off never reaches the agent (docs/MODULES.md).
-    const systemPrompt = withMcpServersSection(options.systemPrompt === undefined ? undefined : withoutOffModules(options.systemPrompt), options.tools, workerConfig.codemode === true);
-    const intoTail = !context.root && typeof context.metadata.resumeKey === 'string' && isCLI && isResumableCliModel(routedModel)
-      && !!selectedSkills && !!systemPrompt && VOLATILE_MARKER.test(systemPrompt);
-    if (systemPrompt) {
-      worker.addSystemMessage(intoTail ? `${systemPrompt}${selectedSkills}` : systemPrompt);
+    // A fork starts from its parent's conversation, system messages included,
+    // and adds nothing ahead of it: any byte here would be a cold prefix
+    // (swarm/fork.ts). A CLI worker cannot be seeded; it starts as a child.
+    if (options.fork && worker instanceof AgentWorker) {
+      worker.seedConversation(options.fork);
+    } else {
+      const systemPrompt = withMcpServersSection(options.systemPrompt === undefined ? undefined : withoutOffModules(options.systemPrompt), options.tools, workerConfig.codemode === true);
+      const intoTail = !context.root && typeof context.metadata.resumeKey === 'string' && isCLI && isResumableCliModel(routedModel)
+        && !!selectedSkills && !!systemPrompt && VOLATILE_MARKER.test(systemPrompt);
+      if (systemPrompt) {
+        worker.addSystemMessage(intoTail ? `${systemPrompt}${selectedSkills}` : systemPrompt);
+      }
+      if (selectedSkills && !intoTail) worker.addSystemMessage(selectedSkills);
     }
-    if (selectedSkills && !intoTail) worker.addSystemMessage(selectedSkills);
 
     // Store the worker
     this.agents.set(agentId, worker);

@@ -32,7 +32,9 @@ import { createMetaTools } from './meta-tools';
 import { shouldUseLazyDiscovery } from './lazy-tools';
 import { selectLaneWithDecision } from './lane-intent';
 import { selectCoreToolIds, stickyCoreToolIds } from './tool-intent';
-import { isPlanMode, PLAN_MODE_DIRECTIVE, stripMutatingTools } from './plan-mode';
+import { isPlanMode, PLAN_MODE_DIRECTIVE } from './plan-mode';
+import { FILE_CHANGES_REFUSED_KEY, type FileChangeRefusalReason } from '@/core/tool-executor';
+import { REPEATABLE_CONTEXT_KEY } from './repeated-context';
 import { isLongTailHandler } from './tool-split';
 import { buildCapabilitiesHandler } from '@/tools/self-report';
 import { modelCandidates, type ModelSelector, warmConversationOf } from './model-selector';
@@ -196,6 +198,13 @@ export interface RootRunExtras {
    * stop that lands before the agent is registered is not lost.
    */
   signal?: AbortSignal;
+  /**
+   * The retrieved blocks inside this turn's context (the memory block, each
+   * context hook's block), verbatim. The worker leaves out any that an earlier
+   * turn still in the conversation already carries (`REPEATABLE_CONTEXT_KEY`).
+   * Directives are never listed: an instruction is repeated on purpose.
+   */
+  repeatableContext?: string[];
 }
 
 /**
@@ -398,19 +407,20 @@ export async function runRootAgent(
   // turn right after startup sees their tools.
   await getMCPBridge().whenInitiallyConnected();
   let rootTools = getToolsForRole(ROOT_ROLE);
-  // A planning turn holds no file-writing tools. Applied to the ROOT's set
-  // before `allowedToolIds` is derived from it, so a child it spawns cannot be
-  // granted what the parent does not hold — the same reasoning the read-only
-  // role filter documents.
-  if (isPlanMode(planSessionCtx)) rootTools = stripMutatingTools(rootTools);
-  // In a space: personal-only tools are not offered (the prompt says why),
-  // and a commenter's turn — or a listen turn nobody asked for (§9.3) —
-  // holds no file-changing tools either; every other write is refused at
-  // call time by `routeApprovalFor`.
-  if (space) {
-    rootTools = withoutPersonalOnlyTools(rootTools);
-    if (writesWithheld(space, scope.trigger)) rootTools = stripMutatingTools(rootTools);
-  }
+  // A planning turn changes no files, and neither does a commenter's turn in a
+  // space or a listen turn nobody asked for (§9.3). The root keeps the
+  // file-changing handlers DECLARED and the executor refuses every call to one
+  // (`FILE_CHANGES_REFUSED_KEY`): stripping them changed the tool list — the
+  // start of the prompt — each time the mode flipped, and that was a cold
+  // provider cache for the whole conversation. A child cannot be granted them
+  // either: the worker spawners read the same session flag and space role and
+  // strip the child's set, which is built once and never flips. Every other
+  // space write is refused at call time by `routeApprovalFor`.
+  const fileChangesRefused: FileChangeRefusalReason | undefined = isPlanMode(planSessionCtx)
+    ? 'plan_mode'
+    : space && writesWithheld(space, scope.trigger) ? 'space_role' : undefined;
+  // In a space: personal-only tools are not offered (the prompt says why).
+  if (space) rootTools = withoutPersonalOnlyTools(rootTools);
   // "Ask my agent" in a room of a space on another install (federation §9):
   // the remote space tools and the non-personal web reads, nothing else —
   // no meta-tools (no delegation, no memory), no personal tool, no file
@@ -542,7 +552,10 @@ export async function runRootAgent(
         // it reported tools the model could not see, and over-counted by one
         // for every discoverOnly handler.
         turnTools = [...lazyCore, selfReport(lazyCore.filter((t) => !isLongTailHandler(t, lazyCoreToolIds)))];
-        toolAdvertisement = { mode: 'lazy', coreToolIds: lazyCoreToolIds };
+        // The sticky groups go first, in the order the conversation first used
+        // them: a group added mid-conversation follows the earlier groups
+        // instead of being inserted between them.
+        toolAdvertisement = { mode: 'lazy', coreToolIds: lazyCoreToolIds, groupOrder: rootCoreToolIds };
         rootAllowedToolIds.add('tool_discovery');
         coreLogger.info(
           {
@@ -859,6 +872,8 @@ export async function runRootAgent(
       // auto-index or notification text (`contentStorageOffFor`).
       ...(remoteRoom ? { remoteRoom: true, [CONTENT_STORAGE_OFF_KEY]: true } : {}),
       ...(inlineUi ? { inlineUiOffered: true } : {}),
+      ...(fileChangesRefused ? { [FILE_CHANGES_REFUSED_KEY]: fileChangesRefused } : {}),
+      ...(extras.repeatableContext?.length ? { [REPEATABLE_CONTEXT_KEY]: extras.repeatableContext } : {}),
     },
   });
 

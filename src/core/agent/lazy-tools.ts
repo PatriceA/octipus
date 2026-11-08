@@ -8,13 +8,16 @@
  * the rule in one place.
  *
  * Both copies read `provider === 'ollama'`, on the reasoning that a local model
- * re-prefills the schema on the iGPU every request while a remote one
- * prefix-caches the block cheaply and tool-calls more reliably with it. The
- * first half is true. The second half was an assumption, and a benchmark put a
+ * re-prefills the schema on the iGPU while a remote one prefix-caches the block
+ * cheaply and tool-calls more reliably with it. The first half is true whenever
+ * the KV prefix is lost (a new session, a reload, another agent's prompt in
+ * between). The second half was an assumption, and a benchmark put a
  * number on what it costs: the root's standing prompt measured 21,945 tokens,
- * of which 15,935 — 73% — was tool JSON schema, billed in full on every fresh
- * session because a cache prefix only helps within one. Prose is the other
- * quarter, so no amount of rewriting the persona touches this.
+ * of which 15,935 — 73% — was tool JSON schema, billed in full on most fresh
+ * sessions. (Provider caches are shared across requests with an identical
+ * prefix; Octipus's per-user and per-session prompt parts are what made fresh
+ * sessions miss.) Prose is the other quarter, so no amount of rewriting the
+ * persona touches this.
  *
  * The condition is now the model's capability rather than its postcode, with a
  * setting to put it back if a provider really does tool-call worse without the

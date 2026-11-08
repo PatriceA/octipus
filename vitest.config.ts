@@ -97,7 +97,8 @@ export default defineConfig({
   test: {
     // Own one exclusive root per invocation, shared with workers via provide.
     // Teardown removes only that root after all projects finish.
-    globalSetup: ['./src/test-helpers/tmp-cleanup.ts'],
+    // The CLI suites need the built tool bridge (cli-bridge-build.ts).
+    globalSetup: ['./src/test-helpers/tmp-cleanup.ts', './src/test-helpers/cli-bridge-build.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['lcov'],

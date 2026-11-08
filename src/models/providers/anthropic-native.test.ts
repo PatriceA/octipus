@@ -78,6 +78,44 @@ describe('AnthropicProvider native /v1/messages body (Phase A2)', () => {
     expect(marked.map((b: any) => b.cache_control)).toEqual([{ type: 'ephemeral', ttl: '1h' }]);
     expect((buildBody(opts, false).system as Array<{ cache_control?: unknown }>)[0].cache_control).toEqual({ type: 'ephemeral' });
   });
+
+  test('human-paced turns keep the stable prefix (tools + system) for an hour, history for five minutes', () => {
+    const messages = [...(opts.messages as CompletionOptions['messages']), { role: 'assistant', content: 'a', timestamp: new Date() }, { role: 'user', content: 'b', timestamp: new Date() }] as CompletionOptions['messages'];
+    const body = buildBody({ ...opts, messages, cacheScope: 'root:', cachePacing: 'human' }, false);
+    const tools = body.tools as Array<{ cache_control?: unknown }>;
+    expect(tools.at(-1)?.cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
+    expect((body.system as Array<{ cache_control?: unknown }>)[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
+    const marked = (body.messages as Array<{ content: unknown }>).flatMap(m => (Array.isArray(m.content) ? m.content : [])).filter((b: any) => b.cache_control);
+    expect(marked.map((b: any) => b.cache_control)).toEqual([{ type: 'ephemeral' }]);
+  });
+
+  test('machine-paced and unspecified requests stay on five minutes, with the tools breakpoint', () => {
+    for (const cachePacing of ['machine', undefined] as const) {
+      const body = buildBody({ ...opts, cacheScope: 'child:coding', cachePacing }, false);
+      expect((body.tools as Array<{ cache_control?: unknown }>).at(-1)?.cache_control).toEqual({ type: 'ephemeral' });
+      expect((body.system as Array<{ cache_control?: unknown }>)[0].cache_control).toEqual({ type: 'ephemeral' });
+    }
+  });
+
+  test('cachePolicy off sends no breakpoint anywhere, tools included', () => {
+    const body = buildBody({ ...opts, cachePolicy: 'off', cachePacing: 'human' }, false);
+    expect(JSON.stringify(body)).not.toContain('cache_control');
+  });
+
+  test('never more than four breakpoints, longer lifetimes first', () => {
+    const messages = [...(opts.messages as CompletionOptions['messages']), { role: 'assistant', content: 'a', timestamp: new Date() }, { role: 'user', content: 'b', timestamp: new Date() }] as CompletionOptions['messages'];
+    for (const cachePolicy of ['default', 'session'] as const) {
+      const body = buildBody({ ...opts, messages, cachePolicy, cacheScope: 'root:', cachePacing: 'human' }, false);
+      // Collected in prefix order (tools → system → messages), not body key order.
+      const ttls: string[] = [];
+      for (const part of [body.tools, body.system, body.messages]) {
+        JSON.stringify(part, (k, v) => { if (k === 'cache_control') ttls.push(v.ttl ?? '5m'); return v; });
+      }
+      expect(ttls.length).toBeLessThanOrEqual(4);
+      // tools → system → messages order: once a 5m entry appears, no 1h after it.
+      expect(ttls.join(',')).not.toMatch(/5m.*1h/);
+    }
+  });
 });
 
 describe('replayed thinking on the native API', () => {

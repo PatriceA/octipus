@@ -15,6 +15,7 @@ import {
   bindReplayedThinking,
   buildCachedSystem,
   markHistoryCacheBreakpoint,
+  markToolsCacheBreakpoint,
   configureAnthropicBody,
   parseAnthropicResponse,
   parseAnthropicSseStream,
@@ -23,7 +24,7 @@ import {
   toAnthropicTools,
 } from './custom/anthropic-compat-provider';
 import { claudeToolChoice, dropClaudeSampling } from '../claude-request';
-import { cacheTtlFor } from './prompt-cache';
+import { cacheTtlsFor } from './prompt-cache';
 import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from './http-retry';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
 import { normalizeUsage } from './usage';
@@ -32,19 +33,20 @@ const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1/';
 const ANTHROPIC_VERSION = '2023-06-01';
 
 /**
- * Opt-in flag (Phase A2) to route this provider through the NATIVE
- * `/v1/messages` endpoint instead of the OpenAI-compat `/v1/chat/completions`
- * one. Native Messages is the default, including prompt caching and structured
- * outputs. ANTHROPIC_NATIVE_MESSAGES=0 is an explicit compatibility rollback.
+ * Whether this provider uses the NATIVE `/v1/messages` endpoint — the default,
+ * with prompt caching and structured outputs. ANTHROPIC_NATIVE_MESSAGES=0 is an
+ * explicit rollback to the OpenAI-compat `/v1/chat/completions` endpoint, which
+ * has no prompt caching.
  */
 function nativeMessagesEnabled(): boolean {
   return anthropicNativeMessagesEnabled(process.env.ANTHROPIC_NATIVE_MESSAGES);
 }
 
 /**
- * Anthropic direct provider -- calls the Anthropic API through its
- * OpenAI-compatible endpoint without going through the LiteLLM proxy.
- * API key is retrieved from the vault at runtime.
+ * Anthropic direct provider -- calls the Anthropic API without going through
+ * the LiteLLM proxy: native Messages by default, the OpenAI-compatible
+ * endpoint only under ANTHROPIC_NATIVE_MESSAGES=0. API key is retrieved from
+ * the vault at runtime.
  */
 export class AnthropicProvider implements ModelProvider {
   readonly name = 'anthropic';
@@ -242,12 +244,18 @@ export class AnthropicProvider implements ModelProvider {
       max_tokens: options.maxTokens || 4096,
       stream,
     };
-    const ttl = cacheTtlFor(options.cachePolicy);
-    if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, options.model, ttl);
-    if (options.cachePolicy !== 'off' && options.historyCache !== false) markHistoryCacheBreakpoint(messages, Boolean(options.cacheScope), ttl);
+    // First-party API: the pacing-based hour on the stable prefix is supported
+    // here (proxies and compatible endpoints keep the policy's lifetimes).
+    const ttls = cacheTtlsFor(options.cachePolicy, options.cachePacing);
+    if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, options.model, ttls.prefix);
+    if (options.cachePolicy !== 'off' && options.historyCache !== false) markHistoryCacheBreakpoint(messages, Boolean(options.cacheScope), ttls.history);
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
     // Tool choice and sampling are set by `configureAnthropicBody`.
-    if (options.tools?.length) body.tools = toAnthropicTools(options.tools);
+    if (options.tools?.length) {
+      const tools = toAnthropicTools(options.tools);
+      if (options.cachePolicy !== 'off') markToolsCacheBreakpoint(tools, ttls.prefix);
+      body.tools = tools;
+    }
     if (options.extraBody) Object.assign(body, options.extraBody);
     configureAnthropicBody(body, options);
     return body;

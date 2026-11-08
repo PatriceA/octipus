@@ -11,7 +11,7 @@ import { coerceDeepseekToolChoice, DEEPSEEK_TEMPLATE_LEAK, parseDsmlToolCalls } 
 import { transformMessagesForProvider } from '@/models/message-transform';
 import { parseToolCallArguments } from '@/models/tool-call-args';
 import { normalizeUsage } from '@/models/providers/usage';
-import { applyAnthropicCacheControl, cacheTtlFor, isAnthropicFamily, logMissedCacheSplit } from '@/models/providers/prompt-cache';
+import { applyAnthropicCacheControl, cacheTtlsFor, isAnthropicFamily, logMissedCacheSplit } from '@/models/providers/prompt-cache';
 import { claudeToolChoice, dropClaudeSampling } from '@/models/claude-request';
 import { modelLogger } from '@/utils/logger';
 
@@ -20,6 +20,20 @@ export interface CompletionOptions {
   cachePolicy?: 'default' | 'off' | 'session';
   /** Logical agent conversation and clear generation, for provider affinity. */
   cacheScope?: string;
+  /**
+   * Who paces this conversation's requests (`cacheTtlsFor`): an attended root
+   * turn is `human` and keeps its stable prefix cached for an hour; anything
+   * else defaults to the 5-minute entry. Honored by the first-party Anthropic
+   * provider only — proxies and compatible endpoints may not accept `ttl`.
+   */
+  cachePacing?: import('@/models/providers/prompt-cache').CachePacing;
+  /**
+   * Queue priority at the provider's rate limiter (`requestPriority`). Unset:
+   * derived from `requestType` (compaction, memory extraction, … are
+   * background). On a local runner, background calls also wait for the
+   * foreground to go quiet.
+   */
+  priority?: import('@/models/rate-limiter').RequestPriority;
   /**
    * `false`: cache the system prefix only, no breakpoint in the conversation.
    * For a request the next one is unlikely to continue (a casual reply between
@@ -506,7 +520,7 @@ export class LiteLLMClient {
     // Anthropic prompt caching (Phase A1): the proxy forwards `cache_control`
     // content blocks to Anthropic upstreams, so cache the static prefix.
     if (options.cachePolicy !== 'off' && claude) {
-      const cached = applyAnthropicCacheControl(params.messages, model, { conversation: Boolean(options.cacheScope), history: options.historyCache, ttl: cacheTtlFor(options.cachePolicy) });
+      const cached = applyAnthropicCacheControl(params.messages, model, { conversation: Boolean(options.cacheScope), history: options.historyCache, ttls: cacheTtlsFor(options.cachePolicy) });
       if (!cached.system) logMissedCacheSplit(model);
     }
     if (options.tools?.length) {

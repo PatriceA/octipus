@@ -1,12 +1,11 @@
 import { instrumentProvider } from './instrumented';
 import { getConfig } from '@/config';
-import { recordLlmRequest } from '@/core/telemetry';
 import { coreLogger, modelLogger } from '@/utils/logger';
 import { classifyError, ClassifiedError, FailoverReason } from '@/core/errors/classification';
 import { CircuitOpenError, getCircuitBreakerRegistry } from '../circuit-breaker';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import { transformMessagesForProvider } from '../message-transform';
-import { getRateLimitManager, } from '../rate-limiter';
+import { getRateLimitManager, requestPriority } from '../rate-limiter';
 import { adjustMaxTokensForThinking, supportsThinking, type ThinkingLevel } from '../thinking-budget';
 import { AnthropicProvider } from './anthropic-provider';
 import { CLIProvider } from './cli-provider';
@@ -270,7 +269,7 @@ export class ProviderRouter {
 
     // Acquire rate limit token
     const rateLimiter = getRateLimitManager();
-    const token = await rateLimiter.acquire(rateLimitKey);
+    const token = await rateLimiter.acquire(rateLimitKey, requestPriority(options));
 
     const startTime = Date.now();
     try {
@@ -279,11 +278,6 @@ export class ProviderRouter {
 
       token.reportSuccess(latencyMs, result.usage.totalTokens);
       circuitBreakers.recordSuccess(rateLimitKey);
-      recordLlmRequest(provider.name, result.model || options.model, 'success', latencyMs / 1000, {
-        prompt: result.usage.inputTokens,
-        completion: result.usage.outputTokens,
-        cached: result.usage.cacheReadTokens,
-      });
 
       if (logsHere) {
         modelLogger.info(
@@ -320,7 +314,6 @@ export class ProviderRouter {
         return this.completeViaFallback(options);
       }
 
-      recordLlmRequest(provider.name, options.model, 'error', (Date.now() - startTime) / 1000);
       throw classifyError(error, provider.name);
     } finally {
       token.release();
@@ -362,7 +355,7 @@ export class ProviderRouter {
 
     // Acquire rate limit token
     const rateLimiter = getRateLimitManager();
-    const token = await rateLimiter.acquire(rateLimitKey);
+    const token = await rateLimiter.acquire(rateLimitKey, requestPriority(options));
 
     const startTime = Date.now();
     try {
@@ -373,13 +366,11 @@ export class ProviderRouter {
       circuitBreakers.recordSuccess(rateLimitKey);
       // Streaming usage isn't aggregated at the router; record latency + count
       // only. Token totals come from the non-streaming path and the cost tracker.
-      recordLlmRequest(provider.name, options.model, 'success', latencyMs / 1000);
     } catch (error) {
       const isRL = isRateLimitResponse(error);
       token.reportError(isRL);
       // A3: only transport-class failures trip the breaker.
       if (isTransportFailure(error)) circuitBreakers.recordFailure(rateLimitKey);
-      recordLlmRequest(provider.name, options.model, 'error', (Date.now() - startTime) / 1000);
       throw classifyError(error, provider.name);
     } finally {
       token.release();
@@ -470,26 +461,17 @@ export class ProviderRouter {
 
   private async completeViaFallback(options: CompletionOptions): Promise<CompletionResult> {
     const fallback = this.getLiteLLM();
-    const token = await getRateLimitManager().acquire('litellm');
+    const token = await getRateLimitManager().acquire('litellm', requestPriority(options));
     const startTime = Date.now();
     try {
       const result = await fallback.complete(options);
       const latencyMs = Date.now() - startTime;
       token.reportSuccess(latencyMs, result.usage.totalTokens);
       getCircuitBreakerRegistry().recordSuccess('litellm');
-      // Fallback goes straight to the litellm provider (not back through
-      // complete()), so record the metric here or the recovered request is
-      // invisible. Labeled provider='litellm' to distinguish it from the primary.
-      recordLlmRequest('litellm', result.model || options.model, 'success', latencyMs / 1000, {
-        prompt: result.usage.inputTokens,
-        completion: result.usage.outputTokens,
-        cached: result.usage.cacheReadTokens,
-      });
       return result;
     } catch (error) {
       token.reportError(isRateLimitResponse(error));
       getCircuitBreakerRegistry().recordFailure('litellm');
-      recordLlmRequest('litellm', options.model, 'error', (Date.now() - startTime) / 1000);
       throw classifyError(error, 'litellm');
     } finally {
       token.release();
@@ -498,18 +480,16 @@ export class ProviderRouter {
 
   private async *streamViaFallback(options: CompletionOptions): AsyncGenerator<StreamChunk> {
     const fallback = this.getLiteLLM();
-    const token = await getRateLimitManager().acquire('litellm');
+    const token = await getRateLimitManager().acquire('litellm', requestPriority(options));
     const startTime = Date.now();
     try {
       yield* fallback.stream(options);
       const latencyMs = Date.now() - startTime;
       token.reportSuccess(latencyMs);
       getCircuitBreakerRegistry().recordSuccess('litellm');
-      recordLlmRequest('litellm', options.model, 'success', latencyMs / 1000);
     } catch (error) {
       token.reportError(isRateLimitResponse(error));
       getCircuitBreakerRegistry().recordFailure('litellm');
-      recordLlmRequest('litellm', options.model, 'error', (Date.now() - startTime) / 1000);
       throw classifyError(error, 'litellm');
     } finally {
       token.release();

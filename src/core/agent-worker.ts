@@ -1,3 +1,8 @@
+import { type OmittedContext, REPEATABLE_CONTEXT_KEY, restoreOmittedContext, withoutRepeatedContext } from './agent/repeated-context';
+import { orderByGroup } from './agent/tool-split';
+import { takeWarmSignal } from './swarm/leader-first';
+import { FORK_KEY, type ForkSeed } from './swarm/fork';
+import type { CachePacing } from '@/models/providers/prompt-cache';
 import { companionCacheScope } from '@/core/companion/history';
 import { createHash } from 'node:crypto';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
@@ -16,7 +21,7 @@ import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { type CompletionOptions, type CompletionResult, getLiteLLMClient } from '@/models/litellm-client';
 import { billableTokens } from '@/models/billable-tokens';
-import { collectStream } from '@/models/stream-collect';
+import { collectStream, type StreamProgress } from '@/models/stream-collect';
 import { getModelRegistry } from '@/models/model-registry';
 import { modelCandidates } from './agent/model-selector';
 import { localOnlyLevel, localRowInstead, ProtectionRoutingError, PSEUDONYMIZED } from './protection/routing';
@@ -25,7 +30,7 @@ import { applyTopicParamOverrides, getTopicConfig } from '@/models/topic-config'
 import { getConfig } from '@/config';
 import { writePromptDump } from './prompt-dumps';
 import type { ModelConfigEntry } from '@/db/schema/models';
-import { compactMessagesWithSummary, CONTEXT_OVERFLOW_TRUNCATED_MARKER, DEFAULT_TOOL_OUTPUT_SOFT_CAP, shouldCompactToolOutputs, stripSignedReasoning, truncateOldestToolOutputs } from '@/utils/context-compaction';
+import { compactMessagesWithSummary, CONTEXT_OVERFLOW_TRUNCATED_MARKER, SUMMARY_MAX_TOKENS, DEFAULT_TOOL_OUTPUT_SOFT_CAP, shouldCompactToolOutputs, stripSignedReasoning, truncateOldestToolOutputs } from '@/utils/context-compaction';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { BaseAgentWorker } from './agent-base';
 import { contentStorageOffFor } from './agent/audience';
@@ -33,7 +38,7 @@ import type { ToolHandler } from './agent-base';
 import { recordModelToolCall } from './agent/model-capability';
 import { ensureChildRelay } from './agent/output-guard';
 import { isLongTailHandler } from './agent/tool-split';
-import { buildCodemodeHandler } from '@/tools/codemode';
+import { buildCodemodeHandler, CODEMODE_TOOL_NAME } from '@/tools/codemode';
 import { getMCPBridge } from '@/mcp/bridge';
 import { ClassifiedError, isFatalConnectionError, isTransientDnsError } from './errors/classification';
 import { formatCollectedResults } from './swarm/collect-tool';
@@ -58,6 +63,8 @@ import { omitSpaceTurnContext } from '@/core/spaces/turn-context';
 import { inlineUiRepairMessage, storeInlineUiBlocks, stubInlineUiFences } from '@/core/inline-ui/extract';
 import { getRunContext } from '@/core/run-context';
 import { transformOutsideInlineUiFences, withoutInlineUiFences } from '@/shared/inline-ui';
+import { type CacheProbe, classifyCacheBreak, type PrefixSignature, prefixSignature } from '@/models/cache-break';
+import { recordPromptCacheBreak } from '@/core/telemetry';
 
 // Re-export types for backward compatibility
 export type { AgentEvent, AgentEventHandler, AgentWorkerConfig, ToolHandler } from './agent-base';
@@ -572,6 +579,43 @@ export class AgentWorker extends BaseAgentWorker {
     return this.toolExecutor.getSideEffectCounters();
   }
 
+  /**
+   * What a cache-parity fork of this run inherits (`spawn_child` with `fork`):
+   * the conversation up to, not including, the assistant turn in flight (the
+   * one whose tool call is spawning the fork), so it is exactly what this run's
+   * last request sent; the registered handlers in their order; how they are
+   * advertised; and the model and cache routing that request used. The
+   * `codemode` handler is left out: it is bound to this worker's executor, and
+   * the fork registers its own from the same model.
+   */
+  forkSnapshot(): ForkSeed {
+    let end = this.messages.length;
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i];
+      if (m.role === 'assistant' && m.toolCalls?.length) { end = i; break; }
+      if (m.role !== 'tool') break;
+    }
+    return {
+      messages: this.messages.slice(0, end).map((m) => ({ ...m })),
+      tools: Array.from(this.toolExecutor.getTools().values()).filter((t) => t.name !== CODEMODE_TOOL_NAME),
+      toolAdvertisement: this.config.toolAdvertisement,
+      model: this.context.model,
+      modelName: this.context.modelName,
+      cacheScope: this.requestCacheScope(),
+      cachePacing: this.requestCachePacing(),
+    };
+  }
+
+  /**
+   * Start from another run's conversation instead of a system prompt (a fork).
+   * Signed reasoning is kept only on the model that signed it.
+   */
+  seedConversation(seed: Pick<ForkSeed, 'messages' | 'model'>): void {
+    const sameModel = seed.model === this.context.model;
+    this.messages = seed.messages.map((m) => (sameModel ? { ...m } : { ...m, providerRaw: undefined }));
+    this.pendingPromptContext = '';
+  }
+
   registerTool(tool: import('./agent-base').ToolHandler): void {
     this.toolExecutor.registerTool(tool);
   }
@@ -638,9 +682,12 @@ export class AgentWorker extends BaseAgentWorker {
   }
 
   async addUserMessage(content: string): Promise<void> {
-    const promptContext = this.pendingPromptContext.trim();
+    // A retrieved block an earlier turn still in view carries is not sent again
+    // (`repeated-context.ts`); the stored row records what was actually sent.
+    const { text: promptContext, omitted } = withoutRepeatedContext(this.pendingPromptContext.trim(), this.context.metadata?.[REPEATABLE_CONTEXT_KEY] as unknown[] | undefined, this.messages);
     this.pendingPromptContext = '';
     const message: AgentMessage = { role: 'user', content: [promptContext, content].filter(Boolean).join('\n\n'), timestamp: new Date() };
+    this.omittedContext = omitted.length ? { content: message.content as string, omitted } : undefined;
     this.messages.push(message);
 
     // Only persist for the root agent — and never in a room, where the
@@ -686,7 +733,7 @@ export class AgentWorker extends BaseAgentWorker {
         await this.loadHistory();
         this.messages = [...system, ...this.messages];
         return this.runInternal(userMessage);
-      }) : this.runInternal(userMessage)));
+      }) : this.runChild(userMessage)));
     } finally {
       this.activeRuns--;
       this.permissionWaitCleanup?.();
@@ -694,6 +741,28 @@ export class AgentWorker extends BaseAgentWorker {
       this.parentSignalCleanup?.();
       this.parentSignalCleanup = null;
     }
+  }
+
+  /**
+   * Provider cache routing for this run's requests. A fork routes as the run it
+   * forked (`FORK_KEY`): its prefix is that run's, so its cache is too.
+   */
+  private requestCacheScope(): string {
+    const fork = this.context.metadata?.[FORK_KEY] as { cacheScope?: string } | undefined;
+    if (fork?.cacheScope) return fork.cacheScope;
+    return companionCacheScope(this.context, this.cacheGeneration) ?? (isRootAgent(this.context) ? `root:${this.cacheGeneration}` : `child:${this.context.role}`);
+  }
+
+  private requestCachePacing(): CachePacing {
+    const fork = this.context.metadata?.[FORK_KEY] as { cachePacing?: CachePacing } | undefined;
+    if (fork?.cachePacing) return fork.cachePacing;
+    return isRootAgent(this.context) && this.context.attended === true ? 'human' : 'machine';
+  }
+
+  /** A child's run: the first one started inside a fan-out leader's scope is that leader (`leader-first.ts`). */
+  private runChild(userMessage?: string): Promise<string> {
+    this.prefixWarm ??= takeWarmSignal();
+    return this.runInternal(userMessage);
   }
 
   private async runInternal(userMessage?: string): Promise<string> {
@@ -1300,11 +1369,13 @@ export class AgentWorker extends BaseAgentWorker {
           summaryModel: this.context.model,
           summaryModelName: this.context.modelName,
           userId: this.context.userId,
+          ...this.summaryContext(),
         });
         if (proactiveRemoved > 0) {
           // A summary replaces the start of the history: no signed reasoning
           // after it matches its conversation any more.
           this.messages = this.withoutStaleReasoning(proactiveCompacted);
+          this.restoreOmittedContext();
           agentLogger.info({
             agentId: this.context.id, iteration: this.iteration,
             messagesRemoved: proactiveRemoved, totalTokens: this.totalTokensUsed,
@@ -1320,10 +1391,12 @@ export class AgentWorker extends BaseAgentWorker {
         summaryModel: this.context.model,
         summaryModelName: this.context.modelName,
         userId: this.context.userId,
+        ...this.summaryContext(),
       });
 
       if (removed > 0) {
         this.messages = this.withoutStaleReasoning(compactedMessages);
+        this.restoreOmittedContext();
         agentLogger.info({
           agentId: this.context.id, sessionId: this.context.sessionId,
           iteration: this.iteration, elapsedMs: this.elapsed(),
@@ -1405,9 +1478,12 @@ export class AgentWorker extends BaseAgentWorker {
             summaryModel: this.context.model,
             summaryModelName: this.context.modelName,
             userId: this.context.userId,
+            // Over the window already: a continuation of it would overflow too.
+            priority: this.turnPriority(),
           });
           // Both rewrites above edit earlier turns: no signed reasoning stays.
           this.messages = this.withoutStaleReasoning(compacted);
+          this.restoreOmittedContext();
           continue;
         }
 
@@ -2144,6 +2220,14 @@ export class AgentWorker extends BaseAgentWorker {
     this.lastPrefixFingerprint = fingerprint;
   }
 
+  /** Retrieved blocks this turn's message left out because an earlier turn carried them (`repeated-context.ts`). */
+  private omittedContext: OmittedContext | undefined;
+
+  /** After a compaction: put back any omitted block whose earlier copy it summarized away. */
+  private restoreOmittedContext(): void {
+    if (this.omittedContext) this.omittedContext = restoreOmittedContext(this.messages, this.omittedContext);
+  }
+
   /**
    * `stripSignedReasoning` for an edit made inside the agent loop — except
    * under manual thinking (`budget_tokens`). Only models from before the
@@ -2156,6 +2240,45 @@ export class AgentWorker extends BaseAgentWorker {
     return this.manualThinking ? messages : stripSignedReasoning(messages, from);
   }
 
+  /** What the last request of this run sent besides its messages (`summaryContext`). */
+  private lastRequestShape: { tools?: ChatCompletionTool[]; cacheScope?: string; cachePacing?: import('@/models/providers/prompt-cache').CachePacing } | undefined;
+
+  /** A compaction inside this run blocks it: it queues as the run does. */
+  private turnPriority(): 'interactive' | 'background' {
+    return this.context.attended === false ? 'background' : 'interactive';
+  }
+
+  /**
+   * How an in-run compaction summarizes: as a continuation of this very
+   * conversation (its last request's tools and cache scope, the instruction
+   * appended), so the provider reads the history back from its prompt cache —
+   * when there was a request to continue, and room in the window for the
+   * summary on top of it. Otherwise the standalone summarizer runs.
+   */
+  private summaryContext(): Pick<import('@/utils/context-compaction').CreateLLMSummaryOptions, 'continuation' | 'priority'> {
+    const priority = this.turnPriority();
+    const shape = this.lastRequestShape;
+    const fits = this.estimateRequestTokens() + SUMMARY_MAX_TOKENS < this.config.contextWindowSize * 0.95;
+    if (!shape || !fits) return { priority };
+    return { priority, continuation: { messages: this.messages, tools: shape.tools, cacheScope: shape.cacheScope, cachePacing: shape.cachePacing, sessionId: this.context.sessionId } };
+  }
+
+  /** The previous request of this worker's conversation, for `classifyCacheBreak`. */
+  private lastCacheProbe: CacheProbe | undefined;
+
+  /** Name, log and count a lost prompt-cache prefix (`cache-break.ts`). */
+  private observeCacheBreak(provider: string, current: PrefixSignature & { at: number }, usage: CompletionResult['usage']): void {
+    const cause = classifyCacheBreak(this.lastCacheProbe, current, usage, provider);
+    if (cause) {
+      recordPromptCacheBreak(provider, cause);
+      const log = { agentId: this.context.id, sessionId: this.context.sessionId, provider, model: current.model, cause,
+        previousInputTokens: this.lastCacheProbe?.inputTokens, cacheReadTokens: usage.cacheReadTokens ?? 0 };
+      if (cause === 'unexplained_miss') agentLogger.info(log, 'Prompt cache missed on an unchanged prefix');
+      else agentLogger.debug(log, 'Prompt prefix changed; the provider cache starts over');
+    }
+    this.lastCacheProbe = { ...current, inputTokens: usage.inputTokens };
+  }
+
   /**
    * Tool handlers advertised to the model this turn. Lazy mode (set by the
    * spawner) trims long-tail handlers from the advertised schema array; they
@@ -2165,9 +2288,9 @@ export class AgentWorker extends BaseAgentWorker {
   private getAdvertisedToolHandlers(): ToolHandler[] {
     const advertisement = this.config.toolAdvertisement ?? { mode: 'full' };
     const registeredTools = Array.from(this.toolExecutor.getTools().values());
-    return advertisement.mode === 'lazy'
-      ? registeredTools.filter((tool) => !isLongTailHandler(tool, advertisement.coreToolIds))
-      : registeredTools;
+    if (advertisement.mode !== 'lazy') return registeredTools;
+    const advertised = registeredTools.filter((tool) => !isLongTailHandler(tool, advertisement.coreToolIds));
+    return advertisement.groupOrder?.length ? orderByGroup(advertised, advertisement.groupOrder) : advertised;
   }
 
   /**
@@ -2507,9 +2630,20 @@ export class AgentWorker extends BaseAgentWorker {
         // and user. A child scopes by its ROLE, not its agent id: siblings of
         // one role share the role prompt and tool block, and a key per agent
         // sent each of them to a different (cold) cache for that shared prefix.
-        cacheScope: companionCacheScope(this.context,this.cacheGeneration) ?? (isRootAgent(this.context) ? `root:${this.cacheGeneration}` : `child:${this.context.role}`),
+        cacheScope: this.requestCacheScope(),
+        // An attended root turn waits on a person between requests; every
+        // other worker runs as a burst (`cacheTtlsFor`).
+        cachePacing: this.requestCachePacing(),
+        // A run nobody is attending (heartbeat, cron, hooks — children inherit
+        // `attended`) yields to live turns at the rate limiter.
+        ...(this.context.attended === false ? { priority: 'background' as const } : {}),
         tools: sentTools,
-        ...(declareToolsOnly ? { toolChoice: 'none' as const } : {}),
+        // `tool_choice` is part of Claude's message-level cache key: flipping it
+        // from auto to none for the final call re-read the whole conversation
+        // uncached. A Claude request keeps auto — the reporting reminder in the
+        // last turn says tools are over, and calls it makes anyway are not run
+        // (`toolsDisabled`). Other providers take the explicit none.
+        ...(declareToolsOnly && !claudeModel ? { toolChoice: 'none' as const } : {}),
         // G6: nullish coalescing — a configured temperature of 0 must survive
         // (|| turned it into 0.7, hurting small-model tool-call fidelity).
         temperature: model.defaultTemperature ?? 0.7,
@@ -2543,7 +2677,11 @@ export class AgentWorker extends BaseAgentWorker {
         providerName = model.provider;
       }
     }
+    this.lastRequestShape = { tools: completionOpts.tools, cacheScope: completionOpts.cacheScope, cachePacing: completionOpts.cachePacing };
+    const sentAt = Date.now();
+    const signature = prefixSignature(litellmModel, completionOpts.tools, this.messages.filter((m) => m.role === 'system').map((m) => m.content));
     const result = await this.completeViaTarget(target, providerName, completionOpts);
+    this.observeCacheBreak(providerName, { ...signature, at: sentAt }, result.usage);
 
 
     const octiMessage: AgentMessage = {
@@ -2575,20 +2713,46 @@ export class AgentWorker extends BaseAgentWorker {
    * like any completion error.
    */
   private async completeViaTarget(target: CompletionTarget, providerName: string, opts: CompletionOptions): Promise<CompletionResult> {
-    const streaming = isRootAgent(this.context) && getConfig().agent?.streaming !== false && typeof target.stream === 'function';
-    if (!streaming) return target.complete(opts);
-    const progress = { chunks: 0 };
+    const root = isRootAgent(this.context);
+    // A fan-out leader streams its first call too, silently: its first chunk
+    // is when the provider holds the prefix its waiting siblings will read.
+    const leader = !root && this.prefixWarm !== undefined;
+    // `agent.streaming: false` switches it off for both: an operator who
+    // disabled streaming for a provider meant every call.
+    const streaming = (root || leader) && getConfig().agent?.streaming !== false && typeof target.stream === 'function';
+    if (!streaming) {
+      try {
+        return await target.complete(opts);
+      } finally {
+        this.firePrefixWarm();
+      }
+    }
+    const progress: StreamProgress = { chunks: 0, ...(leader ? { onFirst: () => this.firePrefixWarm() } : {}) };
     try {
       return await collectStream(
-        target.stream(opts), opts, providerName,
-        (delta) => this.emit('thought', { type: 'text_delta', delta, iteration: this.iteration }),
+        target.stream!(opts), opts, providerName,
+        root ? (delta) => this.emit('thought', { type: 'text_delta', delta, iteration: this.iteration }) : undefined,
         progress,
       );
     } catch (err) {
       if (progress.chunks > 0 || this.abortController.signal.aborted) throw err;
       agentLogger.warn({ err, model: opts.model, provider: providerName }, 'Stream failed before its first chunk — completing without streaming');
       return target.complete(opts);
+    } finally {
+      this.firePrefixWarm();
     }
+  }
+
+  /**
+   * Set when this worker is the leader of a fan-out (`leader-first.ts`): fired
+   * once, on its first chunk or first completion, to start its siblings.
+   */
+  private prefixWarm: (() => void) | undefined;
+
+  private firePrefixWarm(): void {
+    const fire = this.prefixWarm;
+    this.prefixWarm = undefined;
+    fire?.();
   }
 
   /**

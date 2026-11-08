@@ -123,6 +123,12 @@ const llmCachedTokens = new Counter({
   labelNames: ['provider', 'model'],
   registers: [registry],
 });
+const promptCacheBreaks = new Counter({
+  name: 'octipus_prompt_cache_breaks_total',
+  help: 'Requests whose cached prompt prefix was lost, by cause: model_changed, tools_changed, system_changed (the prefix changed) or unexplained_miss (unchanged prefix, read back far less than the previous request within the cache lifetime).',
+  labelNames: ['provider', 'cause'],
+  registers: [registry],
+});
 const swarmSpawns = new Counter({
   name: 'octipus_swarm_spawns_total',
   help: 'Child agent spawns, by child role, depth, and whether the parent supplied a plan (planned children route to the lane executorModel).',
@@ -174,6 +180,10 @@ export function recordToolExecution(
     toolExecutions.inc({ tool: label(tool), status });
     toolDuration.observe({ tool: label(tool) }, seconds);
   });
+}
+
+export function recordPromptCacheBreak(provider: string | undefined, cause: string): void {
+  guard(() => promptCacheBreaks.inc({ provider: label(provider), cause }));
 }
 
 export function recordLlmRequest(

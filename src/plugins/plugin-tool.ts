@@ -53,11 +53,16 @@ export class PluginTool extends BaseTool {
         toolDef.description,
         createParameterSchema(toolDef.parameters),
         async (args, context) => {
+          // A plugin failure is a failed call. Returned as `{ error }` it read
+          // as a success to receipts, audits and the model alike.
+          const config = await this.resolveSecrets(context);
           try {
-            const config = await this.resolveSecrets(context);
             return await handler(args, { config });
-          } catch (err: any) {
-            return { error: `Plugin tool error: ${err.message}` };
+          } catch (err) {
+            // Typed refusals (not executed, policy) keep their type: the
+            // executor records those as never run, not as a failed run.
+            if (err instanceof ToolNotExecutedError) throw err;
+            throw new Error(`Plugin tool error: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
           }
         },
         { permissionAction: 'execute' },

@@ -111,6 +111,66 @@ function handlePullLine(line: string, model: string, onProgress?: (p: PullProgre
   onProgress?.(parsed);
 }
 
+/** Requests only native /api/chat honors: think:false and JSON mode. */
+function nativeModeRequested(options: CompletionOptions): boolean {
+  return options.extraBody?.think === false || options.responseFormat?.type === 'json_object';
+}
+
+/** The operator's pinned Ollama context window (`ollama.contextLength`), if any. */
+function configuredNumCtx(): number | undefined {
+  return getConfig().ollama.contextLength;
+}
+
+/** Whether a completion goes through native /api/chat rather than /v1. */
+function useNativeApi(options: CompletionOptions): boolean {
+  return nativeModeRequested(options) || configuredNumCtx() !== undefined;
+}
+
+/** Rough prompt size of a request, the codebase's chars/4 budget, tool schemas included. */
+export function estimatePromptTokens(options: Pick<CompletionOptions, 'messages' | 'tools'>): number {
+  const chars = options.messages.reduce((n, m) => n + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content ?? '').length)
+    + (m.toolCalls ? JSON.stringify(m.toolCalls).length : 0), 0) + (options.tools ? JSON.stringify(options.tools).length : 0);
+  return Math.ceil(chars / 4);
+}
+
+/**
+ * Fail loud before sending a prompt the pinned window cannot hold: Ollama
+ * would cut it to fit without saying so. The message matches the context
+ * overflow classification, so the agent loop compacts and retries.
+ */
+export function assertFitsNumCtx(options: Pick<CompletionOptions, 'messages' | 'tools' | 'maxTokens'>, numCtx: number): void {
+  const prompt = estimatePromptTokens(options);
+  const reserve = Math.min(options.maxTokens ?? 1024, Math.floor(numCtx / 4));
+  if (prompt + reserve > numCtx) {
+    throw new Error(`Prompt is too long for Ollama: ~${prompt} tokens plus ${reserve} for the reply exceed the configured context window of ${numCtx} (ollama.contextLength). Maximum context length exceeded.`);
+  }
+}
+
+const warnedTruncation = new Set<string>();
+const COMMON_DEFAULT_WINDOWS = [2048, 4096, 8192];
+
+/**
+ * Ollama reports the prompt it actually evaluated. Far smaller than what was
+ * sent, and just under a context size it allocates by default, means the
+ * server truncated it: the model answered without the start of its context.
+ * Logged loudly once per model and window, with the setting that fixes it.
+ */
+export function detectTruncation(model: string, sentTokens: number, reportedTokens: number, numCtx?: number): boolean {
+  if (!(reportedTokens > 0) || sentTokens < 2048 || reportedTokens >= sentTokens * 0.6) return false;
+  const windows = numCtx ? [numCtx] : COMMON_DEFAULT_WINDOWS;
+  const window = windows.find((w) => reportedTokens <= w && reportedTokens >= w * 0.8);
+  if (!window) return false;
+  const key = `${model}:${window}`;
+  if (!warnedTruncation.has(key)) {
+    warnedTruncation.add(key);
+    modelLogger.error(
+      { model, sentTokens, reportedTokens, window },
+      'Ollama truncated the prompt to its context window: the model did not see the start of the conversation. Set ollama.contextLength (num_ctx) and OLLAMA_CONTEXT_LENGTH to a window that fits.',
+    );
+  }
+  return true;
+}
+
 /**
  * Ollama provider -- connects directly to a local Ollama server via its
  * OpenAI-compatible API at {endpoint}/v1.
@@ -152,7 +212,7 @@ export class OllamaProvider implements ModelProvider {
     // /api/chat endpoint (think:false flag, format:'json' field). Route there
     // when either is requested so small local models actually return parseable
     // JSON instead of prose the caller has to repair.
-    if (options.extraBody?.think === false || options.responseFormat?.type === 'json_object') {
+    if (useNativeApi(options)) {
       return this.completeNative(options);
     }
 
@@ -189,6 +249,7 @@ export class OllamaProvider implements ModelProvider {
     try {
       const response = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
       options.accountingResponse?.({ model: response.model ?? options.model, requestId: response.id, usage: normalizeUsage(response.usage) });
+      detectTruncation(options.model, estimatePromptTokens(options), normalizeUsage(response.usage).inputTokens);
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
         throw new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`);
@@ -259,6 +320,123 @@ export class OllamaProvider implements ModelProvider {
   }
 
   /**
+   * The native /api/chat request body (per
+   * https://docs.ollama.com/capabilities/tool-calling): tool messages keyed by
+   * `tool_name`, assistant tool-call arguments as OBJECTS — the /v1 formatter
+   * does the opposite, so it is not reused. With `ollama.contextLength` set the
+   * window is pinned as `num_ctx` (one value for every call, so the runner never
+   * reloads the model) and a prompt that cannot fit fails here, loudly.
+   */
+  private buildNativeBody(options: CompletionOptions, stream: boolean): Record<string, unknown> {
+    const numCtx = configuredNumCtx();
+    if (numCtx !== undefined) assertFitsNumCtx(options, numCtx);
+    const { think: _think, ...extra } = options.extraBody ?? {};
+    const body: Record<string, unknown> = {
+      model: options.model,
+      // Tool-call/result pairing and id repair, as on the /v1 path.
+      messages: this.formatMessagesNative(transformMessagesForProvider(options.messages, this.name)),
+      stream,
+      // Only force think:false when the CALLER asked to disable thinking. When we
+      // route here for JSON mode or the pinned window, leave the model's default
+      // so a reasoning model isn't silently lobotomized.
+      ...(options.extraBody?.think === false ? { think: false } : {}),
+      // Keep the model resident in VRAM between calls so we don't pay the
+      // (slow on iGPU) cold-load every request — the root cause of timeout loops.
+      keep_alive: getConfig().ollama.keepAlive,
+      // Native JSON mode: constrains decoding to valid JSON. This is Ollama's
+      // real structured-output lever (the /v1 response_format is unreliable).
+      ...(options.responseFormat?.type === 'json_object' ? { format: 'json' } : {}),
+      // The caller's other extra fields, as /v1 merges them.
+      ...extra,
+      options: {
+        temperature: options.temperature,
+        num_predict: options.maxTokens,
+        ...(options.topP != null ? { top_p: options.topP } : {}),
+        ...(options.stopSequences?.length ? { stop: options.stopSequences } : {}),
+        ...(numCtx !== undefined ? { num_ctx: numCtx } : {}),
+        ...((extra as { options?: Record<string, unknown> }).options ?? {}),
+      },
+    };
+    if (options.tools?.length) {
+      body.tools = options.tools.map((t) => {
+        if (t.type !== 'function') {
+          throw new Error(`Unsupported tool type for ${this.name}: ${t.type}`);
+        }
+        return { type: 'function', function: { name: t.function.name, description: t.function.description, parameters: t.function.parameters } };
+      });
+    }
+    return body;
+  }
+
+  /**
+   * Streamed native /api/chat (NDJSON, one message fragment per line; tool
+   * calls arrive whole). Used when the context window is pinned, so tool loops
+   * keep streaming on the endpoint that takes `num_ctx`.
+   */
+  private async *streamNative(options: CompletionOptions): AsyncGenerator<StreamChunk> {
+    const body = this.buildNativeBody(options, true);
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (options.apiKey) headers['Authorization'] = `Bearer ${options.apiKey}`;
+    const response = await fetchWithRetryAfter(`${options.endpoint || this.endpoint}/api/chat`, {
+      method: 'POST', headers, body: JSON.stringify(body),
+      signal: withTimeoutSignal(getConfig().ollama.requestTimeout, options.signal),
+    }, this.name);
+    if (!response.ok || !response.body) {
+      const err = await response.text().catch(() => '');
+      throw classifyError({ status: response.status, message: err || 'Ollama native API error' }, 'ollama');
+    }
+    const turnStamp = Date.now();
+    let toolIndex = 0;
+    let buffered = '';
+    const decoder = new TextDecoder();
+    const reader = response.body.getReader();
+    const parse = function* (line: string): Generator<StreamChunk> {
+      if (!line.trim()) return;
+      let data: {
+        model?: string; error?: string; done?: boolean; done_reason?: string; prompt_eval_count?: number; eval_count?: number;
+        message?: { content?: string; thinking?: string; tool_calls?: Array<{ function: { name: string; arguments: unknown } }> };
+      };
+      try { data = JSON.parse(line); } catch (err) {
+        throw classifyError(new Error(`Ollama native stream sent invalid JSON: ${(err as Error).message}`), 'ollama');
+      }
+      if (data.error) throw classifyError({ status: 500, message: data.error }, 'ollama');
+      if (data.message?.content) yield { content: data.message.content };
+      else if (data.message?.thinking) yield { reasoningContent: data.message.thinking };
+      for (const tc of data.message?.tool_calls ?? []) {
+        yield { toolCallDelta: { id: `call_${turnStamp}_${toolIndex++}`, name: tc.function.name,
+          arguments: typeof tc.function.arguments === 'string' ? tc.function.arguments : JSON.stringify(tc.function.arguments ?? {}) } };
+      }
+      if (data.done) {
+        const usage: CompletionResult['usage'] = {
+          available: data.prompt_eval_count != null && data.eval_count != null,
+          inputTokens: data.prompt_eval_count || 0, outputTokens: data.eval_count || 0,
+          totalTokens: (data.prompt_eval_count || 0) + (data.eval_count || 0),
+        };
+        detectTruncation(options.model, estimatePromptTokens(options), usage.inputTokens, configuredNumCtx());
+        yield { usage, model: data.model || options.model };
+        yield { finishReason: data.done_reason || 'stop' };
+      }
+    };
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffered += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buffered.indexOf('\n')) >= 0) {
+          const line = buffered.slice(0, nl);
+          buffered = buffered.slice(nl + 1);
+          yield* parse(line);
+        }
+      }
+      buffered += decoder.decode();
+      if (buffered.trim()) yield* parse(buffered);
+    } finally {
+      reader.cancel().catch(() => {});
+    }
+  }
+
+  /**
    * Use Ollama's native /api/chat endpoint which properly supports think:false.
    * The OpenAI-compatible /v1 endpoint ignores this parameter.
    * Supports tools via Ollama's native tool calling format.
@@ -267,50 +445,8 @@ export class OllamaProvider implements ModelProvider {
     const resolvedEndpoint = options.endpoint || this.endpoint;
     const startTime = Date.now();
 
-    // Native /api/chat shape (per https://docs.ollama.com/capabilities/tool-calling):
-    //   - tool messages keyed by `tool_name` (not `tool_call_id`)
-    //   - assistant.tool_calls[].function.arguments is an OBJECT (not stringified)
-    // The OpenAI /v1 formatter does the opposite — don't reuse it here.
-    const messages = this.formatMessagesNative(options.messages);
-
-    const body: Record<string, unknown> = {
-      model: options.model,
-      messages,
-      stream: false,
-      // Only force think:false when the CALLER asked to disable thinking. When we
-      // route here purely for native JSON mode, leave the model's default so a
-      // reasoning model isn't silently lobotomized.
-      ...(options.extraBody?.think === false ? { think: false } : {}),
-      // Keep the model resident in VRAM between calls so we don't pay the
-      // (slow on iGPU) cold-load every request — the root cause of timeout loops.
-      keep_alive: getConfig().ollama.keepAlive,
-      // Native JSON mode: constrains decoding to valid JSON. This is Ollama's
-      // real structured-output lever (the /v1 response_format is unreliable).
-      ...(options.responseFormat?.type === 'json_object' ? { format: 'json' } : {}),
-      options: {
-        temperature: options.temperature,
-        num_predict: options.maxTokens,
-        ...(options.topP != null ? { top_p: options.topP } : {}),
-        ...(options.stopSequences?.length ? { stop: options.stopSequences } : {}),
-      },
-    };
-
-    // Add tools in Ollama's native format
-    if (options.tools?.length) {
-      body.tools = options.tools.map((t) => {
-        if (t.type !== 'function') {
-          throw new Error(`Unsupported tool type for ${this.name}: ${t.type}`);
-        }
-        return {
-          type: 'function',
-          function: {
-            name: t.function.name,
-            description: t.function.description,
-            parameters: t.function.parameters,
-          },
-        };
-      });
-    }
+    const body = this.buildNativeBody(options, false);
+    const messages = body.messages as unknown[];
 
     modelLogger.debug(
       { model: options.model, messageCount: messages.length, provider: this.name, native: true, hasTools: !!options.tools?.length },
@@ -355,6 +491,7 @@ export class OllamaProvider implements ModelProvider {
     // Observe native usage before interpreting the message/tool payload. Ollama
     // has already completed the generation at this point.
     options.accountingResponse?.({ model: responseModel, usage });
+    detectTruncation(options.model, estimatePromptTokens(options), usage.inputTokens, configuredNumCtx());
     if (!data?.message) {
       throw classifyError(new Error('Ollama native API returned no message'), 'ollama');
     }
@@ -401,7 +538,14 @@ export class OllamaProvider implements ModelProvider {
     // think:false OR json_object must go through native /api/chat (the /v1
     // endpoint ignores both). Implement as a non-streamed native completion
     // yielded as a single chunk — mirrors complete()'s routing.
-    if (options.extraBody?.think === false || options.responseFormat?.type === 'json_object') {
+    // A pinned context window streams through native /api/chat (the only
+    // endpoint that takes num_ctx). think:false / JSON mode keep their
+    // non-streamed native completion below.
+    if (!nativeModeRequested(options) && configuredNumCtx() !== undefined) {
+      yield* this.streamNative(options);
+      return;
+    }
+    if (nativeModeRequested(options)) {
       const result = await this.completeNative(options);
       if (result.content) yield { content: result.content };
       if (result.toolCalls?.length) {
@@ -455,7 +599,11 @@ export class OllamaProvider implements ModelProvider {
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
 
     for await (const chunk of stream) {
-      if (chunk.usage) yield { usage: normalizeUsage(chunk.usage), requestId: chunk.id, model: chunk.model };
+      if (chunk.usage) {
+        const usage = normalizeUsage(chunk.usage);
+        detectTruncation(options.model, estimatePromptTokens(options), usage.inputTokens);
+        yield { usage, requestId: chunk.id, model: chunk.model };
+      }
       const delta = chunk.choices[0]?.delta;
 
       // Do NOT promote 'reasoning' deltas into content — mirrors complete()'s

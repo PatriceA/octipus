@@ -154,6 +154,8 @@ export interface PlanStep {
 }
 
 export interface TaskBrief {
+  /** Requested as a fork (swarm/fork.ts); distinguishes it from the same brief as an ordinary child. */
+  fork?: boolean;
   /** Verbatim one-line echo of the user's original request. */
   originalUserRequest: string;
   /** Slash-separated topic path, e.g. "security/oauth/pkce". */
@@ -270,6 +272,12 @@ export interface AgentNode {
 
 /** Params accepted by `spawn_child` tool (after validation). */
 export interface SpawnChildParams {
+  /**
+   * Continue the parent's conversation instead of starting from a role prompt
+   * (swarm/fork.ts): same model, tools and prefix, so the child reads the
+   * parent's cached prompt and knows what the parent has read.
+   */
+  fork?: boolean;
   routePolicy?: { primaryModel?: string; allowBackup?: boolean };
   expertId?: string;
   role?: AgentRole;

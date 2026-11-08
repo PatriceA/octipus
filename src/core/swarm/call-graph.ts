@@ -56,7 +56,7 @@ export function taskFingerprint(brief: TaskBrief): string {
     .map((a) => a.ref)
     .sort()
     .join(',');
-  const key = `${brief.topicPath}|${normalized}|${artifacts}`;
+  const key = `${brief.topicPath}|${normalized}|${artifacts}${brief.fork ? '|fork' : ''}`;
   return createHash('sha256').update(key).digest('hex');
 }
 

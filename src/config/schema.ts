@@ -41,6 +41,12 @@ export const ollamaConfigSchema = z.object({
   // instead of unloading after Ollama\'s 5min default — avoids repeated cold loads.
   // Accepts a duration string ('10m', '1h') or '-1' to keep it loaded indefinitely.
   keepAlive: z.string().default('10m').describe('How long Ollama keeps a model warm in VRAM (duration string or -1)'),
+  // Ollama allocates its own default context (4096 unless the server sets
+  // OLLAMA_CONTEXT_LENGTH) and silently cuts a longer prompt to fit. Set, it is
+  // sent as `num_ctx` on every call through native /api/chat — the only
+  // endpoint that takes it — and a prompt that cannot fit fails loud instead.
+  // One value for every call keeps the runner from reloading the model.
+  contextLength: z.number().int().min(512).optional().describe('Context window Ollama allocates for each call (num_ctx); unset leaves the server default'),
   /**
    * This host's GPU memory is one shared pool with the CPU's (an APU, or any
    * unified-memory design), so the reported VRAM figure is a firmware carve-out

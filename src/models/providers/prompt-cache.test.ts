@@ -3,6 +3,7 @@ import type { ChatCompletionMessageParam } from 'openai/resources/chat/completio
 import {
   __resetMissedCacheSplitLogs,
   applyAnthropicCacheControl,
+  cacheTtlsFor,
   isAnthropicFamily,
   logMissedCacheSplit,
   splitVolatileSystem,
@@ -174,5 +175,28 @@ describe('applyAnthropicCacheControl — history: false', () => {
     ];
     expect(applyAnthropicCacheControl(messages, 'claude-sonnet-4-6', { conversation: true, history: false })).toEqual({ system: true, history: false });
     expect(messages.slice(1).every((m) => typeof m.content === 'string')).toBe(true);
+  });
+});
+
+describe('cacheTtlsFor — lifetimes by policy and pacing', () => {
+  it('session: an hour everywhere; default: an hour on the prefix only when a person paces it', () => {
+    expect(cacheTtlsFor('session')).toEqual({ prefix: '1h', history: '1h' });
+    expect(cacheTtlsFor('session', 'machine')).toEqual({ prefix: '1h', history: '1h' });
+    expect(cacheTtlsFor(undefined, 'human')).toEqual({ prefix: '1h', history: undefined });
+    expect(cacheTtlsFor('default', 'machine')).toEqual({ prefix: undefined, history: undefined });
+    expect(cacheTtlsFor(undefined)).toEqual({ prefix: undefined, history: undefined });
+  });
+
+  it('the proxy path marks the system prefix and the history with their own lifetimes', () => {
+    const messages = [
+      { role: 'system', content: `${'stable '.repeat(50)}\n\nCURRENT DATE & TIME: now` },
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: 'a' },
+      { role: 'user', content: 'next' },
+    ] as ChatCompletionMessageParam[];
+    applyAnthropicCacheControl(messages, 'claude-sonnet-5', { conversation: true, ttls: cacheTtlsFor(undefined, 'human') });
+    const marks = messages.flatMap((m): unknown[] => (Array.isArray(m.content) ? m.content : []))
+      .map((b) => (b as { cache_control?: unknown }).cache_control).filter(Boolean);
+    expect(marks).toEqual([{ type: 'ephemeral', ttl: '1h' }, { type: 'ephemeral' }]);
   });
 });

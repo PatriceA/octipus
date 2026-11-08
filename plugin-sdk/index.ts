@@ -54,7 +54,10 @@ export interface PluginManifest {
    */
   apiVersion?: string;
   capabilities?: PluginCapabilities;
-  /** Legacy top-level tool list. Kept; mirrors `capabilities.tools`. */
+  /**
+   * Legacy top-level tool list. After `validateManifest` it always holds the
+   * effective list (`capabilities.tools` when present).
+   */
   tools: PluginToolDef[];
   /** Secret-key → vault-secret-name map the host resolves per calling user. */
   secrets?: Record<string, string>;
@@ -174,7 +177,11 @@ export function validateManifest(raw: unknown): ManifestValidation {
   }
 
   if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, manifest: obj as unknown as PluginManifest };
+  // Normalized: `tools` is always the effective list (`manifestTools`), so a
+  // manifest that declares only `capabilities.tools` — the shipped example —
+  // never reaches a consumer with `tools` undefined.
+  const manifest = obj as unknown as PluginManifest;
+  return { ok: true, manifest: { ...manifest, tools: manifestTools(manifest) } };
 }
 
 /** A deterministic fixture value for a declared parameter (used in tool dry-runs). */

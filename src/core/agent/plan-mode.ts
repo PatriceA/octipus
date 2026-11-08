@@ -10,9 +10,12 @@
  *
  * Three parts, because a mode is only as real as its weakest one:
  *
- *  1. The tools. The file-mutating handlers are stripped, reusing the same
- *     `FILE_CHANGE_TOOLS` filter the read-only roles use — one list, so a tool
- *     added to one path cannot be forgotten on the other.
+ *  1. The tools. The file-mutating handlers — the same `FILE_CHANGE_TOOLS`
+ *     list the read-only roles use, so a tool added to one path cannot be
+ *     forgotten on the other — refuse every call. The root keeps them declared
+ *     and the executor refuses them (`FILE_CHANGES_REFUSED_KEY`), so toggling
+ *     the mode leaves the cached tool list intact; a worker's set is built once,
+ *     so the spawners strip them (`stripMutatingTools`).
  *  2. The instruction, which covers what the filter cannot: `shell` still holds
  *     `>` and `tee`, exactly as the read-only role comment has always said.
  *     Defense in depth, not a boundary, and said out loud rather than implied.
@@ -57,8 +60,8 @@ there.
 
 Change nothing. No writing or editing files, no creating or deleting them, no
 commits, no formatters or code generation that rewrites tracked files, no
-installs, no configuration changes. The file-writing tools have been withheld
-for this turn; the shell has not, so a redirect (\`>\`, \`tee\`), an \`-i\` flag or a
+installs, no configuration changes. The file-writing tools refuse every call
+this turn; the shell does not, so a redirect (\`>\`, \`tee\`), an \`-i\` flag or a
 commit would still work. Do not use them. That restraint is the mode.
 
 The visible work plan describes the FUTURE IMPLEMENTATION, not your planning
