@@ -27,8 +27,9 @@ import { coreLogger } from '@/utils/logger';
 import { truncateLinesToTokens } from '@/utils/token-count';
 import { getAgentHooks } from './hooks';
 import { estimateToolSchemaTokens, logPromptComposition, recordContextFill } from './prompt-budget';
+import { PromptBuilder } from './prompt-builder';
 import { PromptTagger, stageRootPrompt, turnContextParts } from './prompt-composition';
-import { splitBasePrompt } from './prompt-parts';
+import { categorizeBuilderParts } from './prompt-parts';
 import { buildSecurityReminder } from './input-guard';
 import { createMetaTools } from './meta-tools';
 import { shouldUseLazyDiscovery } from './lazy-tools';
@@ -201,18 +202,18 @@ export interface RootRunExtras {
    */
   signal?: AbortSignal;
   /**
-   * `extraSystemContext` as labelled pieces (memory, each context hook, space
-   * and group context), for the Context inspector. Ignored unless they add up
-   * to that string exactly.
-   */
-  turnContextParts?: ReadonlyArray<{ label: string; text: string }>;
-  /**
    * The retrieved blocks inside this turn's context (the memory block, each
    * context hook's block), verbatim. The worker leaves out any that an earlier
    * turn still in the conversation already carries (`REPEATABLE_CONTEXT_KEY`).
    * Directives are never listed: an instruction is repeated on purpose.
    */
   repeatableContext?: string[];
+  /**
+   * `extraSystemContext` as labelled pieces (memory, each context hook, space
+   * and group context), for the Context inspector. Ignored unless they add up
+   * to that string exactly.
+   */
+  turnContextParts?: ReadonlyArray<{ label: string; text: string }>;
 }
 
 /**
@@ -604,7 +605,7 @@ export async function runRootAgent(
   // prefix.
   const turnBlock = supervisor&&scope.trigger!=='user'?'':extraSystemContext;
   const volatileParts: string[] = buildPreHookVolatileParts(turnBlock, guardFlags);
-  // Which category each part belongs to, for the Context inspector.
+  // Which category each per-turn part belongs to, for the Context inspector.
   const tagger = new PromptTagger();
   tagger.tag('volatile', 'turn', 'Current date & time', volatileParts[0]);
   tagger.tagSplit(turnBlock, turnContextParts(turnBlock, [
@@ -612,6 +613,8 @@ export async function runRootAgent(
     ...(attachments.context ? [{ label: 'Attachments', text: attachments.context }] : []),
   ]));
   if (guardFlags.length > 0) tagger.tag('volatile', 'guardrails', 'Security alert (input flagged)', volatileParts[volatileParts.length - 1]);
+  // What a static block's sizes leave out: caps and cuts, by builder label.
+  const blockNotes: Record<string, { status?: 'truncated' | 'capped'; note?: string }> = {};
 
   // Fire the before-agent-start hook so extensions and built-in
   // modules (persona, project context) can mutate the system
@@ -631,13 +634,12 @@ export async function runRootAgent(
   });
   systemPrompt = hookCtx.systemPrompt;
 
-  // From here the prompt is assembled into labelled parts rather than one
-  // string, so `logPromptComposition` can say WHICH block costs what. The
-  // worker and swarm paths have had that measurement since the prompt-size
-  // audit; the root agent's own turn — the one the measured pass put at
-  // ~8.4k tokens for a one-line question — never did.
-  const staticParts: string[] = [systemPrompt];
-  tagger.tagSplit(systemPrompt, splitBasePrompt(systemPrompt, supervisor ? 'Companion supervisor prompt' : `${rootAgentRole} role prompt${isLite ? ' (lite)' : ''}`));
+  // From here the prompt is assembled into labelled, tiered parts
+  // (prompt-builder.ts), so `logPromptComposition` can say WHICH block costs
+  // what and a cache break can be traced to the tier that moved. The persona
+  // sits inside the role prompt (after the security preamble), so the prefix
+  // is per-user from its first block on.
+  const prompt = new PromptBuilder().add('user', 'role-prompt', systemPrompt);
 
   // Workers load the canonical checkpoint and transcript under the session
   // lock, so the root no longer renders either — but the user-visible
@@ -656,15 +658,18 @@ export async function runRootAgent(
   // ("who is my wife → search_profiles"), so a capped model would call a tool
   // that is not registered and burn iterations it does not have. Say what is
   // missing, and what to do instead.
-  if (droppedToolGroups.length > 0) {
-    staticParts.push(tagger.tag('static', 'tools', 'Tool groups left out this turn',
-      `\n\nNOT AVAILABLE THIS TURN (your model's tool budget): ${droppedToolGroups.join(', ')}. ` +
+  //
+  // Turn tier: the cap follows each message's tool selection, so in the
+  // session tier it changed the session's shape (and rebuilt its replayed
+  // blocks) whenever the dropped groups did. After everything static, which
+  // is also what "any instruction above" should cover.
+  const droppedGroupsNote = droppedToolGroups.length > 0
+    ? `\n\nNOT AVAILABLE THIS TURN (your model's tool budget): ${droppedToolGroups.join(', ')}. ` +
       'Ignore any instruction above that tells you to use them — calling one will fail. ' +
-      'If the request needs one, spawn_child to a specialist that holds it.',
-    ));
-  }
+      'If the request needs one, spawn_child to a specialist that holds it.'
+    : '';
 
-  if(!supervisor)staticParts.push(tagger.tag('static', 'delegation', 'Delegation policy', buildDelegationPolicy(isLite)));
+  if (!supervisor) prompt.add('user', 'delegation-policy', buildDelegationPolicy(isLite));
   // The delegation mechanics — how spawn_child/collect_children actually behave,
   // which role fits which task, the read-only clause, the no-respawn rule. Full
   // tier only: lite's whole delegation contract is "once, then relay", and a
@@ -675,7 +680,7 @@ export async function runRootAgent(
   // you know" is what the phase deleted; the mechanics below are as true now as
   // they were, and the routing table gained the sentence about what NOT to
   // delegate — the root holds those tools itself.
-  if (!isLite&&!supervisor) staticParts.push(tagger.tag('static', 'delegation', 'Delegation guide', `\n\n${delegationPrompt}`));
+  if (!isLite && !supervisor) prompt.add('user', 'delegation-mechanics', `\n\n${delegationPrompt}`);
   volatileParts.push(tagger.tag('volatile', 'turn', 'Topic hint', buildTopicHint(isLite, classification)));
   if (classification.type === 'ambiguous') {
     volatileParts.push(tagger.tag('volatile', 'turn', 'Ambiguous request note', `\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise resolve only the uncertainty needed to choose direct work or a specialist; do not start a broad investigation just to route the task. If the user explicitly tells you to delegate, always do so.`));
@@ -705,7 +710,6 @@ export async function runRootAgent(
     const projectPath = sessionCtx!.projectPath!;
     const projectName = sessionCtx!.projectName || projectPath.split(/[/\\]/).pop() || 'project';
     let wsContext = `\n\nDEV MODE SESSION — Project: ${projectName}`;
-    let agentsMdChars = 0;
     wsContext += `\nProject path: ${projectPath}`;
 
     // Load the curated AGENTS.md guide for the root agent (lightweight brief)
@@ -713,16 +717,15 @@ export async function runRootAgent(
       const { loadAgentsMd } = await import('./agents-md');
       const guide = await loadAgentsMd(projectPath);
       if (guide) {
-        agentsMdChars = guide.length;
+        if (guide.length > 500) blockNotes['dev-project'] = { status: 'truncated', note: `AGENTS.md: first 500 of ${guide.length.toLocaleString('en-US')} chars` };
         wsContext += `\nProject overview (from AGENTS.md): ${guide.slice(0, 500)}`;
       }
     } catch (err) { coreLogger.error({ err }, 'silent failure in service'); }
 
     wsContext += `\n\nAll worker tasks MUST target this project. Always include the full path "${projectPath}" in every worker task description. The user does not need to specify the project — it is implicit.`;
     wsContext += `\n\nUse create_pipeline when ordered implementation and verification stages justify their cost, or the user requests that workflow; do not add research stages that repeat completed investigation.`;
-    staticParts.push(tagger.tag('static', 'workspace', 'Dev-mode project', wsContext, agentsMdChars > 500
-      ? { status: 'truncated', note: `AGENTS.md: first 500 of ${agentsMdChars.toLocaleString('en-US')} chars` }
-      : {}));
+    // Drifts: the AGENTS.md excerpt changes when the file is edited.
+    prompt.add('session', 'dev-project', wsContext, { drifts: true });
   } else {
     // Normal mode: generic workspace awareness.
     // Advertise the turn workspace's sandbox root (the same one the filesystem
@@ -764,9 +767,11 @@ export async function runRootAgent(
         suite += `\n\nUse the repo_registry tool (list_repos / get_repo / repo_dependents) to navigate this suite efficiently — read a repo's map before its files. Route each worker to a repo by its ABSOLUTE PATH and tell it to read that repo's AGENTS.md first. For a cross-repo change, call repo_dependents on a library before editing it and name every affected repo in the worker tasks.`;
         suite += ` Dependencies are declared direct package relationships, not a complete impact analysis. Inspect API contracts and runtime connections separately. Repo maps and symbols are scan-time snapshots; refresh with scan_repos after code or manifest changes.`;
         if (ambiguousPackages.length) suite += ` Multiple repositories publish the same package; dependency edges are incomplete for: ${ambiguousPackages.slice(0, 20).join(', ')}${ambiguousPackages.length > 20 ? ' (and more)' : ''}. Use explicit repository paths.`;
-        staticParts.push(tagger.tag('static', 'workspace', 'Repo map', suite, truncated || shown.length < repos.length
+        // Drifts: a rescan or a new repo changes it (scan_repos refreshes it).
+        blockNotes['workspace-suite'] = truncated || shown.length < repos.length
           ? { status: 'capped', note: `${shown.length} of ${repos.length} repos · cap ${REPO_SUITE_TOKEN_BUDGET.toLocaleString('en-US')} tokens` }
-          : { note: `${repos.length} repos` }));
+          : { note: `${repos.length} repos` };
+        prompt.add('session', 'workspace-suite', suite, { drifts: true });
         injectedSuite = true;
       }
     } catch (err) {
@@ -789,12 +794,16 @@ export async function runRootAgent(
       }
       wsContext += `\n\nIMPORTANT: When the user references "this project" or a project by name, resolve it to the FULL ABSOLUTE PATH and include that path explicitly in every worker task description. For example, if the user says "audit this project (octipus)", your task descriptions must say "audit the project at ${wsRoot}/octipus". Workers do NOT know which project the user means unless you tell them the exact path.`;
       wsContext += `\n\nWhen a repo is flagged "(has AGENTS.md)", tell the worker to read that repo's AGENTS.md first — it is the curated guide to the repo's structure and commands. For cross-repo work, name every repo involved and its path.`;
-      staticParts.push(tagger.tag('static', 'workspace', 'Workspace folders', wsContext, dirs.length > 30 ? { note: `${dirs.length} folders: too many to list` } : {}));
+      // Drifts: a new top-level directory changes the listing. Replayed as
+      // the conversation first saw it, so it says so: a project cloned
+      // mid-conversation is found by listing the workspace.
+      wsContext += `\nThis listing is as of the start of this conversation; list the workspace directory for anything added since.`;
+      prompt.add('session', 'workspace-listing', wsContext, { drifts: true });
     } catch (err) {
       // The per-user nested root may not exist yet (new user who hasn't
       // written a file). Fall back to a bare workspace line; not fatal.
       coreLogger.debug({ err, wsRoot }, 'workspace readdir skipped — root may not exist yet');
-      staticParts.push(tagger.tag('static', 'workspace', 'Workspace root', `\nWORKSPACE: ${wsRoot}`));
+      prompt.add('session', 'workspace-listing', `\nWORKSPACE: ${wsRoot}`, { drifts: true });
     }
   }
   // A space session: where the agent is, what the role allows, and why the
@@ -802,16 +811,40 @@ export async function runRootAgent(
   if (space) {
     const { getSpace } = await import('@/core/spaces/service');
     const { name } = await getSpace({ userId }, space.workspaceId);
-    staticParts.push(tagger.tag('static', 'workspace', 'Shared space notice', spaceSessionNotice(name, space.role, can(space.role, 'run_agent_write'), extras.room ? { title: extras.room.title } : undefined)));
+    prompt.add('session', 'space-notice', spaceSessionNotice(name, space.role, can(space.role, 'run_agent_write'), extras.room ? { title: extras.room.title } : undefined));
   }
 
   // Static, not volatile: the volatile part is stored with every user row, and
   // whether a session is offered interactive answers rarely changes.
-  if (inlineUi) staticParts.push(tagger.tag('static', 'guardrails', 'Interactive answer rules', INLINE_UI_PROMPT));
+  if (inlineUi) prompt.add('session', 'inline-ui', INLINE_UI_PROMPT);
+
+  let driftReplayed = false;
+  // The drifting session blocks (workspace listing, repo suite, AGENTS.md
+  // excerpt) are replayed as this conversation first saw them, so a new
+  // directory on disk does not rewrite the cached prefix on every following
+  // turn. A clear, a checkpoint, a change to the session tier's shape or a
+  // rescan (scan_repos) rebuilds them.
+  {
+    const generation = sessionGeneration(sessionCtx);
+    const checkpointId = sessionCtx?.checkpoint?.generation === generation ? sessionCtx.checkpoint.entryId : undefined;
+    // A guest's folder scope filters the listing: narrowing it rebuilds it.
+    const { frozen, replayed } = prompt.freezeDrift(sessionCtx?.staticPrompt ?? undefined, { generation, checkpointId, shapeInputs: space?.scope?.folders ?? null });
+    if (!replayed) {
+      try {
+        await sessionRepository.patchContextIfGeneration(sessionId, generation, { staticPrompt: frozen });
+      } catch (err) {
+        coreLogger.warn({ err, sessionId }, 'Could not record the conversation\'s static prompt; the next turn rebuilds it');
+      }
+    }
+    coreLogger.debug({ sessionId, replayed, tiers: prompt.summary() }, 'Root prompt tiers');
+    driftReplayed = replayed;
+  }
 
   // Append the volatile per-turn context (date, summary, history) after the
   // whole static/semi-static instruction block — keeps the prefix cacheable.
-  systemPrompt = assembleSystemPrompt(staticParts, volatileParts);
+  for (const part of volatileParts) prompt.add('turn', 'turn-context', part);
+  prompt.add('turn', 'dropped-tool-groups', droppedGroupsNote);
+  systemPrompt = prompt.build();
 
   const advertisedTools =
     toolAdvertisement.mode === 'lazy'
@@ -837,12 +870,18 @@ export async function runRootAgent(
         ? { advertisement: 'lazy' as const, registeredToolCount: turnTools.length }
         : {}),
     },
-    { static: staticParts.filter(Boolean), volatile: volatileParts.filter(Boolean) },
+    { static: prompt.staticParts(), volatile: prompt.turnParts() },
   ));
-  // The same parts, by category, for the Context inspector: the agent manager
-  // adds skills and MCP servers, the worker adds tools and history.
+  // The same blocks, by category, for the Context inspector (the agent
+  // manager adds skills and MCP servers, the worker tools and history).
+  // Read off the builder after the drift replay: what is sent, not what was built.
   stageRootPrompt(sessionId, {
-    parts: tagger.resolve(staticParts, volatileParts),
+    parts: categorizeBuilderParts(prompt.blocks(), {
+      roleLabel: supervisor ? 'Companion supervisor prompt' : `${rootAgentRole} role prompt${isLite ? ' (lite)' : ''}`,
+      notes: blockNotes,
+      replayed: driftReplayed,
+      tagger,
+    }),
     role: rootAgentRole,
     model: modelName,
     ...(modelMeta?.contextWindow ? { contextWindow: modelMeta.contextWindow } : {}),

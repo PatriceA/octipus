@@ -20,7 +20,7 @@ import {
   turnContextParts,
   withoutText,
 } from './prompt-composition';
-import { splitBasePrompt } from './prompt-parts';
+import { BUILDER_LABELS, categorizeBuilderParts, splitBasePrompt } from './prompt-parts';
 import { OUTPUT_FORMATTING_RULES, SECURITY_PREAMBLE } from './roles';
 import { VAULT_USAGE_GUIDANCE } from './vault-guidance';
 
@@ -66,12 +66,43 @@ describe('PromptTagger', () => {
     expect(tagger.resolve(['abc'], [])[0].category).toBe('other');
   });
 
+  test('every PromptBuilder block the root runner adds has a category', () => {
+    const source = readFileSync(new URL('./root-runner.ts', import.meta.url), 'utf8');
+    const labels = [...source.matchAll(/prompt\.add\(\s*'[a-z]+',\s*'([a-z-]+)'/g)].map((m) => m[1]);
+    expect(labels.length).toBeGreaterThan(8);
+    expect(labels.filter((l) => !(l in BUILDER_LABELS))).toEqual([]);
+  });
+
+  test('builder blocks: the role prompt is split, a replayed drifting block says so, an unknown label is "other"', () => {
+    const tagger = new PromptTagger();
+    const date = tagger.tag('volatile', 'turn', 'Current date & time', 'CURRENT DATE & TIME: now');
+    const parts = categorizeBuilderParts([
+      { tier: 'user', label: 'role-prompt', text: `${SECURITY_PREAMBLE}You are Octipus.` },
+      { tier: 'session', label: 'workspace-suite', text: 'WORKSPACE SUITE', drifts: true },
+      { tier: 'session', label: 'space-notice', text: 'SHARED SPACE' },
+      { tier: 'session', label: 'brand-new-block', text: 'NEW' },
+      { tier: 'turn', label: 'turn-context', text: date },
+    ], { roleLabel: 'general role prompt', notes: { 'workspace-suite': { status: 'capped', note: '40 of 52 repos' } }, replayed: true, tagger });
+    expect(parts.map((p) => [p.tier, p.category, p.label, p.note])).toEqual([
+      ['static', 'guardrails', 'Security preamble', undefined],
+      ['static', 'role', 'general role prompt', undefined],
+      ['static', 'workspace', 'Repo map', 'as first seen in this conversation (replayed so the cached prefix holds)'],
+      ['static', 'workspace', 'Shared space notice', undefined],
+      ['static', 'other', 'brand-new-block', undefined],
+      ['volatile', 'turn', 'Current date & time', undefined],
+    ]);
+    // Not replayed: the cap note of a fresh block stands.
+    expect(categorizeBuilderParts([{ tier: 'session', label: 'workspace-suite', text: 'W', drifts: true }],
+      { roleLabel: 'r', notes: { 'workspace-suite': { status: 'capped', note: '40 of 52 repos' } }, replayed: false, tagger })[0])
+      .toMatchObject({ status: 'capped', note: '40 of 52 repos' });
+  });
+
   test('every block the root runner pushes is tagged at its push site', () => {
     // The fallback above keeps an untagged block visible; this keeps it from
     // being needed. A push that bypasses the tagger shows up as "other".
     const source = readFileSync(new URL('./root-runner.ts', import.meta.url), 'utf8');
     const pushes = [...source.matchAll(/\b(staticParts|volatileParts)\.push\(\s*([^\n]*)/g)];
-    expect(pushes.length).toBeGreaterThan(10);
+    expect(pushes.length).toBeGreaterThanOrEqual(5);
     expect(pushes.filter((m) => !m[2].startsWith('tagger.tag(')).map((m) => m[0])).toEqual([]);
   });
 });
