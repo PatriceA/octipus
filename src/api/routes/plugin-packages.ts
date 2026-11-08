@@ -50,7 +50,7 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
       if (denied) return denied;
       try {
         const row = await installFromDirectory(body.path, principal.userId, { upgrade: body.upgrade === true });
-        return { name: row.name, version: row.version, enabled: row.enabled, manifest: row.manifest };
+        return { name: row.name, version: row.version, enabled: row.enabled, contentHash: row.contentHash, manifest: row.manifest };
       } catch (err) {
         return refused(err, set);
       }
@@ -71,7 +71,7 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
       const denied = adminDenied({ set, user, principal });
       if (denied) return denied;
       try {
-        await configure(params.name, { settings: body.settings, enabled: body.enabled }, principal.userId);
+        await configure(params.name, { settings: body.settings, enabled: body.enabled, approveContent: body.approveContent }, principal.userId);
         return await packageView(params.name);
       } catch (err) {
         return refused(err, set);
@@ -81,6 +81,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
       params: t.Object({ name: t.String({ maxLength: 50 }) }),
       body: t.Object({
         enabled: t.Optional(t.Boolean()),
+        /** Accept the package's files as they are now (after a hash mismatch). */
+        approveContent: t.Optional(t.Boolean()),
         settings: t.Optional(t.Record(t.String({ maxLength: 50 }), t.Unknown())),
       }),
       detail: { tags: ['plugin-packages'] },

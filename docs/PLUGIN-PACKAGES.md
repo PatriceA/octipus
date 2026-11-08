@@ -90,6 +90,55 @@ An enabled package runs as the MCP server `plugin-<name>`:
 Every change (install, settings, secrets, enable, disable) restarts the
 package's server if its configuration changed.
 
+## Content pinning
+
+What runs is what an admin installed. Install, upgrade and content approval
+record a **content hash** of the package directory on its row
+(`plugin_packages.content_hash`, shown as `contentHash`):
+
+```
+sha256 over:  octipus-plugin-content/v1
+              name <manifest name>
+              version <manifest version>
+              file <sha256 of the bytes> "<relative/path>"     one line per file,
+              ...                                              sorted by path
+```
+
+Every file counts — any changed byte, added, removed or renamed file changes
+the hash — but not directory order, timestamps or permissions. A symbolic link
+(refused at install) counts by its target. Only `node_modules/.cache`, at any
+depth, is left out: build tools write their caches there on their own, and
+nothing in it is the package's code.
+
+Before **every start** of the package's server — host start, enable, restart
+after a change, reconnect after a crash — the hash is recomputed. On a
+mismatch the server is not started; the package keeps `enabled` but shows the
+problem *"Modified since it was approved (hash mismatch)"*, and the log names
+the package with the recorded and the actual hash. Enabling a disabled package
+whose files do not match is refused as well. A server already running keeps
+running until its next start.
+
+To accept the new content (after reading what changed):
+
+```
+PATCH /api/plugin-packages/:name { "approveContent": true }
+```
+
+This records the hash of the files as they are now (audit op
+`content_approved`, with the old and new hash) and starts the package if it is
+enabled; `{ "approveContent": true, "enabled": true }` does both in one write.
+Reinstalling with `"upgrade": true` also records a fresh hash.
+
+A package installed **before pinning existed** has no hash. Its first start
+records the current one and logs that once (trust on first use), so existing
+installs keep running after the update; from then on it is checked like any
+other.
+
+A package that writes into its own directory at runtime (its only writable one
+in the sandbox) will read as modified on its next start; it should keep its
+runtime state elsewhere (a temp directory), or be approved again.
+Signatures over the hash come with signed packages (C15).
+
 ## Installing and managing
 
 Admins only. A package installs from a directory on the server; the
@@ -110,7 +159,11 @@ marketplace (plan point C15) will fetch signed packages instead.
    before any file is replaced and stays disabled until enabled again, since
    its tools may have changed. Each setting the new version still declares and
    accepts is kept; a new required setting must be set before enabling.
-5. **Uninstall:** `DELETE /api/plugin-packages/:name` removes the server, the
+   The new files' hash replaces the old one.
+5. **Approve changed content:** `PATCH /api/plugin-packages/:name
+   { "approveContent": true }` after a hash mismatch
+   ([Content pinning](#content-pinning)).
+6. **Uninstall:** `DELETE /api/plugin-packages/:name` removes the server, the
    files, the row and the secrets.
 
 `GET /api/plugin-packages` lists installed packages with their manifest,
@@ -123,7 +176,8 @@ Every change is in the audit log (`resource_type = plugin_package`).
 
 - Packages reporting events back (a new invoice in DATEV opening a case):
   plan point C2b.
-- Signed packages, remote install and the marketplace page: C15.
+- Signed packages, remote install and the marketplace page: C15. Until then a
+  package is pinned by its content hash only ([Content pinning](#content-pinning)).
 - A web page for plugin packages.
 - In a shared space, plugin tools follow the rules of personal connections
   (reads allowed, writes asked or refused); space-level packages come later.

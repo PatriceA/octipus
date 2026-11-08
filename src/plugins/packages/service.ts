@@ -23,10 +23,15 @@
  *
  * Every change re-syncs the bridge (`syncPluginServers`), which restarts the
  * package's server when its config changed.
+ *
+ * The files are pinned (./integrity.ts): install, upgrade and content approval
+ * record a hash of the package directory, and every start of its server
+ * recomputes it; a package modified since then does not start until an admin
+ * approves its content (`configure` with `approveContent`).
  */
 import { cp, lstat, mkdir, readdir, readFile, rename, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { RecordValidationError, validateRecordData } from '@/core/records/fields';
 import { getDb } from '@/db/postgres';
@@ -37,6 +42,7 @@ import { getVault } from '@/security/vault';
 import type { MCPServer } from '@/shared/mcp-server';
 import { PLUGIN_MANIFEST_FILE, type PluginManifest, type PluginPackageView } from '@/shared/plugin-package';
 import { coreLogger } from '@/utils/logger';
+import { CONTENT_MISMATCH_PROBLEM, hashPackageContent, verifyPackageContent } from './integrity';
 import { ManifestError, parseManifest, settingEnvName } from './manifest';
 
 /** Largest package a directory install copies (bytes). */
@@ -176,11 +182,13 @@ export async function installFromDirectory(sourceDir: string, actorUserId: strin
   }
 
   const settings = previous ? keptSettings(manifest, previous.settings) : {};
+  // Hashed as installed, so what the admin installs is what is pinned.
+  const contentHash = await hashPackageContent(target, manifest);
   const [row] = await db.update(pluginPackages)
-    .set({ version: manifest.version, manifest, enabled: false, settings, installedBy: actorUserId, updatedAt: new Date() })
+    .set({ version: manifest.version, manifest, enabled: false, settings, contentHash, installedBy: actorUserId, updatedAt: new Date() })
     .where(eq(pluginPackages.name, manifest.name))
     .returning();
-  await audit(actorUserId, previous ? 'upgraded' : 'installed', manifest.name, { version: manifest.version, from: previous?.version ?? null });
+  await audit(actorUserId, previous ? 'upgraded' : 'installed', manifest.name, { version: manifest.version, from: previous?.version ?? null, contentHash });
   await syncPluginServers();
   return row;
 }
@@ -217,14 +225,17 @@ export async function uninstall(name: string, actorUserId: string): Promise<void
 }
 
 /**
- * Change a package's settings and/or turn it on or off, in one write.
- * Settings are checked against the fields its manifest declares; turning it
- * on (or keeping it on) requires every required setting and secret to have a
- * value. Nothing is saved when either check fails.
+ * Change a package's settings, approve its content and/or turn it on or off,
+ * in one write. Settings are checked against the fields its manifest
+ * declares; turning it on (or keeping it on) requires every required setting
+ * and secret to have a value, and turning it on requires its files to match
+ * the approved hash. `approveContent` records the hash of its files as they
+ * are now: the operator accepting a package modified since it was approved.
+ * Nothing is saved when a check fails.
  */
 export async function configure(
   name: string,
-  change: { settings?: unknown; enabled?: boolean },
+  change: { settings?: unknown; enabled?: boolean; approveContent?: boolean },
   actorUserId: string,
 ): Promise<PluginPackageRow> {
   const row = await requireRow(name);
@@ -246,11 +257,26 @@ export async function configure(
       throw new PluginPackageError('incomplete', `Set ${missing.join(', ')} before enabling ${name}`, missing.map((m) => `${m}: required`));
     }
   }
-  const [updated] = await getDb().update(pluginPackages).set({ settings, enabled, updatedAt: new Date() }).where(eq(pluginPackages.name, name)).returning();
+  let contentHash = row.contentHash;
+  if (change.approveContent) {
+    contentHash = await hashPackageContent(packageDir(name), row);
+  } else if (enabled && !row.enabled && row.contentHash !== null) {
+    const actual = await hashPackageContent(packageDir(name), row);
+    if (actual !== row.contentHash) {
+      throw new PluginPackageError('incomplete', `${name} was modified since it was approved (hash mismatch); approve its content before enabling it`);
+    }
+  }
+  const [updated] = await getDb().update(pluginPackages).set({ settings, enabled, contentHash, updatedAt: new Date() }).where(eq(pluginPackages.name, name)).returning();
+  if (change.approveContent) await audit(actorUserId, 'content_approved', name, { version: row.version, from: row.contentHash, to: contentHash });
   if (change.settings !== undefined) await audit(actorUserId, 'settings_changed', name, { keys: Object.keys(change.settings as object) });
   if (change.enabled !== undefined && change.enabled !== row.enabled) await audit(actorUserId, enabled ? 'enabled' : 'disabled', name, { version: row.version });
   await syncPluginServers();
   return updated;
+}
+
+/** Accept a package's files as they are now (`configure` with `approveContent` alone). */
+export function approveContent(name: string, actorUserId: string): Promise<PluginPackageRow> {
+  return configure(name, { approveContent: true }, actorUserId);
 }
 
 /** Turn a package on or off (`configure` with `enabled` alone). */
@@ -325,6 +351,7 @@ function viewOf(row: PluginPackageRow, secrets: string[]): PluginPackageView {
     secretsSet: secrets,
     problem: row.enabled ? bridge.pluginProblem(serverId) : null,
     connected: bridge.isConnected(serverId),
+    contentHash: row.contentHash,
     installedBy: row.installedBy,
     installedAt: row.installedAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -381,6 +408,36 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
 }
 
 /**
+ * The check before every start of a package's server: its files against the
+ * hash recorded when they were approved. The reason it may not start, or
+ * null. A package with no recorded hash (installed before pinning) has the
+ * current one recorded and starts: trust on first use, logged once.
+ */
+export async function checkBeforeStart(server: MCPServer): Promise<string | null> {
+  const name = server.plugin?.package;
+  if (!name) return null;
+  const row = await findRow(name);
+  if (!row) return `Plugin package ${name} is not installed`;
+  let check: Awaited<ReturnType<typeof verifyPackageContent>>;
+  try {
+    check = await verifyPackageContent(packageDir(name), row, async (hash) => {
+      await getDb().update(pluginPackages).set({ contentHash: hash })
+        .where(and(eq(pluginPackages.name, name), isNull(pluginPackages.contentHash)));
+    });
+  } catch (err) {
+    coreLogger.error({ err, pkg: name }, 'Plugin package content could not be hashed; not started');
+    return `Could not check the package files: ${(err as Error).message}`;
+  }
+  if (check.status === 'first_use') {
+    coreLogger.info({ pkg: name, version: row.version, hash: check.hash }, 'Plugin package had no content hash; recorded it on first start (trust on first use)');
+  } else if (check.status === 'mismatch') {
+    coreLogger.warn({ pkg: name, version: row.version, recorded: check.recorded, actual: check.actual }, 'Plugin package modified since it was approved (hash mismatch); not started');
+    return CONTENT_MISMATCH_PROBLEM;
+  }
+  return null;
+}
+
+/**
  * Give the bridge the servers of every installed package, enabled or not. A
  * package whose server cannot be prepared (its secrets cannot be read, say)
  * keeps the config it runs with, and the reason is shown as its problem.
@@ -388,6 +445,7 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
 export async function syncPluginServers(): Promise<void> {
   const rows = await getDb().select().from(pluginPackages);
   const bridge = getMCPBridge();
+  bridge.setPluginStartGuard(checkBeforeStart);
   const servers: MCPServer[] = [];
   const problems = new Map<string, string>();
   for (const row of rows) {

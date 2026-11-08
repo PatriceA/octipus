@@ -85,6 +85,11 @@ export interface PluginPackageView {
   problem: string | null;
   /** Whether its MCP server is connected right now. */
   connected: boolean;
+  /**
+   * The hash its files were approved with (`sha256:<hex>`, docs/PLUGIN-PACKAGES.md#content-pinning);
+   * null until the first start of a package installed before pinning.
+   */
+  contentHash: string | null;
   installedBy: string | null;
   installedAt: string;
   updatedAt: string;

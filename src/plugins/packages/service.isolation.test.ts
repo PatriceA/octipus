@@ -173,6 +173,51 @@ describe('plugin packages', () => {
     expect((await svc.packageView('echo-plugin')).connected).toBe(true);
   });
 
+  test('a package modified since it was approved does not start until its content is approved', async () => {
+    const svc = await import('./service');
+    const { getMCPBridge } = await import('@/mcp/bridge');
+    const { appendFileSync } = await import('node:fs');
+    const bridge = getMCPBridge();
+    const approved = (await svc.packageView('echo-plugin')).contentHash;
+    expect(approved).toMatch(/^sha256:[0-9a-f]{64}$/);
+
+    appendFileSync(join(svc.packageDir('echo-plugin'), 'server.mjs'), '\n// changed after approval\n');
+    // A restart: the next start checks the files.
+    await bridge.disconnect(SERVER);
+    await svc.syncPluginServers();
+    let view = await svc.packageView('echo-plugin');
+    expect(view.connected).toBe(false);
+    expect(view.enabled).toBe(true);
+    expect(view.problem).toMatch(/modified since it was approved \(hash mismatch\)/i);
+    expect(view.contentHash).toBe(approved);
+    // An on-demand reconnect is refused the same way.
+    await bridge.ensureConnected(SERVER);
+    expect(bridge.isConnected(SERVER)).toBe(false);
+    // Enabling again does not accept the new content either.
+    await svc.setEnabled('echo-plugin', false, admin);
+    await expect(svc.setEnabled('echo-plugin', true, admin)).rejects.toThrow(/hash mismatch/);
+
+    await svc.configure('echo-plugin', { approveContent: true, enabled: true }, admin);
+    view = await svc.packageView('echo-plugin');
+    expect(view.connected).toBe(true);
+    expect(view.problem).toBeNull();
+    expect(view.contentHash).not.toBe(approved);
+  });
+
+  test('a package installed before pinning records its hash on first start', async () => {
+    const svc = await import('./service');
+    const { getMCPBridge } = await import('@/mcp/bridge');
+    const { executeRaw } = await import('@/db/postgres');
+    const { hashPackageContent } = await import('./integrity');
+    await executeRaw(`UPDATE plugin_packages SET content_hash = NULL WHERE name = 'echo-plugin'`);
+    expect((await svc.packageView('echo-plugin')).contentHash).toBeNull();
+    await getMCPBridge().disconnect(SERVER);
+    await svc.syncPluginServers();
+    const view = await svc.packageView('echo-plugin');
+    expect(view.connected).toBe(true);
+    expect(view.contentHash).toBe(await hashPackageContent(svc.packageDir('echo-plugin'), { name: 'echo-plugin', version: view.version }));
+  });
+
   test('an operator MCP config claiming a plugin id is never used for the package', async () => {
     const { getMCPBridge } = await import('@/mcp/bridge');
     const bridge = getMCPBridge();

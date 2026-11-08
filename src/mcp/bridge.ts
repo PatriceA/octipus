@@ -92,6 +92,12 @@ export class MCPBridge extends EventEmitter {
   private pluginServers: MCPServer[] = [];
   /** Why a plugin server is not connected, by server id. */
   private pluginProblems: Map<string, string> = new Map();
+  /**
+   * Checked before every start of a plugin server, reconnects included: the
+   * reason it may not start (its files changed since they were approved), or
+   * null. Set by the plugin service (`setPluginStartGuard`).
+   */
+  private pluginStartGuard: ((server: MCPServer) => Promise<string | null>) | null = null;
   /** The plugin sync in flight; the next one waits for it. */
   private pluginSync: Promise<void> = Promise.resolve();
   // Auto-reconnect state for unexpected transport closes (server crash / OS kill).
@@ -186,6 +192,13 @@ export class MCPBridge extends EventEmitter {
     }
     if (this.connections.has(server.id)) {
       return this.connections.get(server.id)!;
+    }
+    if (server.plugin && this.pluginStartGuard) {
+      const refusal = await this.pluginStartGuard(server);
+      if (refusal) {
+        this.pluginProblems.set(server.id, refusal);
+        throw new Error(refusal);
+      }
     }
 
     coreLogger.info({ serverId: server.id, transport: server.transport || 'stdio' }, 'Connecting to MCP server');
@@ -413,6 +426,11 @@ export class MCPBridge extends EventEmitter {
       this.pluginProblems.set(id, message);
       coreLogger.error({ err: result.reason, serverId: id }, 'Plugin package server failed to start');
     });
+  }
+
+  /** Set the check run before every start of a plugin server (see `pluginStartGuard`). */
+  setPluginStartGuard(guard: ((server: MCPServer) => Promise<string | null>) | null): void {
+    this.pluginStartGuard = guard;
   }
 
   /** Why a plugin server is not connected, or null. */
