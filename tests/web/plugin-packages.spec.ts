@@ -1,4 +1,4 @@
-import type { Route } from '@playwright/test';
+import type { Page, Route } from '@playwright/test';
 import { test, expect } from './fixtures/auth';
 import { json, stubAllDefaults } from './fixtures/api-stubs';
 
@@ -9,6 +9,8 @@ import { json, stubAllDefaults } from './fixtures/api-stubs';
  *     (changed again since) is shown as a message;
  *   - the network state reads plainly, `refused` included, and a revoked key
  *     shows on the signature;
+ *   - settings are edited by the manifest's fields; secrets are write-only and
+ *     the value is gone from the page's heap once saved; uninstall asks first;
  *   - Browse lists the registries' packages and installs one with its URL
  *     and sha256.
  *
@@ -16,6 +18,20 @@ import { json, stubAllDefaults } from './fixtures/api-stubs';
  */
 
 const SHOTS = process.env.PLUGIN_PACKAGE_SHOTS;
+/** Distinctive, so a heap snapshot match cannot be anything else. */
+const SECRET_VALUE = 'zq7Kv41-plugin-secret-Wx9';
+
+/** Whether the page's JavaScript heap holds `needle` (a snapshot, which collects garbage first). */
+async function heapContains(page: Page, needle: string): Promise<boolean> {
+  const cdp = await page.context().newCDPSession(page);
+  const chunks: string[] = [];
+  cdp.on('HeapProfiler.addHeapSnapshotChunk', (e: { chunk: string }) => { chunks.push(e.chunk); });
+  await cdp.send('HeapProfiler.enable');
+  await cdp.send('HeapProfiler.collectGarbage');
+  await cdp.send('HeapProfiler.takeHeapSnapshot', { reportProgress: false });
+  await cdp.detach();
+  return chunks.join('').includes(needle);
+}
 const RECORDED = `sha256:${'a'.repeat(64)}`;
 const ACTUAL = `sha256:${'b'.repeat(64)}`;
 const MISMATCH = 'Modified since it was approved (hash mismatch); approve its content to run it';
@@ -180,18 +196,24 @@ test.describe('plugin packages', () => {
     await expect(secret.getByLabel(/Client secret/)).toHaveAttribute('type', 'password');
     await expect(id.getByLabel(/Client id/)).toHaveValue('');
     await expect(secret.getByRole('button', { name: 'Clear' })).toHaveCount(0);
-    await secret.getByLabel(/Client secret/).fill('s3cr3t');
+    // Typed key by key, so the page's JavaScript heap only ever sees the whole
+    // value where the page itself put it together.
+    await secret.getByLabel(/Client secret/).pressSequentially(SECRET_VALUE);
     await secret.getByRole('button', { name: 'Set' }).click();
     await expect(secret.getByRole('status')).toHaveText('Client secret saved.');
     await expect(secret.getByTestId('plugin-secret-state')).toHaveText('set');
     await expect(secret.getByLabel(/Client secret/)).toHaveValue('');
-    await expect(page.getByText('s3cr3t')).toHaveCount(0);
+    // Once saved, nothing in the page holds the value: not React state, not
+    // react-query's mutation cache (the variable is only 'set', and the
+    // mutation is reset with gcTime 0). A heap snapshot (taken after a GC) must not contain it.
+    expect(await heapContains(page, SECRET_VALUE)).toBe(false);
+    await expect(page.getByText(SECRET_VALUE)).toHaveCount(0);
     // Clearing asks first.
     page.once('dialog', (d) => d.accept());
     await id.getByRole('button', { name: 'Clear' }).click();
     await expect(id.getByTestId('plugin-secret-state')).toHaveText('not set');
     expect(writes.filter((w) => w.method === 'PUT')).toEqual([
-      { method: 'PUT', url: '/api/plugin-packages/finapi/secrets/FINAPI_CLIENT_SECRET', body: { value: 's3cr3t' } },
+      { method: 'PUT', url: '/api/plugin-packages/finapi/secrets/FINAPI_CLIENT_SECRET', body: { value: SECRET_VALUE } },
       { method: 'PUT', url: '/api/plugin-packages/finapi/secrets/FINAPI_CLIENT_ID', body: { value: null } },
     ]);
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/admin-plugin-configure.png`, fullPage: true });

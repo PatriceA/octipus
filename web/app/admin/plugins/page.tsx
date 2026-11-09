@@ -3,10 +3,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CircleCheck, Power, Settings2, ShieldAlert, Trash2 } from 'lucide-react';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { FieldInputs, type FieldValues, fromFieldValues, problemsOf, toFieldValues } from '@/components/business/common';
 import { api } from '@/lib/api';
 import {
+  MAX_PLUGIN_SECRET_LENGTH,
   PLUGIN_PACKAGES_KEY,
   type PluginInstallResult,
   type PluginNetworkStatus,
@@ -158,21 +159,37 @@ type SecretDecl = NonNullable<PluginPackageView['manifest']['secrets']>[number];
 /**
  * One declared secret: whether it has a value (never the value), a field to
  * set a new one (write-only, emptied once saved) and, when set, Clear.
+ *
+ * The value never enters React or react-query state: the input is
+ * uncontrolled and read from its ref when the request is made, the mutation's
+ * variable is only `'set'` or `'clear'`, and the mutation is reset and kept
+ * for no time (`gcTime: 0`) once it settles, so nothing holds the value after
+ * the request.
  */
 function SecretRow({ pkg, secret }: { pkg: PluginPackageView; secret: SecretDecl }) {
   const qc = useQueryClient();
-  const [value, setValue] = useState('');
+  const input = useRef<HTMLInputElement>(null);
+  const [filled, setFilled] = useState(false);
   const [message, setMessage] = useState<FormMessage>(null);
   const isSet = pkg.secretsSet.includes(secret.key);
   const put = useMutation({
-    mutationFn: (v: string | null) => api.put<{ saved: boolean }>(`/plugin-packages/${encodeURIComponent(pkg.name)}/secrets/${encodeURIComponent(secret.key)}`, { value: v }),
-    onSuccess: (_res, v) => {
-      setValue('');
-      setMessage({ kind: 'ok', text: v === null ? `${secret.label} cleared.` : `${secret.label} saved.` });
+    gcTime: 0,
+    mutationFn: (action: 'set' | 'clear') => api.put<{ saved: boolean }>(
+      `/plugin-packages/${encodeURIComponent(pkg.name)}/secrets/${encodeURIComponent(secret.key)}`,
+      { value: action === 'clear' ? null : (input.current?.value ?? '') },
+    ),
+    onSuccess: (_res, action) => {
+      if (input.current) input.current.value = '';
+      setFilled(false);
+      setMessage({ kind: 'ok', text: action === 'clear' ? `${secret.label} cleared.` : `${secret.label} saved.` });
       void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY });
     },
     onError: (err: Error) => setMessage({ kind: 'error', text: problemsOf(err) }),
   });
+  const send = (action: 'set' | 'clear') => {
+    setMessage(null);
+    put.mutate(action, { onSettled: () => put.reset() });
+  };
   const id = `plugin-${pkg.name}-secret-${secret.key}`;
   return (
     <form
@@ -180,7 +197,15 @@ function SecretRow({ pkg, secret }: { pkg: PluginPackageView; secret: SecretDecl
       data-testid="plugin-secret"
       data-key={secret.key}
       className="space-y-1"
-      onSubmit={(e) => { e.preventDefault(); if (value.trim()) { setMessage(null); put.mutate(value); } }}
+      onSubmit={(e) => {
+        e.preventDefault();
+        const length = input.current?.value.length ?? 0;
+        if (length > MAX_PLUGIN_SECRET_LENGTH) {
+          setMessage({ kind: 'error', text: `The value is ${length} characters; a secret holds at most ${MAX_PLUGIN_SECRET_LENGTH}.` });
+        } else if (input.current?.value.trim()) {
+          send('set');
+        }
+      }}
     >
       <div className="flex flex-wrap items-center gap-2">
         <label htmlFor={id} className="text-xs font-medium text-on-surface-variant">
@@ -197,19 +222,20 @@ function SecretRow({ pkg, secret }: { pkg: PluginPackageView; secret: SecretDecl
           autoComplete="new-password"
           spellCheck={false}
           placeholder={isSet ? 'a new value replaces the stored one' : 'value'}
-          value={value}
+          ref={input}
+          defaultValue=""
           disabled={put.isPending}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e) => setFilled(e.target.value.trim() !== '')}
           className="flex-1 min-w-48 bg-surface-container-high border border-outline-variant rounded-md py-1 px-2 text-on-surface text-sm"
         />
-        <button type="submit" disabled={put.isPending || !value.trim()} className="px-2 py-1 rounded-xs bg-primary text-on-primary text-xs cursor-pointer disabled:opacity-50">
+        <button type="submit" disabled={put.isPending || !filled} className="px-2 py-1 rounded-xs bg-primary text-on-primary text-xs cursor-pointer disabled:opacity-50">
           {isSet ? 'Replace' : 'Set'}
         </button>
         {isSet && (
           <button
             type="button"
             disabled={put.isPending}
-            onClick={() => { if (confirm(`Clear ${secret.label} of ${pkg.name}?`)) { setMessage(null); put.mutate(null); } }}
+            onClick={() => { if (confirm(`Clear ${secret.label} of ${pkg.name}?`)) send('clear'); }}
             className="px-2 py-1 rounded-xs text-xs text-on-surface-variant hover:text-on-surface cursor-pointer disabled:opacity-50"
           >
             Clear
