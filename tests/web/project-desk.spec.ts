@@ -100,3 +100,14 @@ test('new work opens the session setup rather than continuing the last conversat
   await page.getByRole('link', { name: 'New session', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'New Session', exact: true })).toBeVisible();
 });
+
+test('long evolving plans keep the inspector compact and retain the full-plan link', async ({ authenticatedPage: page }) => {
+  const data = structuredClone(snapshot);
+  data.sessions[0].plan!.changes = [{ at, summary: 'New findings. '.repeat(100) }, { at, summary: 'An older revision' }];
+  await page.route('**/api/sessions/desk', route => json(route, 200, data));
+  await page.goto('/');
+  const inspector = page.getByRole('complementary', { name: 'Selected session' });
+  await expect(inspector.locator('.desk-plan-change')).toHaveCount(1);
+  expect(await inspector.locator('.desk-plan-change').evaluate(element => element.getBoundingClientRect().height)).toBeLessThan(80);
+  await expect(inspector.getByRole('link', { name: 'View the current plan' })).toHaveAttribute('href', '/chat?session=sess-1');
+});

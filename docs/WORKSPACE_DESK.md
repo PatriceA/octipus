@@ -19,7 +19,7 @@ and next steps instead of showing personal sessions or Companion data.
 
 Plans can grow. The desk shows current activity, recorded outcomes, next steps,
 and plan revision summaries without converting a task count into project
-completion. The inspector shows recent recorded changes; on smaller screens it
+completion. The inspector shows recent recorded changes and a compact excerpt of the latest plan revision; on smaller screens it
 opens as a keyboard-accessible dialog.
 
 `GET /api/sessions/desk` returns one bounded owner-scoped snapshot. It starts with
@@ -32,7 +32,7 @@ tool arguments, and credential material are not returned.
 The browser refreshes this snapshot every 30 seconds while visible. Failed or
 older-than-90-second snapshots show unconfirmed state instead of retaining a
 “Working” badge. Partial source failures are visible, with a retry. The list
-shows at most eight entries from the selected filter, prioritizing decisions and
+shows at most four entries from the selected filter, prioritizing decisions and
 live work; the complete conversation list remains accessible from “View all
 sessions.”
 
