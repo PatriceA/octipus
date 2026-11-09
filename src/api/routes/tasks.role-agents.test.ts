@@ -124,8 +124,8 @@ describe('GET /api/tasks/role-agents', () => {
     expect(body.boardWritesAllowed).toBe(false);
     expect(body.heartbeatEnabled).toBe(false);
     expect(body.roles).toEqual([
-      { role: 'pm', activeTasks: 2, totalTasks: 3, enabled: false, hookId: null, known: true, pipelineTemplate: null },
-      { role: 'qa', activeTasks: 2, totalTasks: 2, enabled: false, hookId: null, known: true, pipelineTemplate: null },
+      { role: 'pm', activeTasks: 2, totalTasks: 3, enabled: false, inherited: true, hookId: null, known: true, pipelineTemplate: null },
+      { role: 'qa', activeTasks: 2, totalTasks: 2, enabled: false, inherited: true, hookId: null, known: true, pipelineTemplate: null },
     ]);
   });
 

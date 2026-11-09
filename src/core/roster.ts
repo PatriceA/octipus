@@ -37,7 +37,7 @@ export async function readRoster(principal: Principal, userId: string, now = new
   const roles: RosterRole[] = [...names].map((role) => {
     const config = ROLE_CONFIGS[role as keyof typeof ROLE_CONFIGS];
     const agent = view.roles.find((r) => r.role === role);
-    const hook = role === ROOT_ROLE ? personal : agent?.hookId ? hookById.get(agent.hookId) : undefined;
+    const hook = role === ROOT_ROLE ? personal : agent?.hookId ? hookById.get(agent.hookId) : agent?.inherited ? personal : undefined;
     const enabled = role === ROOT_ROLE ? personal?.isEnabled ?? false : agent?.enabled ?? false;
     const check = hook ? lastCheck.get(hook.id) : undefined;
     const interval = (hook?.triggerConfig as { intervalMinutes?: unknown } | undefined)?.intervalMinutes;

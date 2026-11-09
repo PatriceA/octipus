@@ -35,7 +35,7 @@ function state(r: RosterRole, serverEnabled: boolean): { text: string; tone: str
 }
 
 function lastCheckText(c: NonNullable<RosterRole['heartbeat']['lastCheck']>): string {
-  if (c.ran) return `${hhmm(c.at)} · started a turn`;
+  if (c.ran) return `${hhmm(c.at)} · handled pending work`;
   const label = c.reason && c.reason in HEARTBEAT_SKIP_LABEL ? HEARTBEAT_SKIP_LABEL[c.reason as HeartbeatSkipReasonName] : (c.reason ?? 'skipped');
   return `${hhmm(c.at)} · skipped: ${label.toLowerCase()}`;
 }
@@ -89,7 +89,7 @@ export default function RosterPage() {
               </span>
               {r.description && <span className="line-clamp-2 text-xs text-on-surface-variant">{r.description}</span>}
               <span className="mt-auto flex flex-wrap gap-1.5 text-[11px]">
-                {r.heartbeat.enabled && <span className="rounded-xs border border-tertiary/50 px-1.5 text-tertiary">Heartbeat</span>}
+                {r.heartbeat.enabled && <span className="rounded-xs border border-tertiary/50 px-1.5 text-tertiary">Background checks</span>}
                 {r.tasks.active > 0 && <span className="rounded-xs border border-outline-variant px-1.5 text-on-surface-variant">{r.tasks.active} to-do{r.tasks.active === 1 ? '' : 's'}</span>}
                 {r.runsToday > 0 && <span className="rounded-xs border border-outline-variant px-1.5 text-on-surface-variant">{r.runsToday} run{r.runsToday === 1 ? '' : 's'} today</span>}
                 {!r.known && <span className="rounded-xs border border-warning/50 px-1.5 text-warning">not in the registry</span>}
@@ -114,10 +114,10 @@ export default function RosterPage() {
               <li className="rounded-lg border border-outline-variant/60 bg-surface-container p-3">{current.root ? 'You send a message, in the web app, terminal or a linked channel.' : 'Octipus or another agent delegates a task to it (spawn_child), or a pipeline stage runs it.'}</li>
               <li className="space-y-2 rounded-lg border border-outline-variant/60 bg-surface-container p-3">
                 <div className="flex items-center justify-between gap-3">
-                  <span className="font-medium">{current.root ? 'Personal heartbeat: checks in on your behalf' : 'Heartbeat: works its to-dos on its own'}</span>
+                  <span className="font-medium">{current.root ? 'Personal heartbeat: background checks' : 'Heartbeat: works its to-dos on its own'}</span>
                   <span className="text-xs">{current.heartbeat.enabled && data.heartbeatEnabled ? 'On' : current.heartbeat.enabled ? 'Paused on server' : 'Off'}</span>
                 </div>
-                {current.root && <p className="text-xs text-on-surface-variant">Uses the same personal heartbeat as Settings. It checks periodically and only starts an agent when something needs attention.</p>}
+                {current.root && <p className="text-xs text-on-surface-variant">Uses the same personal heartbeat as Settings. It checks periodically and records new findings as notifications; workers start only for assigned task work.</p>}
                 {current.heartbeat.enabled && <p className="text-xs text-on-surface-variant">
                   {current.heartbeat.intervalMinutes ? `Checks every ${current.heartbeat.intervalMinutes} min` : 'Checks at the configured interval'}
                   {current.heartbeat.nextCheckAt && <> · next {hhmm(current.heartbeat.nextCheckAt)}</>}

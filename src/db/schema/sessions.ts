@@ -237,7 +237,7 @@ export interface SessionContext {
   }>;
 }
 
-export type SessionKind = 'chat' | 'room';
+export type SessionKind = 'chat' | 'room' | 'automation';
 export type RoomVisibility = 'space' | 'private';
 
 export type Session = typeof sessions.$inferSelect;

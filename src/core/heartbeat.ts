@@ -1,60 +1,14 @@
 import {taskProvenance,type TaskProvenance} from '@/core/tasks/provenance';
 /**
- * Heartbeat loop (WS2) — a periodic per-user agent turn that reviews standing
- * context and either acts or stays silent.
- *
- * Built on the LIVE hooks/cron path (not the unused queue Scheduler): a per-user
- * hook with `trigger='heartbeat'` becomes "due" on an interval; `maybeRunHeartbeats`
- * (called each cron tick) runs a **cheap deterministic gate BEFORE any LLM tokens
- * are spent** — quiet hours → skip; daily cap → skip; user out of token budget →
- * skip; then an "anything pending?" probe over due tasks + unread notifications,
- * and — when enabled — the user's pull requests with failing checks, calendar
- * events about to start (`heartbeat-probes.ts`) and, for a user watching their
- * inbox, new mail no agent has handled (`email/watch.ts`). Only a non-empty probe spawns
- * an orchestrated turn on the `heartbeat` channel, seeded with the pending
- * checklist + the user's standing `HEARTBEAT` note.
- *
- * Silence is the default: an empty probe spends zero tokens.
- *
- * Role heartbeats (work board, after Paperclip: "agents wake on a heartbeat,
- * pick up assigned work, check it out"). A heartbeat hook whose
- * `triggerConfig.role` names a role (e.g. 'coding') is that role's agent for
- * its owner. Same gate — quiet hours, daily cap, quota — but the probe is the
- * owner's tasks assigned to the role that are ready: active, not waiting on
- * an active blocker or child (`waitingOn`), and not held by a live checkout
- * lease. A non-empty probe spawns the role's agent (see executeSpawnAgent)
- * with the ready ids and titles and the check-out / comment / complete
- * protocol. A task wakeup (core/tasks/wakeups.ts) for a role-assigned task
- * marks that role's hook due, so the next cron tick runs its gate instead of
- * waiting out the interval (`startRoleHeartbeatWakeups`). Users with no role
- * heartbeat hook see none of this.
- *
- * Guards on a role turn, all in the gate or on the way out of it:
- *   - the board writes need the owner's ALLOW on tasks/write (the tasks tool
- *     asks otherwise, and an unattended turn cannot be asked): without it the
- *     gate skips with `tasks_permission_required` and notifies the owner once;
- *   - one turn per hook at a time (`in_flight`), across server processes: a
- *     lease on the hook row (`triggerConfig.heartbeatInFlightUntil` + a
- *     `heartbeatInFlightToken` naming instance, boot and a random part),
- *     claimed by a conditional UPDATE in the gate before the probe (given
- *     back on any skip), renewed while the turn runs, cleared by its holder
- *     when it settles or on a graceful shutdown, cleared at startup when a
- *     previous boot of this instance left it, and otherwise expiring by TTL
- *     (`claimRoleTurnLease`);
- *   - the daily cap counts every heartbeat hook of the user together;
- *   - executeSpawnAgent runs a role turn only for a context this gate marked
- *     (`markHeartbeatGatePassed`), so a manual trigger cannot skip it. That
- *     mark is in-process on purpose: the tick that passes the gate fires the
- *     action in the same process.
- *
- * Task wakeups reach every server process (the wakeup bridge relays them over
- * Postgres LISTEN/NOTIFY); marking a hook due is a DB write, so only the
- * process where the close happened does it (remote events are ignored here).
+ * Background heartbeat: deterministic probes and owner notifications, with no
+ * chat turn. Ready role-assigned work is dispatched separately to a gated
+ * role worker. Explicit role hooks (including paused hooks) own their roles;
+ * the personal heartbeat handles roles without an explicit configuration.
  */
 import { isJobOn } from '@/core/modules/registry';
 import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import type { HeartbeatConfig } from '@/config/schema';
 import { getDb } from '@/db/postgres';
@@ -120,8 +74,8 @@ export function isWithinQuietHours(config: HeartbeatConfig, now: Date): boolean 
 // ── Probe (deterministic "anything pending?" — no LLM) ──────────────────────
 
 export interface HeartbeatProbe {
-  dueTasks: Array<{ title: string; dueAt: Date | null; sourceRef?:unknown }>;
-  unreadNotifications: Array<{ title: string; type: string }>;
+  dueTasks: Array<{ id?: string; title: string; dueAt: Date | null; key?: string; updatedAt?: Date; sourceRef?:unknown }>;
+  unreadNotifications: Array<{ id?: string; title: string; type: string; cursorAt?: string }>;
   /** Open PRs by the user whose latest checks are red (empty when the probe is off or gh is absent). */
   failingPullRequests: FailingPullRequest[];
   /** Calendar events starting within the lookahead window (empty when off or no calendar is connected). */
@@ -177,11 +131,17 @@ export function eventKey(e: UpcomingEvent): string {
   return `${e.provider}|${e.start}|${e.title}`;
 }
 
-export interface HeartbeatSeen { prs: string[]; events: string[] }
+export interface HeartbeatSeen { prs: string[]; events: string[]; notifications?: string[]; notificationCursor?: { at: string; id: string }; tasks?: string[]; emails?: string[] }
 
 function readSeen(hook: Hook): HeartbeatSeen {
   const seen = (hook.triggerConfig ?? {}).heartbeatSeen;
-  return { prs: Array.isArray(seen?.prs) ? seen.prs : [], events: Array.isArray(seen?.events) ? seen.events : [] };
+  return {
+    prs: Array.isArray(seen?.prs) ? seen.prs : [], events: Array.isArray(seen?.events) ? seen.events : [],
+    ...(seen?.notificationCursor ? { notificationCursor: seen.notificationCursor } : {}),
+    ...(Array.isArray(seen?.notifications) ? { notifications: seen.notifications } : {}),
+    ...(Array.isArray(seen?.tasks) ? { tasks: seen.tasks } : {}),
+    ...(Array.isArray(seen?.emails) ? { emails: seen.emails } : {}),
+  };
 }
 
 export function probeHasWork(p: HeartbeatProbe): boolean {
@@ -199,26 +159,28 @@ async function probePendingWork(
   now: Date,
   config: HeartbeatConfig,
   deps: HeartbeatProbeDeps,
-  watch: { email: boolean; since?: string },
+  watch: { email: boolean; since?: string; notificationCursor?: { at: string; id: string }; taskSeen?: string[] },
 ): Promise<HeartbeatProbe> {
   const db = getDb();
-  // "Pending now" = open tasks with a due date at/before `now`. The dueAt filter
-  // is pushed into SQL (uses the tasks_user_status_due_idx index) so a user with
-  // many open-but-not-due tasks can't push the due ones past the LIMIT.
+  // Pending reminders include due open tasks and undated role work.
+  // Previously delivered task versions are excluded BEFORE LIMIT so old
+  // overdue items cannot hide later findings.
   //
   // The external probes (pull requests, calendar, the inbox watch) run
   // alongside the DB ones and are each fail-soft and switchable: the DB probe
   // is the floor, they are the reasons a person actually wants to be nudged.
   const [due, unread, failingPullRequests, upcoming, mail] = await Promise.all([
     db
-      .select({ title: tasks.title, dueAt: tasks.dueAt, sourceRef:tasks.sourceRef })
+      .select({ id: tasks.id, title: tasks.title, dueAt: tasks.dueAt, key: sql<string>`${tasks.id}::text || '@' || ${tasks.updatedAt}::text`, updatedAt: tasks.updatedAt, sourceRef:tasks.sourceRef })
       .from(tasks)
-      .where(and(eq(tasks.userId, userId), notInSharedWorkspace(tasks.workspaceId), eq(tasks.status, 'open'), isNotNull(tasks.dueAt), lte(tasks.dueAt, now)))
+      .where(and(eq(tasks.userId, userId), notInSharedWorkspace(tasks.workspaceId), eq(tasks.status, 'open'), or(lte(tasks.dueAt, now), and(isNull(tasks.dueAt), eq(tasks.assigneeKind, 'role'))), taskLeaseFree(), ...taskNotWaiting((t) => [eq(t.userId, userId), notInSharedWorkspace(t.workspaceId)]), ...(watch.taskSeen?.length ? [notInArray(sql<string>`${tasks.id}::text || '@' || ${tasks.updatedAt}::text`, watch.taskSeen)] : [])))
+      .orderBy(desc(tasks.priority), asc(tasks.dueAt), asc(tasks.id))
       .limit(50),
     db
-      .select({ title: notifications.title, type: notifications.type })
+      .select({ id: notifications.id, title: notifications.title, type: notifications.type, cursorAt: sql<string>`${notifications.createdAt}::text` })
       .from(notifications)
-      .where(and(eq(notifications.userId, userId), notInSharedWorkspace(notifications.workspaceId), eq(notifications.read, false)))
+      .where(and(eq(notifications.userId, userId), notInSharedWorkspace(notifications.workspaceId), eq(notifications.read, false), notInArray(notifications.type, ['agent_complete', 'heartbeat_digest']), ...(watch.notificationCursor ? [sql`(${notifications.createdAt}, ${notifications.id}) > (${watch.notificationCursor.at}::timestamptz, ${watch.notificationCursor.id}::uuid)`] : [])))
+      .orderBy(asc(notifications.createdAt), asc(notifications.id))
       .limit(50),
     config.probeGithub
       ? deps.githubAllowed(userId).then((ok) => (ok ? probeFailingPullRequests(deps.github) : []))
@@ -264,25 +226,25 @@ export function renderChecklist(p: HeartbeatProbe, tz = 'UTC', ownerId?: string)
   const lines: string[] = [];
   if (p.upcomingEvents.length > 0) {
     lines.push(`Starting soon (${p.upcomingEvents.length}, times in ${tz}):`);
-    for (const e of p.upcomingEvents.slice(0, 10)) {
+    for (const e of p.upcomingEvents) {
       lines.push(`- ${localClock(e.start, tz)} ${e.title}${e.end ? ` (until ${localClock(e.end, tz)})` : ''}`);
     }
   }
   if (p.failingPullRequests.length > 0) {
     lines.push(`Pull requests with failing checks (${p.failingPullRequests.length}):`);
-    for (const pr of p.failingPullRequests.slice(0, 10)) {
+    for (const pr of p.failingPullRequests) {
       lines.push(`- ${pr.repo}#${pr.number} ${pr.title} — ${pr.url}`);
     }
   }
   if (p.dueTasks.length > 0) {
-    lines.push(`Due tasks (${p.dueTasks.length}):`);
-    for (const t of p.dueTasks.slice(0, 10)) {
+    lines.push(`${p.dueTasks.some((t) => !t.dueAt) ? 'Pending tasks' : 'Due tasks'} (${p.dueTasks.length}):`);
+    for (const t of p.dueTasks) {
       lines.push(`- ${t.title}${t.dueAt ? ` (due ${t.dueAt.toISOString().slice(0, 10)})` : ''}`);
     }
   }
   if (p.unreadNotifications.length > 0) {
     lines.push(`Unread notifications (${p.unreadNotifications.length}):`);
-    for (const n of p.unreadNotifications.slice(0, 10)) {
+    for (const n of p.unreadNotifications) {
       lines.push(`- [${n.type}] ${n.title}`);
     }
   }
@@ -566,10 +528,19 @@ export async function releaseHeldRoleTurnLeases(): Promise<number> {
  */
 const gatePassedContexts = new WeakSet<object>();
 const gateTaskSources=new WeakMap<object,TaskProvenance>();
+const gateSignals = new WeakMap<object, AbortSignal>();
+export function heartbeatTurnSignal(context: object): AbortSignal | undefined { return gateSignals.get(context); }
+export interface HeartbeatTaskDispatch { role: string; taskId: string }
+const gateTaskDispatches = new WeakMap<object, HeartbeatTaskDispatch>();
+export function heartbeatTaskDispatch(context: object): HeartbeatTaskDispatch | undefined {
+  return gateTaskDispatches.get(context);
+}
 export function heartbeatTaskSource(context:object){return gateTaskSources.get(context);}
 
-export function markHeartbeatGatePassed(context: object,source?:TaskProvenance): void {
+export function markHeartbeatGatePassed(context: object,source?:TaskProvenance, dispatch?: HeartbeatTaskDispatch, signal?: AbortSignal): void {
   gatePassedContexts.add(context);
+  if (signal) gateSignals.set(context, signal);
+  if (dispatch) gateTaskDispatches.set(context, { ...dispatch });
   if(source)gateTaskSources.set(context,structuredClone(source));
 }
 
@@ -672,15 +643,20 @@ async function readStandingInstructions(userId: string): Promise<string> {
   }
 }
 
-async function buildHeartbeatMessage(userId: string, checklist: string): Promise<string> {
-  const standing = await readStandingInstructions(userId);
-  const parts = [
-    'Heartbeat check-in. Review the standing instructions and the pending items below.',
-    'Act only where genuinely warranted. If nothing needs action, END THE TURN SILENTLY — do not message the user.',
-  ];
-  if (standing) parts.push(`\n## Standing instructions\n${standing}`);
-  parts.push(`\n## Pending\n${checklist}`);
-  return parts.join('\n');
+/** First ready role without an explicit heartbeat setting. A paused setting wins. */
+async function implicitTaskDispatch(userId: string): Promise<HeartbeatTaskDispatch | undefined> {
+  const configured = await getDb().select({ role: hookRole }).from(hooks).where(and(
+    eq(hooks.userId, userId), eq(hooks.trigger, 'heartbeat'), notInSharedWorkspace(hooks.workspaceId),
+  ));
+  const roles = configured.map((h) => h.role).filter((r): r is string => typeof r === 'string');
+  const candidates = await getDb().select({ taskId: tasks.id, role: tasks.assigneeRef }).from(tasks).where(and(
+    eq(tasks.userId, userId), notInSharedWorkspace(tasks.workspaceId), eq(tasks.assigneeKind, 'role'),
+    inArray(tasks.status, [...ACTIVE_TASK_STATUSES]), taskLeaseFree(),
+    ...taskNotWaiting((t) => [eq(t.userId, userId), notInSharedWorkspace(t.workspaceId)]),
+    ...(roles.length ? [notInArray(tasks.assigneeRef, roles)] : []),
+  )).orderBy(desc(tasks.priority), asc(tasks.createdAt), asc(tasks.id)).limit(ROLE_PROBE_LIMIT);
+  const { ROLE_CONFIGS } = await import('@/core/agent/roles');
+  return candidates.find((c): c is HeartbeatTaskDispatch => isRoleName(c.role) && Object.hasOwn(ROLE_CONFIGS, c.role));
 }
 
 // ── The gate ────────────────────────────────────────────────────────────────
@@ -693,6 +669,7 @@ export type HeartbeatDecision =
   | { run: false; reason: HeartbeatSkipReason };
 
 interface GateEvaluation {
+  taskDispatch?: HeartbeatTaskDispatch;
   taskProvenance?:TaskProvenance;
   decision: HeartbeatDecision;
   /** Runs already recorded today (post day-rollover reset), for the caller to persist. */
@@ -714,7 +691,7 @@ interface GateEvaluation {
 }
 
 /** Read the per-hook daily-run counter, resetting it when the calendar day rolls over. */
-function readRunCounter(hook: Hook, dayKey: string): number {
+function readRunCounter(hook: Pick<Hook, 'triggerConfig'>, dayKey: string): number {
   const cfg = (hook.triggerConfig ?? {}) as Record<string, unknown>;
   return cfg.heartbeatDayKey === dayKey ? Number(cfg.heartbeatRunsToday ?? 0) : 0;
 }
@@ -740,6 +717,8 @@ export async function evaluateHeartbeatGate(
      * lease, and never writes one.
      */
     claimLease?: boolean;
+    /** Cron already holds this hook lease for the whole background check. */
+    leaseToken?: string;
   } = {},
 ): Promise<GateEvaluation> {
   const dayKey = localDayKey(now, config.quietHoursTimezone);
@@ -753,29 +732,31 @@ export async function evaluateHeartbeatGate(
   if (!config.enabled) return skip('disabled');
   if (isWithinQuietHours(config, now)) return skip('quiet_hours');
   if (userRunsToday >= config.maxRunsPerDay) return skip('daily_cap');
-  if (role && roleTurnInFlight(hook.id)) return skip('in_flight');
+  if (!opts.leaseToken && (roleTurnInFlight(hook.id) || await roleTurnLeaseHeld(hook.id))) return skip('in_flight');
 
-  // Already out of daily token budget → don't even probe.
-  try {
-    const { getQuotaManager } = await import('@/security/quotas');
-    const q = await getQuotaManager().willExceed(hook.userId, 'tokensPerDay', 0);
-    if (!q.allowed) return skip('quota');
-  } catch (err) {
-    coreLogger.debug({ err }, 'heartbeat: quota check unavailable (not blocking)');
-  }
+  if (role) {
+    // Already out of daily token budget → don't even probe.
+    try {
+      const { getQuotaManager } = await import('@/security/quotas');
+      const q = await getQuotaManager().willExceed(hook.userId, 'tokensPerDay', 0);
+      if (!q.allowed) return skip('quota');
+    } catch (err) {
+      coreLogger.debug({ err }, 'heartbeat: quota check unavailable (not blocking)');
+    }
 
-  // A paused dollar spend budget skips the tick (the check stamps the pause
-  // and notifies once); any other failure of the check is not blocking.
-  // Only the user scope is checked: the tick runs an orchestrated turn whose
-  // role and workspace are resolved downstream, not here. Role and workspace
-  // budgets are enforced when that turn spawns its agents (agent-manager).
-  try {
-    const { checkSpend } = await import('@/security/spend-budgets');
-    // A heartbeat is personal automation: no producer in a space (§5.6).
-    await checkSpend({ userId: hook.userId, funding: 'own', spaceId: null }, now);
-  } catch (err) {
-    if (err instanceof Error && err.name === 'SpendBudgetExceededError') return skip('spend_budget');
-    coreLogger.debug({ err }, 'heartbeat: spend budget check unavailable (not blocking)');
+    // A paused dollar spend budget skips the tick (the check stamps the pause
+    // and notifies once); any other failure of the check is not blocking.
+    // Only the user scope is checked here; actual workers resolve their
+    // role and workspace downstream. Role and workspace
+    // budgets are enforced when that turn spawns its agents (agent-manager).
+    try {
+      const { checkSpend } = await import('@/security/spend-budgets');
+      // A heartbeat is personal automation: no producer in a space (§5.6).
+      await checkSpend({ userId: hook.userId, funding: 'own', spaceId: null }, now);
+    } catch (err) {
+      if (err instanceof Error && err.name === 'SpendBudgetExceededError') return skip('spend_budget');
+      coreLogger.debug({ err }, 'heartbeat: spend budget check unavailable (not blocking)');
+    }
   }
 
   // A role hook's pending work is the role's ready tasks, nothing else: the
@@ -783,16 +764,16 @@ export async function evaluateHeartbeatGate(
   // One turn per hook across processes: the lease is taken BEFORE the probe,
   // so two processes cannot both probe and fire, and given back on any skip.
   if (role) {
-    let leaseToken: string | undefined;
-    if (opts.claimLease) {
+    let leaseToken: string | undefined = opts.leaseToken;
+    if (opts.claimLease && !leaseToken) {
       const token = await claimRoleTurnLease(hook.id);
       if (!token) return skip('in_flight');
       leaseToken = token;
-    } else if (await roleTurnLeaseHeld(hook.id)) {
+    } else if (!leaseToken && await roleTurnLeaseHeld(hook.id)) {
       return skip('in_flight');
     }
     const giveBack = async () => {
-      if (leaseToken) await releaseRoleTurnLease(hook.id, leaseToken).catch(() => false);
+      if (leaseToken && !opts.leaseToken) await releaseRoleTurnLease(hook.id, leaseToken).catch(() => false);
     };
     try {
       const ready = await probeRoleWork(hook.userId, role,true);
@@ -805,15 +786,24 @@ export async function evaluateHeartbeatGate(
         await giveBack();
         return { ...skip('tasks_permission_required'), boardPermissionMissing: true, readyTasks: ready.length };
       }
-      return { decision: { run: true, message: renderRoleHeartbeatMessage(role, ready) }, runsToday, dayKey, seen: previouslySeen, boardPermissionMissing: false, leaseToken,taskProvenance:await taskProvenance(hook.userId,ready), readyTasks: ready.length };
+      return { decision: { run: true, message: [await readStandingInstructions(hook.userId), renderRoleHeartbeatMessage(role, ready)].filter(Boolean).join('\n\n') }, runsToday, dayKey, seen: previouslySeen, boardPermissionMissing: false, leaseToken,taskProvenance:await taskProvenance(hook.userId,ready), readyTasks: ready.length };
     } catch (err) {
       await giveBack();
       throw err;
     }
   }
 
+  const dispatch = await implicitTaskDispatch(hook.userId);
+  if (dispatch) {
+    // Reuse the SAME durable hook lease and budgets. No synthetic hook or chat.
+    const work = await evaluateHeartbeatGate({ ...hook, triggerConfig: { ...hook.triggerConfig, role: dispatch.role } }, config, now, deps, opts);
+    return { ...work, taskDispatch: dispatch };
+  }
+
   const raw = await probePendingWork(hook.userId, now, config, deps, {
     email: watchesEmail(hook),
+    notificationCursor: previouslySeen.notificationCursor,
+    taskSeen: previouslySeen.tasks,
     since: typeof hook.triggerConfig?.watchEmailSince === 'string' ? hook.triggerConfig.watchEmailSince : undefined,
   });
 
@@ -828,17 +818,26 @@ export async function evaluateHeartbeatGate(
   const seen: HeartbeatSeen = {
     prs: raw.githubUnavailable ? previouslySeen.prs : currentPrs,
     events: raw.calendarPartial ? [...new Set([...previouslySeen.events, ...currentEvents])] : currentEvents,
+    ...(raw.unreadNotifications.at(-1)?.id ? { notificationCursor: {
+      id: raw.unreadNotifications.at(-1)!.id!, at: raw.unreadNotifications.at(-1)!.cursorAt!,
+    } } : previouslySeen.notificationCursor ? { notificationCursor: previouslySeen.notificationCursor } : {}),
+    ...(raw.dueTasks.length || previouslySeen.tasks ? { tasks: [...new Map([...(previouslySeen.tasks ?? []), ...raw.dueTasks.map((t) => t.key!)].map((key) => [key.split('@')[0], key])).values()] } : {}),
+    ...((raw.newEmails?.length ?? 0) || previouslySeen.emails ? { emails: [...new Set([...(previouslySeen.emails ?? []), ...(raw.newEmails ?? []).map((m) => `${m.provider}:${m.id}`)])].slice(-500) } : {}),
   };
   const knownPrs = new Set(previouslySeen.prs);
   const knownEvents = new Set(previouslySeen.events);
   const probe: HeartbeatProbe = {
     ...raw,
+    newEmails: (raw.newEmails ?? []).filter((m) => !previouslySeen.emails?.includes(`${m.provider}:${m.id}`)),
     failingPullRequests: raw.failingPullRequests.filter((pr) => !knownPrs.has(pullRequestKey(pr))),
     upcomingEvents: raw.upcomingEvents.filter((e) => !knownEvents.has(eventKey(e))),
   };
   if (!probeHasWork(probe)) return skip('nothing_pending', seen);
 
-  const message = await buildHeartbeatMessage(hook.userId, renderChecklist(probe, config.quietHoursTimezone, hook.userId));
+  const message = [
+    renderChecklist({ ...probe, newEmails: [] }, config.quietHoursTimezone, hook.userId),
+    ...(probe.newEmails?.length ? [`New email (${probe.newEmails.length}):`, ...probe.newEmails.map((m) => `- ${m.subject}`)] : []),
+  ].filter(Boolean).join('\n');
   return { decision: { run: true, message }, runsToday, dayKey, seen, surfacedEmails: probe.newEmails ?? [],taskProvenance:await taskProvenance(hook.userId,probe.dueTasks) };
 }
 
@@ -903,7 +902,7 @@ export async function ensureHeartbeatHook(userId: string, now: Date = new Date()
       trigger: 'heartbeat',
       triggerConfig: {},
       action: 'spawn_agent',
-      actionConfig: { orchestrated: true, agentPrompt: '' },
+      actionConfig: { agentPrompt: '' },
       isEnabled: true,
       nextRunAt: now, // due on the next tick
     })
@@ -1060,7 +1059,15 @@ export async function ensureRoleHeartbeatHook(userId: string, role: string, now:
 
 /** Disable every heartbeat hook `userId` has for `role` (duplicates included). Idempotent. */
 export async function disableRoleHeartbeatHook(userId: string, role: string, now: Date = new Date()): Promise<void> {
+  if (!ROLE_NAME.test(role)) throw new Error(`Invalid role "${role}"`);
   const db = getDb();
+  const [existing] = await db.select({ id: hooks.id }).from(hooks).where(and(
+    eq(hooks.userId, userId), eq(hooks.trigger, 'heartbeat'), sql`${hookRole} = ${role}`,
+  )).limit(1);
+  if (!existing) await db.insert(hooks).values({
+    userId, name: `Heartbeat (${role})`, trigger: 'heartbeat', triggerConfig: { role },
+    action: 'spawn_agent', actionConfig: { agentPrompt: '' }, isEnabled: false,
+  });
   await db
     .update(hooks)
     .set({ isEnabled: false, updatedAt: now })
@@ -1205,78 +1212,125 @@ export async function maybeRunHeartbeats(
       return;
     }
 
-    // A role hook's gate claims its lease (before probing) and hands it over
-    // when it says run; on a skip it has already given it back.
-    const gate = await evaluateHeartbeatGate(hook, config, now, tickDeps, { userRunsToday: userRuns.get(hook.userId) ?? 0, claimLease: true });
-    const role = heartbeatRole(hook);
-    const leaseToken = gate.leaseToken ?? null;
-
-    // The gate's own state, merged into the stored config (never replacing
-    // it, so a concurrent edit of the hook survives), BEFORE firing, so a long
-    // turn can't cause a duplicate fire on the next tick.
-    const runsToday = gate.decision.run ? gate.runsToday + 1 : gate.runsToday;
-    if (gate.decision.run) userRuns.set(hook.userId, (userRuns.get(hook.userId) ?? 0) + 1);
-    const state: Record<string, unknown> = { heartbeatDayKey: gate.dayKey, heartbeatRunsToday: runsToday, heartbeatSeen: gate.seen };
-    const notifyPermission = gate.boardPermissionMissing === true && hook.triggerConfig?.heartbeatPermissionNotified !== true;
-    if (gate.boardPermissionMissing !== undefined) state.heartbeatPermissionNotified = gate.boardPermissionMissing;
+    // A lease covers probes AND digest delivery, as well as actual work.
+    // Moving nextRunAt alone is insufficient if a wakeup makes it due again.
+    const leaseToken = await claimRoleTurnLease(hook.id);
+    if (!leaseToken) {
+      await recordHeartbeatCheck(hook, now, { decision: { run: false, reason: 'in_flight' }, runsToday: readRunCounter(hook, dayKey), dayKey, seen: readSeen(hook) });
+      return;
+    }
+    let handedOff = false;
+    let settle: (() => Promise<void>) | null = null;
     try {
-      await db
-        .update(hooks)
-        .set({ triggerConfig: sql`${hooks.triggerConfig} || ${JSON.stringify(state)}::jsonb`, updatedAt: now })
-        .where(eq(hooks.id, hook.id));
-    } catch (err) {
-      // Not firing after all: give the lease back rather than let it lapse.
-      if (leaseToken) await releaseRoleTurnLease(hook.id, leaseToken).catch(() => false);
-      throw err;
+      const [fresh] = await db.select({ hook: hooks }).from(hooks).innerJoin(users, eq(hooks.userId, users.id))
+        .where(and(eq(hooks.id, hook.id), eq(users.isActive, true))).limit(1);
+      if (!fresh?.hook.isEnabled || fresh.hook.trigger !== 'heartbeat') {
+        await releaseRoleTurnLease(hook.id, leaseToken);
+        return;
+      }
+      hook = fresh.hook;
+      // A competing check may have committed findings before this lease was
+      // acquired. Never evaluate the earlier candidate snapshot's checkpoint.
+      const freshRuns = await db.select({ config: hooks.triggerConfig }).from(hooks).where(and(eq(hooks.userId, hook.userId), eq(hooks.trigger, 'heartbeat')));
+      const recordedRuns = freshRuns.reduce((sum, h) => sum + readRunCounter({ triggerConfig: h.config }, dayKey), 0);
+      let gate: GateEvaluation;
+      try {
+        gate = await evaluateHeartbeatGate(hook, config, now, tickDeps, { userRunsToday: Math.max(userRuns.get(hook.userId) ?? 0, recordedRuns), leaseToken });
+      } catch (err) {
+        await releaseRoleTurnLease(hook.id, leaseToken);
+        throw err;
+      }
+      const role = heartbeatRole(hook);
+
+      // The gate's own state, merged into the stored config (never replacing
+      // it, so a concurrent edit of the hook survives), BEFORE firing, so a long
+      // turn can't cause a duplicate fire on the next tick.
+      const runsToday = gate.decision.run ? gate.runsToday + 1 : gate.runsToday;
+      if (gate.decision.run) userRuns.set(hook.userId, (userRuns.get(hook.userId) ?? 0) + 1);
+      const state: Record<string, unknown> = { heartbeatDayKey: gate.dayKey, heartbeatRunsToday: runsToday, heartbeatSeen: gate.seen };
+      const notifyPermission = gate.boardPermissionMissing === true && hook.triggerConfig?.heartbeatPermissionNotified !== true;
+      if (gate.boardPermissionMissing !== undefined) state.heartbeatPermissionNotified = gate.boardPermissionMissing;
+      const digest = gate.decision.run && !role && !gate.taskDispatch;
+      try {
+        await db.transaction(async (tx) => {
+          if (digest && gate.decision.run) await tx.insert(notifications).values({
+            userId: hook.userId, type: 'heartbeat_digest', title: 'Heartbeat update',
+            body: gate.decision.message, metadata: { hookId: hook.id },
+          });
+          const [fenced] = await tx
+          .update(hooks)
+          .set({ triggerConfig: sql`${hooks.triggerConfig} || ${JSON.stringify(state)}::jsonb`, updatedAt: now })
+          .where(and(eq(hooks.id, hook.id), eq(hooks.isEnabled, true), sql`${inFlightToken} = ${leaseToken}`, sql`${inFlightUntil}::timestamptz > now()`))
+          .returning({ id: hooks.id });
+          if (!fenced) throw new Error('Heartbeat lease lost before committing findings');
+        });
+      } catch (err) {
+        // Not firing after all: give the lease back rather than let it lapse.
+        if (leaseToken) await releaseRoleTurnLease(hook.id, leaseToken).catch(() => false);
+        throw err;
+      }
+
+      if (notifyPermission) await notifyBoardPermissionRequired(hook, role ?? gate.taskDispatch?.role ?? 'assigned');
+      await recordHeartbeatCheck(hook, now, gate);
+
+      // The notification has been committed before recording mail as surfaced.
+      // This never marks mail read or handled.
+      if (gate.decision.run && gate.surfacedEmails?.length) {
+        await markEmailsSurfaced(hook.userId, gate.surfacedEmails, now);
+      }
+
+      if (digest && gate.decision.run) {
+        const { getNotificationService } = await import('@/core/notification-service');
+        getNotificationService().publishStored({ userId: hook.userId, type: 'heartbeat_digest', title: 'Heartbeat update', body: gate.decision.message, metadata: { hookId: hook.id } });
+        coreLogger.info({ hookId: hook.id, userId: hook.userId }, 'Heartbeat notification recorded; no agent or chat started');
+        await releaseRoleTurnLease(hook.id, leaseToken);
+        return;
+      }
+
+      if (!gate.decision.run) {
+        coreLogger.debug({ hookId: hook.id, userId: hook.userId, reason: gate.decision.reason }, 'Heartbeat skipped');
+        await releaseRoleTurnLease(hook.id, leaseToken);
+        return;
+      }
+      // Shutdown began while this tick was in the gate: fire nothing, and give
+      // the lease back (shutdown only releases the leases of started turns).
+      if (leaseToken && !leaseClaimsOpen) {
+        await releaseRoleTurnLease(hook.id, leaseToken).catch(() => false);
+        return;
+      }
+
+      // This is an internal role-worker handoff, never an incoming chat.
+      // The gate mark and selected task stay server-only and cannot be forged.
+      const context = {
+        message: {
+          id: `heartbeat-${hook.id}-${now.getTime()}`,
+          channelType: 'api' as const,
+          channelId: hook.userId,
+          userId: hook.userId,
+          content: gate.decision.message,
+          timestamp: now,
+        },
+      };
+      const controller = new AbortController();
+      markHeartbeatGatePassed(context,gate.taskProvenance,gate.taskDispatch,controller.signal);
+      settle = leaseToken ? holdRoleTurnLease(hook.id, leaseToken, () => controller.abort(new Error('Heartbeat lease lost'))) : null;
+
+      // Fire-and-forget: the turn can take minutes. A role turn stays in flight
+      // (its lease held and renewed) until it ends, so the next tick in any
+      // process skips its hook with 'in_flight'.
+      handedOff = true;
+      hookManager
+        .triggerHook(hook.id, { type: 'heartbeat', data: { hookId: hook.id }, timestamp: now }, context)
+        .catch((err) => coreLogger.error({ err, hookId: hook.id }, 'Heartbeat run failed'))
+        .finally(() => settle?.());
+
+      coreLogger.info({ hookId: hook.id, userId: hook.userId, role: role ?? gate.taskDispatch?.role }, 'Heartbeat task work triggered');
+    } finally {
+      if (!handedOff) {
+        if (settle) await settle();
+        else await releaseRoleTurnLease(hook.id, leaseToken);
+      }
     }
-
-    if (notifyPermission) await notifyBoardPermissionRequired(hook, role ?? '');
-    await recordHeartbeatCheck(hook, now, gate);
-
-    // Mail the turn is about to be given is marked surfaced first: a turn
-    // that dies before it marks the mail handled leaves it to come back
-    // later (core/email/watch.ts), instead of on every tick.
-    if (gate.decision.run && gate.surfacedEmails?.length) {
-      await markEmailsSurfaced(hook.userId, gate.surfacedEmails, now);
-    }
-
-    if (!gate.decision.run) {
-      coreLogger.debug({ hookId: hook.id, userId: hook.userId, reason: gate.decision.reason }, 'Heartbeat skipped');
-      return;
-    }
-    // Shutdown began while this tick was in the gate: fire nothing, and give
-    // the lease back (shutdown only releases the leases of started turns).
-    if (leaseToken && !leaseClaimsOpen) {
-      await releaseRoleTurnLease(hook.id, leaseToken).catch(() => false);
-      return;
-    }
-
-    // Carry the rendered heartbeat message so executeSpawnAgent uses it
-    // verbatim. channelType is a placeholder — the root agent channel is set
-    // to 'heartbeat' by executeSpawnAgent from hook.trigger. The context is
-    // marked as having passed this gate: a role turn runs only then.
-    const context = {
-      message: {
-        id: `heartbeat-${hook.id}-${now.getTime()}`,
-        channelType: 'api' as const,
-        channelId: hook.userId,
-        userId: hook.userId,
-        content: gate.decision.message,
-        timestamp: now,
-      },
-    };
-    markHeartbeatGatePassed(context,gate.taskProvenance);
-    const settle = leaseToken ? holdRoleTurnLease(hook.id, leaseToken) : null;
-
-    // Fire-and-forget: the turn can take minutes. A role turn stays in flight
-    // (its lease held and renewed) until it ends, so the next tick in any
-    // process skips its hook with 'in_flight'.
-    hookManager
-      .triggerHook(hook.id, { type: 'heartbeat', data: { hookId: hook.id }, timestamp: now }, context)
-      .catch((err) => coreLogger.error({ err, hookId: hook.id }, 'Heartbeat run failed'))
-      .finally(() => settle?.());
-
-    coreLogger.info({ hookId: hook.id, userId: hook.userId, role }, 'Heartbeat triggered');
   };
 
   // Bounded concurrency over users: a gate now waits on `gh` and a calendar,
@@ -1328,17 +1382,27 @@ async function pruneHeartbeatChecks(now: Date): Promise<void> {
  * runs. Returns the settle function: stop renewing, clear the lease if it is
  * still ours, then drop the local mark. Never throws.
  */
-function holdRoleTurnLease(hookId: string, token: string): () => Promise<void> {
+function holdRoleTurnLease(hookId: string, token: string, onLost?: () => void): () => Promise<void> {
   roleTurnsInFlight.add(hookId);
   const ttl = roleTurnLeaseMs();
   let released = false;
+  let confirmedUntil = Date.now() + ttl;
   const renew = setInterval(() => {
     renewRoleTurnLease(hookId, token, ttl)
       .then((held) => {
+        if (held) confirmedUntil = Date.now() + ttl;
         // A renewal that lands after the release is expected, not a loss.
-        if (!held && !released) coreLogger.warn({ hookId }, 'Role heartbeat lease lost while the turn runs');
+        if (!held && !released) {
+          coreLogger.warn({ hookId }, 'Role heartbeat lease lost while the turn runs');
+          onLost?.();
+        }
       })
-      .catch((err) => { if (!released) coreLogger.warn({ err, hookId }, 'Role heartbeat lease renewal failed'); });
+      .catch((err) => {
+        if (!released) {
+          coreLogger.warn({ err, hookId }, 'Role heartbeat lease renewal failed');
+          if (Date.now() + leaseRenewIntervalMs(ttl) >= confirmedUntil) onLost?.();
+        }
+      });
   }, leaseRenewIntervalMs(ttl));
   renew.unref?.();
   const stop = () => {

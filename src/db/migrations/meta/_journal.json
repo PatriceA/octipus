@@ -1226,6 +1226,13 @@
       "when": 1794153600000,
       "tag": "0174_plugin_package_signed_by",
       "breakpoints": true
+    },
+    {
+      "idx": 175,
+      "version": "7",
+      "when": 1794225600000,
+      "tag": "0175_automation_sessions",
+      "breakpoints": true
     }
   ]
 }

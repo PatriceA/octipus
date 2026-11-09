@@ -200,6 +200,7 @@ const ALLOWLIST: Record<string, string> = {
   'src/db/repositories/recovery-consent.ts': 'internal recovery consent: caller-owned session journal, exact approved request snapshot and timestamp only',
   'src/db/repositories/tool-action-repository.ts': 'internal recovery journal and consent: owner/session-bound requests, replay additionally bound to workspace and checkpoint',
   'src/security/quotas.ts': 'counts for quota enforcement',
+  'src/security/environment-session.ts': 'session-owner-bound environment CAS; internal running-agent admission check returns no content',
   'src/security/user-deletion.ts': 'spaces a user authored content in, by user id (ids and names only)',
   // Billing history (cost_log is a keep table): a user's own spend.
   'src/security/spend-budgets.ts': 'cost attribution joins',
@@ -227,6 +228,7 @@ const ALLOWLIST: Record<string, string> = {
   'src/core/heartbeat.ts': PERSONAL_READER,
   'src/core/context-hooks/kinds.ts': PERSONAL_READER,
   'src/core/tasks/role-agents.ts': PERSONAL_READER,
+  'src/core/tasks/heartbeat-dispatch.ts': PERSONAL_READER,
   'src/core/tasks/wakeup-bridge.ts': PERSONAL_READER,
   'src/core/channels/taken-tasks.ts': PERSONAL_READER,
   'src/core/knowledge/weekly-review.ts': PERSONAL_READER,

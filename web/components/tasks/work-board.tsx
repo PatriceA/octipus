@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { api } from '@/lib/api';
 import { TASK_CHECKOUT_TTL_MS } from '../../../src/core/tasks/checkout';
+import type { RoleAgentRow, RoleAgentsView as RoleAgentsData } from '../../../src/shared/heartbeat';
 import type { TaskAssigneeKind } from '../../../src/core/tasks/status';
 
 /**
@@ -379,24 +380,6 @@ export function CommentsToggle({ open, onToggle }: { open: boolean; onToggle: ()
   );
 }
 
-interface RoleAgentsData {
-  roles: RoleAgentRow[];
-  boardWritesAllowed: boolean;
-  /** Older servers leave it out; treat that as on. */
-  heartbeatEnabled?: boolean;
-}
-
-interface RoleAgentRow {
-  role: string;
-  activeTasks: number;
-  totalTasks: number;
-  enabled: boolean;
-  hookId: string | null;
-  known: boolean;
-  /** Template id the agent runs each task through; null = it works tasks itself. Older servers leave it out. */
-  pipelineTemplate?: string | null;
-}
-
 /**
  * Role agents: one heartbeat agent per role that has tasks on the board. On,
  * it wakes on the heartbeat, checks out ready tasks assigned to its role and
@@ -464,7 +447,7 @@ export function RoleAgentsPanel({ refreshKey, controls = false, onChanged }: { r
   // Roles with work on the board, plus any whose agent is on (so it can be turned off).
   const rows = (data?.roles ?? []).filter((r) => r.activeTasks > 0 || r.enabled);
   if (!data) return error ? <p className="text-xs text-error">{error}</p> : null;
-  if (!rows.length) return controls ? <p className="text-sm text-on-surface-variant">No roles have assigned to-dos yet. Assign a to-do to a role on the tasks page, then configure its heartbeat here.</p> : null;
+  if (!rows.length) return controls ? <p className="text-sm text-on-surface-variant">No roles have assigned to-dos yet. Assign a to-do to a role on the tasks page. It follows your personal heartbeat unless you set an override here.</p> : null;
   const running = rows.filter((r) => r.enabled && data.heartbeatEnabled !== false).length;
   const heartbeatOff = data.heartbeatEnabled === false;
 
@@ -516,6 +499,7 @@ export function RoleAgentsPanel({ refreshKey, controls = false, onChanged }: { r
                 <span className="text-xs text-on-surface-variant">
                   {r.activeTasks} open task{r.activeTasks === 1 ? '' : 's'}
                   {!r.known && ' · unknown role'}
+                  {r.inherited && ' · follows personal heartbeat'}
                 </span>
                 <span className="flex-1" />
                 {controls ? <button

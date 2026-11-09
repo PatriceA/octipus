@@ -47,7 +47,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   .get('/:id/execution-environment', async ({ user, principal, params, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
     const session = await contentRepos(principal).sessions.findById(params.id);
-    if (!session || session.userId !== user.id) { set.status = 404; return { error: 'Session not found' }; }
+    if (!session || !await canActInSession(session, user.id, 'personal_tool')) { set.status = 404; return { error: 'Session not found' }; }
     const caller = { userId: user.id, workspaceId: session.workspaceId, space: principal.workspaceKind === 'shared' || await isSharedWorkspaceId(session.workspaceId) ? {} : null, metadata: (session.context ?? {}) as Record<string, unknown> };
     const available = caller.space ? [] : configuredExecutionEnvironments().filter(entry => entry.enabled && entry.userId === user.id && (entry.workspaceId === null || entry.workspaceId === session.workspaceId)).map(({ id, name, backend, roots }) => ({ id, name, backend, roots }));
     const fallback = caller.space ? undefined : configuredExecutionEnvironments().find(entry => entry.enabled && entry.userId === user.id && entry.isDefault && entry.workspaceId === session.workspaceId) ?? configuredExecutionEnvironments().find(entry => entry.enabled && entry.userId === user.id && entry.isDefault && entry.workspaceId === null);
@@ -59,7 +59,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
     if (!requireScope(principal, API_SCOPES.CHAT)) { set.status = 403; return { error: 'Chat scope required to change execution environments' }; }
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
     const session = await contentRepos(principal).sessions.findById(params.id);
-    if (!session || session.userId !== user.id || principal.workspaceKind === 'shared' || await isSharedWorkspaceId(session.workspaceId)) { set.status = 404; return { error: 'Personal session not found' }; }
+    if (!session || !await canActInSession(session, user.id, 'personal_tool') || principal.workspaceKind === 'shared' || await isSharedWorkspaceId(session.workspaceId)) { set.status = 404; return { error: 'Personal session not found' }; }
     if (body.expectedEnvironmentId !== undefined && body.expectedEnvironmentId !== ((session.context as { executionEnvironmentId?: string } | null)?.executionEnvironmentId ?? null)) { set.status = 409; return { error: 'Environment changed; refresh before selecting' }; }
     const { withEnvironmentSessionLock, switchSessionEnvironment } = await import('@/security/environment-session');
     return withEnvironmentSessionLock(session.id, async () => {
@@ -503,7 +503,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
     try {
       const environment = executionEnvironmentFor({ userId: user.id, workspaceId: session.workspaceId, space: principal.workspaceKind === 'shared' || await isSharedWorkspaceId(session.workspaceId) ? {} : null, metadata: (session.context ?? {}) as Record<string, unknown> });
       if (environment?.backend === 'ssh') {
-        if (session.userId !== user.id) { set.status = 403; return { error: 'Remote attachments require the session owner' }; }
+        if (!await canActInSession(session, user.id, 'personal_tool')) { set.status = 403; return { error: 'Remote attachments require the session owner' }; }
         const uploaded = await storeChatUploads(WorkspaceFS.forRequest(principal), Array.isArray(body.files) ? body.files : [body.files]);
         // Attachments stay owner-local until a separately authorized transfer. Do not write a remote-looking host path.
         return { uploaded, note: 'Attachments are stored on Octipus; remote transfers require an authorized tool call.' };
@@ -639,7 +639,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         return { error: 'Session not found' };
       }
       const context = buildAgentContext({ id: `changes-${session.id}`, sessionId: session.id, userId: user.id, scope: { workspaceId: session.workspaceId, space: null, trigger: 'user', funding: 'own' }, role: 'general', topic: 'general', model: 'api', status: 'running', metadata: (session.context ?? {}) as Record<string, unknown> });
-      if (session.userId === user.id && principal.workspaceKind !== 'shared' && !await isSharedWorkspaceId(session.workspaceId) && executionEnvironmentFor(context)?.backend === 'ssh') return remoteFilesystemOperation('changes', {}, context);
+      if (await canActInSession(session, user.id, 'personal_tool') && principal.workspaceKind !== 'shared' && !await isSharedWorkspaceId(session.workspaceId) && executionEnvironmentFor(context)?.backend === 'ssh') return remoteFilesystemOperation('changes', {}, context);
       const fs = WorkspaceFS.forSession(session, spaceAccessOf(principal));
       const { getWorkspaceChanges } = await import('@/core/session-changes');
       return getWorkspaceChanges(fs.root);
@@ -669,7 +669,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         return { error: 'Missing required query param: path' };
       }
       const context = buildAgentContext({ id: `changes-${session.id}`, sessionId: session.id, userId: user.id, scope: { workspaceId: session.workspaceId, space: null, trigger: 'user', funding: 'own' }, role: 'general', topic: 'general', model: 'api', status: 'running', metadata: (session.context ?? {}) as Record<string, unknown> });
-      if (session.userId === user.id && principal.workspaceKind !== 'shared' && !await isSharedWorkspaceId(session.workspaceId) && executionEnvironmentFor(context)?.backend === 'ssh') return remoteFilesystemOperation('change_diff', { path: query.path }, context);
+      if (await canActInSession(session, user.id, 'personal_tool') && principal.workspaceKind !== 'shared' && !await isSharedWorkspaceId(session.workspaceId) && executionEnvironmentFor(context)?.backend === 'ssh') return remoteFilesystemOperation('change_diff', { path: query.path }, context);
       const fs = WorkspaceFS.forSession(session, spaceAccessOf(principal));
       let absPath: string;
       try {

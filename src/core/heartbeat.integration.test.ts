@@ -162,9 +162,9 @@ describe('evaluateHeartbeatGate', () => {
     const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet());
     expect(r.decision.run).toBe(true);
     if (r.decision.run) {
-      expect(r.decision.message).toContain('Heartbeat check-in');
+      expect(r.decision.message).not.toContain('Heartbeat check-in');
       expect(r.decision.message).toContain('Reply to the release email');
-      expect(r.decision.message).toContain('END THE TURN SILENTLY');
+      expect(r.decision.message).not.toContain('END THE TURN SILENTLY');
     }
   });
 
@@ -336,9 +336,9 @@ describe('inbox watch', () => {
     const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, deps);
     expect(r.decision.run).toBe(true);
     const message = (r.decision as { message: string }).message;
-    expect(message).toContain('[gmail m1]');
-    expect(message).toContain('<email-list>');
-    expect(message).toContain('mark_email_handled');
+    expect(message).toContain('Subject m1');
+    expect(message).toContain('New email (2):');
+    expect(message).not.toContain('mark_email_handled');
     expect(r.surfacedEmails?.map((m) => m.id)).toEqual(['m1', 'm2']);
     expect(calls.since?.toISOString()).toBe('2026-07-12T08:00:00.000Z');
   });
@@ -391,7 +391,10 @@ describe('inbox watch', () => {
     try {
       const { deps } = mailbox([mail('m1')]);
       await heartbeat.maybeRunHeartbeats(NOON, deps, cfg());
-      expect(fired).toHaveBeenCalledTimes(1);
+      expect(fired).not.toHaveBeenCalled();
+      const digests = await db.select().from(notifsSchema).where(eq(notifsSchema.type, 'heartbeat_digest'));
+      expect(digests).toHaveLength(1);
+      expect(digests[0].body).toContain('Subject m1');
       const rows = await db.select().from(emailHandledSchema);
       expect(rows.map((r) => [r.messageId, r.status, r.surfacedCount])).toEqual([['m1', 'surfaced', 1]]);
       const [row] = await db.select().from(hooksSchema).where(eq(hooksSchema.id, hook.id));
@@ -705,7 +708,7 @@ describe('role heartbeats', () => {
       await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
       expect(fired).toEqual([]);
       const row = await hookRow(hook.id);
-      expect(row.triggerConfig.heartbeatRunsToday).toBe(0);
+      expect(row.triggerConfig.heartbeatRunsToday).toBeUndefined();
       expect(row.triggerConfig.heartbeatInFlightToken).toBe(token);
     } finally {
       restore();
@@ -1004,5 +1007,208 @@ describe('role heartbeats', () => {
 
     await expect(heartbeat.ensureRoleHeartbeatHook(userId, 'Not A Role', NOON)).rejects.toThrow(/Invalid role/);
     await expect(heartbeat.ensureRoleHeartbeatHook(userId, 'juggler', NOON)).rejects.toThrow(/Unknown role/);
+  });
+});
+
+describe('background heartbeat dispatch', () => {
+  test('routine completions and its own digests neither wake an agent nor hide an actionable notification', async () => {
+    await makeHeartbeatHook();
+    await db.insert(notifsSchema).values(Array.from({ length: 55 }, (_, i) => ({ userId, type: 'agent_complete', title: `Completed ${i}` })));
+    await db.insert(notifsSchema).values({ userId, type: 'heartbeat_digest', title: 'Old heartbeat' });
+    const { getHookManager } = await import('@/hooks/manager');
+    const fired = vi.spyOn(getHookManager(), 'triggerHook').mockResolvedValue(undefined as never);
+    try {
+      await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+      expect(fired).not.toHaveBeenCalled();
+      const [hook] = await db.select().from(hooksSchema);
+      await db.insert(notifsSchema).values({ userId, type: 'agent_error', title: 'Build needs attention' });
+      await db.update(hooksSchema).set({ nextRunAt: null }).where(eq(hooksSchema.id, hook.id));
+      await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+      const digests = await db.select().from(notifsSchema).where(eq(notifsSchema.type, 'heartbeat_digest'));
+      expect(digests).toHaveLength(2);
+      expect(digests.some((n) => n.body?.includes('Build needs attention'))).toBe(true);
+      expect(fired).not.toHaveBeenCalled();
+    } finally { fired.mockRestore(); }
+  });
+
+  test('a digest is durable and deduplicated without creating sessions or reading the original notification', async () => {
+    const hook = await makeHeartbeatHook();
+    const { sessions } = await import('@/db/schema/sessions');
+    const before = await db.select({ id: sessions.id }).from(sessions);
+    const [source] = await db.insert(notifsSchema).values({ userId, type: 'agent_error', title: 'A real failure' }).returning();
+    await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+    await db.update(hooksSchema).set({ nextRunAt: null }).where(eq(hooksSchema.id, hook.id));
+    await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+    expect(await db.select({ id: sessions.id }).from(sessions)).toEqual(before);
+    expect(await db.select().from(notifsSchema).where(eq(notifsSchema.type, 'heartbeat_digest'))).toHaveLength(1);
+    const [original] = await db.select().from(notifsSchema).where(eq(notifsSchema.id, source.id));
+    expect(original.read).toBe(false);
+  });
+
+  test('digest storage failure does not consume its findings', async () => {
+    const hook = await makeHeartbeatHook();
+    await db.insert(notifsSchema).values({ userId, type: 'agent_error', title: 'Do not lose me' });
+    const transaction = vi.spyOn(db, 'transaction').mockRejectedValueOnce(new Error('disk unavailable'));
+    try { await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg()); }
+    finally { transaction.mockRestore(); }
+    const [stored] = await db.select().from(hooksSchema).where(eq(hooksSchema.id, hook.id));
+    expect(stored.triggerConfig.heartbeatSeen).toBeUndefined();
+    await db.update(hooksSchema).set({ nextRunAt: null }).where(eq(hooksSchema.id, hook.id));
+    await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+    expect(await db.select().from(notifsSchema).where(eq(notifsSchema.type, 'heartbeat_digest'))).toHaveLength(1);
+  });
+
+  test('undated role work selects a worker without another heartbeat setting', async () => {
+    const hook = await makeHeartbeatHook();
+    const [task] = await db.insert(tasksSchema).values({ userId, title: 'Build the requested feature', assigneeKind: 'role', assigneeRef: 'coding' }).returning();
+    const gate = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet());
+    expect(gate.taskDispatch).toEqual({ role: 'coding', taskId: task.id });
+    expect(gate.decision.run).toBe(true);
+    const { listRoleAgents } = await import('./tasks/role-agents');
+    expect((await listRoleAgents(userId)).roles.find((r) => r.role === 'coding')).toMatchObject({ enabled: true, inherited: true, hookId: null });
+  });
+
+  test('pausing an inherited role persists an override and prevents fallback', async () => {
+    const hook = await makeHeartbeatHook();
+    await db.insert(tasksSchema).values({ userId, title: 'Paused work', assigneeKind: 'role', assigneeRef: 'coding' });
+    await heartbeat.disableRoleHeartbeatHook(userId, 'coding');
+    const gate = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet());
+    expect(gate.taskDispatch).toBeUndefined();
+    const { listRoleAgents } = await import('./tasks/role-agents');
+    expect((await listRoleAgents(userId)).roles.find((r) => r.role === 'coding')).toMatchObject({ enabled: false, inherited: false });
+  });
+
+  test('role fallback carries an unforgeable selection and holds the parent lease during work', async () => {
+    const hook = await makeHeartbeatHook();
+    const [task] = await db.insert(tasksSchema).values({ userId, title: 'A real job', assigneeKind: 'role', assigneeRef: 'coding' }).returning();
+    const { getHookManager } = await import('@/hooks/manager');
+    let finish!: () => void;
+    const running = new Promise<void>((resolve) => { finish = resolve; });
+    const fired = vi.spyOn(getHookManager(), 'triggerHook').mockImplementation(async (_id, _event, context) => {
+      expect(heartbeat.heartbeatTaskDispatch(context!)).toEqual({ role: 'coding', taskId: task.id });
+      expect(heartbeat.heartbeatGatePassed(context!)).toBe(true);
+      await running;
+      return [];
+    });
+    try {
+      await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+      expect(fired).toHaveBeenCalledTimes(1);
+      expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(true);
+      const stillRunning = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet());
+      expect(stillRunning.decision).toEqual({ run: false, reason: 'in_flight' });
+    } finally {
+      finish();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      fired.mockRestore();
+    }
+    expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(false);
+  });
+
+  test('worker receives freshly claimed task text and protection before routing', async () => {
+    const { getPermissionManager } = await import('@/security/permissions');
+    await getPermissionManager().setPermission(userId, 'tasks', 'write', 'ALLOW');
+    const hook = await makeHeartbeatHook();
+    const [task] = await db.insert(tasksSchema).values({ userId, title: 'Old task title', assigneeKind: 'role', assigneeRef: 'coding' }).returning();
+    const gate = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet());
+    await db.update(tasksSchema).set({ title: 'Updated task title', notes: 'Current instructions', sourceRef: { protectionLevel: 4 } }).where(eq(tasksSchema.id, task.id));
+    const { runHeartbeatTask } = await import('./tasks/heartbeat-dispatch');
+    const worker = vi.fn(async (sessionId: string, message: string) => {
+      const { sessions } = await import('@/db/schema/sessions');
+      const [context] = await db.select().from(sessions).where(eq(sessions.id, sessionId));
+      expect(context.protectionLevel).toBe(4);
+      expect(message).toContain('Updated task title');
+      expect(message).toContain('Current instructions');
+      expect(message).not.toContain('Old task title');
+      const [claimed] = await db.select().from(tasksSchema).where(eq(tasksSchema.id, task.id));
+      expect(claimed.checkedOutBy).toBe(`coding@${sessionId}`);
+      await db.update(tasksSchema).set({ status: 'done' }).where(eq(tasksSchema.id, task.id));
+      return { success: true, data: { response: 'Verified outcome' } };
+    });
+    await runHeartbeatTask(hook, gate.taskDispatch!, worker);
+    expect(worker).toHaveBeenCalledTimes(1);
+    const [done] = await db.select().from(tasksSchema).where(eq(tasksSchema.id, task.id));
+    expect(done.status).toBe('done');
+    expect(done.checkedOutBy).toBeNull();
+  });
+
+  test('a worker failure releases its task and hands it back rather than repeating forever', async () => {
+    const { getPermissionManager } = await import('@/security/permissions');
+    await getPermissionManager().setPermission(userId, 'tasks', 'write', 'ALLOW');
+    const hook = await makeHeartbeatHook();
+    const [task] = await db.insert(tasksSchema).values({ userId, title: 'Blocked job', assigneeKind: 'role', assigneeRef: 'coding' }).returning();
+    const { runHeartbeatTask } = await import('./tasks/heartbeat-dispatch');
+    await expect(runHeartbeatTask(hook, { role: 'coding', taskId: task.id }, async () => { throw new Error('runtime failed'); })).rejects.toThrow('runtime failed');
+    const [returned] = await db.select().from(tasksSchema).where(eq(tasksSchema.id, task.id));
+    expect(returned.checkedOutBy).toBeNull();
+    expect(returned.assigneeKind).toBe('user');
+    expect(returned.assigneeRef).toBe(userId);
+  });
+});
+
+describe('background heartbeat backlog and execution records', () => {
+  test('more than fifty unread findings drain without repeats or omitted items', async () => {
+    const hook = await makeHeartbeatHook();
+    const titles = Array.from({ length: 55 }, (_, i) => `Failure item ${i}`);
+    await db.insert(notifsSchema).values(titles.map((title) => ({ userId, type: 'agent_error', title })));
+    for (let i = 0; i < 3; i++) {
+      await db.update(hooksSchema).set({ nextRunAt: null }).where(eq(hooksSchema.id, hook.id));
+      await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+    }
+    const digests = await db.select().from(notifsSchema).where(eq(notifsSchema.type, 'heartbeat_digest'));
+    expect(digests).toHaveLength(2);
+    const delivered = digests.flatMap((d) => d.body?.match(/Failure item \d+/g) ?? []);
+    expect(delivered.sort()).toEqual(titles.sort());
+  });
+
+  test('seen overdue tasks do not hide task fifty-one or later changes', async () => {
+    const hook = await makeHeartbeatHook();
+    const titles = Array.from({ length: 55 }, (_, i) => `Overdue item ${i}`);
+    const inserted = await db.insert(tasksSchema).values(titles.map((title) => ({ userId, title, dueAt: new Date('2026-07-11T00:00:00Z') }))).returning();
+    for (let i = 0; i < 3; i++) {
+      await db.update(hooksSchema).set({ nextRunAt: null }).where(eq(hooksSchema.id, hook.id));
+      await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+    }
+    const digests = await db.select().from(notifsSchema).where(eq(notifsSchema.type, 'heartbeat_digest'));
+    expect(digests).toHaveLength(2);
+    const delivered = digests.flatMap((d) => d.body?.match(/Overdue item \d+/g) ?? []);
+    expect(delivered.sort()).toEqual(titles.sort());
+    await db.update(tasksSchema).set({ title: 'Changed task', updatedAt: new Date() }).where(eq(tasksSchema.id, inserted[0].id));
+    await db.update(hooksSchema).set({ nextRunAt: null }).where(eq(hooksSchema.id, hook.id));
+    await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+    expect((await db.select().from(notifsSchema).where(eq(notifsSchema.type, 'heartbeat_digest'))).some((n) => n.body?.includes('Changed task'))).toBe(true);
+  });
+
+  test('ordinary task work gets an automation context excluded from personal chat lists', async () => {
+    const { getPermissionManager } = await import('@/security/permissions');
+    await getPermissionManager().setPermission(userId, 'tasks', 'write', 'ALLOW');
+    const hook = await makeHeartbeatHook();
+    const [task] = await db.insert(tasksSchema).values({ userId, title: 'Ordinary work', assigneeKind: 'role', assigneeRef: 'coding' }).returning();
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const { runHeartbeatTask } = await import('./tasks/heartbeat-dispatch');
+    const worker = vi.fn(async (id: string) => {
+      expect(await sessionRepository.findById(id)).toMatchObject({ kind: 'automation', userId, workspaceId: task.workspaceId });
+      expect((await sessionRepository.listByUser(userId)).some((s) => s.id === id)).toBe(false);
+      await db.update(tasksSchema).set({ status: 'done' }).where(eq(tasksSchema.id, task.id));
+      return { success: true };
+    });
+    await runHeartbeatTask(hook, { role: 'coding', taskId: task.id }, worker);
+    expect(worker).toHaveBeenCalledTimes(1);
+  });
+
+  test('a permission revoked after probing prevents server checkout and worker dispatch', async () => {
+    const hook = await makeHeartbeatHook();
+    const [task] = await db.insert(tasksSchema).values({ userId, title: 'No longer authorized', assigneeKind: 'role', assigneeRef: 'coding' }).returning();
+    const gate = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet());
+    const { getPermissionManager } = await import('@/security/permissions');
+    await getPermissionManager().setPermission(userId, 'tasks', 'write', 'DENY');
+    const { runHeartbeatTask } = await import('./tasks/heartbeat-dispatch');
+    const work = vi.fn(async () => ({ success: true }));
+    try {
+      expect(await runHeartbeatTask(hook, gate.taskDispatch!, work)).toMatchObject({ success: false });
+      expect(work).not.toHaveBeenCalled();
+      const [unchanged] = await db.select().from(tasksSchema).where(eq(tasksSchema.id, task.id));
+      expect(unchanged.checkedOutBy).toBeNull();
+      expect(unchanged.assigneeKind).toBe('role');
+    } finally { await getPermissionManager().setPermission(userId, 'tasks', 'write', 'ASK'); }
   });
 });

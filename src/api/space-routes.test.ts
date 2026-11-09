@@ -159,6 +159,7 @@ const SPACE_ACTING = [
   'GET /api/agents/overview (by target)', 'GET /api/agents/triggers (by target)', 'GET /api/agents/roster (by target)', 'GET /api/agents/:id/run (by target)', 'GET /api/agents/pulse (by target)',
   // Context inspector: the session owner only (canActInSession settings), never a room member.
   'GET /api/sessions/:id/context',
+  'GET /api/sessions/:id/execution-environment', 'PUT /api/sessions/:id/execution-environment',
   'GET /api/sessions/:id/plan', 'POST /api/sessions/:id/plan/feedback', 'POST /api/sessions', 'PATCH /api/sessions/:id',
   'DELETE /api/sessions/:id', 'GET /api/sessions/:id/messages', 'POST /api/sessions/:id/attachments', 'GET /api/sessions/:id/files',
   'PUT /api/sessions/:id/files', 'GET /api/sessions/:id/changes', 'GET /api/sessions/:id/changes/diff', 'POST /api/sessions/:id/complete',

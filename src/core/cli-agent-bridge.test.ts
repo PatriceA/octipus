@@ -465,7 +465,7 @@ it.each([true, false])('accepts a delayed approval decision beyond the bridge ba
     const result = await response.json();
     console.log(JSON.stringify({type:'result',subtype:'success',result:JSON.stringify(result),num_turns:1}));
   `);
-  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own', id: 'a', sessionId: 's', userId: 'u', root: true, model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own', id: 'a', sessionId: 's', userId: 'u', root: true, attended: true, model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
   worker.registerTool({ name: 'approval_sample', toolId: 'sample', description: '', parameters: { type: 'object' }, execute: fixture.execute });
   try {
@@ -493,7 +493,7 @@ it.each(['deadline', 'disconnect', 'premature-finish'] as const)('approval %s en
       headers:{Authorization:'Bearer '+process.env.OCTIPUS_AGENT_KEY},body:JSON.stringify({name:'approval_sample',arguments:{}})}).catch(()=>{});
     setInterval(()=>{},1000);
   `);
-  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own', id: 'a', sessionId: 's', userId: 'u', root: true, model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own', id: 'a', sessionId: 's', userId: 'u', root: true, attended: true, model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
   worker.registerTool({ name:'approval_sample', toolId:'sample', description:'', parameters:{type:'object'}, execute:fixture.execute });
   try {

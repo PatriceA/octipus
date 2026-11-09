@@ -35,7 +35,7 @@ test.describe('heartbeat settings', () => {
     await page.goto('/settings');
     await page.getByRole('button', { name: 'Heartbeat' }).click();
     const card = page.getByTestId('heartbeat-settings');
-    await expect(card).toContainText('without using any AI');
+    await expect(card).toContainText('without a chat or AI call');
     // Controlled by the server's answer: click, then wait for the saved state.
     await card.getByLabel('Run my heartbeat').click();
     await expect(card.getByLabel('Run my heartbeat')).toBeChecked();
@@ -44,7 +44,7 @@ test.describe('heartbeat settings', () => {
     await card.getByLabel('Watch my inbox').click();
     await expect(card.getByLabel('Watch my inbox')).toBeChecked();
     expect(puts).toEqual([{ enabled: true }, { intervalMinutes: 15 }, { watchEmail: true }]);
-    await expect(card).toContainText('checked every 15 minutes');
+    await expect(card).toContainText('every 15 minutes');
     await expect(card).toContainText('Watching mail received since');
   });
 
@@ -87,4 +87,35 @@ test.describe('heartbeat settings', () => {
     await expect(card).toContainText('Reply draft saved');
     await expect(card).toContainText('Answered the invoice question');
   });
+});
+
+test('an inherited role can be paused in Settings without turning off personal checks', async ({ authenticatedPage: page }) => {
+  await stubAllDefaults(page);
+  const role = { role: 'coding', activeTasks: 1, totalTasks: 1, enabled: true, inherited: true, hookId: null as string | null, known: true, pipelineTemplate: null };
+  const changes: unknown[] = [];
+  await page.route('**/api/heartbeat/me', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+    enabled: true, intervalMinutes: null, watchEmail: false, watchEmailSince: null,
+    server: { enabled: true, intervalMinutes: 60, quietHoursStart: 22, quietHoursEnd: 7, quietHoursTimezone: 'UTC', maxRunsPerDay: 24, probeEmail: true },
+    mailbox: 'google', standingInstructions: false, recentEmail: [],
+  }) }));
+  await page.route('**/api/tasks/role-agents', async (route) => {
+    if (route.request().method() === 'PUT') {
+      const body = route.request().postDataJSON();
+      changes.push(body);
+      Object.assign(role, { enabled: body.enabled, inherited: false, hookId: 'paused-role-hook' });
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ roles: [role], boardWritesAllowed: true, heartbeatEnabled: true }) });
+  });
+  await page.goto('/settings?tab=heartbeat');
+  const panel = page.getByTestId('role-agents');
+  await panel.getByRole('button', { name: /Role agents/ }).click();
+  await expect(panel).toContainText('follows personal heartbeat');
+  const toggle = panel.getByRole('switch', { name: 'coding agent' });
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await expect(panel).not.toContainText('follows personal heartbeat');
+  await expect(page.getByLabel('Run my heartbeat')).toBeChecked();
+  expect(changes).toEqual([{ role: 'coding', enabled: false }]);
+  await expect(page.getByTestId('heartbeat-settings')).toContainText('without a chat or AI call');
 });

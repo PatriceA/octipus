@@ -96,9 +96,9 @@ export function HeartbeatTab() {
           <HeartPulse className="w-5 h-5 text-primary" /> Heartbeat
         </h2>
         <p className="text-sm text-on-surface-variant mt-1">
-          A regular check-in on your behalf. Each time, Octipus looks — without using any AI — for due tasks, unread notifications,
-          meetings about to start, failing pull requests and, if you turn it on, new email. Only when something is there does an agent
-          start, follow your standing instructions, and act or stay quiet.
+          A background check, without a chat or AI call. Octipus checks pending tasks, important unread notifications,
+          upcoming meetings, failing pull requests and optional new email. New findings appear in notifications.
+          Ready tasks assigned to a role start that role’s worker; paused role settings are respected.
         </p>
       </div>
 
@@ -123,7 +123,7 @@ export function HeartbeatTab() {
         <div>
           <span className="text-on-surface">Run my heartbeat</span>
           <p className="text-xs text-on-surface-variant mt-0.5">
-            At most {server.maxRunsPerDay} agent runs a day, {quiet}. A check that finds nothing costs nothing.
+            At most {server.maxRunsPerDay} updates or task runs a day, {quiet}. Background checks use no model tokens.
           </p>
         </div>
       </label>
@@ -159,10 +159,9 @@ export function HeartbeatTab() {
           <div>
             <span className="text-on-surface flex items-center gap-1.5"><Mail className="w-4 h-4" /> Watch my inbox</span>
             <p className="text-xs text-on-surface-variant mt-0.5">
-              New mail wakes the heartbeat (checked every {interval} minutes). The agent reads it and decides: nothing to do, a task for
-              your list, a short message to you, or a reply saved in your Drafts for you to send. It never sends mail unless you allow
-              sending and say so in your standing instructions. Newsletters and social mail are skipped; mail from before you turn this
-              on is never looked at.
+              Check for new email every {interval} minutes and notify you without starting an agent. This watch does not
+              create tasks or drafts, send mail, or mark mail read. Newsletters and social mail are skipped; mail from
+              before you turn this on is never looked at.
             </p>
             {!data.mailbox && <p className="text-xs text-error mt-1">Connect Google or Microsoft 365 under Integrations first.</p>}
             {!server.probeEmail && <p className="text-xs text-error mt-1">The inbox watch is switched off on this server (heartbeat.probeEmail).</p>}
@@ -195,11 +194,11 @@ export function HeartbeatTab() {
         <p>
           <span className="text-on-surface">Standing instructions:</span>{' '}
           {data.standingInstructions
-            ? 'your pinned note with the slug "heartbeat" is read on every run.'
+            ? 'your note with the slug "heartbeat" guides workers when there is actual task work.'
             : 'none yet. Write a note with the slug "heartbeat" (who you are, what counts as urgent, what the agent may do on its own) and pin it.'}
         </p>
         <p>
-          Assign a to-do to a role on the <a href="/tasks" className="underline text-primary">tasks page</a>, then configure its heartbeat here.
+          Assign a to-do to a role on the <a href="/tasks" className="underline text-primary">tasks page</a>, and the personal heartbeat picks it up. Configure a role here to override that behavior or pause it.
         </p>
       </div>
     </div>

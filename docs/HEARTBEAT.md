@@ -1,183 +1,111 @@
 # Heartbeat
 
-The heartbeat is a periodic, per-user agent turn that reviews standing context
-(due tasks, unread notifications) against your standing instructions, then
-**acts or stays silent**. It's Octipus's proactive loop — the assistant checking
-in on its own, adapted to a multi-user platform with per-user gating, quotas,
-and quiet hours.
+Heartbeat is a background scheduler. Its checks do not start General, call a
+model, create a chat session, or post a synthetic user message. It checks for
+pending work and either records a notification, starts an actual assigned task,
+or stays quiet.
 
-**Off by default.** Nothing runs until you enable it globally *and* a user opts
-in. The one proactive turn that IS on by default is the seeded weekday
-**Daily Briefing** hook — see [HOOKS.md](./HOOKS.md#daily-briefing-seeded).
+## Personal checks
 
-## How it works
+Enable **Settings → Heartbeat → Run my heartbeat**. Set your interval there and review the server quiet hours. An admin's enable action also starts the server heartbeat service;
+a non-admin cannot override an operator-paused server. The roster and task board
+show status and link to Settings, without introducing another switch.
 
-Every 60s cron tick, `maybeRunHeartbeats` (`src/core/heartbeat.ts`) processes
-each user's due heartbeat hook through a **cheap-first gate** — no LLM tokens are
-spent until the last step:
+Every cron tick, `maybeRunHeartbeats` checks due hooks. Quiet hours and the daily
+cap apply before the probes. Probes cover:
 
-1. **Global switch** — `config.heartbeat.enabled` off ⇒ skip.
-2. **Quiet hours** — current hour in `[quietHoursStart, quietHoursEnd)`
-   (evaluated in `quietHoursTimezone`, wraps midnight) ⇒ skip.
-3. **Daily cap** — user already hit `maxRunsPerDay` today ⇒ skip.
-4. **Quota** — user is out of their daily token budget ⇒ skip.
-5. **Pending-work probe** — any **due open tasks** (`due_at ≤ now`) or
-   **unread notifications** (both DB-only), plus two external sources that
-   each run only when enabled and fail soft to "nothing": **open pull
-   requests of yours whose checks are failing** (one `gh api graphql` search
-   across every repo the CLI can see; silently empty when `gh` is not
-   installed or authenticated) and **calendar events starting within the
-   lookahead window** on a connected Google or Microsoft calendar (one
-   request per connected provider). When the user turned on **Watch my
-   inbox**, also **new mail no agent has handled yet** (see
-   [Inbox watch](#inbox-watch)). Nothing in any of them ⇒ skip.
+- Due open tasks, plus undated tasks explicitly assigned to an agent role.
+- Unread notifications, excluding routine `agent_complete` events and heartbeat's
+  own digests. Actionable failures and approval notices remain visible.
+- Your open pull requests with failing checks, when the GitHub probe is enabled.
+- Meetings starting within the configured lookahead window.
+- New mail, if **Watch my inbox** is on.
 
-   Two rules keep those sources honest. The server's `gh` identity belongs
-   to whoever authenticated it — the operator — so the GitHub probe runs
-   **only for admin users** (and a stored DENY on `github/read` still
-   wins); a per-user GitHub credential is enterprise-track work. And a red
-   PR or a meeting has no "done" a user can click, so each hook remembers
-   what it already surfaced (`triggerConfig.heartbeatSeen`) and only a NEW
-   item wakes it; the set is pruned to what the latest probe still sees, so
-   a PR that went green and red again counts as new. A source that could
-   not be read on a tick (gh timed out, a calendar returned 5xx) keeps its
-   previous set rather than pruning it — "could not read" is not "cleared".
-   The pruning happens only when the probe runs: an item that clears and
-   returns with the same state entirely inside quiet hours or after the
-   daily cap is not re-surfaced, a trade-off taken so those skips stay free.
-   One `gh` search is shared by every due hook on a tick, and gates run
-   four at a time.
+New findings produce an owner-only notification. Findings and their checkpoint
+are committed in one database transaction. Merely recording a digest never marks
+source notifications read, tasks complete, or email handled. Notification
+checkpoints remember delivery; a burst larger than the per-check limit drains
+in chronological order rather than being hidden behind the same unread items.
+PRs and meetings are remembered until they clear. An unavailable source keeps
+its previous checkpoint; unavailable does not mean empty.
 
-Only a non-empty probe spawns an orchestrated turn on the **`heartbeat`
-channel** (so the run is tagged `origin='heartbeat'` for audit), seeded with the
-pending checklist plus your standing instructions. **Silence is the default:** an
-empty probe costs zero tokens.
+The server's authenticated `gh` belongs to the operator, so the GitHub probe is
+admin-only and honors a stored `github/read` denial. Calendar and email use the
+owner's connected accounts. New findings are delivered to the local notification
+service, without posting a chat or sending their content to external push relays.
 
-## Seeing what it decided
+## Actual task work
 
-Every gate decision of a due heartbeat is kept in `heartbeat_checks`: when it
-checked, whether it started a turn, the skip reason when it did not
-(`quiet_hours`, `daily_cap`, `quota`, `spend_budget`, `in_flight`,
-`nothing_pending`, `tasks_permission_required`) and, for a role heartbeat, how
-many to-dos were ready. Ids, a reason and a count only — no task titles, mail or
-PR text. Rows older than 14 days are pruned by the heartbeat itself; a failed
-write is logged and never stops the tick.
+A ready task assigned to a registered role can start that role's worker, even
+without a due date. Roles without an explicit configuration follow the personal
+heartbeat. Any explicit role heartbeat owns its role: an enabled hook schedules
+it separately; a disabled hook means paused and blocks personal fallback.
+**Settings → Heartbeat** shows which roles follow the personal setting. Turning
+one off saves an explicit pause, even if it never had its own hook.
 
-**Agents → Triggers** (`/agents/triggers`) shows them: a timeline of today's
-checks and runs per trigger, the day's funnel (checks → each skip reason →
-turns started), and for each heartbeat the last decisions with their reasons
-and the next check. See [MISSION-CONTROL.md](MISSION-CONTROL.md#triggers).
+Personal fallback handles one task at a time, highest priority then oldest. It
+claims the task before routing, rereads current instructions and source
+protection, and creates a server-owned `automation` execution context in the
+task's workspace. This record supports tools, approvals and audit without being
+a personal chat. No checklist conversation is created. Task workers use their
+role's configured model and ordinary unattended permissions and budgets.
+
+A worker needs `tasks/write` set to Allow to check out, comment on and complete
+work. A missing grant is reported once, without spinning a model. Quiet hours,
+the user-wide daily cap, token quota and spend budgets still gate actual work.
+The check itself consumes no model tokens. Only personally owned tasks are
+eligible; shared-space tasks are excluded. Active blockers, waiting children and
+live checkouts prevent dispatch.
+
+The parent hook lease excludes overlapping checks across server processes. It
+is renewed during work; task claims are renewed too. Losing a task claim or hook
+lease stops the affected worker and its descendants. An unfinished fallback task
+is returned to its owner so it is not retried forever. Progress and results live
+in task comments; completion is recorded only through actual task completion.
+
+An explicitly configured role can work tasks through a pipeline template rather
+than a single worker. Pipeline outcomes remain visible on the Pipelines page.
 
 ## Inbox watch
 
-With **Watch my inbox** on (Settings → Heartbeat, `triggerConfig.watchEmail`
-on the user's heartbeat hook), the probe also lists the inbox of the
-connected Google or Microsoft 365 mailbox (`src/core/email/watch.ts`):
+**Watch my inbox** reports new mail through notifications. It does not start a
+mail-review agent, create tasks or reply drafts, send mail, or mark mail read.
+Those actions require an explicit user request or a separately configured
+workflow. This replaces the previous implicit General-agent mail check.
 
-- **Only new mail.** Mail received since the watch was turned on
-  (`watchEmailSince`), and never more than three days back. Gmail's
-  promotions, social and forums tabs are left out of the query.
-- **Only mail no agent has dealt with.** The `email_handled` table keeps, per
-  message id, whether a heartbeat turn was shown it (`surfaced`) and what an
-  agent did with it (`handled`, with an outcome and a one-line note). Ids and
-  outcomes only: no sender, subject or body is stored.
-- **At most ten per turn**, listed in the checklist as untrusted text inside
-  `<email-list>` (sender, subject, a 200-character preview), with what to do
-  with each: nothing, a task, a short message to the owner (`send_to_user`),
-  or a reply draft (`save_reply_draft`, saved in the mailbox, never sent).
-  The agent then calls `mark_email_handled` for every message.
-- **A message the turn did not close comes back** after three hours, at most
-  three times in all, so a turn that failed does not lose mail and one mail
-  the agent cannot deal with does not wake the heartbeat forever.
-- **Cost.** One list request per check (plus one metadata request per new
-  Gmail message). No model call when nothing is new.
+Mail before the watch was enabled is excluded, as are Gmail promotions, social
+and forum categories. Only mail no agent/user has already handled is eligible.
+The existing mail-watch ledger records `surfaced`, not `handled`. The settings
+page's outcome history still shows actions performed by other inbox workflows.
 
-Mail the owner deals with on the inbox page (a task, an archive, a saved
-draft) is recorded as handled too, so the heartbeat does not pick it up
-again. Sending stays behind its own permission: an unattended turn's ASK is
-refused, so the agent cannot send unless the owner allowed it.
+## Standing instructions
 
-For the agent to file tasks and tell the owner, `tasks/write` and
-`messaging/send` need **Allow** (both ask by default). Telling the owner
-works even after the agent read a mail in full: the flow guard counts a
-`send_to_user` to the run's own user as going nowhere else
-(`isOwnerOnlyDelivery`), while any other send after reading mail still asks.
+Your personal note with slug `heartbeat` guides actual task workers. It does not
+create work or start a model when the scheduler has no assigned task. Use it for
+rules such as how to report progress or when to return work to you. Instructions
+are guidance, not permission grants.
 
-The Heartbeat settings tab lists the last ten outcomes ("Reply draft saved —
-answered the invoice question").
+## Seeing what happened
 
-## Standing instructions — the `HEARTBEAT` note
-
-Your standing orders live in a single pinned note with slug `heartbeat` (reusing
-the notes tool/table — no new schema). Whatever you write there is prepended to
-every heartbeat turn. Example:
-
-```
-# HEARTBEAT
-
-- If a task is overdue by more than a day, draft a plan and notify me.
-- Summarize unread GitHub notifications; only ping me for failing CI on my PRs.
-- Never send outbound messages without my approval.
-```
-
-Create/update it like any note (`write_note` with `slug: "heartbeat"`), then pin
-it. If the note is absent, the heartbeat still runs on the probe findings alone.
-
-## Enabling
-
-**In the app** — use **Settings → Heartbeat** for personal and role heartbeat controls.
-An admin’s enable action also activates the server service, so a saved on choice
-is not blocked by a second configuration switch. Non-admins cannot override an
-operator-paused server; owners can still turn off their saved preferences while
-checks are paused. The roster and task board report status and link to Settings.
-
-**Operator bootstrap** — DB settings or these environment values before first-boot migration:
-
-```
-HEARTBEAT_ENABLED=true
-HEARTBEAT_INTERVAL_MINUTES=60
-HEARTBEAT_QUIET_HOURS_START=22
-HEARTBEAT_QUIET_HOURS_END=7
-HEARTBEAT_QUIET_HOURS_TZ=America/New_York
-HEARTBEAT_MAX_RUNS_PER_DAY=24
-```
-
-**Per user** — **Settings → Heartbeat**: *Run my heartbeat*, *Check every*
-(the user's own interval, `triggerConfig.intervalMinutes`, 5–1440 minutes,
-instead of `heartbeat.intervalMinutes`) and *Watch my inbox*. The tab calls
-`GET`/`PUT /api/heartbeat/me`, which use `ensureHeartbeatHook` /
-`disableHeartbeatHook` and merge the rest into the hook's trigger config. The
-global switch still gates whether any user's hook actually runs.
+**Agents → Triggers** shows heartbeat checks, handled findings or dispatched work,
+skip reasons and the next check. `heartbeat_checks` stores IDs and counts, not
+private task/mail text. Decisions are retained for 14 days. A successful personal
+check may mean a notification was delivered; it does not imply an agent ran.
+Worker and pipeline results must be inspected for acceptance evidence.
 
 ## Config reference
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `heartbeat.enabled` | `false` | Master switch. |
-| `heartbeat.intervalMinutes` | `60` | Minutes between runs per user (5–1440). |
-| `heartbeat.quietHoursStart` / `End` | `22` / `7` | No runs in `[start, end)`; equal = disabled. |
-| `heartbeat.quietHoursTimezone` | `UTC` | IANA tz for quiet hours + the daily-cap day boundary. |
-| `heartbeat.maxRunsPerDay` | `24` | Hard per-user daily cap (1–288). |
-| `heartbeat.probeGithub` | `true` | Wake for your open PRs with failing checks (`HEARTBEAT_PROBE_GITHUB`). |
-| `heartbeat.probeCalendar` | `true` | Wake for calendar events about to start (`HEARTBEAT_PROBE_CALENDAR`). |
-| `heartbeat.calendarLookaheadMinutes` | `60` | How far ahead the calendar probe looks (5–1440; `HEARTBEAT_CALENDAR_LOOKAHEAD_MINUTES`). |
-| `heartbeat.probeEmail` | `true` | Allow the inbox watch for users who turned it on (`HEARTBEAT_PROBE_EMAIL`). |
+| `heartbeat.enabled` | `false` | Server service switch. |
+| `heartbeat.intervalMinutes` | `60` | Default interval; users can select 5–1440 minutes. |
+| `heartbeat.quietHoursStart` / `End` | `22` / `7` | Quiet interval; equal values disable quiet hours. |
+| `heartbeat.quietHoursTimezone` | `UTC` | Timezone for quiet hours and the daily cap. |
+| `heartbeat.maxRunsPerDay` | `24` | Per-user cap across handled personal checks and role runs. |
+| `heartbeat.probeGithub` | `true` | Check the owner's failing pull requests. |
+| `heartbeat.probeCalendar` | `true` | Check upcoming connected-calendar events. |
+| `heartbeat.calendarLookaheadMinutes` | `60` | Calendar window, 5–1440 minutes. |
+| `heartbeat.probeEmail` | `true` | Allow users to watch new mail. |
 
-Unattended agent actions remain subject to permissions: ASK blocks rather than
-auto-approving. Standing instructions are prompt guidance, not a grant of access.
-
-## Safety rails
-
-- **Cheap-first gate** — quiet hours, daily cap, and quota are checked before the
-  DB probe; the probe is checked before any LLM turn.
-- **No duplicate fires** — `next_run_at` is advanced *before* the (possibly
-  long) turn starts.
-- **Auditability** — heartbeat runs carry `origin='heartbeat'` in the ambient
-  `RunContext` (and `channel='heartbeat'` in trajectories).
-- **Kill switch** — disable the hook (`disableHeartbeatHook`) or flip
-  `heartbeat.enabled` off.
-
-## Not yet wired (follow-ups)
-
-- A first-class **goals** object — standing instructions are a pinned note for
-  now (deliberate; schema can follow usage).
+Preferences are `GET`/`PUT /api/heartbeat/me`; role overrides are
+`GET`/`PUT /api/tasks/role-agents`. All controls live in Settings.

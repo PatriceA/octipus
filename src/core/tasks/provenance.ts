@@ -43,7 +43,7 @@ export function observeTaskProvenance(sessionId:string,source:TaskProvenance){
 export async function persistHeartbeatTaskProvenance(userId:string,sessionId:string,source:TaskProvenance){
  if(source.protectionLevel===1&&!Object.keys(source.flowLabel).length)return;
  const {sessionRepository}=await import('@/db/repositories/session-repository');let session=await sessionRepository.findById(sessionId);
- if(!session)session=await sessionRepository.create({id:sessionId,userId,channelType:'heartbeat',channelId:userId});
+ if(!session)session=await sessionRepository.createAutomation({id:sessionId,userId,channelType:'heartbeat',channelId:userId});
  if(!await canActInSession(session,userId,'personal_tool'))throw new Error('Heartbeat source session owner mismatch');
  const [stored]=await getDb().update(sessions).set({protectionLevel:sql`greatest(coalesce(${sessions.protectionLevel},1),${source.protectionLevel})`,flowLabel:sql`coalesce(${sessions.flowLabel},'{}'::jsonb)||${JSON.stringify(source.flowLabel)}::jsonb`}).where(and(eq(sessions.id,sessionId),eq(sessions.userId,userId))).returning({id:sessions.id});
  if(!stored)throw new Error('Heartbeat source protection could not be persisted');observeTaskProvenance(sessionId,source);

@@ -255,6 +255,7 @@ export function assertNotRoomCreate(data: { kind?: string | null; channelType?: 
   if (data.kind === 'room' || data.channelType === 'room' || data.roomVisibility != null) {
     throw new Error('Rooms are created in a space (POST /api/spaces/:id/rooms), not as a chat');
   }
+  if (data.kind != null && data.kind !== 'chat') throw new Error('Only chat sessions can be created through a personal chat path');
 }
 
 export class ScopedSessionRepo {
