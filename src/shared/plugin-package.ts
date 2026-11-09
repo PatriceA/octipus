@@ -8,6 +8,9 @@ import type { FieldDef } from './record-fields';
 /** The manifest file at a package's root. */
 export const PLUGIN_MANIFEST_FILE = 'octipus-plugin.json';
 
+/** The longest value a plugin package secret holds (`PUT /api/plugin-packages/:name/secrets/:key`). */
+export const MAX_PLUGIN_SECRET_LENGTH = 10_000;
+
 /** The manifest contract this host reads (`apiVersion`, same MAJOR, MINOR not newer). */
 export const PLUGIN_PACKAGE_API_VERSION = '1.0.0';
 

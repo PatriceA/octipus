@@ -26,7 +26,7 @@ import { ManifestError } from '@/plugins/packages/manifest';
 import { generateSigningKey, SignatureError, signPackage, signRegistryIndexFile } from '@/plugins/packages/signature';
 import { PackageTreeError } from '@/plugins/packages/tree';
 import { PLUGIN_TOOL_EFFECTS, type PluginToolEffect } from '@/shared/plugin-package';
-import { approveCommand, listCommand, type PluginApiIo, secretCommand, setCommand, uninstallCommand } from './plugin-api';
+import { approveCommand, listCommand, type PluginApiIo, readAllText, readHiddenLine, secretCommandFromArgs, setCommand, uninstallCommand } from './plugin-api';
 
 const HELP = `octi plugin — plugin tooling
 
@@ -58,8 +58,8 @@ Usage:
                                 shows the actual hash and asks (at a terminal only).
                                 Refused when the files no longer hash to it.
   octi plugin set <name> key=value...
-                                Change settings (checked against the manifest; key=
-                                clears one). Not for secrets.
+                                Change settings (checked against the manifest; exactly
+                                key= clears one). Not for secrets.
   octi plugin secret <name> <KEY> [--clear]
                                 Set a secret: the value is read from a prompt that does
                                 not echo, or from stdin (octi plugin secret finapi
@@ -163,48 +163,10 @@ function apiIo(): PluginApiIo {
         rl.close();
       }
     },
-    readSecret: (prompt) => (process.stdin.isTTY === true ? readHidden(prompt) : readAllStdin()),
+    readSecret: (prompt) => (process.stdin.isTTY === true
+      ? readHiddenLine(process.stdin, (t) => process.stderr.write(t), prompt)
+      : readAllText(process.stdin)),
   };
-}
-
-/** All of stdin (a pipe or a file), at most 64 KiB. */
-async function readAllStdin(): Promise<string> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of process.stdin) {
-    total += (chunk as Buffer).length;
-    if (total > 64 * 1024) throw new Error('the value on stdin is larger than 64 KiB');
-    chunks.push(chunk as Buffer);
-  }
-  return Buffer.concat(chunks).toString('utf8');
-}
-
-/** One line typed at the terminal without echoing it (raw mode; Ctrl-C aborts). */
-function readHidden(prompt: string): Promise<string> {
-  return new Promise((resolvePromise, reject) => {
-    const stdin = process.stdin;
-    process.stderr.write(prompt);
-    let value = '';
-    const done = (err?: Error) => {
-      stdin.setRawMode(false);
-      stdin.pause();
-      stdin.off('data', onData);
-      process.stderr.write('\n');
-      if (err) reject(err);
-      else resolvePromise(value);
-    };
-    const onData = (data: Buffer) => {
-      for (const ch of data.toString('utf8')) {
-        if (ch === '\r' || ch === '\n' || ch === '\u0004') return done();
-        if (ch === '\u0003') return done(new Error('cancelled'));
-        if (ch === '\u007f' || ch === '\b') value = value.slice(0, -1);
-        else value += ch;
-      }
-    };
-    stdin.setRawMode(true);
-    stdin.resume();
-    stdin.on('data', onData);
-  });
 }
 
 function usage(sub: string, expected: string): never {
@@ -212,14 +174,14 @@ function usage(sub: string, expected: string): never {
   process.exit(2);
 }
 
-async function runApiCommand(sub: 'set' | 'secret' | 'uninstall', argv: string[]): Promise<never> {
-  let values: { yes?: boolean; clear?: boolean };
+async function runApiCommand(sub: 'set' | 'uninstall', argv: string[]): Promise<never> {
+  let values: { yes?: boolean };
   let positionals: string[];
   try {
     ({ values, positionals } = parseArgs({
       args: argv,
       allowPositionals: true,
-      options: sub === 'uninstall' ? { yes: { type: 'boolean', short: 'y' } } : sub === 'secret' ? { clear: { type: 'boolean' } } : {},
+      options: sub === 'uninstall' ? { yes: { type: 'boolean', short: 'y' } } : {},
     }));
   } catch (err) {
     usage(sub, (err as Error).message);
@@ -229,12 +191,6 @@ async function runApiCommand(sub: 'set' | 'secret' | 'uninstall', argv: string[]
     case 'set':
       if (positionals.length < 2) usage(sub, 'expected <name> key=value...');
       process.exit(await setCommand(io, positionals[0], positionals.slice(1)));
-      break;
-    case 'secret':
-      // A third positional is most likely the value typed on the command line: refuse it.
-      if (positionals.length === 3) usage(sub, 'the value is not taken from the command line (shell history, process list); type it at the prompt or pipe it on stdin');
-      if (positionals.length !== 2) usage(sub, 'expected <name> <KEY> [--clear]');
-      process.exit(await secretCommand(io, positionals[0], positionals[1], values.clear === true));
       break;
     case 'uninstall':
       if (positionals.length !== 1) usage(sub, 'expected <name> [--yes]');
@@ -357,9 +313,12 @@ async function main(): Promise<void> {
       await runApprove(rest);
       break;
     case 'set':
-    case 'secret':
     case 'uninstall':
       await runApiCommand(sub, rest);
+      break;
+    case 'secret':
+      // Its own parser: a refusal must never echo a value typed on the command line.
+      process.exit(await secretCommandFromArgs(apiIo(), rest));
       break;
     case undefined:
     case 'help':

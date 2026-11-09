@@ -3,9 +3,25 @@
  * a fake backend: the token rides as a bearer, approve sends the hash it was
  * given or the one confirmed at a terminal, and refuses to guess otherwise.
  */
+import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
+import { StringDecoder } from 'node:string_decoder';
 import { describe, expect, test } from 'vitest';
-import type { PluginPackageView } from '@/shared/plugin-package';
-import { approveCommand, backendBase, listCommand, parseSettingPairs, type PluginApiIo, secretCommand, setCommand, uninstallCommand } from './plugin-api';
+import { MAX_PLUGIN_SECRET_LENGTH, type PluginPackageView } from '@/shared/plugin-package';
+import {
+  approveCommand,
+  backendBase,
+  type HiddenInput,
+  listCommand,
+  parseSettingPairs,
+  type PluginApiIo,
+  readAllText,
+  readHiddenLine,
+  secretCommand,
+  secretCommandFromArgs,
+  setCommand,
+  uninstallCommand,
+} from './plugin-api';
 
 const RECORDED = `sha256:${'a'.repeat(64)}`;
 const ACTUAL = `sha256:${'b'.repeat(64)}`;
@@ -207,6 +223,12 @@ describe('octi plugin set', () => {
       expect(bad.requests).toEqual([]);
     }
     expect(parseSettingPairs(['a=x=y'])).toEqual({ a: 'x=y' });
+    // Only exactly `key=` clears; spaces alone are refused, not read as a clear.
+    expect(parseSettingPairs(['a=', 'b= x '])).toEqual({ a: null, b: ' x ' });
+    expect(() => parseSettingPairs(['a=   '])).toThrow(/only spaces.*`a=` to clear/);
+    const spaces = harness();
+    expect(await setCommand(spaces.io, 'finapi', ['region=  '])).toBe(2);
+    expect(spaces.requests).toEqual([]);
   });
 });
 
@@ -243,5 +265,110 @@ describe('octi plugin secret', () => {
     const bad = harness({ secret: 'x' });
     expect(await secretCommand(bad.io, 'finapi', 'a/b', false)).toBe(2);
     expect(bad.requests).toEqual([]);
+  });
+});
+
+describe('octi plugin secret: arguments, the hidden prompt, stdin and the length limit', () => {
+  test('a value typed on the command line is refused without being echoed', async () => {
+    for (const argv of [['finapi', 'KEY', '-s3cret'], ['finapi', 'KEY', '--s3cret=x'], ['finapi', 'KEY', 's3cret'], ['finapi', 'KEY', '--', '-s3cret'], ['finapi']]) {
+      const h = harness({ secret: 'never read' });
+      expect(await secretCommandFromArgs(h.io, argv), argv.join(' ')).toBe(2);
+      const text = [...h.out, ...h.err].join('');
+      expect(text, argv.join(' ')).toContain('never from the command line');
+      expect(text, argv.join(' ')).not.toContain('3cret');
+      expect(h.requests).toEqual([]);
+      expect(h.asked).toEqual([]);
+    }
+    const ok = harness({ secret: 'v', respond: (m) => (m === 'PUT' ? [200, { saved: true }] : undefined) });
+    expect(await secretCommandFromArgs(ok.io, ['finapi', 'KEY'])).toBe(0);
+    expect(ok.requests.map((r) => r.body)).toEqual([{ value: 'v' }]);
+    const clear = harness({ respond: (m) => (m === 'PUT' ? [200, { saved: true }] : undefined) });
+    expect(await secretCommandFromArgs(clear.io, ['finapi', 'KEY', '--clear'])).toBe(0);
+    expect(clear.requests.map((r) => r.body)).toEqual([{ value: null }]);
+  });
+
+  test('a value longer than the route accepts is refused with the limit, before any request', async () => {
+    const h = harness({ secret: `${'x'.repeat(MAX_PLUGIN_SECRET_LENGTH + 1)}\n` });
+    expect(await secretCommand(h.io, 'finapi', 'KEY', false)).toBe(2);
+    expect(h.err.join('')).toContain(`${MAX_PLUGIN_SECRET_LENGTH + 1} characters; a plugin secret holds at most ${MAX_PLUGIN_SECRET_LENGTH}`);
+    expect(h.requests).toEqual([]);
+    const max = harness({ secret: 'x'.repeat(MAX_PLUGIN_SECRET_LENGTH), respond: (m) => (m === 'PUT' ? [200, { saved: true }] : undefined) });
+    expect(await secretCommand(max.io, 'finapi', 'KEY', false)).toBe(0);
+  });
+
+  test('stdin is read whole as UTF-8, and refused once it is longer than a secret can be', async () => {
+    const euro = Buffer.from('p€ss\n');
+    // A character split across chunks stays whole.
+    expect(await readAllText(Readable.from([euro.subarray(0, 2), euro.subarray(2)]))).toBe('p€ss\n');
+    await expect(readAllText(Readable.from([Buffer.alloc(43, 'x')]), 10)).rejects.toThrow(/longer than 10 characters/);
+  });
+
+  /** A fake raw-mode terminal: records the mode calls; `type` sends chunks as the terminal would. */
+  function fakeTty(): HiddenInput & { type: (chunk: string | Buffer) => void; calls: string[] } {
+    const emitter = new EventEmitter();
+    let encoding: BufferEncoding | null = null;
+    let decoder: StringDecoder | undefined;
+    const calls: string[] = [];
+    return {
+      calls,
+      setRawMode: (raw: boolean) => { calls.push(`raw:${raw}`); },
+      setEncoding: (e: BufferEncoding) => { encoding = e; calls.push(`encoding:${e}`); },
+      resume: () => { calls.push('resume'); },
+      pause: () => { calls.push('pause'); },
+      on: (event, listener) => emitter.on(event, listener),
+      off: (event, listener) => emitter.off(event, listener),
+      // With an encoding set, a stream decodes with a StringDecoder, holding back a partial character.
+      type: (chunk) => {
+        if (typeof chunk === 'string' || encoding === null) {
+          emitter.emit('data', chunk);
+          return;
+        }
+        decoder ??= new StringDecoder(encoding);
+        const text = decoder.write(chunk);
+        if (text) emitter.emit('data', text);
+      },
+    };
+  }
+
+  test('the hidden prompt sets UTF-8 and raw mode, never echoes, and drops escape sequences and control characters', async () => {
+    const tty = fakeTty();
+    const written: string[] = [];
+    const line = readHiddenLine(tty, (t) => written.push(t), 'Value: ');
+    tty.type('ab');
+    tty.type('\u001b[D\u001b[1;5C'); // arrow keys
+    tty.type('\u001b[200~c\u001b[201~'); // a bracketed paste keeps its text, not its markers
+    tty.type('\u0001\u0007\t\u0015'); // Ctrl-A, bell, tab, Ctrl-U
+    tty.type('\u001bx'); // Alt+x
+    tty.type('dX\u007f'); // Backspace removes X
+    const euro = Buffer.from('€');
+    tty.type(euro.subarray(0, 1));
+    tty.type(euro.subarray(1));
+    tty.type('\u001bOP'); // F1
+    tty.type('\r');
+    expect(await line).toBe('abcd€');
+    expect(written).toEqual(['Value: ', '\n']);
+    expect(tty.calls).toEqual(['encoding:utf8', 'raw:true', 'resume', 'raw:false', 'pause']);
+  });
+
+  test('Enter right after a lone Esc still ends the line; Ctrl-C cancels; Ctrl-D ends', async () => {
+    const esc = fakeTty();
+    const a = readHiddenLine(esc, () => {}, '');
+    esc.type('k\u001b\r');
+    expect(await a).toBe('k');
+    const cancel = fakeTty();
+    const b = readHiddenLine(cancel, () => {}, '');
+    cancel.type('abc\u0003');
+    await expect(b).rejects.toThrow('cancelled');
+    const eof = fakeTty();
+    const c = readHiddenLine(eof, () => {}, '');
+    eof.type('xy\u0004');
+    expect(await c).toBe('xy');
+  });
+
+  test('the hidden prompt keeps at most one character over the limit, so a long value is refused', async () => {
+    const tty = fakeTty();
+    const line = readHiddenLine(tty, () => {}, '', 3);
+    tty.type('abcdefg\r');
+    expect(await line).toBe('abcd');
   });
 });

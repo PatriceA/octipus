@@ -670,10 +670,13 @@ its recorded and actual hash. `approve` without `--hash` refuses when it
 cannot ask (not a terminal) and prints the command to run after reviewing; a
 `409` (the files changed again) is shown and exits non-zero. `set` sends the
 pairs as one settings change (the backend checks them against the manifest;
-all or nothing). `secret` never takes the value on the command line, where it
-would end up in the shell history and the process list: it reads it from a
-prompt that does not echo, or from stdin (one trailing newline dropped), and
-never prints it. `uninstall` asks at a terminal and is refused elsewhere
+all or nothing); exactly `key=` clears a setting, and a value of spaces alone
+is refused. `secret` never takes the value on the command line, where it
+would end up in the shell history and the process list, and a refused command
+line is never repeated back: it reads the value from a prompt that does not
+echo (escape sequences and control characters other than Backspace are
+dropped), or from stdin (one trailing newline dropped), refuses one longer
+than 10,000 characters (what the API accepts), and never prints it. `uninstall` asks at a terminal and is refused elsewhere
 without `--yes`.
 
 Every change is in the audit log (`resource_type = plugin_package`).

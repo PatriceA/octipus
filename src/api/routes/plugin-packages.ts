@@ -11,6 +11,7 @@ import {
   uninstall,
 } from '@/plugins/packages/service';
 import { installFromUrl, listRegistry } from '@/plugins/packages/remote';
+import { MAX_PLUGIN_SECRET_LENGTH } from '@/shared/plugin-package';
 import { apiLogger } from '@/utils/logger';
 
 const STATUS: Record<PluginPackageError['code'], number> = { not_found: 404, exists: 409, invalid: 400, incomplete: 409, conflict: 409 };
@@ -150,7 +151,7 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
     },
     {
       params: t.Object({ name: t.String({ maxLength: 50 }), key: t.String({ maxLength: 64 }) }),
-      body: t.Object({ value: t.Union([t.String({ maxLength: 10_000 }), t.Null()]) }),
+      body: t.Object({ value: t.Union([t.String({ maxLength: MAX_PLUGIN_SECRET_LENGTH }), t.Null()]) }),
       detail: { tags: ['plugin-packages'] },
     },
   )
