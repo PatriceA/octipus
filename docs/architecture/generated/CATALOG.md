@@ -686,7 +686,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `plugins` | 3 |
 | `api` | `security` | 168 |
 | `api` | `services` | 5 |
-| `api` | `shared` | 22 |
+| `api` | `shared` | 23 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 6 |
 | `api` | `utils` | 75 |
