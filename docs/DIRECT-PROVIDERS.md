@@ -195,7 +195,7 @@ ANTHROPIC_API_KEY=... npm run measure:cache -- --yes  # count, then send
   and sends nothing. With `--yes` it counts each prefix with the free
   `count_tokens` endpoint (at most 12 calls), prints the exact maximum cost and
   refuses above `--max-cost` (default $2), then sends the four steps through
-  `AnthropicProvider.complete()` — at most 4 Messages requests — with
+  `AnthropicProvider.complete()` — at most 4 billed Messages requests (a 429 is retried once; a 429 is not billed) — with
   `max_tokens: 0`, the documented cache pre-warm: prefill only, no output
   billed. `--max-tokens 1` is the fallback for a model or account that rejects
   0. Pricing comes from the claude-api skill (Opus 5.5: $4 input, $0.20 cache

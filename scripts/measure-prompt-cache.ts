@@ -54,7 +54,7 @@ if (args.help) {
 
   --dry-run          build and analyse the requests only, no network (the default without ANTHROPIC_API_KEY)
   --live             require live mode (fails without ANTHROPIC_API_KEY; live is the default with one)
-  --yes              live: actually send (at most 4 Messages + 12 count_tokens requests)
+  --yes              live: actually send (at most 4 billed Messages requests, each retried once on 429, + 12 count_tokens)
   --model <id>       model to measure (default claude-opus-5-5)
   --max-tokens <n>   max_tokens per request (default 0: prefill only, no output)
   --max-cost <usd>   refuse to send when the worst case exceeds this (default 2)
