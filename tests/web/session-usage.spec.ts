@@ -74,11 +74,11 @@ test('a delayed swarm snapshot preserves a child that arrived over the socket', 
 
 
 test('expanded session costs and skills fit a narrow phone header', async ({ authenticatedPage: page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
   await page.route('**/api/models/usage/session/*', route => json(route, 200, { stats: { ...stats, unknownCostRequests: 15, estimatedCost: 0.03, cacheReadTokens: 123456789, cacheCreationTokens: 987654321 } }));
   await page.goto('/chat');
   await selectChatSession(page, 'sess-1');
   const usage = page.getByTestId('session-usage');
+  await page.setViewportSize({ width: 390, height: 844 });
   await expect(usage).toContainText('incomplete');
   await usage.locator('summary').click();
   await expect(usage.getByText('Unknown cost: 15 requests')).toBeVisible();
