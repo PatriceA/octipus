@@ -381,6 +381,13 @@ describe('registry index signatures', () => {
     expect(verifyRegistryIndex(INDEX, text, 'Acme', [{ ...TRUSTED[0], revoked: true }]).status).toBe('revoked');
     expect(verifyRegistryIndex(INDEX, text, 'Acme', TRUSTED, undefined, { revokedKeys: [keyId] }).status).toBe('revoked');
     expect(verifyRegistryIndex(INDEX, text, 'Acme', [{ ...TRUSTED[0], notAfter: '2020-01-01' }]).status).toBe('expired');
+    // A revocation or expiry of the same key filed under another name still wins.
+    expect(verifyRegistryIndex(INDEX, text, 'Acme', [...TRUSTED, { name: 'Acme (old)', publicKey: publisher.publicKeyPem, revoked: true }]).status).toBe('revoked');
+    expect(verifyRegistryIndex(INDEX, text, 'Acme', [{ name: 'Acme (2026)', publicKey: publisher.publicKeyPem, notAfter: '2020-01-01' }, ...TRUSTED]).status).toBe('expired');
+    // The same key trusted under both names counts for either.
+    const twice = [{ name: 'Other', publicKey: publisher.publicKeyPem }, ...TRUSTED];
+    expect(verifyRegistryIndex(INDEX, text, 'Acme', twice)).toMatchObject({ status: 'valid', publisher: 'Acme' });
+    expect(verifyRegistryIndex(INDEX, text, 'Other', twice)).toMatchObject({ status: 'valid', publisher: 'Other' });
   });
 
   test('a package signature cannot pass for an index signature, nor the other way round', () => {

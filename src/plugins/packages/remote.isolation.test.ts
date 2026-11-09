@@ -419,12 +419,35 @@ describe('registries', () => {
       { registry: 'Wrong publisher', error: expect.stringMatching(/not a key of publisher Acme/) },
     ]);
 
-    // Revoking the publisher's key refuses its index too.
-    const { clearRegistryCache } = await import('./remote');
+    // Revoking the publisher's key refuses its index on the next listing,
+    // although the index itself is still cached: the trust config is part of the cache key.
+    served.fetched = [];
     await policy({ trusted: [{ ...ACME, revoked: true }] });
-    clearRegistryCache();
     listing = await listRegistry();
     expect(listing.packages.map((p) => p.registry)).toEqual(['Plain']);
     expect(listing.errors[0]).toEqual({ registry: 'Signed', error: expect.stringMatching(/does not count: .*revoked/) });
+    expect(served.fetched).toContain('https://signed.example.com/index.json.sig');
+    // Plain names no publisher: its entry stays cached (only Unsigned, which shares its URL, fetches it again).
+    expect(served.fetched.filter((u) => u === 'https://unsigned.example.com/index.json')).toHaveLength(1);
+    // A revocation by key id alone (plugins.revokedKeys) wins as well.
+    const { keyFingerprint, parsePublicKey } = await import('./signature');
+    await policy({ trusted: [ACME], revokedKeys: [keyFingerprint(parsePublicKey(acme.publicKeyPem))] });
+    expect((await listRegistry()).errors[0]).toEqual({ registry: 'Signed', error: expect.stringMatching(/revoked/) });
+  });
+
+  test('the signature of an index URL with a query is fetched beside its path; a fragment is refused', async () => {
+    const { listRegistry } = await import('./remote');
+    const index = Buffer.from(JSON.stringify({ packages: [{ name: 'datev', version: '2.0.0', url: 'https://q.example.com/datev.tgz', sha256: 'cd'.repeat(32) }] }));
+    served.files.set('https://q.example.com/index.json?channel=stable', index);
+    served.files.set('https://q.example.com/index.json.sig?channel=stable', serializeSignature(signRegistryIndex(index, acme.privateKeyPem)));
+    await policy({
+      registries: [
+        { name: 'Query', url: 'https://q.example.com/index.json?channel=stable', publisher: 'Acme' },
+        { name: 'Fragment', url: 'https://q.example.com/index.json?channel=stable#x', publisher: 'Acme' },
+      ],
+    });
+    const listing = await listRegistry();
+    expect(listing.packages.map((p) => [p.registry, p.name])).toEqual([['Query', 'datev']]);
+    expect(listing.errors).toEqual([{ registry: 'Fragment', error: expect.stringMatching(/fragment/) }]);
   });
 });

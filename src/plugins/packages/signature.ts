@@ -462,10 +462,11 @@ export async function checkPackageSignature(
 /**
  * Check a registry index's detached signature (the text of `<index>.sig`,
  * null: none) against the exact index bytes, for the one publisher the
- * registry names (`plugins.registries[].publisher`). Only that publisher's
- * entries in `plugins.trustedPublishers` count: a valid signature by any other
- * trusted key reads as `unknown_key`. A revoked or expired key of that
- * publisher reads as `revoked` or `expired`, never valid.
+ * registry names (`plugins.registries[].publisher`). The key ring is built
+ * from every `plugins.trustedPublishers` entry, so a revocation or expiry of
+ * the key under any name wins (`revoked` / `expired`, never valid); a valid
+ * signature then counts only when an entry of that publisher trusts the key,
+ * and reads as `unknown_key` otherwise.
  */
 export function verifyRegistryIndex(
   indexBytes: Uint8Array,
@@ -483,6 +484,12 @@ export function verifyRegistryIndex(
     if (err instanceof SignatureError) return { status: 'invalid', reason: err.message };
     throw err;
   }
-  const ring = trustedKeys(publishers.filter((p) => p.name === publisher), onInvalidKey, opts);
-  return verifyMessage(registryIndexMessage(indexBytes), sig, ring, 'the registry index');
+  // Every publisher's entries, so a revocation or expiry filed under another
+  // name for the same key still wins (as for packages).
+  const check = verifyMessage(registryIndexMessage(indexBytes), sig, trustedKeys(publishers, onInvalidKey, opts), 'the registry index');
+  if (check.status !== 'valid') return check;
+  // Valid, by a key that some entry trusts: it counts only if an entry of this publisher trusts it.
+  const own = trustedKeys(publishers.filter((p) => p.name === publisher), undefined, opts).get(check.keyId);
+  if (!own || own.untrusted !== null) return { status: 'unknown_key', keyId: check.keyId };
+  return { status: 'valid', publisher, keyId: check.keyId };
 }

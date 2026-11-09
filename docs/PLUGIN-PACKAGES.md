@@ -459,7 +459,10 @@ The publisher signs the index file with the key it signs packages with:
 octi plugin sign-index ./index.json --key ./acme.key   # writes ./index.json.sig
 ```
 
-and serves `index.json.sig` beside the index (`<url>.sig`). The signature file
+and serves `index.json.sig` beside the index: `.sig` is appended to the
+URL's path and its query kept (`…/index.json?channel=stable` →
+`…/index.json.sig?channel=stable`); a registry URL with a fragment (`#…`) is
+refused when it names a publisher. The signature file
 has the canonical form of `octipus-plugin.sig` ([Signed
 packages](#signed-packages)): `{ alg, keyId, signature }`, Ed25519. The signed
 message is `octipus-registry-index/v1\n` followed by `sha256:<hex>` of the
@@ -472,7 +475,10 @@ the bytes fetched with a key of **that** publisher in `trustedPublishers` that
 is neither revoked (`revoked`, `revokedKeys`) nor expired (`notAfter`).
 Otherwise the registry is reported in `errors` and none of its packages show:
 no `.sig` (404), a signature by another publisher's key (even a trusted one),
-a changed index, or a revoked or expired key. Without `publisher`, an index is
+a changed index, or a revoked or expired key. A revocation or expiry counts
+whichever `trustedPublishers` entry (or `revokedKeys`) files it, as for
+packages. The trust config is part of the index cache key, so revoking a key
+refuses its indexes on the next listing. Without `publisher`, an index is
 listed unsigned, as before. Either way, installing from it still requires the
 package's own trusted signature.
 
