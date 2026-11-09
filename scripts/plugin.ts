@@ -6,6 +6,7 @@
  *   octi plugin convert <dir>    Convert a legacy plugin into a plugin package.
  *   octi plugin keygen <prefix>  Make an Ed25519 signing key pair.
  *   octi plugin sign <dir> --key <file>  Sign a plugin package (octipus-plugin.sig).
+ *   octi plugin sign-index <index.json> --key <file>  Sign a registry index (<index.json>.sig).
  *   octi plugin list             Installed packages (through the running backend).
  *   octi plugin approve <name> [--hash sha256:…]  Approve a package's changed content.
  *
@@ -19,7 +20,7 @@ import { parseArgs } from 'node:util';
 import { validatePlugin } from '@octipus/plugin-sdk/testing';
 import { ConvertError, convertLegacyPlugin } from '@/plugins/convert';
 import { ManifestError } from '@/plugins/packages/manifest';
-import { generateSigningKey, SignatureError, signPackage } from '@/plugins/packages/signature';
+import { generateSigningKey, SignatureError, signPackage, signRegistryIndexFile } from '@/plugins/packages/signature';
 import { PackageTreeError } from '@/plugins/packages/tree';
 import { PLUGIN_TOOL_EFFECTS, type PluginToolEffect } from '@/shared/plugin-package';
 import { approveCommand, listCommand, type PluginApiIo } from './plugin-api';
@@ -42,6 +43,11 @@ Usage:
                                 Sign a plugin package: writes <dir>/octipus-plugin.sig
                                 over its content hash. Sign last: any later change to
                                 the files invalidates the signature.
+  octi plugin sign-index <index.json> --key <private-key-file>
+                                Sign a registry index: writes <index.json>.sig over its
+                                exact bytes. Publish both side by side; a registry
+                                configured with "publisher" lists the index only when
+                                the .sig verifies with a trusted key of that publisher.
   octi plugin list              Installed plugin packages: state, signature, network,
                                 approved and actual content hash.
   octi plugin approve <name> [--hash sha256:<hex>]
@@ -98,6 +104,32 @@ async function runSign(argv: string[]): Promise<never> {
     if (!(err instanceof ManifestError || err instanceof SignatureError || err instanceof PackageTreeError || err instanceof SyntaxError || (err as NodeJS.ErrnoException).code)) throw err;
     for (const p of problems) process.stderr.write(`  ✗ ${p}\n`);
     process.stderr.write(`\n❌ ${dir} was not signed.\n`);
+    process.exit(1);
+  }
+}
+
+async function runSignIndex(argv: string[]): Promise<never> {
+  let values: { key?: string };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { key: { type: 'string', short: 'k' } } }));
+  } catch (err) {
+    process.stderr.write(`octi plugin sign-index: ${(err as Error).message}\n\n${HELP}`);
+    process.exit(2);
+  }
+  if (positionals.length !== 1 || !values.key) {
+    process.stderr.write(`octi plugin sign-index: expected <index.json> --key <private-key-file>\n\n${HELP}`);
+    process.exit(2);
+  }
+  const file = resolve(positionals[0]);
+  try {
+    const { sigFile, keyId, sha256 } = await signRegistryIndexFile(file, await readFile(resolve(values.key), 'utf8'));
+    process.stdout.write(`✅ Signed ${file}\n   index hash: ${sha256}\n   key id: ${keyId}\n   wrote ${sigFile}\n`);
+    process.stdout.write('   Publish both files unchanged: any change to the index bytes invalidates the signature.\n');
+    process.exit(0);
+  } catch (err) {
+    if (!(err instanceof SignatureError || (err as NodeJS.ErrnoException).code)) throw err;
+    process.stderr.write(`  ✗ ${(err as Error).message}\n\n❌ ${file} was not signed.\n`);
     process.exit(1);
   }
 }
@@ -224,6 +256,9 @@ async function main(): Promise<void> {
       break;
     case 'sign':
       await runSign(rest);
+      break;
+    case 'sign-index':
+      await runSignIndex(rest);
       break;
     case 'list':
       process.exit(await listCommand(apiIo()));

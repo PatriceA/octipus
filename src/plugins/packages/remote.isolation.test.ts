@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest';
 import { entriesOfDir, makeTarGz } from '@/test-helpers/tar';
-import { generateSigningKey, signPackage } from './signature';
+import { generateSigningKey, serializeSignature, signPackage, signRegistryIndex } from './signature';
 
 const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
@@ -55,7 +55,7 @@ async function serveFixture(url: string, opts: { key?: string; version?: string 
   return `sha256:${createHash('sha256').update(tarball).digest('hex')}`;
 }
 
-async function policy(change: { requireSignature?: boolean; trusted?: Array<Record<string, unknown>>; revokedKeys?: string[]; registries?: Array<{ name: string; url: string }> }): Promise<void> {
+async function policy(change: { requireSignature?: boolean; trusted?: Array<Record<string, unknown>>; revokedKeys?: string[]; registries?: Array<{ name: string; url: string; publisher?: string }> }): Promise<void> {
   const { getConfig } = await import('@/config');
   const plugins = getConfig().plugins;
   if (change.requireSignature !== undefined) plugins.requireSignature = change.requireSignature;
@@ -383,5 +383,48 @@ describe('registries', () => {
     listing = await listRegistry();
     expect(listing.packages[0].installedVersion).toBe('1.0.0');
     expect(served.fetched).toEqual([]);
+  });
+
+  test('a registry naming a publisher lists its index only with a valid signature by that publisher', async () => {
+    const { listRegistry } = await import('./remote');
+    const pkgUrl = 'https://plugins.example.com/echo.tgz';
+    const sha256 = await serveFixture(pkgUrl, { key: acme.privateKeyPem });
+    const index = Buffer.from(JSON.stringify({ packages: [{ name: NAME, version: '1.0.0', description: 'Echo', url: pkgUrl, sha256 }] }));
+    const serve = (host: string, body: Buffer, sigOver: Buffer | null, key = acme.privateKeyPem) => {
+      served.files.set(`https://${host}/index.json`, body);
+      if (sigOver) served.files.set(`https://${host}/index.json.sig`, serializeSignature(signRegistryIndex(sigOver, key)));
+    };
+    serve('signed.example.com', index, index);
+    // Signed, then changed: the bytes no longer match the signature.
+    serve('tampered.example.com', Buffer.from(index.toString('utf8').replace('Echo', 'Evil echo')), index);
+    serve('unsigned.example.com', index, null);
+    serve('stranger.example.com', index, index, stranger.privateKeyPem);
+    await policy({
+      trusted: [ACME, { name: 'Stranger', publicKey: stranger.publicKeyPem }],
+      registries: [
+        { name: 'Signed', url: 'https://signed.example.com/index.json', publisher: 'Acme' },
+        { name: 'Tampered', url: 'https://tampered.example.com/index.json', publisher: 'Acme' },
+        { name: 'Unsigned', url: 'https://unsigned.example.com/index.json', publisher: 'Acme' },
+        { name: 'Wrong publisher', url: 'https://stranger.example.com/index.json', publisher: 'Acme' },
+        // No publisher named: the same unsigned index lists as before.
+        { name: 'Plain', url: 'https://unsigned.example.com/index.json' },
+      ],
+    });
+
+    let listing = await listRegistry();
+    expect(listing.packages.map((p) => [p.registry, p.name, p.description])).toEqual([['Signed', NAME, 'Echo'], ['Plain', NAME, 'Echo']]);
+    expect(listing.errors).toEqual([
+      { registry: 'Tampered', error: expect.stringMatching(/signature is not valid.*does not match the registry index/) },
+      { registry: 'Unsigned', error: expect.stringMatching(/not signed .*index\.json\.sig missing/) },
+      { registry: 'Wrong publisher', error: expect.stringMatching(/not a key of publisher Acme/) },
+    ]);
+
+    // Revoking the publisher's key refuses its index too.
+    const { clearRegistryCache } = await import('./remote');
+    await policy({ trusted: [{ ...ACME, revoked: true }] });
+    clearRegistryCache();
+    listing = await listRegistry();
+    expect(listing.packages.map((p) => p.registry)).toEqual(['Plain']);
+    expect(listing.errors[0]).toEqual({ registry: 'Signed', error: expect.stringMatching(/does not count: .*revoked/) });
   });
 });

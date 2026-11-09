@@ -437,10 +437,44 @@ or version than the entry is refused (`400`), so an entry cannot install
 something other than what it lists. `name` and `version` may be sent with any
 install (`POST /api/plugin-packages`) to the same effect.
 
-A registry is trusted only to point at tarballs: the index is not signed, and
-what installs is decided by the package's own signature against
-`trustedPublishers`. A registry can offer a package you do not trust; it
-cannot make you install one.
+A registry is trusted only to point at tarballs: what installs is decided by
+the package's own signature against `trustedPublishers`. A registry can offer
+a package you do not trust; it cannot make you install one. A signed index
+(below) additionally says who wrote the list.
+
+### Signed registry indexes
+
+A registry entry may name the publisher whose signature its index must carry:
+
+```json
+"plugins": {
+  "trustedPublishers": [{ "name": "Acme", "publicKey": "-----BEGIN PUBLIC KEY-----..." }],
+  "registries": [{ "name": "Acme", "url": "https://plugins.example.com/index.json", "publisher": "Acme" }]
+}
+```
+
+The publisher signs the index file with the key it signs packages with:
+
+```
+octi plugin sign-index ./index.json --key ./acme.key   # writes ./index.json.sig
+```
+
+and serves `index.json.sig` beside the index (`<url>.sig`). The signature file
+has the canonical form of `octipus-plugin.sig` ([Signed
+packages](#signed-packages)): `{ alg, keyId, signature }`, Ed25519. The signed
+message is `octipus-registry-index/v1\n` followed by `sha256:<hex>` of the
+**exact index bytes** served — not of a re-serialised JSON, so publish the
+signed file unchanged — behind its own prefix, so a package signature can
+never pass for an index signature, nor the other way round.
+
+When `publisher` is set, the index is listed only if `<url>.sig` verifies over
+the bytes fetched with a key of **that** publisher in `trustedPublishers` that
+is neither revoked (`revoked`, `revokedKeys`) nor expired (`notAfter`).
+Otherwise the registry is reported in `errors` and none of its packages show:
+no `.sig` (404), a signature by another publisher's key (even a trusted one),
+a changed index, or a revoked or expired key. Without `publisher`, an index is
+listed unsigned, as before. Either way, installing from it still requires the
+package's own trusted signature.
 
 ## Network
 
@@ -626,8 +660,9 @@ Every change is in the audit log (`resource_type = plugin_package`).
 
 - Packages reporting events back (a new invoice in DATEV opening a case):
   plan point C2b.
-- Signed registry indexes, search, ratings or publisher pages: a registry is
-  a flat list, trusted only to point at tarballs ([Registries](#registries)).
+- Search, ratings or publisher pages: a registry is a flat list (signed by
+  its publisher when the host asks for it, [Signed registry
+  indexes](#signed-registry-indexes)).
 - Online revocation: a revoked key is revoked on a host only when that host's
   config says so (`revoked`, `revokedKeys`, `notAfter`).
 - Settings, secrets and uninstall on the web page: it shows packages,

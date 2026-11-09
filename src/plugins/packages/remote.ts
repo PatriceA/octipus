@@ -24,6 +24,7 @@ import { coreLogger } from '@/utils/logger';
 import { fetchGuarded } from '@/utils/sanitize';
 import { manifestSchema } from './manifest';
 import { installFromDirectory, PluginPackageError } from './service';
+import { REGISTRY_INDEX_SIGNATURE_SUFFIX, type SignatureCheck, verifyRegistryIndex } from './signature';
 import { extractTarGz, packageRootIn, TarError } from './tar';
 
 /** Largest tarball a remote install downloads (compressed). */
@@ -35,6 +36,8 @@ export const REGISTRY_CACHE_MS = 60_000;
 const MAX_REDIRECTS = 3;
 const DOWNLOAD_TIMEOUT_MS = 60_000;
 const INDEX_TIMEOUT_MS = 10_000;
+/** Largest index signature read (the canonical form is about 200 bytes). */
+const MAX_INDEX_SIGNATURE_BYTES = 1024;
 
 export class RemoteFetchError extends Error {
   constructor(message: string) {
@@ -221,13 +224,59 @@ export function clearRegistryCache(): void {
   indexCache.clear();
 }
 
-async function readIndex(registry: { name: string; url: string }): Promise<IndexResult> {
-  const key = `${registry.name}\n${registry.url}`;
+/** A registry as `plugins.registries` lists it. */
+interface RegistryConfig {
+  name: string;
+  url: string;
+  publisher?: string;
+}
+
+/** Why a signature check of an index does not let it be listed, in words. */
+function indexSignatureShortfall(registry: RegistryConfig, check: Exclude<SignatureCheck, { status: 'valid' }>): string {
+  const who = `publisher ${registry.publisher}`;
+  switch (check.status) {
+    case 'unsigned':
+      return `The index is not signed (${registry.url}${REGISTRY_INDEX_SIGNATURE_SUFFIX} missing), and the registry requires a signature by ${who}`;
+    case 'unknown_key':
+      return `The index is signed by ${check.keyId}, which is not a key of ${who} in plugins.trustedPublishers`;
+    case 'revoked':
+    case 'expired':
+      return `The index signature does not count: ${check.detail}`;
+    case 'invalid':
+      return `The index signature is not valid: ${check.reason}`;
+  }
+}
+
+/**
+ * When the registry names a publisher: fetch `<url>.sig` and check it against
+ * the exact index bytes. Throws `RemoteFetchError` (the index is not listed)
+ * unless it verifies with a trusted, unrevoked, unexpired key of that publisher.
+ */
+async function checkIndexSignature(registry: RegistryConfig, body: Buffer): Promise<void> {
+  if (registry.publisher === undefined) return;
+  let text: string | null;
+  try {
+    text = (await downloadHttps(`${registry.url}${REGISTRY_INDEX_SIGNATURE_SUFFIX}`, { maxBytes: MAX_INDEX_SIGNATURE_BYTES, timeoutMs: INDEX_TIMEOUT_MS })).toString('utf8');
+  } catch (err) {
+    if (!(err instanceof RemoteFetchError)) throw err;
+    if (!/answered HTTP 404\b/.test(err.message)) throw new RemoteFetchError(`The index signature could not be read: ${err.message}`);
+    text = null;
+  }
+  const plugins = getConfig().plugins;
+  const check = verifyRegistryIndex(body, text, registry.publisher, plugins?.trustedPublishers ?? [], (publisher, reason) => {
+    coreLogger.warn({ publisher, reason }, 'A key in plugins.trustedPublishers cannot be read; it trusts nothing');
+  }, { revokedKeys: plugins?.revokedKeys ?? [] });
+  if (check.status !== 'valid') throw new RemoteFetchError(indexSignatureShortfall(registry, check));
+}
+
+async function readIndex(registry: RegistryConfig): Promise<IndexResult> {
+  const key = `${registry.name}\n${registry.url}\n${registry.publisher ?? ''}`;
   const cached = indexCache.get(key);
   if (cached && Date.now() - cached.at < REGISTRY_CACHE_MS) return cached.result;
   let result: IndexResult;
   try {
     const body = await downloadHttps(registry.url, { maxBytes: MAX_INDEX_BYTES, timeoutMs: INDEX_TIMEOUT_MS, accept: 'application/json' });
+    await checkIndexSignature(registry, body);
     let json: unknown;
     try {
       json = JSON.parse(body.toString('utf8'));
@@ -249,7 +298,9 @@ async function readIndex(registry: { name: string; url: string }): Promise<Index
 /**
  * Every package the configured registries (`plugins.registries`) list, with
  * the version installed here. Each index is cached for a minute; one that
- * cannot be read is reported in `errors` and the others still listed.
+ * cannot be read, or (for a registry naming a `publisher`) whose signature
+ * does not verify with a trusted key of that publisher, is reported in
+ * `errors` and the others still listed.
  */
 export async function listRegistry(): Promise<PluginRegistryListing> {
   const registries = getConfig().plugins?.registries ?? [];

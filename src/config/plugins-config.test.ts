@@ -46,4 +46,9 @@ describe('plugins config', () => {
     expect(plugins({ registries: [{ name: '', url: 'https://plugins.example.com/index.json' }] }).success).toBe(false);
     expect(plugins({ registries: [{ name: 'Acme', url: 'not a url' }] }).success).toBe(false);
   });
+
+  it('a registry may name the publisher whose signature its index must carry', () => {
+    expect(plugins({ registries: [{ name: 'Acme', url: 'https://plugins.example.com/index.json', publisher: 'Acme' }] }).success).toBe(true);
+    expect(plugins({ registries: [{ name: 'Acme', url: 'https://plugins.example.com/index.json', publisher: '' }] }).success).toBe(false);
+  });
 });

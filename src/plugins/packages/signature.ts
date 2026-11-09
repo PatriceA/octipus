@@ -36,6 +36,10 @@ import { checkPackageTree } from './tree';
 export { SIGNATURE_FILE } from './integrity';
 
 const MESSAGE_PREFIX = 'octipus-plugin-signature/v1\n';
+/** The domain prefix of a registry index signature: never a message a package signature is made over. */
+const REGISTRY_INDEX_PREFIX = 'octipus-registry-index/v1\n';
+/** Where a registry index's detached signature is published: beside the index, `<index url>.sig`. */
+export const REGISTRY_INDEX_SIGNATURE_SUFFIX = '.sig';
 /** A signature file larger than this is not one (the canonical form is about 200 bytes). */
 const MAX_SIGNATURE_BYTES = 1024;
 const KEY_ID_RE = /^ed25519:[0-9a-f]{64}$/;
@@ -104,6 +108,15 @@ function message(contentHash: string): Buffer {
   return Buffer.from(`${MESSAGE_PREFIX}${contentHash}`, 'utf8');
 }
 
+/**
+ * The bytes a registry index signature is made over: its own domain prefix
+ * and the sha256 of the exact index bytes served (not a re-serialisation of
+ * the JSON), so a package signature can never pass for one and back.
+ */
+function registryIndexMessage(indexBytes: Uint8Array): Buffer {
+  return Buffer.from(`${REGISTRY_INDEX_PREFIX}sha256:${createHash('sha256').update(indexBytes).digest('hex')}`, 'utf8');
+}
+
 function requireEd25519(key: KeyObject, what: string): KeyObject {
   if (key.asymmetricKeyType !== 'ed25519') throw new SignatureError(`${what} is a ${key.asymmetricKeyType ?? 'non-asymmetric'} key, not Ed25519`);
   return key;
@@ -139,6 +152,37 @@ export function keyFingerprint(key: KeyObject): string {
 
 /** Sign a content hash with a private key (PEM, PKCS#8): the signature file's contents. */
 export function signContentHash(contentHash: string, privateKeyPem: string): SignatureFile {
+  return signMessage(message(contentHash), privateKeyPem);
+}
+
+/**
+ * Sign a registry index (its exact bytes) with a private key (PEM, PKCS#8):
+ * the contents of `<index>.sig`, in the same canonical form as a package
+ * signature (`serializeSignature`).
+ */
+export function signRegistryIndex(indexBytes: Uint8Array, privateKeyPem: string): SignatureFile {
+  return signMessage(registryIndexMessage(indexBytes), privateKeyPem);
+}
+
+/**
+ * Sign a registry index file: writes `<file>.sig` beside it (replacing an
+ * older one). The index must be JSON; it is signed byte for byte as it is
+ * on disk, so publish exactly this file.
+ */
+export async function signRegistryIndexFile(file: string, privateKeyPem: string): Promise<{ keyId: string; sigFile: string; sha256: string }> {
+  const bytes = await readFile(file);
+  try {
+    JSON.parse(bytes.toString('utf8'));
+  } catch {
+    throw new SignatureError(`${file} is not valid JSON; a registry index is { "packages": [...] }`);
+  }
+  const sig = signRegistryIndex(bytes, privateKeyPem);
+  const sigFile = `${file}${REGISTRY_INDEX_SIGNATURE_SUFFIX}`;
+  await writeFile(sigFile, serializeSignature(sig), { mode: 0o644 });
+  return { keyId: sig.keyId, sigFile, sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}` };
+}
+
+function signMessage(msg: Buffer, privateKeyPem: string): SignatureFile {
   let key: KeyObject;
   try {
     key = createPrivateKey(privateKeyPem);
@@ -149,7 +193,7 @@ export function signContentHash(contentHash: string, privateKeyPem: string): Sig
   return {
     alg: 'ed25519',
     keyId: keyFingerprint(createPublicKey(key)),
-    signature: sign(null, message(contentHash), key).toString('base64'),
+    signature: sign(null, msg, key).toString('base64'),
   };
 }
 
@@ -173,14 +217,17 @@ export function serializeSignature(sig: SignatureFile): string {
   return `${JSON.stringify({ alg: sig.alg, keyId: sig.keyId, signature: sig.signature }, null, 2)}\n`;
 }
 
-/** Parse a signature file, refusing anything but the canonical form (`serializeSignature`). */
-export function parseSignatureFile(text: string): SignatureFile {
-  if (Buffer.byteLength(text, 'utf8') > MAX_SIGNATURE_BYTES) throw new SignatureError(`${SIGNATURE_FILE} is larger than ${MAX_SIGNATURE_BYTES} bytes`);
+/**
+ * Parse a signature file, refusing anything but the canonical form
+ * (`serializeSignature`). `fileName` names it in the messages.
+ */
+export function parseSignatureFile(text: string, fileName: string = SIGNATURE_FILE): SignatureFile {
+  if (Buffer.byteLength(text, 'utf8') > MAX_SIGNATURE_BYTES) throw new SignatureError(`${fileName} is larger than ${MAX_SIGNATURE_BYTES} bytes`);
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new SignatureError(`${SIGNATURE_FILE} is not valid JSON`);
+    throw new SignatureError(`${fileName} is not valid JSON`);
   }
   const sig = parsed as Record<string, unknown> | null;
   const keys = typeof sig === 'object' && sig !== null && !Array.isArray(sig) ? Object.keys(sig) : [];
@@ -191,10 +238,10 @@ export function parseSignatureFile(text: string): SignatureFile {
     || typeof sig.signature !== 'string' || !SIGNATURE_RE.test(sig.signature)
     || Buffer.from(sig.signature, 'base64').length !== 64
   ) {
-    throw new SignatureError(`${SIGNATURE_FILE} must be exactly { "alg": "ed25519", "keyId": "ed25519:<64 hex>", "signature": "<base64 of 64 bytes>" }`);
+    throw new SignatureError(`${fileName} must be exactly { "alg": "ed25519", "keyId": "ed25519:<64 hex>", "signature": "<base64 of 64 bytes>" }`);
   }
   const file: SignatureFile = { alg: 'ed25519', keyId: sig.keyId, signature: sig.signature };
-  if (serializeSignature(file) !== text) throw new SignatureError(`${SIGNATURE_FILE} is not in the canonical form \`octi plugin sign\` writes; sign the package again`);
+  if (serializeSignature(file) !== text) throw new SignatureError(`${fileName} is not in the canonical form \`octi plugin sign\` writes; sign it again`);
   return file;
 }
 
@@ -355,14 +402,18 @@ export async function readSignatureFile(dir: string): Promise<SignatureOnDisk | 
  * verified and is `revoked` outright.
  */
 export function verifySignature(contentHash: string, sig: SignatureFile | null, trusted: KeyRing): SignatureCheck {
+  return verifyMessage(message(contentHash), sig, trusted, 'the package content');
+}
+
+function verifyMessage(msg: Buffer, sig: SignatureFile | null, trusted: KeyRing, what: string): SignatureCheck {
   if (sig === null) return { status: 'unsigned' };
   const known = trusted.get(sig.keyId);
   if (!known) return { status: 'unknown_key', keyId: sig.keyId };
   if (known.key === null) {
     return { status: 'revoked', keyId: sig.keyId, publisher: null, detail: known.untrusted?.detail ?? `the key ${sig.keyId} is revoked` };
   }
-  if (!verify(null, message(contentHash), known.key, Buffer.from(sig.signature, 'base64'))) {
-    return { status: 'invalid', reason: `The signature by ${known.name} (${sig.keyId}) does not match the package content` };
+  if (!verify(null, msg, known.key, Buffer.from(sig.signature, 'base64'))) {
+    return { status: 'invalid', reason: `The signature by ${known.name} (${sig.keyId}) does not match ${what}` };
   }
   if (known.untrusted) return { status: known.untrusted.status, keyId: sig.keyId, publisher: known.name, detail: known.untrusted.detail };
   return { status: 'valid', publisher: known.name, keyId: sig.keyId };
@@ -406,4 +457,32 @@ export async function checkPackageSignature(
     throw err;
   }
   return checkSignatureOnDisk(onDisk, contentHash, publishers, onInvalidKey, opts);
+}
+
+/**
+ * Check a registry index's detached signature (the text of `<index>.sig`,
+ * null: none) against the exact index bytes, for the one publisher the
+ * registry names (`plugins.registries[].publisher`). Only that publisher's
+ * entries in `plugins.trustedPublishers` count: a valid signature by any other
+ * trusted key reads as `unknown_key`. A revoked or expired key of that
+ * publisher reads as `revoked` or `expired`, never valid.
+ */
+export function verifyRegistryIndex(
+  indexBytes: Uint8Array,
+  signatureText: string | null,
+  publisher: string,
+  publishers: readonly TrustedPublisher[],
+  onInvalidKey?: (name: string, reason: string) => void,
+  opts?: KeyTrustOptions,
+): SignatureCheck {
+  if (signatureText === null) return { status: 'unsigned' };
+  let sig: SignatureFile;
+  try {
+    sig = parseSignatureFile(signatureText, `The index signature (${REGISTRY_INDEX_SIGNATURE_SUFFIX})`);
+  } catch (err) {
+    if (err instanceof SignatureError) return { status: 'invalid', reason: err.message };
+    throw err;
+  }
+  const ring = trustedKeys(publishers.filter((p) => p.name === publisher), onInvalidKey, opts);
+  return verifyMessage(registryIndexMessage(indexBytes), sig, ring, 'the registry index');
 }
