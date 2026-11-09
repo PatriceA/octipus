@@ -74,7 +74,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             ) : (
               // Re-keying on navigation gives every page the same quick
               // fade/slide entrance the mobile app uses.
-              <div key={pathname} className="animate-enter">
+              <div key={pathname}>
                 <ModuleGate pathname={pathname}>{children}</ModuleGate>
               </div>
             )}

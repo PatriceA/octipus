@@ -78,6 +78,7 @@ export async function stubSessions(page: Page): Promise<void> {
       context: {},
     });
   });
+  await page.route('**/api/sessions/desk', route => json(route, 200, { observedAt: new Date().toISOString(), sessions: [], total: 0, warnings: [] }));
 }
 
 export async function stubModels(page: Page): Promise<void> {

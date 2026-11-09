@@ -158,6 +158,8 @@ const SPACE_ACTING = [
   // Mission control: the principal's own agents, hooks and spend through its scoped repositories.
   'GET /api/agents/overview (by target)', 'GET /api/agents/triggers (by target)', 'GET /api/agents/roster (by target)', 'GET /api/agents/:id/run (by target)', 'GET /api/agents/pulse (by target)',
   // Context inspector: the session owner only (canActInSession settings), never a room member.
+  // Home returns an empty scoped snapshot in shared workspaces, never personal fallback.
+  'GET /api/sessions/desk',
   'GET /api/sessions/:id/context',
   'GET /api/sessions/:id/execution-environment', 'PUT /api/sessions/:id/execution-environment',
   'GET /api/sessions/:id/plan', 'POST /api/sessions/:id/plan/feedback', 'POST /api/sessions', 'PATCH /api/sessions/:id',

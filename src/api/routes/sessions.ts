@@ -44,6 +44,11 @@ import { EXTERNAL_CHANNELS, loadNotifyScope, resolveTarget } from '@/channels/ow
  */
 export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   .use(apiContext)
+  .get('/desk', async ({ user, principal, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const { readWorkspaceDesk } = await import('@/core/workspace-desk');
+    return readWorkspaceDesk(principal);
+  }, { detail: { tags: ['sessions'] } })
   .get('/:id/execution-environment', async ({ user, principal, params, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
     const session = await contentRepos(principal).sessions.findById(params.id);

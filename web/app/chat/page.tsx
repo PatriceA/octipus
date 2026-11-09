@@ -1629,6 +1629,8 @@ export default function ChatPage() {
   // A companion notification opens its conversation with `?session=`; on an
   // already-open chat page that changes the query without a remount.
   const sessionParam = useSearchParams().get('session');
+  const newSessionParam = useSearchParams().get('new');
+  useEffect(() => { if (mounted && newSessionParam === '1') { setShowNewSessionDialog(true); const params = new URLSearchParams(window.location.search); params.delete('new'); router.replace(`/chat?${params.toString()}`); } }, [mounted, newSessionParam, router]);
   useEffect(() => {
     if (mounted && sessionParam) selectSession(sessionParam);
   // eslint-disable-next-line react-hooks/exhaustive-deps

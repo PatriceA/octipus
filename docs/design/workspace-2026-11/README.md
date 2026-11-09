@@ -1,5 +1,10 @@
 # Workspace, navigation, and settings design studies
 
+The approved Project Desk v2 direction is now implemented in the application.
+See [Project Desk and settings](../../WORKSPACE_DESK.md) for the actual data
+sources, state meanings, settings destinations, and validation. The standalone
+preview below remains illustrative and isolated from live data.
+
 Interactive preview: <http://localhost:3007/design-preview/index.html>.
 Source: `web/public/design-preview/index.html`. All data is illustrative. No API
 requests, agent calls, permission changes, or actual work are performed. The

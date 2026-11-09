@@ -11,14 +11,7 @@ interface StatusBadgeProps {
   className?: string;
 }
 
-/**
- * Terminal-UI status badge — `[ ● label ]` style.
- *
- * Square frame, monospace, single-line border in the variant colour.
- * The dot uses the same colour as the text so the badge reads like a
- * single coloured token rather than a Material-style pill. Pulse is
- * retained for the "live" case (e.g. "3 live agents").
- */
+/** Readable state labels share the workspace palette; a live dot remains optional. */
 const variantStyles: Record<StatusVariant, { wrap: string; dot: string }> = {
   success: {
     wrap: 'border-tertiary/60 text-tertiary bg-tertiary-container/40',
@@ -57,7 +50,7 @@ export function StatusBadge({
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1.5 px-1.5 py-0.5 border rounded-xs text-[10px] uppercase tracking-wider font-mono leading-none',
+        'inline-flex items-center gap-1.5 px-1.5 py-0.5 border rounded-full text-[11px] font-sans leading-tight',
         v.wrap,
         className,
       )}

@@ -212,6 +212,7 @@ test.describe('user: banner and budgets card', () => {
     await expect(banner).toContainText('Ask an admin to raise it.');
     await expect(banner).toContainText('(+1 more paused)');
     await expect(banner.getByRole('button', { name: /dismiss/i })).toHaveCount(0);
+    await page.getByRole('link', { name: 'Usage & budgets', exact: true }).click();
     await expect(page.getByTestId('budgets-card')).toBeVisible();
     await shot(page, 'budget-banner.png');
 
@@ -231,6 +232,7 @@ test.describe('user: banner and budgets card', () => {
     await expect(banner).toHaveAttribute('data-scope', 'role');
     await expect(banner).toContainText('Agents in role "coder" are paused: daily budget of $10.00/day reached ($10.42 spent).');
     await expect(banner).not.toContainText('Agents are paused');
+    await page.getByRole('link', { name: 'Usage & budgets', exact: true }).click();
     await expect(page.getByTestId('budgets-card')).toBeVisible();
     await shot(page, 'budget-banner-role.png');
     await banner.getByRole('button', { name: 'Dismiss budget notice' }).click();
@@ -278,6 +280,7 @@ test.describe('user: banner and budgets card', () => {
     await stubAllDefaults(page);
     await stubMyBudgets(page, []);
     await page.goto('/');
+    await page.getByRole('link', { name: 'Usage & budgets', exact: true }).click();
     await expect(page.getByTestId('budgets-card')).toContainText('No spend budget is set for you');
     await expect(page.getByTestId('spend-budget-banner')).toHaveCount(0);
   });

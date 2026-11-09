@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-639 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
+640 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -510,6 +510,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/sessions/:id/monitors/events` | `src/api/routes/sessions.ts` |
 | GET | `/api/sessions/:id/plan` | `src/api/routes/sessions.ts` |
 | POST | `/api/sessions/:id/plan/feedback` | `src/api/routes/sessions.ts` |
+| GET | `/api/sessions/desk` | `src/api/routes/sessions.ts` |
 | GET | `/api/sessions/stats/active` | `src/api/routes/sessions.ts` |
 | GET | `/api/settings` | `src/api/routes/settings.ts` |
 | GET | `/api/settings/:key` | `src/api/routes/settings.ts` |
@@ -676,7 +677,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 29 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 183 |
+| `api` | `core` | 184 |
 | `api` | `db` | 125 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
@@ -722,19 +723,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 14 |
 | `core` | `config` | 68 |
 | `core` | `connectors` | 4 |
-| `core` | `db` | 484 |
+| `core` | `db` | 485 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 10 |
 | `core` | `models` | 134 |
 | `core` | `modules` | 2 |
-| `core` | `security` | 228 |
+| `core` | `security` | 229 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
-| `core` | `shared` | 61 |
+| `core` | `shared` | 62 |
 | `core` | `skills` | 11 |
 | `core` | `tools` | 34 |
-| `core` | `utils` | 232 |
+| `core` | `utils` | 233 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
 | `db` | `core` | 24 |

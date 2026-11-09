@@ -3,13 +3,15 @@ import { json } from './fixtures/api-stubs';
 import { stubGateway } from './fixtures/gateway';
 
 const sessions = { sessions: [{ id: 'sess-2', title: 'Second chat', channelType: 'web', status: 'active', messageCount: 1, updatedAt: '2026-10-15T10:00:00Z' }] };
+const desk = { observedAt: new Date().toISOString(), total: 1, warnings: [], sessions: [{ id: 'sess-2', title: 'Second chat', state: 'idle', activity: 'No active run is recorded.', outcome: null, next: null, updatedAt: '2026-10-15T10:00:00Z', plan: null, pipelineId: null, events: [] }] };
 
 test('dashboard resumes the selected conversation', async ({ authenticatedPage: page }) => {
   await stubGateway(page);
   await page.route('**/api/sessions?*', route => json(route, 200, sessions));
+  await page.route('**/api/sessions/desk', route => json(route, 200, desk));
   await page.route('**/api/sessions/sess-2/messages**', route => json(route, 200, { messages: [{ id: 'm2', role: 'user', content: 'Continue our launch plan', createdAt: '2026-10-15T10:00:00Z' }] }));
   await page.goto('/');
-  await page.getByRole('link', { name: 'Second chat', exact: true }).click();
+  await page.locator('.desk-session').getByRole('link', { name: 'Open session', exact: true }).click();
   await expect(page).toHaveURL(/\/chat\?session=sess-2$/);
   await expect(page.getByText('Continue our launch plan', { exact: true })).toBeVisible();
   const nav = page.getByRole('navigation', { name: 'Work navigation' });
@@ -23,13 +25,13 @@ test('dashboard resumes the selected conversation', async ({ authenticatedPage: 
 test('dashboard distinguishes failed loading from an empty history and can retry', async ({ authenticatedPage: page }) => {
   await stubGateway(page);
   let failed = true;
-  await page.route('**/api/sessions?*', route => json(route, failed ? 400 : 200, failed ? { error: 'Unavailable' } : sessions));
+  await page.route('**/api/sessions/desk', route => json(route, failed ? 400 : 200, failed ? { error: 'Unavailable' } : desk));
   await page.goto('/');
-  await expect(page.getByText('Could not load recent conversations.')).toBeVisible();
+  await expect(page.getByText('Workspace status is unavailable.')).toBeVisible();
   await expect(page.getByText('Your conversations will appear here.')).toHaveCount(0);
   failed = false;
-  await page.getByRole('button', { name: 'Try again', exact: true }).click();
-  await expect(page.getByRole('link', { name: 'Second chat', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Retry', exact: true }).click();
+  await expect(page.locator('.desk-session').getByRole('link', { name: 'Open session', exact: true })).toBeVisible();
 });
 
 test('research returns to the same report after navigation and reload without starting again', async ({ authenticatedPage: page }) => {

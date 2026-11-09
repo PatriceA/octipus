@@ -6,11 +6,12 @@ const at = (m: number) => new Date(2026, 10, 8, 10, m).toISOString();
 test('the sidebar shows runs working now and approvals waiting on Mission control', async ({ authenticatedPage: page }) => {
   await page.route('**/api/agents/pulse', (route) => json(route, 200, { live: 3, pendingApprovals: 2 }));
   await page.goto('/agents');
+  await page.locator('aside summary', { hasText: 'Automation' }).click();
   await expect(page.getByTestId('nav-live-agents')).toHaveText('3');
   await expect(page.getByTestId('nav-live-agents')).toHaveAttribute('aria-label', '3 working now');
   await expect(page.getByTestId('nav-needs-you')).toHaveText('2');
   // Folded, the Agents heading still says so.
-  const heading = page.locator('summary', { hasText: 'Agents' });
+  const heading = page.locator('summary', { hasText: 'Automation' });
   await heading.click();
   await expect(heading.getByLabel('3 working now')).toBeVisible();
   await expect(heading.getByLabel('2 waiting on you')).toBeVisible();
@@ -19,6 +20,7 @@ test('the sidebar shows runs working now and approvals waiting on Mission contro
 test('nothing running and nothing waiting shows no counter', async ({ authenticatedPage: page }) => {
   await page.route('**/api/agents/pulse', (route) => json(route, 200, { live: 0, pendingApprovals: 0 }));
   await page.goto('/agents');
+  await page.locator('aside summary', { hasText: 'Automation' }).click();
   await expect(page.getByRole('link', { name: /mission control/ })).toBeVisible();
   await expect(page.getByTestId('nav-live-agents')).toHaveCount(0);
   await expect(page.getByTestId('nav-needs-you')).toHaveCount(0);

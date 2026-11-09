@@ -30,20 +30,14 @@ interface WorkspaceConfig {
   additionalPaths?: string[];
 }
 
-export function IntegrationsTab() {
+export function IntegrationsTab({ foldersOnly = false }: { foldersOnly?: boolean }) {
   // The CLI integration status reads the install's tool inventory (admin-only).
   const isAdmin = !!useAuth().user?.isAdmin;
+  if (foldersOnly) return <WorkspaceSection isAdmin={isAdmin} />;
   return (
     <div className="space-y-8">
       <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">Integrations</h2>
-      <WorkspaceSection isAdmin={isAdmin} />
-      <hr className="border-outline-variant/10" />
-      {isAdmin && (
-        <>
-          <CLIIntegrationsSection />
-          <hr className="border-outline-variant/10" />
-        </>
-      )}
+      <p className="text-sm text-on-surface-variant">Program and login access lives in <a className="text-primary underline" href="/settings?tab=environments">Environments & Access</a>. Project directories live in <a className="text-primary underline" href="/settings?tab=folders">Workspace folders</a>.</p>
       <OAuthIntegrationsSection />
       <hr className="border-outline-variant/10" />
       <IntegrationSettingsSection />
@@ -190,7 +184,7 @@ function WorkspaceSection({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
-function CLIIntegrationsSection() {
+export function CLIIntegrationsSection() {
   const { data: ghStatus, isLoading: ghLoading, refetch: refetchGh } = useQuery({
     queryKey: ['github-status'],
     queryFn: async () => {

@@ -135,7 +135,8 @@ test('My work lists my open tasks grouped by space', async ({ authenticatedPage:
   await expect(launch.getByTestId('my-work-task').first()).toContainText('Ship release notes');
   await expect(launch.getByTestId('my-work-task').first()).toContainText('high');
   await expect(page.getByRole('region', { name: 'Personal' })).toContainText('Renew passport');
-  await expect(page.getByRole('link', { name: 'my work' })).toBeVisible();
+  await page.locator('aside summary').filter({ hasText: /^Library$/ }).click();
+  await expect(page.getByRole('link', { name: 'Outputs', exact: true })).toBeVisible();
   expectNoConsoleErrors(consoleErrors);
 });
 
