@@ -72,8 +72,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {fullBleed ? (
               <ModuleGate pathname={pathname}>{children}</ModuleGate>
             ) : (
-              // Re-keying on navigation gives every page the same quick
-              // fade/slide entrance the mobile app uses.
+              // Reset page-local state on navigation; the shared menu retains its state.
               <div key={pathname}>
                 <ModuleGate pathname={pathname}>{children}</ModuleGate>
               </div>

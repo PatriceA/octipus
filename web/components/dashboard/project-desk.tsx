@@ -40,9 +40,9 @@ function Desk({ personal, workspaceName }: { personal: boolean; workspaceName: s
   const [mobileDetails, setMobileDetails] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
   const opener = useRef<HTMLButtonElement | null>(null);
-  const snapshot = useQuery({ queryKey: ['workspace-desk', activeWorkspace?.id], queryFn: async () => workspaceDeskSchema.parse(await api.get('/sessions/desk')), enabled: personal, retry: false, refetchInterval: 30_000, staleTime: 15_000 });
+  const snapshot = useQuery({ queryKey: ['workspace-desk', activeWorkspace?.id], queryFn: async () => workspaceDeskSchema.parse(await api.get('/sessions/desk')), enabled: personal, retry: false, refetchInterval: 30_000, staleTime: 90_000, refetchOnMount: 'always' });
   const companionId = companion.data?.supervisorSessionId;
-  const stale = snapshot.isError || !!snapshot.data && Date.now() - Date.parse(snapshot.data.observedAt) > 90_000;
+  const stale = snapshot.isError || snapshot.isStale;
   const sessions = (snapshot.data?.sessions ?? []).filter(session => session.id !== companionId).map(session => stale ? { ...session, state: 'unknown' as const, activity: `Saved snapshot: ${session.activity}` } : session);
   const shown = sessions.filter(session => filter === 'all' || session.state === filter);
   const visible = shown.slice(0, 4);
