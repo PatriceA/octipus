@@ -8,6 +8,7 @@ const row = (id: string, title: string, state: DeskSession['state']): DeskSessio
 const snapshot: WorkspaceDesk = { observedAt: new Date().toISOString(), total: 3, warnings: [], sessions: [row('sess-1', 'Life2', 'working'), row('sess-2', 'Solar Map', 'needs_you'), row('old', 'Earlier work', 'paused')] };
 test.beforeEach(async ({ authenticatedPage: page }) => {
   await page.route('**/api/sessions/desk', route => json(route, 200, snapshot));
+  await page.route('**/api/settings/execution-environments', route => json(route, 200, { environments: [], credentials: [], userId: 'test', machine: 'workstation', account: 'owner', legacy: { sandbox: 'required' } }));
   await page.route('**/api/companion/settings', route => json(route, 200, { enabled: true, supervisorSessionId: 'companion-saved', modelName: 'configured' }));
 });
 test('desk shows state, evidence and plan changes without percentages; drafts survive selection/filtering', async ({ authenticatedPage: page }) => {
@@ -61,6 +62,10 @@ test('settings search finds the canonical CLI destination and back navigation re
   await expect(page).toHaveURL(/tab=environments/);
   await page.goBack();
   await expect(page.getByRole('searchbox', { name: 'Find a setting' })).toBeVisible();
+  await page.getByRole('button', { name: 'Environments & Access', exact: true }).click();
+  await page.getByRole('button', { name: 'All settings', exact: true }).click();
+  await expect(page.locator('.settings-group')).toHaveCount(6);
+  await expect(page.getByRole('searchbox', { name: 'Find a setting' })).toHaveValue('');
 });
 test('navigation groups and width stay as the user set them across page changes and reload', async ({ authenticatedPage: page }) => {
   await page.goto('/');
