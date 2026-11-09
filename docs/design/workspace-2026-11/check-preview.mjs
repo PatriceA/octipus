@@ -17,8 +17,22 @@ try {
     await screenshot(`0${index + 1}-overview.png`);
   }
   await page.locator('[data-project-tab="ready"]').click();
-  assert.equal(await page.locator('.project-detail').count(), 1);
+  assert.equal(await page.locator('.work-entry').count(), 1);
+  assert.equal(await page.locator('.progress-track,[role=progressbar]').count(), 0);
   await page.getByRole('heading', { name: 'Dev: yetano', exact: true }).waitFor();
+  await page.getByLabel('Message Companion', { exact: true }).fill('Keep this idea while I inspect work');
+  await page.locator('[data-project-tab="all"]').click();
+  assert.ok(await page.locator('[data-project-tab="all"]').evaluate(element => element === document.activeElement));
+  assert.equal(await page.getByLabel('Message Companion', { exact: true }).inputValue(), 'Keep this idea while I inspect work');
+  await page.locator('[data-select-project="1"]').click();
+  assert.ok(await page.locator('[data-select-project="1"]').evaluate(element => element === document.activeElement));
+  assert.equal(await page.getByLabel('Message Companion', { exact: true }).inputValue(), 'Keep this idea while I inspect work');
+  await page.locator('.work-inspector').getByRole('heading', { name: 'Solar System Map', exact: true }).waitFor();
+  await page.locator('[data-select-project="0"]').click();
+  await page.getByRole('button', { name: 'View current plan', exact: false }).click();
+  await page.getByRole('heading', { name: 'The current plan', exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  await page.getByLabel('Message Companion', { exact: true }).fill('');
   await page.locator('[data-direction="a"]').click();
   await page.locator('.nav-item[data-view="settings"]').click();
   await screenshot('04-settings.png');
@@ -52,6 +66,11 @@ try {
     await page.locator(`[data-direction="${direction}"]`).click();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `Mobile overflow in ${direction}`);
   }
+  await screenshot('07-mobile-desk.png');
+  await page.locator('[data-select-project="0"]').click();
+  await page.getByRole('dialog').getByRole('heading', { name: 'Life²', exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  assert.ok(await page.locator('[data-select-project="0"]').evaluate(element => element === document.activeElement));
   await page.getByLabel('Search settings', { exact: true }).waitFor();
   await page.getByLabel('Open navigation', { exact: true }).click();
   await page.locator('.nav-item[data-view="settings"]').click();

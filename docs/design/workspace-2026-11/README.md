@@ -9,9 +9,40 @@ preview is a standalone public page, separate from the application routes.
 
 | Direction | Lead experience | Strength | Tradeoff |
 | --- | --- | --- | --- |
-| 01 · Calm workspace | Companion and one decision, followed by current sessions | Familiar, balanced entry point; my recommendation | Some supporting information remains below the fold |
+| 01 · Calm workspace | Companion and one decision, followed by current sessions | Familiar, balanced entry point | Some supporting information remains below the fold |
 | 02 · Companion first | A short cross-project briefing and message composer | Makes the coordinator the natural front door | Relies on a reliable, fresh, evidence-backed Companion summary |
-| 03 · Project desk | Project state and next steps, with Companion alongside | Strong for several ongoing projects | Milestone progress requires a meaningful plan denominator; omit it otherwise |
+| 03 · Project desk · v2 — selected direction | Observable session states, current activity, verified outcomes, and next steps | Working application feel with a persistent Companion and session inspector | Requires fresh, evidence-backed status; no inferred completion percentage |
+
+The second iteration follows owner feedback: Project Desk is the preferred base,
+the initial versions felt too much like websites, and plan percentages are
+misleading when the scope changes. Project Desk v2 removes the large welcome
+copy, metric tiles, and all progress bars. The menu now has a clear filled
+selection, a distinct Companion entry, and an amber decision count. A compact
+supervision strip and message bar keep Companion present while work stays central.
+
+Each session shows **state → current activity → latest verified outcome → next
+step**. The adjacent inspector shows timestamped changes and scope notes. An
+expanded plan is reported as a change, never as a drop in completion. “Ready”
+describes an available result, not completion of the entire project. The preview
+filters sessions by explicit state, not a numeric percentage.
+
+On phones the list stays compact, selecting a session opens its inspector in a
+dialog, and the Companion message bar stays at the bottom. Composer drafts and
+keyboard focus survive changing the selected session or filter.
+
+Work-state rules for implementation:
+
+- **Working:** name the observed activity and when it was last observed.
+- **Needs you:** give a concrete decision, with an action to resolve it.
+- **Blocked:** identify a technical dependency; do not turn it into consent by default.
+- **Paused by you:** preserve the deliberate pause; do not imply Companion will resume it.
+- **Ready to read:** an output is available; the whole project may still continue.
+- **Unknown / stale:** the status could not be confirmed; never infer “working” or “done”.
+
+The current example contains the first, second, and fifth states. A concrete,
+bounded operation such as a file transfer may have its own progress indicator;
+that must not be presented as the project's overall completion. Plan changes
+should say what was added or changed, with access to the current plan.
 
 These are layout alternatives, not three themes for the same layout. Dark mode
 and light mode should ultimately be available independently of the chosen layout.
