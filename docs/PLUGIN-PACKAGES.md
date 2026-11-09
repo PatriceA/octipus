@@ -613,7 +613,11 @@ tarball, signed by a trusted publisher ([Remote install](#remote-install)).
    first. The response has `signedBy` and any `warnings`.
 2. **Configure:** `PATCH /api/plugin-packages/:name { "settings": {...} }`, and
    `PUT /api/plugin-packages/:name/secrets/:key { "value": "..." }` for each
-   secret (`null` removes it). Secret values are never returned.
+   secret (`null` removes it). Secret values are never returned. On the web
+   page, **configure** on a package's row shows its settings as a form typed
+   by the manifest's fields and each secret as set or not set, with a
+   write-only field to set or replace it and Clear; or `octi plugin set` and
+   `octi plugin secret` ([From the command line](#from-the-command-line)).
 3. **Enable:** `PATCH /api/plugin-packages/:name { "enabled": true }`. Refused
    while a required setting or secret has no value; settings and `enabled` in
    one PATCH are saved together or not at all. A required secret of an enabled
@@ -630,7 +634,8 @@ tarball, signed by a trusted publisher ([Remote install](#remote-install)).
    ([Content pinning](#content-pinning)), or "Approve this content" on the
    web page, or `octi plugin approve <name> [--hash sha256:<hex>]`.
 6. **Uninstall:** `DELETE /api/plugin-packages/:name` removes the server, the
-   files, the data directory, the row and the secrets.
+   files, the data directory, the row and the secrets (**uninstall** on the
+   web page, after a confirmation, or `octi plugin uninstall <name>`).
 
 `GET /api/plugin-packages` lists installed packages with their manifest,
 settings, which secrets are set, whether the server is connected, why it is
@@ -676,9 +681,6 @@ Every change is in the audit log (`resource_type = plugin_package`).
   indexes](#signed-registry-indexes)).
 - Online revocation: a revoked key is revoked on a host only when that host's
   config says so (`revoked`, `revokedKeys`, `notAfter`).
-- Settings, secrets and uninstall on the web page: it shows packages,
-  enables and disables them, installs and approves content; the rest is the
-  API.
 - Network enforcement on Windows: the egress proxy is advisory there (no
   built-in runner; see [Network](#network)).
 - In a shared space, plugin tools follow the rules of personal connections

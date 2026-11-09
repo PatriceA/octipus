@@ -95,6 +95,123 @@ test.describe('plugin packages', () => {
     expect(patches).toEqual([{ approveContent: ACTUAL }, { approveContent: ACTUAL }]);
   });
 
+  test('settings are edited by the manifest fields, secrets are write-only, and uninstall asks first', async ({ authenticatedPage: page }) => {
+    const manifest = {
+      ...pkg({}).manifest,
+      settings: [
+        { key: 'region', label: 'Region', type: 'select', options: ['eu', 'us'], required: true },
+        { key: 'limit', label: 'Page size', type: 'number' },
+        { key: 'sandbox', label: 'Use the sandbox API', type: 'boolean' },
+      ],
+      secrets: [
+        { key: 'FINAPI_CLIENT_ID', label: 'Client id', required: true },
+        { key: 'FINAPI_CLIENT_SECRET', label: 'Client secret', required: true, help: 'From the finAPI console' },
+      ],
+    };
+    let packages = [pkg({ manifest, settings: { region: 'eu', limit: 50 }, secretsSet: ['FINAPI_CLIENT_ID'] })];
+    const writes: Array<{ method: string; url: string; body: unknown }> = [];
+    let refuseSettings = true;
+    let refuseDelete = true;
+    await stubAllDefaults(page);
+    await page.route(/\/api\/plugin-packages(\/.*)?$/, async (route: Route) => {
+      const req = route.request();
+      const path = new URL(req.url()).pathname;
+      if (req.method() === 'GET') return json(route, 200, packages);
+      const body = req.postData() ? req.postDataJSON() : undefined;
+      writes.push({ method: req.method(), url: path, body });
+      if (req.method() === 'PATCH') {
+        if (refuseSettings) {
+          refuseSettings = false;
+          return json(route, 400, { error: 'The settings do not fit the package', problems: ['Page size: must be a number'] });
+        }
+        const settings = { ...(body as { settings: Record<string, unknown> }).settings };
+        for (const [k, v] of Object.entries(settings)) if (v === null) delete settings[k];
+        packages = [{ ...packages[0], settings: settings as Record<string, string> }];
+        return json(route, 200, packages[0]);
+      }
+      if (req.method() === 'PUT') {
+        const key = decodeURIComponent(path.split('/').pop() as string);
+        const { value } = body as { value: string | null };
+        const set = new Set(packages[0].secretsSet as string[]);
+        if (value === null) set.delete(key);
+        else set.add(key);
+        packages = [{ ...packages[0], secretsSet: [...set] }];
+        return json(route, 200, { saved: true });
+      }
+      if (req.method() === 'DELETE') {
+        if (refuseDelete) {
+          refuseDelete = false;
+          return json(route, 500, { error: 'The plugin package could not be changed' });
+        }
+        packages = [];
+        return json(route, 200, { uninstalled: true });
+      }
+      return json(route, 404, { error: 'unexpected' });
+    });
+
+    await page.goto('/admin/plugins');
+    const finapi = page.locator('[data-testid="plugin-package"][data-name="finapi"]');
+    await finapi.getByRole('button', { name: 'Configure finapi' }).click();
+    const config = finapi.getByRole('group', { name: 'Configure finapi' });
+
+    // Settings, typed by the manifest: a select, a number and a checkbox, filled with what is stored.
+    const settings = config.getByRole('form', { name: 'Settings of finapi' });
+    await expect(settings.getByLabel('Region *')).toHaveValue('eu');
+    await expect(settings.getByLabel('Page size')).toHaveValue('50');
+    await expect(settings.getByLabel('Use the sandbox API')).not.toBeChecked();
+    await settings.getByLabel('Region *').selectOption('us');
+    await settings.getByLabel('Page size').fill('');
+    await settings.getByLabel('Use the sandbox API').check();
+    // The first save is refused: every problem the API gives is shown.
+    await settings.getByRole('button', { name: 'Save settings' }).click();
+    await expect(settings.getByRole('alert')).toHaveText('! Page size: must be a number');
+    await settings.getByRole('button', { name: 'Save settings' }).click();
+    await expect(settings.getByRole('status')).toHaveText('Settings saved.');
+    expect(writes.filter((w) => w.method === 'PATCH').map((w) => w.body)).toEqual([
+      { settings: { region: 'us', limit: null, sandbox: true } },
+      { settings: { region: 'us', limit: null, sandbox: true } },
+    ]);
+
+    // Secrets: set or not, never a value; the field is write-only and empties once saved.
+    const id = config.locator('[data-testid="plugin-secret"][data-key="FINAPI_CLIENT_ID"]');
+    const secret = config.locator('[data-testid="plugin-secret"][data-key="FINAPI_CLIENT_SECRET"]');
+    await expect(id.getByTestId('plugin-secret-state')).toHaveText('set');
+    await expect(secret.getByTestId('plugin-secret-state')).toHaveText('not set');
+    await expect(secret.getByLabel(/Client secret/)).toHaveAttribute('type', 'password');
+    await expect(id.getByLabel(/Client id/)).toHaveValue('');
+    await expect(secret.getByRole('button', { name: 'Clear' })).toHaveCount(0);
+    await secret.getByLabel(/Client secret/).fill('s3cr3t');
+    await secret.getByRole('button', { name: 'Set' }).click();
+    await expect(secret.getByRole('status')).toHaveText('Client secret saved.');
+    await expect(secret.getByTestId('plugin-secret-state')).toHaveText('set');
+    await expect(secret.getByLabel(/Client secret/)).toHaveValue('');
+    await expect(page.getByText('s3cr3t')).toHaveCount(0);
+    // Clearing asks first.
+    page.once('dialog', (d) => d.accept());
+    await id.getByRole('button', { name: 'Clear' }).click();
+    await expect(id.getByTestId('plugin-secret-state')).toHaveText('not set');
+    expect(writes.filter((w) => w.method === 'PUT')).toEqual([
+      { method: 'PUT', url: '/api/plugin-packages/finapi/secrets/FINAPI_CLIENT_SECRET', body: { value: 's3cr3t' } },
+      { method: 'PUT', url: '/api/plugin-packages/finapi/secrets/FINAPI_CLIENT_ID', body: { value: null } },
+    ]);
+    if (SHOTS) await page.screenshot({ path: `${SHOTS}/admin-plugin-configure.png`, fullPage: true });
+
+    // Uninstall: dismissing the confirmation sends nothing; a refusal is shown; then it goes.
+    page.once('dialog', (d) => d.dismiss());
+    await finapi.getByRole('button', { name: 'Uninstall finapi' }).click();
+    expect(writes.filter((w) => w.method === 'DELETE')).toEqual([]);
+    page.once('dialog', (d) => { expect(d.message()).toContain('Uninstall finapi?'); void d.accept(); });
+    await finapi.getByRole('button', { name: 'Uninstall finapi' }).click();
+    await expect(finapi.getByRole('alert').last()).toHaveText('! The plugin package could not be changed');
+    page.once('dialog', (d) => d.accept());
+    await finapi.getByRole('button', { name: 'Uninstall finapi' }).click();
+    await expect(page.getByText('no plugin packages installed')).toBeVisible();
+    expect(writes.filter((w) => w.method === 'DELETE')).toEqual([
+      { method: 'DELETE', url: '/api/plugin-packages/finapi', body: undefined },
+      { method: 'DELETE', url: '/api/plugin-packages/finapi', body: undefined },
+    ]);
+  });
+
   test('browse lists the registries and installs a package with its URL and sha256', async ({ authenticatedPage: page }) => {
     const posts: unknown[] = [];
     const sha = `sha256:${'f'.repeat(64)}`;
