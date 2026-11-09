@@ -125,7 +125,13 @@ it. If the note is absent, the heartbeat still runs on the probe findings alone.
 
 ## Enabling
 
-**Globally** (operator) — set in DB settings, or use these environment values before first-boot migration:
+**In the app** — use **Settings → Heartbeat** for personal and role heartbeat controls.
+An admin’s enable action also activates the server service, so a saved on choice
+is not blocked by a second configuration switch. Non-admins cannot override an
+operator-paused server; owners can still turn off their saved preferences while
+checks are paused. The roster and task board report status and link to Settings.
+
+**Operator bootstrap** — DB settings or these environment values before first-boot migration:
 
 ```
 HEARTBEAT_ENABLED=true

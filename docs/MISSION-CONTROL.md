@@ -124,6 +124,10 @@ is *not found*.
 
 ## Roster
 
+Heartbeat controls live in **Settings → Heartbeat**. The roster and task board
+show status and link there; the Octipus card reports the same personal heartbeat
+as Settings, while other roles report their assigned-work heartbeats.
+
 **Agents → Roster** (`/agents/roster`, `GET /api/agents/roster`) shows every
 role as an agent the user manages: the root agent (Octipus, which answers chat)
 and each specialist role, including a role only seen on older to-dos or hooks
@@ -132,8 +136,7 @@ and each specialist role, including a role only seen on older to-dos or hooks
 - what it is for (the role's description), its lane, tool groups and whether it
   is read-only;
 - how it starts — delegated to from chat or a pipeline, and its **heartbeat**
-  switch (the same toggle as the to-do board's role-agents panel, `PUT
-  /api/tasks/role-agents`), with its check interval, next check and the latest
+  status, with its check interval, next check and the latest
   decision from `heartbeat_checks`;
 - its assigned to-dos (open of total), flagged *waiting* when its heartbeat is
   off;

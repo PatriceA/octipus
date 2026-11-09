@@ -24,6 +24,7 @@ test.describe('heartbeat settings', () => {
       if (req.method() === 'PUT') {
         const body = req.postDataJSON() as Record<string, unknown>;
         puts.push(body);
+        if (body.enabled === true) (me.server as { enabled: boolean }).enabled = true;
         Object.assign(me, body, body.watchEmail ? { watchEmailSince: '2026-10-22T08:00:00Z' } : {});
       }
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(me) });
@@ -45,6 +46,30 @@ test.describe('heartbeat settings', () => {
     expect(puts).toEqual([{ enabled: true }, { intervalMinutes: 15 }, { watchEmail: true }]);
     await expect(card).toContainText('checked every 15 minutes');
     await expect(card).toContainText('Watching mail received since');
+  });
+
+  test('one heartbeat setting activates an admin’s saved preference and its server prerequisite', async ({ authenticatedPage: page }) => {
+    Object.assign(me, { enabled: true, server: { ...(me.server as object), enabled: false } });
+    await page.goto('/settings?tab=heartbeat');
+    const card = page.getByTestId('heartbeat-settings');
+    await expect(card.getByLabel('Run my heartbeat')).not.toBeChecked();
+    await card.getByLabel('Run my heartbeat').click();
+    await expect.poll(() => puts).toEqual([{ enabled: true }]);
+    await expect(card.getByLabel('Run my heartbeat')).toBeChecked();
+    await expect(card).not.toContainText('switched off on this server');
+    await expect(card.getByRole('button', { name: 'Enable heartbeat on this server' })).toHaveCount(0);
+  });
+
+  test('a member can revoke a saved personal heartbeat while the server is paused', async ({ authenticatedPage: page }) => {
+    Object.assign(me, { enabled: true, server: { ...(me.server as object), enabled: false } });
+    await page.route('**/api/auth/me', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'e2e-user-id', username: 'member', isAdmin: false }) }));
+    await page.goto('/settings?tab=heartbeat');
+    const card = page.getByTestId('heartbeat-settings');
+    await expect(card.getByLabel('Run my heartbeat')).toBeDisabled();
+    await card.getByRole('button', { name: 'Turn off saved personal heartbeat' }).click();
+    await expect.poll(() => puts).toEqual([{ enabled: false }]);
+    await expect(card.getByRole('button', { name: 'Turn off saved personal heartbeat' })).toHaveCount(0);
+    expect((me.server as { enabled: boolean }).enabled).toBe(false);
   });
 
   test('says why nothing runs, and what the agent did with recent mail', async ({ authenticatedPage: page }) => {

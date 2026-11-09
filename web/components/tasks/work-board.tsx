@@ -2,6 +2,7 @@
 
 import { Bot, ChevronDown, ChevronRight, Lock, LockOpen, MessageSquare, RefreshCw, Send, UserRound, Users } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useAuth } from '@/lib/auth-context';
 import { api } from '@/lib/api';
 import { TASK_CHECKOUT_TTL_MS } from '../../../src/core/tasks/checkout';
 import type { TaskAssigneeKind } from '../../../src/core/tasks/status';
@@ -403,7 +404,8 @@ interface RoleAgentRow {
  * the notice says (and links to) when it is not. `refreshKey` re-reads it
  * when the task list changes, so a newly assigned role shows up.
  */
-export function RoleAgentsPanel({ refreshKey }: { refreshKey: string }) {
+export function RoleAgentsPanel({ refreshKey, controls = false, onChanged }: { refreshKey: string; controls?: boolean; onChanged?: () => Promise<void> }) {
+  const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<RoleAgentsData | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -426,11 +428,11 @@ export function RoleAgentsPanel({ refreshKey }: { refreshKey: string }) {
 
   // The pipeline templates a role agent can run its tasks through, read when the panel opens.
   useEffect(() => {
-    if (!open) return;
+    if (!open || !controls) return;
     api.get<{ templates?: { id: string; name: string }[] }>('/pipelines/templates')
       .then((res) => setTemplates((res.templates ?? []).map((t) => ({ id: t.id, name: t.name }))))
       .catch(() => setTemplates([]));
-  }, [open]);
+  }, [open, controls]);
 
   const chooseTemplate = async (row: RoleAgentRow, pipelineTemplate: string | null) => {
     setBusy(row.role);
@@ -438,6 +440,7 @@ export function RoleAgentsPanel({ refreshKey }: { refreshKey: string }) {
       const res = await api.put<{ error?: string }>('/tasks/role-agents', { role: row.role, enabled: true, pipelineTemplate });
       if (res?.error) setError(res.error);
       await load();
+      await onChanged?.();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -445,11 +448,12 @@ export function RoleAgentsPanel({ refreshKey }: { refreshKey: string }) {
     }
   };
 
-  const toggle = async (row: RoleAgentRow) => {
+  const toggle = async (row: RoleAgentRow, enabled = !(row.enabled && data?.heartbeatEnabled !== false)) => {
     setBusy(row.role);
     try {
-      await api.put('/tasks/role-agents', { role: row.role, enabled: !row.enabled });
+      await api.put('/tasks/role-agents', { role: row.role, enabled });
       await load();
+      await onChanged?.();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -459,8 +463,9 @@ export function RoleAgentsPanel({ refreshKey }: { refreshKey: string }) {
 
   // Roles with work on the board, plus any whose agent is on (so it can be turned off).
   const rows = (data?.roles ?? []).filter((r) => r.activeTasks > 0 || r.enabled);
-  if (!data || rows.length === 0) return error ? <p className="text-xs text-error">{error}</p> : null;
-  const running = rows.filter((r) => r.enabled).length;
+  if (!data) return error ? <p className="text-xs text-error">{error}</p> : null;
+  if (!rows.length) return controls ? <p className="text-sm text-on-surface-variant">No roles have assigned to-dos yet. Assign a to-do to a role on the tasks page, then configure its heartbeat here.</p> : null;
+  const running = rows.filter((r) => r.enabled && data.heartbeatEnabled !== false).length;
   const heartbeatOff = data.heartbeatEnabled === false;
 
   return (
@@ -490,9 +495,7 @@ export function RoleAgentsPanel({ refreshKey }: { refreshKey: string }) {
           </p>
           {heartbeatOff && (
             <div role="note" data-testid="role-agents-heartbeat-off" className="bg-error/10 border border-error/20 rounded-xs px-3 py-2 text-xs text-on-surface">
-              Heartbeat is disabled on this server; role agents won&apos;t run. An admin can turn it on with the{' '}
-              <span className="font-mono">heartbeat.enabled</span> setting on the{' '}
-              <a href="/settings" className="underline text-primary">settings page</a> (or the <span className="font-mono">HEARTBEAT_ENABLED</span> environment variable).
+              Heartbeat is disabled on this server; role agents won&apos;t run. Manage heartbeat in the <a href="/settings?tab=heartbeat" className="underline text-primary">settings page</a>.
             </div>
           )}
           {!data.boardWritesAllowed && (
@@ -503,6 +506,7 @@ export function RoleAgentsPanel({ refreshKey }: { refreshKey: string }) {
               <a href="/permissions" className="underline text-primary">permissions</a>.
             </div>
           )}
+          {!controls && <a href="/settings?tab=heartbeat" className="text-xs text-primary underline">Manage heartbeat in Settings</a>}
           {error && <p className="text-xs text-error">{error}</p>}
           <ul className="space-y-1">
             {rows.map((r) => (
@@ -514,18 +518,19 @@ export function RoleAgentsPanel({ refreshKey }: { refreshKey: string }) {
                   {!r.known && ' · unknown role'}
                 </span>
                 <span className="flex-1" />
-                <button
+                {controls ? <button
                   type="button"
                   role="switch"
-                  aria-checked={r.enabled}
+                  aria-checked={r.enabled && !heartbeatOff}
                   aria-label={`${r.role} agent`}
-                  disabled={busy === r.role || (!r.known && !r.enabled)}
+                  disabled={busy === r.role || (!r.known && !r.enabled) || (heartbeatOff && !user?.isAdmin)}
                   onClick={() => toggle(r)}
-                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-40 ${r.enabled ? 'bg-primary' : 'bg-[#484847]'}`}
+                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-40 ${r.enabled && !heartbeatOff ? 'bg-primary' : 'bg-[#484847]'}`}
                 >
-                  <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-on-surface transition-transform ${r.enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
-                </button>
-                {r.enabled && r.pipelineTemplate !== undefined && (
+                  <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-on-surface transition-transform ${r.enabled && !heartbeatOff ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                </button> : <span className="text-xs text-on-surface-variant">{r.enabled ? heartbeatOff ? 'Paused on server' : 'On' : 'Off'}</span>}
+                {controls && heartbeatOff && r.enabled && <button type="button" disabled={busy === r.role} onClick={() => void toggle(r, false)} className="text-xs text-primary underline" aria-label={`Turn off saved heartbeat for ${r.role}`}>Turn off saved preference</button>}
+                {controls && r.enabled && !heartbeatOff && r.pipelineTemplate !== undefined && (
                   <label className="basis-full flex items-center gap-2 pl-6 text-xs text-on-surface-variant">
                     Works each task
                     <select

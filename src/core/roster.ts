@@ -25,7 +25,11 @@ export async function readRoster(principal: Principal, userId: string, now = new
     scopedRepos(principal).hooks.listOwn(),
   ]);
   const hookById = new Map(hooks.map((h) => [h.id, h]));
-  const checks = await scopedRepos(principal).hooks.heartbeatChecksSince(view.roles.map((r) => r.hookId).filter((id): id is string => !!id), since);
+  // The settings card controls the owner's plain heartbeat, not a role-task heartbeat.
+  const personal = hooks.filter(h => h.trigger === 'heartbeat' && h.triggerConfig?.role == null)
+    .sort((a, b) => Number(b.isEnabled) - Number(a.isEnabled) || (a.createdAt?.getTime() ?? 0) - (b.createdAt?.getTime() ?? 0))[0];
+  const checkIds = [...new Set([...view.roles.map(r => r.hookId), personal?.id].filter((id): id is string => !!id))];
+  const checks = await scopedRepos(principal).hooks.heartbeatChecksSince(checkIds, since);
   const lastCheck = new Map<string, (typeof checks)[number]>();
   for (const c of checks) lastCheck.set(c.hookId, c);
 
@@ -33,8 +37,9 @@ export async function readRoster(principal: Principal, userId: string, now = new
   const roles: RosterRole[] = [...names].map((role) => {
     const config = ROLE_CONFIGS[role as keyof typeof ROLE_CONFIGS];
     const agent = view.roles.find((r) => r.role === role);
-    const hook = agent?.hookId ? hookById.get(agent.hookId) : undefined;
-    const check = agent?.hookId ? lastCheck.get(agent.hookId) : undefined;
+    const hook = role === ROOT_ROLE ? personal : agent?.hookId ? hookById.get(agent.hookId) : undefined;
+    const enabled = role === ROOT_ROLE ? personal?.isEnabled ?? false : agent?.enabled ?? false;
+    const check = hook ? lastCheck.get(hook.id) : undefined;
     const interval = (hook?.triggerConfig as { intervalMinutes?: unknown } | undefined)?.intervalMinutes;
     const own = runs.filter((r) => r.role === role);
     const latest = own[0];
@@ -48,9 +53,9 @@ export async function readRoster(principal: Principal, userId: string, now = new
       readOnly: config?.readOnly === true,
       known: !!config,
       heartbeat: {
-        enabled: agent?.enabled ?? false,
-        hookId: agent?.hookId ?? null,
-        nextCheckAt: agent?.enabled && hook?.nextRunAt ? hook.nextRunAt.toISOString() : null,
+        enabled,
+        hookId: hook?.id ?? null,
+        nextCheckAt: enabled && hook?.nextRunAt ? hook.nextRunAt.toISOString() : null,
         intervalMinutes: typeof interval === 'number' ? interval : null,
         lastCheck: check ? { at: check.checkedAt.toISOString(), ran: check.ran, reason: check.reason } : null,
       },

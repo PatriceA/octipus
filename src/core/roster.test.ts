@@ -23,8 +23,12 @@ vi.mock('@/db/repositories/content', () => ({ contentRepos: () => ({ agents: { l
   { id: 'w1', role: 'writing', status: 'completed', createdAt: at('08:40'), sessionTitle: 'Reply draft', origin: { source: 'heartbeat' } },
 ] } }) }));
 vi.mock('@/db/repositories/scoped', () => ({ scopedRepos: () => ({ hooks: {
-  listOwn: async () => [{ id: 'hb-w', nextRunAt: at('10:40'), triggerConfig: { role: 'writing', intervalMinutes: 60 } }],
+  listOwn: async () => [
+    { id: 'personal', trigger: 'heartbeat', isEnabled: true, nextRunAt: at('10:15'), triggerConfig: { intervalMinutes: 15 } },
+    { id: 'hb-w', trigger: 'heartbeat', isEnabled: true, nextRunAt: at('10:40'), triggerConfig: { role: 'writing', intervalMinutes: 60 } },
+  ],
   heartbeatChecksSince: async () => [
+    { hookId: 'personal', checkedAt: at('10:00'), ran: false, reason: 'nothing_pending' },
     { hookId: 'hb-w', checkedAt: at('08:40'), ran: true, reason: null },
     { hookId: 'hb-w', checkedAt: at('09:40'), ran: false, reason: 'in_flight' },
   ],
@@ -43,7 +47,7 @@ test('roles as agents: state, to-dos, runs and the latest heartbeat decision', a
     tasks: { active: 2, total: 5 }, runsToday: 2, liveRuns: 1,
     lastRun: { id: 'w2', status: 'running', title: 'Release notes', source: 'heartbeat' },
   });
-  expect(r.roles[0]).toMatchObject({ root: true, runsToday: 0, lastRun: null });
+  expect(r.roles[0]).toMatchObject({ root: true, runsToday: 0, lastRun: null, heartbeat: { enabled: true, hookId: 'personal', intervalMinutes: 15, nextCheckAt: '2026-11-08T10:15:00.000Z', lastCheck: { reason: 'nothing_pending' } } });
   // A role only seen on old to-dos is listed, and says it is not registered.
   expect(r.roles.find((x) => x.role === 'retired')).toMatchObject({ known: false, toolGroups: 0, tasks: { active: 1 } });
   expect(r.roles.find((x) => x.role === 'research')).toMatchObject({ readOnly: true, heartbeat: { enabled: false, nextCheckAt: null } });

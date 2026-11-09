@@ -1,7 +1,9 @@
 'use client';
 
+import { RoleAgentsPanel } from '@/components/tasks/work-board';
 import { HeartPulse, Loader2, Mail } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { useAuth } from '@/lib/auth-context';
 import { usePageOn } from '@/lib/modules';
 import { api } from '@/lib/api';
 
@@ -45,6 +47,7 @@ export function HeartbeatTab() {
   const [data, setData] = useState<HeartbeatMe | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const { user } = useAuth();
   const inboxOn = usePageOn()('/email');
 
   const load = useCallback(async () => {
@@ -101,8 +104,9 @@ export function HeartbeatTab() {
 
       {!server.enabled && (
         <div role="note" className="bg-error/10 border border-error/20 rounded-xs px-3 py-2 text-xs text-on-surface">
-          The heartbeat is switched off on this server, so nothing runs yet. An admin can turn it on with the{' '}
-          <span className="font-mono">heartbeat.enabled</span> setting under Configuration.
+          <p>The heartbeat is switched off on this server, so your enabled preference cannot run yet.</p>
+          {user?.isAdmin ? <p>Turn on Run my heartbeat below to enable checks. This also enables the server heartbeat service.</p> : <p>An admin needs to enable heartbeat on this server.</p>}
+          {data.enabled && <button type="button" disabled={saving} onClick={() => void save({ enabled: false })} className="mt-2 text-primary underline">Turn off saved personal heartbeat</button>}
         </div>
       )}
       {error && <p className="text-sm text-error">{error}</p>}
@@ -110,8 +114,8 @@ export function HeartbeatTab() {
       <label className="flex items-start gap-3 cursor-pointer">
         <input
           type="checkbox"
-          checked={data.enabled}
-          disabled={saving}
+          checked={data.enabled && server.enabled}
+          disabled={saving || (!server.enabled && !user?.isAdmin)}
           onChange={(e) => save({ enabled: e.target.checked })}
           className="w-4 h-4 rounded accent-primary mt-0.5"
           aria-label="Run my heartbeat"
@@ -185,6 +189,8 @@ export function HeartbeatTab() {
       </div>
       )}
 
+      <RoleAgentsPanel refreshKey={`${data.enabled}:${server.enabled}`} controls onChanged={load} />
+
       <div className="border-t border-outline-variant/20 pt-4 text-xs text-on-surface-variant space-y-1">
         <p>
           <span className="text-on-surface">Standing instructions:</span>{' '}
@@ -193,8 +199,7 @@ export function HeartbeatTab() {
             : 'none yet. Write a note with the slug "heartbeat" (who you are, what counts as urgent, what the agent may do on its own) and pin it.'}
         </p>
         <p>
-          Ideas and to-dos can be worked on their own too: assign a task to a role and turn that role&apos;s agent on in the Role agents
-          panel on the <a href="/tasks" className="underline text-primary">tasks page</a>.
+          Assign a to-do to a role on the <a href="/tasks" className="underline text-primary">tasks page</a>, then configure its heartbeat here.
         </p>
       </div>
     </div>
