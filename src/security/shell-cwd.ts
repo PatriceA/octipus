@@ -1,3 +1,4 @@
+import { resolveEnvironmentCwd } from './environment-runtime';
 import { isAbsolute, resolve } from 'node:path';
 import type { AgentContext } from '@/core/types';
 import { ToolNotExecutedError } from '@/core/tool-execution-error';
@@ -8,6 +9,8 @@ export function resolveShellCwd(requested: unknown, context: AgentContext | unde
   if (!context) {
     throw new ToolNotExecutedError('shell', 'shell commands run for an agent: no agent context was given');
   }
+  const selected = resolveEnvironmentCwd(requested, context);
+  if (selected) return selected;
   const fs = WorkspaceFS.forAgent(context);
   const project = !fs.isSpace && typeof context.metadata?.projectPath === 'string' && context.metadata.projectPath ? resolve(context.metadata.projectPath) : undefined;
   const base = project ?? fs.root;

@@ -1,3 +1,7 @@
+import { environmentCredentialOptions } from '@/security/environment-credentials';
+import { environmentShellOptions, shellOperationsFor } from '@/security/environment-runtime';
+import { executionEnvironmentFor } from '@/security/execution-environments';
+import { environmentToolHome } from '@/security/environment-identity';
 import { withCliKubeconfig } from '@/security/cli-kubeconfig';
 import { isApprovedCall } from '@/security/approved-calls';
 import { implicitVerificationCommand } from '@/security/verification-command';
@@ -49,16 +53,20 @@ export function spaceRunOptions(env: Record<string, string> | undefined, home: S
 
 /** Shell and filesystem tools share the caller's approved host directories. */
 export function shellRunOptions(context: AgentContext, env: Record<string, string> | undefined, home: SpaceToolHome | null, cwd?: string) {
+  const profile = executionEnvironmentFor(context);
+  if (profile?.backend === 'ssh') return { ...environmentShellOptions(context), env, allowedCwdRoots: profile.roots };
   const fs = WorkspaceFS.forAgent(context);
   fs.ensureRootSync();
   const options = spaceRunOptions(env, home);
   const roots = fs.persistentRoots();
-  const caches = fs.isSpace ? undefined : personalBuildCaches();
+  const caches = fs.isSpace || (profile && !profile.hostIdentity) ? undefined : personalBuildCaches();
+  const runtime = environmentShellOptions(context);
   return {
     ...options,
+    ...runtime,
     env: { ...caches?.env, ...options.env },
-    allowHostSshAgent: !fs.isSpace,
-    extraReadWrite: [...roots, ...(options.extraReadWrite ?? []), ...(caches?.paths ?? [])],
+    allowHostSshAgent: !fs.isSpace && (runtime.allowHostSshAgent ?? true),
+    extraReadWrite: [...roots, ...(runtime.extraReadWrite ?? []), ...(options.extraReadWrite ?? []), ...(caches?.paths ?? [])],
     allowedCwdRoots: [...roots, ...(cwd ? [fs.resolve(cwd)] : [])],
   };
 }
@@ -78,7 +86,7 @@ export function withHostServices<T extends { allowNetwork?: boolean; extraReadWr
 
 /** A fresh tool home for one run of a space agent, or null outside a space. */
 async function toolHomeFor(context: AgentContext | undefined): Promise<SpaceToolHome | null> {
-  return context?.space ? openSpaceToolHome({ ...context, space: context.space }) : null;
+  return context?.space ? openSpaceToolHome({ ...context, space: context.space }) : context ? environmentToolHome(context) : null;
 }
 
 
@@ -86,7 +94,7 @@ export class ShellTool extends BaseTool {
   readonly id = 'shell';
   readonly name = 'Shell';
   readonly version = '1.0.0';
-  readonly description = 'Execute shell commands in a sandboxed environment';
+  readonly description = 'Execute commands in the session’s selected execution environment';
 
   private readonly ops: ShellOperations;
 
@@ -97,11 +105,13 @@ export class ShellTool extends BaseTool {
 
   getManifest(): ToolManifest {
     return {
+      execution: { kind: 'environment' },
       id: this.id,
       name: this.name,
       version: this.version,
       description: this.description,
       permissions: [
+        { action: 'read', description: 'Inspect executable locations and non-secret runtime variables', defaultLevel: 'ALLOW' },
         { action: 'execute', description: 'Run shell commands (npm, bun, make, curl, etc.) in the workspace directory', defaultLevel: 'ASK' },
         { action: 'execute_elevated', description: 'Run privileged commands requiring sudo/root access (install packages, manage services, modify system config)', defaultLevel: 'DENY', dangerous: true },
         { action: 'execute_destructive', description: 'Run commands that destroy work irreversibly (rm -r, rm on a glob, git reset --hard, git clean -f, git push --force, dd, shred, find -delete)', defaultLevel: 'ASK', dangerous: true },
@@ -159,10 +169,12 @@ export class ShellTool extends BaseTool {
         const home = await toolHomeFor(context);
         let result: ShellExecResult;
         try {
-          result = await this.ops.exec(command, cwd, withCliKubeconfig(context, withHostServices(context?.metadata, {
+          const credentials = await environmentCredentialOptions(context, withCliKubeconfig(context, withHostServices(executionEnvironmentFor(context) ? undefined : context?.metadata, {
             timeout, unsafe, allowNetwork, signal: getExecutionSignal(context),
             ...shellRunOptions(context, args.env as Record<string, string> | undefined, home, cwd),
           })));
+          try { result = credentials.mask(await shellOperationsFor(context, this.ops).exec(command, cwd, credentials.options)); }
+          catch (error) { throw credentials.maskError(error); }
         } finally {
           home?.dispose();
         }
@@ -252,10 +264,12 @@ export class ShellTool extends BaseTool {
         const home = await toolHomeFor(context);
         let pid: number | undefined;
         try {
-          ({ pid } = await this.ops.spawnBackground(command, cwd, withCliKubeconfig(context, withHostServices(context?.metadata, {
+          const credentials = await environmentCredentialOptions(context, withCliKubeconfig(context, withHostServices(executionEnvironmentFor(context) ? undefined : context?.metadata, {
             unsafe, allowNetwork, ...shellRunOptions(context, args.env as Record<string, string> | undefined, home, cwd),
             onExit: () => home?.dispose(),
-          }))));
+          })));
+          try { ({ pid } = await shellOperationsFor(context, this.ops).spawnBackground(command, cwd, credentials.options)); }
+          catch (error) { throw credentials.maskError(error); }
         } catch (err) {
           home?.dispose();
           throw err;
@@ -272,15 +286,23 @@ export class ShellTool extends BaseTool {
       createParameterSchema({
         name: { type: 'string', description: 'Executable name', required: true },
       }),
-      async (args) => {
+      async (args, context) => {
         const name = String(args.name);
         if (!/^[a-zA-Z0-9._-]+$/.test(name)) {
           throw new Error(`Invalid executable name: ${name}`);
         }
+        const profile = executionEnvironmentFor(context);
+        if (profile) {
+          const home = await toolHomeFor(context);
+          try {
+            const result = await shellOperationsFor(context, this.ops).exec(`command -v '${name}'`, profile.roots[0], { ...shellRunOptions(context, undefined, home), unsafe: true, timeout: 15000 });
+            return { executable: name, path: result.exitCode === 0 ? result.stdout.trim() : null, environmentId: profile.id };
+          } finally { home?.dispose(); }
+        }
         const path = await this.ops.which(name);
         return { executable: name, path };
       },
-      { permissionAction: 'execute', requiresPermission: false }
+      { permissionAction: 'read', readOnly: true }
     );
 
     this.registerTool(
@@ -289,7 +311,7 @@ export class ShellTool extends BaseTool {
       createParameterSchema({
         name: { type: 'string', description: 'Variable name to read', required: true },
       }),
-      async (args) => {
+      async (args, context) => {
         if (typeof args.name !== 'string' || !args.name) {
           throw new Error('env requires a "name" parameter — bulk env dump is not exposed.');
         }
@@ -298,10 +320,23 @@ export class ShellTool extends BaseTool {
         if (isSensitiveEnvName(args.name)) {
           return { [args.name]: null, redacted: true, reason: 'looks like a credential — withheld' };
         }
+        const profile = executionEnvironmentFor(context);
+        if (profile) {
+          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(args.name)) throw new ToolNotExecutedError('shell', 'Choose one variable name');
+          if (profile.credentials.some(binding => binding.variable === args.name)) return { [args.name]: null, redacted: true, reason: 'bound credential — withheld' };
+          const home = await toolHomeFor(context);
+          try {
+            const { quoteRuntimeArg } = await import('@/security/environment-runtime');
+            const code = `process.stdout.write(JSON.stringify(process.env[${JSON.stringify(args.name)}]??null))`;
+            const result = await shellOperationsFor(context, this.ops).exec(`${profile.backend === 'ssh' ? 'node' : quoteRuntimeArg(process.execPath)} -e ${quoteRuntimeArg(code)}`, profile.roots[0], { ...shellRunOptions(context, undefined, home), timeout: 15000 });
+            if (result.exitCode !== 0) throw new Error('Could not inspect the selected runtime variable');
+            return { [args.name]: JSON.parse(result.stdout) };
+          } finally { home?.dispose(); }
+        }
         const envVars = await this.ops.getEnv(args.name);
         return { [args.name]: envVars[args.name] ?? null };
       },
-      { requiresPermission: true }
+      { permissionAction: 'read', readOnly: true }
     );
   }
 
@@ -343,6 +378,7 @@ export class ShellTool extends BaseTool {
     const requested = args.command as string;
     const call = { toolId: this.id, action: this.resolvePermissionAction(requested), toolName, args };
     const run = await runPermissionProfile(context);
+    if ((context as ToolContext).authorizationSource?.startsWith('execution-environment:')) return requested;
     if (run?.profile.executionScope === 'run' && profileAllows(run.profile, call)) return requested;
     if (run?.profile.commands.includes(requested)) return requested;
     const rewritten = run ? profileVerificationRewrite(run.profile, call) : undefined;

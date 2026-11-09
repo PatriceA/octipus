@@ -42,6 +42,14 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
     );
   });
 
+  const allowRuntime = async (credential: Credential) => {
+    try {
+      await api.patch(`/vault/${credential.id}`, { allowedTools: [...new Set([...(credential.allowedTools ?? []), 'execution-environment'])] });
+      setNotice(`Execution environments may now use ${credential.name}. Other credential restrictions remain in effect.`);
+      onRefresh();
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Could not update credential access'); }
+  };
+
   const handleDelete = async (id: string) => {
     try {
       await api.delete(`/vault/${id}`);
@@ -171,6 +179,7 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
                     </td>
                     <td className="py-2.5 px-4">
                       <div className="flex items-center gap-1">
+                        {cred.scope !== 'system' && cred.credentialType !== 'login' && !!cred.allowedTools?.length && !cred.allowedTools.includes('execution-environment') && !cred.allowedAgents?.length && <button onClick={() => void allowRuntime(cred)} className="p-1.5 text-xs text-primary" aria-label={`Allow execution environments for ${cred.name}`}>Allow runtime</button>}
                         {cred.scope !== 'system' && <button onClick={() => setConnectCredential(cred)} title={`Connect API for ${cred.name}`} aria-label={`Connect API for ${cred.name}`} className="p-1.5 text-on-surface-variant hover:text-primary rounded-md hover:bg-surface-container-high cursor-pointer"><Link2 className="w-3.5 h-3.5" /></button>}
                         <button
                           onClick={() => cred.credentialType==='login'?setEditLogin(cred):setRotateId(cred.id)}

@@ -31,3 +31,13 @@ test('API auxiliary description is explicitly fallible and preserves the origina
   expect(result.context).toContain(join(root, 'screen.png'));
   expect(result.imagePaths).toEqual([]);
 });
+
+test('remote project attachments use the selected reader rather than resolving a host file', async () => {
+  root = await mkdtemp(join(tmpdir(), 'octipus-images-'));
+  const reader = vi.fn(async (path: string) => ({ type: 'text' as const, path, content: 'remote project content', version: 'remote-v2', size: 22, modifiedAt: new Date().toISOString() }));
+  const result = await buildRootAttachmentContext(WorkspaceFS.withRoot(root), [{ path: '/srv/project/brief.md', version: 'remote-v1' }], false, 'user', 'Update the remote file', undefined, reader);
+  expect(reader).toHaveBeenCalledWith('/srv/project/brief.md');
+  expect(result.context).toContain('remote project content');
+  expect(result.context).toContain('changed since the user last viewed');
+  expect(result.context).not.toContain('could not be read');
+});

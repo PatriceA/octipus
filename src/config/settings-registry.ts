@@ -942,6 +942,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
   },
 
   // ── Security (runtime-changeable subset) ──
+  { key: 'security.executionEnvironments', category: 'security', valueType: 'json', defaultValue: [], isSecret: false, description: 'Owner-approved execution environments, project folders, host identities and persistent approval policy. Manage in Settings → Environments & Access.' },
   { key: 'security.companionMaintenance', category: 'security', valueType: 'json', defaultValue: { enabled: false, userId: null, roots: [], hostServices: false, sshAgent: false, allowActivation: false, interruptionPolicy: 'wait' }, isSecret: false, description: 'Operator-approved Companion maintenance runtime. Configure in Settings → CLI tools. Grants scoped host maintenance independently of project runtimes.' },
   { key: 'security.cliKubeconfigs', category: 'security', valueType: 'json', defaultValue: [], isSecret: false,
     description: 'Owner-approved existing kubeconfig paths for personal shell commands and verification gates. Manage in Settings → CLI tools. Only paths/context names are stored; shared spaces never receive them.' },

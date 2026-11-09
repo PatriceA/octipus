@@ -40,6 +40,7 @@ interface ToolFunction {
 }
 
 interface ToolModule {
+  execution?: { kind: 'environment' | 'host' | 'connection'; program?: string };
   id: string;
   name: string;
   version: string;
@@ -221,6 +222,7 @@ function ToolModuleCard({
             {roleAccess.length > 0 ? `${roleAccess.length} roles` : 'unused'}
           </span>
           <span className="text-xs text-on-surface-variant">v{module.version}</span>
+          {module.execution && <span className="rounded-full bg-surface-container-high px-2 py-0.5 text-xs text-on-surface-variant">{module.execution.kind === 'environment' ? 'Session environment' : module.execution.kind === 'host' ? 'Octipus server' : 'Configured connection'}</span>}
           <span
             className={cn(
               'px-2 py-0.5 text-xs rounded-full',
@@ -239,6 +241,7 @@ function ToolModuleCard({
 
       {expanded && (
         <div className="border-t border-outline-variant/10 p-4 space-y-1.5">
+          {module.execution && <p className="pb-2 text-xs text-on-surface-variant">{module.execution.program ? `${module.execution.program}: ` : ''}{module.execution.kind === 'environment' ? 'Uses the machine and CLI account selected for the session.' : module.execution.kind === 'host' ? 'Uses services on the Octipus server; remote sessions do not move this integration.' : 'Uses the service target and credentials of its connection. API authentication is separate from CLI login.'} <a href="/settings?tab=environments" className="text-primary underline">Manage environment access</a></p>}
           {/* Which agent roles / topics can use this tool — the QA ask: the
               tool was visible but not which topics could reach it. */}
           <div className="flex items-start gap-2 pb-2 mb-1.5 border-b border-outline-variant/10">

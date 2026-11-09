@@ -63,6 +63,8 @@ export type SandboxRunner = 'bwrap' | 'firejail' | 'sandbox-exec';
 export type SandboxMode = 'off' | 'auto' | 'required';
 
 export interface WrapOptions {
+  /** Trusted server-resolved environment override. Never a tool argument. */
+  mode?: SandboxMode;
   /** Server-resolved opt-in; never a whole ~/.ssh mount. */
   sshAgent?: ShellSshAgent;
   /** Workspace root that should be writable inside the sandbox. */
@@ -612,7 +614,7 @@ export function activeSandboxRunner(options: DetectOptions = {}): SandboxRunner 
  */
 export function wrapCommand(argv: string[], options: WrapOptions): WrapResult {
   options = { ...options, extraReadOnly: [...new Set([...(options.extraReadOnly ?? []), ...browserRuntimeMounts(), ...androidSdkPaths()])] };
-  const mode = getSandboxMode();
+  const mode = options.mode ?? getSandboxMode();
   if (mode === 'off') {
     return { wrapped: false, runner: null, argv, cleanup: () => {} };
   }

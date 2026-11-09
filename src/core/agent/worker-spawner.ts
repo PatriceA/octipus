@@ -1,3 +1,4 @@
+import { executionEnvironmentFor } from '@/security/execution-environments';
 import { createStageDelegation } from './stage-delegation';
 import { WorkerInterruptedError, type Interruption } from '@/core/interruption';
 import { getExecutionSignal } from '@/core/execution-scope';
@@ -104,11 +105,11 @@ export function pipelineMetadata(metadata: Record<string, unknown> | undefined, 
   // writes too, which the file-writer strip cannot see.
   if (opts.planMode) return { ...pipelineMetadata(metadata), [FILE_CHANGES_REFUSED_KEY]: 'plan_mode' };
   if (!metadata) return undefined;
-  const { pipelineId, nodeKey, hostServices, resumeKey, attemptId } = metadata as Record<string, unknown>;
+  const { pipelineId, nodeKey, hostServices, resumeKey, attemptId, executionEnvironmentId } = metadata as Record<string, unknown>;
   const sourceFiles=Array.isArray(metadata.companionSourceFiles)?metadata.companionSourceFiles.slice(0,20).filter((file):file is import('@/core/session-files').AttachedFileRef=>!!file&&typeof file==='object'&&typeof (file as {path?:unknown}).path==='string').map(({path,version,protectionLevel})=>({path,version,protectionLevel})):[];
-  if (pipelineId === undefined && nodeKey === undefined && !sourceFiles.length) return undefined;
+  if (pipelineId === undefined && nodeKey === undefined && !sourceFiles.length && executionEnvironmentId === undefined) return undefined;
   const hasPipelineScope=pipelineId!==undefined||nodeKey!==undefined;
-  return { ...(sourceFiles.length?{companionSourceFiles:sourceFiles}:{}), ...(pipelineId !== undefined && { pipelineId }), ...(nodeKey !== undefined && { nodeKey }), ...(hasPipelineScope && hostServices === true && { hostServices }),
+  return { ...(typeof executionEnvironmentId === 'string' ? { executionEnvironmentId } : {}), ...(sourceFiles.length?{companionSourceFiles:sourceFiles}:{}), ...(pipelineId !== undefined && { pipelineId }), ...(nodeKey !== undefined && { nodeKey }), ...(hasPipelineScope && hostServices === true && { hostServices }),
     // The stage attempt's vendor CLI conversation (`cli-agent-worker`) and the
     // attempt its approvals were granted to (`approved-calls.ts`). Not passed
     // on to a stage's own children (`stageChildMetadata`).
@@ -662,8 +663,9 @@ export async function spawnWorker(
   // room or group session (D10, I7): the same audience the root turn reads.
   const audience = await sessionAudience(session);
   // No dev-mode project root in a space: its workers work in the space's files.
-  const isDevMode = !context.space && sessionCtx?.devMode === true && !!sessionCtx.projectPath;
-  const devProjectPath = isDevMode ? sessionCtx!.projectPath! : undefined;
+  const environment = executionEnvironmentFor(context);
+  const isDevMode = !context.space && (!!environment || sessionCtx?.devMode === true) && !!(sessionCtx?.projectPath ?? environment?.roots[0]);
+  const devProjectPath = isDevMode ? (context.metadata.projectPath as string | undefined) ?? sessionCtx?.projectPath ?? environment?.roots[0] : undefined;
 
   // Inject the curated AGENTS.md guide and maintenance instruction.
   // AGENTS.md (https://agents.md) is the universal project guide other agent
@@ -679,7 +681,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   staticParts.push(AGENTS_MD_INSTRUCTION);
   if (devProjectPath) {
     context.metadata.projectPath = devProjectPath;
-    const agentsGuide = await loadAgentsMd(devProjectPath);
+    const agentsGuide = environment?.backend === 'ssh' ? null : await loadAgentsMd(devProjectPath);
     if (agentsGuide) {
       const projectName = sessionCtx?.projectName || devProjectPath.split(/[/\\]/).pop() || 'project';
       // Bound this per-section injection in TOKENS (Phase 5 item 2). Budget ≈
@@ -692,7 +694,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
 
   // Inject git status/diff for code-aware roles (gives agents awareness of pending changes)
   const GIT_AWARE_ROLES = new Set(['coding', 'review', 'devops', 'security', 'qa']);
-  if (GIT_AWARE_ROLES.has(agentRole)) {
+  if (GIT_AWARE_ROLES.has(agentRole) && environment?.backend !== 'ssh') {
     const git = await gitContextSection(devProjectPath || getConfig().workspace?.rootPath || process.cwd());
     if (git) volatileParts.push(git);
   }
@@ -1190,7 +1192,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     // that is not in the workspace created the file and worked on that instead,
     // and the QA stage downstream certified the fabrication (see
     // `core/premise.ts`). Cheap, stated as fact, never blocking.
-    const premise = premiseNoteFor(baseMessage, premiseRoots(context, isDevMode ? devProjectPath : undefined));
+    const premise = environment?.backend === 'ssh' ? undefined : premiseNoteFor(baseMessage, premiseRoots(context, isDevMode ? devProjectPath : undefined));
     const workerMessage = premise ? `${baseMessage}\n\n${premise}` : baseMessage;
 
     const onPartial = overrides?.onPartialOutput;

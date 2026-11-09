@@ -1,3 +1,4 @@
+import { executionEnvironmentFor, withExecutionEnvironment } from '@/security/execution-environments';
 import { markToolExecutionUncertain, ToolNotExecutedError, ToolPolicyRefusalError, uncertainExecutionRecord } from '@/core/tool-execution-error';
 import { redactedCommand } from '@/utils/command-log';
 import { rememberRunDecision } from '@/security/pipeline-permissions';
@@ -101,6 +102,7 @@ export abstract class BaseTool {
       // ('profiles__search_profiles') which never matches → the child
       // gets ZERO tools. Must be set.
       toolId: this.id,
+      execution: this.getManifest().execution,
       recordsActions: true,
       replaySafety: options?.readOnly ? 'read_only' : undefined,
       // The agent loop checks permissions before it dispatches, and resolves
@@ -206,6 +208,10 @@ export abstract class BaseTool {
     if (decision.route === 'deny') {
       throw new ToolPolicyRefusalError(this.id, `Permission denied for ${this.id}.${action}: ${decision.reason}`);
     }
+    const environment = executionEnvironmentFor(context);
+    if (environment && this.getManifest().execution?.kind === 'host' && (environment.backend === 'ssh' || !environment.hostServices)) {
+      throw new ToolNotExecutedError(this.id, 'This integration runs on the Octipus server and is not available in the selected environment. Use the registered shell in that environment for this operation, or configure host service access in Settings → Environments & Access.');
+    }
     // The route decides, not the level: a call the user already approved for
     // this pipeline stage keeps its ASK level but routes to `execute`
     // (approval-route.ts, source `pipeline-approval`), and asking again here
@@ -262,8 +268,8 @@ export abstract class BaseTool {
     try {
       if (authorizationSource.startsWith('approval:')) await rememberRunDecision(context, { toolId: this.id, action, toolName, args }, undefined, authorizationSource.slice('approval:'.length));
       const result = options?.readOnly || options?.recoverySafe || isReadOnlyAction(action)
-        ? await execute(processedArgs, toolContext)
-        : await actionRecovery.run(context, this.id, `${this.id}__${toolName}`, args, () => execute(processedArgs, toolContext), async () => {
+        ? await withExecutionEnvironment(context, () => execute(processedArgs, toolContext))
+        : await actionRecovery.run(context, this.id, `${this.id}__${toolName}`, args, () => withExecutionEnvironment(context, () => execute(processedArgs, toolContext)), async () => {
           const current = await permissionManager.check(context.userId, this.id, action, args, context,
             { revalidate: true, defaultLevel: manifestPermission?.defaultLevel, dangerous: manifestPermission?.dangerous });
           if (current.level === 'DENY' || ((current.level === 'ASK' || authorizationSource.startsWith('approval:') || authorizationSource === 'pipeline-approval')

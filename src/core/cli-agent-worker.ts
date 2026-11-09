@@ -1,3 +1,4 @@
+import { executionEnvironmentDescription, executionEnvironmentFor } from '@/security/execution-environments';
 import { takeWarmSignal } from './swarm/leader-first';
 import { runPermissionProfile } from '@/security/pipeline-permissions';
 import { personalBuildCaches } from '@/security/build-caches';
@@ -399,11 +400,13 @@ When a task matches one of these skills, load it with get_skill before starting 
         } : { commandListRequired: true, commands: permissionRun.profile.commands.map(redactedCommand), note: 'This is a legacy command-scoped profile. Use the listed commands for remote verification; transport/output-only verification variants retain the same fixed target. Other commands still need consent.' }) } } : {}),
       agentId: this.context.id, sessionId: this.context.sessionId,
       workspaceId: this.context.workspaceId, planMode: this.connection?.planMode ?? false,
-      shellCapabilities: { hostServices: this.context.metadata?.hostServices === true,
-        androidDevices: 'Installed Android SDK tools are mounted read-only. For device tests, registered shell calls need network:true to reach the host ADB server on localhost:5037; approved hostServices grants this automatically and also exposes USB devices. Check adb devices -l in the testing runtime before declaring a device unavailable. USB access retains host OS permissions; a phone may still need authorization on its screen. Child agents do not inherit hostServices.',
+      executionEnvironment: executionEnvironmentDescription(this.context),
+      approvalSurface: { attended: this.context.attended === true, background: this.context.attended !== true, ownerInbox: executionEnvironmentFor(this.context)?.background === 'ask', note: 'The current environment policy is authoritative. An earlier no-approval-channel refusal does not describe a newly configured environment.' },
+      shellCapabilities: { hostServices: executionEnvironmentFor(this.context)?.hostServices ?? this.context.metadata?.hostServices === true,
+        androidDevices: executionEnvironmentFor(this.context) ? 'Device checks run on the selected machine/account. Trusted host mode sees that account’s host ADB server and devices; isolated mode needs its network/host-services grant. Check adb devices -l there before claiming a phone is unavailable. Profile grants follow children.' : 'Installed Android SDK tools are mounted read-only. For device tests, registered shell calls need network:true to reach the host ADB server on localhost:5037; approved hostServices grants this automatically and also exposes USB devices. Check adb devices -l in the testing runtime before declaring a device unavailable. USB access retains host OS permissions; a phone may still need authorization on its screen. Child agents do not inherit hostServices.',
         browserCache: 'Shared host browser runtimes are mounted read-only independently of hostServices; compatible revisions must already be installed.',
         docker: 'Use permitted dedicated docker tools for host containers; compose_project provides repository-scoped local lifecycle when available. Remote stacks require approved SSH shell commands.',
-        note: 'Registered shell commands use the Octipus sandbox. Without approved hostServices a missing Docker socket describes that sandbox, not the host. Native vendor CLI Bash may have different host access. A root context does not inherit child pipeline approval; inspect that pipeline status for its scope.' },
+        note: executionEnvironmentFor(this.context) ? 'Registered shell commands follow executionEnvironment above. Host runs use the OS account; sandbox runs require isolation; SSH runs use the remote machine. API connections have separate service targets.' : 'Registered shell commands use the Octipus sandbox. Without approved hostServices a missing Docker socket describes that sandbox, not the host. Native vendor CLI Bash may have different host access. A root context does not inherit child pipeline approval; inspect that pipeline status for its scope.' },
       workPlan: formatWorkPlanContext(state), guidance: guidance.map(m => m.content),
       ...(this.isCodex() ? { guidanceItems: [...this.pendingCodexGuidance].map(([id, message]) => ({ id, content: message.content })) } : {}),
       ...(this.detached.count() > 0 ? {

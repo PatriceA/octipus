@@ -1,3 +1,4 @@
+import { executionEnvironmentFor } from '@/security/execution-environments';
 import type { PipelineReplayReceipt, PipelineReplayScope } from '@/shared/pipeline-replay';
 import { withAgentOrigin } from '@/core/agent-origin';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
@@ -361,7 +362,7 @@ export async function runStageVerifyCommand(
     const { sessionRepository } = await import('@/db/repositories/session-repository');
     const session = await sessionRepository.findById(ctx.sessionId);
     if (!session) throw new Error(`session ${ctx.sessionId} not found`);
-    const sessionCtx = session.context as { devMode?: boolean; projectPath?: string } | undefined;
+    const sessionCtx = session.context as { devMode?: boolean; projectPath?: string; executionEnvironmentId?: string } | undefined;
     // The command runs where the stage's agents work: the session's
     // workspace (loaded into the file-root map by `turnWorkspaceId`), or
     // its dev-mode project — never a project in a space, whose agents work
@@ -389,8 +390,9 @@ export async function runStageVerifyCommand(
         workspaceId: ctx.workspaceId ?? workspaceId,
         space: ctx.space ?? null,
         projectPath: !inSpace && sessionCtx?.devMode === true ? sessionCtx.projectPath : undefined,
+        executionEnvironmentId: sessionCtx?.executionEnvironmentId,
         hostServices: ctx.hostServices,
-        workspaceRoot: WorkspaceFS.forSession({ ...session, workspaceId }, { space: ctx.space ?? null }).root,
+        workspaceRoot: sessionCtx?.executionEnvironmentId ? undefined : WorkspaceFS.forSession({ ...session, workspaceId }, { space: ctx.space ?? null }).root,
       },
     );
     const failure = outcome.failures[0];
@@ -570,8 +572,12 @@ export function noteReviewModel(
  * back, and saying otherwise sends a person to the wrong place. Undefined
  * outside git.
  */
-async function workspaceHead(root: string | null): Promise<string | undefined> {
+async function workspaceHead(root: string | null, context?: AgentContext): Promise<string | undefined> {
   if (!root) return undefined;
+  if (context && executionEnvironmentFor(context)?.backend === 'ssh') {
+    const head = await (await import('@/tools/filesystem/environment-operations')).remoteFilesystemOperation('git_head', {}, context);
+    return typeof head === 'string' ? head : undefined;
+  }
   const res = await runGit(root, ['rev-parse', '--short', 'HEAD']);
   const head = res.ok ? res.stdout.trim() : '';
   if (!head) return undefined;
@@ -1874,7 +1880,7 @@ export class PipelineManager {
           // the gate let stand is an attempt worth remembering.
           if (qaResult && !qaResult.auditGateFailed) {
             const ledger = qaAttempts.get(cursor) ?? [];
-            ledger.push(attemptFromVerdict(qaResult, itemAcceptance, ledger.length + 1, await workspaceHead(workspaceRoot)));
+            ledger.push(attemptFromVerdict(qaResult, itemAcceptance, ledger.length + 1, await workspaceHead(workspaceRoot, context)));
             qaAttempts.set(cursor, ledger);
           }
           if (!qaResult || qaResult.passed) {
@@ -2289,7 +2295,7 @@ export class PipelineManager {
       root: true,
       model: '',
       status: 'running',
-      metadata: { pipelineId, resumed: true, replayScope, approvedContinuationAttemptId: !opts.freshAttempt && checkpoint.seq === (await pipelineRepository.getCheckpoints(pipelineId, 1))[0]?.seq ? resumeState.attemptId : undefined, overnightRun: (pipeline.metadata?.permissionProfile as { profile?: { overnight?: boolean } } | undefined)?.profile?.overnight === true, approvedRunReplay: (pipeline.metadata?.permissionProfile as { profile?: { allowCheckpointReplay?: boolean } } | undefined)?.profile?.allowCheckpointReplay === true, approvedRunGates: (pipeline.metadata?.permissionProfile as { profile?: { autoApproveGates?: boolean } } | undefined)?.profile?.autoApproveGates === true },
+      metadata: { ...((originSession?.context as { executionEnvironmentId?: string } | null)?.executionEnvironmentId ? { executionEnvironmentId: (originSession!.context as { executionEnvironmentId: string }).executionEnvironmentId } : {}), ...((originSession?.context as { projectPath?: string } | null)?.projectPath ? { projectPath: (originSession!.context as { projectPath: string }).projectPath } : {}), pipelineId, resumed: true, replayScope, approvedContinuationAttemptId: !opts.freshAttempt && checkpoint.seq === (await pipelineRepository.getCheckpoints(pipelineId, 1))[0]?.seq ? resumeState.attemptId : undefined, overnightRun: (pipeline.metadata?.permissionProfile as { profile?: { overnight?: boolean } } | undefined)?.profile?.overnight === true, approvedRunReplay: (pipeline.metadata?.permissionProfile as { profile?: { allowCheckpointReplay?: boolean } } | undefined)?.profile?.allowCheckpointReplay === true, approvedRunGates: (pipeline.metadata?.permissionProfile as { profile?: { autoApproveGates?: boolean } } | undefined)?.profile?.autoApproveGates === true },
     });
     return withAgentUsage(pipeline.userId, scope, () => this.resumeWalk(pipeline, pipelineId, opts, checkpoint, resumeState, context));
   }
@@ -2511,6 +2517,7 @@ export class PipelineManager {
     before?: WorkspaceSnapshot | null;
     /** Root the stage's worker writes to, re-walked here for the "after" side. */
     workspaceRoot?: string | null;
+    context?: AgentContext;
   }): Promise<void> {
     const declared: StageDeclaration = {
       producesArtifacts: args.declared?.producesArtifacts,
@@ -2525,7 +2532,7 @@ export class PipelineManager {
     // The "after" side of the snapshot. Taken here rather than at the call site
     // so it is impossible to gate on a stale reading: this runs immediately
     // before the decision that uses it.
-    const after = args.before && args.workspaceRoot ? await snapshotWorkspace(args.workspaceRoot) : null;
+    const after = args.before && args.workspaceRoot ? await snapshotWorkspace(args.workspaceRoot, { context: args.context }) : null;
     // The declaration decides how the diff is SCORED, not what the walk records:
     // a snapshot that hides files can never be re-scored, and two snapshots taken
     // under different rules cannot be compared at all.
@@ -2620,10 +2627,12 @@ export class PipelineManager {
    * Resolved once per pipeline run: it cannot change mid-run, and the session
    * lookup is a DB round-trip we do not need per stage.
    */
-  private async resolveWorkspaceRoot(sessionId: string, context: Pick<AgentContext, 'space'>): Promise<string | null> {
+  private async resolveWorkspaceRoot(sessionId: string, context: AgentContext): Promise<string | null> {
     try {
       const session = await sessionRepository.findById(sessionId);
       if (!session) return null;
+      const environment = executionEnvironmentFor({ ...context, metadata: (session.context ?? {}) as Record<string, unknown> });
+      if (environment?.backend === 'ssh') return (session.context as { projectPath?: string } | null)?.projectPath ?? environment.roots[0];
       return WorkspaceFS.forSession(session, { space: context.space ?? null }).root;
     } catch (err) {
       coreLogger.warn({ err: (err as Error).message, sessionId }, 'Could not resolve workspace root for the evidence gate');
@@ -2640,11 +2649,12 @@ export class PipelineManager {
   private async snapshotStage(
     declared: StageDeclaration | undefined,
     workspaceRoot: string | null,
+    context: AgentContext,
   ): Promise<WorkspaceSnapshot | null> {
     // Both declarations need the filesystem: one to prove work happened, the
     // other to prove it did not.
     if (!workspaceRoot || !(declared?.producesArtifacts || declared?.readOnly)) return null;
-    return snapshotWorkspace(workspaceRoot);
+    return snapshotWorkspace(workspaceRoot, { context });
   }
 
   /**
@@ -3093,7 +3103,7 @@ export class PipelineManager {
           metadata: { pipelineId: pipeline.id, stageId: node.id, pipelineEvent: 'qa_same_model' },
         }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
       }
-      const before = await this.snapshotStage(declared, workspaceRoot);
+      const before = await this.snapshotStage(declared, workspaceRoot, context);
 
       let counters: SideEffectCounters | null = null;
       const result = await rootAgent.spawnWorker(
@@ -3254,6 +3264,7 @@ export class PipelineManager {
         declared,
         before,
         workspaceRoot,
+        context,
         counters,
       });
 

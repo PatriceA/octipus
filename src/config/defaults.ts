@@ -37,6 +37,7 @@ export const defaultConfig: Partial<Config> = {
     passkeyRpId: 'localhost',
     passkeyRpName: 'Octipus',
     passkeyOrigin: 'http://localhost:3000',
+    executionEnvironments: [],
     shellSandbox: 'off',
     shellSshAgent: false,
     companionMaintenance: { enabled: false, userId: null, roots: [], hostServices: false, sshAgent: false, allowActivation: false, interruptionPolicy: 'wait' },

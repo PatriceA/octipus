@@ -1,3 +1,4 @@
+import { executionEnvironmentFor, pathInEnvironment } from '@/security/execution-environments';
 import { runDelegationAttempt, type DelegationAttempt } from './attempt-history';
 import { getConfig } from '@/config';
 import type { AnyAgentWorker } from '@/core/agent-manager';
@@ -44,6 +45,7 @@ import {
   removeWorktree,
   type WorktreeHandle,
   worktreeCwdOverride,
+  worktreesRoot,
 } from './worktree';
 
 /**
@@ -1123,6 +1125,11 @@ export class SwarmSpawner {
       enabled = false;
     }
     if (!enabled || opts.childRole !== 'coding') return null;
+    const environment = executionEnvironmentFor(opts.parentContext);
+    if (environment && (environment.backend !== 'host' || !environment.roots.some(root => pathInEnvironment(root, worktreesRoot())))) {
+      coreLogger.info({ environmentId: environment.id, parentNodeId: opts.parent.id }, 'Swarm worktree skipped — its internal directory is outside this environment; native and registered tools stay in the approved project');
+      return null;
+    }
     // Nested isolation is off: a descendant of a worktree child works in its
     // ancestor's worktree (see `singleSpawnAndRun`), whose settle captures it.
     if (inheritedWorktreeOf(opts.parentContext)) {
@@ -1218,7 +1225,7 @@ export class SwarmSpawner {
     root: string,
   ): Promise<WorkspaceSnapshot | null> {
     const baselines = (opts.fsBaselines ??= new Map());
-    if (!baselines.has(root)) baselines.set(root, await snapshotWorkspace(root));
+    if (!baselines.has(root)) baselines.set(root, await snapshotWorkspace(root, { context: opts.parentContext }));
     return baselines.get(root) ?? null;
   }
 
@@ -1629,8 +1636,8 @@ export class SwarmSpawner {
     // CLI cwd and registered tools must see the same tree. Tools resolve
     // relative paths using projectPath even when invoked by a CLI worker.
     // Only the persisted dev-mode session may grant access to a shared project.
-    const projectPath = attemptWorktree ?? await devProjectPathForSession(opts.parent.rootSessionId);
-    const scorerEnvironment = opts.scorers?.length ? await scorerEnvironmentError(
+    const projectPath = attemptWorktree ?? (executionEnvironmentFor(opts.parentContext) ? opts.parentContext.metadata?.projectPath as string | undefined : await devProjectPathForSession(opts.parent.rootSessionId));
+    const scorerEnvironment = opts.scorers?.length && !executionEnvironmentFor(opts.parentContext) ? await scorerEnvironmentError(
       opts.scorers ?? [], projectPath ?? WorkspaceFS.forAgent(opts.parentContext).root,
       { beforeSpawn: true, signal: opts.parent.signal },
     ) : null;
@@ -2074,12 +2081,13 @@ export class SwarmSpawner {
         // for a `code-diff`, or scored on `minFilesChanged`, may well have a
         // built wheel or sdist as its deliverable, and skipping it measures
         // zero files and fails the child for producing nothing.
-        ? countChangedFiles(fsBefore, await snapshotWorkspace(scorerWorkspaceRoot), { countPackages: true })
+        ? countChangedFiles(fsBefore, await snapshotWorkspace(scorerWorkspaceRoot, { context: opts.parentContext }), { countPackages: true })
         : null;
       const outcome = await runScorers(
         effectiveScorers,
         { output: result.output, notes: result.notes, receipt: result.receipt },
         buildScorerContext({
+          executionEnvironmentId: opts.parentContext.metadata?.executionEnvironmentId as string | undefined,
           userId: opts.parentContext.userId,
           sessionId: opts.parentContext.sessionId,
           workspaceId: opts.parentContext.workspaceId ?? null,
@@ -2749,6 +2757,8 @@ async function devProjectPathForSession(sessionId?: string): Promise<string | un
  * which it is: worktree isolation applies to dev-mode projects only.
  */
 async function sharedTreeRoot(ctx: AgentContext): Promise<{ root: string; devProject: boolean }> {
+  const environment = executionEnvironmentFor(ctx);
+  if (environment) return { root: (ctx.metadata?.projectPath as string | undefined) ?? environment.roots[0], devProject: environment.backend !== 'ssh' };
   const project = await devProjectPathForSession(ctx.sessionId);
   if (project) return { root: project, devProject: true };
   return { root: WorkspaceFS.forAgent(ctx).root, devProject: false };
@@ -2774,6 +2784,7 @@ async function isCliModel(model: string, modelName?: string): Promise<boolean> {
 
 export function buildScorerContext(args: {
   userId?: string;
+  executionEnvironmentId?: string;
   sessionId?: string;
   workspaceId?: string | null;
   space?: import('@/core/types').AgentSpace | null;
@@ -2790,6 +2801,7 @@ export function buildScorerContext(args: {
 }): ScorerContext {
   return {
     userId: args.userId,
+    executionEnvironmentId: args.executionEnvironmentId,
     workspaceRoot: args.workspaceRoot,
     filesTouched: args.filesTouched,
     // A gate must check the tree the child changed. See `ScorerContext.projectPath`.

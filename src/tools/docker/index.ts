@@ -61,6 +61,7 @@ export class DockerTool extends BaseTool {
 
   getManifest(): ToolManifest {
     return {
+      execution: { kind: 'host', program: 'docker' },
       id: this.id,
       name: this.name,
       version: this.version,

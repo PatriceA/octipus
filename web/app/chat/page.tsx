@@ -1,5 +1,6 @@
 'use client';
 
+import { EnvironmentSelector } from '@/components/chat/environment-selector';
 import { reconcileChatMessages } from '../../../src/shared/chat-reconciliation';
 import { CHAT_INBOX_RESOURCE, CHAT_MESSAGE_MAX_CHARS, EXTERNAL_CHANNEL_TYPES } from '../../../src/shared/chat-gateway';
 import { SessionCost } from '@/components/chat/session-cost';
@@ -2133,6 +2134,7 @@ export default function ChatPage() {
           {!isCompanionChat && companionSessionId && <button type="button" onClick={() => selectSession(companionSessionId)} className="inline-flex items-center gap-1 text-xs text-primary whitespace-nowrap"><Sparkles className="h-3.5 w-3.5" aria-hidden />Companion</button>}
           <button type="button" onClick={createSession} className="text-xs text-primary whitespace-nowrap">New work</button>
         </div>
+        <EnvironmentSelector key={activeSessionId} sessionId={activeSessionId} running={isLoading} />
         {isCompanionChat && <section aria-label="Companion chat identity" className="border-b border-primary/20 bg-primary/5 px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="flex items-center gap-2 text-sm font-medium text-primary"><Sparkles className="h-4 w-4" aria-hidden />Your cross-project coordinator</p>

@@ -1,3 +1,4 @@
+import { configuredExecutionEnvironments } from '@/security/execution-environments';
 import { Elysia, t } from '@/api/http';
 import { buildAgentContext, fundingFor, withAgentUsage } from '@/core/agent/context';
 import { isToolOn } from '@/core/modules/registry';
@@ -35,7 +36,7 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
       const registry = getToolRegistry();
       if (!user.isAdmin) {
         const own = registry.getEnabledManifests().filter((m) => mayRunDirectly(m.id) && registry.isInitialized(m.id));
-        return { tools: own.map((m) => ({ id: m.id, name: m.name, version: m.version, description: m.description,
+        return { tools: own.map((m) => ({ id: m.id, name: m.name, version: m.version, description: m.description, execution: m.execution,
           tools: m.tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })) })) };
       }
       const manifests = registry.getEnabledManifests();
@@ -43,16 +44,18 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
 
       const tools = manifests.map((m) => {
         const avail = availability.get(m.id);
-        const status = !avail?.available ? 'inactive' : avail.degraded ? 'degraded' : 'active';
+        const environmentCheck = m.execution?.kind === 'environment' && configuredExecutionEnvironments().some(profile => profile.userId === user.id && profile.enabled);
+        const status = !avail?.available ? environmentCheck ? 'degraded' : 'inactive' : avail.degraded ? 'degraded' : 'active';
         return {
           id: m.id,
           name: m.name,
           version: m.version,
           description: m.description,
           author: m.author,
+          execution: m.execution,
           isInitialized: registry.isInitialized(m.id),
           status,
-          statusReason: status !== 'active' ? avail?.reason : undefined,
+          statusReason: !avail?.available && environmentCheck ? 'Availability depends on the selected environment. Test it in Settings → Environments & Access.' : status !== 'active' ? avail?.reason : undefined,
           permissions: m.permissions,
           tools: m.tools.map((t) => ({
             name: t.name,
@@ -284,7 +287,8 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
 
       const manifest = tool.getManifest();
       const avail = await registry.checkAvailability(manifest.id);
-      const status = !avail.available ? 'inactive' : avail.degraded ? 'degraded' : 'active';
+      const environmentCheck = manifest.execution?.kind === 'environment' && configuredExecutionEnvironments().some(profile => profile.userId === user.id && profile.enabled);
+      const status = !avail.available ? environmentCheck ? 'degraded' : 'inactive' : avail.degraded ? 'degraded' : 'active';
 
       return {
         id: manifest.id,
@@ -292,9 +296,10 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
         version: manifest.version,
         description: manifest.description,
         author: manifest.author,
+        execution: manifest.execution,
         isInitialized: registry.isInitialized(manifest.id),
         status,
-        statusReason: status !== 'active' ? avail.reason : undefined,
+        statusReason: !avail.available && environmentCheck ? 'Availability depends on the selected environment. Test it in Settings → Environments & Access.' : status !== 'active' ? avail.reason : undefined,
         permissions: manifest.permissions,
         tools: manifest.tools,
       };

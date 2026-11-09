@@ -262,6 +262,7 @@ export async function buildAttachedFilesContext(
   fs: WorkspaceFS,
   refs: AttachedFileRef[],
   describeImage?: (dataUrl: string, mimeType: string, path: string) => Promise<string>,
+  readFileForContext?: (path: string) => Promise<ReadFileResult>,
 ): Promise<string> {
   if (refs.length === 0) return '';
   const blocks: string[] = [];
@@ -269,7 +270,7 @@ export async function buildAttachedFilesContext(
     const name = fileDisplayName(ref.path);
     let res: ReadFileResult;
     try {
-      res = await readSessionFile(fs, ref.path);
+      res = await (readFileForContext ? readFileForContext(ref.path) : readSessionFile(fs, ref.path));
     } catch (err) {
       const reason = err instanceof SessionFileError ? err.message : (err as Error).message;
       blocks.push(`--- ${name} (could not be read: ${reason}) ---`);
