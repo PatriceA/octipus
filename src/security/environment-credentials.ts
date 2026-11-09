@@ -1,3 +1,5 @@
+import { delimiter } from 'node:path';
+import { runtimePath } from './runtime-path';
 import { buildHostChildEnv, isSensitiveEnvName } from './child-env';
 import { markToolNotExecuted } from '@/core/tool-execution-error';
 import type { AgentContext } from '@/core/types';
@@ -12,6 +14,7 @@ export async function environmentCredentialOptions<T extends ShellEnvOptions & {
   const values: string[] = environment?.backend === 'host' && environment.hostIdentity
     ? Object.entries(buildHostChildEnv()).filter(([name]) => isSensitiveEnvName(name)).map(([, value]) => value) : [];
   const env = { ...options.env };
+  if (environment && environment.backend !== 'ssh' && environment.pathDirectories.length > 0) env.PATH = runtimePath([...environment.pathDirectories, env.PATH ?? process.env.PATH ?? ''].join(delimiter));
   for (const binding of environment?.credentials ?? []) {
     const value = await getVault().getByNameAuthorized({ userId: context.userId, workspaceId: context.workspaceId,
       toolId: 'execution-environment', agentId: context.id }, binding.secret);

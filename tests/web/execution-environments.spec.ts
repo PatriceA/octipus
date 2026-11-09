@@ -76,3 +76,39 @@ test('tools explain whether they use the session environment, server or connecti
   await expect(page.getByText('Octipus server', { exact: true })).toBeVisible();
   await expect(page.getByText('Configured connection', { exact: true })).toBeVisible();
 });
+
+test('workstation automation is a single reviewed grant with inventory and explicit Deny guidance', async ({ authenticatedPage: page }) => {
+  let environments: Record<string, unknown>[] = [];
+  await page.route('**/api/settings/execution-environments', route => json(route, 200, { environments, credentials: [], userId, machine: 'workstation', account: 'owner', denials: [{ toolId: 'shell', action: 'execute_elevated' }], legacy: { sandbox: 'required' } }));
+  await page.route('**/api/settings/execution-environments/*', route => {
+    environments = [{ ...route.request().postDataJSON(), revision: 1 }]; return json(route, 200, { environment: environments[0] });
+  });
+  await page.route('**/api/settings/execution-environments/*/test', route => json(route, 200, { status: 'ready', summary: 'Commands visible', checks: [], inventory: { commands: [{ name: 'gh', path: '/usr/bin/gh' }, { name: 'oc', path: '/usr/local/bin/oc' }, { name: 'tea', path: '/usr/bin/tea' }], sshAliases: ['tower', 'second-machine'], truncated: false } }));
+  await page.goto('/settings?tab=environments');
+  await expect(page.getByText('shell.execute_elevated', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'Set up workstation automation' }).click();
+  await expect(page.getByLabel('Execution authority')).toHaveValue('account');
+  await expect(page.getByLabel('Companion and background work')).toHaveValue('automatic');
+  await expect(page.getByLabel(/Continue routine pipeline sign-offs/)).toBeChecked();
+  await expect(page.getByRole('button', { name: 'Save environment' })).toBeDisabled();
+  await page.getByLabel('Project folders', { exact: false }).fill('/home/owner/projects');
+  await page.getByLabel('I approve this environment', { exact: false }).check();
+  await page.getByRole('button', { name: 'Save environment' }).click();
+  await expect.poll(() => environments[0]?.authority).toBe('account');
+  expect(environments[0]).toMatchObject({ installedPrograms: 'all', hostIdentity: true, hostServices: true, network: true, allowDataTransfer: true, background: 'automatic', pipelineAutonomy: true });
+  await page.getByRole('button', { name: 'Test readiness' }).click();
+  await expect(page.getByText('/usr/local/bin/oc', { exact: false })).toBeVisible();
+  await expect(page.getByText('tower, second-machine', { exact: false })).toBeVisible();
+});
+
+test('account environment selection preserves another local worktree without adding folders', async ({ authenticatedPage: page }) => {
+  const writes: unknown[] = [];
+  await page.route('**/api/sessions/sess-1/execution-environment', route => {
+    if (route.request().method() === 'PUT') { writes.push(route.request().postDataJSON()); return json(route, 200, { success: true }); }
+    return json(route, 200, { selectedEnvironmentId: null, projectPath: '/home/owner/worktrees/app', environment: { backend: 'host' }, available: [{ id: 'account', backend: 'host', authority: 'account', name: 'Automation', roots: ['/home/owner/projects'] }] });
+  });
+  await page.goto('/chat?session=sess-1');
+  await page.getByRole('combobox', { name: 'Project execution environment' }).selectOption('account');
+  await expect.poll(() => writes).toEqual([{ environmentId: 'account', projectPath: '/home/owner/worktrees/app', expectedEnvironmentId: null }]);
+  await expect(page.getByRole('button', { name: 'Use this folder' })).toHaveCount(0);
+});

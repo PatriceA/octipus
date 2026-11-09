@@ -7,13 +7,56 @@ verification commands and Companion background work. It is stored in Octipus
 settings; editing a hidden configuration file is unnecessary.
 
 Existing installations keep their previous behavior until the owner explicitly
-adds/selects an environment. Nothing is automatically granted by this update.
+adds/selects an environment. Nothing is automatically granted by this update. Existing environments retain tool-specific authority until their owner changes it.
+
+## Workstation automation and multi-machine projects
+
+Use **Set up workstation automation** for work that should have the same access as
+your workstation account. This grants commands and filesystem access as a whole,
+including installed `gh`, `oc`, `tea`, Git helpers, existing CLI configuration,
+SSH agents and SSH host aliases. New commands on PATH need no registration.
+Additional program folders can be added once; they apply to shell, native CLI
+agents and verification. Readiness shows a searchable inventory from the actual
+runtime. Discovery is advisory, not another list of approved binaries.
+
+Account authority includes the OS account's files outside starting folders,
+administrative/destructive operations and normal Compose lifecycle management
+with existing projects, inline builds and env files. Project folders choose the
+starting location and automatic environment matching; they do not limit this
+broad grant. OS authentication and permissions remain real requirements.
+
+One workstation environment can build locally, deploy via SSH to several machines,
+and verify remote services. Do not switch the entire session to each deployment
+host. Choose a remote environment only when the project's commands/files should
+actually live on that host. A browser on your laptop does not make an Octipus
+server elsewhere your laptop account.
+
+The preset enables automatic interactive/background operations, network/private
+data transfer and **routine pipeline sign-offs and recovery**. These are live,
+revocable environment grants, not lists of individual commands. Recovery still
+checks previous effects before replay; a grant is not evidence an action failed.
+Explicit user pauses, budgets, acceptance criteria, deliberate Deny rules and
+shared/federated boundaries remain effective. Default tool restrictions can be
+replaced by account authority; deliberately saved Deny rules cannot. Missing SSH
+keys, unauthenticated kubeconfig or a stopped service are runtime problems rather
+than requests for repeated approval.
+
+For existing projects, edit their currently selected environment to use full
+account access and automatic work, or select the new environment in each project
+chat. A new preset does not rebind sessions. Identical folder matches need an
+explicit selection. Saving changes to a used profile stops affected active agents;
+resume them after saving. Disabling a profile revokes its authority.
+
+In isolated mode, **Use installed workstation programs as a group** exposes program
+folders read-only without inheriting private configuration. Complex toolchains may
+still need their runtime dependencies or explicit credentials; test readiness in
+that environment. Trusted workstation mode avoids these isolation differences.
 
 ## Choose where work runs
 
 | Environment | Tools and account | Isolation |
 |---|---|---|
-| This computer | The machine running the Octipus server, using its OS account. Opt into its existing CLI logins to use normal `gh`, `oc`, SSH and Git configuration. | Trusted account authority; approved folders guide file tools and working directories, not arbitrary processes. |
+| This computer | The machine running the Octipus server, using its OS account. Opt into its existing CLI logins to use normal `gh`, `oc`, SSH and Git configuration. | Opt-in full account access, or tool restrictions with approved file folders. Host processes are not sandboxed. |
 | Isolated workspace | Installed/approved runtimes, selected folders, a separate persistent tool home and explicitly connected credentials. | Requires the supported process sandbox. Missing isolation fails instead of falling back to the host. |
 | Remote machine | SSH account on the chosen server, with that server's installed tools and CLI logins. Commands, filesystem and Git target that machine. | Trusted remote account authority. Node.js is required remotely. SSH uses the server account's keys/agent and existing known-host trust. |
 
@@ -23,7 +66,7 @@ access exposes Docker and USB/ADB; Docker's socket carries the daemon account's
 power. In trusted host mode that explicit grant also permits lifecycle management
 of existing host containers through dedicated Docker tools. Unsupported Compose
 features can be handled through an authorized shell in the same environment.
-A permission denial cannot be bypassed by changing tools.
+A deliberate saved permission denial cannot be bypassed by changing tools.
 
 CLI-backed models have native vendor tools, so they currently require **This
 computer with host account access**. API/local models can use all three environment
@@ -93,6 +136,6 @@ Vendor-native CLI workers and local worktree isolation are not supported remotel
 choose an API/local model, or use a trusted host environment with authorized SSH
 commands for deployments driven by a vendor CLI.
 
-Optional local worktree isolation is skipped when its internal worktree directory
-is outside the selected environment’s approved folders. The worker, registered
+In restricted mode, optional local worktree isolation is skipped when its internal
+worktree directory is outside the selected environment’s approved folders. The worker, registered
 tools and verification commands then stay together in the approved project.

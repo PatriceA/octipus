@@ -36,8 +36,9 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
   .get('/execution-environments', async ({ user, principal, set }) => {
     if (!user?.isAdmin || !requireScope(principal, API_SCOPES.READ)) { set.status = 403; return { error: 'Admin access required' }; }
     const environments = executionEnvironmentsSchema.parse(await getSettingsService().get('security.executionEnvironments') ?? []);
+    const permissions = await (await import('@/security/permissions')).getPermissionManager().getUserPermissions(user.id);
     const credentials = (await getVault().list(user.id)).filter(entry => entry.credentialType !== 'login').map(entry => ({ name: entry.name, runtimeAllowed: !entry.allowedAgents?.length && (!entry.allowedTools?.length || entry.allowedTools.includes('execution-environment')) }));
-    return { environments: environments.filter(entry => entry.userId === user.id), credentials, userId: user.id, machine: hostname(), account: userInfo().username,
+    return { environments: environments.filter(entry => entry.userId === user.id), denials: permissions.filter(entry => entry.level === 'DENY').map(({ toolId, action }) => ({ toolId, action })), credentials, userId: user.id, machine: hostname(), account: userInfo().username,
       legacy: { sandbox: getConfig().security.shellSandbox, cliTools: getConfig().security.cliRuntimes, kubeconfigs: getConfig().security.cliKubeconfigs.filter(entry => entry.userId === user.id),
         note: 'Existing settings remain active for sessions without a configured environment.' } };
   })
@@ -73,7 +74,7 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
         return executionEnvironmentsSchema.parse([...retained, savedProfile]);
       }, user.id);
       await auditRepository.log({ userId: user.id, action: 'settings_changed', resourceType: 'execution_environment', resourceId: profile.id,
-        details: { backend: profile.backend, roots: profile.roots, approval: profile.approval, background: profile.background, hostIdentity: profile.hostIdentity } });
+        details: { backend: profile.backend, roots: profile.roots, approval: profile.approval, background: profile.background, authority: profile.authority, pipelineAutonomy: profile.pipelineAutonomy, hostIdentity: profile.hostIdentity } });
       return { environment: savedProfile };
     } catch (error) { set.status = 400; return { error: error instanceof Error ? error.message : 'Invalid environment' }; }
   }, { body: t.Record(t.String(), t.Unknown()) })

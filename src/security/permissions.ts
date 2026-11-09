@@ -1,3 +1,4 @@
+import { hasAccountAuthority } from './execution-environments';
 import { acknowledgeRecoveryApproval } from '@/db/repositories/recovery-consent';
 import { getFlowLabel } from './flow-guard';
 import type { ApprovalFlowConsent } from '@/shared/pipeline-approval';
@@ -149,7 +150,7 @@ export class PermissionManager {
     toolId: string,
     action: string,
     context?: Record<string, unknown>,
-    scope?: Pick<AgentContext, 'sessionId' | 'workspaceId'>,
+    scope?: Pick<AgentContext, 'sessionId' | 'workspaceId'> & Partial<Pick<AgentContext, 'metadata' | 'space' | 'trigger'>>,
     options?: { revalidate?: boolean; defaultLevel?: PermissionLevel; dangerous?: boolean },
   ): Promise<PermissionCheckResult> {
     // Vendor tools used to share `cli-native`. Keep those policies effective
@@ -239,6 +240,9 @@ export class PermissionManager {
     }
 
     switch (level) {
+      case 'DENY':
+        if (scope && hasAccountAuthority({ ...scope, userId })) return { allowed: false, level: 'ASK', requiresApproval: true, source: 'manifest', reason: 'Account authority permits this action; apply the selected approval policy' };
+        return { allowed: false, level: 'DENY', requiresApproval: false, source: 'manifest', reason: 'Denied by the tool default; an explicit account authority grant is required' };
       case 'ALLOW':
         return {
           allowed: true,
@@ -264,7 +268,7 @@ export class PermissionManager {
     conditions: PermissionCondition[],
     context: Record<string, unknown>,
     identity: { userId: string; toolId: string; action: string },
-    scope?: Pick<AgentContext, 'sessionId' | 'workspaceId'>,
+    scope?: Pick<AgentContext, 'sessionId' | 'workspaceId'> & Partial<Pick<AgentContext, 'metadata' | 'space' | 'trigger'>>,
     options?: { revalidate?: boolean },
   ): Promise<{ passed: boolean; reason?: string }> {
     for (const condition of conditions) {

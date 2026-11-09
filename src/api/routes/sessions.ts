@@ -49,7 +49,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
     const session = await contentRepos(principal).sessions.findById(params.id);
     if (!session || !await canActInSession(session, user.id, 'personal_tool')) { set.status = 404; return { error: 'Session not found' }; }
     const caller = { userId: user.id, workspaceId: session.workspaceId, space: principal.workspaceKind === 'shared' || await isSharedWorkspaceId(session.workspaceId) ? {} : null, metadata: (session.context ?? {}) as Record<string, unknown> };
-    const available = caller.space ? [] : configuredExecutionEnvironments().filter(entry => entry.enabled && entry.userId === user.id && (entry.workspaceId === null || entry.workspaceId === session.workspaceId)).map(({ id, name, backend, roots }) => ({ id, name, backend, roots }));
+    const available = caller.space ? [] : configuredExecutionEnvironments().filter(entry => entry.enabled && entry.userId === user.id && (entry.workspaceId === null || entry.workspaceId === session.workspaceId)).map(({ id, name, backend, roots, authority }) => ({ id, name, backend, roots, authority }));
     const fallback = caller.space ? undefined : configuredExecutionEnvironments().find(entry => entry.enabled && entry.userId === user.id && entry.isDefault && entry.workspaceId === session.workspaceId) ?? configuredExecutionEnvironments().find(entry => entry.enabled && entry.userId === user.id && entry.isDefault && entry.workspaceId === null);
     const projectPath = typeof caller.metadata.projectPath === 'string' ? caller.metadata.projectPath : undefined;
     try { return { defaultEnvironmentId: fallback?.id ?? null, projectPath, environment: executionEnvironmentDescription(caller), selectedEnvironmentId: caller.metadata.executionEnvironmentId ?? null, available }; }
@@ -71,8 +71,8 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       const patch: Record<string, unknown> = { executionEnvironmentId: body.environmentId, projectPath: null, projectName: null, devMode: false };
       if (environment) {
         const previous = (session.context as { projectPath?: string } | null)?.projectPath;
-        if (!body.projectPath && previous && !environment.roots.some(root => pathInEnvironment(root, previous))) throw new Error('Choose the project folder on the selected machine');
-        patch.projectPath = environmentCwd(environment, body.projectPath ?? (previous && environment.roots.some(root => pathInEnvironment(root, previous)) ? previous : undefined));
+        if (!body.projectPath && previous && environment.authority !== 'account' && !environment.roots.some(root => pathInEnvironment(root, previous))) throw new Error('Choose the project folder on the selected machine');
+        patch.projectPath = environmentCwd(environment, body.projectPath ?? (previous && (environment.authority === 'account' || environment.roots.some(root => pathInEnvironment(root, previous))) ? previous : undefined), environment.authority === 'account');
       }
       const saved = await switchSessionEnvironment(user.id, session.id, session.context, patch);
       if (!saved) { set.status = 409; return { error: 'Session changed or work started; refresh before selecting an environment' }; }

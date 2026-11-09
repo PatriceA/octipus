@@ -5,7 +5,7 @@ import { api } from '@/lib/api';
 
 type Selection = { selectedEnvironmentId?: string | null; projectPath?: string | null; defaultEnvironmentId?: string | null;
   environment: { id?: string; name?: string; backend: string; machine?: string; account?: string; note?: string };
-  available: Array<{ id: string; name: string; backend: string; roots: string[] }>; error?: string };
+  available: Array<{ id: string; name: string; backend: string; authority?: string; roots: string[] }>; error?: string };
 const contains = (root: string, path: string) => { const base = root.replace(/[\\/]+$/, ''); return path === base || path.startsWith(base + '/') || path.startsWith(base + '\\'); };
 
 export function EnvironmentSelector({ sessionId, running }: { sessionId: string | null; running: boolean }) {
@@ -26,7 +26,7 @@ export function EnvironmentSelector({ sessionId, running }: { sessionId: string 
     setError('');
     const target = data?.available.find(entry => entry.id === (id || data.defaultEnvironmentId));
     const previous = data?.projectPath;
-    if (target && (!previous || !target.roots.some(root => contains(root, previous)))) { setPending({ id, path: target.roots[0] }); return; }
+    if (target && (!previous || !(target.authority === 'account' && target.backend === data?.environment.backend) && !target.roots.some(root => contains(root, previous)))) { setPending({ id, path: target.roots[0] }); return; }
     setPending(null); void apply(id, target && previous ? previous : undefined);
   }
   return <div className="flex flex-wrap items-center gap-2 border-b border-outline-variant/40 px-4 py-2 text-xs" aria-label="Execution environment">

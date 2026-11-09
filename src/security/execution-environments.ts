@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { existsSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { hostname, userInfo } from 'node:os';
 import { getConfig } from '@/config';
@@ -50,8 +51,8 @@ export function executionEnvironmentDescription(caller: EnvironmentCaller) {
     machine: profile.backend === 'ssh' ? profile.ssh!.host : hostname(),
     account: profile.backend === 'ssh' ? profile.ssh!.user : userInfo().username,
     hostIdentity: profile.hostIdentity, network: profile.network, hostServices: profile.hostServices,
-    approval: profile.approval, background: profile.background,
-    note: profile.backend === 'host' ? 'Trusted host commands have the selected OS account’s authority. Folder limits guide file tools and working directories; they are not a process sandbox.'
+    authority: profile.authority, pipelineAutonomy: profile.pipelineAutonomy, approval: profile.approval, background: profile.background,
+    note: profile.backend === 'host' ? profile.authority === 'account' ? 'Commands and files use the workstation account’s access, including its installed tools and SSH logins. Project folders select the starting location.' : 'Host commands are not a process sandbox. File tools and working directories remain restricted to the configured folders.'
       : profile.backend === 'sandbox' ? 'Commands require a process sandbox. Approved folders and runtimes are exposed; host login files are not inherited.'
         : 'Commands, Git and filesystem tools run on this SSH host. Host API integrations remain separate connections. Remote filesystem tools require Node.js.' }
     : { backend: 'legacy', note: 'No environment selected. Existing sandbox, CLI and credential settings apply. Configure Settings → Environments & Access for a consistent runtime.' };
@@ -64,4 +65,21 @@ export function activeHostServiceEnvironment(userId: string): ExecutionEnvironme
   if (!caller || caller.userId !== userId || caller.space) return undefined;
   const environment = executionEnvironmentFor(caller);
   return environment?.backend === 'host' && environment.hostServices ? environment : undefined;
+}
+
+/** Broad owner consent, re-resolved on every call; never inherited into a space. */
+export function hasAccountAuthority(caller: EnvironmentCaller): boolean {
+  return caller.trigger !== 'remote' && executionEnvironmentFor(caller)?.authority === 'account';
+}
+
+/** Routine pipeline consent is separate from merely allowing shell commands. */
+export function hasPipelineAutonomy(caller: EnvironmentCaller): boolean {
+  const profile = caller.trigger !== 'remote' ? executionEnvironmentFor(caller) : undefined;
+  return profile?.authority === 'account' && profile.pipelineAutonomy && profile.background === 'automatic' || false;
+}
+
+/** Account authority matches unsandboxed command access; roots still select the project start location. */
+export function accountFileRoots(profile: ExecutionEnvironment): string[] {
+  if (profile.backend === 'ssh' || process.platform !== 'win32') return ['/'];
+  return Array.from({ length: 26 }, (_, i) => `${String.fromCharCode(65 + i)}:\\`).filter(existsSync);
 }

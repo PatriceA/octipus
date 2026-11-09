@@ -441,3 +441,30 @@ describe('durable recovery consent', () => {
     const [row]=await getDb().select().from(toolActions).where(eq(toolActions.id,id));expect(row.reviewId).toBe(request);expect(row.status).toBe('uncertain');
   });
 });
+
+test('shipping shell middleware runs new elevated CLI forms under one account grant and preserves deliberate Deny', async () => {
+  if (process.platform === 'win32') return;
+  const { getConfig } = await import('@/config');
+  const { workstationAutomationPreset } = await import('@/shared/execution-environment');
+  const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
+  const { ShellTool } = await import('@/tools/shell');
+  const { buildAgentContext } = await import('@/core/agent/context');
+  const { getPermissionManager } = await import('@/security/permissions');
+  const { writeFileSync, rmSync } = await import('node:fs');
+  const { randomUUID } = await import('node:crypto');
+  const owner = '11111111-1111-4111-8111-111111111111';
+  await seedUsers([{ id: owner, username: 'workstation-owner' }]);
+  const root = mkdtempSync(join(tmpdir(), 'shell-authority-'));
+  writeFileSync(join(root, 'sudo'), '#!/bin/sh\nprintf account-authorized', { mode: 0o755 });
+  const old = getConfig().security.executionEnvironments;
+  getConfig().security.executionEnvironments = [{ ...workstationAutomationPreset(owner, 'shell-account', [root]), isDefault: true, pathDirectories: [root] }];
+  const caller = buildAgentContext({ id: randomUUID(), userId: owner, sessionId: randomUUID(), role: 'general', topic: 'general', model: 'fixture', status: 'running', attended: false,
+    scope: { workspaceId: null, space: null, trigger: 'schedule', funding: 'own' }, metadata: { executionEnvironmentId: 'shell-account', projectPath: root } });
+  try {
+    const tool = new ShellTool(); await tool.initialize();
+    const run = tool.getToolHandlers().find(handler => handler.name === 'shell__run')!;
+    expect(await run.execute({ command: 'sudo -n example-new-command' }, caller)).toMatchObject({ exitCode: 0, stdout: 'account-authorized' });
+    await getPermissionManager().setPermission(owner, 'shell', 'execute_elevated', 'DENY');
+    await expect(run.execute({ command: 'sudo -n another-command' }, caller)).rejects.toThrow(/denied/i);
+  } finally { getConfig().security.executionEnvironments = old; rmSync(root, { recursive: true, force: true }); }
+});

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { getConfig } from '@/config';
-import { executionEnvironmentSchema } from '@/shared/execution-environment';
+import { workstationAutomationPreset, executionEnvironmentSchema } from '@/shared/execution-environment';
 import { runScorers } from '@/core/swarm/scorers';
 import { observeFlow, resetFlowLabels } from './flow-guard';
 import { LocalShellOperations } from '@/tools/shell/local-operations';
@@ -32,4 +32,19 @@ it('verification runs in the selected host even if the install requires a sandbo
     const outcome = await runScorers([{ kind: 'command_exit_zero', command: 'node -e \'require("node:fs").writeFileSync("gate.txt","verified")\'' }], { output: 'done' }, { userId, sessionId: 'scorer-host', role: 'general', canRunCommands: true, executionEnvironmentId: 'host', projectPath: root });
     expect(outcome.passed).toBe(true); expect(readFileSync(join(root, 'gate.txt'), 'utf8')).toBe('verified');
   } finally { getConfig().security.shellSandbox = sandbox; rmSync(root, { recursive: true, force: true }); }
+});
+
+it('account verification permits shell expressions under the same live automatic grant, including credential-tainted remote checks', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'account-gate-'));
+  getConfig().security.executionEnvironments = [{ ...workstationAutomationPreset(userId, 'account', [root]), isDefault: true }];
+  getConfig().agent.flowGuard = 'ask';
+  observeFlow('account-gate', { toolId: 'filesystem', action: 'read', args: { path: '.env' } });
+  try {
+    const outcome = await runScorers([{ kind: 'command_exit_zero', command: 'sh -c "printf first && printf second"' }], { output: 'done' }, { userId, sessionId: 'account-gate', role: 'general', canRunCommands: true, executionEnvironmentId: 'account', projectPath: root });
+    expect(outcome.passed).toBe(true);
+    getConfig().security.executionEnvironments[0].background = 'deny';
+    getConfig().security.executionEnvironments[0].pipelineAutonomy = false;
+    const denied = await runScorers([{ kind: 'command_exit_zero', command: 'printf next' }], { output: 'done' }, { userId, sessionId: 'account-gate', role: 'general', canRunCommands: true, executionEnvironmentId: 'account', projectPath: root });
+    expect(denied.passed).toBe(false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

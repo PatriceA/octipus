@@ -1,4 +1,4 @@
-import { executionEnvironmentFor, pathInEnvironment } from './execution-environments';
+import { executionEnvironmentFor, pathInEnvironment, hasAccountAuthority, accountFileRoots } from './execution-environments';
 /**
  * WorkspaceFS — per-user filesystem sandbox.
  *
@@ -448,8 +448,8 @@ export class WorkspaceFS {
     if (environment?.backend === 'ssh') return WorkspaceFS.forRequest(agentPrincipal(context), options);
     if (environment) {
       const root = typeof context.metadata?.projectPath === 'string' ? pathResolve(context.metadata.projectPath) : environment.roots[0];
-      if (!environment.roots.some(folder => pathInEnvironment(folder, root))) throw new WorkspaceFsError('OUTSIDE_ROOT', 'Project is outside the selected environment folders');
-      return WorkspaceFS.withRoot(root, { ...options, extraAllowedPrefixes: environment.roots });
+      if (!hasAccountAuthority(context) && !environment.roots.some(folder => pathInEnvironment(folder, root))) throw new WorkspaceFsError('OUTSIDE_ROOT', 'Project is outside the selected environment folders');
+      return WorkspaceFS.withRoot(root, { ...options, extraAllowedPrefixes: hasAccountAuthority(context) ? accountFileRoots(environment) : environment.roots });
     }
     const project = context.metadata?.projectPath;
     return WorkspaceFS.forRequest(agentPrincipal(context), {
@@ -529,8 +529,8 @@ export class WorkspaceFS {
     if (environment?.backend === 'ssh') throw new WorkspaceFsError('INVALID_INPUT', 'This session uses a remote environment. Use the remote filesystem tools.');
     if (environment) {
       const root = ctx?.projectPath ? pathResolve(ctx.projectPath) : environment.roots[0];
-      if (!environment.roots.some(folder => pathInEnvironment(folder, root))) throw new WorkspaceFsError('OUTSIDE_ROOT', 'Project is outside the selected environment folders');
-      return WorkspaceFS.withRoot(root, { ...options, extraAllowedPrefixes: environment.roots });
+      if (environment.authority !== 'account' && !environment.roots.some(folder => pathInEnvironment(folder, root))) throw new WorkspaceFsError('OUTSIDE_ROOT', 'Project is outside the selected environment folders');
+      return WorkspaceFS.withRoot(root, { ...options, extraAllowedPrefixes: environment.authority === 'account' ? accountFileRoots(environment) : environment.roots });
     }
     if (ctx?.devMode && ctx.projectPath) {
       return WorkspaceFS.withRoot(pathResolve(ctx.projectPath),{...options,extraAllowedPrefixes:[...(options.extraAllowedPrefixes??[]),...(ctx.companion?.sourceFiles??[]).map(file=>pathResolve(file.path))]});

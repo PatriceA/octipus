@@ -683,7 +683,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `mcp` | 4 |
 | `api` | `models` | 39 |
 | `api` | `plugins` | 3 |
-| `api` | `security` | 167 |
+| `api` | `security` | 168 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 22 |
 | `api` | `skills` | 6 |
@@ -722,13 +722,13 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 14 |
 | `core` | `config` | 68 |
 | `core` | `connectors` | 4 |
-| `core` | `db` | 483 |
+| `core` | `db` | 484 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 10 |
 | `core` | `models` | 134 |
 | `core` | `modules` | 2 |
-| `core` | `security` | 225 |
+| `core` | `security` | 228 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
 | `core` | `shared` | 61 |
@@ -791,7 +791,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `core` | 40 |
 | `security` | `db` | 87 |
 | `security` | `mcp` | 2 |
-| `security` | `shared` | 6 |
+| `security` | `shared` | 7 |
 | `security` | `tools` | 7 |
 | `security` | `utils` | 34 |
 | `services` | `capabilities` | 5 |
@@ -825,7 +825,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 8 |
 | `tools` | `plugins` | 1 |
-| `tools` | `security` | 77 |
+| `tools` | `security` | 79 |
 | `tools` | `services` | 1 |
 | `tools` | `shared` | 8 |
 | `tools` | `skills` | 5 |

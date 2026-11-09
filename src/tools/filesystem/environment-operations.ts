@@ -1,3 +1,4 @@
+import { hasAccountAuthority, accountFileRoots } from '@/security/execution-environments';
 import { safeRegExp } from '@/utils/sanitize';
 import { posix } from 'node:path';
 import type { AgentContext } from '@/core/types';
@@ -117,10 +118,10 @@ export async function remoteFilesystemOperation(operation: string, args: Record<
     if (!pattern) return { pattern: args.pattern, results: [], error: 'Invalid or too complex regex pattern' };
     args = { ...args, _validatedPattern: pattern.source };
   }
-  const payload = Buffer.from(JSON.stringify({ operation, args, roots: environment.roots, cwd })).toString('base64');
+  const payload = Buffer.from(JSON.stringify({ operation, args, roots: hasAccountAuthority(context) ? accountFileRoots(environment) : environment.roots, cwd })).toString('base64');
   if (payload.length > 1_500_000) throw new ToolNotExecutedError('filesystem', 'Filesystem request is too large');
   return withFileMutationQueue(`ssh:${environment.id}:${posix.resolve(cwd, String(args.path ?? args.source ?? '.'))}`, async () => {
-    const result = await new SshShellOperations(environment).exec(`node -e ${quoteRuntimeArg(REMOTE_FILESYSTEM_PROGRAM)}`, cwd, { timeout: 30000, input: payload });
+    const result = await new SshShellOperations(environment, hasAccountAuthority(context)).exec(`node -e ${quoteRuntimeArg(REMOTE_FILESYSTEM_PROGRAM)}`, cwd, { timeout: 30000, input: payload });
     if (result.killed) throw new Error('Remote filesystem operation was interrupted; inspect its outcome before retrying a write');
     try {
       const parsed = JSON.parse(result.stdout);

@@ -1,4 +1,4 @@
-import { executionEnvironmentFor } from '@/security/execution-environments';
+import { hasAccountAuthority, executionEnvironmentFor } from '@/security/execution-environments';
 import { buildAgentContext } from '@/core/agent/context';
 import { withCliKubeconfig } from '@/security/cli-kubeconfig';
 import { browserRuntimeMounts, browserRuntimePaths } from '@/security/runtime-path';
@@ -26,7 +26,7 @@ import { existsSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { detectRunner, getSandboxMode } from '@/security/shell-sandbox';
-import { basename as programName, commandPolicyViolation, matchElevatedCommand, tokenizeSafe } from '@/tools/shell/policy';
+import { basename as programName, commandPolicyViolation, matchDestructiveCommand, matchElevatedCommand, tokenizeSafe } from '@/tools/shell/policy';
 import { coreLogger } from '@/utils/logger';
 import type { SwarmReceipt } from './receipt';
 
@@ -522,9 +522,10 @@ async function authorizeScorerCommand(ctx: ScorerContext, command: string) {
     import('@/security/permissions'), import('@/security/approval-route'), import('@/security/flow-guard'), import('@/config'),
   ]);
   const context = scorerAgentContext(ctx);
-  const call = { toolId: 'shell', action: 'execute', toolName: 'run', args: { command } };
+  const action = matchElevatedCommand(command) ? 'execute_elevated' : matchDestructiveCommand(command) ? 'execute_destructive' : 'execute';
+  const call = { toolId: 'shell', action, toolName: 'run', args: { command } };
   await loadFlowLabel(ctx.sessionId);
-  const permission = await getPermissionManager().check(ctx.userId!, 'shell', 'execute', call.args, context, { revalidate: true });
+  const permission = await getPermissionManager().check(ctx.userId!, 'shell', action, call.args, context, { revalidate: true });
   const guarded = applyFlowGuard(getConfig().agent.flowGuard, ctx.sessionId, call, permission);
   return routeApprovalFor(context, call, guarded, { unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions });
 }
@@ -963,7 +964,8 @@ async function evaluate(
       // in `env sh -c "…"` and `timeout` in `timeout 60 sh -c "…"`, and misses
       // `"sh" -c` outright because the quotes are still attached — all three
       // spawn a shell.
-      const shellArg = namesShellWithCommandString(scorer.command);
+      const accountAuthority = hasAccountAuthority(scorerAgentContext(ctx));
+      const shellArg = accountAuthority ? null : namesShellWithCommandString(scorer.command);
       if (shellArg) {
         return {
           scorer: label,
@@ -975,9 +977,9 @@ async function evaluate(
       }
 
       // The shell tool's content policy, shared rather than restated.
-      const violation = commandPolicyViolation(scorer.command);
+      const violation = accountAuthority ? null : commandPolicyViolation(scorer.command);
       if (violation) return { scorer: label, reason: `refused: ${violation}`, retryable: false };
-      const elevated = matchElevatedCommand(scorer.command);
+      const elevated = accountAuthority ? null : matchElevatedCommand(scorer.command);
       if (elevated) {
         return {
           scorer: label,
@@ -1130,9 +1132,8 @@ async function evaluate(
           ...(ctx.hostServices ? { allowNetwork: true, allowHostUsb: true } : {}),
           ...runtime,
           ...(ctx.signal ? { signal: ctx.signal } : {}),
-          // Never `unsafe`. Safe mode is what makes `tokenizeSafe` reject shell
-          // metacharacters, and it is the whole security argument for letting an
-          // LLM-authored string reach a process at all.
+          // Only explicit account authority can run shell expressions in a gate.
+          ...(accountAuthority ? { unsafe: true } : {}),
         })));
         if (environment && (await authorizeScorerCommand(ctx, repaired)).route !== 'execute') return { scorer: label, reason: 'Permission or data-transfer consent changed before verification; command not run', retryable: false };
         let res;

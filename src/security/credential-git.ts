@@ -1,3 +1,6 @@
+import { runtimePath } from './runtime-path';
+import { delimiter } from 'node:path';
+import { executionEnvironmentFor, hasAccountAuthority, accountFileRoots } from './execution-environments';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { realpath, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -32,9 +35,18 @@ export async function authenticatedGit(p: ConnectionProfile, caller: ConnectionP
 }, signal?: AbortSignal): Promise<unknown> {
   if (!principalCanUse(p, caller)) throw new Error('Connection access denied');
   if (!p.http?.git) throw new Error('Connection is not enabled for Git');
+  const environment = executionEnvironmentFor(caller);
+  if (environment?.backend === 'ssh') throw new Error('Connection Git uses a local credential broker; use the registered Git or shell tool in the selected remote environment. No local repository was accessed.');
+  // Connection Git is a server-side credential broker, not an arbitrary shell.
+  // A trusted workstation profile may supply its installed Git location; its
+  // service credential stays in the broker and never enters the Git process.
+  const gitEnv: Record<string, string> = environment?.backend === 'host' && hasAccountAuthority(caller)
+    ? { PATH: runtimePath([...environment.pathDirectories, process.env.PATH ?? ''].join(delimiter)) } : {};
+  const runGit = (args: string[], cwd: string, signal: AbortSignal, input?: string, env?: Record<string, string>) => gitCall(args, cwd, signal, input, { ...gitEnv, ...env });
   const cwd = await realpath(args.path);
-  const roots = await Promise.all(p.http.repositoryRoots.map(root => realpath(root)));
-  if (!roots.some(root => { const rel = relative(root, cwd); return !isAbsolute(rel) && rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\'); })) throw new Error('Repository is outside the connection repository roots');
+  const approvedRoots = hasAccountAuthority(caller) ? accountFileRoots(environment!) : p.http.repositoryRoots;
+  const roots = await Promise.all(approvedRoots.map(root => realpath(root)));
+  if (!roots.some(root => { const rel = relative(root, cwd); return !isAbsolute(rel) && rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\'); })) throw new Error(hasAccountAuthority(caller) ? 'Repository is outside the selected environment folders' : 'Repository is outside the connection repository roots; select an account-authority environment to use its approved project folders');
   if (!/^\/(?:[a-zA-Z0-9_.-]+\/)*[a-zA-Z0-9_.-]+\.git$/.test(args.remotePath)) throw new Error('Invalid remotePath: use /group/project.git with exactly one leading slash; do not supply //group/project.git or a full URL. Correct the arguments before retrying other repositories.');
   connectionUrl(p, args.remotePath);
   if (!Array.isArray(args.refspecs) || !args.refspecs.length || args.refspecs.some(ref => typeof ref !== 'string' || !ref || /^-/.test(ref) || /[\s\0-\x1f]/.test(ref))) throw new Error('Explicit Git refspecs are required; flags are not allowed');
@@ -105,34 +117,34 @@ export async function authenticatedGit(p: ConnectionProfile, caller: ConnectionP
     const url = `http://127.0.0.1:${port}${prefix}`;
     // Network Git must never read the agent-writable repository configuration:
     // local URL rewrites, helpers, hooks or proxies cannot bypass the broker.
-    const common = await realpath((await gitCall(['rev-parse','--path-format=absolute','--git-common-dir'],cwd,lifetime)).stdout.trim());
+    const common = await realpath((await runGit(['rev-parse','--path-format=absolute','--git-common-dir'],cwd,lifetime)).stdout.trim());
     const inside = (path:string) => roots.some(root=>{const rel=relative(root,path);return !isAbsolute(rel)&&rel!=='..'&&!rel.startsWith('../')&&!rel.startsWith('..\\');});
     const objects = await realpath(join(common,'objects'));
     if (!inside(common)||!inside(objects)||!inside(await realpath(join(common,'refs')))) throw new Error('Git metadata is outside the approved repository roots');
-    const format=(await gitCall(['rev-parse','--show-object-format'],cwd,lifetime)).stdout.trim();
+    const format=(await runGit(['rev-parse','--show-object-format'],cwd,lifetime)).stdout.trim();
     if(!['sha1','sha256'].includes(format))throw new Error('Unsupported Git object format');
-    const before=refMap((await gitCall(['for-each-ref','--format=%(refname) %(objectname)'],cwd,lifetime)).stdout);
+    const before=refMap((await runGit(['for-each-ref','--format=%(refname) %(objectname)'],cwd,lifetime)).stdout);
     const temporary=await mkdtemp(join(tmpdir(),'octipus-git-transport-'));
     try {
-      await gitCall(['init','--bare',`--object-format=${format}`,temporary],temporary,lifetime);
+      await runGit(['init','--bare',`--object-format=${format}`,temporary],temporary,lifetime);
       const env={GIT_OBJECT_DIRECTORY:objects};
       const clean=['--git-dir='+temporary];
-      if(before.size)await gitCall([...clean,'update-ref','--stdin'],temporary,lifetime,[...before].map(([ref,hash])=>`update ${ref} ${hash}`).join('\n')+'\n',env);
+      if(before.size)await runGit([...clean,'update-ref','--stdin'],temporary,lifetime,[...before].map(([ref,hash])=>`update ${ref} ${hash}`).join('\n')+'\n',env);
       if(args.operation==='push' && args.refspecs.some(ref=>/^\+?HEAD:/.test(ref))){
-        const head=(await gitCall(['rev-parse','--verify','HEAD'],cwd,lifetime)).stdout.trim();
+        const head=(await runGit(['rev-parse','--verify','HEAD'],cwd,lifetime)).stdout.trim();
         if(!/^[a-f0-9]{40,64}$/.test(head))throw new Error('Invalid HEAD');
         await writeFile(join(temporary,'HEAD'),head+'\n');
       }
       let result:{stdout:string;stderr:string};
-      try { result=await gitCall([...clean,'-c','credential.helper=','-c','protocol.allow=never','-c','protocol.http.allow=always',
+      try { result=await runGit([...clean,'-c','credential.helper=','-c','protocol.allow=never','-c','protocol.http.allow=always',
         '-c','http.followRedirects=false','-c','http.proxy=','-c','http.extraHeader=',args.operation,
         ...(args.operation==='fetch'?['--no-tags','--no-recurse-submodules']:['--no-verify']),'--',url,...args.refspecs],temporary,lifetime,undefined,env); }
       catch(error){ throw new Error(String(maskOutput((error as Error).message.replaceAll(url,p.http.origin+args.remotePath) + (transportFailure ? `\nGit broker: ${transportFailure}` : '')))); }
       if(args.operation==='fetch'){
-        const after=refMap((await gitCall([...clean,'for-each-ref','--format=%(refname) %(objectname)'],temporary,lifetime,undefined,env)).stdout);
+        const after=refMap((await runGit([...clean,'for-each-ref','--format=%(refname) %(objectname)'],temporary,lifetime,undefined,env)).stdout);
         const changes=[...after].filter(([ref,hash])=>before.get(ref)!==hash);
         if(changes.some(([ref])=>!ref.startsWith('refs/remotes/')&&!ref.startsWith('refs/tags/')))throw new Error('Fetch changed an unexpected ref');
-        if(changes.length) await gitCall(['update-ref','--stdin'],cwd,lifetime,'start\n'+changes.map(([ref,hash])=>`update ${ref} ${hash} ${before.get(ref)??'0'.repeat(format==='sha256'?64:40)}`).join('\n')+'\nprepare\ncommit\n');
+        if(changes.length) await runGit(['update-ref','--stdin'],cwd,lifetime,'start\n'+changes.map(([ref,hash])=>`update ${ref} ${hash} ${before.get(ref)??'0'.repeat(format==='sha256'?64:40)}`).join('\n')+'\nprepare\ncommit\n');
       }
       return maskOutput({exitCode:0,stdout:result.stdout.replaceAll(url,p.http.origin+args.remotePath),stderr:result.stderr.replaceAll(url,p.http.origin+args.remotePath)});
     } finally {await rm(temporary,{recursive:true,force:true});}

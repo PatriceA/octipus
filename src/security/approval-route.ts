@@ -161,7 +161,7 @@ export async function routeApprovalFor(
   }
   const environment = !space && context.trigger !== 'remote' ? executionEnvironmentFor(context) : undefined;
   const background = !canPromptHuman(context);
-  if (environment && level !== 'DENY') {
+  if (environment && (level !== 'DENY' || environment.authority === 'account' && source === 'manifest')) {
     if (background && environment.background === 'deny' && !isReadCall(call)) return deny('This environment does not allow background changes. Open Settings → Environments & Access.');
     const automatic = background ? environment.background === 'automatic' : environment.approval === 'automatic';
     if (automatic && (source !== 'flow-guard' || (environment.network && environment.allowDataTransfer))) {

@@ -1,9 +1,10 @@
 import { homedir } from 'node:os';
-import { posix, resolve } from 'node:path';
+import { delimiter, posix, resolve } from 'node:path';
 import type { AgentContext } from '@/core/types';
 import { ToolNotExecutedError } from '@/core/tool-execution-error';
-import { executionEnvironmentFor, pathInEnvironment, type EnvironmentCaller } from './execution-environments';
+import { executionEnvironmentFor, pathInEnvironment, hasAccountAuthority, type EnvironmentCaller } from './execution-environments';
 import type { ExecutionEnvironment } from '@/shared/execution-environment';
+import { installedProgramPaths, runtimePath } from './runtime-path';
 import { WorkspaceFS } from './workspace-fs';
 import { LocalShellOperations } from '@/tools/shell/local-operations';
 import { tokenizeSafe } from '@/tools/shell/policy';
@@ -13,35 +14,38 @@ export const quoteRuntimeArg = (value: string) => "'" + value.replaceAll("'", "'
 
 /** Environment values travel over SSH stdin, never argv or a persisted command. */
 export const REMOTE_COMMAND_PROGRAM = String.raw`const f=require('node:fs'),c=require('node:child_process');
-const q=JSON.parse(f.readFileSync(0,'utf8'));const child=c.spawn('sh',['-c',q.command],{cwd:q.cwd,env:{...process.env,...q.env},stdio:['pipe','inherit','inherit']});
+const q=JSON.parse(f.readFileSync(0,'utf8'));const child=c.spawn('sh',['-c',q.command],{cwd:q.cwd,env:{...process.env,...q.env,...(q.pathDirectories?.length?{PATH:[...q.pathDirectories,q.env?.PATH??process.env.PATH??''].join(require('node:path').delimiter)}:{})},stdio:['pipe','inherit','inherit']});
 child.on('error',e=>{process.stderr.write(e.message);process.exitCode=127});
 child.stdin.on('error',()=>{});child.stdin.end(q.input??'');
 child.on('exit',(code,signal)=>{process.exitCode=code??1});
 for(const signal of ['SIGTERM','SIGINT','SIGHUP'])process.on(signal,()=>child.kill(signal));`;
 
-export function environmentShellOptions(caller: EnvironmentCaller): ShellEnvOptions & { allowNetwork?: boolean } {
+export function environmentShellOptions(caller: EnvironmentCaller): ShellEnvOptions & { allowNetwork?: boolean; env?: Record<string, string> } {
   const profile = executionEnvironmentFor(caller);
   if (!profile) return {};
   return { environmentId: profile.id, sandboxMode: profile.backend === 'sandbox' ? 'required' : 'off',
     inheritHostIdentity: profile.backend === 'host' && profile.hostIdentity,
     allowHostSshAgent: profile.backend === 'host' && profile.hostIdentity,
     allowNetwork: profile.network, allowHostUsb: profile.hostServices,
+    ...(profile.backend !== 'ssh' && profile.pathDirectories.length ? { env: { PATH: runtimePath([...profile.pathDirectories, process.env.PATH ?? ''].join(delimiter)) } } : {}),
+    ...(profile.backend === 'sandbox' && profile.installedPrograms === 'all' ? { extraReadOnly: installedProgramPaths(runtimePath([...profile.pathDirectories, process.env.PATH ?? ''].join(delimiter))) } : {}),
     extraReadWrite: [...profile.roots, ...(profile.hostServices ? ['/var/run/docker.sock'] : [])] };
 }
 
-export function environmentCwd(profile: ExecutionEnvironment, requested?: string): string {
+export function environmentCwd(profile: ExecutionEnvironment, requested?: string, account = false): string {
   const cwd = profile.backend === 'ssh' ? posix.resolve(profile.roots[0], requested || '.') : resolve(profile.roots[0], requested || '.');
-  if (!profile.roots.some(root => pathInEnvironment(root, cwd))) throw new ToolNotExecutedError('shell', 'Working directory is outside this environment’s approved folders. Open Settings → Environments & Access.');
+  if (!account && !profile.roots.some(root => pathInEnvironment(root, cwd))) throw new ToolNotExecutedError('shell', 'Working directory is outside this environment’s approved folders. Open Settings → Environments & Access.');
   return cwd;
 }
 
 /** The SSH process is a transport. Command execution and login happen on the selected host. */
 export class SshShellOperations implements ShellOperations {
   private readonly local = new LocalShellOperations();
-  constructor(private readonly profile: ExecutionEnvironment) {}
+  constructor(private readonly profile: ExecutionEnvironment, private readonly account = false) {}
   private transport() {
     const remote = this.profile.ssh!;
-    const payload = `node -e ${quoteRuntimeArg(REMOTE_COMMAND_PROGRAM)}`;
+    const path = this.profile.pathDirectories.length ? `PATH=${this.profile.pathDirectories.map(quoteRuntimeArg).join(':')}:"$PATH" ` : '';
+    const payload = `${path}node -e ${quoteRuntimeArg(REMOTE_COMMAND_PROGRAM)}`;
     return ['ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=10', '-p', String(remote.port), '--', `${remote.user}@${remote.host}`, payload].map(quoteRuntimeArg).join(' ');
   }
   async exec(command: string, cwd: string, options: Parameters<ShellOperations['exec']>[2] = {}) {
@@ -51,7 +55,7 @@ export class SshShellOperations implements ShellOperations {
       command = argv.map(quoteRuntimeArg).join(' ');
     }
     return this.local.exec(this.transport(), homedir(), {
-      timeout: options.timeout, input: JSON.stringify({ command, cwd: environmentCwd(this.profile, cwd), env: options.env, input: options.input }), signal: options.signal, onData: options.onData,
+      timeout: options.timeout, input: JSON.stringify({ command, pathDirectories: this.profile.pathDirectories, cwd: environmentCwd(this.profile, cwd, this.account), env: options.env, input: options.input }), signal: options.signal, onData: options.onData,
       unsafe: false, allowNetwork: true, allowHostSshAgent: true, sandboxMode: 'off',
     });
   }
@@ -61,7 +65,7 @@ export class SshShellOperations implements ShellOperations {
       if (!argv) throw new ToolNotExecutedError('shell', 'This command needs useShell:true for shell operators');
       command = argv.map(quoteRuntimeArg).join(' ');
     }
-    return this.local.spawnBackground(this.transport(), homedir(), { input: JSON.stringify({ command, cwd: environmentCwd(this.profile, cwd), env: options?.env }), unsafe: false, allowNetwork: true, allowHostSshAgent: true, sandboxMode: 'off', onExit: options?.onExit });
+    return this.local.spawnBackground(this.transport(), homedir(), { input: JSON.stringify({ command, pathDirectories: this.profile.pathDirectories, cwd: environmentCwd(this.profile, cwd, this.account), env: options?.env }), unsafe: false, allowNetwork: true, allowHostSshAgent: true, sandboxMode: 'off', onExit: options?.onExit });
   }
   async which(command: string) {
     if (!/^[a-zA-Z0-9_.+-]+$/.test(command)) throw new ToolNotExecutedError('shell', 'Use an executable name');
@@ -73,7 +77,7 @@ export class SshShellOperations implements ShellOperations {
 
 export function shellOperationsFor(context: AgentContext, legacy: ShellOperations): ShellOperations {
   const profile = executionEnvironmentFor(context);
-  return profile?.backend === 'ssh' ? new SshShellOperations(profile) : legacy;
+  return profile?.backend === 'ssh' ? new SshShellOperations(profile, hasAccountAuthority(context)) : legacy;
 }
 
 export function resolveEnvironmentCwd(requested: unknown, context: AgentContext): string | undefined {
@@ -81,7 +85,7 @@ export function resolveEnvironmentCwd(requested: unknown, context: AgentContext)
   if (!profile) return undefined;
   if (requested !== undefined && typeof requested !== 'string') throw new ToolNotExecutedError('shell', 'cwd must be a string');
   const project = typeof context.metadata.projectPath === 'string' ? context.metadata.projectPath : profile.roots[0];
-  const cwd = environmentCwd(profile, requested ? (profile.backend === 'ssh' ? posix.resolve(project, requested as string) : resolve(project, requested as string)) : project);
+  const cwd = environmentCwd(profile, requested ? (profile.backend === 'ssh' ? posix.resolve(project, requested as string) : resolve(project, requested as string)) : project, hasAccountAuthority(context));
   // Local file and shell tools must use the same symlink-aware resolver.
   return profile.backend === 'ssh' ? cwd : WorkspaceFS.forAgent(context).resolve(cwd);
 }

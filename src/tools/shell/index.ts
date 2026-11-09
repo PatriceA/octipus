@@ -1,6 +1,6 @@
 import { environmentCredentialOptions } from '@/security/environment-credentials';
 import { environmentShellOptions, shellOperationsFor } from '@/security/environment-runtime';
-import { executionEnvironmentFor } from '@/security/execution-environments';
+import { executionEnvironmentFor, hasAccountAuthority } from '@/security/execution-environments';
 import { environmentToolHome } from '@/security/environment-identity';
 import { withCliKubeconfig } from '@/security/cli-kubeconfig';
 import { isApprovedCall } from '@/security/approved-calls';
@@ -64,8 +64,9 @@ export function shellRunOptions(context: AgentContext, env: Record<string, strin
   return {
     ...options,
     ...runtime,
-    env: { ...caches?.env, ...options.env },
+    env: { ...caches?.env, ...options.env, ...runtime.env },
     allowHostSshAgent: !fs.isSpace && (runtime.allowHostSshAgent ?? true),
+    extraReadOnly: [...(options.extraReadOnly ?? []), ...(runtime.extraReadOnly ?? [])],
     extraReadWrite: [...roots, ...(runtime.extraReadWrite ?? []), ...(options.extraReadWrite ?? []), ...(caches?.paths ?? [])],
     allowedCwdRoots: [...roots, ...(cwd ? [fs.resolve(cwd)] : [])],
   };
@@ -155,7 +156,7 @@ export class ShellTool extends BaseTool {
         const allowNetwork = args.network === true;
 
         // Security checks
-        this.validateCommand(command);
+        this.validateCommand(command, context);
 
         toolLogger.info({
           command: redactedCommand(command),
@@ -249,7 +250,7 @@ export class ShellTool extends BaseTool {
         // Same security contract as `run`: denylist + injection checks, then
         // the operations layer tokenizes (or refuses) the command. No raw
         // `sh -c` bypass.
-        this.validateCommand(command);
+        this.validateCommand(command, context);
 
         toolLogger.info({
           command: redactedCommand(command),
@@ -391,10 +392,10 @@ export class ShellTool extends BaseTool {
     return requested;
   }
 
-  private validateCommand(command: string): void {
+  private validateCommand(command: string, context: AgentContext): void {
     // Content policy lives in `./policy` so the `command_exit_zero` scorer
     // enforces the same denylist rather than a second copy of it.
-    const violation = commandPolicyViolation(command);
+    const violation = hasAccountAuthority(context) ? null : commandPolicyViolation(command);
     if (violation) throw new ToolPolicyRefusalError('shell', violation);
 
     const elevated = matchElevatedCommand(command);

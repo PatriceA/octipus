@@ -330,7 +330,12 @@ export async function boardWritesAllowed(userId: string, sessionId?: string | nu
   try {
     const { getPermissionManager } = await import('@/security/permissions');
     const check = await getPermissionManager().check(userId, 'tasks', 'write', {}, { sessionId: sessionId ?? '', workspaceId: null });
-    return check.level === 'ALLOW' && check.allowed;
+    const { routeApprovalFor } = await import('@/security/approval-route');
+    const session = sessionId ? await (await import('@/db/repositories/session-repository')).sessionRepository.findById(sessionId) : null;
+    const decision = await routeApprovalFor({ userId, sessionId: sessionId ?? undefined, workspaceId: session?.workspaceId ?? null,
+      metadata: (session?.context ?? {}) as Record<string, unknown>, attended: false, trigger: 'schedule', role: 'general' },
+      { toolId: 'tasks', action: 'write' }, check);
+    return decision.route === 'execute';
   } catch (err) {
     coreLogger.warn({ err, userId }, 'heartbeat: tasks permission check failed (treating as not allowed)');
     return false;
