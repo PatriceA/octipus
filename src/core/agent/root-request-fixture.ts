@@ -12,7 +12,7 @@
  */
 import type { ToolAdvertisement, ToolHandler } from '@/core/agent-base';
 import { AgentWorker } from '@/core/agent-worker';
-import type { AgentContext, AgentMessage } from '@/core/types';
+import type { AgentMessage } from '@/core/types';
 import type { CompletionOptions } from '@/models/litellm-client';
 import { AnthropicProvider } from '@/models/providers/anthropic-provider';
 import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
@@ -20,6 +20,7 @@ import delegationPrompt from './delegation-prompt.md';
 import { type BuildSystemPromptOptions, getAgentHooks } from './hooks';
 import { asTrailingBlock, PromptBuilder, splitSharedPrefix } from './prompt-builder';
 import { getRoleConfig } from './roles';
+import { buildAgentContext } from './context';
 import { buildDelegationPolicy, splitHookedRolePrompt } from './root-runner';
 import { ROOT_ROLE } from './types';
 
@@ -102,10 +103,10 @@ export function workerRequestTools(
   advertisement: ToolAdvertisement,
   model: { provider?: string; modelId: string } = { provider: 'anthropic', modelId: 'claude-opus-5-5' },
 ): RequestTools {
-  const ctx: AgentContext = {
-    id: `w-${userId}`, sessionId: '00000000-0000-0000-0000-000000000000', userId, topic: 't', model: model.modelId,
-    role: 'general', status: 'idle', createdAt: new Date(0), updatedAt: new Date(0), metadata: {}, space: null, trigger: 'user', funding: 'own',
-  };
+  const ctx = buildAgentContext({
+    id: `w-${userId}`, sessionId: '00000000-0000-0000-0000-000000000000', userId, topic: 't', model: model.modelId, role: 'general',
+    scope: { workspaceId: null, space: null, trigger: 'user', funding: 'own' },
+  });
   const worker = new AgentWorker(ctx, { maxIterations: 1, contextWindowSize: 100_000, timeout: 60_000, maxTokenBudget: 0, toolOutputSoftCap: 1000, toolAdvertisement: advertisement });
   worker.registerTools(handlers);
   return (worker as unknown as { requestTools(m: { provider?: string; modelId: string }): RequestTools }).requestTools(model);
