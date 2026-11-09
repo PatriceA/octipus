@@ -87,7 +87,7 @@
   --color-on-surface: #20323d;
   --color-on-surface-variant: #536977;
 
-  --color-on-primary: #ffffff;          /* dark text on accent buttons */
+  --color-on-primary: #ffffff;          /* foreground for solid primary buttons */
   --color-on-primary-container: #204d41;
   --color-on-primary-fixed: #ffffff;
   --color-on-primary-fixed-variant: #204d41;
@@ -193,7 +193,7 @@ button, a { transition: all 0.12s ease; }
    to a gray field with a white option menu. Keep sizing and radius local to
    each screen. */
 select:not([multiple]) {
-  color-scheme: light;
+  color-scheme: inherit;
   color: var(--color-on-surface);
   background-color: var(--color-surface-container-high);
   border-color: var(--color-outline-variant);
@@ -405,4 +405,66 @@ select:not([multiple]):disabled {
 
 @media (min-width: 701px) {
   .workspace-chat:has(.workspace-file-view) .workspace-inspector { display: none; }
+}
+
+/* Palette overrides keep every semantic utility on the same theme. */
+:root.dark {
+  --color-background: #101b23;
+  --color-companion-paper: #1b2c32;
+  --color-on-companion-paper: #d2e5e4;
+  --color-foreground: #e0e9ed;
+  --color-primary: #9cd7c7;
+  --color-primary-dim: #83bfaf;
+  --color-primary-container: #24483e;
+  --color-primary-fixed: #9cd7c7;
+  --color-primary-fixed-dim: #83bfaf;
+  --color-on-primary: #102f2b;
+  --color-on-primary-container: #c6efdf;
+  --color-on-primary-fixed: #102f2b;
+  --color-on-primary-fixed-variant: #c6efdf;
+  --color-secondary: #c6b7f1;
+  --color-secondary-dim: #b2a1e1;
+  --color-secondary-container: #393047;
+  --color-secondary-fixed: #c6b7f1;
+  --color-secondary-fixed-dim: #b2a1e1;
+  --color-on-secondary: #2b2041;
+  --color-on-secondary-container: #e3d8fa;
+  --color-on-secondary-fixed: #2b2041;
+  --color-on-secondary-fixed-variant: #e3d8fa;
+  --color-tertiary: #a1d8b7;
+  --color-tertiary-dim: #8cc3a2;
+  --color-tertiary-container: #233e32;
+  --color-on-tertiary: #163325;
+  --color-on-tertiary-container: #c7ecd4;
+  --color-accent: #ebba80;
+  --color-accent-dim: #d5a66d;
+  --color-accent-container: #493824;
+  --color-on-accent: #34240f;
+  --color-error: #ffb4ab;
+  --color-error-dim: #e89c94;
+  --color-error-container: #512d2b;
+  --color-on-error: #441812;
+  --color-on-error-container: #ffd9d4;
+  --color-warning: #e7c47f;
+  --color-warning-dim: #cfae69;
+  --color-warning-container: #423821;
+  --color-on-warning: #32270f;
+  --color-on-warning-container: #f4dfa9;
+  --color-surface: #16242d;
+  --color-surface-dim: #101b23;
+  --color-surface-bright: #263b47;
+  --color-surface-variant: #30434f;
+  --color-surface-tint: #9cd7c7;
+  --color-surface-container: #192a34;
+  --color-surface-container-low: #15232c;
+  --color-surface-container-high: #233742;
+  --color-surface-container-highest: #304752;
+  --color-surface-container-lowest: #101d25;
+  --color-outline: #8da3ae;
+  --color-outline-variant: #425865;
+  --color-on-surface: #e0e9ed;
+  --color-on-surface-variant: #b2c4ce;
+  --color-inverse-surface: #e0e9ed;
+  --color-inverse-on-surface: #192a34;
+  --color-inverse-primary: #265e59;
 }

@@ -31,7 +31,6 @@ import SidePanel from '@/components/chat/side-panel';
 import MonitorPanel from '@/components/chat/monitor-panel';
 import LearningPanel from '@/components/chat/learning-panel';
 import WorkPlanPanel from '@/components/chat/work-plan-panel';
-import { AgentStrip } from '@/components/chat/agent-strip';
 import ContextPanel from '@/components/chat/context-panel';
 import { GlobalPermissionBanner } from '@/components/global-permission-banner';
 import type { SwarmTreeEvent } from '@/components/swarm-tree';
@@ -2113,9 +2112,10 @@ export default function ChatPage() {
 
       {/* Center — Messages + Input */}
       <div className="workspace-conversation flex-1 flex flex-col min-w-0 min-h-0">
-        <div className="flex items-center gap-3 border-b border-outline-variant/50 px-4 py-3">
+        <section className="session-chat-header" aria-label="Conversation header">
+        <div className="session-title-row">
           <h1
-            className="desktop-session-title min-w-0 flex-1 truncate text-sm font-medium text-on-surface"
+            className="desktop-session-title min-w-0 flex-1 truncate text-base font-semibold text-on-surface"
             data-testid="current-session-title"
             title={activeSessionTitle}
           >
@@ -2124,7 +2124,7 @@ export default function ChatPage() {
           <button
             ref={compactSessionButtonRef}
             type="button"
-            className="compact-session-button min-w-0 flex-1 truncate text-left text-sm font-medium text-on-surface"
+            className="compact-session-button min-w-0 flex-1 truncate text-left text-base font-semibold text-on-surface"
             aria-label={`Switch conversation: ${activeSessionTitle}`}
             aria-haspopup="dialog"
             aria-expanded={showCompactSessions}
@@ -2145,9 +2145,11 @@ export default function ChatPage() {
           <p className="mt-1 text-xs text-on-surface-variant">Plan work, follow your projects, or save an idea for later. You can also work directly in any session chat.</p>
           <p className="mt-1 text-xs text-on-surface-variant">{companionChat.data?.modelName} · {companionChat.data?.enabled ? 'Supervision enabled' : 'Supervision disabled'}</p>
         </section>}
-        {activeSessionId && <SessionCost sessionId={activeSessionId} />}
-        {activeSessionId && <SkillUsage key={`skills-${activeSessionId}`} sessionId={activeSessionId} running={isLoading} />}
-        <AgentStrip agents={trackedAgents} />
+        {activeSessionId && <div className="session-tools-row">
+          <SessionCost sessionId={activeSessionId} />
+          <SkillUsage key={`skills-${activeSessionId}`} sessionId={activeSessionId} running={isLoading} />
+        </div>}
+        </section>
         {activeSessionId && historyErrors[activeSessionId] && <div role="status" data-testid="chat-sync-status"
           className="mx-4 my-2 rounded border border-outline-variant/30 bg-surface-container px-3 py-2 text-xs text-on-surface-variant">
           <p>{historyErrors[activeSessionId]}</p>

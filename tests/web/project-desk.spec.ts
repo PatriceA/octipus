@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright';
 import { test, expect } from './fixtures/auth';
 import { json } from './fixtures/api-stubs';
 import { stubGateway } from './fixtures/gateway';
@@ -115,4 +116,21 @@ test('long evolving plans keep the inspector compact and retain the full-plan li
   await expect(inspector.locator('.desk-plan-change')).toHaveCount(1);
   expect(await inspector.locator('.desk-plan-change').evaluate(element => element.getBoundingClientRect().height)).toBeLessThan(80);
   await expect(inspector.getByRole('link', { name: 'View the current plan' })).toHaveAttribute('href', '/chat?session=sess-1');
+});
+test('dark desk keeps session states and plan information readable', async ({ authenticatedPage: page }) => {
+  await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Workspace', exact: true })).toBeVisible();
+  await expect(page.getByRole('progressbar')).toHaveCount(0);
+  await expect(page.getByRole('complementary', { name: 'Selected session' }).getByText('Phone acceptance added after review')).toBeVisible();
+  await page.screenshot({ path: '/tmp/octipus-project-desk-dark.png', fullPage: true });
+  const audit = await new AxeBuilder({ page }).include('main').withRules(['color-contrast']).analyze();
+  expect(audit.violations, JSON.stringify(audit.violations.map(v => v.nodes))).toEqual([]);
+  await page.getByLabel('Message Companion', { exact: true }).fill('Keep this thought');
+  await page.getByRole('button', { name: 'Inspect Solar Map' }).click();
+  await expect(page.getByRole('complementary', { name: 'Selected session' }).getByRole('heading', { name: 'Solar Map', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: /^Needs you/ }).click();
+  await expect(page.getByRole('button', { name: 'Inspect Life2' })).toHaveCount(0);
+  await expect(page.getByLabel('Message Companion', { exact: true })).toHaveValue('Keep this thought');
+  await expect(page.getByRole('button', { name: /^Needs you/ })).toBeFocused();
 });

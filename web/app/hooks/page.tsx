@@ -832,7 +832,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
             <button
               onClick={handleSubmit}
               disabled={isSubmitting || !name.trim()}
-              className="flex items-center gap-2 px-4 py-2 bg-primary text-[#0e0e0e] cursor-pointer rounded-lg hover:bg-primary-container disabled:opacity-50 text-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-on-primary cursor-pointer rounded-lg hover:bg-primary-dim disabled:opacity-50 text-sm"
             >
               {isSubmitting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -1198,7 +1198,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
             <button
               onClick={handleSubmit}
               disabled={isSubmitting || !name.trim()}
-              className="flex items-center gap-2 px-4 py-2 bg-primary text-[#0e0e0e] cursor-pointer rounded-lg hover:bg-primary-container disabled:opacity-50 text-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-on-primary cursor-pointer rounded-lg hover:bg-primary-dim disabled:opacity-50 text-sm"
             >
               {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
               Save Changes
@@ -1292,7 +1292,7 @@ export default function HooksPage() {
         actions={
           <button
             onClick={() => setShowCreate(true)}
-            className="px-4 py-2 bg-primary text-[#0e0e0e] cursor-pointer rounded-lg hover:bg-primary-container flex items-center gap-2"
+            className="px-4 py-2 bg-primary text-on-primary cursor-pointer rounded-lg hover:bg-primary-dim flex items-center gap-2"
           >
             <Plus className="w-4 h-4" />
             New Automation
@@ -1536,7 +1536,7 @@ export default function HooksPage() {
                             </div>
                             <button
                               onClick={() => applySuggestion(s.id)}
-                              className="text-xs px-3 py-1 bg-primary text-[#0e0e0e] rounded-full font-bold hover:bg-primary-container shrink-0 cursor-pointer transition-colors"
+                              className="text-xs px-3 py-1 bg-primary text-on-primary rounded-full font-bold hover:bg-primary-dim shrink-0 cursor-pointer transition-colors"
                             >
                               Add
                             </button>

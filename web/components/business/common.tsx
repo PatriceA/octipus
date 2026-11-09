@@ -10,7 +10,7 @@ import type { FieldDef, RecordData } from '../../../src/shared/record-fields';
 
 export const INPUT = 'w-full bg-surface-container rounded-xs px-3 py-2 text-sm text-on-surface border border-outline-variant/30 focus:border-primary/60 outline-none';
 export const BUTTON = 'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-surface-container-high text-on-surface/80 rounded-lg cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed';
-export const PRIMARY = 'inline-flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-[#0e0e0e] rounded-full font-bold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed';
+export const PRIMARY = 'inline-flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-on-primary rounded-full font-bold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed';
 export const LABEL = 'block text-xs font-medium text-on-surface-variant mb-1';
 export const CARD = 'bg-surface-container rounded-xs border border-outline-variant/10';
 

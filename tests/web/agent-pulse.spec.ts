@@ -26,7 +26,7 @@ test('nothing running and nothing waiting shows no counter', async ({ authentica
   await expect(page.getByTestId('nav-needs-you')).toHaveCount(0);
 });
 
-test('the agents a session spawned sit at the top of the chat, working ones first, each opening its run', async ({ authenticatedPage: page }) => {
+test('session header omits the repetitive spawned-agent strip', async ({ authenticatedPage: page }) => {
   const agents = [
     { id: 'root-1', sessionId: 'sess-1', role: 'general', root: true, model: 'm', status: 'completed', createdAt: at(0), completedAt: at(5), iteration: 2 },
     { id: 'w-done', sessionId: 'sess-1', role: 'research', model: 'm', status: 'completed', createdAt: at(1), completedAt: at(3), iteration: 3 },
@@ -34,15 +34,24 @@ test('the agents a session spawned sit at the top of the chat, working ones firs
   ];
   await page.route('**/api/agents?sessionId=sess-1', (route) => json(route, 200, { agents }));
   await page.route('**/api/agents/*/events?**', (route) => json(route, 200, { events: [], nextCursor: 0, hasMore: false }));
+  await page.route('**/api/sessions/sess-1/execution-environment', route => json(route, 200, {
+    selectedEnvironmentId: 'host', projectPath: '/home/patrice/Github Rep/BPMN-editor',
+    environment: { id: 'host', name: 'Workstation automation', backend: 'host', account: 'patrice', machine: 'patrice-AI-machine' },
+    available: [{ id: 'host', name: 'Workstation automation', backend: 'host', roots: ['/home/patrice/Github Rep'] }],
+  }));
+  await page.emulateMedia({ colorScheme: 'dark' });
   await page.goto('/chat');
   await selectChatSession(page, 'sess-1');
 
-  const strip = page.getByRole('region', { name: 'Spawned agents' });
-  await expect(strip).toContainText('1 working');
-  const links = strip.getByRole('link');
-  await expect(links).toHaveCount(2);
-  await expect(links.first()).toContainText('coding');
-  await expect(links.first()).toHaveAttribute('href', '/agents/view?id=w-live');
-  await expect(links.nth(1)).toContainText('research');
-  await expect(strip).not.toContainText('general');
+  await expect(page.getByTestId('current-session-title')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Spawned agents' })).toHaveCount(0);
+  await expect(page.getByTestId('session-usage')).toBeVisible();
+  await expect(page.getByRole('button', { name: /Skills/ })).toBeVisible();
+  await expect(page.getByTestId('current-session-title')).toHaveCSS('font-size', '16px');
+  await expect(page.getByTestId('session-usage')).toHaveCSS('font-family', await page.locator('.session-chat-header').evaluate(element => getComputedStyle(element).fontFamily));
+  await page.screenshot({ path: '/tmp/octipus-session-header-dark.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole('button', { name: /Switch conversation:/ })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: '/tmp/octipus-session-header-mobile.png', fullPage: true });
 });

@@ -94,3 +94,9 @@ limits. Browser coverage includes actual gateway dispatch, failed/slow idea
 saves, selection and filter drafts, mobile focus restoration, new session setup,
 settings discovery/back navigation, stale snapshots, menu persistence, and the
 existing app page flows.
+
+## Appearance
+
+Use the sun/moon control in the top bar for an immediate switch, or Settings → Appearance for Light, Dark, or Follow device. The selection is saved per browser, follows navigation and applies before the sign-in screen paints. Follow device tracks operating-system appearance changes; an explicit choice stays fixed. Other tabs in the same browser follow the saved choice.
+
+Session headers use a consistent reading font, a prominent conversation title and compact secondary environment, cost and skills controls. The repetitive spawned-agent strip has been removed; run details remain available in the activity views.

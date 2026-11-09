@@ -121,7 +121,7 @@ export default function LinkAccountPage() {
           type="button"
           onClick={handleSubmit}
           disabled={code.length < 6 || redeemMutation.isPending}
-          className="w-full py-3 bg-primary text-[#0e0e0e] rounded-lg font-medium hover:bg-primary-container disabled:opacity-50 cursor-pointer"
+          className="w-full py-3 bg-primary text-on-primary rounded-lg font-medium hover:bg-primary-dim disabled:opacity-50 cursor-pointer"
         >
           {redeemMutation.isPending ? 'Linking…' : 'Link this channel'}
         </button>

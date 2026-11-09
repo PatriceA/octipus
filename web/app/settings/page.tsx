@@ -11,6 +11,7 @@ import { EnvironmentsTab } from '@/components/settings/environments-tab';
 import { CliToolsTab } from '@/components/settings/cli-tools-tab';
 import { ChannelsTab } from '@/components/settings/channels-tab';
 import { ConfigurationTab } from '@/components/settings/configuration-tab';
+import { AppearanceTab } from '@/components/settings/appearance-tab';
 import { GeneralTab } from '@/components/settings/general-tab';
 import { HeartbeatTab } from '@/components/settings/heartbeat-tab';
 import { IntegrationsTab } from '@/components/settings/integrations-tab';
@@ -42,7 +43,7 @@ export default function SettingsPage() {
   const terms = search.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   const groups = permitted.map(group => ({ ...group, entries: group.entries.filter(entry => { const words = `${group.name} ${entry.title} ${entry.keywords}`.toLowerCase().split(/[^a-z0-9]+/); return terms.every(term => words.some(word => word.startsWith(term))); }) })).filter(group => group.entries.length);
   const panels: Record<string, React.ReactNode> = {
-    general: <GeneralTab />, modules: <ModulesTab />, configuration: <ConfigurationTab />, environments: <EnvironmentsTab />,
+    appearance: <AppearanceTab />, general: <GeneralTab />, modules: <ModulesTab />, configuration: <ConfigurationTab />, environments: <EnvironmentsTab />,
     integrations: <IntegrationsTab />, folders: <IntegrationsTab foldersOnly />, 'cli-tools': <CliToolsTab />,
     mailboxes: <MailboxManager />, channels: <ChannelsTab />, security: <SecurityTab />, 'api-tokens': <ApiTokensTab />,
     'my-models': <MyModelsTab />, 'remote-spaces': <RemoteSpacesTab />, voice: <VoiceTab />, notifications: <NotificationsTab />,

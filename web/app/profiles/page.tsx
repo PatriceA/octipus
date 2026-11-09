@@ -240,7 +240,7 @@ function FactEditor({
         <button
           onClick={handleAdd}
           disabled={busy || !newKey.trim() || !newValue.trim()}
-          className="px-3 py-1.5 text-xs font-bold bg-primary text-[#0e0e0e] rounded-full disabled:opacity-40 cursor-pointer"
+          className="px-3 py-1.5 text-xs font-bold bg-primary text-on-primary rounded-full disabled:opacity-40 cursor-pointer"
         >
           Add
         </button>
@@ -362,7 +362,7 @@ function CreateProfileDialog({
             <button
               type="submit"
               disabled={submitting}
-              className="px-4 py-2 text-sm bg-primary text-[#0e0e0e] rounded-full font-bold disabled:opacity-50 cursor-pointer"
+              className="px-4 py-2 text-sm bg-primary text-on-primary rounded-full font-bold disabled:opacity-50 cursor-pointer"
             >
               {submitting ? 'Creating...' : isUserProfile ? 'Create My Profile' : 'Add Person'}
             </button>
@@ -537,7 +537,7 @@ function EditProfileDialog({
                 <button
                   onClick={handleSaveFields}
                   disabled={saving}
-                  className="px-3 py-1.5 text-xs font-bold bg-primary text-[#0e0e0e] rounded-full cursor-pointer disabled:opacity-50"
+                  className="px-3 py-1.5 text-xs font-bold bg-primary text-on-primary rounded-full cursor-pointer disabled:opacity-50"
                 >
                   {saving ? 'Saving...' : 'Save'}
                 </button>
@@ -733,7 +733,7 @@ function EmptyState({
       <div className="flex items-center justify-center gap-3 mt-6">
         <button
           onClick={onSetupProfile}
-          className="px-5 py-2.5 text-sm bg-primary text-[#0e0e0e] rounded-full font-bold cursor-pointer"
+          className="px-5 py-2.5 text-sm bg-primary text-on-primary rounded-full font-bold cursor-pointer"
         >
           Set Up My Profile
         </button>
@@ -830,7 +830,7 @@ export default function ProfilesPage() {
               </div>
               <button
                 onClick={() => setShowCreatePerson(true)}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-[#0e0e0e] rounded-full font-bold cursor-pointer"
+                className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-on-primary rounded-full font-bold cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
                 Add Person
