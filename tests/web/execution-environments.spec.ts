@@ -2,6 +2,20 @@ import { test, expect } from './fixtures/auth';
 import { json } from './fixtures/api-stubs';
 
 const userId = '11111111-1111-4111-8111-111111111111';
+test('switching sessions keeps exactly one environment row with the current project', async ({ authenticatedPage: page }) => {
+  await page.route('**/api/sessions/*/execution-environment', route => {
+    const sessionId = route.request().url().split('/').at(-2);
+    return json(route, 200, { selectedEnvironmentId: null, projectPath: `/projects/${sessionId}`, environment: { backend: 'host', name: 'Workstation', account: 'owner', machine: 'desktop' }, available: [{ id: 'host', name: 'Workstation', backend: 'host', roots: ['/projects'] }] });
+  });
+  await page.goto('/chat?session=sess-1');
+  for (const sessionId of ['sess-1', 'sess-2', 'sess-1', 'sess-2', 'sess-1']) {
+    await page.locator(`[data-session-id="${sessionId}"]`).first().click();
+    const selector = page.getByRole('combobox', { name: 'Project execution environment' });
+    await expect(selector).toHaveCount(1);
+    await expect(page.locator('[aria-label="Execution environment"]')).toHaveText(new RegExp(`/projects/${sessionId}`));
+  }
+});
+
 test('owner can configure, test, reload and revoke a shared execution environment', async ({ authenticatedPage: page }) => {
   let environments: Record<string, unknown>[] = [];
   const probes: unknown[] = [];
