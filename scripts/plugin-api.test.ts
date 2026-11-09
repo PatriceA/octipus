@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import type { PluginPackageView } from '@/shared/plugin-package';
-import { approveCommand, backendBase, listCommand, type PluginApiIo } from './plugin-api';
+import { approveCommand, backendBase, listCommand, parseSettingPairs, type PluginApiIo, secretCommand, setCommand, uninstallCommand } from './plugin-api';
 
 const RECORDED = `sha256:${'a'.repeat(64)}`;
 const ACTUAL = `sha256:${'b'.repeat(64)}`;
@@ -30,7 +30,15 @@ interface Harness {
   asked: string[];
 }
 
-function harness(opts: { packages?: PluginPackageView[]; patch?: (body: { approveContent: string }) => [number, unknown]; interactive?: boolean; answer?: string; token?: string } = {}): Harness {
+function harness(opts: {
+  packages?: PluginPackageView[];
+  patch?: (body: { approveContent?: string; settings?: Record<string, unknown> }) => [number, unknown];
+  respond?: (method: string, body: unknown) => [number, unknown] | undefined;
+  interactive?: boolean;
+  answer?: string;
+  token?: string;
+  secret?: string | Error;
+} = {}): Harness {
   const h: Harness = { out: [], err: [], requests: [], asked: [], io: undefined as unknown as PluginApiIo };
   h.io = {
     env: { API_PORT: '4999', ...(opts.token ? { OCTIPUS_API_TOKEN: opts.token } : {}) },
@@ -38,9 +46,16 @@ function harness(opts: { packages?: PluginPackageView[]; patch?: (body: { approv
     out: (t) => h.out.push(t),
     err: (t) => h.err.push(t),
     ask: async (q) => { h.asked.push(q); return opts.answer ?? ''; },
+    readSecret: async (q) => {
+      h.asked.push(q);
+      if (opts.secret instanceof Error) throw opts.secret;
+      return opts.secret ?? '';
+    },
     fetch: (async (url: string, init: RequestInit) => {
       const body = init.body ? JSON.parse(init.body as string) : undefined;
       h.requests.push({ method: init.method ?? 'GET', url, headers: init.headers as Record<string, string>, body });
+      const custom = opts.respond?.(init.method ?? 'GET', body);
+      if (custom) return new Response(JSON.stringify(custom[1]), { status: custom[0] });
       if (init.method === 'PATCH') {
         const [status, data] = opts.patch?.(body) ?? [200, view({ contentHash: body.approveContent, actualHash: null, problem: null })];
         return new Response(JSON.stringify(data), { status });
@@ -134,6 +149,99 @@ describe('octi plugin approve', () => {
     expect(await approveCommand(harness().io, 'datev', undefined)).toBe(1);
     const bad = harness();
     expect(await approveCommand(bad.io, 'finapi', 'abc')).toBe(2);
+    expect(bad.requests).toEqual([]);
+  });
+});
+
+describe('octi plugin uninstall', () => {
+  test('with --yes: sends DELETE without asking', async () => {
+    const h = harness({ token: 'tok', respond: (m) => (m === 'DELETE' ? [200, { uninstalled: true }] : undefined) });
+    expect(await uninstallCommand(h.io, 'finapi', true)).toBe(0);
+    expect(h.requests).toEqual([{ method: 'DELETE', url: 'http://localhost:4999/api/plugin-packages/finapi', headers: { authorization: 'Bearer tok' }, body: undefined }]);
+    expect(h.asked).toEqual([]);
+    expect(h.out.join('')).toContain('Uninstalled finapi.');
+  });
+
+  test('at a terminal it asks, and only yes deletes; elsewhere it refuses without --yes', async () => {
+    const yes = harness({ interactive: true, answer: 'yes', respond: (m) => (m === 'DELETE' ? [200, { uninstalled: true }] : undefined) });
+    expect(await uninstallCommand(yes.io, 'finapi', false)).toBe(0);
+    expect(yes.asked).toEqual([expect.stringContaining('Uninstall finapi?')]);
+    expect(yes.requests.map((r) => r.method)).toEqual(['DELETE']);
+
+    const no = harness({ interactive: true, answer: 'n' });
+    expect(await uninstallCommand(no.io, 'finapi', false)).toBe(1);
+    expect(no.requests).toEqual([]);
+
+    const batch = harness({ interactive: false });
+    expect(await uninstallCommand(batch.io, 'finapi', false)).toBe(2);
+    expect(batch.requests).toEqual([]);
+    expect(batch.asked).toEqual([]);
+    expect(batch.err.join('')).toContain('octi plugin uninstall finapi --yes');
+  });
+
+  test('an unknown package (404) fails with the backend message; a malformed name is not sent', async () => {
+    const h = harness({ respond: () => [404, { error: 'No plugin package named datev' }] });
+    expect(await uninstallCommand(h.io, 'datev', true)).toBe(1);
+    expect(h.err.join('')).toContain('No plugin package named datev');
+    const bad = harness();
+    expect(await uninstallCommand(bad.io, '../users', true)).toBe(2);
+    expect(bad.requests).toEqual([]);
+  });
+});
+
+describe('octi plugin set', () => {
+  test('sends key=value pairs as settings (key= clears), and shows what is saved', async () => {
+    const h = harness({ patch: () => [200, view({ actualHash: null, problem: null, settings: { region: 'eu', limit: 5 } })] });
+    expect(await setCommand(h.io, 'finapi', ['region=eu', 'limit=5', 'note=', 'url=https://x.example/?a=b'])).toBe(0);
+    expect(h.requests).toEqual([expect.objectContaining({ method: 'PATCH', url: 'http://localhost:4999/api/plugin-packages/finapi', body: { settings: { region: 'eu', limit: '5', note: null, url: 'https://x.example/?a=b' } } })]);
+    expect(h.out.join('')).toContain('Saved the settings of finapi: region=eu limit=5.');
+  });
+
+  test('a refusal shows every problem; malformed pairs are not sent', async () => {
+    const h = harness({ patch: () => [400, { error: 'The settings do not fit the package', problems: ['Limit: must be a number', 'Unknown field "nope"'] }] });
+    expect(await setCommand(h.io, 'finapi', ['limit=x', 'nope=1'])).toBe(1);
+    expect(h.err.join('')).toMatch(/do not fit[\s\S]*Limit: must be a number[\s\S]*Unknown field "nope"/);
+    for (const pairs of [[], ['region'], ['=eu'], ['Region=eu'], ['a=1', 'a=2']]) {
+      const bad = harness();
+      expect(await setCommand(bad.io, 'finapi', pairs), JSON.stringify(pairs)).toBe(2);
+      expect(bad.requests).toEqual([]);
+    }
+    expect(parseSettingPairs(['a=x=y'])).toEqual({ a: 'x=y' });
+  });
+});
+
+describe('octi plugin secret', () => {
+  test('reads the value from the prompt or stdin (one trailing newline dropped) and PUTs it; it is never printed', async () => {
+    const h = harness({ secret: 's3cr3t value\n', respond: (m) => (m === 'PUT' ? [200, { saved: true }] : undefined) });
+    expect(await secretCommand(h.io, 'finapi', 'FINAPI_TOKEN', false)).toBe(0);
+    expect(h.requests).toEqual([expect.objectContaining({ method: 'PUT', url: 'http://localhost:4999/api/plugin-packages/finapi/secrets/FINAPI_TOKEN', body: { value: 's3cr3t value' } })]);
+    expect(h.asked).toEqual([expect.stringContaining('not shown')]);
+    expect([...h.out, ...h.err].join('')).not.toContain('s3cr3t');
+    expect(h.out.join('')).toContain('Saved FINAPI_TOKEN of finapi.');
+  });
+
+  test('--clear sends null without reading; an empty value is refused', async () => {
+    const clear = harness({ respond: (m) => (m === 'PUT' ? [200, { saved: true }] : undefined) });
+    expect(await secretCommand(clear.io, 'finapi', 'FINAPI_TOKEN', true)).toBe(0);
+    expect(clear.requests.map((r) => r.body)).toEqual([{ value: null }]);
+    expect(clear.asked).toEqual([]);
+
+    const empty = harness({ secret: '\n' });
+    expect(await secretCommand(empty.io, 'finapi', 'FINAPI_TOKEN', false)).toBe(2);
+    expect(empty.requests).toEqual([]);
+    expect(empty.err.join('')).toContain('--clear');
+
+    const cancelled = harness({ secret: new Error('cancelled') });
+    expect(await secretCommand(cancelled.io, 'finapi', 'FINAPI_TOKEN', false)).toBe(1);
+    expect(cancelled.requests).toEqual([]);
+  });
+
+  test('a refusal (undeclared key, required while enabled) is shown; a malformed key is not sent', async () => {
+    const h = harness({ secret: 'x', respond: () => [400, { error: 'finapi declares no secret NOPE' }] });
+    expect(await secretCommand(h.io, 'finapi', 'NOPE', false)).toBe(1);
+    expect(h.err.join('')).toContain('declares no secret NOPE');
+    const bad = harness({ secret: 'x' });
+    expect(await secretCommand(bad.io, 'finapi', 'a/b', false)).toBe(2);
     expect(bad.requests).toEqual([]);
   });
 });

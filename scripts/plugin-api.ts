@@ -1,6 +1,7 @@
 /**
- * `octi plugin list` and `octi plugin approve` (docs/PLUGIN-PACKAGES.md):
- * the installed plugin packages, through the running backend's API.
+ * `octi plugin list`, `approve`, `set`, `secret` and `uninstall`
+ * (docs/PLUGIN-PACKAGES.md): the installed plugin packages, through the
+ * running backend's API.
  *
  * Authenticates the way the other CLI commands that call the backend do: a
  * bearer API token from `OCTIPUS_API_TOKEN` (docs/API.md; `octi persona`),
@@ -21,6 +22,12 @@ export interface PluginApiIo {
   interactive: boolean;
   /** Ask a yes/no question; resolves to the answer typed. */
   ask: (question: string) => Promise<string>;
+  /**
+   * Read a secret value: at a terminal a prompt that does not echo, else all
+   * of stdin. Never from the command line, where it would land in the shell
+   * history and the process list.
+   */
+  readSecret: (prompt: string) => Promise<string>;
 }
 
 /** The backend's base URL, as `octi capabilities`, `octi persona` and `octi doctor` reach it. */
@@ -131,6 +138,103 @@ export async function approveCommand(io: PluginApiIo, name: string, hash: string
   } catch (err) {
     if (!(err instanceof CliError)) throw err;
     io.err(`octi plugin approve: ${err.message}\n`);
+    return err.exitCode;
+  }
+}
+
+/** A package name as the backend accepts it in a path: checked here so a typo is not sent as some other path. */
+function checkName(name: string): void {
+  if (!/^[a-z][a-z0-9-]{1,49}$/.test(name)) throw new CliError(`${JSON.stringify(name)} is not a plugin package name`, 2);
+}
+
+/**
+ * `octi plugin uninstall <name> [--yes]`: remove a package, its files, data
+ * directory, settings and secrets. Asks at a terminal; not at one, it is
+ * refused unless --yes says so.
+ */
+export async function uninstallCommand(io: PluginApiIo, name: string, yes: boolean): Promise<number> {
+  try {
+    checkName(name);
+    if (!yes) {
+      if (!io.interactive) throw new CliError(`not at a terminal: run \`octi plugin uninstall ${name} --yes\` to remove it without asking`, 2);
+      const answer = (await io.ask(`Uninstall ${name}? Its files, data directory, settings and secrets are deleted. [y/N] `)).trim().toLowerCase();
+      if (answer !== 'y' && answer !== 'yes') {
+        io.out('Not uninstalled.\n');
+        return 1;
+      }
+    }
+    await request<{ uninstalled: boolean }>(io, 'DELETE', `/${encodeURIComponent(name)}`);
+    io.out(`Uninstalled ${name}.\n`);
+    return 0;
+  } catch (err) {
+    if (!(err instanceof CliError)) throw err;
+    io.err(`octi plugin uninstall: ${err.message}\n`);
+    return err.exitCode;
+  }
+}
+
+/** `key=value` pairs as the settings a PATCH sends: `key=` clears the setting (null). */
+export function parseSettingPairs(pairs: readonly string[]): Record<string, string | null> {
+  if (pairs.length === 0) throw new CliError('give at least one key=value', 2);
+  const out: Record<string, string | null> = {};
+  for (const pair of pairs) {
+    const at = pair.indexOf('=');
+    const key = at < 0 ? '' : pair.slice(0, at);
+    if (!/^[a-z][a-z0-9_]{0,49}$/.test(key)) throw new CliError(`"${pair}": expected key=value with a setting key (lower-case letters, digits, _)`, 2);
+    if (Object.hasOwn(out, key)) throw new CliError(`${key} is given twice`, 2);
+    const value = pair.slice(at + 1);
+    out[key] = value.trim() === '' ? null : value;
+  }
+  return out;
+}
+
+/**
+ * `octi plugin set <name> key=value...`: change settings (not secrets: see
+ * `octi plugin secret`). Values go as typed and the backend checks them
+ * against the manifest's fields (numbers, `true`/`false`, choices); `key=`
+ * clears one. All or nothing.
+ */
+export async function setCommand(io: PluginApiIo, name: string, pairs: readonly string[]): Promise<number> {
+  try {
+    checkName(name);
+    const settings = parseSettingPairs(pairs);
+    const view = await request<PluginPackageView>(io, 'PATCH', `/${encodeURIComponent(name)}`, { settings });
+    const shown = Object.entries(view.settings).map(([k, v]) => `${k}=${String(v)}`);
+    io.out(`Saved the settings of ${name}${shown.length ? `: ${shown.join(' ')}` : ' (none set)'}.\n`);
+    if (view.problem) io.out(`  still: ${view.problem}\n`);
+    return 0;
+  } catch (err) {
+    if (!(err instanceof CliError)) throw err;
+    io.err(`octi plugin set: ${err.message}\n`);
+    return err.exitCode;
+  }
+}
+
+/**
+ * `octi plugin secret <name> <KEY> [--clear]`: set one declared secret,
+ * reading its value from a prompt that does not echo (at a terminal) or from
+ * stdin (`… < file`, `printf %s "$X" | …`), never from the command line; one
+ * trailing newline is dropped. `--clear` removes it. The value is never shown.
+ */
+export async function secretCommand(io: PluginApiIo, name: string, key: string, clear: boolean): Promise<number> {
+  try {
+    checkName(name);
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(key)) throw new CliError(`${JSON.stringify(key)} is not a secret key (an environment variable name)`, 2);
+    let value: string | null = null;
+    if (!clear) {
+      try {
+        value = (await io.readSecret(`Value for ${key} of ${name} (not shown): `)).replace(/\r?\n$/, '');
+      } catch (err) {
+        throw new CliError(`no value read for ${key}: ${(err as Error).message}`);
+      }
+      if (value.trim() === '') throw new CliError(`no value given for ${key}; use --clear to remove it`, 2);
+    }
+    await request<{ saved: boolean }>(io, 'PUT', `/${encodeURIComponent(name)}/secrets/${encodeURIComponent(key)}`, { value });
+    io.out(clear ? `Removed ${key} of ${name}.\n` : `Saved ${key} of ${name}.\n`);
+    return 0;
+  } catch (err) {
+    if (!(err instanceof CliError)) throw err;
+    io.err(`octi plugin secret: ${err.message}\n`);
     return err.exitCode;
   }
 }

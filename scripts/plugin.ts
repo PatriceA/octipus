@@ -9,6 +9,9 @@
  *   octi plugin sign-index <index.json> --key <file>  Sign a registry index (<index.json>.sig).
  *   octi plugin list             Installed packages (through the running backend).
  *   octi plugin approve <name> [--hash sha256:…]  Approve a package's changed content.
+ *   octi plugin set <name> key=value...  Change a package's settings.
+ *   octi plugin secret <name> <KEY> [--clear]  Set (from stdin or a hidden prompt) or remove a secret.
+ *   octi plugin uninstall <name> [--yes]  Remove a package.
  *
  * Delegated from bin/octi.ts. Uses the published validation kit so authors and
  * the host run identical checks.
@@ -23,7 +26,7 @@ import { ManifestError } from '@/plugins/packages/manifest';
 import { generateSigningKey, SignatureError, signPackage, signRegistryIndexFile } from '@/plugins/packages/signature';
 import { PackageTreeError } from '@/plugins/packages/tree';
 import { PLUGIN_TOOL_EFFECTS, type PluginToolEffect } from '@/shared/plugin-package';
-import { approveCommand, listCommand, type PluginApiIo } from './plugin-api';
+import { approveCommand, listCommand, type PluginApiIo, secretCommand, setCommand, uninstallCommand } from './plugin-api';
 
 const HELP = `octi plugin — plugin tooling
 
@@ -54,8 +57,19 @@ Usage:
                                 Approve a package's changed content. Without --hash it
                                 shows the actual hash and asks (at a terminal only).
                                 Refused when the files no longer hash to it.
+  octi plugin set <name> key=value...
+                                Change settings (checked against the manifest; key=
+                                clears one). Not for secrets.
+  octi plugin secret <name> <KEY> [--clear]
+                                Set a secret: the value is read from a prompt that does
+                                not echo, or from stdin (octi plugin secret finapi
+                                API_TOKEN < token.txt); never from the command line.
+                                --clear removes it.
+  octi plugin uninstall <name> [--yes]
+                                Remove a package, its files, data, settings and secrets.
+                                Asks at a terminal; elsewhere refused without --yes.
 
-list and approve call the running backend (http://localhost:$API_PORT, 3005 by
+list, approve, set, secret and uninstall call the running backend (http://localhost:$API_PORT, 3005 by
 default) with the admin API token in OCTIPUS_API_TOKEN (Settings → API Tokens).
 `;
 
@@ -149,7 +163,83 @@ function apiIo(): PluginApiIo {
         rl.close();
       }
     },
+    readSecret: (prompt) => (process.stdin.isTTY === true ? readHidden(prompt) : readAllStdin()),
   };
+}
+
+/** All of stdin (a pipe or a file), at most 64 KiB. */
+async function readAllStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of process.stdin) {
+    total += (chunk as Buffer).length;
+    if (total > 64 * 1024) throw new Error('the value on stdin is larger than 64 KiB');
+    chunks.push(chunk as Buffer);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+/** One line typed at the terminal without echoing it (raw mode; Ctrl-C aborts). */
+function readHidden(prompt: string): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const stdin = process.stdin;
+    process.stderr.write(prompt);
+    let value = '';
+    const done = (err?: Error) => {
+      stdin.setRawMode(false);
+      stdin.pause();
+      stdin.off('data', onData);
+      process.stderr.write('\n');
+      if (err) reject(err);
+      else resolvePromise(value);
+    };
+    const onData = (data: Buffer) => {
+      for (const ch of data.toString('utf8')) {
+        if (ch === '\r' || ch === '\n' || ch === '\u0004') return done();
+        if (ch === '\u0003') return done(new Error('cancelled'));
+        if (ch === '\u007f' || ch === '\b') value = value.slice(0, -1);
+        else value += ch;
+      }
+    };
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.on('data', onData);
+  });
+}
+
+function usage(sub: string, expected: string): never {
+  process.stderr.write(`octi plugin ${sub}: ${expected}\n\n${HELP}`);
+  process.exit(2);
+}
+
+async function runApiCommand(sub: 'set' | 'secret' | 'uninstall', argv: string[]): Promise<never> {
+  let values: { yes?: boolean; clear?: boolean };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = parseArgs({
+      args: argv,
+      allowPositionals: true,
+      options: sub === 'uninstall' ? { yes: { type: 'boolean', short: 'y' } } : sub === 'secret' ? { clear: { type: 'boolean' } } : {},
+    }));
+  } catch (err) {
+    usage(sub, (err as Error).message);
+  }
+  const io = apiIo();
+  switch (sub) {
+    case 'set':
+      if (positionals.length < 2) usage(sub, 'expected <name> key=value...');
+      process.exit(await setCommand(io, positionals[0], positionals.slice(1)));
+      break;
+    case 'secret':
+      // A third positional is most likely the value typed on the command line: refuse it.
+      if (positionals.length === 3) usage(sub, 'the value is not taken from the command line (shell history, process list); type it at the prompt or pipe it on stdin');
+      if (positionals.length !== 2) usage(sub, 'expected <name> <KEY> [--clear]');
+      process.exit(await secretCommand(io, positionals[0], positionals[1], values.clear === true));
+      break;
+    case 'uninstall':
+      if (positionals.length !== 1) usage(sub, 'expected <name> [--yes]');
+      process.exit(await uninstallCommand(io, positionals[0], values.yes === true));
+  }
 }
 
 async function runApprove(argv: string[]): Promise<never> {
@@ -265,6 +355,11 @@ async function main(): Promise<void> {
       break;
     case 'approve':
       await runApprove(rest);
+      break;
+    case 'set':
+    case 'secret':
+    case 'uninstall':
+      await runApiCommand(sub, rest);
       break;
     case undefined:
     case 'help':

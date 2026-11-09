@@ -644,15 +644,26 @@ the signature state (`signature`).
 octi plugin list
 octi plugin approve finapi --hash sha256:<actualHash>
 octi plugin approve finapi            # shows the actual hash and asks (at a terminal only)
+octi plugin set finapi region=eu limit=50 note=   # settings; key= clears one
+octi plugin secret finapi FINAPI_CLIENT_SECRET    # hidden prompt
+octi plugin secret finapi FINAPI_CLIENT_SECRET < secret.txt   # or stdin
+octi plugin secret finapi FINAPI_CLIENT_SECRET --clear
+octi plugin uninstall finapi          # asks; --yes when not at a terminal
 ```
 
-Both call the running backend at `http://localhost:$API_PORT` (3005 by
+They call the running backend at `http://localhost:$API_PORT` (3005 by
 default) with the bearer token in `OCTIPUS_API_TOKEN` (an admin's API token,
 Settings → API Tokens; [API.md](API.md#getting-an-api-token)), as `octi
 persona` does. `list` shows each package's state, signature, network state and
 its recorded and actual hash. `approve` without `--hash` refuses when it
 cannot ask (not a terminal) and prints the command to run after reviewing; a
-`409` (the files changed again) is shown and exits non-zero.
+`409` (the files changed again) is shown and exits non-zero. `set` sends the
+pairs as one settings change (the backend checks them against the manifest;
+all or nothing). `secret` never takes the value on the command line, where it
+would end up in the shell history and the process list: it reads it from a
+prompt that does not echo, or from stdin (one trailing newline dropped), and
+never prints it. `uninstall` asks at a terminal and is refused elsewhere
+without `--yes`.
 
 Every change is in the audit log (`resource_type = plugin_package`).
 
