@@ -260,11 +260,11 @@ select:not([multiple]):disabled {
 }
 
 
-/* Single-line dim frame — the web equivalent of a TUI bordered pane.
-   Pair with surface bg for the "panel" look. */
+/* Shared panels follow the current surface and text palette together. */
 .term-frame {
-  border: 1px solid #34515b;
-  background: #0d2530;
+  border: 1px solid var(--color-outline-variant);
+  background: var(--color-surface-container);
+  color: var(--color-on-surface);
 }
 
 /* Status dots — small coloured circles for connection / health state. */
