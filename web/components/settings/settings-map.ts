@@ -42,6 +42,7 @@ export const settingsGroups: Array<{ name: string; description: string; icon: st
   { name: 'System', description: 'Usage, diagnostics, and installation controls.', icon: 'settings', entries: [
     { title: 'Features & modules', tab: 'modules', keywords: 'enable disable modules' },
     { title: 'Usage & budgets', tab: 'usage', keywords: 'cost tokens cache limits spend' },
+    { title: 'My plugin usage', tab: 'plugin-usage', keywords: 'plugins packages usage runs cancel background' },
     { title: 'Health & diagnostics', tab: 'health', keywords: 'status services providers', admin: true },
     { title: 'Advanced configuration', tab: 'configuration', keywords: 'gateway logging API settings', admin: true },
     { title: 'Tools', href: '/tools', keywords: 'tool inventory', admin: true },

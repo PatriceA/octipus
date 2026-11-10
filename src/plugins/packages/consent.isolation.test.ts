@@ -228,6 +228,11 @@ describe('install consent', () => {
     expect(row?.approvedContributionsHash).not.toBeNull();
     expect((await auditOps('consent')).at(-1)).toMatchObject({ installed: true, accepted: [...ALL_IDS].sort() });
     await svc.setEnabled(NAME, false, admin);
+    // Agreed once for these files: enabling again asks for nothing new.
+    const again = await consentView(NAME);
+    expect(again.declarations.every((d) => d.carried)).toBe(true);
+    expect((await consentToInstalled(NAME, { contentHash: again.contentHash, accepted: [], enable: true }, admin)).enabled).toBe(true);
+    await svc.setEnabled(NAME, false, admin);
   });
 
   test('the running background runs of a plugin are listed by id, user, role and title', async () => {

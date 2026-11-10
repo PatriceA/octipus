@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page, Route } from '@playwright/test';
 import { test, expect } from './fixtures/auth';
+import { consentView, HASH, perms, preview, tickAll } from './fixtures/plugin-consent';
 import { json } from './fixtures/api-stubs';
 
 /**
@@ -146,6 +147,11 @@ test.describe('the Research plugin page', () => {
   });
 
   test('the admin page offers it under Bundled, installs it, and says what its scopes do', async ({ authenticatedPage: page }) => {
+    const researchPerms = perms('research', {
+      host: ['agent:run', 'documents:write'],
+      tools: [{ name: 'research_status', effect: 'read' }, { name: 'save_report', effect: 'write' }, { name: 'start_research', effect: 'write' }],
+      pages: [{ path: 'run', title: 'Research', entry: 'index.html' }], ui: { dir: 'ui', sha256: 'ab'.repeat(32) },
+    });
     const posts: unknown[] = [];
     let installed: string | null = null;
     const pkg = {
@@ -171,11 +177,16 @@ test.describe('the Research plugin page', () => {
           { name: 'research', version: '1.0.0', title: 'Research', description: 'Deep research in the background.', host: ['agent:run', 'documents:write'], network: [], installed },
         ]);
       }
+      if (req.method() === 'GET' && req.url().endsWith('/research/consent')) return json(route, 200, consentView(researchPerms, { title: 'Research' }));
       if (req.method() === 'GET') return json(route, 200, installed ? [pkg] : []);
-      if (req.method() === 'POST') {
+      if (req.method() === 'POST' && req.url().endsWith('/preview')) {
+        posts.push(req.postDataJSON());
+        return json(route, 200, preview(researchPerms, { title: 'Research', origin: { source: 'bundled' } }));
+      }
+      if (req.method() === 'POST' && req.url().endsWith('/install')) {
         posts.push(req.postDataJSON());
         installed = '1.0.0';
-        return json(route, 200, { name: 'research', version: '1.0.0', enabled: false, signedBy: null, warnings: [] });
+        return json(route, 200, { name: 'research', version: '1.0.0', contentHash: HASH, enabled: false, enableProblem: null, warnings: [] });
       }
       return json(route, 404, {});
     });
@@ -184,19 +195,21 @@ test.describe('the Research plugin page', () => {
     const row = page.locator('[data-testid="bundled-plugin"][data-name="research"]');
     await expect(row).toContainText('agent:run, documents:write');
     await row.getByRole('button', { name: 'Install research' }).click();
+    const install = page.getByTestId('plugin-consent');
+    await tickAll(install);
+    await install.getByRole('button', { name: 'Install', exact: true }).click();
     await expect(page.getByTestId('bundled-plugins').getByRole('status')).toContainText('Installed research 1.0.0 (disabled)');
-    expect(posts).toEqual([{ bundled: 'research' }]);
+    expect(posts[0]).toEqual({ bundled: 'research' });
 
     const installedRow = page.locator('[data-testid="plugin-package"][data-name="research"]');
     const notes = installedRow.getByTestId('plugin-scope-note');
     await expect(notes).toHaveCount(2);
     await expect(notes.first()).toContainText('agent:run starts background agent runs as the user');
     await expect(notes.last()).toContainText('documents:write creates text documents');
-    const dialogs: string[] = [];
-    page.once('dialog', (d) => { dialogs.push(d.message()); void d.dismiss(); });
     await installedRow.getByRole('button', { name: 'Enable research' }).click();
-    await expect.poll(() => dialogs.length).toBe(1);
-    expect(dialogs[0]).toContain('approve its host API scopes agent:run, documents:write');
-    expect(dialogs[0]).toContain('unattended');
+    const consent = page.getByTestId('plugin-consent');
+    await expect(consent.locator('[data-id="host:agent:run"]')).toContainText('Starts background agent runs as you');
+    await expect(consent.locator('[data-id="host:agent:run"]').getByTestId('consent-guidance')).toContainText('unattended');
+    await expect(consent.locator('[data-id="host:documents:write"]').getByTestId('consent-guidance')).toContainText('documents:write creates text documents');
   });
 });

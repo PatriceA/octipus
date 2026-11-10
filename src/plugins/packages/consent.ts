@@ -25,7 +25,8 @@
  *
  * `consentView` / `consentToInstalled` do the same for a package already
  * installed (an agent's, or one installed before this flow): the
- * declarations of its files as they are, agreed to and enabled in one write.
+ * declarations of its files as they are, agreed to and enabled in one write;
+ * what its recorded approvals already cover for those files is carried.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, readdir, rm, stat } from 'node:fs/promises';
@@ -365,9 +366,14 @@ export async function consentView(name: string): Promise<PluginConsentView> {
   const dir = packageDir(name);
   const contentHash = await hashPackageContent(dir, row);
   const permissions = await packagePermissions(row.manifest, dir);
+  const covered = contentHash === row.contentHash ? await coveredBy(row) : () => false;
   return {
     name, version: row.version, title: row.manifest.title, contentHash, signedBy: row.signedBy, origin: row.origin ?? null, enabled: row.enabled,
-    declarations: consentItems(declarationItems(permissions, row.manifest), null),
+    // What its consent already covers for exactly these files (approved scopes, contributions, in-process) is carried.
+    declarations: (() => {
+      const items = declarationItems(permissions, row.manifest);
+      return consentItems(items, items, covered);
+    })(),
     guidance: [...permissionsGuidance(permissions), ...modelTrustWarnings(row.manifest).map((message) => ({ code: 'model_cli_tools', message }))],
   };
 }

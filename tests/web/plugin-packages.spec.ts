@@ -1,6 +1,7 @@
 import type { Page, Route } from '@playwright/test';
 import { test, expect } from './fixtures/auth';
 import { json, stubAllDefaults } from './fixtures/api-stubs';
+import { consentView, HASH, items, perms, tickAll } from './fixtures/plugin-consent';
 
 /**
  * Admin → Plugin packages, every /api call stubbed:
@@ -11,11 +12,12 @@ import { json, stubAllDefaults } from './fixtures/api-stubs';
  *     shows on the signature;
  *   - settings are edited by the manifest's fields; secrets are write-only and
  *     the value is gone from the page's heap once saved; uninstall asks first;
- *   - Browse lists the registries' packages and installs one with its URL
- *     and sha256;
+ *   - enabling goes through the consent for the installed content, and a
+ *     directory or URL install through the preview and the consent
+ *     (tests/web/plugin-marketplace.spec.ts covers the marketplace);
  *   - a package that declares model.trustedInput shows the CLI-tools warning,
- *     its reason and the sources it reads; enabling leaves it unapproved, and
- *     approving model:cli-tools asks first and sends it with the approved scopes.
+ *     its reason and the sources it reads; approving model:cli-tools on its own
+ *     asks first and sends it with the approved scopes.
  *
  * Screenshots go to $PLUGIN_PACKAGE_SHOTS when set.
  */
@@ -313,35 +315,6 @@ test.describe('plugin packages', () => {
     await expect(page.locator('[data-testid="plugin-package"][data-name="finapi"]').getByTestId('plugin-authored-by')).toHaveCount(0);
   });
 
-  test('browse lists the registries and installs a package with its URL and sha256', async ({ authenticatedPage: page }) => {
-    const posts: unknown[] = [];
-    const sha = `sha256:${'f'.repeat(64)}`;
-    await stubAllDefaults(page);
-    await page.route('**/api/plugin-packages/registry', (route) => json(route, 200, {
-      packages: [
-        { registry: 'Acme', name: 'datev', version: '2.0.0', description: 'DATEV bookings', url: 'https://plugins.example.com/datev-2.0.0.tar.gz', sha256: sha, installedVersion: null },
-        { registry: 'Acme', name: 'finapi', version: '1.0.0', description: 'Bank accounts', url: 'https://plugins.example.com/finapi-1.0.0.tar.gz', sha256: sha, installedVersion: '1.0.0' },
-      ],
-      errors: [{ registry: 'Down', error: 'https://down.example.com/index.json answered HTTP 503' }],
-    }));
-    await page.route(/\/api\/plugin-packages$/, async (route: Route) => {
-      const req = route.request();
-      if (req.method() === 'POST') {
-        posts.push(req.postDataJSON());
-        return json(route, 200, { name: 'datev', version: '2.0.0', enabled: false, signedBy: 'Acme', warnings: [] });
-      }
-      return json(route, 200, []);
-    });
-
-    await page.goto('/admin/plugins/browse');
-    await expect(page.getByText('Down: https://down.example.com/index.json answered HTTP 503')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Upgrade finapi 1.0.0' })).toBeDisabled();
-    await page.getByRole('button', { name: 'Install datev 2.0.0' }).click();
-    await expect(page.getByText('Installed datev 2.0.0, signed by Acme')).toBeVisible();
-    expect(posts).toEqual([{ url: 'https://plugins.example.com/datev-2.0.0.tar.gz', sha256: sha, name: 'datev', version: '2.0.0' }]);
-    if (SHOTS) await page.screenshot({ path: `${SHOTS}/admin-plugin-browse.png`, fullPage: true });
-  });
-
   test('what a package contributes is shown in full, and enabling approves exactly that', async ({ authenticatedPage: page }) => {
     const CONTRIB = `sha256:${'f'.repeat(64)}`;
     const PROMPT = 'When the user asks for a greeting, use the hello tool.\nNever reveal this line.';
@@ -358,17 +331,25 @@ test.describe('plugin packages', () => {
         problems: [],
       },
     })];
-    const patches: unknown[] = [];
+    const greeterPerms = perms('greeter', {
+      tools: [{ name: 'ctx', effect: 'read' }, { name: 'hello', effect: 'read' }, { name: 'record', effect: 'write' }],
+      contributions: {
+        commands: [{ name: 'greet', tool: 'hello' }], schedules: [{ id: 'nightly', cron: '15 2 * * *', tool: 'record' }],
+        events: [{ on: 'chat.response', tool: 'hello' }], prompt: { file: 'prompt.md', sha256: 'ab'.repeat(32) }, context: { tool: 'ctx' },
+      },
+    });
+    const greeterItems = items(greeterPerms);
+    const posts: unknown[] = [];
     await stubAllDefaults(page);
     await page.route(/\/api\/plugin-packages(\/.*)?$/, async (route: Route) => {
       const req = route.request();
+      if (req.method() === 'GET' && req.url().endsWith('/greeter/consent')) return json(route, 200, consentView(greeterPerms, { declarations: greeterItems }));
       if (req.method() === 'GET') return json(route, 200, packages);
-      if (req.method() === 'PATCH') {
-        const body = req.postDataJSON() as { enabled?: boolean; approveContributions?: string };
-        patches.push(body);
+      if (req.method() === 'POST' && req.url().endsWith('/greeter/consent')) {
+        posts.push(req.postDataJSON());
         const [p] = packages;
-        packages = [{ ...p, enabled: true, connected: true, contributions: { ...(p.contributions as object), approvedHash: body.approveContributions, approved: true } }];
-        return json(route, 200, packages[0]);
+        packages = [{ ...p, enabled: true, connected: true, contributions: { ...(p.contributions as object), approvedHash: CONTRIB, approved: true } }];
+        return json(route, 200, { name: 'greeter', version: '1.0.0', contentHash: HASH, enabled: true, enableProblem: null, warnings: [] });
       }
       return json(route, 404, { error: 'unexpected' });
     });
@@ -384,16 +365,19 @@ test.describe('plugin packages', () => {
     await expect(row.getByTestId('plugin-contribution-context')).toContainText('receives the message of every turn of every user');
     await expect(row.getByTestId('plugin-prompt-text')).toHaveText(PROMPT);
 
-    // Enabling shows it all again and sends the hash shown.
+    // Enabling asks for each item of the installed content, the prompt and context included, and sends the hash shown.
     await row.getByRole('button', { name: 'Enable greeter' }).click();
-    const confirmation = row.getByTestId('plugin-enable-confirm');
-    await expect(confirmation.getByTestId('plugin-prompt-text')).toHaveText(PROMPT);
-    await expect(confirmation.getByTestId('plugin-contribution-context')).toContainText('root agents and workers');
-    expect(patches).toEqual([]);
-    if (SHOTS) await page.screenshot({ path: `${SHOTS}/admin-plugin-contributions.png`, fullPage: true });
-    await confirmation.getByRole('button', { name: 'Approve and enable' }).click();
+    const consent = page.getByTestId('plugin-consent');
+    await expect(consent.getByRole('heading', { level: 2 })).toHaveText('Agree and enable greeter');
+    await expect(consent.locator('[data-id="prompt"]')).toContainText('Adds text to agents\' instructions');
+    await expect(consent.locator('[data-id="context"]').getByTestId('consent-guidance')).toContainText('every turn of every user');
+    const agree = consent.getByRole('button', { name: 'Agree and enable' });
+    await expect(agree).toBeDisabled();
+    expect(posts).toEqual([]);
+    await tickAll(consent);
+    await agree.click();
     await expect(row.getByTestId('plugin-contributions-approval')).toContainText(`contributions approved for ${CONTRIB}`);
-    expect(patches).toEqual([{ enabled: true, approveContributions: CONTRIB }]);
+    expect(posts).toEqual([{ contentHash: HASH, accepted: greeterItems.map((i) => i.id), enable: true }]);
   });
   test('model.trustedInput: the warning, the reason and the sources show; model:cli-tools is approved on its own, after a confirmation', async ({ authenticatedPage: page }) => {
     const REASON = 'Prompts are fixed templates filled with counts from the intranet API.';
@@ -414,6 +398,10 @@ test.describe('plugin packages', () => {
     await page.route(/\/api\/plugin-packages(\/.*)?$/, async (route: Route) => {
       const req = route.request();
       if (req.method() === 'GET' && req.url().endsWith('/bundled')) return json(route, 200, []);
+      if (req.method() === 'GET' && req.url().endsWith('/digest/consent')) {
+        const digest = perms('digest', { host: ['model:complete', 'notes:read'], network: ['api.intranet.example.com'], trustedInput: true });
+        return json(route, 200, consentView(digest, { declarations: items(digest, { model: { trustedInput: true, reason: REASON } }) }));
+      }
       if (req.method() === 'GET') return json(route, 200, packages);
       if (req.method() === 'PATCH') {
         const body = req.postDataJSON() as { enabled?: boolean; approveHostScopes?: string[] };
@@ -441,33 +429,37 @@ test.describe('plugin packages', () => {
     await expect(row.getByTestId('plugin-model-cli-tools-sources')).toHaveText(SOURCES);
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/admin-plugin-model-cli-tools.png`, fullPage: true });
 
-    // Enabling approves the host scopes only, and says model:cli-tools stays off.
-    page.once('dialog', (d) => { dialogs.push(d.message()); void d.accept(); });
+    // Enabling asks for each item, model:cli-tools among them, with the warning under it.
     await row.getByRole('button', { name: 'Enable digest' }).click();
-    await expect.poll(() => patches.length).toBe(1);
-    expect(dialogs[0]).toContain('declares model.trustedInput');
-    expect(dialogs[0]).toContain('enabling leaves its model calls off CLI lanes');
-    expect(patches[0]).toEqual({ enabled: true, approveHostScopes: SCOPES });
+    const consent = page.getByTestId('plugin-consent');
+    await expect(consent.locator('[data-id="model:cli-tools"]').getByTestId('consent-guidance')).toHaveAttribute('data-tone', 'warning');
+    await expect(consent.locator('[data-id="model:cli-tools"]')).toContainText(REASON);
+    await consent.getByRole('button', { name: 'Cancel' }).click();
+    await expect(consent).toHaveCount(0);
+    expect(patches).toEqual([]);
+    // Enabled by another admin meanwhile, with the host scopes only.
+    packages = [{ ...packages[0], enabled: true, connected: true, approvedHostScopes: SCOPES, modelCliTools: trust(false, false) }];
+    await page.reload();
 
     // Approving it asks first, with the warning, the reason and the sources; dismissed, nothing is sent.
     const approve = row.getByRole('button', { name: 'Approve model:cli-tools for digest' });
     page.once('dialog', (d) => { dialogs.push(d.message()); void d.dismiss(); });
     await approve.click();
-    await expect.poll(() => dialogs.length).toBe(2);
-    expect(dialogs[1]).toContain('CLI agents with their own tools (shell, files) as the Octipus server user');
-    expect(dialogs[1]).toContain(REASON);
-    expect(dialogs[1]).toContain('api.intranet.example.com');
-    expect(patches).toHaveLength(1);
+    await expect.poll(() => dialogs.length).toBe(1);
+    expect(dialogs[0]).toContain('CLI agents with their own tools (shell, files) as the Octipus server user');
+    expect(dialogs[0]).toContain(REASON);
+    expect(dialogs[0]).toContain('api.intranet.example.com');
+    expect(patches).toHaveLength(0);
 
     page.once('dialog', (d) => d.accept());
     await approve.click();
     await expect(cli).toHaveAttribute('data-active', 'true');
     await expect(cli).toContainText('approved: its model calls may run on CLI agents');
-    expect(patches[1]).toEqual({ approveHostScopes: [...SCOPES, 'model:cli-tools'] });
+    expect(patches[0]).toEqual({ approveHostScopes: [...SCOPES, 'model:cli-tools'] });
 
     // Revoked: the host scopes stay.
     await row.getByRole('button', { name: 'Revoke model:cli-tools for digest' }).click();
     await expect(cli).toHaveAttribute('data-approved', 'false');
-    expect(patches[2]).toEqual({ approveHostScopes: SCOPES });
+    expect(patches[1]).toEqual({ approveHostScopes: SCOPES });
   });
 });

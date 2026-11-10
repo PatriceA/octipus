@@ -1,22 +1,29 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CircleCheck, Cpu, Power, Settings2, ShieldAlert, Trash2 } from 'lucide-react';
-import Link from 'next/link';
+import { BarChart3, CircleCheck, Cpu, Power, Settings2, ShieldAlert, ShieldOff, Trash2 } from 'lucide-react';
 import { useRef, useState } from 'react';
+import { ConsentDialog, type ConsentSource } from '@/components/plugins/consent-dialog';
 import { FieldInputs, type FieldValues, fromFieldValues, problemsOf, toFieldValues } from '@/components/business/common';
 import { api } from '@/lib/api';
 import {
+  AGENT_RUN_NOTE,
   type BundledPluginView,
+  displayText,
+  DOCUMENTS_WRITE_NOTE,
+  egressReadWarning,
   MAX_PLUGIN_SECRET_LENGTH,
   MODEL_CLI_TOOLS_APPROVAL,
   MODEL_CLI_TOOLS_WARNING,
   PLUGIN_BUNDLED_KEY,
+  originLabel,
   PLUGIN_PACKAGES_KEY,
-  type PluginInstallResult,
+  type PluginConsentResult,
   type PluginNetworkStatus,
   type PluginPackageView,
+  type PluginRunItem,
   type PluginSignatureStatus,
+  type PluginUsageView,
 } from '@/lib/plugin-packages';
 import { PLUGIN_PAGES_KEY } from '@/lib/plugin-pages';
 import { cn } from '@/lib/utils';
@@ -333,37 +340,11 @@ const HOST_TOKEN_WHEN = 'A call gets a short-lived token for them (at most 30 se
   + 'Schedules, events and context calls never get one. The token acts as that user, within their own data and permission rules. '
   + 'An upgrade asks for this approval again.';
 
-/** Host scopes that can carry data out of the house (src/plugins/packages/service.ts, `EGRESS_HOST_SCOPES`). */
-const EGRESS_SCOPES = ['web:read', 'model:complete', 'agent:run'];
-
-/**
- * A package that can send data out of the house (`web:read`: any URL;
- * `model:complete`: a remote model; `agent:run`: an agent that searches and
- * fetches the web on its prompt) and also read the user's data: what it
- * reads it can send anywhere. Said in the approval, and the package then sees
- * level-1 data only (docs/PLUGIN-PACKAGES.md#host-api).
- */
-function egressReadWarning(scopes: readonly string[]): string {
-  const out = scopes.filter((s) => EGRESS_SCOPES.includes(s));
-  const reads = scopes.filter((s) => s.endsWith(':read') && s !== 'web:read');
-  if (out.length === 0 || reads.length === 0) return '';
-  return `Warning: with ${out.join(' and ')} and ${reads.join(', ')} together, this package can send what it reads anywhere. `
-    + 'It is limited to data at protection level 1.';
+/** The egress warning, as the shared declarations word it (src/shared/plugin-declarations.ts), or ''. */
+function egressWarningText(scopes: readonly string[]): string {
+  const warning = egressReadWarning(scopes);
+  return warning ? `Warning: ${warning}` : '';
 }
-
-/**
- * What `agent:run` lets a package do (src/plugins/packages/host-agent.ts):
- * work that goes on after the call, spending the user's model budget.
- * Said in the row and in the approval.
- */
-const AGENT_RUN_NOTE = 'agent:run starts background agent runs as the user who asks (from a write tool only): the host\'s own agent of a role, '
-  + 'with web search, the user\'s knowledge and documents (no shell, messages or mail), unattended (nothing is asked; an ASK is refused), '
-  + 'for up to 20 minutes and plugins.hostAgentRunTokens tokens a run, counted in the user\'s daily plugin allowance and spend budgets. '
-  + 'The package gets only the run\'s id and its final text.';
-
-/** What `documents:write` lets a package do (src/plugins/packages/host-documents.ts). */
-const DOCUMENTS_WRITE_NOTE = 'documents:write creates text documents in the user\'s Documents and updates the ones this package created, '
-  + 'as that user, marked with the package and tool that made them.';
 
 /** The notes of the scopes in `scopes` that need saying in the approval. */
 function scopeNotes(scopes: readonly string[]): string[] {
@@ -371,27 +352,6 @@ function scopeNotes(scopes: readonly string[]): string[] {
     ...(scopes.includes('agent:run') ? [AGENT_RUN_NOTE] : []),
     ...(scopes.includes('documents:write') ? [DOCUMENTS_WRITE_NOTE] : []),
   ];
-}
-
-/**
- * What enabling says about `model.trustedInput` (docs/PLUGIN-PACKAGES.md#model-calls-on-cli-lanes):
- * approved, it lets the package's model calls run on CLI lanes; not approved,
- * enabling leaves them off and the row's own button approves it.
- */
-function modelCliToolsNote(pkg: PluginPackageView): string {
-  const trust = pkg.modelCliTools;
-  if (!trust) return '';
-  return trust.approved
-    ? `${MODEL_CLI_TOOLS_APPROVAL} is approved: ${MODEL_CLI_TOOLS_WARNING} Its reason: "${trust.reason}".${trust.sourcesWarning ? ` ${trust.sourcesWarning}` : ''}`
-    : `It declares model.trustedInput ("${trust.reason}"), not approved: enabling leaves its model calls off CLI lanes.`;
-}
-
-/** The approval text for enabling `pkg` with `unapproved` host scopes. */
-function hostScopeConfirm(pkg: PluginPackageView, unapproved: string[]): string {
-  const warning = egressReadWarning(pkg.manifest.host ?? []);
-  const model = modelCliToolsNote(pkg);
-  const notes = scopeNotes(unapproved).join(' ');
-  return `Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? ${warning ? `${warning} ` : ''}${notes ? `${notes} ` : ''}${model ? `${model} ` : ''}${HOST_TOKEN_WHEN}`;
 }
 
 /** The confirmation of approving `model:cli-tools` for `pkg`. */
@@ -471,8 +431,8 @@ function PagesAndScopes({ pkg, unapproved }: { pkg: PluginPackageView; unapprove
               <code className={cn('font-mono', unapproved.includes(s) ? tone('warn') : tone('ok'))} data-scope={s} data-approved={!unapproved.includes(s)}>{s}</code>
             </span>
           ))}
-          {unapproved.length > 0 && <span className={tone('warn')}> · {unapproved.length} not approved; enabling approves them</span>}
-          {egressReadWarning(scopes) && <span className={cn('block', tone('warn'))} data-testid="plugin-egress-warning">{egressReadWarning(scopes)}</span>}
+          {unapproved.length > 0 && <span className={tone('warn')}> · {unapproved.length} not approved; enabling asks you to agree to them</span>}
+          {egressWarningText(scopes) && <span className={cn('block', tone('warn'))} data-testid="plugin-egress-warning">{egressWarningText(scopes)}</span>}
           {scopeNotes(scopes).map((note) => <span key={note} className="block" data-testid="plugin-scope-note">{note}</span>)}
           <span className="block">{HOST_TOKEN_WHEN}</span>
         </p>
@@ -509,7 +469,7 @@ function Contributions({ pkg }: { pkg: PluginPackageView }) {
       <p className={c.approved ? tone('ok') : tone('warn')} data-testid="plugin-contributions-approval">
         {c.approved
           ? <>contributions approved for <span className="font-mono">{c.approvedHash}</span></>
-          : <>contributions not approved{c.hash && <> (<span className="font-mono">{c.hash}</span>)</>}: nothing below is active until you approve it when enabling</>}
+          : <>contributions not approved{c.hash && <> (<span className="font-mono">{c.hash}</span>)</>}: nothing below is active until you agree to it when enabling</>}
       </p>
       <ul className="space-y-0.5 list-disc pl-4">
         {c.commands.map((x) => (
@@ -554,32 +514,80 @@ function Contributions({ pkg }: { pkg: PluginPackageView }) {
   );
 }
 
-/**
- * The enable confirmation of a package that adds anything besides tools:
- * everything it adds, in full, and enabling approves exactly that
- * (`approveContributions` with the hash shown). The server refuses (409)
- * when the package changed after this page read it.
- */
-function EnableConfirmation({ pkg, pending, onConfirm, onCancel }: { pkg: PluginPackageView; pending: boolean; onConfirm: () => void; onCancel: () => void }) {
+/** Where a package came from, and its revocation, if any: a banner the admin cannot miss. */
+function Provenance({ pkg }: { pkg: PluginPackageView }) {
   return (
-    <div className="mt-2 space-y-1 rounded-xs border border-warning/40 p-2" role="group" aria-label={`Enable ${pkg.name}`} data-testid="plugin-enable-confirm">
-      <p className="text-xs text-on-surface">
-        Enabling {pkg.name} approves everything it adds, for every user of this install. Review it:
-      </p>
-      <Contributions pkg={pkg} />
-      {pkg.modelCliTools && <p className="text-xs text-on-surface-variant" data-testid="plugin-enable-model-cli-tools">{modelCliToolsNote(pkg)}</p>}
-      <div className="flex gap-2">
-        <button
-          type="button"
-          disabled={pending}
-          onClick={onConfirm}
-          className="inline-flex items-center gap-1 px-2 py-1 rounded-xs bg-primary text-on-primary text-xs cursor-pointer disabled:opacity-50"
-        >
-          <CircleCheck className="w-3.5 h-3.5" /> Approve and enable
-        </button>
-        <button type="button" onClick={onCancel} className="px-2 py-1 text-xs text-on-surface-variant hover:text-on-surface cursor-pointer">
-          Cancel
-        </button>
+    <>
+      <p className="mt-1 text-xs text-on-surface-variant" data-testid="plugin-origin">{originLabel(pkg.origin)}</p>
+      {pkg.revocation && (
+        <div role="alert" className="mt-2 flex items-start gap-2 rounded-xs border border-error/60 bg-error/10 p-2 text-xs text-on-surface" data-testid="plugin-revocation-banner">
+          <ShieldOff className="mt-0.5 h-3.5 w-3.5 shrink-0 text-error" aria-hidden />
+          <span>
+            {pkg.revocation.kind === 'package' ? `This version is revoked by the ${pkg.revocation.source === 'marketplace' ? 'Octipus marketplace' : 'configuration'}` : `The key that signed it is revoked (${pkg.revocation.keyId})`}
+            : {displayText(pkg.revocation.reason) || 'no reason given'}. It does not start and cannot be enabled; upgrade to a version that is not revoked.
+          </span>
+        </div>
+      )}
+    </>
+  );
+}
+
+/** The package's use over 30 days (tokens, cost, model calls, runs, per user), and its running background runs with Cancel. */
+function UsagePanel({ pkg }: { pkg: PluginPackageView }) {
+  const qc = useQueryClient();
+  const usage = useQuery({
+    queryKey: [...PLUGIN_PACKAGES_KEY, pkg.name, 'usage'],
+    queryFn: () => api.get<PluginUsageView>(`/plugin-packages/${encodeURIComponent(pkg.name)}/usage?days=30`),
+  });
+  const runs = useQuery({
+    queryKey: [...PLUGIN_PACKAGES_KEY, pkg.name, 'runs'],
+    queryFn: () => api.get<PluginRunItem[]>(`/plugin-packages/${encodeURIComponent(pkg.name)}/runs?status=running`),
+    refetchInterval: 10_000,
+  });
+  const cancel = useMutation({
+    mutationFn: (id: string) => api.delete<{ id: string; status: string }>(`/plugin-packages/${encodeURIComponent(pkg.name)}/runs/${encodeURIComponent(id)}`),
+    onSettled: () => { void qc.invalidateQueries({ queryKey: [...PLUGIN_PACKAGES_KEY, pkg.name, 'runs'] }); },
+  });
+  const u = usage.data;
+  return (
+    <div className="mt-2 space-y-2 rounded-xs border border-outline-variant/40 p-3 text-xs" role="group" aria-label={`Usage of ${pkg.name}`} data-testid="plugin-usage">
+      {usage.error && <p role="alert" className="text-error">! {problemsOf(usage.error)}</p>}
+      {u && (
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-0.5 sm:grid-cols-4">
+          <div><dt className="text-on-surface-variant">tokens (30 days)</dt><dd className="text-on-surface" data-testid="plugin-usage-tokens">{(u.inputTokens + u.outputTokens).toLocaleString()}</dd></div>
+          <div><dt className="text-on-surface-variant">cost</dt><dd className="text-on-surface" data-testid="plugin-usage-cost">${u.cost.toFixed(2)}</dd></div>
+          <div><dt className="text-on-surface-variant">model calls</dt><dd className="text-on-surface">{u.modelCalls}</dd></div>
+          <div><dt className="text-on-surface-variant">background runs</dt><dd className="text-on-surface">{u.runs}</dd></div>
+        </dl>
+      )}
+      {u?.byUser && u.byUser.length > 0 && (
+        <table className="w-full text-left" data-testid="plugin-usage-by-user">
+          <caption className="text-left text-on-surface-variant">by user</caption>
+          <thead className="text-on-surface-variant"><tr><th className="font-normal">user</th><th className="font-normal">tokens</th><th className="font-normal">cost</th><th className="font-normal">calls</th><th className="font-normal">runs</th></tr></thead>
+          <tbody>
+            {u.byUser.map((x) => (
+              <tr key={x.userId} className="border-t border-outline-variant/30"><td className="font-mono">{x.userId}</td><td>{x.tokens.toLocaleString()}</td><td>${x.cost.toFixed(2)}</td><td>{x.modelCalls}</td><td>{x.runs}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div>
+        <h4 className="font-medium text-on-surface">running background runs</h4>
+        {(runs.data ?? []).length === 0 ? <p className="text-on-surface-variant">None running.</p> : (
+          <ul className="space-y-1" data-testid="plugin-runs">
+            {(runs.data ?? []).map((r) => (
+              <li key={r.id} className="flex flex-wrap items-center gap-2" data-testid="plugin-run" data-id={r.id}>
+                <span className="text-on-surface">{displayText(r.title)}</span>
+                <span className="text-on-surface-variant">{r.role} · user <span className="font-mono">{r.userId}</span> · since {new Date(r.startedAt).toLocaleTimeString()}</span>
+                <button type="button" disabled={cancel.isPending} onClick={() => cancel.mutate(r.id)} aria-label={`Cancel the run ${displayText(r.title)}`}
+                  className="rounded-xs border border-outline-variant px-2 py-0.5 text-on-surface hover:bg-surface-container-high disabled:opacity-50">
+                  Cancel
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {cancel.error && <p role="alert" className="text-error">! {problemsOf(cancel.error)}</p>}
       </div>
     </div>
   );
@@ -589,7 +597,9 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [configuring, setConfiguring] = useState(false);
-  const [confirmingEnable, setConfirmingEnable] = useState(false);
+  const [consenting, setConsenting] = useState(false);
+  const [showUsage, setShowUsage] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const uninstall = useMutation({
     mutationFn: () => api.delete<{ uninstalled: boolean }>(`/plugin-packages/${encodeURIComponent(pkg.name)}`),
     onSuccess: () => { setError(null); void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY }); },
@@ -597,23 +607,15 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
   });
   const declaredScopes = pkg.manifest.host ?? [];
   const unapproved = declaredScopes.filter((s) => !(pkg.approvedHostScopes ?? []).includes(s));
-  // approveHostScopes replaces the approved list: an approved model:cli-tools is kept.
-  const enableScopes = pkg.modelCliTools?.approved ? [...declaredScopes, MODEL_CLI_TOOLS_APPROVAL] : declaredScopes;
-  const toggle = useMutation({
-    // Enabling approves the declared host API scopes the admin was just shown (docs/PLUGIN-PACKAGES.md#host-api).
-    // Enabling a package with contributions approves the contributions hash the confirmation showed.
-    mutationFn: (enabled: boolean) => api.patch<PluginPackageView>(`/plugin-packages/${encodeURIComponent(pkg.name)}`, {
-      ...(enabled && unapproved.length > 0 ? { enabled, approveHostScopes: enableScopes } : { enabled }),
-      ...(enabled && hasContributions(pkg) && pkg.contributions.hash ? { approveContributions: pkg.contributions.hash } : {}),
-    }),
+  // Disabling is one PATCH; enabling goes through the consent for the package's content as installed.
+  const disable = useMutation({
+    mutationFn: () => api.patch<PluginPackageView>(`/plugin-packages/${encodeURIComponent(pkg.name)}`, { enabled: false }),
     onSuccess: () => {
       setError(null);
-      setConfirmingEnable(false);
       void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY });
       // Its pages come and go with it in the sidebar.
       void qc.invalidateQueries({ queryKey: PLUGIN_PAGES_KEY });
     },
-    // A refusal can come from files changed since the page loaded: reload, so the review shows.
     onError: (err: Error) => { setError(problemsOf(err)); void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY }); },
   });
   const hosts = pkg.manifest.network ?? [];
@@ -637,18 +639,24 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
         <NetworkState network={pkg.network} />
         <button
           type="button"
-          disabled={toggle.isPending}
+          disabled={disable.isPending}
           onClick={() => {
-            // A package that adds commands, schedules, events, prompt text or context: review all of it first.
-            if (!pkg.enabled && hasContributions(pkg)) { setConfirmingEnable(true); return; }
-            if (!pkg.enabled && unapproved.length > 0
-              && !confirm(hostScopeConfirm(pkg, unapproved))) return;
-            toggle.mutate(!pkg.enabled);
+            if (pkg.enabled) disable.mutate();
+            else setConsenting(true);
           }}
           aria-label={`${pkg.enabled ? 'Disable' : 'Enable'} ${pkg.name}`}
           className="inline-flex items-center gap-1 text-xs text-on-surface-variant hover:text-on-surface cursor-pointer disabled:opacity-50"
         >
           <Power className="w-3.5 h-3.5" /> {pkg.enabled ? 'disable' : 'enable'}
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowUsage((u) => !u)}
+          aria-expanded={showUsage}
+          aria-label={`Usage of ${pkg.name}`}
+          className="inline-flex items-center gap-1 text-xs text-on-surface-variant hover:text-on-surface cursor-pointer"
+        >
+          <BarChart3 className="w-3.5 h-3.5" /> usage
         </button>
         {!inProcess && <button
           type="button"
@@ -689,22 +697,10 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
           <span className="font-mono">{pkg.authoredBy.userId}</span>). Review its content hash, tools, effects and hosts before enabling it.
         </p>
       )}
+      <Provenance pkg={pkg} />
       <PagesAndScopes pkg={pkg} unapproved={unapproved} />
       <ModelCliTools pkg={pkg} />
-      {confirmingEnable
-        ? (
-          <EnableConfirmation
-            pkg={pkg}
-            pending={toggle.isPending}
-            onCancel={() => setConfirmingEnable(false)}
-            onConfirm={() => {
-              if (unapproved.length > 0
-                && !confirm(hostScopeConfirm(pkg, unapproved))) return;
-              toggle.mutate(true);
-            }}
-          />
-        )
-        : <Contributions pkg={pkg} />}
+      <Contributions pkg={pkg} />
       {pkg.signature && pkg.signature.status !== 'valid' && pkg.signature.status !== 'unsigned' && (
         <p className="mt-1 text-xs text-on-surface-variant">{pkg.signature.detail}</p>
       )}
@@ -716,30 +712,46 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
       <ContentReview pkg={pkg} />
       <InProcessApproval pkg={pkg} />
       {configuring && <PackageConfig pkg={pkg} />}
+      {showUsage && <UsagePanel pkg={pkg} />}
+      {consenting && (
+        <ConsentDialog
+          source={{ kind: 'installed', name: pkg.name }}
+          onClose={() => setConsenting(false)}
+          onDone={(result) => {
+            setConsenting(false);
+            setError(null);
+            setNotice(result.enabled ? `${pkg.name} is enabled.` : `Agreed; not enabled${result.enableProblem ? `: ${result.enableProblem}` : ''}.`);
+            void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY });
+            void qc.invalidateQueries({ queryKey: PLUGIN_PAGES_KEY });
+          }}
+        />
+      )}
+      {notice && <p role="status" className="mt-1 text-xs text-on-surface-variant" data-testid="plugin-notice">{notice}</p>}
       {error && <p role="alert" className="mt-1 text-xs text-error whitespace-pre-line">! {error}</p>}
     </li>
   );
 }
 
 /** Install from a directory on the server or an https tarball (which must be signed by a trusted publisher). */
+/** What a consent's result says once it is done. */
+function installedText(res: PluginConsentResult): string {
+  return `Installed ${res.name} ${res.version} (${res.enabled ? 'enabled' : 'disabled'}).${res.enableProblem ? ` Not enabled: ${res.enableProblem}.` : ''}${res.warnings.length ? ` ${res.warnings.join(' ')}` : ''}`;
+}
+
 function InstallForm() {
   const qc = useQueryClient();
   const [source, setSource] = useState('');
+  const [consent, setConsent] = useState<ConsentSource | null>(null);
   const [message, setMessage] = useState<{ kind: 'error' | 'ok'; text: string } | null>(null);
-  const install = useMutation({
-    mutationFn: (s: string) => api.post<PluginInstallResult>('/plugin-packages', s.startsWith('https://') ? { url: s } : { path: s }),
-    onSuccess: (res) => {
-      setSource('');
-      setMessage({ kind: 'ok', text: `Installed ${res.name} ${res.version} (disabled).${res.warnings?.length ? ` ${res.warnings.join(' ')}` : ''}` });
-      void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY });
-    },
-    onError: (err: Error) => setMessage({ kind: 'error', text: err.message }),
-  });
   return (
     <form
       className="flex flex-wrap items-center gap-2"
       aria-label="Install a plugin package"
-      onSubmit={(e) => { e.preventDefault(); if (source.trim()) install.mutate(source.trim()); }}
+      onSubmit={(e) => {
+        e.preventDefault();
+        const s = source.trim();
+        if (s) { setMessage(null); setConsent({ kind: 'preview', body: s.startsWith('https://') ? { url: s } : { path: s } }); }
+      }}
     >
       <input
         aria-label="Package directory or https URL"
@@ -748,10 +760,22 @@ function InstallForm() {
         onChange={(e) => setSource(e.target.value)}
         className="flex-1 min-w-64 bg-surface-container-high border border-outline-variant rounded-md py-1 px-2 text-on-surface text-sm"
       />
-      <button type="submit" disabled={install.isPending || !source.trim()} className="px-2 py-1 rounded-xs bg-primary text-on-primary text-xs cursor-pointer disabled:opacity-50">
+      <button type="submit" disabled={consent !== null || !source.trim()} className="px-2 py-1 rounded-xs bg-primary text-on-primary text-xs cursor-pointer disabled:opacity-50">
         Install
       </button>
       {message && <p role={message.kind === 'error' ? 'alert' : 'status'} className={cn('w-full text-xs', message.kind === 'error' ? 'text-error' : 'text-on-surface-variant')}>{message.text}</p>}
+      {consent && (
+        <ConsentDialog
+          source={consent}
+          onClose={() => setConsent(null)}
+          onDone={(res) => {
+            setConsent(null);
+            setSource('');
+            setMessage({ kind: 'ok', text: installedText(res) });
+            void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY });
+          }}
+        />
+      )}
     </form>
   );
 }
@@ -768,22 +792,15 @@ function BundledPlugins() {
     queryKey: PLUGIN_BUNDLED_KEY,
     queryFn: () => api.get<BundledPluginView[]>('/plugin-packages/bundled'),
   });
-  const install = useMutation({
-    mutationFn: (b: { name: string; upgrade: boolean }) => api.post<PluginInstallResult>('/plugin-packages', { bundled: b.name, ...(b.upgrade ? { upgrade: true } : {}) }),
-    onSuccess: (res) => {
-      setMessage({ kind: 'ok', text: `Installed ${res.name} ${res.version} (disabled). Review it below, then enable it and approve its scopes.` });
-      void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY });
-    },
-    onError: (err: Error) => setMessage({ kind: 'error', text: err.message }),
-  });
+  const [installing, setInstalling] = useState<string | null>(null);
   const bundled = Array.isArray(data) ? data : [];
   if (bundled.length === 0) return null;
   return (
     <section className="space-y-2" data-testid="bundled-plugins" aria-labelledby="bundled-plugins-title">
       <h3 id="bundled-plugins-title" className="section-label">bundled</h3>
       <p className="text-xs text-on-surface-variant">
-        Plugins that ship with Octipus. They install like any package: pinned to their content and disabled until you
-        enable them and approve the host API scopes they ask for.
+        Plugins that ship with Octipus. They install like any package: you agree to what each declares, and it is
+        pinned to its content.
       </p>
       <ul className="term-frame rounded-xs divide-y divide-outline-variant/10">
         {bundled.map((b) => {
@@ -805,8 +822,8 @@ function BundledPlugins() {
               ) : (
                 <button
                   type="button"
-                  disabled={install.isPending || Boolean(b.problem)}
-                  onClick={() => install.mutate({ name: b.name, upgrade })}
+                  disabled={installing !== null || Boolean(b.problem)}
+                  onClick={() => { setMessage(null); setInstalling(b.name); }}
                   className="px-2 py-1 rounded-xs bg-primary text-on-primary text-xs cursor-pointer disabled:opacity-50"
                   aria-label={`${upgrade ? 'Upgrade' : 'Install'} ${b.name}`}
                 >
@@ -818,6 +835,18 @@ function BundledPlugins() {
         })}
       </ul>
       {message && <p role={message.kind === 'error' ? 'alert' : 'status'} className={cn('text-xs', message.kind === 'error' ? 'text-error' : 'text-on-surface-variant')}>{message.text}</p>}
+      {installing && (
+        <ConsentDialog
+          source={{ kind: 'preview', body: { bundled: installing } }}
+          onClose={() => setInstalling(null)}
+          onDone={(res) => {
+            setInstalling(null);
+            setMessage({ kind: 'ok', text: installedText(res) });
+            void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY });
+            void qc.invalidateQueries({ queryKey: PLUGIN_BUNDLED_KEY });
+          }}
+        />
+      )}
     </section>
   );
 }
@@ -840,13 +869,12 @@ export default function AdminPluginPackagesPage() {
         <div className="flex-1 min-w-0">
           <h2 className="section-label">plugin packages</h2>
           <p className="mt-1 text-xs text-on-surface-variant">
-            Connections to other systems, each its own process with only its declared tools and hosts. A package starts
-            disabled; one whose files changed since they were approved does not start until its new content is approved.
-            A package from a URL must be signed by a publisher in <code>plugins.trustedPublishers</code>. An in-process
-            plugin runs in the server process and needs one more approval, for its exact content, before it is loaded.
+            Connections to other systems, each its own process with only its declared tools and hosts. Installing or
+            enabling one shows what it declares, item by item, and runs only once you agree to each, for its exact content.
+            One whose files changed since then does not start until its new content is approved. A package from a URL
+            must be signed by a publisher in <code>plugins.trustedPublishers</code>.
           </p>
         </div>
-        <Link href="/admin/plugins/browse" className="text-xs text-primary hover:underline">browse registries →</Link>
       </div>
       <InstallForm />
       {error && <p role="alert" className="text-xs text-error">! {(error as Error).message}</p>}
