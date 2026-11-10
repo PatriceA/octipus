@@ -632,8 +632,8 @@ shown in the model settings and `/work-plan` for a CLI root.
 
 ## One-shot completions (lanes)
 
-A CLI model bound to a lane also answers one-shot completions (a summary, a
-reader action, a plugin's `model:complete`). These always run in the CLI's
+A CLI model bound to a lane also answers one-shot completions (a summary, mail
+triage, a plugin's `model:complete`). These always run in the CLI's
 tool-less mode: prompt on stdin, no native tools, no MCP servers, no user or
 project settings, an install row's in an empty directory (a personal row's in
 its owner's own one), never the workspace root. Their callers feed in fetched

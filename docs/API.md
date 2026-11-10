@@ -248,12 +248,6 @@ filesystem or shell isolation.
 | POST | `/api/chat` | Send a chat message. Without a `channel` that can show an approval prompt, the turn is unattended: actions at ASK are refused, not asked. Interactive answers are replaced by a plain line unless the body declares `renders: ["inline_ui"]`; `toolsUsed: true` adds the tool names the turn called (the eval runner) |
 | POST | `/api/chat/approve` | Respond to an approval request |
 
-## Reader
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/reader` | Fetch and extract article/page content |
-
 ## Documents
 
 | Method | Endpoint | Description |

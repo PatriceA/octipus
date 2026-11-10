@@ -3,15 +3,17 @@
 End-user-facing capabilities layered on top of the agent runtime. Each ships as
 a tool/service + REST route + web page.
 
-## Reader
+## Reading a web page
 
-Fetch a URL, extract the readable content, and run reader actions on it.
+The core no longer has a reader of its own. Reading a page in a clean view is
+the example plugin, Reader (`plugins/reader`, see
+[PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#bundled-plugins)), which an admin
+installs under Admin → Plugin packages → Bundled.
 
-- Code: `src/core/reader/` (`fetch.ts`, `extract.ts`, `actions.ts`)
-- Route: `src/api/routes/reader.ts`
-- Web: `web/app/reader/page.tsx`
-
-The fetcher is SSRF-guarded. Extraction strips boilerplate to readable text.
+What stays in the core is the fetch and extraction that the plugin host
+scope `web:read` runs (`src/core/web-read/`: `fetch.ts`, `extract.ts`). The
+fetcher is SSRF-guarded and capped at 5 MB. Extraction strips boilerplate and
+rebuilds the article from an allowlist of tags.
 
 ## Deep Research
 
@@ -71,13 +73,13 @@ zone. The ranking is one pure function (`src/core/tasks/rank.ts`) shared by
 the tool, the API and the tasks page's *what next* grouping (the default); the
 Daily Briefing asks the tool for this view rather than re-sorting.
 
-**Provenance.** Every task carries `source` (`user | agent | reader | research |
-email`) and a `sourceRef` linking back to where it came from. The producers live
+**Provenance.** Every task carries `source` (`user | agent | research | email |
+channel`, and `reader` on tasks made by the removed core reader) and a `sourceRef` linking back to where it came from. The producers live
 in `src/core/tasks/sourced.ts`:
 
 | Source | How a task gets created |
 |---|---|
-| `reader` | **save as to-dos** on a Reader *Action items* result (`POST /api/reader/tasks`) — one task per bullet, linked to the article URL, category *Reading*. |
+| `agent` | Also what the Reader example plugin's `create_tasks` writes (host scope `tasks:write`): one task per item, category *Reading*, with a `sourceRef` naming the plugin, the tool and the article URL. Older tasks from the removed core reader keep `source: reader`. |
 | `email` | **To-do** on an open message (`POST /api/email/message/:id/task`) — subject as title, sender + snippet in notes, triage priority mapped onto task priority, category *Email*. The email-processor tool also tells the agent to `create_task` for mail that needs the user. |
 | `research` | Automatic on every finished Deep Research run — one *Review research: …* task pointing at the saved document (`sourceRef.documentId`), category *Research*. |
 

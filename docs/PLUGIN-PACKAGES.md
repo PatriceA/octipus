@@ -1179,9 +1179,19 @@ the refusals counted since the previous row.
 
 ## Bundled plugins
 
-First-party plugins ship with Octipus as package directories under
-`plugins/` in the checkout or install (the Docker image included). Each is an
-ordinary plugin package; shipping with Octipus gives it no trust of its own:
+Octipus ships one plugin: **the example plugin**, Reader (`plugins/reader`,
+[plugins/README.md](../plugins/README.md)). It is the reference
+implementation of a package plugin: tools with effects, host API scopes and a
+page that calls its tools through the bridge. Read it before you write your
+own. It is an example, not a product feature, so onboarding does not offer it.
+
+The plugins Octipus ships are an explicit list, `SHIPPED_PLUGINS` in
+`src/plugins/packages/bundled.ts` (today `['reader']`), of package directories
+under `plugins/` in the checkout or install (the Docker image included). Any
+other directory under `plugins/` is never listed, installed as bundled or
+treated as a shipped name; Octipus logs it once, as a warning. A bundled
+plugin is an ordinary plugin package; shipping with Octipus gives it no trust
+of its own:
 
 - **Listed** on Admin → Plugin packages under *Bundled*, by `GET
   /api/plugin-packages/bundled` (name, version, title, description, the host
@@ -1205,7 +1215,26 @@ under `plugins.requireSignature` they are refused like any unsigned package.
 
 | Plugin | What it does | Host scopes |
 |---|---|---|
-| `reader` | The reader ([MODULES.md](MODULES.md)): a page in a clean view, summarized, simplified, translated, its action items or an answer about it, saved as a note or as to-dos. Tools `read_url`, `reader_action` (read), `save_note`, `create_tasks` (write); the page *Reader* at `/plugins/reader/read`. | `web:read`, `model:complete`, `notes:write`, `tasks:write` |
+| `reader` | The example plugin (it replaced the core reader, [MODULES.md](MODULES.md#modules-that-move-to-plugins)): a page in a clean view, summarized, simplified, translated, its action items or an answer about it, saved as a note or as to-dos. Tools `read_url`, `reader_action` (read), `save_note`, `create_tasks` (write); the page *Reader* at `/plugins/reader/read`. | `web:read`, `model:complete`, `notes:write`, `tasks:write` |
+
+## Where plugins live
+
+A plugin you make, by hand, with `octi plugin` or through an agent in
+[creator mode](#writing-a-plugin-with-an-agent), stays on your machine, whether
+you run a release install or a git checkout:
+
+- **The source** is in a directory of your own, or in the agent's workspace
+  (the skill suggests `my-plugins/<name>/` there).
+- **The installed copy** is in `<workspace.rootPath>/plugin-packages/<name>`
+  (by default `~/.octipus/workspace`), copied there at install.
+- **Its data** is in `<workspace.rootPath>/plugin-data/<name>`.
+- **Nothing is written into the Octipus install or repository.** An install
+  refuses a plugin store or data directory that resolves inside
+  `<install>/plugins` (a misconfigured `workspace.rootPath`), with an error
+  that says so.
+- **Only the example plugin ships in `plugins/`.** The repository's
+  `.gitignore` ignores every other path under `plugins/`, and Octipus does not
+  offer one as bundled. New plugins are not added to the repository.
 
 ## Installing and managing
 
@@ -1343,6 +1372,13 @@ into its workspace with the filesystem tool and edits them; a read tool rather
 than a scaffolding write, because the filesystem tool already decides where an
 agent's files go and asks for its writes.
 
+Beyond the templates, the skill points the agent to **the example plugin**,
+`plugins/reader` ([Bundled plugins](#bundled-plugins)), as the complete
+package to read: tools, host scopes and a page through the bridge. The skill
+tells the agent to write its package in its own workspace
+(`my-plugins/<name>/`), never in the Octipus repository ([Where plugins
+live](#where-plugins-live)).
+
 **What `plugin_install` refuses:**
 
 - **A user who is not an active admin.** Only admins install plugins, so only
@@ -1358,8 +1394,8 @@ agent's files go and asks for its writes.
   the plugin store, a remote execution environment, and a shared space.
 - **`runtime: "in-process"`**, with a message saying so.
 - **A package that does not validate**, with every problem.
-- **The name of a plugin shipped with Octipus** (`plugins/<name>`, such as
-  `reader`), so an agent cannot take its place before an admin installs it.
+- **The name of a plugin shipped with Octipus** (one of `SHIPPED_PLUGINS`,
+  today only `reader`), so an agent cannot take its place before an admin installs it.
 - **Replacing someone else's package.** `upgrade: true` replaces only a
   package whose current version an agent of the same user installed; never one
   a person or another user's agent installed. An upgrade is disabled again,

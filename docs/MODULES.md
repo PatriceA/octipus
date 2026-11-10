@@ -24,7 +24,6 @@ spaces; settings, skills, the tools page and evaluations; backups.
 | `scan-folders` | Folders whose new files are filed into the documents ([SCAN-FOLDERS.md](SCAN-FOLDERS.md)) |
 | `protection` | Protection levels 1-4 ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md)) |
 | `research` | Research jobs: a question researched in the background, the report saved to the documents |
-| `reader` | **Deprecated**: the reader, a page in a clean view, turned into notes and tasks. It moves to the bundled Reader plugin (below); no use case switches it on any more |
 | `inbox` | The Gmail / Outlook inbox of a connected account: triage, drafts, tasks from mail, the email processor tool and the heartbeat's inbox watch |
 | `artifacts` | Live artifacts: hosted dashboards, tables, feeds and pages, their refreshes, and saving a chat answer as one ([ARTIFACTS.md](ARTIFACTS.md)) |
 | `people` | Profiles of people, pets and organisations, the profiles tool, and the profile context agents get (the persona stays core) |
@@ -34,18 +33,18 @@ spaces; settings, skills, the tools page and evaluations; backups.
 
 ## Modules that move to plugins
 
-A module can move out of the core into a first-party plugin package
-([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#bundled-plugins), plan:
-[plans/plugins-everything.md](plans/plugins-everything.md)). While it moves,
-the module is **deprecated**: it keeps working where it is on, for at least
-one release; no onboarding use case switches it on; and Settings → Modules
-says which bundled plugin replaces it (`replacedBy` in `GET /api/modules`).
-An admin installs the plugin under Admin → Plugin packages → Bundled,
-enables it (approving its host scopes), then turns the module off.
+A module can move out of the core into a plugin package
+([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md), plan:
+[plans/plugins-everything.md](plans/plugins-everything.md)).
 
-| Module | Moves to | Since |
+| Module | Now | Removed in |
 |---|---|---|
-| `reader` | The bundled `reader` plugin: the *Reader* page under Plugins, and the agent tools `read_url`, `reader_action`, `save_note`, `create_tasks` | 0.6 |
+| `reader` | The example plugin `plugins/reader` ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#bundled-plugins)): the *Reader* page under Plugins, and the agent tools `read_url`, `reader_action`, `save_note`, `create_tasks`. An admin installs it under Admin → Plugin packages → Bundled. It is an example, not a product feature: no use case brings it. | 0.6 |
+
+The core module, its route (`/api/reader`) and its page (`/reader`) are gone.
+An install whose `modules.enabled` still lists `reader` (migration 0152 put
+it there) keeps the id; it is ignored, like any id this build does not
+declare.
 
 ## What "off" means
 

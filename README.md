@@ -133,7 +133,7 @@ Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus
 - **Fail-loud routing** — strict `getModelForTopic()`, no silent fallbacks; unbound topics fail at spawn time with a clear error.
 - **Root agent persona** — per-user identity (name, tone, narration, free-form facts) layered between `SECURITY_PREAMBLE` and the role prompt via the `before-agent-start` hook; six presets ship under `personas/`. Default is *Octipus*, the dry octopus-machine.
 - **Root agent detach** — parent can detach children and use `collect_children` to await later; enables narration and user interaction while children run in parallel.
-- **Enrichment features** — Reader (fetch + extract web content), Deep Research (report generation with source references, document persistence and knowledge indexing when available; durable job tracking; interrupted work is reported after restart), To-Do list (recurring via scheduler), Email triage (batch classification), and hardware-aware onboarding (curated Ollama catalog plus registry data).
+- **Enrichment features** — Deep Research (report generation with source references, document persistence and knowledge indexing when available; durable job tracking; interrupted work is reported after restart), To-Do list (recurring via scheduler), Email triage (batch classification), and hardware-aware onboarding (curated Ollama catalog plus registry data).
 - **Testing and evaluation** — unit, database integration, and browser suites, plus model evals and adversarial case generators. The red-team CI job is a dry-run without model calls; see [Testing](docs/TESTING.md) for what each suite verifies.
 
 ## Technologies and ideas worth a look
@@ -154,10 +154,10 @@ Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus
 |---|---|
 | **Agents** | 3-level Swarm, 16 built-in roles, editable custom roles, and seeded or mounted skills |
 | **Models** | Ollama, OpenAI, Anthropic, Gemini, Grok, DeepSeek, Mistral, Z.AI (GLM), Moonshot (Kimi), OpenRouter, Voyage, custom OpenAI/Gemini-compat, LiteLLM, CLI (Claude Code / Codex / Antigravity / Vibe / GLM / Kimi) |
-| **Tools** | Filesystem, shell (local/SSH/Docker), git, browser (Playwright + extension), web search, Docker, knowledge base, scheduling, voice, M365, GitHub/GitLab, and external MCP bridges. The standalone MCP server exposes 87 tools across 25 groups, published as [`octipus-mcp-server`](https://www.npmjs.com/package/octipus-mcp-server). |
+| **Tools** | Filesystem, shell (local/SSH/Docker), git, browser (Playwright + extension), web search, Docker, knowledge base, scheduling, voice, M365, GitHub/GitLab, and external MCP bridges. The standalone MCP server exposes 85 tools across 24 groups, published as [`octipus-mcp-server`](https://www.npmjs.com/package/octipus-mcp-server). |
 | **Channels** | Telegram, Slack, Teams, WhatsApp, web UI, TUI (chat shell + editor, built on [pi-tui](https://www.npmjs.com/package/@mariozechner/pi-tui)), voice (Twilio), MCP server |
 | **Knowledge** | Hybrid search (BM25 + vector), tiered content, auto-indexing, document ingest + OCR, authored knowledge graph (notes, `[[wikilinks]]`, Obsidian vault + Canvas) |
-| **Enrichment** | Reader (fetch + extract), Deep Research (report with source references → Documents + knowledge base when available), To-Do list, Email triage, Hardware-aware onboarding |
+| **Enrichment** | Deep Research (report with source references → Documents + knowledge base when available), To-Do list, Email triage, Hardware-aware onboarding |
 | **Automation** | Hooks, webhooks, cron tasks, plugin system |
 | **Eval** | Provider conformance suite, 16 built-in assertion types, red-team plugins (5 attacks, 49 cases) |
 | **Security** | WebAuthn passkeys, TOTP 2FA, JWT sessions, encrypted vault, audit log |
@@ -235,7 +235,7 @@ Open directions (later): federation between Octipus instances, local-first sync 
 | **[Chat Commands](docs/CHAT-COMMANDS.md)** | Slash commands and channel availability |
 | **[API Reference](docs/API.md)** | REST and WebSocket API reference |
 | **[Architecture Catalog](docs/architecture/generated/CATALOG.md)** | Generated from the source and gated in CI: every mounted route, the module import graph, the gateway event matrix |
-| **[Enrichment Features](docs/ENRICHMENT.md)** | Reader, Deep Research, Tasks, Email triage, Hardware-aware onboarding |
+| **[Enrichment Features](docs/ENRICHMENT.md)** | Deep Research, Tasks, Email triage, Hardware-aware onboarding, the web-read fetch behind the Reader example plugin |
 | **[Shared Spaces](docs/SPACES.md)** | Workspaces several people share: roles, invites, archive, purge |
 | **[Configuration](docs/CONFIGURATION.md)** | Env vars, ports, services |
 | **[LiteLLM Proxy](docs/LITELLM.md)** | Route models through a LiteLLM proxy; auth, adding models, 401 fixes |

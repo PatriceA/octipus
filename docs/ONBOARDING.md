@@ -74,8 +74,9 @@ last run did counts as done.
   - `company`: cases, contacts and records; mail; scan folders; protection
     levels; the email inbox; people and profiles.
   - `product`: research jobs, live artifacts, people and profiles.
-  - `research`: research jobs, recall, live artifacts. The reader is the
-    bundled Reader plugin now: the plan says where an admin installs it.
+  - `research`: research jobs, recall, live artifacts. The Reader is the
+    example plugin ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#bundled-plugins)),
+    not a product feature, so the guide does not offer it.
   - `development`: none, so a developer gets the core only.
   - A chat picked to talk to Octipus from (Telegram, Slack, …) turns on the
     chat channels. Voice no use case brings: tick it in the picker below, or
