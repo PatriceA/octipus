@@ -25,6 +25,10 @@ import { mcpResultLimit } from '@/core/tool-output-spill';
 import { applyServerEdit, configView, mergeServerConfigs } from './config-store';
 import type { PluginToolEffect } from '@/shared/plugin-package';
 
+/** What a call to a plugin server carries in `_meta`, issued per call and released when it returns. */
+export type PluginCallMeta = (server: MCPServer, toolName: string, context: AgentContext) =>
+  Promise<{ meta: Record<string, unknown>; release: () => void } | null>;
+
 /** The id prefix of a plugin package's MCP server: `plugin-<package name>`. */
 export const PLUGIN_SERVER_PREFIX = 'plugin-';
 
@@ -98,6 +102,12 @@ export class MCPBridge extends EventEmitter {
    * null. Set by the plugin service (`setPluginStartGuard`).
    */
   private pluginStartGuard: ((server: MCPServer) => Promise<string | null>) | null = null;
+  /**
+   * The `_meta` of a call to a plugin server (its host API token,
+   * docs/PLUGIN-PACKAGES.md#host-api) and how to release it once the call
+   * returns, or null. Set by the plugin service (`setPluginCallMeta`).
+   */
+  private pluginCallMeta: PluginCallMeta | null = null;
   /** The plugin sync in flight; the next one waits for it. */
   private pluginSync: Promise<void> = Promise.resolve();
   // Auto-reconnect state for unexpected transport closes (server crash / OS kill).
@@ -508,6 +518,11 @@ export class MCPBridge extends EventEmitter {
     this.pluginStartGuard = guard;
   }
 
+  /** Set what a call to a plugin server carries in `_meta` (see `pluginCallMeta`). */
+  setPluginCallMeta(issuer: PluginCallMeta | null): void {
+    this.pluginCallMeta = issuer;
+  }
+
   /** Why a plugin server is not connected, or null. */
   pluginProblem(serverId: string): string | null {
     return this.pluginProblems.get(serverId) ?? null;
@@ -770,10 +785,19 @@ export class MCPBridge extends EventEmitter {
       if (signal) connection.transport.send(message, signal); else connection.transport.send(message);
     };
 
+    // A plugin package's host API token for this call only (docs/PLUGIN-PACKAGES.md#host-api).
+    // A failure to issue one sends the call without it (the package gets no host access), never fails it.
+    const extra = connection.server.plugin && this.pluginCallMeta
+      ? await this.pluginCallMeta(connection.server, toolName, context).catch((err: unknown) => {
+        coreLogger.error({ err, serverId, toolName }, 'Plugin host API token could not be issued; calling without it');
+        return null;
+      })
+      : null;
     try {
       const result = await connection.protocol.sendRequest(send, MCPMethods.CallTool, {
         name: toolName,
         arguments: args,
+        ...(extra ? { _meta: extra.meta } : {}),
       });
       breaker.recordSuccess(serverId);
       // Only an operator-trusted server may attest that dispatch had no effect.
@@ -792,6 +816,8 @@ export class MCPBridge extends EventEmitter {
     } catch (err) {
       breaker.recordFailure(serverId);
       throw err;
+    } finally {
+      extra?.release();
     }
   }
 

@@ -86,6 +86,8 @@ import { taskRoutes } from './routes/tasks';
 import { caseRoutes, contactRoutes } from './routes/cases';
 import { publicFormRoutes, recordRoutes, recordTypeRoutes } from './routes/records';
 import { pluginPackageRoutes } from './routes/plugin-packages';
+import { pluginHostRoutes } from './routes/plugin-host';
+import { pluginCallRoutes, pluginUiRoutes } from './routes/plugin-ui';
 import { mailRoutes } from './routes/mail';
 import { moduleRoutes } from './routes/modules';
 import { scanFolderRoutes } from './routes/scan-folders';
@@ -185,7 +187,9 @@ export function createServer() {
       // would override that and break the outer→embed iframe load.
       const path = new URL(request.url).pathname;
       const isArtifactPage = path.startsWith('/a/') || path.startsWith('/__artifacts__/');
-      if (!isArtifactPage) {
+      // Plugin package pages likewise: a sandboxing CSP of their own, framed by the app (routes/plugin-ui.ts).
+      const isPluginPage = path.startsWith('/api/plugin-ui/');
+      if (!isArtifactPage && !isPluginPage) {
         set.headers['X-Frame-Options'] = 'DENY';
         // A handler that serves its own page may set a narrower policy (the
         // OAuth popup callbacks: one nonce'd script, nothing else). Keep it.
@@ -465,6 +469,9 @@ export function createServer() {
         .use(recordRoutes)
         .use(publicFormRoutes)
         .use(pluginPackageRoutes)
+        .use(pluginUiRoutes)
+        .use(pluginCallRoutes)
+        .use(pluginHostRoutes)
         .use(mailRoutes)
         .use(scanFolderRoutes)
         .use(companionRoutes)

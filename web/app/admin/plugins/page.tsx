@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CircleCheck, Power, Settings2, ShieldAlert, Trash2 } from 'lucide-react';
+import { CircleCheck, Cpu, Power, Settings2, ShieldAlert, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { useRef, useState } from 'react';
 import { FieldInputs, type FieldValues, fromFieldValues, problemsOf, toFieldValues } from '@/components/business/common';
@@ -14,6 +14,7 @@ import {
   type PluginPackageView,
   type PluginSignatureStatus,
 } from '@/lib/plugin-packages';
+import { PLUGIN_PAGES_KEY } from '@/lib/plugin-pages';
 import { cn } from '@/lib/utils';
 
 const NETWORK_LABEL: Record<PluginNetworkStatus['state'], string> = {
@@ -104,6 +105,55 @@ function ContentReview({ pkg }: { pkg: PluginPackageView }) {
         <CircleCheck className="w-3.5 h-3.5" /> Approve this content
       </button>
       {error && <p role="alert" className="text-xs text-error">! {error}</p>}
+    </div>
+  );
+}
+
+/**
+ * An in-process plugin (runtime `in-process`) runs in the server process with
+ * its full authority, so it needs one approval more than a package: for the
+ * approved content hash, shown here. Shown while that approval is missing and
+ * there is no changed content to review first. The server refuses (409) a
+ * hash that is no longer the approved content or no longer what the files
+ * hash to.
+ */
+function InProcessApproval({ pkg }: { pkg: PluginPackageView }) {
+  const qc = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const approve = useMutation({
+    mutationFn: (hash: string) => api.patch<PluginPackageView>(`/plugin-packages/${encodeURIComponent(pkg.name)}`, { approveInProcess: hash }),
+    onSuccess: () => {
+      setError(null);
+      void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY });
+    },
+    onError: (err: Error) => {
+      setError(problemsOf(err));
+      void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY });
+    },
+  });
+  if (pkg.runtime !== 'in-process' || pkg.inProcess?.approved || pkg.actualHash || !pkg.contentHash) return null;
+  const hash = pkg.contentHash;
+  return (
+    <div className="mt-2 space-y-1 rounded-xs border border-warning/40 p-2" role="group" aria-label={`In-process approval for ${pkg.name}`}>
+      <p className="text-xs text-on-surface">
+        Runs in the server process: no sandbox, with the server&apos;s network, files, data and agent loop. It is not loaded until
+        you approve that for this content.
+      </p>
+      <dl className="grid grid-cols-[6rem_1fr] gap-x-2 text-xs">
+        <dt className="text-on-surface-variant">content</dt>
+        <dd className="font-mono break-all" data-testid="in-process-hash">{hash}</dd>
+      </dl>
+      <button
+        type="button"
+        disabled={approve.isPending}
+        onClick={() => {
+          if (confirm(`Run ${pkg.name} in the server process, with the server's full authority, for the content that hashes to ${hash}?`)) approve.mutate(hash);
+        }}
+        className="inline-flex items-center gap-1 px-2 py-1 rounded-xs bg-primary text-on-primary text-xs cursor-pointer disabled:opacity-50"
+      >
+        <Cpu className="w-3.5 h-3.5" /> Approve running in the server process
+      </button>
+      {error && <p role="alert" className="text-xs text-error whitespace-pre-line">! {error}</p>}
     </div>
   );
 }
@@ -268,43 +318,212 @@ function PackageConfig({ pkg }: { pkg: PluginPackageView }) {
   );
 }
 
+/**
+ * What a package adds besides tools: its pages (sidebar entries while it is
+ * enabled) and the host API scopes it asks for, each approved or not. A scope
+ * a new version adds is not approved: enabling asks for it.
+ */
+/** Exactly when a package with approved host scopes gets a token (src/plugins/packages/host-api.ts, `hostCallKind`). */
+const HOST_TOKEN_WHEN = 'A call gets a short-lived token for them (at most 30 seconds, for that call only) only when a user starts it: '
+  + 'a tool call of their own agent in their conversation, a slash command they type, or a button on the package\'s page. '
+  + 'Schedules, events and context calls never get one. The token acts as that user, within their own data and permission rules. '
+  + 'An upgrade asks for this approval again.';
+
+function PagesAndScopes({ pkg, unapproved }: { pkg: PluginPackageView; unapproved: string[] }) {
+  const pages = pkg.manifest.ui?.pages ?? [];
+  const scopes = pkg.manifest.host ?? [];
+  if (pages.length === 0 && scopes.length === 0) return null;
+  return (
+    <div className="mt-1 space-y-0.5 text-xs text-on-surface-variant">
+      {pages.length > 0 && (
+        <p data-testid="plugin-pages">
+          pages: {pages.map((p) => `${p.title} (/plugins/${pkg.name}/${p.path})`).join(', ')}
+        </p>
+      )}
+      {scopes.length > 0 && (
+        <p data-testid="plugin-host-scopes">
+          host API:{' '}
+          {scopes.map((s, i) => (
+            <span key={s}>
+              {i > 0 && ', '}
+              <code className={cn('font-mono', unapproved.includes(s) ? tone('warn') : tone('ok'))} data-scope={s} data-approved={!unapproved.includes(s)}>{s}</code>
+            </span>
+          ))}
+          {unapproved.length > 0 && <span className={tone('warn')}> · {unapproved.length} not approved; enabling approves them</span>}
+          <span className="block">{HOST_TOKEN_WHEN}</span>
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Whether a package adds anything besides tools (docs/PLUGIN-PACKAGES.md#contributions). */
+function hasContributions(pkg: PluginPackageView): boolean {
+  const c = pkg.contributions;
+  return !!c && (c.commands.length > 0 || c.schedules.length > 0 || c.events.length > 0 || !!c.prompt || !!c.context);
+}
+
+function LastRun({ run }: { run: { at: string; ok: boolean; error: string | null } | null }) {
+  if (!run) return null;
+  return run.ok
+    ? <span className={tone('quiet')}> · last run ok {new Date(run.at).toLocaleString()}</span>
+    : <span className={tone('bad')}> · last run failed: {run.error}</span>;
+}
+
+/**
+ * What a package adds besides tools, in full: its slash commands, schedules,
+ * event handlers, turn context and the whole prompt text it puts in every
+ * user's agents. Nothing of it is bound until an admin approves exactly this
+ * (the contributions hash); shown in the row and in the enable confirmation.
+ */
+function Contributions({ pkg }: { pkg: PluginPackageView }) {
+  if (!hasContributions(pkg)) return null;
+  const c = pkg.contributions;
+  const roles = (r: string[] | null) => (r ? `agents of the roles ${r.join(', ')}` : 'every agent');
+  return (
+    <div className="mt-2 space-y-1 text-xs text-on-surface-variant" data-testid="plugin-contributions">
+      <p className={c.approved ? tone('ok') : tone('warn')} data-testid="plugin-contributions-approval">
+        {c.approved
+          ? <>contributions approved for <span className="font-mono">{c.approvedHash}</span></>
+          : <>contributions not approved{c.hash && <> (<span className="font-mono">{c.hash}</span>)</>}: nothing below is active until you approve it when enabling</>}
+      </p>
+      <ul className="space-y-0.5 list-disc pl-4">
+        {c.commands.map((x) => (
+          <li key={`c-${x.name}`} data-testid="plugin-contribution-command">
+            command <code className="font-mono">/{x.name}</code> → {x.tool} ({x.effect ?? '?'}), run as the user who types it: {x.description}
+          </li>
+        ))}
+        {c.schedules.map((x) => (
+          <li key={`s-${x.id}`} data-testid="plugin-contribution-schedule">
+            schedule <code className="font-mono">{x.id}</code> <code className="font-mono">{x.cron}</code> (UTC) → {x.tool} ({x.effect ?? '?'}), run as the installing admin, unattended
+            <LastRun run={x.lastRun} />
+          </li>
+        ))}
+        {c.events.map((x) => (
+          <li key={`e-${x.on}-${x.tool}`} data-testid="plugin-contribution-event">
+            on <code className="font-mono">{x.on}</code> of every user → {x.tool} ({x.effect ?? '?'}), run as that user (ids only)
+            <LastRun run={x.lastRun} />
+          </li>
+        ))}
+        {c.context && (
+          <li data-testid="plugin-contribution-context" className={tone('warn')}>
+            context: {c.context.tool} ({c.context.effect ?? '?'}) receives the message of every turn of every user — root agents and
+            workers, {roles(c.context.roles)} — and its answer is put in front of the agent
+            <LastRun run={c.context.lastRun} />
+          </li>
+        )}
+        {c.prompt && (
+          <li data-testid="plugin-contribution-prompt">
+            prompt: <code className="font-mono">{c.prompt.file}</code> is added to the system prompt of {roles(c.prompt.roles)}, for every
+            user, fenced as third-party text:
+            <pre
+              className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-xs border border-outline-variant bg-surface-container p-2 font-mono text-on-surface"
+              data-testid="plugin-prompt-text"
+            >
+              {c.prompt.text ?? '(the file cannot be read)'}
+            </pre>
+          </li>
+        )}
+      </ul>
+      {c.problems.map((p) => <p key={p} className={tone('bad')}>! {p}</p>)}
+    </div>
+  );
+}
+
+/**
+ * The enable confirmation of a package that adds anything besides tools:
+ * everything it adds, in full, and enabling approves exactly that
+ * (`approveContributions` with the hash shown). The server refuses (409)
+ * when the package changed after this page read it.
+ */
+function EnableConfirmation({ pkg, pending, onConfirm, onCancel }: { pkg: PluginPackageView; pending: boolean; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div className="mt-2 space-y-1 rounded-xs border border-warning/40 p-2" role="group" aria-label={`Enable ${pkg.name}`} data-testid="plugin-enable-confirm">
+      <p className="text-xs text-on-surface">
+        Enabling {pkg.name} approves everything it adds, for every user of this install. Review it:
+      </p>
+      <Contributions pkg={pkg} />
+      <div className="flex gap-2">
+        <button
+          type="button"
+          disabled={pending}
+          onClick={onConfirm}
+          className="inline-flex items-center gap-1 px-2 py-1 rounded-xs bg-primary text-on-primary text-xs cursor-pointer disabled:opacity-50"
+        >
+          <CircleCheck className="w-3.5 h-3.5" /> Approve and enable
+        </button>
+        <button type="button" onClick={onCancel} className="px-2 py-1 text-xs text-on-surface-variant hover:text-on-surface cursor-pointer">
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function PackageRow({ pkg }: { pkg: PluginPackageView }) {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [configuring, setConfiguring] = useState(false);
+  const [confirmingEnable, setConfirmingEnable] = useState(false);
   const uninstall = useMutation({
     mutationFn: () => api.delete<{ uninstalled: boolean }>(`/plugin-packages/${encodeURIComponent(pkg.name)}`),
     onSuccess: () => { setError(null); void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY }); },
     onError: (err: Error) => setError(problemsOf(err)),
   });
+  const declaredScopes = pkg.manifest.host ?? [];
+  const unapproved = declaredScopes.filter((s) => !(pkg.approvedHostScopes ?? []).includes(s));
   const toggle = useMutation({
-    mutationFn: (enabled: boolean) => api.patch<PluginPackageView>(`/plugin-packages/${encodeURIComponent(pkg.name)}`, { enabled }),
-    onSuccess: () => { setError(null); void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY }); },
+    // Enabling approves the declared host API scopes the admin was just shown (docs/PLUGIN-PACKAGES.md#host-api).
+    // Enabling a package with contributions approves the contributions hash the confirmation showed.
+    mutationFn: (enabled: boolean) => api.patch<PluginPackageView>(`/plugin-packages/${encodeURIComponent(pkg.name)}`, {
+      ...(enabled && unapproved.length > 0 ? { enabled, approveHostScopes: declaredScopes } : { enabled }),
+      ...(enabled && hasContributions(pkg) && pkg.contributions.hash ? { approveContributions: pkg.contributions.hash } : {}),
+    }),
+    onSuccess: () => {
+      setError(null);
+      setConfirmingEnable(false);
+      void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY });
+      // Its pages come and go with it in the sidebar.
+      void qc.invalidateQueries({ queryKey: PLUGIN_PAGES_KEY });
+    },
     // A refusal can come from files changed since the page loaded: reload, so the review shows.
     onError: (err: Error) => { setError(problemsOf(err)); void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY }); },
   });
   const hosts = pkg.manifest.network ?? [];
+  const inProcess = pkg.runtime === 'in-process';
+  const running = inProcess ? 'loaded' : 'running';
   return (
     <li className="px-4 py-3 text-sm" data-testid="plugin-package" data-name={pkg.name}>
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-on-surface font-medium">{pkg.name}</span>
         <span className="text-xs text-on-surface-variant">{pkg.version}</span>
         <span className="text-xs text-on-surface-variant flex-1 min-w-0 truncate" title={pkg.manifest.description}>{pkg.manifest.title}</span>
+        {inProcess && (
+          <span className="text-xs text-warning" title="Runs in the server process, not in a sandbox" data-testid="plugin-runtime">
+            in-process{pkg.inProcess?.approved ? '' : ' · not approved'}
+          </span>
+        )}
         <span className={cn('text-xs', pkg.connected ? tone('ok') : tone('quiet'))}>
-          {pkg.enabled ? (pkg.connected ? 'running' : 'enabled') : 'disabled'}
+          {pkg.enabled ? (pkg.connected ? running : 'enabled') : 'disabled'}
         </span>
         <SignatureState signature={pkg.signature} />
         <NetworkState network={pkg.network} />
         <button
           type="button"
           disabled={toggle.isPending}
-          onClick={() => toggle.mutate(!pkg.enabled)}
+          onClick={() => {
+            // A package that adds commands, schedules, events, prompt text or context: review all of it first.
+            if (!pkg.enabled && hasContributions(pkg)) { setConfirmingEnable(true); return; }
+            if (!pkg.enabled && unapproved.length > 0
+              && !confirm(`Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? ${HOST_TOKEN_WHEN}`)) return;
+            toggle.mutate(!pkg.enabled);
+          }}
           aria-label={`${pkg.enabled ? 'Disable' : 'Enable'} ${pkg.name}`}
           className="inline-flex items-center gap-1 text-xs text-on-surface-variant hover:text-on-surface cursor-pointer disabled:opacity-50"
         >
           <Power className="w-3.5 h-3.5" /> {pkg.enabled ? 'disable' : 'enable'}
         </button>
-        <button
+        {!inProcess && <button
           type="button"
           onClick={() => setConfiguring((c) => !c)}
           aria-expanded={configuring}
@@ -312,7 +531,7 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
           className="inline-flex items-center gap-1 text-xs text-on-surface-variant hover:text-on-surface cursor-pointer"
         >
           <Settings2 className="w-3.5 h-3.5" /> configure
-        </button>
+        </button>}
         <button
           type="button"
           disabled={uninstall.isPending}
@@ -325,11 +544,33 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
           <Trash2 className="w-3.5 h-3.5" /> uninstall
         </button>
       </div>
-      <p className="mt-1 text-xs text-on-surface-variant">
-        tools: {Object.entries(pkg.manifest.tools).map(([t, d]) => `${t} (${d.effect})`).join(', ')}
-        {' · '}hosts: {hosts.length ? hosts.join(', ') : 'none'}
-      </p>
+      {inProcess ? (
+        <p className="mt-1 text-xs text-on-surface-variant">
+          entry: <code className="font-mono">{pkg.manifest.entry}</code>
+          {pkg.inProcess?.approved && <> · approved to run in the server process for <span className="font-mono">{pkg.inProcess.approvedHash}</span></>}
+        </p>
+      ) : (
+        <p className="mt-1 text-xs text-on-surface-variant">
+          tools: {Object.entries(pkg.manifest.tools ?? {}).map(([t, d]) => `${t} (${d.effect})`).join(', ')}
+          {' · '}hosts: {hosts.length ? hosts.join(', ') : 'none'}
+        </p>
+      )}
       <p className="mt-1 text-xs text-on-surface-variant" data-testid="plugin-network-detail">{pkg.network.detail}</p>
+      <PagesAndScopes pkg={pkg} unapproved={unapproved} />
+      {confirmingEnable
+        ? (
+          <EnableConfirmation
+            pkg={pkg}
+            pending={toggle.isPending}
+            onCancel={() => setConfirmingEnable(false)}
+            onConfirm={() => {
+              if (unapproved.length > 0
+                && !confirm(`Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? Its tools then act with them as the user who calls them.`)) return;
+              toggle.mutate(true);
+            }}
+          />
+        )
+        : <Contributions pkg={pkg} />}
       {pkg.signature && pkg.signature.status !== 'valid' && pkg.signature.status !== 'unsigned' && (
         <p className="mt-1 text-xs text-on-surface-variant">{pkg.signature.detail}</p>
       )}
@@ -339,6 +580,7 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
         </p>
       )}
       <ContentReview pkg={pkg} />
+      <InProcessApproval pkg={pkg} />
       {configuring && <PackageConfig pkg={pkg} />}
       {error && <p role="alert" className="mt-1 text-xs text-error whitespace-pre-line">! {error}</p>}
     </li>
@@ -400,7 +642,8 @@ export default function AdminPluginPackagesPage() {
           <p className="mt-1 text-xs text-on-surface-variant">
             Connections to other systems, each its own process with only its declared tools and hosts. A package starts
             disabled; one whose files changed since they were approved does not start until its new content is approved.
-            A package from a URL must be signed by a publisher in <code>plugins.trustedPublishers</code>.
+            A package from a URL must be signed by a publisher in <code>plugins.trustedPublishers</code>. An in-process
+            plugin runs in the server process and needs one more approval, for its exact content, before it is loaded.
           </p>
         </div>
         <Link href="/admin/plugins/browse" className="text-xs text-primary hover:underline">browse registries →</Link>

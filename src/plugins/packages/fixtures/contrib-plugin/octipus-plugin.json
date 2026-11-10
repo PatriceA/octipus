@@ -1,0 +1,27 @@
+{
+  "name": "contrib-plugin",
+  "version": "1.0.0",
+  "apiVersion": "1.0.0",
+  "title": "Contributions (test fixture)",
+  "description": "A plugin package for the contribution tests: a command, schedules, an event, a prompt section and turn context.",
+  "server": { "command": "node", "args": ["server.mjs"] },
+  "tools": {
+    "hello": { "effect": "read", "description": "Greet" },
+    "record": { "effect": "write", "description": "Record something" },
+    "ctx": { "effect": "read", "description": "Context for a turn" },
+    "boom": { "effect": "read", "description": "Always fails" }
+  },
+  "commands": [
+    { "name": "greet", "tool": "hello", "description": "Say hello", "input": { "text": "$args", "loud": true } }
+  ],
+  "schedules": [
+    { "id": "tick", "cron": "* * * * *", "tool": "hello", "input": { "text": "tick" } },
+    { "id": "write-tick", "cron": "* * * * *", "tool": "record", "input": { "what": "tick" } }
+  ],
+  "events": [
+    { "on": "chat.response", "tool": "hello" },
+    { "on": "document.failed", "tool": "boom" }
+  ],
+  "prompt": { "file": "prompt.md", "roles": ["general"] },
+  "context": { "tool": "ctx" }
+}

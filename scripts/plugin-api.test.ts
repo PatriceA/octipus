@@ -10,6 +10,8 @@ import { describe, expect, test } from 'vitest';
 import { MAX_PLUGIN_SECRET_LENGTH, type PluginPackageView } from '@/shared/plugin-package';
 import {
   approveCommand,
+  approveContributionsCommand,
+  approveInProcessCommand,
   backendBase,
   type HiddenInput,
   listCommand,
@@ -33,7 +35,9 @@ function view(over: Partial<PluginPackageView> = {}): PluginPackageView {
     network: { state: 'refused', detail: 'Not started' }, connected: false,
     contentHash: RECORDED, actualHash: ACTUAL, signedBy: null,
     signature: { status: 'invalid', keyId: null, publisher: null, detail: 'does not match' },
-    installedBy: null, installedAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-01T00:00:00Z',
+    runtime: 'package', inProcess: null,
+    contributions: { hash: null, approvedHash: null, approved: false, commands: [], schedules: [], events: [], prompt: null, context: null, problems: [] },
+    approvedHostScopes: null, installedBy: null, installedAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-01T00:00:00Z',
     ...over,
   };
 }
@@ -165,6 +169,62 @@ describe('octi plugin approve', () => {
     expect(await approveCommand(harness().io, 'datev', undefined)).toBe(1);
     const bad = harness();
     expect(await approveCommand(bad.io, 'finapi', 'abc')).toBe(2);
+    expect(bad.requests).toEqual([]);
+  });
+});
+
+describe('octi plugin approve-in-process', () => {
+  const inProcessView = (over: Partial<PluginPackageView> = {}) => view({
+    name: 'auditlog', runtime: 'in-process', problem: null, actualHash: null, enabled: false,
+    inProcess: { approved: false, approvedHash: null, approvedBy: null, approvedAt: null, loaded: false },
+    ...over,
+  });
+  const approvedView = (body: { approveInProcess?: string }): [number, unknown] => [200, inProcessView({
+    inProcess: { approved: true, approvedHash: body.approveInProcess ?? null, approvedBy: 'u', approvedAt: '2026-11-10T00:00:00Z', loaded: false },
+  })];
+
+  test('list shows the runtime and the missing approval with the command to give it', async () => {
+    const h = harness({ packages: [inProcessView()] });
+    expect(await listCommand(h.io)).toBe(0);
+    const text = h.out.join('');
+    expect(text).toContain('runtime:   in-process');
+    expect(text).toContain(`octi plugin approve-in-process auditlog --hash ${RECORDED}`);
+  });
+
+  test('with --hash: sends exactly that hash as approveInProcess', async () => {
+    const h = harness({ respond: (method, body) => (method === 'PATCH' ? approvedView(body as { approveInProcess?: string }) : undefined) });
+    expect(await approveInProcessCommand(h.io, 'auditlog', RECORDED)).toBe(0);
+    expect(h.requests).toEqual([expect.objectContaining({ method: 'PATCH', url: 'http://localhost:4999/api/plugin-packages/auditlog', body: { approveInProcess: RECORDED } })]);
+    expect(h.out.join('')).toContain(`Approved auditlog to run in the server process, for ${RECORDED}. Enable it to load it.`);
+  });
+
+  test('without --hash: asks at a terminal for the approved content hash; refuses to guess elsewhere', async () => {
+    const yes = harness({ packages: [inProcessView()], interactive: true, answer: 'y', respond: (method, body) => (method === 'PATCH' ? approvedView(body as { approveInProcess?: string }) : undefined) });
+    expect(await approveInProcessCommand(yes.io, 'auditlog', undefined)).toBe(0);
+    expect(yes.asked[0]).toContain(RECORDED);
+    expect(yes.asked[0]).toContain('full authority');
+    expect(yes.requests.at(-1)?.body).toEqual({ approveInProcess: RECORDED });
+
+    const no = harness({ packages: [inProcessView()], interactive: true, answer: 'n' });
+    expect(await approveInProcessCommand(no.io, 'auditlog', undefined)).toBe(1);
+    expect(no.requests.filter((r) => r.method === 'PATCH')).toEqual([]);
+
+    const away = harness({ packages: [inProcessView()] });
+    expect(await approveInProcessCommand(away.io, 'auditlog', undefined)).toBe(2);
+    expect(away.err.join('')).toContain(`octi plugin approve-in-process auditlog --hash ${RECORDED}`);
+  });
+
+  test('a package, changed content or a bad hash are refused before anything is sent', async () => {
+    const pkgHarness = harness({ packages: [view({ name: 'finapi', runtime: 'package' })] });
+    expect(await approveInProcessCommand(pkgHarness.io, 'finapi', undefined)).toBe(1);
+    expect(pkgHarness.err.join('')).toMatch(/sandboxed package/);
+
+    const changed = harness({ packages: [inProcessView({ actualHash: ACTUAL })] });
+    expect(await approveInProcessCommand(changed.io, 'auditlog', undefined)).toBe(1);
+    expect(changed.err.join('')).toContain('octi plugin approve auditlog first');
+
+    const bad = harness();
+    expect(await approveInProcessCommand(bad.io, 'auditlog', 'sha256:nope')).toBe(2);
     expect(bad.requests).toEqual([]);
   });
 });
@@ -370,5 +430,49 @@ describe('octi plugin secret: arguments, the hidden prompt, stdin and the length
     const line = readHiddenLine(tty, () => {}, '', 3);
     tty.type('abcdefg\r');
     expect(await line).toBe('abcd');
+  });
+});
+
+describe('octi plugin approve-contributions', () => {
+  const CONTRIB = `sha256:${'c'.repeat(64)}`;
+  const contributed = (over: Partial<PluginPackageView['contributions']> = {}) => view({
+    name: 'greeter', problem: null, actualHash: null, enabled: false,
+    contributions: {
+      hash: CONTRIB, approvedHash: null, approved: false,
+      commands: [{ name: 'greet', tool: 'hello', effect: 'read', description: 'Say hello', bound: false }],
+      schedules: [{ id: 'tick', cron: '0 * * * *', tool: 'record', effect: 'write', bound: false, lastRun: null }],
+      events: [{ on: 'chat.response', tool: 'hello', effect: 'read', bound: false, lastRun: null }],
+      prompt: { file: 'prompt.md', roles: null, text: 'Always greet loudly.\nSecond line.', bound: false, chars: null },
+      context: { tool: 'ctx', effect: 'read', roles: null, bound: false, lastRun: null },
+      problems: [],
+      ...over,
+    },
+  });
+
+  test('without --hash: shows everything it adds, the whole prompt text, and asks at a terminal; refuses elsewhere', async () => {
+    const yes = harness({ packages: [contributed()], interactive: true, answer: 'y', respond: (method) => (method === 'PATCH' ? [200, contributed({ approvedHash: CONTRIB, approved: true })] : undefined) });
+    expect(await approveContributionsCommand(yes.io, 'greeter', undefined)).toBe(0);
+    const shown = yes.out.join('');
+    expect(shown).toContain('/greet → hello (read)');
+    expect(shown).toContain('"0 * * * *" (UTC) → record (write), as the installing admin');
+    expect(shown).toContain('chat.response → hello (read)');
+    expect(shown).toContain('every turn of EVERY user');
+    expect(shown).toContain('    | Always greet loudly.\n    | Second line.');
+    expect(yes.requests.at(-1)?.body).toEqual({ approveContributions: CONTRIB });
+
+    const away = harness({ packages: [contributed()] });
+    expect(await approveContributionsCommand(away.io, 'greeter', undefined)).toBe(2);
+    expect(away.err.join('')).toContain(`octi plugin approve-contributions greeter --hash ${CONTRIB}`);
+    expect(away.requests.filter((r) => r.method === 'PATCH')).toEqual([]);
+  });
+
+  test('with --hash: sends it; a refusal names the hash to review', async () => {
+    const ok = harness({ respond: (method) => (method === 'PATCH' ? [200, contributed({ approvedHash: CONTRIB, approved: true })] : undefined) });
+    expect(await approveContributionsCommand(ok.io, 'greeter', CONTRIB)).toBe(0);
+    expect(ok.requests).toEqual([expect.objectContaining({ method: 'PATCH', body: { approveContributions: CONTRIB } })]);
+    const refused = harness({ respond: (method) => (method === 'PATCH' ? [409, { error: 'changed', contributionsHash: CONTRIB }] : undefined) });
+    expect(await approveContributionsCommand(refused.io, 'greeter', `sha256:${'d'.repeat(64)}`)).toBe(1);
+    expect(refused.err.join('')).toContain(`--hash ${CONTRIB}`);
+    expect(await approveContributionsCommand(harness().io, 'greeter', 'sha256:nope')).toBe(2);
   });
 });

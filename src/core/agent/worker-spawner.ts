@@ -1,4 +1,5 @@
 import { executionEnvironmentFor } from '@/security/execution-environments';
+import { pluginPromptSections } from '@/plugins/packages/contributions/prompt';
 import { createStageDelegation } from './stage-delegation';
 import { WorkerInterruptedError, type Interruption } from '@/core/interruption';
 import { getExecutionSignal } from '@/core/execution-scope';
@@ -858,6 +859,16 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     if (hooks.text) volatileParts.push(hooks.text);
     contextTurn = hooks.turn;
   }
+  // Turn context of plugin packages (docs/PLUGIN-PACKAGES.md#context), against the same brief and audience rule.
+  if (isRealUserId(context.userId) && !audience.shared && !audience.contentStorageOff) {
+    const { runPluginContexts } = await import('@/plugins/packages/contributions/context');
+    const { inheritScope } = await import('./context');
+    const plugins = await runPluginContexts({
+      userId: context.userId, sessionId: context.sessionId, role: agentRole,
+      query: input ? `${task}\n${input}` : task, scope: inheritScope(context),
+    });
+    if (plugins.text) volatileParts.push(plugins.text);
+  }
 
   // Workers must return results to the root agent, not message the user directly (STATIC)
   staticParts.push(`\n\nIMPORTANT: You are a worker agent. Return your findings and results as plain text in your final response — the rootAgent handles all user communication. Just do your task and respond with the result.\nDo NOT use messaging tools (send_to_user, send_channel_message) to contact the user. <!-- module:channels -->`);
@@ -873,6 +884,10 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   if (!finalIsSmall && roleTools.some((t) => t.toolId === 'knowledge')) {
     staticParts.push(`\n\nPRODUCT DOCS: Octipus's own product documentation (setup, channels, model providers, configuration) is indexed in the knowledge base (source "octipus-docs"). For any "how do I set up / configure / connect / enable X" question about Octipus itself, call search_knowledge FIRST and answer from the retrieved docs — cite the source file — rather than guessing.`);
   }
+
+  // Prompt sections of enabled plugin packages for this role
+  // (docs/PLUGIN-PACKAGES.md#prompt-sections): static, the same for every user.
+  for (const section of pluginPromptSections(agentRole)) staticParts.push(section.text);
 
   // CLI workers advertise their actual run-scoped handlers at launch. Do not
   // promise the standalone admin MCP catalog or invented octipus_* aliases.

@@ -10,6 +10,7 @@
  * request the script measures against the live API is the one the tests pin.
  * Nothing in the product imports this module.
  */
+import { pluginPromptSections } from '@/plugins/packages/contributions/prompt';
 import type { ToolAdvertisement, ToolHandler } from '@/core/agent-base';
 import { AgentWorker } from '@/core/agent-worker';
 import type { AgentMessage } from '@/core/types';
@@ -56,6 +57,7 @@ export async function assembleRootPrompt(options: RootPromptOptions): Promise<Pr
     .add('install', 'role-prompt', split.install)
     .add('install', 'delegation-policy', buildDelegationPolicy(isLite));
   if (!isLite) prompt.add('install', 'delegation-mechanics', `\n\n${delegationPrompt}`);
+  for (const section of pluginPromptSections(ROOT_ROLE)) prompt.add('install', section.label, section.text);
   return prompt
     .add('user', 'persona', asTrailingBlock(split.user))
     .add('session', 'workspace-listing', `\nWORKSPACE: Root is ${workspace}`, { drifts: true })

@@ -17,7 +17,7 @@ import { apiLogger } from '@/utils/logger';
 const STATUS: Record<PluginPackageError['code'], number> = { not_found: 404, exists: 409, invalid: 400, incomplete: 409, conflict: 409 };
 
 /** A refused change: its status and every problem; anything else is logged and a 500. */
-function refused(err: unknown, set: { status?: number | string }): { error: string; problems?: string[]; actualHash?: string } {
+function refused(err: unknown, set: { status?: number | string }): { error: string; problems?: string[]; actualHash?: string; contributionsHash?: string } {
   if (err instanceof PluginPackageError) {
     set.status = STATUS[err.code];
     return { error: err.message, problems: err.problems, ...err.details };
@@ -32,7 +32,8 @@ function refused(err: unknown, set: { status?: number | string }): { error: stri
  * Installing takes a directory on the server, signed or not (signature checked
  * against plugins.trustedPublishers), or an https tarball, which must carry a
  * valid trusted signature; `GET /registry` lists what plugins.registries
- * offer. A package starts disabled.
+ * offer. A package starts disabled. An `in-process` plugin also needs
+ * `approveInProcess` before it can be enabled.
  */
 export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   .use(apiContext)
@@ -113,7 +114,11 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
       const denied = adminDenied({ set, user, principal });
       if (denied) return denied;
       try {
-        await configure(params.name, { settings: body.settings, enabled: body.enabled, approveContent: body.approveContent }, principal.userId);
+        await configure(params.name, {
+          settings: body.settings, enabled: body.enabled, approveContent: body.approveContent, approveInProcess: body.approveInProcess,
+          approveContributions: body.approveContributions,
+          ...(body.approveHostScopes !== undefined ? { approveHostScopes: body.approveHostScopes } : {}),
+        }, principal.userId);
         return await packageView(params.name);
       } catch (err) {
         return refused(err, set);
@@ -130,6 +135,31 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
          * message asking for the hash; it is accepted here only to say so.
          */
         approveContent: t.Optional(t.Union([t.String({ maxLength: 100 }), t.Boolean()])),
+        /**
+         * An `in-process` plugin only: approve running it in the server
+         * process, for the content hash the admin reviewed (the approved
+         * `contentHash`). Refused (409) unless it is the approved content and
+         * the files hash to it now; approving other content clears it.
+         * Enabling such a plugin without it is refused (409). A boolean is
+         * refused (400) with a message asking for the hash.
+         */
+        approveInProcess: t.Optional(t.Union([t.String({ maxLength: 100 }), t.Boolean()])),
+        /**
+         * Approve what the package adds besides tools (commands, schedules,
+         * events, prompt text in every user's agents, turn context), for the
+         * contributions hash the admin reviewed (the view's
+         * `contributions.hash`). Refused (409, with `contributionsHash`) unless
+         * it is what the package adds now. Enabling a package that adds any
+         * without it is refused (409, with `contributionsHash`); install and
+         * upgrade clear it. A boolean is refused (400).
+         */
+        approveContributions: t.Optional(t.Union([t.String({ maxLength: 100 }), t.Boolean()])),
+        /**
+         * The host API scopes the admin approves (docs/PLUGIN-PACKAGES.md#host-api):
+         * scopes the manifest declares. Enabling a package that declares any
+         * needs all of them approved; an upgrade clears the approval.
+         */
+        approveHostScopes: t.Optional(t.Array(t.String({ maxLength: 40 }), { maxItems: 20 })),
         settings: t.Optional(t.Record(t.String({ maxLength: 50 }), t.Unknown())),
       }),
       detail: { tags: ['plugin-packages'] },

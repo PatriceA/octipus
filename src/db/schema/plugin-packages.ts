@@ -1,5 +1,5 @@
 import { boolean, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-import type { PluginManifest } from '@/shared/plugin-package';
+import type { PluginHostScope, PluginManifest } from '@/shared/plugin-package';
 import { users } from './users';
 
 /**
@@ -21,6 +21,11 @@ import { users } from './users';
  * file's bytes recorded with `contentHash` (null: no signature file): the
  * file is outside the content hash, so it is pinned on its own and compared
  * before every start.
+ *
+ * `inProcessApprovedHash` is the content hash an admin approved to run in the
+ * server process (runtime `in-process`, docs/PLUGIN-PACKAGES.md#runtimes),
+ * with who and when; it holds only while it equals `contentHash`, and
+ * approving other content clears it.
  */
 export const pluginPackages = pgTable('plugin_packages', {
   name: text('name').primaryKey(),
@@ -30,6 +35,21 @@ export const pluginPackages = pgTable('plugin_packages', {
   contentHash: text('content_hash'),
   signedBy: text('signed_by'),
   signatureHash: text('signature_hash'),
+  inProcessApprovedHash: text('in_process_approved_hash'),
+  inProcessApprovedBy: uuid('in_process_approved_by').references(() => users.id, { onDelete: 'set null' }),
+  inProcessApprovedAt: timestamp('in_process_approved_at', { withTimezone: true }),
+  /**
+   * The host API scopes an admin approved (docs/PLUGIN-PACKAGES.md#host-api);
+   * null: none yet. Only scopes the manifest declares AND this lists are
+   * granted; enabling asks for any declared scope missing here.
+   */
+  approvedHostScopes: jsonb('approved_host_scopes').$type<PluginHostScope[]>(),
+  /**
+   * The contributions hash an admin approved (src/plugins/packages/contributions/approval.ts):
+   * commands, schedules, events, prompt and context bind only while it equals
+   * the package's current one. Null: not approved; install and upgrade clear it.
+   */
+  approvedContributionsHash: text('approved_contributions_hash'),
   settings: jsonb('settings').$type<Record<string, string | number | boolean>>().default({}).notNull(),
   installedBy: uuid('installed_by').references(() => users.id, { onDelete: 'set null' }),
   installedAt: timestamp('installed_at', { withTimezone: true }).defaultNow().notNull(),
