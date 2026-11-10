@@ -8,8 +8,8 @@ import { json } from './fixtures/api-stubs';
  * The bundled Reader plugin's page (plugins/reader/ui, docs/PLUGIN-PACKAGES.md#bundled-plugins),
  * every /api call stubbed; the page is the plugin's real UI files, served with
  * the headers the server sends (the sandboxing CSP):
- *   - it renders in its sandboxed frame and reads an article through the
- *     bridge (read_url), showing it cleaned;
+ *   - it renders in its sandboxed frame, connects over the bridge's
+ *     MessagePort, and reads an article through it (read_url), showing it cleaned;
  *   - an action (action_items) runs through the bridge and its items show;
  *   - saving them as to-dos (a write tool) asks the user in the app, outside
  *     the frame, and runs only once allowed; the frame says what was saved;
@@ -90,6 +90,8 @@ test.describe('the Reader plugin page', () => {
     await readArticle(page);
     const frame = frameOf(page);
     expect(await page.locator('[data-testid="plugin-frame"]').getAttribute('sandbox')).toBe('allow-scripts');
+    // The page connected over the bridge's port (the fragment the app put on its URL).
+    await expect(frame.locator('body')).toHaveAttribute('data-bridge', 'connected');
     await expect(frame.locator('#meta')).toContainText('Example News · Ada Lovelace');
     await expect(frame.locator('#content strong')).toHaveText('buy milk');
     // A link in the article is not followed out of the frame: it fills the address field.
@@ -102,7 +104,7 @@ test.describe('the Reader plugin page', () => {
 
     await frame.getByRole('button', { name: 'Save as to-dos' }).click();
     const dialog = page.getByTestId('plugin-confirm');
-    await expect(dialog).toContainText('Reader wants to run create_tasks');
+    await expect(dialog).toContainText('The plugin reader (Reader) wants to run create_tasks');
     await dialog.getByRole('button', { name: 'Allow once' }).click();
     await expect(frame.locator('#saved')).toHaveText('2 added to your to-do list.');
 

@@ -1,27 +1,43 @@
 // The Reader page. It runs in a sandboxed frame with an opaque origin and no
-// network (CSP connect-src 'none'): everything goes through the page bridge,
+// network (CSP connect-src 'none'): everything goes through the page bridge (a MessagePort),
 // which calls this plugin's own tools as the signed-in user
 // (docs/PLUGIN-PACKAGES.md#pages). Saving (a write tool) is confirmed by the
 // user in the app, outside this frame.
 (function () {
   'use strict';
 
-  // ── The bridge ───────────────────────────────────────────────────────────
+  // ── The bridge (docs/PLUGIN-PACKAGES.md#pages) ───────────────────────────
+  // The app put a nonce and its own origin into this page's URL fragment. The
+  // page opens a MessageChannel, hands one port to its parent with the nonce,
+  // to that exact origin (never '*'), and from then on talks only over its own
+  // port; it never listens on its window.
+  var params = new URLSearchParams((location.hash || '').slice(1));
+  var nonce = params.get('octipus');
+  var parentOrigin = params.get('parent');
+  /** Calls waiting for their answer, by numeric id. */
+  var waiting = new Map();
   var nextId = 1;
-  var waiting = {};
-  window.addEventListener('message', function (event) {
-    var data = event.data;
-    if (event.source !== window.parent || !data || data.octipus !== 'result' || !waiting[data.id]) return;
-    var done = waiting[data.id];
-    delete waiting[data.id];
-    done(data);
-  });
+  var port = null;
+  if (nonce && parentOrigin) {
+    var channel = new MessageChannel();
+    channel.port1.onmessage = function (event) {
+      var data = event.data;
+      if (!data || data.octipus !== 'result' || typeof data.id !== 'number') return;
+      var done = waiting.get(data.id);
+      if (typeof done !== 'function') return;
+      waiting.delete(data.id);
+      done(data);
+    };
+    window.parent.postMessage({ octipus: 'ready', nonce: nonce }, parentOrigin, [channel.port2]);
+    port = channel.port1;
+  }
 
   /** Call one of this plugin's tools; resolves with its JSON result, rejects with a message. */
   function callTool(tool, args) {
     return new Promise(function (resolve, reject) {
+      if (!port) { reject(new Error('Open the Reader from the Octipus app: this page has no connection to it.')); return; }
       var id = nextId++;
-      waiting[id] = function (reply) {
+      waiting.set(id, function (reply) {
         if (!reply.ok) {
           reject(new Error(reply.code === 'denied_by_user' ? 'Not saved: you did not allow it.' : (reply.error || 'The call failed')));
           return;
@@ -30,8 +46,8 @@
         var text = result.content && result.content[0] && result.content[0].text;
         if (result.isError) { reject(new Error(text || 'The reader failed')); return; }
         try { resolve(JSON.parse(text)); } catch (e) { resolve(text); }
-      };
-      window.parent.postMessage({ octipus: 'call', id: id, tool: tool, args: args || {} }, '*');
+      });
+      port.postMessage({ octipus: 'call', id: id, tool: tool, args: args || {} });
     });
   }
 
@@ -234,4 +250,5 @@
   });
 
   document.body.setAttribute('data-ready', 'true');
+  document.body.setAttribute('data-bridge', port ? 'connected' : 'none');
 })();

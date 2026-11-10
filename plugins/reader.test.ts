@@ -89,6 +89,11 @@ describe('the package', () => {
     // The script has no network of its own (connect-src 'none') and no modal dialog (the frame cannot open one).
     const js = readFileSync(join(uiDir, 'app.js'), 'utf8');
     expect(js).not.toMatch(/\bfetch\(|XMLHttpRequest|WebSocket|window\.prompt|\bprompt\(|\balert\(|\bconfirm\(/);
+    // The bridge is a MessagePort: the page posts only its ready, to the parent's exact origin, and never listens on its window.
+    expect(js).not.toMatch(/postMessage\([^)]*['"]\*['"]/);
+    expect(js).not.toMatch(/addEventListener\(\s*['"]message['"]/);
+    expect(js).toMatch(/new MessageChannel\(\)/);
+    expect(js).toContain("window.parent.postMessage({ octipus: 'ready', nonce: nonce }, parentOrigin, [channel.port2])");
   });
 });
 
