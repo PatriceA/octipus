@@ -1387,6 +1387,8 @@ export class AgentService {
       toolIds?: string[];
       /** Runtime-granted tool ids, on top of the role's set. See spawnWorker. */
       extraToolIds?: string[];
+      /** `toolIds` is the whole set: nothing is appended after it. See spawnWorker. */
+      exactTools?: boolean;
       /** Declared purpose, checked against the resolved toolset. See spawnWorker. */
       purpose?: import('./role-contract').DeclaredPurpose;
       /** Per-visit token cap for this worker. See spawnWorker. */

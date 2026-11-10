@@ -1135,8 +1135,8 @@ package only ever holds its id.
   (`websearch`), the user's `knowledge` and `documents`, its `task_state`,
   `artifacts` and `profiles`: never a shell, the filesystem, git, a message,
   a mail or another plugin (`mcp`). A role with none of these is refused
-  (`400 role`). The user's connectors join it as they join any worker of
-  theirs. Every tool call goes through the user's own permission rules, the
+  (`400 role`). That list is the whole set: the user's connectors and the
+  test environment of the `qa` and `review` roles never join it. Every tool call goes through the user's own permission rules, the
   web search and fetch through the host's SSRF guard, exactly as in the
   user's own conversation.
 - **Only a `write` or `external` tool starts a run** (`403 read_tool`

@@ -219,6 +219,8 @@ async function runInBackground(
     const { getAgentService } = await import('@/core/agent');
     const result = await withAgentUsage(grant.userId, scope, () => getAgentService().spawnWorker(run.role, run.prompt, '', parent, {
       toolIds: run.toolIds,
+      // The approved list is the whole set: no connector or test-container tools join it.
+      exactTools: true,
       maxTokenBudget: run.budget,
       onTokens: (n: number) => { tokens += n; },
       onWorkerSpawned: (id: string) => { workerId = id; if (stopped) stop(stopped); },
