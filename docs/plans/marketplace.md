@@ -79,14 +79,22 @@ octipus-plugins/
 4. A license check and a size check against the host's install limits
    (200 MB, 20,000 files).
 
-**On merge to `main` with a version bump:**
+**On merge to `main` with a version bump**, CI only builds; it never signs
+and never publishes:
 1. **Build** the tarball reproducibly (sorted entries, fixed mtimes and owners).
-2. **Sign** the content hash, then the index, in a protected GitHub
-   environment with a required maintainer approval. The private key exists
-   only there (see Decisions).
-3. **Publish** the tarball as a GitHub Release asset (`<name>-v<version>`).
-   Then build and deploy the marketplace website (below). It also serves the
-   index and its `.sig` at `https://plugins.octipus.cc/index.json`.
+2. **Record** each tarball's sha256 and content hash as a build artifact.
+   CI holds no key.
+
+**Publishing happens on the publishing machine** (see Signing below), with one
+command, e.g. `npm run publish`:
+1. Pull `main` and rebuild the tarballs reproducibly.
+2. **Compare** the hashes with CI's record, and stop on any difference. A
+   tampered CI or a tampered checkout cannot be signed without being noticed.
+3. **Sign** each new package's content hash, then the index.
+4. **Write** the site, the tarballs (`/dl/<name>-<version>.tar.gz`), and
+   `index.json` with `index.json.sig` into one output directory. You deploy
+   that directory to the web server for `plugins.octipus.cc`, the same way as
+   octipus.cc.
 
 The index keeps every published version of a plugin, not only the newest, so
 a host can stay on an older version and a downgrade remains possible.
@@ -99,10 +107,10 @@ the place to discover plugins before installing them, and to link to them.
 
 - **Built from `octipus-plugins`.** A static Astro site (octipus.cc is Astro)
   is generated from the plugins' `marketplace.json`, READMEs, changelogs and
-  the computed permissions on every publish. It is deployed to GitHub Pages
-  with a custom domain (`CNAME plugins.octipus.cc`). The same deployment
-  serves the signed `index.json`, so the host's registry URL is on the
-  Octipus domain, not on `github.io`.
+  the computed permissions on every publish. It is hosted alongside
+  octipus.cc on the same server, and that setup is done separately, after this
+  plan. The same deployment serves the tarballs and the signed `index.json`,
+  so everything a host downloads comes from `plugins.octipus.cc`.
 - **Same design as octipus.cc:**
   - **Layout:** the site's own header, navigation and footer (`ocean-header`,
     `ocean-navigation`, `ocean-footer`), with Plugins as an entry next to Docs
@@ -147,10 +155,10 @@ This is backward compatible: v1 hosts read `name`, `version`, `description`,
   "generatedAt": "2026-11-10T12:00:00Z",
   "packages": [{
     "name": "weekly-review", "version": "1.2.0", "description": "…",
-    "url": "https://github.com/PatriceA/octipus-plugins/releases/download/weekly-review-v1.2.0/weekly-review-1.2.0.tar.gz",
+    "url": "https://plugins.octipus.cc/dl/weekly-review-1.2.0.tar.gz",
     "sha256": "<hex>", "contentHash": "sha256:<hex>", "apiVersion": "1.0.0", "minOctipus": "0.7.0",
     "title": "Weekly review", "category": "productivity", "tags": ["tasks", "notes"],
-    "icon": "…/icon.png", "screenshots": ["…"], "readme": "…/README.md", "changelog": "…/CHANGELOG.md",
+    "icon": "https://plugins.octipus.cc/weekly-review/icon.png", "screenshots": ["…"], "readme": "…", "changelog": "…",
     "publisher": "Octipus", "license": "MIT", "publishedAt": "…",
     "permissions": { "host": ["tasks:read", "notes:write"], "network": [], "effects": { "write": 1, "read": 2 },
                      "contributions": ["schedule"], "pages": 1, "trustedInput": false },
@@ -242,8 +250,9 @@ budgets. The docs and the detail page say so.
 
 1. **Registry and website:**
    - the repository layout and the CI checks;
-   - reproducible builds and signing in a protected environment;
-   - publishing to Releases, and index v2;
+   - reproducible builds, and the local publish command (hash check, signing,
+     output directory);
+   - index v2, encrypted keys and the backup key;
    - the `plugins.octipus.cc` site in the octipus.cc design, serving the
      index.
 
@@ -259,31 +268,54 @@ budgets. The docs and the detail page say so.
    - Third-party publishers either submit to `octipus-plugins` and are signed
      by the marketplace key, or run their own signed registry that admins add.
 
-## Decisions to make
+## Signing
 
-1. **Key custody.**
-   - Recommended: the marketplace private key lives only as a secret of a
-     protected GitHub environment, and every publish needs a maintainer's
-     approval.
-   - Alternative: maintainers sign offline and push the `.sig` files. That is
-     stricter but slower.
-2. **Who may publish.**
+**The key lives on the publishing machine, not on GitHub and not on the web
+server.**
+
+- **Not on GitHub:** a GitHub secret can be read by any workflow that a
+  merged change can alter. The marketplace signature is the one thing that
+  makes a package installable on every Octipus host, so it should not depend
+  on the review of every future workflow change.
+- **Not on the web server:** that process faces the internet. A compromise
+  there should be able to deface the site, but never to sign.
+- **Encrypted at rest.** `octi plugin keygen --passphrase` writes the private
+  key as passphrase-encrypted PKCS#8 (`node:crypto`, no new dependency).
+  `sign` and `sign-index` ask for the passphrase, or read it from a file
+  descriptor for scripts. This is a small addition in phase 1; today's key
+  file is unencrypted.
+- **A second, backup key.** It is generated at the same time and kept offline
+  (a password manager or a USB stick in a drawer), and never used to sign
+  packages. Both public keys ship in Octipus's built-in `trustedPublishers`
+  entry.
+  - If the active key is lost or leaks, the backup key signs an index whose
+    `revoked` list names the old key and that starts signing with a new one.
+  - No Octipus host needs an update to keep working.
+  - The host accepts a revocation signed by any trusted marketplace key, and
+    a revocation cannot be undone by the revoked key.
+- **Later, optional:** a hardware key such as a YubiKey. It needs a signing
+  path that calls the token instead of reading a file; not now.
+
+## Decisions
+
+- **Subdomain:** `plugins.octipus.cc`.
+- **Hosting:** your own server, next to octipus.cc. You pull the repository
+  and set up the site and the subdomain after this is built.
+- **Key custody:** the publishing machine, with an encrypted key file and an
+  offline backup key (Signing, above).
+
+Still open:
+1. **Who may publish.**
    - Recommended for now: first-party only (you and maintainers).
    - Open community submissions are phase 5.
-3. **Hosting.**
-   - Recommended: GitHub Releases for the tarballs, and the website plus the
-     index on GitHub Pages under `plugins.octipus.cc`. The DNS record is a
-     CNAME to `patricea.github.io`. The host's remote install follows up to
-     three https redirects, which covers Releases.
-   - The subdomain name: `plugins.octipus.cc` (recommended) or
-     `marketplace.octipus.cc`.
-4. **Sharing the octipus.cc design.** Its source is not in the repositories
-   this work can see. Recommended: move the site's layout (header, navigation,
-   footer) and tokens into a small shared package, or a `design/` folder the
-   site and the marketplace both import, so there is one source.
+2. **Sharing the octipus.cc design.** Its source is not in the repositories
+   this work can see.
+   - Recommended: move the site's layout (header, navigation, footer) and
+     tokens into a small shared package, or a `design/` folder the site and
+     the marketplace both import, so there is one source.
    - Until then, the marketplace copies them from the published site, and
      that copy is replaced once the source is shared.
-5. **The examples in the marketplace too.**
+3. **The examples in the marketplace too.**
    - Recommended: yes, from the same source (above).
 
 ## Not doing
