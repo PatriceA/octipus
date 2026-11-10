@@ -44,8 +44,9 @@
  * (`signatureHash`) is recorded with the content hash and compared at every
  * start, whatever `requireSignature` says.
  */
+import { randomBytes } from 'node:crypto';
 import { cp, lstat, mkdir, readFile, rename, rm } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { and, eq, isNull } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { RecordValidationError, validateRecordData } from '@/core/records/fields';
@@ -63,6 +64,7 @@ import {
   type PluginAgentAuthorship,
   type PluginInProcessStatus,
   type PluginManifest,
+  type PluginRuntime,
   type PluginNetworkStatus,
   type PluginPackageView,
   type PluginSignatureStatus,
@@ -333,31 +335,47 @@ export async function installFromDirectory(
     allowDowngrade?: boolean;
     /** The agent that wrote the package (creator mode, ./authoring): recorded in the audit row, shown on the admin page. */
     authoredBy?: AgentAuthoredDetails;
+    /** The runtime the package must declare (creator mode installs `package` only), checked on the staged copy. */
+    requireRuntime?: PluginRuntime;
   } = {},
 ): Promise<PluginPackageRow & { warnings: string[] }> {
   const source = resolve(sourceDir);
-  const manifest = await readManifest(source);
+  const fromStore = relative(pluginsRoot(), source);
+  if (fromStore === '' || (fromStore !== '..' && !fromStore.startsWith(`..${sep}`) && !isAbsolute(fromStore))) throw new PluginPackageError('invalid', 'The package is already in the plugin directory');
+  // A first look at the source, so a linked or unbounded tree is refused
+  // before anything is copied. It is not what decides: the source may be
+  // written by someone else (an agent) while this runs, so everything below
+  // is read and checked on the staged copy only.
   await checkTree(source);
-  const target = packageDir(manifest.name);
-  if (resolve(target) === source) throw new PluginPackageError('invalid', 'The package is already in the plugin directory');
-  if (opts.expect?.name !== undefined && opts.expect.name !== manifest.name) {
-    throw new PluginPackageError('invalid', `The package is "${manifest.name}", not the expected "${opts.expect.name}"; not installed`);
-  }
-  if (opts.expect?.version !== undefined && opts.expect.version !== manifest.version) {
-    throw new PluginPackageError('invalid', `${manifest.name} is version ${manifest.version}, not the expected ${opts.expect.version}; not installed`);
-  }
+  await installHook?.(source);
   const db = getDb();
-  const serverId = `${PLUGIN_SERVER_PREFIX}${manifest.name}`;
 
-  // Copy beside the target, hash the copy and check its signature before
-  // anything installed is touched: a refused package leaves an installed one
-  // (and whether it runs) as it was.
-  const staging = `${target}.installing-${process.pid}-${Date.now()}`;
+  // Copy into the plugin directory, then read, check, hash and verify only
+  // the copy, before anything installed is touched: a refused package leaves
+  // an installed one (and whether it runs) as it was, and what was checked is
+  // exactly what is installed.
+  await mkdir(pluginsRoot(), { recursive: true });
+  let staging = join(pluginsRoot(), `.installing-${process.pid}-${Date.now()}-${randomBytes(4).toString('hex')}`);
+  let manifest: PluginManifest;
   let contentHash: string;
   let signature: Awaited<ReturnType<typeof acceptSignature>>;
   try {
-    await mkdir(pluginsRoot(), { recursive: true });
     await cp(source, staging, { recursive: true, errorOnExist: true, verbatimSymlinks: true });
+    manifest = await readManifest(staging);
+    await checkTree(staging);
+    if (opts.requireRuntime !== undefined && pluginRuntime(manifest) !== opts.requireRuntime) {
+      throw new PluginPackageError('invalid', `${manifest.name} declares runtime "${pluginRuntime(manifest)}"; only runtime "${opts.requireRuntime}" is accepted here; not installed`);
+    }
+    if (opts.expect?.name !== undefined && opts.expect.name !== manifest.name) {
+      throw new PluginPackageError('invalid', `The package is "${manifest.name}", not the expected "${opts.expect.name}"; not installed`);
+    }
+    if (opts.expect?.version !== undefined && opts.expect.version !== manifest.version) {
+      throw new PluginPackageError('invalid', `${manifest.name} is version ${manifest.version}, not the expected ${opts.expect.version}; not installed`);
+    }
+    // Named after the package from here on, beside its target.
+    const named = `${packageDir(manifest.name)}.installing-${process.pid}-${Date.now()}`;
+    await rename(staging, named);
+    staging = named;
     // Hashed as copied, so what the admin installs is what is pinned.
     if (manifest.entry !== undefined) await checkEntry(staging, manifest.entry);
     contentHash = await hashPackageContent(staging, manifest);
@@ -369,6 +387,8 @@ export async function installFromDirectory(
     await rm(staging, { recursive: true, force: true }).catch(() => {});
     throw err;
   }
+  const target = packageDir(manifest.name);
+  const serverId = `${PLUGIN_SERVER_PREFIX}${manifest.name}`;
 
   let previous: PluginPackageRow | null = null;
   const overrides: Record<string, unknown> = {};
@@ -470,6 +490,12 @@ export async function installFromDirectory(
   });
   await syncPluginServers();
   return { ...row, warnings: signature.warnings };
+}
+
+let installHook: ((source: string) => Promise<void> | void) | null = null;
+/** Test-only: runs between the first look at the source and its copy (when another writer could change it). */
+export function _setInstallHookForTesting(hook: ((source: string) => Promise<void> | void) | null): void {
+  installHook = hook;
 }
 
 /**
