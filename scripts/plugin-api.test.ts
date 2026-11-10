@@ -10,6 +10,7 @@ import { describe, expect, test } from 'vitest';
 import { MAX_PLUGIN_SECRET_LENGTH, type PluginPackageView } from '@/shared/plugin-package';
 import {
   approveCommand,
+  approveContributionsCommand,
   approveInProcessCommand,
   backendBase,
   type HiddenInput,
@@ -35,7 +36,7 @@ function view(over: Partial<PluginPackageView> = {}): PluginPackageView {
     contentHash: RECORDED, actualHash: ACTUAL, signedBy: null,
     signature: { status: 'invalid', keyId: null, publisher: null, detail: 'does not match' },
     runtime: 'package', inProcess: null,
-    contributions: { commands: [], schedules: [], events: [], prompt: null, context: null, problems: [] },
+    contributions: { hash: null, approvedHash: null, approved: false, commands: [], schedules: [], events: [], prompt: null, context: null, problems: [] },
     approvedHostScopes: null, installedBy: null, installedAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-01T00:00:00Z',
     ...over,
   };
@@ -429,5 +430,49 @@ describe('octi plugin secret: arguments, the hidden prompt, stdin and the length
     const line = readHiddenLine(tty, () => {}, '', 3);
     tty.type('abcdefg\r');
     expect(await line).toBe('abcd');
+  });
+});
+
+describe('octi plugin approve-contributions', () => {
+  const CONTRIB = `sha256:${'c'.repeat(64)}`;
+  const contributed = (over: Partial<PluginPackageView['contributions']> = {}) => view({
+    name: 'greeter', problem: null, actualHash: null, enabled: false,
+    contributions: {
+      hash: CONTRIB, approvedHash: null, approved: false,
+      commands: [{ name: 'greet', tool: 'hello', effect: 'read', description: 'Say hello', bound: false }],
+      schedules: [{ id: 'tick', cron: '0 * * * *', tool: 'record', effect: 'write', bound: false, lastRun: null }],
+      events: [{ on: 'chat.response', tool: 'hello', effect: 'read', bound: false, lastRun: null }],
+      prompt: { file: 'prompt.md', roles: null, text: 'Always greet loudly.\nSecond line.', bound: false, chars: null },
+      context: { tool: 'ctx', effect: 'read', roles: null, bound: false, lastRun: null },
+      problems: [],
+      ...over,
+    },
+  });
+
+  test('without --hash: shows everything it adds, the whole prompt text, and asks at a terminal; refuses elsewhere', async () => {
+    const yes = harness({ packages: [contributed()], interactive: true, answer: 'y', respond: (method) => (method === 'PATCH' ? [200, contributed({ approvedHash: CONTRIB, approved: true })] : undefined) });
+    expect(await approveContributionsCommand(yes.io, 'greeter', undefined)).toBe(0);
+    const shown = yes.out.join('');
+    expect(shown).toContain('/greet → hello (read)');
+    expect(shown).toContain('"0 * * * *" (UTC) → record (write), as the installing admin');
+    expect(shown).toContain('chat.response → hello (read)');
+    expect(shown).toContain('every turn of EVERY user');
+    expect(shown).toContain('    | Always greet loudly.\n    | Second line.');
+    expect(yes.requests.at(-1)?.body).toEqual({ approveContributions: CONTRIB });
+
+    const away = harness({ packages: [contributed()] });
+    expect(await approveContributionsCommand(away.io, 'greeter', undefined)).toBe(2);
+    expect(away.err.join('')).toContain(`octi plugin approve-contributions greeter --hash ${CONTRIB}`);
+    expect(away.requests.filter((r) => r.method === 'PATCH')).toEqual([]);
+  });
+
+  test('with --hash: sends it; a refusal names the hash to review', async () => {
+    const ok = harness({ respond: (method) => (method === 'PATCH' ? [200, contributed({ approvedHash: CONTRIB, approved: true })] : undefined) });
+    expect(await approveContributionsCommand(ok.io, 'greeter', CONTRIB)).toBe(0);
+    expect(ok.requests).toEqual([expect.objectContaining({ method: 'PATCH', body: { approveContributions: CONTRIB } })]);
+    const refused = harness({ respond: (method) => (method === 'PATCH' ? [409, { error: 'changed', contributionsHash: CONTRIB }] : undefined) });
+    expect(await approveContributionsCommand(refused.io, 'greeter', `sha256:${'d'.repeat(64)}`)).toBe(1);
+    expect(refused.err.join('')).toContain(`--hash ${CONTRIB}`);
+    expect(await approveContributionsCommand(harness().io, 'greeter', 'sha256:nope')).toBe(2);
   });
 });

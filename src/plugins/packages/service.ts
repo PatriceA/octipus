@@ -70,6 +70,7 @@ import {
 import { coreLogger } from '@/utils/logger';
 import { contributionInstallProblems, contributionsView, syncContributions } from './contributions';
 import { checkInProcessBundle } from './in-process-bundle';
+import { contributionsHashOf, hasContributions } from './contributions/approval';
 import { CONTENT_MISMATCH_PROBLEM, hashPackageContent, isContentHash, verifyPackageContent } from './integrity';
 import { ManifestError, parseManifest, settingEnvName } from './manifest';
 import { checkSignatureOnDisk, readSignatureFile, SIGNATURE_FILE, type SignatureCheck, SignatureError, type TrustedPublisher } from './signature';
@@ -82,7 +83,7 @@ export class PluginPackageError extends Error {
     message: string,
     readonly problems: string[] = [message],
     /** What the refusal knows that a client can act on, e.g. the `actualHash` to review and approve. */
-    readonly details: { actualHash?: string } = {},
+    readonly details: { actualHash?: string; contributionsHash?: string } = {},
   ) {
     super(message);
     this.name = 'PluginPackageError';
@@ -418,6 +419,8 @@ export async function installFromDirectory(
           version: manifest.version, manifest, enabled: false, settings, contentHash, signatureHash: signature.signatureHash, signedBy: signature.signedBy,
           // New files: running them in the server process is approved again, for these bytes.
           inProcessApprovedHash: null, inProcessApprovedBy: null, inProcessApprovedAt: null,
+          // New files: what it adds to every user's agents is approved again.
+          approvedContributionsHash: null,
           installedBy: actorUserId, updatedAt: new Date(),
         })
         .where(eq(pluginPackages.name, manifest.name))
@@ -454,6 +457,7 @@ export async function installFromDirectory(
     version: manifest.version, from: previous?.version ?? null, contentHash, signedBy: signature.signedBy, keyId: signature.keyId,
     runtime: pluginRuntime(manifest),
     ...(opts.source ? { source: opts.source } : {}),
+    ...(previous?.approvedContributionsHash ? { contributionsApprovalCleared: previous.approvedContributionsHash } : {}),
     ...overrides,
   });
   await syncPluginServers();
@@ -554,10 +558,20 @@ export async function uninstall(name: string, actorUserId: string): Promise<void
  */
 export async function configure(
   name: string,
-  change: { settings?: unknown; enabled?: boolean; approveContent?: string | boolean; approveInProcess?: string | boolean; approveHostScopes?: unknown },
+  change: {
+    settings?: unknown; enabled?: boolean; approveContent?: string | boolean; approveInProcess?: string | boolean; approveHostScopes?: unknown;
+    approveContributions?: string | boolean;
+  },
   actorUserId: string,
 ): Promise<PluginPackageRow> {
   const row = await requireRow(name);
+  if (change.approveContributions !== undefined) {
+    if (!hasContributions(row.manifest)) throw new PluginPackageError('invalid', `${name} declares no commands, schedules, events, prompt or context; there is nothing to approve`);
+    if (!isContentHash(change.approveContributions)) {
+      throw new PluginPackageError('invalid',
+        'approveContributions takes the contributions hash you reviewed ("sha256:<64 hex>", shown as contributions.hash), not true: what the package adds is approved only while it still hashes to it');
+    }
+  }
   if (change.approveContent !== undefined && !isContentHash(change.approveContent)) {
     throw new PluginPackageError('invalid',
       'approveContent takes the content hash you reviewed ("sha256:<64 hex>", shown as actualHash), not true: the files are approved only while they still hash to it');
@@ -687,9 +701,45 @@ export async function configure(
     throw new PluginPackageError('incomplete',
       `${name} runs in the server process, with the server's full authority: approve that for its content first (approveInProcess: "${contentHash ?? '<its content hash>'}"), then enable it`);
   }
+  // What the package adds to every user's agents (prompt, context, events,
+  // schedules, commands) is approved for one contributions hash: approving
+  // content that changes it clears the approval, and enabling needs it.
+  let approvedContributionsHash = row.approvedContributionsHash;
+  let contributionsCleared = false;
+  const approvingContributions = typeof change.approveContributions === 'string' ? change.approveContributions : null;
+  if (hasContributions(row.manifest) && (approvingContributions || approving || (enabled && !row.enabled))) {
+    let current: string | null;
+    try {
+      current = await contributionsHashOf(row.manifest, packageDir(name));
+    } catch (err) {
+      throw new PluginPackageError('invalid', `The contributions of ${name} cannot be read: ${(err as Error).message}`);
+    }
+    if (approvingContributions) {
+      if (approvingContributions !== current) {
+        throw new PluginPackageError('conflict',
+          `The contributions of ${name} hash to ${current}, not to the reviewed ${approvingContributions}: they changed since they were reviewed; review them again`,
+          [`approveContributions: reviewed ${approvingContributions}, actual ${current}`], current ? { contributionsHash: current } : {});
+      }
+      approvedContributionsHash = approvingContributions;
+    } else if (approvedContributionsHash !== null && approvedContributionsHash !== current) {
+      approvedContributionsHash = null;
+      contributionsCleared = true;
+    }
+    if (enabled && !row.enabled && approvedContributionsHash !== current) {
+      throw new PluginPackageError('conflict',
+        `${name} adds commands, schedules, events, prompt text or turn context for every user: review them and approve them first (approveContributions: "${current}"), then enable it`,
+        [`approveContributions: required, contributions hash ${current}`], current ? { contributionsHash: current } : {});
+    }
+  }
   const [updated] = await getDb().update(pluginPackages)
-    .set({ settings, enabled, contentHash, signatureHash, signedBy, approvedHostScopes, ...inProcessApproval, updatedAt: new Date() })
+    .set({ settings, enabled, contentHash, signatureHash, signedBy, approvedHostScopes, approvedContributionsHash, ...inProcessApproval, updatedAt: new Date() })
     .where(eq(pluginPackages.name, name)).returning();
+  if (approvingContributions) {
+    await audit(actorUserId, 'contributions_approved', name, { version: row.version, hash: approvingContributions, previous: row.approvedContributionsHash });
+  }
+  if (contributionsCleared) {
+    await audit(actorUserId, 'contributions_approval_cleared', name, { version: row.version, previous: row.approvedContributionsHash });
+  }
   if (approving) {
     forgetMismatches(name);
     await audit(actorUserId, 'content_approved', name, {
@@ -740,6 +790,11 @@ export function approveHostScopes(name: string, scopes: PluginHostScope[], actor
 /** Accept a package's files, if they still hash to the reviewed `hash` (`configure` with `approveContent` alone). */
 export function approveContent(name: string, hash: string, actorUserId: string): Promise<PluginPackageRow> {
   return configure(name, { approveContent: hash }, actorUserId);
+}
+
+/** Approve what a package contributes, for the reviewed contributions `hash` (`configure` with `approveContributions` alone). */
+export function approveContributions(name: string, hash: string, actorUserId: string): Promise<PluginPackageRow> {
+  return configure(name, { approveContributions: hash }, actorUserId);
 }
 
 /** Approve an in-process plugin to run in the server process, for the reviewed `hash` (`configure` with `approveInProcess` alone). */

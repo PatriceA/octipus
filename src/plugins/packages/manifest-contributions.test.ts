@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
+import { canonicalJson, hashContributions, hasContributions } from './contributions/approval';
 import { cronMatches, cronProblem, parseCron } from './contributions/cron';
 import { expandInput, resultText } from './contributions/call';
 import { ManifestError, parseManifest } from './manifest';
@@ -116,5 +117,39 @@ describe('contribution calls', () => {
     expect(resultText({ content: [{ type: 'text', text: 'a' }, { type: 'image', data: '' }, { type: 'text', text: 'b' }] })).toEqual({ text: 'a\nb', isError: false });
     expect(resultText({ content: [{ type: 'text', text: 'no' }], isError: true })).toEqual({ text: 'no', isError: true });
     expect(resultText({ content: [{ type: 'text', text: 'x'.repeat(10_000) }] }).text).toHaveLength(8_000);
+  });
+});
+
+describe('contributions hash', () => {
+  test('canonical JSON: keys sorted at every level, undefined members left out, arrays kept in order', () => {
+    expect(canonicalJson({ b: 1, a: { d: [2, { z: 1, y: undefined, x: 'q' }], c: null } })).toBe('{"a":{"c":null,"d":[2,{"x":"q","z":1}]},"b":1}');
+  });
+
+  test('the same contributions hash alike whatever the key order; anything else that changes them changes it', () => {
+    const m = parseManifest(FIXTURE);
+    const reordered = parseManifest({
+      context: FIXTURE.context, ...FIXTURE,
+      commands: FIXTURE.commands.map((c: Record<string, unknown>) => ({ input: c.input, description: c.description, tool: c.tool, name: c.name })),
+    });
+    const prompt = new TextEncoder().encode('Use the hello tool.\n');
+    const h = hashContributions(m, prompt);
+    expect(h).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(hashContributions(reordered, prompt)).toBe(h);
+    // Tools, version and other fields are not part of it.
+    expect(hashContributions({ ...m, version: '9.9.9', description: 'other' }, prompt)).toBe(h);
+    // The prompt bytes, a schedule, an event, the context roles are.
+    expect(hashContributions(m, new TextEncoder().encode('Use the hello tool!\n'))).not.toBe(h);
+    expect(hashContributions(m, null)).not.toBe(h);
+    expect(hashContributions({ ...m, schedules: [{ id: 'tick', cron: '0 * * * *', tool: 'hello' }] }, prompt)).not.toBe(h);
+    expect(hashContributions({ ...m, events: [] }, prompt)).not.toBe(h);
+    expect(hashContributions({ ...m, context: { tool: 'ctx', roles: ['general'] } }, prompt)).not.toBe(h);
+    // An empty list hashes as none.
+    expect(hashContributions({ ...m, commands: [] }, prompt)).toBe(hashContributions({ ...m, commands: undefined }, prompt));
+  });
+
+  test('a manifest with no contributions has none to approve', () => {
+    expect(hasContributions({ tools: {} } as never)).toBe(false);
+    expect(hasContributions({ commands: [] } as never)).toBe(false);
+    expect(hasContributions({ prompt: { file: 'a.md' } } as never)).toBe(true);
   });
 });

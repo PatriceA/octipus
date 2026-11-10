@@ -44,6 +44,12 @@ export const pluginPackages = pgTable('plugin_packages', {
    * granted; enabling asks for any declared scope missing here.
    */
   approvedHostScopes: jsonb('approved_host_scopes').$type<PluginHostScope[]>(),
+  /**
+   * The contributions hash an admin approved (src/plugins/packages/contributions/approval.ts):
+   * commands, schedules, events, prompt and context bind only while it equals
+   * the package's current one. Null: not approved; install and upgrade clear it.
+   */
+  approvedContributionsHash: text('approved_contributions_hash'),
   settings: jsonb('settings').$type<Record<string, string | number | boolean>>().default({}).notNull(),
   installedBy: uuid('installed_by').references(() => users.id, { onDelete: 'set null' }),
   installedAt: timestamp('installed_at', { withTimezone: true }).defaultNow().notNull(),

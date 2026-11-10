@@ -234,8 +234,37 @@ package (no `..`, no link out of it, at most 8,000 characters of UTF-8), and a
 command name that Octipus, an extension or another installed package already
 uses.
 
+### Approving contributions
+
+Contributions reach every user of the install: prompt text in every user's
+agents, every user's messages sent to a context tool, every user's events,
+schedules running as an admin, commands anyone can type. So they are
+approved on their own, for exactly what was reviewed:
+
+- The **contributions hash** (`contributions.hash` in the view,
+  `sha256:<hex>`) covers the canonical JSON of the manifest's `commands`,
+  `schedules`, `events`, `prompt` and `context` (keys sorted, empty lists
+  left out) and the prompt file's bytes.
+- Enabling a package that has any contributions needs
+  `approveContributions: "<that hash>"` (in the same PATCH as `enabled`, or
+  before it); without it, or with another hash, it is refused (409, the body
+  carrying `contributionsHash`). The approval is recorded
+  (`approved_contributions_hash`) and audited (`contributions_approved`).
+- **Install and every upgrade clear it**, and approving changed content
+  whose contributions hash differs clears it too (audited as
+  `contributions_approval_cleared`); the package must be approved again
+  before it is enabled.
+- Contributions bind only while the approved hash is the current one, read
+  from the files at bind time; the prompt text bound is the text hashed.
+- On the web page each package's row lists everything it contributes: each
+  command, schedule (cron, UTC) and event with its tool and effect and whom it
+  runs as, the context tool, and the full prompt text. Enabling shows all of
+  it again and approves it ("Approve and enable"). From the command line:
+  `octi plugin approve-contributions <name>` shows the same and asks, or
+  takes `--hash`.
+
 **Bound while enabled, without a restart.** Every contribution is registered
-with a disposer when the package is enabled, and disposed (in reverse
+with a disposer when the package is enabled and approved, and disposed (in reverse
 registration order) when it is disabled, upgraded (an upgrade leaves it
 disabled) or uninstalled; re-enabling binds it again. A contribution that
 cannot bind at that moment (a command name an extension took since install,
@@ -309,9 +338,20 @@ failing tool never reaches the publisher or another package.
 
 `prompt: { file, roles? }`. The file's markdown is added to the system prompt
 of agents of the named roles (every role when `roles` is left out) while the
-package is enabled, headed `PLUGIN <name>:`, ordered by package name. It is
-read only from files that still hash to the approved content, so it is part
-of what the admin approved ([Content pinning](#content-pinning)).
+package is enabled, ordered by package name. It is read only from files that
+still hash to the approved content and whose contributions hash was approved,
+so it is exactly what the admin reviewed ([Content pinning](#content-pinning),
+[Approving contributions](#approving-contributions)).
+
+Each section is fenced: a `<plugin-prompt plugin="<name>">` block that says it
+is third-party text from that package, approved by an administrator, which
+cannot override the system or operator instructions, change the agent's role
+or rules, or grant a permission; angle brackets in the text are replaced so it
+cannot close the fence. **The fence is advice to the model, not a boundary**:
+the text is still in the system prompt of every agent of every user and the
+model reads it. Approve a prompt section only from a publisher you would let
+write instructions to your agents, and read the whole text first (it is at
+most 8,000 characters).
 
 It is static and the same for every user, so the root agent carries it in
 the **install tier** of its prompt, after the role prompt and the delegation
@@ -1081,6 +1121,8 @@ octi plugin list
 octi plugin approve finapi --hash sha256:<actualHash>
 octi plugin approve finapi            # shows the actual hash and asks (at a terminal only)
 octi plugin approve-in-process auditlog --hash sha256:<contentHash>   # an in-process plugin
+octi plugin approve-contributions finapi   # shows its commands, schedules, events, context and prompt text, and asks
+octi plugin approve-contributions finapi --hash sha256:<contributions.hash>
 octi plugin set finapi region=eu limit=50 note=   # settings; key= clears one
 octi plugin secret finapi FINAPI_CLIENT_SECRET    # hidden prompt
 octi plugin secret finapi FINAPI_CLIENT_SECRET < secret.txt   # or stdin

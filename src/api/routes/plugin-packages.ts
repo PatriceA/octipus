@@ -17,7 +17,7 @@ import { apiLogger } from '@/utils/logger';
 const STATUS: Record<PluginPackageError['code'], number> = { not_found: 404, exists: 409, invalid: 400, incomplete: 409, conflict: 409 };
 
 /** A refused change: its status and every problem; anything else is logged and a 500. */
-function refused(err: unknown, set: { status?: number | string }): { error: string; problems?: string[]; actualHash?: string } {
+function refused(err: unknown, set: { status?: number | string }): { error: string; problems?: string[]; actualHash?: string; contributionsHash?: string } {
   if (err instanceof PluginPackageError) {
     set.status = STATUS[err.code];
     return { error: err.message, problems: err.problems, ...err.details };
@@ -116,6 +116,7 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
       try {
         await configure(params.name, {
           settings: body.settings, enabled: body.enabled, approveContent: body.approveContent, approveInProcess: body.approveInProcess,
+          approveContributions: body.approveContributions,
         }, principal.userId);
         return await packageView(params.name);
       } catch (err) {
@@ -142,6 +143,16 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
          * refused (400) with a message asking for the hash.
          */
         approveInProcess: t.Optional(t.Union([t.String({ maxLength: 100 }), t.Boolean()])),
+        /**
+         * Approve what the package adds besides tools (commands, schedules,
+         * events, prompt text in every user's agents, turn context), for the
+         * contributions hash the admin reviewed (the view's
+         * `contributions.hash`). Refused (409, with `contributionsHash`) unless
+         * it is what the package adds now. Enabling a package that adds any
+         * without it is refused (409, with `contributionsHash`); install and
+         * upgrade clear it. A boolean is refused (400).
+         */
+        approveContributions: t.Optional(t.Union([t.String({ maxLength: 100 }), t.Boolean()])),
         settings: t.Optional(t.Record(t.String({ maxLength: 50 }), t.Unknown())),
       }),
       detail: { tags: ['plugin-packages'] },

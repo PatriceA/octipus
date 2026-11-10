@@ -19,6 +19,7 @@ import { hashPackageContent } from '../integrity';
 import { bindCommand, commandConflicts } from './commands';
 import { bindContext } from './context';
 import { bindEvent, forgetEventBudget } from './events';
+import { hasContributions, readContributions } from './approval';
 import { bindPrompt, boundPromptChars, readPromptFile } from './prompt';
 import { bindSchedule } from './schedules';
 import { forgetRuns, lastRuns } from './status';
@@ -40,14 +41,10 @@ interface Binding {
 const bindings = new Map<string, Binding>();
 let chain: Promise<void> = Promise.resolve();
 
-function hasContributions(m: PluginManifest): boolean {
-  return !!(m.commands?.length || m.schedules?.length || m.events?.length || m.prompt || m.context);
-}
-
 /** What a binding depends on: when it changes, the package is bound again. */
 function bindingKey(row: PluginPackageRow): string {
   const m = row.manifest;
-  return JSON.stringify([row.version, row.contentHash, row.installedBy, m.commands, m.schedules, m.events, m.prompt, m.context]);
+  return JSON.stringify([row.version, row.contentHash, row.approvedContributionsHash, row.installedBy, m.commands, m.schedules, m.events, m.prompt, m.context]);
 }
 
 async function dispose(pkg: string, binding: Binding): Promise<void> {
@@ -67,14 +64,27 @@ async function bind(row: PluginPackageRow): Promise<Binding> {
   const m = row.manifest;
   const binding: Binding = { key: bindingKey(row), disposers: [], bound: new Set(), problems: [] };
   const pkg = row.name;
+  const { packageDir } = await import('../service');
+  const dir = packageDir(pkg);
+  // Nothing binds unless an admin approved exactly what it adds now.
+  let promptText: string | null = null;
   try {
-    if (m.prompt) {
+    const read = await readContributions(m, dir);
+    if (read.hash !== row.approvedContributionsHash) {
+      binding.problems.push(`Not bound: its contributions are not approved${read.hash ? ` (contributions hash ${read.hash})` : ''}; review and approve them`);
+      return binding;
+    }
+    promptText = read.promptText;
+  } catch (err) {
+    binding.problems.push(`Not bound: ${(err as Error).message}`);
+    return binding;
+  }
+  try {
+    if (m.prompt && promptText !== null) {
       try {
         if (row.contentHash === null) throw new Error('prompt: not added until the package content is pinned (its first start)');
-        const { packageDir } = await import('../service');
-        const dir = packageDir(pkg);
-        // Read, then check the files still hash to the approved content.
-        const text = await readPromptFile(dir, m.prompt);
+        // The text hashed into the approval; the files must also still hash to the approved content.
+        const text = promptText;
         if (await hashPackageContent(dir, row) !== row.contentHash) throw new Error('prompt: not added, the package files changed since their content was approved');
         binding.disposers.push(bindPrompt(pkg, text, m.prompt.roles));
         binding.bound.add('prompt');
@@ -164,18 +174,38 @@ export async function contributionInstallProblems(
   return problems;
 }
 
-/** What a package contributes, what is bound now, and its last runs (for its row). */
-export async function contributionsView(row: Pick<PluginPackageRow, 'name' | 'manifest'>): Promise<PluginContributionsView> {
+/**
+ * What a package contributes, for its row and the enable confirmation: each
+ * part with its tool's effect, the full prompt text, the contributions hash
+ * to approve and the approved one, what is bound now, and its last runs.
+ */
+export async function contributionsView(row: Pick<PluginPackageRow, 'name' | 'manifest' | 'approvedContributionsHash'>): Promise<PluginContributionsView> {
   const m = row.manifest;
   const binding = bindings.get(row.name);
   const bound = (key: string) => binding?.bound.has(key) ?? false;
-  const runs = hasContributions(m) ? await lastRuns(row.name) : {};
+  const effect = (tool: string) => m.tools?.[tool]?.effect ?? null;
+  const any = hasContributions(m);
+  const runs = any ? await lastRuns(row.name) : {};
+  const problems = binding ? [...binding.problems] : [];
+  let hash: string | null = null;
+  let promptText: string | null = null;
+  if (any) {
+    try {
+      const { packageDir } = await import('../service');
+      ({ hash, promptText } = await readContributions(m, packageDir(row.name)));
+    } catch (err) {
+      problems.push(`Cannot be read: ${(err as Error).message}`);
+    }
+  }
   return {
-    commands: (m.commands ?? []).map((c) => ({ name: c.name, tool: c.tool, description: c.description, bound: bound(`command:${c.name}`) })),
-    schedules: (m.schedules ?? []).map((s) => ({ id: s.id, cron: s.cron, tool: s.tool, bound: bound(`schedule:${s.id}`), lastRun: runs[`schedule:${s.id}`] ?? null })),
-    events: (m.events ?? []).map((e) => ({ on: e.on, tool: e.tool, bound: bound(`event:${e.on}:${e.tool}`), lastRun: runs[`event:${e.on}:${e.tool}`] ?? null })),
-    prompt: m.prompt ? { file: m.prompt.file, roles: m.prompt.roles ?? null, bound: bound('prompt'), chars: boundPromptChars(row.name) } : null,
-    context: m.context ? { tool: m.context.tool, roles: m.context.roles ?? null, bound: bound('context'), lastRun: runs.context ?? null } : null,
-    problems: binding ? [...binding.problems] : [],
+    hash,
+    approvedHash: row.approvedContributionsHash ?? null,
+    approved: any && hash !== null && hash === row.approvedContributionsHash,
+    commands: (m.commands ?? []).map((c) => ({ name: c.name, tool: c.tool, effect: effect(c.tool), description: c.description, bound: bound(`command:${c.name}`) })),
+    schedules: (m.schedules ?? []).map((s) => ({ id: s.id, cron: s.cron, tool: s.tool, effect: effect(s.tool), bound: bound(`schedule:${s.id}`), lastRun: runs[`schedule:${s.id}`] ?? null })),
+    events: (m.events ?? []).map((e) => ({ on: e.on, tool: e.tool, effect: effect(e.tool), bound: bound(`event:${e.on}:${e.tool}`), lastRun: runs[`event:${e.on}:${e.tool}`] ?? null })),
+    prompt: m.prompt ? { file: m.prompt.file, roles: m.prompt.roles ?? null, text: promptText, bound: bound('prompt'), chars: boundPromptChars(row.name) } : null,
+    context: m.context ? { tool: m.context.tool, effect: effect(m.context.tool), roles: m.context.roles ?? null, bound: bound('context'), lastRun: runs.context ?? null } : null,
+    problems,
   };
 }

@@ -10,6 +10,7 @@
  *   octi plugin list             Installed packages (through the running backend).
  *   octi plugin approve <name> [--hash sha256:…]  Approve a package's changed content.
  *   octi plugin approve-in-process <name> [--hash sha256:…]  Approve an in-process plugin to run in the server process.
+ *   octi plugin approve-contributions <name> [--hash sha256:…]  Approve what a package adds (commands, schedules, events, prompt, context).
  *   octi plugin set <name> key=value...  Change a package's settings.
  *   octi plugin secret <name> <KEY> [--clear]  Set (from stdin or a hidden prompt) or remove a secret.
  *   octi plugin uninstall <name> [--yes]  Remove a package.
@@ -27,7 +28,7 @@ import { ManifestError } from '@/plugins/packages/manifest';
 import { generateSigningKey, SignatureError, signPackage, signRegistryIndexFile } from '@/plugins/packages/signature';
 import { PackageTreeError } from '@/plugins/packages/tree';
 import { PLUGIN_TOOL_EFFECTS, type PluginToolEffect } from '@/shared/plugin-package';
-import { approveCommand, approveInProcessCommand, listCommand, type PluginApiIo, readAllText, readHiddenLine, secretCommandFromArgs, setCommand, uninstallCommand } from './plugin-api';
+import { approveCommand, approveContributionsCommand, approveInProcessCommand, listCommand, type PluginApiIo, readAllText, readHiddenLine, secretCommandFromArgs, setCommand, uninstallCommand } from './plugin-api';
 
 const HELP = `octi plugin — plugin tooling
 
@@ -64,6 +65,13 @@ Usage:
                                 hash; needed before it can be enabled, and again after
                                 any new content. Without --hash it shows the hash and
                                 asks (at a terminal only).
+  octi plugin approve-contributions <name> [--hash sha256:<hex>]
+                                Approve what a package adds besides tools: slash
+                                commands, schedules, event handlers, prompt text in
+                                every user's agents, turn context; needed before it can
+                                be enabled, and again after an upgrade. Without --hash
+                                it shows all of it (the full prompt text) and asks (at
+                                a terminal only).
   octi plugin set <name> key=value...
                                 Change settings (checked against the manifest; exactly
                                 key= clears one). Not for secrets.
@@ -76,7 +84,7 @@ Usage:
                                 Remove a package, its files, data, settings and secrets.
                                 Asks at a terminal; elsewhere refused without --yes.
 
-list, approve, approve-in-process, set, secret and uninstall call the running backend (http://localhost:$API_PORT, 3005 by
+list, approve, approve-in-process, approve-contributions, set, secret and uninstall call the running backend (http://localhost:$API_PORT, 3005 by
 default) with the admin API token in OCTIPUS_API_TOKEN (Settings → API Tokens).
 `;
 
@@ -205,7 +213,7 @@ async function runApiCommand(sub: 'set' | 'uninstall', argv: string[]): Promise<
   }
 }
 
-async function runApprove(sub: 'approve' | 'approve-in-process', argv: string[]): Promise<never> {
+async function runApprove(sub: 'approve' | 'approve-in-process' | 'approve-contributions', argv: string[]): Promise<never> {
   let values: { hash?: string };
   let positionals: string[];
   try {
@@ -218,7 +226,7 @@ async function runApprove(sub: 'approve' | 'approve-in-process', argv: string[])
     process.stderr.write(`octi plugin ${sub}: expected <name> [--hash sha256:<hex>]\n\n${HELP}`);
     process.exit(2);
   }
-  const command = sub === 'approve' ? approveCommand : approveInProcessCommand;
+  const command = sub === 'approve' ? approveCommand : sub === 'approve-in-process' ? approveInProcessCommand : approveContributionsCommand;
   process.exit(await command(apiIo(), positionals[0], values.hash));
 }
 
@@ -319,6 +327,7 @@ async function main(): Promise<void> {
       break;
     case 'approve':
     case 'approve-in-process':
+    case 'approve-contributions':
       await runApprove(sub, rest);
       break;
     case 'set':

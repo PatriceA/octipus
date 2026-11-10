@@ -316,14 +316,24 @@ export interface PluginContributionRun {
   error: string | null;
 }
 
-/** What an installed package adds to the host, and whether each part is bound now. */
+/**
+ * What an installed package adds to the host, and whether each part is bound
+ * now. Nothing binds until an admin approves `hash` (`approveContributions`).
+ */
 export interface PluginContributionsView {
-  commands: Array<{ name: string; tool: string; description: string; bound: boolean }>;
-  schedules: Array<{ id: string; cron: string; tool: string; bound: boolean; lastRun: PluginContributionRun | null }>;
-  events: Array<{ on: PluginEventType; tool: string; bound: boolean; lastRun: PluginContributionRun | null }>;
-  prompt: { file: string; roles: string[] | null; bound: boolean; chars: number | null } | null;
-  context: { tool: string; roles: string[] | null; bound: boolean; lastRun: PluginContributionRun | null } | null;
-  /** Why a declared contribution is not bound right now (a name taken since install, content not approved). */
+  /** The contributions hash now (`sha256:<hex>`): what `approveContributions` takes. Null when it adds nothing (or cannot be read). */
+  hash: string | null;
+  /** The hash an admin approved, or null. */
+  approvedHash: string | null;
+  /** Whether `approvedHash` is `hash`: only then is anything bound. */
+  approved: boolean;
+  commands: Array<{ name: string; tool: string; effect: PluginToolEffect | null; description: string; bound: boolean }>;
+  schedules: Array<{ id: string; cron: string; tool: string; effect: PluginToolEffect | null; bound: boolean; lastRun: PluginContributionRun | null }>;
+  events: Array<{ on: PluginEventType; tool: string; effect: PluginToolEffect | null; bound: boolean; lastRun: PluginContributionRun | null }>;
+  /** `text`: the whole prompt file, for review (null when it cannot be read). */
+  prompt: { file: string; roles: string[] | null; text: string | null; bound: boolean; chars: number | null } | null;
+  context: { tool: string; effect: PluginToolEffect | null; roles: string[] | null; bound: boolean; lastRun: PluginContributionRun | null } | null;
+  /** Why a declared contribution is not bound right now (not approved, a name taken since install, content not approved). */
   problems: string[];
 }
 // ── end contributions ───────────────────────────────────────────────────────
