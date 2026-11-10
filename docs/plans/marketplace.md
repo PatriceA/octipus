@@ -127,7 +127,7 @@ the place to discover plugins before installing them, and to link to them.
   The layout and tokens are shared with octipus.cc's source, not copied by
   eye, so a change to the main site reaches the marketplace (see Decisions).
 - **Pages:**
-  - **Home:** search, categories, and featured plugins (the examples first).
+  - **Home:** search, categories, and featured plugins.
   - **One page per plugin:**
     - its README;
     - screenshots, served from the site itself;
@@ -213,11 +213,10 @@ listing cannot understate what a package asks for.
 
 ### The examples
 
-`reader` and `research` stay in `plugins/` as the offline, always-available
-examples and reference implementations. They are also published to the
-marketplace from the same source by a sync job, so the copy in the repository
-and the published one cannot drift. A marketplace version of a shipped example
-is an ordinary upgrade.
+`reader` and `research` stay in Octipus's own `plugins/` folder, and only
+there. They show a user what a plugin can do, and serve as reference
+implementations for authors. They are **not** listed in the marketplace. The
+marketplace starts empty and fills with real plugins, written later.
 
 ## What a marketplace signature means
 
@@ -230,8 +229,7 @@ budgets. The docs and the detail page say so.
 ## Gaps to close, from the research plugin work
 
 **Needed for the first release:**
-- Default registry and a shipped publisher key (Host side 1), and the examples
-  signed by it.
+- Default registry and a shipped publisher key (Host side 1).
 - A per-plugin usage view: the tokens and spend of `model:complete` and
   `agent:run` for each package and user. The cost rows are already tagged
   `plugin:<name>`, so this is a page, not new accounting.
@@ -256,7 +254,7 @@ budgets. The docs and the detail page say so.
    - the `plugins.octipus.cc` site in the octipus.cc design, serving the
      index.
 
-   The reader and research are published from there.
+   The marketplace launches empty; its first plugins come afterwards.
 2. **Host:** the default registry and key, index v2 parsing with the
    permission cross-check, `minOctipus`, and provenance.
 3. **Marketplace page:** search and categories, the detail view, permissions
@@ -375,16 +373,14 @@ and "Reviewed and signed by Octipus".
 - **Submissions:** open to anyone by pull request. The key holder reviews,
   merges and signs each version ([Submitting a plugin](#submitting-a-plugin)).
 
-Still open:
-1. **Sharing the octipus.cc design.** Its source is not in the repositories
-   this work can see.
-   - Recommended: move the site's layout (header, navigation, footer) and
-     tokens into a small shared package, or a `design/` folder the site and
-     the marketplace both import, so there is one source.
-   - Until then, the marketplace copies them from the published site, and
-     that copy is replaced once the source is shared.
-2. **The examples in the marketplace too.**
-   - Recommended: yes, from the same source (above).
+- **Design:** one shared source. The octipus.cc layout (header, navigation,
+  footer) and tokens move into a small shared package, or a `design/` folder
+  the site and the marketplace both import.
+  - The site's source is not in the repositories this work can see.
+  - Until it is shared, the marketplace copies them from the published site,
+    and that copy is replaced once the source is shared.
+- **Examples:** not in the marketplace. `reader` and `research` stay in
+  Octipus only ([The examples](#the-examples)).
 
 ## Not doing
 
