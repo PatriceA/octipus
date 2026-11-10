@@ -16,12 +16,13 @@ const KEY_ID = `ed25519:${'a'.repeat(64)}`;
 describe('plugins config', () => {
   it('defaults agree: schema, defaults, legacy loader, settings registry', () => {
     const parsed = plugins({});
-    const defaults = { trustedPublishers: [], revokedKeys: [], requireSignature: false, registries: [], hostModelDailyTokens: 200_000 };
+    const defaults = { trustedPublishers: [], revokedKeys: [], requireSignature: false, registries: [], hostModelDailyTokens: 200_000, hostAgentRunTokens: 150_000 };
     expect(parsed.success && parsed.data).toEqual(defaults);
     expect(defaultConfig.plugins).toEqual(defaults);
-    expect(loadFromEnvLegacy().plugins).toMatchObject({ revokedKeys: [], registries: [], hostModelDailyTokens: 200_000 });
+    expect(loadFromEnvLegacy().plugins).toMatchObject({ revokedKeys: [], registries: [], hostModelDailyTokens: 200_000, hostAgentRunTokens: 150_000 });
     expect(SETTINGS_REGISTRY.find((s) => s.key === 'plugins.hostModelDailyTokens')?.defaultValue).toBe(200_000);
-    for (const key of ['plugins.trustedPublishers', 'plugins.revokedKeys', 'plugins.requireSignature', 'plugins.registries', 'plugins.hostModelDailyTokens']) {
+    expect(SETTINGS_REGISTRY.find((s) => s.key === 'plugins.hostAgentRunTokens')?.defaultValue).toBe(150_000);
+    for (const key of ['plugins.trustedPublishers', 'plugins.revokedKeys', 'plugins.requireSignature', 'plugins.registries', 'plugins.hostModelDailyTokens', 'plugins.hostAgentRunTokens']) {
       expect(SETTINGS_REGISTRY.find((s) => s.key === key), key).toBeDefined();
     }
   });
@@ -40,6 +41,12 @@ describe('plugins config', () => {
     expect(plugins({ hostModelDailyTokens: 0 }).success).toBe(true);
     expect(plugins({ hostModelDailyTokens: -1 }).success).toBe(false);
     expect(plugins({ hostModelDailyTokens: 1.5 }).success).toBe(false);
+  });
+
+  it('hostAgentRunTokens is a whole number of tokens, 0 to turn plugin background runs off', () => {
+    expect(plugins({ hostAgentRunTokens: 0 }).success).toBe(true);
+    expect(plugins({ hostAgentRunTokens: -1 }).success).toBe(false);
+    expect(plugins({ hostAgentRunTokens: 2.5 }).success).toBe(false);
   });
 
   it('revokedKeys are key ids', () => {
