@@ -4,7 +4,7 @@ import { Loader2, ShieldAlert } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api, ApiError, getApiUrl } from '@/lib/api';
-import { bridgeNonce, isBridgeReady, pageFrameSrc, parseBridgeCall, pluginPageHref, usePluginPages, type BridgeCall, type PluginPageLink } from '@/lib/plugin-pages';
+import { bridgeNonce, isBridgeReady, pageFrameSrc, pageFrameUrl, parseBridgeCall, pluginPageHref, usePluginPages, type BridgeCall, type PluginPageLink } from '@/lib/plugin-pages';
 
 /** Calls a page may have in flight at once; more are answered `busy`. */
 const MAX_IN_FLIGHT = 4;
@@ -77,8 +77,7 @@ function PluginFrame({ page }: { page: PluginPageLink }) {
   const [nonce] = useState(bridgeNonce);
   const port = useRef<MessagePort | null>(null);
   const path = pageFrameSrc(page);
-  const src = path === null ? null
-    : `${getApiUrl().replace(/\/api\/?$/, '')}${path}#octipus=${nonce}&parent=${encodeURIComponent(window.location.origin)}`;
+  const src = path === null ? null : pageFrameUrl(getApiUrl(), window.location.origin, path, nonce);
 
   const reply = useCallback((message: Record<string, unknown>) => {
     if (detached.current) return;

@@ -115,6 +115,28 @@ export function pageFrameSrc(page: Pick<PluginPageLink, 'plugin' | 'src'>): stri
   return segments.length > 0 ? `${prefix}${segments.join('/')}` : null;
 }
 
+const HOST_RE = /^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$/;
+const BASE_PATH_RE = /^(\/[A-Za-z0-9._-]+)*$/;
+
+/**
+ * The frame's full URL: the API's origin (a fixed scheme and a checked host,
+ * never a stored string as is), the base path in front of `/api`, the page's
+ * path from {@link pageFrameSrc}, and the bridge fragment. Null when the API
+ * URL is not plain http(s).
+ */
+export function pageFrameUrl(apiUrl: string, appOrigin: string, path: string, nonce: string): string | null {
+  let base: URL;
+  try {
+    base = new URL(apiUrl, appOrigin);
+  } catch {
+    return null;
+  }
+  const scheme = base.protocol === 'https:' ? 'https://' : base.protocol === 'http:' ? 'http://' : null;
+  const basePath = base.pathname.replace(/\/api\/?$/, '');
+  if (!scheme || !HOST_RE.test(base.host) || !BASE_PATH_RE.test(basePath) || !/^[0-9a-f]{16,128}$/.test(nonce)) return null;
+  return `${scheme}${base.host}${basePath}${path}#octipus=${nonce}&parent=${encodeURIComponent(appOrigin)}`;
+}
+
 /** A fresh nonce for one frame. */
 export function bridgeNonce(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(24)), (b) => b.toString(16).padStart(2, '0')).join('');
