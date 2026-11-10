@@ -263,10 +263,13 @@ budgets. The docs and the detail page say so.
    before install, update badges and the permissions diff.
 4. **Updates and revocation:** the daily check, admin notifications, online
    revocation, and the usage view.
-5. **Community:** a submission guide and template, the review checklist,
-   publisher pages.
-   - Third-party publishers either submit to `octipus-plugins` and are signed
-     by the marketplace key, or run their own signed registry that admins add.
+5. **Community:**
+   - the submission template and `CONTRIBUTING.md`, the review checklist, and
+     the CI permissions comment on pull requests;
+   - author names on plugin pages.
+
+   The PR checks themselves come in phase 1, since your own plugins go
+   through them too. Authors with their own registry need nothing new.
 
 ## Signing
 
@@ -296,6 +299,71 @@ server.**
 - **Later, optional:** a hardware key such as a YubiKey. It needs a signing
   path that calls the token instead of reading a file; not now.
 
+## Submitting a plugin
+
+Anyone can propose a plugin. Only the key holder publishes it, and that
+includes every new version of an existing plugin.
+
+1. **The author opens a pull request** to `octipus-plugins` with the plugin's
+   **source**, never a prebuilt tarball, in `plugins/<name>/`:
+   - the manifest, server, `ui/` and tests;
+   - `README.md` (what it does, setup, the secrets it needs);
+   - `CHANGELOG.md` and `marketplace.json`.
+
+   A template (`plugins/_template/`) and `CONTRIBUTING.md` describe the rules:
+   - dependency-free or vendored code;
+   - no `in-process` runtime;
+   - the narrowest true tool effects;
+   - every network host declared;
+   - an honest `model.trustedInput` reason, or none at all.
+
+   The author needs no key.
+2. **CI checks it** (see CI above):
+   - validate, tests, sandbox smoke, licence and size;
+   - a **permissions summary posted as a PR comment**. For an update, the
+     summary shows only what changed since the published version. Anything
+     new or wider gets `needs-security-review`.
+3. **The key holder reviews and merges.** The review checklist sits next to
+   the template:
+   - the code;
+   - the permissions summary;
+   - the network hosts (who they belong to, why they are needed);
+   - where outside data meets a model prompt;
+   - what is written to the user's notes, tasks and documents.
+
+   For an update that widens nothing, the review is mostly the code diff.
+4. **The key holder publishes** on the publishing machine (`npm run publish`):
+   rebuild from the merged source, compare hashes with CI, sign, write the
+   site. **That signature is the sign-off.** Until it exists, no Octipus host
+   installs the version from the marketplace, merged or not.
+
+Why it works this way:
+- **One key, one meaning.** Every Octipus host trusts the marketplace key, so
+  what it signs installs everywhere. Only the key holder says that.
+- **Source, not binaries.** Publishing rebuilds from the reviewed source and
+  checks the hash, so an author cannot swap in other code after the review.
+- **An author's update is a new submission.** Merging it changes nothing for
+  hosts until it is signed.
+
+Plugin pages on `plugins.octipus.cc` show the author (from `marketplace.json`)
+and "Reviewed and signed by Octipus".
+
+**Routes that need no sign-off**, which stay as they are:
+- **The author's own registry:** a signed index with the author's key
+  (`octi plugin sign-index`). An admin who trusts that author adds the
+  registry and key to their own config. It is not listed on
+  `plugins.octipus.cc`.
+- **A direct install:** an admin installs a plugin from a directory or a
+  signed tarball URL on their own host.
+
+**Later, if reviewing grows:**
+- **Maintainer keys:** several marketplace keys (one per maintainer), all
+  trusted under the Octipus publisher, each revocable on its own.
+- **Countersigning:** the author signs and the marketplace countersigns, so a
+  listing shows who wrote it and who reviewed it. Today a package carries
+  exactly one signature file (`octipus-plugin.sig`), so this needs a
+  multi-signature format.
+
 ## Decisions
 
 - **Subdomain:** `plugins.octipus.cc`.
@@ -304,18 +372,18 @@ server.**
 - **Key custody:** the publishing machine, with an encrypted key file and an
   offline backup key (Signing, above).
 
+- **Submissions:** open to anyone by pull request. The key holder reviews,
+  merges and signs each version ([Submitting a plugin](#submitting-a-plugin)).
+
 Still open:
-1. **Who may publish.**
-   - Recommended for now: first-party only (you and maintainers).
-   - Open community submissions are phase 5.
-2. **Sharing the octipus.cc design.** Its source is not in the repositories
+1. **Sharing the octipus.cc design.** Its source is not in the repositories
    this work can see.
    - Recommended: move the site's layout (header, navigation, footer) and
      tokens into a small shared package, or a `design/` folder the site and
      the marketplace both import, so there is one source.
    - Until then, the marketplace copies them from the published site, and
      that copy is replaced once the source is shared.
-3. **The examples in the marketplace too.**
+2. **The examples in the marketplace too.**
    - Recommended: yes, from the same source (above).
 
 ## Not doing
