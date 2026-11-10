@@ -1,20 +1,22 @@
 /**
  * The built-in connectors, in one place.
  *
- * This list used to be duplicated between the registry and the HTTP route, and
- * every step of the OAuth flow named `atlassian` in a string comparison — so a
- * second connector meant editing seven call sites and hoping none was missed.
- * Everything now resolves through here: adding a connector is a definition
- * file and one line below.
+ * A connector is a remote MCP server reached with an OAuth token the user (or
+ * a space) grants through dynamic client registration. Everything — the HTTP
+ * routes, the OAuth flow, the space connectors and the agent's
+ * `connector_list_tools` / `connector_call_tool` — resolves through here:
+ * adding a connector is a definition file and one line below.
+ *
+ * None ship today. The Atlassian and Linear connectors were removed; an
+ * install that connected one still holds `connector_<id>_*` vault rows and
+ * may have `connector:<id>` in a role's tool list. Those ids no longer
+ * resolve here, so every caller ignores them: the registry exposes no tool
+ * for them, the token lookup returns null before touching the vault, and the
+ * routes answer 404.
  */
-import { ATLASSIAN_CONNECTOR } from './atlassian/definition';
-import { LINEAR_CONNECTOR } from './linear/definition';
 import type { ConnectorDefinition } from './types';
 
-export const ALL_CONNECTORS: readonly ConnectorDefinition[] = [
-  ATLASSIAN_CONNECTOR,
-  LINEAR_CONNECTOR,
-];
+export const ALL_CONNECTORS: readonly ConnectorDefinition[] = [];
 
 export function findConnector(id: string): ConnectorDefinition | undefined {
   return ALL_CONNECTORS.find((c) => c.id === id);

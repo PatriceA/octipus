@@ -3,7 +3,7 @@ export interface ConnectorDefinition {
   name: string;
   description: string;
   logoUrl: string;
-  /** Full MCP endpoint URL, e.g. https://mcp.atlassian.com/v1/mcp/authv2 */
+  /** Full MCP endpoint URL, e.g. https://mcp.example.com/mcp */
   mcpEndpoint: string;
   /**
    * OAuth authorization-server metadata document, per the MCP spec. The

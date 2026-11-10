@@ -27,7 +27,7 @@ export const settingsGroups: Array<{ name: string; description: string; icon: st
     { title: 'Knowledge', href: '/knowledge', keywords: 'indexing sources embeddings documents' },
   ] },
   { name: 'Connected accounts', description: 'Services, mailboxes, and messaging.', icon: 'connect', entries: [
-    { title: 'Accounts & services', tab: 'integrations', keywords: 'oauth google github gitlab appwrite integrations' },
+    { title: 'Accounts & services', tab: 'integrations', keywords: 'oauth google github appwrite integrations' },
     { title: 'Mailboxes', tab: 'mailboxes', keywords: 'email imap smtp multiple inbox calendar', module: 'mail' },
     { title: 'Channels', tab: 'channels', keywords: 'telegram teams slack whatsapp', module: 'channels' },
     { title: 'MCP & connectors', href: '/mcp', keywords: 'extensions plugins tools' },

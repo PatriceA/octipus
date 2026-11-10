@@ -94,7 +94,7 @@ test.describe('space connectors', () => {
     const calls: Array<{ method: string; path: string; body: unknown }> = [];
     let connectors = [
       { id: 'github', name: 'GitHub', description: 'A GitHub token', kind: 'token', connected: false, connectedBy: null, connectedAt: null },
-      { id: 'linear', name: 'Linear', description: 'Linear issues', kind: 'oauth', connected: true, connectedBy: 'olga', connectedAt: NOW },
+      { id: 'example', name: 'Example', description: 'An OAuth connector', kind: 'oauth', connected: true, connectedBy: 'olga', connectedAt: NOW },
     ];
     await stubAllDefaults(page);
     await page.route(`**/api/spaces/${SPACE_ID}`, (route) => json(route, 200, space(role)));
@@ -120,11 +120,11 @@ test.describe('space connectors', () => {
     return calls;
   }
 
-  test('an owner connects GitHub with a token and disconnects Linear', async ({ authenticatedPage: page }) => {
+  test('an owner connects GitHub with a token and disconnects an OAuth connector', async ({ authenticatedPage: page }) => {
     const calls = await stubs(page, 'owner');
     await page.goto(`/spaces/${SPACE_ID}/settings`);
     const section = page.getByRole('region', { name: 'Connectors' });
-    await expect(section.getByTestId('space-connector-linear')).toContainText('connected by olga');
+    await expect(section.getByTestId('space-connector-example')).toContainText('connected by olga');
 
     await section.getByTestId('space-connector-github').getByRole('button', { name: 'Connect' }).click();
     await section.getByLabel('GitHub token').fill('ghp_team');
@@ -132,9 +132,9 @@ test.describe('space connectors', () => {
     await expect(section.getByTestId('space-connector-github')).toContainText('connected by e2etest');
     expect(calls).toContainEqual({ method: 'POST', path: `/api/spaces/${SPACE_ID}/connectors/github`, body: { token: 'ghp_team' } });
 
-    await section.getByTestId('space-connector-linear').getByRole('button', { name: 'Disconnect' }).click();
-    await expect(section.getByTestId('space-connector-linear')).toContainText('not connected');
-    expect(calls.some((c) => c.method === 'DELETE' && c.path.endsWith('/connectors/linear'))).toBe(true);
+    await section.getByTestId('space-connector-example').getByRole('button', { name: 'Disconnect' }).click();
+    await expect(section.getByTestId('space-connector-example')).toContainText('not connected');
+    expect(calls.some((c) => c.method === 'DELETE' && c.path.endsWith('/connectors/example'))).toBe(true);
   });
 
   test('a member who is not an owner reads the connectors but has no controls', async ({ authenticatedPage: page }) => {

@@ -71,14 +71,14 @@ export class ConnectorRegistry {
       name: 'connector_list_tools',
       replaySafety: 'read_only',
       description:
-        'List tools available from connected built-in connectors (e.g. Atlassian Jira/Confluence). ' +
+        'List tools available from connected built-in connectors. ' +
         'Call before connector_call_tool to discover available tools and their parameters.',
       parameters: {
         type: 'object',
         properties: {
           connector_id: {
             type: 'string',
-            description: 'Optional: filter by connector ID (e.g. "atlassian"). Omit to list all.',
+            description: 'Optional: filter by connector ID. Omit to list all.',
           },
         },
       },
@@ -123,12 +123,12 @@ export class ConnectorRegistry {
     return {
       name: 'connector_call_tool',
       description:
-        'Call a tool on a built-in connector (e.g. Atlassian). ' +
+        'Call a tool on a connected built-in connector. ' +
         'Use connector_list_tools first to discover available tool names and parameter schemas.',
       parameters: {
         type: 'object',
         properties: {
-          connector_id: { type: 'string', description: 'Connector ID (e.g. "atlassian")' },
+          connector_id: { type: 'string', description: 'Connector ID, as connector_list_tools reports it' },
           tool_name: { type: 'string', description: 'Tool name from connector_list_tools' },
           arguments: { type: 'object', description: 'Arguments per the tool schema' },
         },
@@ -151,11 +151,9 @@ export class ConnectorRegistry {
   }
 
   /**
-   * The remote server's own tool list.
-   *
-   * Public because the named connector tools (`src/tools/atlassian`) resolve
-   * a capability against it rather than hard-coding a remote tool name that
-   * the vendor is free to rename.
+   * The remote server's own tool list. Public so a named tool built on a
+   * connector can resolve the remote tool it needs instead of hard-coding a
+   * name the vendor is free to rename.
    */
   async fetchConnectorTools(
     connector: ConnectorDefinition,

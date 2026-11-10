@@ -122,8 +122,8 @@ describe('role↔tool binding (W7)', () => {
 
   describe('getBoundConnectorIds', () => {
     test('extracts connector ids (prefix stripped)', () => {
-      withTestRole(['filesystem', `${CONNECTOR_TOOL_PREFIX}atlassian`, 'mcp'], () => {
-        expect(getBoundConnectorIds(TEST_ROLE)).toEqual(['atlassian']);
+      withTestRole(['filesystem', `${CONNECTOR_TOOL_PREFIX}example`, 'mcp'], () => {
+        expect(getBoundConnectorIds(TEST_ROLE)).toEqual(['example']);
       });
     });
 
@@ -138,7 +138,7 @@ describe('role↔tool binding (W7)', () => {
     test('a connector-only role resolves to no builtin/MCP handlers', () => {
       // Connector handlers are resolved per-user at spawn time, not here, so a
       // role with only connector ids must not dead-end in the builtin registry.
-      withTestRole([`${CONNECTOR_TOOL_PREFIX}atlassian`], () => {
+      withTestRole([`${CONNECTOR_TOOL_PREFIX}example`], () => {
         expect(getToolsForRole(TEST_ROLE)).toEqual([]);
       });
     });

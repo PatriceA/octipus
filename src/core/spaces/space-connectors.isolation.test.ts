@@ -35,6 +35,9 @@ process.env.JWT_SECRET ??= `test-jwt-${rand(24)}`;
 process.env.SESSION_SECRET ??= `test-session-${rand(24)}`;
 process.env.LOG_LEVEL ??= 'error';
 
+// No connector ships built in; the OAuth flow is driven with a stand-in.
+vi.mock('@/connectors/definitions', async () => (await import('@/test-helpers/connector-fixtures')).mockDefinitions());
+
 /** What `gh` was asked to run, with the environment it would have had, read while the run's home existed. */
 const ghRuns: Array<{ args: string[]; env: Record<string, string>; hostsYml: string | null }> = [];
 vi.mock('@/utils/gh', async () => {
@@ -138,7 +141,7 @@ beforeAll(async () => {
   // An OAuth connector whose client is already registered (no discovery over the network).
   const { connectorVaultKeys } = await import('@/security/oauth');
   const { getVault } = await import('@/security/vault');
-  const keys = connectorVaultKeys('atlassian');
+  const keys = connectorVaultKeys('example');
   await getVault().setSystemSecret(keys.clientId, 'client-id');
   await getVault().setSystemSecret(keys.authEndpoint, 'https://auth.example.test/authorize');
   await getVault().setSystemSecret(keys.tokenEndpoint, 'https://auth.example.test/token');
@@ -304,12 +307,12 @@ describe('connectors in a space are the space\'s (§9.5)', () => {
   test('connectorOwnerOf: a space context gets the space\'s connections only, a personal one the member\'s', async () => {
     const { connectorOwnerOf, getConnectorRegistry } = await import('@/connectors');
     const { storeConnectorUserTokens } = await import('@/security/oauth');
-    await storeConnectorUserTokens('atlassian', editorId, 'editor-personal', undefined, undefined);
+    await storeConnectorUserTokens('example', editorId, 'editor-personal', undefined, undefined);
     const inSpace = await agentContext(editorId, { workspaceId: spaceId, role: 'editor' });
     const personal = await agentContext(editorId, null);
     expect(connectorOwnerOf(personal)).toBe(editorId);
     expect(connectorOwnerOf(inSpace)).toMatchObject({ space: { workspaceId: spaceId, userId: editorId } });
-    // The member's personal Atlassian is not the space's.
+    // The member's personal connection is not the space's.
     expect(await getConnectorRegistry().getUserToolHandlers(connectorOwnerOf(inSpace))).toEqual([]);
     expect((await getConnectorRegistry().getUserToolHandlers(connectorOwnerOf(personal))).map((h) => h.name))
       .toEqual(['connector_list_tools', 'connector_call_tool']);
@@ -322,8 +325,7 @@ describe('connectors in a space are the space\'s (§9.5)', () => {
     const writes: Array<[string, string, string, Record<string, unknown>?]> = [
       ['github', 'write', 'create_issue'],
       ['github', 'manage', 'pr_merge'],
-      ['atlassian', 'createJiraIssue', 'createJiraIssue'],
-      ['connector', 'connector_call_tool', 'connector_call_tool', { connector_id: 'atlassian', tool_name: 'createJiraIssue' }],
+      ['connector', 'connector_call_tool', 'connector_call_tool', { connector_id: 'example', tool_name: 'create_issue' }],
     ];
     for (const [toolId, action, toolName, args] of writes) {
       expect(await routeApprovalFor(editor, { toolId, action, toolName, args }, { level: 'ALLOW' }), `${toolId}.${action}`).toMatchObject({ route: 'execute' });
@@ -333,8 +335,7 @@ describe('connectors in a space are the space\'s (§9.5)', () => {
       .toMatchObject({ route: 'deny', reason: expect.stringMatching(/can only read and comment/) });
     for (const [toolId, action, toolName, args] of [
       ['github', 'read', 'issue_list'],
-      ['atlassian', 'searchJiraIssuesUsingJql', 'searchJiraIssuesUsingJql'],
-      ['connector', 'connector_call_tool', 'connector_call_tool', { connector_id: 'atlassian', tool_name: 'searchJiraIssuesUsingJql' }],
+      ['connector', 'connector_call_tool', 'connector_call_tool', { connector_id: 'example', tool_name: 'search_issues' }],
     ] as Array<[string, string, string, Record<string, unknown>?]>) {
       expect(await routeApprovalFor(editor, { toolId, action, toolName, args }, { level: 'ALLOW' })).toMatchObject({ route: 'execute' });
     }
@@ -342,8 +343,8 @@ describe('connectors in a space are the space\'s (§9.5)', () => {
     // A space session is offered them.
     const { withoutPersonalOnlyTools } = await import('@/security/space-tools');
     const h = (name: string, toolId: string, permissionAction: string) => ({ name, toolId, permissionAction, description: '', parameters: { type: 'object' }, execute: async () => null });
-    expect(withoutPersonalOnlyTools([h('github__issue_create', 'github', 'write'), h('atlassian__createJiraIssue', 'atlassian', 'createJiraIssue')]).map((t) => t.name))
-      .toEqual(['github__issue_create', 'atlassian__createJiraIssue']);
+    expect(withoutPersonalOnlyTools([h('github__issue_create', 'github', 'write'), h('connector_call_tool', 'connector', 'connector_call_tool')]).map((t) => t.name))
+      .toEqual(['github__issue_create', 'connector_call_tool']);
   });
 });
 
@@ -356,22 +357,22 @@ describe('OAuth connects are bound to the browser that started them (§9.5)', ()
       const editor = await resolvedPrincipal(editorId, spaceId);
 
       // The URL handed to someone else: their browser has no cookie.
-      const first = await started(await call('owner', 'POST', `/api/spaces/${spaceId}/connectors/atlassian`));
-      expect(await callback('atlassian', first.state)).toMatch(/different browser/);
+      const first = await started(await call('owner', 'POST', `/api/spaces/${spaceId}/connectors/example`));
+      expect(await callback('example', first.state)).toMatch(/different browser/);
       // Someone else's cookie does not match either.
-      const other = await started(await call('editor', 'POST', '/api/connectors/atlassian/authorize'));
-      const second = await started(await call('owner', 'POST', `/api/spaces/${spaceId}/connectors/atlassian`));
-      expect(await callback('atlassian', second.state, other.cookie)).toMatch(/different browser/);
+      const other = await started(await call('editor', 'POST', '/api/connectors/example/authorize'));
+      const second = await started(await call('owner', 'POST', `/api/spaces/${spaceId}/connectors/example`));
+      expect(await callback('example', second.state, other.cookie)).toMatch(/different browser/);
       expect(fetchSpy).not.toHaveBeenCalled();
-      expect(await spaceConnectorAccessToken(editor, 'atlassian')).toBeNull();
+      expect(await spaceConnectorAccessToken(editor, 'example')).toBeNull();
 
       // The starting browser (its cookie reused across flows).
-      const third = await started(await call('owner', 'POST', `/api/spaces/${spaceId}/connectors/atlassian`, { cookie: second.cookie }));
+      const third = await started(await call('owner', 'POST', `/api/spaces/${spaceId}/connectors/example`, { cookie: second.cookie }));
       expect(third.cookie).toBe(second.cookie);
-      expect(await callback('atlassian', third.state, third.cookie)).toMatch(/connector:connected/);
-      expect(await spaceConnectorAccessToken(editor, 'atlassian')).toBe('space-at');
+      expect(await callback('example', third.state, third.cookie)).toMatch(/connector:connected/);
+      expect(await spaceConnectorAccessToken(editor, 'example')).toBe('space-at');
       const { getVault } = await import('@/security/vault');
-      expect(await getVault().getByName(ownerId, 'connector_atlassian_access_token')).toBeNull();
+      expect(await getVault().getByName(ownerId, 'connector_example_access_token')).toBeNull();
     } finally {
       fetchSpy.mockRestore();
     }
@@ -380,12 +381,12 @@ describe('OAuth connects are bound to the browser that started them (§9.5)', ()
   test('space connector: a starter who no longer owns the space when the callback comes is refused', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(tokenResponse({ access_token: 'late-at', token_type: 'bearer' }));
     try {
-      const flow = await started(await call('coowner', 'POST', `/api/spaces/${otherSpaceId}/connectors/atlassian`));
+      const flow = await started(await call('coowner', 'POST', `/api/spaces/${otherSpaceId}/connectors/example`));
       expect((await call('owner', 'PATCH', `/api/spaces/${otherSpaceId}/members/${coOwnerId}`, { body: { role: 'editor' } })).status).toBe(200);
-      expect(await callback('atlassian', flow.state, flow.cookie)).toMatch(/connector:error/);
+      expect(await callback('example', flow.state, flow.cookie)).toMatch(/connector:error/);
       const { spaceConnectorAccessToken } = await import('@/core/spaces/connectors');
       const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
-      expect(await spaceConnectorAccessToken(await resolvedPrincipal(ownerId, otherSpaceId), 'atlassian')).toBeNull();
+      expect(await spaceConnectorAccessToken(await resolvedPrincipal(ownerId, otherSpaceId), 'example')).toBeNull();
     } finally {
       fetchSpy.mockRestore();
       await call('owner', 'PATCH', `/api/spaces/${otherSpaceId}/members/${coOwnerId}`, { body: { role: 'owner' } });
@@ -396,12 +397,12 @@ describe('OAuth connects are bound to the browser that started them (§9.5)', ()
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(tokenResponse({ access_token: 'commenter-at', token_type: 'bearer' }));
     try {
       const { getConnectorAccessToken } = await import('@/security/oauth');
-      const flow = await started(await call('commenter', 'POST', '/api/connectors/atlassian/authorize'));
-      expect(await callback('atlassian', flow.state)).toMatch(/different browser/);
-      expect(await getConnectorAccessToken('atlassian', commenterId)).toBeNull();
-      const again = await started(await call('commenter', 'POST', '/api/connectors/atlassian/authorize', { cookie: flow.cookie }));
-      expect(await callback('atlassian', again.state, again.cookie)).toMatch(/connector:connected/);
-      expect(await getConnectorAccessToken('atlassian', commenterId)).toBe('commenter-at');
+      const flow = await started(await call('commenter', 'POST', '/api/connectors/example/authorize'));
+      expect(await callback('example', flow.state)).toMatch(/different browser/);
+      expect(await getConnectorAccessToken('example', commenterId)).toBeNull();
+      const again = await started(await call('commenter', 'POST', '/api/connectors/example/authorize', { cookie: flow.cookie }));
+      expect(await callback('example', again.state, again.cookie)).toMatch(/connector:connected/);
+      expect(await getConnectorAccessToken('example', commenterId)).toBe('commenter-at');
     } finally {
       fetchSpy.mockRestore();
     }
@@ -412,18 +413,18 @@ describe('OAuth connects are bound to the browser that started them (§9.5)', ()
     const { spaceRepos } = await import('@/db/repositories/space');
     const { spaceConnectorAccessToken, spaceConnectorKeys } = await import('@/core/spaces/connectors');
     const owner = await resolvedPrincipal(ownerId, spaceId);
-    const keys = spaceConnectorKeys('atlassian');
+    const keys = spaceConnectorKeys('example');
     await spaceRepos(owner).secrets.write(keys.tokenExpiry, new Date(Date.now() - 60_000).toISOString(), 'other');
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(tokenResponse({ access_token: 'space-at-2', expires_in: 3600 }));
     try {
       const editor = await resolvedPrincipal(editorId, spaceId);
-      expect(await spaceConnectorAccessToken(editor, 'atlassian')).toBe('space-at-2');
+      expect(await spaceConnectorAccessToken(editor, 'example')).toBe('space-at-2');
       expect(String(fetchSpy.mock.calls[0]![1]?.body)).toContain('refresh_token=space-rt');
       expect(await spaceRepos(editor).secrets.read(keys.accessToken)).toBe('space-at-2');
       // The author stays the owner who connected it.
       expect((await spaceRepos(editor).secrets.list()).find((s) => s.name === keys.accessToken)?.storedBy).toBe(ownerId);
-      expect(await spaceRepos(editor).secrets.refresh('connector_linear_access_token', 'x')).toBe(false);
-      expect(await spaceRepos(editor).secrets.read('connector_linear_access_token')).toBeNull();
+      expect(await spaceRepos(editor).secrets.refresh('connector_other_access_token', 'x')).toBe(false);
+      expect(await spaceRepos(editor).secrets.read('connector_other_access_token')).toBeNull();
     } finally {
       fetchSpy.mockRestore();
     }
@@ -441,5 +442,41 @@ describe('space secrets keep no superseded ciphertext', () => {
     expect(await count()).toBe(1);
     expect((await call('owner', 'DELETE', `/api/spaces/${spaceId}/connectors/github`)).status).toBe(200);
     expect(await count()).toBe(0);
+  });
+});
+
+describe('a removed connector (atlassian, linear) stored before the upgrade is ignored', () => {
+  test('its saved tokens neither surface, nor reach an agent, nor start a flow', async () => {
+    const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
+    const { spaceRepos } = await import('@/db/repositories/space');
+    const { spaceConnectorKeys } = await import('@/core/spaces/connectors');
+    const { storeConnectorUserTokens } = await import('@/security/oauth');
+    const owner = await resolvedPrincipal(ownerId, spaceId);
+    for (const id of ['atlassian', 'linear']) {
+      await spaceRepos(owner).secrets.write(spaceConnectorKeys(id).accessToken, `space-${id}`, 'oauth_token');
+      await storeConnectorUserTokens(id, ownerId, `personal-${id}`, 'rt', 3600);
+    }
+
+    // The connector pages list only connectors that exist.
+    const personal = await call('owner', 'GET', '/api/connectors');
+    expect(personal.status).toBe(200);
+    expect((await personal.json() as { connectors: Array<{ id: string }> }).connectors.map((c) => c.id)).toEqual(['example']);
+    const space = await call('owner', 'GET', `/api/spaces/${spaceId}/connectors`);
+    expect(space.status).toBe(200);
+    expect((await space.json() as { connectors: Array<{ id: string }> }).connectors.map((c) => c.id)).toEqual(['github', 'example']);
+
+    // An agent bound to one (`connector:atlassian`) gets no connector tools, and the token getter never answers for it.
+    const { connectorOwnerOf, getConnectorRegistry } = await import('@/connectors');
+    const ctx = await agentContext(ownerId, null);
+    expect(await getConnectorRegistry().getUserToolHandlers(connectorOwnerOf(ctx), new Set(['atlassian', 'linear']))).toEqual([]);
+    const inSpace = await agentContext(ownerId, { workspaceId: spaceId, role: 'owner' });
+    expect(await getConnectorRegistry().getUserToolHandlers(connectorOwnerOf(inSpace), new Set(['atlassian']))).toEqual([]);
+
+    // Starting or clearing one is refused, not attempted.
+    for (const id of ['atlassian', 'linear']) {
+      expect(await (await call('owner', 'POST', `/api/connectors/${id}/authorize`)).json()).toEqual({ error: `Unknown connector: ${id}` });
+      expect((await call('owner', 'POST', `/api/spaces/${spaceId}/connectors/${id}`)).status).toBe(404);
+      expect(await callback(id, 'no-such-state')).toMatch(/connector:error/);
+    }
   });
 });

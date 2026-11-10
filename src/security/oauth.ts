@@ -93,9 +93,7 @@ export const OAUTH_VAULT_NAMES = {
  * Vault entry names for one connector's OAuth material.
  *
  * The first three are system-scoped (the dynamically registered client and the
- * endpoints it was registered against); the last three are per-user. The
- * `connector_<id>_*` shape is the same one Atlassian already used, so
- * generalising it left every existing row where it was.
+ * endpoints it was registered against); the last three are per-user.
  */
 export function connectorVaultKeys(connectorId: string): {
   clientId: string;
@@ -114,12 +112,6 @@ export function connectorVaultKeys(connectorId: string): {
     tokenExpiry: `connector_${connectorId}_token_expiry`,
   };
 }
-
-const ATLASSIAN_KEYS = connectorVaultKeys('atlassian');
-
-export const ATLASSIAN_USER_ACCESS_TOKEN_KEY = ATLASSIAN_KEYS.accessToken;
-export const ATLASSIAN_USER_REFRESH_TOKEN_KEY = ATLASSIAN_KEYS.refreshToken;
-export const ATLASSIAN_USER_TOKEN_EXPIRY_KEY = ATLASSIAN_KEYS.tokenExpiry;
 
 // --- Provider Configs ---
 
@@ -712,11 +704,6 @@ export function oauthPublicUrl(): string {
   return config.oauth?.publicUrl || `http://localhost:${config.api.port}`;
 }
 
-/** @deprecated Use `discoverAndRegisterConnector('atlassian', publicUrl)`. */
-export function discoverAndRegisterAtlassian(publicUrl: string): Promise<ConnectorOAuthMetadata> {
-  return discoverAndRegisterConnector('atlassian', publicUrl);
-}
-
 // --- Connector User Token Storage ---
 
 export async function storeConnectorUserTokens(
@@ -748,16 +735,6 @@ export async function storeConnectorUserTokens(
   if (expiresAt) {
     await v.store(userId, keys.tokenExpiry, expiresAt, { credentialType: 'other' });
   }
-}
-
-/** @deprecated Use `storeConnectorUserTokens('atlassian', ...)`. */
-export function storeAtlassianUserTokens(
-  userId: string,
-  accessToken: string,
-  refreshToken: string | undefined,
-  expiresInSeconds: number | undefined,
-): Promise<void> {
-  return storeConnectorUserTokens('atlassian', userId, accessToken, refreshToken, expiresInSeconds);
 }
 
 // --- Connector Access Token Retrieval (with refresh) ---
@@ -851,9 +828,4 @@ export async function getConnectorAccessToken(
   });
   connectorRefreshInFlight.set(inFlightKey, refreshPromise);
   return refreshPromise;
-}
-
-/** @deprecated Use `getConnectorAccessToken('atlassian', userId)`. */
-export function getAtlassianAccessToken(userId: string): Promise<string | null> {
-  return getConnectorAccessToken('atlassian', userId);
 }

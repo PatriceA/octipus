@@ -3,7 +3,7 @@
  *
  * A `spawn_agent` hook with `actionConfig.readOnly` runs its turn with a
  * fixed allowance instead of the session's tools: reads of files, git,
- * GitHub/GitLab/Atlassian and the knowledge base, handlers that declare
+ * GitHub and the knowledge base, handlers that declare
  * themselves read-only, and one way out, `send_to_user` to the hook's own
  * owner (the notify step). Everything else is refused before the permission
  * check: shell, file writes, web fetch and search (a URL carries data out),
@@ -63,7 +63,7 @@ export function readOnlyNotifyAllowed(sessionId: string | undefined, userId: str
 }
 
 /** Tool ids whose `read` / `list` / `search` actions only read. */
-const READ_TOOL_IDS = new Set(['filesystem', 'git', 'github', 'gitlab', 'atlassian', 'knowledge']);
+const READ_TOOL_IDS = new Set(['filesystem', 'git', 'github', 'knowledge']);
 const READ_ACTIONS = new Set(['read', 'list', 'search']);
 /** Vendor CLI tools that only read (the same set the flow guard calls readers). */
 const CLI_READERS = new Set(['Read', 'Grep', 'Glob', 'NotebookRead', 'LS']);

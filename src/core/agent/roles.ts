@@ -118,7 +118,7 @@ export function stripSecurityPreamble(prompt: string | undefined): string {
  */
 /**
  * Prefix marking a role toolId as a connector binding (e.g.
- * `connector:atlassian`). A colon is used (not `connector_`) so the binding id
+ * `connector:example`). A colon is used (not `connector_`) so the binding id
  * can never collide with the real connector meta-tool names
  * `connector_list_tools` / `connector_call_tool`. Connector tools are gated
  * per-role through this convention so connectors stop bypassing role gating

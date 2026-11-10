@@ -19,7 +19,7 @@
  *   session `private` (`personalSourceRead`), so the I6 rule asks before
  *   their data is written into the space.
  * - The space's own connectors (§9.5) are not personal: in a space session
- *   the GitHub tool, the Atlassian tool and `connector_*` act only through
+ *   the GitHub tool and `connector_*` act only through
  *   the space's connection (`connectorOwnerOf`, the GitHub tool's space
  *   token), never the member's, so they are space tools
  *   (`SPACE_CONNECTOR_TOOL_IDS`) — their writes follow the member's role and
@@ -100,7 +100,7 @@ export function isReadCall(call: SpaceToolCall): boolean {
   }
   if (call.toolId === 'connector') {
     // `connector_call_tool` names the remote tool in its arguments; remote
-    // names are MCP tool names (`searchJiraIssuesUsingJql`, `get_page`).
+    // names are MCP tool names (`search_issues`, `get_page`).
     if (call.toolName === 'connector_list_tools') return true;
     const remote = call.args?.tool_name;
     return call.toolName === 'connector_call_tool' && typeof remote === 'string'
@@ -116,10 +116,10 @@ export function isReadCall(call: SpaceToolCall): boolean {
 /**
  * Connector containers that, in a space session, act only through the
  * space's own connection (§9.5): the GitHub tool (the space's token, or a
- * refusal), the Atlassian tool and `connector_*` (`connectorOwnerOf`). They
+ * refusal) and `connector_*` (`connectorOwnerOf`). They
  * are space tools there.
  */
-export const SPACE_CONNECTOR_TOOL_IDS: ReadonlySet<string> = new Set(['github', 'atlassian', 'connector']);
+export const SPACE_CONNECTOR_TOOL_IDS: ReadonlySet<string> = new Set(['github', 'connector']);
 
 /**
  * Containers known to act only on the space when they write: its content
@@ -160,7 +160,7 @@ const PERSONAL_ONLY_TOOL_NAMES = new Set([
  * session `private`; their writes are personal-only.
  */
 const PERSONAL_SOURCE_TOOL_IDS = new Set([
-  'google-workspace', 'microsoft365', 'messaging', 'gitlab', 'email-processor', 'voice',
+  'google-workspace', 'microsoft365', 'messaging', 'email-processor', 'voice',
   'mcp', 'browser-ext', 'data',
 ]);
 
@@ -262,8 +262,8 @@ export function spaceSessionNotice(spaceName: string, role: SpaceRole, mayWrite:
     + (mayWrite ? '' : 'The user\'s role can only read and comment here: do not try to create or change anything except task comments. ')
     + (role === 'guest' ? 'As a guest the user reaches only some rooms and folders of the space; tools answer within that scope, so what they do not return may still exist. ' : '')
     + 'Scheduling, monitors, pipelines and recipes, memory, profile and skill tools, vault sync, indexing and writes through '
-    + 'the user\'s personal connections (mail, calendar, chat, GitLab, MCP servers, their browser) are not '
-    + 'available in a space, because they act on the user\'s personal account and automation. GitHub, Atlassian and the '
+    + 'the user\'s personal connections (mail, calendar, chat, MCP servers, their browser) are not '
+    + 'available in a space, because they act on the user\'s personal account and automation. GitHub and the '
     + 'other connectors act here through the space\'s own connections, which a space owner connects. Coding agent configuration '
     + '(.claude, .codex, .gemini, .agents, .mcp.json) cannot be written here. The user\'s personal memories are not loaded here. '
     + 'Writing data read from the user\'s personal sources into the space needs their approval.';

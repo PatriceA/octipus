@@ -15,7 +15,7 @@ export const USE_CASES: UseCase[] = [
     id: 'development',
     title: 'Build software',
     summary: 'Coding agents (Claude Code, Codex, Gemini), your repositories, GitHub and your issue tracker, and pipelines that plan, build and check work.',
-    sets: ['coding agents', 'repositories folder', 'GitHub', 'Jira or Linear', 'a coding agent for your tasks'],
+    sets: ['coding agents', 'repositories folder', 'GitHub', 'your issue tracker', 'a coding agent for your tasks'],
   },
   {
     id: 'company',
@@ -26,8 +26,8 @@ export const USE_CASES: UseCase[] = [
   {
     id: 'product',
     title: 'Product management',
-    summary: 'Your tracker (Jira or Linear), a product agent for specs, stories and release notes, research on markets and competitors, and your calendar.',
-    sets: ['Jira or Linear', 'a product agent', 'research', 'calendar check-ins'],
+    summary: 'Your issue tracker, a product agent for specs, stories and release notes, research on markets and competitors, and your calendar.',
+    sets: ['your issue tracker', 'a product agent', 'research', 'calendar check-ins'],
   },
   {
     id: 'research',
@@ -253,29 +253,25 @@ const toolQuestions: Question[] = [
     id: 'tools.tracker',
     kind: 'choice',
     prompt: 'Which issue tracker do you use?',
-    options: (s) => {
-      const on = (id: string) => s.connectors.find((c) => c.id === id)?.connected;
-      return [
-        { value: 'jira', label: 'Jira (Atlassian Cloud)', hint: on('atlassian') ? 'already connected' : 'signs in with your Atlassian account; Confluence too' },
-        { value: 'linear', label: 'Linear', hint: on('linear') ? 'already connected' : undefined },
-        ...(s.isAdmin ? [{ value: 'mcp', label: 'Another tool with an MCP server', hint: 'Jira Data Center, YouTrack, … by its MCP address' }] : []),
-        { value: 'none', label: 'None' },
-      ];
-    },
+    options: (s) => [
+      { value: 'github', label: 'GitHub Issues', hint: 'agents use the GitHub tool with your GitHub sign-in or token' },
+      ...(s.isAdmin ? [{ value: 'mcp', label: 'Another tool with an MCP server', hint: 'added by its MCP address' }] : []),
+      { value: 'none', label: 'None' },
+    ],
     initial: () => 'none',
   },
   {
     id: 'tools.mcpName',
     kind: 'text',
     prompt: 'Name for the server',
-    placeholder: 'jira',
+    placeholder: 'tracker',
     when: (a) => is(a, 'tools.tracker', 'mcp'),
   },
   {
     id: 'tools.mcpUrl',
     kind: 'text',
     prompt: 'MCP server address (https://…)',
-    placeholder: 'https://jira.example.com/mcp',
+    placeholder: 'https://tracker.example.com/mcp',
     when: (a) => is(a, 'tools.tracker', 'mcp'),
   },
 ];

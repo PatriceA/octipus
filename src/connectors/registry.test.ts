@@ -1,8 +1,9 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import type { ConnectorDefinition, UserConnectorStatus } from './types';
-import { ATLASSIAN_CONNECTOR } from './atlassian/definition';
-import { ALL_CONNECTORS, findConnector, isConnectorId } from './definitions';
-import { LINEAR_CONNECTOR } from './linear/definition';
+
+// The registry is exercised against a stand-in connector; the real list is
+// read through `vi.importActual` below.
+vi.mock('./definitions', async () => (await import('@/test-helpers/connector-fixtures')).mockDefinitions());
 
 describe('connector types', () => {
   test('ConnectorDefinition shape compiles', () => {
@@ -28,19 +29,8 @@ describe('connector types', () => {
 });
 
 describe('built-in definitions', () => {
-  test('atlassian has required fields', () => {
-    expect(ATLASSIAN_CONNECTOR.id).toBe('atlassian');
-    expect(ATLASSIAN_CONNECTOR.mcpEndpoint).toBe('https://mcp.atlassian.com/v1/mcp/authv2');
-    expect(ATLASSIAN_CONNECTOR.oauthScopes.length).toBeGreaterThan(0);
-  });
-
-  test('linear has required fields', () => {
-    expect(LINEAR_CONNECTOR.id).toBe('linear');
-    expect(LINEAR_CONNECTOR.mcpEndpoint).toBe('https://mcp.linear.app/mcp');
-    expect(LINEAR_CONNECTOR.oauthScopes).toEqual(['read', 'write']);
-  });
-
-  test('every connector carries a discovery URL and a unique id', () => {
+  test('every connector carries a discovery URL and a unique id', async () => {
+    const { ALL_CONNECTORS } = await vi.importActual<typeof import('./definitions')>('./definitions');
     // Registration is driven entirely off the discovery document, so a
     // definition without one cannot be connected at all.
     const ids = new Set<string>();
@@ -49,14 +39,19 @@ describe('built-in definitions', () => {
       expect(ids.has(connector.id)).toBe(false);
       ids.add(connector.id);
     }
-    expect(findConnector('atlassian')?.name).toBe('Atlassian');
-    expect(findConnector('nope')).toBeUndefined();
-    expect(isConnectorId('linear')).toBe(true);
+  });
+
+  test('the removed Atlassian and Linear connectors no longer resolve', async () => {
+    const { findConnector, isConnectorId } = await vi.importActual<typeof import('./definitions')>('./definitions');
+    for (const id of ['atlassian', 'linear', 'gitlab', 'nope']) {
+      expect(findConnector(id)).toBeUndefined();
+      expect(isConnectorId(id)).toBe(false);
+    }
     expect(isConnectorId('google')).toBe(false);
   });
 });
 
-import { ConnectorRegistry } from './registry';
+import { ConnectorRegistry, getConnectorRegistry } from './registry';
 
 describe('ConnectorRegistry', () => {
   test('getUserToolHandlers returns empty array when user has no connectors', async () => {
@@ -69,7 +64,7 @@ describe('ConnectorRegistry', () => {
   test('getUserToolHandlers returns two meta-tools when user has connector', async () => {
     const mockGetToken = async (_connectorId: string, _owner: unknown): Promise<string | null> => 'valid-token';
     const registry = new ConnectorRegistry(mockGetToken);
-    const handlers = await registry.getUserToolHandlers('user-with-atlassian');
+    const handlers = await registry.getUserToolHandlers('user-with-example');
     expect(handlers.length).toBeGreaterThanOrEqual(2);
     const names = handlers.map(h => h.name);
     expect(names).toContain('connector_list_tools');
@@ -80,21 +75,46 @@ describe('ConnectorRegistry', () => {
     const mockGetToken = async (): Promise<string | null> => 'valid-token';
     const registry = new ConnectorRegistry(mockGetToken);
     // Role binds a connector the user does NOT have → no handlers exposed.
-    const handlers = await registry.getUserToolHandlers('user-with-atlassian', new Set(['some-other-connector']));
+    const handlers = await registry.getUserToolHandlers('user-with-example', new Set(['some-other-connector']));
     expect(handlers).toHaveLength(0);
   });
 
   test('allowedConnectorIds includes the bound connector → meta-tools exposed', async () => {
     const mockGetToken = async (): Promise<string | null> => 'valid-token';
     const registry = new ConnectorRegistry(mockGetToken);
-    const handlers = await registry.getUserToolHandlers('user-with-atlassian', new Set(['atlassian']));
+    const handlers = await registry.getUserToolHandlers('user-with-example', new Set(['example']));
     expect(handlers.length).toBeGreaterThanOrEqual(2);
   });
 
   test('undefined allowedConnectorIds preserves backward-compatible all-connectors behaviour', async () => {
     const mockGetToken = async (): Promise<string | null> => 'valid-token';
     const registry = new ConnectorRegistry(mockGetToken);
-    const handlers = await registry.getUserToolHandlers('user-with-atlassian', undefined);
+    const handlers = await registry.getUserToolHandlers('user-with-example', undefined);
     expect(handlers.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('a stored id of a removed connector (atlassian, linear) is ignored', () => {
+  test('a role still binding `connector:atlassian` or `connector:linear` gets no connector tools', async () => {
+    const asked: string[] = [];
+    const registry = new ConnectorRegistry(async (id) => { asked.push(id); return 'stale-token'; });
+    expect(await registry.getUserToolHandlers('user', new Set(['atlassian', 'linear']))).toEqual([]);
+    // Only defined connectors are ever looked up.
+    expect(asked).toEqual([]);
+  });
+
+  test('connector_call_tool refuses a removed connector id instead of reaching for it', async () => {
+    const registry = new ConnectorRegistry(async () => 'valid-token');
+    const call = (await registry.getUserToolHandlers('user')).find((h) => h.name === 'connector_call_tool')!;
+    await expect(call.execute({ connector_id: 'atlassian', tool_name: 'getJiraIssue' }, {} as never))
+      .rejects.toThrow(/Connector 'atlassian' not found/);
+  });
+
+  test('the default token lookup returns null for them without reading the vault', async () => {
+    // No vault is initialized here: a lookup that reached it would throw.
+    const { getAccessToken } = getConnectorRegistry() as unknown as { getAccessToken: (id: string, owner: string) => Promise<string | null> };
+    for (const id of ['atlassian', 'linear']) {
+      await expect(getAccessToken(id, 'user')).resolves.toBeNull();
+    }
   });
 });

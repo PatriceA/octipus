@@ -393,7 +393,7 @@ export async function spawnWorker(
       const before = roleTools.length;
       roleTools = stripMutatingTools(roleTools);
       // And the executor's plan-mode rule for what the strip cannot see:
-      // repository writes (git, GitHub, GitLab). On the WORKER's metadata:
+      // repository writes (git, GitHub). On the WORKER's metadata:
       // `context` is the caller's.
       planModeWorker = true;
       coreLogger.info(

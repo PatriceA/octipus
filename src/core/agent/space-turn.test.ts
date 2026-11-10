@@ -661,13 +661,12 @@ describe('personal connections and agent configuration in a space', () => {
     const ctx = await spaceContext(editorId, sessionId, 'editor', { attended: true });
     const decide = (toolId: string, action: string, toolName?: string, args?: Record<string, unknown>) =>
       routeApprovalFor(ctx, { toolId, action, toolName, args }, { level: 'ALLOW' });
-    // (The space's own connectors — GitHub, Atlassian, `connector_*` — are
+    // (The space's own connectors — GitHub and `connector_*` — are
     // not personal in a space: space-connectors.isolation.test.ts.)
     const writes: Array<[string, string, string, Record<string, unknown>?]> = [
       ['browser-ext', 'navigate', 'navigate'],
       ['browser-ext', 'cookies', 'cookies'],
       ['mcp', 'tracker.create_issue', 'tracker.create_issue'],
-      ['gitlab', 'write', 'create_issue'],
       ['google-workspace', 'email_send', 'email_send'],
     ];
     for (const [toolId, action, toolName, args] of writes) {
@@ -770,7 +769,7 @@ describe('I6 from a real read, on the tool-executor and CLI relay paths', () => 
       expect(remote).toHaveBeenCalledTimes(1);
 
       // Tool executor: the space write now needs a human, and this run cannot ask one.
-      const [note] = await exec.handleToolCalls([{ id: 'c3', name: 'notes__write_note', arguments: { title: 'Jira summary' } }]);
+      const [note] = await exec.handleToolCalls([{ id: 'c3', name: 'notes__write_note', arguments: { title: 'Tracker summary' } }]);
       expect(String(note.content)).toMatch(/Approval required: notes\.write_note writes data from your personal sources \(mcp:tracker\.search_issues\) into Launch room/);
       // CLI relay: the native write is refused with the same reason.
       expect((await cli(sessionId)).response.response).toMatchObject({ behavior: 'deny', message: expect.stringMatching(/writes data from your personal sources/) });

@@ -158,8 +158,6 @@ export function classifyFlow(call: FlowCall): FlowContract {
     case 'data':
       return { taints: ['private'] };
     case 'github':
-    case 'gitlab':
-    case 'atlassian':
       // Issue and PR text can be written by anyone who can comment.
       if (action === 'read') return { taints: ['suspicious'] };
       return { taints, egress: 'write' };
