@@ -20,11 +20,11 @@
  */
 import { z } from 'zod';
 import { coreLogger } from '@/utils/logger';
-import { isoTime } from './index-v2';
+import { isoTime } from './listing-text';
 import { manifestSchema } from './manifest';
 import { currentMarketplace } from './marketplace-config';
 import { marketplaceHooks, marketplaceSource } from './marketplace';
-import { configuredRegistries, downloadHttps, isIndexRefusal, readIndex } from './remote';
+import { configuredRegistries, downloadHttps, isIndexRefusal, mapBounded, REGISTRY_FETCH_CONCURRENCY, readIndex, type IndexHooks, type RegistrySource } from './remote';
 
 /** Largest image served. */
 export const MAX_ASSET_BYTES = 2 * 1024 * 1024;
@@ -57,23 +57,23 @@ export class AssetError extends Error {
 
 /** Whether a readable index (the marketplace, or a configured registry) lists `url` as an icon or screenshot. */
 async function isListedAsset(url: string): Promise<boolean> {
-  const sources = [];
+  const sources: Array<{ source: RegistrySource; hooks: IndexHooks }> = [];
   const settings = currentMarketplace();
   if (settings.state === 'ready') {
     const mp = await marketplaceSource(settings);
     if (!('error' in mp)) sources.push({ source: mp, hooks: marketplaceHooks(settings) });
   }
   for (const r of configuredRegistries()) sources.push({ source: r, hooks: {} });
-  for (const { source, hooks } of sources) {
+  const listed = await mapBounded(sources, REGISTRY_FETCH_CONCURRENCY, async ({ source, hooks }) => {
     const result = await readIndex(source, hooks);
-    for (const e of result.fetched?.index.entries ?? []) {
-      if (e.icon === url || e.screenshots.includes(url)) return true;
-    }
-  }
-  return false;
+    return (result.fetched?.index.entries ?? []).some((e) => e.icon === url || e.screenshots.includes(url));
+  });
+  return listed.includes(true);
 }
 
 const assetCache = new Map<string, { at: number; type: ImageType; bytes: Buffer }>();
+/** Fetches in flight, so concurrent misses for one URL share one download. */
+const inFlight = new Map<string, Promise<{ type: ImageType; bytes: Buffer }>>();
 
 /** Test-only. */
 export function clearAssetCache(): void {
@@ -95,9 +95,21 @@ function remember(url: string, type: ImageType, bytes: Buffer): void {
 /** A listing image, checked as the module comment says. Throws `AssetError` with the status to answer. */
 export async function fetchListingAsset(url: string): Promise<{ type: ImageType; bytes: Buffer }> {
   if (typeof url !== 'string' || url.length > 2000) throw new AssetError(400, 'Not an asset URL');
+  // Listed now, before anything cached is served: a delisted image stops serving at once.
+  if (!(await isListedAsset(url))) {
+    assetCache.delete(url);
+    throw new AssetError(404, 'Not an image a registry lists');
+  }
   const cached = assetCache.get(url);
   if (cached && Date.now() - cached.at < ASSET_CACHE_MS) return cached;
-  if (!(await isListedAsset(url))) throw new AssetError(404, 'Not an image a registry lists');
+  const pending = inFlight.get(url);
+  if (pending) return pending;
+  const run = downloadAsset(url).finally(() => inFlight.delete(url));
+  inFlight.set(url, run);
+  return run;
+}
+
+async function downloadAsset(url: string): Promise<{ type: ImageType; bytes: Buffer }> {
   let bytes: Buffer;
   try {
     bytes = await downloadHttps(url, { maxBytes: MAX_ASSET_BYTES, timeoutMs: ASSET_TIMEOUT_MS, sameOrigin: true, accept: 'image/png, image/jpeg, image/webp, image/gif' });

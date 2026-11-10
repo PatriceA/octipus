@@ -258,25 +258,28 @@ function configRevokedKeyIds(publishers: readonly TrustedPublisher[]): string[] 
  *
  * - **Publishers.** `plugins.trustedPublishers`; for a package installed from
  *   the marketplace (`origin.source === 'marketplace'`) the marketplace's
- *   signing keys too (its last accepted keys.json, re-verified against the
- *   root keys), while the marketplace is configured. They are trusted for nothing
- *   else. `only` replaces the list (an install from the marketplace accepts
- *   its keys alone).
- * - **Revoked keys.** `plugins.revokedKeys`, the keys of revoked
- *   `trustedPublishers` entries, and the keys the marketplace's signed index
- *   revoked (./revocations.ts, kept in the database). A database that cannot
- *   be read refuses the check (it throws): never trust on a guess.
+ *   signing keys instead (its last accepted keys.json, re-verified against
+ *   the root keys), while the marketplace is configured. They are trusted
+ *   for nothing else, and nothing else is trusted for a marketplace package.
+ *   `only` replaces the list (an install from the marketplace accepts its
+ *   keys alone).
+ * - **Revoked keys.** `plugins.revokedKeys` and the keys of revoked
+ *   `trustedPublishers` entries, always; the keys the marketplace's keys.json
+ *   revoked (./revocations.ts, kept in the database) for marketplace trust
+ *   only: a marketplace package, or an install from it. A database that
+ *   cannot be read refuses the check (it throws): never trust on a guess.
  */
 async function signingPolicy(origin?: PluginOrigin | null, only?: readonly TrustedPublisher[]): Promise<{ publishers: readonly TrustedPublisher[]; revokedKeys: readonly string[]; required: boolean }> {
   const plugins = getConfig().plugins;
   const config = plugins?.trustedPublishers ?? [];
+  const marketplace = origin?.source === 'marketplace';
   let publishers: readonly TrustedPublisher[] = only ?? config;
-  if (!only && origin?.source === 'marketplace') {
+  if (!only && marketplace) {
     // The marketplace's signing keys as last accepted (re-verified against its root keys), never its root keys.
     const { persistedSigningPublishers } = await import('./marketplace-keys-file');
-    publishers = [...config, ...await persistedSigningPublishers()];
+    publishers = await persistedSigningPublishers();
   }
-  const revokedKeys = [...new Set([...(plugins?.revokedKeys ?? []), ...configRevokedKeyIds(config), ...await revokedKeyIds()])];
+  const revokedKeys = [...new Set([...(plugins?.revokedKeys ?? []), ...configRevokedKeyIds(config), ...(marketplace ? await revokedKeyIds() : [])])];
   return { publishers, revokedKeys, required: signatureRequired() };
 }
 
@@ -332,8 +335,9 @@ async function acceptSignature(
   contentHash: string,
   requireTrusted = false,
   only?: readonly TrustedPublisher[],
+  origin?: PluginOrigin | null,
 ): Promise<{ signedBy: string | null; keyId: string | null; signatureHash: string | null; warnings: string[] }> {
-  const state = await signatureState(dir, contentHash, null, only);
+  const state = await signatureState(dir, contentHash, origin ?? null, only);
   const { check, sha256: signatureHash } = state;
   if (check.status === 'valid') return { signedBy: check.publisher, keyId: check.keyId, signatureHash, warnings: [] };
   const shortfall = signatureShortfall(name, check);
@@ -505,8 +509,10 @@ export async function stagePackage(
     if (opts.expect?.version !== undefined && opts.expect.version !== manifest.version) {
       throw new PluginPackageError('invalid', `${manifest.name} is version ${manifest.version}, not the expected ${opts.expect.version}; not installed`);
     }
-    // A version the marketplace revoked installs from nowhere (docs/PLUGIN-PACKAGES.md#online-revocation).
-    const revoked = await packageRevocation(manifest.name, manifest.version);
+    // A version the marketplace revoked does not install from the marketplace
+    // (docs/PLUGIN-PACKAGES.md#online-revocation). Its revocations are about
+    // its own packages: an install from elsewhere is the admin's other trust.
+    const revoked = opts.origin?.source === 'marketplace' ? await packageRevocation(manifest.name, manifest.version) : null;
     if (revoked) {
       await auditQuietly('install_refused_revoked', manifest.name, { version: manifest.version, reason: revoked.reason, actor: actorUserId });
       throw new PluginPackageError('invalid', `${manifest.name} ${manifest.version} is revoked by the marketplace (${revoked.reason || 'no reason given'}); not installed`);
@@ -535,7 +541,7 @@ export async function stagePackage(
       throw new PluginPackageError('invalid',
         `${manifest.name} ${manifest.version} hashes to ${contentHash}, not to the ${opts.expectListing.contentHash} its listing states; not installed`);
     }
-    const signature = await acceptSignature(staging, manifest.name, contentHash, opts.requireTrustedSignature === true, opts.trustOnly);
+    const signature = await acceptSignature(staging, manifest.name, contentHash, opts.requireTrustedSignature === true, opts.trustOnly, opts.origin);
     // Its contributions must fit beside what is installed (a command name taken), and its prompt file be readable.
     const fit = await contributionInstallProblems(manifest, staging, await getDb().select({ name: pluginPackages.name, manifest: pluginPackages.manifest }).from(pluginPackages));
     if (fit.length > 0) throw new PluginPackageError('conflict', `${manifest.name}: ${fit.join('; ')}`, fit);
@@ -910,7 +916,7 @@ export async function configure(
   }
   const enabled = change.enabled ?? row.enabled;
   if ((enabled && !row.enabled) || change.approveContent !== undefined || change.approveInProcess !== undefined) {
-    const revoked = await packageRevocation(name, row.version);
+    const revoked = row.origin?.source === 'marketplace' ? await packageRevocation(name, row.version) : null;
     if (revoked) {
       throw new PluginPackageError('incomplete', `${name} ${row.version} is revoked by the marketplace (${revoked.reason || 'no reason given'}); it cannot be enabled or approved. Upgrade to a version that is not revoked`);
     }
@@ -1301,10 +1307,11 @@ async function viewOf(row: PluginPackageRow, secrets: string[], authoredBy?: Plu
  * signed index), or the key that signed it (the marketplace, or the config).
  */
 async function revocationOf(row: PluginPackageRow, signature: PluginSignatureStatus | null): Promise<PluginRevocationView | null> {
-  const pkg = await packageRevocation(row.name, row.version);
+  const marketplace = row.origin?.source === 'marketplace';
+  const pkg = marketplace ? await packageRevocation(row.name, row.version) : null;
   if (pkg) return { kind: 'package', keyId: null, reason: pkg.reason, source: 'marketplace', since: pkg.firstSeenAt.toISOString() };
   if (signature?.status === 'revoked' && signature.keyId) {
-    const key = await keyRevocation(signature.keyId);
+    const key = marketplace ? await keyRevocation(signature.keyId) : null;
     return key
       ? { kind: 'key', keyId: signature.keyId, reason: key.reason, source: 'marketplace', since: key.firstSeenAt.toISOString() }
       : { kind: 'key', keyId: signature.keyId, reason: signature.detail, source: 'config', since: null };
@@ -1544,10 +1551,12 @@ export async function checkPackageBeforeStart(name: string): Promise<string | nu
     await auditOnce(`${name}\n${check.recorded}\n${check.actual}`, 'content_mismatch', name, { version: row.version, recorded: check.recorded, actual: check.actual });
     return CONTENT_MISMATCH_PROBLEM;
   }
-  // A version the marketplace revoked does not start, whatever else holds (docs/PLUGIN-PACKAGES.md#online-revocation).
+  // A marketplace package whose version the marketplace revoked does not
+  // start, whatever else holds (docs/PLUGIN-PACKAGES.md#online-revocation).
+  const marketplace = row.origin?.source === 'marketplace';
   let revoked: Awaited<ReturnType<typeof packageRevocation>>;
   try {
-    revoked = await packageRevocation(name, row.version);
+    revoked = marketplace ? await packageRevocation(name, row.version) : null;
   } catch (err) {
     coreLogger.error({ err, pkg: name }, 'Plugin package revocations could not be read; not started');
     return `Could not check whether the package is revoked: ${(err as Error).message}`;
@@ -1584,6 +1593,18 @@ export async function checkPackageBeforeStart(name: string): Promise<string | nu
     // Once per (package, key).
     await auditOnce(`${name}\nrevoked\n${sig.check.keyId}`, 'signature_revoked', name, { version: row.version, hash: check.hash, keyId: sig.check.keyId, publisher: sig.check.publisher });
     return `${shortfall}; it does not start until it is signed again by a trusted key (or its signature file is removed and its content approved)`;
+  }
+  // A marketplace package runs only with a valid signature by a signing key
+  // the marketplace's keys.json endorses now, whatever requireSignature says:
+  // its trust IS that signature. A key dropped from keys.json, expired, or a
+  // stored keys.json that no longer verifies stops it.
+  if (marketplace && sig.check.status !== 'valid') {
+    const shortfall = sig.check.status === 'unknown_key'
+      ? `${name} is signed by ${sig.check.keyId}, which is not a signing key the marketplace's keys.json endorses now`
+      : signatureShortfall(name, sig.check);
+    coreLogger.warn({ pkg: name, version: row.version, status: sig.check.status }, 'Marketplace package has no valid marketplace signature; not started');
+    await auditOnce(`${name}\nmarketplace-signature\n${check.hash}\n${sig.check.status}`, 'signature_refused', name, { version: row.version, hash: check.hash, status: sig.check.status, reason: shortfall, origin: 'marketplace' });
+    return `${shortfall}; a package from the marketplace runs only with a valid signature by a signing key its keys.json endorses now`;
   }
   if (signatureRequired()) {
     const signature = sig.check;

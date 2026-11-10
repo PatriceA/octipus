@@ -45,7 +45,8 @@ export async function listUpdates(): Promise<PluginUpdateView[]> {
       indexes.set(registry, 'error' in found ? null : await readIndex(found.source, found.hooks));
     }
     const listed = indexes.get(registry)?.fetched?.index.entries.filter((e) => e.name === row.name) ?? [];
-    const latest = newestInstallable(listed, revoked, appVersion);
+    // The marketplace's revocations hold back its own versions only.
+    const latest = newestInstallable(listed, registry === MARKETPLACE_REGISTRY ? revoked : new Map(), appVersion);
     if (!latest || compareVersions(latest.version, row.version) <= 0) continue;
     const diff = latest.permissions ? diffPermissions(await packagePermissions(row.manifest, packageDir(row.name)), latest.permissions) : null;
     const warnings: PluginGuidanceWarning[] = [
@@ -92,8 +93,44 @@ export async function maybeRunUpdateCheck(now = Date.now()): Promise<void> {
   }
 }
 
+let tickRunning = false;
+let lastFreshness = 0;
+/** How often the freshness check (a stale index or keys.json) runs from the cron tick. */
+const FRESHNESS_CHECK_INTERVAL_MS = 60 * 60_000;
+
+/**
+ * The cron tick's revocation catch-up (every tick, every instance): the
+ * revocations in force whose effects have not run in this process yet are
+ * applied here (another instance stored them), and, hourly, the admins are
+ * told when the marketplace's last accepted index or keys.json is more than
+ * 7 days old. Never throws.
+ */
+export async function maybeRunRevocationTick(now = Date.now()): Promise<void> {
+  if (tickRunning) return;
+  tickRunning = true;
+  try {
+    const { catchUpRevocations } = await import('./revocation-effects');
+    await catchUpRevocations();
+    if (now - lastFreshness >= FRESHNESS_CHECK_INTERVAL_MS) {
+      lastFreshness = now;
+      const { currentMarketplace } = await import('./marketplace-config');
+      const settings = currentMarketplace();
+      if (settings.state === 'ready') {
+        const { marketplaceFreshness, notifyStale } = await import('./marketplace');
+        await notifyStale(await marketplaceFreshness(settings, now));
+      }
+    }
+  } catch (err) {
+    coreLogger.error({ err }, 'plugin marketplace: the revocation catch-up failed');
+  } finally {
+    tickRunning = false;
+  }
+}
+
 /** Test-only. */
 export function _resetUpdateCheck(): void {
+  tickRunning = false;
+  lastFreshness = 0;
   lastRun = 0;
   running = false;
 }

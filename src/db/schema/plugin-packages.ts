@@ -125,6 +125,8 @@ export const pluginMarketplaceKeys = pgTable('plugin_marketplace_keys', {
   signature: text('signature').notNull(),
   sha256: text('sha256').notNull(),
   signedByRoot: text('signed_by_root').notNull(),
+  /** Every signing key any accepted keys.json listed: keys.json may revoke only these (and roots). */
+  endorsedKeyIds: jsonb('endorsed_key_ids').$type<string[]>().notNull().default([]),
   acceptedAt: timestamp('accepted_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -134,5 +136,7 @@ export const pluginListingPins = pgTable('plugin_listing_pins', {
   name: text('name').notNull(),
   version: text('version').notNull(),
   contentHash: text('content_hash').notNull(),
+  /** The key that signed the index that first listed it (null: an unsigned registry). A pin of a key revoked since holds nothing. */
+  signedBy: text('signed_by'),
   firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [primaryKey({ columns: [t.registryUrl, t.name, t.version] })]);

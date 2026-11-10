@@ -396,6 +396,13 @@ async function processCronTick(): Promise<void> {
       .then(({ maybeRunUpdateCheck }) => maybeRunUpdateCheck())
       .catch((err: unknown) => coreLogger.error({ err }, 'Plugin update check failed'));
 
+    // Marketplace revocations stored by another instance stop what they cover
+    // here too, and a stale marketplace (index or keys.json older than a week)
+    // is reported (src/plugins/packages/marketplace-updates.ts). Not awaited.
+    import('@/plugins/packages/marketplace-updates')
+      .then(({ maybeRunRevocationTick }) => maybeRunRevocationTick())
+      .catch((err: unknown) => coreLogger.error({ err }, 'Plugin revocation catch-up failed'));
+
     // The daily backup (core/backup/service.ts), in its configured hour. Not
     // awaited: a backup takes minutes; it guards against a second run itself.
     maybeRunScheduledBackup(now).catch((err: unknown) => coreLogger.error({ err }, 'Scheduled backup check failed'));

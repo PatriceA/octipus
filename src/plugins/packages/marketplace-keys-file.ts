@@ -7,7 +7,7 @@
  * the sha256 of the exact bytes: never interchangeable with a package or
  * index signature):
  *
- *   { "schema": 1, "version": 3, "generatedAt": "…",
+ *   { "schema": 1, "version": 3, "generatedAt": "…", "expires": "…",
  *     "signingKeys": [{ "keyId": "ed25519:…", "publicKey": "-----BEGIN PUBLIC KEY-----…", "notAfter": "2027-12-31" }],
  *     "revokedKeys": [{ "keyId": "ed25519:…", "reason": "…" }] }
  *
@@ -19,11 +19,16 @@
  * - refuses a `version` not greater than the last accepted one (the same
  *   version with the same bytes is fine), unless the last one was signed by a
  *   root revoked since;
+ * - refuses a file whose optional `expires` has passed (a mirror cannot
+ *   freeze a host on an old file);
  * - applies the root rule: `rootBackup` may revoke `root`, `root` may never
  *   revoke `rootBackup` (a file that tries is refused as a whole), a key may
  *   retire itself; a root is never a signing key;
+ * - accepts a key revocation only for a key that an accepted keys.json
+ *   endorses or ever endorsed (`endorsed_key_ids`), or for a root: keys.json
+ *   cannot revoke a key it never vouched for (others are ignored, logged);
  * - stores revocations sticky (./revocations.ts): a later version that drops
- *   one does not lift it;
+ *   one does not lift it. They apply to marketplace trust only;
  * - persists the last good file with its signature, re-verified whenever it
  *   is read, so installed marketplace packages keep verifying while the
  *   marketplace is unreachable.
@@ -34,19 +39,20 @@
  */
 import { createHash } from 'node:crypto';
 import { sql } from 'drizzle-orm';
-import { z } from 'zod';
 import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { pluginMarketplaceKeys } from '@/db/schema/plugin-packages';
 import { SYSTEM_USER_ID } from '@/security/principal';
 import { coreLogger } from '@/utils/logger';
-import { isoTime, line } from './index-v2';
 import { currentMarketplace, type MarketplaceSettings, type RootKey } from './marketplace-config';
 import { MARKETPLACE_PUBLISHER } from './marketplace-keys';
 import { applyNewRevocations } from './revocation-effects';
 import { recordRevocations, revokedKeyIds } from './revocations';
-import { isKeyId, keyFingerprint, parsePublicKey, type TrustedPublisher, verifyMarketplaceKeys } from './signature';
+import { type KeysFile, KeysFileError, keysFileExpired, parseKeysFile, rootRevocationProblem } from './marketplace-keys-format';
+import { type TrustedPublisher, verifyMarketplaceKeys } from './signature';
+
+export { type KeysFile, KeysFileError, parseKeysFile, rootRevocationProblem } from './marketplace-keys-format';
 
 /** Largest keys.json read. */
 export const MAX_KEYS_FILE_BYTES = 64 * 1024;
@@ -55,87 +61,8 @@ const KEYS_TIMEOUT_MS = 10_000;
 /** How long a fetched keys.json is reused. */
 export const KEYS_CACHE_MS = 60_000;
 
-export class KeysFileError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'KeysFileError';
-  }
-}
-
-const keyIdSchema = z.string().max(80).refine(isKeyId, 'a key id, ed25519:<64 hex>');
-const dateOrTime = z.string().max(40).regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/, 'an ISO date or date-time with a zone')
-  .refine((s) => !Number.isNaN(Date.parse(s)), 'not a real date');
-
-const keysFileSchema = z.object({
-  schema: z.literal(1),
-  version: z.number().int().min(1).max(2_147_483_647),
-  generatedAt: isoTime,
-  signingKeys: z.array(z.object({ keyId: keyIdSchema, publicKey: z.string().min(1).max(2000), notAfter: dateOrTime.optional().nullable() }).strict()).max(20),
-  revokedKeys: z.array(z.object({ keyId: keyIdSchema, reason: line(500).optional().nullable() }).strict()).max(1000),
-}).strict();
-
-export interface KeysFile {
-  version: number;
-  generatedAt: Date;
-  signingKeys: Array<{ keyId: string; publicKey: string; notAfter: string | null }>;
-  revokedKeys: Array<{ keyId: string; reason: string }>;
-}
-
-/** Parse and check a keys file's content (its signature is checked separately). */
-export function parseKeysFile(bytes: Uint8Array, roots: readonly RootKey[]): KeysFile {
-  let json: unknown;
-  try {
-    json = JSON.parse(Buffer.from(bytes).toString('utf8'));
-  } catch {
-    throw new KeysFileError('keys.json is not valid JSON');
-  }
-  const parsed = keysFileSchema.safeParse(json);
-  if (!parsed.success) {
-    throw new KeysFileError(`keys.json does not fit its schema: ${parsed.error.issues.slice(0, 3).map((i) => `${i.path.join('.') || 'value'}: ${i.message}`).join('; ')}`);
-  }
-  const rootIds = new Set(roots.map((r) => r.keyId));
-  const seen = new Set<string>();
-  for (const k of parsed.data.signingKeys) {
-    let id: string;
-    try {
-      id = keyFingerprint(parsePublicKey(k.publicKey));
-    } catch (err) {
-      throw new KeysFileError(`keys.json: the signing key ${k.keyId} cannot be read (${(err as Error).message})`);
-    }
-    if (id !== k.keyId) throw new KeysFileError(`keys.json: the signing key listed as ${k.keyId} is ${id}`);
-    if (rootIds.has(id)) throw new KeysFileError(`keys.json lists a root key (${id}) as a signing key; root keys never sign packages or indexes`);
-    if (seen.has(id)) throw new KeysFileError(`keys.json lists the signing key ${id} twice`);
-    seen.add(id);
-  }
-  return {
-    version: parsed.data.version,
-    generatedAt: new Date(parsed.data.generatedAt),
-    signingKeys: parsed.data.signingKeys.map((k) => ({ keyId: k.keyId, publicKey: k.publicKey, notAfter: k.notAfter ?? null })),
-    revokedKeys: parsed.data.revokedKeys.map((k) => ({ keyId: k.keyId, reason: k.reason ?? '' })),
-  };
-}
-
-/**
- * Whether a keys file signed by root `signer` may revoke these keys: a key
- * may retire itself, and any signing key may be revoked; of the roots, only
- * `rootBackup` may revoke `root`. Returns why not, or null.
- */
-export function rootRevocationProblem(signer: string, roots: readonly RootKey[], revoked: readonly string[]): string | null {
-  const roleOf = new Map(roots.map((r) => [r.keyId, r.role]));
-  const signerRole = roleOf.get(signer);
-  if (signerRole === undefined) return `keys.json is signed by ${signer}, which is not a root key`;
-  for (const target of revoked) {
-    if (target === signer) continue;
-    const targetRole = roleOf.get(target);
-    if (targetRole === undefined) continue;
-    if (signerRole === 'rootBackup' && targetRole === 'root') continue;
-    return `keys.json signed by the ${signerRole} key may not revoke the ${targetRole} key (${target}); the whole file is refused`;
-  }
-  return null;
-}
-
-/** Key ids revoked now: `plugins.revokedKeys` and the stored revocations. */
-async function revokedNow(): Promise<string[]> {
+/** Key ids revoked now for marketplace trust: `plugins.revokedKeys` and the stored (keys.json) revocations. */
+export async function revokedNow(): Promise<string[]> {
   return [...new Set([...(getConfig().plugins?.revokedKeys ?? []), ...await revokedKeyIds()])];
 }
 
@@ -170,20 +97,23 @@ export function signingPublishers(file: KeysFile, revoked: readonly string[]): T
  * throw saying why not: `version` must grow, unless the last one was signed
  * by a root revoked now.
  */
-async function acceptVersion(settings: Extract<MarketplaceSettings, { state: 'ready' }>, file: KeysFile, bytes: Uint8Array, signature: string, signedBy: string, distrusted: readonly string[]): Promise<void> {
+async function acceptVersion(settings: Extract<MarketplaceSettings, { state: 'ready' }>, file: KeysFile, bytes: Uint8Array, signature: string, signedBy: string, distrusted: readonly string[]): Promise<string[]> {
   const sha256 = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
   const body = Buffer.from(bytes).toString('utf8');
   const t = pluginMarketplaceKeys;
   const distrust = distrusted.length > 0 ? sql` OR ${t.signedByRoot} IN (${sql.join(distrusted.map((k) => sql`${k}`), sql`, `)})` : sql``;
+  const listed = JSON.stringify(file.signingKeys.map((k) => k.keyId));
+  // The endorsed keys only grow: what any accepted file listed, and what this one lists.
+  const endorsed = sql`(SELECT COALESCE(jsonb_agg(DISTINCT v), '[]'::jsonb) FROM jsonb_array_elements_text(${t.endorsedKeyIds} || ${listed}::jsonb) v)`;
   const accepted = await getDb().insert(t)
-    .values({ registryUrl: settings.url, version: file.version, generatedAt: file.generatedAt, body, signature, sha256, signedByRoot: signedBy })
+    .values({ registryUrl: settings.url, version: file.version, generatedAt: file.generatedAt, body, signature, sha256, signedByRoot: signedBy, endorsedKeyIds: file.signingKeys.map((k) => k.keyId) })
     .onConflictDoUpdate({
       target: t.registryUrl,
-      set: { version: file.version, generatedAt: file.generatedAt, body, signature, sha256, signedByRoot: signedBy, acceptedAt: new Date() },
+      set: { version: file.version, generatedAt: file.generatedAt, body, signature, sha256, signedByRoot: signedBy, acceptedAt: new Date(), endorsedKeyIds: endorsed },
       setWhere: sql`${t.version} < ${file.version} OR (${t.version} = ${file.version} AND ${t.sha256} = ${sha256})${distrust}`,
     })
-    .returning({ version: t.version });
-  if (accepted.length > 0) return;
+    .returning({ version: t.version, endorsedKeyIds: t.endorsedKeyIds });
+  if (accepted.length > 0) return accepted[0].endorsedKeyIds;
   const [last] = await getDb().select({ version: t.version }).from(t).where(sql`${t.registryUrl} = ${settings.url}`).limit(1);
   throw new KeysFileError(last && last.version === file.version
     ? `keys.json version ${file.version} has other content than the version ${file.version} accepted before; refused`
@@ -239,6 +169,8 @@ async function fetchAndAccept(settings: Extract<MarketplaceSettings, { state: 'r
     signature = null;
   }
   const { file, signedBy } = await verifyKeysFile(settings, bytes, signature);
+  const expired = keysFileExpired(file);
+  if (expired) throw new KeysFileError(expired);
   const problem = rootRevocationProblem(signedBy, settings.roots, file.revokedKeys.map((k) => k.keyId));
   if (problem) {
     await auditRepository.log({
@@ -247,8 +179,14 @@ async function fetchAndAccept(settings: Extract<MarketplaceSettings, { state: 'r
     }).catch((err: unknown) => coreLogger.error({ err }, 'plugin marketplace: audit row could not be written'));
     throw new KeysFileError(problem);
   }
-  await acceptVersion(settings, file, bytes, signature as string, signedBy, [...await revokedNow(), ...file.revokedKeys.map((k) => k.keyId)]);
-  const added = await recordRevocations(file.revokedKeys.map((k) => ({ kind: 'key' as const, keyId: k.keyId, reason: k.reason })),
+  const endorsed = new Set(await acceptVersion(settings, file, bytes, signature as string, signedBy, [...await revokedNow(), ...file.revokedKeys.map((k) => k.keyId)]));
+  // keys.json revokes only a key it vouches or vouched for, or a root: never a key of another trust (a trusted publisher's, say).
+  const rootIds = new Set(settings.roots.map((r) => r.keyId));
+  const ignored = file.revokedKeys.filter((k) => !endorsed.has(k.keyId) && !rootIds.has(k.keyId)).map((k) => k.keyId);
+  if (ignored.length > 0) {
+    coreLogger.warn({ ignored: ignored.slice(0, 20), version: file.version }, 'plugin marketplace: keys.json revokes keys it never endorsed; those revocations are ignored');
+  }
+  const added = await recordRevocations(file.revokedKeys.filter((k) => endorsed.has(k.keyId) || rootIds.has(k.keyId)).map((k) => ({ kind: 'key' as const, keyId: k.keyId, reason: k.reason })),
     { registryUrl: settings.keysUrl, signedByKey: signedBy, indexGeneratedAt: file.generatedAt });
   if (added.length > 0) {
     cache = null;

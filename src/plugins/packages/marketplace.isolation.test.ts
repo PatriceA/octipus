@@ -308,7 +308,7 @@ describe('listing and install', () => {
     await expect(install({ version: '2.0.0', allowIncompatible: true })).rejects.toThrow(/not supported/);
   });
 
-  test('a published version whose content changes in a later index is refused, and the admins told', async () => {
+  test('a published version whose content changes in a later index is refused (that entry only), and the admins told', async () => {
     publishKeys(1, [keyA]);
     const p = await publishPackage('1.0.0', keyA);
     publishIndex([entryOf(p)]);
@@ -316,9 +316,18 @@ describe('listing and install', () => {
     expect((await marketplaceListing()).state).toBe('ready');
     await clearCaches();
     const swapped = await publishPackage('1.0.0', keyA, (m) => { m.description = 'Different content, same version'; });
-    publishIndex([entryOf(swapped)]);
-    expect(await marketplaceListing()).toMatchObject({ state: 'error', message: expect.stringMatching(/other content for versions already published/) });
+    const next = await publishPackage('1.1.0', keyA);
+    publishIndex([entryOf(swapped), entryOf(next)]);
+    const listing = await marketplaceListing();
+    // The rest of the index stays usable; the replaced entry is refused and says so.
+    expect(listing.state).toBe('ready');
+    expect(listing.plugins[0].versions.map((v) => v.version)).toEqual(['1.1.0']);
+    expect(listing.errors).toEqual([{ registry: 'marketplace', error: expect.stringMatching(/^echo-plugin 1\.0\.0: replaced: refused/) }]);
     expect((await auditOps('listing_replaced')).length).toBe(1);
+    await expect(install({ version: '1.0.0' })).rejects.toThrow(/does not list echo-plugin 1\.0\.0/);
+    const { queryRaw } = await import('@/db/postgres');
+    const { rows } = await queryRaw(`SELECT type FROM notifications WHERE user_id = '${admin}' AND type = 'plugin_listing_replaced'`);
+    expect(rows.length).toBe(1);
   });
 
   test('an index older than the last one accepted is refused (rollback)', async () => {
@@ -392,7 +401,7 @@ describe('online revocation', () => {
     const rev = await import('./revocations');
     expect((await rev.packageRevocation(NAME, '1.0.0'))?.reason).toBe('bad');
     expect((await marketplaceListing()).state).toBe('error');
-    const [row] = await rev.listRevocations();
+    const [{ row }] = await rev.listRevocations();
     await rev.clearRevocation(row.id, admin, 'false alarm');
     expect(await rev.packageRevocation(NAME, '1.0.0')).toBeNull();
     expect((await auditOps('revocation_cleared')).at(-1)).toMatchObject({ reason: 'false alarm', name: NAME });

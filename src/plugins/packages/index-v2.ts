@@ -24,6 +24,7 @@
  */
 import { z } from 'zod';
 import { PLUGIN_RUNTIMES, PLUGIN_TOOL_EFFECTS, type PluginPermissionsSummary } from '@/shared/plugin-package';
+import { isoTime, line, markdown, safeText } from './listing-text';
 import { manifestSchema } from './manifest';
 import { normalizeSha256, parseRegistryIndex } from './remote';
 import { isKeyId } from './signature';
@@ -40,21 +41,8 @@ export const MAX_CHANGELOG_CHARS = 100_000;
 
 const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const CORE_SEMVER_RE = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/;
-const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2})$/;
-/** C0 controls other than tab, newline and carriage return, DEL and C1 controls. */
-const CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/;
-/** Any control character at all (single-line fields). */
-const ANY_CONTROL_RE = /[\u0000-\u001F\u007F-\u009F]/;
-/** Bidirectional embeddings, overrides and isolates, and zero-width marks that can disguise a short text. */
-const BIDI_RE = /[؜​-‏‪-‮⁦-⁩﻿]/;
+export { isoTime, line } from './listing-text';
 
-/** A single-line text field. */
-export const line = (max: number) => z.string().max(max)
-  .refine((s) => !ANY_CONTROL_RE.test(s), 'no control characters')
-  .refine((s) => !BIDI_RE.test(s), 'no bidirectional or invisible formatting characters');
-/** A Markdown text (README, CHANGELOG): tab and newlines allowed, other controls not. */
-const markdown = (max: number) => z.string().max(max).refine((s) => !CONTROL_RE.test(s), 'no control characters');
-export const isoTime = z.string().max(40).regex(ISO_RE, 'an ISO date-time with a zone').refine((s) => !Number.isNaN(Date.parse(s)), 'not a real time');
 const sortedUnique = (items: readonly string[]) => items.every((v, i) => i === 0 || items[i - 1] < v);
 
 const sha256Hex = z.string().regex(/^[0-9a-f]{64}$/, 'a hex sha256');
@@ -131,6 +119,8 @@ const revokedSchema = z.array(z.union([
 const topSchema = z.object({
   schema: z.literal(2),
   generatedAt: isoTime,
+  /** After this time the index is refused (a mirror or a man in the middle cannot freeze a host on it). */
+  expires: isoTime.optional().nullable(),
   publisher: line(100).optional().nullable(),
   url: z.string().max(2000).optional().nullable(),
   packages: z.array(z.unknown()).max(MAX_INDEX_ENTRIES),
@@ -169,6 +159,8 @@ export interface IndexEntry {
 export interface ParsedIndex {
   schema: 1 | 2;
   generatedAt: Date | null;
+  /** When the index stops being accepted (v2 `expires`), or null. */
+  expires: Date | null;
   entries: IndexEntry[];
   revoked: { packages: Array<{ name: string; version: string; reason: string }>; keys: Array<{ keyId: string; reason: string }> };
   /** Entries skipped, and why. */
@@ -234,7 +226,8 @@ function v1Entry(e: { registry: string; name: string; version: string; descripti
 }
 
 function zodProblem(err: z.ZodError): string {
-  return err.issues.slice(0, 3).map((i) => `${i.path.join('.') || 'value'}: ${i.message}`).join('; ');
+  // A path can carry a key of the hostile document: echoed only as safe text.
+  return safeText(err.issues.slice(0, 3).map((i) => `${i.path.join('.') || 'value'}: ${i.message}`).join('; '));
 }
 
 /**
@@ -252,7 +245,7 @@ export function parseIndexDocument(json: unknown, registry: { name: string; url:
     const { entries, problems } = parseRegistryIndex(json, registry.name);
     const kept = opts.tarballSameOrigin ? entries.filter((e) => fetchableUrl(e.url, registry.url) !== null) : entries;
     if (kept.length !== entries.length) problems.push(`${entries.length - kept.length} entries with a tarball off the registry's origin skipped`);
-    return { schema: 1, generatedAt: null, entries: kept.map(v1Entry), revoked: { packages: [], keys: [] }, problems };
+    return { schema: 1, generatedAt: null, expires: null, entries: kept.map(v1Entry), revoked: { packages: [], keys: [] }, problems: problems.map((p) => safeText(p)) };
   }
   if (typeof schema !== 'number' || !Number.isInteger(schema)) throw new IndexFormatError('The index "schema" is not a whole number');
   if (schema > INDEX_SCHEMA_VERSION) throw new IndexFormatError(`The index is schema ${schema}; this host reads up to ${INDEX_SCHEMA_VERSION}: update Octipus`);
@@ -270,7 +263,7 @@ export function parseIndexDocument(json: unknown, registry: { name: string; url:
   const entries: IndexEntry[] = [];
   top.data.packages.forEach((item, i) => {
     const parsed = entrySchema.safeParse(item);
-    const label = `packages[${i}]${typeof (item as { name?: unknown })?.name === 'string' ? ` (${String((item as { name: string }).name).slice(0, 50)})` : ''}`;
+    const label = `packages[${i}]${typeof (item as { name?: unknown })?.name === 'string' ? ` (${safeText(String((item as { name: string }).name), 50)})` : ''}`;
     if (!parsed.success) {
       problems.push(`${label}: ${zodProblem(parsed.error)}`);
       return;
@@ -323,5 +316,8 @@ export function parseIndexDocument(json: unknown, registry: { name: string; url:
     problems.push(`${e.name} ${e.version} is listed more than once; skipped`);
     return false;
   });
-  return { schema: 2, generatedAt: new Date(top.data.generatedAt), entries: unique, revoked, problems };
+  return {
+    schema: 2, generatedAt: new Date(top.data.generatedAt), expires: top.data.expires ? new Date(top.data.expires) : null,
+    entries: unique, revoked, problems: problems.map((p) => safeText(p)),
+  };
 }

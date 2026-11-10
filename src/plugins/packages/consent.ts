@@ -20,8 +20,12 @@
  * One audit row (`consent`) lists the ids agreed to.
  *
  * Previews are single-use, expire after `PREVIEW_TTL_MS`, belong to the admin
- * who made them, and live on this server process (an install must reach the
- * instance that made the preview).
+ * who made them, and live on this server process: the staged copy is a
+ * directory on this instance's disk, so storing the preview in the database
+ * would not make it installable elsewhere. An install must reach the
+ * instance that made the preview (sticky sessions behind a load balancer);
+ * one that reaches another instance is refused (fails closed) and the admin
+ * previews again.
  *
  * `consentView` / `consentToInstalled` do the same for a package already
  * installed (an agent's, or one installed before this flow): the
@@ -168,11 +172,11 @@ async function coveredBy(row: PluginPackageRow): Promise<(id: string) => boolean
 }
 
 /** The install options of a preview source, its guidance, and a version that needs a newer Octipus. */
-async function resolveSource(source: PreviewSource): Promise<{ options: InstallOptions; guidance: PluginGuidanceWarning[]; incompatible: string | null; download?: { url: string; sha256?: string }; dir?: string }> {
+async function resolveSource(source: PreviewSource): Promise<{ options: InstallOptions; guidance: PluginGuidanceWarning[]; incompatible: string | null; download?: { url: string; sha256?: string; sameOrigin?: boolean }; dir?: string }> {
   if ('registry' in source) {
     const { resolveRegistryInstall } = await import('./registry-install');
     const resolved = await resolveRegistryInstall({ registry: source.registry, name: source.name, version: source.version });
-    return { options: resolved.options, guidance: resolved.guidance, incompatible: resolved.incompatible, download: { url: resolved.entry.url, sha256: resolved.entry.sha256 } };
+    return { options: resolved.options, guidance: resolved.guidance, incompatible: resolved.incompatible, download: { url: resolved.entry.url, sha256: resolved.entry.sha256, sameOrigin: resolved.sameOrigin } };
   }
   if ('url' in source) {
     const { remoteInstallOptions } = await import('./remote');
@@ -218,7 +222,7 @@ export async function previewInstall(source: PreviewSource, actorUserId: string)
     let cleanup: (() => Promise<void>) | null = null;
     if (resolved.download) {
       const { downloadPackage } = await import('./remote');
-      const download = await downloadPackage(resolved.download.url, resolved.download.sha256);
+      const download = await downloadPackage(resolved.download.url, resolved.download.sha256, { sameOrigin: resolved.download.sameOrigin === true });
       root = download.root;
       cleanup = download.cleanup;
     }
@@ -320,7 +324,8 @@ export async function installPreview(
   await sweep();
   const preview = previews.get(previewId);
   if (!preview || preview.actorUserId !== actorUserId || preview.expiresAt <= Date.now()) {
-    throw new PluginPackageError('not_found', 'No such install preview: it expired, was used, or belongs to someone else. Preview the package again');
+    // Behind a load balancer without sticky sessions the install can reach another instance than the preview: it then fails closed here.
+    throw new PluginPackageError('not_found', 'No such install preview: it expired, was used, belongs to someone else, or was made on another server instance. Preview the package again');
   }
   if (req.contentHash !== preview.contentHash) {
     throw new PluginPackageError('conflict', `You agreed to ${req.contentHash}, but this preview is ${preview.contentHash}; preview the package again`);

@@ -134,16 +134,19 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   )
 
   // Revocations the marketplace published (in force and cleared), and clearing one (audited).
+  // `enforced` is false for a cleared one, and for a package revocation whose
+  // signing key is revoked since (`signerRevoked`), until a trusted key re-asserts it.
   .get(
     '/revocations',
     async ({ user, principal, set }) => {
       const denied = adminDenied({ set, user, principal });
       if (denied) return denied;
       const { listRevocations } = await import('@/plugins/packages/revocations');
-      return (await listRevocations()).map((r) => ({
+      return (await listRevocations()).map(({ row: r, enforced, signerRevoked }) => ({
         id: r.id, kind: r.kind, name: r.name, version: r.version, keyId: r.keyId, reason: r.reason, registryUrl: r.registryUrl,
         signedByKey: r.signedByKey, indexGeneratedAt: r.indexGeneratedAt.toISOString(), firstSeenAt: r.firstSeenAt.toISOString(),
         clearedAt: r.clearedAt?.toISOString() ?? null, clearedBy: r.clearedBy, clearReason: r.clearReason,
+        scope: 'marketplace' as const, enforced, signerRevoked,
       }));
     },
     { detail: { tags: ['plugin-packages'] } },
@@ -153,8 +156,15 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
     async ({ user, principal, set, params, body }) => {
       const denied = adminDenied({ set, user, principal });
       if (denied) return denied;
-      const { clearRevocation } = await import('@/plugins/packages/revocations');
-      const row = await clearRevocation(params.id, principal.userId, body.reason);
+      const { clearRevocation, RevocationClearError } = await import('@/plugins/packages/revocations');
+      let row: Awaited<ReturnType<typeof clearRevocation>>;
+      try {
+        row = await clearRevocation(params.id, principal.userId, body.reason);
+      } catch (err) {
+        if (!(err instanceof RevocationClearError)) throw err;
+        set.status = 409;
+        return { error: err.message };
+      }
       if (!row) {
         set.status = 404;
         return { error: 'No such revocation in force' };
@@ -164,6 +174,44 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
     {
       params: t.Object({ id: t.String({ pattern: '^[0-9a-fA-F-]{36}$' }) }),
       body: t.Object({ reason: t.String({ minLength: 3, maxLength: 500 }) }),
+      detail: { tags: ['plugin-packages'] },
+    },
+  )
+
+  // Reset one listing pin (src/plugins/packages/listing-pins.ts): the next
+  // index read pins that version afresh. For a version refused as "replaced"
+  // after a legitimate re-publish. Audited with the admin's reason.
+  .delete(
+    '/pins',
+    async ({ user, principal, set, body }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
+      const { currentMarketplace, MARKETPLACE_REGISTRY } = await import('@/plugins/packages/marketplace-config');
+      const { configuredRegistries, clearRegistryCache } = await import('@/plugins/packages/remote');
+      const settings = currentMarketplace();
+      const url = body.registry === MARKETPLACE_REGISTRY
+        ? (settings.state === 'off' ? null : settings.url)
+        : configuredRegistries().find((r) => r.name === body.registry)?.url ?? null;
+      if (url === null) {
+        set.status = 404;
+        return { error: `No registry named "${body.registry}"` };
+      }
+      const { resetPin } = await import('@/plugins/packages/listing-pins');
+      const removed = await resetPin(url, body.name, body.version, principal.userId, body.reason);
+      if (!removed) {
+        set.status = 404;
+        return { error: `No pin for ${body.name} ${body.version} in ${body.registry}` };
+      }
+      clearRegistryCache();
+      return { reset: true, registry: body.registry, name: body.name, version: body.version, contentHash: removed.contentHash, note: 'The next index read pins this version afresh, to the content it lists then.' };
+    },
+    {
+      body: t.Object({
+        registry: t.String({ minLength: 1, maxLength: 100 }),
+        name: t.String({ minLength: 1, maxLength: 50 }),
+        version: t.String({ minLength: 1, maxLength: 100 }),
+        reason: t.String({ minLength: 3, maxLength: 500 }),
+      }),
       detail: { tags: ['plugin-packages'] },
     },
   )

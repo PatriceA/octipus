@@ -742,8 +742,21 @@ export interface MarketplaceListing {
   plugins: MarketplacePluginView[];
   /** Categories present in `plugins`, sorted. */
   categories: string[];
-  /** Registries (from plugins.registries, or the marketplace) that could not be read, and why. */
+  /**
+   * Registries (from plugins.registries, or the marketplace) that could not be
+   * read, and why; and listed versions refused because they replace a
+   * published version ("replaced: refused"), the rest of that index kept.
+   */
   errors: Array<{ registry: string; error: string }>;
+  /** The marketplace's index or keys.json last accepted more than 7 days ago (a banner; the admins are notified once). */
+  stale: MarketplaceStaleFile[];
+}
+
+/** A marketplace file whose last accepted version is old: revocations published since may not have reached this host. */
+export interface MarketplaceStaleFile {
+  file: 'index' | 'keys.json';
+  generatedAt: string;
+  message: string;
 }
 
 /** A newer version of an installed package from the same source (`GET /api/plugin-packages/updates`). */

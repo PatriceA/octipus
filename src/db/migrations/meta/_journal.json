@@ -1261,6 +1261,13 @@
       "when": 1794240000000,
       "tag": "0179_plugin_marketplace",
       "breakpoints": true
+    },
+    {
+      "idx": 180,
+      "version": "7",
+      "when": 1794243600000,
+      "tag": "0180_plugin_marketplace_hardening",
+      "breakpoints": true
     }
   ]
 }

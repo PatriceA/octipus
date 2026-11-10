@@ -58,6 +58,8 @@ export interface ResolvedRegistryInstall {
   options: InstallOptions;
   /** Set when the version needs a newer Octipus (`minOctipus`): the admin's call, not a boundary. */
   incompatible: string | null;
+  /** The tarball must be on the registry's origin, redirects included (a strict registry: the marketplace). */
+  sameOrigin: boolean;
   guidance: PluginGuidanceWarning[];
 }
 
@@ -75,7 +77,8 @@ export async function resolveRegistryInstall(req: RegistryInstallRequest): Promi
   if (!result.fetched) throw new PluginPackageError('invalid', `The registry ${req.registry} cannot be read: ${result.error ?? 'unknown error'}`);
   const listed = result.fetched.index.entries.filter((e) => e.name === req.name);
   if (listed.length === 0) throw new PluginPackageError('not_found', `${req.registry} does not list ${req.name}`);
-  const revoked = await revokedVersions();
+  // The marketplace's revocations apply to installs from it only.
+  const revoked = req.registry === MARKETPLACE_REGISTRY ? await revokedVersions() : new Map<string, string>();
   const appVersion = getAppVersion();
   let entry: IndexEntry | null;
   if (req.version !== undefined) {
@@ -122,7 +125,7 @@ export async function resolveRegistryInstall(req: RegistryInstallRequest): Promi
     ...(incompatible ? [{ code: 'incompatible', message: incompatible }] : []),
     ...(current && sourceClass(current.origin) !== sourceClass(origin) ? [{ code: 'source_change', message: `The source changed from ${sourceClass(current.origin)} to ${sourceClass(origin)} (recorded in the audit log)` }] : []),
   ];
-  return { entry, options, incompatible, guidance };
+  return { entry, options, incompatible, guidance, sameOrigin: source.strict === true };
 }
 
 /** Install `name` from a registry. Returns the row, the signature warnings, and the guidance for the admin. */
@@ -134,7 +137,7 @@ export async function installFromRegistry(
     throw new PluginPackageError('conflict', `${resolved.incompatible}. Confirm to install it anyway (allowIncompatible: true)`);
   }
   const { entry } = resolved;
-  const download = await downloadPackage(entry.url, entry.sha256);
+  const download = await downloadPackage(entry.url, entry.sha256, { sameOrigin: resolved.sameOrigin });
   let row: PluginPackageRow & { warnings: string[] };
   try {
     row = await installFromDirectory(download.root, actorUserId, resolved.options);
