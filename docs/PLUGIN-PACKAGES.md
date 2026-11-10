@@ -54,9 +54,10 @@ server (any language) that the manifest says how to start:
 | `settings` | Non-secret settings as [record type fields](RECORDS.md#record-types), handed to the server as `OCTIPUS_SETTING_<KEY>`. |
 | `secrets` | Credentials, stored in the vault, handed to the server as environment variables under their own `key`. |
 | `commands`, `schedules`, `events`, `prompt`, `context` | What the package adds besides tools, each bound to one of its own tools ([Contributions](#contributions)). |
-
 | `runtime` | `package` (the default: this page) or `in-process` ([Runtimes](#runtimes)). |
 | `entry` | For `in-process` only: the module to load. |
+| `ui` | Pages the package adds to the web app: `{ "dir"?: "ui", "pages": [{ "path", "title", "icon"?, "entry" }] }` ([Pages](#pages)). |
+| `host` | Host API scopes it asks for, from `notes:read`, `notes:write`, `tasks:read`, `tasks:write`, `documents:read`, `notify`; an admin approves them when enabling ([Host API](#host-api)). |
 
 Every problem in a manifest is reported at once; a package that does not fit is
 refused at install.
@@ -828,6 +829,188 @@ macOS release and is used by the system and by other developer tools. If a
 future release removes it, detection finds nothing: `auto` then runs
 unwrapped (`not_enforced`) and `required` refuses to start the server.
 
+## Pages
+
+A package can add pages to the web app: static HTML of its own, shown in a
+sandboxed frame, that talks to the host only through a `postMessage` bridge
+calling the package's **own tools** as the signed-in user.
+
+```json
+"ui": {
+  "dir": "ui",
+  "pages": [{ "path": "dashboard", "title": "Bank dashboard", "icon": "layout-dashboard", "entry": "index.html" }]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `dir` | The directory whose files are served, relative to the package root; default `ui`. Its scripts, styles, images and fonts sit alongside the entry. |
+| `pages[].path` | The page's route under `/plugins/<name>/`: lower-case `a-z0-9-` segments, up to four. |
+| `pages[].title` | Sidebar label and page title. |
+| `pages[].icon` | A lucide icon name (`layout-dashboard`, `list-todo`, `database`, …); an unknown one shows a puzzle piece. |
+| `pages[].entry` | The `.html` file, relative to `dir`. |
+
+Every path is a plain relative path — no `..`, no absolute path, no hidden
+segment, no backslash — or the manifest is refused at install. At most 20 pages.
+
+**What the host serves.** `GET /api/plugin-ui/<name>/<file>` serves a file of
+the package's UI directory, and only:
+
+- while the package is **enabled** and its files still hash to the approved
+  content hash ([Content pinning](#content-pinning); re-hashed at most once a
+  minute, and refused at once while the server reports a mismatch);
+- from inside `dir`: the real path of the file must be the same path under
+  the real UI directory, so no symbolic link (refused at install anyway) leads
+  anywhere else;
+- with a known static type (`.html`, `.css`, `.js`, `.mjs`, `.json`, `.map`,
+  `.txt`, `.svg`, `.png`, `.jpg`, `.gif`, `.webp`, `.ico`, `.woff`, `.woff2`;
+  anything else is a 404), `X-Content-Type-Options: nosniff`, at most 5 MB;
+- under this CSP, `<base>` being `http(s)://<host>/api/plugin-ui/<name>/`:
+
+  ```
+  default-src 'none'; script-src <base>; style-src <base>; img-src <base> data:;
+  font-src <base>; media-src <base>; connect-src 'none'; frame-src 'none';
+  worker-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none';
+  frame-ancestors 'self'; sandbox allow-scripts
+  ```
+
+  No inline script, no `eval`, no `fetch` or WebSocket, no form, no frame, and
+  `sandbox allow-scripts` without `allow-same-origin`: the document has an
+  opaque origin even when opened directly, so it cannot read the app's
+  cookies, storage or DOM. Only the app itself may frame it.
+
+The files are static and the same for everyone, so they are served without a
+sign-in (a sandboxed frame's requests carry no cookie). **Put no data or
+secret in them**: whatever a page shows comes through the bridge.
+
+**In the web app.** Each enabled package's pages are listed by `GET
+/api/plugin-ui` (signed in) and appear in the sidebar under *Plugins*; disabling
+the package removes them. `/plugins/<name>/<path>` shows the page in an
+`<iframe sandbox="allow-scripts">`.
+
+**The bridge.** The page posts a call to its parent, and gets one answer:
+
+```js
+parent.postMessage({ octipus: 'call', id: 1, tool: 'list_accounts', args: {} }, '*');
+window.addEventListener('message', (e) => {
+  if (e.source !== parent || e.data?.octipus !== 'result') return;
+  // { octipus: 'result', id: 1, ok: true, result }          — the MCP tool result
+  // { octipus: 'result', id: 1, ok: false, error, code }    — refused or failed
+});
+```
+
+The parent accepts a message only from that page's frame (its window, with the
+opaque origin `"null"`), only in exactly this shape (`id` a short string or a
+number, `tool` a tool name, `args` a plain object under 100 kB; any other key
+refuses it), at most 4 calls in flight and 10 a second. It then calls
+
+```
+POST /api/plugins/<name>/call/<tool>   { "args": {...}, "confirm"?: true }
+```
+
+as the signed-in user, always with the page's own package name: a page cannot
+address another package's tools. The server refuses a tool the manifest does
+not declare (`404 unknown_tool`), a package that is disabled or has no pages
+(`404`), and more than 20 calls in a burst per user and package (`429`). The
+call takes **the same path as an agent's**: the tool's declared effect, the
+user's permission rules, the protection level, the audit
+(`resource_type = tool`).
+
+**Write and external effects.** A request has no approval channel, so a call the
+rules would ask about (`write` by default, `external` always) is refused with
+`409 approval_required` and the tool's effect. The web app then shows the user
+its own dialog — outside the page's frame, naming the package, the tool, its
+effect and the arguments — and only on *Allow once* repeats the call with
+`confirm: true`, which counts as the approval of that one call (audited as
+`resource_type = plugin_page`, op `call_confirmed`). *Refuse* answers the page
+`denied_by_user`. A DENY rule is never overridden. The page itself cannot set
+`confirm`: it only names a tool and its arguments.
+
+A page can navigate its own frame elsewhere; whatever is loaded there can still
+only ask for the same package's tools, as its own page could.
+
+## Host API
+
+A package can act in Octipus for the user who called it — read their notes,
+create a task — through a narrow host API, limited to the scopes it declares
+and an admin approved:
+
+```json
+"host": ["notes:read", "tasks:write", "notify"]
+```
+
+| Scope | Endpoint | What |
+|---|---|---|
+| — | `GET /api/plugin-host/whoami` | The token's package, tool, scopes, workspace kind and expiry. |
+| `notes:read` | `GET /api/plugin-host/notes?limit=&tag=` | The user's notes in the call's workspace (at most 100), bodies included. |
+| `notes:write` | `POST /api/plugin-host/notes { title, body?, tags? }` | Creates a note; never overwrites (`409 exists` for a taken title). |
+| `tasks:read` | `GET /api/plugin-host/tasks?status=` | The user's own tasks (at most 200). |
+| `tasks:write` | `POST /api/plugin-host/tasks { title, notes?, priority?, dueAt? }` | Creates a task for the user (audited as a task mutation by `plugin:<name>`). |
+| `documents:read` | `GET /api/plugin-host/documents/:id` | One document: metadata and extracted text. |
+| `notify` | `POST /api/plugin-host/notify { title, body? }` | A notification to the calling user, and to nobody else. |
+
+**Approval.** Enabling a package that declares `host` needs every declared
+scope approved: `PATCH /api/plugin-packages/:name { "enabled": true,
+"approveHostScopes": [...] }` (Admin → Plugin packages shows the scopes and
+asks when you enable). Only declared scopes can be approved. The approved set is
+stored with the package (`approvedHostScopes`); an upgrade keeps it, so a
+version that **adds** a scope cannot be enabled until that scope is approved
+too. Disabling, upgrading, uninstalling or changing the approval revokes every
+token in flight.
+
+**The token.** With every `tools/call` to such a package the host sends, in the
+request's own metadata (it works over stdio, where a per-call environment
+variable cannot):
+
+```json
+"_meta": { "octipus/host": {
+  "url": "http://octipus-host.internal",
+  "token": "ocph_…",
+  "expiresAt": "2026-11-10T10:00:35.000Z",
+  "scopes": ["notes:read"]
+} }
+```
+
+The token is minted for that call and revoked when it returns; it expires with
+the call's timeout (`requestTimeoutMs`, default 30 s, plus 5 s). It is bound to:
+
+- **the package** — another package presenting it gets `401`;
+- **the user who triggered the call** (the agent's user, or the signed-in user
+  of a page) **and the workspace it ran in** (a space, or their own);
+- **its scopes**: declared ∩ approved ∩ what the tool's effect allows (a
+  `read` tool never gets `notes:write`, `tasks:write` or `notify`) ∩ what the
+  user holds (the scope's module is on, and the user's own rules do not DENY
+  the matching action of the `notes`, `tasks` or `documents` tool). A call
+  left with no scope carries no token.
+
+Tokens live in memory, as hashes, never outlive their call and are never
+accepted by the rest of the API (they are neither session nor API tokens).
+`OCTIPUS_HOST_URL` is set in the server's environment when it has host scopes.
+
+**Reaching it.** The package calls `http://octipus-host.internal/api/plugin-host/…`
+with `Authorization: Bearer <token>` **through its egress proxy** (`HTTP_PROXY`,
+an absolute-form request; Node's `fetch` needs `NODE_USE_ENV_PROXY=1` or a
+proxy agent). The proxy of a package with host scopes forwards that name, on
+port 80, under `/api/plugin-host/` only, to the host's own API port on loopback
+— never resolved through DNS, never another path (`%`, `..` and empty segments
+are refused), port or loopback service, never through `CONNECT` — drops the
+client's cookies and forwarding headers, and stamps the package name
+(`x-octipus-plugin-egress`). A package without approved scopes reaches nothing
+by that name, even if it lists it in `network`. A package with only `host`
+(and no `network`) still gets a proxy, so under the sandbox it is
+`restricted`, not `offline`.
+
+**What applies on the host.** Each request is checked against the token
+(present, live, this package's, carrying the endpoint's scope), the user (still
+active) and the workspace, re-resolved for the request: a space membership
+removed or a role lowered meanwhile applies at once, and the space role's
+rules (a viewer cannot write) apply as in the user's own agent. A document
+above the package's `maxProtection` is refused (`403 protection_level`; an
+unclear level counts as 4), and one that is read raises the calling session's
+protection level. 60 requests in a burst per package and user, then `429`.
+Every request, allowed or refused, is one audit row (`resource_type =
+plugin_host`, the op, the scope, the status, the tool).
+
 ## Installing and managing
 
 Admins only, on the web page (Admin → Plugin packages, and Browse for the
@@ -852,7 +1035,8 @@ tarball, signed by a trusted publisher ([Remote install](#remote-install)).
 3. **Enable:** `PATCH /api/plugin-packages/:name { "enabled": true }`. Refused
    while a required setting or secret has no value; settings and `enabled` in
    one PATCH are saved together or not at all. A required secret of an enabled
-   package cannot be removed; disable it first.
+   package cannot be removed; disable it first. A package with `host` scopes
+   needs them approved too (`"approveHostScopes": [...]`, [Host API](#host-api)).
 4. **Upgrade:** install again with `"upgrade": true` (`"allowSignerChange"`
    and `"allowDowngrade"` for another publisher or an older version, see
    [Signed packages](#signed-packages)). Once the new files are copied and
