@@ -27,6 +27,7 @@ import {
   PanelLeftClose,
   Puzzle,
   Settings,
+  ShieldCheck,
   Sparkles,
   Tags,
   Telescope,
@@ -150,9 +151,6 @@ export function Sidebar() {
     ? { label: 'Plugins', items: (pluginPages.data ?? []).map((p) => ({ name: p.title, href: pluginPageHref(p), icon: PLUGIN_ICONS[p.icon ?? ''] ?? Puzzle })) }
     : null;
   const groups = [...navGroups.filter(group => group.label !== 'Settings'), ...(pluginGroup ? [pluginGroup] : [])].map(g => ({ ...g, items: g.items.filter(item => (!item.adminOnly || user?.isAdmin) && !offPage(item.href)) })).map(group => {
-    if (group.label === 'Settings' && user?.isAdmin) {
-      return { ...group, items: [...group.items, { name: 'users', href: '/admin/users', icon: Users }] };
-    }
     if (group.label === 'Automation' && pulse) {
       return { ...group, items: group.items.map((item) => item.href === '/agents' ? { ...item, pulse } : item) };
     }
@@ -174,7 +172,7 @@ export function Sidebar() {
     .filter((href) => href === '/' ? pathname === '/' : pathname === href || pathname.startsWith(`${href}/`) )
     .sort((a, b) => b.length - a.length)[0];
 
-  const settingsActive = ['/settings', '/models', '/mcp', '/tools', '/permissions', '/persona', '/profiles', '/memory', '/skills', '/topics', '/eval', '/secrets', '/admin'].some(path => pathname === path || pathname.startsWith(`${path}/`));
+  const settingsActive = ['/settings', '/models', '/mcp', '/tools', '/permissions', '/persona', '/profiles', '/memory', '/skills', '/topics', '/eval', '/secrets'].some(path => pathname === path || pathname.startsWith(`${path}/`));
   return (
     <>
     <button type="button" className="mobile-nav-toggle" aria-label={mobileOpen ? "Close navigation" : "Open navigation"} aria-expanded={mobileOpen} onClick={() => { if (!mobileOpen && collapsed) toggle(); setMobileOpen(!mobileOpen); }}><PanelLeft size={20} /></button>
@@ -261,6 +259,7 @@ export function Sidebar() {
         ))}
       </nav>
 
+      {user?.isAdmin && <Link href="/admin" onClick={() => setMobileOpen(false)} className={`app-nav-item admin-nav-anchor flex items-center gap-3 p-3 mx-2 mb-1 rounded-lg ${pathname === '/admin' || pathname.startsWith('/admin/') ? 'nav-selected' : ''}`} aria-label="Administration" aria-current={pathname === '/admin' || pathname.startsWith('/admin/') ? 'page' : undefined} title={collapsed ? 'Administration' : undefined}><ShieldCheck size={17} aria-hidden />{!collapsed && <span>Administration</span>}</Link>}
       <Link href="/settings" onClick={() => setMobileOpen(false)} className={`app-nav-item settings-nav-anchor flex items-center gap-3 p-3 m-2 rounded-lg ${settingsActive ? 'nav-selected' : ''}`} aria-label="Settings" aria-current={pathname === '/settings' ? 'page' : undefined} title={collapsed ? 'Settings' : undefined}><Settings size={17} aria-hidden />{!collapsed && <span>Settings</span>}</Link>
       {/* User identity lives in the header profile dropdown (single source of
           truth); the duplicate sidebar card was removed per QA. */}

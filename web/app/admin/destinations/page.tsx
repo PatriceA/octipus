@@ -79,7 +79,7 @@ export default function AdminDestinationsPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="section-label">notification destinations</h2>
+        <h2 className="section-label">Notification destinations</h2>
         <p className="mt-1 text-xs text-on-surface-variant">
           Shared chats that hooks, notifications, monitors and unattended agents may message besides each
           user&apos;s own linked chats.

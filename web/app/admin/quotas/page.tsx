@@ -112,7 +112,7 @@ export default function AdminQuotasPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
-        <h2 className="section-label">quotas</h2>
+        <h2 className="section-label">Quotas & budgets</h2>
         <span className="text-xs text-on-surface-variant">
           (* indicates a per-user override; everything else inherits the global default)
         </span>

@@ -46,6 +46,6 @@ export const settingsGroups: Array<{ name: string; description: string; icon: st
     { title: 'Advanced configuration', tab: 'configuration', keywords: 'gateway logging API settings', admin: true },
     { title: 'Tools', href: '/tools', keywords: 'tool inventory', admin: true },
     { title: 'Evaluations', href: '/eval', keywords: 'tests benchmarks', admin: true },
-    { title: 'Users', href: '/admin/users', keywords: 'users accounts roles', admin: true },
+    { title: 'Administration', href: '/admin', keywords: 'users accounts roles organizations quotas budgets plugins audit federation admin', admin: true },
   ] },
 ];

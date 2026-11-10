@@ -63,7 +63,7 @@ export default function AdminOrgsPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="section-label">organizations</h2>
+        <h2 className="section-label">Organizations</h2>
         <button
           type="button"
           onClick={() => { setShowCreate(true); setError(null); }}
