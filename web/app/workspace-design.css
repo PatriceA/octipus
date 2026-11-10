@@ -42,3 +42,8 @@
 @media(max-width:700px){.session-title-row{padding:12px;gap:10px}.session-chat-header>[aria-label="Execution environment"]{padding:0 12px 8px}.session-tools-row{padding:0 12px 4px;gap:0 16px}}
 .session-tools-row>[data-testid="session-usage"]{min-width:0;max-width:100%;flex-shrink:1;overflow-wrap:anywhere}
 .session-tools-row>section{min-width:min(150px,100%);max-width:100%;overflow-wrap:anywhere}
+
+/* Companion keeps its lavender identity in navigation and session surfaces. */
+.app-sidebar .companion-nav-item.nav-selected{background:#c9bafa!important;color:#2b2041!important;box-shadow:inset 3px 0 #eee7ff}
+.session-companion-shortcut{background:var(--color-secondary-container);border:1px solid color-mix(in srgb,var(--color-secondary) 35%,transparent);border-radius:7px;padding:6px 10px}
+.session-companion-shortcut:hover{border-color:var(--color-secondary)}

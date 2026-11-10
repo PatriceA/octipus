@@ -2133,14 +2133,14 @@ export default function ChatPage() {
             <span className="text-primary" aria-hidden>&gt; </span>
             {activeSessionTitle}
           </button>
-          {!isCompanionChat && companionSessionId && <button type="button" onClick={() => selectSession(companionSessionId)} className="inline-flex items-center gap-1 text-xs text-primary whitespace-nowrap"><Sparkles className="h-3.5 w-3.5" aria-hidden />Companion</button>}
+          {!isCompanionChat && companionSessionId && <button type="button" onClick={() => selectSession(companionSessionId)} className="session-companion-shortcut inline-flex items-center gap-1 text-xs text-secondary whitespace-nowrap"><Sparkles className="h-3.5 w-3.5" aria-hidden />Companion</button>}
           <button type="button" onClick={createSession} className="text-xs text-primary whitespace-nowrap">New work</button>
         </div>
         <EnvironmentSelector key={`environment-${activeSessionId ?? 'new'}`} sessionId={activeSessionId} running={isLoading} />
-        {isCompanionChat && <section aria-label="Companion chat identity" className="border-b border-primary/20 bg-primary/5 px-4 py-3">
+        {isCompanionChat && <section aria-label="Companion chat identity" className="border-b border-secondary/30 bg-secondary-container px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="flex items-center gap-2 text-sm font-medium text-primary"><Sparkles className="h-4 w-4" aria-hidden />Your cross-project coordinator</p>
-            <Link href="/companion" className="text-xs text-primary underline">Goals & supervision settings</Link>
+            <p className="flex items-center gap-2 text-sm font-medium text-secondary"><Sparkles className="h-4 w-4" aria-hidden />Your cross-project coordinator</p>
+            <Link href="/companion" className="text-xs text-secondary underline">Goals & supervision settings</Link>
           </div>
           <p className="mt-1 text-xs text-on-surface-variant">Plan work, follow your projects, or save an idea for later. You can also work directly in any session chat.</p>
           <p className="mt-1 text-xs text-on-surface-variant">{companionChat.data?.modelName} · {companionChat.data?.enabled ? 'Supervision enabled' : 'Supervision disabled'}</p>
