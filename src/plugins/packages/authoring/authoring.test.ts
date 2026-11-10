@@ -19,13 +19,14 @@ import { pluginDevTool } from '@/tools/plugin-dev';
 import { MAX_PROMPT_CHARS } from '../contributions/prompt';
 import { manifestSchema, parseManifest } from '../manifest';
 import { contributionProblems } from '../manifest-contributions';
+import { defaultMaxProtection } from '../service';
 import { MAX_PACKAGE_FILES } from '../tree';
 import { manifestJsonSchema, PLUGIN_DEV_TOOLS, pluginApiContract, pluginDevToolName } from './contract';
 import { PLUGIN_AUTHORING_SKILL } from './skill';
 import { listTemplates, readTemplate, templatesRoot } from './templates';
 import { IN_PROCESS_REFUSAL, validatePluginDirectory } from './validate';
 
-const contract = () => pluginApiContract({ canInstall: false, network: () => ({ state: 'not_enforced', detail: 'test' }), adminPage: 'http://x/admin/plugins' });
+const contract = () => pluginApiContract({ canInstall: false, network: () => ({ state: 'not_enforced', detail: 'test' }), adminPage: 'http://x/admin/plugins', shellSandboxed: false });
 
 /** A copy of a template in a temp dir, its manifest changed by `change`. */
 function copyOf(template: string, change?: (m: Record<string, unknown>) => Record<string, unknown>): string {
@@ -89,6 +90,11 @@ describe('plugin_api contract', () => {
     expect((c.contributions.cron as { fields: unknown[] }).fields).toHaveLength(5);
     expect(c.sandbox.thisHostWithHosts).toEqual({ state: 'not_enforced', detail: 'test' });
     expect(c.install.youCanInstall).toBe(false);
+    expect(c.sandbox.shellCommandsSandboxed).toBe(false);
+    expect((await pluginApiContract({ canInstall: true, network: () => ({ state: 'x', detail: 'x' }), adminPage: 'x', shellSandboxed: true })).sandbox.shellCommandsSandboxed).toBe(true);
+    // The default protection level, from the function the server uses.
+    expect(c.defaultMaxProtection.examples).toEqual({ nothing: 4, networkHosts: 1, hostWebRead: 1, uiPages: 1 });
+    expect(c.defaultMaxProtection.examples.networkHosts).toBe(defaultMaxProtection({ network: ['a.example.com'] }));
     expect(c.templates.map((t) => t.name)).toEqual(['tool-only', 'with-command', 'with-schedule']);
   });
 
@@ -235,6 +241,8 @@ describe('the skill', () => {
     }
     expect(PLUGIN_AUTHORING_SKILL.content).toContain('disabled');
     expect(PLUGIN_AUTHORING_SKILL.content).toContain('youCanInstall');
+    // Runs agent-written code on the host only inside the shell sandbox.
+    expect(PLUGIN_AUTHORING_SKILL.content).toContain('sandbox.shellCommandsSandboxed');
     expect(PLUGIN_AUTHORING_SKILL.content).toContain(MCP_PROTOCOL_VERSION);
     expect(PLUGIN_AUTHORING_SKILL.content).not.toMatch(/plugin_enable|plugin_approve/);
   });

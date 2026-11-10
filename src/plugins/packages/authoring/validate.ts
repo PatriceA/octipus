@@ -153,7 +153,7 @@ export async function validatePluginDirectory(
   problems.push(...await contributionInstallProblems(manifest, dir, installed));
   const current = installed.find((p) => p.name === manifest.name);
   if (current) {
-    warnings.push(`${manifest.name} is installed (version ${current.version}): plugin_install with upgrade: true replaces it, only if an agent installed it`);
+    warnings.push(`${manifest.name} is installed (version ${current.version}): plugin_install with upgrade: true replaces it, only if an agent of the same user installed it`);
   }
   return result(manifest, treeOk ? await hashPackageContent(dir, manifest) : null);
 }

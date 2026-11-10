@@ -83,7 +83,9 @@ directory (`OCTIPUS_PLUGIN_DATA_DIR`).
    contribution and host-API contract, and an `install_plugin` action that
    installs the agent's bundle **disabled**: an admin reviews the content
    hash on the admin page and enables it. The agent never gets in-process
-   code, and nothing it writes runs before a person approves those exact bytes.
+   code, and Octipus does not start anything it writes before a person
+   approves those exact bytes (the agent's own shell is held by the shell
+   sandbox and its ASK prompts, see PLUGIN-PACKAGES.md).
 
 ## Phase 3, the reader: declaration → contributions
 

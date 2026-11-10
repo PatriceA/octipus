@@ -16,7 +16,7 @@ import { z } from 'zod';
 import { DEFAULT_REQUEST_TIMEOUT_MS, MCP_PROTOCOL_VERSION } from '@/mcp/protocol';
 import { MINIMAL_ENV_NAMES } from '@/security/child-env';
 import { proxyEnv } from '@/security/egress-proxy';
-import { getSandboxMode } from '@/security/shell-sandbox';
+import { activeSandboxRunner, getSandboxMode } from '@/security/shell-sandbox';
 import { MAX_PLUGIN_SECRET_LENGTH, PLUGIN_MANIFEST_FILE, PLUGIN_PACKAGE_API_VERSION, type PluginEventType, type PluginManifest, type PluginRuntime, type PluginToolEffect } from '@/shared/plugin-package';
 import { MAX_RESULT_CHARS } from '../contributions/call';
 import { CONTEXT_TIMEOUT_MS, MAX_CONTEXT_CHARS } from '../contributions/context';
@@ -26,6 +26,7 @@ import { MAX_PROMPT_CHARS } from '../contributions/prompt';
 import { MAX_CONCURRENT_RUNS } from '../contributions/schedules';
 import { SIGNATURE_FILE } from '../integrity';
 import { manifestSchema, settingEnvName } from '../manifest';
+import { defaultMaxProtection } from '../service';
 import { MAX_CONTRIBUTION_INPUT_CHARS } from '../manifest-contributions';
 import { MAX_PACKAGE_BYTES, MAX_PACKAGE_FILES } from '../tree';
 import { pluginDevToolName } from './names';
@@ -63,6 +64,7 @@ export interface PluginApiContract {
   manifestSchema: Record<string, unknown>;
   /** The checks the schema alone does not express. */
   manifestRules: string[];
+  defaultMaxProtection: { rule: string; examples: Record<string, number> };
   runtimes: Record<PluginRuntime, string>;
   toolEffects: Record<PluginToolEffect, string>;
   contributions: Record<string, unknown>;
@@ -85,6 +87,8 @@ export async function pluginApiContract(opts: {
   canInstall: boolean;
   network: (m: PluginManifest) => { state: string; detail: string };
   adminPage: string;
+  /** Whether shell commands run sandboxed here (default: what the shell tool would do now). */
+  shellSandboxed?: boolean;
 }): Promise<PluginApiContract> {
   const example = (hosts: string[]) => opts.network({ name: 'example', version: '0.0.0', apiVersion: PLUGIN_PACKAGE_API_VERSION, title: 'x', description: 'x', network: hosts });
   return {
@@ -101,8 +105,18 @@ export async function pluginApiContract(opts: {
       `prompt.file: a .md file inside the package (no .., no link out), at most ${MAX_PROMPT_CHARS} characters; not the manifest or ${SIGNATURE_FILE}.`,
       `server.command and server.args may not name ${SIGNATURE_FILE}; files they name must be in the package.`,
       'A setting may not collide with a secret: setting <key> becomes the variable OCTIPUS_SETTING_<KEY>.',
-      'Left out, maxProtection is 1 for a package with network hosts and 4 for one without: a call from a conversation above it is refused.',
+      'maxProtection: the highest protection level (1-4) of a conversation that may call the package; a call from one above it is refused. Left out, it is derived (see defaultMaxProtection).',
     ],
+    defaultMaxProtection: {
+      rule: 'When maxProtection is left out: 1 if the package has network hosts, the host scope web:read or ui pages (each can carry data out), otherwise 4.',
+      // Computed by the function the server uses, so the rule above cannot drift from it unnoticed (a unit test compares them).
+      examples: {
+        nothing: defaultMaxProtection({}),
+        networkHosts: defaultMaxProtection({ network: ['api.example.com'] }),
+        hostWebRead: defaultMaxProtection({ host: ['web:read'] as PluginManifest['host'] }),
+        uiPages: defaultMaxProtection({ ui: { pages: [{ path: 'main', title: 'Main', entry: 'index.html' }] } as PluginManifest['ui'] }),
+      },
+    },
     runtimes: RUNTIMES,
     toolEffects: EFFECTS,
     contributions: {
@@ -157,6 +171,8 @@ export async function pluginApiContract(opts: {
       files: 'The package directory is read-only and its data directory the only writable one (a private /tmp besides).',
       network: 'Only the declared hosts, through the egress proxy: an exact name, *.example.com for its subdomains (not the apex), on 443 and 80 unless a port is given. Addresses that resolve to private, loopback or link-local ranges are refused.',
       mode: getSandboxMode(),
+      // Whether the shell tool's commands run in a sandbox on this host: only then may an agent start its server locally to test it.
+      shellCommandsSandboxed: opts.shellSandboxed ?? activeSandboxRunner() !== null,
       thisHostWithHosts: example(['api.example.com']),
       thisHostWithoutHosts: example([]),
     },
@@ -168,8 +184,8 @@ export async function pluginApiContract(opts: {
     install: {
       youCanInstall: opts.canInstall,
       who: 'Only an admin\'s agent may install, and the admin approves the call. Anyone may validate.',
-      what: 'A package-runtime directory inside your workspace, copied and hashed; installed DISABLED. Nothing it contains runs until an admin reviews the content hash and enables it.',
-      upgrade: 'upgrade: true replaces a package an agent installed (it is disabled again); a package a person installed is never replaced.',
+      what: 'A package-runtime directory inside your own workspace, copied and hashed; installed DISABLED. Octipus does not start it until an admin reviews the content hash and enables it.',
+      upgrade: 'upgrade: true replaces a package an agent of the same user installed (it is disabled again); never one a person or another user\'s agent installed, nor a name of a plugin shipped with Octipus.',
       adminPage: opts.adminPage,
       enable: 'There is no tool to enable or approve: an admin does it on the admin page or with `octi plugin` (PATCH /api/plugin-packages/<name> { "enabled": true }).',
     },

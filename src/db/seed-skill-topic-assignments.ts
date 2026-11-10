@@ -14,7 +14,6 @@ const DEFAULT_ASSIGNMENTS: Array<{ skillId: string; topic: string; isActive: boo
   { skillId: 'data-structures', topic: 'coding', isActive: true },
   { skillId: 'api-design', topic: 'coding', isActive: true },
   { skillId: 'performance-engineering', topic: 'coding', isActive: true },
-  { skillId: 'plugin-development', topic: 'coding', isActive: false },
   { skillId: 'octipus-plugin-package', topic: 'coding', isActive: true },
 
   // ── Architecture topic ──
@@ -112,6 +111,10 @@ const RETIRED_ASSIGNMENTS: Array<{ skillId: string; topic: string }> = [
   // See docs/postmortems/2026-07-07-run-743d4b66-world-cup-research.md (RC3):
   // made a small research model drift into writing documentation.
   { skillId: 'technical-writing', topic: 'research' },
+  // Superseded by octipus-plugin-package (creator mode): it taught writing
+  // in-process extensions; an existing install's active row would keep
+  // injecting it into coding workers.
+  { skillId: 'plugin-development', topic: 'coding' },
 ];
 
 export async function seedSkillTopicAssignments(): Promise<void> {

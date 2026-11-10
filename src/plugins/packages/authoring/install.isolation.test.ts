@@ -13,7 +13,7 @@
  * Backed by ephemeral PGlite.
  */
 import { randomBytes } from 'node:crypto';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -28,6 +28,7 @@ process.env.WORKSPACE_PATH ??= mkdtempSync(join(tmpdir(), 'octipus-authoring-ws-
 
 const admin = '33333333-3333-4333-8333-333333333333';
 const member = '44444444-4444-4444-8444-444444444444';
+const otherAdmin = '66666666-6666-4666-8666-666666666666';
 const session = '55555555-5555-4555-8555-555555555555';
 
 const ctx = (userId: string): AgentContext => ({ id: 'agent-1', userId, sessionId: '', role: 'general', status: 'running' } as unknown as AgentContext);
@@ -64,6 +65,7 @@ beforeAll(async () => {
   await runMigrations();
   await executeRaw(`INSERT INTO users (id, username, is_admin) VALUES ('${admin}', 'admin', true) ON CONFLICT DO NOTHING`);
   await executeRaw(`INSERT INTO users (id, username, is_admin) VALUES ('${member}', 'member', false) ON CONFLICT DO NOTHING`);
+  await executeRaw(`INSERT INTO users (id, username, is_admin) VALUES ('${otherAdmin}', 'admin2', true) ON CONFLICT DO NOTHING`);
   const { initializeVault } = await import('@/security/vault');
   await initializeVault();
 });
@@ -81,9 +83,9 @@ describe('plugin_install', () => {
   test('only a directory inside the agent\'s own workspace', async () => {
     const { workspacePackageDir } = await import('@/tools/plugin-dev');
     const outside = mkdtempSync(join(tmpdir(), 'octipus-outside-'));
-    expect(() => workspacePackageDir(outside, ctx(admin))).toThrow(/outside allowed workspace|not a directory inside your workspace/);
+    expect(() => workspacePackageDir(outside, ctx(admin))).toThrow(/outside allowed workspace|not a directory inside your own workspace/);
     expect(() => workspacePackageDir('../../..', ctx(admin))).toThrow();
-    expect(() => workspacePackageDir('.', ctx(admin))).toThrow(/not a directory inside your workspace/);
+    expect(() => workspacePackageDir('.', ctx(admin))).toThrow(/not a directory inside your own workspace/);
     // Another user's workspace is outside this one's.
     const theirs = await writeTemplate(member, 'tool-only', 'plugins/theirs');
     expect(() => workspacePackageDir(theirs, ctx(admin))).toThrow();
@@ -160,6 +162,66 @@ describe('plugin_install', () => {
     expect((await svc.packageView('person-made')).version).toBe('0.1.0');
   });
 
+  test('outside the user\'s own workspaces is refused even when the sandbox root is broad', async () => {
+    const { workspacePackageDir } = await import('@/tools/plugin-dev');
+    const broad = (userId: string) => ({ ...ctx(userId), metadata: { projectPath: '/' } }) as unknown as AgentContext;
+    const theirs = await writeTemplate(member, 'tool-only', 'plugins/broad-theirs');
+    expect(() => workspacePackageDir(theirs, broad(admin))).toThrow(/not a directory inside your own workspace/);
+    expect(() => workspacePackageDir('/etc', broad(admin))).toThrow(/not a directory inside your own workspace/);
+  });
+
+  test('another user\'s agent may not upgrade it, and a shipped plugin\'s name is refused', async () => {
+    await writeTemplate(otherAdmin, 'tool-only', 'plugins/agent-tools', (m) => ({ ...m, name: 'agent-tools', version: '0.3.0' }));
+    expect(await install(otherAdmin, 'plugins/agent-tools', true)).toMatchObject({ installed: false, error: expect.stringContaining('another user\'s agent') });
+
+    const bundled = mkdtempSync(join(tmpdir(), 'octipus-bundled-'));
+    mkdirSync(join(bundled, 'shipped'));
+    writeFileSync(join(bundled, 'shipped', 'octipus-plugin.json'), '{}');
+    const { setBundledRoot } = await import('../bundled');
+    setBundledRoot(bundled);
+    try {
+      await writeTemplate(admin, 'tool-only', 'plugins/shipped', (m) => ({ ...m, name: 'shipped' }));
+      expect(await install(admin, 'plugins/shipped')).toMatchObject({ installed: false, error: expect.stringContaining('shipped with Octipus') });
+    } finally {
+      setBundledRoot(null);
+    }
+    const svc = await import('../service');
+    await expect(svc.packageView('shipped')).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  test('what changes in the source after validation is refused: the install checks only its own copy', async () => {
+    const svc = await import('../service');
+    const manifestOf = (dir: string) => join(dir, 'octipus-plugin.json');
+    const swap = (dir: string, change: (m: Record<string, unknown>) => Record<string, unknown>) =>
+      writeFileSync(manifestOf(dir), JSON.stringify(change(JSON.parse(readFileSync(manifestOf(dir), 'utf8')))));
+    try {
+      // Runtime switched to in-process between the checks and the copy.
+      await writeTemplate(admin, 'tool-only', 'plugins/racy', (m) => ({ ...m, name: 'racy' }));
+      svc._setInstallHookForTesting((source) => swap(source, (m) => {
+        const { server: _s, tools: _t, settings: _x, ...rest } = m;
+        return { ...rest, name: 'racy', runtime: 'in-process', entry: 'server.mjs' };
+      }));
+      expect(await install(admin, 'plugins/racy')).toMatchObject({ installed: false, error: expect.stringContaining('only runtime "package" is accepted') });
+
+      // A link added after the first look.
+      const linked = await writeTemplate(admin, 'tool-only', 'plugins/racy-link', (m) => ({ ...m, name: 'racy-link' }));
+      svc._setInstallHookForTesting(() => symlinkSync('/etc/hostname', join(linked, 'stolen')));
+      expect(await install(admin, 'plugins/racy-link')).toMatchObject({ installed: false, error: expect.stringContaining('symbolic link') });
+
+      // Renamed to another package (one a person installed) after validation.
+      await writeTemplate(admin, 'tool-only', 'plugins/racy-name', (m) => ({ ...m, name: 'racy-name' }));
+      svc._setInstallHookForTesting((source) => swap(source, (m) => ({ ...m, name: 'person-made' })));
+      expect(await install(admin, 'plugins/racy-name')).toMatchObject({ installed: false, error: expect.stringContaining('not the expected "racy-name"') });
+    } finally {
+      svc._setInstallHookForTesting(null);
+    }
+    const names = (await svc.listPackages()).map((p) => p.name);
+    expect(names.filter((n) => n.startsWith('racy'))).toEqual([]);
+    expect((await svc.packageView('person-made')).version).toBe('0.1.0');
+    const { readdirSync } = await import('node:fs');
+    expect(readdirSync(svc.pluginsRoot()).filter((n) => n.includes('.installing-'))).toEqual([]);
+  });
+
   test('once an admin enables it, the template server runs and its command answers', async () => {
     await writeTemplate(admin, 'with-command', 'plugins/agent-cmd', (m) => ({ ...m, name: 'agent-cmd' }));
     expect(await install(admin, 'plugins/agent-cmd')).toMatchObject({ installed: true, enabled: false });
@@ -167,6 +229,8 @@ describe('plugin_install', () => {
     expect(getCommandRegistry().get('wordcount')).toBeUndefined();
 
     const svc = await import('../service');
+    // A person approves what it adds for every user (the command), then enables it.
+    await svc.approveContributions('agent-cmd', (await svc.packageView('agent-cmd')).contributions.hash as string, admin);
     await svc.setEnabled('agent-cmd', true, admin);
     const view = await svc.packageView('agent-cmd');
     expect(view.enabled).toBe(true);

@@ -24,7 +24,7 @@ export const PLUGIN_AUTHORING_SKILL_CONTENT = `Use this when the user wants a ne
 2. **Start from a template.** \`${template}\` lists them; \`${template}\` with \`name\` returns its files. Write every file into one new directory of your workspace with the filesystem tool (e.g. \`plugins/<name>/\`). Rename the package: \`name\` in ${PLUGIN_MANIFEST_FILE} (lower-case, digits, \`-\`) and \`NAME\` in server.mjs.
 3. **Implement.** Keep the server dependency-free (plain \`.mjs\`, Node built-ins) or vendor what it needs inside the package. Every tool the server lists must be declared in \`tools\` with the narrowest true effect: \`read\` reads, \`write\` changes data in the connected system, \`external\` acts outside the organisation (payments, messages to people). Declare every host it talks to in \`network\`; nothing else is reachable under the sandbox. Keep state only in \`OCTIPUS_PLUGIN_DATA_DIR\`; the package directory is read-only and its files are pinned by hash. Credentials are \`secrets\` (an admin sets them), never in files. Log to stderr; stdout carries only JSON-RPC.
 4. **Validate.** \`${validate}\` with the directory. Fix every problem and validate again until \`ok\` is true. Read the warnings too.
-5. **Test the server, if you have a shell.** From the package directory, with a scratch data directory outside it:
+5. **Test the server, only in a sandboxed shell.** Only if \`sandbox.shellCommandsSandboxed\` in \`${api}\` is true (and you have a shell): starting the server runs the code you wrote, and without the shell sandbox it would run as the Octipus server's user, with its files and network. Otherwise skip this step: do not run the server, rely on \`${validate}\`, and say in the hand-over that the server was not run. From the package directory, with a scratch data directory outside it:
    \`\`\`
    printf '%s\\n' \\
      '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"${MCP_PROTOCOL_VERSION}","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}' \\
@@ -35,11 +35,12 @@ export const PLUGIN_AUTHORING_SKILL_CONTENT = `Use this when the user wants a ne
    \`\`\`
    Each request must get exactly one line back with its \`id\`; a tool failure is a result with \`isError: true\`. Call every tool once. Remove anything the test wrote into the package directory, then validate again.
 6. **Install.** Only if \`install.youCanInstall\` is true: \`${install}\` with the directory (\`upgrade: true\` to replace a version you installed before). The user is asked to approve. It installs the package **disabled** and returns its content hash. If you may not install, stop after step 5 and tell the user where the package is so an admin can install it.
-7. **Hand over.** Tell the user plainly: the plugin is installed but disabled; nothing in it runs until an admin opens the admin page (the \`review\` text has the link), checks the content hash you report, its tools, effects and hosts, sets any required settings and secrets, and enables it. You cannot enable or approve it. Any later change to its files needs a new install and a new review.
+7. **Hand over.** Tell the user plainly: the plugin is installed but disabled; Octipus does not start it until an admin opens the admin page (the \`review\` text has the link), checks the content hash you report, its tools, effects and hosts, sets any required settings and secrets, approves what it adds for every user (commands, schedules, events, prompt, context), and enables it. You cannot enable or approve it. Any later change to its files needs a new install and a new review.
 
 ## Rules
 
 - Never claim the plugin works or is active before an admin enabled it.
+- Never run code of the plugin on the host outside the shell sandbox (step 5).
 - Never ask the user to paste a secret into the chat; declare it in \`secrets\` and let the admin set it.
 - A schedule runs unattended as the installing admin: a \`write\` tool needs their ALLOW rule, an \`external\` one never runs. Prefer \`read\` tools for schedules and context.
 - Do not write into another installed package or the plugin store; work only in your workspace.`;

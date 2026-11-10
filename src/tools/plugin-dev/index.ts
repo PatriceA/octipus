@@ -30,7 +30,7 @@ import { listTemplates, readTemplate } from '@/plugins/packages/authoring/templa
 import { validatePluginDirectory } from '@/plugins/packages/authoring/validate';
 import { networkStatus } from '@/plugins/packages/service';
 import { executionEnvironmentFor } from '@/security/execution-environments';
-import { isInside } from '@/security/workspace-fs';
+import { isInside, userWorkspacesDir } from '@/security/workspace-fs';
 import { toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema } from '../base-tool';
 import { filesystemTool } from '../filesystem';
@@ -56,8 +56,12 @@ const real = (path: string): string => {
 
 /**
  * The package directory an agent names, resolved like the filesystem tool
- * resolves its reads, and refused unless it is inside the agent's own
- * workspace (not its root, not the plugin store, not a remote environment).
+ * resolves its reads, and refused unless it is inside both the agent's
+ * sandbox root and the calling user's own Octipus workspaces
+ * (`<dataRoot>/users/<id>/workspaces`): an execution environment whose root
+ * is broad (`/`, a home directory) does not open other users' workspaces,
+ * `/etc` or the server's files. Never the sandbox root itself, the plugin
+ * store or a remote environment.
  */
 export function workspacePackageDir(rawPath: unknown, context: AgentContext): string {
   if (typeof rawPath !== 'string' || !rawPath.trim()) throw new ToolNotExecutedError(PLUGIN_DEV_TOOL_ID, 'path: the plugin directory in your workspace');
@@ -67,8 +71,9 @@ export function workspacePackageDir(rawPath: unknown, context: AgentContext): st
   const { path, root } = filesystemTool.resolveForRead(rawPath.trim(), context);
   const workspace = real(root);
   const dir = real(path);
-  if (!isInside(workspace, dir) || dir === workspace) {
-    throw new ToolNotExecutedError(PLUGIN_DEV_TOOL_ID, `${rawPath} is not a directory inside your workspace; write the plugin under your workspace first (filesystem write_file)`);
+  const own = real(userWorkspacesDir(context.userId));
+  if (!isInside(workspace, dir) || dir === workspace || !isInside(own, dir) || dir === own) {
+    throw new ToolNotExecutedError(PLUGIN_DEV_TOOL_ID, `${rawPath} is not a directory inside your own workspace (${own}); write the plugin there first (filesystem write_file)`);
   }
   if (pluginStoreDirs().some((store) => isInside(real(store), dir))) {
     throw new ToolNotExecutedError(PLUGIN_DEV_TOOL_ID, `${rawPath} is in the plugin store; point at the copy you wrote in your workspace`);
@@ -170,10 +175,10 @@ export class PluginDevTool extends BaseTool {
 
     this.registerTool(
       PLUGIN_DEV_TOOLS.install,
-      'Install a validated plugin package (runtime "package") from your workspace. It is installed DISABLED: nothing in it '
-        + 'runs until an admin reviews its content hash on the admin page and enables it — tell the user that. Asks the user '
+      'Install a validated plugin package (runtime "package") from your workspace. It is installed DISABLED: Octipus does not '
+        + 'start it until an admin reviews its content hash on the admin page and enables it — tell the user that. Asks the user '
         + 'for approval; only an admin\'s agent may install. Never installs runtime "in-process". With upgrade: true it replaces '
-        + 'a package an agent installed (disabled again); never one a person installed.',
+        + 'a package an agent of the same user installed (disabled again); never one a person or another user\'s agent installed, nor the name of a plugin shipped with Octipus. Only a directory in your own workspace.',
       createParameterSchema({
         path: { type: 'string', description: 'The plugin directory in your workspace', required: true },
         upgrade: { type: 'boolean', description: 'Replace the installed version of a package an agent installed' },

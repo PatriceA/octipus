@@ -1278,9 +1278,21 @@ Every change is in the audit log (`resource_type = plugin_package`).
 
 An agent can write a `package` plugin and install it **disabled**; an admin
 reviews its content hash and enables it ("creator mode",
-[plan phase 4](plans/plugins-everything.md)). Nothing the agent writes runs
-before a person has approved those exact bytes, and the agent never gets code
-into the server process.
+[plan phase 4](plans/plugins-everything.md)). Octipus does not start a
+package the agent wrote before a person has approved those exact bytes, and
+the agent never gets code into the server process.
+
+**How far that guarantee goes.** It covers what Octipus runs as a plugin. It
+is only as strong as the agent's other tools: an agent with a shell can run
+the code it wrote there, and a shell command runs inside the shell sandbox
+only when `security.shellSandbox` is on (`auto` where a runner exists, or
+`required`). With the sandbox off, a shell command the user approves runs as
+the Octipus server's user, with its files, its network and its environment
+minus the stripped secrets, so "a person approves" then rests on the ASK
+prompts alone. The skill tells the agent to start its server for a local test
+only when `plugin_api` reports `sandbox.shellCommandsSandboxed: true`, and
+to skip that test otherwise. **On installs that use creator mode, set
+`security.shellSandbox: required`.**
 
 The built-in tool group `plugin_dev` (in the general and coding roles; not in a
 shared space) has four tools, and the system skill **Write an Octipus plugin**
@@ -1310,15 +1322,30 @@ agent's files go and asks for its writes.
   install the directory from the admin page or the API. (`plugin_api` says
   `youCanInstall: false` up front.) The call itself is a `write` the user
   approves, so the admin says yes to each install.
-- **A path outside the agent's own workspace** (resolved as the filesystem
-  tool resolves reads, then checked against the real path of the workspace
-  root), the workspace root itself, the plugin store, a remote execution
-  environment, and a shared space.
+- **A path outside the calling user's own workspaces** (resolved as the
+  filesystem tool resolves reads, then checked by real path against both the
+  agent's sandbox root and `<data root>/users/<user id>/workspaces`, so an
+  execution environment rooted at `/` or a home directory does not open other
+  users' workspaces, `/etc` or the server's files), the sandbox root itself,
+  the plugin store, a remote execution environment, and a shared space.
 - **`runtime: "in-process"`**, with a message saying so.
 - **A package that does not validate**, with every problem.
-- **Replacing a person's package.** `upgrade: true` replaces only a package
-  whose current version an agent installed; an upgrade is disabled again, like
-  any other.
+- **The name of a plugin shipped with Octipus** (`plugins/<name>`, such as
+  `reader`), so an agent cannot take its place before an admin installs it.
+- **Replacing someone else's package.** `upgrade: true` replaces only a
+  package whose current version an agent of the same user installed; never one
+  a person or another user's agent installed. An upgrade is disabled again,
+  like any other.
+
+**Checked on the copy that is installed.** The agent can still change its
+directory after `plugin_validate`, so the install itself decides on its own
+copy: `installFromDirectory` copies the source into the plugin directory first
+and reads the manifest, checks the tree, the runtime (`requireRuntime:
+"package"`), the name and version that were validated (`expect`), hashes and
+verifies only that copy. A runtime switched to `in-process`, a link added or a
+name changed after validation is refused. (Every install now works this way:
+the source is looked at once before copying, so a linked or oversized tree
+is refused early, but only the staged copy decides.)
 
 There is **no tool to enable or approve** a plugin. The answer gives the
 content hash and the admin page (`<public URL>/admin/plugins`); the admin
