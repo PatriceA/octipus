@@ -44,7 +44,7 @@ const pkg = (over: Record<string, unknown>) => ({
   },
   enabled: true, settings: {}, secretsSet: [], problem: null, connected: true,
   network: { state: 'restricted', detail: 'Only api.finapi.io: the sandbox (bwrap) has no direct network.' },
-  contentHash: RECORDED, actualHash: null, signedBy: 'Acme',
+  contentHash: RECORDED, actualHash: null, signedBy: 'Acme', runtime: 'package', inProcess: null,
   signature: { status: 'valid', keyId: `ed25519:${'c'.repeat(64)}`, publisher: 'Acme', detail: 'Signed by Acme' },
   installedBy: 'e2e-user-id', installedAt: '2026-11-01T09:00:00Z', updatedAt: '2026-11-01T09:00:00Z',
   ...over,
@@ -232,6 +232,68 @@ test.describe('plugin packages', () => {
       { method: 'DELETE', url: '/api/plugin-packages/finapi', body: undefined },
       { method: 'DELETE', url: '/api/plugin-packages/finapi', body: undefined },
     ]);
+  });
+
+  test('an in-process plugin shows its runtime, and approving it to run in the server process sends its content hash after a confirmation', async ({ authenticatedPage: page }) => {
+    const manifest = {
+      name: 'auditlog', version: '1.0.0', apiVersion: '1.0.0', title: 'Audit every tool call', description: 'A tool:after hook',
+      runtime: 'in-process', entry: 'dist/index.mjs',
+    };
+    const notApproved = { approved: false, approvedHash: null, approvedBy: null, approvedAt: null, loaded: false };
+    let packages = [pkg({
+      name: 'auditlog', manifest, enabled: false, connected: false, runtime: 'in-process', inProcess: notApproved,
+      network: { state: 'not_enforced', detail: "Runs in the server process: no sandbox, so it has the server's network, files and data." },
+    })];
+    const patches: unknown[] = [];
+    const dialogs: string[] = [];
+    let refuseNext = true;
+    await stubAllDefaults(page);
+    await page.route(/\/api\/plugin-packages(\/.*)?$/, async (route: Route) => {
+      const req = route.request();
+      if (req.method() === 'GET') return json(route, 200, packages);
+      if (req.method() === 'PATCH') {
+        const body = req.postDataJSON() as { approveInProcess?: string };
+        patches.push(body);
+        if (refuseNext) {
+          refuseNext = false;
+          return json(route, 409, { error: `The files of auditlog hash to ${ACTUAL}, not to the reviewed ${body.approveInProcess}: they changed since they were approved; review them and approve their content first` });
+        }
+        packages = packages.map((p) => ({ ...p, inProcess: { approved: true, approvedHash: body.approveInProcess, approvedBy: 'e2e-user-id', approvedAt: '2026-11-10T09:00:00Z', loaded: false } }));
+        return json(route, 200, packages[0]);
+      }
+      return json(route, 404, { error: 'unexpected' });
+    });
+
+    await page.goto('/admin/plugins');
+    const row = page.locator('[data-testid="plugin-package"][data-name="auditlog"]');
+    await expect(row.getByTestId('plugin-runtime')).toHaveText('in-process · not approved');
+    await expect(row).toContainText('dist/index.mjs');
+    // No settings or secrets for an in-process plugin, so no configure.
+    await expect(row.getByRole('button', { name: 'Configure auditlog' })).toHaveCount(0);
+    const approval = row.getByRole('group', { name: 'In-process approval for auditlog' });
+    await expect(approval.getByTestId('in-process-hash')).toHaveText(RECORDED);
+    if (SHOTS) await page.screenshot({ path: `${SHOTS}/admin-plugin-in-process.png`, fullPage: true });
+
+    // Dismissing the confirmation sends nothing.
+    page.once('dialog', (d) => { dialogs.push(d.message()); void d.dismiss(); });
+    await approval.getByRole('button', { name: 'Approve running in the server process' }).click();
+    await expect.poll(() => dialogs.length).toBe(1);
+    expect(dialogs[0]).toContain(RECORDED);
+    expect(dialogs[0]).toContain('full authority');
+    expect(patches).toEqual([]);
+
+    // A refusal (the files changed since) is shown.
+    page.once('dialog', (d) => d.accept());
+    await approval.getByRole('button', { name: 'Approve running in the server process' }).click();
+    await expect(approval.getByRole('alert')).toContainText('they changed since they were approved');
+
+    // Approved: the group goes away and the row says so.
+    page.once('dialog', (d) => d.accept());
+    await approval.getByRole('button', { name: 'Approve running in the server process' }).click();
+    await expect(row.getByRole('group', { name: 'In-process approval for auditlog' })).toHaveCount(0);
+    await expect(row.getByTestId('plugin-runtime')).toHaveText('in-process');
+    await expect(row).toContainText(`approved to run in the server process for ${RECORDED}`);
+    expect(patches).toEqual([{ approveInProcess: RECORDED }, { approveInProcess: RECORDED }]);
   });
 
   test('browse lists the registries and installs a package with its URL and sha256', async ({ authenticatedPage: page }) => {

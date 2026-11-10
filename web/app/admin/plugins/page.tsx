@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CircleCheck, Power, Settings2, ShieldAlert, Trash2 } from 'lucide-react';
+import { CircleCheck, Cpu, Power, Settings2, ShieldAlert, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { useRef, useState } from 'react';
 import { FieldInputs, type FieldValues, fromFieldValues, problemsOf, toFieldValues } from '@/components/business/common';
@@ -104,6 +104,55 @@ function ContentReview({ pkg }: { pkg: PluginPackageView }) {
         <CircleCheck className="w-3.5 h-3.5" /> Approve this content
       </button>
       {error && <p role="alert" className="text-xs text-error">! {error}</p>}
+    </div>
+  );
+}
+
+/**
+ * An in-process plugin (runtime `in-process`) runs in the server process with
+ * its full authority, so it needs one approval more than a package: for the
+ * approved content hash, shown here. Shown while that approval is missing and
+ * there is no changed content to review first. The server refuses (409) a
+ * hash that is no longer the approved content or no longer what the files
+ * hash to.
+ */
+function InProcessApproval({ pkg }: { pkg: PluginPackageView }) {
+  const qc = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const approve = useMutation({
+    mutationFn: (hash: string) => api.patch<PluginPackageView>(`/plugin-packages/${encodeURIComponent(pkg.name)}`, { approveInProcess: hash }),
+    onSuccess: () => {
+      setError(null);
+      void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY });
+    },
+    onError: (err: Error) => {
+      setError(problemsOf(err));
+      void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY });
+    },
+  });
+  if (pkg.runtime !== 'in-process' || pkg.inProcess?.approved || pkg.actualHash || !pkg.contentHash) return null;
+  const hash = pkg.contentHash;
+  return (
+    <div className="mt-2 space-y-1 rounded-xs border border-warning/40 p-2" role="group" aria-label={`In-process approval for ${pkg.name}`}>
+      <p className="text-xs text-on-surface">
+        Runs in the server process: no sandbox, with the server&apos;s network, files, data and agent loop. It is not loaded until
+        you approve that for this content.
+      </p>
+      <dl className="grid grid-cols-[6rem_1fr] gap-x-2 text-xs">
+        <dt className="text-on-surface-variant">content</dt>
+        <dd className="font-mono break-all" data-testid="in-process-hash">{hash}</dd>
+      </dl>
+      <button
+        type="button"
+        disabled={approve.isPending}
+        onClick={() => {
+          if (confirm(`Run ${pkg.name} in the server process, with the server's full authority, for the content that hashes to ${hash}?`)) approve.mutate(hash);
+        }}
+        className="inline-flex items-center gap-1 px-2 py-1 rounded-xs bg-primary text-on-primary text-xs cursor-pointer disabled:opacity-50"
+      >
+        <Cpu className="w-3.5 h-3.5" /> Approve running in the server process
+      </button>
+      {error && <p role="alert" className="text-xs text-error whitespace-pre-line">! {error}</p>}
     </div>
   );
 }
@@ -284,14 +333,21 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
     onError: (err: Error) => { setError(problemsOf(err)); void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY }); },
   });
   const hosts = pkg.manifest.network ?? [];
+  const inProcess = pkg.runtime === 'in-process';
+  const running = inProcess ? 'loaded' : 'running';
   return (
     <li className="px-4 py-3 text-sm" data-testid="plugin-package" data-name={pkg.name}>
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-on-surface font-medium">{pkg.name}</span>
         <span className="text-xs text-on-surface-variant">{pkg.version}</span>
         <span className="text-xs text-on-surface-variant flex-1 min-w-0 truncate" title={pkg.manifest.description}>{pkg.manifest.title}</span>
+        {inProcess && (
+          <span className="text-xs text-warning" title="Runs in the server process, not in a sandbox" data-testid="plugin-runtime">
+            in-process{pkg.inProcess?.approved ? '' : ' · not approved'}
+          </span>
+        )}
         <span className={cn('text-xs', pkg.connected ? tone('ok') : tone('quiet'))}>
-          {pkg.enabled ? (pkg.connected ? 'running' : 'enabled') : 'disabled'}
+          {pkg.enabled ? (pkg.connected ? running : 'enabled') : 'disabled'}
         </span>
         <SignatureState signature={pkg.signature} />
         <NetworkState network={pkg.network} />
@@ -304,7 +360,7 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
         >
           <Power className="w-3.5 h-3.5" /> {pkg.enabled ? 'disable' : 'enable'}
         </button>
-        <button
+        {!inProcess && <button
           type="button"
           onClick={() => setConfiguring((c) => !c)}
           aria-expanded={configuring}
@@ -312,7 +368,7 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
           className="inline-flex items-center gap-1 text-xs text-on-surface-variant hover:text-on-surface cursor-pointer"
         >
           <Settings2 className="w-3.5 h-3.5" /> configure
-        </button>
+        </button>}
         <button
           type="button"
           disabled={uninstall.isPending}
@@ -325,10 +381,17 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
           <Trash2 className="w-3.5 h-3.5" /> uninstall
         </button>
       </div>
-      <p className="mt-1 text-xs text-on-surface-variant">
-        tools: {Object.entries(pkg.manifest.tools).map(([t, d]) => `${t} (${d.effect})`).join(', ')}
-        {' · '}hosts: {hosts.length ? hosts.join(', ') : 'none'}
-      </p>
+      {inProcess ? (
+        <p className="mt-1 text-xs text-on-surface-variant">
+          entry: <code className="font-mono">{pkg.manifest.entry}</code>
+          {pkg.inProcess?.approved && <> · approved to run in the server process for <span className="font-mono">{pkg.inProcess.approvedHash}</span></>}
+        </p>
+      ) : (
+        <p className="mt-1 text-xs text-on-surface-variant">
+          tools: {Object.entries(pkg.manifest.tools ?? {}).map(([t, d]) => `${t} (${d.effect})`).join(', ')}
+          {' · '}hosts: {hosts.length ? hosts.join(', ') : 'none'}
+        </p>
+      )}
       <p className="mt-1 text-xs text-on-surface-variant" data-testid="plugin-network-detail">{pkg.network.detail}</p>
       {pkg.signature && pkg.signature.status !== 'valid' && pkg.signature.status !== 'unsigned' && (
         <p className="mt-1 text-xs text-on-surface-variant">{pkg.signature.detail}</p>
@@ -339,6 +402,7 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
         </p>
       )}
       <ContentReview pkg={pkg} />
+      <InProcessApproval pkg={pkg} />
       {configuring && <PackageConfig pkg={pkg} />}
       {error && <p role="alert" className="mt-1 text-xs text-error whitespace-pre-line">! {error}</p>}
     </li>
@@ -400,7 +464,8 @@ export default function AdminPluginPackagesPage() {
           <p className="mt-1 text-xs text-on-surface-variant">
             Connections to other systems, each its own process with only its declared tools and hosts. A package starts
             disabled; one whose files changed since they were approved does not start until its new content is approved.
-            A package from a URL must be signed by a publisher in <code>plugins.trustedPublishers</code>.
+            A package from a URL must be signed by a publisher in <code>plugins.trustedPublishers</code>. An in-process
+            plugin runs in the server process and needs one more approval, for its exact content, before it is loaded.
           </p>
         </div>
         <Link href="/admin/plugins/browse" className="text-xs text-primary hover:underline">browse registries →</Link>
