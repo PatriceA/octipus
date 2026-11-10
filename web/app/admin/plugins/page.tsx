@@ -350,10 +350,114 @@ function PagesAndScopes({ pkg, unapproved }: { pkg: PluginPackageView; unapprove
   );
 }
 
+/** Whether a package adds anything besides tools (docs/PLUGIN-PACKAGES.md#contributions). */
+function hasContributions(pkg: PluginPackageView): boolean {
+  const c = pkg.contributions;
+  return !!c && (c.commands.length > 0 || c.schedules.length > 0 || c.events.length > 0 || !!c.prompt || !!c.context);
+}
+
+function LastRun({ run }: { run: { at: string; ok: boolean; error: string | null } | null }) {
+  if (!run) return null;
+  return run.ok
+    ? <span className={tone('quiet')}> · last run ok {new Date(run.at).toLocaleString()}</span>
+    : <span className={tone('bad')}> · last run failed: {run.error}</span>;
+}
+
+/**
+ * What a package adds besides tools, in full: its slash commands, schedules,
+ * event handlers, turn context and the whole prompt text it puts in every
+ * user's agents. Nothing of it is bound until an admin approves exactly this
+ * (the contributions hash); shown in the row and in the enable confirmation.
+ */
+function Contributions({ pkg }: { pkg: PluginPackageView }) {
+  if (!hasContributions(pkg)) return null;
+  const c = pkg.contributions;
+  const roles = (r: string[] | null) => (r ? `agents of the roles ${r.join(', ')}` : 'every agent');
+  return (
+    <div className="mt-2 space-y-1 text-xs text-on-surface-variant" data-testid="plugin-contributions">
+      <p className={c.approved ? tone('ok') : tone('warn')} data-testid="plugin-contributions-approval">
+        {c.approved
+          ? <>contributions approved for <span className="font-mono">{c.approvedHash}</span></>
+          : <>contributions not approved{c.hash && <> (<span className="font-mono">{c.hash}</span>)</>}: nothing below is active until you approve it when enabling</>}
+      </p>
+      <ul className="space-y-0.5 list-disc pl-4">
+        {c.commands.map((x) => (
+          <li key={`c-${x.name}`} data-testid="plugin-contribution-command">
+            command <code className="font-mono">/{x.name}</code> → {x.tool} ({x.effect ?? '?'}), run as the user who types it: {x.description}
+          </li>
+        ))}
+        {c.schedules.map((x) => (
+          <li key={`s-${x.id}`} data-testid="plugin-contribution-schedule">
+            schedule <code className="font-mono">{x.id}</code> <code className="font-mono">{x.cron}</code> (UTC) → {x.tool} ({x.effect ?? '?'}), run as the installing admin, unattended
+            <LastRun run={x.lastRun} />
+          </li>
+        ))}
+        {c.events.map((x) => (
+          <li key={`e-${x.on}-${x.tool}`} data-testid="plugin-contribution-event">
+            on <code className="font-mono">{x.on}</code> of every user → {x.tool} ({x.effect ?? '?'}), run as that user (ids only)
+            <LastRun run={x.lastRun} />
+          </li>
+        ))}
+        {c.context && (
+          <li data-testid="plugin-contribution-context" className={tone('warn')}>
+            context: {c.context.tool} ({c.context.effect ?? '?'}) receives the message of every turn of every user — root agents and
+            workers, {roles(c.context.roles)} — and its answer is put in front of the agent
+            <LastRun run={c.context.lastRun} />
+          </li>
+        )}
+        {c.prompt && (
+          <li data-testid="plugin-contribution-prompt">
+            prompt: <code className="font-mono">{c.prompt.file}</code> is added to the system prompt of {roles(c.prompt.roles)}, for every
+            user, fenced as third-party text:
+            <pre
+              className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-xs border border-outline-variant bg-surface-container p-2 font-mono text-on-surface"
+              data-testid="plugin-prompt-text"
+            >
+              {c.prompt.text ?? '(the file cannot be read)'}
+            </pre>
+          </li>
+        )}
+      </ul>
+      {c.problems.map((p) => <p key={p} className={tone('bad')}>! {p}</p>)}
+    </div>
+  );
+}
+
+/**
+ * The enable confirmation of a package that adds anything besides tools:
+ * everything it adds, in full, and enabling approves exactly that
+ * (`approveContributions` with the hash shown). The server refuses (409)
+ * when the package changed after this page read it.
+ */
+function EnableConfirmation({ pkg, pending, onConfirm, onCancel }: { pkg: PluginPackageView; pending: boolean; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div className="mt-2 space-y-1 rounded-xs border border-warning/40 p-2" role="group" aria-label={`Enable ${pkg.name}`} data-testid="plugin-enable-confirm">
+      <p className="text-xs text-on-surface">
+        Enabling {pkg.name} approves everything it adds, for every user of this install. Review it:
+      </p>
+      <Contributions pkg={pkg} />
+      <div className="flex gap-2">
+        <button
+          type="button"
+          disabled={pending}
+          onClick={onConfirm}
+          className="inline-flex items-center gap-1 px-2 py-1 rounded-xs bg-primary text-on-primary text-xs cursor-pointer disabled:opacity-50"
+        >
+          <CircleCheck className="w-3.5 h-3.5" /> Approve and enable
+        </button>
+        <button type="button" onClick={onCancel} className="px-2 py-1 text-xs text-on-surface-variant hover:text-on-surface cursor-pointer">
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function PackageRow({ pkg }: { pkg: PluginPackageView }) {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [configuring, setConfiguring] = useState(false);
+  const [confirmingEnable, setConfirmingEnable] = useState(false);
   const uninstall = useMutation({
     mutationFn: () => api.delete<{ uninstalled: boolean }>(`/plugin-packages/${encodeURIComponent(pkg.name)}`),
     onSuccess: () => { setError(null); void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY }); },
@@ -363,10 +467,14 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
   const unapproved = declaredScopes.filter((s) => !(pkg.approvedHostScopes ?? []).includes(s));
   const toggle = useMutation({
     // Enabling approves the declared host API scopes the admin was just shown (docs/PLUGIN-PACKAGES.md#host-api).
-    mutationFn: (enabled: boolean) => api.patch<PluginPackageView>(`/plugin-packages/${encodeURIComponent(pkg.name)}`,
-      enabled && unapproved.length > 0 ? { enabled, approveHostScopes: declaredScopes } : { enabled }),
+    // Enabling a package with contributions approves the contributions hash the confirmation showed.
+    mutationFn: (enabled: boolean) => api.patch<PluginPackageView>(`/plugin-packages/${encodeURIComponent(pkg.name)}`, {
+      ...(enabled && unapproved.length > 0 ? { enabled, approveHostScopes: declaredScopes } : { enabled }),
+      ...(enabled && hasContributions(pkg) && pkg.contributions.hash ? { approveContributions: pkg.contributions.hash } : {}),
+    }),
     onSuccess: () => {
       setError(null);
+      setConfirmingEnable(false);
       void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY });
       // Its pages come and go with it in the sidebar.
       void qc.invalidateQueries({ queryKey: PLUGIN_PAGES_KEY });
@@ -397,6 +505,8 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
           type="button"
           disabled={toggle.isPending}
           onClick={() => {
+            // A package that adds commands, schedules, events, prompt text or context: review all of it first.
+            if (!pkg.enabled && hasContributions(pkg)) { setConfirmingEnable(true); return; }
             if (!pkg.enabled && unapproved.length > 0
               && !confirm(`Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? Its tools then act with them as the user who calls them.`)) return;
             toggle.mutate(!pkg.enabled);
@@ -440,6 +550,20 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
       )}
       <p className="mt-1 text-xs text-on-surface-variant" data-testid="plugin-network-detail">{pkg.network.detail}</p>
       <PagesAndScopes pkg={pkg} unapproved={unapproved} />
+      {confirmingEnable
+        ? (
+          <EnableConfirmation
+            pkg={pkg}
+            pending={toggle.isPending}
+            onCancel={() => setConfirmingEnable(false)}
+            onConfirm={() => {
+              if (unapproved.length > 0
+                && !confirm(`Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? Its tools then act with them as the user who calls them.`)) return;
+              toggle.mutate(true);
+            }}
+          />
+        )
+        : <Contributions pkg={pkg} />}
       {pkg.signature && pkg.signature.status !== 'valid' && pkg.signature.status !== 'unsigned' && (
         <p className="mt-1 text-xs text-on-surface-variant">{pkg.signature.detail}</p>
       )}
