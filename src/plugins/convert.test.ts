@@ -1,6 +1,6 @@
 /**
  * The legacy-plugin converter (docs/PLUGINS.md#converting-to-a-plugin-package):
- * convert the shipped example, check the manifest against the package
+ * convert the legacy fixture (tests/fixtures/legacy-plugin), check the manifest against the package
  * contract, then start the generated MCP server as a real subprocess and
  * compare its answers with the legacy handlers'. Refusals are checked on
  * synthetic plugins.
@@ -11,11 +11,11 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { afterAll, describe, expect, test, vi } from 'vitest';
-import exampleModule from '../../extensions/example-plugin/index';
+import exampleModule from '../../tests/fixtures/legacy-plugin/index';
 import { ConvertError, convertLegacyPlugin, renderServer, toJsonSchema } from './convert';
 import { parseManifest } from './packages/manifest';
 
-const EXAMPLE = resolve(__dirname, '..', '..', 'extensions', 'example-plugin');
+const EXAMPLE = resolve(__dirname, '..', '..', 'tests', 'fixtures', 'legacy-plugin');
 
 const tmpDirs: string[] = [];
 function tmp(prefix: string): string {
@@ -82,7 +82,7 @@ async function refusal(dir: string, opts: Parameters<typeof convertLegacyPlugin>
 
 const tool = (name: string) => ({ name, description: `${name} tool`, parameters: { x: { type: 'string', description: 'x', required: true } } });
 
-describe('convertLegacyPlugin: the shipped example', () => {
+describe('convertLegacyPlugin: the legacy fixture', () => {
   let outDir: string;
 
   test('writes a package whose manifest fits the package contract', async () => {
@@ -287,14 +287,14 @@ describe('legacy loader deprecation', () => {
       return { ...actual, createChildLogger: () => child };
     });
     const root = tmp('octipus-deprecation-');
-    const pluginDir = join(root, 'extensions', 'old-one');
+    const pluginDir = join(root, 'legacy-plugins', 'old-one');
     mkdirSync(pluginDir, { recursive: true });
     writeFileSync(join(pluginDir, 'plugin.json'), JSON.stringify({ name: 'old-one', version: '1.0.0', description: 'd', apiVersion: '1.0.0', main: 'index.mjs', tools: [tool('t')] }));
     writeFileSync(join(pluginDir, 'index.mjs'), `export default { name: 'old-one', tools: { t: async () => 1 } };`);
     const cwd = vi.spyOn(process, 'cwd').mockReturnValue(root);
     try {
       const loader = await import('./loader');
-      const loaded = await loader.loadPlugins();
+      const loaded = await loader.loadPlugins({ dir: join(root, 'legacy-plugins'), cwd: root });
       expect(loaded.map((p) => p.manifest.name)).toEqual(['old-one']);
       await loader.reloadPlugin('old-one');
       const deprecations = warn.mock.calls.filter((c) => String(c[1]).includes('deprecated'));

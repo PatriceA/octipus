@@ -9,7 +9,8 @@ import { buildExtensionContext, isTrustedExtension, resetTrustedExtensionPaths, 
 
 /**
  * Hooking the agent loop (rewriting tool calls, the system prompt) is not
- * something a cloned repository's `.octipus/extensions` gets by being there:
+ * something an extension gets by being installed (and a cloned repository's
+ * `.octipus/extensions` is not even loaded any more, src/extensions/loader.ts):
  * only an extension the operator lists by path may do it.
  */
 

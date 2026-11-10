@@ -184,6 +184,16 @@ describe('launch and server config', () => {
     expect(unapproved.sandbox?.egress).toBeUndefined();
   });
 
+  test('the binding allows CLI lanes only for model.trustedInput with model:complete and model:cli-tools approved', async () => {
+    const { serverFor } = await import('./service');
+    const trusted = { ...base, host: ['model:complete'], model: { trustedInput: true, reason: 'Fixed prompts.' } };
+    expect((await serverFor(row(trusted, ['model:complete', 'model:cli-tools']) as never)).plugin).toMatchObject({ hostScopes: ['model:complete'], modelCliTools: true });
+    // The pseudo-scope is never handed out as a scope.
+    expect((await serverFor(row(trusted, ['model:complete', 'model:cli-tools']) as never)).plugin?.hostScopes).not.toContain('model:cli-tools');
+    expect((await serverFor(row(trusted, ['model:complete']) as never)).plugin).not.toHaveProperty('modelCliTools');
+    expect((await serverFor(row({ ...trusted, model: undefined }, ['model:complete', 'model:cli-tools']) as never)).plugin).not.toHaveProperty('modelCliTools');
+  });
+
   test('a package with pages leaves the house like one with network: maxProtection 1 unless declared', async () => {
     const { serverFor } = await import('./service');
     const ui = { pages: [{ path: 'dash', title: 'Dash', entry: 'index.html' }] };

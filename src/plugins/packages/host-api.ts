@@ -68,6 +68,12 @@ export interface HostTokenGrant {
    * that content level. Unset: nothing above level 1 read.
    */
   readLevel?: number;
+  /**
+   * The package's `model:complete` calls may run on a CLI lane: it declares
+   * `model.trustedInput` and an admin approved `model:cli-tools`
+   * (docs/PLUGIN-PACKAGES.md#model-calls-on-cli-lanes). Unset: refused there.
+   */
+  modelCliTools?: true;
 }
 
 /** Record that the call of `grant` read content at `level` (its `model:complete` runs at the highest). */
@@ -262,6 +268,7 @@ export async function issueHostCallMeta(
     scopes,
     maxProtection: binding.maxProtection,
     tool: toolName,
+    ...(binding.modelCliTools && scopes.includes('model:complete') ? { modelCliTools: true as const } : {}),
   }, ttl);
   coreLogger.debug({ pkg: binding.package, tool: toolName, scopes }, 'Plugin host API token issued for a call');
   const meta: PluginHostCallMeta = { url: HOST_API_URL, token, expiresAt: new Date(expiresAt).toISOString(), scopes };

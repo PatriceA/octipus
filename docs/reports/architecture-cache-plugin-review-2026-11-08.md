@@ -420,6 +420,10 @@ The names are inverted: the `extensions/` directory holds *plugins*, and
 *extensions* live in `.octipus/extensions/`. `AGENT.md` says plugins load from
 `OCTIPUS_HOME`; the code uses `process.cwd()`.
 
+*Since this review:* legacy plugins load from `~/.octipus/legacy-plugins/`
+and extensions only from `~/.octipus/extensions/`; neither reads the working
+directory (docs/PLUGINS.md).
+
 ### 7.2 Reproduced defects
 
 | # | Defect | Evidence | Fix |

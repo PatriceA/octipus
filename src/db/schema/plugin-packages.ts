@@ -1,5 +1,5 @@
 import { boolean, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-import type { PluginHostScope, PluginManifest } from '@/shared/plugin-package';
+import type { PluginHostApproval, PluginManifest } from '@/shared/plugin-package';
 import { users } from './users';
 
 /**
@@ -41,9 +41,11 @@ export const pluginPackages = pgTable('plugin_packages', {
   /**
    * The host API scopes an admin approved (docs/PLUGIN-PACKAGES.md#host-api);
    * null: none yet. Only scopes the manifest declares AND this lists are
-   * granted; enabling asks for any declared scope missing here.
+   * granted; enabling asks for any declared scope missing here. It may also
+   * hold `model:cli-tools`, the approval of the manifest's `model.trustedInput`
+   * (docs/PLUGIN-PACKAGES.md#model-calls-on-cli-lanes), which enabling does not ask for.
    */
-  approvedHostScopes: jsonb('approved_host_scopes').$type<PluginHostScope[]>(),
+  approvedHostScopes: jsonb('approved_host_scopes').$type<PluginHostApproval[]>(),
   /**
    * The contributions hash an admin approved (src/plugins/packages/contributions/approval.ts):
    * commands, schedules, events, prompt and context bind only while it equals

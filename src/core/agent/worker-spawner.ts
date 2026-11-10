@@ -789,7 +789,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     if (devProjectPath !== octiRoot) {
       workspaceHint += `\nOCTIPUS PROJECT: ${octiRoot}`;
     }
-    workspaceHint += `\nPLUGIN DIRECTORY: ${octiRoot}/extensions/ — ALL plugins MUST be created here, nowhere else.`;
+    workspaceHint += `\nPLUGINS: a plugin you write is a plugin package in your workspace (e.g. my-plugins/<name>/, docs/PLUGIN-PACKAGES.md), never inside the Octipus project at ${octiRoot}.`;
     if (/\s/.test(octiRoot) || /\s/.test(devProjectPath)) {
       workspaceHint += `\nIMPORTANT: Paths contain spaces — ALWAYS wrap them in double quotes in shell commands (e.g. \`chmod +x "${devProjectPath}/file.sh"\`). Unquoted, the shell splits on spaces and the command fails.`;
     }
@@ -814,7 +814,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     if (workspaceRoot !== octiRoot) {
       workspaceHint += `\nOCTIPUS PROJECT: ${octiRoot}`;
     }
-    workspaceHint += `\nPLUGIN DIRECTORY: ${octiRoot}/extensions/ — ALL plugins MUST be created here, nowhere else.`;
+    workspaceHint += `\nPLUGINS: a plugin you write is a plugin package in your workspace (e.g. my-plugins/<name>/, docs/PLUGIN-PACKAGES.md), never inside the Octipus project at ${octiRoot}.`;
     if (/\s/.test(workspaceRoot) || /\s/.test(octiRoot)) {
       workspaceHint += `\nIMPORTANT: Paths contain spaces — ALWAYS wrap them in double quotes in shell commands (e.g. \`chmod +x "${workspaceRoot}/project/file.sh"\`). Unquoted, the shell splits on spaces and the command fails.`;
     }

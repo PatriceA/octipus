@@ -64,7 +64,6 @@ const PersonaPage = lazy(() => import('./app/persona/page'));
 const PipelinesPage = lazy(() => import('./app/pipelines/page'));
 const PluginPage = lazy(() => import('./app/plugins/page'));
 const ProfilesPage = lazy(() => import('./app/profiles/page'));
-const ReaderPage = lazy(() => import('./app/reader/page'));
 const ResearchPage = lazy(() => import('./app/research/page'));
 const RoomsPage = lazy(() => import('./app/rooms/page'));
 const RunsViewPage = lazy(() => import('./app/runs/view/page'));
@@ -174,7 +173,6 @@ const router = createBrowserRouter([
       { path: 'pipelines', element: <PipelinesPage /> },
       { path: 'plugins/:name/*', element: <PluginPage /> },
       { path: 'profiles', element: <ProfilesPage /> },
-      { path: 'reader', element: <ReaderPage /> },
       { path: 'research', element: <ResearchPage /> },
       { path: 'rooms', element: <RoomsPage /> },
       { path: 'runs/view', element: <RunsViewPage /> },

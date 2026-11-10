@@ -26,10 +26,4 @@ export interface ModuleDefinition {
   caseEntities: string[];
   /** Its documentation, relative to the repository. */
   docs?: string;
-  /**
-   * Deprecated: what it moves to, a first-party plugin shipped with Octipus
-   * (docs/PLUGIN-PACKAGES.md#bundled-plugins). It keeps working where it is
-   * on; no use case switches it on any more.
-   */
-  replacedBy?: { plugin: string; note: string };
 }

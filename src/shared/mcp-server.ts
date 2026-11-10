@@ -23,6 +23,12 @@ export interface PluginBinding {
    * for these, narrowed to the tool's effect and the calling user.
    */
   hostScopes?: PluginHostScope[];
+  /**
+   * Its `model:complete` calls may run on a CLI lane (a model with its own
+   * tools): the manifest declares `model.trustedInput` and an admin approved
+   * `model:cli-tools` (docs/PLUGIN-PACKAGES.md#model-calls-on-cli-lanes).
+   */
+  modelCliTools?: true;
 }
 
 export interface MCPServer extends McpExposureConfig {

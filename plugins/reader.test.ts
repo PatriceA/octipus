@@ -1,5 +1,5 @@
 /**
- * The bundled Reader plugin (plugins/reader, docs/PLUGIN-PACKAGES.md#bundled-plugins):
+ * The example plugin, Reader (plugins/reader, docs/PLUGIN-PACKAGES.md#bundled-plugins):
  *
  * - its package is valid as the host checks it at install: the manifest, its
  *   contributions, its pages (plain paths, files present, served types, no
@@ -23,7 +23,6 @@ import { isPlainRelativePath, uiDirOf } from '@/plugins/packages/manifest-ui-hos
 import { checkPackageTree } from '@/plugins/packages/tree';
 import { uiContentType } from '@/plugins/packages/ui';
 import { PLUGIN_HOST_SCOPES } from '@/shared/plugin-package';
-import { readerModule } from '@/modules/reader';
 
 const DIR = join(import.meta.dirname, 'reader');
 const manifest = parseManifest(JSON.parse(readFileSync(join(DIR, 'octipus-plugin.json'), 'utf8')));
@@ -59,12 +58,6 @@ describe('the package', () => {
     await expect(checkPackageTree(DIR)).resolves.toBeUndefined();
     // Nothing but the package itself: no tests or build output inside it.
     expect(filesUnder(DIR).sort()).toEqual(['octipus-plugin.json', 'server.mjs', 'ui/app.js', 'ui/index.html', 'ui/style.css']);
-  });
-
-  test('the reader module it replaces is deprecated toward it, and no use case switches that on', () => {
-    expect(readerModule.replacedBy?.plugin).toBe(manifest.name);
-    expect(readerModule.replacedBy?.note).toContain('Bundled');
-    expect(readerModule.profiles).toEqual([]);
   });
 
   test('its page is a plain static file set the page CSP can serve', () => {

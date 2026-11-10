@@ -297,40 +297,10 @@ const API_CHECKS: Array<{
 ];
 
 /**
- * Reader and Deep Research are API features with no chat entry point, so they
- * are driven directly. Both are cheap on purpose: the reader action runs on
- * supplied text (no network), and research runs at `quick` depth.
+ * Flows driven directly through the API. Deep Research has no chat entry
+ * point, and runs at `quick` depth to stay cheap.
  */
 const FLOWS: Array<{ id: string; group: string; what: string; run: () => Promise<boolean> }> = [
-  {
-    id: 'reader-fetch',
-    group: 'reader',
-    what: 'fetches a URL and returns extracted article text',
-    run: async () => {
-      const res = await api('/api/reader', { method: 'POST', body: { url: 'https://example.com/' } });
-      const doc = res.body as { title?: string; textContent?: string };
-      return res.status === 200 && (doc.textContent?.length ?? 0) > 50 && !!doc.title;
-    },
-  },
-  {
-    id: 'reader-action',
-    group: 'reader',
-    what: 'summarizes supplied text through the reader topic model',
-    run: async () => {
-      const res = await api('/api/reader/action', {
-        method: 'POST',
-        body: {
-          action: 'summarize',
-          text:
-            'Octipus is a self-hosted AI assistant. It stores everything in Postgres with pgvector, ' +
-            'routes each request to a model bound to a topic lane, and runs tools in a sandbox. ' +
-            'Users reach it through a web app, a terminal UI, and chat channels.',
-        },
-      });
-      const out = res.body as { output?: string; error?: string };
-      return res.status === 200 && (out.output?.length ?? 0) > 40;
-    },
-  },
   {
     id: 'memory-roundtrip',
     group: 'memory',

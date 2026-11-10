@@ -55,7 +55,6 @@ import { noteRoutes } from './routes/notes';
 import { personaRoutes } from './routes/persona';
 import { modelRoutes } from './routes/models';
 import { digestRoutes } from './routes/digest';
-import { readerRoutes } from './routes/reader';
 import { notificationRoutes } from './routes/notifications';
 import { spendBudgetRoutes } from './routes/spend-budgets';
 import { permissionRequestRoutes } from './routes/permission-requests';
@@ -477,7 +476,6 @@ export function createServer() {
         .use(companionRoutes)
         .use(backupRoutes)
         .use(protectionRoutes)
-        .use(readerRoutes)
         .use(digestRoutes)
         .use(emailRoutes)
         .use(calendarRoutes)

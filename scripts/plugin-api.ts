@@ -1,5 +1,5 @@
 /**
- * `octi plugin list`, `approve`, `approve-in-process`, `approve-contributions`, `set`, `secret`, `uninstall`,
+ * `octi plugin list`, `approve`, `approve-in-process`, `approve-contributions`, `approve-cli-tools`, `set`, `secret`, `uninstall`,
  * `bundled` and `install-bundled`
  * (docs/PLUGIN-PACKAGES.md): the installed plugin packages, through the
  * running backend's API.
@@ -13,7 +13,13 @@
  * tested with a fetch and a prompt of the test's own.
  */
 import { parseArgs } from 'node:util';
-import { type BundledPluginView, MAX_PLUGIN_SECRET_LENGTH, type PluginPackageView } from '@/shared/plugin-package';
+import {
+  type BundledPluginView,
+  MAX_PLUGIN_SECRET_LENGTH,
+  MODEL_CLI_TOOLS_WARNING,
+  PLUGIN_MODEL_CLI_TOOLS_APPROVAL,
+  type PluginPackageView,
+} from '@/shared/plugin-package';
 
 export interface PluginApiIo {
   fetch: typeof fetch;
@@ -97,6 +103,11 @@ function line(p: PluginPackageView): string {
     ...(p.actualHash ? [`    actual:    ${p.actualHash}   (approve with: octi plugin approve ${p.name} --hash ${p.actualHash})`] : []),
     ...(inProcess ? [`    in-process: ${approval}`] : []),
     ...(p.contributions?.hash ? [`    contributions: ${p.contributions.approved ? `approved (${p.contributions.hash})` : `not approved (review: octi plugin approve-contributions ${p.name})`}`] : []),
+    ...(p.modelCliTools ? [`    model:     trustedInput ("${p.modelCliTools.reason}"); ${p.modelCliTools.active
+      ? 'its model calls may run on CLI lanes (approved)'
+      : p.modelCliTools.approved
+        ? `${PLUGIN_MODEL_CLI_TOOLS_APPROVAL} approved; takes effect once model:complete is approved too`
+        : `not approved, its model calls stay off CLI lanes (review: octi plugin approve-cli-tools ${p.name})`}`] : []),
     ...(p.authoredBy ? [`    authored:  by an agent (session ${p.authoredBy.sessionId ?? 'none'}, user ${p.authoredBy.userId}); review before enabling`] : []),
   ].join('\n');
 }
@@ -258,6 +269,63 @@ export async function approveContributionsCommand(io: PluginApiIo, name: string,
   } catch (err) {
     if (!(err instanceof CliError)) throw err;
     io.err(`octi plugin approve-contributions: ${err.message}\n`);
+    return err.exitCode;
+  }
+}
+
+/**
+ * `octi plugin approve-cli-tools <name> [--yes] [--revoke]`: approve (or
+ * revoke) `model:cli-tools` for a package whose manifest declares
+ * `model.trustedInput` (docs/PLUGIN-PACKAGES.md#model-calls-on-cli-lanes): its
+ * `model:complete` calls may then run on a CLI lane, a model with its own
+ * tools. Shows the package's reason and the sources it also reads from, and
+ * asks at a terminal; elsewhere refused without --yes. Sent as the approved
+ * host scopes plus (or minus) `model:cli-tools`; an upgrade clears it.
+ */
+export async function approveCliToolsCommand(io: PluginApiIo, name: string, opts: { yes?: boolean; revoke?: boolean } = {}): Promise<number> {
+  try {
+    checkName(name);
+    const packages = await request<PluginPackageView[]>(io, 'GET', '/');
+    const pkg = packages.find((p) => p.name === name);
+    if (!pkg) throw new CliError(`no plugin package named ${name}`);
+    const trust = pkg.modelCliTools;
+    if (!trust) throw new CliError(`${name} does not declare model.trustedInput; its model calls stay off CLI lanes and there is nothing to approve`);
+    const approved = (pkg.approvedHostScopes ?? []).filter((s) => s !== PLUGIN_MODEL_CLI_TOOLS_APPROVAL);
+    if (opts.revoke) {
+      if (!trust.approved) {
+        io.out(`${name}'s ${PLUGIN_MODEL_CLI_TOOLS_APPROVAL} is not approved.\n`);
+        return 0;
+      }
+      await request<PluginPackageView>(io, 'PATCH', `/${encodeURIComponent(name)}`, { approveHostScopes: approved });
+      io.out(`Revoked ${PLUGIN_MODEL_CLI_TOOLS_APPROVAL} for ${name}: its model calls stay off CLI lanes.\n`);
+      return 0;
+    }
+    if (trust.approved) {
+      io.out(`${name}'s ${PLUGIN_MODEL_CLI_TOOLS_APPROVAL} is already approved${trust.active ? '' : ' (it takes effect once model:complete is approved too)'}.\n`);
+      return 0;
+    }
+    io.out([
+      `${name} ${pkg.version} declares model.trustedInput: "${trust.reason}"`,
+      `  ${MODEL_CLI_TOOLS_WARNING}`,
+      ...(trust.sourcesWarning ? [`  ⚠ ${trust.sourcesWarning}`] : []),
+      '',
+    ].join('\n'));
+    if (!opts.yes) {
+      if (!io.interactive) throw new CliError(`not at a terminal: review ${name}, then run \`octi plugin approve-cli-tools ${name} --yes\``, 2);
+      const answer = (await io.ask(`Approve ${PLUGIN_MODEL_CLI_TOOLS_APPROVAL} for ${name}? [y/N] `)).trim().toLowerCase();
+      if (answer !== 'y' && answer !== 'yes') {
+        io.out('Not approved.\n');
+        return 1;
+      }
+    }
+    const view = await request<PluginPackageView>(io, 'PATCH', `/${encodeURIComponent(name)}`, { approveHostScopes: [...approved, PLUGIN_MODEL_CLI_TOOLS_APPROVAL] });
+    io.out(view.modelCliTools?.active
+      ? `Approved ${PLUGIN_MODEL_CLI_TOOLS_APPROVAL} for ${name}: its model calls may run on CLI lanes.\n`
+      : `Approved ${PLUGIN_MODEL_CLI_TOOLS_APPROVAL} for ${name}; it takes effect once model:complete is approved (enable it on the admin page).\n`);
+    return 0;
+  } catch (err) {
+    if (!(err instanceof CliError)) throw err;
+    io.err(`octi plugin approve-cli-tools: ${err.message}\n`);
     return err.exitCode;
   }
 }

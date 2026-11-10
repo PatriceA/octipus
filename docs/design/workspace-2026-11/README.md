@@ -90,7 +90,7 @@ This reduces top-level choices; it does not remove enabled capabilities:
 | Companion chat / supervision | Companion; supervision is a secondary view; configuration links to Settings |
 | Tasks / my work | To-dos for queued work; session deliverables in Library → Outputs; preserve existing links |
 | Inbox / notifications / away digest | Activity → Decisions, Results, All events |
-| Research / reader / documents / notes / knowledge / recall / artifacts | Library with searchable type views; preserve dedicated editors and readers |
+| Research / documents / notes / knowledge / recall / artifacts | Library with searchable type views; preserve dedicated editors and readers (the Reader is now the example plugin, a plugin page) |
 | Mission control / roster / pipelines | Automation → Runs, Pipelines, Agent diagnostics |
 | Triggers / hooks / schedules | Automation → Schedules; setup controls have canonical Settings destinations |
 | Cases / contacts / records | A contextual Business destination when the module is enabled; excluded from these personal-home mockups |

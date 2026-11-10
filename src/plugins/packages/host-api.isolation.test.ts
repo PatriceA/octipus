@@ -12,6 +12,9 @@
  *   another package; the proxy reaches nothing but `/api/plugin-host/`;
  * - documents above the package's maxProtection are refused;
  * - every host API request is audited;
+ * - `model.trustedInput` grants nothing until an admin approves
+ *   `model:cli-tools`; only then does a CLI lane take its model calls
+ *   (audited with `cliTools: true`), and an upgrade clears the approval;
  * - the page bridge calls only the package's own declared tools, as the
  *   signed-in user, through the normal permission path (an external tool
  *   needs the user's confirmation), rate-limited; its files are served only
@@ -36,7 +39,26 @@ process.env.WORKSPACE_PATH ??= mkdtempSync(join(tmpdir(), 'octipus-host-ws-'));
 
 const ADMIN = { id: '11111111-1111-4111-8111-111111111111', username: 'admin', isAdmin: true };
 const MEMBER = { id: '22222222-2222-4222-8222-222222222222', username: 'member', isAdmin: false };
-const fixture = vi.hoisted(() => ({ user: null as null | { id: string; username: string; isAdmin: boolean } }));
+const fixture = vi.hoisted(() => ({
+  user: null as null | { id: string; username: string; isAdmin: boolean },
+  /** What the "everyday" lane resolves to (null: the real resolution). */
+  model: null as null | { name: string; modelId: string; provider: string },
+  /** Completions the stubbed model client was asked for. */
+  completions: [] as Array<Record<string, unknown>>,
+}));
+vi.mock('@/models/resolve-model', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/models/resolve-model')>();
+  return { ...original, resolveModel: async (...args: Parameters<typeof original.resolveModel>) => fixture.model ?? original.resolveModel(...args) };
+});
+vi.mock('@/models/litellm-client', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/models/litellm-client')>();
+  return {
+    ...original,
+    getLiteLLMClient: () => (fixture.model
+      ? { complete: async (options: Record<string, unknown>) => { fixture.completions.push(options); return { content: 'cli answer', usage: { inputTokens: 1, outputTokens: 1 } }; } }
+      : original.getLiteLLMClient()),
+  };
+});
 vi.mock('@/api/context', async () => {
   const { principalFromUser } = await import('@/security/principal');
   return {
@@ -88,7 +110,7 @@ async function callApproved(tool: string, args: Record<string, unknown> = {}, us
 const proxies = new Map<string, import('@/security/egress-proxy').EgressProxy>();
 
 /** A request to the host API through `plugin`'s egress proxy, as a package sends it. */
-async function hostApi(path: string, token: string, plugin = NAME): Promise<{ status: number; body: any }> {
+async function hostApi(path: string, token: string, plugin = NAME, post?: unknown): Promise<{ status: number; body: any }> {
   const { startEgressProxy } = await import('@/security/egress-proxy');
   let proxy = proxies.get(plugin);
   if (!proxy) {
@@ -98,13 +120,17 @@ async function hostApi(path: string, token: string, plugin = NAME): Promise<{ st
   const { request } = await import('node:http');
   const port = proxy.port;
   return new Promise((resolve, reject) => {
-    const req = request({ host: '127.0.0.1', port, path: `http://octipus-host.internal/api/plugin-host${path}`, headers: { authorization: `Bearer ${token}` } }, (res) => {
+    const payload = post === undefined ? undefined : JSON.stringify(post);
+    const req = request({
+      host: '127.0.0.1', port, path: `http://octipus-host.internal/api/plugin-host${path}`, method: payload ? 'POST' : 'GET',
+      headers: { authorization: `Bearer ${token}`, ...(payload ? { 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(payload)) } : {}) },
+    }, (res) => {
       let data = '';
       res.on('data', (c) => { data += c; });
       res.on('end', () => { let body: unknown = null; try { body = JSON.parse(data); } catch { /* not JSON */ } resolve({ status: res.statusCode ?? 0, body }); });
     });
     req.on('error', reject);
-    req.end();
+    req.end(payload);
   });
 }
 
@@ -414,5 +440,95 @@ describe('pages', () => {
     await expect(svc.setEnabled(NAME, true, ADMIN.id)).rejects.toMatchObject({ code: 'incomplete', message: expect.stringContaining('tasks:read') });
     await svc.configure(NAME, { approveHostScopes: [...ALL_SCOPES, 'tasks:read'], enabled: true }, ADMIN.id);
     expect((await route('GET', '/api/plugin-ui')).body.pages).toHaveLength(1);
+  });
+});
+
+describe('model.trustedInput and model:cli-tools', () => {
+  const TRUSTED = 'trusted-model';
+  const REASON = 'Prompts are the package\'s own fixed templates; nothing it reads goes into them.';
+  const SCOPES = ['notes:read', 'model:complete'];
+
+  function trustedCopy(over: Record<string, unknown> = {}): string {
+    const dir = mkdtempSync(join(tmpdir(), 'trusted-model-'));
+    cpSync(FIXTURE_DIR, dir, { recursive: true });
+    const manifest = JSON.parse(readFileSync(join(dir, 'octipus-plugin.json'), 'utf8'));
+    delete manifest.ui;
+    writeFileSync(join(dir, 'octipus-plugin.json'), JSON.stringify({
+      ...manifest, name: TRUSTED, host: SCOPES, model: { trustedInput: true, reason: REASON }, ...over,
+    }));
+    return dir;
+  }
+
+  async function ops(name: string): Promise<Array<Record<string, any>>> {
+    const { queryRaw } = await import('@/db/postgres');
+    const { rows } = await queryRaw(`SELECT details FROM audit_log WHERE resource_type = 'plugin_package' AND resource_id = '${name}' ORDER BY created_at`);
+    return rows.map((r: { details: any }) => (typeof r.details === 'string' ? JSON.parse(r.details) : r.details));
+  }
+
+  test('refused at install with web:read; a package without the flag cannot have model:cli-tools approved', async () => {
+    const svc = await import('./service');
+    await expect(svc.installFromDirectory(trustedCopy({ host: ['web:read', 'model:complete'] }), ADMIN.id)).rejects.toMatchObject({ code: 'invalid' });
+    await expect(svc.configure(NAME, { approveHostScopes: [...ALL_SCOPES, 'tasks:read', 'model:cli-tools'] }, ADMIN.id))
+      .rejects.toMatchObject({ code: 'invalid', message: expect.stringContaining('does not declare model.trustedInput') });
+  });
+
+  test('enabled without the approval, the flag has no effect; approved, a CLI lane takes its calls, audited; an upgrade clears it', async () => {
+    const svc = await import('./service');
+    const { getMCPBridge } = await import('@/mcp/bridge');
+    const installed = await svc.installFromDirectory(trustedCopy(), ADMIN.id);
+    expect(installed.warnings.join(' ')).toContain('model:cli-tools');
+    expect(installed.warnings.join(' ')).toContain('notes:read');
+    expect((await svc.packageView(TRUSTED)).modelCliTools).toMatchObject({ reason: REASON, approved: false, active: false, sourcesWarning: expect.stringContaining('notes:read') });
+
+    // Enabling needs the host scopes only, not model:cli-tools.
+    fixture.user = ADMIN;
+    expect((await route('PATCH', `/api/plugin-packages/${TRUSTED}`, { enabled: true, approveHostScopes: SCOPES })).status).toBe(200);
+    expect(getMCPBridge().pluginServerConfig(`plugin-${TRUSTED}`)?.plugin).not.toHaveProperty('modelCliTools');
+
+    const { mintHostToken } = await import('./host-api');
+    const mint = (modelCliTools: boolean) => mintHostToken({
+      plugin: TRUSTED, userId: ADMIN.id, workspaceId: null, sessionId: null, scopes: ['model:complete'], maxProtection: 1, tool: 'whoami',
+      ...(modelCliTools ? { modelCliTools: true as const } : {}),
+    }, 30_000).token;
+    fixture.model = { name: 'everyday-agy', modelId: 'cli/antigravity', provider: 'cli' };
+    try {
+      const refused = await hostApi('/model/complete', mint(false), TRUSTED, { prompt: 'Write the weekly digest header.' });
+      expect(refused).toMatchObject({ status: 409, body: { code: 'cli_model' } });
+      expect(refused.body.error).toContain('model:cli-tools');
+      expect(fixture.completions).toEqual([]);
+
+      // Approved on its own, keeping the host scopes (the list is replaced as a whole).
+      const approved = await route('PATCH', `/api/plugin-packages/${TRUSTED}`, { approveHostScopes: [...SCOPES, 'model:cli-tools'] });
+      expect(approved.status).toBe(200);
+      expect(approved.body).toMatchObject({ enabled: true, modelCliTools: { approved: true, active: true } });
+      expect(getMCPBridge().pluginServerConfig(`plugin-${TRUSTED}`)?.plugin).toMatchObject({ hostScopes: SCOPES, modelCliTools: true });
+      expect((await ops(TRUSTED)).map((d) => d.op)).toContain('model_cli_tools_approved');
+
+      const ok = await hostApi('/model/complete', mint(true), TRUSTED, { prompt: 'Write the weekly digest header.' });
+      expect(ok).toMatchObject({ status: 200, body: { output: 'cli answer', model: 'everyday-agy' } });
+      expect(fixture.completions.at(-1)).toMatchObject({ model: 'cli/antigravity', allowCliTools: true, requestType: `plugin:${TRUSTED}` });
+      const rows = (await hostAudit()).filter((a) => a.details.op === 'model.complete');
+      expect(rows.at(-2)).toMatchObject({ action: 'permission_denied', details: { status: 409, code: 'cli_model' } });
+      expect(rows.at(-1)).toMatchObject({ action: 'tool_executed', userId: ADMIN.id, details: { status: 200, tool: 'whoami', model: 'everyday-agy', cliTools: true } });
+    } finally {
+      fixture.model = null;
+      fixture.user = null;
+    }
+
+    // Any upgrade clears it, with the host scopes.
+    const next = trustedCopy({ version: '1.1.0' });
+    await svc.installFromDirectory(next, ADMIN.id, { upgrade: true });
+    const view = await svc.packageView(TRUSTED);
+    expect(view.approvedHostScopes).toBeNull();
+    expect(view.modelCliTools).toMatchObject({ approved: false, active: false });
+    expect((await ops(TRUSTED)).at(-1)).toMatchObject({ op: 'upgraded', modelCliToolsApprovalCleared: true });
+
+    // Approved again and revoked: audited both ways.
+    await svc.configure(TRUSTED, { approveHostScopes: [...SCOPES, 'model:cli-tools'], enabled: true }, ADMIN.id);
+    await svc.configure(TRUSTED, { approveHostScopes: SCOPES }, ADMIN.id);
+    expect((await svc.packageView(TRUSTED)).modelCliTools).toMatchObject({ approved: false });
+    expect((await ops(TRUSTED)).map((d) => d.op).slice(-2)).toEqual(['host_scopes_approved', 'model_cli_tools_revoked']);
+    await svc.setEnabled(TRUSTED, false, ADMIN.id);
+    await getMCPBridge().disconnect(`plugin-${TRUSTED}`);
   });
 });

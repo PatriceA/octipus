@@ -93,3 +93,19 @@ logs.zip
 # Copy of the last backend build that booted and stayed up (scripts/supervisor.mjs)
 .last-good-build/
 .last-good-build.tmp/
+
+# Plugins: only the example plugin ships in the repository (plugins/README.md).
+# A plugin you make stays on your machine, outside the repository.
+/plugins/*
+!/plugins/reader/
+!/plugins/reader.test.ts
+!/plugins/README.md
+
+# Local plugins and extensions never live in the repository. Legacy plugins
+# load from ~/.octipus/legacy-plugins and in-process extensions from
+# ~/.octipus/extensions; neither loader reads the checkout. A leftover
+# <cwd>/extensions or .octipus/extensions stays out of git. (The rest of
+# .octipus/ at the root holds tracked design notes, so only its extensions/
+# directory is ignored.)
+/extensions/
+.octipus/extensions/

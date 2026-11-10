@@ -85,7 +85,7 @@ function warnUnpinnedOnce(names: string[]): void {
   if (warnedUnpinned) return;
   warnedUnpinned = true;
   coreLogger.warn({ extensions: names },
-    'Extensions loaded from ~/.octipus/extensions or .octipus/extensions are not pinned (no content hash, signature or approval); '
+    'Extensions loaded from ~/.octipus/extensions are not pinned (no content hash, signature or approval); '
     + 'for anything but development, install them as in-process plugins (docs/PLUGIN-PACKAGES.md#runtimes)');
 }
 

@@ -319,7 +319,7 @@ describe('the bundled name', () => {
     const { isBundledName, listBundled, installBundled } = await import('./bundled');
     expect(isBundledName('reader')).toBe(true);
     expect(isBundledName('host-plugin')).toBe(false);
-    expect(isBundledName('../reader')).toBe(false);
+    expect(isBundledName(join('..', NAME))).toBe(false);
     const svc = await import('./service');
     await svc.uninstall(NAME, ADMIN.id);
     // A package of someone else's, named "reader", installed from a directory.
@@ -337,5 +337,28 @@ describe('the bundled name', () => {
     const listed = (await listBundled()).find((b) => b.name === NAME);
     expect(listed).toMatchObject({ installed: '1.0.0' });
     expect(listed?.taken).toBeUndefined();
+  });
+});
+
+describe('only the plugins Octipus ships are bundled', () => {
+  test('another directory under <install>/plugins is not listed, installable as bundled, or a shipped name', async () => {
+    const { cpSync, readFileSync, writeFileSync } = await import('node:fs');
+    const { installBundled, isBundledName, listBundled, setBundledRoot, SHIPPED_PLUGINS } = await import('./bundled');
+    expect(SHIPPED_PLUGINS).toEqual(['reader']);
+    const root = mkdtempSync(join(tmpdir(), 'octipus-install-plugins-'));
+    cpSync(join(__dirname, '..', '..', '..', 'plugins', 'reader'), join(root, 'reader'), { recursive: true });
+    // A plugin someone made and dropped into the install's plugins/: a valid package.
+    cpSync(join(__dirname, 'fixtures', 'echo-plugin'), join(root, 'my-local'), { recursive: true });
+    const manifest = JSON.parse(readFileSync(join(root, 'my-local', 'octipus-plugin.json'), 'utf8'));
+    writeFileSync(join(root, 'my-local', 'octipus-plugin.json'), JSON.stringify({ ...manifest, name: 'my-local' }));
+    setBundledRoot(root);
+    try {
+      expect((await listBundled()).map((b) => b.name)).toEqual(['reader']);
+      expect(isBundledName('my-local')).toBe(false);
+      expect(isBundledName('reader')).toBe(true);
+      await expect(installBundled('my-local', ADMIN.id)).rejects.toMatchObject({ code: 'not_found' });
+    } finally {
+      setBundledRoot(null);
+    }
   });
 });

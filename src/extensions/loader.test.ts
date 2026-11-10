@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GatewayEventBus } from '@/core/gateway/event-bus';
-import { discoverExtensions, loadExtension } from './loader';
+import { coreLogger } from '@/utils/logger';
+import { discoverExtensions, loadExtension, resetProjectLocalWarningForTests } from './loader';
 import { ExtensionRegistry } from './registry';
 
 describe('Extension Discovery + Loader', () => {
@@ -42,7 +43,7 @@ describe('Extension Discovery + Loader', () => {
   });
 
   test('discovers directory-based extension via index.ts', () => {
-    const dir = join(cwd, '.octipus', 'extensions', 'my-ext');
+    const dir = join(home, '.octipus', 'extensions', 'my-ext');
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'index.ts'), 'export default function () {}');
 
@@ -63,22 +64,39 @@ describe('Extension Discovery + Loader', () => {
     expect(found.map(f => f.name)).toEqual(['real']);
   });
 
-  test('first-seen wins when same name appears in user and project', () => {
+  test('does not discover project-local extensions in <cwd>/.octipus/extensions', () => {
     const userDir = join(home, '.octipus', 'extensions');
     const projDir = join(cwd, '.octipus', 'extensions');
     mkdirSync(userDir, { recursive: true });
-    mkdirSync(projDir, { recursive: true });
+    mkdirSync(join(projDir, 'from-repo'), { recursive: true });
     writeFileSync(join(userDir, 'shared.ts'), 'export default function () {}');
     writeFileSync(join(projDir, 'shared.ts'), 'export default function () {}');
+    writeFileSync(join(projDir, 'only-in-repo.ts'), 'export default function () {}');
+    writeFileSync(join(projDir, 'from-repo', 'index.ts'), 'export default function () {}');
 
     const found = discoverExtensions({ home, cwd });
-    // user dir is first in defaultDirs, so it wins
-    expect(found).toHaveLength(1);
-    expect(found[0].entryPath).toBe(join(userDir, 'shared.ts'));
+    expect(found.map((f) => f.entryPath)).toEqual([join(userDir, 'shared.ts')]);
+  });
+
+  test('warns once, naming the project-local extensions it skips', () => {
+    const projDir = join(cwd, '.octipus', 'extensions');
+    mkdirSync(projDir, { recursive: true });
+    writeFileSync(join(projDir, 'only-in-repo.ts'), 'export default function () {}');
+    resetProjectLocalWarningForTests();
+    const warn = vi.spyOn(coreLogger, 'warn').mockImplementation(() => {});
+    try {
+      discoverExtensions({ home, cwd });
+      discoverExtensions({ home, cwd });
+      const calls = warn.mock.calls.filter(([, msg]) => typeof msg === 'string' && msg.includes('are not loaded'));
+      expect(calls).toHaveLength(1);
+      expect(calls[0][0]).toMatchObject({ extensions: ['only-in-repo'], userDir: join(home, '.octipus', 'extensions') });
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test('loadExtension imports the module and runs the factory', async () => {
-    const dir = join(cwd, '.octipus', 'extensions');
+    const dir = join(home, '.octipus', 'extensions');
     mkdirSync(dir, { recursive: true });
     const file = join(dir, 'pingpong.ts');
     writeFileSync(file, [
@@ -105,7 +123,7 @@ describe('Extension Discovery + Loader', () => {
   });
 
   test('a factory that throws leaves nothing registered behind', async () => {
-    const dir = join(cwd, '.octipus', 'extensions');
+    const dir = join(home, '.octipus', 'extensions');
     mkdirSync(dir, { recursive: true });
     const file = join(dir, 'halfway.ts');
     writeFileSync(file, [
@@ -122,7 +140,7 @@ describe('Extension Discovery + Loader', () => {
   });
 
   test('loadExtension returns undefined when file has no default export', async () => {
-    const dir = join(cwd, '.octipus', 'extensions');
+    const dir = join(home, '.octipus', 'extensions');
     mkdirSync(dir, { recursive: true });
     const file = join(dir, 'broken.ts');
     writeFileSync(file, 'export const notDefault = 1;');
@@ -132,7 +150,7 @@ describe('Extension Discovery + Loader', () => {
   });
 
   test('ExtensionRegistry.reload disposes commands and re-runs discovery to add new files', async () => {
-    const dir = join(cwd, '.octipus', 'extensions');
+    const dir = join(home, '.octipus', 'extensions');
     mkdirSync(dir, { recursive: true });
 
     writeFileSync(join(dir, 'first.ts'), [
@@ -184,7 +202,7 @@ describe('Extension Discovery + Loader', () => {
   });
 
   test('one bad extension does not block others', async () => {
-    const dir = join(cwd, '.octipus', 'extensions');
+    const dir = join(home, '.octipus', 'extensions');
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'bad.ts'), 'export default function () { throw new Error("init boom"); }');
     writeFileSync(join(dir, 'good.ts'), [

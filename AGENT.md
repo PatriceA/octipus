@@ -63,7 +63,8 @@ src/
     swarm/        spawn_child, budgets, cancel, error mapping
     rag/          auto-indexer, hybrid search (BM25 + vector)
     errors/       FailoverReason / RecoveryAction / classifyError
-    memory/       long-term memory; personas/ persona engine; reader/ ; research/
+    memory/       long-term memory; personas/ persona engine; research/;
+                  web-read/ (the fetch behind the plugin host scope web:read)
     artifacts/ documents/ trajectories/ work-stream/  agent output surfaces
     agent-worker.ts, cli-agent-worker.ts, tool-executor.ts, scheduler.ts
   db/             Drizzle schema, repositories, migrations, seeds (seed-*.ts)
@@ -76,7 +77,7 @@ src/
   mcp/            external MCP client bridge
   connectors/     OAuth connectors (e.g. Atlassian) + registry
   extensions/     extension API + loader (host-side plugin runtime)
-  plugins/        plugin loader + plugin-as-tool wrapper
+  plugins/        plugin loader + plugin-as-tool wrapper; packages/ (plugin packages)
   hooks/          event hook manager (triggers, actions, suggestions)
   capabilities/   optional hardware/capability installers (hwfit)
   voice/          STT / TTS / wake-word / telephony
@@ -84,12 +85,12 @@ src/
   tui-pi/         terminal chat client (pi-tui)
   tui-editor/     TUI code editor
   services/ shared/ setup/   org services, shared types/diff, setup probes
-mcp-server/       standalone MCP server (87 tools across 25 groups)
+mcp-server/       standalone MCP server (85 tools across 24 groups)
 web/              Vite + React Router dashboard
 browser-extension/  companion browser extension
 bin/              octi launcher CLI (bin/octi start|stop)
 personas/         persona YAML definitions
-extensions/       installed plugins (example-plugin, github)
+plugins/          the example plugin package only (plugins/reader, plugins/README.md)
 eval/             YAML eval scenarios
 scripts/          migrate, setup, backup, doctor, e2e, integration, key rotation
 docs/             feature & architecture docs (see README Documentation table)
@@ -213,9 +214,14 @@ think you need to break one, open an issue first.
 - **Channel** → `src/channels/<name>/`. Must speak the gateway protocol; no
   channel-specific root agent hooks. One line in `CHANNEL_MODULES` in
   `src/channels/discovery.ts`.
-- **Plugin / extension** → a directory under `extensions/` (resolved from the backend's working directory) with
-  `plugin.json` + `index.ts`; loaded by `src/plugins/loader.ts`. See the
-  `plugin-development` skill and `docs/PLUGINS.md`.
+- **Plugin / extension** → never in this repository. Deprecated legacy plugins
+  (`plugin.json` + `index.ts`, `src/plugins/loader.ts`) load from
+  `~/.octipus/legacy-plugins/`, in-process extensions from
+  `~/.octipus/extensions/`; neither reads the working directory. See
+  `docs/PLUGINS.md`.
+- **Plugin package** → never under `plugins/`: only the example plugin
+  (`plugins/reader`) ships there, and every other plugin lives outside the
+  repository (`docs/PLUGIN-PACKAGES.md#where-plugins-live`).
 - **Persona** → a YAML file in `personas/`; loaded by `src/core/personas/`.
 - **Connector** → `src/connectors/<name>/definition.ts`, register in the
   connector registry. OAuth via `oauth-http-transport.ts`.

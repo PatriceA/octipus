@@ -11,8 +11,11 @@ which run inside the server with its full rights. (Trusted extensions, the
 `octi.*` modules that hook the agent loop, can now be installed as packages
 too, with `runtime: "in-process"`: see [Runtimes](#runtimes).) Use a package for anything
 that talks to the outside world or handles credentials. Those plugins are
-deprecated; `octi plugin convert <dir>` turns one into a package
-([PLUGINS.md](PLUGINS.md#converting-to-a-plugin-package)).
+deprecated; they load from `~/.octipus/legacy-plugins/<name>` (no longer from
+`<cwd>/extensions`), and `octi plugin convert <dir>` turns one into a package
+([PLUGINS.md](PLUGINS.md#converting-to-a-plugin-package)). Pass `--out` or run
+the converter outside the Octipus checkout: the output defaults to
+`<cwd>/<name>-package`.
 
 ## What a package is
 
@@ -58,6 +61,7 @@ server (any language) that the manifest says how to start:
 | `entry` | For `in-process` only: the module to load. |
 | `ui` | Pages the package adds to the web app: `{ "dir"?: "ui", "pages": [{ "path", "title", "icon"?, "entry" }] }` ([Pages](#pages)). |
 | `host` | Host API scopes it asks for, from `notes:read`, `notes:write`, `tasks:read`, `tasks:write`, `documents:read`, `notify`, `web:read`, `model:complete`; an admin approves them when enabling ([Host API](#host-api)). |
+| `model` | `{ "trustedInput": true, "reason": "…" }`: its `model:complete` prompts carry no outside data, so an admin may let them run on CLI lanes. Leave it out unless that holds ([Model calls on CLI lanes](#model-calls-on-cli-lanes)). |
 
 Every problem in a manifest is reported at once; a package that does not fit is
 refused at install.
@@ -1069,6 +1073,8 @@ first, then the install's; in a space, with the user's space role):
 - `409 no_model` when none is bound, and `409 cli_model` when the lane runs
   on a CLI model: a vendor CLI is an agent harness on the host, and a
   plugin's prompt never drives one. Bind an API or local model to `everyday`.
+  The one exception is a package with an approved `model.trustedInput`
+  ([Model calls on CLI lanes](#model-calls-on-cli-lanes)).
 - It runs as part of the calling session, at the highest protection level
   the same package call has read through the host API (documents, tasks):
   level 3-4 content stays on local models (`409 protection_level` when there
@@ -1177,11 +1183,84 @@ limited per client address (then `429`) and audited in aggregate: one row
 (op `refused`, its `code`, `count`) per kind and package per minute, carrying
 the refusals counted since the previous row.
 
+### Model calls on CLI lanes
+
+A plugin's `model:complete` call is refused (`409 cli_model`) when the user's
+`everyday` lane is bound to a CLI model. A CLI is an agent with its own tools
+(shell, files) that runs as the Octipus server user, outside the package's
+sandbox; Antigravity runs with `--dangerously-skip-permissions`, Vibe with
+`--auto-approve`, Codex with `exec`. A plugin's prompt can carry outside
+data (a fetched page, a mail, a document, another person's words) written
+to steer it, so by default its calls stay off such a lane.
+
+A package whose prompts carry no outside data can say so in its manifest:
+
+```json
+"host": ["model:complete"],
+"model": { "trustedInput": true, "reason": "Prompts are fixed templates filled with counts from our intranet API." }
+```
+
+- `trustedInput` defaults to false; absent means untrusted.
+- `reason` is required with it, at most 300 characters, and shown to the admin.
+- The install refuses it without the host scope `model:complete`, together
+  with `web:read` (a fetched page is outside data by definition), and for
+  runtime `in-process`.
+- With `network` hosts or `*:read` host scopes it is allowed (a company API
+  can be a trusted source), but the install, `plugin_validate` and the admin
+  page warn and list them: whatever they return can reach the prompts.
+
+**The flag grants nothing by itself**: a package declares it about itself.
+An admin approves it explicitly as `model:cli-tools`, an item of
+`approveHostScopes` next to the host scopes (`PATCH /api/plugin-packages/:name
+{ "approveHostScopes": ["model:complete", "model:cli-tools"] }`; the list
+replaces the approved one, so leaving it out revokes it). On the admin page,
+the package's row shows the warning, the reason and the sources and has its
+own approve/revoke button; the enable confirmation says whether it is
+approved. Enabling does not ask for it: a package enabled without it works,
+and its model calls stay off CLI lanes. From the command line: `octi plugin
+approve-cli-tools <name>` (asks; `--yes` when not at a terminal, `--revoke`
+to take it back). Only a package that declares `model.trustedInput` can have
+it approved. **Every upgrade clears it**, with the host scopes. The approval
+and its revocation are audited (`model_cli_tools_approved`,
+`model_cli_tools_revoked`); the package view carries `modelCliTools`
+(`reason`, `approved`, `active`, `sourcesWarning`).
+
+When the lane resolves to a CLI model and the package declares the flag and
+both `model:complete` and `model:cli-tools` are approved, the call runs:
+
+- A CLI with a tool-less mode (Claude Code, GLM, Kimi) still runs in it.
+- One without (Antigravity, Vibe, Codex) runs with its normal arguments, in a
+  fresh empty directory of its own that is removed afterwards, never the
+  workspace root. The prompt, a multi-line one and the `system` text
+  included, always goes on stdin and never into the command line: Codex reads
+  it with `exec … -`, Vibe with a bare `-p` (its documented stdin mode), and
+  Antigravity as one stream-json user event (`--input-format stream-json
+  --output-format stream-json`, its documented stdin channel; `--print`
+  takes the prompt only as an argument, so it is not used here).
+- The per-user token allowance, the rate limit, the spend budgets and the
+  protection routing apply as for any `model:complete` call. Its audit row
+  (`resource_type = plugin_host`, op `model.complete`) records the package,
+  the tool, the model and `cliTools: true`.
+
+Core one-shot completions (summaries, mail triage and the like) are not
+affected: they always run tool-less and are refused on Antigravity, Vibe and
+Codex ([CLI-AGENTS.md](CLI-AGENTS.md#one-shot-completions-lanes)).
+
 ## Bundled plugins
 
-First-party plugins ship with Octipus as package directories under
-`plugins/` in the checkout or install (the Docker image included). Each is an
-ordinary plugin package; shipping with Octipus gives it no trust of its own:
+Octipus ships one plugin: **the example plugin**, Reader (`plugins/reader`,
+[plugins/README.md](../plugins/README.md)). It is the reference
+implementation of a package plugin: tools with effects, host API scopes and a
+page that calls its tools through the bridge. Read it before you write your
+own. It is an example, not a product feature, so onboarding does not offer it.
+
+The plugins Octipus ships are an explicit list, `SHIPPED_PLUGINS` in
+`src/plugins/packages/bundled.ts` (today `['reader']`), of package directories
+under `plugins/` in the checkout or install (the Docker image included). Any
+other directory under `plugins/` is never listed, installed as bundled or
+treated as a shipped name; Octipus logs it once, as a warning. A bundled
+plugin is an ordinary plugin package; shipping with Octipus gives it no trust
+of its own:
 
 - **Listed** on Admin → Plugin packages under *Bundled*, by `GET
   /api/plugin-packages/bundled` (name, version, title, description, the host
@@ -1205,7 +1284,34 @@ under `plugins.requireSignature` they are refused like any unsigned package.
 
 | Plugin | What it does | Host scopes |
 |---|---|---|
-| `reader` | The reader ([MODULES.md](MODULES.md)): a page in a clean view, summarized, simplified, translated, its action items or an answer about it, saved as a note or as to-dos. Tools `read_url`, `reader_action` (read), `save_note`, `create_tasks` (write); the page *Reader* at `/plugins/reader/read`. | `web:read`, `model:complete`, `notes:write`, `tasks:write` |
+| `reader` | The example plugin (it replaced the core reader, [MODULES.md](MODULES.md#modules-that-move-to-plugins)): a page in a clean view, summarized, simplified, translated, its action items or an answer about it, saved as a note or as to-dos. Tools `read_url`, `reader_action` (read), `save_note`, `create_tasks` (write); the page *Reader* at `/plugins/reader/read`. | `web:read`, `model:complete`, `notes:write`, `tasks:write` |
+
+## Where plugins live
+
+A plugin you make, by hand, with `octi plugin` or through an agent in
+[creator mode](#writing-a-plugin-with-an-agent), stays on your machine, whether
+you run a release install or a git checkout:
+
+- **The source** is in a directory of your own, or in the agent's workspace
+  (the skill suggests `my-plugins/<name>/` there).
+- **The installed copy** is in `<workspace.rootPath>/plugin-packages/<name>`
+  (by default `~/.octipus/workspace`), copied there at install.
+- **Its data** is in `<workspace.rootPath>/plugin-data/<name>`.
+- **Nothing is written into the Octipus install or repository.** An install
+  refuses a plugin store or data directory that resolves inside
+  `<install>/plugins` (a misconfigured `workspace.rootPath`), with an error
+  that says so.
+- **Only the example plugin ships in `plugins/`.** The repository's
+  `.gitignore` ignores every other path under `plugins/`, and Octipus does not
+  offer one as bundled. New plugins are not added to the repository.
+- **No plugin system reads plugins from the Octipus checkout.** Plugin
+  packages load from the plugin store above; deprecated legacy plugins
+  (`plugin.json`, [PLUGINS.md](PLUGINS.md)) from `~/.octipus/legacy-plugins/`;
+  in-process extensions from `~/.octipus/extensions/`. The server's working
+  directory is not searched: `<cwd>/extensions/` (where legacy plugins used to
+  load from) and a project's `<cwd>/.octipus/extensions/` are not loaded, and
+  the server logs one warning naming anything it finds there. The
+  repository's `.gitignore` ignores both directories.
 
 ## Installing and managing
 
@@ -1272,6 +1378,7 @@ octi plugin approve finapi            # shows the actual hash and asks (at a ter
 octi plugin approve-in-process auditlog --hash sha256:<contentHash>   # an in-process plugin
 octi plugin approve-contributions finapi   # shows its commands, schedules, events, context and prompt text, and asks
 octi plugin approve-contributions finapi --hash sha256:<contributions.hash>
+octi plugin approve-cli-tools digest  # model:cli-tools for a package with model.trustedInput; asks (--yes, --revoke)
 octi plugin set finapi region=eu limit=50 note=   # settings; key= clears one
 octi plugin secret finapi FINAPI_CLIENT_SECRET    # hidden prompt
 octi plugin secret finapi FINAPI_CLIENT_SECRET < secret.txt   # or stdin
@@ -1343,6 +1450,13 @@ into its workspace with the filesystem tool and edits them; a read tool rather
 than a scaffolding write, because the filesystem tool already decides where an
 agent's files go and asks for its writes.
 
+Beyond the templates, the skill points the agent to **the example plugin**,
+`plugins/reader` ([Bundled plugins](#bundled-plugins)), as the complete
+package to read: tools, host scopes and a page through the bridge. The skill
+tells the agent to write its package in its own workspace
+(`my-plugins/<name>/`), never in the Octipus repository ([Where plugins
+live](#where-plugins-live)).
+
 **What `plugin_install` refuses:**
 
 - **A user who is not an active admin.** Only admins install plugins, so only
@@ -1358,8 +1472,8 @@ agent's files go and asks for its writes.
   the plugin store, a remote execution environment, and a shared space.
 - **`runtime: "in-process"`**, with a message saying so.
 - **A package that does not validate**, with every problem.
-- **The name of a plugin shipped with Octipus** (`plugins/<name>`, such as
-  `reader`), so an agent cannot take its place before an admin installs it.
+- **The name of a plugin shipped with Octipus** (one of `SHIPPED_PLUGINS`,
+  today only `reader`), so an agent cannot take its place before an admin installs it.
 - **Replacing someone else's package.** `upgrade: true` replaces only a
   package whose current version an agent of the same user installed; never one
   a person or another user's agent installed. An upgrade is disabled again,

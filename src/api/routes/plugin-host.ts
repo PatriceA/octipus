@@ -334,19 +334,19 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
   })
 
   // One public web page, fetched by the host through its SSRF guard and turned
-  // into a clean article (the reader extraction): the package never touches
+  // into a clean article (src/core/web-read): the package never touches
   // the network itself. Size and time are capped by the fetcher (5 MB, 15 s);
   // the text handed back is capped here.
   .post('/web/read', (ctx) => run(ctx, 'web.read', 'web:read', async ({ grant }, details) => {
     Object.assign(details, webReadAuditOf(ctx.body.url));
-    const { fetchReaderDoc, ReaderFetchError } = await import('@/core/reader/fetch');
-    let doc: Awaited<ReturnType<typeof fetchReaderDoc>>;
+    const { fetchArticle, WebReadError } = await import('@/core/web-read/fetch');
+    let doc: Awaited<ReturnType<typeof fetchArticle>>;
     try {
-      doc = await fetchReaderDoc(ctx.body.url);
+      doc = await fetchArticle(ctx.body.url);
     } catch (err) {
       // The package learns only that it was refused or failed, never why
       // (an address, a status, a size): no probing of what lies behind the guard.
-      const code = err instanceof ReaderFetchError && err.blocked ? 'blocked' : 'fetch_failed';
+      const code = err instanceof WebReadError && err.blocked ? 'blocked' : 'fetch_failed';
       apiLogger.info({ err: (err as Error).message, plugin: grant.plugin, ...details }, 'plugin-host: web:read refused or failed');
       details.code = code;
       ctx.set.status = 422;
@@ -368,10 +368,13 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
 
   // One text completion on the calling user's `everyday` model (their own
   // binding first, then the install's). No tools, no history: a system text
-  // and a prompt in, the model's text out. Input and output are capped.
+  // and a prompt in, the model's text out. Input and output are capped. A CLI
+  // lane is refused (409 cli_model) unless the package declares
+  // model.trustedInput and an admin approved model:cli-tools; such a call's
+  // audit row records the model and `cliTools: true`.
   .post('/model/complete', (ctx) => run(ctx, 'model.complete', 'model:complete', async ({ grant, principal }, details) => {
     const { pluginModelComplete } = await import('@/plugins/packages/host-model');
-    const outcome = await pluginModelComplete(grant, principal, ctx.body);
+    const outcome = await pluginModelComplete(grant, principal, ctx.body, details);
     if (!outcome.ok) {
       ctx.set.status = outcome.status;
       if (outcome.retryAfter) ctx.set.headers['retry-after'] = String(outcome.retryAfter);

@@ -76,12 +76,6 @@ export function ModulesTab() {
                   <span className="block text-on-surface-variant">{m.description}</span>
                 </span>
               </label>
-              {m.replacedBy && (
-                <p className="text-[11px] text-warning pl-6" data-testid={`module-${m.id}-replaced`}>
-                  {m.replacedBy.note}
-                  {user?.isAdmin && <> <a href="/admin/plugins" className="text-primary hover:underline">plugin packages →</a></>}
-                </p>
-              )}
               {adds.length > 0 && <p className="text-[11px] text-on-surface-variant pl-6">adds {adds.join(' · ')}</p>}
               {m.dependsOn.length > 0 && <p className="text-[11px] text-on-surface-variant pl-6">needs {m.dependsOn.map((id) => titles.get(id) ?? id).join(', ')}</p>}
               {blockers.length > 0 && <p className="text-[11px] text-on-surface-variant pl-6">needed by {blockers.map((id) => titles.get(id) ?? id).join(', ')}: turn that off first</p>}

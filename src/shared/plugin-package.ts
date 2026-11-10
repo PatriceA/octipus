@@ -84,6 +84,11 @@ export interface PluginManifest extends PluginManifestContributions {
   ui?: PluginUiDecl;
   /** Host API scopes the package asks for (see "Pages and host API" below). */
   host?: PluginHostScope[];
+  /**
+   * What the package says about the prompts of its `model:complete` calls
+   * (see "Model calls on CLI lanes" below). Absent: untrusted.
+   */
+  model?: PluginModelDecl;
 }
 
 /** An installed package as the API returns it. */
@@ -186,7 +191,13 @@ export interface PluginPackageView {
    * null before any approval. A scope the manifest declares and this list
    * lacks is not granted, and enabling asks for it again.
    */
-  approvedHostScopes: PluginHostScope[] | null;
+  approvedHostScopes: PluginHostApproval[] | null;
+  /**
+   * The manifest's `model.trustedInput` and whether an admin approved it
+   * (`model:cli-tools` in `approveHostScopes`); null when the manifest does
+   * not declare it (see "Model calls on CLI lanes" below).
+   */
+  modelCliTools: PluginModelCliToolsView | null;
   installedBy: string | null;
   installedAt: string;
   updatedAt: string;
@@ -410,6 +421,76 @@ export const PLUGIN_HOST_META_KEY = 'octipus/host';
 export const PLUGIN_HOST_ALIAS = 'octipus-host.internal';
 
 // ── end pages and host API ─────────────────────────────────────────────
+
+// ── Model calls on CLI lanes (docs/PLUGIN-PACKAGES.md#model-calls-on-cli-lanes) ──
+// A plugin's `model:complete` call is refused (409 cli_model) when the user's
+// `everyday` lane is bound to a CLI model: a vendor CLI is an agent harness
+// with its own tools (shell, files), run as the Octipus server user, and a
+// plugin's prompt may carry outside data written to steer it. A package whose
+// prompts carry none can say so (`model.trustedInput`, with a reason), and
+// only an admin's explicit approval of `model:cli-tools` lets its calls run
+// on such a lane. An upgrade clears the approval, like every host scope.
+
+/** The most characters `model.reason` may have. */
+export const MAX_MODEL_TRUST_REASON_CHARS = 300;
+
+/** What `model` in the manifest declares. */
+export interface PluginModelDecl {
+  /**
+   * The package's prompts to `model:complete` are built only from its own
+   * constants or from sources the admin trusts, never from outside data
+   * (web pages, mail, user files, other people's words). Default false.
+   * Needs `model:complete`, refuses `web:read` and runtime `in-process`.
+   */
+  trustedInput?: boolean;
+  /** Why the prompts carry no outside data; required with `trustedInput`, shown to the admin. */
+  reason?: string;
+}
+
+/**
+ * The approval item of `model.trustedInput`, sent in `approveHostScopes`
+ * next to the host scopes. Not a scope a manifest declares in `host`, and
+ * never handed to a package's token.
+ */
+export const PLUGIN_MODEL_CLI_TOOLS_APPROVAL = 'model:cli-tools';
+export type PluginHostApproval = PluginHostScope | typeof PLUGIN_MODEL_CLI_TOOLS_APPROVAL;
+
+/** The warning the admin approves `model:cli-tools` under. */
+export const MODEL_CLI_TOOLS_WARNING = 'Its model calls may run on CLI agents with their own tools (shell, files) as the Octipus server user; '
+  + 'only approve if its prompts never carry outside data.';
+
+export interface PluginModelCliToolsView {
+  /** The manifest's `model.reason`. */
+  reason: string;
+  /** Whether an admin approved `model:cli-tools` for this version. */
+  approved: boolean;
+  /** Approved, and `model:complete` is approved too: its calls may run on a CLI lane. */
+  active: boolean;
+  /** The package's other sources of data the admin must trust: `network` hosts and `*:read` host scopes; null when none. */
+  sourcesWarning: string | null;
+}
+
+/** Whether a manifest declares `model.trustedInput`. */
+export function declaresTrustedModelInput(m: Pick<PluginManifest, 'model'>): boolean {
+  return m.model?.trustedInput === true;
+}
+
+/**
+ * The sources a package with `model.trustedInput` can still build prompts
+ * from, which only the admin can judge: its `network` hosts and its `*:read`
+ * host scopes (`web:read` is refused outright). Null when it has none.
+ */
+export function modelCliToolsSourcesWarning(m: Pick<PluginManifest, 'network' | 'host'>): string | null {
+  const hosts = m.network ?? [];
+  const reads = (m.host ?? []).filter((s) => s.endsWith(':read'));
+  if (hosts.length === 0 && reads.length === 0) return null;
+  const parts = [
+    ...(hosts.length > 0 ? [`the network hosts ${hosts.join(', ')}`] : []),
+    ...(reads.length > 0 ? [`the host scopes ${reads.join(', ')}`] : []),
+  ];
+  return `It also reads from ${parts.join(' and ')}: approve only if you trust what they return, since it can reach its prompts.`;
+}
+// ── end model calls on CLI lanes ────────────────────────────────────────────
 
 /**
  * A first-party plugin shipped with Octipus (`plugins/<name>` in the install),
