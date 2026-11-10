@@ -63,6 +63,14 @@ describe('plugins config', () => {
     expect(plugins({ registries: [{ name: 'Acme', url: 'not a url' }] }).success).toBe(false);
   });
 
+  it('"marketplace" is reserved and registry names are unique (review P5)', () => {
+    const url = 'https://plugins.example.com/index.json';
+    expect(plugins({ registries: [{ name: 'marketplace', url }] }).success).toBe(false);
+    expect(plugins({ registries: [{ name: ' Marketplace ', url }] }).success).toBe(false);
+    expect(plugins({ registries: [{ name: 'Acme', url }, { name: 'Acme', url: 'https://other.example.com/index.json' }] }).success).toBe(false);
+    expect(plugins({ registries: [{ name: 'Acme', url }, { name: 'Beta', url }] }).success).toBe(true);
+  });
+
   it('a registry may name the publisher whose signature its index must carry', () => {
     expect(plugins({ registries: [{ name: 'Acme', url: 'https://plugins.example.com/index.json', publisher: 'Acme' }] }).success).toBe(true);
     expect(plugins({ registries: [{ name: 'Acme', url: 'https://plugins.example.com/index.json', publisher: '' }] }).success).toBe(false);

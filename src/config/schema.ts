@@ -921,10 +921,17 @@ export const configSchema = z.object({
      * publisher (docs/PLUGIN-PACKAGES.md#signed-registry-indexes).
      */
     registries: z.array(z.object({
-      name: z.string().min(1).max(100),
+      /** Unique; `marketplace` is reserved for the built-in Octipus marketplace. */
+      name: z.string().min(1).max(100).refine((v) => v.trim().toLowerCase() !== 'marketplace', '"marketplace" is reserved for the built-in Octipus marketplace; name the registry otherwise'),
       url: z.string().url().max(2000).refine((v) => v.startsWith('https://'), 'a registry is reached over https'),
       publisher: z.string().min(1).max(100).optional(),
-    })).default([]),
+    })).default([]).superRefine((list, ctx) => {
+      const seen = new Set<string>();
+      list.forEach((r, i) => {
+        if (seen.has(r.name)) ctx.addIssue({ code: 'custom', path: [i, 'name'], message: `the registry name "${r.name}" is used twice; registry names are unique` });
+        seen.add(r.name);
+      });
+    }),
     /**
      * Tokens (input + output) one user's plugin `model:complete` calls may use
      * per UTC day, all packages together; 0 turns those calls off.
