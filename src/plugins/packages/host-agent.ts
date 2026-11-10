@@ -339,18 +339,7 @@ export interface PluginRunListItem {
  * any output.
  */
 export async function listRunningRuns(plugin: string, userId?: string): Promise<PluginRunListItem[]> {
-  const { getDb } = await import('@/db/postgres');
-  const { backgroundJobs } = await import('@/db/schema/background-jobs');
-  const { and, desc, eq, inArray, sql } = await import('drizzle-orm');
-  const rows = await getDb().select().from(backgroundJobs)
-    .where(and(
-      eq(backgroundJobs.kind, 'agent'),
-      inArray(backgroundJobs.status, ['running', 'queued']),
-      sql`${backgroundJobs.payload}->>'plugin' = ${plugin}`,
-      ...(userId ? [eq(backgroundJobs.userId, userId)] : []),
-    ))
-    .orderBy(desc(backgroundJobs.createdAt))
-    .limit(200);
+  const rows = await backgroundJobRepository.runningForPlugin(plugin, userId);
   return rows.map((r) => ({
     id: r.id, userId: r.userId, startedAt: (r.startedAt ?? r.createdAt).toISOString(),
     role: typeof r.payload.role === 'string' ? r.payload.role : DEFAULT_RUN_ROLE, title: r.title,
