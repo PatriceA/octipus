@@ -10,9 +10,9 @@
  */
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { auditLog } from '@/db/schema/audit';
+import { auditRepository } from '@/db/repositories/audit-repository';
 import { type PluginPackageRow, pluginPackages } from '@/db/schema/plugin-packages';
 import { type BundledPluginView, PLUGIN_MANIFEST_FILE } from '@/shared/plugin-package';
 import { octipusRoot } from '@/utils/install-root';
@@ -52,10 +52,7 @@ export function isBundledName(name: string): boolean {
  * is another package that took it.
  */
 async function installedFromBundle(row: Pick<PluginPackageRow, 'name' | 'version' | 'contentHash'>, dir: string): Promise<boolean> {
-  const [last] = await getDb().select({ details: auditLog.details }).from(auditLog)
-    .where(and(eq(auditLog.resourceType, 'plugin_package'), eq(auditLog.resourceId, row.name),
-      sql`${auditLog.details}->>'op' IN ('installed', 'upgraded')`))
-    .orderBy(desc(auditLog.createdAt)).limit(1);
+  const [last] = await auditRepository.findPluginInstalls([row.name]);
   if ((last?.details as { source?: unknown } | undefined)?.source === `bundled:${row.name}`) return true;
   if (!row.contentHash) return false;
   try {
