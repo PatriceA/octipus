@@ -14,6 +14,8 @@ const FIELDS: Field[] = [
   { min: 1, max: 12, name: 'month' },
   { min: 0, max: 7, name: 'day of week' },
 ];
+/** The five fields in order, with their ranges (the plugin authoring contract shows them). */
+export const CRON_FIELDS: ReadonlyArray<Readonly<Field>> = FIELDS;
 
 export interface CronSpec {
   sets: Array<Set<number>>;
