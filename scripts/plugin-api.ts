@@ -97,6 +97,7 @@ function line(p: PluginPackageView): string {
     ...(p.actualHash ? [`    actual:    ${p.actualHash}   (approve with: octi plugin approve ${p.name} --hash ${p.actualHash})`] : []),
     ...(inProcess ? [`    in-process: ${approval}`] : []),
     ...(p.contributions?.hash ? [`    contributions: ${p.contributions.approved ? `approved (${p.contributions.hash})` : `not approved (review: octi plugin approve-contributions ${p.name})`}`] : []),
+    ...(p.authoredBy ? [`    authored:  by an agent (session ${p.authoredBy.sessionId ?? 'none'}, user ${p.authoredBy.userId}); review before enabling`] : []),
   ].join('\n');
 }
 

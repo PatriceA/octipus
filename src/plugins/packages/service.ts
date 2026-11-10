@@ -60,6 +60,7 @@ import type { MCPServer } from '@/shared/mcp-server';
 import {
   PLUGIN_MANIFEST_FILE,
   type PluginHostScope,
+  type PluginAgentAuthorship,
   type PluginInProcessStatus,
   type PluginManifest,
   type PluginNetworkStatus,
@@ -68,6 +69,7 @@ import {
   pluginRuntime,
 } from '@/shared/plugin-package';
 import { coreLogger } from '@/utils/logger';
+import { type AgentAuthoredDetails, agentAuthorship, agentAuthorships } from './authoring/authorship';
 import { contributionInstallProblems, contributionsView, syncContributions } from './contributions';
 import { checkInProcessBundle } from './in-process-bundle';
 import { contributionsHashOf, hasContributions } from './contributions/approval';
@@ -329,6 +331,8 @@ export async function installFromDirectory(
     allowSignerChange?: boolean;
     /** An upgrade may install an older version (audited). */
     allowDowngrade?: boolean;
+    /** The agent that wrote the package (creator mode, ./authoring): recorded in the audit row, shown on the admin page. */
+    authoredBy?: AgentAuthoredDetails;
   } = {},
 ): Promise<PluginPackageRow & { warnings: string[] }> {
   const source = resolve(sourceDir);
@@ -461,6 +465,7 @@ export async function installFromDirectory(
     runtime: pluginRuntime(manifest),
     ...(opts.source ? { source: opts.source } : {}),
     ...(previous?.approvedContributionsHash ? { contributionsApprovalCleared: previous.approvedContributionsHash } : {}),
+    ...(opts.authoredBy ? { authoredBy: opts.authoredBy } : {}),
     ...overrides,
   });
   await syncPluginServers();
@@ -873,7 +878,7 @@ export function inProcessApproved(row: PluginPackageRow): boolean {
   return row.contentHash !== null && row.inProcessApprovedHash === row.contentHash;
 }
 
-async function viewOf(row: PluginPackageRow, secrets: string[]): Promise<PluginPackageView> {
+async function viewOf(row: PluginPackageRow, secrets: string[], authoredBy?: PluginAgentAuthorship | null): Promise<PluginPackageView> {
   const bridge = getMCPBridge();
   const signature = await currentSignature(row);
   const serverId = `${PLUGIN_SERVER_PREFIX}${row.name}`;
@@ -938,6 +943,7 @@ async function viewOf(row: PluginPackageRow, secrets: string[]): Promise<PluginP
     inProcess,
     contributions: await contributionsView(row),
     approvedHostScopes: row.approvedHostScopes ?? null,
+    authoredBy: authoredBy !== undefined ? authoredBy : await agentAuthorship(row.name),
     installedBy: row.installedBy,
     installedAt: row.installedAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -1007,7 +1013,8 @@ export function networkStatus(m: PluginManifest, runner = activeSandboxRunner({ 
 export async function listPackages(): Promise<PluginPackageView[]> {
   const rows = await getDb().select().from(pluginPackages).orderBy(pluginPackages.name);
   const entries = rows.some((r) => (r.manifest.secrets ?? []).length > 0) ? await getVault().list('system') : [];
-  return Promise.all(rows.map(async (row) => viewOf(row, await secretsSet(row, entries))));
+  const authors = await agentAuthorships(rows.map((r) => r.name));
+  return Promise.all(rows.map(async (row) => viewOf(row, await secretsSet(row, entries), authors.get(row.name) ?? null)));
 }
 
 /** One installed package, for the admin API. */

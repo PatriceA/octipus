@@ -430,3 +430,29 @@ export interface BundledPluginView {
   problem?: string;
 }
 
+
+// ── Creator mode (docs/PLUGIN-PACKAGES.md#writing-a-plugin-with-an-agent) ───
+// An agent may write a `package` plugin in its workspace and install it with
+// `plugin_dev__plugin_install` (src/tools/plugin-dev): always disabled, for an
+// admin to review and enable. The install's audit row records who asked.
+
+/** The agent that wrote and installed a package's current version. */
+export interface PluginAgentAuthorship {
+  /** The user whose agent installed it (an admin, who approved the call). */
+  userId: string;
+  /** The chat session the agent ran in, when it ran in one. */
+  sessionId: string | null;
+  agentId: string | null;
+  /** When it was installed. */
+  at: string;
+}
+
+export interface PluginPackageView {
+  /**
+   * Set when the current version was installed by an agent (creator mode),
+   * read from its `installed`/`upgraded` audit row; null when a person
+   * installed it.
+   */
+  authoredBy: PluginAgentAuthorship | null;
+}
+// ── end creator mode ────────────────────────────────────────────────────────
