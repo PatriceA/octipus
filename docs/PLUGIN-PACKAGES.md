@@ -823,17 +823,21 @@ file that cannot be read, verified or parsed counts for nothing.
 | Threat | What the host does |
 | --- | --- |
 | No keys in this build | The root keys in `src/plugins/packages/marketplace-keys.ts` are placeholders until a release ships real ones. While either is, the marketplace is off: never fetched, never trusted, nothing installs; the listing says *"The Octipus marketplace is not configured in this build"*. A placeholder never verifies anything. |
-| A forged index or package | The index must be signed by a signing key the root-signed `keys.json` endorses now; a package from the marketplace must carry a valid signature by one of those keys, and only those (a key in `trustedPublishers` does not count for the marketplace, and the marketplace's keys count for nothing else). |
+| A forged index or package | The index must be signed by a signing key the root-signed `keys.json` endorses now; a package from the marketplace must carry a valid signature by one of those keys, and only those (a key in `trustedPublishers` does not count for the marketplace, and the marketplace's keys count for nothing else). An installed marketplace package starts only while that holds, whatever `requireSignature` says: a signature that is unknown (its key dropped from `keys.json`, or a stored `keys.json` that no longer verifies), expired, revoked, invalid or missing stops it. |
+| Marketplace trust leaking out | `keys.json` may revoke only a key it endorses or ever endorsed (`plugin_marketplace_keys.endorsed_key_ids`), or a root; any other revocation in it is ignored (logged). Its key revocations, and the index's package revocations, apply to marketplace trust only: packages installed from the marketplace, installs from it and its index. Never to `trustedPublishers`, a directory, URL or bundled install, or another registry (the admin's own `plugins.revokedKeys` reaches everything). |
 | A listing that understates | The host recomputes the permissions from the downloaded manifest (`computePermissions`) and refuses any difference from the listing's, with an audit row (`listing_mismatch`); the same for `contentHash`, name and version. |
-| A published version replaced | The `contentHash` of every `name@version` is pinned per registry the first time it is listed; a later index claiming another hash for it is refused as a whole, audited (`listing_replaced`) and notified to admins. |
+| A published version replaced | The `contentHash` of every `name@version` is pinned per registry the first time it is listed, with the key that signed that index ([Listing pins](#listing-pins)). A later index claiming another hash for it has that entry refused ("replaced: refused", in the listing's `errors`), audited (`listing_replaced`) and notified to admins once; the rest of the index stays usable. |
+| A leaked key squatting future versions | A pin taken under a key revoked since holds nothing back: it is dropped (audited, `listing_pins_dropped`) and the version pinned afresh by the next index. An admin can reset one pin, with a reason (`DELETE /api/plugin-packages/pins`, audited `listing_pin_reset`). |
 | A replayed old index | `generatedAt` only moves forward per registry (one conditional upsert); an older index, or another index with the same `generatedAt`, is refused, as is one dated more than a day ahead. |
 | A replayed old keys file | `keys.json`'s `version` only grows; the same version with the same bytes is fine, anything else refused. |
-| A leaked signing key | The key holder revokes it in `keys.json` (signed by a root key) and endorses a new one. Revocations are sticky: a later file that drops one does not lift it. Installs and starts of anything signed by a revoked key are refused, everywhere on the host. |
+| A leaked signing key | The key holder revokes it in `keys.json` (signed by a root key) and endorses a new one. Revocations are sticky: a later file that drops one does not lift it. Installs and starts of marketplace packages signed by a revoked key are refused. The package revocations its indexes published are flagged `signerRevoked` and no longer enforced, unless an index signed by a trusted key lists them again. |
 | A leaked root key | `rootBackup` signs a `keys.json` that revokes `root`. From then on `root` verifies nothing. `root` can never revoke `rootBackup`: a file that tries is refused as a whole. A leaked root may have pushed `version` high; a file from the backup root that revokes it is accepted anyway (a file signed by a revoked root holds nothing back). Losing both roots needs a new release. |
 | A future-dated index from a leaked key | An index signed by a key revoked since does not hold the next one back, so the backup's revocation always gets through. |
-| A revoked package version | Package revocations in a verified index are stored in the database, refused at install and at every start, shown on the row (`revocation`), audited (`revoked_online`) and notified to admins; a running server is stopped. They hold while the marketplace is unreachable and across restarts. |
+| A revoked package version | Package revocations in a verified index are stored in the database, refused at install from the marketplace and at every start of a marketplace package, shown on the row (`revocation`), audited (`revoked_online`) and notified to admins (one notification per index, with a count); its server, tokens, background runs and in-process module are stopped on every instance. They hold while the marketplace is unreachable and across restarts. |
 | The marketplace unreachable | Listing and installing from it stop ("unavailable"). Installed marketplace packages keep running only if their signatures verify against the last stored `keys.json`, re-verified against the root keys whenever it is read. |
-| Hostile text and links | Index v2 is parsed with a strict schema: a limit on every string and list, no control characters, no bidirectional or invisible formatting characters in short fields, an unknown `schema` above 2 refused. README and CHANGELOG are returned as raw Markdown for the client to render sanitized, without raw HTML or remote images. `homepage` and `author.url` are https or dropped. The index's own `keyId` field is never used: who signed is read from the signature. |
+| A host frozen on an old index (a mirror or a man in the middle replaying a valid one) | `keys.json` and the index may carry `expires`; past it they are refused. When the last accepted index or `keys.json` was generated more than 7 days ago, the Marketplace page shows a banner (`stale`) and admins get one `plugin_marketplace_stale` notification per stale file. |
+| Several server instances | Each instance applies the revocations in force it has not applied yet on every marketplace index read and every cron tick (stopping its own servers, tokens and runs); the instance that stored them audits and notifies. An install consent preview lives on the instance that made it ([The install consent](#the-install-consent)). |
+| Hostile text and links | Index v2 is parsed with a strict schema: a limit on every string and list, no control characters, no bidirectional or invisible formatting characters in short fields (zero-width and bidi marks, U+00AD, U+115F, U+180E, U+2060–U+2064, U+3164, U+FEFF, tag characters), an unknown `schema` above 2 refused. A v1 description, and any name or schema path echoed in a problem, has those characters removed; the CLI strips its output again. README and CHANGELOG are returned as raw Markdown for the client to render sanitized, without raw HTML or remote images. `homepage` and `author.url` are https or dropped. The index's own `keyId` field is never used: who signed is read from the signature. |
 | Hostile images | Icons and screenshots must be https on the registry's origin under `/<name>/`, else dropped. The host fetches only an image a readable index lists (never a URL a client names), through the SSRF guard, with no redirect off the origin, at most 2 MB, and keeps it only when its bytes are PNG, JPEG, WebP or GIF (no SVG). It is served with the sniffed type, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'` and `Content-Disposition: inline`. |
 | Takeover by another registry | An upgrade from another source than the installed version's (another registry, the marketplace) is a change the admin confirms (`allowSourceChange`), recorded in the audit row (`sourceChange`). |
 | Escaping the sandbox | The marketplace carries sandboxed packages only: a listing with `runtime: in-process` is shown as not installable, and an install requires runtime `package` on the staged copy. |
@@ -862,7 +866,7 @@ bytes, so it can never pass for a package or index signature):
 
 ```json
 {
-  "schema": 1, "version": 3, "generatedAt": "2026-11-10T12:00:00Z",
+  "schema": 1, "version": 3, "generatedAt": "2026-11-10T12:00:00Z", "expires": "2026-12-10T12:00:00Z",
   "signingKeys": [{ "keyId": "ed25519:<64 hex>", "publicKey": "-----BEGIN PUBLIC KEY-----\n…", "notAfter": "2027-12-31" }],
   "revokedKeys": [{ "keyId": "ed25519:<64 hex>", "reason": "leaked" }]
 }
@@ -870,11 +874,32 @@ bytes, so it can never pass for a package or index signature):
 
 The host fetches it from the marketplace origin (64 KiB at most), verifies it
 against the root keys that are not revoked, checks each listed key's id
-against its key, refuses a root listed as a signing key, applies the root
-rule above, stores it with its signature (`plugin_marketplace_keys`), and
-stores its revocations (`plugin_revocations`). Only listed, non-revoked,
-unexpired signing keys are trusted. Sign it with `octi plugin sign-keys
-keys.json --key <root.key>` on an offline machine.
+against its key, refuses a root listed as a signing key, refuses the file once
+its optional `expires` (an ISO date-time with a zone) has passed, applies the
+root rule above, stores it with its signature (`plugin_marketplace_keys`) and
+the union of every signing key any accepted file listed (`endorsed_key_ids`),
+and stores its revocations (`plugin_revocations`) of keys in that union or
+roots; a revocation of any other key is ignored. Only listed, non-revoked,
+unexpired signing keys are trusted, for the marketplace only. A stored file
+past its `expires` still verifies installed packages (refusing it there would
+stop every marketplace package while the marketplace is unreachable); the
+staleness banner covers that case.
+
+Sign it with `octi plugin sign-keys keys.json --key <root.key> [--root-pub
+<other-root.pub>]` on an offline machine: it checks the file as a host reads
+it first (the schema, a whole `version`, no root among the signing keys, not
+expired) and signs nothing otherwise. `octi plugin verify-keys keys.json
+--root-pub root.pub --root-pub root-backup.pub --json` checks a signed one
+([Packing and publishing](#packing-and-publishing)).
+
+**What the marketplace repository publishes.** `keys.json` with the fields
+above (`expires` optional, recommended: about a month, renewed well before);
+the index v2 with an optional top-level `expires` and a `generatedAt` no more
+than 7 days old (publish at least weekly, even when nothing changed, or hosts
+warn their admins); every `revoked` package entry listed again in each index
+(a revocation by a key revoked since counts again only when a trusted key
+lists it); each `keys.json` listing every revoked key (a key it never endorsed
+cannot be revoked by it).
 
 **Configuring a build.** Make the two root keys offline (`octi plugin keygen
 octipus-root`, `octi plugin keygen octipus-root-backup`), paste the two `.pub`
@@ -907,7 +932,7 @@ the new key. No Octipus host needs an update.
 
 Read as the [octipus-plugins](https://github.com/PatriceA/octipus-plugins#index-v2)
 publish script writes it: `{ schema: 2, generatedAt, publisher, url,
-packages: [...], revoked: [...] }`, each package with the v1 fields (`name`,
+packages: [...], revoked: [...], expires? }`, each package with the v1 fields (`name`,
 `version`, `description`, `url`, `sha256`) and `contentHash`, `apiVersion`,
 `minOctipus`, `title`, `summary`, `category`, `tags`, `icon`, `screenshots`,
 `homepage`, `author: { name, url }`, `readme` and `changelog` (the newest
@@ -917,7 +942,26 @@ entry of each plugin only), `publisher`, `license`, `publishedAt`, `keyId`
 from the marketplace only) and `{ keyId, reason }` (ignored: key revocation
 lives in `keys.json`). v1 indexes keep working for other registries; the
 marketplace requires v2 and every tarball on its origin. An entry that does
-not fit is skipped; a malformed `revoked` refuses the whole index.
+not fit is skipped; a malformed `revoked` refuses the whole index. An index
+whose `expires` (optional, an ISO date-time with a zone) has passed is
+refused, for any registry.
+
+### Listing pins
+
+The first time a registry lists a `name@version` with a `contentHash`, the
+host pins that hash (`plugin_listing_pins`), with the key that signed the
+index (`signed_by`; null for an unsigned registry). A published version never
+changes content: a later index listing another hash for it has that entry
+refused, shown in the listing's `errors` as `<name> <version>: replaced:
+refused (pinned …, now listed as …)`, audited (`listing_replaced`) and
+notified once (`plugin_listing_replaced`); the rest of the index is listed and
+installable. A pin whose signer is revoked now (by `keys.json` for the
+marketplace, by `plugins.revokedKeys` for any registry) holds nothing: it is
+dropped and the version pinned again by the next index, so a leaked key that
+listed a future version first cannot lock out the real one. When a version was
+re-published on purpose, an admin resets its pin with `DELETE
+/api/plugin-packages/pins { registry, name, version, reason }` (audited,
+`listing_pin_reset`); the next index read pins it afresh.
 
 ### Compatibility
 
@@ -946,17 +990,41 @@ source is a change of source (`allowSourceChange`); direct installs
 ### Online revocation
 
 Package revocations come from a marketplace index verified by a currently
-endorsed signing key; key revocations come from `keys.json`. Both are stored
-in `plugin_revocations` and only accumulate. A revoked version or key is
-refused at install and at every start; enabling and approving a revoked
-version are refused; the row shows `revocation: { kind, keyId, reason,
-source, since }`; admins get a `plugin_revoked` notification.
+endorsed signing key; key revocations come from `keys.json` (for keys it
+endorses or ever endorsed, and roots). Both are stored in `plugin_revocations`,
+with the key that signed what they came from (`signedByKey`), and only
+accumulate.
+
+**Scope.** They are about the marketplace's own packages: a revoked version
+or key is refused at install from the marketplace and at every start of a
+package installed from it (`origin.source === 'marketplace'`); enabling and
+approving a revoked version are refused; the row shows `revocation: { kind,
+keyId, reason, source, since }`. A package of the same name and version
+installed from a directory, a URL, the bundled plugins or another registry is
+not touched, and a key the admin trusts through `trustedPublishers` keeps
+counting there. `plugins.revokedKeys` is the admin's lever for those.
+
+**Signers.** A package revocation whose signer is revoked since (by
+`keys.json`, or `plugins.revokedKeys`) is flagged `signerRevoked` and not
+enforced; when an index signed by a trusted key lists it again, it is
+re-asserted under that key and enforced again. A key revocation is never
+flagged this way.
+
+**Effects.** Admins get one `plugin_revoked` notification per index (or
+keys file) that brings new revocations, with the count and the first ten.
+Every instance stops what a revocation covers: the one that stored it at
+once, the others on their next marketplace index read or cron tick (they keep
+the ids applied in memory and catch up on any revocation in force they have
+not applied). An in-process plugin already loaded is re-checked on every sync
+and unloaded when its start check refuses it now.
 
 An admin can lift one (an error on the marketplace's side, say):
-`GET /api/plugin-packages/revocations` lists them, and `DELETE
+`GET /api/plugin-packages/revocations` lists them (with `scope:
+"marketplace"`, `enforced` and `signerRevoked`), and `DELETE
 /api/plugin-packages/revocations/:id { "reason": "…" }` clears one (audited,
-`revocation_cleared`; the row is kept). While the marketplace still lists
-the revocation, its next index revokes it again.
+`revocation_cleared`; the row is kept). The revocation of a root key is never
+cleared (409). While the marketplace still lists the revocation, its next
+index revokes it again.
 
 ### Updates
 
@@ -993,7 +1061,7 @@ rows of its background runs, with the number of model calls and runs.
 
 | Route | Who | Answer |
 | --- | --- | --- |
-| `GET /api/plugin-packages/marketplace?q=&category=` | admins | `MarketplaceListing`: `{ state, message, generatedAt, plugins, categories, errors }` |
+| `GET /api/plugin-packages/marketplace?q=&category=` | admins | `MarketplaceListing`: `{ state, message, generatedAt, plugins, categories, errors, stale }` |
 | `GET /api/plugin-packages/marketplace/asset?url=` | admins | the image bytes (PNG, JPEG, WebP, GIF), or `{ error }` with 400, 404, 413, 415 or 502 |
 | `POST /api/plugin-packages { registry, name, version?, upgrade?, allowSourceChange?, allowSignerChange?, allowDowngrade?, allowIncompatible? }` | admins | `{ name, version, enabled, contentHash, signedBy, warnings, guidance, origin, manifest }` |
 | `POST /api/plugin-packages/preview { registry, name, version? \| url, sha256? \| path \| bundled }` | admins | `PluginInstallPreview` ([The install consent](#the-install-consent)) |
@@ -1002,7 +1070,8 @@ rows of its background runs, with the number of model calls and runs.
 | `GET /api/plugin-packages/:name/runs?status=running` | admins | `[{ id, userId, startedAt, role, title }]` |
 | `GET /api/plugin-packages/my-usage?days=30` | any user | `[{ name, title, usage, runs }]`: the caller's own use of each enabled package, and their running runs |
 | `GET /api/plugin-packages/updates` | admins | `[{ name, installed, latest, registry, diff, warnings }]` |
-| `GET /api/plugin-packages/revocations`, `DELETE …/revocations/:id` | admins | the revocations; clearing one |
+| `GET /api/plugin-packages/revocations`, `DELETE …/revocations/:id` | admins | the revocations, each with `scope`, `enforced` and `signerRevoked`; clearing one (409 for a root key) |
+| `DELETE /api/plugin-packages/pins { registry, name, version, reason }` | admins | `{ reset, registry, name, version, contentHash, note }`; 404 when there is no such pin |
 | `GET /api/plugin-packages/:name/usage`, `…/usage/me` | admins; any user | `PluginUsageView` |
 | `DELETE /api/plugin-packages/:name/runs/:id` | the run's user, or an admin | `{ id, status: "cancelled" }` |
 | `DELETE /api/plugin-host/agent/runs/:id` | the same package, for the same user | `{ id, status: "cancelled" }` |
@@ -1038,7 +1107,10 @@ same code an install runs, offline: none of these needs a running server.
 | `octi plugin verify <dir> --pub <file.pub> [--json]` | Checks `octipus-plugin.sig` against the key and the current content hash. Exit 0 when valid, 1 otherwise. `--json`: `{"valid","keyId","contentHash","error"?}` (`keyId`: the key the signature names; `error` only when not valid). Several `--pub` pass when any one verifies. |
 | `octi plugin sign-index <index.json> --key <file> [--passphrase-file <path\|->] [--json]` | Signs a registry index's exact bytes ([Signed registry indexes](#signed-registry-indexes)). `--json`: `{"sigFile","sha256","keyId"}`. |
 | `octi plugin verify-index <index.json> --pub <file.pub>... [--json]` | Checks `<index.json>.sig` over the exact bytes, as `sign-index` signs them. Passes when any one `--pub` verifies, and names it. `--json`: `{"valid","keyId","pub","sha256","error"?}` (`pub`: the path of the key that verified, else null; `sha256`: `sha256:<hex>` of the index bytes). |
-| `octi plugin keygen <prefix> [--passphrase-file <path\|->] [--json]` | A key pair; `--json`: `{"key","pub","keyId","encrypted"}`. |
+| `octi plugin keygen <prefix> [--passphrase-file <path\|->] [--json]` | A key pair; `--json`: `{"key","pub","keyId","encrypted"}`. Without `--passphrase-file` the private key is written unencrypted, with a loud warning on stderr (a root key must always be encrypted and kept offline). |
+| `octi plugin sign-keys <keys.json> --key <root.key> [--root-pub <file>...] [--passphrase-file <path\|->] [--json]` | Signs the marketplace's keys file with a root key ([Marketplace keys](#marketplace-keys)), after checking it as a host reads it: the schema, no root (the signer, any `--root-pub`) among the signing keys, not expired. `--json`: `{"sigFile","sha256","keyId"}`. |
+| `octi plugin verify-keys <keys.json> --root-pub <file>... [--json]` | Checks `<keys.json>.sig` by a root (the first `--root-pub` is `root`, the second `rootBackup`), the schema, the root revocation rule and `expires`. `--json`: `{"valid","keyId","version","endorsed":[keyId],"revoked":[keyId],"error"?}` (`keyId`: the root that signed). It cannot know which keys earlier files endorsed: a host ignores a revocation of a key no accepted file ever endorsed. |
+| `octi plugin unpack <tarball> --out <dir> [--json]` | Unpacks with the strict tar reader install uses (no links, no path out of the target, no duplicate path, the size and file limits) into a new or empty `<dir>`. `--json`: `{"out","root","sha256","name","version"}` (`root`: the package directory inside `<dir>`; `sha256`: `sha256:<hex>` of the tarball). |
 
 Every one exits non-zero on an error (2 for a usage error). With `--json`,
 stdout carries exactly one JSON document (one line) and every diagnostic goes
@@ -1841,7 +1913,11 @@ was declared) is guidance under the item, never a refusal.
 3. **Previews** belong to the admin who made them, are single-use (spent by
    the first install that passes the agreement check, whatever happens next),
    expire after 15 minutes, and live on the server process that made them;
-   their staged copy is removed when spent or expired.
+   their staged copy is removed when spent or expired. The staged copy is a
+   directory on that instance's disk, so with several instances behind a load
+   balancer the install must reach the same one (sticky sessions); one that
+   reaches another instance is refused as "made on another server instance"
+   (fails closed) and the admin previews again.
 
 A package installed without this consent (by an agent, `plugin_install`,
 which still lands disabled; or before this flow) is agreed to from its

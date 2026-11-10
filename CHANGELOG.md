@@ -9,6 +9,38 @@ labels reflect blast radius, not contract guarantees.
 
 ### Security
 
+- **Plugin marketplace hardening (independent review).** Marketplace trust
+  stays inside the marketplace: `keys.json` may revoke only keys it endorses
+  or ever endorsed (and roots), and its key revocations and the index's
+  package revocations apply only to packages installed from the marketplace,
+  installs from it and its index; never to `trustedPublishers`, directory,
+  URL or bundled installs or other registries. A marketplace package starts
+  only with a valid signature by a key `keys.json` endorses now, whatever
+  `requireSignature` says (a key simply dropped from `keys.json` stops its
+  packages). A package revocation from a signing key revoked since is
+  flagged `signerRevoked` and not enforced until a trusted key lists it
+  again; listing pins record their signer and a revoked signer's pins are
+  dropped. An entry that replaces a pinned version is refused alone
+  ("replaced: refused"), the rest of the index kept; `DELETE
+  /api/plugin-packages/pins` resets one pin (audited, with a reason). Every
+  instance applies the revocations in force (index read, cron tick), and a
+  loaded in-process plugin is unloaded when its start check refuses it now.
+  One `plugin_revoked` notification per index. A root key's revocation can no
+  longer be cleared. `keys.json` and index v2 take an optional `expires`
+  (refused after it); a banner and a `plugin_marketplace_stale` notification
+  when the last accepted one is older than 7 days. Control, bidi and
+  invisible characters are removed from v1 descriptions and echoed names, and
+  refused in more forms (U+00AD, U+115F, U+180E, U+2060–U+2064, U+3164, tag
+  characters). The asset proxy re-checks that an image is listed before
+  serving it from cache and coalesces concurrent fetches; the marketplace's
+  tarballs stay on its origin through redirects. `plugins.registries` refuses
+  the name `marketplace` and duplicate names. **Migration** 0180 adds
+  `plugin_marketplace_keys.endorsed_key_ids` and `plugin_listing_pins.signed_by`.
+- **`octi plugin`:** `sign-keys` checks the keys file as a host reads it
+  before signing; `keygen` warns loudly about an unencrypted key; new
+  `verify-keys <keys.json> --root-pub <file>... --json` and `unpack
+  <tarball> --out <dir> --json` (the install's strict tar reader).
+
 - **One install consent per item, bound to the content.** A plugin is
   previewed first (`POST /api/plugin-packages/preview`: downloaded and
   verified with the install's own checks, staged outside the store, nothing

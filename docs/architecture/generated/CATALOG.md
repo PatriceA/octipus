@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-663 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
+664 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -436,6 +436,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/plugin-packages/marketplace` | `src/api/routes/plugin-packages.ts` |
 | GET | `/api/plugin-packages/marketplace/asset` | `src/api/routes/plugin-packages.ts` |
 | GET | `/api/plugin-packages/my-usage` | `src/api/routes/plugin-packages.ts` |
+| DELETE | `/api/plugin-packages/pins` | `src/api/routes/plugin-packages.ts` |
 | POST | `/api/plugin-packages/preview` | `src/api/routes/plugin-packages.ts` |
 | GET | `/api/plugin-packages/registry` | `src/api/routes/plugin-packages.ts` |
 | GET | `/api/plugin-packages/revocations` | `src/api/routes/plugin-packages.ts` |
@@ -705,7 +706,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 5 |
 | `api` | `models` | 39 |
-| `api` | `plugins` | 25 |
+| `api` | `plugins` | 28 |
 | `api` | `security` | 171 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 24 |
@@ -743,7 +744,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `mcp` | 11 |
 | `core` | `models` | 134 |
 | `core` | `modules` | 2 |
-| `core` | `plugins` | 7 |
+| `core` | `plugins` | 8 |
 | `core` | `security` | 228 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
@@ -793,13 +794,13 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `models` | `services` | 1 |
 | `models` | `shared` | 4 |
 | `models` | `utils` | 43 |
-| `plugins` | `config` | 9 |
+| `plugins` | `config` | 10 |
 | `plugins` | `core` | 27 |
 | `plugins` | `db` | 47 |
 | `plugins` | `extensions` | 2 |
 | `plugins` | `mcp` | 6 |
 | `plugins` | `models` | 2 |
-| `plugins` | `security` | 17 |
+| `plugins` | `security` | 18 |
 | `plugins` | `shared` | 29 |
 | `plugins` | `tools` | 1 |
 | `plugins` | `utils` | 34 |
