@@ -630,6 +630,19 @@ Build the bridge with `npm run build --prefix mcp-server` along with the backend
 Missing compiled bridge files fail at startup of the run. Capability details are
 shown in the model settings and `/work-plan` for a CLI root.
 
+## One-shot completions (lanes)
+
+A CLI model bound to a lane also answers one-shot completions (a summary, a
+reader action, a plugin's `model:complete`). These always run in the CLI's
+tool-less mode: prompt on stdin, no native tools, no MCP servers, no user or
+project settings, an install row's in an empty directory (a personal row's in
+its owner's own one), never the workspace root. Their callers feed in fetched
+pages, mail and plugin-written prompts, so a CLI that cannot run without its
+own tools (Antigravity, Vibe, Codex) answers no completion: the call fails
+with "it has no mode without its own tools". Use such a CLI as an agent model
+(`/model`, a role or pipeline stage) and bind an API model or Claude Code to
+the lanes.
+
 ## Session reuse
 
 Octipus hands the vendor CLI its own session id back on the next turn (for

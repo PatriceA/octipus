@@ -1309,6 +1309,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
   },
 
+  {
+    key: 'plugins.hostModelDailyTokens',
+    category: 'security',
+    valueType: 'number',
+    defaultValue: 200_000,
+    description:
+      'Tokens (input + output) one user\'s plugin model:complete calls may use per UTC day, all plugin packages together (docs/PLUGIN-PACKAGES.md#host-api). 0 turns plugin model calls off.',
+    isSecret: false,
+  },
+
   // ── Protection levels (docs/PROTECTION-LEVELS.md) ──
   {
     key: 'protection.remoteAtLevel3',

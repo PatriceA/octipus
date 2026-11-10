@@ -17,6 +17,7 @@
  * documents above the package's `maxProtection` are refused, and what is
  * read raises the calling session's protection level.
  */
+import { createHash } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
@@ -29,7 +30,7 @@ import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { contentRepos } from '@/db/repositories/content';
 import { users } from '@/db/schema/users';
-import { type HostTokenGrant, verifyHostToken } from '@/plugins/packages/host-api';
+import { type HostTokenGrant, noteHostRead, verifyHostToken } from '@/plugins/packages/host-api';
 import { clientIp } from '@/security/client-ip';
 import { egressStampValid, HOST_API_EGRESS_HEADER, HOST_API_EGRESS_KEY_HEADER } from '@/security/egress-proxy';
 import type { Principal } from '@/security/principal';
@@ -144,26 +145,41 @@ async function authorize(ctx: HostCtx, op: string, scope: PluginHostScope | null
 }
 
 /** Run an endpoint body: audit the outcome, map a space refusal to its status. */
-async function run<T>(ctx: HostCtx, op: string, scope: PluginHostScope | null, body: (a: Authorized) => Promise<T>): Promise<T | { error: string; code?: string }> {
+async function run<T>(
+  ctx: HostCtx, op: string, scope: PluginHostScope | null,
+  body: (a: Authorized, details: Record<string, unknown>) => Promise<T>,
+): Promise<T | { error: string; code?: string }> {
   const a = await authorize(ctx, op, scope);
   if ('error' in a) return a;
+  // What the endpoint adds to its audit row (a URL's host and hash, a refusal code).
+  const details: Record<string, unknown> = {};
   try {
-    const out = await body(a);
+    const out = await body(a, details);
     const status = typeof ctx.set.status === 'number' ? ctx.set.status : 200;
-    await audit(a.grant, a.grant.plugin, op, status, scope ? { scope } : {});
+    await audit(a.grant, a.grant.plugin, op, status, { ...(scope ? { scope } : {}), ...details });
     return out;
   } catch (err) {
     if (err instanceof SpaceError) {
       const status = spaceErrorStatus(err);
       ctx.set.status = status;
-      await audit(a.grant, a.grant.plugin, op, status, { scope, code: err.code });
+      await audit(a.grant, a.grant.plugin, op, status, { scope, code: err.code, ...details });
       return { error: err.message, code: err.code };
     }
     apiLogger.error({ err, plugin: a.grant.plugin, op }, 'plugin-host: request failed');
     ctx.set.status = 500;
-    await audit(a.grant, a.grant.plugin, op, 500, { scope });
+    await audit(a.grant, a.grant.plugin, op, 500, { scope, ...details });
     return { error: 'The host API request failed' };
   }
+}
+
+/**
+ * A `web:read` URL as the audit records it: its host and a sha256 of the
+ * whole URL, never the URL (its path and query can carry what the package read).
+ */
+export function webReadAuditOf(url: string): { host: string; urlSha256: string } {
+  let host = '';
+  try { host = new URL(url).host; } catch { host = ''; }
+  return { host, urlSha256: createHash('sha256').update(url).digest('hex') };
 }
 
 /** `web:read`: the article text handed back at most (the rest is cut, `truncated`). */
@@ -233,6 +249,7 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
     const provenance = await Promise.all(all.map((task) => taskProvenance(grant.userId, [task])));
     const tasks = all.filter((_task, i) => provenance[i].protectionLevel <= grant.maxProtection);
     const kept = provenance.filter((p) => p.protectionLevel <= grant.maxProtection);
+    for (const p of kept) noteHostRead(grant, p.protectionLevel);
     if (grant.sessionId && kept.length > 0) {
       observeTaskProvenance(grant.sessionId, {
         protectionLevel: Math.max(...kept.map((p) => p.protectionLevel)),
@@ -303,8 +320,10 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
       ctx.set.status = 403;
       return { error: `The document is at protection level ${level}; this package may see up to ${grant.maxProtection}`, code: 'protection_level' };
     }
-    // The text goes back into the calling conversation with the tool's result.
+    // The text goes back into the calling conversation with the tool's result,
+    // and whatever this call sends to a model afterwards carries its level.
     if (grant.sessionId) raiseSessionLevel(grant.sessionId, doc.protectionLevel);
+    noteHostRead(grant, level);
     return {
       id: doc.id, name: doc.originalName, mimeType: doc.mimeType, size: doc.size, category: doc.category,
       summary: doc.summary, text: doc.ocrText, protectionLevel: level, createdAt: doc.createdAt,
@@ -318,14 +337,22 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
   // into a clean article (the reader extraction): the package never touches
   // the network itself. Size and time are capped by the fetcher (5 MB, 15 s);
   // the text handed back is capped here.
-  .post('/web/read', (ctx) => run(ctx, 'web.read', 'web:read', async () => {
-    const { fetchReaderDoc } = await import('@/core/reader/fetch');
+  .post('/web/read', (ctx) => run(ctx, 'web.read', 'web:read', async ({ grant }, details) => {
+    Object.assign(details, webReadAuditOf(ctx.body.url));
+    const { fetchReaderDoc, ReaderFetchError } = await import('@/core/reader/fetch');
     let doc: Awaited<ReturnType<typeof fetchReaderDoc>>;
     try {
       doc = await fetchReaderDoc(ctx.body.url);
     } catch (err) {
+      // The package learns only that it was refused or failed, never why
+      // (an address, a status, a size): no probing of what lies behind the guard.
+      const code = err instanceof ReaderFetchError && err.blocked ? 'blocked' : 'fetch_failed';
+      apiLogger.info({ err: (err as Error).message, plugin: grant.plugin, ...details }, 'plugin-host: web:read refused or failed');
+      details.code = code;
       ctx.set.status = 422;
-      return { error: (err as Error).message, code: 'fetch_failed' };
+      return code === 'blocked'
+        ? { error: 'This address may not be fetched', code }
+        : { error: 'The page could not be fetched', code };
     }
     const truncated = doc.textContent.length > WEB_READ_MAX_CHARS || doc.contentHtml.length > WEB_READ_MAX_HTML;
     return {
@@ -342,26 +369,16 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
   // One text completion on the calling user's `everyday` model (their own
   // binding first, then the install's). No tools, no history: a system text
   // and a prompt in, the model's text out. Input and output are capped.
-  .post('/model/complete', (ctx) => run(ctx, 'model.complete', 'model:complete', async ({ grant }) => {
-    const { resolveModel } = await import('@/models/resolve-model');
-    const model = await resolveModel({ userId: grant.userId, topic: 'everyday' });
-    if (!model) {
-      ctx.set.status = 409;
-      return { error: 'No model is bound to the "everyday" lane; bind one on the Topics page', code: 'no_model' };
+  .post('/model/complete', (ctx) => run(ctx, 'model.complete', 'model:complete', async ({ grant, principal }, details) => {
+    const { pluginModelComplete } = await import('@/plugins/packages/host-model');
+    const outcome = await pluginModelComplete(grant, principal, ctx.body);
+    if (!outcome.ok) {
+      ctx.set.status = outcome.status;
+      if (outcome.retryAfter) ctx.set.headers['retry-after'] = String(outcome.retryAfter);
+      details.code = outcome.code;
+      return { error: outcome.error, code: outcome.code };
     }
-    const { getLiteLLMClient } = await import('@/models/litellm-client');
-    const result = await getLiteLLMClient().complete({
-      model: model.modelId,
-      modelConfigName: model.name,
-      messages: [
-        ...(ctx.body.system ? [{ role: 'system' as const, content: ctx.body.system, timestamp: new Date() }] : []),
-        { role: 'user' as const, content: ctx.body.prompt, timestamp: new Date() },
-      ],
-      temperature: ctx.body.temperature ?? 0.3,
-      maxTokens: ctx.body.maxTokens ?? 1200,
-      userId: grant.userId,
-    });
-    return { output: (result.content ?? '').trim(), model: model.name };
+    return { output: outcome.output, model: outcome.model };
   }), {
     body: t.Object({
       system: t.Optional(t.String({ maxLength: 4000 })),

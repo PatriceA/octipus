@@ -1068,6 +1068,22 @@ export function defaultMaxProtection(m: Pick<PluginManifest, 'maxProtection' | '
   return (m.network ?? []).length > 0 || (m.host ?? []).includes('web:read') || (m.ui?.pages ?? []).length > 0 ? 1 : 4;
 }
 
+/** Host scopes that send what the package hands them out of the house: any URL (`web:read`), a remote model (`model:complete`). */
+export const EGRESS_HOST_SCOPES: readonly PluginHostScope[] = ['web:read', 'model:complete'];
+
+/**
+ * The level a package may see, as enforced: its `maxProtection` (or the
+ * default above), clamped to 1 while it is granted a scope that can carry
+ * data out (`EGRESS_HOST_SCOPES`), whatever its manifest says: such a package
+ * could pass whatever it reads to any URL or model.
+ */
+export function effectiveMaxProtection(
+  m: Pick<PluginManifest, 'maxProtection' | 'network' | 'host' | 'ui'>, granted: readonly PluginHostScope[],
+): 1 | 2 | 3 | 4 {
+  const level = defaultMaxProtection(m);
+  return granted.some((s) => EGRESS_HOST_SCOPES.includes(s)) ? 1 : level;
+}
+
 /** The MCP server an installed package runs as. */
 export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
   const m = row.manifest;
@@ -1117,8 +1133,8 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
     toolExposure: { ...Object.fromEntries(Object.keys(tools).map((t) => [t, 'deferred' as const])), '*': 'hidden' },
     plugin: {
       package: row.name, version: row.version, tools: Object.fromEntries(Object.entries(tools).map(([t, d]) => [t, d.effect])),
-      // Undeclared: see defaultMaxProtection.
-      maxProtection: defaultMaxProtection(m),
+      // Undeclared: see defaultMaxProtection; clamped by egress scopes (effectiveMaxProtection).
+      maxProtection: effectiveMaxProtection(m, hostScopes),
       ...(hostScopes.length > 0 ? { hostScopes } : {}),
     },
   };

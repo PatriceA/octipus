@@ -1038,7 +1038,7 @@ and an admin approved:
 | Scope | Endpoint | What |
 |---|---|---|
 | — | `GET /api/plugin-host/whoami` | The token's package, tool, scopes, workspace kind and expiry. |
-| `notes:read` | `GET /api/plugin-host/notes?limit=&tag=` | The user's notes in the call's workspace (at most 100), bodies included. |
+| `notes:read` | `GET /api/plugin-host/notes?limit=&tag=` | The user's notes in the call's workspace (at most 100), bodies included. Notes carry no protection level (unlike documents and tasks), so none is filtered out: approve `notes:read` only for a package you would show every note to. |
 | `notes:write` | `POST /api/plugin-host/notes { title, body?, tags? }` | Creates a note; never overwrites (`409 exists` for a taken title). |
 | `tasks:read` | `GET /api/plugin-host/tasks?status=` | The user's own tasks (at most 200). A task carries the protection level and flow label of the conversation it came from (its provenance): one above the package's `maxProtection` is left out (`withheld` counts them), and the rest raise the calling session's level and label, as the tasks tool does. |
 | `tasks:write` | `POST /api/plugin-host/tasks { title, notes?, priority?, dueAt?, category?, link?: { url, label? } }` | Creates a task for the user (audited as a task mutation by `plugin:<name>`), filed under `category` and linked back to `link.url` (an http(s) URL). |
@@ -1053,19 +1053,42 @@ fetch (`fetchGuarded`: public addresses only, the IP pinned for the connect,
 each redirect checked again), at most 5 MB and 15 s, HTML only, and hands
 back only the cleaned article (allowlist HTML with no script, style or event
 handler, and plain text), the text cut at 100,000 characters (cleaned HTML
-over 400,000 characters is left out; `truncated` says so). A refused URL or
-failed fetch is `422 fetch_failed`. A user whose rules deny the web tool's
-fetch (`websearch` `fetch`) does not get the scope. A URL can carry data out
-like any request, so a package with `web:read` and no `maxProtection` may see
-level 1 only, as one with `network` hosts.
+over 400,000 characters is left out; `truncated` says so). The body is read
+as a stream and cut at 5 MB whatever its `Content-Length` says. A URL the
+guard refuses (or a redirect to one) is `422 blocked`, any other failure `422
+fetch_failed`: the package learns nothing else (no address, status or size),
+so it cannot map what lies behind the guard; the reason is logged on the
+server. The audit row records the URL's host and a sha256 of the whole URL,
+never the URL itself. A user whose rules deny the web tool's fetch
+(`websearch` `fetch`) does not get the scope.
 
 **`model:complete`** runs one completion, with no tools and no history, on
 the model the calling user's `everyday` lane resolves to (their own binding
-first, then the install's): `409 no_model` when none is bound. The system
-text is at most 4,000 characters, the prompt 40,000, `maxTokens` at most
-4,000 (default 1,200), `temperature` 0-1 (default 0.3). It costs what the
-user's own model calls cost; the host API's rate limit (60 requests in a
-burst per package and user) applies, and every call is audited.
+first, then the install's; in a space, with the user's space role):
+
+- `409 no_model` when none is bound, and `409 cli_model` when the lane runs
+  on a CLI model: a vendor CLI is an agent harness on the host, and a
+  plugin's prompt never drives one. Bind an API or local model to `everyday`.
+- It runs as part of the calling session, at the highest protection level
+  the same package call has read through the host API (documents, tasks):
+  level 3-4 content stays on local models (`409 protection_level` when there
+  is none) and level 2-3 leaves pseudonymized, as the session's own turns do
+  ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md)).
+- Cost is bounded before the call: at most 6 calls a minute per package and
+  user (`429 rate_limited`), a per-user daily token allowance for all
+  packages together, `plugins.hostModelDailyTokens` (default 200,000 tokens
+  per UTC day, 0 turns plugin model calls off: `403 model_off`; `429
+  token_cap` when used up), and the user's spend budgets (`429
+  spend_budget`). Its cost rows have the request type `plugin:<name>`.
+- The system text is at most 4,000 characters, the prompt 40,000,
+  `maxTokens` at most 4,000 (default 1,200), `temperature` 0-1 (default
+  0.3). Every call is audited.
+
+**Egress scopes cap what a package sees.** `web:read` can send anything to
+any URL, and `model:complete` to a remote model. While a package is granted
+either, it may see level 1 data only, whatever its manifest's
+`maxProtection` says. The admin page warns when such a scope comes with a
+`*:read` scope: the package can send what it reads anywhere.
 
 `web:read` and `model:complete` change no data, so a `read` tool gets them;
 `notes:write`, `tasks:write` and `notify` only go to `write` and `external`
@@ -1171,6 +1194,11 @@ ordinary plugin package; shipping with Octipus gives it no trust of its own:
   (`bundled:<name>`).
 - **Enabled** by an admin like any package, approving the host API scopes it
   asks for.
+- **Its name is its own.** A bundle shows as installed only when the package
+  under its name came from it (its last install was `bundled:<name>`, or its
+  files are the bundle's); another package holding the name shows as *name
+  taken by another package*, and installing or upgrading the bundle is
+  refused (`409`) until that package is uninstalled.
 
 Not yet: bundled plugins are not signed with an Octipus publisher key, so
 under `plugins.requireSignature` they are refused like any unsigned package.

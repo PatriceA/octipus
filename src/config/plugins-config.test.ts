@@ -6,7 +6,7 @@ import { SETTINGS_REGISTRY } from './settings-registry';
 
 /**
  * `plugins.*` (docs/PLUGIN-PACKAGES.md): key expiry and revocation on
- * trusted publishers, `revokedKeys`, and `registries`. Every source of a
+ * trusted publishers, `revokedKeys`, `registries` and `hostModelDailyTokens`. Every source of a
  * default agrees, and the schema refuses what the service could not use.
  */
 const plugins = (value: unknown) => configSchema.shape.plugins.safeParse(value);
@@ -16,10 +16,12 @@ const KEY_ID = `ed25519:${'a'.repeat(64)}`;
 describe('plugins config', () => {
   it('defaults agree: schema, defaults, legacy loader, settings registry', () => {
     const parsed = plugins({});
-    expect(parsed.success && parsed.data).toEqual({ trustedPublishers: [], revokedKeys: [], requireSignature: false, registries: [] });
-    expect(defaultConfig.plugins).toEqual({ trustedPublishers: [], revokedKeys: [], requireSignature: false, registries: [] });
-    expect(loadFromEnvLegacy().plugins).toMatchObject({ revokedKeys: [], registries: [] });
-    for (const key of ['plugins.trustedPublishers', 'plugins.revokedKeys', 'plugins.requireSignature', 'plugins.registries']) {
+    const defaults = { trustedPublishers: [], revokedKeys: [], requireSignature: false, registries: [], hostModelDailyTokens: 200_000 };
+    expect(parsed.success && parsed.data).toEqual(defaults);
+    expect(defaultConfig.plugins).toEqual(defaults);
+    expect(loadFromEnvLegacy().plugins).toMatchObject({ revokedKeys: [], registries: [], hostModelDailyTokens: 200_000 });
+    expect(SETTINGS_REGISTRY.find((s) => s.key === 'plugins.hostModelDailyTokens')?.defaultValue).toBe(200_000);
+    for (const key of ['plugins.trustedPublishers', 'plugins.revokedKeys', 'plugins.requireSignature', 'plugins.registries', 'plugins.hostModelDailyTokens']) {
       expect(SETTINGS_REGISTRY.find((s) => s.key === key), key).toBeDefined();
     }
   });
@@ -32,6 +34,12 @@ describe('plugins config', () => {
     for (const notAfter of ['next year', '2027-13-45', '2027-02-30', '2027-04-31T00:00:00Z', '01.01.2027', '2027-01-01T00:00']) {
       expect(plugins({ trustedPublishers: [{ name: 'Acme', publicKey: KEY, notAfter }] }).success, notAfter).toBe(false);
     }
+  });
+
+  it('hostModelDailyTokens is a whole number of tokens, 0 to turn plugin model calls off', () => {
+    expect(plugins({ hostModelDailyTokens: 0 }).success).toBe(true);
+    expect(plugins({ hostModelDailyTokens: -1 }).success).toBe(false);
+    expect(plugins({ hostModelDailyTokens: 1.5 }).success).toBe(false);
   });
 
   it('revokedKeys are key ids', () => {

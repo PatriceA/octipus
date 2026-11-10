@@ -18,7 +18,7 @@ import { createInterface } from 'node:readline';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { contributionInstallProblems } from '@/plugins/packages/contributions';
 import { parseManifest } from '@/plugins/packages/manifest';
-import { defaultMaxProtection } from '@/plugins/packages/service';
+import { defaultMaxProtection, effectiveMaxProtection } from '@/plugins/packages/service';
 import { isPlainRelativePath, uiDirOf } from '@/plugins/packages/manifest-ui-host';
 import { checkPackageTree } from '@/plugins/packages/tree';
 import { uiContentType } from '@/plugins/packages/ui';
@@ -51,6 +51,10 @@ describe('the package', () => {
     expect(defaultMaxProtection({ host: ['notes:write'] })).toBe(4);
     expect(defaultMaxProtection({ network: ['api.example.com'] })).toBe(1);
     expect(defaultMaxProtection({ host: ['web:read'], maxProtection: 3 })).toBe(3);
+    // Granted an egress scope, a package sees level 1 whatever its manifest says.
+    expect(effectiveMaxProtection({ host: ['web:read', 'documents:read'], maxProtection: 4 }, ['web:read', 'documents:read'])).toBe(1);
+    expect(effectiveMaxProtection({ host: ['model:complete', 'documents:read'], maxProtection: 4 }, ['model:complete', 'documents:read'])).toBe(1);
+    expect(effectiveMaxProtection({ host: ['model:complete', 'documents:read'], maxProtection: 4 }, ['documents:read'])).toBe(4);
     expect(await contributionInstallProblems(manifest, DIR, [])).toEqual([]);
     await expect(checkPackageTree(DIR)).resolves.toBeUndefined();
     // Nothing but the package itself: no tests or build output inside it.

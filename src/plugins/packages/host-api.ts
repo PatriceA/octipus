@@ -62,6 +62,18 @@ export interface HostTokenGrant {
   /** The tool whose call the token belongs to, for the audit. */
   tool: string;
   expiresAt: number;
+  /**
+   * The highest protection level of what this call has read through the host
+   * API so far (documents, tasks): a `model:complete` of the same call runs at
+   * that content level. Unset: nothing above level 1 read.
+   */
+  readLevel?: number;
+}
+
+/** Record that the call of `grant` read content at `level` (its `model:complete` runs at the highest). */
+export function noteHostRead(grant: HostTokenGrant, level: number | null | undefined): void {
+  const l = typeof level === 'number' && Number.isFinite(level) ? level : 4;
+  if (l > (grant.readLevel ?? 1)) grant.readLevel = l;
 }
 
 const live = new Map<string, HostTokenGrant>();

@@ -181,7 +181,8 @@ A package that leaves `maxProtection` out may see level 1 when it lists
 `network` hosts (a call to an outside system counts as leaving the house, like
 a remote model) or the `web:read` host scope (the host fetches any URL it
 names, and a URL can carry data out), and level 4 when it has neither (its
-sandbox has no network).
+sandbox has no network). A package granted `web:read` or `model:complete`
+sees level 1 only, even with a higher `maxProtection`.
 The call is refused before anyone is asked to approve it. An artifact data
 source on a plugin package's server is checked when the agent creates it: it
 refreshes later without the conversation that wrote its arguments.

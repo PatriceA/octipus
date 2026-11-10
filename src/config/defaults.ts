@@ -143,6 +143,7 @@ export const defaultConfig: Partial<Config> = {
     revokedKeys: [],
     requireSignature: false,
     registries: [],
+    hostModelDailyTokens: 200_000,
   },
   protection: {
     remoteAtLevel3: false,
