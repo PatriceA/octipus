@@ -1181,7 +1181,7 @@ async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<voi
     process.stdout.write(`\x1b[33m! Could not list capabilities: ${(err as Error).message}\x1b[0m\n`);
   }
   // Only offer capabilities that actually have an installer (installerKind
-  // 'node-exec'). The rest (email-processor, gitlab, google-workspace, …) are
+  // 'node-exec'). The rest (email-processor, google-workspace, …) are
   // configured later via credentials/OAuth in the UI — POSTing /install for
   // them just 409s with "No installer registered".
   const missing = caps.filter((c) => !c.available && ['node-exec', 'bun-exec'].includes(c.installerKind || '')).map((c) => c.toolId);

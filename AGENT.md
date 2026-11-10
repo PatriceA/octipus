@@ -71,11 +71,11 @@ src/
   models/         provider clients, ModelRegistry, circuit-breaker, conformance
   security/       auth (JWT/passkeys/TOTP/SAML), vault (AES-256-GCM), permissions
   skills/         skill registry: DB-backed + filesystem (SKILL.md) discovery
-  tools/          built-in tools (fs, shell, git, github, gitlab, browser,
+  tools/          built-in tools (fs, shell, git, github, browser,
                   docker, docs, knowledge, messaging, m365, google-workspace,
                   websearch, voice, visual, scheduling, tasks, artifacts…)
   mcp/            external MCP client bridge
-  connectors/     OAuth connectors (e.g. Atlassian) + registry
+  connectors/     OAuth MCP connector framework + registry (none built in)
   extensions/     extension API + loader (host-side plugin runtime)
   plugins/        plugin loader + plugin-as-tool wrapper; packages/ (plugin packages)
   hooks/          event hook manager (triggers, actions, suggestions)
@@ -85,7 +85,7 @@ src/
   tui-pi/         terminal chat client (pi-tui)
   tui-editor/     TUI code editor
   services/ shared/ setup/   org services, shared types/diff, setup probes
-mcp-server/       standalone MCP server (85 tools across 24 groups)
+mcp-server/       standalone MCP server (83 tools across 23 groups)
 web/              Vite + React Router dashboard
 browser-extension/  companion browser extension
 bin/              octi launcher CLI (bin/octi start|stop)

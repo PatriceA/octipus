@@ -1,4 +1,3 @@
-export { AtlassianTool, atlassianTool } from './atlassian';
 export { BaseTool, createParameterSchema, type ToolAvailability, type ToolContext, type ToolExecutionOptions } from './base-tool';
 export { BrowserTool, browserTool } from './browser';
 export { BrowserExtTool, browserExtTool } from './browser-ext';
@@ -12,7 +11,6 @@ export { EmailProcessorTool, emailProcessorTool } from './email-processor';
 export { FilesystemTool, filesystemTool } from './filesystem';
 export { GitTool, gitTool } from './git';
 export { GitHubTool, githubTool } from './github';
-export { GitLabTool, gitlabTool } from './gitlab';
 export { GoogleWorkspaceTool, googleWorkspaceTool } from './google-workspace';
 export { KnowledgeTool, knowledgeTool } from './knowledge';
 export { MessagingTool, messagingTool } from './messaging';

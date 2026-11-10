@@ -36,7 +36,10 @@ export default function PluginPage() {
   const name = params.name ?? '';
   const path = params['*'] ?? '';
   const pages = usePluginPages();
-  const page = (pages.data ?? []).find((p) => p.plugin === name && p.path === path) ?? null;
+  // `/plugins/<name>` alone opens the package's first page (a link that knows only the package, e.g. a finished background run).
+  const page = (pages.data ?? []).find((p) => p.plugin === name && p.path === path)
+    ?? (path === '' ? (pages.data ?? []).find((p) => p.plugin === name) : undefined)
+    ?? null;
 
   if (pages.isLoading) {
     return <main className="flex h-full items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-on-surface-variant" /></main>;

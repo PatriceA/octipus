@@ -19,7 +19,6 @@
 import { toolLogger } from '@/utils/logger';
 import * as ArtifactsModule from './artifacts';
 import * as ArtifactsToolboxModule from './artifacts-toolbox';
-import * as AtlassianModule from './atlassian';
 import { BaseTool } from './base-tool';
 import * as BrowserModule from './browser';
 import * as BrowserExtModule from './browser-ext';
@@ -33,7 +32,6 @@ import * as EmailProcessorModule from './email-processor';
 import * as FilesystemModule from './filesystem';
 import * as GitModule from './git';
 import * as GithubModule from './github';
-import * as GitlabModule from './gitlab';
 import * as GoogleWorkspaceModule from './google-workspace';
 import * as InlineUiModule from './inline-ui';
 import * as KnowledgeModule from './knowledge';
@@ -62,7 +60,6 @@ import * as WebsearchModule from './websearch';
 const MODULES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ['artifacts', ArtifactsModule],
   ['artifacts-toolbox', ArtifactsToolboxModule],
-  ['atlassian', AtlassianModule],
   ['browser', BrowserModule],
   ['browser-ext', BrowserExtModule],
   ['cases', CasesModule],
@@ -75,7 +72,6 @@ const MODULES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ['filesystem', FilesystemModule],
   ['git', GitModule],
   ['github', GithubModule],
-  ['gitlab', GitlabModule],
   ['google-workspace', GoogleWorkspaceModule],
   ['inline-ui', InlineUiModule],
   ['knowledge', KnowledgeModule],

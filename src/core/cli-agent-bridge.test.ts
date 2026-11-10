@@ -459,7 +459,7 @@ it.each([true, false])('accepts a delayed approval decision beyond the bridge ba
     fixture.waitListener?.('a', false, requestId);
     return approved;
   });
-  fixture.execute.mockResolvedValue('jira result');
+  fixture.execute.mockResolvedValue('remote result');
   writeFileSync(fixture.script, `
     const response = await fetch(process.env.OCTIPUS_AGENT_URL + '/call', {method:'POST',
       headers:{Authorization:'Bearer '+process.env.OCTIPUS_AGENT_KEY},body:JSON.stringify({name:'approval_sample',arguments:{}})});
@@ -470,7 +470,7 @@ it.each([true, false])('accepts a delayed approval decision beyond the bridge ba
     { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
   worker.registerTool({ name: 'approval_sample', toolId: 'sample', description: '', parameters: { type: 'object' }, execute: fixture.execute });
   try {
-    if (approved) await expect(worker.run('sample')).resolves.toContain('jira result');
+    if (approved) await expect(worker.run('sample')).resolves.toContain('remote result');
     else await expect(worker.run('sample')).rejects.toThrow('approval was not granted');
     expect(fixture.execute).toHaveBeenCalledTimes(approved ? 1 : 0);
   } finally { worker.stop(); timerSpy.mockRestore(); }

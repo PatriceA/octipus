@@ -1,13 +1,12 @@
 /**
  * Tasks created FROM another surface — an email the
- * user wants to act on, a finished Deep Research report. The `tasks` schema
+ * user wants to act on. The `tasks` schema
  * has carried `source` / `sourceRef` provenance since it landed, but nothing
  * produced rows with `source !== 'user' | 'agent'`: the enum existed, the
  * producers did not. This module is the one place those producers go
  * through, so provenance is stamped consistently and the UI can link back.
  *
- * Pure builders (`emailToTask`, `researchFollowUpTask`)
- * are separated from the one DB write (`createTasksFromSource`) so the shape
+ * Pure builders (`emailToTask`) are separated from the one DB write (`createTasksFromSource`) so the shape
  * of what lands on the to-do list is unit-testable without a database.
  */
 import { createHash } from 'node:crypto';
@@ -20,6 +19,8 @@ import type { Principal } from '@/security/principal';
  * `channel`: taken on in a group channel (src/core/channels/taken-tasks.ts).
  * `reader`: kept for existing tasks made by the removed core reader; the
  * Reader example plugin writes `agent` with a `sourceRef`.
+ * `research`: kept for existing tasks made by the removed core research module
+ * (its "Review research: …" follow-ups); the Research example plugin makes none.
  */
 export type TaskSource = 'user' | 'agent' | 'reader' | 'research' | 'email' | 'channel';
 
@@ -70,27 +71,6 @@ export function emailToTask(message: EmailForTask): SourcedTaskInput {
     priority,
     category: 'Email',
     sourceRef: { messageId: message.id, label: subject },
-  };
-}
-
-/**
- * A finished research report → one "review the findings" task pointing at the
- * saved document. One task per run: the report is the deliverable, the task
- * is the reminder that it exists and needs a decision.
- */
-export function researchFollowUpTask(
-  report: { question: string; sources: ReadonlyArray<unknown> },
-  documentId: string | null | undefined,
-): SourcedTaskInput {
-  const question = normalizeTaskTitle(report.question);
-  return {
-    title: normalizeTaskTitle(`Review research: ${question}`),
-    notes: `Deep Research finished with ${report.sources.length} source${report.sources.length === 1 ? '' : 's'}.${
-      documentId ? ' The cited report is saved under Documents (category Research).' : ''
-    }`,
-    priority: 1,
-    category: 'Research',
-    sourceRef: { documentId: documentId ?? undefined, label: question },
   };
 }
 

@@ -37,7 +37,7 @@ it.each([true, false])('keeps approval pending beyond the execution deadline, de
       // Execution gets its full budget after approval, not the remainder.
       await new Promise(resolve => setTimeout(resolve, 50));
       executed();
-      return { content: [{ type: 'text', text: 'jira result' }] };
+      return { content: [{ type: 'text', text: 'remote result' }] };
     },
   });
   bridges.push(bridge);
@@ -48,7 +48,7 @@ it.each([true, false])('keeps approval pending beyond the execution deadline, de
   decide();
   const response = await pending;
   expect(response.status).toBe(200);
-  expect(await response.json()).toMatchObject(approved ? { content: [{ text: 'jira result' }] } : { isError: true });
+  expect(await response.json()).toMatchObject(approved ? { content: [{ text: 'remote result' }] } : { isError: true });
   expect(executed).toHaveBeenCalledTimes(approved ? 1 : 0);
 });
 

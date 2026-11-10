@@ -11,10 +11,8 @@ test('optional connector installs, reports progress, and removes without an OAut
   let state: CocoIndexStatus = { ...initial };
   let installBody: unknown;
   let removed = false;
-  await page.route('**/api/connectors', route => json(route, 200, { connectors: [
-    { id: 'atlassian', name: 'Atlassian', description: 'Jira and Confluence', logoUrl: '/logos/atlassian.svg', connected: false },
-    { id: 'linear', name: 'Linear', description: 'Issues and projects', logoUrl: '/logos/linear.svg', connected: false },
-  ] }));
+  // No account connector ships built in: the tab holds the optional local service alone.
+  await page.route('**/api/connectors', route => json(route, 200, { connectors: [] }));
   await page.route('**/api/connectors/cocoindex', route => {
     if (route.request().method() === 'DELETE') {
       removed = true;
@@ -29,9 +27,9 @@ test('optional connector installs, reports progress, and removes without an OAut
   });
   await page.goto('/mcp');
   await page.getByRole('button', { name: 'Connectors', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Atlassian' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Linear' })).toBeVisible();
   const card = page.getByRole('region', { name: 'CocoIndex Code' });
+  await expect(card).toBeVisible();
+  await expect(page.getByText('No connectors available')).toHaveCount(0);
   await expect(card.getByText('Optional · Code index')).toBeVisible();
   await expect(card.getByRole('button', { name: 'Install and connect' })).toBeDisabled();
   await card.getByLabel('Folder on the backend').fill('/workspace/mobile and backend');

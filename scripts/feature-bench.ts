@@ -297,8 +297,8 @@ const API_CHECKS: Array<{
 ];
 
 /**
- * Flows driven directly through the API. Deep Research has no chat entry
- * point, and runs at `quick` depth to stay cheap.
+ * Flows driven directly through the API. (Deep research is the research
+ * plugin's now, plugins/research: it is not benched here.)
  */
 const FLOWS: Array<{ id: string; group: string; what: string; run: () => Promise<boolean> }> = [
   {
@@ -334,35 +334,6 @@ const FLOWS: Array<{ id: string; group: string; what: string; run: () => Promise
           body: { message: 'What is my rack UPS called? Answer with the name only.', channel: 'api' },
         });
         if (String((asked.body as { response?: string }).response ?? '').includes(MARK)) return true;
-      }
-      return false;
-    },
-  },
-  {
-    id: 'research-quick',
-    group: 'research',
-    what: 'runs a bounded research job to a finished report',
-    run: async () => {
-      const started = await api('/api/research', {
-        method: 'POST',
-        body: { question: 'What is pgvector and what is it used for?', depth: 'quick' },
-      });
-      const jobId = (started.body as { jobId?: string }).jobId;
-      if (!jobId) return false;
-      const deadline = Date.now() + 300_000;
-      while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 5000));
-        const poll = await api(`/api/research/${jobId}`);
-        const job = poll.body as {
-          status?: string;
-          report?: { sections?: unknown[]; sources?: unknown[] };
-        };
-        // A report with no sources is a model answering from memory, which is
-        // the one thing Deep Research exists not to do.
-        if (job.status === 'done') {
-          return (job.report?.sections?.length ?? 0) > 0 && (job.report?.sources?.length ?? 0) > 0;
-        }
-        if (job.status === 'error' || job.status === 'failed') return false;
       }
       return false;
     },

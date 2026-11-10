@@ -295,6 +295,13 @@ export async function spawnWorker(
      */
     extraToolIds?: string[];
     /**
+     * `toolIds` is the whole tool set: nothing is appended after the narrowing
+     * (no connector handlers, no test-container tools). For work started by a
+     * plugin (`agent:run`), whose tool list the host fixes and an admin
+     * approved; a role's extras must not widen it.
+     */
+    exactTools?: boolean;
+    /**
      * What the caller says this work IS (a pipeline stage's `producesArtifacts`
      * / `runsCommands` declaration). Checked against the tools the worker is
      * actually about to get, and the spawn is REFUSED when they cannot honor
@@ -358,7 +365,7 @@ export async function spawnWorker(
     }
   }
 
-  if (isRealUserId(context.userId)) {
+  if (isRealUserId(context.userId) && !overrides?.exactTools) {
     try {
       const { connectorOwnerOf, getConnectorRegistry } = await import('@/connectors');
       // Role↔connector binding: if the role binds specific connectors
@@ -393,7 +400,7 @@ export async function spawnWorker(
       const before = roleTools.length;
       roleTools = stripMutatingTools(roleTools);
       // And the executor's plan-mode rule for what the strip cannot see:
-      // repository writes (git, GitHub, GitLab). On the WORKER's metadata:
+      // repository writes (git, GitHub). On the WORKER's metadata:
       // `context` is the caller's.
       planModeWorker = true;
       coreLogger.info(
@@ -561,7 +568,7 @@ export async function spawnWorker(
   // Framework capability: a bounded test environment for QA/review, without
   // granting Docker administration. Advertise it in pipeline worker prompts
   // as well as registering it globally; count it in the execution contract.
-  if (['qa', 'review'].includes(agentRole)) {
+  if (['qa', 'review'].includes(agentRole) && !overrides?.exactTools) {
     const { buildTestContainerHandlers } = await import('@/tools/test-container');
     roleTools.push(...buildTestContainerHandlers());
   }

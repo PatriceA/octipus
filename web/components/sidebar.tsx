@@ -92,7 +92,6 @@ const navGroups: NavGroup[] = [
   ] },
   { label: 'Library', items: [
     { name: 'Outputs', href: '/my-work', icon: ClipboardList },
-    { name: 'research', href: '/research', icon: Telescope },
     { name: 'notes', href: '/notes', icon: NotebookPen },
     { name: 'documents', href: '/documents', icon: FileText },
     { name: 'knowledge', href: '/knowledge', icon: Brain },

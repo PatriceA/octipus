@@ -344,18 +344,20 @@ describe('only the plugins Octipus ships are bundled', () => {
   test('another directory under <install>/plugins is not listed, installable as bundled, or a shipped name', async () => {
     const { cpSync, readFileSync, writeFileSync } = await import('node:fs');
     const { installBundled, isBundledName, listBundled, setBundledRoot, SHIPPED_PLUGINS } = await import('./bundled');
-    expect(SHIPPED_PLUGINS).toEqual(['reader']);
+    expect(SHIPPED_PLUGINS).toEqual(['reader', 'research']);
     const root = mkdtempSync(join(tmpdir(), 'octipus-install-plugins-'));
     cpSync(join(__dirname, '..', '..', '..', 'plugins', 'reader'), join(root, 'reader'), { recursive: true });
+    cpSync(join(__dirname, '..', '..', '..', 'plugins', 'research'), join(root, 'research'), { recursive: true });
     // A plugin someone made and dropped into the install's plugins/: a valid package.
     cpSync(join(__dirname, 'fixtures', 'echo-plugin'), join(root, 'my-local'), { recursive: true });
     const manifest = JSON.parse(readFileSync(join(root, 'my-local', 'octipus-plugin.json'), 'utf8'));
     writeFileSync(join(root, 'my-local', 'octipus-plugin.json'), JSON.stringify({ ...manifest, name: 'my-local' }));
     setBundledRoot(root);
     try {
-      expect((await listBundled()).map((b) => b.name)).toEqual(['reader']);
+      expect((await listBundled()).map((b) => b.name)).toEqual(['reader', 'research']);
       expect(isBundledName('my-local')).toBe(false);
       expect(isBundledName('reader')).toBe(true);
+      expect(isBundledName('research')).toBe(true);
       await expect(installBundled('my-local', ADMIN.id)).rejects.toMatchObject({ code: 'not_found' });
     } finally {
       setBundledRoot(null);

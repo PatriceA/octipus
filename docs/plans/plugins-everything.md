@@ -1,6 +1,6 @@
 # Plugins for everything
 
-Status: accepted; phases 1, 2 and 4 implemented; phase 3 done for the reader, which is now the example plugin and no longer in the core; `research` is next (2026-11-10).
+Status: accepted; phases 1, 2 and 4 implemented; phase 3 done for the reader and for research, which are now the two example plugins and no longer in the core (2026-11-10).
 
 ## Why
 
@@ -124,7 +124,8 @@ default registry.
 Behaviour differences: the page shows no lead image and loads no remote
 image (the page CSP allows its own files only); a link in an article fills
 the address field instead of navigating; translate and ask take their
-argument in a field (a sandboxed frame opens no dialog). `research` is next.
+argument in a field (a sandboxed frame opens no dialog). `research` followed
+(below).
 
    *Status: implemented.* The `plugin_dev` tool group (`plugin_api`,
    `plugin_template`, `plugin_validate`, `plugin_install`; the plan's
@@ -138,6 +139,48 @@ argument in a field (a sandboxed frame opens no dialog). `research` is next.
    [PLUGIN-PACKAGES.md](../PLUGIN-PACKAGES.md#writing-a-plugin-with-an-agent).
    Left: the older `plugin-development` skill still teaches the deprecated
    in-process extensions; retire or redirect it once phase 3 lands.
+
+## Phase 3, research: declaration → contributions
+
+`research` is the second module out, and the first whose work does not fit
+in one call: a run takes minutes, and a host token lives at most 30 seconds.
+The bundled plugin `plugins/research`, the second example plugin, does what
+the module did through contributions and two new host scopes:
+
+| Module declaration (`src/modules/research.ts`) | What it was | In the plugin |
+|---|---|---|
+| `routes: ['/api/research']` `POST /` | A `background_jobs` row (`kind: research`) and a fixed pipeline on the `research` lane, in the server process: plan sub-queries (one JSON completion), SearXNG search, SSRF-guarded fetch and text extraction of each hit, one synthesis completion returning cited sections as JSON, citations checked against the fetched sources; `quick` / `standard` / `deep` bounded it at 1-4 searches and 4-14 sources; seconds to minutes; no rate limit, token budget or timeout of its own | Tool `start_research` (write) → host scope **`agent:run`**: a background run of the host's own `research` agent, as the user, unattended, in a session of its own, its tools narrowed to web search and fetch, knowledge, documents, task state, artifacts and profiles (the host's own tools, under the user's rules); the depth sets the searches and sources the prompt asks for. Bounded by the host: 3 starts in a burst and 6 an hour, 2 in flight per package and user, `plugins.hostAgentRunTokens` per run, the daily plugin allowance, spend budgets, 20 minutes. The plugin keeps only the run id |
+| `GET /:jobId` | The row's stage and the structured report | Tool `research_status` (read) → `agent:run` read: status, stage, the Markdown report; withheld above the plugin's `maxProtection` (1) |
+| (in the job) persist | Always: the report as a Markdown document (category Research), indexed into the knowledge base, and one *Review research* to-do (`source: research`) | Tool `save_report` (write) → host scope **`documents:write`**: when the user asks; a document (category Research, provenance `{ plugin, tool }`, indexed fail-soft), updated in place when saved again; no to-do |
+| `pages: ['/research']` | The React page (and a *Research* tab in the work navigation) | `ui.pages: [{ path: 'run' }]`: static page in the sandboxed frame; starting and saving ask the user (write tools), polling does not (a read tool) |
+| `profiles: ['product', 'research']` | Onboarding switched it on | None: an example, not a product feature; the research use case brings recall and live artifacts |
+
+What the plugin surface gained, general rather than research-shaped:
+
+- **`agent:run`**: work past the 30-second token without a longer token.
+  The run is the host's agent under the user's permissions, budgets and
+  protection routing; the package gets a run id and, in a later call, the
+  run's status and final text. A read tool reads runs, only a write tool
+  starts one; calls inside a run get no host token; revoking a package's
+  tokens stops its runs; it counts as egress (level 1).
+- **`documents:write`**: create a text document as the user (spaces' role
+  rules apply), and update only documents the same package created, within
+  its `maxProtection`; provenance in `metadata.sourceRef`.
+
+*Status: done for research.* The core module, its route (`/api/research`), its
+page (`/research`), its sidebar and work-navigation entries, `src/core/research/`
+(gather, synthesis, render, persist, jobs), `researchFollowUpTask`, the
+standalone MCP server's `octipus_start_research` / `octipus_get_research_report`
+and the feature-bench flow are removed. A stored `research` in
+`modules.enabled` is ignored; tasks it made keep `source: research`, and its
+`background_jobs` rows (`kind: research`) are kept until retention. The
+`research` role and lane, the web search tool and the guarded fetch stay: the
+plugin's run uses them. Behaviour differences: the report is the agent's
+Markdown, its citations asked for rather than checked against a fetched set;
+saving is the user's choice, and no follow-up to-do is made; a run is
+personal only, as before, and now refused in a space rather than run there
+as personal. Not done: background runs in spaces (funding and audience
+rules), a cancel call, and progress finer than "working".
 
 ## What we do not copy
 

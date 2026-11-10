@@ -17,7 +17,7 @@ import { DEFAULT_REQUEST_TIMEOUT_MS, MCP_PROTOCOL_VERSION } from '@/mcp/protocol
 import { MINIMAL_ENV_NAMES } from '@/security/child-env';
 import { proxyEnv } from '@/security/egress-proxy';
 import { activeSandboxRunner, getSandboxMode } from '@/security/shell-sandbox';
-import { MAX_MODEL_TRUST_REASON_CHARS, MAX_PLUGIN_SECRET_LENGTH, PLUGIN_MANIFEST_FILE, PLUGIN_MODEL_CLI_TOOLS_APPROVAL, PLUGIN_PACKAGE_API_VERSION, type PluginEventType, type PluginManifest, type PluginRuntime, type PluginToolEffect } from '@/shared/plugin-package';
+import { MAX_MODEL_TRUST_REASON_CHARS, MAX_PLUGIN_SECRET_LENGTH, PLUGIN_HOST_ALIAS, PLUGIN_HOST_META_KEY, PLUGIN_HOST_START_SCOPES, PLUGIN_HOST_WRITE_SCOPES, PLUGIN_MANIFEST_FILE, PLUGIN_MODEL_CLI_TOOLS_APPROVAL, PLUGIN_PACKAGE_API_VERSION, type PluginEventType, type PluginHostScope, type PluginManifest, type PluginRuntime, type PluginToolEffect } from '@/shared/plugin-package';
 import { MAX_RESULT_CHARS } from '../contributions/call';
 import { CONTEXT_TIMEOUT_MS, MAX_CONTEXT_CHARS } from '../contributions/context';
 import { CRON_FIELDS } from '../contributions/cron';
@@ -28,6 +28,10 @@ import { SIGNATURE_FILE } from '../integrity';
 import { manifestSchema, settingEnvName } from '../manifest';
 import { defaultMaxProtection } from '../service';
 import { MAX_CONTRIBUTION_INPUT_CHARS } from '../manifest-contributions';
+import { MAX_TOKEN_TTL_MS } from '../host-api';
+import { DEFAULT_RUN_ROLE, MAX_RUN_OUTPUT_CHARS, MAX_RUNS_IN_FLIGHT, PLUGIN_RUN_TOOL_IDS, RUN_BURST, RUN_TIMEOUT_MS, RUNS_PER_HOUR } from '../host-agent';
+import { MAX_DOCUMENT_CHARS } from '../host-documents';
+import { MODEL_CALLS_PER_MINUTE } from '../host-model';
 import { MAX_PACKAGE_BYTES, MAX_PACKAGE_FILES } from '../tree';
 import { pluginDevToolName } from './names';
 import { listTemplates } from './templates';
@@ -46,6 +50,23 @@ const EVENTS: Record<PluginEventType, string> = {
   'chat.response': 'A root turn answered. { event: { type, at, userId, sessionId } }',
   'document.completed': 'An uploaded document was processed. { event: { type, at, userId, documentId } }',
   'document.failed': 'Processing an uploaded document failed. { event: { type, at, userId, documentId } }',
+};
+
+/**
+ * What each host API scope does, its endpoint and rules. Keyed by the
+ * constant: a new scope does not compile until it is described here.
+ */
+const HOST_SCOPES: Record<PluginHostScope, string> = {
+  'notes:read': 'GET /api/plugin-host/notes?limit=&tag= → { notes }: the user\'s notes in the call\'s workspace (at most 100), bodies included.',
+  'notes:write': 'POST /api/plugin-host/notes { title, body?, tags? } → { id, slug }: creates a note; never overwrites (409 exists).',
+  'tasks:read': 'GET /api/plugin-host/tasks?status= → { tasks, withheld }: the user\'s own tasks; those above maxProtection are left out.',
+  'tasks:write': 'POST /api/plugin-host/tasks { title, notes?, priority?, dueAt?, category?, link?: { url, label? } } → { id, title, status }.',
+  'documents:read': 'GET /api/plugin-host/documents/:id → { id, name, mimeType, text, protectionLevel, … }: one document within maxProtection (403 protection_level above it).',
+  'documents:write': `POST /api/plugin-host/documents { name, content, mimeType?: "text/markdown"|"text/plain", category?, summary?, protectionLevel? } → { id, name, protectionLevel, size }: a text document of the user's, in the call's workspace (a space's role rules apply), at least at the level of what the call read; its metadata records { source: "plugin", sourceRef: { plugin, tool } }. PUT /api/plugin-host/documents/:id { content, name?, summary? } replaces the content of a document this package created (403 not_created_by_plugin for any other, 403 protection_level above maxProtection); the level only rises. Content at most ${MAX_DOCUMENT_CHARS} characters. A write tool only.`,
+  notify: 'POST /api/plugin-host/notify { title, body? } → { ok }: a notification to the calling user only.',
+  'web:read': 'POST /api/plugin-host/web/read { url } → the clean article { url, title, textContent, contentHtml, … }: fetched by the host through its SSRF guard (422 blocked / fetch_failed, nothing else said).',
+  'model:complete': `POST /api/plugin-host/model/complete { system?, prompt, maxTokens?, temperature? } → { output, model }: one completion on the user's "everyday" lane; at most ${MODEL_CALLS_PER_MINUTE} a minute, a daily token allowance, the user's spend budgets.`,
+  'agent:run': `POST /api/plugin-host/agent/runs { prompt, role?, title? } → 202 { id, status: "running", role }: a background run of the host's own agent as the user (role default "${DEFAULT_RUN_ROLE}", any role but general; its tools narrowed to ${PLUGIN_RUN_TOOL_IDS.join(', ')}), unattended, in a session of its own; starting needs a write or external tool. GET /api/plugin-host/agent/runs/:id → { id, status: running|done|error|interrupted, role, title, stage, output, withheld?, error, tokens, startedAt, finishedAt } for a run of this package and user (404 otherwise); output is the final text (at most ${MAX_RUN_OUTPUT_CHARS} characters), withheld above maxProtection. Bounds: ${RUN_BURST} starts in a burst and ${RUNS_PER_HOUR} an hour per package and user, ${MAX_RUNS_IN_FLIGHT} running at once, plugins.hostAgentRunTokens tokens a run (counted in the daily plugin allowance), the user's spend budgets, ${Math.round(RUN_TIMEOUT_MS / 60_000)} minutes. Personal workspaces only (409 space). The package keeps the id and polls with a later call: no token outlives its call.`,
 };
 
 const RUNTIMES: Record<PluginRuntime, string> = {
@@ -67,6 +88,8 @@ export interface PluginApiContract {
   defaultMaxProtection: { rule: string; examples: Record<string, number> };
   /** Model calls on CLI lanes and the manifest's `model.trustedInput`. */
   modelCalls: { cliLanes: string; trustedInput: string };
+  /** The host API: how a call reaches it, and what each scope in `host` does. */
+  hostApi: { reach: string; token: string; effects: string; scopes: Record<PluginHostScope, string> };
   runtimes: Record<PluginRuntime, string>;
   toolEffects: Record<PluginToolEffect, string>;
   contributions: Record<string, unknown>;
@@ -111,18 +134,25 @@ export async function pluginApiContract(opts: {
       `model.trustedInput: leave it out (the default is untrusted). Set it to true only when every prompt the package sends to model:complete is built from its own constants or from sources the admin trusts, never from web pages, mail, files, user text or other outside data. It needs the host scope model:complete and a model.reason (at most ${MAX_MODEL_TRUST_REASON_CHARS} characters, shown to the admin); it is refused with web:read and for runtime "in-process".`,
     ],
     defaultMaxProtection: {
-      rule: 'When maxProtection is left out: 1 if the package has network hosts, the host scope web:read or ui pages (each can carry data out), otherwise 4.',
+      rule: 'When maxProtection is left out: 1 if the package has network hosts, the host scope web:read or agent:run, or ui pages (each can carry data out), otherwise 4. Granted web:read, model:complete or agent:run, a package sees level 1 whatever it declares.',
       // Computed by the function the server uses, so the rule above cannot drift from it unnoticed (a unit test compares them).
       examples: {
         nothing: defaultMaxProtection({}),
         networkHosts: defaultMaxProtection({ network: ['api.example.com'] }),
         hostWebRead: defaultMaxProtection({ host: ['web:read'] as PluginManifest['host'] }),
+        hostAgentRun: defaultMaxProtection({ host: ['agent:run'] as PluginManifest['host'] }),
         uiPages: defaultMaxProtection({ ui: { pages: [{ path: 'main', title: 'Main', entry: 'index.html' }] } as PluginManifest['ui'] }),
       },
     },
     modelCalls: {
       cliLanes: 'A model:complete call is refused (409 cli_model) when the user\'s "everyday" lane is bound to a CLI model: a CLI agent has its own tools (shell, files) and runs as the Octipus server user, so a prompt carrying outside data could steer it.',
       trustedInput: `model: { "trustedInput": true, "reason": "<why the prompts carry no outside data>" } asks for the one exception. It grants nothing by itself: an admin approves ${PLUGIN_MODEL_CLI_TOOLS_APPROVAL} explicitly (an upgrade clears it); until then the call is refused as above. Network hosts and *:read host scopes are allowed with it, but the admin is warned that they reach the prompts.`,
+    },
+    hostApi: {
+      reach: `With approved host scopes, each tools/call a user started (their agent's call, a slash command, a button on the package's page) carries _meta["${PLUGIN_HOST_META_KEY}"] = { url, token, expiresAt, scopes }. Call http://${PLUGIN_HOST_ALIAS}/api/plugin-host/… with Authorization: Bearer <token>, through the egress proxy (HTTP_PROXY, an absolute-form request). Schedules, events and context calls get no token.`,
+      token: `Minted for the one call, at most ${MAX_TOKEN_TTL_MS / 1000} seconds, revoked when the call returns; it acts as the calling user in their workspace, with declared ∩ approved ∩ the tool's effect ∩ what the user holds. Work that takes longer is an agent:run run, read by its id in a later call.`,
+      effects: `A read tool never gets ${PLUGIN_HOST_WRITE_SCOPES.join(', ')}. ${PLUGIN_HOST_START_SCOPES.join(', ')}: a read tool reads, starting needs a write or external tool.`,
+      scopes: HOST_SCOPES,
     },
     runtimes: RUNTIMES,
     toolEffects: EFFECTS,

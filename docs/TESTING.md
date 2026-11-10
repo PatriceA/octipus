@@ -136,9 +136,12 @@ and persisted messages after process restart and reauthentication. CI gates this
 lane and uploads its JSON report. Scripted output is lifecycle evidence, not a
 model-quality score.
 
-`src/core/research/workflow-acceptance.test.ts` exercises research persistence,
-source provenance, concurrent task-ingestion retries, and interrupted-job recovery
-against embedded storage. `src/security/dispatch-authorization.test.ts` exercises
+`src/plugins/packages/host-scopes.isolation.test.ts` and
+`bundled-research.isolation.test.ts` exercise the research plugin's background
+runs (`agent:run`) and saved documents (`documents:write`) end to end against
+embedded storage; `src/core/jobs/jobs.integration.test.ts` covers
+interrupted-job recovery. (The core research module and its
+`workflow-acceptance.test.ts` are removed.) `src/security/dispatch-authorization.test.ts` exercises
 actual dispatch guards with independently observed side effects, including MCP.
 Browser tests in `tests/web/consolidation.spec.ts` use API fixtures for failure and
 recovery states; they do not claim to test the model/backend integration.

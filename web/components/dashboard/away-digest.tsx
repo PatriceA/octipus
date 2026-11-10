@@ -12,7 +12,7 @@ interface AgentBrief { id: string; role: string; status: string; error?: string 
 interface PipelineBrief { id: string; title: string; status: string; summary?: string | null; waitingOnYou: boolean }
 interface ApprovalBrief { id: string; sessionId: string; summary: string; question: string }
 interface TaskBrief { id: string; title: string; source: string }
-interface JobBrief { id: string; kind: string; title: string; status: 'done' | 'error' | 'interrupted'; error?: string | null; resultRef?: string | null }
+interface JobBrief { id: string; kind: string; title: string; status: 'done' | 'error' | 'interrupted'; error?: string | null; resultRef?: string | null; plugin?: string }
 interface AwayDigest {
   since: string;
   until: string;
@@ -64,10 +64,15 @@ function sinceLabel(iso: string): string {
     : `since ${d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
 }
 
-/** Where a finished job's output lives: a research report is saved as a document, a processed document is one — both on the documents page. */
+/**
+ * Where a finished job's output lives: a plugin's background run on the
+ * plugin's page; a processed document, or the report of a research run of the
+ * removed research module, on the documents page.
+ */
 function jobHref(j: JobBrief): string {
   if (j.kind === 'learning') return '/chat';
-  return j.kind === 'research' && !j.resultRef ? '/research' : '/documents';
+  if (j.kind === 'agent' && j.plugin) return `/plugins/${encodeURIComponent(j.plugin)}`;
+  return '/documents';
 }
 
 function Section({ title, tone, children }: { title: string; tone?: string; children: React.ReactNode }) {

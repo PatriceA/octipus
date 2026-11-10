@@ -798,6 +798,24 @@ export class ScopedDocumentRepo {
     return row ?? null;
   }
 
+  /**
+   * Replace a document's text and what describes it (a plugin updating the
+   * document it created, `documents:write`), within the scope; the level only
+   * rises. Null when the row is not the scope's.
+   */
+  async updateContent(
+    id: string,
+    patch: { originalName: string; size: number; ocrText: string; summary: string | null; protectionLevel: number },
+  ): Promise<DocumentRecord | null> {
+    if (!isUuid(id)) return null;
+    this.scope.can('write');
+    const [row] = await this.db.update(documents)
+      .set({ ...patch, protectionLevel: sql`greatest(coalesce(${documents.protectionLevel}, 4), ${patch.protectionLevel})`, processedAt: new Date() })
+      .where(and(eq(documents.id, id), ...this.scope.shared(documents)))
+      .returning();
+    return row ?? null;
+  }
+
   /** Update status — restricted to documents the principal may write. */
   async updateStatus(id: string, status: DocumentRecord['status'], error?: string): Promise<boolean> {
     if (!isUuid(id)) return false;
@@ -1139,10 +1157,13 @@ export class ScopedPipelineRepo {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Background jobs (research runs, document processing)
+// Background jobs (plugin background runs, document processing; research rows of the removed module)
 // ─────────────────────────────────────────────────────────────────────
 
-export type ChangedJobRow = Pick<BackgroundJob, 'id' | 'kind' | 'title' | 'status' | 'error' | 'resultRef' | 'updatedAt' | 'finishedAt'>;
+export type ChangedJobRow = Pick<BackgroundJob, 'id' | 'kind' | 'title' | 'status' | 'error' | 'resultRef' | 'updatedAt' | 'finishedAt'> & {
+  /** The plugin of a plugin's background run (`kind: 'agent'`); null otherwise. */
+  plugin: string | null;
+};
 
 /** Read side of `background_jobs`: the poller and the digest. Writes are the workers' (`BackgroundJobRepository`). */
 export class ScopedJobRepo {
@@ -1188,6 +1209,7 @@ export class ScopedJobRepo {
         resultRef: backgroundJobs.resultRef,
         updatedAt: backgroundJobs.updatedAt,
         finishedAt: backgroundJobs.finishedAt,
+        plugin: sql<string | null>`${backgroundJobs.payload}->>'plugin'`,
       })
       .from(backgroundJobs)
       .where(and(...filters.filter((f): f is SQL => f !== undefined)))

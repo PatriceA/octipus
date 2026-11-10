@@ -198,19 +198,6 @@ export function CLIIntegrationsSection() {
     },
   });
 
-  const { data: glStatus, isLoading: glLoading, refetch: refetchGl } = useQuery({
-    queryKey: ['gitlab-status'],
-    queryFn: async () => {
-      try {
-        const skills = await api.get<{ tools: { id: string; status: string; isInitialized: boolean }[] }>('/tools');
-        const glSkill = skills?.tools?.find((s) => s.id === 'gitlab');
-        return { available: glSkill?.status === 'active', configured: !!glSkill?.isInitialized };
-      } catch {
-        return { available: false, configured: false };
-      }
-    },
-  });
-
   const cliTools = [
     {
       name: 'GitHub',
@@ -219,14 +206,6 @@ export function CLIIntegrationsSection() {
       loading: ghLoading,
       refetch: refetchGh,
       setupHint: 'Install gh CLI and run: gh auth login',
-    },
-    {
-      name: 'GitLab',
-      description: 'Manage projects, issues, MRs, and pipelines via glab CLI',
-      status: glStatus,
-      loading: glLoading,
-      refetch: refetchGl,
-      setupHint: 'Install glab CLI and run: glab auth login',
     },
   ];
 

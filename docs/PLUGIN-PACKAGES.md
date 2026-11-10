@@ -1047,9 +1047,11 @@ and an admin approved:
 | `tasks:read` | `GET /api/plugin-host/tasks?status=` | The user's own tasks (at most 200). A task carries the protection level and flow label of the conversation it came from (its provenance): one above the package's `maxProtection` is left out (`withheld` counts them), and the rest raise the calling session's level and label, as the tasks tool does. |
 | `tasks:write` | `POST /api/plugin-host/tasks { title, notes?, priority?, dueAt?, category?, link?: { url, label? } }` | Creates a task for the user (audited as a task mutation by `plugin:<name>`), filed under `category` and linked back to `link.url` (an http(s) URL). |
 | `documents:read` | `GET /api/plugin-host/documents/:id` | One document: metadata and extracted text. |
+| `documents:write` | `POST /api/plugin-host/documents { name, content, mimeType?, category?, summary?, protectionLevel? }`; `PUT /api/plugin-host/documents/:id { content, name?, summary? }` | Creates a text document (Markdown or plain text) for the user; replaces the content of one this package created. See below. |
 | `notify` | `POST /api/plugin-host/notify { title, body? }` | A notification to the calling user, and to nobody else. |
 | `web:read` | `POST /api/plugin-host/web/read { url }` | One public web page, fetched by the host and turned into a clean article: `{ url, title, byline?, siteName?, publishedAt?, contentHtml, textContent, wordCount, estReadMinutes, truncated }`. |
 | `model:complete` | `POST /api/plugin-host/model/complete { system?, prompt, maxTokens?, temperature? }` | One text completion on the calling user's `everyday` model: `{ output, model }`. |
+| `agent:run` | `POST /api/plugin-host/agent/runs { prompt, role?, title? }`; `GET /api/plugin-host/agent/runs/:id` | Starts a background agent run as the user and answers its id at once; a later call reads its status and final text. See below. |
 
 **`web:read`** lets a package read any public page without network of its
 own: the host fetches it through the same SSRF guard as the agents' web
@@ -1090,15 +1092,97 @@ first, then the install's; in a space, with the user's space role):
   `maxTokens` at most 4,000 (default 1,200), `temperature` 0-1 (default
   0.3). Every call is audited.
 
+**`documents:write`** writes the user's Documents, as that user:
+
+- `POST /api/plugin-host/documents` creates a text document: `name` (at
+  most 200 characters; path characters are dropped and the extension follows
+  the type), `content` (at most 500,000 characters), `mimeType`
+  `text/markdown` (default) or `text/plain`, an optional `category` and
+  `summary`. It answers `{ id, name, protectionLevel, size }`. The file is
+  written under the call's workspace's documents directory
+  (`…/plugin-<name>/`), the text is the document's text (search, the
+  Documents page and `documents:read` see it) and it is indexed into the
+  knowledge base when an embedding model is there (fail-soft).
+- **Spaces.** It runs in the call's workspace through the same repositories
+  as the user's own requests: in a space the member's role decides (a viewer
+  cannot write, `403`), and the row belongs to the space.
+- **Provenance.** The row's `metadata` is `{ source: "plugin", sourceRef: {
+  plugin, tool } }`, and the audit row of the request records the document id.
+- **Protection.** A new document is at the level of what the same call has
+  read through the host API (documents, tasks, a run's result), or the
+  `protectionLevel` asked for when that is higher; never lower.
+- `PUT /api/plugin-host/documents/:id` replaces the content (and optionally
+  the name and summary) of a document **this package created** (`403
+  not_created_by_plugin` for any other: the user's uploads, another
+  package's), within the package's `maxProtection` (`403 protection_level`
+  above it, as for reading). Its level only rises. A document of another
+  user or workspace is `404`.
+- A user whose rules deny the documents tool's `export_document` does not
+  get the scope.
+
+**`agent:run`** is for work that takes longer than a call's 30-second token.
+It never makes a longer token: the run is the host's own agent run, and the
+package only ever holds its id.
+
+- `POST /api/plugin-host/agent/runs { prompt, role?, title? }` answers `202 {
+  id, status: "running", role }` at once. The run is a worker of the role
+  (default `research`; any of the host's roles but `general`, the root),
+  started as the calling user in a session of its own (an automation
+  session, channel `plugin-run`), **unattended**: nothing is asked of anyone,
+  and an action the user's rules set to ASK is refused. Its prompt is the
+  worker's task, at most 20,000 characters.
+- **Its tools** are the role's, narrowed to web search and fetch
+  (`websearch`), the user's `knowledge` and `documents`, its `task_state`,
+  `artifacts` and `profiles`: never a shell, the filesystem, git, a message,
+  a mail or another plugin (`mcp`). A role with none of these is refused
+  (`400 role`). That list is the whole set: the user's connectors and the
+  test environment of the `qa` and `review` roles never join it. Every tool call goes through the user's own permission rules, the
+  web search and fetch through the host's SSRF guard, exactly as in the
+  user's own conversation.
+- **Only a `write` or `external` tool starts a run** (`403 read_tool`
+  otherwise; the page bridge asks the user first). A `read` tool holds the
+  scope to read a run.
+- `GET /api/plugin-host/agent/runs/:id` answers `{ id, status: running |
+  done | error | interrupted, role, title, stage, output, withheld?, error,
+  tokens, startedAt, finishedAt }`, for a run of the same package and user
+  only (`404` for any other). `output` is the worker's final text, at most
+  100,000 characters, once done.
+- **Protection.** The run's session raises its level as its agent reads,
+  and its model calls are routed by that level like any turn's. A result
+  above the package's `maxProtection` is withheld (`output: null, withheld:
+  { protectionLevel }`); one that is handed over raises the calling
+  session's level, and a `model:complete` or `documents:write` of the same
+  call runs or saves at it.
+- **Cost and time**, all checked before it starts: at most 3 starts in a
+  burst and 6 an hour per package and user (`429 rate_limited`), 2 runs of a
+  package running at once per user (`429 too_many_runs`), a token budget per
+  run, `plugins.hostAgentRunTokens` (default 150,000; 0 turns runs off: `403
+  agent_off`), reserved whole against the same daily allowance as
+  `model:complete` (`plugins.hostModelDailyTokens`, `429 token_cap`; the
+  run's model calls count in it), and the user's spend budgets (`429
+  spend_budget`; the agent's own model calls check them again as it runs).
+  A run is stopped after 20 minutes.
+- **Personal workspaces only** for now: in a space it is `409 space`.
+- It is a `background_jobs` row (`kind: agent`): a restart marks a running
+  run `interrupted`, it does not resume. Disabling, upgrading or uninstalling
+  the package, or changing its approval, stops its runs.
+- **No tokens inside.** A tool call made inside a run (to this package or
+  another) carries no host token: nobody started it by hand.
+
 **Egress scopes cap what a package sees.** `web:read` can send anything to
-any URL, and `model:complete` to a remote model. While a package is granted
-either, it may see level 1 data only, whatever its manifest's
-`maxProtection` says. The admin page warns when such a scope comes with a
-`*:read` scope: the package can send what it reads anywhere.
+any URL, `model:complete` to a remote model, and `agent:run` to an agent
+that searches and fetches the web on the package's prompt. While a package
+is granted any of them, it may see level 1 data only, whatever its
+manifest's `maxProtection` says, and like `web:read`, `agent:run` makes an
+undeclared `maxProtection` 1. The admin page warns when such a scope comes
+with a `*:read` scope: the package can send what it reads anywhere; and it
+says what `agent:run` and `documents:write` do, in the row and when
+enabling.
 
 `web:read` and `model:complete` change no data, so a `read` tool gets them;
-`notes:write`, `tasks:write` and `notify` only go to `write` and `external`
-tools.
+`notes:write`, `tasks:write`, `documents:write` and `notify` only go to
+`write` and `external` tools. A `read` tool gets `agent:run` to read a run,
+never to start one.
 
 **Approval.** Enabling a package that declares `host` needs every declared
 scope approved: `PATCH /api/plugin-packages/:name { "enabled": true,
@@ -1108,7 +1192,8 @@ stored with the package (`approvedHostScopes`). **Every upgrade clears it**: a
 new version's tools may have other effects (a tool that turned from `read` to
 `write` would widen what its calls' tokens carry), so it cannot be enabled
 until its scopes are approved again. Disabling, upgrading, uninstalling or
-changing the approval revokes every token in flight.
+changing the approval revokes every token in flight and stops the package's
+background runs (`agent:run`).
 
 **Which calls get a token.** Only a call a user started themselves:
 
@@ -1145,7 +1230,8 @@ a token kept past its call cannot be used during another user's. It is bound to:
   `read` tool never gets `notes:write`, `tasks:write` or `notify`) ∩ what the
   user holds (the scope's module is on, and the user's own rules do not DENY
   the matching action of the `notes`, `tasks` or `documents` tool). A call
-  left with no scope carries no token.
+  left with no scope carries no token, and so does a call made inside a
+  plugin's background run (`agent:run`).
 
 Tokens live in memory, as hashes, never outlive their call and are never
 accepted by the rest of the API (they are neither session nor API tokens).
@@ -1248,14 +1334,16 @@ Codex ([CLI-AGENTS.md](CLI-AGENTS.md#one-shot-completions-lanes)).
 
 ## Bundled plugins
 
-Octipus ships one plugin: **the example plugin**, Reader (`plugins/reader`,
-[plugins/README.md](../plugins/README.md)). It is the reference
-implementation of a package plugin: tools with effects, host API scopes and a
-page that calls its tools through the bridge. Read it before you write your
-own. It is an example, not a product feature, so onboarding does not offer it.
+Octipus ships two plugins, **the example plugins** ([plugins/README.md](../plugins/README.md)):
+Reader (`plugins/reader`), work done inside one call, and Research
+(`plugins/research`), work that outlives the call (a background run read
+back by its id). They are the reference implementations of a package plugin:
+tools with effects, host API scopes and a page that calls its tools through
+the bridge. Read them before you write your own. They are examples, not
+product features, so onboarding does not offer them.
 
 The plugins Octipus ships are an explicit list, `SHIPPED_PLUGINS` in
-`src/plugins/packages/bundled.ts` (today `['reader']`), of package directories
+`src/plugins/packages/bundled.ts` (today `['reader', 'research']`), of package directories
 under `plugins/` in the checkout or install (the Docker image included). Any
 other directory under `plugins/` is never listed, installed as bundled or
 treated as a shipped name; Octipus logs it once, as a warning. A bundled
@@ -1284,7 +1372,8 @@ under `plugins.requireSignature` they are refused like any unsigned package.
 
 | Plugin | What it does | Host scopes |
 |---|---|---|
-| `reader` | The example plugin (it replaced the core reader, [MODULES.md](MODULES.md#modules-that-move-to-plugins)): a page in a clean view, summarized, simplified, translated, its action items or an answer about it, saved as a note or as to-dos. Tools `read_url`, `reader_action` (read), `save_note`, `create_tasks` (write); the page *Reader* at `/plugins/reader/read`. | `web:read`, `model:complete`, `notes:write`, `tasks:write` |
+| `reader` | An example plugin (it replaced the core reader, [MODULES.md](MODULES.md#modules-that-move-to-plugins)): a page in a clean view, summarized, simplified, translated, its action items or an answer about it, saved as a note or as to-dos. Tools `read_url`, `reader_action` (read), `save_note`, `create_tasks` (write); the page *Reader* at `/plugins/reader/read`. | `web:read`, `model:complete`, `notes:write`, `tasks:write` |
+| `research` | An example plugin (it replaced the core research module, [MODULES.md](MODULES.md#modules-that-move-to-plugins)): deep research on a question in the background by the host's research agent, as the user (web search, the user's knowledge), and the cited report saved to the user's documents. Tools `start_research` (write: starts the run, keeps its id), `research_status` (read: the run's status and report), `save_report` (write: a document, or an update of the one saved before); the page *Research* at `/plugins/research/run`. | `agent:run`, `documents:write` |
 
 ## Where plugins live
 
@@ -1301,7 +1390,7 @@ you run a release install or a git checkout:
   refuses a plugin store or data directory that resolves inside
   `<install>/plugins` (a misconfigured `workspace.rootPath`), with an error
   that says so.
-- **Only the example plugin ships in `plugins/`.** The repository's
+- **Only the example plugins ship in `plugins/`.** The repository's
   `.gitignore` ignores every other path under `plugins/`, and Octipus does not
   offer one as bundled. New plugins are not added to the repository.
 - **No plugin system reads plugins from the Octipus checkout.** Plugin
@@ -1450,9 +1539,10 @@ into its workspace with the filesystem tool and edits them; a read tool rather
 than a scaffolding write, because the filesystem tool already decides where an
 agent's files go and asks for its writes.
 
-Beyond the templates, the skill points the agent to **the example plugin**,
-`plugins/reader` ([Bundled plugins](#bundled-plugins)), as the complete
-package to read: tools, host scopes and a page through the bridge. The skill
+Beyond the templates, the skill points the agent to **the example plugins**,
+`plugins/reader` and `plugins/research` ([Bundled plugins](#bundled-plugins)),
+as complete packages to read: tools, host scopes and a page through the
+bridge, and (Research) work longer than a call through `agent:run`. The skill
 tells the agent to write its package in its own workspace
 (`my-plugins/<name>/`), never in the Octipus repository ([Where plugins
 live](#where-plugins-live)).

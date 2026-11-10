@@ -354,23 +354,38 @@ export interface PluginContributionsView {
 /**
  * What a package may do through the host API, as the user who triggered the
  * call. A small explicit set: each scope maps to one narrow endpoint group of
- * `/api/plugin-host/*`. Write scopes (`notes:write`, `tasks:write`, `notify`)
- * are handed only to calls of a tool whose declared effect is `write` or
- * `external`: a `read` tool reads.
+ * `/api/plugin-host/*`. Write scopes (`notes:write`, `tasks:write`,
+ * `documents:write`, `notify`) are handed only to calls of a tool whose
+ * declared effect is `write` or `external`: a `read` tool reads.
  *
  * `web:read` has the host fetch one public web page (through its SSRF guard)
  * and hand back its readable text; `model:complete` runs one text completion
  * on the calling user's `everyday` model. Neither changes data, so a `read`
  * tool gets them; `web:read` lets a package name any URL, so it counts as
  * network for the package's default `maxProtection` (docs/PLUGIN-PACKAGES.md#host-api).
+ *
+ * `agent:run` starts a background agent run of the host's (as the user, with
+ * a prompt and a role) and reads its status and result by its id: the run
+ * outlives the call's token, the package only ever holds the run id. A `read`
+ * tool gets it to read a run; starting one needs a `write` or `external` tool
+ * (`PLUGIN_HOST_START_SCOPES`). Its agent can search and fetch the web with the
+ * user's tools, so it counts as network too.
  */
 export const PLUGIN_HOST_SCOPES = [
-  'notes:read', 'notes:write', 'tasks:read', 'tasks:write', 'documents:read', 'notify', 'web:read', 'model:complete',
+  'notes:read', 'notes:write', 'tasks:read', 'tasks:write', 'documents:read', 'documents:write', 'notify', 'web:read', 'model:complete',
+  'agent:run',
 ] as const;
 export type PluginHostScope = (typeof PLUGIN_HOST_SCOPES)[number];
 
 /** The scopes that change data or reach the user: only for `write`/`external` tools. */
-export const PLUGIN_HOST_WRITE_SCOPES: readonly PluginHostScope[] = ['notes:write', 'tasks:write', 'notify'];
+export const PLUGIN_HOST_WRITE_SCOPES: readonly PluginHostScope[] = ['notes:write', 'tasks:write', 'documents:write', 'notify'];
+
+/**
+ * Scopes a `read` tool holds to read with, whose starting endpoint still needs
+ * a `write` or `external` tool: `agent:run` (a read tool polls a run, a write
+ * tool starts one).
+ */
+export const PLUGIN_HOST_START_SCOPES: readonly PluginHostScope[] = ['agent:run'];
 
 /** One page a package adds to the web app. */
 export interface PluginUiPage {

@@ -1137,18 +1137,24 @@ export function grantedHostScopes(row: Pick<PluginPackageRow, 'manifest' | 'appr
 /**
  * The package's `maxProtection`, or when it declares none: a package that
  * reaches the network leaves the house (1), and so does one that may have the
- * host fetch any URL it names (`web:read`: the URL itself can carry data out),
- * and so does one with pages, which can navigate their frame anywhere with
- * what they were shown in the URL (docs/PLUGIN-PACKAGES.md#pages); one that
- * can do none of these keeps everything in (4).
+ * host fetch any URL it names (`web:read`: the URL itself can carry data out)
+ * or run an agent that searches and fetches the web on a prompt it writes
+ * (`agent:run`), and so does one with pages, which can navigate their frame
+ * anywhere with what they were shown in the URL (docs/PLUGIN-PACKAGES.md#pages);
+ * one that can do none of these keeps everything in (4).
  */
 export function defaultMaxProtection(m: Pick<PluginManifest, 'maxProtection' | 'network' | 'host' | 'ui'>): 1 | 2 | 3 | 4 {
   if (m.maxProtection !== undefined) return m.maxProtection;
-  return (m.network ?? []).length > 0 || (m.host ?? []).includes('web:read') || (m.ui?.pages ?? []).length > 0 ? 1 : 4;
+  const host = m.host ?? [];
+  return (m.network ?? []).length > 0 || host.includes('web:read') || host.includes('agent:run') || (m.ui?.pages ?? []).length > 0 ? 1 : 4;
 }
 
-/** Host scopes that send what the package hands them out of the house: any URL (`web:read`), a remote model (`model:complete`). */
-export const EGRESS_HOST_SCOPES: readonly PluginHostScope[] = ['web:read', 'model:complete'];
+/**
+ * Host scopes that send what the package hands them out of the house: any URL
+ * (`web:read`), a remote model (`model:complete`), an agent that searches and
+ * fetches the web on the package's prompt (`agent:run`).
+ */
+export const EGRESS_HOST_SCOPES: readonly PluginHostScope[] = ['web:read', 'model:complete', 'agent:run'];
 
 /**
  * The level a package may see, as enforced: its `maxProtection` (or the

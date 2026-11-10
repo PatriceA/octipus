@@ -2,8 +2,8 @@
  * Space connectors (docs/plans/coworking-spec.md §9.5).
  *
  * A space connector is connected once by an owner and then used by the
- * space's agent for every member who may run it — the "space" hat: a GitHub
- * repository, a Jira site, a Linear workspace the team shares. Its
+ * space's agent for every member who may run it — the "space" hat: the GitHub
+ * repositories, or a remote MCP connector's account, the team shares. Its
  * credentials are space secrets (`vault.scope = 'space'`), read and written
  * only through `spaceRepos(principal).secrets` after a membership check.
  *

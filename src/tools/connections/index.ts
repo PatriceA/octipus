@@ -52,7 +52,7 @@ export class ConnectionsTool extends BaseTool {
       query: { type: 'object', description: 'Query string fields' }, headers: { type: 'object', description: 'Non-authentication headers' },
       timeout: { type: 'number', description: 'Execution timeout in milliseconds (1–600000)', default: 120000 },
     }), (args, c) => request({ ...args, method: 'GET', json: undefined, form: undefined }, c), { permissionAction: 'read', readOnly: true });
-    for (const operation of ['fetch', 'push'] as const) this.registerTool(`git_${operation}`, `Authenticated Git ${operation} using a configured connection. Credentials stay in a temporary HTTP broker, never in git's environment, command line or config. Does not require glab. Validate one repository before batching calls; fix argument errors before trying other repositories.`, createParameterSchema({
+    for (const operation of ['fetch', 'push'] as const) this.registerTool(`git_${operation}`, `Authenticated Git ${operation} using a configured connection. Credentials stay in a temporary HTTP broker, never in git's environment, command line or config. Validate one repository before batching calls; fix argument errors before trying other repositories.`, createParameterSchema({
       connection: { type: 'string', required: true, description: 'Configured connection name' }, path: { type: 'string', required: true, description: 'Local repository under the connection repositoryRoots' },
       remotePath: { type: 'string', required: true, description: '/group/project.git on the configured origin, with exactly one leading slash. No // prefix or full URL.' },
       timeout: { type: 'number', description: 'Git timeout in milliseconds (1–1800000)', default: 600000 },

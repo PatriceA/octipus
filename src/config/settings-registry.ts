@@ -1315,7 +1315,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     valueType: 'number',
     defaultValue: 200_000,
     description:
-      'Tokens (input + output) one user\'s plugin model:complete calls may use per UTC day, all plugin packages together (docs/PLUGIN-PACKAGES.md#host-api). 0 turns plugin model calls off.',
+      'Tokens (input + output) one user\'s plugin model:complete calls and background runs may use per UTC day, all plugin packages together (docs/PLUGIN-PACKAGES.md#host-api). 0 turns plugin model calls off.',
+    isSecret: false,
+  },
+  {
+    key: 'plugins.hostAgentRunTokens',
+    category: 'security',
+    valueType: 'number',
+    defaultValue: 150_000,
+    description:
+      'Tokens one plugin background run (host scope agent:run) may use; its tokens also count in plugins.hostModelDailyTokens (docs/PLUGIN-PACKAGES.md#host-api). 0 turns plugin background runs off.',
     isSecret: false,
   },
 
