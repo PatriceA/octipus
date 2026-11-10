@@ -405,6 +405,17 @@ running code could stage executable content in. Only paths relative to the
 package root enter the listing, so the copy hashed at install hashes the same
 as the installed directory.
 
+**`marketplace.json` is listing metadata, not content.** A regular file of
+that name in the package root (a marketplace's title, tags, screenshots and
+author for the listing) is left out of the hash of a package's **source** —
+what `octi plugin hash`, `pack`, `sign`, `verify` and `validate` read — and
+install leaves it out of the copy it installs, so an installed package never
+has one. Editing a listing therefore never changes the content hash or
+invalidates a signature. Only that one root file is exempt: a
+`marketplace.json` in a subdirectory, or a directory of that name, counts. In
+an **installed** directory nothing is exempt: a `marketplace.json` that
+appears there later changes the hash like any other file.
+
 Install and upgrade copy the package into a staging directory beside the
 installed one and hash **the copy**, and check its signature, before they touch
 anything installed; only then is an upgraded package disabled. The row (new
@@ -488,7 +499,23 @@ anything else the key signs. The signature file is the one file the content
 hash leaves out, so signing does not change the hash. Sign last: any change to
 the files after signing, the manifest included, invalidates the signature.
 Keep the `.key` file secret (it is written `0600`); `keygen` never overwrites a
-file. `sign` refuses a package with a symbolic link or special file anywhere
+file. To keep it encrypted at rest, give `keygen` a passphrase:
+
+```
+octi plugin keygen ./acme --passphrase-file ./passphrase.txt   # or - to read it from stdin
+octi plugin sign ./my-package --key ./acme.key --passphrase-file ./passphrase.txt
+octi plugin sign ./my-package --key ./acme.key                 # asks for it at a terminal, without echo
+```
+
+The private key is then written as passphrase-encrypted PKCS#8 PEM
+(`-----BEGIN ENCRYPTED PRIVATE KEY-----`, AES-256-CBC with a PBKDF2-derived
+key; `node:crypto`, no new dependency). The passphrase file's one trailing
+newline (`\n` or `\r\n`) is not part of the passphrase, and an empty
+passphrase is refused. `sign` and `sign-index` take `--passphrase-file
+<path|->` too; without it they ask at a terminal and, with no terminal
+(a script, CI), are refused with a message saying so. A wrong passphrase is
+refused in fixed words: no message carries the key or the passphrase. An
+unencrypted key works as before. `sign` refuses a package with a symbolic link or special file anywhere
 in it (as install does) and writes the signature through a temporary file and
 a rename, never through a link. The temporary file is made in the package's
 parent directory, so a `sign` that dies half-way leaves nothing in the package.
@@ -760,6 +787,81 @@ packages. The trust config is part of the index cache key, so revoking a key
 refuses its indexes on the next listing. Without `publisher`, an index is
 listed unsigned, as before. Either way, installing from it still requires the
 package's own trusted signature.
+
+## Packing and publishing
+
+A marketplace (or any publisher) builds, checks and signs packages with the
+same code an install runs, offline: none of these needs a running server.
+
+| Command | What it does |
+| --- | --- |
+| `octi plugin validate <dir> [--json]` | Checks a package the way an install would (the checks of `plugin_validate`): the manifest against the contract, the tree, the files `server` starts from, the contributions; `runtime: "in-process"` is refused. A legacy plugin (`plugin.json`) is checked with the plugin SDK's kit. `--json`: `{"ok","problems":[],"warnings":[]}`; exit 1 when not ok. |
+| `octi plugin hash <dir> [--json]` | The content hash ([Content pinning](#content-pinning)), with the hash install uses, `marketplace.json` left out. Refuses what install refuses: links, special files, more than 200 MB or 20,000 files. `--json`: `{"name","version","contentHash"}`. |
+| `octi plugin pack <dir> --out <file.tar.gz> [--json]` | A reproducible tarball (below). `--json`: `{"file","sha256","contentHash","name","version"}`, `sha256` the hex sha256 of the tarball bytes (what an index lists), `contentHash` the package's. `--out` may not be inside the package. |
+| `octi plugin permissions <dir> [--json]` | What the package asks for, from its parsed manifest alone (below). |
+| `octi plugin sign <dir> --key <file> [--passphrase-file <path\|->] [--json]` | Signs the content hash ([Signed packages](#signed-packages)). `--json`: `{"file","contentHash","keyId"}`. |
+| `octi plugin verify <dir> --pub <file.pub> [--json]` | Checks `octipus-plugin.sig` against the key and the current content hash. Exit 0 when valid, 1 otherwise. `--json`: `{"valid","keyId","contentHash","error"?}` (`keyId`: the key the signature names; `error` only when not valid). Several `--pub` pass when any one verifies. |
+| `octi plugin sign-index <index.json> --key <file> [--passphrase-file <path\|->] [--json]` | Signs a registry index's exact bytes ([Signed registry indexes](#signed-registry-indexes)). `--json`: `{"sigFile","sha256","keyId"}`. |
+| `octi plugin verify-index <index.json> --pub <file.pub>... [--json]` | Checks `<index.json>.sig` over the exact bytes, as `sign-index` signs them. Passes when any one `--pub` verifies, and names it. `--json`: `{"valid","keyId","pub","sha256","error"?}` (`pub`: the path of the key that verified, else null; `sha256`: `sha256:<hex>` of the index bytes). |
+| `octi plugin keygen <prefix> [--passphrase-file <path\|->] [--json]` | A key pair; `--json`: `{"key","pub","keyId","encrypted"}`. |
+
+Every one exits non-zero on an error (2 for a usage error). With `--json`,
+stdout carries exactly one JSON document (one line) and every diagnostic goes
+to stderr; a command that fails before it has a result (a manifest install
+would refuse, say) prints nothing on stdout. From another directory, call
+`<octipus>/bin/octi plugin …`, or `npx --prefix <octipus> tsx --tsconfig
+<octipus>/tsconfig.json <octipus>/scripts/plugin.ts …` (the tsconfig resolves
+the `@/` imports); relative paths are taken from where you run it.
+
+**The tarball.** `pack` writes the same bytes for the same files, on Linux and
+macOS, whenever it runs:
+
+- every file of the package, `octipus-plugin.sig` included when present;
+  `marketplace.json` (in the root) is never packed;
+- one top-level directory `<name>-<version>/`, then the entries sorted by
+  relative path (code-unit order; a directory before what it holds; empty
+  directories kept);
+- POSIX ustar headers, with a pax `path` record only for a path that fits
+  neither ustar's name nor its prefix field; mtime 0, uid and gid 0, empty
+  uname and gname; mode `0644` for a file, `0755` for one with an execute bit
+  and for a directory;
+- gzip with mtime 0, no file name and OS byte 255, around a raw deflate at
+  level 9. The deflate stream is Node's bundled zlib, the same on every
+  platform for a given Node version; pin Node (24) where tarballs are built
+  and compared.
+
+Timestamps, owners, umask, permissions other than the execute bit, and the
+order the file system lists entries in do not count. File names are taken
+byte for byte: a name stored in another Unicode normalisation (an HFS+ volume
+writes NFD) is another name, so build from a git checkout. The tarball
+unpacks through the remote-install reader ([Remote install](#remote-install))
+to a directory whose content hash is the one `hash` prints, and a signature
+packed with it verifies there.
+
+**The permissions summary.** `permissions --json` prints, computed only from
+the manifest as install parses it (`computePermissions` in
+`src/plugins/packages/permissions.ts`, so a host can recompute it from a
+downloaded manifest and compare it with what an index claims):
+
+```json
+{
+  "name": "reader", "version": "1.0.0", "apiVersion": "1.0.0", "runtime": "package",
+  "host": ["model:complete", "notes:write", "tasks:write", "web:read"],
+  "network": [],
+  "tools": [{ "name": "create_tasks", "effect": "write" }, { "name": "read_url", "effect": "read" },
+            { "name": "reader_action", "effect": "read" }, { "name": "save_note", "effect": "write" }],
+  "effects": { "read": 2, "write": 2, "external": 0 },
+  "contributions": { "commands": [], "schedules": [], "events": [], "prompt": false, "context": false },
+  "pages": 1, "trustedInput": false, "maxProtection": 1
+}
+```
+
+`host` and `network` are sorted, `tools` sorted by name, and the
+contribution lists (command names, schedule ids, event types) sorted too, so
+the same manifest always gives the same JSON. `effects` always has all three
+keys. `maxProtection` is the manifest's, or the default a host derives when
+it declares none (1 for a package that reaches the network, may fetch any
+URL, runs an agent or has pages; else 4).
 
 ## Network
 

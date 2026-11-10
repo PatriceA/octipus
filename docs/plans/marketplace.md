@@ -280,11 +280,11 @@ server.**
   on the review of every future workflow change.
 - **Not on the web server:** that process faces the internet. A compromise
   there should be able to deface the site, but never to sign.
-- **Encrypted at rest.** `octi plugin keygen --passphrase` writes the private
-  key as passphrase-encrypted PKCS#8 (`node:crypto`, no new dependency).
-  `sign` and `sign-index` ask for the passphrase, or read it from a file
-  descriptor for scripts. This is a small addition in phase 1; today's key
-  file is unencrypted.
+- **Encrypted at rest.** `octi plugin keygen --passphrase-file <path|->`
+  writes the private key as passphrase-encrypted PKCS#8 (`node:crypto`, no
+  new dependency). `sign` and `sign-index` ask for the passphrase at a
+  terminal, or read it with `--passphrase-file` (a file, or stdin for `-`)
+  for scripts. Done (docs/PLUGIN-PACKAGES.md#signed-packages).
 - **A second, backup key.** It is generated at the same time and kept offline
   (a password manager or a USB stick in a drawer), and never used to sign
   packages. Both public keys ship in Octipus's built-in `trustedPublishers`

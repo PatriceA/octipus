@@ -150,9 +150,45 @@ export function keyFingerprint(key: KeyObject): string {
   return `ed25519:${createHash('sha256').update(der.subarray(ED25519_SPKI_PREFIX.length)).digest('hex')}`;
 }
 
-/** Sign a content hash with a private key (PEM, PKCS#8): the signature file's contents. */
-export function signContentHash(contentHash: string, privateKeyPem: string): SignatureFile {
-  return signMessage(message(contentHash), privateKeyPem);
+/**
+ * A private signing key: PEM (PKCS#8), or a key already read with
+ * `readPrivateKey` (an encrypted one, decrypted with its passphrase).
+ */
+export type SigningKey = string | KeyObject;
+
+/** The PEM header of a passphrase-encrypted PKCS#8 key (`keygen --passphrase-file`). */
+const ENCRYPTED_KEY_HEADER = '-----BEGIN ENCRYPTED PRIVATE KEY-----';
+
+/** Whether a private key file is passphrase-encrypted PKCS#8 PEM. */
+export function isEncryptedPrivateKey(pem: string): boolean {
+  return pem.trimStart().startsWith(ENCRYPTED_KEY_HEADER);
+}
+
+/**
+ * Read an Ed25519 private key (PEM, PKCS#8), decrypting it with `passphrase`
+ * when it is encrypted. The messages never carry the key or the passphrase:
+ * an encrypted key without one, or with the wrong one, is refused in fixed
+ * words.
+ */
+export function readPrivateKey(pem: string, passphrase?: string): KeyObject {
+  const encrypted = isEncryptedPrivateKey(pem);
+  if (encrypted && (passphrase === undefined || passphrase === '')) {
+    throw new SignatureError('The private key is encrypted; give its passphrase');
+  }
+  let key: KeyObject;
+  try {
+    key = encrypted ? createPrivateKey({ key: pem, format: 'pem', passphrase }) : createPrivateKey(pem);
+  } catch (err) {
+    if (encrypted) throw new SignatureError('The passphrase does not decrypt the private key (wrong passphrase, or a damaged key file)');
+    // Node's message names what failed to decode, never the key bytes.
+    throw new SignatureError(`Not a readable private key: ${(err as Error).message}`);
+  }
+  return requireEd25519(key, 'The private key');
+}
+
+/** Sign a content hash with a private key (PEM, PKCS#8, or one read by `readPrivateKey`): the signature file's contents. */
+export function signContentHash(contentHash: string, privateKey: SigningKey): SignatureFile {
+  return signMessage(message(contentHash), privateKey);
 }
 
 /**
@@ -160,8 +196,8 @@ export function signContentHash(contentHash: string, privateKeyPem: string): Sig
  * the contents of `<index>.sig`, in the same canonical form as a package
  * signature (`serializeSignature`).
  */
-export function signRegistryIndex(indexBytes: Uint8Array, privateKeyPem: string): SignatureFile {
-  return signMessage(registryIndexMessage(indexBytes), privateKeyPem);
+export function signRegistryIndex(indexBytes: Uint8Array, privateKey: SigningKey): SignatureFile {
+  return signMessage(registryIndexMessage(indexBytes), privateKey);
 }
 
 /**
@@ -169,27 +205,22 @@ export function signRegistryIndex(indexBytes: Uint8Array, privateKeyPem: string)
  * older one). The index must be JSON; it is signed byte for byte as it is
  * on disk, so publish exactly this file.
  */
-export async function signRegistryIndexFile(file: string, privateKeyPem: string): Promise<{ keyId: string; sigFile: string; sha256: string }> {
+export async function signRegistryIndexFile(file: string, privateKey: SigningKey): Promise<{ keyId: string; sigFile: string; sha256: string }> {
   const bytes = await readFile(file);
   try {
     JSON.parse(bytes.toString('utf8'));
   } catch {
     throw new SignatureError(`${file} is not valid JSON; a registry index is { "packages": [...] }`);
   }
-  const sig = signRegistryIndex(bytes, privateKeyPem);
+  const sig = signRegistryIndex(bytes, privateKey);
   const sigFile = `${file}${REGISTRY_INDEX_SIGNATURE_SUFFIX}`;
   await writeFile(sigFile, serializeSignature(sig), { mode: 0o644 });
   return { keyId: sig.keyId, sigFile, sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}` };
 }
 
-function signMessage(msg: Buffer, privateKeyPem: string): SignatureFile {
-  let key: KeyObject;
-  try {
-    key = createPrivateKey(privateKeyPem);
-  } catch (err) {
-    throw new SignatureError(`Not a readable private key: ${(err as Error).message}`);
-  }
-  requireEd25519(key, 'The private key');
+function signMessage(msg: Buffer, privateKey: SigningKey): SignatureFile {
+  const key = typeof privateKey === 'string' ? readPrivateKey(privateKey) : requireEd25519(privateKey, 'The private key');
+  if (key.type !== 'private') throw new SignatureError('This is not a private key');
   return {
     alg: 'ed25519',
     keyId: keyFingerprint(createPublicKey(key)),
@@ -197,11 +228,18 @@ function signMessage(msg: Buffer, privateKeyPem: string): SignatureFile {
   };
 }
 
-/** A new Ed25519 key pair, PEM-encoded (private: PKCS#8, public: SPKI), with its key id. */
-export function generateSigningKey(): { privateKeyPem: string; publicKeyPem: string; keyId: string } {
+/**
+ * A new Ed25519 key pair, PEM-encoded (private: PKCS#8, public: SPKI), with
+ * its key id. With a passphrase the private key is encrypted PKCS#8
+ * (AES-256-CBC, the key derived from the passphrase by PBKDF2).
+ */
+export function generateSigningKey(passphrase?: string): { privateKeyPem: string; publicKeyPem: string; keyId: string } {
+  if (passphrase === '') throw new SignatureError('An empty passphrase encrypts nothing');
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   return {
-    privateKeyPem: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
+    privateKeyPem: (passphrase === undefined
+      ? privateKey.export({ format: 'pem', type: 'pkcs8' })
+      : privateKey.export({ format: 'pem', type: 'pkcs8', cipher: 'aes-256-cbc', passphrase })).toString(),
     publicKeyPem: publicKey.export({ format: 'pem', type: 'spki' }).toString(),
     keyId: keyFingerprint(publicKey),
   };
@@ -258,11 +296,12 @@ export function parseSignatureFile(text: string, fileName: string = SIGNATURE_FI
  * atomic; a package directory that is itself a mount point fails with EXDEV
  * and is reported. On any failure the temporary file is removed.
  */
-export async function signPackage(dir: string, privateKeyPem: string): Promise<{ contentHash: string; keyId: string; file: string }> {
+export async function signPackage(dir: string, privateKey: SigningKey): Promise<{ contentHash: string; keyId: string; file: string }> {
   await checkPackageTree(dir);
   const manifest = parseManifest(JSON.parse(await readFile(join(dir, PLUGIN_MANIFEST_FILE), 'utf8')));
-  const contentHash = await hashPackageContent(dir, manifest);
-  const sig = signContentHash(contentHash, privateKeyPem);
+  // The package's source: its listing file (marketplace.json) is not part of what is signed.
+  const contentHash = await hashPackageContent(dir, manifest, { source: true });
+  const sig = signContentHash(contentHash, privateKey);
   const file = join(dir, SIGNATURE_FILE);
   try {
     if (!(await lstat(file)).isFile()) throw new SignatureError(`${file} exists and is not a regular file`);

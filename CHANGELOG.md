@@ -460,6 +460,33 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Offline plugin tooling for publishing: `octi plugin hash`, `pack`,
+  `permissions`, `verify`, `verify-index`, and package `validate`.** None
+  needs a running server, and each runs the host's own code, so a
+  marketplace's CI and its publishing machine compute the same content hash,
+  tarball, permissions summary and signatures as an install does. `pack`
+  writes a reproducible `.tar.gz` (sorted entries under `<name>-<version>/`,
+  ustar, mtime 0, owner 0, modes 0644/0755, a fixed gzip header): the same
+  files give the same bytes, and the tarball installs through the
+  remote-install reader to the same content hash. `permissions` prints what a
+  manifest asks for (host scopes, network hosts, tool effects, contributions,
+  pages, `model.trustedInput`, the effective `maxProtection`); `verify` and
+  `verify-index` check a package's or an index's signature against given
+  public keys (`verify-index` passes when any one of several keys verifies).
+  `validate` now checks a plugin package (`octipus-plugin.json`) the way
+  `plugin_validate` does; a legacy plugin is checked as before. Each takes
+  `--json`, which prints one JSON document on stdout and every diagnostic on
+  stderr (docs/PLUGIN-PACKAGES.md#packing-and-publishing).
+- **Passphrase-encrypted signing keys.** `octi plugin keygen --passphrase-file
+  <path|->` writes the private key as encrypted PKCS#8 (AES-256-CBC); `sign`
+  and `sign-index` take the same flag, or ask at a terminal without echo, and
+  are refused with no terminal. Unencrypted keys keep working.
+- **A package's `marketplace.json` is listing metadata, not content.** The
+  content hash of a package's source (`hash`, `pack`, `sign`, `validate`)
+  leaves a root `marketplace.json` out, `pack` never packs it, and install
+  leaves it out of the installed copy, so editing a listing never changes what
+  was signed. In an installed directory a `marketplace.json` that appears later
+  counts like any other file.
 - **Plugin host API: `documents:write` and `agent:run`.** `documents:write`
   creates a text document for the calling user in the call's workspace (a
   space's role rules apply), recording the package and tool in
