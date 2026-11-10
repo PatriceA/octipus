@@ -1,26 +1,22 @@
 /**
  * Plugin package pages (docs/PLUGIN-PACKAGES.md#pages): the pages the enabled
- * packages add (`GET /api/plugin-ui`), and the shape of the postMessage bridge
- * a page's sandboxed frame talks to.
+ * packages add (`GET /api/plugin-ui`), and the bridge a page's sandboxed
+ * frame talks to.
  *
- * Once the page has loaded, the parent sends it a secret:
+ * The bridge is a MessagePort, never a broadcast:
  *
- *   { octipus: 'hello', token }
+ * 1. The app loads the frame at `<entry>#octipus=<nonce>&parent=<app origin>`.
+ *    The fragment never goes over the network, and a document the frame
+ *    navigates to does not see it.
+ * 2. The page opens a `MessageChannel` and hands one port to its parent, to
+ *    that exact origin: `parent.postMessage({ octipus: 'ready', nonce }, parentOrigin, [port2])`.
+ * 3. The app takes the first `ready` from its own frame (window, opaque origin
+ *    "null", the nonce it chose, exactly one port) and ignores every later one.
+ *    From then on it talks only over that port: `{ octipus: 'call', id, tool, args }`
+ *    in, `{ octipus: 'result', id, ok, result | error, code }` out.
  *
- * and the page asks its parent (this app) to call one of its own package's
- * tools with it:
- *
- *   parent.postMessage({ octipus: 'call', id: 1, token, tool: 'list_items', args: {} }, '*')
- *
- * and gets back, from the parent:
- *
- *   { octipus: 'result', id: 1, ok: true, result }            // the MCP tool result
- *   { octipus: 'result', id: 1, ok: false, error, code }      // refused or failed
- *
- * The parent checks that a message comes from the page's own frame (its
- * window, and the opaque origin "null" a sandboxed frame has), that it has
- * exactly this shape, and calls `POST /api/plugins/<name>/call/<tool>` as the
- * signed-in user — never another package's tool.
+ * The port is the capability: it lives in the page's document, so a
+ * navigation destroys it, and the app also detaches on any later load.
  */
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
@@ -49,8 +45,6 @@ export function pluginPageHref(page: Pick<PluginPageLink, 'plugin' | 'path'>): s
 /** A call the page asks for, once checked. */
 export interface BridgeCall {
   id: string | number;
-  /** The secret the parent sent with `hello` after the page loaded. */
-  token: string;
   tool: string;
   args: Record<string, unknown>;
 }
@@ -73,9 +67,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  */
 export function parseBridgeCall(data: unknown): BridgeCall | null {
   if (!isPlainObject(data) || data.octipus !== 'call') return null;
-  if (Object.keys(data).some((k) => !['octipus', 'id', 'tool', 'args', 'token'].includes(k))) return null;
-  const { id, tool, args, token } = data;
-  if (typeof token !== 'string' || token.length > 100) return null;
+  if (Object.keys(data).some((k) => !['octipus', 'id', 'tool', 'args'].includes(k))) return null;
+  const { id, tool, args } = data;
   if (!((typeof id === 'string' && id.length <= 100) || (typeof id === 'number' && Number.isFinite(id)))) return null;
   if (typeof tool !== 'string' || !TOOL_RE.test(tool)) return null;
   if (args !== undefined && !isPlainObject(args)) return null;
@@ -84,5 +77,45 @@ export function parseBridgeCall(data: unknown): BridgeCall | null {
   } catch {
     return null;
   }
-  return { id, token, tool, args: (args ?? {}) as Record<string, unknown> };
+  return { id, tool, args: (args ?? {}) as Record<string, unknown> };
+}
+
+/** Whether `data` is the page's `ready` with exactly this nonce (and nothing else). */
+export function isBridgeReady(data: unknown, nonce: string): boolean {
+  if (!isPlainObject(data) || data.octipus !== 'ready') return false;
+  if (Object.keys(data).some((k) => k !== 'octipus' && k !== 'nonce')) return false;
+  return typeof data.nonce === 'string' && data.nonce.length === nonce.length && data.nonce === nonce;
+}
+
+const PLUGIN_NAME_RE = /^[a-z][a-z0-9-]{1,49}$/;
+const SEGMENT_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}$/;
+
+/**
+ * The frame URL of a page, rebuilt from the server's listing only: the
+ * package name and the entry's path segments are checked (as the manifest
+ * check does) and each is encoded again. Null for anything else (another
+ * prefix, another package, a query, a fragment, `..`), so no route or DOM
+ * text ever reaches the frame's `src`.
+ */
+export function pageFrameSrc(page: Pick<PluginPageLink, 'plugin' | 'src'>): string | null {
+  if (!PLUGIN_NAME_RE.test(page.plugin)) return null;
+  const prefix = `/api/plugin-ui/${page.plugin}/`;
+  if (typeof page.src !== 'string' || !page.src.startsWith(prefix)) return null;
+  const segments: string[] = [];
+  for (const raw of page.src.slice(prefix.length).split('/')) {
+    let segment: string;
+    try {
+      segment = decodeURIComponent(raw);
+    } catch {
+      return null;
+    }
+    if (!SEGMENT_RE.test(segment)) return null;
+    segments.push(encodeURIComponent(segment));
+  }
+  return segments.length > 0 ? `${prefix}${segments.join('/')}` : null;
+}
+
+/** A fresh nonce for one frame. */
+export function bridgeNonce(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(24)), (b) => b.toString(16).padStart(2, '0')).join('');
 }

@@ -948,26 +948,42 @@ secret in them**: whatever a page shows comes through the bridge.
 the package removes them. `/plugins/<name>/<path>` shows the page in an
 `<iframe sandbox="allow-scripts">`.
 
-**The bridge.** Once the page's document has loaded, the parent sends it a
-secret; the page posts each call with it and gets one answer:
+**The bridge** is a `MessagePort`, never a broadcast. The app loads the frame
+at the entry's URL (built only from the server's page listing, each path
+segment checked and encoded) with a fragment:
 
-```js
-let token = null;
-window.addEventListener('message', (e) => {
-  if (e.source !== parent) return;
-  if (e.data?.octipus === 'hello') token = e.data.token;   // after the page's load
-  // { octipus: 'result', id: 1, ok: true, result }          — the MCP tool result
-  // { octipus: 'result', id: 1, ok: false, error, code }    — refused or failed
-});
-// once token is set:
-parent.postMessage({ octipus: 'call', id: 1, token, tool: 'list_accounts', args: {} }, '*');
+```
+/api/plugin-ui/<name>/<entry>#octipus=<nonce>&parent=<the app's origin, URL-encoded>
 ```
 
-The parent accepts a message only from that page's frame (its window, with the
-opaque origin `"null"`), only with the secret it sent, only in exactly this
-shape (`id` a short string or a number, `tool` a tool name, `args` a plain
-object under 100 kB; any other key refuses it), at most 4 calls in flight and
-10 a second. It then calls
+A fragment never goes over the network, and a document the frame navigates to
+does not get it. The page opens a `MessageChannel` and hands one end to its
+parent, to that exact origin (never `'*'`); from then on it talks only over its
+own end:
+
+```js
+const params = new URLSearchParams(location.hash.slice(1));
+const channel = new MessageChannel();
+const waiting = new Map();   // id (a number) → resolve
+channel.port1.onmessage = (e) => {
+  // { octipus: 'result', id: 1, ok: true, result }          — the MCP tool result
+  // { octipus: 'result', id: 1, ok: false, error, code }    — refused or failed
+  const resolve = typeof e.data?.id === 'number' ? waiting.get(e.data.id) : undefined;
+  if (resolve) { waiting.delete(e.data.id); resolve(e.data); }
+};
+parent.postMessage({ octipus: 'ready', nonce: params.get('octipus') }, params.get('parent'), [channel.port2]);
+// a call:
+waiting.set(1, (reply) => { /* … */ });
+channel.port1.postMessage({ octipus: 'call', id: 1, tool: 'list_accounts', args: {} });
+```
+
+The app takes the **first** `ready` that comes from its own frame (its window,
+with the opaque origin `"null"`), carries the nonce it chose and transfers
+exactly one port, and ignores every later `ready`. It never posts to the
+frame's window: everything goes over that port, the capability the page holds.
+Calls must have exactly this shape (`id` a short string or a number, `tool` a
+tool name, `args` a plain object under 100 kB; any other key refuses it); at
+most 4 are in flight and 10 a second. It then calls
 
 ```
 POST /api/plugins/<name>/call/<tool>   { "args": {...}, "confirm"?: true }
@@ -992,11 +1008,12 @@ effect and the arguments — and only on *Allow once* repeats the call with
 `confirm`: it only names a tool and its arguments.
 
 **Navigation.** A page can navigate its own frame (a link, `location =`, a
-meta refresh). The app counts the frame's `load` events: on any after the
-first, the bridge is detached for good, the frame is emptied (`about:blank`)
-and the user is told the page navigated away. A document the frame navigates
-to never gets the secret, so it cannot call the bridge before its own load is
-seen either.
+meta refresh). The port lives in the page's document, so a navigation destroys
+it: nothing sent afterwards reaches anyone, and a document navigated to has no
+fragment, so no nonce and no port (even if it navigated while still parsing,
+before any `load` was seen). The app also counts the frame's `load` events: on
+any after the first, it closes the port for good, empties the frame
+(`about:blank`) and tells the user the page navigated away.
 
 **Treat a page as able to leak.** What a page is shown, it can put into the
 URL of a navigation, which leaves before the app sees the next load (the CSP

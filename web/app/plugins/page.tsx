@@ -4,7 +4,7 @@ import { Loader2, ShieldAlert } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api, ApiError, getApiUrl } from '@/lib/api';
-import { parseBridgeCall, pluginPageHref, usePluginPages, type BridgeCall, type PluginPageLink } from '@/lib/plugin-pages';
+import { bridgeNonce, isBridgeReady, pageFrameSrc, parseBridgeCall, pluginPageHref, usePluginPages, type BridgeCall, type PluginPageLink } from '@/lib/plugin-pages';
 
 /** Calls a page may have in flight at once; more are answered `busy`. */
 const MAX_IN_FLIGHT = 4;
@@ -68,24 +68,21 @@ function PluginFrame({ page }: { page: PluginPageLink }) {
   const loads = useRef(0);
   const detached = useRef(false);
   const [navigatedAway, setNavigatedAway] = useState(false);
-  const base = getApiUrl().replace(/\/api\/?$/, '');
-  const src = `${base}${page.src}`;
-
   /**
-   * The bridge's secret for this page, sent to the frame once its first
-   * document has loaded (`{ octipus: 'hello', token }`); a call counts only
-   * with it. A document the frame navigates to later never gets it, so a
-   * site a link leads to cannot use the bridge even before its own load is
-   * seen (only what the page itself hands over, which is the package's own
-   * doing: see docs/PLUGIN-PACKAGES.md#pages).
+   * The bridge (web/lib/plugin-pages.ts): the nonce in the frame's URL
+   * fragment, and the one port the page handed over with it. Nothing is ever
+   * posted to the frame's window; everything goes over this port, which dies
+   * with the page's document.
    */
-  const token = useRef<string | null>(null);
+  const [nonce] = useState(bridgeNonce);
+  const port = useRef<MessagePort | null>(null);
+  const path = pageFrameSrc(page);
+  const src = path === null ? null
+    : `${getApiUrl().replace(/\/api\/?$/, '')}${path}#octipus=${nonce}&parent=${encodeURIComponent(window.location.origin)}`;
 
   const reply = useCallback((message: Record<string, unknown>) => {
     if (detached.current) return;
-    // A sandboxed frame has an opaque origin: '*' is the only target that reaches it.
-    // The message goes to this frame's window only, and holds only what it asked for.
-    frame.current?.contentWindow?.postMessage({ octipus: 'result', ...message }, '*');
+    port.current?.postMessage({ octipus: 'result', ...message });
   }, []);
 
   const ask = useCallback((call: BridgeCall, effect: string) => new Promise<boolean>((resolve) => {
@@ -97,15 +94,10 @@ function PluginFrame({ page }: { page: PluginPageLink }) {
 
   const onLoad = () => {
     loads.current += 1;
-    if (loads.current === 1) {
-      const bytes = crypto.getRandomValues(new Uint8Array(24));
-      token.current = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-      frame.current?.contentWindow?.postMessage({ octipus: 'hello', token: token.current }, '*');
-      return;
-    }
-    if (detached.current) return;
+    if (loads.current === 1 || detached.current) return;
     detached.current = true;
-    token.current = null;
+    port.current?.close();
+    port.current = null;
     for (const p of queue.current.splice(0)) p.resolve(false);
     setCurrent(null);
     setNavigatedAway(true);
@@ -134,29 +126,41 @@ function PluginFrame({ page }: { page: PluginPageLink }) {
     }
   }, [ask, page.plugin, reply]);
 
+  // A call over the port: checked, limited, run.
+  const onCall = useCallback((data: unknown) => {
+    if (detached.current) return;
+    const call = parseBridgeCall(data);
+    if (!call) return;
+    const now = Date.now();
+    recent.current = recent.current.filter((t) => now - t < 1000);
+    if (recent.current.length >= MAX_PER_SECOND) {
+      reply({ id: call.id, ok: false, error: 'Too many calls; wait a moment', code: 'rate_limited' });
+      return;
+    }
+    if (inFlight.current >= MAX_IN_FLIGHT) {
+      reply({ id: call.id, ok: false, error: 'Too many calls at once', code: 'busy' });
+      return;
+    }
+    recent.current.push(now);
+    inFlight.current += 1;
+    void run(call).finally(() => { inFlight.current -= 1; });
+  }, [reply, run]);
+
+  // The handshake: the first `ready` from this frame, with this nonce and one port. Later ones are ignored.
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
-      // Only this page's own frame, which (sandboxed, no same-origin) has the opaque origin "null".
-      if (detached.current || !frame.current || event.source !== frame.current.contentWindow || event.origin !== 'null') return;
-      const call = parseBridgeCall(event.data);
-      if (!call || !token.current || call.token !== token.current) return;
-      const now = Date.now();
-      recent.current = recent.current.filter((t) => now - t < 1000);
-      if (recent.current.length >= MAX_PER_SECOND) {
-        reply({ id: call.id, ok: false, error: 'Too many calls; wait a moment', code: 'rate_limited' });
-        return;
-      }
-      if (inFlight.current >= MAX_IN_FLIGHT) {
-        reply({ id: call.id, ok: false, error: 'Too many calls at once', code: 'busy' });
-        return;
-      }
-      recent.current.push(now);
-      inFlight.current += 1;
-      void run(call).finally(() => { inFlight.current -= 1; });
+      if (port.current || detached.current || !frame.current || event.source !== frame.current.contentWindow || event.origin !== 'null') return;
+      if (!isBridgeReady(event.data, nonce) || event.ports.length !== 1) return;
+      const [p] = event.ports;
+      port.current = p;
+      p.onmessage = (e) => onCall(e.data);
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [reply, run]);
+  }, [nonce, onCall]);
+
+  // Leaving the page closes the port.
+  useEffect(() => () => { port.current?.close(); port.current = null; }, []);
 
   // Leaving the page refuses whatever it still waits for.
   useEffect(() => {
@@ -183,7 +187,7 @@ function PluginFrame({ page }: { page: PluginPageLink }) {
       <iframe
         ref={frame}
         title={`${page.pluginTitle}: ${page.title}`}
-        src={navigatedAway ? 'about:blank' : src}
+        src={navigatedAway || src === null ? 'about:blank' : src}
         onLoad={onLoad}
         sandbox="allow-scripts"
         referrerPolicy="no-referrer"

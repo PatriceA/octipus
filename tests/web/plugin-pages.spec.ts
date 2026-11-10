@@ -39,8 +39,12 @@ interface Stubs {
   /** The files the frame fetched. (Sec-Fetch-Dest is added below Playwright's interception, so it is checked in the route tests.) */
   dests: string[];
   enabled: boolean;
-  /** The hash of the entry URL (the fixture page calls the tool it names). */
+  /** What the fixture page does: the tool it calls, or a scenario (`data-tool` on its <body>). */
   tool: string;
+  /** The entry URL the page listing gives (default: the fixture's). */
+  src?: string;
+  /** Each request URL of the entry, as the frame made it (query and fragment included where sent). */
+  entries: string[];
 }
 
 async function stubPlugin(page: Page, stubs: Stubs): Promise<void> {
@@ -50,13 +54,19 @@ async function stubPlugin(page: Page, stubs: Stubs): Promise<void> {
     const ext = file.split('.').pop() ?? '';
     stubs.dests.push(file);
     if (!stubs.enabled || !TYPES[ext]) return route.fulfill({ status: 404, body: 'Not found' });
+    let body = readFileSync(join(UI_DIR, file), 'utf8');
+    if (file === 'index.html') {
+      stubs.entries.push(route.request().url());
+      // The scenario, on the first document only (a document navigated to does what a plain page does).
+      if (!url.search) body = body.replace('<body>', `<body data-tool="${stubs.tool}">`);
+    }
     return route.fulfill({
       status: 200,
-      body: readFileSync(join(UI_DIR, file)),
+      body,
       headers: { 'content-type': TYPES[ext], 'content-security-policy': csp(url.origin), 'x-content-type-options': 'nosniff' },
     });
   });
-  await page.route(/\/api\/plugin-ui$/, (route) => json(route, 200, { pages: stubs.enabled ? [{ ...PAGE, src: `${PAGE.src}#${stubs.tool}` }] : [] }));
+  await page.route(/\/api\/plugin-ui$/, (route) => json(route, 200, { pages: stubs.enabled ? [{ ...PAGE, src: stubs.src ?? PAGE.src }] : [] }));
   await page.route(/\/api\/plugins\/[^/]+\/call\/[^/]+$/, async (route) => {
     const req = route.request();
     const body = req.postDataJSON() as Stubs['calls'][number]['body'];
@@ -73,7 +83,7 @@ const frameOf = (page: Page) => page.frameLocator('[data-testid="plugin-frame"]'
 
 test.describe('plugin pages', () => {
   test('the page renders sandboxed, and a bridge call reaches its own package and comes back', async ({ authenticatedPage: page }) => {
-    const stubs: Stubs = { calls: [], dests: [], enabled: true, tool: 'whoami' };
+    const stubs: Stubs = { calls: [], dests: [], entries: [], enabled: true, tool: 'whoami' };
     await stubPlugin(page, stubs);
     await page.goto('/plugins/host-plugin/dashboard');
     const frame = frameOf(page);
@@ -92,23 +102,65 @@ test.describe('plugin pages', () => {
   });
 
   test('another package\'s tool is refused, and only the page\'s own frame is heard', async ({ authenticatedPage: page }) => {
-    const stubs: Stubs = { calls: [], dests: [], enabled: true, tool: 'list_accounts' };
+    const stubs: Stubs = { calls: [], dests: [], entries: [], enabled: true, tool: 'list_accounts' };
     await stubPlugin(page, stubs);
     await page.goto('/plugins/host-plugin/dashboard');
     await expect(frameOf(page).locator('#status')).toHaveText('refused: unknown_tool');
     // The request named its own package only.
     expect(stubs.calls.map((c) => c.url)).toEqual(['/api/plugins/host-plugin/call/list_accounts']);
-    // A message posted by the app window itself (not the frame), or malformed, calls nothing.
+    // Messages posted by the app window itself (not the frame) — a call, or a 'ready' with a port — call nothing.
     await page.evaluate(() => {
-      window.postMessage({ octipus: 'call', id: 9, token: 'guess', tool: 'whoami', args: {} }, '*');
-      window.postMessage({ octipus: 'call', id: 10, tool: '../../admin', args: {} }, '*');
+      window.postMessage({ octipus: 'call', id: 9, tool: 'whoami', args: {} }, window.location.origin);
+      const channel = new MessageChannel();
+      window.postMessage({ octipus: 'ready', nonce: 'guess' }, window.location.origin, [channel.port2]);
+      channel.port1.postMessage({ octipus: 'call', id: 10, tool: 'whoami', args: {} });
     });
     await page.waitForTimeout(300);
     expect(stubs.calls).toHaveLength(1);
   });
 
+  test('the frame gets its nonce and the app origin in the fragment, and calls go over the one port it handed over', async ({ authenticatedPage: page }) => {
+    const stubs: Stubs = { calls: [], dests: [], entries: [], enabled: true, tool: 'ready-twice' };
+    await stubPlugin(page, stubs);
+    await page.goto('/plugins/host-plugin/dashboard');
+    await expect(frameOf(page).locator('#status')).toHaveText('ok');
+    // A second 'ready' (another port) is ignored: its call is never answered nor sent.
+    await expect(frameOf(page).locator('body')).toHaveAttribute('data-second-port', 'ignored');
+    expect(stubs.calls).toHaveLength(1);
+    const src = await page.locator('[data-testid="plugin-frame"]').getAttribute('src') ?? '';
+    const fragment = new URLSearchParams(src.split('#')[1]);
+    expect(fragment.get('octipus')).toMatch(/^[0-9a-f]{48}$/);
+    expect(fragment.get('parent')).toBe(new URL(page.url()).origin);
+    // The fragment never went over the network.
+    expect(stubs.entries.every((u) => !u.includes('#') && !u.includes('octipus='))).toBe(true);
+  });
+
+  test('a page that navigates while still parsing never gets a port; the next document receives nothing', async ({ authenticatedPage: page }) => {
+    const stubs: Stubs = { calls: [], dests: [], entries: [], enabled: true, tool: 'navigate-early' };
+    await stubPlugin(page, stubs);
+    await page.goto('/plugins/host-plugin/dashboard');
+    await expect.poll(() => stubs.entries.some((u) => u.includes('?early=1'))).toBe(true);
+    // The document navigated to has no fragment: no nonce, no port, no calls.
+    await expect(frameOf(page).locator('body')).toHaveAttribute('data-bridge', 'none');
+    await page.waitForTimeout(300);
+    expect(stubs.calls).toEqual([]);
+  });
+
+  test('the frame URL comes only from the listing, checked and encoded', async ({ authenticatedPage: page }) => {
+    const stubs: Stubs = { calls: [], dests: [], entries: [], enabled: true, tool: 'whoami', src: '/api/plugin-ui/host-plugin/../../auth/me' };
+    await stubPlugin(page, stubs);
+    await page.goto('/plugins/host-plugin/dashboard');
+    await expect(page.getByTestId('plugin-page')).toBeVisible();
+    await expect(page.locator('[data-testid="plugin-frame"]')).toHaveAttribute('src', 'about:blank');
+    // An entry of another package is refused the same way.
+    stubs.src = '/api/plugin-ui/other-plugin/index.html';
+    await page.reload();
+    await expect(page.locator('[data-testid="plugin-frame"]')).toHaveAttribute('src', 'about:blank');
+    expect(stubs.entries).toEqual([]);
+  });
+
   test('an external tool runs only after the user allows it in the app', async ({ authenticatedPage: page }) => {
-    const stubs: Stubs = { calls: [], dests: [], enabled: true, tool: 'send_letter' };
+    const stubs: Stubs = { calls: [], dests: [], entries: [], enabled: true, tool: 'send_letter' };
     await stubPlugin(page, stubs);
     await page.goto('/plugins/host-plugin/dashboard');
     const dialog = page.getByTestId('plugin-confirm');
@@ -125,7 +177,7 @@ test.describe('plugin pages', () => {
   });
 
   test('a page that navigates its frame away loses the bridge and is closed', async ({ authenticatedPage: page }) => {
-    const stubs: Stubs = { calls: [], dests: [], enabled: true, tool: 'navigate' };
+    const stubs: Stubs = { calls: [], dests: [], entries: [], enabled: true, tool: 'navigate' };
     await stubPlugin(page, stubs);
     await page.goto('/plugins/host-plugin/dashboard');
     await expect(page.getByTestId('plugin-navigated')).toContainText("navigated away from host-plugin's own page");
@@ -136,7 +188,7 @@ test.describe('plugin pages', () => {
   });
 
   test('refusing the confirmation answers the page and runs nothing', async ({ authenticatedPage: page }) => {
-    const stubs: Stubs = { calls: [], dests: [], enabled: true, tool: 'send_letter' };
+    const stubs: Stubs = { calls: [], dests: [], entries: [], enabled: true, tool: 'send_letter' };
     await stubPlugin(page, stubs);
     await page.goto('/plugins/host-plugin/dashboard');
     await page.getByTestId('plugin-confirm').getByRole('button', { name: 'Refuse' }).click();
@@ -145,7 +197,7 @@ test.describe('plugin pages', () => {
   });
 
   test('the sidebar entry appears with enabling and goes with disabling', async ({ authenticatedPage: page }) => {
-    const stubs: Stubs = { calls: [], dests: [], enabled: false, tool: 'whoami' };
+    const stubs: Stubs = { calls: [], dests: [], entries: [], enabled: false, tool: 'whoami' };
     await stubPlugin(page, stubs);
     const patches: unknown[] = [];
     const view = () => [{
