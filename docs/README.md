@@ -74,7 +74,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md) | Plugin packages: out-of-repo connections that run as their own fenced-in MCP server, with declared tool effects, settings and vault secrets. The example plugin is [`plugins/reader`](../plugins/README.md); your own plugins live outside the repository. |
 | [TASK-BOARD.md](TASK-BOARD.md) | The work board on the tasks page: assignees, checkout leases, comments, dependency wakeups, the audit trail, and role agents that work their tasks. |
 | [SPEND-BUDGETS.md](SPEND-BUDGETS.md) | Dollar spend budgets per user, role or workspace: warn and pause, what users see, and the admin screen. |
-| [PLUGINS.md](PLUGINS.md) | Installing and building host-side plugins / extensions. |
+| [PLUGINS.md](PLUGINS.md) | Deprecated host-side plugins (`~/.octipus/legacy-plugins`) and in-process extensions (`~/.octipus/extensions`); neither loads from the Octipus checkout. |
 | [MCP-INTEGRATION.md](MCP-INTEGRATION.md) | Connecting external MCP servers (client side) with lazy tool discovery. |
 | [MCP-SERVER.md](MCP-SERVER.md) | The standalone MCP server Octipus exposes to CLI models. |
 | [PROFILES.md](PROFILES.md) | People & profiles. |

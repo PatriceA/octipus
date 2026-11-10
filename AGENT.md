@@ -90,7 +90,6 @@ web/              Vite + React Router dashboard
 browser-extension/  companion browser extension
 bin/              octi launcher CLI (bin/octi start|stop)
 personas/         persona YAML definitions
-extensions/       installed plugins (example-plugin, github)
 plugins/          the example plugin package only (plugins/reader, plugins/README.md)
 eval/             YAML eval scenarios
 scripts/          migrate, setup, backup, doctor, e2e, integration, key rotation
@@ -215,9 +214,11 @@ think you need to break one, open an issue first.
 - **Channel** → `src/channels/<name>/`. Must speak the gateway protocol; no
   channel-specific root agent hooks. One line in `CHANNEL_MODULES` in
   `src/channels/discovery.ts`.
-- **Plugin / extension** → a directory under `extensions/` (resolved from the backend's working directory) with
-  `plugin.json` + `index.ts`; loaded by `src/plugins/loader.ts`. See the
-  `plugin-development` skill and `docs/PLUGINS.md`.
+- **Plugin / extension** → never in this repository. Deprecated legacy plugins
+  (`plugin.json` + `index.ts`, `src/plugins/loader.ts`) load from
+  `~/.octipus/legacy-plugins/`, in-process extensions from
+  `~/.octipus/extensions/`; neither reads the working directory. See
+  `docs/PLUGINS.md`.
 - **Plugin package** → never under `plugins/`: only the example plugin
   (`plugins/reader`) ships there, and every other plugin lives outside the
   repository (`docs/PLUGIN-PACKAGES.md#where-plugins-live`).

@@ -826,11 +826,12 @@ export const configSchema = z.object({
     maxTokens: z.number().int().min(100).max(8000).default(2000),
   }).prefault({}),
   /**
-   * In-process extensions (`.octipus/extensions`, src/extensions). Every
-   * extension may observe gateway events and add commands; only a TRUSTED one
-   * may hook the agent loop (`octi.hook`: rewrite the system prompt, rewrite
-   * or refuse tool calls, see results, gate spawns), because a project's
-   * `.octipus/extensions` arrives with whatever repository was cloned.
+   * In-process extensions (`~/.octipus/extensions`, src/extensions; a
+   * project's `<cwd>/.octipus/extensions` is not loaded). Every extension may
+   * observe gateway events and add commands; only a TRUSTED one may hook the
+   * agent loop (`octi.hook`: rewrite the system prompt, rewrite or refuse tool
+   * calls, see results, gate spawns), because being installed in that
+   * directory is not the operator's consent to steer every agent.
    * Absolute paths of an extension's entry file or its directory; compared by
    * real path, so a same-named extension elsewhere is not trusted.
    * Env: OCTIPUS_TRUSTED_EXTENSIONS (comma-separated).

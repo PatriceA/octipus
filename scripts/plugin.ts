@@ -38,8 +38,12 @@ const HELP = `octi plugin — plugin tooling
 Usage:
   octi plugin validate <dir>    Validate a plugin directory against the contract
   octi plugin convert <legacy-dir> [--out <dir>] [--effect <tool>=<read|write|external>]... [--network <host>]... [--check-handlers]
-                                Convert a legacy plugin (plugin.json) into a plugin
-                                package (octipus-plugin.json + MCP server). Every tool
+                                Convert a legacy plugin (plugin.json; they load from
+                                ~/.octipus/legacy-plugins/<name>, no longer from
+                                <cwd>/extensions) into a plugin package
+                                (octipus-plugin.json + MCP server). --out defaults to
+                                <cwd>/<name>-package: run it outside the Octipus
+                                checkout, or pass --out. Every tool
                                 is "external" (always ask) unless --effect lowers it.
                                 --check-handlers imports the plugin here to check every
                                 tool has a handler: that runs its code with your rights.

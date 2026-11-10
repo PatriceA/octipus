@@ -100,3 +100,12 @@ logs.zip
 !/plugins/reader/
 !/plugins/reader.test.ts
 !/plugins/README.md
+
+# Local plugins and extensions never live in the repository. Legacy plugins
+# load from ~/.octipus/legacy-plugins and in-process extensions from
+# ~/.octipus/extensions; neither loader reads the checkout. A leftover
+# <cwd>/extensions or .octipus/extensions stays out of git. (The rest of
+# .octipus/ at the root holds tracked design notes, so only its extensions/
+# directory is ignored.)
+/extensions/
+.octipus/extensions/

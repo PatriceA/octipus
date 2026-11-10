@@ -589,7 +589,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   registry.register({
     name: 'reload-extensions',
     aliases: ['reload'],
-    description: 'Re-discover and reload user extensions from .octipus/extensions/',
+    description: 'Re-discover and reload user extensions from ~/.octipus/extensions/',
     adminOnly: true,
     handler: async () => {
       try {

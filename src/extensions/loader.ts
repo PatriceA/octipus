@@ -8,20 +8,21 @@ import { buildExtensionContext, isTrustedExtension } from './api';
 import type { ExtensionFactory, LoadedExtension } from './types';
 
 /**
- * Default discovery locations:
- *
- * - `~/.octipus/extensions/` — user-global
- * - `<cwd>/.octipus/extensions/` — project-local
+ * Default discovery location: `~/.octipus/extensions/` (per user, outside any
+ * checkout). There is no project-local discovery: a cloned repository's
+ * `.octipus/extensions` is never loaded, so a checkout cannot bring code into
+ * the server by being the working directory.
  *
  * Each entry is either:
  * - a single `*.ts` file at the root → name = filename without extension
  * - a directory containing `index.ts` → name = directory name
  *
- * Files starting with `.` or `_` are skipped (private). Existing
- * `extensions/` plugin.json system is unaffected — it still loads via
- * `src/plugins/loader.ts`.
+ * Files starting with `.` or `_` are skipped (private). Legacy `plugin.json`
+ * plugins load separately, from `~/.octipus/legacy-plugins/`
+ * (`src/plugins/loader.ts`).
  */
 export interface ExtensionDiscoveryOptions {
+  /** Used only to warn about a leftover `<cwd>/.octipus/extensions`; never loaded. */
   cwd?: string;
   home?: string;
   /** Extra absolute dirs (used by tests / settings). */
@@ -33,11 +34,30 @@ interface DiscoveredEntry {
   entryPath: string;
 }
 
-function defaultDirs(cwd: string, home: string): string[] {
-  return [
-    join(home, '.octipus', 'extensions'),
-    join(cwd, '.octipus', 'extensions'),
-  ];
+function defaultDirs(home: string): string[] {
+  return [join(home, '.octipus', 'extensions')];
+}
+
+/** Warned once per process about a project-local directory that is no longer read. */
+let projectLocalWarned = false;
+
+/** Test hook: forget that the project-local warning was given. */
+export function resetProjectLocalWarningForTests(): void {
+  projectLocalWarned = false;
+}
+
+function warnProjectLocal(cwd: string, home: string): void {
+  if (projectLocalWarned) return;
+  const dir = join(cwd, '.octipus', 'extensions');
+  const userDir = join(home, '.octipus', 'extensions');
+  if (resolve(dir) === resolve(userDir)) return;
+  const names = discoverInDir(dir).map((e) => e.name);
+  if (names.length === 0) return;
+  projectLocalWarned = true;
+  coreLogger.warn(
+    { dir, extensions: names, userDir },
+    `Project-local extensions in ${dir} are not loaded (${names.join(', ')}): extensions load only from ${userDir}. Move the ones you trust there.`,
+  );
 }
 
 function discoverInDir(dir: string): DiscoveredEntry[] {
@@ -67,14 +87,15 @@ function discoverInDir(dir: string): DiscoveredEntry[] {
 export function discoverExtensions(opts: ExtensionDiscoveryOptions = {}): DiscoveredEntry[] {
   const cwd = opts.cwd ?? process.cwd();
   const home = opts.home ?? homedir();
-  const dirs = [...defaultDirs(cwd, home), ...(opts.extraDirs ?? []).map(d => resolve(d))];
+  warnProjectLocal(cwd, home);
+  const dirs = [...defaultDirs(home), ...(opts.extraDirs ?? []).map(d => resolve(d))];
 
   const seen = new Set<string>();
   const out: DiscoveredEntry[] = [];
 
   for (const dir of dirs) {
     for (const entry of discoverInDir(dir)) {
-      // Project-local wins over user-global by virtue of order; first-seen wins.
+      // The user directory comes first; first-seen wins.
       if (seen.has(entry.name)) {
         coreLogger.debug({ name: entry.name, dir }, 'extension already loaded by another dir, skipping');
         continue;

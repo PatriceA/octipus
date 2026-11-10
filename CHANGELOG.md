@@ -152,6 +152,19 @@ labels reflect blast radius, not contract guarantees.
   installable as bundled, and an install refuses a plugin store inside that
   directory: local plugins stay outside the install and the repository
   (docs/PLUGIN-PACKAGES.md#where-plugins-live).
+- **No plugin loads from the Octipus checkout or the working directory.**
+  Legacy `plugin.json` plugins load from `~/.octipus/legacy-plugins/`
+  instead of `<cwd>/extensions/`; plugins left there are not loaded and the
+  server logs one warning naming them (move them, or convert them with
+  `octi plugin convert`). In-process extensions load only from
+  `~/.octipus/extensions/`: a project's `<cwd>/.octipus/extensions/` is no
+  longer discovered (one warning names what it skips). `extensions/example-plugin`
+  and `extensions/.gitkeep` are removed (the example plugin is
+  `plugins/reader`); the converter and validator tests use
+  `tests/fixtures/legacy-plugin`, and the "Plugin contract" CI job validates
+  and converts that fixture instead of scanning `extensions/*`. `.gitignore`
+  ignores `/extensions/` and `.octipus/extensions/`. Agents are no longer told
+  to create plugins in `<checkout>/extensions/`.
 
 ### Fixed
 

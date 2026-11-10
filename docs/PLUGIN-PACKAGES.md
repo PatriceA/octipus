@@ -11,8 +11,11 @@ which run inside the server with its full rights. (Trusted extensions, the
 `octi.*` modules that hook the agent loop, can now be installed as packages
 too, with `runtime: "in-process"`: see [Runtimes](#runtimes).) Use a package for anything
 that talks to the outside world or handles credentials. Those plugins are
-deprecated; `octi plugin convert <dir>` turns one into a package
-([PLUGINS.md](PLUGINS.md#converting-to-a-plugin-package)).
+deprecated; they load from `~/.octipus/legacy-plugins/<name>` (no longer from
+`<cwd>/extensions`), and `octi plugin convert <dir>` turns one into a package
+([PLUGINS.md](PLUGINS.md#converting-to-a-plugin-package)). Pass `--out` or run
+the converter outside the Octipus checkout: the output defaults to
+`<cwd>/<name>-package`.
 
 ## What a package is
 
@@ -1298,6 +1301,14 @@ you run a release install or a git checkout:
 - **Only the example plugin ships in `plugins/`.** The repository's
   `.gitignore` ignores every other path under `plugins/`, and Octipus does not
   offer one as bundled. New plugins are not added to the repository.
+- **No plugin system reads plugins from the Octipus checkout.** Plugin
+  packages load from the plugin store above; deprecated legacy plugins
+  (`plugin.json`, [PLUGINS.md](PLUGINS.md)) from `~/.octipus/legacy-plugins/`;
+  in-process extensions from `~/.octipus/extensions/`. The server's working
+  directory is not searched: `<cwd>/extensions/` (where legacy plugins used to
+  load from) and a project's `<cwd>/.octipus/extensions/` are not loaded, and
+  the server logs one warning naming anything it finds there. The
+  repository's `.gitignore` ignores both directories.
 
 ## Installing and managing
 

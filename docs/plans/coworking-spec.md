@@ -447,7 +447,8 @@ events are named in `GLOBAL_EVENT_TYPES` with a reason: gateway connection
 audit events before authentication (`hub.ts:174-185`) go to no client;
 `extension.notify` (`src/extensions/api.ts:86-94`) is stamped with the
 extension's installing user. *As built:* host extensions are files the
-operator installs (`~/.octipus/extensions`, `<cwd>/.octipus/extensions`), so
+operator installs (`~/.octipus/extensions`; project-local discovery was later
+removed), so
 there is no installing user: `extension.notify` stays user-less, is listed in
 `GLOBAL_EVENT_TYPES` and travels on the internal bus only, never to a client
 (`protocol.ts`, docs/architecture/gateway.md). `AgentNode` gains `userId`

@@ -192,7 +192,8 @@ orchestrated run with heartbeat channel; e2e module in `scripts/e2e/tests/`.
 
 **Current state:** two parallel mechanisms —
 
-- `src/plugins/` manifest plugins from `<cwd>/extensions/`
+- `src/plugins/` manifest plugins from `<cwd>/extensions/` (now
+  `~/.octipus/legacy-plugins/`)
   (`loader.ts:126`): `plugin.json` + entry module; **tools only**
   (wrapped as one `PluginTool extends BaseTool`, `plugin-tool.ts:6`);
   vault-backed secret resolution per calling user (`resolveSecrets`,
@@ -248,7 +249,8 @@ code multiplies the trust surface. Revisit after signing exists.
 
 **Files:** new `plugin-sdk/`, `src/plugins/{loader,types,plugin-tool}.ts`,
 `src/extensions/{loader,api,types,registry}.ts`, `bin/octi.ts`
-(subcommands), `extensions/example-plugin/` (update to new manifest),
+(subcommands), the example legacy plugin (update to new manifest; then
+under `extensions/`, now the fixture `tests/fixtures/legacy-plugin/`),
 `docs/PLUGINS.md`, new CI job.
 
 **Testing:** the validation kit self-tests; contract-run
