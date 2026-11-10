@@ -73,10 +73,11 @@ last run did counts as done.
   cases picked bring their modules:
   - `company`: cases, contacts and records; mail; scan folders; protection
     levels; the email inbox; people and profiles.
-  - `product`: research jobs, live artifacts, people and profiles.
-  - `research`: research jobs, recall, live artifacts. The Reader is the
-    example plugin ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#bundled-plugins)),
-    not a product feature, so the guide does not offer it.
+  - `product`: live artifacts, people and profiles.
+  - `research`: recall and live artifacts; its research agent is the
+    `research` role's agent, set up in the guide's Research section. Reader and Research are
+    the example plugins ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#bundled-plugins)),
+    not product features, so the guide does not offer them.
   - `development`: none, so a developer gets the core only.
   - A chat picked to talk to Octipus from (Telegram, Slack, …) turns on the
     chat channels. Voice no use case brings: tick it in the picker below, or

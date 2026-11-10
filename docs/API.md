@@ -261,10 +261,10 @@ filesystem or shell isolation.
 
 ## Research
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/research` | Start a deep research job |
-| GET | `/api/research/:jobId` | Get persisted research job status and results |
+The core research endpoints (`/api/research`) are removed: deep research is
+the example plugin `plugins/research`, which a page and agents call as plugin
+tools, and which runs through the plugin host API scopes `agent:run` and
+`documents:write` ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#host-api)).
 
 ## Tasks
 
@@ -683,6 +683,26 @@ and its endpoints are system-scoped under `connector_<id>_client_id` /
 
 Every connected connector is reachable through the generic
 `connector_list_tools` / `connector_call_tool` pair.
+
+## Plugin host API
+
+Called only by a plugin package's own tool calls, through its egress proxy,
+with the per-call token (`Bearer ocph_…`); a session or API token gives
+nothing here ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#host-api)).
+
+| Method | Endpoint | Scope |
+|--------|----------|-------|
+| GET | `/api/plugin-host/whoami` | — |
+| GET / POST | `/api/plugin-host/notes` | `notes:read` / `notes:write` |
+| GET / POST | `/api/plugin-host/tasks` | `tasks:read` / `tasks:write` |
+| GET | `/api/plugin-host/documents/:id` | `documents:read` |
+| POST | `/api/plugin-host/documents` | `documents:write` (create a text document) |
+| PUT | `/api/plugin-host/documents/:id` | `documents:write` (update one the package created) |
+| POST | `/api/plugin-host/notify` | `notify` |
+| POST | `/api/plugin-host/web/read` | `web:read` |
+| POST | `/api/plugin-host/model/complete` | `model:complete` |
+| POST | `/api/plugin-host/agent/runs` | `agent:run` (start a background run; `202 { id }`) |
+| GET | `/api/plugin-host/agent/runs/:id` | `agent:run` (a run's status and result) |
 
 ## Plugins
 

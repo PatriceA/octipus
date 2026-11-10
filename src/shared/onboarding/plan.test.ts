@@ -255,10 +255,11 @@ describe('answers', () => {
 });
 
 describe('modules', () => {
-  test('research offers no Reader: it is the example plugin, not a product feature', () => {
+  test('research offers no Reader and no research plugin: they are the example plugins, not product features', () => {
     const steps = plan(['research'], { 'research.roleAgent': true });
     expect(ids(steps)).not.toContain('plugin:reader');
-    expect(steps.map((s) => s.title).join('\n')).not.toMatch(/reader/i);
+    expect(ids(steps)).not.toContain('plugin:research');
+    expect(steps.map((s) => s.title).join('\n')).not.toMatch(/reader|research jobs|plugin/i);
   });
 
   test('development: the core only, no module step', () => {
@@ -271,7 +272,7 @@ describe('modules', () => {
   });
 
   test('only what is missing is turned on; nothing is ever turned off', () => {
-    const some = plan(['company'], { 'company.mail': false }, fresh({ modules: { enabled: ['mail', 'research'], byUseCase: fresh().modules.byUseCase } }));
+    const some = plan(['company'], { 'company.mail': false }, fresh({ modules: { enabled: ['mail', 'recall'], byUseCase: fresh().modules.byUseCase } }));
     expect(step(some, 'modules')).toMatchObject({ call: { body: { ids: ['business'] } } });
     const all = plan(['company'], { 'company.mail': false }, fresh({ modules: { enabled: ['business', 'mail'], byUseCase: fresh().modules.byUseCase } }));
     expect(found(all)).toContain('modules');

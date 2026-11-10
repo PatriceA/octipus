@@ -85,7 +85,7 @@ src/
   tui-pi/         terminal chat client (pi-tui)
   tui-editor/     TUI code editor
   services/ shared/ setup/   org services, shared types/diff, setup probes
-mcp-server/       standalone MCP server (85 tools across 24 groups)
+mcp-server/       standalone MCP server (83 tools across 23 groups)
 web/              Vite + React Router dashboard
 browser-extension/  companion browser extension
 bin/              octi launcher CLI (bin/octi start|stop)

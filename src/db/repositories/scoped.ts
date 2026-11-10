@@ -1157,10 +1157,13 @@ export class ScopedPipelineRepo {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Background jobs (research runs, document processing)
+// Background jobs (plugin background runs, document processing; research rows of the removed module)
 // ─────────────────────────────────────────────────────────────────────
 
-export type ChangedJobRow = Pick<BackgroundJob, 'id' | 'kind' | 'title' | 'status' | 'error' | 'resultRef' | 'updatedAt' | 'finishedAt'>;
+export type ChangedJobRow = Pick<BackgroundJob, 'id' | 'kind' | 'title' | 'status' | 'error' | 'resultRef' | 'updatedAt' | 'finishedAt'> & {
+  /** The plugin of a plugin's background run (`kind: 'agent'`); null otherwise. */
+  plugin: string | null;
+};
 
 /** Read side of `background_jobs`: the poller and the digest. Writes are the workers' (`BackgroundJobRepository`). */
 export class ScopedJobRepo {
@@ -1206,6 +1209,7 @@ export class ScopedJobRepo {
         resultRef: backgroundJobs.resultRef,
         updatedAt: backgroundJobs.updatedAt,
         finishedAt: backgroundJobs.finishedAt,
+        plugin: sql<string | null>`${backgroundJobs.payload}->>'plugin'`,
       })
       .from(backgroundJobs)
       .where(and(...filters.filter((f): f is SQL => f !== undefined)))

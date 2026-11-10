@@ -86,8 +86,6 @@ export interface ToolInfo {
   }>;
 }
 
-export type ResearchDepth = 'quick' | 'standard' | 'deep';
-
 export interface MemoryRow {
   id: string;
   factType: string;
@@ -312,16 +310,6 @@ export class OctiClient {
 
   async deleteMemory(id: string): Promise<{ deleted?: boolean; error?: string }> {
     return this.request(`/api/memory/${id}`, { method: 'DELETE' });
-  }
-
-  // ─── Deep Research (async jobs) ───
-
-  async startResearch(question: string, depth?: ResearchDepth): Promise<{ jobId: string; status: string }> {
-    return this.request('/api/research', { method: 'POST', body: JSON.stringify({ question, depth }) });
-  }
-
-  async getResearch(jobId: string): Promise<unknown> {
-    return this.request(`/api/research/${jobId}`);
   }
 
   // ─── Skills (domain knowledge) ───

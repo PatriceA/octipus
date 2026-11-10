@@ -1,8 +1,8 @@
 /**
  * "While you were away" — one list of what happened to a user's work since
  * a point in time: agents that finished or failed, pipelines that completed
- * or now wait on them, approvals blocking a run, background work (research
- * runs, document processing) that finished or died, to-dos that other things
+ * or now wait on them, approvals blocking a run, background work (a plugin's
+ * background run, document processing) that finished or died, to-dos that other things
  * created for them, and how much of the inbox is unread.
  *
  * The state tables (`agents`, `pipelines`, `background_jobs`, `tasks`, `notifications`) already
@@ -11,7 +11,6 @@
  * contained. Pending approvals are in-process (`ApprovalManager`), so they
  * are read through an injectable dependency rather than a table.
  */
-import { isModuleOn } from '@/core/modules/registry';
 import { scopedRepos } from '@/db/repositories/scoped';
 import type { Principal } from '@/security/principal';
 
@@ -19,8 +18,12 @@ export interface AgentBrief { id: string; role: string; status: 'completed' | 'f
 export interface PipelineBrief { id: string; title: string; status: string; summary?: string | null; changedAt: string; waitingOnYou: boolean }
 export interface ApprovalBrief { id: string; sessionId: string; summary: string; question: string }
 export interface TaskBrief { id: string; title: string; source: string; createdAt: string }
-/** A research run or a document that finished, failed, or was cut off by a restart. */
-export interface JobBrief { id: string; kind: string; title: string; status: 'done' | 'error' | 'interrupted'; error?: string | null; resultRef?: string | null; finishedAt: string }
+/** A background run (a plugin's, or a research run of the removed module) or a document that finished, failed, or was cut off by a restart. */
+export interface JobBrief {
+  id: string; kind: string; title: string; status: 'done' | 'error' | 'interrupted'; error?: string | null; resultRef?: string | null; finishedAt: string;
+  /** The plugin whose background run this was (`kind: 'agent'`). */
+  plugin?: string;
+}
 
 export interface AwayDigest {
   since: string;
@@ -106,10 +109,12 @@ export async function collectAwayDigest(
     changedAt: p.updatedAt.toISOString(),
     waitingOnYou: WAITING_STATUSES.has(p.status),
   }));
-  // Research runs are the `research` module's (docs/MODULES.md).
-  const jobBriefs: JobBrief[] = jobs.filter((j) => j.kind !== 'research' || isModuleOn('research')).map((j) => ({
+  // `research` rows are the removed research module's (their reports are documents);
+  // `agent` rows are plugins' background runs, read on the plugin's page.
+  const jobBriefs: JobBrief[] = jobs.map((j) => ({
     id: j.id,
     kind: j.kind,
+    ...(j.kind === 'agent' && j.plugin ? { plugin: j.plugin } : {}),
     title: j.title,
     status: j.status as JobBrief['status'],
     error: j.error,

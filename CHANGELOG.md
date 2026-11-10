@@ -174,6 +174,19 @@ labels reflect blast radius, not contract guarantees.
   `modules.enabled` is ignored; tasks it made keep `source: reader`.
   Onboarding no longer mentions it. The `replacedBy` field of
   `GET /api/modules` is removed with it.
+- **The core research module is gone; Research is the second example
+  plugin.** The `research` module, `POST /api/research` and
+  `GET /api/research/:jobId`, the `/research` page and its sidebar and work
+  navigation entries, `src/core/research/`, the follow-up *Review research*
+  to-do, the standalone MCP server's `octipus_start_research` and
+  `octipus_get_research_report` and the feature bench's research flow are
+  removed. Researching a question in the background is the example plugin
+  `plugins/research`: install it under Admin → Plugin packages → Bundled or
+  with `octi plugin install-bundled research`, and approve `agent:run` and
+  `documents:write`. A stored `research` in `modules.enabled` is ignored;
+  tasks it made keep `source: research`, and its finished runs still show in
+  the away digest until retention. The research onboarding use case now
+  brings recall and live artifacts, and `product` live artifacts and people.
 - **Only the plugins Octipus ships are bundled.** A directory under
   `<install>/plugins` other than the example plugin is no longer listed or
   installable as bundled, and an install refuses a plugin store inside that
@@ -419,6 +432,28 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Plugin host API: `documents:write` and `agent:run`.** `documents:write`
+  creates a text document for the calling user in the call's workspace (a
+  space's role rules apply), recording the package and tool in
+  `metadata.sourceRef`, at least at the level of what the call read, and
+  updates only documents the same package created. `agent:run` starts a
+  background run of the host's own agent as the user (`POST
+  /api/plugin-host/agent/runs`, a role, its tools narrowed to search, fetch
+  and read) and answers its id at once; a later call reads its status and
+  result. No token outlives its call: the run is unattended under the user's
+  rules, spend budgets and protection routing, bounded per package and user
+  (3 in a burst, 6 an hour, 2 at once), by `plugins.hostAgentRunTokens` (new,
+  default 150,000 tokens a run, 0 turns runs off) and the daily plugin
+  allowance (which now counts run tokens), and stopped after 20 minutes or
+  when the package is disabled, upgraded or its approval changes. Only a
+  write tool starts a run; personal workspaces only. Both need an admin's
+  approval; the admin page says what they do (docs/PLUGIN-PACKAGES.md#host-api).
+- **Research, the second example plugin** (`plugins/research`): a question
+  researched in the background by the host's research agent, its cited report
+  shown on the plugin's page and saved to Documents when the user asks
+  (docs/PLUGIN-PACKAGES.md#bundled-plugins, plugins/README.md).
+- **`/plugins/<name>` opens a plugin's first page**, and a plugin's finished
+  background run in the away digest links there.
 - **Run outcome and evidence.** The run view shows how a run ended, the files
   its tools recorded writing, the files its answer says it saved — *missing*
   until a recorded write matches — and the verification checks that judged it.

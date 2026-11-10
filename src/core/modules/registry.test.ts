@@ -48,14 +48,26 @@ describe('what is on', () => {
     expect(registry.enabledModules().size).toBe(0);
   });
 
-  test('a stored id of a module this build removed (the reader) is ignored, and kept in the setting', () => {
-    // Installs that went through migration 0152 store "reader"; the core reader is gone (plugins/reader is the example plugin).
-    expect(registry.moduleById('reader')).toBeUndefined();
+  test('a stored id of a module this build removed (the reader, research) is ignored, and kept in the setting', () => {
+    // Installs that went through migration 0152 store "reader" and "research"; both core modules are gone
+    // (plugins/reader and plugins/research are the example plugins).
+    for (const removed of ['reader', 'research']) {
+      expect(registry.moduleById(removed)).toBeUndefined();
+      expect(registry.isModuleOn(removed)).toBe(false);
+      expect(() => registry.nextEnabled([removed], removed, true)).toThrow(/Unknown module/);
+    }
     state.enabled = ['research', 'reader', 'recall'];
-    expect([...registry.enabledModules()].sort()).toEqual(['recall', 'research']);
+    expect([...registry.enabledModules()]).toEqual(['recall']);
     expect(registry.moduleViews().map((m) => m.id)).not.toContain('reader');
-    expect(registry.nextEnabled(['research', 'reader', 'recall'], 'business', true)).toEqual(['business', 'research', 'recall', 'reader']);
-    expect(() => registry.nextEnabled(['reader'], 'reader', true)).toThrow(/Unknown module/);
+    expect(registry.moduleViews().map((m) => m.id)).not.toContain('research');
+    // Nothing of theirs is switched off by the stale id: their routes are simply not there.
+    expect(registry.isPathOn('/api/research')).toBe(true);
+    expect(registry.nextEnabled(['research', 'reader', 'recall'], 'business', true)).toEqual(['business', 'recall', 'research', 'reader']);
+  });
+
+  test('the research use case brings recall and live artifacts: research is the research plugin, which onboarding does not offer', () => {
+    expect(REAL_MODULES.filter((m) => m.profiles.includes('research')).map((m) => m.id).sort()).toEqual(['artifacts', 'recall']);
+    expect(REAL_MODULES.some((m) => m.routes.includes('/api/research') || m.pages.includes('/research'))).toBe(false);
   });
 
   test('a module whose dependency is off is off, whatever the setting says', () => {

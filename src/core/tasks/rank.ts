@@ -66,7 +66,7 @@ export interface RankOptions {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-// `reader` is kept for existing tasks made by the removed core reader.
+// `reader` and `research` are kept for existing tasks made by the removed core reader and research module.
 const INBOUND_SOURCES = new Set(['email', 'research', 'reader', 'channel']);
 const INBOUND_WINDOW_MS = 48 * 60 * 60 * 1000;
 const UPCOMING_WINDOW_DAYS = 7;

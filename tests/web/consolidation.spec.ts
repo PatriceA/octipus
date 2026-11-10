@@ -34,19 +34,6 @@ test('settings exposes advanced destinations and preserves direct links', async 
   await expect(page.getByRole('heading', { name: /topics/i }).first()).toBeVisible();
 });
 
-test('research does not claim a missing document was saved', async ({ authenticatedPage: page }) => {
-  await page.route('**/api/research', route => route.fulfill({ json: { jobId: 'fixture-job' } }));
-  await page.route('**/api/research/fixture-job', route => route.fulfill({ json: {
-    id: 'fixture-job', status: 'done', stage: 'done', report: { question: 'Fixture question', generatedAt: '2026-09-10T10:00:00Z', depth: 'quick',
-      sections: [{ heading: 'Answer', markdown: '42 tasks', citations: [] }], sources: [], limitations: 'Fixture only' },
-  } }));
-  await page.goto('/research');
-  await page.getByRole('main').getByRole('textbox').fill('Fixture question');
-  await page.getByRole('button', { name: 'Start research', exact: true }).click();
-  await expect(page.getByText('Report available here, but no saved document was confirmed.')).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Saved to Documents' })).toHaveCount(0);
-});
-
 test('project discovery keeps partial results and exposes a retry', async ({ authenticatedPage: page }) => {
   await page.route('**/api/workspace', route => route.fulfill({ json: { rootPath: '/projects', additionalPaths: ['/denied'] } }));
   await page.route('**/api/tools/filesystem/tools/list_directory/execute', route => {

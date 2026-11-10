@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { emailToTask, normalizeTaskTitle, researchFollowUpTask } from './sourced';
+import { emailToTask, normalizeTaskTitle } from './sourced';
 
 describe('normalizeTaskTitle', () => {
   test('collapses whitespace and trims', () => {
@@ -37,22 +37,5 @@ describe('emailToTask', () => {
   test('low-priority triage maps to no priority', () => {
     const t = emailToTask({ id: 'm3', subject: 'Newsletter', from: { email: 'x@y.z' }, triage: { priority: 'low' } });
     expect(t.priority).toBe(0);
-  });
-});
-
-describe('researchFollowUpTask', () => {
-  test('points at the saved document and counts sources', () => {
-    const t = researchFollowUpTask({ question: 'Is PGlite production-ready?', sources: [1, 2, 3] }, 'doc-1');
-    expect(t.title).toBe('Review research: Is PGlite production-ready?');
-    expect(t.notes).toContain('3 sources');
-    expect(t.notes).toContain('Documents');
-    expect(t.category).toBe('Research');
-    expect(t.sourceRef).toEqual({ documentId: 'doc-1', label: 'Is PGlite production-ready?' });
-  });
-  test('no document id (persistence failed) → task still created, no dangling ref', () => {
-    const t = researchFollowUpTask({ question: 'q', sources: [1] }, null);
-    expect(t.notes).toContain('1 source.');
-    expect(t.notes).not.toContain('Documents');
-    expect(t.sourceRef?.documentId).toBeUndefined();
   });
 });

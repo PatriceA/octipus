@@ -269,7 +269,7 @@ async function main() {
       .then(({ reportInvalidHookTargets }) => reportInvalidHookTargets())
       .catch((err) => logger.warn({ err }, 'Invalid hook target report failed'));
 
-    // Background jobs (research runs, document processing): a job still
+    // Background jobs (plugin background runs, document processing): a job still
     // `running` is a lie after a restart. Mark it interrupted, then let the
     // document worker drain what was only queued — nothing had begun on those,
     // so running them now is safe. BEFORE the channels come up: a channel

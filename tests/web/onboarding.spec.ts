@@ -177,7 +177,7 @@ test.describe('onboarding guide', () => {
     state.models = { textReady: true, embeddingReady: true, verifySeparate: false, names: ['anthropic claude-sonnet-5-5'], providersWithKey: ['anthropic'], byTopic: {} };
     state.modules = {
       enabled: ['recall'],
-      byUseCase: { research: [{ id: 'research', title: 'Research jobs' }, { id: 'recall', title: 'Recall' }] },
+      byUseCase: { research: [{ id: 'artifacts', title: 'Live artifacts' }, { id: 'recall', title: 'Recall' }] },
       available: MODULES.map((m) => ({ id: m.id, title: m.title, description: m.description })),
     } as typeof state.modules;
     await page.goto('/');
@@ -187,7 +187,9 @@ test.describe('onboarding guide', () => {
     await guide.getByRole('button', { name: 'Research', exact: true }).click();
     await guide.getByRole('button', { name: 'See my plan' }).click();
     const picker = guide.getByTestId('module-picker');
-    await expect(picker.getByRole('checkbox', { name: 'Research jobs' })).toBeChecked();
+    await expect(picker.getByRole('checkbox', { name: 'Live artifacts' })).toBeChecked();
+    // Research is the research plugin now, which the guide does not offer.
+    await expect(picker.getByRole('checkbox', { name: 'Research jobs' })).toHaveCount(0);
     // On already: shown, and the guide does not switch it off.
     await expect(picker.getByRole('checkbox', { name: 'Recall' })).toBeDisabled();
     const business = picker.getByRole('checkbox', { name: 'Cases, contacts and records' });
@@ -195,7 +197,7 @@ test.describe('onboarding guide', () => {
     await business.check();
     await expect(guide.locator('[data-plan-step="modules"]')).toContainText('Cases, contacts and records');
     await guide.getByRole('button', { name: 'Go, set it up' }).click();
-    await expect.poll(() => calls.find((c) => c.path === '/modules/enable')?.body).toEqual({ ids: ['research', 'business'] });
+    await expect.poll(() => calls.find((c) => c.path === '/modules/enable')?.body).toEqual({ ids: ['artifacts', 'business'] });
   });
 
   test('putting it away leaves a link on the home page', async ({ authenticatedPage: page }) => {
