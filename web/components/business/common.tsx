@@ -84,18 +84,19 @@ const INPUT_TYPE: Partial<Record<FieldDef['type'], string>> = {
   number: 'number', money: 'number', date: 'date', email: 'email', phone: 'tel', url: 'url',
 };
 
-/** The inputs of a record type's fields. */
-export function FieldInputs({ fields, values, onChange, disabled }: {
+/** The inputs of a record type's fields. `idPrefix` keeps ids unique when several forms share a page. */
+export function FieldInputs({ fields, values, onChange, disabled, idPrefix = 'field' }: {
   fields: readonly FieldDef[];
   values: FieldValues;
   onChange: (next: FieldValues) => void;
   disabled?: boolean;
+  idPrefix?: string;
 }) {
   const set = (key: string, value: string | boolean) => onChange({ ...values, [key]: value });
   return (
     <div className="space-y-3">
       {fields.map((f) => {
-        const id = `field-${f.key}`;
+        const id = `${idPrefix}-${f.key}`;
         const label = `${f.label}${f.required ? ' *' : ''}`;
         let input: ReactNode;
         if (f.type === 'boolean') {

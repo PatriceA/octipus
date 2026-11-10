@@ -1,11 +1,13 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CircleCheck, Power, ShieldAlert } from 'lucide-react';
+import { CircleCheck, Power, Settings2, ShieldAlert, Trash2 } from 'lucide-react';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { FieldInputs, type FieldValues, fromFieldValues, problemsOf, toFieldValues } from '@/components/business/common';
 import { api } from '@/lib/api';
 import {
+  MAX_PLUGIN_SECRET_LENGTH,
   PLUGIN_PACKAGES_KEY,
   type PluginInstallResult,
   type PluginNetworkStatus,
@@ -106,14 +108,180 @@ function ContentReview({ pkg }: { pkg: PluginPackageView }) {
   );
 }
 
+/**
+ * A package's settings, typed by its manifest's fields, saved in one PATCH
+ * (the server checks them; all or nothing). A required setting cannot be
+ * cleared while the package is enabled.
+ */
+function SettingsForm({ pkg }: { pkg: PluginPackageView }) {
+  const qc = useQueryClient();
+  const fields = pkg.manifest.settings ?? [];
+  const [values, setValues] = useState<FieldValues>(() => toFieldValues(fields, pkg.settings));
+  const [message, setMessage] = useState<{ kind: 'error' | 'ok'; text: string } | null>(null);
+  const save = useMutation({
+    mutationFn: (v: FieldValues) => api.patch<PluginPackageView>(`/plugin-packages/${encodeURIComponent(pkg.name)}`, { settings: fromFieldValues(fields, v) }),
+    onSuccess: (view) => {
+      setValues(toFieldValues(fields, view.settings));
+      setMessage({ kind: 'ok', text: 'Settings saved.' });
+      void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY });
+    },
+    onError: (err: Error) => setMessage({ kind: 'error', text: problemsOf(err) }),
+  });
+  if (fields.length === 0) return <p className="text-xs text-on-surface-variant">No settings.</p>;
+  return (
+    <form
+      aria-label={`Settings of ${pkg.name}`}
+      className="space-y-2"
+      onSubmit={(e) => { e.preventDefault(); setMessage(null); save.mutate(values); }}
+    >
+      <FieldInputs fields={fields} values={values} onChange={setValues} disabled={save.isPending} idPrefix={`plugin-${pkg.name}-setting`} />
+      <button type="submit" disabled={save.isPending} className="px-2 py-1 rounded-xs bg-primary text-on-primary text-xs cursor-pointer disabled:opacity-50">
+        Save settings
+      </button>
+      <Message message={message} />
+    </form>
+  );
+}
+
+type FormMessage = { kind: 'error' | 'ok'; text: string } | null;
+
+function Message({ message }: { message: FormMessage }) {
+  if (!message) return null;
+  return (
+    <p role={message.kind === 'error' ? 'alert' : 'status'} className={cn('text-xs whitespace-pre-line', message.kind === 'error' ? 'text-error' : 'text-on-surface-variant')}>
+      {message.kind === 'error' ? `! ${message.text}` : message.text}
+    </p>
+  );
+}
+
+type SecretDecl = NonNullable<PluginPackageView['manifest']['secrets']>[number];
+
+/**
+ * One declared secret: whether it has a value (never the value), a field to
+ * set a new one (write-only, emptied once saved) and, when set, Clear.
+ *
+ * The value never enters React or react-query state: the input is
+ * uncontrolled and read from its ref when the request is made, the mutation's
+ * variable is only `'set'` or `'clear'`, and the mutation is reset and kept
+ * for no time (`gcTime: 0`) once it settles, so nothing holds the value after
+ * the request.
+ */
+function SecretRow({ pkg, secret }: { pkg: PluginPackageView; secret: SecretDecl }) {
+  const qc = useQueryClient();
+  const input = useRef<HTMLInputElement>(null);
+  const [filled, setFilled] = useState(false);
+  const [message, setMessage] = useState<FormMessage>(null);
+  const isSet = pkg.secretsSet.includes(secret.key);
+  const put = useMutation({
+    gcTime: 0,
+    mutationFn: (action: 'set' | 'clear') => api.put<{ saved: boolean }>(
+      `/plugin-packages/${encodeURIComponent(pkg.name)}/secrets/${encodeURIComponent(secret.key)}`,
+      { value: action === 'clear' ? null : (input.current?.value ?? '') },
+    ),
+    onSuccess: (_res, action) => {
+      if (input.current) input.current.value = '';
+      setFilled(false);
+      setMessage({ kind: 'ok', text: action === 'clear' ? `${secret.label} cleared.` : `${secret.label} saved.` });
+      void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY });
+    },
+    onError: (err: Error) => setMessage({ kind: 'error', text: problemsOf(err) }),
+  });
+  const send = (action: 'set' | 'clear') => {
+    setMessage(null);
+    put.mutate(action, { onSettled: () => put.reset() });
+  };
+  const id = `plugin-${pkg.name}-secret-${secret.key}`;
+  return (
+    <form
+      aria-label={`Secret ${secret.key} of ${pkg.name}`}
+      data-testid="plugin-secret"
+      data-key={secret.key}
+      className="space-y-1"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const length = input.current?.value.length ?? 0;
+        if (length > MAX_PLUGIN_SECRET_LENGTH) {
+          setMessage({ kind: 'error', text: `The value is ${length} characters; a secret holds at most ${MAX_PLUGIN_SECRET_LENGTH}.` });
+        } else if (input.current?.value.trim()) {
+          send('set');
+        }
+      }}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <label htmlFor={id} className="text-xs font-medium text-on-surface-variant">
+          {secret.label}{secret.required ? ' *' : ''} <code className="font-mono">{secret.key}</code>
+        </label>
+        <span className={cn('text-xs', isSet ? tone('ok') : secret.required ? tone('warn') : tone('quiet'))} data-testid="plugin-secret-state">
+          {isSet ? 'set' : 'not set'}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          id={id}
+          type="password"
+          autoComplete="new-password"
+          spellCheck={false}
+          placeholder={isSet ? 'a new value replaces the stored one' : 'value'}
+          ref={input}
+          defaultValue=""
+          disabled={put.isPending}
+          onChange={(e) => setFilled(e.target.value.trim() !== '')}
+          className="flex-1 min-w-48 bg-surface-container-high border border-outline-variant rounded-md py-1 px-2 text-on-surface text-sm"
+        />
+        <button type="submit" disabled={put.isPending || !filled} className="px-2 py-1 rounded-xs bg-primary text-on-primary text-xs cursor-pointer disabled:opacity-50">
+          {isSet ? 'Replace' : 'Set'}
+        </button>
+        {isSet && (
+          <button
+            type="button"
+            disabled={put.isPending}
+            onClick={() => { if (confirm(`Clear ${secret.label} of ${pkg.name}?`)) send('clear'); }}
+            className="px-2 py-1 rounded-xs text-xs text-on-surface-variant hover:text-on-surface cursor-pointer disabled:opacity-50"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      {secret.help && <p className="text-xs text-on-surface-variant">{secret.help}</p>}
+      <Message message={message} />
+    </form>
+  );
+}
+
+/** Settings and secrets of a package, opened from its row. */
+function PackageConfig({ pkg }: { pkg: PluginPackageView }) {
+  const secrets = pkg.manifest.secrets ?? [];
+  return (
+    <div className="mt-2 space-y-3 rounded-xs border border-outline-variant/40 p-3" role="group" aria-label={`Configure ${pkg.name}`}>
+      <section className="space-y-2">
+        <h3 className="text-xs font-medium text-on-surface">settings</h3>
+        <SettingsForm pkg={pkg} />
+      </section>
+      <section className="space-y-2">
+        <h3 className="text-xs font-medium text-on-surface">secrets</h3>
+        <p className="text-xs text-on-surface-variant">Kept in the vault and handed only to the package; a stored value is never shown.</p>
+        {secrets.length === 0
+          ? <p className="text-xs text-on-surface-variant">No secrets.</p>
+          : secrets.map((s) => <SecretRow key={s.key} pkg={pkg} secret={s} />)}
+      </section>
+    </div>
+  );
+}
+
 function PackageRow({ pkg }: { pkg: PluginPackageView }) {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
+  const [configuring, setConfiguring] = useState(false);
+  const uninstall = useMutation({
+    mutationFn: () => api.delete<{ uninstalled: boolean }>(`/plugin-packages/${encodeURIComponent(pkg.name)}`),
+    onSuccess: () => { setError(null); void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY }); },
+    onError: (err: Error) => setError(problemsOf(err)),
+  });
   const toggle = useMutation({
     mutationFn: (enabled: boolean) => api.patch<PluginPackageView>(`/plugin-packages/${encodeURIComponent(pkg.name)}`, { enabled }),
     onSuccess: () => { setError(null); void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY }); },
     // A refusal can come from files changed since the page loaded: reload, so the review shows.
-    onError: (err: Error) => { setError(err.message); void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY }); },
+    onError: (err: Error) => { setError(problemsOf(err)); void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY }); },
   });
   const hosts = pkg.manifest.network ?? [];
   return (
@@ -136,6 +304,26 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
         >
           <Power className="w-3.5 h-3.5" /> {pkg.enabled ? 'disable' : 'enable'}
         </button>
+        <button
+          type="button"
+          onClick={() => setConfiguring((c) => !c)}
+          aria-expanded={configuring}
+          aria-label={`Configure ${pkg.name}`}
+          className="inline-flex items-center gap-1 text-xs text-on-surface-variant hover:text-on-surface cursor-pointer"
+        >
+          <Settings2 className="w-3.5 h-3.5" /> configure
+        </button>
+        <button
+          type="button"
+          disabled={uninstall.isPending}
+          onClick={() => {
+            if (confirm(`Uninstall ${pkg.name}? Its files, data directory, settings and secrets are deleted.`)) uninstall.mutate();
+          }}
+          aria-label={`Uninstall ${pkg.name}`}
+          className="inline-flex items-center gap-1 text-xs text-on-surface-variant hover:text-error cursor-pointer disabled:opacity-50"
+        >
+          <Trash2 className="w-3.5 h-3.5" /> uninstall
+        </button>
       </div>
       <p className="mt-1 text-xs text-on-surface-variant">
         tools: {Object.entries(pkg.manifest.tools).map(([t, d]) => `${t} (${d.effect})`).join(', ')}
@@ -151,7 +339,8 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
         </p>
       )}
       <ContentReview pkg={pkg} />
-      {error && <p role="alert" className="mt-1 text-xs text-error">! {error}</p>}
+      {configuring && <PackageConfig pkg={pkg} />}
+      {error && <p role="alert" className="mt-1 text-xs text-error whitespace-pre-line">! {error}</p>}
     </li>
   );
 }
@@ -193,8 +382,8 @@ function InstallForm() {
 
 /**
  * Admin → Plugin packages (docs/PLUGIN-PACKAGES.md): what is installed, who
- * signed it, whether its network is enforced, and content waiting for
- * approval after a hash mismatch.
+ * signed it, whether its network is enforced, content waiting for approval
+ * after a hash mismatch, its settings and secrets (write-only), and uninstall.
  */
 export default function AdminPluginPackagesPage() {
   const { data, isLoading, error } = useQuery({

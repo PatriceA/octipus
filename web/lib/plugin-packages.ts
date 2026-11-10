@@ -4,7 +4,9 @@
  *
  * Backend: src/api/routes/plugin-packages.ts — GET /api/plugin-packages,
  * GET /api/plugin-packages/registry, POST /api/plugin-packages { path | url, sha256? },
- * PATCH /api/plugin-packages/:name { enabled?, approveContent? }.
+ * PATCH /api/plugin-packages/:name { enabled?, approveContent?, settings? },
+ * PUT /api/plugin-packages/:name/secrets/:key { value | null },
+ * DELETE /api/plugin-packages/:name.
  */
 export type {
   PluginNetworkStatus,
@@ -13,6 +15,8 @@ export type {
   PluginRegistryListing,
   PluginSignatureStatus,
 } from '../../src/shared/plugin-package';
+
+export { MAX_PLUGIN_SECRET_LENGTH } from '../../src/shared/plugin-package';
 
 export const PLUGIN_PACKAGES_KEY = ['admin', 'plugin-packages'] as const;
 export const PLUGIN_REGISTRY_KEY = ['admin', 'plugin-packages', 'registry'] as const;

@@ -1,6 +1,7 @@
 /**
- * `octi plugin list` and `octi plugin approve` (docs/PLUGIN-PACKAGES.md):
- * the installed plugin packages, through the running backend's API.
+ * `octi plugin list`, `approve`, `set`, `secret` and `uninstall`
+ * (docs/PLUGIN-PACKAGES.md): the installed plugin packages, through the
+ * running backend's API.
  *
  * Authenticates the way the other CLI commands that call the backend do: a
  * bearer API token from `OCTIPUS_API_TOKEN` (docs/API.md; `octi persona`),
@@ -10,7 +11,8 @@
  * Kept apart from scripts/plugin.ts (which runs on import) so it can be
  * tested with a fetch and a prompt of the test's own.
  */
-import type { PluginPackageView } from '@/shared/plugin-package';
+import { parseArgs } from 'node:util';
+import { MAX_PLUGIN_SECRET_LENGTH, type PluginPackageView } from '@/shared/plugin-package';
 
 export interface PluginApiIo {
   fetch: typeof fetch;
@@ -21,6 +23,12 @@ export interface PluginApiIo {
   interactive: boolean;
   /** Ask a yes/no question; resolves to the answer typed. */
   ask: (question: string) => Promise<string>;
+  /**
+   * Read a secret value: at a terminal a prompt that does not echo, else all
+   * of stdin. Never from the command line, where it would land in the shell
+   * history and the process list.
+   */
+  readSecret: (prompt: string) => Promise<string>;
 }
 
 /** The backend's base URL, as `octi capabilities`, `octi persona` and `octi doctor` reach it. */
@@ -133,4 +141,223 @@ export async function approveCommand(io: PluginApiIo, name: string, hash: string
     io.err(`octi plugin approve: ${err.message}\n`);
     return err.exitCode;
   }
+}
+
+/** A package name as the backend accepts it in a path: checked here so a typo is not sent as some other path. */
+function checkName(name: string): void {
+  if (!/^[a-z][a-z0-9-]{1,49}$/.test(name)) throw new CliError(`${JSON.stringify(name)} is not a plugin package name`, 2);
+}
+
+/**
+ * `octi plugin uninstall <name> [--yes]`: remove a package, its files, data
+ * directory, settings and secrets. Asks at a terminal; not at one, it is
+ * refused unless --yes says so.
+ */
+export async function uninstallCommand(io: PluginApiIo, name: string, yes: boolean): Promise<number> {
+  try {
+    checkName(name);
+    if (!yes) {
+      if (!io.interactive) throw new CliError(`not at a terminal: run \`octi plugin uninstall ${name} --yes\` to remove it without asking`, 2);
+      const answer = (await io.ask(`Uninstall ${name}? Its files, data directory, settings and secrets are deleted. [y/N] `)).trim().toLowerCase();
+      if (answer !== 'y' && answer !== 'yes') {
+        io.out('Not uninstalled.\n');
+        return 1;
+      }
+    }
+    await request<{ uninstalled: boolean }>(io, 'DELETE', `/${encodeURIComponent(name)}`);
+    io.out(`Uninstalled ${name}.\n`);
+    return 0;
+  } catch (err) {
+    if (!(err instanceof CliError)) throw err;
+    io.err(`octi plugin uninstall: ${err.message}\n`);
+    return err.exitCode;
+  }
+}
+
+/**
+ * `key=value` pairs as the settings a PATCH sends. Only exactly `key=` clears
+ * a setting (null); a value of spaces alone is refused rather than read as a
+ * clear.
+ */
+export function parseSettingPairs(pairs: readonly string[]): Record<string, string | null> {
+  if (pairs.length === 0) throw new CliError('give at least one key=value', 2);
+  const out: Record<string, string | null> = {};
+  for (const pair of pairs) {
+    const at = pair.indexOf('=');
+    const key = at < 0 ? '' : pair.slice(0, at);
+    if (!/^[a-z][a-z0-9_]{0,49}$/.test(key)) throw new CliError(`"${pair}": expected key=value with a setting key (lower-case letters, digits, _)`, 2);
+    if (Object.hasOwn(out, key)) throw new CliError(`${key} is given twice`, 2);
+    const value = pair.slice(at + 1);
+    if (value !== '' && value.trim() === '') throw new CliError(`${key}: the value is only spaces; give a value, or \`${key}=\` to clear it`, 2);
+    out[key] = value === '' ? null : value;
+  }
+  return out;
+}
+
+/**
+ * `octi plugin set <name> key=value...`: change settings (not secrets: see
+ * `octi plugin secret`). Values go as typed and the backend checks them
+ * against the manifest's fields (numbers, `true`/`false`, choices); `key=`
+ * clears one. All or nothing.
+ */
+export async function setCommand(io: PluginApiIo, name: string, pairs: readonly string[]): Promise<number> {
+  try {
+    checkName(name);
+    const settings = parseSettingPairs(pairs);
+    const view = await request<PluginPackageView>(io, 'PATCH', `/${encodeURIComponent(name)}`, { settings });
+    const shown = Object.entries(view.settings).map(([k, v]) => `${k}=${String(v)}`);
+    io.out(`Saved the settings of ${name}${shown.length ? `: ${shown.join(' ')}` : ' (none set)'}.\n`);
+    if (view.problem) io.out(`  still: ${view.problem}\n`);
+    return 0;
+  } catch (err) {
+    if (!(err instanceof CliError)) throw err;
+    io.err(`octi plugin set: ${err.message}\n`);
+    return err.exitCode;
+  }
+}
+
+/**
+ * `octi plugin secret <name> <KEY> [--clear]`: set one declared secret,
+ * reading its value from a prompt that does not echo (at a terminal) or from
+ * stdin (`… < file`, `printf %s "$X" | …`), never from the command line; one
+ * trailing newline is dropped. `--clear` removes it. The value is never shown.
+ */
+export async function secretCommand(io: PluginApiIo, name: string, key: string, clear: boolean): Promise<number> {
+  try {
+    checkName(name);
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(key)) throw new CliError(`${JSON.stringify(key)} is not a secret key (an environment variable name)`, 2);
+    let value: string | null = null;
+    if (!clear) {
+      try {
+        value = (await io.readSecret(`Value for ${key} of ${name} (not shown): `)).replace(/\r?\n$/, '');
+      } catch (err) {
+        throw new CliError(`no value read for ${key}: ${(err as Error).message}`);
+      }
+      if (value.trim() === '') throw new CliError(`no value given for ${key}; use --clear to remove it`, 2);
+      if (value.length > MAX_PLUGIN_SECRET_LENGTH) {
+        throw new CliError(`the value for ${key} is ${value.length} characters; a plugin secret holds at most ${MAX_PLUGIN_SECRET_LENGTH}`, 2);
+      }
+    }
+    await request<{ saved: boolean }>(io, 'PUT', `/${encodeURIComponent(name)}/secrets/${encodeURIComponent(key)}`, { value });
+    io.out(clear ? `Removed ${key} of ${name}.\n` : `Saved ${key} of ${name}.\n`);
+    return 0;
+  } catch (err) {
+    if (!(err instanceof CliError)) throw err;
+    io.err(`octi plugin secret: ${err.message}\n`);
+    return err.exitCode;
+  }
+}
+
+const SECRET_USAGE = 'expected <name> <KEY> [--clear]; the value is read from a prompt that does not echo, or from stdin, never from the command line';
+
+/**
+ * The arguments of `octi plugin secret`. A refusal never repeats what was
+ * typed: a value given on the command line by mistake (`-s3cret`, a third
+ * argument) would otherwise be echoed into the terminal and its logs.
+ */
+export function parseSecretArgs(argv: readonly string[]): { name: string; key: string; clear: boolean } {
+  let parsed: { values: { clear?: boolean }; positionals: string[] };
+  try {
+    parsed = parseArgs({ args: [...argv], allowPositionals: true, options: { clear: { type: 'boolean' } } });
+  } catch {
+    throw new CliError(SECRET_USAGE, 2);
+  }
+  if (parsed.positionals.length !== 2) throw new CliError(SECRET_USAGE, 2);
+  return { name: parsed.positionals[0], key: parsed.positionals[1], clear: parsed.values.clear === true };
+}
+
+/** `octi plugin secret` from its argv, refusing bad arguments without echoing them. */
+export async function secretCommandFromArgs(io: PluginApiIo, argv: readonly string[]): Promise<number> {
+  let args: ReturnType<typeof parseSecretArgs>;
+  try {
+    args = parseSecretArgs(argv);
+  } catch (err) {
+    if (!(err instanceof CliError)) throw err;
+    io.err(`octi plugin secret: ${err.message}\n`);
+    return err.exitCode;
+  }
+  return secretCommand(io, args.name, args.key, args.clear);
+}
+
+/** What `readHiddenLine` needs of a terminal stream (process.stdin, or a fake in tests). */
+export interface HiddenInput {
+  setRawMode(raw: boolean): unknown;
+  setEncoding(encoding: BufferEncoding): unknown;
+  resume(): unknown;
+  pause(): unknown;
+  on(event: 'data', listener: (chunk: string | Buffer) => void): unknown;
+  off(event: 'data', listener: (chunk: string | Buffer) => void): unknown;
+}
+
+/**
+ * One line typed at a terminal without echoing it, in raw mode, decoded as
+ * UTF-8 by the stream (`setEncoding`, so a character split across chunks
+ * stays whole). Enter or Ctrl-D ends it, Ctrl-C cancels, Backspace removes the
+ * last character; every other control character and every escape sequence
+ * (arrow keys, bracketed-paste markers) is dropped. At most `max` + 1
+ * characters are kept, so the caller can refuse a longer value.
+ */
+export function readHiddenLine(input: HiddenInput, write: (text: string) => void, prompt: string, max = MAX_PLUGIN_SECRET_LENGTH): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    write(prompt);
+    let value: string[] = [];
+    /** Inside an escape sequence: `esc` after ESC, `csi` after ESC [ or ESC O, until its final byte. */
+    let escape: 'none' | 'esc' | 'csi' = 'none';
+    let finished = false;
+    const done = (err?: Error) => {
+      finished = true;
+      input.off('data', onData);
+      input.setRawMode(false);
+      input.pause();
+      write('\n');
+      const text = value.join('');
+      value = [];
+      if (err) reject(err);
+      else resolvePromise(text);
+    };
+    const onData = (chunk: string | Buffer) => {
+      if (finished) return;
+      for (const ch of typeof chunk === 'string' ? chunk : chunk.toString('utf8')) {
+        const code = ch.codePointAt(0) as number;
+        // A control character (Enter after a lone Esc, say) ends a sequence and counts as itself.
+        if (escape !== 'none' && code < 0x20) escape = 'none';
+        if (escape === 'esc') {
+          // ESC [ / ESC O start a sequence; ESC <key> (Alt+key) drops the key.
+          escape = ch === '[' || ch === 'O' ? 'csi' : 'none';
+          continue;
+        }
+        if (escape === 'csi') {
+          if (code >= 0x40 && code <= 0x7e) escape = 'none';
+          continue;
+        }
+        if (ch === '\r' || ch === '\n' || ch === '\u0004') return done();
+        if (ch === '\u0003') return done(new Error('cancelled'));
+        if (ch === '\u001b') escape = 'esc';
+        else if (ch === '\u007f' || ch === '\b') value.pop();
+        else if (code < 0x20 || (code >= 0x80 && code < 0xa0)) continue;
+        else if (value.length <= max) value.push(ch);
+      }
+    };
+    input.setEncoding('utf8');
+    input.setRawMode(true);
+    input.resume();
+    input.on('data', onData);
+  });
+}
+
+/**
+ * All of a stream (stdin from a pipe or a file) as UTF-8, refusing one longer
+ * than a secret can be (`max` characters, at most 4 bytes each).
+ */
+export async function readAllText(input: AsyncIterable<string | Buffer>, max = MAX_PLUGIN_SECRET_LENGTH): Promise<string> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of input) {
+    const bytes = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
+    total += bytes.length;
+    // Room for the trailing newline that is dropped.
+    if (total > max * 4 + 2) throw new Error(`the value on stdin is longer than ${max} characters, the most a plugin secret holds`);
+    chunks.push(bytes);
+  }
+  return Buffer.concat(chunks).toString('utf8');
 }

@@ -107,15 +107,16 @@ cache breakpoints, Anthropic's limit:
    per-session follows it;
 3. the end of the static system prompt (user and session tiers: persona,
    workspace, inline-UI rules);
-4. the settled conversation history — the last non-system turn before the
-   newest one — so an agent loop's accumulated tool results are re-read at
-   cache rates instead of full price on iterations 2..N
+4. the conversation history, so an agent loop's accumulated tool results are
+   re-read at cache rates instead of full price on iterations 2..N
    (`markHistoryCacheBreakpoint` in
-   `src/models/providers/custom/anthropic-compat-provider.ts`).
+   `src/models/providers/custom/anthropic-compat-provider.ts`). In a
+   conversation (a request with a cache scope, as every agent turn has) it is
+   on the newest turn, which the next request reads back; a one-shot completion
+   stops at the settled history, the turn before the newest.
 
-The newest turn is deliberately left outside every breakpoint. On an attended
-turn 1–3 get a one-hour lifetime and the history five minutes (one-hour entries
-must precede shorter ones).
+On an attended turn 1–3 get a one-hour lifetime and the history five minutes
+(one-hour entries must precede shorter ones).
 
 **Tool order.** Tools precede the system prompt in every provider's prefix, so
 the agent sends them in three tiers (`orderForCache` in
@@ -163,6 +164,83 @@ users whose connectors, direct MCP tools, extension tools, inline-UI offer and s
 groups all differ send byte-identical tools up to and including breakpoint 1
 in all three cases: native with tool search, native without it (lazy or full),
 and the leading `sharedToolCount` entries of an OpenAI-compatible request.
+
+### Measuring the layout against the API
+
+`npm run measure:cache` (`scripts/measure-prompt-cache.ts`) builds the root
+agent's native request bodies for four steps through the same assembly the
+tests above use (`src/core/agent/root-request-fixture.ts`: role prompt, persona
+insertion, delegation text, install-tier split, a real `AgentWorker`'s tool
+order and deferral over the root role's real toolboxes, and
+`AnthropicProvider`'s native body builder), and prints for each request its
+breakpoints and lifetimes, token counts per segment, the predicted cache usage,
+and the byte-identities between steps the design relies on.
+
+```sh
+npm run measure:cache -- --dry-run                    # no network, ever
+npm run measure:cache -- --dry-run --no-tool-search   # the layout without tool search
+ANTHROPIC_API_KEY=... npm run measure:cache           # live plan + maximum cost; sends nothing
+ANTHROPIC_API_KEY=... npm run measure:cache -- --yes  # count, then send
+```
+
+- **Dry run** (`--dry-run`, and the default without `ANTHROPIC_API_KEY`): no
+  network. Token counts are the repo's `estimateTokens` heuristic and are
+  labelled as estimates; the breakpoints, identities and the shape of the
+  prediction are exact. It exits 1 when a layout check fails, so it can gate a
+  change to the prompt or tool assembly.
+- **Live** needs `ANTHROPIC_API_KEY` and always talks to `api.anthropic.com`.
+  `ANTHROPIC_BASE_URL` alone is refused: it can route to a proxy or another
+  account, not the cache of the key being measured. Without `--yes` it prints
+  the plan and an estimated maximum cost (every step a full one-hour write)
+  and sends nothing. With `--yes` it counts each prefix with the free
+  `count_tokens` endpoint (at most 12 calls), prints the exact maximum cost and
+  refuses above `--max-cost` (default $2), then sends the four steps through
+  `AnthropicProvider.complete()` — at most 4 billed Messages requests (a 429 is retried once; a 429 is not billed) — with
+  `max_tokens: 0`, the documented cache pre-warm: prefill only, no output
+  billed. `--max-tokens 1` is the fallback for a model or account that rejects
+  0. Pricing comes from the claude-api skill (Opus 5.5: $4 input, $0.20 cache
+  read, $5 / $8 for 5-minute / one-hour writes per MTok); `--model` picks the
+  model (default `claude-opus-5-5`: the root's model is routed per turn from
+  the database, so pass the one your install uses). The cache minimum is
+  512 tokens on the 5.x models and up to 4,096 on older ones; a breakpoint
+  below it writes nothing, silently.
+
+What to expect, with tool search on (the default):
+
+| Step | Request | `cache_read_input_tokens` | `cache_creation_input_tokens` |
+|---|---|---|---|
+| A1 | user A, turn 1 | 0 | the whole prompt (tools, install tier, system at 1h; the turn at 5m) |
+| A2 | user A, turn 2 | A1's whole prompt (found at its history breakpoint) | answer 1 + turn 2 only |
+| B1 | user B, turn 1 | A1's tools + install tier (about 2.2k + 5.9k estimated tokens) | B's persona/workspace tail + turn |
+| A3 | user A, turn 3, after a direct MCP tool appeared | A2's whole prompt: the new tool is deferred | answer 2 + turn 3 only |
+
+`input_tokens` (uncached) stays near zero, since the last breakpoint is on the
+newest turn. With `--no-tool-search`, B1 and A3 read only the tools entry:
+per-user tools and the new MCP tool load after breakpoint 1 and precede the
+install tier, so its entry is per-user — by design, and the dry run says so.
+
+**Reading a mismatch.** The live report puts expected next to actual for each
+counter, within 64 tokens or 3% (counted prefixes include a one-token
+placeholder turn), and flags `[sent body differs from the analysed one!]` if
+the provider sent something other than the body it analysed.
+
+- *A1 reads instead of writing*: an earlier run within the hour left the
+  one-hour entries warm. Expected on a re-run within the hour; judge the later
+  steps, or wait an hour.
+- *Everything is a write, nothing is ever read*: the prefix is under the
+  model's minimum, or the requests ran in different workspaces (caches are
+  per workspace), or longer than five minutes apart for the history entries.
+- *B1 reads only the tools entry*: a byte before the install breakpoint
+  differs between users — a loaded per-user tool (run the dry run: the
+  `A1 vs B1 … install-tier` check fails and the step's `tools after it`
+  segment is non-zero), or per-user text has leaked into the install tier.
+- *B1 reads nothing*: the shared tools themselves differ (a tool description
+  that embeds user or time state), or `tool_choice`/thinking settings differ.
+- *A3 reads only up to the tools entry*: the MCP tool was not deferred
+  (`agent.nativeToolSearch` off, a model without tool search, or the tool is
+  in the loaded floor).
+- *A write lands on the 5-minute counter where 1h was expected* (or the
+  reverse): the breakpoint lifetimes changed (`cacheTtlsFor`).
 
 The same split (`src/models/providers/prompt-cache.ts`,
 `applyAnthropicCacheControl`) also applies to the OpenAI-compat pass-through —

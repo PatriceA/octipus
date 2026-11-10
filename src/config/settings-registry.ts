@@ -1305,7 +1305,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     valueType: 'json',
     defaultValue: [],
     description:
-      'Plugin package indexes to browse: [{ "name": "...", "url": "https://.../index.json" }]. Each index lists { packages: [{ name, version, description, url, sha256 }] }; installing from one downloads the https tarball, checks its sha256 and requires a valid signature by a trusted publisher.',
+      'Plugin package indexes to browse: [{ "name": "...", "url": "https://.../index.json", "publisher": "..." }]. Each index lists { packages: [{ name, version, description, url, sha256 }] }; installing from one downloads the https tarball, checks its sha256 and requires a valid signature by a trusted publisher. With "publisher" (a name in plugins.trustedPublishers), the index itself must carry a valid signature by that publisher at <url>.sig (octi plugin sign-index), or it is not listed.',
     isSecret: false,
   },
 

@@ -437,10 +437,50 @@ or version than the entry is refused (`400`), so an entry cannot install
 something other than what it lists. `name` and `version` may be sent with any
 install (`POST /api/plugin-packages`) to the same effect.
 
-A registry is trusted only to point at tarballs: the index is not signed, and
-what installs is decided by the package's own signature against
-`trustedPublishers`. A registry can offer a package you do not trust; it
-cannot make you install one.
+A registry is trusted only to point at tarballs: what installs is decided by
+the package's own signature against `trustedPublishers`. A registry can offer
+a package you do not trust; it cannot make you install one. A signed index
+(below) additionally says who wrote the list.
+
+### Signed registry indexes
+
+A registry entry may name the publisher whose signature its index must carry:
+
+```json
+"plugins": {
+  "trustedPublishers": [{ "name": "Acme", "publicKey": "-----BEGIN PUBLIC KEY-----..." }],
+  "registries": [{ "name": "Acme", "url": "https://plugins.example.com/index.json", "publisher": "Acme" }]
+}
+```
+
+The publisher signs the index file with the key it signs packages with:
+
+```
+octi plugin sign-index ./index.json --key ./acme.key   # writes ./index.json.sig
+```
+
+and serves `index.json.sig` beside the index: `.sig` is appended to the
+URL's path and its query kept (`…/index.json?channel=stable` →
+`…/index.json.sig?channel=stable`); a registry URL with a fragment (`#…`) is
+refused when it names a publisher. The signature file
+has the canonical form of `octipus-plugin.sig` ([Signed
+packages](#signed-packages)): `{ alg, keyId, signature }`, Ed25519. The signed
+message is `octipus-registry-index/v1\n` followed by `sha256:<hex>` of the
+**exact index bytes** served — not of a re-serialised JSON, so publish the
+signed file unchanged — behind its own prefix, so a package signature can
+never pass for an index signature, nor the other way round.
+
+When `publisher` is set, the index is listed only if `<url>.sig` verifies over
+the bytes fetched with a key of **that** publisher in `trustedPublishers` that
+is neither revoked (`revoked`, `revokedKeys`) nor expired (`notAfter`).
+Otherwise the registry is reported in `errors` and none of its packages show:
+no `.sig` (404), a signature by another publisher's key (even a trusted one),
+a changed index, or a revoked or expired key. A revocation or expiry counts
+whichever `trustedPublishers` entry (or `revokedKeys`) files it, as for
+packages. The trust config is part of the index cache key, so revoking a key
+refuses its indexes on the next listing. Without `publisher`, an index is
+listed unsigned, as before. Either way, installing from it still requires the
+package's own trusted signature.
 
 ## Network
 
@@ -579,7 +619,11 @@ tarball, signed by a trusted publisher ([Remote install](#remote-install)).
    first. The response has `signedBy` and any `warnings`.
 2. **Configure:** `PATCH /api/plugin-packages/:name { "settings": {...} }`, and
    `PUT /api/plugin-packages/:name/secrets/:key { "value": "..." }` for each
-   secret (`null` removes it). Secret values are never returned.
+   secret (`null` removes it). Secret values are never returned. On the web
+   page, **configure** on a package's row shows its settings as a form typed
+   by the manifest's fields and each secret as set or not set, with a
+   write-only field to set or replace it and Clear; or `octi plugin set` and
+   `octi plugin secret` ([From the command line](#from-the-command-line)).
 3. **Enable:** `PATCH /api/plugin-packages/:name { "enabled": true }`. Refused
    while a required setting or secret has no value; settings and `enabled` in
    one PATCH are saved together or not at all. A required secret of an enabled
@@ -596,7 +640,8 @@ tarball, signed by a trusted publisher ([Remote install](#remote-install)).
    ([Content pinning](#content-pinning)), or "Approve this content" on the
    web page, or `octi plugin approve <name> [--hash sha256:<hex>]`.
 6. **Uninstall:** `DELETE /api/plugin-packages/:name` removes the server, the
-   files, the data directory, the row and the secrets.
+   files, the data directory, the row and the secrets (**uninstall** on the
+   web page, after a confirmation, or `octi plugin uninstall <name>`).
 
 `GET /api/plugin-packages` lists installed packages with their manifest,
 settings, which secrets are set, whether the server is connected, why it is
@@ -610,15 +655,29 @@ the signature state (`signature`).
 octi plugin list
 octi plugin approve finapi --hash sha256:<actualHash>
 octi plugin approve finapi            # shows the actual hash and asks (at a terminal only)
+octi plugin set finapi region=eu limit=50 note=   # settings; key= clears one
+octi plugin secret finapi FINAPI_CLIENT_SECRET    # hidden prompt
+octi plugin secret finapi FINAPI_CLIENT_SECRET < secret.txt   # or stdin
+octi plugin secret finapi FINAPI_CLIENT_SECRET --clear
+octi plugin uninstall finapi          # asks; --yes when not at a terminal
 ```
 
-Both call the running backend at `http://localhost:$API_PORT` (3005 by
+They call the running backend at `http://localhost:$API_PORT` (3005 by
 default) with the bearer token in `OCTIPUS_API_TOKEN` (an admin's API token,
 Settings → API Tokens; [API.md](API.md#getting-an-api-token)), as `octi
 persona` does. `list` shows each package's state, signature, network state and
 its recorded and actual hash. `approve` without `--hash` refuses when it
 cannot ask (not a terminal) and prints the command to run after reviewing; a
-`409` (the files changed again) is shown and exits non-zero.
+`409` (the files changed again) is shown and exits non-zero. `set` sends the
+pairs as one settings change (the backend checks them against the manifest;
+all or nothing); exactly `key=` clears a setting, and a value of spaces alone
+is refused. `secret` never takes the value on the command line, where it
+would end up in the shell history and the process list, and a refused command
+line is never repeated back: it reads the value from a prompt that does not
+echo (escape sequences and control characters other than Backspace are
+dropped), or from stdin (one trailing newline dropped), refuses one longer
+than 10,000 characters (what the API accepts), and never prints it. `uninstall` asks at a terminal and is refused elsewhere
+without `--yes`.
 
 Every change is in the audit log (`resource_type = plugin_package`).
 
@@ -626,13 +685,11 @@ Every change is in the audit log (`resource_type = plugin_package`).
 
 - Packages reporting events back (a new invoice in DATEV opening a case):
   plan point C2b.
-- Signed registry indexes, search, ratings or publisher pages: a registry is
-  a flat list, trusted only to point at tarballs ([Registries](#registries)).
+- Search, ratings or publisher pages: a registry is a flat list (signed by
+  its publisher when the host asks for it, [Signed registry
+  indexes](#signed-registry-indexes)).
 - Online revocation: a revoked key is revoked on a host only when that host's
   config says so (`revoked`, `revokedKeys`, `notAfter`).
-- Settings, secrets and uninstall on the web page: it shows packages,
-  enables and disables them, installs and approves content; the rest is the
-  API.
 - Network enforcement on Windows: the egress proxy is advisory there (no
   built-in runner; see [Network](#network)).
 - In a shared space, plugin tools follow the rules of personal connections

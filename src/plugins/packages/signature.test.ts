@@ -33,7 +33,10 @@ import {
   serializeSignature,
   signContentHash,
   signPackage,
+  signRegistryIndex,
+  signRegistryIndexFile,
   trustedKeys,
+  verifyRegistryIndex,
 } from './signature';
 
 const dirs: string[] = [];
@@ -344,5 +347,67 @@ describe('revoked and expired keys', () => {
     const contentHash = await hashPackageContent(dir, MANIFEST);
     const rotated = [{ name: 'Acme', publicKey: publisher.publicKeyPem, revoked: true }, { name: 'Acme 2027', publicKey: other.publicKeyPem }];
     expect(await checkPackageSignature(dir, contentHash, rotated)).toEqual({ status: 'valid', publisher: 'Acme 2027', keyId: other.keyId });
+  });
+});
+
+describe('registry index signatures', () => {
+  const INDEX = Buffer.from(`${JSON.stringify({ packages: [{ name: 'demo', version: '1.0.0', url: 'https://x.example.com/demo.tgz', sha256: 'ab'.repeat(32) }] }, null, 2)}\n`);
+
+  test('a signature over the exact index bytes verifies for its publisher; any change to the bytes does not', () => {
+    const text = serializeSignature(signRegistryIndex(INDEX, publisher.privateKeyPem));
+    expect(verifyRegistryIndex(INDEX, text, 'Acme', TRUSTED)).toEqual({ status: 'valid', publisher: 'Acme', keyId: keyFingerprint(createPublicKey(publisher.publicKeyPem)) });
+    // The same JSON re-serialised is other bytes: refused.
+    const reformatted = Buffer.from(JSON.stringify(JSON.parse(INDEX.toString('utf8'))));
+    expect(verifyRegistryIndex(reformatted, text, 'Acme', TRUSTED)).toMatchObject({ status: 'invalid', reason: expect.stringContaining('the registry index') });
+    const tampered = Buffer.from(INDEX.toString('utf8').replace('1.0.0', '1.0.1'));
+    expect(verifyRegistryIndex(tampered, text, 'Acme', TRUSTED).status).toBe('invalid');
+    expect(verifyRegistryIndex(INDEX, null, 'Acme', TRUSTED).status).toBe('unsigned');
+    expect(verifyRegistryIndex(INDEX, text.trimEnd(), 'Acme', TRUSTED)).toMatchObject({ status: 'invalid', reason: expect.stringContaining('index signature') });
+  });
+
+  test('only a key of the named publisher counts', () => {
+    const text = serializeSignature(signRegistryIndex(INDEX, other.privateKeyPem));
+    const both = [...TRUSTED, { name: 'Other', publicKey: other.publicKeyPem }];
+    expect(verifyRegistryIndex(INDEX, text, 'Other', both).status).toBe('valid');
+    // Trusted, but not the registry's publisher.
+    expect(verifyRegistryIndex(INDEX, text, 'Acme', both).status).toBe('unknown_key');
+    // A publisher with no key listed trusts nothing.
+    expect(verifyRegistryIndex(INDEX, text, 'Nobody', both).status).toBe('unknown_key');
+  });
+
+  test('a revoked or expired key of the publisher is never valid', () => {
+    const text = serializeSignature(signRegistryIndex(INDEX, publisher.privateKeyPem));
+    const keyId = keyFingerprint(createPublicKey(publisher.publicKeyPem));
+    expect(verifyRegistryIndex(INDEX, text, 'Acme', [{ ...TRUSTED[0], revoked: true }]).status).toBe('revoked');
+    expect(verifyRegistryIndex(INDEX, text, 'Acme', TRUSTED, undefined, { revokedKeys: [keyId] }).status).toBe('revoked');
+    expect(verifyRegistryIndex(INDEX, text, 'Acme', [{ ...TRUSTED[0], notAfter: '2020-01-01' }]).status).toBe('expired');
+    // A revocation or expiry of the same key filed under another name still wins.
+    expect(verifyRegistryIndex(INDEX, text, 'Acme', [...TRUSTED, { name: 'Acme (old)', publicKey: publisher.publicKeyPem, revoked: true }]).status).toBe('revoked');
+    expect(verifyRegistryIndex(INDEX, text, 'Acme', [{ name: 'Acme (2026)', publicKey: publisher.publicKeyPem, notAfter: '2020-01-01' }, ...TRUSTED]).status).toBe('expired');
+    // The same key trusted under both names counts for either.
+    const twice = [{ name: 'Other', publicKey: publisher.publicKeyPem }, ...TRUSTED];
+    expect(verifyRegistryIndex(INDEX, text, 'Acme', twice)).toMatchObject({ status: 'valid', publisher: 'Acme' });
+    expect(verifyRegistryIndex(INDEX, text, 'Other', twice)).toMatchObject({ status: 'valid', publisher: 'Other' });
+  });
+
+  test('a package signature cannot pass for an index signature, nor the other way round', () => {
+    const contentHash = `sha256:${'ab'.repeat(32)}`;
+    const pkgSig = serializeSignature(signContentHash(contentHash, publisher.privateKeyPem));
+    expect(verifyRegistryIndex(Buffer.from(contentHash), pkgSig, 'Acme', TRUSTED).status).toBe('invalid');
+    const indexSig = serializeSignature(signRegistryIndex(Buffer.from(contentHash), publisher.privateKeyPem));
+    expect(checkSignature(contentHash, indexSig, trustedKeys(TRUSTED)).status).toBe('invalid');
+  });
+
+  test('signRegistryIndexFile writes <index>.sig over the file as it is on disk, and refuses a file that is not JSON', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'octipus-index-'));
+    dirs.push(dir);
+    const file = join(dir, 'index.json');
+    writeFileSync(file, INDEX);
+    const { sigFile, keyId } = await signRegistryIndexFile(file, publisher.privateKeyPem);
+    expect(sigFile).toBe(`${file}.sig`);
+    expect(keyId).toBe(keyFingerprint(createPublicKey(publisher.publicKeyPem)));
+    expect(verifyRegistryIndex(readFileSync(file), readFileSync(sigFile, 'utf8'), 'Acme', TRUSTED).status).toBe('valid');
+    writeFileSync(join(dir, 'bad.json'), 'not json');
+    await expect(signRegistryIndexFile(join(dir, 'bad.json'), publisher.privateKeyPem)).rejects.toThrow(/not valid JSON/);
   });
 });

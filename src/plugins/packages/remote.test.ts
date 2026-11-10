@@ -18,7 +18,7 @@ vi.mock('@/utils/sanitize', async (importOriginal) => ({
   },
 }));
 
-const { downloadHttps, normalizeSha256, parseRegistryIndex, RemoteFetchError } = await import('./remote');
+const { downloadHttps, indexSignatureUrl, normalizeSha256, parseRegistryIndex, RemoteFetchError } = await import('./remote');
 
 const SHA = 'ab'.repeat(32);
 const entry = (over: Record<string, unknown> = {}) => ({
@@ -59,6 +59,20 @@ describe('parseRegistryIndex', () => {
   test('an index that is not { packages: [...] } is one problem', () => {
     expect(parseRegistryIndex([entry()], 'Acme')).toEqual({ entries: [], problems: [expect.stringContaining('"packages"')] });
     expect(parseRegistryIndex(null, 'Acme').entries).toEqual([]);
+  });
+});
+
+describe('indexSignatureUrl', () => {
+  test('appends .sig to the path and keeps the query', () => {
+    expect(indexSignatureUrl('https://plugins.example.com/index.json')).toBe('https://plugins.example.com/index.json.sig');
+    expect(indexSignatureUrl('https://plugins.example.com/v1/index.json?channel=stable&v=2')).toBe('https://plugins.example.com/v1/index.json.sig?channel=stable&v=2');
+    expect(indexSignatureUrl('https://plugins.example.com/')).toBe('https://plugins.example.com/.sig');
+  });
+
+  test('refuses a fragment (even an empty one) and anything but https', () => {
+    expect(() => indexSignatureUrl('https://plugins.example.com/index.json#latest')).toThrow(RemoteFetchError);
+    expect(() => indexSignatureUrl('https://plugins.example.com/index.json#')).toThrow(/fragment/);
+    expect(() => indexSignatureUrl('http://plugins.example.com/index.json')).toThrow(/https/);
   });
 });
 
