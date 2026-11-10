@@ -60,9 +60,10 @@ async function runCommand(pkg: string, decl: PluginCommandDecl, userId: string, 
   try {
     const { sessionRepository } = await import('@/db/repositories/session-repository');
     const { channelCanPrompt } = await import('@/security/approval-policy');
+    const { canActInSession } = await import('@/core/rooms/access');
     const session = sessionId ? await sessionRepository.findById(sessionId) : null;
-    // A session that is not the caller's is treated as none: the call is theirs, not the session's.
-    const own = session && (session.userId === userId || session.kind === 'room') ? session : null;
+    // A session the caller may not act in is treated as none: the call is theirs, not the session's.
+    const own = session && await canActInSession(session, userId, 'chat') ? session : null;
     const context = await actingContext({
       pkg, userId, kind: 'command',
       // A person typed it; an approval reaches them where the client can show one.
