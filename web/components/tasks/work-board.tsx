@@ -51,6 +51,7 @@ function AssigneeIcon({ kind, className }: { kind: TaskAssigneeKind; className?:
 
 /** "who" on a row or card: an icon for person / role / agent node, then the ref. */
 export function AssigneeChip({ task }: { task: BoardFields }) {
+  const { user } = useAuth();
   if (!task.assigneeKind || !task.assigneeRef) return null;
   const title = task.assigneeKind === 'role'
     ? `Assigned to the ${task.assigneeRef} role: any ${task.assigneeRef} agent may pick it up`
@@ -65,7 +66,7 @@ export function AssigneeChip({ task }: { task: BoardFields }) {
       className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary inline-flex items-center gap-0.5 max-w-[12rem]"
     >
       <AssigneeIcon kind={task.assigneeKind} className="w-2.5 h-2.5 shrink-0" />
-      <span className="truncate">{task.assigneeKind === 'role' ? `${task.assigneeRef} role` : task.assigneeRef}</span>
+      <span className="truncate">{task.assigneeKind === 'role' ? `${task.assigneeRef} role` : task.assigneeKind === 'user' && task.assigneeRef === user?.id ? 'You' : task.assigneeRef}</span>
     </span>
   );
 }
@@ -169,7 +170,7 @@ export function AssigneeEditor({
             setDirty(true);
           }}
           onBlur={() => commit(kind, ref)}
-          onKeyDown={(e) => e.key === 'Enter' && commit(kind, ref)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit(kind, ref); } }}
           className="w-28 rounded-xs border border-outline-variant/20 bg-surface px-2 py-1 text-xs text-on-surface"
         />
       ) : null}
@@ -320,6 +321,7 @@ export function CommentsThread({ taskId, indent = true, canComment = true }: { t
 
   return (
     <div className={`mt-2 space-y-1.5 ${indent ? 'pl-8' : ''}`} data-testid="task-comments">
+      <p className="text-xs text-on-surface-variant">Background task runs report here rather than creating a chat.</p>
       {comments === null ? (
         <p className="text-[11px] text-on-surface-variant inline-flex items-center gap-1">
           <RefreshCw className="w-3 h-3 animate-spin" /> loading comments…
@@ -372,10 +374,10 @@ export function CommentsToggle({ open, onToggle }: { open: boolean; onToggle: ()
     <button
       onClick={onToggle}
       aria-expanded={open}
-      className={`text-[10px] inline-flex items-center gap-0.5 ${open ? 'text-primary' : 'text-on-surface-variant/70'} hover:text-on-surface`}
+      className={`text-xs inline-flex items-center gap-1 rounded-md border border-outline-variant/40 px-2 py-1 ${open ? 'text-primary' : 'text-on-surface-variant/70'} hover:text-on-surface`}
       title={open ? 'Hide comments' : 'Show comments'}
     >
-      <MessageSquare className="w-2.5 h-2.5" /> comments
+      <MessageSquare className="w-3 h-3" /> comments & updates
     </button>
   );
 }

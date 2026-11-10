@@ -243,7 +243,7 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
   test('the inline editor sets, changes and clears the assignee; create can assign a role', async ({ authenticatedPage: page }) => {
     await page.goto('/tasks');
     const milk = page.getByTestId('task-row').filter({ hasText: 'Buy milk' });
-    await milk.getByRole('button', { name: 'edit' }).click();
+    await milk.getByRole('button', { name: 'fields', exact: true }).click();
     await milk.getByLabel('Assignee kind').selectOption('role');
     await expect.poll(() => calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([{ assigneeKind: 'role', assigneeRef: 'pm' }]);
     await milk.getByLabel('Assignee role').selectOption('research');
@@ -433,7 +433,7 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     const filter = page.getByTestId('assignee-filter');
     await filter.selectOption('role:qa');
     const row = page.getByTestId('task-row').filter({ hasText: 'Write the tests' });
-    await row.getByRole('button', { name: 'edit' }).click();
+    await row.getByRole('button', { name: 'fields', exact: true }).click();
     await row.getByLabel('Assignee role').selectOption('research');
     await expect(page.getByTestId('task-row')).toHaveCount(0);
     await expect(filter).toHaveValue('role:qa');
@@ -495,7 +495,7 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     await page.clock.install();
     await page.goto('/tasks');
     const deploy = page.getByTestId('task-row').filter({ hasText: 'Deploy it' });
-    await deploy.getByRole('button', { name: 'edit' }).click();
+    await deploy.getByRole('button', { name: 'fields', exact: true }).click();
     await expect(deploy.getByLabel('Agent node')).toHaveValue('node-7');
 
     // An agent reassigns it; the next poll brings the change into the open editor.
