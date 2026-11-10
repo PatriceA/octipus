@@ -17,7 +17,7 @@ vi.mock('@/security/permissions', () => ({
 vi.mock('@/core/modules/registry', () => ({ isToolOn: (toolId: string) => !held.off.has(toolId) }));
 
 const {
-  _liveHostTokens, grantableScopes, hostApiTarget, issueHostCallMeta, mintHostToken, revokeHostToken, revokePluginTokens,
+  _liveHostTokens, grantableScopes, hostCallKind, hostApiTarget, issueHostCallMeta, mintHostToken, revokeHostToken, revokePluginTokens,
   setHostApiPort, userHeldScopes, verifyHostToken,
 } = await import('./host-api');
 
@@ -93,7 +93,7 @@ describe('the _meta of a call', () => {
     id: 'plugin-acme', name: 'Acme', command: 'node', isEnabled: true, requestTimeoutMs: 10_000,
     plugin: { package: 'acme', version: '1.0.0', tools: { read_it: 'read', write_it: 'write' }, maxProtection: 2, hostScopes: ['notes:read', 'notes:write'], ...over },
   });
-  const context = { id: 'a1', userId: 'u1', sessionId: 's1', workspaceId: 'w1', space: null } as unknown as AgentContext;
+  const context = { id: 'a1', userId: 'u1', sessionId: 's1', workspaceId: 'w1', space: null, trigger: 'user', metadata: {} } as unknown as AgentContext;
 
   test('a fresh token for the calling user, narrowed to the tool, revoked on release', async () => {
     const issued = await issueHostCallMeta(server(), 'read_it', context);
@@ -102,8 +102,8 @@ describe('the _meta of a call', () => {
     expect(meta.scopes).toEqual(['notes:read']);
     const live = verifyHostToken(meta.token, 'acme');
     expect(live).toMatchObject({ userId: 'u1', workspaceId: 'w1', sessionId: 's1', tool: 'read_it', maxProtection: 2 });
-    // Expires with the call's timeout (plus a few seconds of grace).
-    expect(Date.parse(meta.expiresAt) - Date.now()).toBeLessThanOrEqual(15_000);
+    // Expires with the call's timeout.
+    expect(Date.parse(meta.expiresAt) - Date.now()).toBeLessThanOrEqual(10_000);
     issued?.release();
     expect(verifyHostToken(meta.token, 'acme')).toBeNull();
 
@@ -118,6 +118,35 @@ describe('the _meta of a call', () => {
     expect(await issueHostCallMeta(server(), 'read_it', { ...context, userId: '' } as AgentContext)).toBeNull();
     held.denied.add('notes.read');
     expect(await issueHostCallMeta(server(), 'read_it', context)).toBeNull();
+  });
+
+  test('a token lives at most 30 seconds, whatever the package\'s timeout', async () => {
+    const issued = await issueHostCallMeta({ ...server(), requestTimeoutMs: 600_000 }, 'read_it', context);
+    const meta = issued?.meta[PLUGIN_HOST_META_KEY] as PluginHostCallMeta;
+    expect(Date.parse(meta.expiresAt) - Date.now()).toBeLessThanOrEqual(30_000);
+    expect(Date.parse(meta.expiresAt) - Date.now()).toBeGreaterThan(25_000);
+    issued?.release();
+  });
+
+  test('only calls a user started get a token: never a schedule, an event or a context call', async () => {
+    const as = (over: Partial<AgentContext>) => ({ ...context, ...over }) as AgentContext;
+    const contribution = (kind: string) => as({ metadata: { source: 'plugin-contribution', plugin: 'acme', contribution: kind } });
+    for (const kind of ['event', 'context', 'schedule', 'something-new']) {
+      expect(await issueHostCallMeta(server(), 'read_it', contribution(kind)), kind).toBeNull();
+    }
+    const command = await issueHostCallMeta(server(), 'read_it', contribution('command'));
+    expect(command).not.toBeNull();
+    command?.release();
+    const page = await issueHostCallMeta(server(), 'read_it', as({ sessionId: '', metadata: { source: 'plugin-page', plugin: 'acme' } }));
+    expect(page).not.toBeNull();
+    page?.release();
+    // An agent's call only in the user's own turn, in a session.
+    for (const trigger of ['schedule', 'monitor', 'listen', 'remote', 'room'] as const) {
+      expect(await issueHostCallMeta(server(), 'read_it', as({ trigger })), trigger).toBeNull();
+    }
+    expect(await issueHostCallMeta(server(), 'read_it', as({ sessionId: '' }))).toBeNull();
+    expect(await issueHostCallMeta(server(), 'read_it', as({ metadata: { source: 'heartbeat' } }))).toBeNull();
+    expect(hostCallKind(as({}))).toBe('agent');
   });
 
   test('a space call carries the space', async () => {

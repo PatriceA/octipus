@@ -40,8 +40,12 @@ import { coreLogger } from '@/utils/logger';
 /** The prefix of a host API token. */
 export const HOST_TOKEN_PREFIX = 'ocph_';
 
-/** Grace beyond the call's timeout, for a request in flight as the call ends. Revocation at the end of the call still applies. */
-const EXPIRY_GRACE_MS = 5_000;
+/**
+ * The longest a token lives, whatever the package's `requestTimeoutMs` (up to
+ * 600 s): a token held past its own call must not still work during another
+ * user's. Revocation at the end of the call still applies first.
+ */
+export const MAX_TOKEN_TTL_MS = 30_000;
 /** Upper bound on live tokens; the oldest go first (each is revoked at the end of its call anyway). */
 const MAX_LIVE_TOKENS = 10_000;
 
@@ -178,6 +182,35 @@ export function hostApiTarget(): { host: string; port: number } {
   return { host: loopback ? '127.0.0.1' : host, port: portOverride ?? port };
 }
 
+/** The calls that may carry a host API token: each one started by the user it acts for. */
+export type HostCallKind = 'agent' | 'command' | 'page';
+
+/**
+ * What started a call, when it is one a user started themselves, or null:
+ *
+ * - `page`: the page bridge, a signed-in user on the package's page
+ *   (`metadata.source = 'plugin-page'`);
+ * - `command`: a slash command the user typed (`plugin-contribution`, kind `command`);
+ * - `agent`: a tool call of the user's own agent in their session
+ *   (`trigger = 'user'`, a session, no `metadata.source` of a known
+ *   unattended kind).
+ *
+ * Everything else is null and gets no token: a contribution called by a
+ * schedule, an event or the turn-start context (it runs for users who did
+ * not ask for it, or as an admin), a contribution kind not known here, a
+ * heartbeat, cron, room, remote or listen turn, a call without a session.
+ */
+export function hostCallKind(context: Pick<AgentContext, 'trigger' | 'sessionId' | 'metadata'>): HostCallKind | null {
+  const source = context.metadata?.source;
+  if (source === 'plugin-page') return 'page';
+  if (source === 'plugin-contribution') return context.metadata?.contribution === 'command' ? 'command' : null;
+  if (source !== undefined && UNATTENDED_SOURCES.has(String(source))) return null;
+  return context.trigger === 'user' && !!context.sessionId ? 'agent' : null;
+}
+
+/** Metadata sources of runs nobody started by hand. */
+const UNATTENDED_SOURCES = new Set(['heartbeat', 'cron', 'schedule', 'hook', 'monitor', 'event', 'webhook']);
+
 /** The base URL a package calls the host API at (through its proxy). */
 export const HOST_API_URL = `http://${PLUGIN_HOST_ALIAS}`;
 
@@ -194,12 +227,14 @@ export async function issueHostCallMeta(
 ): Promise<{ meta: Record<string, unknown>; release: () => void } | null> {
   const binding = server.plugin;
   if (!binding?.hostScopes?.length || !context?.userId) return null;
+  // Only a call the user started: never a schedule, an event or a context call.
+  if (hostCallKind(context) === null) return null;
   const effect = Object.hasOwn(binding.tools, toolName) ? binding.tools[toolName] : undefined;
   if (!effect) return null;
   const candidates = grantableScopes(binding.hostScopes, binding.hostScopes, effect);
   const scopes = await userHeldScopes(context.userId, candidates, { sessionId: context.sessionId, workspaceId: context.workspaceId ?? null });
   if (scopes.length === 0) return null;
-  const ttl = (server.requestTimeoutMs ?? 30_000) + EXPIRY_GRACE_MS;
+  const ttl = Math.min(server.requestTimeoutMs ?? MAX_TOKEN_TTL_MS, MAX_TOKEN_TTL_MS);
   const { token, expiresAt } = mintHostToken({
     plugin: binding.package,
     userId: context.userId,

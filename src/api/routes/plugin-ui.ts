@@ -25,7 +25,7 @@ import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { pluginPackages } from '@/db/schema/plugin-packages';
 import { getMCPBridge, PLUGIN_SERVER_PREFIX } from '@/mcp/bridge';
-import { listEnabledPages, pluginUiCsp, pluginUiHeaders, readUiFile, uiBaseUrl } from '@/plugins/packages/ui';
+import { fetchDestAllowed, isSecureOrigin, listEnabledPages, pluginUiCsp, pluginUiHeaders, readUiFile, uiBaseUrl } from '@/plugins/packages/ui';
 import { ApprovalBlockedError, withDispatchAuthorization } from '@/security/dispatch-authorization';
 import { isAuthenticated } from '@/security/principal';
 import { eq } from 'drizzle-orm';
@@ -56,14 +56,17 @@ export const pluginUiRoutes = new Elysia({ prefix: '/plugin-ui' })
     } catch {
       rel = '';
     }
-    const base = uiBaseUrl(ctx.request, name);
-    const file = base ? await readUiFile(name, rel) : { status: 404 as const };
+    const base = uiBaseUrl(ctx.request, name, ctx.socketAddress);
+    // Only into the app's frame (or as a subresource of the page): never opened on its own.
+    const dest = !!base && fetchDestAllowed(rel, ctx.request.headers.get('sec-fetch-dest'), isSecureOrigin(base));
+    const file = base && dest ? await readUiFile(name, rel) : { status: 404 as const };
     if (file.status !== 200 || !base) {
       ctx.set.status = 404;
       ctx.set.headers['Content-Security-Policy'] = "default-src 'none'; frame-ancestors 'none'; sandbox";
       return 'Not found';
     }
     Object.assign(ctx.set.headers, pluginUiHeaders(pluginUiCsp(base), file.contentType));
+    ctx.set.headers.vary = 'Sec-Fetch-Dest';
     return new Uint8Array(file.body);
   }, { detail: { tags: ['plugin-packages'] } });
 

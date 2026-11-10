@@ -31,6 +31,8 @@ import { getDb } from '@/db/postgres';
 import { pluginPackages } from '@/db/schema/plugin-packages';
 import { getMCPBridge, PLUGIN_SERVER_PREFIX } from '@/mcp/bridge';
 import type { PluginPageLink } from '@/shared/plugin-package';
+import { publicLinkBase } from '@/core/public-url';
+import { isTrustedProxy } from '@/security/client-ip';
 import { coreLogger } from '@/utils/logger';
 import { CONTENT_MISMATCH_PROBLEM, hashPackageContent } from './integrity';
 import { isPlainRelativePath, uiDirOf } from './manifest-ui-host';
@@ -121,18 +123,60 @@ export function pluginUiHeaders(csp: string, contentType: string): Record<string
 const HOST_RE = /^[A-Za-z0-9.-]+(:\d{1,5})?$|^\[[0-9A-Fa-f:.]+\](:\d{1,5})?$/;
 
 /**
- * The absolute base URL of a package's UI directory, as the browser reached
- * it: the request's host (or `X-Forwarded-Host` from a reverse proxy) and
- * scheme. Null when the host does not look like one (it goes into a CSP).
+ * The absolute base URL of a package's UI directory, the only source its CSP
+ * allows: from the configured public URL (`oauth.publicUrl` / `PUBLIC_URL`)
+ * when there is one; otherwise the address the request came in on, where
+ * `X-Forwarded-Host` / `-Proto` count only from a trusted proxy
+ * (`security.trustedProxies`). Null when the host does not look like one.
  */
-export function uiBaseUrl(request: Request, name: string): string | null {
+export function uiBaseUrl(request: Request, name: string, socketAddress?: string, publicBase = publicLinkBase()): string | null {
+  const path = `${PLUGIN_UI_PREFIX}/${encodeURIComponent(name)}/`;
+  if (publicBase) {
+    try {
+      const pub = new URL(publicBase);
+      if ((pub.protocol === 'https:' || pub.protocol === 'http:') && HOST_RE.test(pub.host)) return `${pub.protocol}//${pub.host}${path}`;
+    } catch { /* not a URL: fall through to the request */ }
+    return null;
+  }
   const url = new URL(request.url);
-  const fwdHost = request.headers.get('x-forwarded-host')?.split(',')[0]?.trim();
-  const fwdProto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase();
+  const trusted = socketAddress !== undefined && isTrustedProxy(socketAddress);
+  const fwdHost = trusted ? request.headers.get('x-forwarded-host')?.split(',')[0]?.trim() : undefined;
+  const fwdProto = trusted ? request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase() : undefined;
   const host = fwdHost || url.host;
   const proto = fwdProto === 'https' || fwdProto === 'http' ? fwdProto : url.protocol.replace(':', '');
   if (!HOST_RE.test(host)) return null;
-  return `${proto}://${host}${PLUGIN_UI_PREFIX}/${encodeURIComponent(name)}/`;
+  return `${proto}://${host}${path}`;
+}
+
+/**
+ * Whether a request for `rel` comes from where a page's file belongs
+ * (`Sec-Fetch-Dest`): the HTML entry only into a frame (`iframe`), never
+ * opened as a top-level document, a nested frame or an object; the other
+ * files only as what they are (script, style, image, font, media).
+ *
+ * Browsers send `Sec-Fetch-*` only to potentially trustworthy origins
+ * (https, localhost). Where the page is served from one (`secureOrigin`), a
+ * request without the header is refused. On plain http to another host — an
+ * install reached by LAN address — no browser sends it, so its absence is
+ * accepted there (the document is still sandboxed by its CSP); a header that
+ * is present is always checked.
+ */
+export function fetchDestAllowed(rel: string, dest: string | null, secureOrigin = true): boolean {
+  if (!dest) return !secureOrigin;
+  const ext = extname(rel).toLowerCase();
+  if (ext === '.html' || ext === '.htm') return dest === 'iframe';
+  if (ext === '.js' || ext === '.mjs') return dest === 'script';
+  if (ext === '.css') return dest === 'style';
+  if (ext === '.woff' || ext === '.woff2') return dest === 'font';
+  if (['.svg', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico'].includes(ext)) return dest === 'image';
+  // .json, .map, .txt: fetched by nothing the CSP allows but devtools (source maps).
+  return dest === 'empty' && ext === '.map';
+}
+
+/** Whether browsers send `Sec-Fetch-*` to this base URL: https, or http to a loopback name. */
+export function isSecureOrigin(base: string): boolean {
+  const url = new URL(base);
+  return url.protocol === 'https:' || ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || url.hostname.endsWith('.localhost');
 }
 
 /** When each package's files last hashed to its approved hash. */

@@ -24,12 +24,14 @@ import { checkRateLimit } from '@/core/artifacts/rate-limit';
 import { NoteExistsError, getNoteService } from '@/core/knowledge/notes';
 import { raiseSessionLevel } from '@/core/protection/session-level';
 import { auditTaskMutation } from '@/core/tasks/audit';
+import { observeTaskProvenance, taskProvenance } from '@/core/tasks/provenance';
 import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { contentRepos } from '@/db/repositories/content';
 import { users } from '@/db/schema/users';
 import { type HostTokenGrant, verifyHostToken } from '@/plugins/packages/host-api';
-import { HOST_API_EGRESS_HEADER } from '@/security/egress-proxy';
+import { clientIp } from '@/security/client-ip';
+import { egressStampValid, HOST_API_EGRESS_HEADER, HOST_API_EGRESS_KEY_HEADER } from '@/security/egress-proxy';
 import type { Principal } from '@/security/principal';
 import { SpaceError, spaceErrorStatus } from '@/security/space-access';
 import type { PluginHostScope } from '@/shared/plugin-package';
@@ -37,7 +39,7 @@ import { effectiveProtectionLevel } from '@/shared/protection';
 import { apiLogger } from '@/utils/logger';
 
 type Set = { status?: number | string; headers: Record<string, string> };
-interface HostCtx { request: Request; set: Set }
+interface HostCtx { request: Request; set: Set; socketAddress?: string }
 
 interface Authorized {
   grant: HostTokenGrant;
@@ -77,6 +79,29 @@ async function principalOf(grant: HostTokenGrant): Promise<Principal | null> {
   return { ...base, workspaceId: resolution.workspaceId, workspaceKind: 'personal' };
 }
 
+/** Refusals without a token, counted per (code, package) and written as one row per minute. */
+const refusals = new Map<string, { count: number; since: number }>();
+const REFUSAL_WINDOW_MS = 60_000;
+
+async function auditRefusalAggregate(code: string, plugin: string, now = Date.now()): Promise<void> {
+  const key = `${code}\n${plugin}`;
+  const entry = refusals.get(key);
+  if (entry && now - entry.since < REFUSAL_WINDOW_MS) {
+    entry.count += 1;
+    return;
+  }
+  // A new window: one row for this refusal and those counted since the last row, then count afresh.
+  const count = 1 + (entry?.count ?? 0);
+  refusals.set(key, { count: 0, since: now });
+  if (refusals.size > 1000) refusals.clear();
+  await audit(null, plugin, 'refused', 401, { code, count, windowMs: REFUSAL_WINDOW_MS });
+}
+
+/** Test-only. */
+export function _resetHostRefusals(): void {
+  refusals.clear();
+}
+
 /**
  * The token's grant and the principal it acts as, or the refusal (written
  * to `set`, audited). `scope` is what the endpoint needs; null for one that
@@ -91,10 +116,22 @@ async function authorize(ctx: HostCtx, op: string, scope: PluginHostScope | null
     await audit(grant, plugin, op, status, { code, ...(scope ? { scope } : {}) });
     return { error, code };
   };
-  // Through the package's egress proxy only: it names the package.
-  if (!plugin || !/^[a-z][a-z0-9-]{1,49}$/.test(plugin)) return refuse(401, 'The host API is reached through the package\'s egress proxy', 'not_via_proxy');
+  // Refused before any token is known: nobody to attribute it to. Limited per
+  // address, and audited as one aggregate row per kind and minute, never per request.
+  const refuseUnknown = async (error: string, code: 'not_via_proxy' | 'invalid_token') => {
+    const ip = clientIp(ctx.request, ctx.socketAddress);
+    const limited = checkRateLimit(`plugin-host-refused:${ip}`, { capacity: 20, refillPerSecond: 2 });
+    ctx.set.status = limited.allowed ? 401 : 429;
+    if (!limited.allowed) ctx.set.headers['retry-after'] = String(limited.retryAfterSeconds ?? 1);
+    await auditRefusalAggregate(code, /^[a-z][a-z0-9-]{1,49}$/.test(plugin) ? plugin : 'unknown');
+    return limited.allowed ? { error, code } : { error: 'Too many refused host API requests', code: 'rate_limited' };
+  };
+  // Through the package's egress proxy only: it names the package and proves it with that proxy's own secret.
+  if (!plugin || !/^[a-z][a-z0-9-]{1,49}$/.test(plugin) || !egressStampValid(plugin, ctx.request.headers.get(HOST_API_EGRESS_KEY_HEADER))) {
+    return refuseUnknown('The host API is reached through the package\'s egress proxy', 'not_via_proxy');
+  }
   const grant = token ? verifyHostToken(token, plugin) : null;
-  if (!grant) return refuse(401, 'A valid host API token for this package is required', 'invalid_token');
+  if (!grant) return refuseUnknown('A valid host API token for this package is required', 'invalid_token');
   const limited = checkRateLimit(`plugin-host:${grant.plugin}:${grant.userId}`, { capacity: 60, refillPerSecond: 10 });
   if (!limited.allowed) {
     ctx.set.headers['retry-after'] = String(limited.retryAfterSeconds ?? 1);
@@ -182,11 +219,24 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
   })
 
   // The user's own tasks in the call's workspace.
-  .get('/tasks', (ctx) => run(ctx, 'tasks.list', 'tasks:read', async ({ principal }) => {
+  // Each task carries the provenance of the conversation it came from
+  // (core/tasks/provenance.ts): one above the package's maxProtection is left
+  // out, and what is handed over raises the calling session as the tasks tool does.
+  .get('/tasks', (ctx) => run(ctx, 'tasks.list', 'tasks:read', async ({ grant, principal }) => {
     const status = ctx.query.status;
-    const tasks = await contentRepos(principal).tasks.listOwn(status ? { status } : {});
+    const all = (await contentRepos(principal).tasks.listOwn(status ? { status } : {})).slice(0, 200);
+    const provenance = await Promise.all(all.map((task) => taskProvenance(grant.userId, [task])));
+    const tasks = all.filter((_task, i) => provenance[i].protectionLevel <= grant.maxProtection);
+    const kept = provenance.filter((p) => p.protectionLevel <= grant.maxProtection);
+    if (grant.sessionId && kept.length > 0) {
+      observeTaskProvenance(grant.sessionId, {
+        protectionLevel: Math.max(...kept.map((p) => p.protectionLevel)),
+        flowLabel: Object.assign({}, ...kept.map((p) => p.flowLabel)),
+      });
+    }
     return {
-      tasks: tasks.slice(0, 200).map((x) => ({
+      withheld: all.length - tasks.length,
+      tasks: tasks.map((x) => ({
         id: x.id, title: x.title, notes: x.notes, status: x.status, priority: x.priority, category: x.category, dueAt: x.dueAt, createdAt: x.createdAt,
       })),
     };

@@ -117,6 +117,7 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
         await configure(params.name, {
           settings: body.settings, enabled: body.enabled, approveContent: body.approveContent, approveInProcess: body.approveInProcess,
           approveContributions: body.approveContributions,
+          ...(body.approveHostScopes !== undefined ? { approveHostScopes: body.approveHostScopes } : {}),
         }, principal.userId);
         return await packageView(params.name);
       } catch (err) {
@@ -153,6 +154,11 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
          * upgrade clear it. A boolean is refused (400).
          */
         approveContributions: t.Optional(t.Union([t.String({ maxLength: 100 }), t.Boolean()])),
+         * The host API scopes the admin approves (docs/PLUGIN-PACKAGES.md#host-api):
+         * scopes the manifest declares. Enabling a package that declares any
+         * needs all of them approved; an upgrade clears the approval.
+         */
+        approveHostScopes: t.Optional(t.Array(t.String({ maxLength: 40 }), { maxItems: 20 })),
         settings: t.Optional(t.Record(t.String({ maxLength: 50 }), t.Unknown())),
       }),
       detail: { tags: ['plugin-packages'] },

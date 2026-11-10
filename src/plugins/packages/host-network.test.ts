@@ -21,7 +21,7 @@ vi.mock('@/config', async (original) => ({
 }));
 vi.mock('@/security/vault', () => ({ getVault: () => ({ getSystemSecret: async () => null }) }));
 
-import { hostApiPathAllowed, startEgressProxy } from '@/security/egress-proxy';
+import { egressStampValid, hostApiPathAllowed, startEgressProxy } from '@/security/egress-proxy';
 
 let api: Server;
 let apiPort: number;
@@ -86,6 +86,7 @@ describe('egress proxy with the host API', () => {
     try {
       const res = await forward(proxy.port, 'http://octipus-host.internal/api/plugin-host/notes?limit=2', {
         authorization: 'Bearer ocph_x', cookie: 'session_token=abc', 'x-octipus-plugin-egress': 'forged', 'x-octipus-workspace': 'w',
+        'x-octipus-plugin-egress-key': 'forged-key',
         'x-forwarded-for': '1.2.3.4', 'x-forwarded-host': 'evil',
       });
       expect(res).toMatchObject({ status: 200 });
@@ -95,9 +96,18 @@ describe('egress proxy with the host API', () => {
       expect(h.authorization).toBe('Bearer ocph_x');
       for (const k of ['cookie', 'x-octipus-workspace', 'x-forwarded-for', 'x-forwarded-host']) expect(h[k], k).toBeUndefined();
       expect(h.host).toBe(`127.0.0.1:${apiPort}`);
+      // The stamp carries this proxy's own secret, which the host API checks.
+      const key = h['x-octipus-plugin-egress-key'] as string;
+      expect(key).not.toBe('forged-key');
+      expect(egressStampValid('acme', key)).toBe(true);
+      expect(egressStampValid('other', key)).toBe(false);
+      expect(egressStampValid('acme', 'forged-key')).toBe(false);
+      expect(egressStampValid('acme', undefined)).toBe(false);
     } finally {
       await proxy.close();
     }
+    // Gone with its proxy.
+    expect(egressStampValid('acme', seen[0].headers['x-octipus-plugin-egress-key'] as string)).toBe(false);
   });
 
   test('refuses other paths, ports and tunnels to the host, and other loopback ports', async () => {
@@ -172,6 +182,14 @@ describe('launch and server config', () => {
     expect(unapproved.plugin?.hostScopes).toBeUndefined();
     expect(unapproved.env?.OCTIPUS_HOST_URL).toBeUndefined();
     expect(unapproved.sandbox?.egress).toBeUndefined();
+  });
+
+  test('a package with pages leaves the house like one with network: maxProtection 1 unless declared', async () => {
+    const { serverFor } = await import('./service');
+    const ui = { pages: [{ path: 'dash', title: 'Dash', entry: 'index.html' }] };
+    expect((await serverFor(row({ ...base, ui }, null) as never)).plugin?.maxProtection).toBe(1);
+    expect((await serverFor(row({ ...base, ui, maxProtection: 3 }, null) as never)).plugin?.maxProtection).toBe(3);
+    expect((await serverFor(row(base, null) as never)).plugin?.maxProtection).toBe(4);
   });
 
   test('the network status counts the host API as a host', async () => {

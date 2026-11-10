@@ -421,6 +421,9 @@ export async function installFromDirectory(
           inProcessApprovedHash: null, inProcessApprovedBy: null, inProcessApprovedAt: null,
           // New files: what it adds to every user's agents is approved again.
           approvedContributionsHash: null,
+          // New version: its tools' effects (and so what each call's token may carry) can
+          // differ, so the host API scopes are approved again (docs/PLUGIN-PACKAGES.md#host-api).
+          approvedHostScopes: null,
           installedBy: actorUserId, updatedAt: new Date(),
         })
         .where(eq(pluginPackages.name, manifest.name))
@@ -1068,8 +1071,10 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
     toolExposure: { ...Object.fromEntries(Object.keys(tools).map((t) => [t, 'deferred' as const])), '*': 'hidden' },
     plugin: {
       package: row.name, version: row.version, tools: Object.fromEntries(Object.entries(tools).map(([t, d]) => [t, d.effect])),
-      // Undeclared: a package that reaches the network leaves the house (1); one that cannot keeps everything in (4).
-      maxProtection: m.maxProtection ?? ((m.network ?? []).length > 0 ? 1 : 4),
+      // Undeclared: a package that reaches the network leaves the house (1); so does one with
+      // pages, which can navigate their frame anywhere with what they were shown in the URL
+      // (docs/PLUGIN-PACKAGES.md#pages). Only one with neither keeps everything in (4).
+      maxProtection: m.maxProtection ?? ((m.network ?? []).length > 0 || (m.ui?.pages ?? []).length > 0 ? 1 : 4),
       ...(hostScopes.length > 0 ? { hostScopes } : {}),
     },
   };

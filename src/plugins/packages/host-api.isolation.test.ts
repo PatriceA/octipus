@@ -56,8 +56,12 @@ let server: RunningServer;
 let base: string;
 let app: import('@/api/http').App;
 
-function agentContext(userId = ADMIN.id): AgentContext {
-  return { id: `agent-${rand(4)}`, userId, sessionId: '', role: 'general', status: 'running', attended: false, workspaceId: null, space: null } as unknown as AgentContext;
+/** The user's own agent, in their conversation: the one kind of agent call that gets a host token. */
+function agentContext(userId = ADMIN.id, over: Partial<AgentContext> = {}): AgentContext {
+  return {
+    id: `agent-${rand(4)}`, userId, sessionId: `sess-${rand(4)}`, role: 'general', status: 'running', attended: false,
+    workspaceId: null, space: null, trigger: 'user', metadata: {}, ...over,
+  } as unknown as AgentContext;
 }
 
 /** The JSON a fixture tool answered. */
@@ -65,9 +69,9 @@ function out(result: unknown): Record<string, any> {
   return JSON.parse(((result as { content: Array<{ text: string }> }).content[0]).text);
 }
 
-async function callAs(tool: string, args: Record<string, unknown> = {}, userId = ADMIN.id): Promise<Record<string, any>> {
+async function callAs(tool: string, args: Record<string, unknown> = {}, userId = ADMIN.id, over: Partial<AgentContext> = {}): Promise<Record<string, any>> {
   const { getMCPBridge } = await import('@/mcp/bridge');
-  return out(await getMCPBridge().callTool(SERVER, tool, args, agentContext(userId)));
+  return out(await getMCPBridge().callTool(SERVER, tool, args, agentContext(userId, over)));
 }
 
 /** A write tool, run as if the user approved it (a dispatch receipt). */
@@ -80,15 +84,33 @@ async function callApproved(tool: string, args: Record<string, unknown> = {}, us
     () => getMCPBridge().callTool(SERVER, tool, args, context, authArgs)));
 }
 
-/** A request straight to the host API listener (as the proxy would forward it). */
+/** Egress proxies of test packages (a label each), pointed at the listener as a package's would be. */
+const proxies = new Map<string, import('@/security/egress-proxy').EgressProxy>();
+
+/** A request to the host API through `plugin`'s egress proxy, as a package sends it. */
 async function hostApi(path: string, token: string, plugin = NAME): Promise<{ status: number; body: any }> {
-  const res = await fetch(`${base}/api/plugin-host${path}`, { headers: { authorization: `Bearer ${token}`, 'x-octipus-plugin-egress': plugin } });
-  return { status: res.status, body: await res.json().catch(() => null) };
+  const { startEgressProxy } = await import('@/security/egress-proxy');
+  let proxy = proxies.get(plugin);
+  if (!proxy) {
+    proxy = await startEgressProxy({ label: plugin, allowed: [], hostApi: { host: '127.0.0.1', port: server.port } });
+    proxies.set(plugin, proxy);
+  }
+  const { request } = await import('node:http');
+  const port = proxy.port;
+  return new Promise((resolve, reject) => {
+    const req = request({ host: '127.0.0.1', port, path: `http://octipus-host.internal/api/plugin-host${path}`, headers: { authorization: `Bearer ${token}` } }, (res) => {
+      let data = '';
+      res.on('data', (c) => { data += c; });
+      res.on('end', () => { let body: unknown = null; try { body = JSON.parse(data); } catch { /* not JSON */ } resolve({ status: res.statusCode ?? 0, body }); });
+    });
+    req.on('error', reject);
+    req.end();
+  });
 }
 
-async function route(method: string, path: string, body?: unknown): Promise<{ status: number; body: any; headers: Headers }> {
+async function route(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: any; headers: Headers }> {
   const res = await app.handle(new Request(`http://localhost${path}`, {
-    method, headers: body === undefined ? {} : { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
+    method, headers: { ...headers, ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body),
   }));
   const text = await res.text();
   let parsed: unknown = text;
@@ -118,7 +140,8 @@ beforeAll(async () => {
   const { App, listen } = await import('@/api/http');
   const { pluginHostRoutes } = await import('@/api/routes/plugin-host');
   const { pluginCallRoutes, pluginUiRoutes } = await import('@/api/routes/plugin-ui');
-  app = new App({ prefix: '/api' }).use(pluginUiRoutes).use(pluginCallRoutes).use(pluginHostRoutes);
+  const { pluginPackageRoutes } = await import('@/api/routes/plugin-packages');
+  app = new App({ prefix: '/api' }).use(pluginUiRoutes).use(pluginCallRoutes).use(pluginHostRoutes).use(pluginPackageRoutes);
   server = listen(app, { hostname: '127.0.0.1', port: 0 });
   await new Promise((r) => setTimeout(r, 50));
   base = `http://127.0.0.1:${server.port}`;
@@ -129,6 +152,7 @@ beforeAll(async () => {
 afterAll(async () => {
   const { getMCPBridge } = await import('@/mcp/bridge');
   await getMCPBridge().disconnect(SERVER);
+  for (const proxy of proxies.values()) await proxy.close();
   server?.stop(true);
   const { closeDb } = await import('@/db/postgres');
   await closeDb();
@@ -144,8 +168,16 @@ describe('host API scopes', () => {
     await expect(svc.configure(NAME, { approveHostScopes: 'all' }, ADMIN.id)).rejects.toMatchObject({ code: 'invalid' });
     // Part of them is not enough to enable.
     await expect(svc.configure(NAME, { approveHostScopes: ['notes:read'], enabled: true }, ADMIN.id)).rejects.toMatchObject({ code: 'incomplete' });
-    const row = await svc.configure(NAME, { approveHostScopes: ALL_SCOPES, enabled: true }, ADMIN.id);
-    expect(row.enabled).toBe(true);
+    // Through the admin route, as the web page sends it.
+    fixture.user = ADMIN;
+    expect((await route('PATCH', `/api/plugin-packages/${NAME}`, { enabled: true })).status).toBe(409);
+    const enabled = await route('PATCH', `/api/plugin-packages/${NAME}`, { enabled: true, approveHostScopes: ALL_SCOPES });
+    expect(enabled.status).toBe(200);
+    expect(enabled.body).toMatchObject({ enabled: true, approvedHostScopes: ALL_SCOPES });
+    expect((await route('PATCH', `/api/plugin-packages/${NAME}`, { approveHostScopes: 'all' })).status).toBe(422);
+    fixture.user = MEMBER;
+    expect((await route('PATCH', `/api/plugin-packages/${NAME}`, { approveHostScopes: [] })).status).toBe(403);
+    fixture.user = null;
     const view = await svc.packageView(NAME);
     expect(view.approvedHostScopes).toEqual(ALL_SCOPES);
     expect(view.connected).toBe(true);
@@ -204,6 +236,9 @@ describe('host API scopes', () => {
     expect((await hostApi('/whoami', token, 'echo-plugin')).status).toBe(401);
     const unstamped = await fetch(`${base}/api/plugin-host/whoami`, { headers: { authorization: `Bearer ${token}` } });
     expect(unstamped.status).toBe(401);
+    // A stamp the client wrote itself, without the proxy's secret, is no stamp.
+    const forged = await fetch(`${base}/api/plugin-host/whoami`, { headers: { authorization: `Bearer ${token}`, 'x-octipus-plugin-egress': NAME, 'x-octipus-plugin-egress-key': 'guess' } });
+    expect([forged.status, ((await forged.json()) as { code: string }).code]).toEqual([401, 'not_via_proxy']);
     // A scope it does not carry.
     expect(await hostApi('/tasks', token)).toMatchObject({ status: 403, body: { code: 'scope_missing' } });
     // The token is no session or API token.
@@ -243,6 +278,58 @@ describe('host API scopes', () => {
     expect((await callAs('read_doc', { id: low }, MEMBER.id)).status).toBe(404);
   });
 
+  test('calls nobody started by hand get no token: events, context, schedules, other turns', async () => {
+    for (const contribution of ['event', 'context', 'schedule']) {
+      const res = await callAs('whoami', {}, ADMIN.id, { metadata: { source: 'plugin-contribution', plugin: NAME, contribution } } as Partial<AgentContext>);
+      expect(res.noHost, contribution).toBe(true);
+    }
+    expect((await callAs('whoami', {}, ADMIN.id, { trigger: 'schedule' })).noHost).toBe(true);
+    expect((await callAs('whoami', {}, ADMIN.id, { sessionId: '' })).noHost).toBe(true);
+    const command = await callAs('whoami', {}, ADMIN.id, { metadata: { source: 'plugin-contribution', plugin: NAME, contribution: 'command' } } as Partial<AgentContext>);
+    expect(command.res.status).toBe(200);
+  });
+
+  test('tasks above the package\'s maxProtection (by their provenance) are left out, and the session learns what it read', async () => {
+    const { queryRaw } = await import('@/db/postgres');
+    const add = (title: string, ref: Record<string, unknown> | null) => queryRaw(
+      `INSERT INTO tasks (user_id, title, source, source_ref) VALUES ($1, $2, 'agent', $3)`, [ADMIN.id, title, ref === null ? null : JSON.stringify(ref)]);
+    await add('Plain task', null);
+    await add('Internal task', { sessionId: 'x', protectionLevel: 2, flowLabel: { private: 'mail:read' } });
+    await add('Confidential task', { sessionId: 'y', protectionLevel: 3 });
+    const { mintHostToken } = await import('./host-api');
+    const sessionId = `sess-${rand(4)}`;
+    const { token } = mintHostToken({ plugin: NAME, userId: ADMIN.id, workspaceId: null, sessionId, scopes: ['tasks:read'], maxProtection: 2, tool: 'x' }, 30_000);
+    const listed = await hostApi('/tasks', token);
+    expect(listed.status).toBe(200);
+    const titles = listed.body.tasks.map((t: { title: string }) => t.title);
+    expect(titles).toEqual(expect.arrayContaining(['Plain task', 'Internal task']));
+    expect(titles).not.toContain('Confidential task');
+    expect(listed.body.withheld).toBe(1);
+    const { sessionProtectionLevel } = await import('@/core/protection/session-level');
+    expect(sessionProtectionLevel(sessionId)).toBe(2);
+    const { getFlowLabel } = await import('@/security/flow-guard');
+    expect(getFlowLabel(sessionId).private).toBe(true);
+  });
+
+  test('refusals without a token are limited per address and audited in aggregate', async () => {
+    const { _resetRateLimits } = await import('@/core/artifacts/rate-limit');
+    const { _resetHostRefusals } = await import('@/api/routes/plugin-host');
+    _resetRateLimits();
+    _resetHostRefusals();
+    const before = (await hostAudit()).filter((a) => a.details.op === 'refused').length;
+    const statuses: number[] = [];
+    for (let i = 0; i < 30; i++) {
+      statuses.push((await fetch(`${base}/api/plugin-host/whoami`, { headers: { 'x-octipus-plugin-egress': NAME, 'x-octipus-plugin-egress-key': `k${i}` } })).status);
+    }
+    expect(statuses.slice(0, 5)).toEqual([401, 401, 401, 401, 401]);
+    expect(statuses).toContain(429);
+    // One row for the window, not thirty.
+    const rows = (await hostAudit()).filter((a) => a.details.op === 'refused');
+    expect(rows.length - before).toBe(1);
+    expect(rows.at(-1)).toMatchObject({ action: 'permission_denied', details: { code: 'not_via_proxy', count: 1 } });
+    _resetRateLimits();
+  });
+
   test('the proxy reaches nothing of the host but the host API', async () => {
     for (const url of ['http://octipus-host.internal/api/auth/me', `http://octipus-host.internal:${server.port}/api/plugin-host/whoami`, `http://127.0.0.1:${server.port}/api/plugin-host/whoami`]) {
       expect((await callAs('probe', { url })).status, url).toBe(403);
@@ -257,15 +344,21 @@ describe('pages', () => {
     expect(pages.body.pages).toEqual([{ plugin: NAME, pluginTitle: 'Host API (test fixture)', path: 'dashboard', title: 'Host dashboard', icon: 'layout-dashboard', src: '/api/plugin-ui/host-plugin/index.html' }]);
     fixture.user = null;
     expect((await route('GET', '/api/plugin-ui')).status).toBe(401);
-    const file = await route('GET', '/api/plugin-ui/host-plugin/index.html');
+    const frame = { 'sec-fetch-dest': 'iframe' };
+    const file = await route('GET', '/api/plugin-ui/host-plugin/index.html', undefined, frame);
     expect(file.status).toBe(200);
+    // Never opened on its own, nor without the header, nor a script as a frame.
+    expect((await route('GET', '/api/plugin-ui/host-plugin/index.html', undefined, { 'sec-fetch-dest': 'document' })).status).toBe(404);
+    expect((await route('GET', '/api/plugin-ui/host-plugin/index.html')).status).toBe(404);
+    expect((await route('GET', '/api/plugin-ui/host-plugin/app.js', undefined, frame)).status).toBe(404);
     expect(file.headers.get('content-type')).toBe('text/html; charset=utf-8');
     expect(file.headers.get('content-security-policy')).toContain('sandbox allow-scripts');
     expect(file.headers.get('content-security-policy')).toContain("script-src http://localhost/api/plugin-ui/host-plugin/");
     expect(file.headers.get('x-content-type-options')).toBe('nosniff');
-    expect((await route('GET', '/api/plugin-ui/host-plugin/app.js')).status).toBe(200);
+    expect((await route('GET', '/api/plugin-ui/host-plugin/app.js', undefined, { 'sec-fetch-dest': 'script' })).status).toBe(200);
     for (const p of ['/api/plugin-ui/host-plugin/../server.mjs', '/api/plugin-ui/host-plugin/%2e%2e/server.mjs', '/api/plugin-ui/host-plugin/server.mjs', '/api/plugin-ui/echo-plugin/index.html']) {
-      expect((await route('GET', p)).status, p).toBe(404);
+      expect((await route('GET', p, undefined, { 'sec-fetch-dest': 'script' })).status, p).toBe(404);
+      expect((await route('GET', p, undefined, frame)).status, p).toBe(404);
     }
   });
 
@@ -303,12 +396,12 @@ describe('pages', () => {
     expect(statuses).toContain(429);
   });
 
-  test('disabled: no page, no files, no calls; an upgrade adding a scope asks again', async () => {
+  test('disabled: no page, no files, no calls; an upgrade asks for the scopes again', async () => {
     const svc = await import('./service');
     await svc.setEnabled(NAME, false, ADMIN.id);
     fixture.user = MEMBER;
     expect((await route('GET', '/api/plugin-ui')).body.pages).toEqual([]);
-    expect((await route('GET', '/api/plugin-ui/host-plugin/index.html')).status).toBe(404);
+    expect((await route('GET', '/api/plugin-ui/host-plugin/index.html', undefined, { 'sec-fetch-dest': 'iframe' })).status).toBe(404);
     expect((await route('POST', '/api/plugins/host-plugin/call/whoami', { args: {} })).status).toBe(404);
 
     const next = mkdtempSync(join(tmpdir(), 'host-plugin-next-'));
@@ -316,7 +409,8 @@ describe('pages', () => {
     const manifest = JSON.parse(readFileSync(join(next, 'octipus-plugin.json'), 'utf8'));
     writeFileSync(join(next, 'octipus-plugin.json'), JSON.stringify({ ...manifest, version: '1.1.0', host: [...manifest.host, 'tasks:read'] }));
     await svc.installFromDirectory(next, ADMIN.id, { upgrade: true });
-    expect((await svc.packageView(NAME)).approvedHostScopes).toEqual(ALL_SCOPES);
+    // Any upgrade clears the approval: its tools' effects may have changed (read → write widens a call's token).
+    expect((await svc.packageView(NAME)).approvedHostScopes).toBeNull();
     await expect(svc.setEnabled(NAME, true, ADMIN.id)).rejects.toMatchObject({ code: 'incomplete', message: expect.stringContaining('tasks:read') });
     await svc.configure(NAME, { approveHostScopes: [...ALL_SCOPES, 'tasks:read'], enabled: true }, ADMIN.id);
     expect((await route('GET', '/api/plugin-ui')).body.pages).toHaveLength(1);

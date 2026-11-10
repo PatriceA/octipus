@@ -21,13 +21,15 @@ vi.mock('@/db/postgres', () => {
   return { getDb: () => ({ select: () => chain }) };
 });
 vi.mock('@/mcp/bridge', () => ({ PLUGIN_SERVER_PREFIX: 'plugin-', getMCPBridge: () => ({ pluginProblem: () => state.problem }) }));
+const trusted = vi.hoisted(() => new Set<string>());
+vi.mock('@/security/client-ip', () => ({ isTrustedProxy: (address: string) => trusted.has(address) }));
 vi.mock('./service', () => ({ packageDir: (name: string) => join(state.root, name) }));
 vi.mock('./integrity', async (original) => ({
   ...await original<typeof import('./integrity')>(),
   hashPackageContent: async () => state.hash,
 }));
 
-const { _forgetUiVerification, listEnabledPages, pluginUiCsp, pluginUiHeaders, readUiFile, uiBaseUrl, uiContentType, uiFileUrl } = await import('./ui');
+const { _forgetUiVerification, fetchDestAllowed, isSecureOrigin, listEnabledPages, pluginUiCsp, pluginUiHeaders, readUiFile, uiBaseUrl, uiContentType, uiFileUrl } = await import('./ui');
 
 const manifest = { name: 'acme', title: 'Acme', ui: { pages: [{ path: 'dash', title: 'Dash', icon: 'zap', entry: 'index.html' }] } };
 
@@ -130,11 +132,37 @@ describe('headers and CSP', () => {
     expect(uiContentType('a')).toBeNull();
   });
 
-  test('the base URL comes from the request, and a host that is not one gives none', () => {
-    expect(uiBaseUrl(new Request('http://localhost:3005/api/plugin-ui/acme/index.html'), 'acme')).toBe('http://localhost:3005/api/plugin-ui/acme/');
-    expect(uiBaseUrl(new Request('http://x/', { headers: { 'x-forwarded-host': 'octi.example', 'x-forwarded-proto': 'https' } }), 'acme'))
-      .toBe('https://octi.example/api/plugin-ui/acme/');
-    expect(uiBaseUrl(new Request('http://x/', { headers: { 'x-forwarded-host': "evil; script-src 'unsafe-inline'" } }), 'acme')).toBeNull();
+  test('the base URL: the public URL when configured, else the request; forwarded headers only from a trusted proxy', () => {
+    const req = (headers: Record<string, string> = {}) => new Request('http://localhost:3005/api/plugin-ui/acme/index.html', { headers });
+    const fwd = { 'x-forwarded-host': 'evil.example', 'x-forwarded-proto': 'https' };
+    expect(uiBaseUrl(req(), 'acme', undefined, '')).toBe('http://localhost:3005/api/plugin-ui/acme/');
+    // From an untrusted peer the forwarded headers are ignored.
+    expect(uiBaseUrl(req(fwd), 'acme', '203.0.113.9', '')).toBe('http://localhost:3005/api/plugin-ui/acme/');
+    trusted.add('10.0.0.2');
+    expect(uiBaseUrl(req(fwd), 'acme', '10.0.0.2', '')).toBe('https://evil.example/api/plugin-ui/acme/');
+    expect(uiBaseUrl(req({ 'x-forwarded-host': "evil; script-src 'unsafe-inline'" }), 'acme', '10.0.0.2', '')).toBeNull();
+    trusted.clear();
+    // The configured public URL wins over anything the request says.
+    expect(uiBaseUrl(req(fwd), 'acme', '10.0.0.2', 'https://octi.example/')).toBe('https://octi.example/api/plugin-ui/acme/');
+    expect(uiBaseUrl(req(), 'acme', undefined, 'javascript:alert(1)')).toBeNull();
     expect(uiFileUrl('acme', 'a b/c.html')).toBe('/api/plugin-ui/acme/a%20b/c.html');
+  });
+
+  test('a file is served only where it belongs (Sec-Fetch-Dest)', () => {
+    expect(fetchDestAllowed('index.html', 'iframe')).toBe(true);
+    for (const dest of ['document', 'frame', 'object', 'embed', 'empty', 'script', null]) expect(fetchDestAllowed('index.html', dest), String(dest)).toBe(false);
+    expect(fetchDestAllowed('assets/app.js', 'script')).toBe(true);
+    expect(fetchDestAllowed('assets/app.js', 'document')).toBe(false);
+    expect(fetchDestAllowed('style.css', 'style')).toBe(true);
+    expect(fetchDestAllowed('logo.svg', 'image')).toBe(true);
+    expect(fetchDestAllowed('logo.svg', 'iframe')).toBe(false);
+    expect(fetchDestAllowed('font.woff2', 'font')).toBe(true);
+    expect(fetchDestAllowed('data.json', 'empty')).toBe(false);
+    // Plain http to a LAN address: browsers send no Sec-Fetch-*, so a missing header passes there only.
+    expect(fetchDestAllowed('index.html', null, false)).toBe(true);
+    expect(fetchDestAllowed('index.html', 'document', false)).toBe(false);
+    expect(isSecureOrigin('https://octi.example/api/plugin-ui/acme/')).toBe(true);
+    expect(isSecureOrigin('http://localhost:3007/api/plugin-ui/acme/')).toBe(true);
+    expect(isSecureOrigin('http://192.168.1.5:3007/api/plugin-ui/acme/')).toBe(false);
   });
 });
