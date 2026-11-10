@@ -1,4 +1,5 @@
 import { buildAgentContext } from './context';
+import { pluginPromptSections } from '@/plugins/packages/contributions/prompt';
 import { executionEnvironmentFor } from '@/security/execution-environments';
 import { COMPANION_TOKEN_LIMITS } from '@/shared/companion-supervision';
 import { companionBudgetResponse, companionControllerLimits } from '@/core/companion/turn-limits';
@@ -728,6 +729,9 @@ export async function runRootAgent(
   // they were, and the routing table gained the sentence about what NOT to
   // delegate — the root holds those tools itself.
   if (!isLite && !supervisor) prompt.add(roleTier, 'delegation-mechanics', `\n\n${delegationPrompt}`);
+  // Prompt sections of enabled plugin packages (docs/PLUGIN-PACKAGES.md#prompt-sections):
+  // static files, the same bytes for every user, so they stay in the install tier.
+  for (const section of pluginPromptSections(rootAgentRole)) prompt.add(roleTier, section.label, section.text);
   // The persona (and anything else the hook appended): the first per-user block.
   if (hookedSplit) prompt.add('user', 'persona', asTrailingBlock(hookedSplit.user));
   volatileParts.push(tagger.tag('volatile', 'turn', 'Topic hint', buildTopicHint(isLite, classification)));
