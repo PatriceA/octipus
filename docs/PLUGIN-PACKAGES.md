@@ -50,7 +50,7 @@ server (any language) that the manifest says how to start:
 | `server` | `command` and `args`, run in the package directory over stdio. Optional `requestTimeoutMs`. |
 | `tools` | Every tool the server offers, with its `effect` (below). At least one. |
 | `network` | The hosts it talks to (`api.example.com`, `*.example.com` for its subdomains, `api.example.com:8443` for one port). Shown at install; the package reaches only these, on 443 and 80 unless a port is given — enforced only under the sandbox ([Network](#network)). |
-| `maxProtection` | The highest protection level (1-4) of data it may see. A call from a conversation holding content above it is refused ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md#plugin-calls-c6d)). Left out: 1 for a package with `network` hosts, 4 for one without. |
+| `maxProtection` | The highest protection level (1-4) of data it may see. A call from a conversation holding content above it is refused ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md#plugin-calls-c6d)). Left out: 1 for a package with `network` hosts or `ui` pages (a page can leak what it shows, [Pages](#pages)), 4 for one with neither. |
 | `settings` | Non-secret settings as [record type fields](RECORDS.md#record-types), handed to the server as `OCTIPUS_SETTING_<KEY>`. |
 | `secrets` | Credentials, stored in the vault, handed to the server as environment variables under their own `key`. |
 | `commands`, `schedules`, `events`, `prompt`, `context` | What the package adds besides tools, each bound to one of its own tools ([Contributions](#contributions)). |
@@ -914,7 +914,18 @@ the package's UI directory, and only:
 - with a known static type (`.html`, `.css`, `.js`, `.mjs`, `.json`, `.map`,
   `.txt`, `.svg`, `.png`, `.jpg`, `.gif`, `.webp`, `.ico`, `.woff`, `.woff2`;
   anything else is a 404), `X-Content-Type-Options: nosniff`, at most 5 MB;
-- under this CSP, `<base>` being `http(s)://<host>/api/plugin-ui/<name>/`:
+- only where it belongs, by `Sec-Fetch-Dest`: the HTML entry only into a frame
+  (`iframe`; opened as a top-level `document`, an `object` or anything else it
+  is a 404), scripts as `script`, styles as `style`, images as `image`, fonts as
+  `font`. Browsers send `Sec-Fetch-*` only to https and localhost: there a
+  request without it is refused; on plain http to another address (a LAN
+  install), where no browser sends it, its absence is accepted and the CSP
+  below still sandboxes the document;
+- under this CSP, `<base>` being the configured public URL (`oauth.publicUrl` /
+  `PUBLIC_URL`) plus `/api/plugin-ui/<name>/` — or, without one, the address
+  the request came in on (`X-Forwarded-Host` / `-Proto` only from a proxy in
+  `security.trustedProxies`). With a public URL set, pages work only when the
+  app is opened at that URL:
 
   ```
   default-src 'none'; script-src <base>; style-src <base>; img-src <base> data:;
@@ -937,21 +948,26 @@ secret in them**: whatever a page shows comes through the bridge.
 the package removes them. `/plugins/<name>/<path>` shows the page in an
 `<iframe sandbox="allow-scripts">`.
 
-**The bridge.** The page posts a call to its parent, and gets one answer:
+**The bridge.** Once the page's document has loaded, the parent sends it a
+secret; the page posts each call with it and gets one answer:
 
 ```js
-parent.postMessage({ octipus: 'call', id: 1, tool: 'list_accounts', args: {} }, '*');
+let token = null;
 window.addEventListener('message', (e) => {
-  if (e.source !== parent || e.data?.octipus !== 'result') return;
+  if (e.source !== parent) return;
+  if (e.data?.octipus === 'hello') token = e.data.token;   // after the page's load
   // { octipus: 'result', id: 1, ok: true, result }          — the MCP tool result
   // { octipus: 'result', id: 1, ok: false, error, code }    — refused or failed
 });
+// once token is set:
+parent.postMessage({ octipus: 'call', id: 1, token, tool: 'list_accounts', args: {} }, '*');
 ```
 
 The parent accepts a message only from that page's frame (its window, with the
-opaque origin `"null"`), only in exactly this shape (`id` a short string or a
-number, `tool` a tool name, `args` a plain object under 100 kB; any other key
-refuses it), at most 4 calls in flight and 10 a second. It then calls
+opaque origin `"null"`), only with the secret it sent, only in exactly this
+shape (`id` a short string or a number, `tool` a tool name, `args` a plain
+object under 100 kB; any other key refuses it), at most 4 calls in flight and
+10 a second. It then calls
 
 ```
 POST /api/plugins/<name>/call/<tool>   { "args": {...}, "confirm"?: true }
@@ -975,8 +991,22 @@ effect and the arguments — and only on *Allow once* repeats the call with
 `denied_by_user`. A DENY rule is never overridden. The page itself cannot set
 `confirm`: it only names a tool and its arguments.
 
-A page can navigate its own frame elsewhere; whatever is loaded there can still
-only ask for the same package's tools, as its own page could.
+**Navigation.** A page can navigate its own frame (a link, `location =`, a
+meta refresh). The app counts the frame's `load` events: on any after the
+first, the bridge is detached for good, the frame is emptied (`about:blank`)
+and the user is told the page navigated away. A document the frame navigates
+to never gets the secret, so it cannot call the bridge before its own load is
+seen either.
+
+**Treat a page as able to leak.** What a page is shown, it can put into the
+URL of a navigation, which leaves before the app sees the next load (the CSP
+blocks every other way out: fetch, forms, images and scripts elsewhere). A package's tools
+already see what they return, so this is a leak to the package's author, not
+a widening of what the package can read. That is why a package with `ui` and
+no declared `maxProtection` counts as leaving the house (1), like one with
+`network` hosts; declare a higher `maxProtection` only for a publisher you
+trust with that data. (Serving pages from a separate origin is not
+implemented: the sandbox already gives them an opaque origin.)
 
 ## Host API
 
@@ -993,7 +1023,7 @@ and an admin approved:
 | — | `GET /api/plugin-host/whoami` | The token's package, tool, scopes, workspace kind and expiry. |
 | `notes:read` | `GET /api/plugin-host/notes?limit=&tag=` | The user's notes in the call's workspace (at most 100), bodies included. |
 | `notes:write` | `POST /api/plugin-host/notes { title, body?, tags? }` | Creates a note; never overwrites (`409 exists` for a taken title). |
-| `tasks:read` | `GET /api/plugin-host/tasks?status=` | The user's own tasks (at most 200). |
+| `tasks:read` | `GET /api/plugin-host/tasks?status=` | The user's own tasks (at most 200). A task carries the protection level and flow label of the conversation it came from (its provenance): one above the package's `maxProtection` is left out (`withheld` counts them), and the rest raise the calling session's level and label, as the tasks tool does. |
 | `tasks:write` | `POST /api/plugin-host/tasks { title, notes?, priority?, dueAt? }` | Creates a task for the user (audited as a task mutation by `plugin:<name>`). |
 | `documents:read` | `GET /api/plugin-host/documents/:id` | One document: metadata and extracted text. |
 | `notify` | `POST /api/plugin-host/notify { title, body? }` | A notification to the calling user, and to nobody else. |
@@ -1002,10 +1032,22 @@ and an admin approved:
 scope approved: `PATCH /api/plugin-packages/:name { "enabled": true,
 "approveHostScopes": [...] }` (Admin → Plugin packages shows the scopes and
 asks when you enable). Only declared scopes can be approved. The approved set is
-stored with the package (`approvedHostScopes`); an upgrade keeps it, so a
-version that **adds** a scope cannot be enabled until that scope is approved
-too. Disabling, upgrading, uninstalling or changing the approval revokes every
-token in flight.
+stored with the package (`approvedHostScopes`). **Every upgrade clears it**: a
+new version's tools may have other effects (a tool that turned from `read` to
+`write` would widen what its calls' tokens carry), so it cannot be enabled
+until its scopes are approved again. Disabling, upgrading, uninstalling or
+changing the approval revokes every token in flight.
+
+**Which calls get a token.** Only a call a user started themselves:
+
+- a tool call of the user's own agent, in their conversation (`trigger` `user`, a session);
+- a slash command they typed (a `commands` contribution);
+- a call from the package's page, by the signed-in user.
+
+Never a call from a schedule, an event or the turn-start context (they run
+for users who did not ask, or as the installing admin), nor a heartbeat,
+cron, room, remote or listen turn, nor a contribution kind the host does not
+know: those calls carry no `_meta["octipus/host"]`.
 
 **The token.** With every `tools/call` to such a package the host sends, in the
 request's own metadata (it works over stdio, where a per-call environment
@@ -1021,7 +1063,8 @@ variable cannot):
 ```
 
 The token is minted for that call and revoked when it returns; it expires with
-the call's timeout (`requestTimeoutMs`, default 30 s, plus 5 s). It is bound to:
+the call's timeout, **at most 30 seconds** whatever `requestTimeoutMs` says, so
+a token kept past its call cannot be used during another user's. It is bound to:
 
 - **the package** — another package presenting it gets `401`;
 - **the user who triggered the call** (the agent's user, or the signed-in user
@@ -1043,8 +1086,12 @@ proxy agent). The proxy of a package with host scopes forwards that name, on
 port 80, under `/api/plugin-host/` only, to the host's own API port on loopback
 — never resolved through DNS, never another path (`%`, `..` and empty segments
 are refused), port or loopback service, never through `CONNECT` — drops the
-client's cookies and forwarding headers, and stamps the package name
-(`x-octipus-plugin-egress`). A package without approved scopes reaches nothing
+client's cookies, forwarding and Octipus headers, and stamps the package name
+(`x-octipus-plugin-egress`) with the proxy's own secret
+(`x-octipus-plugin-egress-key`: random, generated when the proxy starts, held
+only in memory and dropped when it stops). The host API accepts a request
+only with the secret of a live proxy of the package it names, so the stamp
+cannot be forged by a client that reaches the API port directly. A package without approved scopes reaches nothing
 by that name, even if it lists it in `network`. A package with only `host`
 (and no `network`) still gets a proxy, so under the sandbox it is
 `restricted`, not `offline`.
@@ -1057,8 +1104,12 @@ rules (a viewer cannot write) apply as in the user's own agent. A document
 above the package's `maxProtection` is refused (`403 protection_level`; an
 unclear level counts as 4), and one that is read raises the calling session's
 protection level. 60 requests in a burst per package and user, then `429`.
-Every request, allowed or refused, is one audit row (`resource_type =
-plugin_host`, the op, the scope, the status, the tool).
+Every request with a valid stamp and token, allowed or refused, is one audit
+row (`resource_type = plugin_host`, the op, the scope, the status, the tool).
+A request refused before that (no or a forged stamp, no or a dead token) is
+limited per client address (then `429`) and audited in aggregate: one row
+(op `refused`, its `code`, `count`) per kind and package per minute, carrying
+the refusals counted since the previous row.
 
 ## Installing and managing
 
@@ -1085,7 +1136,8 @@ tarball, signed by a trusted publisher ([Remote install](#remote-install)).
    while a required setting or secret has no value; settings and `enabled` in
    one PATCH are saved together or not at all. A required secret of an enabled
    package cannot be removed; disable it first. A package with `host` scopes
-   needs them approved too (`"approveHostScopes": [...]`, [Host API](#host-api)).
+   needs them approved too (`"approveHostScopes": [...]`, [Host API](#host-api));
+   an upgrade clears that approval.
 4. **Upgrade:** install again with `"upgrade": true` (`"allowSignerChange"`
    and `"allowDowngrade"` for another publisher or an older version, see
    [Signed packages](#signed-packages)). Once the new files are copied and

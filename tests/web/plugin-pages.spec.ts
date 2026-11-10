@@ -36,6 +36,8 @@ const PAGE = { plugin: 'host-plugin', pluginTitle: 'Host API (test fixture)', pa
 
 interface Stubs {
   calls: Array<{ url: string; body: { args?: unknown; confirm?: boolean } }>;
+  /** The files the frame fetched. (Sec-Fetch-Dest is added below Playwright's interception, so it is checked in the route tests.) */
+  dests: string[];
   enabled: boolean;
   /** The hash of the entry URL (the fixture page calls the tool it names). */
   tool: string;
@@ -46,6 +48,7 @@ async function stubPlugin(page: Page, stubs: Stubs): Promise<void> {
     const url = new URL(route.request().url());
     const file = url.pathname.split('/').pop() ?? '';
     const ext = file.split('.').pop() ?? '';
+    stubs.dests.push(file);
     if (!stubs.enabled || !TYPES[ext]) return route.fulfill({ status: 404, body: 'Not found' });
     return route.fulfill({
       status: 200,
@@ -70,7 +73,7 @@ const frameOf = (page: Page) => page.frameLocator('[data-testid="plugin-frame"]'
 
 test.describe('plugin pages', () => {
   test('the page renders sandboxed, and a bridge call reaches its own package and comes back', async ({ authenticatedPage: page }) => {
-    const stubs: Stubs = { calls: [], enabled: true, tool: 'whoami' };
+    const stubs: Stubs = { calls: [], dests: [], enabled: true, tool: 'whoami' };
     await stubPlugin(page, stubs);
     await page.goto('/plugins/host-plugin/dashboard');
     const frame = frameOf(page);
@@ -82,13 +85,14 @@ test.describe('plugin pages', () => {
     await expect(frame.locator('body')).toHaveAttribute('data-storage', 'blocked');
     expect(await page.locator('[data-testid="plugin-frame"]').getAttribute('sandbox')).toBe('allow-scripts');
     expect(stubs.calls).toEqual([{ url: '/api/plugins/host-plugin/call/whoami', body: { args: {} } }]);
+    expect(stubs.dests.sort()).toEqual(['app.js', 'index.html', 'style.css']);
     const reply = JSON.parse(await frame.locator('#out').textContent() ?? '{}');
     expect(reply).toMatchObject({ octipus: 'result', id: 1, ok: true });
     expect(JSON.parse(reply.result.content[0].text)).toEqual({ tool: 'whoami', hello: 'from the host' });
   });
 
   test('another package\'s tool is refused, and only the page\'s own frame is heard', async ({ authenticatedPage: page }) => {
-    const stubs: Stubs = { calls: [], enabled: true, tool: 'list_accounts' };
+    const stubs: Stubs = { calls: [], dests: [], enabled: true, tool: 'list_accounts' };
     await stubPlugin(page, stubs);
     await page.goto('/plugins/host-plugin/dashboard');
     await expect(frameOf(page).locator('#status')).toHaveText('refused: unknown_tool');
@@ -96,7 +100,7 @@ test.describe('plugin pages', () => {
     expect(stubs.calls.map((c) => c.url)).toEqual(['/api/plugins/host-plugin/call/list_accounts']);
     // A message posted by the app window itself (not the frame), or malformed, calls nothing.
     await page.evaluate(() => {
-      window.postMessage({ octipus: 'call', id: 9, tool: 'whoami', args: {} }, '*');
+      window.postMessage({ octipus: 'call', id: 9, token: 'guess', tool: 'whoami', args: {} }, '*');
       window.postMessage({ octipus: 'call', id: 10, tool: '../../admin', args: {} }, '*');
     });
     await page.waitForTimeout(300);
@@ -104,20 +108,35 @@ test.describe('plugin pages', () => {
   });
 
   test('an external tool runs only after the user allows it in the app', async ({ authenticatedPage: page }) => {
-    const stubs: Stubs = { calls: [], enabled: true, tool: 'send_letter' };
+    const stubs: Stubs = { calls: [], dests: [], enabled: true, tool: 'send_letter' };
     await stubPlugin(page, stubs);
     await page.goto('/plugins/host-plugin/dashboard');
     const dialog = page.getByTestId('plugin-confirm');
-    await expect(dialog).toContainText('Host API (test fixture) wants to run send_letter');
+    await expect(dialog).toContainText('The plugin host-plugin (Host API (test fixture)) wants to run send_letter');
     await expect(dialog).toContainText('outside the organisation');
     await expect(frameOf(page).locator('#status')).toHaveText('script ran');
-    await dialog.getByRole('button', { name: 'Allow once' }).click();
+    // Allow arms only after a moment, so a click meant for the page cannot land on it.
+    const allow = dialog.getByRole('button', { name: 'Allow once' });
+    await expect(allow).toBeDisabled();
+    await expect(allow).toBeEnabled();
+    await allow.click();
     await expect(frameOf(page).locator('#status')).toHaveText('ok');
     expect(stubs.calls.map((c) => c.body)).toEqual([{ args: {} }, { args: {}, confirm: true }]);
   });
 
+  test('a page that navigates its frame away loses the bridge and is closed', async ({ authenticatedPage: page }) => {
+    const stubs: Stubs = { calls: [], dests: [], enabled: true, tool: 'navigate' };
+    await stubPlugin(page, stubs);
+    await page.goto('/plugins/host-plugin/dashboard');
+    await expect(page.getByTestId('plugin-navigated')).toContainText("navigated away from host-plugin's own page");
+    await expect(page.locator('[data-testid="plugin-frame"]')).toHaveAttribute('src', 'about:blank');
+    // Only the page's own call went out; whatever is in the frame now calls nothing.
+    await page.waitForTimeout(300);
+    expect(stubs.calls.map((c) => c.url)).toEqual(['/api/plugins/host-plugin/call/whoami']);
+  });
+
   test('refusing the confirmation answers the page and runs nothing', async ({ authenticatedPage: page }) => {
-    const stubs: Stubs = { calls: [], enabled: true, tool: 'send_letter' };
+    const stubs: Stubs = { calls: [], dests: [], enabled: true, tool: 'send_letter' };
     await stubPlugin(page, stubs);
     await page.goto('/plugins/host-plugin/dashboard');
     await page.getByTestId('plugin-confirm').getByRole('button', { name: 'Refuse' }).click();
@@ -126,7 +145,7 @@ test.describe('plugin pages', () => {
   });
 
   test('the sidebar entry appears with enabling and goes with disabling', async ({ authenticatedPage: page }) => {
-    const stubs: Stubs = { calls: [], enabled: false, tool: 'whoami' };
+    const stubs: Stubs = { calls: [], dests: [], enabled: false, tool: 'whoami' };
     await stubPlugin(page, stubs);
     const patches: unknown[] = [];
     const view = () => [{

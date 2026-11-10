@@ -3,9 +3,14 @@
  * packages add (`GET /api/plugin-ui`), and the shape of the postMessage bridge
  * a page's sandboxed frame talks to.
  *
- * A page asks its parent (this app) to call one of its own package's tools:
+ * Once the page has loaded, the parent sends it a secret:
  *
- *   parent.postMessage({ octipus: 'call', id: 1, tool: 'list_items', args: {} }, '*')
+ *   { octipus: 'hello', token }
+ *
+ * and the page asks its parent (this app) to call one of its own package's
+ * tools with it:
+ *
+ *   parent.postMessage({ octipus: 'call', id: 1, token, tool: 'list_items', args: {} }, '*')
  *
  * and gets back, from the parent:
  *
@@ -44,6 +49,8 @@ export function pluginPageHref(page: Pick<PluginPageLink, 'plugin' | 'path'>): s
 /** A call the page asks for, once checked. */
 export interface BridgeCall {
   id: string | number;
+  /** The secret the parent sent with `hello` after the page loaded. */
+  token: string;
   tool: string;
   args: Record<string, unknown>;
 }
@@ -66,8 +73,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  */
 export function parseBridgeCall(data: unknown): BridgeCall | null {
   if (!isPlainObject(data) || data.octipus !== 'call') return null;
-  if (Object.keys(data).some((k) => !['octipus', 'id', 'tool', 'args'].includes(k))) return null;
-  const { id, tool, args } = data;
+  if (Object.keys(data).some((k) => !['octipus', 'id', 'tool', 'args', 'token'].includes(k))) return null;
+  const { id, tool, args, token } = data;
+  if (typeof token !== 'string' || token.length > 100) return null;
   if (!((typeof id === 'string' && id.length <= 100) || (typeof id === 'number' && Number.isFinite(id)))) return null;
   if (typeof tool !== 'string' || !TOOL_RE.test(tool)) return null;
   if (args !== undefined && !isPlainObject(args)) return null;
@@ -76,5 +84,5 @@ export function parseBridgeCall(data: unknown): BridgeCall | null {
   } catch {
     return null;
   }
-  return { id, tool, args: (args ?? {}) as Record<string, unknown> };
+  return { id, token, tool, args: (args ?? {}) as Record<string, unknown> };
 }

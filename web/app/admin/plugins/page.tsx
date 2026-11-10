@@ -323,6 +323,12 @@ function PackageConfig({ pkg }: { pkg: PluginPackageView }) {
  * enabled) and the host API scopes it asks for, each approved or not. A scope
  * a new version adds is not approved: enabling asks for it.
  */
+/** Exactly when a package with approved host scopes gets a token (src/plugins/packages/host-api.ts, `hostCallKind`). */
+const HOST_TOKEN_WHEN = 'A call gets a short-lived token for them (at most 30 seconds, for that call only) only when a user starts it: '
+  + 'a tool call of their own agent in their conversation, a slash command they type, or a button on the package\'s page. '
+  + 'Schedules, events and context calls never get one. The token acts as that user, within their own data and permission rules. '
+  + 'An upgrade asks for this approval again.';
+
 function PagesAndScopes({ pkg, unapproved }: { pkg: PluginPackageView; unapproved: string[] }) {
   const pages = pkg.manifest.ui?.pages ?? [];
   const scopes = pkg.manifest.host ?? [];
@@ -344,6 +350,7 @@ function PagesAndScopes({ pkg, unapproved }: { pkg: PluginPackageView; unapprove
             </span>
           ))}
           {unapproved.length > 0 && <span className={tone('warn')}> · {unapproved.length} not approved; enabling approves them</span>}
+          <span className="block">{HOST_TOKEN_WHEN}</span>
         </p>
       )}
     </div>
@@ -508,7 +515,7 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
             // A package that adds commands, schedules, events, prompt text or context: review all of it first.
             if (!pkg.enabled && hasContributions(pkg)) { setConfirmingEnable(true); return; }
             if (!pkg.enabled && unapproved.length > 0
-              && !confirm(`Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? Its tools then act with them as the user who calls them.`)) return;
+              && !confirm(`Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? ${HOST_TOKEN_WHEN}`)) return;
             toggle.mutate(!pkg.enabled);
           }}
           aria-label={`${pkg.enabled ? 'Disable' : 'Enable'} ${pkg.name}`}
