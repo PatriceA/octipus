@@ -50,14 +50,14 @@ server (any language) that the manifest says how to start:
 | `server` | `command` and `args`, run in the package directory over stdio. Optional `requestTimeoutMs`. |
 | `tools` | Every tool the server offers, with its `effect` (below). At least one. |
 | `network` | The hosts it talks to (`api.example.com`, `*.example.com` for its subdomains, `api.example.com:8443` for one port). Shown at install; the package reaches only these, on 443 and 80 unless a port is given — enforced only under the sandbox ([Network](#network)). |
-| `maxProtection` | The highest protection level (1-4) of data it may see. A call from a conversation holding content above it is refused ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md#plugin-calls-c6d)). Left out: 1 for a package with `network` hosts or `ui` pages (a page can leak what it shows, [Pages](#pages)), 4 for one with neither. |
+| `maxProtection` | The highest protection level (1-4) of data it may see. A call from a conversation holding content above it is refused ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md#plugin-calls-c6d)). Left out: 1 for a package with `network` hosts, the `web:read` host scope or `ui` pages (a page can leak what it shows, [Pages](#pages)), 4 for one with none of these. |
 | `settings` | Non-secret settings as [record type fields](RECORDS.md#record-types), handed to the server as `OCTIPUS_SETTING_<KEY>`. |
 | `secrets` | Credentials, stored in the vault, handed to the server as environment variables under their own `key`. |
 | `commands`, `schedules`, `events`, `prompt`, `context` | What the package adds besides tools, each bound to one of its own tools ([Contributions](#contributions)). |
 | `runtime` | `package` (the default: this page) or `in-process` ([Runtimes](#runtimes)). |
 | `entry` | For `in-process` only: the module to load. |
 | `ui` | Pages the package adds to the web app: `{ "dir"?: "ui", "pages": [{ "path", "title", "icon"?, "entry" }] }` ([Pages](#pages)). |
-| `host` | Host API scopes it asks for, from `notes:read`, `notes:write`, `tasks:read`, `tasks:write`, `documents:read`, `notify`; an admin approves them when enabling ([Host API](#host-api)). |
+| `host` | Host API scopes it asks for, from `notes:read`, `notes:write`, `tasks:read`, `tasks:write`, `documents:read`, `notify`, `web:read`, `model:complete`; an admin approves them when enabling ([Host API](#host-api)). |
 
 Every problem in a manifest is reported at once; a package that does not fit is
 refused at install.
@@ -1041,9 +1041,35 @@ and an admin approved:
 | `notes:read` | `GET /api/plugin-host/notes?limit=&tag=` | The user's notes in the call's workspace (at most 100), bodies included. |
 | `notes:write` | `POST /api/plugin-host/notes { title, body?, tags? }` | Creates a note; never overwrites (`409 exists` for a taken title). |
 | `tasks:read` | `GET /api/plugin-host/tasks?status=` | The user's own tasks (at most 200). A task carries the protection level and flow label of the conversation it came from (its provenance): one above the package's `maxProtection` is left out (`withheld` counts them), and the rest raise the calling session's level and label, as the tasks tool does. |
-| `tasks:write` | `POST /api/plugin-host/tasks { title, notes?, priority?, dueAt? }` | Creates a task for the user (audited as a task mutation by `plugin:<name>`). |
+| `tasks:write` | `POST /api/plugin-host/tasks { title, notes?, priority?, dueAt?, category?, link?: { url, label? } }` | Creates a task for the user (audited as a task mutation by `plugin:<name>`), filed under `category` and linked back to `link.url` (an http(s) URL). |
 | `documents:read` | `GET /api/plugin-host/documents/:id` | One document: metadata and extracted text. |
 | `notify` | `POST /api/plugin-host/notify { title, body? }` | A notification to the calling user, and to nobody else. |
+| `web:read` | `POST /api/plugin-host/web/read { url }` | One public web page, fetched by the host and turned into a clean article: `{ url, title, byline?, siteName?, publishedAt?, contentHtml, textContent, wordCount, estReadMinutes, truncated }`. |
+| `model:complete` | `POST /api/plugin-host/model/complete { system?, prompt, maxTokens?, temperature? }` | One text completion on the calling user's `everyday` model: `{ output, model }`. |
+
+**`web:read`** lets a package read any public page without network of its
+own: the host fetches it through the same SSRF guard as the agents' web
+fetch (`fetchGuarded`: public addresses only, the IP pinned for the connect,
+each redirect checked again), at most 5 MB and 15 s, HTML only, and hands
+back only the cleaned article (allowlist HTML with no script, style or event
+handler, and plain text), the text cut at 100,000 characters (cleaned HTML
+over 400,000 characters is left out; `truncated` says so). A refused URL or
+failed fetch is `422 fetch_failed`. A user whose rules deny the web tool's
+fetch (`websearch` `fetch`) does not get the scope. A URL can carry data out
+like any request, so a package with `web:read` and no `maxProtection` may see
+level 1 only, as one with `network` hosts.
+
+**`model:complete`** runs one completion, with no tools and no history, on
+the model the calling user's `everyday` lane resolves to (their own binding
+first, then the install's): `409 no_model` when none is bound. The system
+text is at most 4,000 characters, the prompt 40,000, `maxTokens` at most
+4,000 (default 1,200), `temperature` 0-1 (default 0.3). It costs what the
+user's own model calls cost; the host API's rate limit (60 requests in a
+burst per package and user) applies, and every call is audited.
+
+`web:read` and `model:complete` change no data, so a `read` tool gets them;
+`notes:write`, `tasks:write` and `notify` only go to `write` and `external`
+tools.
 
 **Approval.** Enabling a package that declares `host` needs every declared
 scope approved: `PATCH /api/plugin-packages/:name { "enabled": true,
@@ -1128,6 +1154,31 @@ limited per client address (then `429`) and audited in aggregate: one row
 (op `refused`, its `code`, `count`) per kind and package per minute, carrying
 the refusals counted since the previous row.
 
+## Bundled plugins
+
+First-party plugins ship with Octipus as package directories under
+`plugins/` in the checkout or install (the Docker image included). Each is an
+ordinary plugin package; shipping with Octipus gives it no trust of its own:
+
+- **Listed** on Admin → Plugin packages under *Bundled*, by `GET
+  /api/plugin-packages/bundled` (name, version, title, description, the host
+  scopes it asks for, the version installed here) and by `octi plugin bundled`.
+- **Installed** with *Install* on that list, `POST /api/plugin-packages {
+  "bundled": "<name>" }` (`"upgrade": true` for a newer bundled version) or
+  `octi plugin install-bundled <name> [--upgrade]`: exactly an install from
+  its directory, so it is copied, its content hash pinned, its signature
+  checked, and it starts **disabled**. The audit row names the source
+  (`bundled:<name>`).
+- **Enabled** by an admin like any package, approving the host API scopes it
+  asks for.
+
+Not yet: bundled plugins are not signed with an Octipus publisher key, so
+under `plugins.requireSignature` they are refused like any unsigned package.
+
+| Plugin | What it does | Host scopes |
+|---|---|---|
+| `reader` | The reader ([MODULES.md](MODULES.md)): a page in a clean view, summarized, simplified, translated, its action items or an answer about it, saved as a note or as to-dos. Tools `read_url`, `reader_action` (read), `save_note`, `create_tasks` (write); the page *Reader* at `/plugins/reader/read`. | `web:read`, `model:complete`, `notes:write`, `tasks:write` |
+
 ## Installing and managing
 
 Admins only, on the web page (Admin → Plugin packages, and Browse for the
@@ -1137,7 +1188,8 @@ server, signed or not ([Signed packages](#signed-packages)), or from an https
 tarball, signed by a trusted publisher ([Remote install](#remote-install)).
 
 1. **Install:** `POST /api/plugin-packages { "path": "/opt/plugins/finapi" }`,
-   or `{ "url": "https://…/finapi-1.2.0.tar.gz", "sha256": "…" }`.
+   `{ "url": "https://…/finapi-1.2.0.tar.gz", "sha256": "…" }`, or `{ "bundled": "reader" }`
+   for a plugin shipped with Octipus ([Bundled plugins](#bundled-plugins)).
    The directory is copied into the plugin directory (no symbolic links, at most
    200 MB and 20,000 files) and its signature checked. The package starts
    **disabled**, so its tools, effects, hosts and protection level can be read
@@ -1197,6 +1249,8 @@ octi plugin secret finapi FINAPI_CLIENT_SECRET    # hidden prompt
 octi plugin secret finapi FINAPI_CLIENT_SECRET < secret.txt   # or stdin
 octi plugin secret finapi FINAPI_CLIENT_SECRET --clear
 octi plugin uninstall finapi          # asks; --yes when not at a terminal
+octi plugin bundled                   # the plugins shipped with Octipus
+octi plugin install-bundled reader    # install one, disabled (--upgrade for a newer version)
 ```
 
 They call the running backend at `http://localhost:$API_PORT` (3005 by

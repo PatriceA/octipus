@@ -1,6 +1,6 @@
 # Plugins for everything
 
-Status: accepted, phases 1 and 2 in progress (2026-11-10).
+Status: accepted; phases 1 and 2 landed, phase 3 started with the reader (2026-11-10).
 
 ## Why
 
@@ -84,6 +84,38 @@ directory (`OCTIPUS_PLUGIN_DATA_DIR`).
    installs the agent's bundle **disabled**: an admin reviews the content
    hash on the admin page and enables it. The agent never gets in-process
    code, and nothing it writes runs before a person approves those exact bytes.
+
+## Phase 3, the reader: declaration → contributions
+
+The `reader` module is the first to move. The bundled plugin `plugins/reader`
+(a dependency-free stdio MCP server and a static page) does what the module
+did, through contributions only:
+
+| Module declaration (`src/modules/reader.ts`) | What it was | In the plugin |
+|---|---|---|
+| `routes: ['/api/reader']` `POST /` | Fetch a URL through the SSRF guard, extract a clean article | Tool `read_url` (read) → host scope **`web:read`**: the host fetches with the same guard and extraction (`fetchReaderDoc`) and hands back the article; the plugin has no network of its own |
+| `POST /action` | summarize / simplify / translate / action_items / ask, one call on the `everyday` lane | Tool `reader_action` (read) → host scope **`model:complete`** (same prompts, same untrusted-content framing, same 12,000-character cap) |
+| `POST /tasks` | Action items → tasks (`source: reader`, category Reading, linked to the article) | Tool `create_tasks` (write) → `tasks:write`, with the new `category` and `link` fields; the source is `agent` with `sourceRef { plugin, tool, url, label }` |
+| — (the module promised notes, the page had none) | | Tool `save_note` (write) → `notes:write`: the article, or an action's result, as a note |
+| `pages: ['/reader']` | The React page | `ui.pages: [{ path: 'read' }]`: static HTML/JS in the sandboxed frame, calling the four tools through the bridge; saving asks the user (write effect) |
+| `tools: []`, `jobs: []` | — | Agents get the four tools too (`mcp.plugin-reader.*`), which the module never gave them |
+| `profiles: ['research']` | Onboarding switched it on | `profiles: []`; the onboarding plan and Settings → Modules point admins to Admin → Plugin packages → Bundled (`replacedBy`) |
+
+What the plugin surface gained, each general rather than reader-shaped:
+the host scopes `web:read` and `model:complete`, `category`/`link` on
+`tasks:write`, `maxProtection` defaulting to 1 for a package with `web:read`,
+and bundled plugins (`plugins/` in the install: listed, installed pinned and
+disabled, enabled by an admin approving their scopes).
+
+What is not done yet: the core reader (route, page, `src/core/reader`'s
+action code) stays, deprecated, for installs that have the module on; the
+extraction (`fetchReaderDoc`) stays in any case, as what `web:read` runs.
+It goes once installs have moved (a release later). Bundled plugins are not
+signed with an Octipus publisher key, nor listed in a default registry.
+Behaviour differences: the page shows no lead image and loads no remote
+image (the page CSP allows its own files only); a link in an article fills
+the address field instead of navigating; translate and ask take their
+argument in a field (a sandboxed frame opens no dialog). `research` is next.
 
 ## What we do not copy
 
