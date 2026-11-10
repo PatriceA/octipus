@@ -53,6 +53,7 @@ server (any language) that the manifest says how to start:
 | `maxProtection` | The highest protection level (1-4) of data it may see. A call from a conversation holding content above it is refused ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md#plugin-calls-c6d)). Left out: 1 for a package with `network` hosts, 4 for one without. |
 | `settings` | Non-secret settings as [record type fields](RECORDS.md#record-types), handed to the server as `OCTIPUS_SETTING_<KEY>`. |
 | `secrets` | Credentials, stored in the vault, handed to the server as environment variables under their own `key`. |
+| `commands`, `schedules`, `events`, `prompt`, `context` | What the package adds besides tools, each bound to one of its own tools ([Contributions](#contributions)). |
 
 | `runtime` | `package` (the default: this page) or `in-process` ([Runtimes](#runtimes)). |
 | `entry` | For `in-process` only: the module to load. |
@@ -192,6 +193,139 @@ An enabled package runs as the MCP server `plugin-<name>`:
 
 Every change (install, settings, secrets, enable, disable) restarts the
 package's server if its configuration changed.
+
+## Contributions
+
+Besides its tools, a package can add slash commands, schedules, event
+handlers, a section of the agents' system prompt and per-turn context. Each
+one is declared in the manifest and names one of the package's **own
+declared tools**; the host is the only code that touches the command list,
+the scheduler, the event bus and the prompt, and every call goes through the
+same door as an agent's call to that tool (`mcp.plugin-<name>.<tool>`): its
+declared [effect](#tool-effects), the permission rules, approvals, the
+[protection level](PROTECTION-LEVELS.md#plugin-calls-c6d) and the circuit
+breaker all apply. Nothing a contribution does waves a call through.
+
+```json
+{
+  "commands": [{ "name": "balance", "tool": "list_accounts", "description": "Show balances", "input": { "account": "$args" } }],
+  "schedules": [{ "id": "nightly-sync", "cron": "15 2 * * *", "tool": "sync", "input": { "full": false } }],
+  "events": [{ "on": "document.completed", "tool": "classify_document" }],
+  "prompt": { "file": "agent-notes.md", "roles": ["general"] },
+  "context": { "tool": "account_summary", "roles": ["general"] }
+}
+```
+
+Refused at install, with every reason at once: a contribution naming a tool
+the package does not declare, a `context` tool that is not a `read`, a command
+name or schedule id used twice, a cron expression that does not parse, an
+event not on the list below, a prompt file that is not a `.md` file inside the
+package (no `..`, no link out of it, at most 8,000 characters of UTF-8), and a
+command name that Octipus, an extension or another installed package already
+uses.
+
+**Bound while enabled, without a restart.** Every contribution is registered
+with a disposer when the package is enabled, and disposed (in reverse
+registration order) when it is disabled, upgraded (an upgrade leaves it
+disabled) or uninstalled; re-enabling binds it again. A contribution that
+cannot bind at that moment (a command name an extension took since install,
+files that no longer hash to the approved content) is left out and its reason
+listed; the rest bind, and the next change tries again. The package view
+(`GET /api/plugin-packages`, `contributions`) lists what each package adds,
+whether each part is bound now, the last run of each schedule, event and
+context tool (`lastRun`: when, whether it worked, why not), and the
+`problems`.
+
+### Slash commands
+
+`commands: [{ name, tool, description, input? }]`. `/name args` calls the
+tool **as the user who typed it**, without a model turn, and answers with the
+tool's text (cut to 8,000 characters). It works on every surface that takes
+slash commands (web chat, the TUI, channels), as `/name` and as
+`/<package>:name`. `input` is the tool's arguments; a string value `"$args"`
+(anywhere in it) is replaced by the text after the command. Without `input`
+the tool gets `{ "text": "<args>" }`.
+
+The call is the user's: their permission rules apply, a `write` tool asks
+them where the client can show an approval (web, TUI, messaging apps) and is
+refused where it cannot (the REST API), and an `external` one always asks.
+
+Names are lower-case `a-z0-9-` (at most 32 characters). A package may not
+take a name Octipus or an extension uses (`/help`, `/status`, …), another
+installed package's command, or `/cancel`.
+
+### Schedules
+
+`schedules: [{ id, cron, tool, input? }]`. The cron runner calls the tool
+with `input` (or `{}`) at every minute the expression matches. Cron is five
+fields in **UTC** (minute, hour, day of month, month, day of week; `*`,
+numbers, ranges `1-5`, steps `*/15`, lists `1,15`; Sunday is 0 or 7).
+
+- **Who it runs as:** the install — the admin who installed or last upgraded
+  the package — **unattended**. A `read` tool runs. A `write` tool is ASK by
+  default and, with nobody to ask, refused, until that admin gives it an ALLOW
+  rule (`mcp`, `plugin-<name>.<tool>`). An `external` tool is always refused:
+  the same policy as every unattended run, no bypass. When the installer's
+  account is gone, the schedule does not run (its `lastRun` says so):
+  reinstall or upgrade the package as an admin.
+- **Once:** every instance runs the loop, and each minute of a schedule is
+  claimed in the shared store before it runs. A tick that comes late fires the
+  minutes it missed, up to five back.
+- **Bounded:** at most four schedule calls of all packages run at once, and a
+  schedule whose previous call is still running skips its turn. A failure (an
+  error, a refusal, a tool reporting an error) is logged and recorded as the
+  schedule's `lastRun`.
+
+### Events
+
+`events: [{ on, tool }]`, with `on` one of these gateway events. The tool gets
+`{ "event": {...} }` with **ids only**, never a reply, a file's contents or an
+error text:
+
+| `on` | When | `event` |
+|---|---|---|
+| `chat.response` | A root turn answered | `type`, `at`, `userId`, `sessionId` |
+| `document.completed` | An uploaded document was processed | `type`, `at`, `userId`, `documentId` |
+| `document.failed` | Processing an uploaded document failed | `type`, `at`, `userId`, `documentId` |
+
+The call runs **as the user the event belongs to, unattended** (a `write` tool
+only under that user's ALLOW rule, an `external` one never). An event of a
+session whose content is above the package's `maxProtection` is not
+delivered. Delivery is asynchronous, after the event: at most 60 events a
+minute and 4 at once per package, the rest dropped (and the drop recorded); a
+failing tool never reaches the publisher or another package.
+
+### Prompt sections
+
+`prompt: { file, roles? }`. The file's markdown is added to the system prompt
+of agents of the named roles (every role when `roles` is left out) while the
+package is enabled, headed `PLUGIN <name>:`, ordered by package name. It is
+read only from files that still hash to the approved content, so it is part
+of what the admin approved ([Content pinning](#content-pinning)).
+
+It is static and the same for every user, so the root agent carries it in
+the **install tier** of its prompt, after the role prompt and the delegation
+text: the cached prefix every user's sessions share
+([DIRECT-PROVIDERS.md](DIRECT-PROVIDERS.md)) stays shared; enabling or
+disabling a package changes it once for everybody. Workers carry it in their
+static base.
+
+### Context
+
+`context: { tool, roles? }`. Before every root turn and every worker of the
+named roles (all when left out), the tool is called with
+`{ "query": <the message or the worker's brief>, "role": <role> }`, and its
+text rides the **turn tier** of the system prompt, beside the
+[context hooks](CONTEXT-HOOKS.md)' blocks, as
+`<plugin-context plugin="<name>">` with angle brackets replaced so it cannot
+close the fence.
+
+- The tool must be a `read`. It runs as the user, unattended (a rule that
+  makes it ASK refuses it), and the session's protection level applies.
+- It does not run where other people read the reply (a group thread, a room),
+  where the session's text may not be copied, or in a space.
+- It has 3 seconds and 4,000 characters; a failure or a timeout costs the
+  turn the block, never the turn, and is recorded as the context's `lastRun`.
 
 ## Content pinning
 
@@ -744,6 +878,9 @@ the signature state (`signature`), its `runtime` and, for an in-process
 plugin, its in-process approval and whether it is loaded (`inProcess`;
 `connected` then means loaded).
 
+the signature state (`signature`) and what it contributes
+(`contributions`, [Contributions](#contributions)).
+
 ### From the command line
 
 ```
@@ -781,8 +918,9 @@ Every change is in the audit log (`resource_type = plugin_package`).
 
 ## Not yet
 
-- Packages reporting events back (a new invoice in DATEV opening a case):
-  plan point C2b.
+- Packages reporting events back on their own (a new invoice in DATEV opening
+  a case): plan point C2b. Today a package learns of host events only through
+  [Events](#events), and acts only through its tools.
 - Search, ratings or publisher pages: a registry is a flat list (signed by
   its publisher when the host asks for it, [Signed registry
   indexes](#signed-registry-indexes)).

@@ -729,6 +729,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `mcp` | 10 |
 | `core` | `models` | 136 |
 | `core` | `modules` | 2 |
+| `core` | `plugins` | 6 |
 | `core` | `security` | 229 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
@@ -779,14 +780,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `models` | `shared` | 4 |
 | `models` | `utils` | 43 |
 | `plugins` | `config` | 2 |
-| `plugins` | `core` | 3 |
-| `plugins` | `db` | 7 |
+| `plugins` | `core` | 11 |
+| `plugins` | `db` | 10 |
 | `plugins` | `extensions` | 2 |
-| `plugins` | `mcp` | 1 |
-| `plugins` | `security` | 3 |
-| `plugins` | `shared` | 7 |
+| `plugins` | `mcp` | 2 |
+| `plugins` | `security` | 7 |
+| `plugins` | `shared` | 8 |
 | `plugins` | `tools` | 1 |
-| `plugins` | `utils` | 9 |
+| `plugins` | `utils` | 16 |
 | `security` | `api` | 1 |
 | `security` | `config` | 20 |
 | `security` | `connectors` | 3 |
@@ -876,6 +877,7 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - core <-> hooks
 - core <-> mcp
 - core <-> models
+- core <-> plugins
 - core <-> security
 - core <-> services
 - core <-> skills
@@ -972,4 +974,4 @@ The contract promises these and no code emits them. Each is either a type to ret
 - `task.changed` — subscribed by `src/core/monitors/service.ts`
 - `test.event` — subscribed by `src/core/monitors/service.ts`
 
-1 publish/subscribe site(s) use a non-literal event type and are counted here rather than dropped.
+2 publish/subscribe site(s) use a non-literal event type and are counted here rather than dropped.
