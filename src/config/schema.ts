@@ -872,11 +872,22 @@ export const configSchema = z.object({
     /** Key ids (`ed25519:<64 hex>`, as `octi plugin keygen` prints) that trust nothing, whether listed above or not. */
     revokedKeys: z.array(z.string().regex(/^ed25519:[0-9a-f]{64}$/, 'a key id, ed25519:<64 hex>')).default([]),
     requireSignature: z.boolean().default(false),
-    /** Package indexes to browse (https only): `{ packages: [{ name, version, description, url, sha256 }] }`. */
+    /**
+     * Package indexes to browse (https only): `{ packages: [{ name, version, description, url, sha256 }] }`.
+     * With `publisher` (a name in `trustedPublishers`), the index is listed only
+     * when `<url>.sig` verifies with a trusted, unrevoked, unexpired key of that
+     * publisher (docs/PLUGIN-PACKAGES.md#signed-registry-indexes).
+     */
     registries: z.array(z.object({
       name: z.string().min(1).max(100),
       url: z.string().url().max(2000).refine((v) => v.startsWith('https://'), 'a registry is reached over https'),
+      publisher: z.string().min(1).max(100).optional(),
     })).default([]),
+    /**
+     * Tokens (input + output) one user's plugin `model:complete` calls may use
+     * per UTC day, all packages together; 0 turns those calls off.
+     */
+    hostModelDailyTokens: z.number().int().min(0).max(100_000_000).default(200_000),
   }).prefault({}),
   oauth: oauthConfigSchema,
   rateLimit: rateLimitConfigSchema,

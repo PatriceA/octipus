@@ -1,0 +1,15 @@
+{
+  "name": "my-tools",
+  "version": "0.1.0",
+  "apiVersion": "1.0.0",
+  "title": "My tools",
+  "description": "A starting point: one read tool and one write tool, served by a dependency-free MCP server over stdio.",
+  "server": { "command": "node", "args": ["server.mjs"] },
+  "tools": {
+    "greet": { "effect": "read", "description": "Greet someone by name" },
+    "save_note": { "effect": "write", "description": "Keep a short note in the plugin's data directory" }
+  },
+  "settings": [
+    { "key": "greeting", "label": "Greeting", "type": "text", "help": "The word greet starts with (default: Hello)" }
+  ]
+}

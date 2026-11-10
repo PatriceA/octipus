@@ -203,6 +203,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       revokedKeys: defaultConfig.plugins!.revokedKeys,
       requireSignature: process.env.PLUGINS_REQUIRE_SIGNATURE === 'true',
       registries: defaultConfig.plugins!.registries,
+      hostModelDailyTokens: defaultConfig.plugins!.hostModelDailyTokens,
     },
     protection: {
       remoteAtLevel3: process.env.PROTECTION_REMOTE_AT_LEVEL3 === 'true',

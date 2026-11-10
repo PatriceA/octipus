@@ -43,7 +43,7 @@ export interface StdioSandbox {
    * where the proxy's socket directory goes (`runDir`; not under /tmp, see
    * `EgressProxyOptions.socketParent`).
    */
-  egress?: { label: string; hosts: string[]; runDir?: string };
+  egress?: { label: string; hosts: string[]; runDir?: string; hostApi?: { host: string; port: number } };
 }
 
 /** What `prepareSandboxedLaunch` decided: the argv and env to spawn, and what to clean up. */
@@ -82,7 +82,8 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
     ...(sandbox.readOnlyRoot ? { workspaceReadOnly: true } : {}),
     ...(writable.length > 0 ? { extraReadWrite: writable } : {}),
   };
-  const egress = sandbox.egress && sandbox.egress.hosts.length > 0 ? sandbox.egress : null;
+  // A proxy for declared hosts, or for the host API alone (docs/PLUGIN-PACKAGES.md#host-api).
+  const egress = sandbox.egress && (sandbox.egress.hosts.length > 0 || sandbox.egress.hostApi) ? sandbox.egress : null;
   if (!egress) {
     // Octipus's own Node binary stays readable, as on the egress path: a
     // package started with it (e.g. under nvm, or a CI tool cache in $HOME)
@@ -97,6 +98,7 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
   const seatbelt = activeSandboxRunner({ allowSeatbelt: true }) === 'sandbox-exec';
   const proxy = await startEgressProxy({
     label: egress.label, allowed: egress.hosts, unixSocket: process.platform !== 'win32' && !seatbelt, socketParent: egress.runDir,
+    ...(egress.hostApi ? { hostApi: egress.hostApi } : {}),
   });
   try {
     if (seatbelt) {

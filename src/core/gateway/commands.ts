@@ -71,6 +71,17 @@ export class CommandRegistry {
     }
   }
 
+  /** The command a name or alias resolves to, if any. */
+  get(name: string): CommandDef | undefined {
+    const key = name.toLowerCase();
+    return this.commands.get(this.aliases.get(key) ?? key);
+  }
+
+  /** Every command name and alias taken. */
+  names(): string[] {
+    return [...this.commands.keys(), ...this.aliases.keys()];
+  }
+
   /**
    * Remove a command and all its aliases. Used by the extension loader
    * to clean up on `/reload` and shutdown. Returns whether the command

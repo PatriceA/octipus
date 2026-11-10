@@ -67,7 +67,9 @@ export function isTrustedExtension(entryPath: string, trusted: readonly string[]
 /**
  * Build a fresh ExtensionAPI bound to the given event bus, plus a
  * `dispose()` that unwinds every subscription/command this extension
- * registered.
+ * registered, in reverse registration order (the last registration is undone
+ * first, as with nested effects), so a teardown never sees a dependency
+ * registered before it already gone.
  *
  * Failure isolation: handler exceptions are caught and logged; one bad
  * handler must not take down the bus or the rest of the extensions.
@@ -80,16 +82,14 @@ export function buildExtensionContext(
   trusted: boolean = isTrustedExtension(entryPath),
 ): { api: ExtensionAPI; loaded: LoadedExtension } {
   const logger = createChildLogger({ component: 'extension', extension: name });
-  const unsubscribers: Array<() => void> = [];
-  const commandNames: string[] = [];
-  const disposeCallbacks: Array<() => void | Promise<void>> = [];
+  /** Every registration's undo, in registration order; dispose runs them in reverse. */
+  const disposers: Array<{ what: string; run: () => void | Promise<void> }> = [];
   let disposed = false;
   let toolContainer: ExtensionToolContainer | undefined;
   const pendingToolWork: Promise<void>[] = [];
   let toolRegistrationError: string | undefined;
   /** Provider id -> its live row names (empty while its checks run). */
   const providers = new Map<string, string[]>();
-  const pendingProviderWork: Promise<unknown>[] = [];
 
   const api: ExtensionAPI = {
     name,
@@ -110,7 +110,7 @@ export function buildExtensionContext(
           });
       };
       const unsub = eventBus.subscribe(pattern, wrapped);
-      unsubscribers.push(unsub);
+      disposers.push({ what: `on(${pattern})`, run: unsub });
       return unsub;
     },
 
@@ -154,7 +154,7 @@ export function buildExtensionContext(
           }
         },
       });
-      commandNames.push(def.name);
+      disposers.push({ what: `command /${def.name}`, run: () => { registry.unregister(def.name); } });
     },
 
     notify(message: string, level: 'info' | 'warn' | 'error' = 'info', sessionId?: string): void {
@@ -169,7 +169,7 @@ export function buildExtensionContext(
     },
 
     onDispose(fn) {
-      disposeCallbacks.push(fn);
+      disposers.push({ what: 'onDispose callback', run: fn });
     },
 
     hook(event, handler) {
@@ -190,7 +190,7 @@ export function buildExtensionContext(
         }
       };
       const off = getAgentHooks().register(event, named);
-      unsubscribers.push(off);
+      disposers.push({ what: `hook ${event}`, run: off });
       logger.info({ event }, 'extension hooked the agent loop');
       return off;
     },
@@ -213,6 +213,15 @@ export function buildExtensionContext(
         // definition leaves nothing registered.
         const container = new ExtensionToolContainer(name, logger);
         container.add(def);
+        disposers.push({
+          what: `tool group ${container.id}`,
+          run: async () => {
+            await Promise.allSettled(pendingToolWork);
+            if (toolContainer !== container) return;
+            toolContainer = undefined;
+            await unregisterContainer(container);
+          },
+        });
         pendingToolWork.push(registerContainer(container).catch(async (err) => {
           logger.error({ err, toolGroup: container.id }, 'registering the extension tool group failed');
           // Nothing may go on adding tools to a group the registry does not
@@ -280,7 +289,13 @@ export function buildExtensionContext(
           throw err;
         },
       );
-      pendingProviderWork.push(work.catch(() => {}));
+      disposers.push({
+        what: `provider ${id}`,
+        run: async () => {
+          await work.catch(() => {});
+          unregister();
+        },
+      });
       return work;
     },
   };
@@ -291,27 +306,13 @@ export function buildExtensionContext(
     async dispose() {
       if (disposed) return;
       disposed = true;
-      for (const unsub of unsubscribers) {
-        try { unsub(); } catch (err) { logger.warn({ err }, 'unsubscribe failed during dispose'); }
+      // Last registered, first undone; one failing undo never stops the rest.
+      while (disposers.length > 0) {
+        const { what, run } = disposers.pop() as (typeof disposers)[number];
+        try { await run(); } catch (err) { logger.warn({ err, what }, 'dispose step failed'); }
       }
-      unsubscribers.length = 0;
-      const cmdRegistry = getCommandRegistry();
-      for (const cmdName of commandNames) {
-        try { cmdRegistry.unregister(cmdName); } catch (err) { logger.warn({ err, cmdName }, 'unregister command failed'); }
-      }
-      commandNames.length = 0;
-      await Promise.allSettled(pendingProviderWork);
       for (const names of providers.values()) deactivateExtensionProvider(names);
       providers.clear();
-      if (toolContainer) {
-        await Promise.allSettled(pendingToolWork);
-        try { await unregisterContainer(toolContainer); } catch (err) { logger.warn({ err }, 'unregister tools failed'); }
-        toolContainer = undefined;
-      }
-      for (const cb of disposeCallbacks) {
-        try { await cb(); } catch (err) { logger.warn({ err }, 'onDispose callback failed'); }
-      }
-      disposeCallbacks.length = 0;
     },
   };
 

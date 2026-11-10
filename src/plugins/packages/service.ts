@@ -44,8 +44,9 @@
  * (`signatureHash`) is recorded with the content hash and compared at every
  * start, whatever `requireSignature` says.
  */
-import { cp, mkdir, readFile, rename, rm } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { cp, lstat, mkdir, readFile, rename, rm } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { and, eq, isNull } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { RecordValidationError, validateRecordData } from '@/core/records/fields';
@@ -57,12 +58,28 @@ import { activeSandboxRunner, getSandboxMode } from '@/security/shell-sandbox';
 import { SYSTEM_USER_ID } from '@/security/principal';
 import { getVault } from '@/security/vault';
 import type { MCPServer } from '@/shared/mcp-server';
-import { PLUGIN_MANIFEST_FILE, type PluginManifest, type PluginNetworkStatus, type PluginPackageView, type PluginSignatureStatus } from '@/shared/plugin-package';
+import {
+  PLUGIN_MANIFEST_FILE,
+  type PluginHostScope,
+  type PluginAgentAuthorship,
+  type PluginInProcessStatus,
+  type PluginManifest,
+  type PluginRuntime,
+  type PluginNetworkStatus,
+  type PluginPackageView,
+  type PluginSignatureStatus,
+  pluginRuntime,
+} from '@/shared/plugin-package';
 import { coreLogger } from '@/utils/logger';
+import { type AgentAuthoredDetails, agentAuthorship, agentAuthorships } from './authoring/authorship';
+import { contributionInstallProblems, contributionsView, syncContributions } from './contributions';
+import { checkInProcessBundle } from './in-process-bundle';
+import { contributionsHashOf, hasContributions } from './contributions/approval';
 import { CONTENT_MISMATCH_PROBLEM, hashPackageContent, isContentHash, verifyPackageContent } from './integrity';
 import { ManifestError, parseManifest, settingEnvName } from './manifest';
 import { checkSignatureOnDisk, readSignatureFile, SIGNATURE_FILE, type SignatureCheck, SignatureError, type TrustedPublisher } from './signature';
 import { checkPackageTree, PackageTreeError } from './tree';
+import { HOST_API_URL, hostApiTarget, isHostScope, issueHostCallMeta, revokePluginTokens } from './host-api';
 
 export class PluginPackageError extends Error {
   constructor(
@@ -70,7 +87,7 @@ export class PluginPackageError extends Error {
     message: string,
     readonly problems: string[] = [message],
     /** What the refusal knows that a client can act on, e.g. the `actualHash` to review and approve. */
-    readonly details: { actualHash?: string } = {},
+    readonly details: { actualHash?: string; contributionsHash?: string } = {},
   ) {
     super(message);
     this.name = 'PluginPackageError';
@@ -316,38 +333,62 @@ export async function installFromDirectory(
     allowSignerChange?: boolean;
     /** An upgrade may install an older version (audited). */
     allowDowngrade?: boolean;
+    /** The agent that wrote the package (creator mode, ./authoring): recorded in the audit row, shown on the admin page. */
+    authoredBy?: AgentAuthoredDetails;
+    /** The runtime the package must declare (creator mode installs `package` only), checked on the staged copy. */
+    requireRuntime?: PluginRuntime;
   } = {},
 ): Promise<PluginPackageRow & { warnings: string[] }> {
   const source = resolve(sourceDir);
-  const manifest = await readManifest(source);
+  const fromStore = relative(pluginsRoot(), source);
+  if (fromStore === '' || (fromStore !== '..' && !fromStore.startsWith(`..${sep}`) && !isAbsolute(fromStore))) throw new PluginPackageError('invalid', 'The package is already in the plugin directory');
+  // A first look at the source, so a linked or unbounded tree is refused
+  // before anything is copied. It is not what decides: the source may be
+  // written by someone else (an agent) while this runs, so everything below
+  // is read and checked on the staged copy only.
   await checkTree(source);
-  const target = packageDir(manifest.name);
-  if (resolve(target) === source) throw new PluginPackageError('invalid', 'The package is already in the plugin directory');
-  if (opts.expect?.name !== undefined && opts.expect.name !== manifest.name) {
-    throw new PluginPackageError('invalid', `The package is "${manifest.name}", not the expected "${opts.expect.name}"; not installed`);
-  }
-  if (opts.expect?.version !== undefined && opts.expect.version !== manifest.version) {
-    throw new PluginPackageError('invalid', `${manifest.name} is version ${manifest.version}, not the expected ${opts.expect.version}; not installed`);
-  }
+  await installHook?.(source);
   const db = getDb();
-  const serverId = `${PLUGIN_SERVER_PREFIX}${manifest.name}`;
 
-  // Copy beside the target, hash the copy and check its signature before
-  // anything installed is touched: a refused package leaves an installed one
-  // (and whether it runs) as it was.
-  const staging = `${target}.installing-${process.pid}-${Date.now()}`;
+  // Copy into the plugin directory, then read, check, hash and verify only
+  // the copy, before anything installed is touched: a refused package leaves
+  // an installed one (and whether it runs) as it was, and what was checked is
+  // exactly what is installed.
+  await mkdir(pluginsRoot(), { recursive: true });
+  let staging = join(pluginsRoot(), `.installing-${process.pid}-${Date.now()}-${randomBytes(4).toString('hex')}`);
+  let manifest: PluginManifest;
   let contentHash: string;
   let signature: Awaited<ReturnType<typeof acceptSignature>>;
   try {
-    await mkdir(pluginsRoot(), { recursive: true });
     await cp(source, staging, { recursive: true, errorOnExist: true, verbatimSymlinks: true });
+    manifest = await readManifest(staging);
+    await checkTree(staging);
+    if (opts.requireRuntime !== undefined && pluginRuntime(manifest) !== opts.requireRuntime) {
+      throw new PluginPackageError('invalid', `${manifest.name} declares runtime "${pluginRuntime(manifest)}"; only runtime "${opts.requireRuntime}" is accepted here; not installed`);
+    }
+    if (opts.expect?.name !== undefined && opts.expect.name !== manifest.name) {
+      throw new PluginPackageError('invalid', `The package is "${manifest.name}", not the expected "${opts.expect.name}"; not installed`);
+    }
+    if (opts.expect?.version !== undefined && opts.expect.version !== manifest.version) {
+      throw new PluginPackageError('invalid', `${manifest.name} is version ${manifest.version}, not the expected ${opts.expect.version}; not installed`);
+    }
+    // Named after the package from here on, beside its target.
+    const named = `${packageDir(manifest.name)}.installing-${process.pid}-${Date.now()}`;
+    await rename(staging, named);
+    staging = named;
     // Hashed as copied, so what the admin installs is what is pinned.
+    if (manifest.entry !== undefined) await checkEntry(staging, manifest.entry);
     contentHash = await hashPackageContent(staging, manifest);
     signature = await acceptSignature(staging, manifest.name, contentHash, opts.requireTrustedSignature === true);
+    // Its contributions must fit beside what is installed (a command name taken), and its prompt file be readable.
+    const fit = await contributionInstallProblems(manifest, staging, await db.select({ name: pluginPackages.name, manifest: pluginPackages.manifest }).from(pluginPackages));
+    if (fit.length > 0) throw new PluginPackageError('conflict', `${manifest.name}: ${fit.join('; ')}`, fit);
   } catch (err) {
     await rm(staging, { recursive: true, force: true }).catch(() => {});
     throw err;
   }
+  const target = packageDir(manifest.name);
+  const serverId = `${PLUGIN_SERVER_PREFIX}${manifest.name}`;
 
   let previous: PluginPackageRow | null = null;
   const overrides: Record<string, unknown> = {};
@@ -398,7 +439,17 @@ export async function installFromDirectory(
     await getMCPBridge().disconnect(serverId);
     row = await db.transaction(async (tx) => {
       const [updated] = await tx.update(pluginPackages)
-        .set({ version: manifest.version, manifest, enabled: false, settings, contentHash, signatureHash: signature.signatureHash, signedBy: signature.signedBy, installedBy: actorUserId, updatedAt: new Date() })
+        .set({
+          version: manifest.version, manifest, enabled: false, settings, contentHash, signatureHash: signature.signatureHash, signedBy: signature.signedBy,
+          // New files: running them in the server process is approved again, for these bytes.
+          inProcessApprovedHash: null, inProcessApprovedBy: null, inProcessApprovedAt: null,
+          // New files: what it adds to every user's agents is approved again.
+          approvedContributionsHash: null,
+          // New version: its tools' effects (and so what each call's token may carry) can
+          // differ, so the host API scopes are approved again (docs/PLUGIN-PACKAGES.md#host-api).
+          approvedHostScopes: null,
+          installedBy: actorUserId, updatedAt: new Date(),
+        })
         .where(eq(pluginPackages.name, manifest.name))
         .returning();
       if (!updated) throw new PluginPackageError('not_found', `Plugin package not found: ${manifest.name}`);
@@ -428,13 +479,35 @@ export async function installFromDirectory(
   }
   if (swap.backup) await rm(swap.backup, { recursive: true, force: true }).catch((err: unknown) => coreLogger.warn({ err, dir: swap.backup }, 'Could not remove the previous package files'));
   forgetMismatches(manifest.name);
+  revokePluginTokens(manifest.name);
   await audit(actorUserId, previous ? 'upgraded' : 'installed', manifest.name, {
     version: manifest.version, from: previous?.version ?? null, contentHash, signedBy: signature.signedBy, keyId: signature.keyId,
+    runtime: pluginRuntime(manifest),
     ...(opts.source ? { source: opts.source } : {}),
+    ...(previous?.approvedContributionsHash ? { contributionsApprovalCleared: previous.approvedContributionsHash } : {}),
+    ...(opts.authoredBy ? { authoredBy: opts.authoredBy } : {}),
     ...overrides,
   });
   await syncPluginServers();
   return { ...row, warnings: signature.warnings };
+}
+
+let installHook: ((source: string) => Promise<void> | void) | null = null;
+/** Test-only: runs between the first look at the source and its copy (when another writer could change it). */
+export function _setInstallHookForTesting(hook: ((source: string) => Promise<void> | void) | null): void {
+  installHook = hook;
+}
+
+/**
+ * An in-process plugin's `entry` must be a regular file in the package (the
+ * manifest checked its path), and the package one bundled module: no other
+ * code file, no import by path (./in-process-bundle.ts).
+ */
+async function checkEntry(dir: string, entry: string): Promise<void> {
+  const info = await lstat(join(dir, entry)).catch(() => null);
+  if (!info?.isFile()) throw new PluginPackageError('invalid', `entry: ${entry} is not a file in the package`);
+  const problems = await checkInProcessBundle(dir, entry);
+  if (problems.length > 0) throw new PluginPackageError('invalid', `${problems[0]}; not installed`, problems);
 }
 
 /**
@@ -486,6 +559,7 @@ export async function uninstall(name: string, actorUserId: string): Promise<void
   await rm(packageDir(name), { recursive: true, force: true });
   await rm(pluginDataDir(name), { recursive: true, force: true });
   forgetMismatches(name);
+  revokePluginTokens(name);
   const entries = (row.manifest.secrets ?? []).length > 0 ? await getVault().list('system') : [];
   for (const s of row.manifest.secrets ?? []) await deleteSecret(name, s.key, entries);
   await audit(actorUserId, 'uninstalled', name, { version: row.version });
@@ -505,18 +579,48 @@ export async function uninstall(name: string, actorUserId: string): Promise<void
  * signature: `signedBy` becomes that publisher, or null. Under
  * `plugins.requireSignature`, approving or enabling content without one is
  * refused (`incomplete`).
+ *
+ * An `in-process` plugin (docs/PLUGIN-PACKAGES.md#runtimes) runs in the
+ * server process, so it needs one approval more: `approveInProcess`, the
+ * content hash the admin reviewed, accepted only when it is the approved
+ * content and the files still hash to it, under the same signature rules as
+ * enabling. It is recorded with who and when; approving other content clears
+ * it. Turning such a plugin on without it is refused (`incomplete`); one that
+ * stays enabled while its approval is cleared is not loaded until it is
+ * approved again.
  * Nothing is saved when a check fails.
  */
 export async function configure(
   name: string,
-  change: { settings?: unknown; enabled?: boolean; approveContent?: string | boolean },
+  change: {
+    settings?: unknown; enabled?: boolean; approveContent?: string | boolean; approveInProcess?: string | boolean; approveHostScopes?: unknown;
+    approveContributions?: string | boolean;
+  },
   actorUserId: string,
 ): Promise<PluginPackageRow> {
   const row = await requireRow(name);
+  if (change.approveContributions !== undefined) {
+    if (!hasContributions(row.manifest)) throw new PluginPackageError('invalid', `${name} declares no commands, schedules, events, prompt or context; there is nothing to approve`);
+    if (!isContentHash(change.approveContributions)) {
+      throw new PluginPackageError('invalid',
+        'approveContributions takes the contributions hash you reviewed ("sha256:<64 hex>", shown as contributions.hash), not true: what the package adds is approved only while it still hashes to it');
+    }
+  }
   if (change.approveContent !== undefined && !isContentHash(change.approveContent)) {
     throw new PluginPackageError('invalid',
       'approveContent takes the content hash you reviewed ("sha256:<64 hex>", shown as actualHash), not true: the files are approved only while they still hash to it');
   }
+  const inProcess = pluginRuntime(row.manifest) === 'in-process';
+  if (change.approveInProcess !== undefined) {
+    if (!inProcess) throw new PluginPackageError('invalid', `${name} runs as a sandboxed package; approveInProcess is only for runtime "in-process"`);
+    if (!isContentHash(change.approveInProcess)) {
+      throw new PluginPackageError('invalid',
+        'approveInProcess takes the content hash you reviewed ("sha256:<64 hex>", the approved contentHash), not true: running in the server process is approved for those bytes only');
+    }
+  }
+  const approvedHostScopes = change.approveHostScopes !== undefined
+    ? checkHostScopeApproval(row.manifest, change.approveHostScopes)
+    : row.approvedHostScopes;
   let settings = row.settings;
   if (change.settings !== undefined) {
     const values = change.settings;
@@ -535,6 +639,15 @@ export async function configure(
       throw new PluginPackageError('incomplete', `Set ${missing.join(', ')} before enabling ${name}`, missing.map((m) => `${m}: required`));
     }
   }
+  if (enabled && !row.enabled) {
+    // Enabling approves what the package may do as a user: every declared host scope must be approved.
+    const unapproved = unapprovedHostScopes(row.manifest, approvedHostScopes);
+    if (unapproved.length > 0) {
+      throw new PluginPackageError('incomplete',
+        `Approve the host API scopes ${unapproved.join(', ')} before enabling ${name} (approveHostScopes)`,
+        unapproved.map((s) => `host: ${s} not approved`));
+    }
+  }
   let contentHash = row.contentHash;
   let signedBy = row.signedBy;
   let signatureHash = row.signatureHash;
@@ -550,8 +663,11 @@ export async function configure(
       `${signatureShortfall(name, check)}; plugins.requireSignature refuses ${doing} it until it carries a valid signature by a trusted publisher`);
   };
   const approving = typeof change.approveContent === 'string' ? change.approveContent : null;
+  /** What the files hash to now, once computed by a check below. */
+  let hashedNow: string | null = null;
   if (approving) {
     const actual = await hashPackageContent(packageDir(name), row);
+    hashedNow = actual;
     if (actual !== approving) {
       throw new PluginPackageError('conflict',
         `The files of ${name} hash to ${actual}, not to the reviewed ${approving}: they changed since they were reviewed; review them again`,
@@ -577,6 +693,7 @@ export async function configure(
       }
     }
     actual ??= await hashPackageContent(packageDir(name), row);
+    hashedNow = actual;
     const sig = await signatureState(packageDir(name), actual);
     if (sig.malformed) throw new PluginPackageError('incomplete', `${sig.malformed}; remove it or sign the package again before enabling ${name}`);
     if (row.contentHash !== null && sig.sha256 !== row.signatureHash) {
@@ -586,20 +703,137 @@ export async function configure(
     }
     refuseUnsigned(sig.check, 'enabling');
   }
-  const [updated] = await getDb().update(pluginPackages).set({ settings, enabled, contentHash, signatureHash, signedBy, updatedAt: new Date() }).where(eq(pluginPackages.name, name)).returning();
+  // Running in the server process is approved for one content hash: other content clears it.
+  let inProcessApproval = { inProcessApprovedHash: row.inProcessApprovedHash, inProcessApprovedBy: row.inProcessApprovedBy, inProcessApprovedAt: row.inProcessApprovedAt };
+  const inProcessCleared = row.inProcessApprovedHash !== null && contentHash !== row.inProcessApprovedHash;
+  if (inProcessCleared) inProcessApproval = { inProcessApprovedHash: null, inProcessApprovedBy: null, inProcessApprovedAt: null };
+  const approvingInProcess = typeof change.approveInProcess === 'string' ? change.approveInProcess : null;
+  if (approvingInProcess) {
+    if (contentHash === null || approvingInProcess !== contentHash) {
+      throw new PluginPackageError('conflict',
+        `${name}'s approved content is ${contentHash ?? 'not pinned yet'}, not the reviewed ${approvingInProcess}: approve running in the server process for the approved content`,
+        [`approveInProcess: reviewed ${approvingInProcess}, approved content ${contentHash ?? 'none'}`]);
+    }
+    const actual = hashedNow ?? await hashPackageContent(packageDir(name), row);
+    if (actual !== approvingInProcess) {
+      throw new PluginPackageError('conflict',
+        `The files of ${name} hash to ${actual}, not to the reviewed ${approvingInProcess}: they changed since they were approved; review them and approve their content first`,
+        [`approveInProcess: reviewed ${approvingInProcess}, actual ${actual}`], { actualHash: actual });
+    }
+    if (!approving) {
+      const sig = await signatureState(packageDir(name), actual);
+      if (sig.malformed) throw new PluginPackageError('invalid', `${sig.malformed}; remove it or sign the package again before approving it to run in the server process`);
+      if (sig.sha256 !== signatureHash) {
+        throw new PluginPackageError('incomplete',
+          `${SIGNATURE_FILE} of ${name} changed since its content was approved; approve its content first`, undefined, { actualHash: actual });
+      }
+      refuseUnsigned(sig.check, 'approving');
+    }
+    inProcessApproval = { inProcessApprovedHash: approvingInProcess, inProcessApprovedBy: actorUserId, inProcessApprovedAt: new Date() };
+  }
+  if (inProcess && change.enabled === true && (contentHash === null || inProcessApproval.inProcessApprovedHash !== contentHash)) {
+    throw new PluginPackageError('incomplete',
+      `${name} runs in the server process, with the server's full authority: approve that for its content first (approveInProcess: "${contentHash ?? '<its content hash>'}"), then enable it`);
+  }
+  // What the package adds to every user's agents (prompt, context, events,
+  // schedules, commands) is approved for one contributions hash: approving
+  // content that changes it clears the approval, and enabling needs it.
+  let approvedContributionsHash = row.approvedContributionsHash;
+  let contributionsCleared = false;
+  const approvingContributions = typeof change.approveContributions === 'string' ? change.approveContributions : null;
+  if (hasContributions(row.manifest) && (approvingContributions || approving || (enabled && !row.enabled))) {
+    let current: string | null;
+    try {
+      current = await contributionsHashOf(row.manifest, packageDir(name));
+    } catch (err) {
+      throw new PluginPackageError('invalid', `The contributions of ${name} cannot be read: ${(err as Error).message}`);
+    }
+    if (approvingContributions) {
+      if (approvingContributions !== current) {
+        throw new PluginPackageError('conflict',
+          `The contributions of ${name} hash to ${current}, not to the reviewed ${approvingContributions}: they changed since they were reviewed; review them again`,
+          [`approveContributions: reviewed ${approvingContributions}, actual ${current}`], current ? { contributionsHash: current } : {});
+      }
+      approvedContributionsHash = approvingContributions;
+    } else if (approvedContributionsHash !== null && approvedContributionsHash !== current) {
+      approvedContributionsHash = null;
+      contributionsCleared = true;
+    }
+    if (enabled && !row.enabled && approvedContributionsHash !== current) {
+      throw new PluginPackageError('conflict',
+        `${name} adds commands, schedules, events, prompt text or turn context for every user: review them and approve them first (approveContributions: "${current}"), then enable it`,
+        [`approveContributions: required, contributions hash ${current}`], current ? { contributionsHash: current } : {});
+    }
+  }
+  const [updated] = await getDb().update(pluginPackages)
+    .set({ settings, enabled, contentHash, signatureHash, signedBy, approvedHostScopes, approvedContributionsHash, ...inProcessApproval, updatedAt: new Date() })
+    .where(eq(pluginPackages.name, name)).returning();
+  if (approvingContributions) {
+    await audit(actorUserId, 'contributions_approved', name, { version: row.version, hash: approvingContributions, previous: row.approvedContributionsHash });
+  }
+  if (contributionsCleared) {
+    await audit(actorUserId, 'contributions_approval_cleared', name, { version: row.version, previous: row.approvedContributionsHash });
+  }
   if (approving) {
     forgetMismatches(name);
-    await audit(actorUserId, 'content_approved', name, { version: row.version, from: row.contentHash, to: contentHash, signedBy, previousSignedBy: row.signedBy, signatureHash });
+    await audit(actorUserId, 'content_approved', name, {
+      version: row.version, from: row.contentHash, to: contentHash, signedBy, previousSignedBy: row.signedBy, signatureHash,
+      ...(inProcessCleared ? { inProcessApprovalCleared: row.inProcessApprovedHash } : {}),
+    });
   }
+  if (approvingInProcess) {
+    await audit(actorUserId, 'in_process_approved', name, { version: row.version, hash: approvingInProcess, signedBy, previous: row.inProcessApprovedHash });
+  }
+  if (change.approveHostScopes !== undefined) await audit(actorUserId, 'host_scopes_approved', name, { version: row.version, scopes: approvedHostScopes, previous: row.approvedHostScopes });
   if (change.settings !== undefined) await audit(actorUserId, 'settings_changed', name, { keys: Object.keys(change.settings as object) });
   if (change.enabled !== undefined && change.enabled !== row.enabled) await audit(actorUserId, enabled ? 'enabled' : 'disabled', name, { version: row.version });
+  // A token of a call in flight dies with the package's enabled state or a narrower approval.
+  if (!enabled || change.approveHostScopes !== undefined) revokePluginTokens(name);
   await syncPluginServers();
   return updated;
+}
+
+/**
+ * The host API scopes an admin approves (`approveHostScopes`): a list of
+ * scopes the manifest declares, each at most once. A scope it does not
+ * declare is refused: approval is for what this version asks.
+ */
+function checkHostScopeApproval(manifest: PluginManifest, value: unknown): PluginHostScope[] {
+  if (!Array.isArray(value) || !value.every(isHostScope)) {
+    throw new PluginPackageError('invalid', 'approveHostScopes is a list of host API scopes, such as ["notes:read"]');
+  }
+  const declared = new Set(manifest.host ?? []);
+  const undeclared = value.filter((s) => !declared.has(s));
+  if (undeclared.length > 0) {
+    throw new PluginPackageError('invalid', `${manifest.name} does not declare the host API scopes ${undeclared.join(', ')}`);
+  }
+  return [...new Set(value)];
+}
+
+/** The scopes the manifest declares that are not approved. */
+export function unapprovedHostScopes(manifest: PluginManifest, approved: readonly string[] | null): PluginHostScope[] {
+  const ok = new Set(approved ?? []);
+  return (manifest.host ?? []).filter((s) => !ok.has(s));
+}
+
+/** Approve a package's host API scopes (`configure` with `approveHostScopes` alone). */
+export function approveHostScopes(name: string, scopes: PluginHostScope[], actorUserId: string): Promise<PluginPackageRow> {
+  return configure(name, { approveHostScopes: scopes }, actorUserId);
 }
 
 /** Accept a package's files, if they still hash to the reviewed `hash` (`configure` with `approveContent` alone). */
 export function approveContent(name: string, hash: string, actorUserId: string): Promise<PluginPackageRow> {
   return configure(name, { approveContent: hash }, actorUserId);
+}
+
+/** Approve what a package contributes, for the reviewed contributions `hash` (`configure` with `approveContributions` alone). */
+export function approveContributions(name: string, hash: string, actorUserId: string): Promise<PluginPackageRow> {
+  return configure(name, { approveContributions: hash }, actorUserId);
+}
+
+/** Approve an in-process plugin to run in the server process, for the reviewed `hash` (`configure` with `approveInProcess` alone). */
+export function approveInProcess(name: string, hash: string, actorUserId: string): Promise<PluginPackageRow> {
+  return configure(name, { approveInProcess: hash }, actorUserId);
 }
 
 /** Turn a package on or off (`configure` with `enabled` alone). */
@@ -662,11 +896,37 @@ async function secretsSet(row: PluginPackageRow, entries?: SystemSecretList): Pr
   return declared.filter((s) => names.has(secretName(row.name, s.key))).map((s) => s.key);
 }
 
-async function viewOf(row: PluginPackageRow, secrets: string[]): Promise<PluginPackageView> {
+/** The problem shown for an enabled in-process plugin whose content is not approved to run in the server process. */
+export const IN_PROCESS_UNAPPROVED_PROBLEM = 'Not approved to run in the server process (for this content); approve that to load it';
+
+/** Whether an in-process plugin's approval covers its approved content. */
+export function inProcessApproved(row: PluginPackageRow): boolean {
+  return row.contentHash !== null && row.inProcessApprovedHash === row.contentHash;
+}
+
+async function viewOf(row: PluginPackageRow, secrets: string[], authoredBy?: PluginAgentAuthorship | null): Promise<PluginPackageView> {
   const bridge = getMCPBridge();
   const signature = await currentSignature(row);
   const serverId = `${PLUGIN_SERVER_PREFIX}${row.name}`;
-  let problem = row.enabled ? bridge.pluginProblem(serverId) : null;
+  const runtime = pluginRuntime(row.manifest);
+  let inProcess: PluginInProcessStatus | null = null;
+  let problem: string | null;
+  let connected: boolean;
+  if (runtime === 'in-process') {
+    const loader = await import('./in-process');
+    connected = loader.isInProcessLoaded(row.name);
+    problem = !row.enabled ? null : !inProcessApproved(row) ? IN_PROCESS_UNAPPROVED_PROBLEM : loader.inProcessProblem(row.name);
+    inProcess = {
+      approved: inProcessApproved(row),
+      approvedHash: row.inProcessApprovedHash,
+      approvedBy: row.inProcessApprovedBy,
+      approvedAt: row.inProcessApprovedAt?.toISOString() ?? null,
+      loaded: connected,
+    };
+  } else {
+    problem = row.enabled ? bridge.pluginProblem(serverId) : null;
+    connected = bridge.isConnected(serverId);
+  }
   // Only on a mismatch, so a listing does not hash every package: what the
   // files hash to now, for the admin to review and pass as approveContent.
   let actualHash: string | null = null;
@@ -700,11 +960,16 @@ async function viewOf(row: PluginPackageRow, secrets: string[]): Promise<PluginP
     secretsSet: secrets,
     problem,
     network: networkStatus(row.manifest),
-    connected: bridge.isConnected(serverId),
+    connected,
     contentHash: row.contentHash,
     actualHash,
     signedBy: signature?.status === 'valid' ? signature.publisher : null,
     signature,
+    runtime,
+    inProcess,
+    contributions: await contributionsView(row),
+    approvedHostScopes: row.approvedHostScopes ?? null,
+    authoredBy: authoredBy !== undefined ? authoredBy : await agentAuthorship(row.name),
     installedBy: row.installedBy,
     installedAt: row.installedAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -752,7 +1017,11 @@ async function currentSignature(row: PluginPackageRow): Promise<PluginSignatureS
  * network away; without one the declared hosts are advice.
  */
 export function networkStatus(m: PluginManifest, runner = activeSandboxRunner({ allowSeatbelt: true }), mode = getSandboxMode()): PluginNetworkStatus {
-  const hosts = m.network ?? [];
+  if (pluginRuntime(m) === 'in-process') {
+    return { state: 'not_enforced', detail: 'Runs in the server process: no sandbox, so it has the server\'s network, files and data.' };
+  }
+  // The host API counts as a host here: it is reached through the egress proxy (docs/PLUGIN-PACKAGES.md#host-api).
+  const hosts = [...(m.network ?? []), ...((m.host ?? []).length > 0 ? ['the Octipus host API'] : [])];
   if (!runner && mode === 'required') {
     return { state: 'refused', detail: `Not started: security.shellSandbox is required and no sandbox can wrap the server here (${NO_RUNNER}).` };
   }
@@ -770,7 +1039,8 @@ export function networkStatus(m: PluginManifest, runner = activeSandboxRunner({ 
 export async function listPackages(): Promise<PluginPackageView[]> {
   const rows = await getDb().select().from(pluginPackages).orderBy(pluginPackages.name);
   const entries = rows.some((r) => (r.manifest.secrets ?? []).length > 0) ? await getVault().list('system') : [];
-  return Promise.all(rows.map(async (row) => viewOf(row, await secretsSet(row, entries))));
+  const authors = await agentAuthorships(rows.map((r) => r.name));
+  return Promise.all(rows.map(async (row) => viewOf(row, await secretsSet(row, entries), authors.get(row.name) ?? null)));
 }
 
 /** One installed package, for the admin API. */
@@ -779,9 +1049,46 @@ export async function packageView(name: string): Promise<PluginPackageView> {
   return viewOf(row, await secretsSet(row));
 }
 
+/** The host API scopes a package is granted: declared and approved. */
+export function grantedHostScopes(row: Pick<PluginPackageRow, 'manifest' | 'approvedHostScopes'>): PluginHostScope[] {
+  const approved = new Set(row.approvedHostScopes ?? []);
+  return (row.manifest.host ?? []).filter((s) => approved.has(s));
+}
+
+/**
+ * The package's `maxProtection`, or when it declares none: a package that
+ * reaches the network leaves the house (1), and so does one that may have the
+ * host fetch any URL it names (`web:read`: the URL itself can carry data out),
+ * and so does one with pages, which can navigate their frame anywhere with
+ * what they were shown in the URL (docs/PLUGIN-PACKAGES.md#pages); one that
+ * can do none of these keeps everything in (4).
+ */
+export function defaultMaxProtection(m: Pick<PluginManifest, 'maxProtection' | 'network' | 'host' | 'ui'>): 1 | 2 | 3 | 4 {
+  if (m.maxProtection !== undefined) return m.maxProtection;
+  return (m.network ?? []).length > 0 || (m.host ?? []).includes('web:read') || (m.ui?.pages ?? []).length > 0 ? 1 : 4;
+}
+
+/** Host scopes that send what the package hands them out of the house: any URL (`web:read`), a remote model (`model:complete`). */
+export const EGRESS_HOST_SCOPES: readonly PluginHostScope[] = ['web:read', 'model:complete'];
+
+/**
+ * The level a package may see, as enforced: its `maxProtection` (or the
+ * default above), clamped to 1 while it is granted a scope that can carry
+ * data out (`EGRESS_HOST_SCOPES`), whatever its manifest says: such a package
+ * could pass whatever it reads to any URL or model.
+ */
+export function effectiveMaxProtection(
+  m: Pick<PluginManifest, 'maxProtection' | 'network' | 'host' | 'ui'>, granted: readonly PluginHostScope[],
+): 1 | 2 | 3 | 4 {
+  const level = defaultMaxProtection(m);
+  return granted.some((s) => EGRESS_HOST_SCOPES.includes(s)) ? 1 : level;
+}
+
 /** The MCP server an installed package runs as. */
 export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
   const m = row.manifest;
+  if (!m.server || !m.tools) throw new Error(`${row.name} runs in the server process; it has no MCP server`);
+  const tools = m.tools;
   const env: Record<string, string> = {};
   for (const f of m.settings ?? []) {
     if (Object.hasOwn(row.settings, f.key)) env[settingEnvName(f.key)] = String(row.settings[f.key]);
@@ -795,6 +1102,14 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
   const dataDir = pluginDataDir(row.name);
   // Set last, so no secret can claim the name.
   env.OCTIPUS_PLUGIN_DATA_DIR = dataDir;
+  // The host API (docs/PLUGIN-PACKAGES.md#host-api): only the declared scopes an
+  // admin approved; reached through the egress proxy, whose only route to it is this.
+  const hostScopes = grantedHostScopes(row);
+  if (hostScopes.length > 0) env.OCTIPUS_HOST_URL = HOST_API_URL;
+  const hosts = [...(m.network ?? [])];
+  const egress = hosts.length > 0 || hostScopes.length > 0
+    ? { egress: { label: row.name, hosts, runDir: pluginRunDir(), ...(hostScopes.length > 0 ? { hostApi: hostApiTarget() } : {}) } }
+    : {};
   return {
     id: `${PLUGIN_SERVER_PREFIX}${row.name}`,
     name: m.title,
@@ -808,18 +1123,19 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
     // Hosts go through the egress proxy; direct network stays off wherever the
     // sandbox can turn it off. allowNetwork is kept for a sandbox without egress support.
     sandbox: {
-      root: dir, readOnlyRoot: true, writable: [dataDir], allowNetwork: (m.network ?? []).length > 0,
-      ...((m.network ?? []).length > 0 ? { egress: { label: row.name, hosts: [...(m.network ?? [])], runDir: pluginRunDir() } } : {}),
+      root: dir, readOnlyRoot: true, writable: [dataDir], allowNetwork: hosts.length > 0,
+      ...egress,
     },
     requestTimeoutMs: m.server.requestTimeoutMs,
     isEnabled: row.enabled,
     // Declared tools are reachable through mcp_list_tools / mcp_call_tool;
     // every other name the server offers is hidden (an exact name wins over `*`).
-    toolExposure: { ...Object.fromEntries(Object.keys(m.tools).map((t) => [t, 'deferred' as const])), '*': 'hidden' },
+    toolExposure: { ...Object.fromEntries(Object.keys(tools).map((t) => [t, 'deferred' as const])), '*': 'hidden' },
     plugin: {
-      package: row.name, version: row.version, tools: Object.fromEntries(Object.entries(m.tools).map(([t, d]) => [t, d.effect])),
-      // Undeclared: a package that reaches the network leaves the house (1); one that cannot keeps everything in (4).
-      maxProtection: m.maxProtection ?? ((m.network ?? []).length > 0 ? 1 : 4),
+      package: row.name, version: row.version, tools: Object.fromEntries(Object.entries(tools).map(([t, d]) => [t, d.effect])),
+      // Undeclared: see defaultMaxProtection; clamped by egress scopes (effectiveMaxProtection).
+      maxProtection: effectiveMaxProtection(m, hostScopes),
+      ...(hostScopes.length > 0 ? { hostScopes } : {}),
     },
   };
 }
@@ -861,6 +1177,15 @@ async function auditOnce(key: string, op: string, name: string, details: Record<
 export async function checkBeforeStart(server: MCPServer): Promise<string | null> {
   const name = server.plugin?.package;
   if (!name) return null;
+  return checkPackageBeforeStart(name);
+}
+
+/**
+ * `checkBeforeStart` by package name: also the check before an in-process
+ * plugin's module is loaded (./in-process.ts), so both runtimes run only the
+ * bytes approved, under the same signature rules.
+ */
+export async function checkPackageBeforeStart(name: string): Promise<string | null> {
   const row = await findRow(name);
   if (!row) return `Plugin package ${name} is not installed`;
   let check: Awaited<ReturnType<typeof verifyPackageContent>>;
@@ -932,14 +1257,18 @@ export async function checkBeforeStart(server: MCPServer): Promise<string | null
  * Give the bridge the servers of every installed package, enabled or not. A
  * package whose server cannot be prepared (its secrets cannot be read, say)
  * keeps the config it runs with, and the reason is shown as its problem.
+ * In-process plugins have no server: the extension system loads and unloads
+ * them to match their rows (./in-process.ts).
  */
 export async function syncPluginServers(): Promise<void> {
   const rows = await getDb().select().from(pluginPackages);
   const bridge = getMCPBridge();
   bridge.setPluginStartGuard(checkBeforeStart);
+  bridge.setPluginCallMeta(issueHostCallMeta);
   const servers: MCPServer[] = [];
   const problems = new Map<string, string>();
   for (const row of rows) {
+    if (pluginRuntime(row.manifest) === 'in-process') continue;
     try {
       servers.push(await serverFor(row));
     } catch (err) {
@@ -951,6 +1280,10 @@ export async function syncPluginServers(): Promise<void> {
     }
   }
   await bridge.setPluginServers(servers, problems);
+  const { syncInProcessPlugins } = await import('./in-process');
+  await syncInProcessPlugins();
+  // Commands, schedules, events, prompt and context follow (./contributions).
+  await syncContributions(rows);
 }
 
 async function audit(actorUserId: string, op: string, name: string, details: Record<string, unknown>): Promise<void> {

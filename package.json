@@ -51,6 +51,7 @@
     "catalog:check": "tsx --import ./scripts/md-loader.mjs scripts/gen-catalog.ts --check",
     "benchmark:sessions:openrouter": "tsx --import ./scripts/md-loader.mjs scripts/benchmark-openrouter-sessions.ts",
     "root-agent-cost": "tsx --import ./scripts/md-loader.mjs scripts/root-agent-cost.ts",
+    "measure:cache": "tsx --import ./scripts/md-loader.mjs scripts/measure-prompt-cache.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint",
     "lint:fix": "biome lint --write --unsafe",

@@ -38,12 +38,14 @@
  *   listener. Well-behaved HTTP clients honour it, but nothing stops a direct
  *   connection: advisory only. The package's status says so.
  */
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer as createHttpServer, type IncomingHttpHeaders, type IncomingMessage, request as httpRequest, type ServerResponse } from 'node:http';
 import { connect as netConnect, createServer as createNetServer, isIP, type Server as NetServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PLUGIN_HOST_ALIAS } from '@/shared/plugin-package';
 import { coreLogger } from '@/utils/logger';
 import { assertPublicAddress, pinnedLookup } from '@/utils/sanitize';
 
@@ -150,6 +152,67 @@ export interface EgressProxyOptions {
    * by the transport — production always refuses private addresses.
    */
   allowPrivateAddresses?: boolean;
+  /**
+   * The host's own API, for a package that declares `host` scopes
+   * (docs/PLUGIN-PACKAGES.md#host-api): plain-HTTP requests to
+   * `http://octipus-host.internal/api/plugin-host/…` (`PLUGIN_HOST_ALIAS`, port
+   * 80) are forwarded to exactly this address and port. The name is never
+   * resolved; any other path, port or method of reaching it (CONNECT) is
+   * refused, and without this option the name is refused like any
+   * undeclared host.
+   */
+  hostApi?: { host: string; port: number };
+}
+
+/** The only path prefix forwarded to the host API. */
+export const HOST_API_PATH_PREFIX = '/api/plugin-host/';
+/** The header the proxy stamps on host API requests with the package's label (any client copy is dropped). */
+export const HOST_API_EGRESS_HEADER = 'x-octipus-plugin-egress';
+/** The header carrying the proxy's own secret, which proves the request came through it. */
+export const HOST_API_EGRESS_KEY_HEADER = 'x-octipus-plugin-egress-key';
+
+/**
+ * The secret of every live proxy with a host API target, by package label.
+ * Generated at proxy start, kept only here, dropped at close: the host API
+ * accepts a request only with the secret of a live proxy of the package the
+ * stamp names (`egressStampValid`), so the stamp cannot be forged by a
+ * client reaching the API directly. A label can briefly have two proxies (a
+ * restart), hence a set.
+ */
+const egressKeys = new Map<string, Set<string>>();
+
+/** Whether `key` is the secret of a live proxy of `label`. Constant time per candidate. */
+export function egressStampValid(label: string, key: string | null | undefined): boolean {
+  if (!key) return false;
+  const given = Buffer.from(key);
+  for (const candidate of egressKeys.get(label) ?? []) {
+    const known = Buffer.from(candidate);
+    if (known.length === given.length && timingSafeEqual(known, given)) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether `pathname` may be forwarded to the host API: under
+ * `/api/plugin-host/`, with nothing that a server could decode into another
+ * path (`%`, a backslash, an empty or dot segment).
+ */
+export function hostApiPathAllowed(pathname: string): boolean {
+  if (!pathname.startsWith(HOST_API_PATH_PREFIX) || /[%\\]/.test(pathname)) return false;
+  return pathname.slice(1).split('/').every((s, i, all) => (s !== '' || i === all.length - 1) && s !== '.' && s !== '..');
+}
+
+/** The headers a host API request carries on: no cookie, no forwarding or Octipus headers of the client's, the proxy's label. */
+function hostApiHeaders(headers: IncomingHttpHeaders, label: string, key: string, target: { host: string; port: number }): IncomingHttpHeaders {
+  const out: IncomingHttpHeaders = {};
+  for (const [name, value] of Object.entries(stripHopByHop(headers))) {
+    if (name === 'cookie' || name === 'host' || name.startsWith('x-forwarded') || name === 'forwarded' || name.startsWith('x-octipus') || name === 'x-real-ip') continue;
+    out[name] = value;
+  }
+  out.host = `${target.host.includes(':') ? `[${target.host}]` : target.host}:${target.port}`;
+  out[HOST_API_EGRESS_HEADER] = label;
+  out[HOST_API_EGRESS_KEY_HEADER] = key;
+  return out;
 }
 
 export interface EgressProxy {
@@ -230,6 +293,19 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     return { ip: addresses[0] };
   };
 
+  // This proxy's own secret for the host API stamp; registered while it lives.
+  const egressKey = randomBytes(32).toString('base64url');
+  if (options.hostApi) {
+    const keys = egressKeys.get(label) ?? new Set<string>();
+    keys.add(egressKey);
+    egressKeys.set(label, keys);
+  }
+  const forgetKey = () => {
+    const keys = egressKeys.get(label);
+    keys?.delete(egressKey);
+    if (keys && keys.size === 0) egressKeys.delete(label);
+  };
+
   const server = createHttpServer(async (req: IncomingMessage, res: ServerResponse) => {
     let target: URL;
     try {
@@ -244,6 +320,29 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     }
     const host = normalizeHost(target.hostname);
     const port = target.port ? Number(target.port) : 80;
+    if (host === PLUGIN_HOST_ALIAS) {
+      // The host API: a fixed internal target, never resolved, never another port or path.
+      const api = options.hostApi;
+      if (!api || port !== 80 || !hostApiPathAllowed(target.pathname)) {
+        coreLogger.warn({ pkg: label, host, port, path: target.pathname }, 'Plugin package host API request refused');
+        res.writeHead(403, { 'content-type': 'text/plain' }).end(api ? `Only ${HOST_API_PATH_PREFIX}… on port 80 reaches the host API\n` : 'This package declares no host API scopes\n');
+        return;
+      }
+      const upstream = track(httpRequest({
+        host: api.host, port: api.port, method: req.method, path: `${target.pathname}${target.search}`,
+        headers: hostApiHeaders(req.headers, label, egressKey, api), agent: false,
+      }, (up) => {
+        res.writeHead(up.statusCode ?? 502, stripHopByHop(up.headers));
+        up.pipe(res);
+      }));
+      upstream.on('error', (err) => {
+        if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' }).end(`Host API error: ${err.message}\n`);
+        else res.destroy();
+      });
+      res.on('close', () => upstream.destroy());
+      req.pipe(upstream);
+      return;
+    }
     if (!hostAllowed(allowed, host, port)) {
       refuse(host, port, 'http');
       res.writeHead(403, { 'content-type': 'text/plain' }).end(`Host ${host}:${port} is not declared in this package's network list\n`);
@@ -283,7 +382,8 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
       client.end('HTTP/1.1 400 Bad Request\r\n\r\n');
       return;
     }
-    if (!hostAllowed(allowed, authority.host, authority.port)) {
+    // The host API is plain HTTP through the proxy only: no tunnel to it, whatever is declared.
+    if (authority.host === PLUGIN_HOST_ALIAS || !hostAllowed(allowed, authority.host, authority.port)) {
       refuse(authority.host, authority.port, 'connect');
       client.end('HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n\r\nHost not declared in this package\'s network list\n');
       return;
@@ -321,8 +421,9 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
   server.on('clientError', (_err, socket) => socket.destroy());
 
   await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => { server.off('error', reject); resolve(); });
+    const failed = (err: Error) => { forgetKey(); reject(err); };
+    server.once('error', failed);
+    server.listen(0, '127.0.0.1', () => { server.off('error', failed); resolve(); });
   });
   const address = server.address();
   const port = typeof address === 'object' && address ? address.port : 0;
@@ -348,6 +449,7 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     socketDir,
     close() {
       closed ??= (async () => {
+        forgetKey();
         for (const s of open) s.destroy();
         await Promise.all([
           new Promise<void>((r) => server.close(() => r())),

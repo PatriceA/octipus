@@ -24,13 +24,28 @@ spaces; settings, skills, the tools page and evaluations; backups.
 | `scan-folders` | Folders whose new files are filed into the documents ([SCAN-FOLDERS.md](SCAN-FOLDERS.md)) |
 | `protection` | Protection levels 1-4 ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md)) |
 | `research` | Research jobs: a question researched in the background, the report saved to the documents |
-| `reader` | The reader: a page in a clean view, turned into notes and tasks |
+| `reader` | **Deprecated**: the reader, a page in a clean view, turned into notes and tasks. It moves to the bundled Reader plugin (below); no use case switches it on any more |
 | `inbox` | The Gmail / Outlook inbox of a connected account: triage, drafts, tasks from mail, the email processor tool and the heartbeat's inbox watch |
 | `artifacts` | Live artifacts: hosted dashboards, tables, feeds and pages, their refreshes, and saving a chat answer as one ([ARTIFACTS.md](ARTIFACTS.md)) |
 | `people` | Profiles of people, pets and organisations, the profiles tool, and the profile context agents get (the persona stays core) |
 | `voice` | Speech in the chat and the mobile app, the voice sockets, and phone calls ([VOICE.md](VOICE.md)) |
 | `channels` | Telegram, Slack, Teams and WhatsApp, group channels, linking a chat, and the messaging tool ([CHANNELS.md](CHANNELS.md)); the in-app chat and notifications stay core |
 | `recall` | Context hooks: knowledge passages and the notes index handed to agents as they start ([CONTEXT-HOOKS.md](CONTEXT-HOOKS.md)) |
+
+## Modules that move to plugins
+
+A module can move out of the core into a first-party plugin package
+([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#bundled-plugins), plan:
+[plans/plugins-everything.md](plans/plugins-everything.md)). While it moves,
+the module is **deprecated**: it keeps working where it is on, for at least
+one release; no onboarding use case switches it on; and Settings → Modules
+says which bundled plugin replaces it (`replacedBy` in `GET /api/modules`).
+An admin installs the plugin under Admin → Plugin packages → Bundled,
+enables it (approving its host scopes), then turns the module off.
+
+| Module | Moves to | Since |
+|---|---|---|
+| `reader` | The bundled `reader` plugin: the *Reader* page under Plugins, and the agent tools `read_url`, `reader_action`, `save_note`, `create_tasks` | 0.6 |
 
 ## What "off" means
 

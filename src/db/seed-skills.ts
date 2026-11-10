@@ -2,6 +2,7 @@ import { eq, inArray } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import type { NewSkill } from '@/db/schema/skills';
 import { skills } from '@/db/schema/skills';
+import { PLUGIN_AUTHORING_SKILL } from '@/plugins/packages/authoring/skill';
 import { logger } from '@/utils/logger';
 
 const SYSTEM_SKILLS: Omit<NewSkill, 'isSystem' | 'userId' | 'createdAt' | 'updatedAt'>[] = [
@@ -24,157 +25,11 @@ const SYSTEM_SKILLS: Omit<NewSkill, 'isSystem' | 'userId' | 'createdAt' | 'updat
   { id: 'performance-engineering', name: 'Performance Engineering', category: 'coding', description: 'Profiling, caching strategies, optimization techniques, and benchmarking.', principles: ['Measure first — never optimize without profiling data', 'Optimize the bottleneck — Amdahl\'s Law limits parallel gains', 'Caching trades freshness for speed — define acceptable staleness', 'Latency budgets distribute acceptable delay across components', 'Performance is a feature — set and enforce SLOs'], bestPractices: ['Use flame graphs and CPU/memory profilers to find hot paths', 'Cache at multiple layers: CDN, reverse proxy, application, database', 'Benchmark with realistic data volumes and concurrency levels', 'Lazy-load resources and defer non-critical work', 'Set P50, P95, P99 latency targets for key endpoints'], antiPatterns: ['Premature optimization without measurement', 'Cache-everything approach leading to stale data bugs', 'Load testing only in dev with unrealistic data sizes', 'Ignoring tail latency (P99) while optimizing averages'], frameworks: ['Flame Graphs', 'K6/Locust', 'Core Web Vitals', 'Redis Caching', 'CDN Edge Caching'] },
   { id: 'data-engineering', name: 'Data Engineering', category: 'data', description: 'ETL/ELT pipelines, data warehousing, streaming, and data quality practices.', principles: ['ELT over ETL — load raw data first, transform in the warehouse', 'Idempotent pipelines — safe to re-run without duplicating data', 'Schema evolution must be backward-compatible', 'Data quality is enforced at ingestion, not after analysis', 'Partition and cluster data by common query dimensions'], bestPractices: ['Use medallion architecture: bronze (raw), silver (cleaned), gold (aggregated)', 'Implement data contracts between producers and consumers', 'Add data quality checks (nulls, ranges, freshness) in pipelines', 'Use streaming (Kafka/Kinesis) for real-time, batch for historical', 'Track data lineage for debugging and compliance'], antiPatterns: ['Monolithic pipelines that are impossible to debug or restart partially', 'No schema validation — garbage data propagates silently', 'Tightly coupling dashboards to raw source tables', 'Manual CSV uploads as a permanent data integration strategy'], frameworks: ['dbt', 'Apache Kafka', 'Apache Spark', 'Medallion Architecture', 'Great Expectations'] },
   { id: 'machine-learning', name: 'Machine Learning', category: 'ai', description: 'ML algorithms, feature engineering, model evaluation, and deployment patterns.', principles: ['No free lunch — no single algorithm is best for all problems', 'More data often beats a better algorithm', 'Bias-variance tradeoff governs model generalization', 'Feature engineering is where domain knowledge creates value', 'Validate on held-out data that mirrors production distribution'], bestPractices: ['Start with a simple baseline (logistic regression, decision tree)', 'Use cross-validation to get robust performance estimates', 'Track experiments with versioned data, code, and hyperparameters', 'Monitor model drift in production with statistical tests', 'Use SHAP/LIME for model interpretability and stakeholder trust'], antiPatterns: ['Training on test data (data leakage)', 'Using accuracy as sole metric for imbalanced datasets', 'Skipping exploratory data analysis before modeling', 'Deploying models without monitoring for feature/concept drift'], frameworks: ['Scikit-learn', 'XGBoost', 'MLflow', 'SHAP', 'Weights & Biases'] },
-  { id: 'plugin-development', name: 'Plugin Development', category: 'coding', description: 'Building plugins for Octipus platform — manifest format, tool definitions, entry file structure, and deployment.', content: `You are an expert at building plugins for Octipus platform. When a user asks you to create a plugin, you build it correctly using the filesystem tool and place it in the extensions/ directory inside OCTIPUS_HOME (shown in the system prompt). NEVER create extensions in the workspace root — always use the OCTIPUS_HOME path as the base for plugins.
+  { id: 'plugin-development', name: 'Plugin Development', category: 'coding', description: 'Superseded: Octipus plugins are now sandboxed plugin packages; use the "Write an Octipus plugin" skill and the plugin_dev tools.', content: `This skill is superseded. Octipus plugins are no longer files placed in an extensions/ directory: they are sandboxed plugin packages (docs/PLUGIN-PACKAGES.md).
 
-## Plugin Structure
+To build one, follow the "Write an Octipus plugin" skill (id octipus-plugin-package): read the contract with plugin_api, start from a template (plugin_template), write the package in your workspace, check it with plugin_validate, then install it with plugin_install. It is installed disabled; an admin reviews its content hash and enables it.
 
-Every plugin is a directory inside \`extensions/\` containing exactly two files:
-
-\`\`\`
-extensions/
-  <plugin-name>/
-    plugin.json    # Manifest (required)
-    index.ts       # Entry file (required)
-\`\`\`
-
-## plugin.json Manifest
-
-\`\`\`json
-{
-  "name": "<plugin-name>",
-  "version": "1.0.0",
-  "description": "<what the plugin does>",
-  "author": "<author>",
-  "main": "index.ts",
-  "tools": [
-    {
-      "name": "<tool_name>",
-      "description": "<what this tool does>",
-      "parameters": {
-        "<param_name>": {
-          "type": "string|number|boolean",
-          "description": "<param description>",
-          "required": true
-        }
-      }
-    }
-  ]
-}
-\`\`\`
-
-Rules:
-- "name" must be lowercase, alphanumeric with hyphens only
-- Each tool in "tools" array must have a unique name
-- Parameter types: "string", "number", "boolean"
-- Set "required": true for mandatory parameters
-- Use "default" for optional parameters with defaults
-
-## index.ts Entry File
-
-\`\`\`typescript
-import type { PluginContext } from '../../src/plugins/types';
-import { fileAt } from '@/utils/fs-file';
-import { spawnProcess } from '@/utils/proc';
-
-export default {
-  name: '<plugin-name>',
-
-  async initialize(context: PluginContext): Promise<void> {
-    context.logger.info('<Plugin Name> initialized');
-  },
-
-  tools: {
-    async <tool_name>(args: Record<string, unknown>): Promise<unknown> {
-      // Implement the tool logic here
-      // Access parameters: args.<param_name> as <type>
-      // Return a JSON-serializable result object
-      return { result: 'success' };
-    },
-  },
-
-  async shutdown(): Promise<void> {
-    // Optional cleanup
-  },
-};
-\`\`\`
-
-Rules:
-- The default export must have "name" matching the manifest
-- Every tool listed in plugin.json must have a corresponding function in "tools"
-- Tool functions receive args as Record<string, unknown> — cast to expected types
-- Tool functions must return a JSON-serializable value
-- Use try/catch and return { error: 'message' } for error cases
-- The import path for PluginContext is always '../../src/plugins/types'
-
-## Building a Plugin Step by Step
-
-1. Create the plugin directory: \`OCTIPUS_HOME/extensions/<plugin-name>/\`
-2. Write plugin.json with the manifest
-3. Write index.ts with tool implementations
-4. Tell the user to restart or reload — DONE
-
-IMPORTANT: This is a 3-step task. Create directory, write plugin.json, write index.ts, then STOP and respond. Do NOT re-read files you just wrote, do NOT run shell commands to verify, do NOT rewrite files. Write them correctly the first time and finish.
-
-## Best Practices
-
-- Keep plugins focused — one plugin per concern
-- Validate all inputs at the start of each tool function
-- Return descriptive error messages
-- Use the logger from PluginContext for debugging
-- For HTTP calls, use fetch() (available in Bun runtime)
-- For file operations, use fileAt() or Node fs module
-- Keep tool names short and descriptive using snake_case
-- Write clear tool descriptions — agents read these to decide when to use the tool
-
-## Common Plugin Patterns
-
-### HTTP API Integration
-\`\`\`typescript
-async fetch_data(args: Record<string, unknown>): Promise<unknown> {
-  const url = args.url as string;
-  try {
-    const response = await fetch(url);
-    if (!response.ok) return { error: \\\`HTTP \\\${response.status}\\\` };
-    return await response.json();
-  } catch (err: any) {
-    return { error: err.message };
-  }
-}
-\`\`\`
-
-### File Processing
-\`\`\`typescript
-async process_file(args: Record<string, unknown>): Promise<unknown> {
-  const path = args.path as string;
-  const file = fileAt(path);
-  if (!await file.exists()) return { error: 'File not found' };
-  const content = await file.text();
-  // Process content...
-  return { lines: content.split('\\n').length };
-}
-\`\`\`
-
-### Command Execution
-\`\`\`typescript
-async run_command(args: Record<string, unknown>): Promise<unknown> {
-  const cmd = args.command as string;
-  const proc = spawnProcess({ command: 'sh', args: ['-c', cmd], stdout: 'pipe', stderr: 'pipe' });
-  const stdout = await new Response(proc.stdout).text();
-  const stderr = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
-  return { exitCode, stdout, stderr };
-}
-\`\`\`
-
-## After Creating the Plugin
-
-Tell the user:
-1. The plugin has been created at OCTIPUS_HOME/extensions/<plugin-name>/
-2. Restart the backend or call the reload API to activate it
-3. The new tools will appear under Tools in the web UI
-4. Agents can use the tools immediately after loading
-
-CRITICAL: Always use the OCTIPUS_HOME path from the system prompt for plugin paths. The workspace root may be a different directory (e.g., a parent folder). Plugins MUST go in OCTIPUS_HOME/extensions/, not workspace/extensions/.`, principles: [], bestPractices: [], antiPatterns: [], frameworks: ['Bun Runtime', 'TypeScript', 'Plugin API'] },
+Do not write code into OCTIPUS_HOME/extensions: in-process extensions run with the server's full authority and are installed by an admin, never by an agent.` },
   { id: 'networking', name: 'Networking', category: 'devops', description: 'TCP/IP, DNS, load balancing, CDN, and network protocol fundamentals.', principles: ['End-to-end principle — keep intelligence at the edges, network simple', 'Layered protocols (OSI/TCP-IP) isolate concerns at each level', 'DNS is the first point of failure — low TTLs enable fast failover', 'TLS everywhere — encrypt all traffic in transit', 'Latency is distance divided by speed of light — physics matters'], bestPractices: ['Use L7 load balancers for path-based routing and health checks', 'Enable HTTP/2 or HTTP/3 for multiplexed, low-latency connections', 'Place CDN edges close to users for static and cacheable content', 'Implement connection timeouts and circuit breakers for resilience', 'Use private subnets and security groups for network segmentation'], antiPatterns: ['Single point of failure — no redundant DNS, LB, or links', 'Unbounded retry storms amplifying network failures', 'Exposing internal services directly to the public internet', 'Ignoring MTU and fragmentation in high-throughput paths'], frameworks: ['TCP/IP', 'HTTP/2-3', 'DNS', 'BGP', 'WireGuard/IPSec'] },
   { id: 'caveman', name: 'Caveman Mode', category: 'general', description: 'Ultra-compressed output mode. Cuts token usage ~75% by dropping filler words while keeping full technical accuracy. Attachable to any topic to reduce output verbosity.', content: `Respond terse like smart caveman. All technical substance stay. Only fluff die.
 
@@ -198,6 +53,8 @@ Drop caveman for: security warnings, irreversible action confirmations, multi-st
 ## Boundaries
 
 Code/commits/PRs: write normal. Structured output (JSON, SQL, configs): write normal.`, principles: [], bestPractices: [], antiPatterns: [], frameworks: [] },
+  // Creator mode: a sandboxed plugin package, installed disabled for an admin (src/plugins/packages/authoring/skill.ts).
+  PLUGIN_AUTHORING_SKILL,
 ];
 
 /** The shipped fields a boot re-applies to an existing system skill. */

@@ -33,6 +33,9 @@ const PUBLIC_ROUTES: ReadonlyArray<{ method: string; pattern: RegExp }> = [
   // Public forms (docs/RECORDS.md → Forms): the token is the credential.
   { method: 'GET', pattern: /^\/api\/forms\/[^/]+$/ },
   { method: 'POST', pattern: /^\/api\/forms\/[^/]+$/ },
+  // Plugin package page files (docs/PLUGIN-PACKAGES.md#pages): static, sandboxed by
+  // their CSP, requested by a sandboxed frame that carries no cookie. Not the listing.
+  { method: 'GET', pattern: /^\/api\/plugin-ui\/[^/]+\/.+$/ },
 ];
 
 export function isPublicRoute(method: string, path: string): boolean {
@@ -49,6 +52,9 @@ export function isPublicPath(path: string): boolean {
   // `/ready` are in the prefix list below). The rest of /api/health is install
   // state and needs a sign-in (routes/health.ts gates it further).
   if (PUBLIC_HEALTH_PATHS.has(path)) return true;
+  // The plugin host API takes only its per-call token, checked inside the route
+  // (docs/PLUGIN-PACKAGES.md#host-api); a session or API token gives nothing there.
+  if (path.startsWith('/api/plugin-host/')) return true;
   // Webhook endpoints use HMAC signature verification instead of bearer auth
   if (path.startsWith('/api/webhooks/')) return true;
   // Incoming webhooks use per-hook webhookSecret for authentication

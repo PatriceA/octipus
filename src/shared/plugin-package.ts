@@ -8,6 +8,9 @@ import type { FieldDef } from './record-fields';
 /** The manifest file at a package's root. */
 export const PLUGIN_MANIFEST_FILE = 'octipus-plugin.json';
 
+/** The longest value a plugin package secret holds (`PUT /api/plugin-packages/:name/secrets/:key`). */
+export const MAX_PLUGIN_SECRET_LENGTH = 10_000;
+
 /** The manifest contract this host reads (`apiVersion`, same MAJOR, MINOR not newer). */
 export const PLUGIN_PACKAGE_API_VERSION = '1.0.0';
 
@@ -41,7 +44,7 @@ export interface PluginSecretDecl {
   required?: boolean;
 }
 
-export interface PluginManifest {
+export interface PluginManifest extends PluginManifestContributions {
   /** Lower-case package name, e.g. `finapi`. */
   name: string;
   version: string;
@@ -51,15 +54,22 @@ export interface PluginManifest {
   description: string;
   publisher?: string;
   homepage?: string;
-  /** How the host starts the package: a local MCP server over stdio, in the package directory. */
-  server: {
+  /**
+   * How the host starts the package: a local MCP server over stdio, in the
+   * package directory. Required for runtime `package`; absent for `in-process`.
+   */
+  server?: {
     command: string;
     args?: string[];
     /** Per-request timeout for slow tools, in milliseconds. */
     requestTimeoutMs?: number;
   };
-  /** Every tool the package offers and what it does. */
-  tools: Record<string, PluginToolDecl>;
+  /**
+   * Every tool the package offers and what it does. Required for runtime
+   * `package`; absent for `in-process` (its tools are registered with
+   * `octi.registerTool`, each with its own effect).
+   */
+  tools?: Record<string, PluginToolDecl>;
   /** Hosts the package talks to. Shown at install; the sandbox gets network only when there is at least one. */
   network?: string[];
   /**
@@ -70,6 +80,10 @@ export interface PluginManifest {
   /** Non-secret settings, handed to the package as `OCTIPUS_SETTING_<KEY>`. */
   settings?: FieldDef[];
   secrets?: PluginSecretDecl[];
+  /** Pages shown in the web app (see "Pages and host API" below). */
+  ui?: PluginUiDecl;
+  /** Host API scopes the package asks for (see "Pages and host API" below). */
+  host?: PluginHostScope[];
 }
 
 /** An installed package as the API returns it. */
@@ -164,7 +178,283 @@ export interface PluginPackageView {
    * `changed` (not the signature file approved with the content).
    */
   signature: PluginSignatureStatus | null;
+  /** What it adds besides tools (docs/PLUGIN-PACKAGES.md#contributions). */
+  contributions: PluginContributionsView;
+
+  /**
+   * The host API scopes an admin approved (docs/PLUGIN-PACKAGES.md#host-api);
+   * null before any approval. A scope the manifest declares and this list
+   * lacks is not granted, and enabling asks for it again.
+   */
+  approvedHostScopes: PluginHostScope[] | null;
   installedBy: string | null;
   installedAt: string;
   updatedAt: string;
 }
+
+// ---------------------------------------------------------------------------
+// Runtimes (docs/PLUGIN-PACKAGES.md#runtimes, docs/plans/plugins-everything.md
+// phase 1): a package runs as a sandboxed MCP server (`package`, the default)
+// or as a trusted extension loaded into the server process (`in-process`).
+// The fields below merge into the interfaces above.
+// ---------------------------------------------------------------------------
+
+/** How a plugin runs. */
+export const PLUGIN_RUNTIMES = ['package', 'in-process'] as const;
+export type PluginRuntime = (typeof PLUGIN_RUNTIMES)[number];
+
+export interface PluginManifest {
+  /** How the plugin runs; `package` when absent. */
+  runtime?: PluginRuntime;
+  /**
+   * For `in-process`: the module (`.ts`, `.js` or `.mjs`, relative to the
+   * package root) whose default export is the extension factory
+   * (`(octi) => void | Promise<void>`, docs/PLUGINS.md#from-an-extension-octihook-trusted-extensions-only).
+   */
+  entry?: string;
+}
+
+/**
+ * The extra approval an `in-process` plugin needs before it may be enabled:
+ * running in the server process, recorded with the content hash it covers.
+ * Approving other content (an upgrade, a content approval of new bytes)
+ * clears it.
+ */
+export interface PluginInProcessStatus {
+  /** Whether the approval covers the approved content now (`approvedHash === contentHash`). */
+  approved: boolean;
+  /** The content hash approved to run in the server process, or null. */
+  approvedHash: string | null;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  /** Whether its module is loaded in this server process now. */
+  loaded: boolean;
+}
+
+export interface PluginPackageView {
+  /** `manifest.runtime`, defaulted. */
+  runtime: PluginRuntime;
+  /** For an `in-process` plugin, its in-process approval and whether it is loaded; null for `package`. */
+  inProcess: PluginInProcessStatus | null;
+}
+
+/** The runtime a manifest declares, defaulted. */
+export function pluginRuntime(m: { runtime?: PluginRuntime }): PluginRuntime {
+  return m.runtime ?? 'package';
+}
+// --- end runtimes ----------------------------------------------------------
+
+// ── Contributions: commands, schedules, events, prompt, context ─────────────
+// (docs/PLUGIN-PACKAGES.md#contributions; checked in
+// src/plugins/packages/manifest-contributions.ts, bound in
+// src/plugins/packages/contributions/). Each one names one of the package's
+// own declared tools and runs through the same authorization as an agent call.
+
+/**
+ * The gateway events a package may subscribe to (`events[].on`). Each reaches
+ * the tool as ids only (never message text, file contents or secrets):
+ *
+ * - `chat.response` — a root turn answered: `{ type, at, userId, sessionId }`;
+ * - `document.completed` — an uploaded document was processed: `{ type, at, userId, documentId }`;
+ * - `document.failed` — processing an uploaded document failed: `{ type, at, userId, documentId }`.
+ */
+export const PLUGIN_EVENT_TYPES = ['chat.response', 'document.completed', 'document.failed'] as const;
+export type PluginEventType = (typeof PLUGIN_EVENT_TYPES)[number];
+
+/** `/name args` calls `tool` as the user who typed it, without a model turn. */
+export interface PluginCommandDecl {
+  /** The command without the slash; also reachable as `/<package>:<name>`. */
+  name: string;
+  tool: string;
+  description: string;
+  /**
+   * The tool's arguments. A string value `"$args"` is replaced by the text
+   * after the command. Default `{ "text": "$args" }`.
+   */
+  input?: Record<string, unknown>;
+}
+
+/** The cron runner calls `tool` with `input` (UTC, five fields). */
+export interface PluginScheduleDecl {
+  id: string;
+  cron: string;
+  tool: string;
+  input?: Record<string, unknown>;
+}
+
+export interface PluginEventDecl {
+  on: PluginEventType;
+  tool: string;
+}
+
+/** Static markdown from the package, added to the system prompt of `roles` (all when omitted). */
+export interface PluginPromptDecl {
+  /** A `.md` file in the package, relative to its root. */
+  file: string;
+  roles?: string[];
+}
+
+/** A `read` tool called at the start of every turn of `roles` (all when omitted); its text rides the turn. */
+export interface PluginContextDecl {
+  tool: string;
+  roles?: string[];
+}
+
+export interface PluginManifestContributions {
+  commands?: PluginCommandDecl[];
+  schedules?: PluginScheduleDecl[];
+  events?: PluginEventDecl[];
+  prompt?: PluginPromptDecl;
+  context?: PluginContextDecl;
+}
+
+/** The last run of a schedule, event or context contribution (on the plugin's row). */
+export interface PluginContributionRun {
+  at: string;
+  ok: boolean;
+  /** Why it failed, or what was skipped (rate limit). */
+  error: string | null;
+}
+
+/**
+ * What an installed package adds to the host, and whether each part is bound
+ * now. Nothing binds until an admin approves `hash` (`approveContributions`).
+ */
+export interface PluginContributionsView {
+  /** The contributions hash now (`sha256:<hex>`): what `approveContributions` takes. Null when it adds nothing (or cannot be read). */
+  hash: string | null;
+  /** The hash an admin approved, or null. */
+  approvedHash: string | null;
+  /** Whether `approvedHash` is `hash`: only then is anything bound. */
+  approved: boolean;
+  commands: Array<{ name: string; tool: string; effect: PluginToolEffect | null; description: string; bound: boolean }>;
+  schedules: Array<{ id: string; cron: string; tool: string; effect: PluginToolEffect | null; bound: boolean; lastRun: PluginContributionRun | null }>;
+  events: Array<{ on: PluginEventType; tool: string; effect: PluginToolEffect | null; bound: boolean; lastRun: PluginContributionRun | null }>;
+  /** `text`: the whole prompt file, for review (null when it cannot be read). */
+  prompt: { file: string; roles: string[] | null; text: string | null; bound: boolean; chars: number | null } | null;
+  context: { tool: string; effect: PluginToolEffect | null; roles: string[] | null; bound: boolean; lastRun: PluginContributionRun | null } | null;
+  /** Why a declared contribution is not bound right now (not approved, a name taken since install, content not approved). */
+  problems: string[];
+}
+// ── end contributions ───────────────────────────────────────────────────────
+
+// ── Pages and host API (docs/PLUGIN-PACKAGES.md#pages, #host-api) ─────────
+
+/**
+ * What a package may do through the host API, as the user who triggered the
+ * call. A small explicit set: each scope maps to one narrow endpoint group of
+ * `/api/plugin-host/*`. Write scopes (`notes:write`, `tasks:write`, `notify`)
+ * are handed only to calls of a tool whose declared effect is `write` or
+ * `external`: a `read` tool reads.
+ *
+ * `web:read` has the host fetch one public web page (through its SSRF guard)
+ * and hand back its readable text; `model:complete` runs one text completion
+ * on the calling user's `everyday` model. Neither changes data, so a `read`
+ * tool gets them; `web:read` lets a package name any URL, so it counts as
+ * network for the package's default `maxProtection` (docs/PLUGIN-PACKAGES.md#host-api).
+ */
+export const PLUGIN_HOST_SCOPES = [
+  'notes:read', 'notes:write', 'tasks:read', 'tasks:write', 'documents:read', 'notify', 'web:read', 'model:complete',
+] as const;
+export type PluginHostScope = (typeof PLUGIN_HOST_SCOPES)[number];
+
+/** The scopes that change data or reach the user: only for `write`/`external` tools. */
+export const PLUGIN_HOST_WRITE_SCOPES: readonly PluginHostScope[] = ['notes:write', 'tasks:write', 'notify'];
+
+/** One page a package adds to the web app. */
+export interface PluginUiPage {
+  /** The page's path under `/plugins/<name>/`, e.g. `dashboard` (lower-case, `a-z0-9-`, `/`-separated). */
+  path: string;
+  /** Sidebar label and page title. */
+  title: string;
+  /** A lucide icon name (e.g. `chart-bar`); a default icon when missing or unknown. */
+  icon?: string;
+  /** The static HTML file, relative to `ui.dir`. */
+  entry: string;
+}
+
+export interface PluginUiDecl {
+  /** The directory (relative to the package root) whose files are served; default `ui`. */
+  dir?: string;
+  pages: PluginUiPage[];
+}
+
+/** A page of an enabled package, as the sidebar lists it (`GET /api/plugin-ui`). */
+export interface PluginPageLink {
+  plugin: string;
+  /** The package's title. */
+  pluginTitle: string;
+  path: string;
+  title: string;
+  icon: string | null;
+  /** The entry file's URL, served by `/api/plugin-ui/<name>/…`. */
+  src: string;
+}
+
+/** What `_meta["octipus/host"]` of a `tools/call` carries to a package that declares `host`. */
+export interface PluginHostCallMeta {
+  /** Where the host API is reached, through the package's egress proxy: `http://octipus-host.internal`. */
+  url: string;
+  /** The bearer token for this one call. */
+  token: string;
+  /** ISO time the token expires (the call's timeout). */
+  expiresAt: string;
+  /** What the token may do: the declared, approved scopes the user holds, for this tool's effect. */
+  scopes: PluginHostScope[];
+}
+
+/** The `_meta` key a tool call carries the host API token under. */
+export const PLUGIN_HOST_META_KEY = 'octipus/host';
+
+/** The name a package reaches the host API by, through its egress proxy only (never resolved by DNS). */
+export const PLUGIN_HOST_ALIAS = 'octipus-host.internal';
+
+// ── end pages and host API ─────────────────────────────────────────────
+
+/**
+ * A first-party plugin shipped with Octipus (`plugins/<name>` in the install),
+ * as `GET /api/plugin-packages/bundled` lists it (docs/PLUGIN-PACKAGES.md#bundled-plugins).
+ */
+export interface BundledPluginView {
+  name: string;
+  version: string;
+  title: string;
+  description: string;
+  /** Host API scopes it asks for (approved when enabling). */
+  host: PluginHostScope[];
+  /** Hosts it reaches itself. */
+  network: string[];
+  /** The installed version of this bundle, or null. */
+  installed: string | null;
+  /** Another package (not this bundle) holds the name: it cannot be installed until that one is removed. */
+  taken?: boolean;
+  /** Its manifest does not parse: why (it cannot be installed). */
+  problem?: string;
+}
+
+
+// ── Creator mode (docs/PLUGIN-PACKAGES.md#writing-a-plugin-with-an-agent) ───
+// An agent may write a `package` plugin in its workspace and install it with
+// `plugin_dev__plugin_install` (src/tools/plugin-dev): always disabled, for an
+// admin to review and enable. The install's audit row records who asked.
+
+/** The agent that wrote and installed a package's current version. */
+export interface PluginAgentAuthorship {
+  /** The user whose agent installed it (an admin, who approved the call). */
+  userId: string;
+  /** The chat session the agent ran in, when it ran in one. */
+  sessionId: string | null;
+  agentId: string | null;
+  /** When it was installed. */
+  at: string;
+}
+
+export interface PluginPackageView {
+  /**
+   * Set when the current version was installed by an agent (creator mode),
+   * read from its `installed`/`upgraded` audit row; null when a person
+   * installed it.
+   */
+  authoredBy: PluginAgentAuthorship | null;
+}
+// ── end creator mode ────────────────────────────────────────────────────────

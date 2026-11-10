@@ -22,7 +22,7 @@ const CORE_ROUTE_PREFIXES = [
   '/api/eval', '/api/evaluations', '/api/gateway', '/api/graph', '/api/health', '/api/heartbeat', '/api/hooks',
   '/api/invites', '/api/knowledge', '/api/logs', '/api/mcp', '/api/me', '/api/memory', '/api/metrics', '/api/models',
   '/api/modules', '/api/notes', '/api/notifications', '/api/onboarding', '/api/permission-requests', '/api/persona',
-  '/api/pipelines', '/api/plugin-packages', '/api/plugins', '/api/recurring-tasks', '/api/remote-spaces',
+  '/api/pipelines', '/api/plugin-host', '/api/plugin-packages', '/api/plugin-ui', '/api/plugins', '/api/recurring-tasks', '/api/remote-spaces',
   '/api/roles', '/api/runs', '/api/saml', '/api/scim', '/api/search', '/api/sessions', '/api/settings',
   '/api/skills', '/api/spaces', '/api/spend-budgets', '/api/swarm', '/api/tasks', '/api/tools', '/api/topics',
   '/api/trajectories', '/api/vault', '/api/verification', '/api/webhooks', '/api/workspace',
@@ -32,7 +32,7 @@ const CORE_ROUTE_PREFIXES = [
 const CORE_TOOLS = [
   'atlassian', 'browser', 'browser-ext', 'companion', 'connections', 'data', 'docker', 'documents',
   'filesystem', 'git', 'github', 'gitlab', 'google-workspace', 'inline-ui', 'knowledge',
-  'mcp_admin', 'microsoft365', 'monitor', 'notes', 'plan', 'repo_registry', 'scheduling',
+  'mcp_admin', 'microsoft365', 'monitor', 'notes', 'plan', 'plugin_dev', 'repo_registry', 'scheduling',
   'shell', 'skill-distill', 'task_state', 'tasks', 'visual', 'websearch',
 ];
 

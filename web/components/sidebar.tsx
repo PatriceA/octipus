@@ -25,6 +25,7 @@ import {
   NotebookPen,
   PanelLeft,
   PanelLeftClose,
+  Puzzle,
   Settings,
   Sparkles,
   Tags,
@@ -43,6 +44,7 @@ import { usePathname } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { usePageOn } from '@/lib/modules';
+import { pluginPageHref, usePluginPages } from '@/lib/plugin-pages';
 import { useRooms } from '@/lib/rooms';
 import { useSidebarStore } from '@/lib/sidebar-store';
 import { cn } from '@/lib/utils';
@@ -117,6 +119,14 @@ const navGroups: NavGroup[] = [
   ] },
 ];
 
+/** The icons a plugin page may name (`ui.pages[].icon`); any other name shows the puzzle piece. */
+const PLUGIN_ICONS: Record<string, typeof LayoutDashboard> = {
+  'book-open': BookOpen, bot: Bot, brain: Brain, 'calendar-days': CalendarDays, 'clipboard-list': ClipboardList,
+  contact: Contact, database: Database, 'file-text': FileText, 'folder-kanban': FolderKanban, globe: Globe,
+  'layout-dashboard': LayoutDashboard, 'list-todo': ListTodo, mail: Mail, newspaper: Newspaper, 'notebook-pen': NotebookPen,
+  puzzle: Puzzle, sparkles: Sparkles, telescope: Telescope, users: Users, wrench: Wrench, zap: Zap,
+};
+
 export function Sidebar() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -135,7 +145,12 @@ export function Sidebar() {
   // group left without pages goes too.
   const pageOn = usePageOn();
   const offPage = (href: string) => !pageOn(href);
-  const groups = navGroups.filter(group => group.label !== 'Settings').map(g => ({ ...g, items: g.items.filter(item => (!item.adminOnly || user?.isAdmin) && !offPage(item.href)) })).map(group => {
+  // Pages of the enabled plugin packages (docs/PLUGIN-PACKAGES.md#pages), as their own group.
+  const pluginPages = usePluginPages(!!user);
+  const pluginGroup: NavGroup | null = (pluginPages.data ?? []).length > 0
+    ? { label: 'Plugins', items: (pluginPages.data ?? []).map((p) => ({ name: p.title, href: pluginPageHref(p), icon: PLUGIN_ICONS[p.icon ?? ''] ?? Puzzle })) }
+    : null;
+  const groups = [...navGroups.filter(group => group.label !== 'Settings'), ...(pluginGroup ? [pluginGroup] : [])].map(g => ({ ...g, items: g.items.filter(item => (!item.adminOnly || user?.isAdmin) && !offPage(item.href)) })).map(group => {
     if (group.label === 'Settings' && user?.isAdmin) {
       return { ...group, items: [...group.items, { name: 'users', href: '/admin/users', icon: Users }] };
     }

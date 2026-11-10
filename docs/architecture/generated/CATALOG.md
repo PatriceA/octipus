@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-640 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
+653 mounted routes across 86 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -410,14 +410,27 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/pipelines/templates/:id/export` | `src/api/routes/pipelines.ts` |
 | POST | `/api/pipelines/templates/import` | `src/api/routes/pipelines.ts` |
 | GET | `/api/pipelines/types` | `src/api/routes/pipelines.ts` |
+| GET | `/api/plugin-host/documents/:id` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/model/complete` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/notes` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/notes` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/notify` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/tasks` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/tasks` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/web/read` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/whoami` | `src/api/routes/plugin-host.ts` |
 | GET | `/api/plugin-packages` | `src/api/routes/plugin-packages.ts` |
 | POST | `/api/plugin-packages` | `src/api/routes/plugin-packages.ts` |
 | DELETE | `/api/plugin-packages/:name` | `src/api/routes/plugin-packages.ts` |
 | PATCH | `/api/plugin-packages/:name` | `src/api/routes/plugin-packages.ts` |
 | PUT | `/api/plugin-packages/:name/secrets/:key` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/bundled` | `src/api/routes/plugin-packages.ts` |
 | GET | `/api/plugin-packages/registry` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-ui` | `src/api/routes/plugin-ui.ts` |
+| GET | `/api/plugin-ui/:name/*` | `src/api/routes/plugin-ui.ts` |
 | GET | `/api/plugins` | `src/api/routes/plugins.ts` |
 | GET | `/api/plugins/:name` | `src/api/routes/plugins.ts` |
+| POST | `/api/plugins/:name/call/:tool` | `src/api/routes/plugin-ui.ts` |
 | POST | `/api/plugins/:name/reload` | `src/api/routes/plugins.ts` |
 | PUT | `/api/protection/:entity/:id` | `src/api/routes/protection.ts` |
 | POST | `/api/reader` | `src/api/routes/reader.ts` |
@@ -668,7 +681,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `mcp` | 1 |
 | `(root)` | `models` | 2 |
 | `(root)` | `modules` | 1 |
-| `(root)` | `plugins` | 1 |
+| `(root)` | `plugins` | 3 |
 | `(root)` | `security` | 5 |
 | `(root)` | `skills` | 1 |
 | `(root)` | `tools` | 4 |
@@ -677,19 +690,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 29 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 184 |
-| `api` | `db` | 125 |
+| `api` | `core` | 193 |
+| `api` | `db` | 132 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
-| `api` | `mcp` | 4 |
+| `api` | `mcp` | 5 |
 | `api` | `models` | 39 |
-| `api` | `plugins` | 3 |
-| `api` | `security` | 168 |
+| `api` | `plugins` | 7 |
+| `api` | `security` | 174 |
 | `api` | `services` | 5 |
-| `api` | `shared` | 22 |
+| `api` | `shared` | 24 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 6 |
-| `api` | `utils` | 75 |
+| `api` | `utils` | 77 |
 | `api` | `voice` | 23 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
@@ -727,8 +740,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 10 |
-| `core` | `models` | 134 |
+| `core` | `models` | 136 |
 | `core` | `modules` | 2 |
+| `core` | `plugins` | 6 |
 | `core` | `security` | 229 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
@@ -740,6 +754,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `db` | `config` | 4 |
 | `db` | `core` | 24 |
 | `db` | `models` | 1 |
+| `db` | `plugins` | 1 |
 | `db` | `security` | 27 |
 | `db` | `services` | 1 |
 | `db` | `shared` | 9 |
@@ -778,21 +793,23 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `models` | `services` | 1 |
 | `models` | `shared` | 4 |
 | `models` | `utils` | 43 |
-| `plugins` | `config` | 2 |
-| `plugins` | `core` | 3 |
-| `plugins` | `db` | 5 |
-| `plugins` | `mcp` | 1 |
-| `plugins` | `security` | 3 |
-| `plugins` | `shared` | 5 |
+| `plugins` | `config` | 4 |
+| `plugins` | `core` | 17 |
+| `plugins` | `db` | 21 |
+| `plugins` | `extensions` | 2 |
+| `plugins` | `mcp` | 5 |
+| `plugins` | `models` | 2 |
+| `plugins` | `security` | 13 |
+| `plugins` | `shared` | 15 |
 | `plugins` | `tools` | 1 |
-| `plugins` | `utils` | 7 |
+| `plugins` | `utils` | 19 |
 | `security` | `api` | 1 |
 | `security` | `config` | 20 |
 | `security` | `connectors` | 3 |
 | `security` | `core` | 40 |
 | `security` | `db` | 87 |
 | `security` | `mcp` | 2 |
-| `security` | `shared` | 7 |
+| `security` | `shared` | 8 |
 | `security` | `tools` | 7 |
 | `security` | `utils` | 34 |
 | `services` | `capabilities` | 5 |
@@ -818,19 +835,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `test-helpers` | `security` | 2 |
 | `tools` | `api` | 2 |
 | `tools` | `channels` | 2 |
-| `tools` | `config` | 3 |
+| `tools` | `config` | 4 |
 | `tools` | `connectors` | 2 |
-| `tools` | `core` | 129 |
+| `tools` | `core` | 131 |
 | `tools` | `db` | 42 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 8 |
-| `tools` | `plugins` | 1 |
-| `tools` | `security` | 79 |
+| `tools` | `plugins` | 6 |
+| `tools` | `security` | 81 |
 | `tools` | `services` | 1 |
 | `tools` | `shared` | 8 |
 | `tools` | `skills` | 5 |
-| `tools` | `utils` | 41 |
+| `tools` | `utils` | 42 |
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 3 |
 | `tui-editor` | `mcp` | 2 |
@@ -875,6 +892,7 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - core <-> hooks
 - core <-> mcp
 - core <-> models
+- core <-> plugins
 - core <-> security
 - core <-> services
 - core <-> skills
@@ -882,6 +900,7 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - core <-> utils
 - core <-> voice
 - db <-> models
+- db <-> plugins
 - db <-> security
 - db <-> services
 - hooks <-> tools
@@ -971,4 +990,4 @@ The contract promises these and no code emits them. Each is either a type to ret
 - `task.changed` — subscribed by `src/core/monitors/service.ts`
 - `test.event` — subscribed by `src/core/monitors/service.ts`
 
-1 publish/subscribe site(s) use a non-literal event type and are counted here rather than dropped.
+2 publish/subscribe site(s) use a non-literal event type and are counted here rather than dropped.

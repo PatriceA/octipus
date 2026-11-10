@@ -329,6 +329,15 @@ async function main() {
     } catch (err) {
       logger.error({ err }, 'Extension loading failed (non-fatal)');
     }
+    // In-process plugins (docs/PLUGIN-PACKAGES.md#runtimes): installed and
+    // approved like packages, loaded into the extension system now that it has
+    // its event bus. Later changes load and unload them as they happen.
+    try {
+      const { syncInProcessPlugins } = await import('@/plugins/packages/in-process');
+      await syncInProcessPlugins();
+    } catch (err) {
+      logger.error({ err }, 'In-process plugins failed to load (non-fatal)');
+    }
 
     // Swarm orphan reaper is started (boot pass + recurring interval) inside
     // gateway.start() above, alongside the agent-manager stale cleanup.
@@ -552,6 +561,12 @@ async function main() {
       }
 
       // Dispose extensions before tearing down the hub they subscribed to
+      try {
+        const { disposeInProcessPlugins } = await import('@/plugins/packages/in-process');
+        await disposeInProcessPlugins();
+      } catch (err) {
+        logger.warn({ err }, 'Disposing in-process plugins failed');
+      }
       try {
         const { getExtensionRegistry } = await import('@/extensions');
         await getExtensionRegistry().disposeAll();

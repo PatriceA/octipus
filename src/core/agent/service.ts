@@ -8,6 +8,7 @@ import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from
 import { refreshSessionLevel } from '@/core/protection/session-level';
 import { prepareAttachmentProtection } from '@/core/protection/attachments';
 import { finishContextTurn, runContextHooks } from '@/core/context-hooks';
+import { runPluginContexts } from '@/plugins/packages/contributions/context';
 import { clearFlowLabel, getFlowLabel, markNotSharedAudience, markSharedAudience, observeFlow } from '@/security/flow-guard';
 import { bareReply, type GroupTurn, groupTurnContext } from '@/core/channels/group-context';
 import { generateRunId, runWithContext, getRunContext } from '@/core/run-context';
@@ -971,6 +972,11 @@ export class AgentService {
           event: 'turn_start', userId, workspaceId, sessionId: resolvedSessionId,
           space: scope.space, query: message, role: 'general', channel,
         });
+      // Turn context of plugin packages (docs/PLUGIN-PACKAGES.md#context): the
+      // same audience rule, never in a space; it never throws either.
+      const pluginContextRun = sharedAudience || audience.contentStorageOff
+        ? Promise.resolve({ text: '', labelledBlocks: [] })
+        : runPluginContexts({ userId, sessionId: resolvedSessionId, role: 'general', query: message, scope });
 
       // Memory-redesign Phase D — best-effort long-term memory
       // injection. Auto-no-ops when the memories table is empty or
@@ -1005,9 +1011,10 @@ export class AgentService {
       }
 
       const contextHooks = await contextHooksRun;
+      const pluginContext = await pluginContextRun;
       // The root runner adds attachments after selecting the model, so CLI
       // turns can receive original images without an OCR round trip.
-      const turnContext = memoryBlock + contextHooks.text + spaceContext;
+      const turnContext = memoryBlock + contextHooks.text + pluginContext.text + spaceContext;
       const memoryCadence = getConfig().memory?.extractionCadence ?? 'per_turn';
       const fireMemoryUpdate = () => {
         // Cadence gate. `off` short-circuits before any work; the
@@ -1081,6 +1088,7 @@ export class AgentService {
           turnContextParts: [
             { label: 'Long-term memory', text: memoryBlock },
             ...contextHooks.labelledBlocks,
+            ...pluginContext.labelledBlocks,
             { label: 'Shared space context', text: spaceContext },
             { label: 'Group conversation', text: groupContextBlock },
           ],

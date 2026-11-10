@@ -383,6 +383,12 @@ async function processCronTick(): Promise<void> {
 
     startModuleSweeps(now);
 
+    // Schedules of plugin packages (docs/PLUGIN-PACKAGES.md#schedules): each
+    // due minute claimed once across instances, the calls not awaited.
+    import('@/plugins/packages/contributions')
+      .then(({ runDuePluginSchedules }) => runDuePluginSchedules(now))
+      .catch((err: unknown) => coreLogger.error({ err }, 'Plugin schedule sweep failed'));
+
     // The daily backup (core/backup/service.ts), in its configured hour. Not
     // awaited: a backup takes minutes; it guards against a second run itself.
     maybeRunScheduledBackup(now).catch((err: unknown) => coreLogger.error({ err }, 'Scheduled backup check failed'));
