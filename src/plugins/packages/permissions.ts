@@ -9,7 +9,7 @@
  * Every list is sorted (code-unit order), so the same manifest always gives
  * the same JSON, whatever order its author wrote things in.
  */
-import { type PluginManifest, type PluginRuntime, type PluginToolEffect, pluginRuntime } from '@/shared/plugin-package';
+import { type PluginManifest, type PluginPermissionsSummary, type PluginToolEffect, pluginRuntime } from '@/shared/plugin-package';
 
 /**
  * The package's `maxProtection`, or when it declares none: a package that
@@ -26,29 +26,8 @@ export function defaultMaxProtection(m: Pick<PluginManifest, 'maxProtection' | '
   return (m.network ?? []).length > 0 || host.includes('web:read') || host.includes('agent:run') || (m.ui?.pages ?? []).length > 0 ? 1 : 4;
 }
 
-/** The permissions summary of a package (`octi plugin permissions --json`). */
-export interface PluginPermissions {
-  name: string;
-  version: string;
-  apiVersion: string;
-  runtime: PluginRuntime;
-  /** Host API scopes, sorted. */
-  host: string[];
-  /** Network hosts, sorted. */
-  network: string[];
-  /** Declared tools and their effects, sorted by name. */
-  tools: Array<{ name: string; effect: PluginToolEffect }>;
-  /** How many tools have each effect. */
-  effects: Record<PluginToolEffect, number>;
-  /** What the package adds besides tools; each list sorted. */
-  contributions: { commands: string[]; schedules: string[]; events: string[]; prompt: boolean; context: boolean };
-  /** How many pages it adds. */
-  pages: number;
-  /** Whether it declares `model.trustedInput`. */
-  trustedInput: boolean;
-  /** The highest protection level it may see: its `maxProtection`, or the default (`defaultMaxProtection`). */
-  maxProtection: 1 | 2 | 3 | 4;
-}
+/** The permissions summary of a package (`octi plugin permissions --json`); the shape lives in src/shared so the web app reads the same type. */
+export type PluginPermissions = PluginPermissionsSummary;
 
 const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const sorted = (values: readonly string[] | undefined) => [...(values ?? [])].sort(byCodeUnit);

@@ -1328,6 +1328,17 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
   },
 
+  {
+    key: 'plugins.marketplace',
+    category: 'security',
+    valueType: 'json',
+    defaultValue: true,
+    description:
+      'The built-in Octipus marketplace (plugins.octipus.cc): true (default) lists and installs from its signed index, false turns it off entirely (never fetched, never trusted). An object { "url": "https://.../index.json", "rootKeys": { "root": "<PEM>", "rootBackup": "<PEM>" } } points it at another index or root keys, for testing or self-hosting. A build without root keys keeps it off. Its signing keys (listed in its root-signed keys.json) are trusted only for packages installed from it.',
+    isSecret: false,
+    envVar: 'PLUGINS_MARKETPLACE',
+  },
+
   // ── Protection levels (docs/PROTECTION-LEVELS.md) ──
   {
     key: 'protection.remoteAtLevel3',

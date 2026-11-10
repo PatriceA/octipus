@@ -1,5 +1,6 @@
 import { executionEnvironmentsSchema } from '@/shared/execution-environment';
 import { companionMaintenanceSchema } from '@/shared/companion-maintenance';
+import { createPublicKey } from 'node:crypto';
 import { isIP } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -780,6 +781,46 @@ export function normalizeRetiredConfigValues<T>(merged: T): T {
 }
 
 // Full configuration schema
+/**
+ * An Ed25519 public key as PEM (SPKI), what `octi plugin keygen` writes to
+ * `<name>.pub`: refused at config load when it is not one, so a typo never
+ * leaves the marketplace trusting nothing (or something else) in silence.
+ */
+const ed25519PublicKeyPem = z.string().min(1).max(2000).refine((pem) => {
+  const text = pem.trim();
+  if (!text.startsWith('-----BEGIN PUBLIC KEY-----') || !text.endsWith('-----END PUBLIC KEY-----')) return false;
+  try {
+    return createPublicKey(text).asymmetricKeyType === 'ed25519';
+  } catch {
+    return false;
+  }
+}, 'an Ed25519 public key in PEM (the contents of the .pub file octi plugin keygen writes)');
+
+/**
+ * `plugins.marketplace` (docs/PLUGIN-PACKAGES.md#marketplace): `true` (the
+ * default) uses the built-in Octipus marketplace, `false` turns it off
+ * entirely; an object overrides its index URL and/or its two keys, for
+ * testing or self-hosting. Root keys given here count as configured.
+ */
+export const marketplaceConfigSchema = z.union([
+  z.boolean(),
+  z.object({
+    enabled: z.boolean().default(true),
+    /** The signed index (https; its signature is `<url>.sig`). */
+    url: z.string().url().max(2000)
+      .refine((v) => v.startsWith('https://'), 'the marketplace is reached over https')
+      .refine((v) => !v.includes('#') && !/^https:\/\/[^/]*@/.test(v), 'no fragment and no credentials in the marketplace URL')
+      .optional(),
+    /**
+     * The marketplace's ROOT keys: they sign only `<origin>/keys.json`, which
+     * lists the signing keys. `rootBackup` (kept offline) may revoke `root`.
+     */
+    rootKeys: z.object({ root: ed25519PublicKeyPem, rootBackup: ed25519PublicKeyPem.optional() }).strict()
+      .refine((k) => k.rootBackup === undefined || k.rootBackup.trim() !== k.root.trim(), 'the backup root key must differ from the root key')
+      .optional(),
+  }).strict(),
+]);
+
 export const configSchema = z.object({
   storageMode: storageModeSchema,
   database: databaseConfigSchema,
@@ -894,6 +935,13 @@ export const configSchema = z.object({
      * budget; its tokens also count in `hostModelDailyTokens`. 0 turns those runs off.
      */
     hostAgentRunTokens: z.number().int().min(0).max(10_000_000).default(150_000),
+    /**
+     * The built-in Octipus marketplace (docs/PLUGIN-PACKAGES.md#marketplace):
+     * `true` (default), `false` (off entirely: never fetched, never trusted),
+     * or `{ enabled?, url?, rootKeys?: { root, rootBackup? } }` to point it at
+     * another index or root keys. Without root keys in the build or here it stays off.
+     */
+    marketplace: marketplaceConfigSchema.default(true),
   }).prefault({}),
   oauth: oauthConfigSchema,
   rateLimit: rateLimitConfigSchema,

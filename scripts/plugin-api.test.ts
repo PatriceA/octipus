@@ -41,6 +41,7 @@ function view(over: Partial<PluginPackageView> = {}): PluginPackageView {
     runtime: 'package', inProcess: null,
     contributions: { hash: null, approvedHash: null, approved: false, commands: [], schedules: [], events: [], prompt: null, context: null, problems: [] },
     approvedHostScopes: null, modelCliTools: null, authoredBy: null, installedBy: null, installedAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-01T00:00:00Z',
+    origin: null, revocation: null, declarations: [],
     ...over,
   };
 }

@@ -12,13 +12,27 @@ import {
 } from '@/plugins/packages/service';
 import { installBundled, listBundled } from '@/plugins/packages/bundled';
 import { installFromUrl, listRegistry } from '@/plugins/packages/remote';
-import { MAX_PLUGIN_SECRET_LENGTH } from '@/shared/plugin-package';
+import { isAdmin, isAuthenticated } from '@/security/principal';
+import { MAX_PLUGIN_SECRET_LENGTH, type PluginUsageView } from '@/shared/plugin-package';
 import { apiLogger } from '@/utils/logger';
+
+const NAME_PARAM = t.Object({ name: t.String({ maxLength: 50, pattern: '^[a-z][a-z0-9-]{1,49}$' }) });
+const USAGE_QUERY = t.Object({ days: t.Optional(t.String({ pattern: '^[0-9]{1,3}$' })) });
+
+/** One plugin's usage over `days` (1-365, default 30): every user's (admins), or one user's own. */
+async function usageOf(name: string, daysParam: string | undefined, userId: string | null): Promise<PluginUsageView> {
+  const days = Math.min(365, Math.max(1, Number(daysParam ?? 30) || 30));
+  const since = new Date(Date.now() - days * 24 * 60 * 60_000);
+  const { pluginUsageRepository } = await import('@/db/repositories/plugin-usage-repository');
+  const totals = await pluginUsageRepository.usage(name, since, userId ?? undefined);
+  const { byUser, ...rest } = totals;
+  return { name, days, since: since.toISOString(), scope: userId === null ? 'all' : 'me', ...rest, ...(userId === null ? { byUser } : {}) };
+}
 
 const STATUS: Record<PluginPackageError['code'], number> = { not_found: 404, exists: 409, invalid: 400, incomplete: 409, conflict: 409 };
 
 /** A refused change: its status and every problem; anything else is logged and a 500. */
-function refused(err: unknown, set: { status?: number | string }): { error: string; problems?: string[]; actualHash?: string; contributionsHash?: string } {
+function refused(err: unknown, set: { status?: number | string }): { error: string; problems?: string[]; actualHash?: string; contributionsHash?: string; sourceChange?: { from: string; to: string } } {
   if (err instanceof PluginPackageError) {
     set.status = STATUS[err.code];
     return { error: err.message, problems: err.problems, ...err.details };
@@ -61,6 +75,99 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
     { detail: { tags: ['plugin-packages'] } },
   )
 
+  // The marketplace and the configured registries, one card per plugin (src/plugins/packages/marketplace.ts).
+  // README and CHANGELOG are raw Markdown: the client renders them sanitized, without raw HTML or remote images.
+  .get(
+    '/marketplace',
+    async ({ user, principal, set, query }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
+      const { marketplaceListing } = await import('@/plugins/packages/marketplace');
+      return marketplaceListing({ q: query.q, category: query.category });
+    },
+    {
+      query: t.Object({ q: t.Optional(t.String({ maxLength: 200 })), category: t.Optional(t.String({ maxLength: 40 })) }),
+      detail: { tags: ['plugin-packages'] },
+    },
+  )
+
+  // A listing image, fetched by the host from the registry that lists it
+  // (src/plugins/packages/marketplace-assets.ts): PNG, JPEG, WebP or GIF by
+  // their bytes, never SVG, served under a CSP that runs nothing.
+  .get(
+    '/marketplace/asset',
+    async ({ user, principal, set, query }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
+      const { AssetError, fetchListingAsset } = await import('@/plugins/packages/marketplace-assets');
+      try {
+        const asset = await fetchListingAsset(query.url);
+        set.headers['Content-Type'] = asset.type;
+        set.headers['X-Content-Type-Options'] = 'nosniff';
+        set.headers['Content-Security-Policy'] = "default-src 'none'";
+        set.headers['Content-Disposition'] = 'inline';
+        set.headers['Cache-Control'] = 'private, max-age=3600';
+        return new Response(new Uint8Array(asset.bytes));
+      } catch (err) {
+        if (err instanceof AssetError) {
+          set.status = err.status;
+          return { error: err.message };
+        }
+        apiLogger.error({ err }, 'plugin-packages: listing image failed');
+        set.status = 500;
+        return { error: 'The image could not be served' };
+      }
+    },
+    { query: t.Object({ url: t.String({ minLength: 9, maxLength: 2000, pattern: '^https://' }) }), detail: { tags: ['plugin-packages'] } },
+  )
+
+  // Installed packages with a newer version from the same source, each with a permissions diff.
+  .get(
+    '/updates',
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
+      const { listUpdates } = await import('@/plugins/packages/marketplace-updates');
+      return listUpdates();
+    },
+    { detail: { tags: ['plugin-packages'] } },
+  )
+
+  // Revocations the marketplace published (in force and cleared), and clearing one (audited).
+  .get(
+    '/revocations',
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
+      const { listRevocations } = await import('@/plugins/packages/revocations');
+      return (await listRevocations()).map((r) => ({
+        id: r.id, kind: r.kind, name: r.name, version: r.version, keyId: r.keyId, reason: r.reason, registryUrl: r.registryUrl,
+        signedByKey: r.signedByKey, indexGeneratedAt: r.indexGeneratedAt.toISOString(), firstSeenAt: r.firstSeenAt.toISOString(),
+        clearedAt: r.clearedAt?.toISOString() ?? null, clearedBy: r.clearedBy, clearReason: r.clearReason,
+      }));
+    },
+    { detail: { tags: ['plugin-packages'] } },
+  )
+  .delete(
+    '/revocations/:id',
+    async ({ user, principal, set, params, body }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
+      const { clearRevocation } = await import('@/plugins/packages/revocations');
+      const row = await clearRevocation(params.id, principal.userId, body.reason);
+      if (!row) {
+        set.status = 404;
+        return { error: 'No such revocation in force' };
+      }
+      return { cleared: true, id: row.id, note: 'If the marketplace still lists it, its next index revokes it again.' };
+    },
+    {
+      params: t.Object({ id: t.String({ pattern: '^[0-9a-fA-F-]{36}$' }) }),
+      body: t.Object({ reason: t.String({ minLength: 3, maxLength: 500 }) }),
+      detail: { tags: ['plugin-packages'] },
+    },
+  )
+
   // The first-party plugins shipped with Octipus (plugins/ in the install), with the version installed here.
   .get(
     '/bundled',
@@ -77,10 +184,30 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
     async ({ user, principal, body, set }) => {
       const denied = adminDenied({ set, user, principal });
       if (denied) return denied;
-      const sources = [body.path, body.url, body.bundled].filter((v) => v !== undefined).length;
+      const sources = [body.path, body.url, body.bundled, body.registry].filter((v) => v !== undefined).length;
       if (sources !== 1) {
         set.status = 400;
-        return { error: 'Give one of path (a directory on the server), url (an https .tar.gz) or bundled (a plugin shipped with Octipus)' };
+        return { error: 'Give one of path (a directory on the server), url (an https .tar.gz), bundled (a plugin shipped with Octipus) or registry (with name: "marketplace" or a configured registry)' };
+      }
+      if (body.registry !== undefined) {
+        if (body.name === undefined) {
+          set.status = 400;
+          return { error: 'A registry install names the package (name), and optionally its version' };
+        }
+        try {
+          const { installFromRegistry } = await import('@/plugins/packages/registry-install');
+          const row = await installFromRegistry(principal.userId, {
+            registry: body.registry, name: body.name, version: body.version, upgrade: body.upgrade === true,
+            allowSignerChange: body.allowSignerChange === true, allowDowngrade: body.allowDowngrade === true,
+            allowSourceChange: body.allowSourceChange === true, allowIncompatible: body.allowIncompatible === true,
+          });
+          return {
+            name: row.name, version: row.version, enabled: row.enabled, contentHash: row.contentHash, signedBy: row.signedBy,
+            warnings: row.warnings, guidance: row.guidance, origin: row.origin, manifest: row.manifest,
+          };
+        } catch (err) {
+          return refused(err, set);
+        }
       }
       if (body.sha256 !== undefined && body.url === undefined) {
         set.status = 400;
@@ -109,6 +236,12 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
         path: t.Optional(t.String({ minLength: 1, maxLength: 1000, pattern: '^(/|[A-Za-z]:\\\\)' })),
         /** Or the name of a plugin shipped with Octipus (`GET /bundled`); installed like a directory, disabled. */
         bundled: t.Optional(t.String({ minLength: 2, maxLength: 50, pattern: '^[a-z][a-z0-9-]+$' })),
+        /** Or a registry to install `name` (and `version`) from: "marketplace", or a name in plugins.registries. */
+        registry: t.Optional(t.String({ minLength: 1, maxLength: 100 })),
+        /** An upgrade from another source than the installed version's (another registry, the marketplace): the admin's consent, audited. */
+        allowSourceChange: t.Optional(t.Boolean()),
+        /** A registry install of a version that asks for a newer Octipus (minOctipus): the admin's consent. */
+        allowIncompatible: t.Optional(t.Boolean()),
         /** Or an https URL of a .tar.gz; it must carry a valid signature by a trusted publisher. */
         url: t.Optional(t.String({ minLength: 9, maxLength: 2000, pattern: '^https://' })),
         /** With url: the sha256 the tarball must hash to (`sha256:<hex>` or bare hex), checked before it is unpacked. */
@@ -124,6 +257,54 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
       }),
       detail: { tags: ['plugin-packages'] },
     },
+  )
+
+  // One plugin's tokens, spend, model calls and runs: every user's (admins).
+  .get(
+    '/:name/usage',
+    async ({ user, principal, set, params, query }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
+      return usageOf(params.name, query.days, null);
+    },
+    { params: NAME_PARAM, query: USAGE_QUERY, detail: { tags: ['plugin-packages'] } },
+  )
+
+  // The same, for the signed-in user's own use only (any user).
+  .get(
+    '/:name/usage/me',
+    async ({ principal, set, params, query }) => {
+      if (!isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Authentication required' };
+      }
+      return usageOf(params.name, query.days, principal.userId);
+    },
+    { params: NAME_PARAM, query: USAGE_QUERY, detail: { tags: ['plugin-packages'] } },
+  )
+
+  // Stop a plugin's background run from the app: the user who started it, or an admin (audited).
+  .delete(
+    '/:name/runs/:id',
+    async ({ principal, set, params }) => {
+      if (!isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Authentication required' };
+      }
+      const { cancelRunFromApp } = await import('@/plugins/packages/host-agent');
+      const outcome = await cancelRunFromApp(params.name, params.id, { userId: principal.userId, isAdmin: isAdmin(principal) });
+      if (!outcome.ok) {
+        set.status = outcome.status;
+        return { error: outcome.error, code: outcome.code };
+      }
+      const { auditRepository } = await import('@/db/repositories/audit-repository');
+      await auditRepository.log({
+        userId: principal.userId, action: 'settings_changed', resourceType: 'plugin_package', resourceId: params.name,
+        details: { op: 'run_cancelled', runId: params.id, runUser: outcome.value.userId, byAdmin: outcome.value.userId !== principal.userId },
+      });
+      return { id: outcome.value.id, status: outcome.value.status };
+    },
+    { params: t.Object({ name: NAME_PARAM.properties.name, id: t.String({ maxLength: 64 }) }), detail: { tags: ['plugin-packages'] } },
   )
 
   .patch(

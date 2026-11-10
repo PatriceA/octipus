@@ -389,6 +389,13 @@ async function processCronTick(): Promise<void> {
       .then(({ runDuePluginSchedules }) => runDuePluginSchedules(now))
       .catch((err: unknown) => coreLogger.error({ err }, 'Plugin schedule sweep failed'));
 
+    // The daily plugin update check (src/plugins/packages/marketplace-updates.ts):
+    // reads the registries an installed package came from, notifies admins
+    // once per new version. Never upgrades. Not awaited; at most once a day.
+    import('@/plugins/packages/marketplace-updates')
+      .then(({ maybeRunUpdateCheck }) => maybeRunUpdateCheck())
+      .catch((err: unknown) => coreLogger.error({ err }, 'Plugin update check failed'));
+
     // The daily backup (core/backup/service.ts), in its configured hour. Not
     // awaited: a backup takes minutes; it guards against a second run itself.
     maybeRunScheduledBackup(now).catch((err: unknown) => coreLogger.error({ err }, 'Scheduled backup check failed'));

@@ -72,10 +72,14 @@ import {
   type PluginManifest,
   type PluginRuntime,
   type PluginNetworkStatus,
+  type PluginOrigin,
   type PluginPackageView,
+  type PluginPermissionsSummary,
+  type PluginRevocationView,
   type PluginSignatureStatus,
   pluginRuntime,
 } from '@/shared/plugin-package';
+import { declarationItems } from '@/shared/plugin-declarations';
 import { octipusRoot } from '@/utils/install-root';
 import { coreLogger } from '@/utils/logger';
 import { type AgentAuthoredDetails, agentAuthorship, agentAuthorships } from './authoring/authorship';
@@ -84,8 +88,9 @@ import { checkInProcessBundle } from './in-process-bundle';
 import { contributionsHashOf, hasContributions } from './contributions/approval';
 import { CONTENT_MISMATCH_PROBLEM, hashPackageContent, isContentHash, LISTING_FILE, verifyPackageContent } from './integrity';
 import { ManifestError, parseManifest, settingEnvName } from './manifest';
-import { defaultMaxProtection } from './permissions';
-import { checkSignatureOnDisk, readSignatureFile, SIGNATURE_FILE, type SignatureCheck, SignatureError, type TrustedPublisher } from './signature';
+import { computePermissions, defaultMaxProtection } from './permissions';
+import { checkSignatureOnDisk, keyFingerprint, parsePublicKey, readSignatureFile, SIGNATURE_FILE, type SignatureCheck, SignatureError, type TrustedPublisher } from './signature';
+import { keyRevocation, packageRevocation, revokedKeyIds } from './revocations';
 import { checkPackageTree, PackageTreeError } from './tree';
 import { HOST_API_URL, hostApiTarget, isHostScope, issueHostCallMeta, revokePluginTokens } from './host-api';
 
@@ -95,7 +100,7 @@ export class PluginPackageError extends Error {
     message: string,
     readonly problems: string[] = [message],
     /** What the refusal knows that a client can act on, e.g. the `actualHash` to review and approve. */
-    readonly details: { actualHash?: string; contributionsHash?: string } = {},
+    readonly details: { actualHash?: string; contributionsHash?: string; sourceChange?: { from: string; to: string } } = {},
   ) {
     super(message);
     this.name = 'PluginPackageError';
@@ -228,10 +233,51 @@ async function requireRow(name: string): Promise<PluginPackageRow> {
   return row;
 }
 
-/** The signing policy in force (`plugins.*`), read at each check so a config change (a revoked key, say) applies to the next one. */
-function signingPolicy(): { publishers: readonly TrustedPublisher[]; revokedKeys: readonly string[]; required: boolean } {
+/** Whether `plugins.requireSignature` is on, read at each check. */
+function signatureRequired(): boolean {
+  return getConfig().plugins?.requireSignature === true;
+}
+
+/** Key ids of `trustedPublishers` entries marked `revoked`, so they stay revoked in a ring built without those entries. */
+function configRevokedKeyIds(publishers: readonly TrustedPublisher[]): string[] {
+  const out: string[] = [];
+  for (const p of publishers) {
+    if (p.revoked !== true) continue;
+    try {
+      out.push(keyFingerprint(parsePublicKey(p.publicKey)));
+    } catch {
+      // An unreadable key trusts nothing anyway (trustedKeys reports it).
+    }
+  }
+  return out;
+}
+
+/**
+ * The signing policy in force, read at each check so a config change (a
+ * revoked key, say) applies to the next one (docs/PLUGIN-PACKAGES.md#signed-packages):
+ *
+ * - **Publishers.** `plugins.trustedPublishers`; for a package installed from
+ *   the marketplace (`origin.source === 'marketplace'`) the marketplace's
+ *   signing keys too (its last accepted keys.json, re-verified against the
+ *   root keys), while the marketplace is configured. They are trusted for nothing
+ *   else. `only` replaces the list (an install from the marketplace accepts
+ *   its keys alone).
+ * - **Revoked keys.** `plugins.revokedKeys`, the keys of revoked
+ *   `trustedPublishers` entries, and the keys the marketplace's signed index
+ *   revoked (./revocations.ts, kept in the database). A database that cannot
+ *   be read refuses the check (it throws): never trust on a guess.
+ */
+async function signingPolicy(origin?: PluginOrigin | null, only?: readonly TrustedPublisher[]): Promise<{ publishers: readonly TrustedPublisher[]; revokedKeys: readonly string[]; required: boolean }> {
   const plugins = getConfig().plugins;
-  return { publishers: plugins?.trustedPublishers ?? [], revokedKeys: plugins?.revokedKeys ?? [], required: plugins?.requireSignature === true };
+  const config = plugins?.trustedPublishers ?? [];
+  let publishers: readonly TrustedPublisher[] = only ?? config;
+  if (!only && origin?.source === 'marketplace') {
+    // The marketplace's signing keys as last accepted (re-verified against its root keys), never its root keys.
+    const { persistedSigningPublishers } = await import('./marketplace-keys-file');
+    publishers = [...config, ...await persistedSigningPublishers()];
+  }
+  const revokedKeys = [...new Set([...(plugins?.revokedKeys ?? []), ...configRevokedKeyIds(config), ...await revokedKeyIds()])];
+  return { publishers, revokedKeys, required: signatureRequired() };
 }
 
 /**
@@ -245,10 +291,10 @@ interface SignatureState {
   malformed: string | null;
 }
 
-async function signatureState(dir: string, contentHash: string): Promise<SignatureState> {
+async function signatureState(dir: string, contentHash: string, origin?: PluginOrigin | null, only?: readonly TrustedPublisher[]): Promise<SignatureState> {
+  const policy = await signingPolicy(origin, only);
   try {
     const onDisk = await readSignatureFile(dir);
-    const policy = signingPolicy();
     const check = checkSignatureOnDisk(onDisk, contentHash, policy.publishers, (publisher, reason) => {
       coreLogger.warn({ publisher, reason }, 'A key in plugins.trustedPublishers cannot be read; it trusts nothing');
     }, { revokedKeys: policy.revokedKeys });
@@ -285,14 +331,15 @@ async function acceptSignature(
   name: string,
   contentHash: string,
   requireTrusted = false,
+  only?: readonly TrustedPublisher[],
 ): Promise<{ signedBy: string | null; keyId: string | null; signatureHash: string | null; warnings: string[] }> {
-  const state = await signatureState(dir, contentHash);
+  const state = await signatureState(dir, contentHash, null, only);
   const { check, sha256: signatureHash } = state;
   if (check.status === 'valid') return { signedBy: check.publisher, keyId: check.keyId, signatureHash, warnings: [] };
   const shortfall = signatureShortfall(name, check);
   if (check.status === 'invalid' || check.status === 'revoked') throw new PluginPackageError('invalid', `${shortfall}; not installed`);
   if (requireTrusted) throw new PluginPackageError('invalid', `${shortfall}; a package installed from a URL must carry a valid signature by a trusted publisher`);
-  if (signingPolicy().required) throw new PluginPackageError('invalid', `${shortfall}; plugins.requireSignature accepts only packages signed by a trusted publisher`);
+  if (signatureRequired()) throw new PluginPackageError('invalid', `${shortfall}; plugins.requireSignature accepts only packages signed by a trusted publisher`);
   if (check.status === 'unknown_key' || check.status === 'expired') {
     coreLogger.warn({ pkg: name, keyId: check.keyId, status: check.status }, 'Plugin package signed by an untrusted key; installed as unsigned');
     return { signedBy: null, keyId: check.keyId, signatureHash, warnings: [`${shortfall}: installed as unsigned`] };
@@ -328,6 +375,36 @@ async function signerChange(
 async function dropListingFile(staging: string): Promise<void> {
   const path = join(staging, LISTING_FILE);
   if ((await lstat(path).catch(() => null))?.isFile()) await rm(path);
+}
+
+/** JSON with sorted object keys, so equal objects compare equal whatever their key order. */
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/**
+ * The source an upgrade must keep (docs/PLUGIN-PACKAGES.md#provenance): the
+ * marketplace, or one named registry. Direct installs an admin points at
+ * (a directory, a URL, a bundled plugin, an agent's directory) and packages
+ * installed before provenance was recorded are one class, `direct`: moving
+ * between them is the admin's own doing, as before. Moving to or from a
+ * registry needs `allowSourceChange`.
+ */
+export function sourceClass(origin: PluginOrigin | null | undefined): string {
+  const source = origin?.source;
+  if (source === 'marketplace' || (typeof source === 'string' && source.startsWith('registry:'))) return source;
+  return 'direct';
+}
+
+function describeSource(origin: PluginOrigin | null | undefined): string {
+  if (!origin) return 'an install made before provenance was recorded';
+  if (origin.source === 'marketplace') return 'the Octipus marketplace';
+  if (origin.source.startsWith('registry:')) return `the registry ${origin.source.slice('registry:'.length)}`;
+  return `a ${origin.source} install`;
 }
 
 /**
@@ -377,6 +454,20 @@ export async function installFromDirectory(
     authoredBy?: AgentAuthoredDetails;
     /** The runtime the package must declare (creator mode installs `package` only), checked on the staged copy. */
     requireRuntime?: PluginRuntime;
+    /**
+     * What a registry listing promised beyond name and version
+     * (docs/PLUGIN-PACKAGES.md#marketplace): the content hash, and the
+     * permissions (`computePermissions`) the listing shows. Each is compared
+     * with the staged copy; any difference refuses the install (audited), so
+     * a listing can never understate what a package asks for.
+     */
+    expectListing?: { contentHash?: string | null; permissions?: PluginPermissionsSummary | null };
+    /** Where it comes from (provenance, recorded on the row and in the audit row). Default: a directory, or `agent` with `authoredBy`. */
+    origin?: PluginOrigin;
+    /** Only these publishers' keys count for its signature (an install from the marketplace: its keys alone). */
+    trustOnly?: readonly TrustedPublisher[];
+    /** An upgrade may come from another source than the installed version (another registry, the marketplace; audited). */
+    allowSourceChange?: boolean;
   } = {},
 ): Promise<PluginPackageRow & { warnings: string[] }> {
   assertStoreOutsideInstall();
@@ -414,6 +505,23 @@ export async function installFromDirectory(
     if (opts.expect?.version !== undefined && opts.expect.version !== manifest.version) {
       throw new PluginPackageError('invalid', `${manifest.name} is version ${manifest.version}, not the expected ${opts.expect.version}; not installed`);
     }
+    // A version the marketplace revoked installs from nowhere (docs/PLUGIN-PACKAGES.md#online-revocation).
+    const revoked = await packageRevocation(manifest.name, manifest.version);
+    if (revoked) {
+      await auditQuietly('install_refused_revoked', manifest.name, { version: manifest.version, reason: revoked.reason, actor: actorUserId });
+      throw new PluginPackageError('invalid', `${manifest.name} ${manifest.version} is revoked by the marketplace (${revoked.reason || 'no reason given'}); not installed`);
+    }
+    if (opts.expectListing?.permissions) {
+      const actual = computePermissions(manifest);
+      if (canonicalJson(actual) !== canonicalJson(opts.expectListing.permissions)) {
+        await auditQuietly('listing_mismatch', manifest.name, {
+          version: manifest.version, actor: actorUserId, what: 'permissions', listed: opts.expectListing.permissions, actual, source: opts.origin?.source ?? null,
+        });
+        throw new PluginPackageError('invalid',
+          `The listing of ${manifest.name} ${manifest.version} does not state what the package asks for: its permissions differ from those computed from its manifest; not installed`,
+          [`listed: ${canonicalJson(opts.expectListing.permissions)}`, `actual: ${canonicalJson(actual)}`]);
+      }
+    }
     // Named after the package from here on, beside its target.
     const named = `${packageDir(manifest.name)}.installing-${process.pid}-${Date.now()}`;
     await rename(staging, named);
@@ -421,7 +529,14 @@ export async function installFromDirectory(
     // Hashed as copied, so what the admin installs is what is pinned.
     if (manifest.entry !== undefined) await checkEntry(staging, manifest.entry);
     contentHash = await hashPackageContent(staging, manifest);
-    signature = await acceptSignature(staging, manifest.name, contentHash, opts.requireTrustedSignature === true);
+    if (opts.expectListing?.contentHash && opts.expectListing.contentHash !== contentHash) {
+      await auditQuietly('listing_mismatch', manifest.name, {
+        version: manifest.version, actor: actorUserId, what: 'contentHash', listed: opts.expectListing.contentHash, actual: contentHash, source: opts.origin?.source ?? null,
+      });
+      throw new PluginPackageError('invalid',
+        `${manifest.name} ${manifest.version} hashes to ${contentHash}, not to the ${opts.expectListing.contentHash} its listing states; not installed`);
+    }
+    signature = await acceptSignature(staging, manifest.name, contentHash, opts.requireTrustedSignature === true, opts.trustOnly);
     // Its contributions must fit beside what is installed (a command name taken), and its prompt file be readable.
     const fit = await contributionInstallProblems(manifest, staging, await db.select({ name: pluginPackages.name, manifest: pluginPackages.manifest }).from(pluginPackages));
     if (fit.length > 0) throw new PluginPackageError('conflict', `${manifest.name}: ${fit.join('; ')}`, fit);
@@ -434,6 +549,7 @@ export async function installFromDirectory(
 
   let previous: PluginPackageRow | null = null;
   const overrides: Record<string, unknown> = {};
+  const origin: PluginOrigin = opts.origin ?? (opts.authoredBy ? { source: 'agent' } : { source: 'directory' });
   try {
     if (opts.upgrade) {
       const current = await findRow(manifest.name);
@@ -444,6 +560,15 @@ export async function installFromDirectory(
             `${manifest.name} ${manifest.version} is older than the installed ${current.version}; pass allowDowngrade to install it anyway`);
         }
         overrides.downgrade = true;
+      }
+      // Another registry (or the marketplace) offering the same name must not take the package over in silence.
+      if (sourceClass(current.origin) !== sourceClass(origin)) {
+        if (!opts.allowSourceChange) {
+          throw new PluginPackageError('conflict',
+            `${manifest.name} ${current.version} came from ${describeSource(current.origin)}; this version comes from ${describeSource(origin)}. Confirm the change of source to continue (allowSourceChange: true); it is recorded in the audit log`,
+            [`source: ${sourceClass(current.origin)} → ${sourceClass(origin)}`], { sourceChange: { from: sourceClass(current.origin), to: sourceClass(origin) } });
+        }
+        overrides.sourceChange = { from: current.origin ?? null, to: origin };
       }
       const change = await signerChange(current, signature);
       if (change) {
@@ -461,7 +586,7 @@ export async function installFromDirectory(
       if (current.enabled) await syncPluginServers();
     } else {
       const [claimed] = await db.insert(pluginPackages)
-        .values({ name: manifest.name, version: manifest.version, manifest, enabled: false, settings: {}, installedBy: actorUserId })
+        .values({ name: manifest.name, version: manifest.version, manifest, enabled: false, settings: {}, installedBy: actorUserId, origin })
         .onConflictDoNothing()
         .returning();
       if (!claimed) {
@@ -482,7 +607,7 @@ export async function installFromDirectory(
     row = await db.transaction(async (tx) => {
       const [updated] = await tx.update(pluginPackages)
         .set({
-          version: manifest.version, manifest, enabled: false, settings, contentHash, signatureHash: signature.signatureHash, signedBy: signature.signedBy,
+          version: manifest.version, manifest, enabled: false, settings, contentHash, signatureHash: signature.signatureHash, signedBy: signature.signedBy, origin,
           // New files: running them in the server process is approved again, for these bytes.
           inProcessApprovedHash: null, inProcessApprovedBy: null, inProcessApprovedAt: null,
           // New files: what it adds to every user's agents is approved again.
@@ -527,6 +652,7 @@ export async function installFromDirectory(
     version: manifest.version, from: previous?.version ?? null, contentHash, signedBy: signature.signedBy, keyId: signature.keyId,
     runtime: pluginRuntime(manifest),
     ...(opts.source ? { source: opts.source } : {}),
+    origin,
     ...(previous?.approvedContributionsHash ? { contributionsApprovalCleared: previous.approvedContributionsHash } : {}),
     ...(previous?.approvedHostScopes?.includes(PLUGIN_MODEL_CLI_TOOLS_APPROVAL) ? { modelCliToolsApprovalCleared: true } : {}),
     ...(opts.authoredBy ? { authoredBy: opts.authoredBy } : {}),
@@ -691,6 +817,12 @@ export async function configure(
     }
   }
   const enabled = change.enabled ?? row.enabled;
+  if ((enabled && !row.enabled) || change.approveContent !== undefined || change.approveInProcess !== undefined) {
+    const revoked = await packageRevocation(name, row.version);
+    if (revoked) {
+      throw new PluginPackageError('incomplete', `${name} ${row.version} is revoked by the marketplace (${revoked.reason || 'no reason given'}); it cannot be enabled or approved. Upgrade to a version that is not revoked`);
+    }
+  }
   if (enabled) {
     const missing = await missingConfiguration({ ...row, settings });
     if (missing.length > 0) {
@@ -709,7 +841,7 @@ export async function configure(
   let contentHash = row.contentHash;
   let signedBy = row.signedBy;
   let signatureHash = row.signatureHash;
-  const required = signingPolicy().required;
+  const required = signatureRequired();
   /** Under requireSignature: refuse unless the files carry a valid trusted signature over `hash`. */
   const refuseUnsigned = (check: SignatureCheck, doing: string): void => {
     // A revoked key is refused whatever requireSignature says.
@@ -735,7 +867,7 @@ export async function configure(
     // Approved content is the publisher's only if their signature covers it. A
     // signature left from before the change no longer matches: it reads as
     // invalid, and signedBy clears.
-    const sig = await signatureState(packageDir(name), actual);
+    const sig = await signatureState(packageDir(name), actual, row.origin);
     if (sig.malformed) throw new PluginPackageError('invalid', `${sig.malformed}; remove it or sign the package again before approving`);
     refuseUnsigned(sig.check, 'approving');
     signedBy = sig.check.status === 'valid' ? sig.check.publisher : null;
@@ -752,7 +884,7 @@ export async function configure(
     }
     actual ??= await hashPackageContent(packageDir(name), row);
     hashedNow = actual;
-    const sig = await signatureState(packageDir(name), actual);
+    const sig = await signatureState(packageDir(name), actual, row.origin);
     if (sig.malformed) throw new PluginPackageError('incomplete', `${sig.malformed}; remove it or sign the package again before enabling ${name}`);
     if (row.contentHash !== null && sig.sha256 !== row.signatureHash) {
       throw new PluginPackageError('incomplete',
@@ -779,7 +911,7 @@ export async function configure(
         [`approveInProcess: reviewed ${approvingInProcess}, actual ${actual}`], { actualHash: actual });
     }
     if (!approving) {
-      const sig = await signatureState(packageDir(name), actual);
+      const sig = await signatureState(packageDir(name), actual, row.origin);
       if (sig.malformed) throw new PluginPackageError('invalid', `${sig.malformed}; remove it or sign the package again before approving it to run in the server process`);
       if (sig.sha256 !== signatureHash) {
         throw new PluginPackageError('incomplete',
@@ -1063,10 +1195,29 @@ async function viewOf(row: PluginPackageRow, secrets: string[], authoredBy?: Plu
     approvedHostScopes: row.approvedHostScopes ?? null,
     modelCliTools: modelCliToolsView(row),
     authoredBy: authoredBy !== undefined ? authoredBy : await agentAuthorship(row.name),
+    origin: row.origin ?? null,
+    revocation: await revocationOf(row, signature),
+    declarations: declarationItems(computePermissions(row.manifest), row.manifest),
     installedBy: row.installedBy,
     installedAt: row.installedAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+/**
+ * Why a package is revoked, for its view: its version (the marketplace's
+ * signed index), or the key that signed it (the marketplace, or the config).
+ */
+async function revocationOf(row: PluginPackageRow, signature: PluginSignatureStatus | null): Promise<PluginRevocationView | null> {
+  const pkg = await packageRevocation(row.name, row.version);
+  if (pkg) return { kind: 'package', keyId: null, reason: pkg.reason, source: 'marketplace', since: pkg.firstSeenAt.toISOString() };
+  if (signature?.status === 'revoked' && signature.keyId) {
+    const key = await keyRevocation(signature.keyId);
+    return key
+      ? { kind: 'key', keyId: signature.keyId, reason: key.reason, source: 'marketplace', since: key.firstSeenAt.toISOString() }
+      : { kind: 'key', keyId: signature.keyId, reason: signature.detail, source: 'config', since: null };
+  }
+  return null;
 }
 
 /** Why no runner wraps the server: off, none found, or Windows (no built-in one). */
@@ -1084,7 +1235,7 @@ const NO_RUNNER = 'security.shellSandbox off, no bwrap/firejail on Linux, no /us
 async function currentSignature(row: PluginPackageRow): Promise<PluginSignatureStatus | null> {
   if (row.contentHash === null) return null;
   try {
-    const sig = await signatureState(packageDir(row.name), row.contentHash);
+    const sig = await signatureState(packageDir(row.name), row.contentHash, row.origin);
     if (sig.sha256 !== row.signatureHash) {
       return { status: 'changed', keyId: null, publisher: null, detail: `${SIGNATURE_FILE} changed since the content was approved` };
     }
@@ -1301,9 +1452,22 @@ export async function checkPackageBeforeStart(name: string): Promise<string | nu
     await auditOnce(`${name}\n${check.recorded}\n${check.actual}`, 'content_mismatch', name, { version: row.version, recorded: check.recorded, actual: check.actual });
     return CONTENT_MISMATCH_PROBLEM;
   }
+  // A version the marketplace revoked does not start, whatever else holds (docs/PLUGIN-PACKAGES.md#online-revocation).
+  let revoked: Awaited<ReturnType<typeof packageRevocation>>;
+  try {
+    revoked = await packageRevocation(name, row.version);
+  } catch (err) {
+    coreLogger.error({ err, pkg: name }, 'Plugin package revocations could not be read; not started');
+    return `Could not check whether the package is revoked: ${(err as Error).message}`;
+  }
+  if (revoked) {
+    coreLogger.warn({ pkg: name, version: row.version, reason: revoked.reason }, 'Plugin package version is revoked; not started');
+    await auditOnce(`${name}\npackage-revoked\n${row.version}`, 'package_revoked', name, { version: row.version, reason: revoked.reason });
+    return `${name} ${row.version} is revoked by the marketplace (${revoked.reason || 'no reason given'}); it does not start. Upgrade to a version that is not revoked`;
+  }
   let sig: SignatureState;
   try {
-    sig = await signatureState(packageDir(name), check.hash);
+    sig = await signatureState(packageDir(name), check.hash, row.origin);
   } catch (err) {
     coreLogger.error({ err, pkg: name }, 'Plugin package signature could not be read; not started');
     return `Could not check the package signature: ${(err as Error).message}`;
@@ -1329,7 +1493,7 @@ export async function checkPackageBeforeStart(name: string): Promise<string | nu
     await auditOnce(`${name}\nrevoked\n${sig.check.keyId}`, 'signature_revoked', name, { version: row.version, hash: check.hash, keyId: sig.check.keyId, publisher: sig.check.publisher });
     return `${shortfall}; it does not start until it is signed again by a trusted key (or its signature file is removed and its content approved)`;
   }
-  if (signingPolicy().required) {
+  if (signatureRequired()) {
     const signature = sig.check;
     if (signature.status !== 'valid') {
       const shortfall = signatureShortfall(name, signature);

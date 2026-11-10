@@ -3,6 +3,7 @@
  * share. Dependency-free so `web/` imports it as is; the manifest is parsed
  * and checked in src/plugins/packages/manifest.ts.
  */
+import type { PluginDeclarationItem, PluginGuidanceWarning } from './plugin-declarations';
 import type { FieldDef } from './record-fields';
 
 /** The manifest file at a package's root. */
@@ -554,3 +555,202 @@ export interface PluginPackageView {
   authoredBy: PluginAgentAuthorship | null;
 }
 // ── end creator mode ────────────────────────────────────────────────────────
+
+// ── Marketplace, provenance, revocation, updates and usage ──────────────────
+// (docs/PLUGIN-PACKAGES.md#marketplace). The fields below merge into the
+// interfaces above.
+
+/**
+ * Where an installed version came from (`plugin_packages.origin`):
+ * - `marketplace`: the built-in Octipus marketplace;
+ * - `registry:<name>`: a registry of `plugins.registries`;
+ * - `url`, `directory`, `bundled`, `agent`: a direct install by an admin, a
+ *   plugin shipped with Octipus, or creator mode.
+ */
+export interface PluginOrigin {
+  source: 'marketplace' | `registry:${string}` | 'url' | 'directory' | 'bundled' | 'agent';
+  /** The registry's name (the marketplace's is "Octipus"), for a registry install. */
+  registry?: string;
+  /** The tarball URL, for a URL or registry install. */
+  url?: string;
+  /** The version the listing offered (equal to the installed version). */
+  listingVersion?: string;
+  /** The `generatedAt` of the signed index it was installed from. */
+  indexGeneratedAt?: string | null;
+}
+
+/** Why an installed package (or its signing key) is revoked, as the package view shows it. */
+export interface PluginRevocationView {
+  kind: 'package' | 'key';
+  /** The revoked key id, for a key revocation. */
+  keyId: string | null;
+  reason: string;
+  /** Where the revocation came from: `marketplace` (its signed index) or `config` (plugins.revokedKeys / a revoked trusted publisher). */
+  source: 'marketplace' | 'config';
+  /** When this host first saw it (marketplace revocations only). */
+  since: string | null;
+}
+
+export interface PluginPackageView {
+  /** Where the installed version came from; null when installed before provenance was recorded. */
+  origin: PluginOrigin | null;
+  /** Set when this version, or the key that signed it, is revoked: it does not start, and enabling is refused. */
+  revocation: PluginRevocationView | null;
+  /** What it declares it will do, item by item (`declarationItems`), for the admin to read and agree to. */
+  declarations: PluginDeclarationItem[];
+}
+
+/**
+ * What a package asks for, computed from its manifest alone
+ * (`computePermissions`, `octi plugin permissions --json`); an index v2 entry
+ * carries it, and the host recomputes it at install.
+ */
+export interface PluginPermissionsSummary {
+  name: string;
+  version: string;
+  apiVersion: string;
+  runtime: PluginRuntime;
+  host: string[];
+  network: string[];
+  tools: Array<{ name: string; effect: PluginToolEffect }>;
+  effects: Record<PluginToolEffect, number>;
+  contributions: { commands: string[]; schedules: string[]; events: string[]; prompt: boolean; context: boolean };
+  pages: number;
+  trustedInput: boolean;
+  maxProtection: 1 | 2 | 3 | 4;
+}
+
+/** One change between two permission summaries (`PluginUpdateView.diff`). */
+export interface PluginPermissionChange {
+  kind: 'runtime' | 'apiVersion' | 'host' | 'network' | 'tool' | 'contribution' | 'pages' | 'trustedInput' | 'maxProtection';
+  change: 'added' | 'removed' | 'wider' | 'narrower' | 'changed';
+  /** In words, e.g. "host API scope notes:write". */
+  text: string;
+  /** Whether it asks for more than before. */
+  widens: boolean;
+}
+
+export interface PluginPermissionDiff {
+  /** Whether anything asks for more than before. */
+  widened: boolean;
+  changes: PluginPermissionChange[];
+}
+
+/** Whether a listed version can run here. */
+export interface PluginCompatibility {
+  ok: boolean;
+  /** Why not, in words; null when it can. */
+  reason: string | null;
+}
+
+/** One version of a plugin in the marketplace (or a registry). */
+export interface MarketplaceVersionView {
+  version: string;
+  publishedAt: string | null;
+  /** The tarball's sha256 (`sha256:<hex>`). */
+  sha256: string;
+  contentHash: string | null;
+  apiVersion: string | null;
+  minOctipus: string | null;
+  compatibility: PluginCompatibility;
+  /** The reason, when this version is revoked. */
+  revoked: string | null;
+}
+
+/** One plugin as the in-app Marketplace page shows it (`GET /api/plugin-packages/marketplace`). */
+export interface MarketplacePluginView {
+  /** `marketplace`, or a registry's name. */
+  registry: string;
+  name: string;
+  title: string;
+  /** The listing's one-line summary (may be empty). */
+  summary: string;
+  description: string;
+  category: string | null;
+  tags: string[];
+  author: { name: string; url: string | null } | null;
+  homepage: string | null;
+  license: string | null;
+  publisher: string | null;
+  /** The icon through the host's asset proxy (`/api/plugin-packages/marketplace/asset?…`), or null. */
+  icon: string | null;
+  /** Screenshots through the host's asset proxy. */
+  screenshots: string[];
+  /** README.md as raw Markdown text (render sanitized, without raw HTML or remote images), or null. */
+  readme: string | null;
+  /** CHANGELOG.md as raw Markdown text, or null. */
+  changelog: string | null;
+  /** The newest version that can be installed here (compatible, not revoked), or null. */
+  latest: string | null;
+  /** Every listed version, newest first. */
+  versions: MarketplaceVersionView[];
+  /** The permissions of `latest` (else of the newest version), as the index lists them; checked again at install. */
+  permissions: PluginPermissionsSummary | null;
+  /** `permissions` in words, e.g. "Reads your tasks", "No network access". */
+  askSummary: string[];
+  /** `permissions` item by item (`declarationItems`; no secrets or page titles: the listing does not carry the manifest). */
+  declarations: PluginDeclarationItem[];
+  /** Guidance for the admin (an egress scope beside a read scope, deprecation, a source change); never a refusal. */
+  warnings: PluginGuidanceWarning[];
+  /** Whether `latest` can be installed here. */
+  compatibility: PluginCompatibility;
+  installedVersion: string | null;
+  /** Where the installed version came from, when installed. */
+  installedOrigin: PluginOrigin | null;
+  /** A newer installable version than the installed one, from the same source. */
+  updateAvailable: string | null;
+  /** Set when the installed version is revoked (or every listed version is). */
+  revoked: string | null;
+  deprecated: string | null;
+  /** Downloads as the marketplace's unsigned stats.json reports them; display only, never part of trust. Null when unknown. */
+  downloads: number | null;
+}
+
+export interface MarketplaceListing {
+  /**
+   * `ready`: listed; `off`: plugins.marketplace is false; `unconfigured`: this
+   * build has no marketplace keys yet (`message` says so); `error`: the index
+   * could not be read or verified (`message` says why).
+   */
+  state: 'ready' | 'off' | 'unconfigured' | 'error';
+  message: string | null;
+  /** The index's `generatedAt`, when listed. */
+  generatedAt: string | null;
+  plugins: MarketplacePluginView[];
+  /** Categories present in `plugins`, sorted. */
+  categories: string[];
+  /** Registries (from plugins.registries, or the marketplace) that could not be read, and why. */
+  errors: Array<{ registry: string; error: string }>;
+}
+
+/** A newer version of an installed package from the same source (`GET /api/plugin-packages/updates`). */
+export interface PluginUpdateView {
+  name: string;
+  installed: string;
+  latest: string;
+  /** `marketplace` or the registry's name. */
+  registry: string;
+  /** Installed permissions (recomputed from the installed manifest) → the new entry's; null when the listing states none (an index v1 registry). */
+  diff: PluginPermissionDiff | null;
+  /** Guidance: what widens, what the new version adds that needs saying. */
+  warnings: PluginGuidanceWarning[];
+}
+
+/** Tokens, spend and calls of one plugin package (`GET /api/plugin-packages/:name/usage`). */
+export interface PluginUsageView {
+  name: string;
+  days: number;
+  since: string;
+  /** `all` for the admin view (every user), `me` for the caller's own. */
+  scope: 'all' | 'me';
+  /** `model:complete` calls: cost rows tagged `plugin:<name>`. */
+  modelCalls: number;
+  /** Background runs (`agent:run`) started. */
+  runs: number;
+  inputTokens: number;
+  outputTokens: number;
+  /** Spend in the cost log's currency (USD), model calls and runs together. */
+  cost: number;
+  /** Per user (admin view only; ids, no content). */
+  byUser?: Array<{ userId: string; modelCalls: number; runs: number; tokens: number; cost: number }>;
+}

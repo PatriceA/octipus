@@ -42,6 +42,36 @@ vi.mock('@/plugins/packages/remote', () => ({
   listRegistry: async () => { fixture.calls.push({ fn: 'listRegistry', args: [] }); return { packages: [], errors: [] }; },
 }));
 
+vi.mock('@/plugins/packages/marketplace', () => ({
+  marketplaceListing: async (...args: unknown[]) => { fixture.calls.push({ fn: 'marketplaceListing', args }); return { state: 'ready', plugins: [] }; },
+}));
+vi.mock('@/plugins/packages/marketplace-updates', () => ({
+  listUpdates: async () => { fixture.calls.push({ fn: 'listUpdates', args: [] }); return []; },
+}));
+vi.mock('@/plugins/packages/marketplace-assets', () => {
+  class AssetError extends Error { constructor(readonly status: number, message: string) { super(message); } }
+  return {
+    AssetError,
+    fetchListingAsset: async (url: string) => {
+      fixture.calls.push({ fn: 'fetchListingAsset', args: [url] });
+      if (url.endsWith('.svg')) throw new AssetError(415, 'Not a PNG, JPEG, WebP or GIF image');
+      return { type: 'image/png', bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47]) };
+    },
+  };
+});
+vi.mock('@/plugins/packages/revocations', () => ({
+  listRevocations: async () => { fixture.calls.push({ fn: 'listRevocations', args: [] }); return []; },
+  clearRevocation: async (...args: unknown[]) => { fixture.calls.push({ fn: 'clearRevocation', args }); return null; },
+}));
+vi.mock('@/plugins/packages/registry-install', () => ({
+  installFromRegistry: async (...args: unknown[]) => { fixture.calls.push({ fn: 'installFromRegistry', args }); return { ...row, guidance: [], origin: { source: 'marketplace' } }; },
+}));
+vi.mock('@/db/repositories/plugin-usage-repository', () => ({
+  pluginUsageRepository: {
+    usage: async (...args: unknown[]) => { fixture.calls.push({ fn: 'usage', args }); return { modelCalls: 1, runs: 0, inputTokens: 1, outputTokens: 1, cost: 0, byUser: [{ userId: 'u' }] }; },
+  },
+}));
+
 const { pluginPackageRoutes } = await import('./plugin-packages');
 const app = new App({ prefix: '/api' }).use(pluginPackageRoutes);
 
@@ -65,6 +95,13 @@ const ROUTES: Array<[string, string, unknown?]> = [
   ['PATCH', '/demo', { approveContent: SHA }],
   ['PUT', '/demo/secrets/TOKEN', { value: 'x' }],
   ['DELETE', '/demo'],
+  ['GET', '/marketplace'],
+  ['GET', '/marketplace/asset?url=https%3A%2F%2Fmp.example.com%2Fdemo%2Ficon.png'],
+  ['GET', '/updates'],
+  ['GET', '/revocations'],
+  ['DELETE', '/revocations/11111111-1111-4111-8111-111111111111', { reason: 'mistake' }],
+  ['GET', '/demo/usage'],
+  ['POST', '/', { registry: 'marketplace', name: 'demo' }],
 ];
 
 describe('plugin package routes', () => {
@@ -123,5 +160,42 @@ describe('plugin package routes', () => {
     expect((await call('POST', '/', { path: '/opt/x', sha256: SHA })).status).toBe(400);
     expect((await call('POST', '/', { url: 'https://plugins.example.com/x.tgz', sha256: 'nope' })).status).toBe(422);
     expect(fixture.calls).toEqual([]);
+  });
+
+  test('the marketplace takes q and category; a registry install names the package', async () => {
+    fixture.user = ADMIN;
+    expect((await call('GET', '/marketplace?q=caf%C3%A9&category=productivity')).status).toBe(200);
+    expect((await call('POST', '/', { registry: 'marketplace' })).status).toBe(400);
+    const res = await call('POST', '/', { registry: 'marketplace', name: 'demo', allowSourceChange: true });
+    expect([res.status, res.body.guidance, res.body.origin]).toEqual([200, [], { source: 'marketplace' }]);
+    expect(fixture.calls).toEqual([
+      { fn: 'marketplaceListing', args: [{ q: 'café', category: 'productivity' }] },
+      { fn: 'installFromRegistry', args: [ADMIN.id, { registry: 'marketplace', name: 'demo', version: undefined, upgrade: false, allowSignerChange: false, allowDowngrade: false, allowSourceChange: true, allowIncompatible: false }] },
+    ]);
+  });
+
+  test('an image is served with its sniffed type, nosniff, a CSP that runs nothing and inline disposition; a refusal keeps its status', async () => {
+    fixture.user = ADMIN;
+    const res = await app.handle(new Request('http://localhost/api/plugin-packages/marketplace/asset?url=https%3A%2F%2Fmp.example.com%2Fdemo%2Ficon.png'));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('image/png');
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(res.headers.get('content-security-policy')).toBe("default-src 'none'");
+    expect(res.headers.get('content-disposition')).toBe('inline');
+    expect((await call('GET', '/marketplace/asset?url=https%3A%2F%2Fmp.example.com%2Fdemo%2Fx.svg')).status).toBe(415);
+    expect((await call('GET', '/marketplace/asset?url=http%3A%2F%2Fmp.example.com%2Fx.png')).status).toBe(422);
+  });
+
+  test('usage: the admin view covers every user; a member gets only their own', async () => {
+    fixture.user = ADMIN;
+    const all = await call('GET', '/demo/usage?days=7');
+    expect([all.status, all.body.scope, all.body.byUser]).toEqual([200, 'all', [{ userId: 'u' }]]);
+    fixture.user = MEMBER;
+    expect((await call('GET', '/demo/usage')).status).toBe(403);
+    const mine = await call('GET', '/demo/usage/me');
+    expect([mine.status, mine.body.scope, mine.body.byUser]).toEqual([200, 'me', undefined]);
+    fixture.user = null;
+    expect((await call('GET', '/demo/usage/me')).status).toBe(401);
+    expect(fixture.calls.map((c) => [c.fn, c.args[0], c.args[2]])).toEqual([['usage', 'demo', undefined], ['usage', 'demo', MEMBER.id]]);
   });
 });
