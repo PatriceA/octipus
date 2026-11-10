@@ -40,6 +40,11 @@ vi.mock('@/plugins/packages/bundled', () => ({
 vi.mock('@/plugins/packages/remote', () => ({
   installFromUrl: async (...args: unknown[]) => { fixture.calls.push({ fn: 'installFromUrl', args }); return row; },
   listRegistry: async () => { fixture.calls.push({ fn: 'listRegistry', args: [] }); return { packages: [], errors: [] }; },
+  configuredRegistries: () => [{ name: 'acme', url: 'https://acme.example.com/index.json' }],
+  clearRegistryCache: () => {},
+}));
+vi.mock('@/plugins/packages/listing-pins', () => ({
+  resetPin: async (...args: unknown[]) => { fixture.calls.push({ fn: 'resetPin', args }); return args[2] === '1.0.0' ? { contentHash: `sha256:${'c'.repeat(64)}`, signedBy: null } : null; },
 }));
 
 vi.mock('@/plugins/packages/marketplace', () => ({
@@ -59,10 +64,18 @@ vi.mock('@/plugins/packages/marketplace-assets', () => {
     },
   };
 });
-vi.mock('@/plugins/packages/revocations', () => ({
-  listRevocations: async () => { fixture.calls.push({ fn: 'listRevocations', args: [] }); return []; },
-  clearRevocation: async (...args: unknown[]) => { fixture.calls.push({ fn: 'clearRevocation', args }); return null; },
-}));
+vi.mock('@/plugins/packages/revocations', () => {
+  class RevocationClearError extends Error {}
+  return {
+    RevocationClearError,
+    listRevocations: async () => { fixture.calls.push({ fn: 'listRevocations', args: [] }); return []; },
+    clearRevocation: async (...args: unknown[]) => {
+      fixture.calls.push({ fn: 'clearRevocation', args });
+      if (args[0] === '33333333-3333-4333-8333-333333333333') throw new RevocationClearError('a root key; its revocation cannot be cleared');
+      return null;
+    },
+  };
+});
 vi.mock('@/plugins/packages/registry-install', () => ({
   installFromRegistry: async (...args: unknown[]) => { fixture.calls.push({ fn: 'installFromRegistry', args }); return { ...row, guidance: [], origin: { source: 'marketplace' } }; },
 }));
@@ -100,6 +113,7 @@ const ROUTES: Array<[string, string, unknown?]> = [
   ['GET', '/updates'],
   ['GET', '/revocations'],
   ['DELETE', '/revocations/11111111-1111-4111-8111-111111111111', { reason: 'mistake' }],
+  ['DELETE', '/pins', { registry: 'acme', name: 'demo', version: '1.0.0', reason: 'republished' }],
   ['GET', '/demo/usage'],
   ['POST', '/', { registry: 'marketplace', name: 'demo' }],
 ];
@@ -184,6 +198,21 @@ describe('plugin package routes', () => {
     expect(res.headers.get('content-disposition')).toBe('inline');
     expect((await call('GET', '/marketplace/asset?url=https%3A%2F%2Fmp.example.com%2Fdemo%2Fx.svg')).status).toBe(415);
     expect((await call('GET', '/marketplace/asset?url=http%3A%2F%2Fmp.example.com%2Fx.png')).status).toBe(422);
+  });
+
+  test('a pin is reset with a reason, by registry name; the revocation of a root key is never cleared', async () => {
+    fixture.user = ADMIN;
+    expect((await call('DELETE', '/pins', { registry: 'acme', name: 'demo', version: '1.0.0' })).status).toBe(422);
+    const res = await call('DELETE', '/pins', { registry: 'acme', name: 'demo', version: '1.0.0', reason: 'republished on purpose' });
+    expect([res.status, res.body.reset]).toEqual([200, true]);
+    expect((await call('DELETE', '/pins', { registry: 'acme', name: 'demo', version: '2.0.0', reason: 'republished' })).status).toBe(404);
+    expect((await call('DELETE', '/pins', { registry: 'nope', name: 'demo', version: '1.0.0', reason: 'republished' })).status).toBe(404);
+    expect(fixture.calls.filter((c) => c.fn === 'resetPin')).toEqual([
+      { fn: 'resetPin', args: ['https://acme.example.com/index.json', 'demo', '1.0.0', ADMIN.id, 'republished on purpose'] },
+      { fn: 'resetPin', args: ['https://acme.example.com/index.json', 'demo', '2.0.0', ADMIN.id, 'republished'] },
+    ]);
+    const refused = await call('DELETE', '/revocations/33333333-3333-4333-8333-333333333333', { reason: 'oops' });
+    expect([refused.status, refused.body.error]).toEqual([409, expect.stringMatching(/root key/)]);
   });
 
   test('usage: the admin view covers every user; a member gets only their own', async () => {
