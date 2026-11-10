@@ -2,6 +2,7 @@ import { eq, inArray } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import type { NewSkill } from '@/db/schema/skills';
 import { skills } from '@/db/schema/skills';
+import { PLUGIN_AUTHORING_SKILL } from '@/plugins/packages/authoring/skill';
 import { logger } from '@/utils/logger';
 
 const SYSTEM_SKILLS: Omit<NewSkill, 'isSystem' | 'userId' | 'createdAt' | 'updatedAt'>[] = [
@@ -198,6 +199,8 @@ Drop caveman for: security warnings, irreversible action confirmations, multi-st
 ## Boundaries
 
 Code/commits/PRs: write normal. Structured output (JSON, SQL, configs): write normal.`, principles: [], bestPractices: [], antiPatterns: [], frameworks: [] },
+  // Creator mode: a sandboxed plugin package, installed disabled for an admin (src/plugins/packages/authoring/skill.ts).
+  PLUGIN_AUTHORING_SKILL,
 ];
 
 /** The shipped fields a boot re-applies to an existing system skill. */

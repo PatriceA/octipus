@@ -15,6 +15,7 @@ const DEFAULT_ASSIGNMENTS: Array<{ skillId: string; topic: string; isActive: boo
   { skillId: 'api-design', topic: 'coding', isActive: true },
   { skillId: 'performance-engineering', topic: 'coding', isActive: true },
   { skillId: 'plugin-development', topic: 'coding', isActive: true },
+  { skillId: 'octipus-plugin-package', topic: 'coding', isActive: true },
 
   // ── Architecture topic ──
   { skillId: 'software-architecture', topic: 'architecture', isActive: true },
@@ -92,6 +93,9 @@ const DEFAULT_ASSIGNMENTS: Array<{ skillId: string; topic: string; isActive: boo
   { skillId: 'caveman', topic: 'writing', isActive: false },
   { skillId: 'caveman', topic: 'research', isActive: false },
   { skillId: 'caveman', topic: 'general', isActive: false },
+
+  // ── Creator mode: writing a sandboxed plugin package (src/plugins/packages/authoring/skill.ts) ──
+  { skillId: 'octipus-plugin-package', topic: 'general', isActive: true },
   { skillId: 'caveman', topic: 'communication', isActive: false },
 ];
 
