@@ -166,6 +166,11 @@ async function run<T>(ctx: HostCtx, op: string, scope: PluginHostScope | null, b
   }
 }
 
+/** `web:read`: the article text handed back at most (the rest is cut, `truncated`). */
+const WEB_READ_MAX_CHARS = 100_000;
+/** `web:read`: cleaned HTML longer than this is left out (`contentHtml: ''`, `truncated`). */
+const WEB_READ_MAX_HTML = 400_000;
+
 const noteView = (n: { id: string; slug: string; title: string; body: string; tags?: unknown; noteKind?: unknown; updatedAt: Date }) => ({
   id: n.id, slug: n.slug, title: n.title, body: n.body, tags: n.tags ?? [], kind: n.noteKind ?? 'note', updatedAt: n.updatedAt,
 });
@@ -252,16 +257,22 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
       ctx.set.status = 400;
       return { error: 'dueAt is not a date', code: 'invalid' };
     }
+    const link = ctx.body.link;
+    if (link && !/^https?:\/\//i.test(link.url)) {
+      ctx.set.status = 400;
+      return { error: 'link.url is an http(s) URL', code: 'invalid' };
+    }
     const task = await contentRepos(principal).tasks.create({
       title: ctx.body.title,
       notes: ctx.body.notes ?? null,
       priority: ctx.body.priority ?? 0,
       dueAt,
+      ...(ctx.body.category ? { category: ctx.body.category } : {}),
       source: 'agent',
-      sourceRef: { plugin: grant.plugin, tool: grant.tool } as never,
+      sourceRef: { plugin: grant.plugin, tool: grant.tool, ...(link ? { url: link.url, ...(link.label ? { label: link.label } : {}) } : {}) } as never,
     });
     await auditTaskMutation({
-      userId: task.userId, taskId: task.id, op: 'create', change: ['title', 'notes', 'priority', 'dueAt'],
+      userId: task.userId, taskId: task.id, op: 'create', change: ['title', 'notes', 'priority', 'dueAt', ...(ctx.body.category ? ['category'] : [])],
       actor: { kind: 'system', id: `plugin:${grant.plugin}` }, runId: grant.sessionId,
     });
     return { id: task.id, title: task.title, status: task.status };
@@ -271,6 +282,10 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
       notes: t.Optional(t.String({ maxLength: 10_000 })),
       priority: t.Optional(t.Integer({ minimum: 0, maximum: 3 })),
       dueAt: t.Optional(t.String({ maxLength: 40 })),
+      /** A user list to file it under (e.g. "Reading"). */
+      category: t.Optional(t.String({ minLength: 1, maxLength: 100 })),
+      /** Where it came from: shown with the task and linked back to. */
+      link: t.Optional(t.Object({ url: t.String({ minLength: 1, maxLength: 2048 }), label: t.Optional(t.String({ maxLength: 500 })) })),
     }),
     detail: { tags: ['plugin-host'] },
   })
@@ -299,6 +314,64 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
     detail: { tags: ['plugin-host'] },
   })
 
+  // One public web page, fetched by the host through its SSRF guard and turned
+  // into a clean article (the reader extraction): the package never touches
+  // the network itself. Size and time are capped by the fetcher (5 MB, 15 s);
+  // the text handed back is capped here.
+  .post('/web/read', (ctx) => run(ctx, 'web.read', 'web:read', async () => {
+    const { fetchReaderDoc } = await import('@/core/reader/fetch');
+    let doc: Awaited<ReturnType<typeof fetchReaderDoc>>;
+    try {
+      doc = await fetchReaderDoc(ctx.body.url);
+    } catch (err) {
+      ctx.set.status = 422;
+      return { error: (err as Error).message, code: 'fetch_failed' };
+    }
+    const truncated = doc.textContent.length > WEB_READ_MAX_CHARS || doc.contentHtml.length > WEB_READ_MAX_HTML;
+    return {
+      ...doc,
+      textContent: doc.textContent.slice(0, WEB_READ_MAX_CHARS),
+      contentHtml: doc.contentHtml.length > WEB_READ_MAX_HTML ? '' : doc.contentHtml,
+      truncated,
+    };
+  }), {
+    body: t.Object({ url: t.String({ minLength: 1, maxLength: 2048, pattern: '^https?://' }) }),
+    detail: { tags: ['plugin-host'] },
+  })
+
+  // One text completion on the calling user's `everyday` model (their own
+  // binding first, then the install's). No tools, no history: a system text
+  // and a prompt in, the model's text out. Input and output are capped.
+  .post('/model/complete', (ctx) => run(ctx, 'model.complete', 'model:complete', async ({ grant }) => {
+    const { resolveModel } = await import('@/models/resolve-model');
+    const model = await resolveModel({ userId: grant.userId, topic: 'everyday' });
+    if (!model) {
+      ctx.set.status = 409;
+      return { error: 'No model is bound to the "everyday" lane; bind one on the Topics page', code: 'no_model' };
+    }
+    const { getLiteLLMClient } = await import('@/models/litellm-client');
+    const result = await getLiteLLMClient().complete({
+      model: model.modelId,
+      modelConfigName: model.name,
+      messages: [
+        ...(ctx.body.system ? [{ role: 'system' as const, content: ctx.body.system, timestamp: new Date() }] : []),
+        { role: 'user' as const, content: ctx.body.prompt, timestamp: new Date() },
+      ],
+      temperature: ctx.body.temperature ?? 0.3,
+      maxTokens: ctx.body.maxTokens ?? 1200,
+      userId: grant.userId,
+    });
+    return { output: (result.content ?? '').trim(), model: model.name };
+  }), {
+    body: t.Object({
+      system: t.Optional(t.String({ maxLength: 4000 })),
+      prompt: t.String({ minLength: 1, maxLength: 40_000 }),
+      maxTokens: t.Optional(t.Integer({ minimum: 1, maximum: 4000 })),
+      temperature: t.Optional(t.Number({ minimum: 0, maximum: 1 })),
+    }),
+    detail: { tags: ['plugin-host'] },
+  })
+
   // A notification to the user who triggered the call (and to nobody else).
   .post('/notify', (ctx) => run(ctx, 'notify', 'notify', async ({ grant, principal }) => {
     const { getNotificationService } = await import('@/core/notification-service');
@@ -322,4 +395,6 @@ export const PLUGIN_HOST_ENDPOINTS: ReadonlyArray<{ method: string; path: string
   { method: 'POST', path: '/api/plugin-host/tasks', scope: 'tasks:write' },
   { method: 'GET', path: '/api/plugin-host/documents/:id', scope: 'documents:read' },
   { method: 'POST', path: '/api/plugin-host/notify', scope: 'notify' },
+  { method: 'POST', path: '/api/plugin-host/web/read', scope: 'web:read' },
+  { method: 'POST', path: '/api/plugin-host/model/complete', scope: 'model:complete' },
 ];

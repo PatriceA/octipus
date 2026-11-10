@@ -42,6 +42,18 @@ describe('scope intersection', () => {
     expect(grantableScopes(['notes:read'], ['notes:read', 'tasks:write'], 'write')).toEqual(['notes:read']);
   });
 
+  test('web:read and model:complete change no data: a read tool gets them', () => {
+    expect(grantableScopes(['web:read', 'model:complete', 'notes:write'], ['web:read', 'model:complete', 'notes:write'], 'read')).toEqual(['web:read', 'model:complete']);
+  });
+
+  test('web:read is the web tool\'s fetch: a user whose rules deny it does not get it; model:complete has no tool action', async () => {
+    held.denied.add('websearch.fetch');
+    expect(await userHeldScopes('u1', ['web:read', 'model:complete'])).toEqual(['model:complete']);
+    held.denied.clear();
+    held.off.add('websearch');
+    expect(await userHeldScopes('u1', ['web:read', 'model:complete'])).toEqual(['model:complete']);
+  });
+
   test('the user holds a scope unless its module is off or their rules deny the matching action', async () => {
     held.denied.add('notes.write');
     held.off.add('documents');

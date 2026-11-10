@@ -132,7 +132,12 @@ export function grantableScopes(
   return (declared ?? []).filter((s) => ok.has(s) && (effect !== 'read' || !PLUGIN_HOST_WRITE_SCOPES.includes(s)));
 }
 
-/** The built-in tool action a scope stands for: the user's rules on it apply. `notify` reaches only the user and has none. */
+/**
+ * The built-in tool action a scope stands for: the user's rules on it apply.
+ * `notify` reaches only the user and `model:complete` runs on the user's own
+ * model lane; neither has one. `web:read` is the web tool's page fetch: a user
+ * whose rules deny `websearch.fetch` does not get it.
+ */
 export const SCOPE_TOOL_ACTION: Record<PluginHostScope, { toolId: string; action: string } | null> = {
   'notes:read': { toolId: 'notes', action: 'read' },
   'notes:write': { toolId: 'notes', action: 'write' },
@@ -140,6 +145,8 @@ export const SCOPE_TOOL_ACTION: Record<PluginHostScope, { toolId: string; action
   'tasks:write': { toolId: 'tasks', action: 'write' },
   'documents:read': { toolId: 'documents', action: 'read' },
   notify: null,
+  'web:read': { toolId: 'websearch', action: 'fetch' },
+  'model:complete': null,
 };
 
 /**

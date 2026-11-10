@@ -1022,6 +1022,19 @@ export function grantedHostScopes(row: Pick<PluginPackageRow, 'manifest' | 'appr
   return (row.manifest.host ?? []).filter((s) => approved.has(s));
 }
 
+/**
+ * The package's `maxProtection`, or when it declares none: a package that
+ * reaches the network leaves the house (1), and so does one that may have the
+ * host fetch any URL it names (`web:read`: the URL itself can carry data out),
+ * and so does one with pages, which can navigate their frame anywhere with
+ * what they were shown in the URL (docs/PLUGIN-PACKAGES.md#pages); one that
+ * can do none of these keeps everything in (4).
+ */
+export function defaultMaxProtection(m: Pick<PluginManifest, 'maxProtection' | 'network' | 'host' | 'ui'>): 1 | 2 | 3 | 4 {
+  if (m.maxProtection !== undefined) return m.maxProtection;
+  return (m.network ?? []).length > 0 || (m.host ?? []).includes('web:read') || (m.ui?.pages ?? []).length > 0 ? 1 : 4;
+}
+
 /** The MCP server an installed package runs as. */
 export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
   const m = row.manifest;
@@ -1071,10 +1084,8 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
     toolExposure: { ...Object.fromEntries(Object.keys(tools).map((t) => [t, 'deferred' as const])), '*': 'hidden' },
     plugin: {
       package: row.name, version: row.version, tools: Object.fromEntries(Object.entries(tools).map(([t, d]) => [t, d.effect])),
-      // Undeclared: a package that reaches the network leaves the house (1); so does one with
-      // pages, which can navigate their frame anywhere with what they were shown in the URL
-      // (docs/PLUGIN-PACKAGES.md#pages). Only one with neither keeps everything in (4).
-      maxProtection: m.maxProtection ?? ((m.network ?? []).length > 0 || (m.ui?.pages ?? []).length > 0 ? 1 : 4),
+      // Undeclared: see defaultMaxProtection.
+      maxProtection: defaultMaxProtection(m),
       ...(hostScopes.length > 0 ? { hostScopes } : {}),
     },
   };
