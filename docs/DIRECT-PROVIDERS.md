@@ -132,16 +132,16 @@ the agent sends them in three tiers (`orderForCache` in
    install is connected, which is install-wide state. A space session drops
    `mcp_list_resources` with the other personal-only tools, which differs by
    session kind, not by user;
-2. *per-user and runtime*: connector tools (per user), the inline-UI tool (per
-   user and client), direct MCP tools (`mcp__<server>__<tool>`: servers
-   connect and change what they expose; plugin packages are MCP servers),
+2. *per-user and runtime*: the inline-UI tool (per user and client), direct
+   MCP tools (`mcp__<server>__<tool>`: servers connect and change what they
+   expose; plugin packages are MCP servers),
    extension tools (`ext_*`);
 3. *sticky*: on the lazy path, the groups the message selected
    (`isIntentGatedGroup`), in the order the conversation first used them, so a
    group used later is appended at the tail.
 
 Breakpoint 1 sits on the last tool of the first tier, so two users of an
-install with different connectors, MCP servers, extension tools or sticky
+install with different plugins, MCP servers, extension tools or sticky
 groups read the same tools entry. The system breakpoints after it are still
 per-user: an entry there requires every byte before it, the per-user tools
 included, to match. For the same user nothing is lost — a breakpoint caches
@@ -151,7 +151,7 @@ before. Only the order changes; the set of tools a request declares does not.
 
 With Anthropic's tool search (`agent.nativeToolSearch`, the lazy path on
 first-party Claude), every tool outside a fixed floor is sent with
-`defer_loading` and stays out of the prefix: connector and extension tools,
+`defer_loading` and stays out of the prefix: plugin and extension tools,
 direct MCP tools (`mcp__<server>__<tool>`) and the sticky groups are deferred.
 The MCP meta-tools stay loaded, so a server that reconnects or changes its
 tools mid-conversation no longer rewrites that conversation's cached prefix;
@@ -160,7 +160,7 @@ call. The floor's shared tools, the MCP meta-tools among them, come first and
 carry the breakpoint; the inline-UI tool is in the floor and follows it.
 
 Measured on a model of the root's assembly (`tool-cache-order.test.ts`), two
-users whose connectors, direct MCP tools, extension tools, inline-UI offer and sticky
+users whose plugin tools, direct MCP tools, extension tools, inline-UI offer and sticky
 groups all differ send byte-identical tools up to and including breakpoint 1
 in all three cases: native with tool search, native without it (lazy or full),
 and the leading `sharedToolCount` entries of an OpenAI-compatible request.

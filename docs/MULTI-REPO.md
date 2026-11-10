@@ -94,7 +94,7 @@ Manifest and companion settings reads are capped at 400,000 bytes per file.
 ## Java repositories
 
 Java has native repository discovery, package/dependency matching and symbol
-indexing. No CocoIndex connector is needed for these capabilities.
+indexing. The optional CocoIndex code index is not needed for these capabilities.
 
 - **Maven:** `pom.xml` supplies a `groupId:artifactId` package identity and direct
   project dependencies. Local property references and the declared parent group

@@ -407,8 +407,8 @@ entry name/tool access rather than guessing names or trying repeated logins.
 
 Each managed CLI run receives a private loopback bridge, authenticated with a
 random capability that ends with the run. The bridge exposes that worker's
-registered Octipus tools, including its role-specific tools, skill loaders,
-connectors and applicable plan/delegation tools. Calls run through the native
+registered Octipus tools, including its role-specific tools, skill loaders
+and applicable plan/delegation tools. Calls run through the native
 `ToolExecutor` with the original agent, user, session and workspace. The bridge
 never accepts an identity or session override from tool arguments and does not
 use the standalone MCP server's bootstrap admin token.
@@ -887,7 +887,7 @@ only exercised by the opt-in live test and can drift with vendor releases. An
 opt-in test (`OCTIPUS_LIVE_CLI=claude-code`, `codex`, `vibe` or `antigravity` with Vitest's
 `src/core/cli-agent-bridge.test.ts`) exercises a configured real CLI login against
 isolated sample tools and an in-memory plan repository. It does not contact
-personal connectors or modify project files, but consumes vendor usage.
+personal accounts or modify project files, but consumes vendor usage.
 
 Approximately 90% coverage of useful everyday workflows is the implementation
 target, not a measured compatibility percentage or a promise of feature parity.
