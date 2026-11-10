@@ -251,6 +251,20 @@ describe('in-process plugins', () => {
     await vi.waitFor(async () => expect(await toolRegistered()).toBe(true));
   });
 
+  test('a loaded plugin whose key is revoked since is unloaded on the next sync, without being disabled (review finding 5)', async () => {
+    const svc = await import('./service');
+    const { syncInProcessPlugins, isInProcessLoaded } = await import('./in-process');
+    await installApproveEnable(await copyOfFixture({ key: acme.privateKeyPem }));
+    await vi.waitFor(async () => expect(await toolRegistered()).toBe(true));
+    // Still enabled and approved: only the trust behind it changed.
+    await policy({ revokedKeys: [acme.keyId] });
+    await syncInProcessPlugins();
+    expect(isInProcessLoaded(NAME)).toBe(false);
+    expect(await toolRegistered()).toBe(false);
+    expect(globalThis.__inprocLog).toEqual(['load v1', 'dispose v1']);
+    expect((await svc.packageView(NAME)).problem).toMatch(/revoked key/);
+  });
+
   test('a revoked key stops it; requireSignature refuses it unsigned', async () => {
     const svc = await import('./service');
     const { syncInProcessPlugins } = await import('./in-process');
