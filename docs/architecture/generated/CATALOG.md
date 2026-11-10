@@ -795,7 +795,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `models` | `utils` | 43 |
 | `plugins` | `config` | 3 |
 | `plugins` | `core` | 15 |
-| `plugins` | `db` | 19 |
+| `plugins` | `db` | 18 |
 | `plugins` | `extensions` | 2 |
 | `plugins` | `mcp` | 5 |
 | `plugins` | `security` | 12 |

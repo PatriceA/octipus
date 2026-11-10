@@ -6,9 +6,7 @@
  * it into that row's details. A later install or upgrade by a person makes the
  * package theirs again.
  */
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
-import { getDb } from '@/db/postgres';
-import { auditLog } from '@/db/schema/audit';
+import { auditRepository } from '@/db/repositories/audit-repository';
 import type { PluginAgentAuthorship } from '@/shared/plugin-package';
 
 /** What an agent install records in its audit row's details, under `authoredBy`. */
@@ -29,15 +27,7 @@ function isAgentAuthored(value: unknown): value is AgentAuthoredDetails {
 export async function agentAuthorships(names: readonly string[]): Promise<Map<string, PluginAgentAuthorship>> {
   const out = new Map<string, PluginAgentAuthorship>();
   if (names.length === 0) return out;
-  const rows = await getDb()
-    .select({ name: auditLog.resourceId, details: auditLog.details, createdAt: auditLog.createdAt })
-    .from(auditLog)
-    .where(and(
-      eq(auditLog.resourceType, 'plugin_package'),
-      inArray(auditLog.resourceId, [...names]),
-      sql`${auditLog.details}->>'op' in ('installed', 'upgraded')`,
-    ))
-    .orderBy(desc(auditLog.createdAt));
+  const rows = await auditRepository.findPluginInstalls(names);
   const seen = new Set<string>();
   for (const row of rows) {
     if (row.name === null || seen.has(row.name)) continue;
