@@ -649,7 +649,19 @@ outside data) and an admin approved `model:cli-tools`
 ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#model-calls-on-cli-lanes)). Such a
 call still runs tool-less on a CLI that can; on Antigravity, Vibe or Codex
 it runs with the CLI's normal arguments, in a fresh empty directory, and is
-audited with `cliTools: true`. Every other plugin call is refused on a CLI
+audited with `cliTools: true`. The prompt (system text included, line breaks
+and all) goes on stdin, never into the command line, which still refuses any
+argument with a line break:
+
+| CLI | How the prompt arrives | Source |
+|---|---|---|
+| Codex | `codex exec … -` reads it from stdin | codex CLI |
+| Mistral Vibe | `vibe -p --output json …`: a bare `-p` reads the prompt from stdin | Vibe README ("With `-p` and no text, the prompt is read from stdin") |
+| Antigravity | `agy --input-format stream-json --output-format stream-json`: one line `{"event":"user","message":{"content":"…"}}` on stdin; the answer is the `result` event's `response`, with token usage. `--print` takes the prompt only as its value and ignores stdin, so it is not used for these calls. | [Antigravity headless mode](https://antigravity.google/docs/cli/headless) |
+
+Agent runs are unchanged: Antigravity still gets `--print <prompt>` as one
+argument (no shell on Windows), Vibe its prompt inline or on stdin on
+Windows. Every other plugin call is refused on a CLI
 lane (`409 cli_model`), and every core completion keeps the rule above.
 
 ## Session reuse

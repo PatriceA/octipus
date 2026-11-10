@@ -1231,9 +1231,12 @@ both `model:complete` and `model:cli-tools` are approved, the call runs:
 - A CLI with a tool-less mode (Claude Code, GLM, Kimi) still runs in it.
 - One without (Antigravity, Vibe, Codex) runs with its normal arguments, in a
   fresh empty directory of its own that is removed afterwards, never the
-  workspace root. The prompt goes on stdin where the CLI reads it there
-  (Codex); Antigravity and Vibe take it as an argument, so a prompt with a
-  line break (a `system` text included) is refused there.
+  workspace root. The prompt, a multi-line one and the `system` text
+  included, always goes on stdin and never into the command line: Codex reads
+  it with `exec … -`, Vibe with a bare `-p` (its documented stdin mode), and
+  Antigravity as one stream-json user event (`--input-format stream-json
+  --output-format stream-json`, its documented stdin channel; `--print`
+  takes the prompt only as an argument, so it is not used here).
 - The per-user token allowance, the rate limit, the spend budgets and the
   protection routing apply as for any `model:complete` call. Its audit row
   (`resource_type = plugin_host`, op `model.complete`) records the package,

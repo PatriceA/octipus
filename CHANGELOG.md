@@ -758,6 +758,13 @@ labels reflect blast radius, not contract guarantees.
 
 ### Changed
 
+- **Plugin model calls on Antigravity and Vibe take multi-line prompts.** An
+  approved `model:cli-tools` call hands the prompt to them on stdin instead of
+  the command line: Vibe with a bare `-p`, Antigravity as a stream-json user
+  event (`--input-format stream-json --output-format stream-json`, which also
+  reports token usage). A prompt with a line break, which every prompt with a
+  system text has, was refused on both. The command-line guard against line
+  breaks is unchanged; agent runs are unchanged.
 - **The flow guard lets an agent message its own user after reading mail.**
   `send_to_user` to the session's own user is delivered only to that user's
   verified chats, so it is no longer escalated to an approval after the
