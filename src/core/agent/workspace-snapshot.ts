@@ -116,7 +116,7 @@ const EGG_INFO_FILES = new Set([
  *
  * Matched on the relative path, NOT on the directory name. `.octipus` in
  * `PRUNED_DIRS` looked equivalent and is not: a project workspace's `.octipus/`
- * holds real user content — this repository keeps its plans there — so pruning
+ * can hold real user content (plans, design notes), so pruning
  * the name would hide a stage asked to write a design document under
  * `.octipus/plans/`, and the evidence gate would then fail it for producing
  * nothing. Only the spill path is ours.

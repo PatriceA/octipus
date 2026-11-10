@@ -32,7 +32,6 @@ import { registerNotesTools } from './tools/notes.js';
 import { registerEmailTools } from './tools/email.js';
 import { registerMemoryTools } from './tools/memory.js';
 import { registerResearchTools } from './tools/research.js';
-import { registerReaderTools } from './tools/reader.js';
 
 /**
  * The version this server reports in the MCP handshake.
@@ -148,7 +147,6 @@ export function createServer(octiUrl: string): McpServer {
     artifacts: collect(server, () => registerArtifactTools(server, client)),
     inbox: collect(server, () => registerEmailTools(server, client)),
     research: collect(server, () => registerResearchTools(server, client)),
-    reader: collect(server, () => registerReaderTools(server, client)),
   };
   for (const tool of Object.values(byModule).flat()) tool.disable();
   void syncModules(client, byModule);

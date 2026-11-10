@@ -11,6 +11,7 @@
  *   octi plugin approve <name> [--hash sha256:…]  Approve a package's changed content.
  *   octi plugin approve-in-process <name> [--hash sha256:…]  Approve an in-process plugin to run in the server process.
  *   octi plugin approve-contributions <name> [--hash sha256:…]  Approve what a package adds (commands, schedules, events, prompt, context).
+ *   octi plugin approve-cli-tools <name> [--yes] [--revoke]  Let a package's model calls run on CLI lanes (model:cli-tools).
  *   octi plugin set <name> key=value...  Change a package's settings.
  *   octi plugin secret <name> <KEY> [--clear]  Set (from stdin or a hidden prompt) or remove a secret.
  *   octi plugin uninstall <name> [--yes]  Remove a package.
@@ -30,15 +31,19 @@ import { ManifestError } from '@/plugins/packages/manifest';
 import { generateSigningKey, SignatureError, signPackage, signRegistryIndexFile } from '@/plugins/packages/signature';
 import { PackageTreeError } from '@/plugins/packages/tree';
 import { PLUGIN_TOOL_EFFECTS, type PluginToolEffect } from '@/shared/plugin-package';
-import { approveCommand, approveContributionsCommand, approveInProcessCommand, bundledCommand, installBundledCommand, listCommand, type PluginApiIo, readAllText, readHiddenLine, secretCommandFromArgs, setCommand, uninstallCommand } from './plugin-api';
+import { approveCliToolsCommand, approveCommand, approveContributionsCommand, approveInProcessCommand, bundledCommand, installBundledCommand, listCommand, type PluginApiIo, readAllText, readHiddenLine, secretCommandFromArgs, setCommand, uninstallCommand } from './plugin-api';
 
 const HELP = `octi plugin — plugin tooling
 
 Usage:
   octi plugin validate <dir>    Validate a plugin directory against the contract
   octi plugin convert <legacy-dir> [--out <dir>] [--effect <tool>=<read|write|external>]... [--network <host>]... [--check-handlers]
-                                Convert a legacy plugin (plugin.json) into a plugin
-                                package (octipus-plugin.json + MCP server). Every tool
+                                Convert a legacy plugin (plugin.json; they load from
+                                ~/.octipus/legacy-plugins/<name>, no longer from
+                                <cwd>/extensions) into a plugin package
+                                (octipus-plugin.json + MCP server). --out defaults to
+                                <cwd>/<name>-package: run it outside the Octipus
+                                checkout, or pass --out. Every tool
                                 is "external" (always ask) unless --effect lowers it.
                                 --check-handlers imports the plugin here to check every
                                 tool has a handler: that runs its code with your rights.
@@ -74,6 +79,13 @@ Usage:
                                 be enabled, and again after an upgrade. Without --hash
                                 it shows all of it (the full prompt text) and asks (at
                                 a terminal only).
+  octi plugin approve-cli-tools <name> [--yes] [--revoke]
+                                Approve model:cli-tools for a package that declares
+                                model.trustedInput: its model calls may then run on a
+                                CLI agent with its own tools (shell, files) as the
+                                server user. Only for prompts that never carry outside
+                                data. Asks at a terminal; elsewhere refused without
+                                --yes. --revoke takes it back; an upgrade clears it.
   octi plugin set <name> key=value...
                                 Change settings (checked against the manifest; exactly
                                 key= clears one). Not for secrets.
@@ -91,7 +103,7 @@ Usage:
                                 Install one, pinned and disabled like any package;
                                 enable it on the admin page, approving its host scopes.
 
-list, approve, approve-in-process, approve-contributions, set, secret, uninstall, bundled and install-bundled call the running backend (http://localhost:$API_PORT, 3005 by
+list, approve, approve-in-process, approve-contributions, approve-cli-tools, set, secret, uninstall, bundled and install-bundled call the running backend (http://localhost:$API_PORT, 3005 by
 default) with the admin API token in OCTIPUS_API_TOKEN (Settings → API Tokens).
 `;
 
@@ -337,6 +349,17 @@ async function main(): Promise<void> {
     case 'approve-contributions':
       await runApprove(sub, rest);
       break;
+    case 'approve-cli-tools': {
+      let parsed: { values: { yes?: boolean; revoke?: boolean }; positionals: string[] };
+      try {
+        parsed = parseArgs({ args: rest, allowPositionals: true, options: { yes: { type: 'boolean' }, revoke: { type: 'boolean' } } });
+      } catch (err) {
+        usage(sub, (err as Error).message);
+      }
+      if (parsed.positionals.length !== 1) usage(sub, 'expected <name> [--yes] [--revoke]');
+      process.exit(await approveCliToolsCommand(apiIo(), parsed.positionals[0], { yes: parsed.values.yes === true, revoke: parsed.values.revoke === true }));
+      break;
+    }
     case 'set':
     case 'uninstall':
       await runApiCommand(sub, rest);

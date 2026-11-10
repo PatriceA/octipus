@@ -11,7 +11,6 @@ import { inboxModule } from './inbox';
 import { mailModule } from './mail';
 import { peopleModule } from './people';
 import { protectionModule } from './protection';
-import { readerModule } from './reader';
 import { recallModule } from './recall';
 import { researchModule } from './research';
 import { scanFoldersModule } from './scan-folders';
@@ -23,7 +22,6 @@ export const MODULES: readonly ModuleDefinition[] = [
   scanFoldersModule,
   protectionModule,
   researchModule,
-  readerModule,
   recallModule,
   inboxModule,
   artifactsModule,

@@ -25,8 +25,6 @@ export interface ModuleView {
   tools: string[];
   jobs: string[];
   on: boolean;
-  /** Deprecated: the bundled plugin it moves to, and what to tell an admin. */
-  replacedBy?: { plugin: string; note: string };
 }
 
 export interface ModulesResponse {

@@ -1,12 +1,12 @@
 /**
- * Tasks created FROM another surface — a Reader action-item list, an email the
+ * Tasks created FROM another surface — an email the
  * user wants to act on, a finished Deep Research report. The `tasks` schema
  * has carried `source` / `sourceRef` provenance since it landed, but nothing
  * produced rows with `source !== 'user' | 'agent'`: the enum existed, the
  * producers did not. This module is the one place those producers go
  * through, so provenance is stamped consistently and the UI can link back.
  *
- * Pure builders (`readerItemsToTasks`, `emailToTask`, `researchFollowUpTask`)
+ * Pure builders (`emailToTask`, `researchFollowUpTask`)
  * are separated from the one DB write (`createTasksFromSource`) so the shape
  * of what lands on the to-do list is unit-testable without a database.
  */
@@ -16,7 +16,11 @@ import { scopedRepos } from '@/db/repositories/scoped';
 import type { Task, TaskSourceRef } from '@/db/schema/tasks';
 import type { Principal } from '@/security/principal';
 
-/** `channel`: taken on in a group channel (src/core/channels/taken-tasks.ts). */
+/**
+ * `channel`: taken on in a group channel (src/core/channels/taken-tasks.ts).
+ * `reader`: kept for existing tasks made by the removed core reader; the
+ * Reader example plugin writes `agent` with a `sourceRef`.
+ */
 export type TaskSource = 'user' | 'agent' | 'reader' | 'research' | 'email' | 'channel';
 
 export interface SourcedTaskInput {
@@ -36,29 +40,6 @@ const NOTES_MAX = 4000;
 export function normalizeTaskTitle(raw: string): string {
   const t = raw.replace(/\s+/g, ' ').trim();
   return t.length > TITLE_MAX ? `${t.slice(0, TITLE_MAX - 1)}…` : t;
-}
-
-/** Reader `action_items` → one task per bullet, linked back to the article. */
-export function readerItemsToTasks(
-  items: string[],
-  origin: { url?: string; title?: string },
-): SourcedTaskInput[] {
-  const seen = new Set<string>();
-  const out: SourcedTaskInput[] = [];
-  for (const raw of items) {
-    const title = normalizeTaskTitle(raw);
-    if (!title) continue;
-    const key = title.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({
-      title,
-      notes: origin.url ? `From: ${origin.title ? `${origin.title} — ` : ''}${origin.url}` : null,
-      category: 'Reading',
-      sourceRef: { url: origin.url, label: origin.title },
-    });
-  }
-  return out;
 }
 
 /** The subset of an email the task builder needs (provider-agnostic). */

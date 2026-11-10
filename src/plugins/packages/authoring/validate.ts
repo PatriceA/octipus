@@ -13,6 +13,7 @@ import { PLUGIN_MANIFEST_FILE, type PluginManifest, pluginRuntime } from '@/shar
 import { contributionInstallProblems } from '../contributions';
 import { hashPackageContent } from '../integrity';
 import { ManifestError, manifestSchema, parseManifest } from '../manifest';
+import { modelTrustWarnings } from '../service';
 import { checkPackageTree, PackageTreeError } from '../tree';
 
 export interface PluginValidation {
@@ -151,6 +152,8 @@ export async function validatePluginDirectory(
 
   if (manifest.server) problems.push(...await serverProblems(dir, manifest.server, warnings));
   problems.push(...await contributionInstallProblems(manifest, dir, installed));
+  // model.trustedInput: it grants nothing until an admin approves it, and what else the package reads reaches its prompts.
+  warnings.push(...modelTrustWarnings(manifest));
   const current = installed.find((p) => p.name === manifest.name);
   if (current) {
     warnings.push(`${manifest.name} is installed (version ${current.version}): plugin_install with upgrade: true replaces it, only if an agent of the same user installed it`);

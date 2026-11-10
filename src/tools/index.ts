@@ -36,8 +36,8 @@ import { getToolRegistry } from './registry';
 /**
  * Register all built-in tools and plugins.
  *
- * The built-ins come from the static map in `discovery.ts`. Plugins live in
- * `extensions/` and are loaded by `loadPlugins()`.
+ * The built-ins come from the static map in `discovery.ts`. Legacy plugins
+ * live in `~/.octipus/legacy-plugins/` and are loaded by `loadPlugins()`.
  */
 export async function registerBuiltinTools(): Promise<void> {
   const registry = getToolRegistry();
@@ -64,7 +64,7 @@ export async function registerBuiltinTools(): Promise<void> {
   }
   toolLogger.info({ count: discovered.length }, 'Built-in tools registered (auto-discovered)');
 
-  // Load plugins from extensions/ directory
+  // Load legacy plugins from ~/.octipus/legacy-plugins/
   const plugins = await loadPlugins();
   for (const plugin of plugins) {
     try {

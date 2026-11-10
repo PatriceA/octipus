@@ -76,7 +76,7 @@ The LLM-facing tool is `spawn_child`. Agents also get the lane escalation tool
 (one use per Agent lifetime) to retry a task on a different configured lane
 when children hit budget or timeout. It no longer selects a database expert.
 
-**Location:** `src/core/swarm/` — `spawner.ts`, `call-graph.ts`, `types.ts`, `errors.ts`, `escalate-tool.ts`, `swarm-tool.ts`, `orphan-reaper.ts`, `fan-out-budget.ts`, `node-repository.ts`. DB table `swarm_nodes`. The full design lives in `.octipus/swarm-design.md`.
+**Location:** `src/core/swarm/` — `spawner.ts`, `call-graph.ts`, `types.ts`, `errors.ts`, `escalate-tool.ts`, `swarm-tool.ts`, `orphan-reaper.ts`, `fan-out-budget.ts`, `node-repository.ts`. DB table `swarm_nodes`.
 
 ## Root agent persona
 

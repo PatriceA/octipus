@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { extractReaderDoc } from './extract';
+import { extractArticle } from './extract';
 
 const ARTICLE = `<!doctype html><html><head>
   <title>Site — My Article</title>
@@ -23,8 +23,8 @@ const ARTICLE = `<!doctype html><html><head>
   <div class="advert">BUY NOW</div>
 </body></html>`;
 
-describe('extractReaderDoc', () => {
-  const doc = extractReaderDoc(ARTICLE, 'https://example.com/post');
+describe('extractArticle', () => {
+  const doc = extractArticle(ARTICLE, 'https://example.com/post');
 
   test('extracts metadata', () => {
     expect(doc.title).toBe('My Article');
@@ -71,7 +71,7 @@ describe('extractReaderDoc', () => {
       <a href="/relative/path">h</a>
       <img src="javascript:alert(2)" alt="i">
       <img src="https://cdn.example/p.png" alt="j"></article>`;
-    const d = extractReaderDoc(html, 'https://t.test');
+    const d = extractArticle(html, 'https://t.test');
     expect(d.contentHtml).not.toMatch(/javascript:/i);
     expect(d.contentHtml).not.toContain('data:text/html');
     expect(d.contentHtml).not.toContain('169.254.169.254');
@@ -84,7 +84,7 @@ describe('extractReaderDoc', () => {
 
   test('strips media/embed subtrees entirely', () => {
     const html = `<article><p>keep this</p><object data="x.swf">objdata</object><video><source src="x.mp4"></video><embed src="y"></article>`;
-    const d = extractReaderDoc(html, 'https://t.test');
+    const d = extractArticle(html, 'https://t.test');
     expect(d.contentHtml).toContain('keep this');
     expect(d.contentHtml).not.toMatch(/<object|<video|<source|<embed/i);
     expect(d.textContent).not.toContain('objdata');
@@ -96,15 +96,15 @@ describe('extractReaderDoc', () => {
   });
 });
 
-describe('extractReaderDoc resilience', () => {
+describe('extractArticle resilience', () => {
   test('malformed HTML does not throw and yields a usable doc', () => {
-    const doc = extractReaderDoc('<html><body><p>orphan <b>bold</p></body>', 'https://x.test');
+    const doc = extractArticle('<html><body><p>orphan <b>bold</p></body>', 'https://x.test');
     expect(doc.textContent).toContain('orphan');
     expect(doc.title).toBe('https://x.test'); // no title → falls back to url
   });
 
   test('empty input yields an empty-but-valid doc', () => {
-    const doc = extractReaderDoc('', 'https://empty.test');
+    const doc = extractArticle('', 'https://empty.test');
     expect(doc.wordCount).toBe(0);
     expect(doc.estReadMinutes).toBe(1);
     expect(doc.url).toBe('https://empty.test');

@@ -131,7 +131,7 @@ export interface MessageClassification {
   topic?: string;
   reasoning?: string;
   /**
-   * Chat/work split (`.octipus/end-user-ux-design.md` Thread 3): whether the
+   * Chat/work split: whether the
    * deliverable belongs `inline` in the chat reply or as an editable `file` the
    * user opens in the Files tab. Heuristic default from `classifyMessage`; the
    * user can force it per-message via the composer toggle (handled at runtime,

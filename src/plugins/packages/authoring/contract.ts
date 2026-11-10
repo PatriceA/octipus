@@ -17,7 +17,7 @@ import { DEFAULT_REQUEST_TIMEOUT_MS, MCP_PROTOCOL_VERSION } from '@/mcp/protocol
 import { MINIMAL_ENV_NAMES } from '@/security/child-env';
 import { proxyEnv } from '@/security/egress-proxy';
 import { activeSandboxRunner, getSandboxMode } from '@/security/shell-sandbox';
-import { MAX_PLUGIN_SECRET_LENGTH, PLUGIN_MANIFEST_FILE, PLUGIN_PACKAGE_API_VERSION, type PluginEventType, type PluginManifest, type PluginRuntime, type PluginToolEffect } from '@/shared/plugin-package';
+import { MAX_MODEL_TRUST_REASON_CHARS, MAX_PLUGIN_SECRET_LENGTH, PLUGIN_MANIFEST_FILE, PLUGIN_MODEL_CLI_TOOLS_APPROVAL, PLUGIN_PACKAGE_API_VERSION, type PluginEventType, type PluginManifest, type PluginRuntime, type PluginToolEffect } from '@/shared/plugin-package';
 import { MAX_RESULT_CHARS } from '../contributions/call';
 import { CONTEXT_TIMEOUT_MS, MAX_CONTEXT_CHARS } from '../contributions/context';
 import { CRON_FIELDS } from '../contributions/cron';
@@ -65,6 +65,8 @@ export interface PluginApiContract {
   /** The checks the schema alone does not express. */
   manifestRules: string[];
   defaultMaxProtection: { rule: string; examples: Record<string, number> };
+  /** Model calls on CLI lanes and the manifest's `model.trustedInput`. */
+  modelCalls: { cliLanes: string; trustedInput: string };
   runtimes: Record<PluginRuntime, string>;
   toolEffects: Record<PluginToolEffect, string>;
   contributions: Record<string, unknown>;
@@ -106,6 +108,7 @@ export async function pluginApiContract(opts: {
       `server.command and server.args may not name ${SIGNATURE_FILE}; files they name must be in the package.`,
       'A setting may not collide with a secret: setting <key> becomes the variable OCTIPUS_SETTING_<KEY>.',
       'maxProtection: the highest protection level (1-4) of a conversation that may call the package; a call from one above it is refused. Left out, it is derived (see defaultMaxProtection).',
+      `model.trustedInput: leave it out (the default is untrusted). Set it to true only when every prompt the package sends to model:complete is built from its own constants or from sources the admin trusts, never from web pages, mail, files, user text or other outside data. It needs the host scope model:complete and a model.reason (at most ${MAX_MODEL_TRUST_REASON_CHARS} characters, shown to the admin); it is refused with web:read and for runtime "in-process".`,
     ],
     defaultMaxProtection: {
       rule: 'When maxProtection is left out: 1 if the package has network hosts, the host scope web:read or ui pages (each can carry data out), otherwise 4.',
@@ -116,6 +119,10 @@ export async function pluginApiContract(opts: {
         hostWebRead: defaultMaxProtection({ host: ['web:read'] as PluginManifest['host'] }),
         uiPages: defaultMaxProtection({ ui: { pages: [{ path: 'main', title: 'Main', entry: 'index.html' }] } as PluginManifest['ui'] }),
       },
+    },
+    modelCalls: {
+      cliLanes: 'A model:complete call is refused (409 cli_model) when the user\'s "everyday" lane is bound to a CLI model: a CLI agent has its own tools (shell, files) and runs as the Octipus server user, so a prompt carrying outside data could steer it.',
+      trustedInput: `model: { "trustedInput": true, "reason": "<why the prompts carry no outside data>" } asks for the one exception. It grants nothing by itself: an admin approves ${PLUGIN_MODEL_CLI_TOOLS_APPROVAL} explicitly (an upgrade clears it); until then the call is refused as above. Network hosts and *:read host scopes are allowed with it, but the admin is warned that they reach the prompts.`,
     },
     runtimes: RUNTIMES,
     toolEffects: EFFECTS,

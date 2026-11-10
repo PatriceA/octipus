@@ -9,6 +9,7 @@ import { fieldListSchema } from '@/core/records/fields';
 import { SIGNATURE_FILE } from './integrity';
 import { refineRuntime, runtimeFields } from './manifest-runtime';
 import { contributionFields, contributionProblems } from './manifest-contributions';
+import { MODEL_FIELDS, modelProblems } from './manifest-model';
 import { UI_HOST_FIELDS } from './manifest-ui-host';
 import {
   PLUGIN_PACKAGE_API_VERSION,
@@ -66,6 +67,7 @@ export const manifestSchema = z.object({
   }).strict()).max(20).optional(),
   ...contributionFields,
   ...UI_HOST_FIELDS,
+  ...MODEL_FIELDS,
 }).strict().superRefine((m, ctx) => {
   refineRuntime(m, ctx);
   // Pages call the plugin's own sandboxed tools, and the host API token rides
@@ -74,6 +76,7 @@ export const manifestSchema = z.object({
     ctx.addIssue({ code: 'custom', message: 'ui and host apply to the package runtime only; an in-process plugin has no sandboxed tools to serve them' });
   }
   for (const message of contributionProblems(m)) ctx.addIssue({ code: 'custom', message });
+  for (const message of modelProblems(m)) ctx.addIssue({ code: 'custom', message });
   // The signature file is the one file the content hash leaves out: the server may not be started from it.
   const sigName = SIGNATURE_FILE.toLowerCase();
   if (m.server && [m.server.command, ...(m.server.args ?? [])].some((part) => part.toLowerCase().includes(sigName))) {

@@ -137,6 +137,42 @@ labels reflect blast radius, not contract guarantees.
   needs one. Skill import/export and skill-topic assignments no longer
   reach other users' skills.
 
+### Removed
+
+- **The `.octipus/` design notes are gone from the repository.** The 19 notes
+  (swarm, multi-repo, UX, audits, archived plans) are removed and `.octipus/` is
+  git-ignored: it is the Octipus runtime folder (project skills, attachments,
+  extensions). Code comments and docs that pointed at the notes now point at the
+  maintained docs (`docs/AGENT-ARCHITECTURE.md`, `docs/MULTI-REPO.md`) or say
+  nothing. The notes stay in git history.
+
+- **The core Reader is gone; Reader is the example plugin.** The `reader`
+  module, `POST /api/reader` (and `/action`, `/tasks`) and the `/reader` page
+  are removed. Reading a page is the example plugin `plugins/reader`: install
+  it under Admin → Plugin packages → Bundled or with
+  `octi plugin install-bundled reader`. A stored `reader` in
+  `modules.enabled` is ignored; tasks it made keep `source: reader`.
+  Onboarding no longer mentions it. The `replacedBy` field of
+  `GET /api/modules` is removed with it.
+- **Only the plugins Octipus ships are bundled.** A directory under
+  `<install>/plugins` other than the example plugin is no longer listed or
+  installable as bundled, and an install refuses a plugin store inside that
+  directory: local plugins stay outside the install and the repository
+  (docs/PLUGIN-PACKAGES.md#where-plugins-live).
+- **No plugin loads from the Octipus checkout or the working directory.**
+  Legacy `plugin.json` plugins load from `~/.octipus/legacy-plugins/`
+  instead of `<cwd>/extensions/`; plugins left there are not loaded and the
+  server logs one warning naming them (move them, or convert them with
+  `octi plugin convert`). In-process extensions load only from
+  `~/.octipus/extensions/`: a project's `<cwd>/.octipus/extensions/` is no
+  longer discovered (one warning names what it skips). `extensions/example-plugin`
+  and `extensions/.gitkeep` are removed (the example plugin is
+  `plugins/reader`); the converter and validator tests use
+  `tests/fixtures/legacy-plugin`, and the "Plugin contract" CI job validates
+  and converts that fixture instead of scanning `extensions/*`. `.gitignore`
+  ignores `/extensions/` and `.octipus/extensions/`. Agents are no longer told
+  to create plugins in `<checkout>/extensions/`.
+
 ### Fixed
 
 - **A burst of remote-space frames no longer closes the federation link.** The
@@ -729,6 +765,13 @@ labels reflect blast radius, not contract guarantees.
 
 ### Changed
 
+- **Plugin model calls on Antigravity and Vibe take multi-line prompts.** An
+  approved `model:cli-tools` call hands the prompt to them on stdin instead of
+  the command line: Vibe with a bare `-p`, Antigravity as a stream-json user
+  event (`--input-format stream-json --output-format stream-json`, which also
+  reports token usage). A prompt with a line break, which every prompt with a
+  system text has, was refused on both. The command-line guard against line
+  breaks is unchanged; agent runs are unchanged.
 - **The flow guard lets an agent message its own user after reading mail.**
   `send_to_user` to the session's own user is delivered only to that user's
   verified chats, so it is no longer escalated to an approval after the

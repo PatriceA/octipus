@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { buildPlan, defaultModulesFor, MODULES_PICKED, READER_PLUGIN_HINT, requiredModulesFor, slugify, standingInstructions } from './plan';
+import { buildPlan, defaultModulesFor, MODULES_PICKED, requiredModulesFor, slugify, standingInstructions } from './plan';
 import { initialAnswers, sectionsFor, storableAnswers, visibleQuestions } from './use-cases';
 import type { Answers, OnboardingState, PlanStep, UseCaseId } from './types';
 
@@ -240,10 +240,10 @@ describe('answers', () => {
 });
 
 describe('modules', () => {
-  test('research points to the bundled Reader plugin, which replaces the reader module', () => {
-    expect(step(plan(['research'], {}), 'plugin:reader')).toMatchObject({ kind: 'done', title: READER_PLUGIN_HINT });
-    expect(step(plan(['research'], {}, fresh({ isAdmin: false })), 'plugin:reader')).toMatchObject({ kind: 'done', title: expect.stringContaining('Your admin installs the Reader plugin') });
-    expect(ids(plan(['development'], {}))).not.toContain('plugin:reader');
+  test('research offers no Reader: it is the example plugin, not a product feature', () => {
+    const steps = plan(['research'], { 'research.roleAgent': true });
+    expect(ids(steps)).not.toContain('plugin:reader');
+    expect(steps.map((s) => s.title).join('\n')).not.toMatch(/reader/i);
   });
 
   test('development: the core only, no module step', () => {

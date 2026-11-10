@@ -1,5 +1,6 @@
 /**
- * `model:complete` of the plugin host API (host-model.ts): no CLI model, the
+ * `model:complete` of the plugin host API (host-model.ts): no CLI model
+ * unless the package's model.trustedInput is approved, the
  * call runs as part of the calling session at the level the package call has
  * read, the space role reaches the lane, and cost is bounded before the call
  * (a per-package bucket, a per-user daily token cap, spend budgets), with the
@@ -90,6 +91,46 @@ describe('model:complete', () => {
     expect(h.calls).toEqual([]);
     h.model = null;
     expect(await pluginModelComplete(grant(), personal, req)).toMatchObject({ ok: false, status: 409, code: 'no_model' });
+  });
+
+  test('a CLI lane: refused without model.trustedInput approved; allowed with it, with allowCliTools and the audit details', async () => {
+    h.model = { name: 'everyday-agy', modelId: 'cli/antigravity', provider: 'cli' };
+    // No flag: refused, naming the flag and the approval.
+    const refused = await pluginModelComplete(grant(), personal, req);
+    expect(refused).toMatchObject({ ok: false, status: 409, code: 'cli_model' });
+    expect(refused.ok ? '' : refused.error).toMatch(/model\.trustedInput.*model:cli-tools/);
+    // The flag declared but not approved never reaches the grant (issueHostCallMeta sets it only when approved): refused the same.
+    expect(await pluginModelComplete(grant({ modelCliTools: undefined }), personal, req)).toMatchObject({ code: 'cli_model' });
+    expect(h.calls).toEqual([]);
+    // Declared and approved: the call goes through, with allowCliTools, and the audit details say so.
+    const details: Record<string, unknown> = {};
+    const g = grant({ modelCliTools: true });
+    expect(await pluginModelComplete(g, personal, req, details)).toEqual({ ok: true, output: 'the answer', model: 'everyday-agy', cliTools: true });
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0].options).toMatchObject({
+      model: 'cli/antigravity', allowCliTools: true, requestType: `plugin:${g.plugin}`, accountingMetadata: { plugin: g.plugin, tool: 'summarize', cliTools: true },
+    });
+    expect(details).toEqual({ model: 'everyday-agy', cliTools: true });
+  });
+
+  test('an API lane never gets allowCliTools, approved or not', async () => {
+    const details: Record<string, unknown> = {};
+    await pluginModelComplete(grant({ modelCliTools: true }), personal, req, details);
+    expect(h.calls[0].options).not.toHaveProperty('allowCliTools');
+    expect(details).toEqual({ model: 'everyday-api' });
+  });
+
+  test('the caps still apply to an approved CLI call', async () => {
+    h.model = { name: 'everyday-agy', modelId: 'cli/antigravity', provider: 'cli' };
+    h.usedToday = 199_990;
+    expect(await pluginModelComplete(grant({ modelCliTools: true }), personal, req)).toMatchObject({ ok: false, code: 'token_cap' });
+    h.usedToday = 0;
+    const g = grant({ modelCliTools: true });
+    const outcomes = [];
+    for (let i = 0; i < MODEL_CALLS_PER_MINUTE + 1; i++) outcomes.push(await pluginModelComplete(g, personal, req));
+    expect(outcomes.at(-1)).toMatchObject({ ok: false, code: 'rate_limited' });
+    h.routingError = true;
+    expect(await pluginModelComplete(grant({ modelCliTools: true, readLevel: 4 }), personal, req)).toMatchObject({ ok: false, code: 'protection_level' });
   });
 
   test('in a space the lane is resolved with the space and the user\'s role there', async () => {

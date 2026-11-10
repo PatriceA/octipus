@@ -48,6 +48,16 @@ describe('what is on', () => {
     expect(registry.enabledModules().size).toBe(0);
   });
 
+  test('a stored id of a module this build removed (the reader) is ignored, and kept in the setting', () => {
+    // Installs that went through migration 0152 store "reader"; the core reader is gone (plugins/reader is the example plugin).
+    expect(registry.moduleById('reader')).toBeUndefined();
+    state.enabled = ['research', 'reader', 'recall'];
+    expect([...registry.enabledModules()].sort()).toEqual(['recall', 'research']);
+    expect(registry.moduleViews().map((m) => m.id)).not.toContain('reader');
+    expect(registry.nextEnabled(['research', 'reader', 'recall'], 'business', true)).toEqual(['business', 'research', 'recall', 'reader']);
+    expect(() => registry.nextEnabled(['reader'], 'reader', true)).toThrow(/Unknown module/);
+  });
+
   test('a module whose dependency is off is off, whatever the setting says', () => {
     state.enabled = ['top'];
     expect(registry.isModuleOn('top')).toBe(false);

@@ -632,8 +632,8 @@ shown in the model settings and `/work-plan` for a CLI root.
 
 ## One-shot completions (lanes)
 
-A CLI model bound to a lane also answers one-shot completions (a summary, a
-reader action, a plugin's `model:complete`). These always run in the CLI's
+A CLI model bound to a lane also answers one-shot completions (a summary, mail
+triage, a plugin's `model:complete`). These always run in the CLI's
 tool-less mode: prompt on stdin, no native tools, no MCP servers, no user or
 project settings, an install row's in an empty directory (a personal row's in
 its owner's own one), never the workspace root. Their callers feed in fetched
@@ -642,6 +642,27 @@ own tools (Antigravity, Vibe, Codex) answers no completion: the call fails
 with "it has no mode without its own tools". Use such a CLI as an agent model
 (`/model`, a role or pipeline stage) and bind an API model or Claude Code to
 the lanes.
+
+The one exception is a plugin's `model:complete` call, by explicit approval
+only: its package declares `model.trustedInput` (its prompts carry no
+outside data) and an admin approved `model:cli-tools`
+([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#model-calls-on-cli-lanes)). Such a
+call still runs tool-less on a CLI that can; on Antigravity, Vibe or Codex
+it runs with the CLI's normal arguments, in a fresh empty directory, and is
+audited with `cliTools: true`. The prompt (system text included, line breaks
+and all) goes on stdin, never into the command line, which still refuses any
+argument with a line break:
+
+| CLI | How the prompt arrives | Source |
+|---|---|---|
+| Codex | `codex exec … -` reads it from stdin | codex CLI |
+| Mistral Vibe | `vibe -p --output json …`: a bare `-p` reads the prompt from stdin | Vibe README ("With `-p` and no text, the prompt is read from stdin") |
+| Antigravity | `agy --input-format stream-json --output-format stream-json`: one line `{"event":"user","message":{"content":"…"}}` on stdin; the answer is the `result` event's `response`, with token usage. `--print` takes the prompt only as its value and ignores stdin, so it is not used for these calls. | [Antigravity headless mode](https://antigravity.google/docs/cli/headless) |
+
+Agent runs are unchanged: Antigravity still gets `--print <prompt>` as one
+argument (no shell on Windows), Vibe its prompt inline or on stdin on
+Windows. Every other plugin call is refused on a CLI
+lane (`409 cli_model`), and every core completion keeps the rule above.
 
 ## Session reuse
 

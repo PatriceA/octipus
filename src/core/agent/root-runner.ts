@@ -798,7 +798,7 @@ export async function runRootAgent(
 
     // Multi-repo: when the repo registry has been scanned, inject the map of
     // the suite (kinds + dependency edges) — the root agent's "mental model"
-    // — instead of a bare directory listing. See .octipus/multi-repo-design.md.
+    // — instead of a bare directory listing. See docs/MULTI-REPO.md.
     let injectedSuite = false;
     if (!space&&!supervisor) try {
       const { loadRepoGraph } = await import('@/core/repos/registry-service');

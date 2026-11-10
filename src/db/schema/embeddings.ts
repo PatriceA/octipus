@@ -124,7 +124,7 @@ export const embeddings = pgTable('embeddings', {
    */
   docId: uuid('doc_id').references((): AnyPgColumn => documents.id, { onDelete: 'cascade' }),
   /**
-   * Multi-repo scoping (see `.octipus/multi-repo-design.md`). When the chunk
+   * Multi-repo scoping (see docs/MULTI-REPO.md). When the chunk
    * comes from a registered repository's generated/curated content (repo map,
    * AGENTS.md, …) this points at the `workspace_repos` row, so search can be
    * scoped to one repo, a subset, or span the suite. NULL for non-repo content.

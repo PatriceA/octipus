@@ -1,4 +1,4 @@
-import type { PluginContext } from '../../src/plugins/types';
+import type { PluginContext } from '../../../src/plugins/types';
 
 export default {
   name: 'example-plugin',

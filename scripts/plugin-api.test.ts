@@ -10,6 +10,7 @@ import { describe, expect, test } from 'vitest';
 import { MAX_PLUGIN_SECRET_LENGTH, type PluginPackageView } from '@/shared/plugin-package';
 import {
   approveCommand,
+  approveCliToolsCommand,
   approveContributionsCommand,
   approveInProcessCommand,
   bundledCommand,
@@ -39,7 +40,7 @@ function view(over: Partial<PluginPackageView> = {}): PluginPackageView {
     signature: { status: 'invalid', keyId: null, publisher: null, detail: 'does not match' },
     runtime: 'package', inProcess: null,
     contributions: { hash: null, approvedHash: null, approved: false, commands: [], schedules: [], events: [], prompt: null, context: null, problems: [] },
-    approvedHostScopes: null, authoredBy: null, installedBy: null, installedAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-01T00:00:00Z',
+    approvedHostScopes: null, modelCliTools: null, authoredBy: null, installedBy: null, installedAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-01T00:00:00Z',
     ...over,
   };
 }
@@ -476,6 +477,55 @@ describe('octi plugin approve-contributions', () => {
     expect(await approveContributionsCommand(refused.io, 'greeter', `sha256:${'d'.repeat(64)}`)).toBe(1);
     expect(refused.err.join('')).toContain(`--hash ${CONTRIB}`);
     expect(await approveContributionsCommand(harness().io, 'greeter', 'sha256:nope')).toBe(2);
+  });
+});
+
+describe('octi plugin approve-cli-tools', () => {
+  const REASON = 'Prompts are fixed templates.';
+  const trusted = (over: Partial<NonNullable<PluginPackageView['modelCliTools']>> = {}, scopes: PluginPackageView['approvedHostScopes'] = ['model:complete']) => view({
+    name: 'digest', problem: null, actualHash: null, approvedHostScopes: scopes,
+    modelCliTools: { reason: REASON, approved: false, active: false, sourcesWarning: 'It also reads from the host scopes notes:read: approve only if you trust what they return, since it can reach its prompts.', ...over },
+  });
+
+  test('list shows the flag and how to approve it', async () => {
+    const h = harness({ packages: [trusted()] });
+    expect(await listCommand(h.io)).toBe(0);
+    expect(h.out.join('')).toContain(`model:     trustedInput ("${REASON}"); not approved, its model calls stay off CLI lanes (review: octi plugin approve-cli-tools digest)`);
+  });
+
+  test('shows the warning, the reason and the sources, asks at a terminal, and sends the approved scopes plus model:cli-tools', async () => {
+    const yes = harness({ packages: [trusted()], interactive: true, answer: 'y', respond: (method) => (method === 'PATCH' ? [200, trusted({ approved: true, active: true }, ['model:complete', 'model:cli-tools'])] : undefined) });
+    expect(await approveCliToolsCommand(yes.io, 'digest')).toBe(0);
+    const shown = yes.out.join('');
+    expect(shown).toContain(REASON);
+    expect(shown).toContain('CLI agents with their own tools (shell, files) as the Octipus server user; only approve if its prompts never carry outside data');
+    expect(shown).toContain('notes:read');
+    expect(yes.asked).toEqual(['Approve model:cli-tools for digest? [y/N] ']);
+    expect(yes.requests.at(-1)).toMatchObject({ method: 'PATCH', url: 'http://localhost:4999/api/plugin-packages/digest', body: { approveHostScopes: ['model:complete', 'model:cli-tools'] } });
+    expect(shown).toContain('its model calls may run on CLI lanes');
+
+    const no = harness({ packages: [trusted()], interactive: true, answer: 'n' });
+    expect(await approveCliToolsCommand(no.io, 'digest')).toBe(1);
+    expect(no.requests.filter((r) => r.method === 'PATCH')).toEqual([]);
+
+    const away = harness({ packages: [trusted()] });
+    expect(await approveCliToolsCommand(away.io, 'digest')).toBe(2);
+    expect(away.err.join('')).toContain('octi plugin approve-cli-tools digest --yes');
+    expect(away.requests.filter((r) => r.method === 'PATCH')).toEqual([]);
+
+    const forced = harness({ packages: [trusted({}, null)], respond: (method) => (method === 'PATCH' ? [200, trusted({ approved: true }, ['model:cli-tools'])] : undefined) });
+    expect(await approveCliToolsCommand(forced.io, 'digest', { yes: true })).toBe(0);
+    expect(forced.requests.at(-1)?.body).toEqual({ approveHostScopes: ['model:cli-tools'] });
+    expect(forced.out.join('')).toContain('takes effect once model:complete is approved');
+  });
+
+  test('--revoke sends the approved scopes without it; a package without the flag has nothing to approve', async () => {
+    const h = harness({ packages: [trusted({ approved: true, active: true }, ['model:complete', 'model:cli-tools'])] });
+    expect(await approveCliToolsCommand(h.io, 'digest', { revoke: true })).toBe(0);
+    expect(h.requests.at(-1)?.body).toEqual({ approveHostScopes: ['model:complete'] });
+    const none = harness({ packages: [view({ name: 'plain' })] });
+    expect(await approveCliToolsCommand(none.io, 'plain', { yes: true })).toBe(1);
+    expect(none.err.join('')).toContain('does not declare model.trustedInput');
   });
 });
 

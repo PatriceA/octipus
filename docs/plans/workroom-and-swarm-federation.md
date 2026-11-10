@@ -158,7 +158,7 @@ the user's seat config, which is config, exactly like a topic binding.
 
 Two spawner changes are needed and both are small:
 
-- The **same-role refusal** (`.octipus/swarm-design.md`, implementation notes)
+- The **same-role refusal** (`src/core/swarm/spawner.ts`)
   rejects a child whose role equals the parent's. A room root has no role; give it
   the sentinel role `workroom` so the check is moot, and add a `workroom` lane to
   the topic table so `getModelForTopic` fails loud if a seat has no model.

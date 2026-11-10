@@ -322,7 +322,7 @@ async function main() {
       if (interrupted > 0) logger.info({ interrupted }, 'Paused pipelines interrupted by a restart');
     }
 
-    // Load user-authored extensions (.octipus/extensions/)
+    // Load user-authored extensions (~/.octipus/extensions/; never the working directory's)
     try {
       const { getExtensionRegistry } = await import('@/extensions');
       await getExtensionRegistry(gatewayHub.eventBus).loadAll();

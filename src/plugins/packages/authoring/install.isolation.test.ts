@@ -178,7 +178,7 @@ describe('plugin_install', () => {
     mkdirSync(join(bundled, 'shipped'));
     writeFileSync(join(bundled, 'shipped', 'octipus-plugin.json'), '{}');
     const { setBundledRoot } = await import('../bundled');
-    setBundledRoot(bundled);
+    setBundledRoot(bundled, ['shipped']);
     try {
       await writeTemplate(admin, 'tool-only', 'plugins/shipped', (m) => ({ ...m, name: 'shipped' }));
       expect(await install(admin, 'plugins/shipped')).toMatchObject({ installed: false, error: expect.stringContaining('shipped with Octipus') });

@@ -1,9 +1,12 @@
 name: Plugin contract
 
-# Validate every plugin under extensions/ against the published contract
-# (@octipus/plugin-sdk): manifest schema, apiVersion compatibility, module
-# shape, and a fixture dry-run of each declared tool. WS3's "plugin contract
-# shards" at our scale.
+# Check the legacy plugin contract (@octipus/plugin-sdk) and the converter on
+# the fixture under tests/fixtures/legacy-plugin: manifest schema, apiVersion
+# compatibility, module shape, a fixture dry-run of each declared tool, and
+# that `octi plugin convert` turns it into a plugin package. Legacy plugins
+# load from ~/.octipus/legacy-plugins, never from the repository, so there is
+# no extensions/ directory to scan; plugins/reader is the example plugin and
+# is covered by the unit tests.
 
 on:
   pull_request:
@@ -19,7 +22,7 @@ permissions:
 
 jobs:
   validate:
-    name: Validate extensions/*
+    name: Validate the legacy plugin fixture and its conversion
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -33,17 +36,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Validate each plugin
+      - name: Validate the legacy fixture
+        run: npx tsx scripts/plugin.ts validate tests/fixtures/legacy-plugin
+
+      - name: Convert the legacy fixture to a plugin package
         run: |
           set -e
-          shopt -s nullglob
-          found=0
-          for manifest in extensions/*/plugin.json; do
-            dir="$(dirname "$manifest")"
-            found=1
-            echo "── $dir ──"
-            npx tsx scripts/plugin.ts validate "$dir"
-          done
-          if [ "$found" -eq 0 ]; then
-            echo "No plugins under extensions/ — nothing to validate."
-          fi
+          out="$RUNNER_TEMP/legacy-plugin-package"
+          npx tsx scripts/plugin.ts convert tests/fixtures/legacy-plugin --out "$out"
+          test -f "$out/octipus-plugin.json"
+          test -f "$out/server.mjs"

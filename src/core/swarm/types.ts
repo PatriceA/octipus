@@ -1,7 +1,7 @@
 /**
  * Swarm Phase 1 — public types.
  *
- * Mirrors the design in `.octipus/swarm-design.md`. Phase 1 covers
+ * See docs/AGENT-ARCHITECTURE.md. Phase 1 covers
  * Root agent (depth 0) → Agent (depth 1) only; Subagent (depth 2) is
  * defined for forward compatibility but not spawnable yet.
  */

@@ -11,14 +11,25 @@
 > minimal environment and declared tool effects. The plugins on this page run
 > inside the server with its full rights.
 
-Extend Octipus's capabilities by dropping plugins into the `extensions/` directory. Each plugin provides tools that are automatically registered and available to agents — no core code changes needed.
+Extend Octipus's capabilities by dropping plugins into `~/.octipus/legacy-plugins/`. Each plugin provides tools that are automatically registered and available to agents — no core code changes needed.
+
+> **Not from the Octipus checkout.** None of the plugin systems read plugins
+> from the Octipus checkout or the server's working directory: legacy plugins
+> load from `~/.octipus/legacy-plugins/`, in-process extensions from
+> `~/.octipus/extensions/`, and plugin packages from the plugin store under
+> `workspace.rootPath` ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#where-plugins-live)).
+> Legacy plugins used to load from `<cwd>/extensions/`; that directory is no
+> longer read. If it still holds plugins, the server logs one warning naming
+> them: move each to `~/.octipus/legacy-plugins/`, or convert it with
+> `octi plugin convert` ([below](#converting-to-a-plugin-package)). A
+> project's `<cwd>/.octipus/extensions/` is no longer loaded either.
 
 ## Plugin Structure
 
-A plugin is a directory inside `extensions/` containing:
+A plugin is a directory inside `~/.octipus/legacy-plugins/` containing:
 
 ```
-extensions/
+~/.octipus/legacy-plugins/
   my-plugin/
     plugin.json    # Manifest (required)
     index.ts       # Entry file (required)
@@ -72,7 +83,7 @@ export default {
 
 ## How It Works
 
-1. At startup, `loadPlugins()` scans `extensions/` for directories with `plugin.json`
+1. At startup, `loadPlugins()` scans `~/.octipus/legacy-plugins/` for directories with `plugin.json`
 2. Each manifest is validated (name, version, description, main, tools)
 3. The entry file is dynamically imported via `await import()`
 4. `initialize()` is called with a `PluginContext` (logger)
@@ -89,7 +100,7 @@ export default {
 
 ## Development Workflow
 
-1. Create your plugin directory in `extensions/`
+1. Create your plugin directory in `~/.octipus/legacy-plugins/` (outside the Octipus checkout)
 2. Write `plugin.json` and `index.ts`
 3. Restart the backend, or call `POST /api/plugins/:name/reload` to hot-reload.
    The reload imports a fresh copy of the entry file (modules it imports
@@ -116,7 +127,7 @@ Handlers run sequentially in registration order. A thrown handler is logged and 
 
 ### From an extension: `octi.hook` (trusted extensions only)
 
-An extension (`~/.octipus/extensions` or a project's `.octipus/extensions`) reaches the same hooks without importing host internals:
+An extension (`~/.octipus/extensions`; a project's `.octipus/extensions` is not loaded) reaches the same hooks without importing host internals:
 
 ```ts
 export default function (octi) {
@@ -254,11 +265,11 @@ A compaction rewrites the start of the conversation, so the prompt cache starts 
 
 Hooks, tools and providers can rewrite what the agent does or see all of it, so `octi.hook`, `octi.registerTool` and `octi.registerProvider` throw unless the operator trusts the extension: list each trusted extension's entry file or directory, by absolute path, in `extensions.trusted` (or `OCTIPUS_TRUSTED_EXTENSIONS`, comma-separated). The list is read once, before the first extension's code runs, so changing it needs a restart; relative entries are ignored; paths are compared by real path, decided before the extension is imported, so an extension with the same name somewhere else is not trusted. Observing events (`octi.on`) and adding slash commands (`octi.registerCommand`) need no trust.
 
-What this gate is and is not: it keeps an extension that was not meant to steer the agent from doing so. It is not a sandbox. Every extension, trusted or not, is in-process code with the server's privileges from the moment it loads, and `<cwd>/.octipus/extensions` loads automatically, so install only extensions you would run yourself.
+What this gate is and is not: it keeps an extension that was not meant to steer the agent from doing so. It is not a sandbox. Every extension, trusted or not, is in-process code with the server's privileges from the moment it loads, and everything in `~/.octipus/extensions` loads automatically, so install only extensions you would run yourself. (A project's `<cwd>/.octipus/extensions` is not loaded: a cloned repository cannot bring an extension in by being the working directory. The server logs one warning naming any it skips; move the ones you trust to `~/.octipus/extensions`.)
 
 **Installing a trusted extension as an in-process plugin.** The way to run a trusted extension in production is to install it like a plugin package, with `"runtime": "in-process"` and `"entry"` naming the module, bundled into one ES module file (for example with `esbuild --bundle`) ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#runtimes)). It is then copied into the plugin directory, pinned by content hash, signed and checked against `plugins.trustedPublishers` and `plugins.revokedKeys`, listed on Admin → Plugin packages and audited, and it runs only after an admin approves its content and, separately, approves running it in the server process for that hash. It is trusted (`hook`, `registerTool`, `registerProvider` work) without an `extensions.trusted` entry, loads and unloads when it is enabled, disabled, upgraded or uninstalled, without a restart, and its registrations are disposed in reverse order.
 
-Extensions in `~/.octipus/extensions` and `<cwd>/.octipus/extensions` keep working for development: they are not pinned (no hash, signature or approval: whatever is on disk at load runs), and the server logs that once. `extensions.trusted` (and `OCTIPUS_TRUSTED_EXTENSIONS`) keeps working for them, but is deprecated: install anything you trust as an in-process plugin instead.
+Extensions in `~/.octipus/extensions` keep working for development: they are not pinned (no hash, signature or approval: whatever is on disk at load runs), and the server logs that once. `extensions.trusted` (and `OCTIPUS_TRUSTED_EXTENSIONS`) keeps working for them, but is deprecated: install anything you trust as an in-process plugin instead.
 
 Behaviour to know when writing a hook:
 
@@ -269,13 +280,13 @@ Behaviour to know when writing a hook:
 ## Converting to a plugin package
 
 ```bash
-octi plugin convert extensions/my-plugin --out ./my-plugin-package \
+octi plugin convert ~/.octipus/legacy-plugins/my-plugin --out ~/my-plugin-package \
   --effect lookup=read --network api.example.com
 ```
 
 The converter wraps the plugin's handlers rather than rewriting them. It
 writes, into an output directory that must be missing or empty (default
-`./<name>-package`):
+`./<name>-package`, so run it outside the Octipus checkout or pass `--out`):
 
 | File | What it is |
 |---|---|
@@ -339,11 +350,14 @@ parameter properties. Compile it to JavaScript first otherwise.
 
 Then install the package as any other: `POST /api/plugin-packages { "path":
 "<out>" }` ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#installing-and-managing)),
-and remove the plugin from `extensions/` so its tools are not offered twice.
+and remove the plugin from `~/.octipus/legacy-plugins/` so its tools are not offered twice.
 
 ## Example Plugin
 
-See `extensions/example-plugin/` for a working example with a greeting tool and a calculator.
+The example plugin is [`plugins/reader`](../plugins/reader), a plugin package
+([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md)). No legacy plugin ships with
+Octipus; the converter and validator tests use the fixture in
+`tests/fixtures/legacy-plugin/` (a greeting tool and a calculator).
 
 ## Key Files
 
@@ -355,7 +369,7 @@ See `extensions/example-plugin/` for a working example with a greeting tool and 
 | `src/plugins/convert.ts` | `octi plugin convert`: legacy plugin to plugin package |
 | `src/plugins/index.ts` | Barrel exports |
 | `src/api/routes/plugins.ts` | REST API routes |
-| `extensions/` | Plugin directory (create plugins here) |
+| `~/.octipus/legacy-plugins/` | Legacy plugin directory (per user, outside the checkout) |
 | `src/extensions/api.ts` | The `octi` API of user extensions: `on`, `registerCommand`, `hook`, `registerTool`, `registerProvider`, `hookApiVersion` |
 | `src/extensions/providers.ts` | `registerProvider` validation and registration; the rows live in `src/models/extension-models.ts` |
 | `src/extensions/tools.ts` | Extension tool groups (`ext_<extension>`) in the tool registry |
@@ -396,14 +410,15 @@ Declare the contract version your plugin targets:
 ### Validate before you ship
 
 ```bash
-octi plugin validate ./extensions/my-plugin
+octi plugin validate ~/.octipus/legacy-plugins/my-plugin
 ```
 
 This runs the full pre-flight the host runs at load time — manifest schema,
 apiVersion compatibility, module shape, an `initialize` dry-run, and a fixture
 dry-run of every declared tool. It exits non-zero on any fatal error. A CI
-workflow (`.github/workflows/plugin-validate.yml`) runs it over every plugin in
-`extensions/`.
+workflow (`.github/workflows/plugin-validate.yml`) runs it over the legacy
+fixture in `tests/fixtures/legacy-plugin/` and converts that fixture with
+`octi plugin convert`.
 
 Authors can run the same check in their own CI:
 

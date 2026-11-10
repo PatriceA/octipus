@@ -73,7 +73,7 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
 
   // Reload user extensions from disk. Equivalent to the TUI's `/reload`
   // command but reachable from the WebUI Tools page. Only reloads extensions
-  // (commands in .octipus/extensions/); built-in tools remain frozen at
+  // (commands in ~/.octipus/extensions/); built-in tools remain frozen at
   // startup and plugins reload via /plugins/:name/reload.
   .post(
     '/reload',

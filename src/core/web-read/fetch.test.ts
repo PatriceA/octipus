@@ -1,5 +1,5 @@
 /**
- * The reader's fetch (also the plugin host API's web:read): the body is read
+ * The web-read fetch (what the plugin host API's web:read runs): the body is read
  * as a stream and cut at the cap whatever the response declares, and a
  * refusal by the SSRF guard is told apart from any other failure.
  */
@@ -11,7 +11,7 @@ vi.mock('@/utils/sanitize', async (importOriginal) => {
   return { ...real, fetchGuarded: async (url: string, init?: RequestInit) => (h.respond ? h.respond(url) : real.fetchGuarded(url, init)) };
 });
 
-const { fetchReaderDoc, MAX_HTML_BYTES, readCapped, ReaderFetchError } = await import('./fetch');
+const { fetchArticle, MAX_HTML_BYTES, readCapped, WebReadError } = await import('./fetch');
 
 /** An endless chunked HTML body (no Content-Length), counting what is pulled. */
 function endless(): Response {
@@ -26,14 +26,14 @@ function endless(): Response {
   return new Response(body, { headers: { 'content-type': 'text/html' } });
 }
 
-describe('reader fetch', () => {
+describe('web-read fetch', () => {
   test('a body without a Content-Length is cut at the cap, and reading stops there', async () => {
     const text = await readCapped(endless(), 200_000);
     expect(Buffer.byteLength(text)).toBe(200_000);
     expect(h.pulled).toBeLessThan(200_000 + 3 * 64 * 1024);
 
     h.respond = () => endless();
-    const doc = await fetchReaderDoc('https://news.example.com/huge');
+    const doc = await fetchArticle('https://news.example.com/huge');
     expect(doc.textContent.length).toBeLessThanOrEqual(MAX_HTML_BYTES);
     expect(h.pulled).toBeLessThan(MAX_HTML_BYTES + 3 * 64 * 1024);
     h.respond = null;
@@ -41,19 +41,19 @@ describe('reader fetch', () => {
 
   test('a declared size over the cap is refused before reading', async () => {
     h.respond = () => new Response('<p>x</p>', { headers: { 'content-type': 'text/html', 'content-length': String(MAX_HTML_BYTES + 1) } });
-    await expect(fetchReaderDoc('https://news.example.com/big')).rejects.toMatchObject({ name: 'ReaderFetchError', blocked: false });
+    await expect(fetchArticle('https://news.example.com/big')).rejects.toMatchObject({ name: 'WebReadError', blocked: false });
     h.respond = null;
   });
 
   test('the SSRF guard\'s refusal is marked blocked; other failures are not', async () => {
-    const blocked = await fetchReaderDoc('http://10.0.0.1/admin').catch((e) => e);
-    expect(blocked).toBeInstanceOf(ReaderFetchError);
+    const blocked = await fetchArticle('http://10.0.0.1/admin').catch((e) => e);
+    expect(blocked).toBeInstanceOf(WebReadError);
     expect(blocked.blocked).toBe(true);
     h.respond = () => new Response('nope', { status: 500, headers: { 'content-type': 'text/html' } });
-    const failed = await fetchReaderDoc('https://news.example.com/down').catch((e) => e);
-    expect(failed).toMatchObject({ name: 'ReaderFetchError', blocked: false });
+    const failed = await fetchArticle('https://news.example.com/down').catch((e) => e);
+    expect(failed).toMatchObject({ name: 'WebReadError', blocked: false });
     h.respond = () => new Response('{}', { headers: { 'content-type': 'application/json' } });
-    expect(await fetchReaderDoc('https://news.example.com/json').catch((e) => e)).toMatchObject({ blocked: false });
+    expect(await fetchArticle('https://news.example.com/json').catch((e) => e)).toMatchObject({ blocked: false });
     h.respond = null;
   });
 });

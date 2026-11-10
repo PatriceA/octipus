@@ -4,10 +4,16 @@
  * call that user started. What keeps it from being a way around the rules a
  * user's own agent runs under:
  *
- * - **No CLI model.** A lane bound to a CLI row is refused (`cli_model`): a
- *   vendor CLI is an agent harness on the host, not a text model, and a
- *   plugin's prompt must never drive one. (CLI completions run tool-less
- *   anyway, `providers/cli-provider.ts`; this keeps plugins off them altogether.)
+ * - **No CLI model, unless approved.** A lane bound to a CLI row is refused
+ *   (`cli_model`): a vendor CLI is an agent harness on the host with its own
+ *   tools (shell, files) run as the server user, and a plugin's prompt may
+ *   carry outside data written to steer it. The one exception is a package
+ *   that declares `model.trustedInput` and whose `model:cli-tools` an admin
+ *   approved (`HostTokenGrant.modelCliTools`,
+ *   docs/PLUGIN-PACKAGES.md#model-calls-on-cli-lanes): its call goes to the
+ *   CLI with `allowCliTools`, tool-less where the CLI can be, otherwise with
+ *   its normal arguments in an empty directory (`providers/cli-provider.ts`),
+ *   and the audit row says `cliTools: true`.
  * - **Protection.** The call runs as part of the calling session
  *   (`sessionId`), at the highest protection level the same package call has
  *   read through the host API (`HostTokenGrant.readLevel`): level 3-4 stays on
@@ -37,7 +43,7 @@ export interface HostModelRequest {
 }
 
 export type HostModelOutcome =
-  | { ok: true; output: string; model: string }
+  | { ok: true; output: string; model: string; cliTools?: true }
   | { ok: false; status: number; code: string; error: string; retryAfter?: number };
 
 /** The cost rows of plugin model calls are tagged with this request type. */
@@ -62,7 +68,18 @@ export function estimateTokens(req: HostModelRequest): number {
   return Math.ceil(((req.system?.length ?? 0) + req.prompt.length) / 3) + (req.maxTokens ?? 1200);
 }
 
-export async function pluginModelComplete(grant: HostTokenGrant, principal: Principal, req: HostModelRequest): Promise<HostModelOutcome> {
+/** Why a CLI lane is refused to a plugin's model call. */
+export const CLI_MODEL_REFUSAL = 'The "everyday" lane runs on a CLI model, an agent with its own tools (shell, files) on the host. '
+  + 'A plugin\'s model calls run there only when its manifest declares model.trustedInput and an admin approved model:cli-tools; '
+  + 'otherwise bind an API or local model to the lane';
+
+/**
+ * One completion for a package call. `details` gets what the audit row of the
+ * request records about the model: its name and, on a CLI lane, `cliTools: true`.
+ */
+export async function pluginModelComplete(
+  grant: HostTokenGrant, principal: Principal, req: HostModelRequest, details: Record<string, unknown> = {},
+): Promise<HostModelOutcome> {
   const limited = checkRateLimit(`plugin-host-model:${grant.plugin}:${grant.userId}`, { capacity: MODEL_CALLS_PER_MINUTE, refillPerSecond: MODEL_CALLS_PER_MINUTE / 60 });
   if (!limited.allowed) {
     return { ok: false, status: 429, code: 'rate_limited', error: `At most ${MODEL_CALLS_PER_MINUTE} model calls a minute per plugin`, retryAfter: limited.retryAfterSeconds ?? 10 };
@@ -90,9 +107,12 @@ export async function pluginModelComplete(grant: HostTokenGrant, principal: Prin
     ...(inSpace ? { inSpace: true, spaceRole: principal.workspaceKind === 'shared' ? principal.spaceRole : undefined } : {}),
   });
   if (!model) return { ok: false, status: 409, code: 'no_model', error: 'No model is bound to the "everyday" lane; bind one on the Topics page' };
-  if (model.provider === 'cli') {
-    return { ok: false, status: 409, code: 'cli_model', error: 'The "everyday" lane runs on a CLI model; plugins may use API and local models only' };
+  const cliTools = model.provider === 'cli';
+  if (cliTools && grant.modelCliTools !== true) {
+    return { ok: false, status: 409, code: 'cli_model', error: CLI_MODEL_REFUSAL };
   }
+  details.model = model.name;
+  if (cliTools) details.cliTools = true;
 
   const { withContentLevel } = await import('@/core/protection/session-level');
   const { getLiteLLMClient } = await import('@/models/litellm-client');
@@ -110,9 +130,11 @@ export async function pluginModelComplete(grant: HostTokenGrant, principal: Prin
       ...(grant.sessionId ? { sessionId: grant.sessionId } : {}),
       workspaceId: principal.workspaceId ?? null,
       requestType: pluginRequestType(grant.plugin),
-      accountingMetadata: { plugin: grant.plugin, tool: grant.tool },
+      accountingMetadata: { plugin: grant.plugin, tool: grant.tool, ...(cliTools ? { cliTools: true } : {}) },
+      // Declared and approved: the CLI may run with its own tools when it has no tool-less mode.
+      ...(cliTools ? { allowCliTools: true } : {}),
     }));
-    return { ok: true, output: (result.content ?? '').trim(), model: model.name };
+    return { ok: true, output: (result.content ?? '').trim(), model: model.name, ...(cliTools ? { cliTools: true as const } : {}) };
   } catch (err) {
     if ((err as Error).name === 'ProtectionRoutingError') {
       return { ok: false, status: 409, code: 'protection_level', error: (err as Error).message };

@@ -9,7 +9,7 @@ import { workspaces } from './organizations';
  * user-facing todo list the agent can read, create, and complete.
  *
  * `source`/`sourceRef` are the differentiator: a task records where it came
- * from (a chat turn, a reader action-item, an email triage) so the UI can link
+ * from (a chat turn, a plugin's action-item, an email triage) so the UI can link
  * back to the origin.
  */
 export const tasks = pgTable('tasks', {
@@ -67,7 +67,7 @@ export const tasks = pgTable('tasks', {
   remindAt: timestamp('remind_at', { withTimezone: true }),
   remindedAt: timestamp('reminded_at', { withTimezone: true }),
   completedAt: timestamp('completed_at', { withTimezone: true }),
-  /** Provenance: 'user' | 'agent' | 'reader' | 'research' | 'email' | 'channel'. */
+  /** Provenance: 'user' | 'agent' | 'reader' | 'research' | 'email' | 'channel'. 'reader' is kept for existing tasks (the core reader is removed). */
   source: text('source').default('user').notNull(),
   /** Optional link back to the origin (sessionId, url, messageId, …). */
   sourceRef: jsonb('source_ref').$type<TaskSourceRef>(),

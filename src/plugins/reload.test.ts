@@ -5,12 +5,13 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { getLoadedPlugin, loadPlugins, PluginReloadError, reloadPlugin } from './loader';
 
 /**
- * The loader against a real `extensions/` directory: the hot reload must pick
+ * The loader against a real legacy plugin directory (`~/.octipus/legacy-plugins`): the hot reload must pick
  * up edited code (Node caches ESM by URL), keep the running plugin when the new
  * copy fails, and shut the old module down exactly once.
  */
 let root: string;
 let pluginDir: string;
+let savedHome: string | undefined;
 
 const manifest = (extra: Record<string, unknown> = {}) => JSON.stringify({
   name: 'reload-probe',
@@ -40,16 +41,20 @@ const probe = () => (globalThis as unknown as { __reloadProbe: { shutdowns: stri
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'octipus-plugin-reload-'));
-  pluginDir = join(root, 'extensions', 'reload-probe');
+  pluginDir = join(root, '.octipus', 'legacy-plugins', 'reload-probe');
   mkdirSync(pluginDir, { recursive: true });
   writeFileSync(join(pluginDir, 'plugin.json'), manifest());
   writeFileSync(join(pluginDir, 'index.mjs'), source('v1'));
+  // os.homedir() reads HOME on POSIX: the loader's default directory is under it.
+  savedHome = process.env.HOME;
+  process.env.HOME = root;
   vi.spyOn(process, 'cwd').mockReturnValue(root);
   (globalThis as unknown as { __reloadProbe?: unknown }).__reloadProbe = { shutdowns: [], inits: [] };
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
   rmSync(root, { recursive: true, force: true });
 });
 

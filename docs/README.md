@@ -55,7 +55,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md) | Notes, `[[wikilinks]]`, authored edges, graph traversal, Obsidian/Canvas interop. |
 | [DOCUMENTS.md](DOCUMENTS.md) | Document ingestion, OCR, management, and exporting a deliverable as .docx / .xlsx. |
 | [DATA-TOOLS.md](DATA-TOOLS.md) | Read-only SQL against a registered database or a workspace CSV, and how a connection is registered. |
-| [ENRICHMENT.md](ENRICHMENT.md) | Reader, deep research, tasks, and email-triage enrichment features. |
+| [ENRICHMENT.md](ENRICHMENT.md) | Deep research, tasks, email triage, and the web-read fetch behind the Reader example plugin. |
 | [INLINE-UI.md](INLINE-UI.md) | Interactive answers: small widgets inside a reply in the web chat and rooms — how they are written, isolated, saved as artifacts and switched off. |
 | [ARTIFACTS.md](ARTIFACTS.md) | Live hosted HTML artifacts produced by agents. |
 | [ARTIFACTS-COOKBOOK.md](ARTIFACTS-COOKBOOK.md) | Worked examples and recipes for building artifacts. |
@@ -71,10 +71,10 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [BACKUP.md](BACKUP.md) | Daily backups of the database (with the vault) and the workspace files, checked by loading them back; retention, the admin API and restore. |
 | [MODULES.md](MODULES.md) | The core and the modules an install switches on (cases, mail, scan folders, protection levels); Settings → Modules and the API. |
 | [SCAN-FOLDERS.md](SCAN-FOLDERS.md) | Scan folders: server directories a scanner or fax service drops files into, filed into the documents of a personal or space scope. |
-| [PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md) | Plugin packages: out-of-repo connections that run as their own fenced-in MCP server, with declared tool effects, settings and vault secrets. |
+| [PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md) | Plugin packages: out-of-repo connections that run as their own fenced-in MCP server, with declared tool effects, settings and vault secrets. The example plugin is [`plugins/reader`](../plugins/README.md); your own plugins live outside the repository. |
 | [TASK-BOARD.md](TASK-BOARD.md) | The work board on the tasks page: assignees, checkout leases, comments, dependency wakeups, the audit trail, and role agents that work their tasks. |
 | [SPEND-BUDGETS.md](SPEND-BUDGETS.md) | Dollar spend budgets per user, role or workspace: warn and pause, what users see, and the admin screen. |
-| [PLUGINS.md](PLUGINS.md) | Installing and building host-side plugins / extensions. |
+| [PLUGINS.md](PLUGINS.md) | Deprecated host-side plugins (`~/.octipus/legacy-plugins`) and in-process extensions (`~/.octipus/extensions`); neither loads from the Octipus checkout. |
 | [MCP-INTEGRATION.md](MCP-INTEGRATION.md) | Connecting external MCP servers (client side) with lazy tool discovery. |
 | [MCP-SERVER.md](MCP-SERVER.md) | The standalone MCP server Octipus exposes to CLI models. |
 | [PROFILES.md](PROFILES.md) | People & profiles. |
