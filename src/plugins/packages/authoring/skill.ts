@@ -44,7 +44,8 @@ export const PLUGIN_AUTHORING_SKILL_CONTENT = `Use this when the user wants a ne
 - Never run code of the plugin on the host outside the shell sandbox (step 5).
 - Never ask the user to paste a secret into the chat; declare it in \`secrets\` and let the admin set it.
 - A schedule runs unattended as the installing admin: a \`write\` tool needs their ALLOW rule, an \`external\` one never runs. Prefer \`read\` tools for schedules and context.
-- Do not write into another installed package, the plugin store or the Octipus install or repository; work only in your workspace.`;
+- Do not write into another installed package, the plugin store or the Octipus install or repository; work only in your workspace.
+- Leave \`model\` out of the manifest. Set \`model.trustedInput\` only when every prompt the plugin sends to \`model:complete\` is built from its own constants or from sources the admin trusts, never from web pages, mail, files, the user's text or other outside data, and give the honest \`reason\`. It lets its model calls run on CLI agents with their own tools, and only after an admin approves it.`;
 
 export const PLUGIN_AUTHORING_SKILL = {
   id: PLUGIN_AUTHORING_SKILL_ID,

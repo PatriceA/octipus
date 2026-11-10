@@ -643,6 +643,15 @@ with "it has no mode without its own tools". Use such a CLI as an agent model
 (`/model`, a role or pipeline stage) and bind an API model or Claude Code to
 the lanes.
 
+The one exception is a plugin's `model:complete` call, by explicit approval
+only: its package declares `model.trustedInput` (its prompts carry no
+outside data) and an admin approved `model:cli-tools`
+([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#model-calls-on-cli-lanes)). Such a
+call still runs tool-less on a CLI that can; on Antigravity, Vibe or Codex
+it runs with the CLI's normal arguments, in a fresh empty directory, and is
+audited with `cliTools: true`. Every other plugin call is refused on a CLI
+lane (`409 cli_model`), and every core completion keeps the rule above.
+
 ## Session reuse
 
 Octipus hands the vendor CLI its own session id back on the next turn (for

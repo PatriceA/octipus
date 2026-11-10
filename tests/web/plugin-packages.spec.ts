@@ -12,7 +12,10 @@ import { json, stubAllDefaults } from './fixtures/api-stubs';
  *   - settings are edited by the manifest's fields; secrets are write-only and
  *     the value is gone from the page's heap once saved; uninstall asks first;
  *   - Browse lists the registries' packages and installs one with its URL
- *     and sha256.
+ *     and sha256;
+ *   - a package that declares model.trustedInput shows the CLI-tools warning,
+ *     its reason and the sources it reads; enabling leaves it unapproved, and
+ *     approving model:cli-tools asks first and sends it with the approved scopes.
  *
  * Screenshots go to $PLUGIN_PACKAGE_SHOTS when set.
  */
@@ -391,5 +394,80 @@ test.describe('plugin packages', () => {
     await confirmation.getByRole('button', { name: 'Approve and enable' }).click();
     await expect(row.getByTestId('plugin-contributions-approval')).toContainText(`contributions approved for ${CONTRIB}`);
     expect(patches).toEqual([{ enabled: true, approveContributions: CONTRIB }]);
+  });
+  test('model.trustedInput: the warning, the reason and the sources show; model:cli-tools is approved on its own, after a confirmation', async ({ authenticatedPage: page }) => {
+    const REASON = 'Prompts are fixed templates filled with counts from the intranet API.';
+    const SOURCES = 'It also reads from the network hosts api.intranet.example.com and the host scopes notes:read: approve only if you trust what they return, since it can reach its prompts.';
+    const SCOPES = ['notes:read', 'model:complete'];
+    const trust = (approved: boolean, active: boolean) => ({ reason: REASON, approved, active, sourcesWarning: SOURCES });
+    let packages = [pkg({
+      name: 'digest', enabled: false, connected: false,
+      manifest: {
+        ...pkg({}).manifest, name: 'digest', title: 'Weekly digest', network: ['api.intranet.example.com'],
+        host: SCOPES, model: { trustedInput: true, reason: REASON },
+      },
+      approvedHostScopes: null, modelCliTools: trust(false, false),
+    })];
+    const patches: Array<{ enabled?: boolean; approveHostScopes?: string[] }> = [];
+    const dialogs: string[] = [];
+    await stubAllDefaults(page);
+    await page.route(/\/api\/plugin-packages(\/.*)?$/, async (route: Route) => {
+      const req = route.request();
+      if (req.method() === 'GET' && req.url().endsWith('/bundled')) return json(route, 200, []);
+      if (req.method() === 'GET') return json(route, 200, packages);
+      if (req.method() === 'PATCH') {
+        const body = req.postDataJSON() as { enabled?: boolean; approveHostScopes?: string[] };
+        patches.push(body);
+        const [p] = packages;
+        const approved = body.approveHostScopes ?? (p.approvedHostScopes as string[] | null);
+        const cli = (approved ?? []).includes('model:cli-tools');
+        packages = [{
+          ...p, ...(body.enabled !== undefined ? { enabled: body.enabled, connected: body.enabled } : {}),
+          approvedHostScopes: approved, modelCliTools: trust(cli, cli && (approved ?? []).includes('model:complete')),
+        }];
+        return json(route, 200, packages[0]);
+      }
+      return json(route, 404, { error: 'unexpected' });
+    });
+
+    await page.goto('/admin/plugins');
+    const row = page.locator('[data-testid="plugin-package"][data-name="digest"]');
+    const cli = row.getByTestId('plugin-model-cli-tools');
+    await expect(cli).toHaveAttribute('data-approved', 'false');
+    await expect(cli).toContainText('not approved: its model calls stay off CLI lanes');
+    await expect(row.getByTestId('plugin-model-cli-tools-warning')).toHaveText(
+      'Its model calls may run on CLI agents with their own tools (shell, files) as the Octipus server user; only approve if its prompts never carry outside data.');
+    await expect(row.getByTestId('plugin-model-cli-tools-reason')).toContainText(REASON);
+    await expect(row.getByTestId('plugin-model-cli-tools-sources')).toHaveText(SOURCES);
+    if (SHOTS) await page.screenshot({ path: `${SHOTS}/admin-plugin-model-cli-tools.png`, fullPage: true });
+
+    // Enabling approves the host scopes only, and says model:cli-tools stays off.
+    page.once('dialog', (d) => { dialogs.push(d.message()); void d.accept(); });
+    await row.getByRole('button', { name: 'Enable digest' }).click();
+    await expect.poll(() => patches.length).toBe(1);
+    expect(dialogs[0]).toContain('declares model.trustedInput');
+    expect(dialogs[0]).toContain('enabling leaves its model calls off CLI lanes');
+    expect(patches[0]).toEqual({ enabled: true, approveHostScopes: SCOPES });
+
+    // Approving it asks first, with the warning, the reason and the sources; dismissed, nothing is sent.
+    const approve = row.getByRole('button', { name: 'Approve model:cli-tools for digest' });
+    page.once('dialog', (d) => { dialogs.push(d.message()); void d.dismiss(); });
+    await approve.click();
+    await expect.poll(() => dialogs.length).toBe(2);
+    expect(dialogs[1]).toContain('CLI agents with their own tools (shell, files) as the Octipus server user');
+    expect(dialogs[1]).toContain(REASON);
+    expect(dialogs[1]).toContain('api.intranet.example.com');
+    expect(patches).toHaveLength(1);
+
+    page.once('dialog', (d) => d.accept());
+    await approve.click();
+    await expect(cli).toHaveAttribute('data-active', 'true');
+    await expect(cli).toContainText('approved: its model calls may run on CLI agents');
+    expect(patches[1]).toEqual({ approveHostScopes: [...SCOPES, 'model:cli-tools'] });
+
+    // Revoked: the host scopes stay.
+    await row.getByRole('button', { name: 'Revoke model:cli-tools for digest' }).click();
+    await expect(cli).toHaveAttribute('data-approved', 'false');
+    expect(patches[2]).toEqual({ approveHostScopes: SCOPES });
   });
 });

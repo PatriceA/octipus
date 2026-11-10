@@ -161,6 +161,21 @@ describe('the _meta of a call', () => {
     expect(hostCallKind(as({}))).toBe('agent');
   });
 
+  test('the grant says model calls may run on CLI lanes only when the binding does and the call holds model:complete', async () => {
+    const withModel = (over: Partial<MCPServer['plugin']> = {}) => server({ hostScopes: ['notes:read', 'model:complete'], ...over });
+    const approved = await issueHostCallMeta(withModel({ modelCliTools: true }), 'read_it', context);
+    expect(verifyHostToken((approved?.meta[PLUGIN_HOST_META_KEY] as PluginHostCallMeta).token, 'acme')?.modelCliTools).toBe(true);
+    approved?.release();
+    // Declared but not approved: the binding carries no flag, and neither does the grant.
+    const unapproved = await issueHostCallMeta(withModel(), 'read_it', context);
+    expect(verifyHostToken((unapproved?.meta[PLUGIN_HOST_META_KEY] as PluginHostCallMeta).token, 'acme')).not.toHaveProperty('modelCliTools');
+    unapproved?.release();
+    // No model:complete in the call's scopes: nothing to flag.
+    const noModel = await issueHostCallMeta(server({ modelCliTools: true }), 'read_it', context);
+    expect(verifyHostToken((noModel?.meta[PLUGIN_HOST_META_KEY] as PluginHostCallMeta).token, 'acme')).not.toHaveProperty('modelCliTools');
+    noModel?.release();
+  });
+
   test('a space call carries the space', async () => {
     const issued = await issueHostCallMeta(server(), 'read_it', { ...context, space: { workspaceId: 'space-1' } } as unknown as AgentContext);
     expect(verifyHostToken((issued?.meta[PLUGIN_HOST_META_KEY] as PluginHostCallMeta).token, 'acme')?.workspaceId).toBe('space-1');

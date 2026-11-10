@@ -59,8 +59,14 @@ import { SYSTEM_USER_ID } from '@/security/principal';
 import { getVault } from '@/security/vault';
 import type { MCPServer } from '@/shared/mcp-server';
 import {
+  declaresTrustedModelInput,
+  MODEL_CLI_TOOLS_WARNING,
+  modelCliToolsSourcesWarning,
   PLUGIN_MANIFEST_FILE,
+  PLUGIN_MODEL_CLI_TOOLS_APPROVAL,
+  type PluginHostApproval,
   type PluginHostScope,
+  type PluginModelCliToolsView,
   type PluginAgentAuthorship,
   type PluginInProcessStatus,
   type PluginManifest,
@@ -468,7 +474,8 @@ export async function installFromDirectory(
           // New files: what it adds to every user's agents is approved again.
           approvedContributionsHash: null,
           // New version: its tools' effects (and so what each call's token may carry) can
-          // differ, so the host API scopes are approved again (docs/PLUGIN-PACKAGES.md#host-api).
+          // differ, so the host API scopes are approved again (docs/PLUGIN-PACKAGES.md#host-api),
+          // and so is model:cli-tools: what its prompts are built from can differ too.
           approvedHostScopes: null,
           installedBy: actorUserId, updatedAt: new Date(),
         })
@@ -507,11 +514,26 @@ export async function installFromDirectory(
     runtime: pluginRuntime(manifest),
     ...(opts.source ? { source: opts.source } : {}),
     ...(previous?.approvedContributionsHash ? { contributionsApprovalCleared: previous.approvedContributionsHash } : {}),
+    ...(previous?.approvedHostScopes?.includes(PLUGIN_MODEL_CLI_TOOLS_APPROVAL) ? { modelCliToolsApprovalCleared: true } : {}),
     ...(opts.authoredBy ? { authoredBy: opts.authoredBy } : {}),
     ...overrides,
   });
   await syncPluginServers();
-  return { ...row, warnings: signature.warnings };
+  return { ...row, warnings: [...signature.warnings, ...modelTrustWarnings(manifest)] };
+}
+
+/**
+ * What an install says about a manifest's `model.trustedInput`: that it grants
+ * nothing until an admin approves `model:cli-tools`, and the other sources
+ * the package reads from, which the admin has to trust.
+ */
+export function modelTrustWarnings(m: PluginManifest): string[] {
+  if (!declaresTrustedModelInput(m)) return [];
+  const sources = modelCliToolsSourcesWarning(m);
+  return [
+    `${m.name} declares model.trustedInput ("${m.model?.reason ?? ''}"): its model calls stay off CLI lanes until an admin approves ${PLUGIN_MODEL_CLI_TOOLS_APPROVAL}. ${MODEL_CLI_TOOLS_WARNING}`,
+    ...(sources ? [sources] : []),
+  ];
 }
 
 let installHook: ((source: string) => Promise<void> | void) | null = null;
@@ -806,7 +828,14 @@ export async function configure(
   if (approvingInProcess) {
     await audit(actorUserId, 'in_process_approved', name, { version: row.version, hash: approvingInProcess, signedBy, previous: row.inProcessApprovedHash });
   }
-  if (change.approveHostScopes !== undefined) await audit(actorUserId, 'host_scopes_approved', name, { version: row.version, scopes: approvedHostScopes, previous: row.approvedHostScopes });
+  if (change.approveHostScopes !== undefined) {
+    await audit(actorUserId, 'host_scopes_approved', name, { version: row.version, scopes: approvedHostScopes, previous: row.approvedHostScopes });
+    const before = (row.approvedHostScopes ?? []).includes(PLUGIN_MODEL_CLI_TOOLS_APPROVAL);
+    const after = (approvedHostScopes ?? []).includes(PLUGIN_MODEL_CLI_TOOLS_APPROVAL);
+    if (before !== after) {
+      await audit(actorUserId, after ? 'model_cli_tools_approved' : 'model_cli_tools_revoked', name, { version: row.version, reason: row.manifest.model?.reason ?? null });
+    }
+  }
   if (change.settings !== undefined) await audit(actorUserId, 'settings_changed', name, { keys: Object.keys(change.settings as object) });
   if (change.enabled !== undefined && change.enabled !== row.enabled) await audit(actorUserId, enabled ? 'enabled' : 'disabled', name, { version: row.version });
   // A token of a call in flight dies with the package's enabled state or a narrower approval.
@@ -818,18 +847,45 @@ export async function configure(
 /**
  * The host API scopes an admin approves (`approveHostScopes`): a list of
  * scopes the manifest declares, each at most once. A scope it does not
- * declare is refused: approval is for what this version asks.
+ * declare is refused: approval is for what this version asks. It may also
+ * carry `model:cli-tools`, the approval of the manifest's `model.trustedInput`
+ * (docs/PLUGIN-PACKAGES.md#model-calls-on-cli-lanes), only when it declares it.
+ * The list replaces the approved one: leaving `model:cli-tools` out revokes it.
  */
-function checkHostScopeApproval(manifest: PluginManifest, value: unknown): PluginHostScope[] {
-  if (!Array.isArray(value) || !value.every(isHostScope)) {
-    throw new PluginPackageError('invalid', 'approveHostScopes is a list of host API scopes, such as ["notes:read"]');
+function checkHostScopeApproval(manifest: PluginManifest, value: unknown): PluginHostApproval[] {
+  const isApproval = (s: unknown): s is PluginHostApproval => isHostScope(s) || s === PLUGIN_MODEL_CLI_TOOLS_APPROVAL;
+  if (!Array.isArray(value) || !value.every(isApproval)) {
+    throw new PluginPackageError('invalid', `approveHostScopes is a list of host API scopes, such as ["notes:read"] (and ${PLUGIN_MODEL_CLI_TOOLS_APPROVAL} for a package that declares model.trustedInput)`);
   }
-  const declared = new Set(manifest.host ?? []);
+  const declared = new Set<string>([...(manifest.host ?? []), ...(declaresTrustedModelInput(manifest) ? [PLUGIN_MODEL_CLI_TOOLS_APPROVAL] : [])]);
   const undeclared = value.filter((s) => !declared.has(s));
   if (undeclared.length > 0) {
-    throw new PluginPackageError('invalid', `${manifest.name} does not declare the host API scopes ${undeclared.join(', ')}`);
+    const what = undeclared.map((s) => (s === PLUGIN_MODEL_CLI_TOOLS_APPROVAL ? `${s} (it does not declare model.trustedInput)` : s));
+    throw new PluginPackageError('invalid', `${manifest.name} does not declare the host API scopes ${what.join(', ')}`);
   }
   return [...new Set(value)];
+}
+
+/**
+ * Whether a package's `model:complete` calls may run on a CLI lane (its
+ * models have their own tools): it declares `model.trustedInput`, and an
+ * admin approved both `model:complete` and `model:cli-tools` for this version.
+ */
+export function modelCliToolsGranted(row: Pick<PluginPackageRow, 'manifest' | 'approvedHostScopes'>): boolean {
+  const approved = row.approvedHostScopes ?? [];
+  return declaresTrustedModelInput(row.manifest) && (row.manifest.host ?? []).includes('model:complete')
+    && approved.includes('model:complete') && approved.includes(PLUGIN_MODEL_CLI_TOOLS_APPROVAL);
+}
+
+/** The view of a manifest's `model.trustedInput` and its approval, or null when it does not declare it. */
+export function modelCliToolsView(row: Pick<PluginPackageRow, 'manifest' | 'approvedHostScopes'>): PluginModelCliToolsView | null {
+  if (!declaresTrustedModelInput(row.manifest)) return null;
+  return {
+    reason: row.manifest.model?.reason ?? '',
+    approved: (row.approvedHostScopes ?? []).includes(PLUGIN_MODEL_CLI_TOOLS_APPROVAL),
+    active: modelCliToolsGranted(row),
+    sourcesWarning: modelCliToolsSourcesWarning(row.manifest),
+  };
 }
 
 /** The scopes the manifest declares that are not approved. */
@@ -839,7 +895,7 @@ export function unapprovedHostScopes(manifest: PluginManifest, approved: readonl
 }
 
 /** Approve a package's host API scopes (`configure` with `approveHostScopes` alone). */
-export function approveHostScopes(name: string, scopes: PluginHostScope[], actorUserId: string): Promise<PluginPackageRow> {
+export function approveHostScopes(name: string, scopes: PluginHostApproval[], actorUserId: string): Promise<PluginPackageRow> {
   return configure(name, { approveHostScopes: scopes }, actorUserId);
 }
 
@@ -991,6 +1047,7 @@ async function viewOf(row: PluginPackageRow, secrets: string[], authoredBy?: Plu
     inProcess,
     contributions: await contributionsView(row),
     approvedHostScopes: row.approvedHostScopes ?? null,
+    modelCliTools: modelCliToolsView(row),
     authoredBy: authoredBy !== undefined ? authoredBy : await agentAuthorship(row.name),
     installedBy: row.installedBy,
     installedAt: row.installedAt.toISOString(),
@@ -1158,6 +1215,8 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
       // Undeclared: see defaultMaxProtection; clamped by egress scopes (effectiveMaxProtection).
       maxProtection: effectiveMaxProtection(m, hostScopes),
       ...(hostScopes.length > 0 ? { hostScopes } : {}),
+      // Its model calls may run on a CLI lane: declared and approved (docs/PLUGIN-PACKAGES.md#model-calls-on-cli-lanes).
+      ...(modelCliToolsGranted(row) ? { modelCliTools: true as const } : {}),
     },
   };
 }

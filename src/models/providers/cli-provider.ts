@@ -4,7 +4,7 @@ import { describeCliCapabilities } from '@/shared/cli-capabilities';
 import { cliCredentialOwnerFor, cliEnvFor, cliWorkDirFor } from '@/core/cli-child-env';
 import { discoverCodexMcpServers, getClaudeSpaceSettingsPath, getEmptyMcpConfigPath, getEmptyVibeHome } from '@/core/cli-adapters';
 import { spawn } from 'child_process';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { delimiter, extname, join } from 'path';
 import { getConfig } from '@/config';
@@ -419,6 +419,18 @@ function emptyCompletionDir(): string {
   return dir;
 }
 
+/**
+ * The working directory of a completion that runs with the CLI's own tools
+ * (`allowCliTools`): a fresh empty directory of its own, removed afterwards,
+ * so nothing one call writes there is seen by another (another user's).
+ */
+function freshCompletionDir(): { dir: string; remove: () => void } {
+  const parent = join(tmpdir(), 'octipus-cli');
+  mkdirSync(parent, { recursive: true });
+  const dir = mkdtempSync(join(parent, 'completion-tools-'));
+  return { dir, remove: () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } } };
+}
+
 /** Workspace root for CLI runs other than one-shot completions (falls back to cwd). */
 function resolveWorkspaceRoot(): string {
   try {
@@ -666,7 +678,15 @@ export class CLIProvider implements ModelProvider {
     // --auto-approve, codex exec) would act on the host with the server's
     // rights. A CLI with no tool-less mode answers no completion; it runs only
     // as an agent model (the CLI agent worker, with its own isolation).
-    if (!tool.toolLessArgs) {
+    //
+    // The one exception is `allowCliTools`, set only by a plugin's
+    // model:complete call that an admin approved for CLI lanes (the package
+    // declares model.trustedInput, docs/PLUGIN-PACKAGES.md#model-calls-on-cli-lanes),
+    // and honoured only with that call's `plugin:<name>` request type: a CLI
+    // with a tool-less mode still uses it (tools are never needed), one without
+    // runs with its normal arguments in a fresh empty directory.
+    const cliTools = options.allowCliTools === true && options.requestType?.startsWith('plugin:') === true;
+    if (!tool.toolLessArgs && !cliTools) {
       throw classifyError(new Error(`${tool.name} cannot answer one-shot completions: it has no mode without its own tools. Use it as an agent model (/model) instead of binding it to a lane.`), 'cli');
     }
     const quotaKey = cliQuotaKey(tool.quotaProvider, credentialOwner);
@@ -680,18 +700,40 @@ export class CLIProvider implements ModelProvider {
 
     // Build prompt from messages (combine system + user messages)
     const prompt = this.buildPrompt(options);
-    // In stdin mode the prompt must not reach argv at all — the builders take
-    // an empty string and place `-` (or nothing) instead.
-    // The tool-less mode reads the prompt from stdin: it never reaches argv.
-    const viaStdin = true;
-    const cwd = credentialOwner ? cliWorkDirFor(credentialOwner.userId) : emptyCompletionDir();
     // Same allowlisted child env as the agent worker — never the server's
     // full environment (DB credentials, every provider key). The model row's
     // `cliAgent.inheritApiKeys` opts a key-mode CLI back into its own key,
     // exactly as it does for managed runs.
     const inheritApiKeys = row?.metadata?.cliAgent?.inheritApiKeys === true;
     const childEnv = cliEnvFor(credentialOwner, tool, tool.buildEnv ? await tool.buildEnv() : undefined, inheritApiKeys);
-    const args = tool.toolLessArgs();
+    let viaStdin: boolean;
+    let cwd: string;
+    let args: string[];
+    let cleanup: (() => void) | null = null;
+    if (tool.toolLessArgs) {
+      // The tool-less mode reads the prompt from stdin: it never reaches argv.
+      viaStdin = true;
+      cwd = credentialOwner ? cliWorkDirFor(credentialOwner.userId) : emptyCompletionDir();
+      args = tool.toolLessArgs();
+    } else {
+      // allowCliTools (checked above): the CLI's normal arguments, never the
+      // workspace root or the owner's directory. In stdin mode the prompt
+      // never reaches argv — the builders take an empty string and place `-`
+      // (or nothing) instead; a CLI that reads it only from argv (agy, vibe)
+      // gets it there, and a multi-line one is refused by execCli.
+      const fresh = freshCompletionDir();
+      cleanup = fresh.remove;
+      cwd = fresh.dir;
+      viaStdin = tool.promptVia === 'stdin';
+      const argPrompt = viaStdin ? '' : prompt;
+      try {
+        args = tool.buildArgsAsync ? await tool.buildArgsAsync(argPrompt, cwd, childEnv) : tool.buildArgs(argPrompt);
+      } catch (err) {
+        cleanup();
+        throw classifyError(err as Error, 'cli');
+      }
+      modelLogger.info({ tool: tool.name, model: options.model, requestType: options.requestType }, 'CLI completion with the CLI\'s own tools (an approved plugin call)');
+    }
     const startTime = Date.now();
 
     modelLogger.debug({ tool: tool.name, model: options.model }, 'Executing CLI tool');
@@ -730,6 +772,8 @@ export class CLIProvider implements ModelProvider {
       }
 
       throw classifyError(error, 'cli');
+    } finally {
+      cleanup?.();
     }
   }
 

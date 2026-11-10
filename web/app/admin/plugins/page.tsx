@@ -9,6 +9,8 @@ import { api } from '@/lib/api';
 import {
   type BundledPluginView,
   MAX_PLUGIN_SECRET_LENGTH,
+  MODEL_CLI_TOOLS_APPROVAL,
+  MODEL_CLI_TOOLS_WARNING,
   PLUGIN_BUNDLED_KEY,
   PLUGIN_PACKAGES_KEY,
   type PluginInstallResult,
@@ -345,10 +347,81 @@ function egressReadWarning(scopes: readonly string[]): string {
     + 'It is limited to data at protection level 1.';
 }
 
+/**
+ * What enabling says about `model.trustedInput` (docs/PLUGIN-PACKAGES.md#model-calls-on-cli-lanes):
+ * approved, it lets the package's model calls run on CLI lanes; not approved,
+ * enabling leaves them off and the row's own button approves it.
+ */
+function modelCliToolsNote(pkg: PluginPackageView): string {
+  const trust = pkg.modelCliTools;
+  if (!trust) return '';
+  return trust.approved
+    ? `${MODEL_CLI_TOOLS_APPROVAL} is approved: ${MODEL_CLI_TOOLS_WARNING} Its reason: "${trust.reason}".${trust.sourcesWarning ? ` ${trust.sourcesWarning}` : ''}`
+    : `It declares model.trustedInput ("${trust.reason}"), not approved: enabling leaves its model calls off CLI lanes.`;
+}
+
 /** The approval text for enabling `pkg` with `unapproved` host scopes. */
 function hostScopeConfirm(pkg: PluginPackageView, unapproved: string[]): string {
   const warning = egressReadWarning(pkg.manifest.host ?? []);
-  return `Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? ${warning ? `${warning} ` : ''}${HOST_TOKEN_WHEN}`;
+  const model = modelCliToolsNote(pkg);
+  return `Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? ${warning ? `${warning} ` : ''}${model ? `${model} ` : ''}${HOST_TOKEN_WHEN}`;
+}
+
+/** The confirmation of approving `model:cli-tools` for `pkg`. */
+function modelCliToolsConfirm(pkg: PluginPackageView): string {
+  const trust = pkg.modelCliTools;
+  return `Approve ${MODEL_CLI_TOOLS_APPROVAL} for ${pkg.name}? ${MODEL_CLI_TOOLS_WARNING} Its reason: "${trust?.reason ?? ''}".`
+    + `${trust?.sourcesWarning ? ` ${trust.sourcesWarning}` : ''} An upgrade asks for this approval again.`;
+}
+
+/**
+ * A package's `model.trustedInput` and its approval (`model:cli-tools`): the
+ * warning, its reason, the other sources it reads from, and a button that
+ * approves or revokes it on its own (sent with the approved host scopes,
+ * which `approveHostScopes` replaces as a whole).
+ */
+function ModelCliTools({ pkg }: { pkg: PluginPackageView }) {
+  const qc = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const trust = pkg.modelCliTools;
+  const others = (pkg.approvedHostScopes ?? []).filter((s) => s !== MODEL_CLI_TOOLS_APPROVAL);
+  const change = useMutation({
+    mutationFn: (approve: boolean) => api.patch<PluginPackageView>(`/plugin-packages/${encodeURIComponent(pkg.name)}`, {
+      approveHostScopes: approve ? [...others, MODEL_CLI_TOOLS_APPROVAL] : others,
+    }),
+    onSuccess: () => { setError(null); void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY }); },
+    onError: (err: Error) => setError(problemsOf(err)),
+  });
+  if (!trust) return null;
+  return (
+    <div className="mt-1 space-y-0.5 text-xs text-on-surface-variant" data-testid="plugin-model-cli-tools" data-approved={trust.approved} data-active={trust.active}>
+      <p>
+        model calls on CLI lanes:{' '}
+        <code className={cn('font-mono', trust.approved ? tone('warn') : tone('quiet'))}>{MODEL_CLI_TOOLS_APPROVAL}</code>{' '}
+        {trust.active
+          ? <span className={tone('warn')}>approved: its model calls may run on CLI agents</span>
+          : trust.approved
+            ? <span className={tone('warn')}>approved; takes effect once model:complete is approved too</span>
+            : <span>not approved: its model calls stay off CLI lanes</span>}
+        <button
+          type="button"
+          disabled={change.isPending}
+          onClick={() => {
+            if (trust.approved) { change.mutate(false); return; }
+            if (confirm(modelCliToolsConfirm(pkg))) change.mutate(true);
+          }}
+          aria-label={`${trust.approved ? 'Revoke' : 'Approve'} ${MODEL_CLI_TOOLS_APPROVAL} for ${pkg.name}`}
+          className="ml-2 inline-flex items-center gap-1 text-xs text-on-surface-variant hover:text-on-surface cursor-pointer disabled:opacity-50"
+        >
+          {trust.approved ? 'revoke' : 'approve'}
+        </button>
+      </p>
+      <p className={tone('warn')} data-testid="plugin-model-cli-tools-warning">{MODEL_CLI_TOOLS_WARNING}</p>
+      <p data-testid="plugin-model-cli-tools-reason">reason given by the package: “{trust.reason}”</p>
+      {trust.sourcesWarning && <p className={tone('warn')} data-testid="plugin-model-cli-tools-sources">{trust.sourcesWarning}</p>}
+      {error && <p role="alert" className="text-error whitespace-pre-line">! {error}</p>}
+    </div>
+  );
 }
 
 function PagesAndScopes({ pkg, unapproved }: { pkg: PluginPackageView; unapproved: string[] }) {
@@ -466,6 +539,7 @@ function EnableConfirmation({ pkg, pending, onConfirm, onCancel }: { pkg: Plugin
         Enabling {pkg.name} approves everything it adds, for every user of this install. Review it:
       </p>
       <Contributions pkg={pkg} />
+      {pkg.modelCliTools && <p className="text-xs text-on-surface-variant" data-testid="plugin-enable-model-cli-tools">{modelCliToolsNote(pkg)}</p>}
       <div className="flex gap-2">
         <button
           type="button"
@@ -495,11 +569,13 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
   });
   const declaredScopes = pkg.manifest.host ?? [];
   const unapproved = declaredScopes.filter((s) => !(pkg.approvedHostScopes ?? []).includes(s));
+  // approveHostScopes replaces the approved list: an approved model:cli-tools is kept.
+  const enableScopes = pkg.modelCliTools?.approved ? [...declaredScopes, MODEL_CLI_TOOLS_APPROVAL] : declaredScopes;
   const toggle = useMutation({
     // Enabling approves the declared host API scopes the admin was just shown (docs/PLUGIN-PACKAGES.md#host-api).
     // Enabling a package with contributions approves the contributions hash the confirmation showed.
     mutationFn: (enabled: boolean) => api.patch<PluginPackageView>(`/plugin-packages/${encodeURIComponent(pkg.name)}`, {
-      ...(enabled && unapproved.length > 0 ? { enabled, approveHostScopes: declaredScopes } : { enabled }),
+      ...(enabled && unapproved.length > 0 ? { enabled, approveHostScopes: enableScopes } : { enabled }),
       ...(enabled && hasContributions(pkg) && pkg.contributions.hash ? { approveContributions: pkg.contributions.hash } : {}),
     }),
     onSuccess: () => {
@@ -586,6 +662,7 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
         </p>
       )}
       <PagesAndScopes pkg={pkg} unapproved={unapproved} />
+      <ModelCliTools pkg={pkg} />
       {confirmingEnable
         ? (
           <EnableConfirmation
