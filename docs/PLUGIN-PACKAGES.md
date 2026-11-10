@@ -254,7 +254,9 @@ approved on their own, for exactly what was reviewed:
   before it); without it, or with another hash, it is refused (409, the body
   carrying `contributionsHash`). The approval is recorded
   (`approved_contributions_hash`) and audited (`contributions_approved`).
-- **Install and every upgrade clear it**, and approving changed content
+- **Install and every upgrade clear it** (unless they come with the admin's
+  [consent](#the-install-consent), which approves it for the new content),
+  and approving changed content
   whose contributions hash differs clears it too (audited as
   `contributions_approval_cleared`); the package must be approved again
   before it is enabled.
@@ -962,17 +964,23 @@ A daily check (from the cron tick) reads the registries installed packages
 came from and finds a newer installable version from the **same** source.
 Admins get one `plugin_update` notification per new version, with the
 permissions diff between the installed version (recomputed from its
-installed manifest) and the new listing. Upgrades are never automatic.
+installed files) and the new listing. Upgrades are never automatic: the
+Updates tab lists them with the diff (what widens highlighted), and Upgrade
+opens the install consent, where what is unchanged carries over.
 
 ### Declarations
 
 `declarationItems(permissions, manifest?)` (`src/shared/plugin-declarations.ts`)
 turns what a package declares into a stable, ordered list of `{ id, kind,
-label, detail, guidance? }`: runtime, in-process, network hosts, host scopes,
-tools and their effects, commands, schedules, events, prompt, context, pages,
-secrets, `model:cli-tools` and the protection level. The package view and
-each marketplace card carry it as `declarations`, for the install consent
-(one screen, every item ticked, bound to the content hash).
+label, detail, guidance? }`: `runtime`, `in-process`, `network:<host>`,
+`host:<scope>`, `tool:<name>`, `command:<name>`, `schedule:<id>`,
+`event:<on>`, `prompt`, `context`, `page:<path>`, `ui` (the page files),
+`secret:<key>`, `model:cli-tools` and `protection`, in that order. Each
+`detail` carries what the item is bound to (a schedule's cron, tool and
+input; the prompt file, its roles and sha256; a page's entry; the page tree's
+sha256), so an item that changed reads as changed. The package view and each
+marketplace card carry it as `declarations`; the install consent asks for
+each ([The install consent](#the-install-consent)).
 
 ### Usage
 
@@ -988,6 +996,11 @@ rows of its background runs, with the number of model calls and runs.
 | `GET /api/plugin-packages/marketplace?q=&category=` | admins | `MarketplaceListing`: `{ state, message, generatedAt, plugins, categories, errors }` |
 | `GET /api/plugin-packages/marketplace/asset?url=` | admins | the image bytes (PNG, JPEG, WebP, GIF), or `{ error }` with 400, 404, 413, 415 or 502 |
 | `POST /api/plugin-packages { registry, name, version?, upgrade?, allowSourceChange?, allowSignerChange?, allowDowngrade?, allowIncompatible? }` | admins | `{ name, version, enabled, contentHash, signedBy, warnings, guidance, origin, manifest }` |
+| `POST /api/plugin-packages/preview { registry, name, version? \| url, sha256? \| path \| bundled }` | admins | `PluginInstallPreview` ([The install consent](#the-install-consent)) |
+| `POST /api/plugin-packages/install { previewId, contentHash, accepted, enable? }` | the admin who made the preview | `PluginConsentResult`: `{ name, version, contentHash, enabled, enableProblem, warnings }` |
+| `GET /api/plugin-packages/:name/consent`, `POST …/consent { contentHash, accepted, enable? }` | admins | `PluginConsentView`; `PluginConsentResult` |
+| `GET /api/plugin-packages/:name/runs?status=running` | admins | `[{ id, userId, startedAt, role, title }]` |
+| `GET /api/plugin-packages/my-usage?days=30` | any user | `[{ name, title, usage, runs }]`: the caller's own use of each enabled package, and their running runs |
 | `GET /api/plugin-packages/updates` | admins | `[{ name, installed, latest, registry, diff, warnings }]` |
 | `GET /api/plugin-packages/revocations`, `DELETE …/revocations/:id` | admins | the revocations; clearing one |
 | `GET /api/plugin-packages/:name/usage`, `…/usage/me` | admins; any user | `PluginUsageView` |
@@ -995,7 +1008,20 @@ rows of its background runs, with the number of model calls and runs.
 | `DELETE /api/plugin-host/agent/runs/:id` | the same package, for the same user | `{ id, status: "cancelled" }` |
 
 The shapes are `MarketplaceListing`, `MarketplacePluginView`,
-`PluginUpdateView` and `PluginUsageView` in `src/shared/plugin-package.ts`.
+`PluginUpdateView` and `PluginUsageView` in `src/shared/plugin-package.ts`,
+and `PluginInstallPreview`, `PluginConsentView`, `PluginConsentItem` and
+`PluginConsentResult` in `src/shared/plugin-declarations.ts`.
+
+**The Marketplace page** (Admin → Plugins → Marketplace) searches as you type
+over title, summary, tags and author, folding case and accents (and reads
+`?q=`), filters by category and sorts by relevance, name, newest or (when
+the marketplace reports them) downloads. Each card names the registry it
+comes from ("Octipus marketplace" or the registry's name; never the
+free-text `publisher`). The detail renders README and CHANGELOG with no raw
+HTML, links only when https (new tab, `noopener noreferrer`) and images only
+when they are the listing's own icon or screenshots, through the proxy URLs
+the host returned. **Users** see their own use of each plugin, and cancel
+their own background runs, in Settings → My plugin usage.
 
 ## Packing and publishing
 
@@ -1747,11 +1773,100 @@ you run a release install or a git checkout:
 
 ## Installing and managing
 
-Admins only, on the web page (Admin → Plugin packages, and Browse for the
-registries), from the command line (`octi plugin list`, `octi plugin
-approve`) or through the API. A package installs from a directory on the
-server, signed or not ([Signed packages](#signed-packages)), or from an https
-tarball, signed by a trusted publisher ([Remote install](#remote-install)).
+Admins only, on the web page (Admin → Plugin packages: **Installed**,
+**Marketplace** and **Updates**), from the command line (`octi plugin list`,
+`octi plugin install`) or through the API. A package installs from a
+directory on the server, signed or not ([Signed packages](#signed-packages)),
+from an https tarball, signed by a trusted publisher ([Remote
+install](#remote-install)), from a registry or the marketplace by name
+([Marketplace](#marketplace)), or from the plugins shipped with Octipus.
+
+### The install consent
+
+On install the plugin declares what it will do, and the admin agrees to each
+item before the install runs. Nothing slides through, and nothing an admin
+can weigh is refused: what is not one of the four boundaries (the sandbox,
+signatures, the listing matching the download, runtime enforcement of what
+was declared) is guidance under the item, never a refusal.
+
+1. **Preview.** `POST /api/plugin-packages/preview` with one source:
+   `{ "registry", "name", "version"? }`, `{ "url", "sha256"? }`, `{ "path" }`
+   or `{ "bundled" }`. The host downloads and verifies the package exactly as
+   an install does, with the same code (the sha256 of the download, the strict
+   tar reader, the tree, the signature, the listing's permissions and content
+   hash, revocation, the runtime), and stages the checked copy in
+   `<workspace>/plugin-previews`, outside the plugin store, without installing
+   anything. It answers:
+
+   ```json
+   {
+     "previewId": "<uuid>", "name": "weekly", "version": "1.1.0", "title": "Weekly review",
+     "contentHash": "sha256:<hex>", "signedBy": "Octipus", "origin": { "source": "marketplace", … },
+     "declarations": [{ "id": "schedule:nightly", "kind": "schedule", "label": "Runs on a schedule (nightly)",
+                        "detail": "15 2 * * * UTC → sync", "guidance": "…", "carried": false, "status": "changed" }, …],
+     "guidance": [{ "code": "signature", "message": "…" }],
+     "diff": { "widened": true, "changes": [ … ] }, "upgradeFrom": "1.0.0", "expiresAt": "…"
+   }
+   ```
+
+   `declarations` are the [declaration items](#declarations). For an upgrade,
+   `diff` compares the installed version's permissions (recomputed from its
+   files) with these, and each item is `unchanged` (same id and words),
+   `changed` or `new`; an unchanged item is `carried: true` when the
+   installed version's consent covered it (its host scope or
+   `model:cli-tools` approved, its contributions approved, the in-process
+   approval for its content, or, for the rest, the package agreed to or
+   enabled), so it is not asked again. An upgrade from another source,
+   signed by another key, to an older version, or a version that asks for a
+   newer Octipus adds a `change:source`, `change:signer`,
+   `change:downgrade` or `change:incompatible` item to agree to like the
+   rest (never carried).
+2. **Install.** `POST /api/plugin-packages/install { "previewId",
+   "contentHash", "accepted": [ids], "enable"? }` installs the staged copy
+   only when every item that is not carried is in `accepted` (409 otherwise,
+   naming the missing ids; the preview stays usable), `contentHash` is the
+   preview's, the install's own fresh copy of it still hashes to it, the
+   declarations recomputed from that copy equal the preview's, and the
+   installed version is still the one the preview compared against (409
+   otherwise: preview again). Every check of an install runs again on that
+   copy. It records **every approval** the items stand for, for exactly that
+   content hash, in the same transaction as the row: the content, the
+   contributions hash, the host scopes, the in-process approval (for an
+   in-process plugin, where its source allows one) and `model:cli-tools` (when
+   it declares `model.trustedInput`). One audit row (`consent`) lists the
+   accepted ids, the carried ones and the content hash. With `"enable":
+   true` it is enabled at once, unless a required setting or secret has no
+   value yet: then it is installed disabled and `enableProblem` says which.
+   Answer: `{ name, version, contentHash, enabled, enableProblem, warnings }`.
+3. **Previews** belong to the admin who made them, are single-use (spent by
+   the first install that passes the agreement check, whatever happens next),
+   expire after 15 minutes, and live on the server process that made them;
+   their staged copy is removed when spent or expired.
+
+A package installed without this consent (by an agent, `plugin_install`,
+which still lands disabled; or before this flow) is agreed to from its
+installed content: `GET /api/plugin-packages/:name/consent` answers `{ name,
+version, title, contentHash, signedBy, origin, enabled, declarations,
+guidance }` for the files as they are (items its recorded approvals already
+cover are carried), and `POST /api/plugin-packages/:name/consent {
+contentHash, accepted, enable? }` approves the content, contributions, host
+scopes, in-process and `model:cli-tools` and enables it in one write, only
+while the files still hash to `contentHash`.
+
+The web app uses this flow for every install, upgrade and enable: one screen
+lists each declaration with a checkbox, its words and its exact detail, the
+guidance under it (information or a warning, never blocking), the upgrade's
+unchanged items ticked and greyed and its new or changed ones marked, and an
+"Enable after install" switch; Install stays disabled until every required
+item is ticked, and for a moment after the list shows (a click aimed at what
+was there before cannot land on it). `octi plugin install` and `upgrade`
+print the declarations and ask for each at a terminal, or take `--accept
+all|<id,id,…>`; without a terminal and without `--accept` they refuse, with
+the list. The separate approvals below (`approveContent`,
+`approveHostScopes`, `approveContributions`, `approveInProcess`) and `POST
+/api/plugin-packages` keep working for scripts and the CLI's other commands.
+
+### Step by step
 
 1. **Install:** `POST /api/plugin-packages { "path": "/opt/plugins/finapi" }`,
    `{ "url": "https://…/finapi-1.2.0.tar.gz", "sha256": "…" }`, or `{ "bundled": "reader" }`
@@ -1773,11 +1888,13 @@ tarball, signed by a trusted publisher ([Remote install](#remote-install)).
    package cannot be removed; disable it first. A package with `host` scopes
    needs them approved too (`"approveHostScopes": [...]`, [Host API](#host-api));
    an upgrade clears that approval.
-4. **Upgrade:** install again with `"upgrade": true` (`"allowSignerChange"`
+4. **Upgrade:** preview and install again (above), or install again with `"upgrade": true` (`"allowSignerChange"`
    and `"allowDowngrade"` for another publisher or an older version, see
    [Signed packages](#signed-packages)). Once the new files are copied and
    checked, the package is disabled before any file is replaced and stays
-   disabled until enabled again, since its tools may have changed. Each setting the new version still declares and
+   disabled until enabled again, since its tools may have changed. Without a
+   consent, its approvals are cleared; with one, they are what the admin just
+   agreed to. Each setting the new version still declares and
    accepts is kept; a new required setting must be set before enabling.
    The new files' hash replaces the old one.
 5. **Approve changed content:** `PATCH /api/plugin-packages/:name
@@ -1820,8 +1937,9 @@ octi plugin bundled                   # the plugins shipped with Octipus
 octi plugin install-bundled reader    # install one, disabled (--upgrade for a newer version)
 octi plugin marketplace [query] [--category productivity]   # what the marketplace and registries offer
 octi plugin updates                   # installed packages with a newer version from the same source
-octi plugin install weekly-review     # from the marketplace, the newest compatible version, disabled
-octi plugin install finapi --registry Acme --version 1.2.0 --upgrade [--allow-source-change]
+octi plugin install weekly-review     # from the marketplace: prints what it declares, asks for each item
+octi plugin install weekly-review --accept all --enable   # agree to every item without a terminal
+octi plugin upgrade finapi --registry Acme --version 1.2.0 --accept host:notes:write,schedule:nightly
 ```
 
 They call the running backend at `http://localhost:$API_PORT` (3005 by

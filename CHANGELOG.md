@@ -9,6 +9,35 @@ labels reflect blast radius, not contract guarantees.
 
 ### Security
 
+- **One install consent per item, bound to the content.** A plugin is
+  previewed first (`POST /api/plugin-packages/preview`: downloaded and
+  verified with the install's own checks, staged outside the store, nothing
+  installed) and installed only with every declaration agreed to (`POST
+  /api/plugin-packages/install { previewId, contentHash, accepted, enable? }`):
+  the staged copy must still hash to the content hash shown and declare the
+  same items, and the installed version must be the one compared against. The
+  approvals (content, contributions, host scopes, in-process,
+  `model:cli-tools`) are recorded with the row in one transaction and audited
+  as one `consent` row. Previews are per admin, single-use and expire after
+  15 minutes. An upgrade carries unchanged items it had agreed to and asks
+  for what is new or changed; another source, signer, an older version or a
+  newer Octipus needed are items to agree to, not refusals. Installed
+  packages (an agent's) are agreed to and enabled with `GET`/`POST
+  /api/plugin-packages/:name/consent`. `octi plugin install` and `upgrade`
+  ask per item at a terminal or take `--accept all|<ids>`, and refuse
+  otherwise. The web app uses this everywhere it installs, upgrades or
+  enables; the separate approval endpoints keep working.
+- **Plugin permissions name what contributions and pages are bound to
+  (M3).** `computePermissions` (`octi plugin permissions --json`, index v2
+  `permissions`) now lists commands with their tool, schedules with cron,
+  tool and input, events with their tool, the prompt with the sha256 of its
+  bytes and its roles, the context tool and roles, pages with path, title and
+  entry, and `ui: { dir, sha256 }` of the page tree, so a schedule switched
+  to another tool, a cron change, new prompt text or a replaced page is a
+  change (and widens) in the update diff and the consent. **Breaking for
+  registries:** an index must list the new shape (the host's deep-equality
+  check refuses the old one).
+
 - **The plugin marketplace, host side.** A built-in registry for
   `https://plugins.octipus.cc/index.json`, anchored by two root public keys
   that ship as placeholders: until a build carries real ones the marketplace
@@ -480,6 +509,16 @@ labels reflect blast radius, not contract guarantees.
   clear presence; `room.subscribe` re-checks access after joining.
 
 ### Added
+
+- **Marketplace, Updates and Installed tabs** in Admin → Plugins (Browse
+  redirects to Marketplace): instant search folding case and accents,
+  categories, sorting, cards with what each asks for, download counts and
+  install/update/incompatible/revoked badges, a detail with the README
+  rendered safely, the updates with their permissions diff and the
+  revocations (cleared with a reason), and per package its origin, revocation
+  banner, 30-day usage and running background runs with Cancel
+  (`GET /api/plugin-packages/:name/runs?status=running`). Users get Settings
+  → My plugin usage (`GET /api/plugin-packages/my-usage`).
 
 - **Offline plugin tooling for publishing: `octi plugin hash`, `pack`,
   `permissions`, `verify`, `verify-index`, and package `validate`.** None
