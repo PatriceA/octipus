@@ -423,6 +423,24 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
     detail: { tags: ['plugin-host'] },
   })
 
+  // Cancel a run of this package for this user: its worker stops and the run
+  // reads as cancelled. Any tool of the package may cancel its own run (it
+  // only ends work); another package's or user's run is not found.
+  .delete('/agent/runs/:id', (ctx) => run(ctx, 'agent.cancel', 'agent:run', async ({ grant }, details) => {
+    details.runId = ctx.params.id;
+    const { cancelPluginAgentRun } = await import('@/plugins/packages/host-agent');
+    const outcome = await cancelPluginAgentRun(grant, ctx.params.id);
+    if (!outcome.ok) {
+      ctx.set.status = outcome.status;
+      details.code = outcome.code;
+      return { error: outcome.error, code: outcome.code };
+    }
+    return outcome.value;
+  }), {
+    params: t.Object({ id: t.String({ maxLength: 64 }) }),
+    detail: { tags: ['plugin-host'] },
+  })
+
   // One public web page, fetched by the host through its SSRF guard and turned
   // into a clean article (src/core/web-read): the package never touches
   // the network itself. Size and time are capped by the fetcher (5 MB, 15 s);
@@ -511,4 +529,5 @@ export const PLUGIN_HOST_ENDPOINTS: ReadonlyArray<{ method: string; path: string
   { method: 'POST', path: '/api/plugin-host/model/complete', scope: 'model:complete' },
   { method: 'POST', path: '/api/plugin-host/agent/runs', scope: 'agent:run' },
   { method: 'GET', path: '/api/plugin-host/agent/runs/:id', scope: 'agent:run' },
+  { method: 'DELETE', path: '/api/plugin-host/agent/runs/:id', scope: 'agent:run' },
 ];

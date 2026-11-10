@@ -152,6 +152,14 @@ export function untrackPluginRun(jobId: string): void {
   runs.delete(jobId);
 }
 
+/** Stop one running background run in this process (its job id); false when it does not run here. */
+export function stopPluginRun(jobId: string, reason: string): boolean {
+  const run = runs.get(jobId);
+  if (!run) return false;
+  run.stop(reason);
+  return true;
+}
+
 /** Whether `sessionId` is the session of a running plugin background run. */
 export function isPluginRunSession(sessionId: string | undefined | null): boolean {
   if (!sessionId) return false;
