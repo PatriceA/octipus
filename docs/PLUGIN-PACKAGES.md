@@ -87,10 +87,17 @@ An in-process plugin's manifest names its module instead of a server:
 ```
 
 - **`entry`**: a path relative to the package root (no `.`/`..` segments) to
-  a `.ts`, `.js` or `.mjs` module whose default export is the extension
+  an ES module (`.mjs` or `.js`) whose default export is the extension
   factory, `(octi) => void | Promise<void>`, the same shape as an extension in
   `~/.octipus/extensions` ([PLUGINS.md](PLUGINS.md)). It must be a file in
   the package at install.
+- **One bundled module.** The entry is the package's only code file (no other
+  `.js`, `.mjs`, `.cjs`, `.ts`, `.jsx`, `.tsx`, `.node` or `.wasm` anywhere in
+  it; data files such as a README are fine), and it imports nothing by path
+  (`./x`, `../x`, `/x`, `file:`), only Node built-ins (`node:fs`, …). Bundle
+  the plugin and its dependencies into one file, for example
+  `esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/plugin.mjs`.
+  Install refuses a package that breaks this, saying which file or line.
 - **What applies**: `name` (lower-case letters and digits only, no `-`: its
   tools are named `ext_<name>__<id>`), `version`, `apiVersion`, `title`,
   `description`, `publisher`, `homepage`; content pinning, signatures,
@@ -131,7 +138,11 @@ extension system loads it from its installed directory (read in place, never
 written), after the check every package start gets: its files hash to the
 approved content hash, its signature file is the approved one, its key is
 not revoked, and under `plugins.requireSignature` it carries a trusted
-signature. A plugin that fails the check, cannot be imported or whose factory
+signature. Then the package is listed and hashed once more, the entry's bytes
+are read into memory and must match that listing's line for the entry (a
+listing that hashes to the approved hash), and those bytes are imported from
+memory (a `data:` URL). What runs is exactly what was checked: a file changed
+after the read never runs, and one changed before it fails the check. A plugin that fails the check, cannot be imported or whose factory
 throws is not loaded, the reason shows as its problem, and the server runs on.
 Its factory gets the same `octi` API as a trusted extension. Disabling,
 uninstalling or upgrading it disposes everything it registered (event
@@ -139,10 +150,8 @@ handlers, commands, hooks, tools, providers, `onDispose` callbacks), the last
 registration first; enabling or approving loads it again. No restart either
 way.
 
-One caveat: the entry module is imported anew for new content, but modules it
-imports are cached by the process under their path, so an upgrade that
-changes an imported file runs the old copy of that file until a restart.
-Bundle the plugin into its entry file to avoid it.
+Because the module is its bytes, new content always loads new code and
+nothing it imports can go stale: there is no file it imports.
 
 What in-process does not give: a sandbox. The checks above make sure the code
 that runs is the code an admin approved, signed by whom it says; they do not

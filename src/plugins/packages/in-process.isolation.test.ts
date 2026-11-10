@@ -16,7 +16,7 @@
  * Backed by ephemeral PGlite.
  */
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest';
@@ -115,6 +115,9 @@ afterEach(async () => {
   getConfig().plugins.trustedPublishers = [{ name: 'Acme', publicKey: acme.publicKeyPem }];
   if ((await svc.listPackages()).length > 0) await svc.uninstall(NAME, admin);
   globalThis.__inprocLog = [];
+  const { inProcessTestHooks } = await import('./in-process');
+  inProcessTestHooks.afterCheck = undefined;
+  inProcessTestHooks.beforeImport = undefined;
 });
 
 afterAll(async () => {
@@ -291,5 +294,53 @@ describe('in-process plugins', () => {
     writeFileSync(join(dir, 'octipus-plugin.json'), JSON.stringify({ ...manifest, entry: 'missing.mjs' }));
     await expect(svc.installFromDirectory(dir, admin)).rejects.toMatchObject({ code: 'invalid', message: expect.stringMatching(/entry: missing\.mjs is not a file/) });
     expect(await svc.listPackages()).toEqual([]);
+  });
+
+  test('a package of several modules, or an entry importing by path, is refused: an in-process plugin is one bundled module', async () => {
+    const svc = await import('./service');
+    const helper = await copyOfFixture();
+    writeFileSync(join(helper, 'helper.mjs'), 'export const x = 1;\n');
+    await expect(svc.installFromDirectory(helper, admin)).rejects.toMatchObject({
+      code: 'invalid', message: expect.stringMatching(/one bundled module.*helper\.mjs.*esbuild --bundle/),
+    });
+    const nested = await copyOfFixture();
+    mkdirSync(join(nested, 'lib'));
+    writeFileSync(join(nested, 'lib', 'util.ts'), 'export const y = 2;\n');
+    await expect(svc.installFromDirectory(nested, admin)).rejects.toMatchObject({ message: expect.stringMatching(/lib\/util\.ts/) });
+
+    const importing = await copyOfFixture();
+    writeFileSync(join(importing, 'index.mjs'), `import { x } from './data/x.json';\n${readFileSync(join(importing, 'index.mjs'), 'utf8')}`);
+    await expect(svc.installFromDirectory(importing, admin)).rejects.toMatchObject({ message: expect.stringMatching(/imports a module by path \(line 1\)/) });
+    expect(await svc.listPackages()).toEqual([]);
+
+    // Data files beside the entry are fine.
+    const withData = await copyOfFixture();
+    writeFileSync(join(withData, 'README.md'), '# inproc\n');
+    expect((await svc.installFromDirectory(withData, admin)).name).toBe(NAME);
+  });
+
+  test('what runs is the verified bytes: a change after they are read does not run, one before the read is refused', async () => {
+    const svc = await import('./service');
+    const { inProcessTestHooks, syncInProcessPlugins } = await import('./in-process');
+    const tamper = () => {
+      const file = join(svc.packageDir(NAME), 'index.mjs');
+      writeFileSync(file, readFileSync(file, 'utf8').replace(/const MARK = '[^']*'/, "const MARK = 'tampered'"));
+    };
+
+    // Changed after the bytes were read and checked, before the import: the checked bytes run.
+    inProcessTestHooks.beforeImport = async () => { tamper(); };
+    await installApproveEnable(await copyOfFixture());
+    await vi.waitFor(async () => expect(await toolRegistered()).toBe(true));
+    expect(globalThis.__inprocLog).toEqual(['load v1']);
+    inProcessTestHooks.beforeImport = undefined;
+    await svc.uninstall(NAME, admin);
+
+    // Changed after the package check, before the bytes are read: refused, nothing runs.
+    inProcessTestHooks.afterCheck = async () => { tamper(); };
+    await installApproveEnable(await copyOfFixture());
+    await syncInProcessPlugins();
+    expect(await toolRegistered()).toBe(false);
+    expect(globalThis.__inprocLog).toEqual(['load v1', 'dispose v1']);
+    expect((await svc.packageView(NAME)).problem).toMatch(/hash mismatch/);
   });
 });

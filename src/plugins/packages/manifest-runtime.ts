@@ -6,7 +6,8 @@
  * - `package` (the default): an MCP server in the sandbox. `server` and
  *   `tools` are required; `entry` is refused.
  * - `in-process`: a trusted extension loaded into the server process
- *   (docs/PLUGINS.md#from-an-extension-octihook-trusted-extensions-only). `entry` is required. `server` and
+ *   (docs/PLUGINS.md#from-an-extension-octihook-trusted-extensions-only). `entry` is required: the
+ *   plugin bundled into one ES module (.mjs/.js), the package's only code file. `server` and
  *   `tools` are refused (nothing is started, and its tools are registered
  *   with `octi.registerTool`, each with its effect), and so are the fields
  *   whose guarantees only a sandbox gives: `network` (it has the server's
@@ -18,13 +19,17 @@
 import { z } from 'zod';
 import { PLUGIN_RUNTIMES } from '@/shared/plugin-package';
 
-/** A relative path of plain segments, ending in a module extension the server can import. */
-const ENTRY_RE = /^(?:[A-Za-z0-9_][A-Za-z0-9._-]*\/){0,10}[A-Za-z0-9_][A-Za-z0-9._-]*\.(?:ts|js|mjs)$/;
+/**
+ * A relative path of plain segments to a JavaScript module: the plugin bundled
+ * into one ES module, imported from memory (./in-process-bundle.ts), where
+ * nothing strips TypeScript.
+ */
+const ENTRY_RE = /^(?:[A-Za-z0-9_][A-Za-z0-9._-]*\/){0,10}[A-Za-z0-9_][A-Za-z0-9._-]*\.(?:js|mjs)$/;
 
 export const runtimeFields = {
   runtime: z.enum(PLUGIN_RUNTIMES).optional(),
   entry: z.string().max(300)
-    .regex(ENTRY_RE, 'entry: a relative path inside the package to a .ts, .js or .mjs module, such as index.ts or dist/plugin.mjs')
+    .regex(ENTRY_RE, 'entry: a relative path inside the package to the bundled ES module (.mjs or .js), such as dist/plugin.mjs')
     .refine((e) => !e.split('/').some((seg) => seg === '.' || seg === '..'), 'entry: no . or .. segments')
     .optional(),
 };

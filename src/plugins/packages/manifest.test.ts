@@ -57,14 +57,14 @@ describe('plugin manifest', () => {
   describe('runtime', () => {
     const IN_PROCESS = {
       name: 'auditlog', version: '1.0.0', apiVersion: '1.0.0', title: 'Audit log', description: 'Hooks every tool call',
-      runtime: 'in-process', entry: 'index.ts',
+      runtime: 'in-process', entry: 'index.mjs',
     };
 
     test('package is the default; in-process needs an entry and no server or tools', () => {
       expect(parseManifest(FIXTURE).runtime).toBeUndefined();
       expect(parseManifest({ ...FIXTURE, runtime: 'package' }).runtime).toBe('package');
       const m = parseManifest(IN_PROCESS);
-      expect([m.runtime, m.entry, m.server, m.tools]).toEqual(['in-process', 'index.ts', undefined, undefined]);
+      expect([m.runtime, m.entry, m.server, m.tools]).toEqual(['in-process', 'index.mjs', undefined, undefined]);
       expect(parseManifest({ ...IN_PROCESS, entry: 'dist/plugin.mjs' }).entry).toBe('dist/plugin.mjs');
       expect(problems({ ...IN_PROCESS, runtime: 'wasm' }).length).toBeGreaterThan(0);
     });
@@ -73,7 +73,7 @@ describe('plugin manifest', () => {
       const { server: _s, tools: _t, ...bare } = FIXTURE;
       const found = problems(bare);
       expect(found).toEqual(expect.arrayContaining([expect.stringMatching(/^server: required/), expect.stringMatching(/^tools: required/)]));
-      expect(problems({ ...FIXTURE, entry: 'index.ts' })).toEqual([expect.stringMatching(/^entry: only for runtime "in-process"/)]);
+      expect(problems({ ...FIXTURE, entry: 'index.mjs' })).toEqual([expect.stringMatching(/^entry: only for runtime "in-process"/)]);
     });
 
     test('in-process refuses what only a sandbox or a server would give, every problem at once', () => {
@@ -87,7 +87,7 @@ describe('plugin manifest', () => {
     });
 
     test('the entry is a relative module path inside the package, and the name has no -', () => {
-      for (const entry of ['/etc/passwd.js', '../x.ts', 'a/../../x.ts', './index.ts', 'index.json', 'octipus-plugin.sig', 'a\\b.ts', '']) {
+      for (const entry of ['/etc/passwd.js', 'index.ts', 'dist/plugin.cjs', '../x.ts', 'a/../../x.ts', './index.ts', 'index.json', 'octipus-plugin.sig', 'a\\b.ts', '']) {
         expect(problems({ ...IN_PROCESS, entry }).some((p) => p.startsWith('entry:')), entry).toBe(true);
       }
       expect(problems({ ...IN_PROCESS, name: 'audit-log' })).toEqual([expect.stringMatching(/^name: an in-process plugin's name/)]);

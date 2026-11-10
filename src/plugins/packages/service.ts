@@ -69,6 +69,7 @@ import {
 } from '@/shared/plugin-package';
 import { coreLogger } from '@/utils/logger';
 import { contributionInstallProblems, contributionsView, syncContributions } from './contributions';
+import { checkInProcessBundle } from './in-process-bundle';
 import { CONTENT_MISMATCH_PROBLEM, hashPackageContent, isContentHash, verifyPackageContent } from './integrity';
 import { ManifestError, parseManifest, settingEnvName } from './manifest';
 import { checkSignatureOnDisk, readSignatureFile, SIGNATURE_FILE, type SignatureCheck, SignatureError, type TrustedPublisher } from './signature';
@@ -459,10 +460,16 @@ export async function installFromDirectory(
   return { ...row, warnings: signature.warnings };
 }
 
-/** An in-process plugin's `entry` must be a regular file in the package (the manifest checked its path). */
+/**
+ * An in-process plugin's `entry` must be a regular file in the package (the
+ * manifest checked its path), and the package one bundled module: no other
+ * code file, no import by path (./in-process-bundle.ts).
+ */
 async function checkEntry(dir: string, entry: string): Promise<void> {
   const info = await lstat(join(dir, entry)).catch(() => null);
   if (!info?.isFile()) throw new PluginPackageError('invalid', `entry: ${entry} is not a file in the package`);
+  const problems = await checkInProcessBundle(dir, entry);
+  if (problems.length > 0) throw new PluginPackageError('invalid', `${problems[0]}; not installed`, problems);
 }
 
 /**

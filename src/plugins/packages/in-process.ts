@@ -8,8 +8,10 @@
  * only after the check every package server start gets (`checkPackageBeforeStart`:
  * its files hash to the approved hash, its signature file is the approved
  * one, no revoked key, and a trusted signature under `plugins.requireSignature`).
- * Its module is imported from its installed directory (read in place, never
- * written) and its factory gets the same `octi` API a directory extension
+ * It is one bundled module (./in-process-bundle.ts): its entry's bytes are
+ * read once, checked against the listing that matched the approved hash, and
+ * imported from memory (a `data:` URL), so what runs is exactly what was
+ * checked, whatever happens to the file afterwards. Its factory gets the same `octi` API a directory extension
  * gets (`buildExtensionContext`), trusted: it may hook the agent loop and
  * register tools and providers.
  *
@@ -20,10 +22,9 @@
  * a restart. Before the extension system has started (no event bus yet) it
  * does nothing; the boot calls it again once it has.
  *
- * Module caching: the entry module is imported under a query naming its
- * content hash, so new content loads new code. Modules it imports are cached
- * by the process under their own path; a plugin of several modules whose
- * imported files changed in an upgrade needs a restart (or a bundled entry).
+ * Module caching: the process caches a `data:` module by its URL, which is
+ * its bytes, so new content always loads new code and the same content is
+ * the same module; there are no imported files to go stale.
  */
 import { join } from 'node:path';
 import { getDb } from '@/db/postgres';
@@ -32,9 +33,15 @@ import { buildExtensionContext } from '@/extensions/api';
 import { peekExtensionRegistry } from '@/extensions/registry';
 import type { ExtensionFactory, LoadedExtension } from '@/extensions/types';
 import { pluginRuntime } from '@/shared/plugin-package';
-import { importModuleAt } from '@/utils/import-module';
 import { coreLogger } from '@/utils/logger';
+import { moduleDataUrl, readVerifiedEntry } from './in-process-bundle';
 import { checkPackageBeforeStart, inProcessApproved, packageDir } from './service';
+
+/**
+ * Test seam: called after the package check and after the verified bytes are
+ * read, to change the files at exactly those moments.
+ */
+export const inProcessTestHooks: { afterCheck?: () => Promise<void>; beforeImport?: () => Promise<void> } = {};
 
 interface LoadedPlugin {
   /** The content hash it was loaded with. */
@@ -91,9 +98,17 @@ async function load(row: PluginPackageRow): Promise<string | null> {
   const entry = row.manifest.entry;
   if (!entry) return 'The manifest names no entry module';
   const entryPath = join(packageDir(row.name), entry);
+  await inProcessTestHooks.afterCheck?.();
+  // The bytes the approved hash covers, read once; nothing is read from disk after this.
+  const verified = await readVerifiedEntry(packageDir(row.name), { name: row.name, version: row.version, contentHash: hash }, entry);
+  if ('problem' in verified) {
+    coreLogger.warn({ pkg: row.name, problem: verified.problem }, 'In-process plugin entry did not verify; not loaded');
+    return verified.problem;
+  }
+  await inProcessTestHooks.beforeImport?.();
   let factory: ExtensionFactory;
   try {
-    const mod = await importModuleAt(entryPath, `content=${hash.slice('sha256:'.length)}`);
+    const mod = await import(/* @vite-ignore */ moduleDataUrl(verified.bytes)) as Record<string, unknown>;
     factory = ((mod as { default?: unknown }).default ?? mod) as ExtensionFactory;
   } catch (err) {
     coreLogger.error({ err, pkg: row.name, entry }, 'In-process plugin module could not be imported');
