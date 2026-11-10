@@ -29,7 +29,7 @@ import { pluginPackages } from '@/db/schema/plugin-packages';
 import type { PluginManifest } from '@/shared/plugin-package';
 import { coreLogger } from '@/utils/logger';
 import { installFromDirectory, PluginPackageError } from '../service';
-import { bundledDir } from '../bundled';
+import { isBundledName } from '../bundled';
 import { agentAuthorship } from './authorship';
 import { IN_PROCESS_REFUSAL, type PluginValidation, validatePluginDirectory } from './validate';
 
@@ -67,15 +67,6 @@ export async function isActiveAdmin(userId: string): Promise<boolean> {
 /** The installed packages, for the command-name checks of a validation. */
 export async function installedForValidation(): Promise<Array<{ name: string; version: string; manifest: PluginManifest }>> {
   return getDb().select({ name: pluginPackages.name, version: pluginPackages.version, manifest: pluginPackages.manifest }).from(pluginPackages);
-}
-
-/**
- * Whether `name` is a plugin shipped with Octipus (`plugins/<name>`): an agent
- * may not install a package under that name, so it cannot stand in for one.
- * TODO: switch to `isBundledName` from ../bundled once it is exported there.
- */
-function isBundledName(name: string): boolean {
-  return bundledDir(name) !== null;
 }
 
 const refused = (error: string, problems?: string[]): AgentInstallResult => ({ installed: false, error, ...(problems?.length ? { problems } : {}) });
