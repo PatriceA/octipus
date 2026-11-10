@@ -334,19 +334,19 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
   })
 
   // One public web page, fetched by the host through its SSRF guard and turned
-  // into a clean article (the reader extraction): the package never touches
+  // into a clean article (src/core/web-read): the package never touches
   // the network itself. Size and time are capped by the fetcher (5 MB, 15 s);
   // the text handed back is capped here.
   .post('/web/read', (ctx) => run(ctx, 'web.read', 'web:read', async ({ grant }, details) => {
     Object.assign(details, webReadAuditOf(ctx.body.url));
-    const { fetchReaderDoc, ReaderFetchError } = await import('@/core/reader/fetch');
-    let doc: Awaited<ReturnType<typeof fetchReaderDoc>>;
+    const { fetchArticle, WebReadError } = await import('@/core/web-read/fetch');
+    let doc: Awaited<ReturnType<typeof fetchArticle>>;
     try {
-      doc = await fetchReaderDoc(ctx.body.url);
+      doc = await fetchArticle(ctx.body.url);
     } catch (err) {
       // The package learns only that it was refused or failed, never why
       // (an address, a status, a size): no probing of what lies behind the guard.
-      const code = err instanceof ReaderFetchError && err.blocked ? 'blocked' : 'fetch_failed';
+      const code = err instanceof WebReadError && err.blocked ? 'blocked' : 'fetch_failed';
       apiLogger.info({ err: (err as Error).message, plugin: grant.plugin, ...details }, 'plugin-host: web:read refused or failed');
       details.code = code;
       ctx.set.status = 422;

@@ -1,7 +1,7 @@
 /**
- * Pure HTML → ReaderDoc extraction (feature #4). Given raw page HTML and a URL,
+ * Pure HTML → WebArticle extraction (feature #4). Given raw page HTML and a URL,
  * find the main article content, strip chrome (nav/ads/scripts), and emit a
- * sanitized, reader-formatted document. No I/O — fully testable on fixtures.
+ * sanitized article. No I/O — fully testable on fixtures.
  *
  * Sanitization is by construction: contentHtml is rebuilt by serializing ONLY
  * an allowlist of tags/attributes with escaped text, so no script, style,
@@ -12,7 +12,7 @@ import type { Element } from 'domhandler';
 import { getElementsByTagName, removeElement, textContent } from 'domutils';
 import { parseDocument } from 'htmlparser2';
 import { STRIP_TAGS, safeUrl, serialize } from '@/core/html/sanitize';
-import type { ReaderDoc } from './types';
+import type { WebArticle } from './types';
 
 /** Class/id substrings that mark a node as non-article chrome. */
 const CHROME_RE = /(^|[\s_-])(nav|menu|footer|header|sidebar|comment|share|social|promo|advert|ad|cookie|banner|related|newsletter|subscribe)([\s_-]|$)/i;
@@ -48,10 +48,10 @@ function pruneChrome(root: Element): void {
 }
 
 /**
- * Extract a ReaderDoc from raw HTML. `url` is echoed back and used as the
+ * Extract a WebArticle from raw HTML. `url` is echoed back and used as the
  * canonical link. Never throws on malformed HTML (the parser is lenient).
  */
-export function extractReaderDoc(html: string, url: string): ReaderDoc {
+export function extractArticle(html: string, url: string): WebArticle {
   const doc = parseDocument(html);
   const metas = getElementsByTagName('meta', doc, true);
 

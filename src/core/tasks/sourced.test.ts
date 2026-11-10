@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { emailToTask, normalizeTaskTitle, readerItemsToTasks, researchFollowUpTask } from './sourced';
+import { emailToTask, normalizeTaskTitle, researchFollowUpTask } from './sourced';
 
 describe('normalizeTaskTitle', () => {
   test('collapses whitespace and trims', () => {
@@ -9,24 +9,6 @@ describe('normalizeTaskTitle', () => {
     const t = normalizeTaskTitle('x'.repeat(500));
     expect(t.length).toBe(200);
     expect(t.endsWith('…')).toBe(true);
-  });
-});
-
-describe('readerItemsToTasks', () => {
-  test('one task per bullet, linked to the article, deduplicated', () => {
-    const tasks = readerItemsToTasks(
-      ['Email the vendor', '  email the VENDOR ', '', 'Book the room'],
-      { url: 'https://example.com/post', title: 'Planning notes' },
-    );
-    expect(tasks.map((t) => t.title)).toEqual(['Email the vendor', 'Book the room']);
-    expect(tasks[0].sourceRef).toEqual({ url: 'https://example.com/post', label: 'Planning notes' });
-    expect(tasks[0].notes).toContain('https://example.com/post');
-    expect(tasks[0].category).toBe('Reading');
-  });
-  test('no origin → no notes, still a task', () => {
-    const [t] = readerItemsToTasks(['Do the thing'], {});
-    expect(t.notes).toBeNull();
-    expect(t.sourceRef).toEqual({ url: undefined, label: undefined });
   });
 });
 

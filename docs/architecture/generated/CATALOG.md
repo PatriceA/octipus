@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-653 mounted routes across 86 route files. The path is the full one, group prefix included — what a client actually calls.
+650 mounted routes across 85 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -433,9 +433,6 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/plugins/:name/call/:tool` | `src/api/routes/plugin-ui.ts` |
 | POST | `/api/plugins/:name/reload` | `src/api/routes/plugins.ts` |
 | PUT | `/api/protection/:entity/:id` | `src/api/routes/protection.ts` |
-| POST | `/api/reader` | `src/api/routes/reader.ts` |
-| POST | `/api/reader/action` | `src/api/routes/reader.ts` |
-| POST | `/api/reader/tasks` | `src/api/routes/reader.ts` |
 | GET | `/api/record-types` | `src/api/routes/records.ts` |
 | POST | `/api/record-types` | `src/api/routes/records.ts` |
 | DELETE | `/api/record-types/:id` | `src/api/routes/records.ts` |
@@ -690,14 +687,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 29 |
 | `api` | `connectors` | 3 |
-| `api` | `core` | 193 |
+| `api` | `core` | 190 |
 | `api` | `db` | 132 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 5 |
 | `api` | `models` | 39 |
 | `api` | `plugins` | 7 |
-| `api` | `security` | 174 |
+| `api` | `security` | 173 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 24 |
 | `api` | `skills` | 6 |
@@ -740,7 +737,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 10 |
-| `core` | `models` | 136 |
+| `core` | `models` | 134 |
 | `core` | `modules` | 2 |
 | `core` | `plugins` | 6 |
 | `core` | `security` | 229 |
@@ -802,7 +799,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `plugins` | `security` | 13 |
 | `plugins` | `shared` | 15 |
 | `plugins` | `tools` | 1 |
-| `plugins` | `utils` | 19 |
+| `plugins` | `utils` | 21 |
 | `security` | `api` | 1 |
 | `security` | `config` | 20 |
 | `security` | `connectors` | 3 |

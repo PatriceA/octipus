@@ -324,16 +324,6 @@ export class OctiClient {
     return this.request(`/api/research/${jobId}`);
   }
 
-  // ─── Reader (URL → clean article + AI actions) ───
-
-  async readUrl(url: string): Promise<unknown> {
-    return this.request('/api/reader', { method: 'POST', body: JSON.stringify({ url }) });
-  }
-
-  async readerAction(action: string, opts: { url?: string; text?: string; argument?: string }): Promise<unknown> {
-    return this.request('/api/reader/action', { method: 'POST', body: JSON.stringify({ action, ...opts }) });
-  }
-
   // ─── Skills (domain knowledge) ───
 
   async listSkills(): Promise<Array<{

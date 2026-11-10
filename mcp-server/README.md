@@ -1,7 +1,7 @@
 # Octipus MCP server
 
 This package exposes an Octipus backend as a Model Context Protocol server. It
-registers 87 tools across 25 groups for chat, search, agents, sessions, models,
+registers 85 tools across 24 groups for chat, search, agents, sessions, models,
 knowledge, documents, tasks, research, and administration. Tool availability
 and results still depend on the connected backend, the authenticated user, and
 that user's permissions.
