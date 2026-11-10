@@ -594,25 +594,26 @@ export async function readAllText(input: AsyncIterable<string | Buffer>, max = M
 
 /** `octi plugin marketplace [query] [--category <c>]`: what the marketplace and the configured registries offer. */
 export async function marketplaceCommand(io: PluginApiIo, query: string | undefined, category: string | undefined): Promise<number> {
+  const out = (text: string) => io.out(text.split('\n').map(printable).join('\n'));
   try {
     const params = new URLSearchParams();
     if (query) params.set('q', query);
     if (category) params.set('category', category);
     const listing = await request<MarketplaceListing>(io, 'GET', `/marketplace${params.size > 0 ? `?${params}` : ''}`);
-    if (listing.message) io.out(`${listing.message}\n`);
-    for (const e of listing.errors.filter((x) => x.registry !== 'marketplace')) io.out(`registry ${e.registry}: ${e.error}\n`);
-    if (listing.plugins.length === 0) io.out(listing.state === 'ready' ? 'No plugins match.\n' : '');
+    if (listing.message) out(`${listing.message}\n`);
+    for (const e of listing.errors.filter((x) => x.registry !== 'marketplace')) out(`registry ${e.registry}: ${e.error}\n`);
+    if (listing.plugins.length === 0) out(listing.state === 'ready' ? 'No plugins match.\n' : '');
     for (const p of listing.plugins) {
       const state = p.revoked ? `revoked: ${p.revoked}`
         : p.updateAvailable ? `installed ${p.installedVersion}, update ${p.updateAvailable} (octi plugin install ${p.name} --upgrade)`
           : p.installedVersion ? `installed ${p.installedVersion}`
             : p.latest ? `install with: octi plugin install ${p.name}${p.registry === 'marketplace' ? '' : ` --registry ${p.registry}`}`
               : `not installable here: ${p.compatibility.reason ?? 'no compatible version'}`;
-      io.out(`${p.name} ${p.latest ?? p.versions[0]?.version ?? ''}  ${p.title}${p.registry === 'marketplace' ? '' : `  [${p.registry}]`}\n`);
-      if (p.summary || p.description) io.out(`    ${p.summary || p.description}\n`);
-      io.out(`    ${state}${p.downloads !== null ? `; ${p.downloads} downloads` : ''}\n`);
-      if (p.askSummary.length > 0) io.out(`    asks for: ${p.askSummary.join('; ')}\n`);
-      for (const w of p.warnings) io.out(`    note: ${w.message}\n`);
+      out(`${p.name} ${p.latest ?? p.versions[0]?.version ?? ''}  ${p.title}${p.registry === 'marketplace' ? '' : `  [${p.registry}]`}\n`);
+      if (p.summary || p.description) out(`    ${p.summary || p.description}\n`);
+      out(`    ${state}${p.downloads !== null ? `; ${p.downloads} downloads` : ''}\n`);
+      if (p.askSummary.length > 0) out(`    asks for: ${p.askSummary.join('; ')}\n`);
+      for (const w of p.warnings) out(`    note: ${w.message}\n`);
     }
     return 0;
   } catch (err) {
@@ -624,15 +625,16 @@ export async function marketplaceCommand(io: PluginApiIo, query: string | undefi
 
 /** `octi plugin updates`: installed packages with a newer version from the same source, and what changes. */
 export async function updatesCommand(io: PluginApiIo): Promise<number> {
+  const out = (text: string) => io.out(text.split('\n').map(printable).join('\n'));
   try {
     const updates = await request<PluginUpdateView[]>(io, 'GET', '/updates');
-    if (updates.length === 0) io.out('Every package installed from a registry is up to date.\n');
+    if (updates.length === 0) out('Every package installed from a registry is up to date.\n');
     for (const u of updates) {
-      io.out(`${u.name} ${u.installed} → ${u.latest}  (from ${u.registry}; upgrade with: octi plugin install ${u.name} --upgrade${u.registry === 'marketplace' ? '' : ` --registry ${u.registry}`})\n`);
-      if (u.diff === null) io.out('    the registry does not list its permissions\n');
-      else if (u.diff.changes.length === 0) io.out('    asks for nothing new\n');
-      else for (const c of u.diff.changes) io.out(`    ${c.widens ? '+' : '-'} ${c.change} ${c.text}\n`);
-      for (const w of u.warnings) io.out(`    note: ${w.message}\n`);
+      out(`${u.name} ${u.installed} → ${u.latest}  (from ${u.registry}; upgrade with: octi plugin install ${u.name} --upgrade${u.registry === 'marketplace' ? '' : ` --registry ${u.registry}`})\n`);
+      if (u.diff === null) out('    the registry does not list its permissions\n');
+      else if (u.diff.changes.length === 0) out('    asks for nothing new\n');
+      else for (const c of u.diff.changes) out(`    ${c.widens ? '+' : '-'} ${c.change} ${c.text}\n`);
+      for (const w of u.warnings) out(`    note: ${w.message}\n`);
     }
     return 0;
   } catch (err) {
