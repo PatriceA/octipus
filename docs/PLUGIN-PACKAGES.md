@@ -7,7 +7,9 @@ fenced in by Octipus. This is point C2 of the
 [business OS plan](plans/business-os.md).
 
 Plugin packages are not the older in-process plugins of [PLUGINS.md](PLUGINS.md),
-which run inside the server with its full rights. Use a package for anything
+which run inside the server with its full rights. (Trusted extensions, the
+`octi.*` modules that hook the agent loop, can now be installed as packages
+too, with `runtime: "in-process"`: see [Runtimes](#runtimes).) Use a package for anything
 that talks to the outside world or handles credentials. Those plugins are
 deprecated; `octi plugin convert <dir>` turns one into a package
 ([PLUGINS.md](PLUGINS.md#converting-to-a-plugin-package)).
@@ -52,8 +54,97 @@ server (any language) that the manifest says how to start:
 | `settings` | Non-secret settings as [record type fields](RECORDS.md#record-types), handed to the server as `OCTIPUS_SETTING_<KEY>`. |
 | `secrets` | Credentials, stored in the vault, handed to the server as environment variables under their own `key`. |
 
+| `runtime` | `package` (the default: this page) or `in-process` ([Runtimes](#runtimes)). |
+| `entry` | For `in-process` only: the module to load. |
+
 Every problem in a manifest is reported at once; a package that does not fit is
 refused at install.
+
+## Runtimes
+
+A plugin is installed, pinned, signed, approved, listed and audited the same
+way whatever runs it; `runtime` says what does:
+
+| Runtime | Runs as | Trust needed |
+|---|---|---|
+| `package` (default) | An MCP server over stdio, in the sandbox ([How a package runs](#how-a-package-runs)) | An admin installs it and approves its content hash |
+| `in-process` | A [trusted extension](PLUGINS.md#from-an-extension-octihook-trusted-extensions-only) loaded into the server process (`octi.*`): it can hook the agent loop, register tools and model providers | As for `package`, plus an explicit approval to run in the server process, recorded with the content hash |
+
+An in-process plugin's manifest names its module instead of a server:
+
+```json
+{
+  "name": "auditlog",
+  "version": "1.0.0",
+  "apiVersion": "1.0.0",
+  "title": "Audit every tool call",
+  "description": "Writes a line for each tool call through a tool:after hook.",
+  "runtime": "in-process",
+  "entry": "dist/index.mjs"
+}
+```
+
+- **`entry`**: a path relative to the package root (no `.`/`..` segments) to
+  a `.ts`, `.js` or `.mjs` module whose default export is the extension
+  factory, `(octi) => void | Promise<void>`, the same shape as an extension in
+  `~/.octipus/extensions` ([PLUGINS.md](PLUGINS.md)). It must be a file in
+  the package at install.
+- **What applies**: `name` (lower-case letters and digits only, no `-`: its
+  tools are named `ext_<name>__<id>`), `version`, `apiVersion`, `title`,
+  `description`, `publisher`, `homepage`; content pinning, signatures,
+  revocation, registries, remote install, upgrade and uninstall, unchanged.
+- **What is refused**, because only a sandbox or a server process of its own
+  would make it true: `server` and `tools` (nothing is started; its tools are
+  registered with `octi.registerTool`, each with its effect), `network` (it
+  has the server's network), `maxProtection` (it can read whatever the server
+  can). `settings` and `secrets` are refused too: nothing hands them to an
+  in-process module yet (a provider names a system vault secret instead).
+
+**The in-process approval.** Approving its content says *these bytes are what
+I reviewed*; running them in the server process gives them the server's full
+authority, so it is a second, explicit decision:
+
+```
+PATCH /api/plugin-packages/auditlog { "approveInProcess": "sha256:<contentHash>" }
+```
+
+The hash must be the approved `contentHash` and the files must still hash to
+it (`409` otherwise), under the same signature rules as enabling (a revoked
+key is refused; under `plugins.requireSignature`, unsigned content too). It is
+recorded on the row with who and when (`inProcess` in the view) and audited
+(`in_process_approved`). Enabling an in-process plugin without it is refused
+(`409`). It covers one content hash: an upgrade, or approving changed content,
+clears it (the audit row of the content approval says so), and the plugin is
+not loaded again until it is approved for the new bytes. A plugin installed
+from a URL must carry a trusted signature, like any package, and still needs
+this approval.
+
+On the web page an in-process plugin's row says **in-process**, and while the
+approval is missing shows its content hash with **Approve running in the
+server process** (after a confirmation). From the command line:
+`octi plugin approve-in-process <name> [--hash sha256:<hex>]`.
+
+**Loading.** While an in-process plugin is enabled and approved, the
+extension system loads it from its installed directory (read in place, never
+written), after the check every package start gets: its files hash to the
+approved content hash, its signature file is the approved one, its key is
+not revoked, and under `plugins.requireSignature` it carries a trusted
+signature. A plugin that fails the check, cannot be imported or whose factory
+throws is not loaded, the reason shows as its problem, and the server runs on.
+Its factory gets the same `octi` API as a trusted extension. Disabling,
+uninstalling or upgrading it disposes everything it registered (event
+handlers, commands, hooks, tools, providers, `onDispose` callbacks), the last
+registration first; enabling or approving loads it again. No restart either
+way.
+
+One caveat: the entry module is imported anew for new content, but modules it
+imports are cached by the process under their path, so an upgrade that
+changes an imported file runs the old copy of that file until a restart.
+Bundle the plugin into its entry file to avoid it.
+
+What in-process does not give: a sandbox. The checks above make sure the code
+that runs is the code an admin approved, signed by whom it says; they do not
+limit what that code can do once it runs.
 
 ## Tool effects
 
@@ -638,7 +729,9 @@ tarball, signed by a trusted publisher ([Remote install](#remote-install)).
 5. **Approve changed content:** `PATCH /api/plugin-packages/:name
    { "approveContent": "sha256:<reviewed hash>" }` after a hash mismatch
    ([Content pinning](#content-pinning)), or "Approve this content" on the
-   web page, or `octi plugin approve <name> [--hash sha256:<hex>]`.
+   web page, or `octi plugin approve <name> [--hash sha256:<hex>]`. An
+   in-process plugin also needs `{ "approveInProcess": "sha256:<contentHash>" }`
+   before it can be enabled, and again after new content ([Runtimes](#runtimes)).
 6. **Uninstall:** `DELETE /api/plugin-packages/:name` removes the server, the
    files, the data directory, the row and the secrets (**uninstall** on the
    web page, after a confirmation, or `octi plugin uninstall <name>`).
@@ -646,8 +739,10 @@ tarball, signed by a trusted publisher ([Remote install](#remote-install)).
 `GET /api/plugin-packages` lists installed packages with their manifest,
 settings, which secrets are set, whether the server is connected, why it is
 not when it should be, whether its network is enforced (`network`), its
-content hash (and `actualHash` on a mismatch), who signed it (`signedBy`) and
-the signature state (`signature`).
+content hash (and `actualHash` on a mismatch), who signed it (`signedBy`),
+the signature state (`signature`), its `runtime` and, for an in-process
+plugin, its in-process approval and whether it is loaded (`inProcess`;
+`connected` then means loaded).
 
 ### From the command line
 
@@ -655,6 +750,7 @@ the signature state (`signature`).
 octi plugin list
 octi plugin approve finapi --hash sha256:<actualHash>
 octi plugin approve finapi            # shows the actual hash and asks (at a terminal only)
+octi plugin approve-in-process auditlog --hash sha256:<contentHash>   # an in-process plugin
 octi plugin set finapi region=eu limit=50 note=   # settings; key= clears one
 octi plugin secret finapi FINAPI_CLIENT_SECRET    # hidden prompt
 octi plugin secret finapi FINAPI_CLIENT_SECRET < secret.txt   # or stdin
@@ -665,8 +761,10 @@ octi plugin uninstall finapi          # asks; --yes when not at a terminal
 They call the running backend at `http://localhost:$API_PORT` (3005 by
 default) with the bearer token in `OCTIPUS_API_TOKEN` (an admin's API token,
 Settings → API Tokens; [API.md](API.md#getting-an-api-token)), as `octi
-persona` does. `list` shows each package's state, signature, network state and
-its recorded and actual hash. `approve` without `--hash` refuses when it
+persona` does. `list` shows each package's state, runtime, signature, network
+state, its recorded and actual hash and, for an in-process plugin, its
+in-process approval. `approve-in-process` works like `approve`, for the
+approved content hash. `approve` without `--hash` refuses when it
 cannot ask (not a terminal) and prints the command to run after reviewing; a
 `409` (the files changed again) is shown and exits non-zero. `set` sends the
 pairs as one settings change (the backend checks them against the manifest;
