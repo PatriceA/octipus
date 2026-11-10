@@ -9,6 +9,27 @@ labels reflect blast radius, not contract guarantees.
 
 ### Security
 
+- **The plugin marketplace, host side.** A built-in registry for
+  `https://plugins.octipus.cc/index.json`, anchored by two root public keys
+  that ship as placeholders: until a build carries real ones the marketplace
+  is off (never fetched, never trusted) and Admin says it is not configured.
+  Root keys sign only `keys.json`, which endorses the signing keys (rotation
+  and revocation without a release; the backup root may revoke the root,
+  never the reverse). An install from a registry recomputes the permissions
+  from the downloaded manifest and refuses any difference from the listing,
+  checks the content hash, and records provenance (`origin`). A published
+  version's content hash is pinned; `generatedAt` and the keys file version
+  only move forward. Package and key revocations from the marketplace are
+  stored, sticky, refused at install and at every start, and notified to
+  admins. Listing images are proxied (PNG, JPEG, WebP, GIF by their bytes;
+  no SVG; `nosniff`, `default-src 'none'`). New: `plugins.marketplace`
+  (`true` / `false` / `{ url, rootKeys }`), `GET /api/plugin-packages/marketplace`,
+  `/marketplace/asset`, `/updates`, `/revocations`, `/:name/usage`,
+  `/:name/usage/me`, `DELETE /:name/runs/:id`, `DELETE
+  /api/plugin-host/agent/runs/:id`, a daily update check, and `octi plugin
+  marketplace`, `updates`, `install <name>`, `sign-keys`. Migration 0179.
+  An upgrade from another source needs `allowSourceChange`.
+
 - **OAuth popup callback pages no longer reflect script.** The connector
   callback put `?error=` into an inline `<script>` with `JSON.stringify` under
   a CSP that allowed `'unsafe-inline'`, so `</script><script>…` ran on the

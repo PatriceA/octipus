@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-648 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
+657 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -407,6 +407,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/pipelines/templates/import` | `src/api/routes/pipelines.ts` |
 | GET | `/api/pipelines/types` | `src/api/routes/pipelines.ts` |
 | POST | `/api/plugin-host/agent/runs` | `src/api/routes/plugin-host.ts` |
+| DELETE | `/api/plugin-host/agent/runs/:id` | `src/api/routes/plugin-host.ts` |
 | GET | `/api/plugin-host/agent/runs/:id` | `src/api/routes/plugin-host.ts` |
 | POST | `/api/plugin-host/documents` | `src/api/routes/plugin-host.ts` |
 | GET | `/api/plugin-host/documents/:id` | `src/api/routes/plugin-host.ts` |
@@ -423,9 +424,17 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/plugin-packages` | `src/api/routes/plugin-packages.ts` |
 | DELETE | `/api/plugin-packages/:name` | `src/api/routes/plugin-packages.ts` |
 | PATCH | `/api/plugin-packages/:name` | `src/api/routes/plugin-packages.ts` |
+| DELETE | `/api/plugin-packages/:name/runs/:id` | `src/api/routes/plugin-packages.ts` |
 | PUT | `/api/plugin-packages/:name/secrets/:key` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/:name/usage` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/:name/usage/me` | `src/api/routes/plugin-packages.ts` |
 | GET | `/api/plugin-packages/bundled` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/marketplace` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/marketplace/asset` | `src/api/routes/plugin-packages.ts` |
 | GET | `/api/plugin-packages/registry` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/revocations` | `src/api/routes/plugin-packages.ts` |
+| DELETE | `/api/plugin-packages/revocations/:id` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/updates` | `src/api/routes/plugin-packages.ts` |
 | GET | `/api/plugin-ui` | `src/api/routes/plugin-ui.ts` |
 | GET | `/api/plugin-ui/:name/*` | `src/api/routes/plugin-ui.ts` |
 | GET | `/api/plugins` | `src/api/routes/plugins.ts` |
@@ -685,13 +694,13 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 28 |
 | `api` | `core` | 192 |
-| `api` | `db` | 131 |
+| `api` | `db` | 133 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 5 |
 | `api` | `models` | 39 |
-| `api` | `plugins` | 11 |
-| `api` | `security` | 170 |
+| `api` | `plugins` | 19 |
+| `api` | `security` | 171 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 24 |
 | `api` | `skills` | 6 |
@@ -728,7 +737,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `mcp` | 11 |
 | `core` | `models` | 134 |
 | `core` | `modules` | 2 |
-| `core` | `plugins` | 6 |
+| `core` | `plugins` | 7 |
 | `core` | `security` | 228 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
@@ -778,16 +787,16 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `models` | `services` | 1 |
 | `models` | `shared` | 4 |
 | `models` | `utils` | 43 |
-| `plugins` | `config` | 6 |
-| `plugins` | `core` | 26 |
-| `plugins` | `db` | 24 |
+| `plugins` | `config` | 8 |
+| `plugins` | `core` | 27 |
+| `plugins` | `db` | 45 |
 | `plugins` | `extensions` | 2 |
-| `plugins` | `mcp` | 5 |
+| `plugins` | `mcp` | 6 |
 | `plugins` | `models` | 2 |
-| `plugins` | `security` | 14 |
-| `plugins` | `shared` | 19 |
+| `plugins` | `security` | 17 |
+| `plugins` | `shared` | 26 |
 | `plugins` | `tools` | 1 |
-| `plugins` | `utils` | 24 |
+| `plugins` | `utils` | 33 |
 | `security` | `api` | 1 |
 | `security` | `config` | 20 |
 | `security` | `core` | 39 |

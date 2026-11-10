@@ -1,7 +1,28 @@
 # Plugin marketplace
 
-Status: proposed (2026-11-10). Marketplace repository:
-[PatriceA/octipus-plugins](https://github.com/PatriceA/octipus-plugins) (empty).
+Status: phases 1, 2 and 4 done on the host (2026-11-10): the built-in
+registry with placeholder root keys (off until a build ships real ones),
+the root-signed `keys.json` of signing keys, index v2 parsing with the
+permissions cross-check, `minOctipus`, provenance, listing pins, online
+revocation, the daily update check, the usage view and cancelling a run
+([PLUGIN-PACKAGES.md#marketplace](../PLUGIN-PACKAGES.md#marketplace)).
+Phase 3 (the Marketplace page) and the consolidated install consent are
+next. Marketplace repository:
+[PatriceA/octipus-plugins](https://github.com/PatriceA/octipus-plugins).
+
+## Principle
+
+Goal: let people build and share any of their ideas, safely. Four hard
+boundaries, never negotiable:
+
+- the sandbox;
+- signatures;
+- the listing has to match the downloaded plugin;
+- runtime enforcement of exactly what was declared.
+
+Everything else is guidance: every declaration shown in plain words at
+install, with consent per item. We inform and guide admins; we don't refuse an
+informed choice.
 
 ## Why
 
@@ -285,6 +306,13 @@ server.**
   new dependency). `sign` and `sign-index` ask for the passphrase at a
   terminal, or read it with `--passphrase-file` (a file, or stdin for `-`)
   for scripts. Done (docs/PLUGIN-PACKAGES.md#signed-packages).
+- **Root keys and signing keys (as built).** The host ships two ROOT keys,
+  `root` and `rootBackup`, that sign only `keys.json`, which lists the
+  signing keys; signing keys sign the index and the packages. A signing key
+  is rotated or revoked by a new `keys.json`, without a new Octipus release
+  ([PLUGIN-PACKAGES.md#marketplace-keys](../PLUGIN-PACKAGES.md#marketplace-keys)).
+  This replaces the active-and-backup design below, which could not
+  introduce a new key.
 - **A second, backup key.** It is generated at the same time and kept offline
   (a password manager or a USB stick in a drawer), and never used to sign
   packages. Both public keys ship in Octipus's built-in `trustedPublishers`

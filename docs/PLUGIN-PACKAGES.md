@@ -660,8 +660,9 @@ that key signed, under that name and version. What it does not:
   as an unsigned package (sandbox, network, declared tools and effects), and
   an admin still reads what it declares before enabling it;
 - that the key is still in the publisher's hands — a leaked key signs
-  anything until it is revoked or expires here; nothing tells a host a key
-  was revoked (no online revocation list): each host's config has to say so;
+  anything until it is revoked or expires here; for a publisher of your own,
+  each host's config has to say so (the marketplace revokes its keys online,
+  [Online revocation](#online-revocation));
 - anything about where the package came from: a URL or registry only says
   where the bytes were fetched; the signature says who made them.
 
@@ -787,6 +788,214 @@ packages. The trust config is part of the index cache key, so revoking a key
 refuses its indexes on the next listing. Without `publisher`, an index is
 listed unsigned, as before. Either way, installing from it still requires the
 package's own trusted signature.
+
+## Marketplace
+
+Octipus ships one registry of its own, the Octipus marketplace
+(`https://plugins.octipus.cc/index.json`, publisher `Octipus`), built from the
+[octipus-plugins](https://github.com/PatriceA/octipus-plugins) repository.
+Admins browse it on the Marketplace page or with `octi plugin marketplace`,
+and install from it by name (`octi plugin install <name>`). Other registries
+(`plugins.registries`) keep working as before and appear beside it.
+
+### Trust and threat model
+
+Goal: let people build and share any of their ideas, safely. Four hard
+boundaries, never negotiable:
+
+- the sandbox;
+- signatures;
+- the listing has to match the downloaded plugin;
+- runtime enforcement of exactly what was declared.
+
+Everything else is guidance: every declaration shown in plain words at
+install, with consent per item. We inform and guide admins; we don't refuse an
+informed choice.
+
+What directly protects those boundaries is held as hard as they are: key
+handling, revocation, pins, the rollback checks and the SSRF guard. Every
+byte the host fetches (keys file, index, signatures, tarballs, READMEs,
+screenshots, stats) is hostile until checked, and every check fails closed: a
+file that cannot be read, verified or parsed counts for nothing.
+
+| Threat | What the host does |
+| --- | --- |
+| No keys in this build | The root keys in `src/plugins/packages/marketplace-keys.ts` are placeholders until a release ships real ones. While either is, the marketplace is off: never fetched, never trusted, nothing installs; the listing says *"The Octipus marketplace is not configured in this build"*. A placeholder never verifies anything. |
+| A forged index or package | The index must be signed by a signing key the root-signed `keys.json` endorses now; a package from the marketplace must carry a valid signature by one of those keys, and only those (a key in `trustedPublishers` does not count for the marketplace, and the marketplace's keys count for nothing else). |
+| A listing that understates | The host recomputes the permissions from the downloaded manifest (`computePermissions`) and refuses any difference from the listing's, with an audit row (`listing_mismatch`); the same for `contentHash`, name and version. |
+| A published version replaced | The `contentHash` of every `name@version` is pinned per registry the first time it is listed; a later index claiming another hash for it is refused as a whole, audited (`listing_replaced`) and notified to admins. |
+| A replayed old index | `generatedAt` only moves forward per registry (one conditional upsert); an older index, or another index with the same `generatedAt`, is refused, as is one dated more than a day ahead. |
+| A replayed old keys file | `keys.json`'s `version` only grows; the same version with the same bytes is fine, anything else refused. |
+| A leaked signing key | The key holder revokes it in `keys.json` (signed by a root key) and endorses a new one. Revocations are sticky: a later file that drops one does not lift it. Installs and starts of anything signed by a revoked key are refused, everywhere on the host. |
+| A leaked root key | `rootBackup` signs a `keys.json` that revokes `root`. From then on `root` verifies nothing. `root` can never revoke `rootBackup`: a file that tries is refused as a whole. A leaked root may have pushed `version` high; a file from the backup root that revokes it is accepted anyway (a file signed by a revoked root holds nothing back). Losing both roots needs a new release. |
+| A future-dated index from a leaked key | An index signed by a key revoked since does not hold the next one back, so the backup's revocation always gets through. |
+| A revoked package version | Package revocations in a verified index are stored in the database, refused at install and at every start, shown on the row (`revocation`), audited (`revoked_online`) and notified to admins; a running server is stopped. They hold while the marketplace is unreachable and across restarts. |
+| The marketplace unreachable | Listing and installing from it stop ("unavailable"). Installed marketplace packages keep running only if their signatures verify against the last stored `keys.json`, re-verified against the root keys whenever it is read. |
+| Hostile text and links | Index v2 is parsed with a strict schema: a limit on every string and list, no control characters, no bidirectional or invisible formatting characters in short fields, an unknown `schema` above 2 refused. README and CHANGELOG are returned as raw Markdown for the client to render sanitized, without raw HTML or remote images. `homepage` and `author.url` are https or dropped. The index's own `keyId` field is never used: who signed is read from the signature. |
+| Hostile images | Icons and screenshots must be https on the registry's origin under `/<name>/`, else dropped. The host fetches only an image a readable index lists (never a URL a client names), through the SSRF guard, with no redirect off the origin, at most 2 MB, and keeps it only when its bytes are PNG, JPEG, WebP or GIF (no SVG). It is served with the sniffed type, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'` and `Content-Disposition: inline`. |
+| Takeover by another registry | An upgrade from another source than the installed version's (another registry, the marketplace) is a change the admin confirms (`allowSourceChange`), recorded in the audit row (`sourceChange`). |
+| Escaping the sandbox | The marketplace carries sandboxed packages only: a listing with `runtime: in-process` is shown as not installable, and an install requires runtime `package` on the staged copy. |
+| Download counts | `stats.json` is unsigned and display-only: read with the guard, capped and schema-checked, ignored on any error, never used for trust, install or default order. The host never reports its own installs. |
+
+What a marketplace signature means: these exact bytes passed the
+marketplace's CI and a maintainer's review. Not that the code is safe; the
+host's guarantees stay the sandbox, the declared network hosts, the approved
+host scopes, tool effects and the user's permission rules.
+
+### Marketplace keys
+
+```
+built-in ROOT keys (root, rootBackup)        src/plugins/packages/marketplace-keys.ts
+      │ sign only
+      ▼
+<origin>/keys.json + keys.json.sig           the signing keys, and revoked keys
+      │ endorse
+      ▼
+signing keys ──sign──▶ index.json.sig, and each package's octipus-plugin.sig
+```
+
+`keys.json`, beside its detached `keys.json.sig` (the canonical signature
+form, over `octipus-marketplace-keys/v1\n` and `sha256:<hex>` of the exact
+bytes, so it can never pass for a package or index signature):
+
+```json
+{
+  "schema": 1, "version": 3, "generatedAt": "2026-11-10T12:00:00Z",
+  "signingKeys": [{ "keyId": "ed25519:<64 hex>", "publicKey": "-----BEGIN PUBLIC KEY-----\n…", "notAfter": "2027-12-31" }],
+  "revokedKeys": [{ "keyId": "ed25519:<64 hex>", "reason": "leaked" }]
+}
+```
+
+The host fetches it from the marketplace origin (64 KiB at most), verifies it
+against the root keys that are not revoked, checks each listed key's id
+against its key, refuses a root listed as a signing key, applies the root
+rule above, stores it with its signature (`plugin_marketplace_keys`), and
+stores its revocations (`plugin_revocations`). Only listed, non-revoked,
+unexpired signing keys are trusted. Sign it with `octi plugin sign-keys
+keys.json --key <root.key>` on an offline machine.
+
+**Configuring a build.** Make the two root keys offline (`octi plugin keygen
+octipus-root`, `octi plugin keygen octipus-root-backup`), paste the two `.pub`
+files into `MARKETPLACE_ROOT_KEYS` and set `placeholder: false`. Never put a
+private key in the repository, CI or the web server.
+
+**Rotating a signing key.** Make a new signing key, publish a `keys.json`
+with a higher `version` that lists the new key and revokes the old one (sign
+it with a root key), re-sign the live versions with the new key as new
+versions (a published version's content is pinned), and sign the index with
+the new key. No Octipus host needs an update.
+
+### Configuration
+
+```json
+"plugins": {
+  "marketplace": true
+}
+```
+
+- `true` (default): the built-in marketplace, when the build has root keys.
+- `false`: off entirely (air-gapped installs, organisations with their own
+  registry): never fetched, never trusted.
+- `{ "enabled": true, "url": "https://…/index.json", "rootKeys": { "root": "<PEM>", "rootBackup": "<PEM>" } }`:
+  another index or other root keys, for testing or self-hosting. Root keys
+  given here count as configured. Each PEM must be an Ed25519 public key; the
+  config is refused at load otherwise. `keys.json` is read from the index's origin.
+
+### Index v2
+
+Read as the [octipus-plugins](https://github.com/PatriceA/octipus-plugins#index-v2)
+publish script writes it: `{ schema: 2, generatedAt, publisher, url,
+packages: [...], revoked: [...] }`, each package with the v1 fields (`name`,
+`version`, `description`, `url`, `sha256`) and `contentHash`, `apiVersion`,
+`minOctipus`, `title`, `summary`, `category`, `tags`, `icon`, `screenshots`,
+`homepage`, `author: { name, url }`, `readme` and `changelog` (the newest
+entry of each plugin only), `publisher`, `license`, `publishedAt`, `keyId`
+(ignored), `permissions` (exactly `octi plugin permissions --json`) and
+`deprecated`. `revoked` is a list of `{ name, version, reason }` (applied
+from the marketplace only) and `{ keyId, reason }` (ignored: key revocation
+lives in `keys.json`). v1 indexes keep working for other registries; the
+marketplace requires v2 and every tarball on its origin. An entry that does
+not fit is skipped; a malformed `revoked` refuses the whole index.
+
+### Compatibility
+
+`apiVersion` and `minOctipus` are checked when listing (a version that
+cannot run here shows `compatibility: { ok: false, reason }` and is not
+`latest`) and again at install. A plugin API this host does not read is
+refused. A version that asks for a newer Octipus installs only with the
+admin's `allowIncompatible`.
+
+### Provenance
+
+A registry install records where it came from on the row (`origin`, shown in
+the package view) and in the `installed`/`upgraded` audit row:
+
+```json
+{ "source": "marketplace", "registry": "Octipus", "url": "https://plugins.octipus.cc/dl/…", "listingVersion": "1.2.0", "indexGeneratedAt": "…" }
+```
+
+`source` is `marketplace`, `registry:<name>`, `url`, `directory`, `bundled`
+or `agent`; null for a package installed before provenance was recorded. The
+marketplace's signing keys are trusted for a package only while its
+`origin.source` is `marketplace`. Moving a package to or from a registry
+source is a change of source (`allowSourceChange`); direct installs
+(directory, URL, bundled, agent, unknown) are one class.
+
+### Online revocation
+
+Package revocations come from a marketplace index verified by a currently
+endorsed signing key; key revocations come from `keys.json`. Both are stored
+in `plugin_revocations` and only accumulate. A revoked version or key is
+refused at install and at every start; enabling and approving a revoked
+version are refused; the row shows `revocation: { kind, keyId, reason,
+source, since }`; admins get a `plugin_revoked` notification.
+
+An admin can lift one (an error on the marketplace's side, say):
+`GET /api/plugin-packages/revocations` lists them, and `DELETE
+/api/plugin-packages/revocations/:id { "reason": "…" }` clears one (audited,
+`revocation_cleared`; the row is kept). While the marketplace still lists
+the revocation, its next index revokes it again.
+
+### Updates
+
+A daily check (from the cron tick) reads the registries installed packages
+came from and finds a newer installable version from the **same** source.
+Admins get one `plugin_update` notification per new version, with the
+permissions diff between the installed version (recomputed from its
+installed manifest) and the new listing. Upgrades are never automatic.
+
+### Declarations
+
+`declarationItems(permissions, manifest?)` (`src/shared/plugin-declarations.ts`)
+turns what a package declares into a stable, ordered list of `{ id, kind,
+label, detail, guidance? }`: runtime, in-process, network hosts, host scopes,
+tools and their effects, commands, schedules, events, prompt, context, pages,
+secrets, `model:cli-tools` and the protection level. The package view and
+each marketplace card carry it as `declarations`, for the install consent
+(one screen, every item ticked, bound to the content hash).
+
+### Usage
+
+`GET /api/plugin-packages/:name/usage?days=30` (admins: every user) and
+`GET /api/plugin-packages/:name/usage/me?days=30` (the signed-in user's own)
+sum the plugin's `model:complete` cost rows (`plugin:<name>`) and the cost
+rows of its background runs, with the number of model calls and runs.
+
+### API
+
+| Route | Who | Answer |
+| --- | --- | --- |
+| `GET /api/plugin-packages/marketplace?q=&category=` | admins | `MarketplaceListing`: `{ state, message, generatedAt, plugins, categories, errors }` |
+| `GET /api/plugin-packages/marketplace/asset?url=` | admins | the image bytes (PNG, JPEG, WebP, GIF), or `{ error }` with 400, 404, 413, 415 or 502 |
+| `POST /api/plugin-packages { registry, name, version?, upgrade?, allowSourceChange?, allowSignerChange?, allowDowngrade?, allowIncompatible? }` | admins | `{ name, version, enabled, contentHash, signedBy, warnings, guidance, origin, manifest }` |
+| `GET /api/plugin-packages/updates` | admins | `[{ name, installed, latest, registry, diff, warnings }]` |
+| `GET /api/plugin-packages/revocations`, `DELETE …/revocations/:id` | admins | the revocations; clearing one |
+| `GET /api/plugin-packages/:name/usage`, `…/usage/me` | admins; any user | `PluginUsageView` |
+| `DELETE /api/plugin-packages/:name/runs/:id` | the run's user, or an admin | `{ id, status: "cancelled" }` |
+| `DELETE /api/plugin-host/agent/runs/:id` | the same package, for the same user | `{ id, status: "cancelled" }` |
+
+The shapes are `MarketplaceListing`, `MarketplacePluginView`,
+`PluginUpdateView` and `PluginUsageView` in `src/shared/plugin-package.ts`.
 
 ## Packing and publishing
 
@@ -1153,7 +1362,7 @@ and an admin approved:
 | `notify` | `POST /api/plugin-host/notify { title, body? }` | A notification to the calling user, and to nobody else. |
 | `web:read` | `POST /api/plugin-host/web/read { url }` | One public web page, fetched by the host and turned into a clean article: `{ url, title, byline?, siteName?, publishedAt?, contentHtml, textContent, wordCount, estReadMinutes, truncated }`. |
 | `model:complete` | `POST /api/plugin-host/model/complete { system?, prompt, maxTokens?, temperature? }` | One text completion on the calling user's `everyday` model: `{ output, model }`. |
-| `agent:run` | `POST /api/plugin-host/agent/runs { prompt, role?, title? }`; `GET /api/plugin-host/agent/runs/:id` | Starts a background agent run as the user and answers its id at once; a later call reads its status and final text. See below. |
+| `agent:run` | `POST /api/plugin-host/agent/runs { prompt, role?, title? }`; `GET /api/plugin-host/agent/runs/:id`; `DELETE /api/plugin-host/agent/runs/:id` | Starts a background agent run as the user and answers its id at once; a later call reads its status and final text; `DELETE` cancels it (its own runs for the same user only; any of its tools may). See below. |
 
 **`web:read`** lets a package read any public page without network of its
 own: the host fetches it through the same SSRF guard as the agents' web
@@ -1577,6 +1786,10 @@ octi plugin secret finapi FINAPI_CLIENT_SECRET --clear
 octi plugin uninstall finapi          # asks; --yes when not at a terminal
 octi plugin bundled                   # the plugins shipped with Octipus
 octi plugin install-bundled reader    # install one, disabled (--upgrade for a newer version)
+octi plugin marketplace [query] [--category productivity]   # what the marketplace and registries offer
+octi plugin updates                   # installed packages with a newer version from the same source
+octi plugin install weekly-review     # from the marketplace, the newest compatible version, disabled
+octi plugin install finapi --registry Acme --version 1.2.0 --upgrade [--allow-source-change]
 ```
 
 They call the running backend at `http://localhost:$API_PORT` (3005 by
@@ -1702,8 +1915,9 @@ line.
 - Search, ratings or publisher pages: a registry is a flat list (signed by
   its publisher when the host asks for it, [Signed registry
   indexes](#signed-registry-indexes)).
-- Online revocation: a revoked key is revoked on a host only when that host's
-  config says so (`revoked`, `revokedKeys`, `notAfter`).
+- Online revocation for registries other than the marketplace: their keys
+  are revoked on a host only when that host's config says so (`revoked`,
+  `revokedKeys`, `notAfter`).
 - Network enforcement on Windows: the egress proxy is advisory there (no
   built-in runner; see [Network](#network)).
 - In a shared space, plugin tools follow the rules of personal connections
