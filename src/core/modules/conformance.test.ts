@@ -32,7 +32,7 @@ const CORE_ROUTE_PREFIXES = [
 const CORE_TOOLS = [
   'atlassian', 'browser', 'browser-ext', 'companion', 'connections', 'data', 'docker', 'documents',
   'filesystem', 'git', 'github', 'gitlab', 'google-workspace', 'inline-ui', 'knowledge',
-  'mcp_admin', 'microsoft365', 'monitor', 'notes', 'plan', 'repo_registry', 'scheduling',
+  'mcp_admin', 'microsoft365', 'monitor', 'notes', 'plan', 'plugin_dev', 'repo_registry', 'scheduling',
   'shell', 'skill-distill', 'task_state', 'tasks', 'visual', 'websearch',
 ];
 
