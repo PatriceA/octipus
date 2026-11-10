@@ -246,4 +246,11 @@ describe('the skill', () => {
     expect(PLUGIN_AUTHORING_SKILL.content).toContain(MCP_PROTOCOL_VERSION);
     expect(PLUGIN_AUTHORING_SKILL.content).not.toMatch(/plugin_enable|plugin_approve/);
   });
+
+  test('points to the example plugin, and keeps the source out of the repository', () => {
+    expect(PLUGIN_AUTHORING_SKILL.content).toMatch(/\bplugins\/reader\b/);
+    expect(PLUGIN_AUTHORING_SKILL.content).toContain('my-plugins/<name>/');
+    expect(PLUGIN_AUTHORING_SKILL.content).not.toContain('`plugins/<name>/`');
+    expect(PLUGIN_AUTHORING_SKILL.content).toMatch(/never in the Octipus repository/);
+  });
 });

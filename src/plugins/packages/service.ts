@@ -70,6 +70,7 @@ import {
   type PluginSignatureStatus,
   pluginRuntime,
 } from '@/shared/plugin-package';
+import { octipusRoot } from '@/utils/install-root';
 import { coreLogger } from '@/utils/logger';
 import { type AgentAuthoredDetails, agentAuthorship, agentAuthorships } from './authoring/authorship';
 import { contributionInstallProblems, contributionsView, syncContributions } from './contributions';
@@ -127,6 +128,26 @@ export function compareVersions(a: string, b: string): number {
 /** Where installed packages live. */
 export function pluginsRoot(): string {
   return join(resolve(getConfig().workspace.rootPath), 'plugin-packages');
+}
+
+/**
+ * Refuse a plugin store or data directory inside `<install>/plugins`, where
+ * only the plugins Octipus ships live (a misconfigured `workspace.rootPath`):
+ * an installed or local plugin never lands in the install or the repository.
+ */
+export function assertStoreOutsideInstall(): void {
+  let shippedDir: string;
+  try {
+    shippedDir = join(octipusRoot(), 'plugins');
+  } catch {
+    return;
+  }
+  for (const dir of [pluginsRoot(), join(resolve(getConfig().workspace.rootPath), 'plugin-data')]) {
+    const rel = relative(shippedDir, dir);
+    if (rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))) {
+      throw new PluginPackageError('invalid', `The plugin store ${dir} is inside ${shippedDir}, where only the plugins Octipus ships live: set workspace.rootPath to a directory outside the Octipus install`);
+    }
+  }
 }
 
 /** The directory of one installed package. */
@@ -339,6 +360,7 @@ export async function installFromDirectory(
     requireRuntime?: PluginRuntime;
   } = {},
 ): Promise<PluginPackageRow & { warnings: string[] }> {
+  assertStoreOutsideInstall();
   const source = resolve(sourceDir);
   const fromStore = relative(pluginsRoot(), source);
   if (fromStore === '' || (fromStore !== '..' && !fromStore.startsWith(`..${sep}`) && !isAbsolute(fromStore))) throw new PluginPackageError('invalid', 'The package is already in the plugin directory');
