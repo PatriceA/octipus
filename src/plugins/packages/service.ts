@@ -59,6 +59,7 @@ import { getVault } from '@/security/vault';
 import type { MCPServer } from '@/shared/mcp-server';
 import {
   PLUGIN_MANIFEST_FILE,
+  type PluginHostScope,
   type PluginInProcessStatus,
   type PluginManifest,
   type PluginNetworkStatus,
@@ -72,6 +73,7 @@ import { CONTENT_MISMATCH_PROBLEM, hashPackageContent, isContentHash, verifyPack
 import { ManifestError, parseManifest, settingEnvName } from './manifest';
 import { checkSignatureOnDisk, readSignatureFile, SIGNATURE_FILE, type SignatureCheck, SignatureError, type TrustedPublisher } from './signature';
 import { checkPackageTree, PackageTreeError } from './tree';
+import { HOST_API_URL, hostApiTarget, isHostScope, issueHostCallMeta, revokePluginTokens } from './host-api';
 
 export class PluginPackageError extends Error {
   constructor(
@@ -446,6 +448,7 @@ export async function installFromDirectory(
   }
   if (swap.backup) await rm(swap.backup, { recursive: true, force: true }).catch((err: unknown) => coreLogger.warn({ err, dir: swap.backup }, 'Could not remove the previous package files'));
   forgetMismatches(manifest.name);
+  revokePluginTokens(manifest.name);
   await audit(actorUserId, previous ? 'upgraded' : 'installed', manifest.name, {
     version: manifest.version, from: previous?.version ?? null, contentHash, signedBy: signature.signedBy, keyId: signature.keyId,
     runtime: pluginRuntime(manifest),
@@ -511,6 +514,7 @@ export async function uninstall(name: string, actorUserId: string): Promise<void
   await rm(packageDir(name), { recursive: true, force: true });
   await rm(pluginDataDir(name), { recursive: true, force: true });
   forgetMismatches(name);
+  revokePluginTokens(name);
   const entries = (row.manifest.secrets ?? []).length > 0 ? await getVault().list('system') : [];
   for (const s of row.manifest.secrets ?? []) await deleteSecret(name, s.key, entries);
   await audit(actorUserId, 'uninstalled', name, { version: row.version });
@@ -543,7 +547,7 @@ export async function uninstall(name: string, actorUserId: string): Promise<void
  */
 export async function configure(
   name: string,
-  change: { settings?: unknown; enabled?: boolean; approveContent?: string | boolean; approveInProcess?: string | boolean },
+  change: { settings?: unknown; enabled?: boolean; approveContent?: string | boolean; approveInProcess?: string | boolean; approveHostScopes?: unknown },
   actorUserId: string,
 ): Promise<PluginPackageRow> {
   const row = await requireRow(name);
@@ -559,6 +563,9 @@ export async function configure(
         'approveInProcess takes the content hash you reviewed ("sha256:<64 hex>", the approved contentHash), not true: running in the server process is approved for those bytes only');
     }
   }
+  const approvedHostScopes = change.approveHostScopes !== undefined
+    ? checkHostScopeApproval(row.manifest, change.approveHostScopes)
+    : row.approvedHostScopes;
   let settings = row.settings;
   if (change.settings !== undefined) {
     const values = change.settings;
@@ -575,6 +582,15 @@ export async function configure(
     const missing = await missingConfiguration({ ...row, settings });
     if (missing.length > 0) {
       throw new PluginPackageError('incomplete', `Set ${missing.join(', ')} before enabling ${name}`, missing.map((m) => `${m}: required`));
+    }
+  }
+  if (enabled && !row.enabled) {
+    // Enabling approves what the package may do as a user: every declared host scope must be approved.
+    const unapproved = unapprovedHostScopes(row.manifest, approvedHostScopes);
+    if (unapproved.length > 0) {
+      throw new PluginPackageError('incomplete',
+        `Approve the host API scopes ${unapproved.join(', ')} before enabling ${name} (approveHostScopes)`,
+        unapproved.map((s) => `host: ${s} not approved`));
     }
   }
   let contentHash = row.contentHash;
@@ -665,7 +681,7 @@ export async function configure(
       `${name} runs in the server process, with the server's full authority: approve that for its content first (approveInProcess: "${contentHash ?? '<its content hash>'}"), then enable it`);
   }
   const [updated] = await getDb().update(pluginPackages)
-    .set({ settings, enabled, contentHash, signatureHash, signedBy, ...inProcessApproval, updatedAt: new Date() })
+    .set({ settings, enabled, contentHash, signatureHash, signedBy, approvedHostScopes, ...inProcessApproval, updatedAt: new Date() })
     .where(eq(pluginPackages.name, name)).returning();
   if (approving) {
     forgetMismatches(name);
@@ -677,10 +693,41 @@ export async function configure(
   if (approvingInProcess) {
     await audit(actorUserId, 'in_process_approved', name, { version: row.version, hash: approvingInProcess, signedBy, previous: row.inProcessApprovedHash });
   }
+  if (change.approveHostScopes !== undefined) await audit(actorUserId, 'host_scopes_approved', name, { version: row.version, scopes: approvedHostScopes, previous: row.approvedHostScopes });
   if (change.settings !== undefined) await audit(actorUserId, 'settings_changed', name, { keys: Object.keys(change.settings as object) });
   if (change.enabled !== undefined && change.enabled !== row.enabled) await audit(actorUserId, enabled ? 'enabled' : 'disabled', name, { version: row.version });
+  // A token of a call in flight dies with the package's enabled state or a narrower approval.
+  if (!enabled || change.approveHostScopes !== undefined) revokePluginTokens(name);
   await syncPluginServers();
   return updated;
+}
+
+/**
+ * The host API scopes an admin approves (`approveHostScopes`): a list of
+ * scopes the manifest declares, each at most once. A scope it does not
+ * declare is refused: approval is for what this version asks.
+ */
+function checkHostScopeApproval(manifest: PluginManifest, value: unknown): PluginHostScope[] {
+  if (!Array.isArray(value) || !value.every(isHostScope)) {
+    throw new PluginPackageError('invalid', 'approveHostScopes is a list of host API scopes, such as ["notes:read"]');
+  }
+  const declared = new Set(manifest.host ?? []);
+  const undeclared = value.filter((s) => !declared.has(s));
+  if (undeclared.length > 0) {
+    throw new PluginPackageError('invalid', `${manifest.name} does not declare the host API scopes ${undeclared.join(', ')}`);
+  }
+  return [...new Set(value)];
+}
+
+/** The scopes the manifest declares that are not approved. */
+export function unapprovedHostScopes(manifest: PluginManifest, approved: readonly string[] | null): PluginHostScope[] {
+  const ok = new Set(approved ?? []);
+  return (manifest.host ?? []).filter((s) => !ok.has(s));
+}
+
+/** Approve a package's host API scopes (`configure` with `approveHostScopes` alone). */
+export function approveHostScopes(name: string, scopes: PluginHostScope[], actorUserId: string): Promise<PluginPackageRow> {
+  return configure(name, { approveHostScopes: scopes }, actorUserId);
 }
 
 /** Accept a package's files, if they still hash to the reviewed `hash` (`configure` with `approveContent` alone). */
@@ -825,6 +872,7 @@ async function viewOf(row: PluginPackageRow, secrets: string[]): Promise<PluginP
     runtime,
     inProcess,
     contributions: await contributionsView(row),
+    approvedHostScopes: row.approvedHostScopes ?? null,
     installedBy: row.installedBy,
     installedAt: row.installedAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -875,7 +923,8 @@ export function networkStatus(m: PluginManifest, runner = activeSandboxRunner({ 
   if (pluginRuntime(m) === 'in-process') {
     return { state: 'not_enforced', detail: 'Runs in the server process: no sandbox, so it has the server\'s network, files and data.' };
   }
-  const hosts = m.network ?? [];
+  // The host API counts as a host here: it is reached through the egress proxy (docs/PLUGIN-PACKAGES.md#host-api).
+  const hosts = [...(m.network ?? []), ...((m.host ?? []).length > 0 ? ['the Octipus host API'] : [])];
   if (!runner && mode === 'required') {
     return { state: 'refused', detail: `Not started: security.shellSandbox is required and no sandbox can wrap the server here (${NO_RUNNER}).` };
   }
@@ -902,6 +951,12 @@ export async function packageView(name: string): Promise<PluginPackageView> {
   return viewOf(row, await secretsSet(row));
 }
 
+/** The host API scopes a package is granted: declared and approved. */
+export function grantedHostScopes(row: Pick<PluginPackageRow, 'manifest' | 'approvedHostScopes'>): PluginHostScope[] {
+  const approved = new Set(row.approvedHostScopes ?? []);
+  return (row.manifest.host ?? []).filter((s) => approved.has(s));
+}
+
 /** The MCP server an installed package runs as. */
 export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
   const m = row.manifest;
@@ -920,6 +975,14 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
   const dataDir = pluginDataDir(row.name);
   // Set last, so no secret can claim the name.
   env.OCTIPUS_PLUGIN_DATA_DIR = dataDir;
+  // The host API (docs/PLUGIN-PACKAGES.md#host-api): only the declared scopes an
+  // admin approved; reached through the egress proxy, whose only route to it is this.
+  const hostScopes = grantedHostScopes(row);
+  if (hostScopes.length > 0) env.OCTIPUS_HOST_URL = HOST_API_URL;
+  const hosts = [...(m.network ?? [])];
+  const egress = hosts.length > 0 || hostScopes.length > 0
+    ? { egress: { label: row.name, hosts, runDir: pluginRunDir(), ...(hostScopes.length > 0 ? { hostApi: hostApiTarget() } : {}) } }
+    : {};
   return {
     id: `${PLUGIN_SERVER_PREFIX}${row.name}`,
     name: m.title,
@@ -933,8 +996,8 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
     // Hosts go through the egress proxy; direct network stays off wherever the
     // sandbox can turn it off. allowNetwork is kept for a sandbox without egress support.
     sandbox: {
-      root: dir, readOnlyRoot: true, writable: [dataDir], allowNetwork: (m.network ?? []).length > 0,
-      ...((m.network ?? []).length > 0 ? { egress: { label: row.name, hosts: [...(m.network ?? [])], runDir: pluginRunDir() } } : {}),
+      root: dir, readOnlyRoot: true, writable: [dataDir], allowNetwork: hosts.length > 0,
+      ...egress,
     },
     requestTimeoutMs: m.server.requestTimeoutMs,
     isEnabled: row.enabled,
@@ -945,6 +1008,7 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
       package: row.name, version: row.version, tools: Object.fromEntries(Object.entries(tools).map(([t, d]) => [t, d.effect])),
       // Undeclared: a package that reaches the network leaves the house (1); one that cannot keeps everything in (4).
       maxProtection: m.maxProtection ?? ((m.network ?? []).length > 0 ? 1 : 4),
+      ...(hostScopes.length > 0 ? { hostScopes } : {}),
     },
   };
 }
@@ -1073,6 +1137,7 @@ export async function syncPluginServers(): Promise<void> {
   const rows = await getDb().select().from(pluginPackages);
   const bridge = getMCPBridge();
   bridge.setPluginStartGuard(checkBeforeStart);
+  bridge.setPluginCallMeta(issueHostCallMeta);
   const servers: MCPServer[] = [];
   const problems = new Map<string, string>();
   for (const row of rows) {

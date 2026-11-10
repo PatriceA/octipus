@@ -1,5 +1,5 @@
 import { boolean, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-import type { PluginManifest } from '@/shared/plugin-package';
+import type { PluginHostScope, PluginManifest } from '@/shared/plugin-package';
 import { users } from './users';
 
 /**
@@ -38,6 +38,12 @@ export const pluginPackages = pgTable('plugin_packages', {
   inProcessApprovedHash: text('in_process_approved_hash'),
   inProcessApprovedBy: uuid('in_process_approved_by').references(() => users.id, { onDelete: 'set null' }),
   inProcessApprovedAt: timestamp('in_process_approved_at', { withTimezone: true }),
+  /**
+   * The host API scopes an admin approved (docs/PLUGIN-PACKAGES.md#host-api);
+   * null: none yet. Only scopes the manifest declares AND this lists are
+   * granted; enabling asks for any declared scope missing here.
+   */
+  approvedHostScopes: jsonb('approved_host_scopes').$type<PluginHostScope[]>(),
   settings: jsonb('settings').$type<Record<string, string | number | boolean>>().default({}).notNull(),
   installedBy: uuid('installed_by').references(() => users.id, { onDelete: 'set null' }),
   installedAt: timestamp('installed_at', { withTimezone: true }).defaultNow().notNull(),

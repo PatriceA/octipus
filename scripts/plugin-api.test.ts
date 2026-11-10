@@ -36,7 +36,7 @@ function view(over: Partial<PluginPackageView> = {}): PluginPackageView {
     signature: { status: 'invalid', keyId: null, publisher: null, detail: 'does not match' },
     runtime: 'package', inProcess: null,
     contributions: { commands: [], schedules: [], events: [], prompt: null, context: null, problems: [] },
-    installedBy: null, installedAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-01T00:00:00Z',
+    approvedHostScopes: null, installedBy: null, installedAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-01T00:00:00Z',
     ...over,
   };
 }
