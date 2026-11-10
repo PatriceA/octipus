@@ -88,11 +88,12 @@ export const pluginCallRoutes = new Elysia({ prefix: '/plugins' })
       return { error: 'No such plugin page', code: 'not_found' };
     }
     // Its own declared tools only; another package's tool is not addressable from here.
-    if (!Object.hasOwn(row.manifest.tools, params.tool)) {
+    const decl = Object.hasOwn(row.manifest.tools ?? {}, params.tool) ? row.manifest.tools?.[params.tool] : undefined;
+    if (!decl) {
       set.status = 404;
       return { error: `${params.name} has no tool ${params.tool}`, code: 'unknown_tool' };
     }
-    const effect = row.manifest.tools[params.tool].effect;
+    const effect = decl.effect;
     const args = (body?.args ?? {}) as Record<string, unknown>;
     if (JSON.stringify(args).length > MAX_ARGS_CHARS) {
       set.status = 413;
