@@ -30,7 +30,7 @@ const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
 process.env.JWT_SECRET ??= `test-jwt-${rand(24)}`;
 process.env.SESSION_SECRET ??= `test-session-${rand(24)}`;
-process.env.LOG_LEVEL ??= 'silent';
+process.env.LOG_LEVEL = 'fatal';
 process.env.WORKSPACE_PATH ??= mkdtempSync(join(tmpdir(), 'octipus-bundled-ws-'));
 
 const ADMIN = { id: '11111111-1111-4111-8111-111111111111', username: 'admin', isAdmin: true };
@@ -95,8 +95,12 @@ const ARTICLE_URL = 'https://news.example.com/plan';
 let server: RunningServer;
 let app: import('@/api/http').App;
 
+/** The user's own agent, in their conversation: the kind of agent call that gets a host token. */
 function agentContext(userId = ADMIN.id): AgentContext {
-  return { id: `agent-${rand(4)}`, userId, sessionId: '', role: 'general', status: 'running', attended: false, workspaceId: null, space: null } as unknown as AgentContext;
+  return {
+    id: `agent-${rand(4)}`, userId, sessionId: `sess-${rand(4)}`, role: 'general', status: 'running', attended: true,
+    workspaceId: null, space: null, trigger: 'user', metadata: {},
+  } as unknown as AgentContext;
 }
 
 /** A tool result: its JSON (or text) and whether it is an error. */
@@ -123,9 +127,9 @@ async function callApproved(tool: string, args: Record<string, unknown>, userId 
     () => getMCPBridge().callTool(SERVER, tool, args, context, authArgs)));
 }
 
-async function route(method: string, path: string, body?: unknown): Promise<{ status: number; body: any }> {
+async function route(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: any }> {
   const res = await app.handle(new Request(`http://localhost${path}`, {
-    method, headers: body === undefined ? {} : { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
+    method, headers: { ...headers, ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body),
   }));
   const text = await res.text();
   let value: unknown = text;
@@ -286,8 +290,9 @@ describe('the reader page', () => {
     fixture.user = MEMBER;
     const pages = await route('GET', '/api/plugin-ui');
     expect(pages.body.pages).toContainEqual({ plugin: NAME, pluginTitle: 'Reader', path: 'read', title: 'Reader', icon: 'newspaper', src: '/api/plugin-ui/reader/index.html' });
-    expect((await route('GET', '/api/plugin-ui/reader/app.js')).status).toBe(200);
-    expect((await route('GET', '/api/plugin-ui/reader/server.mjs')).status).toBe(404);
+    // Served as the frame's script (what a browser says it fetches), and nothing outside ui/.
+    expect((await route('GET', '/api/plugin-ui/reader/app.js', undefined, { 'sec-fetch-dest': 'script' })).status).toBe(200);
+    expect((await route('GET', '/api/plugin-ui/reader/server.mjs', undefined, { 'sec-fetch-dest': 'script' })).status).toBe(404);
 
     const read = await route('POST', `/api/plugins/${NAME}/call/read_url`, { args: { url: ARTICLE_URL, includeHtml: true } });
     expect(read.status).toBe(200);
