@@ -154,7 +154,7 @@ Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md).
 |---|---|
 | **Agents** | 3-level Swarm, 16 built-in roles, editable custom roles, and seeded or mounted skills |
 | **Models** | Ollama, OpenAI, Anthropic, Gemini, Grok, DeepSeek, Mistral, Z.AI (GLM), Moonshot (Kimi), OpenRouter, Voyage, custom OpenAI/Gemini-compat, LiteLLM, CLI (Claude Code / Codex / Antigravity / Vibe / GLM / Kimi) |
-| **Tools** | Filesystem, shell (local/SSH/Docker), git, browser (Playwright + extension), web search, Docker, knowledge base, scheduling, voice, M365, GitHub/GitLab, and external MCP bridges. The standalone MCP server exposes 85 tools across 24 groups, published as [`octipus-mcp-server`](https://www.npmjs.com/package/octipus-mcp-server). |
+| **Tools** | Filesystem, shell (local/SSH/Docker), git, browser (Playwright + extension), web search, Docker, knowledge base, scheduling, voice, M365, GitHub, and external MCP bridges. The standalone MCP server exposes 85 tools across 24 groups, published as [`octipus-mcp-server`](https://www.npmjs.com/package/octipus-mcp-server). |
 | **Channels** | Telegram, Slack, Teams, WhatsApp, web UI, TUI (chat shell + editor, built on [pi-tui](https://www.npmjs.com/package/@mariozechner/pi-tui)), voice (Twilio), MCP server |
 | **Knowledge** | Hybrid search (BM25 + vector), tiered content, auto-indexing, document ingest + OCR, authored knowledge graph (notes, `[[wikilinks]]`, Obsidian vault + Canvas) |
 | **Enrichment** | Deep Research (report with source references → Documents + knowledge base when available), To-Do list, Email triage, Hardware-aware onboarding |

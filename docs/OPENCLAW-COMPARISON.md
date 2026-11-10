@@ -97,7 +97,7 @@ multi-user platform; OpenClaw's is better for a personal assistant.
 | Tool area | OpenClaw | Octipus | Notes |
 |---|---|---|---|
 | Shell/exec (sandboxed) | Yes (Docker/SSH sandbox, exec approvals) | Yes (local/SSH/Docker, permission ALLOW/ASK/DENY) | |
-| Files, git | Yes | Yes | Octipus adds GitHub *and* GitLab tools, repo registry |
+| Files, git | Yes | Yes | Octipus adds a GitHub tool and a repo registry |
 | Browser automation | Yes (CDP control) | Yes (Playwright) | |
 | Browser extension (user's real browser) | Yes | Yes | |
 | Web search | Yes (8+ backends: brave, exa, tavily, perplexity, searxng…) | Yes (websearch group) | OpenClaw broader backend choice |

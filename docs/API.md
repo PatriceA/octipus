@@ -411,7 +411,7 @@ Shared workspaces ([SPACES.md](SPACES.md)). A caller who is not a member gets
 | GET | `/api/spaces/:id/file-leases` | member | Live file leases ("Ben is editing"): `{path, holderUserId, holderName, holderKind, expiresAt}` |
 | POST | `/api/spaces/:id/file-leases` | editor, owner | `{path, renew?}` take (or renew) the lease on a space file; 409 `lease_held` with `heldBy` when someone else has it (or a directory above it, or a file under it) |
 | DELETE | `/api/spaces/:id/file-leases?path=` | member | Release your lease |
-| GET | `/api/spaces/:id/connectors` | member | The space's connectors (GitHub, Atlassian, Linear): `{id, name, kind, connected, connectedBy, connectedAt}`; never a value |
+| GET | `/api/spaces/:id/connectors` | member | The space's connectors (GitHub, and any OAuth connector defined): `{id, name, kind, connected, connectedBy, connectedAt}`; never a value |
 | POST | `/api/spaces/:id/connectors/:connectorId` | owner | Connect: `{token}` for GitHub; an OAuth connector returns `{url}` for the popup, whose callback stores the tokens under the space |
 | DELETE | `/api/spaces/:id/connectors/:connectorId` | owner | Disconnect (the space's secrets of that connector are deactivated) |
 | GET | `/api/spaces/:id/rooms` | member | Rooms I can enter, with `unreadCount` and `muted` |
@@ -662,8 +662,12 @@ A connector is a remote MCP server the user authorises once, per user, over
 OAuth 2.1 with PKCE. Octipus registers itself as a public client dynamically
 against the server's own discovery document, so a connector is a definition
 file (id, name, MCP endpoint, discovery URL, scopes) and nothing else — there
-is no per-connector OAuth code. Built in today: **Atlassian** (Jira and
-Confluence) and **Linear**.
+is no per-connector OAuth code. None is built in today: the Atlassian (Jira
+and Confluence) and Linear connectors were removed, so `GET /api/connectors`
+returns an empty list. An id that names no connector (`atlassian`, `linear`
+on an older install) is ignored: it is not listed, its authorize, callback
+and disconnect answer `Unknown connector`, and tokens still stored under it
+are never read.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -678,16 +682,7 @@ and its endpoints are system-scoped under `connector_<id>_client_id` /
 `_auth_endpoint` / `_token_endpoint`.
 
 Every connected connector is reachable through the generic
-`connector_list_tools` / `connector_call_tool` pair. Atlassian additionally has
-named tools (`atlassian_sites`, `jira_search`, `jira_get_issue`,
-`jira_create_issue`, `jira_update_issue`, `jira_comment`,
-`jira_transition_issue`, `jira_list_projects`, `confluence_search`,
-`confluence_get_page`, `confluence_create_page`, `confluence_update_page`),
-held by the `pm` role. Those resolve the remote tool by capability rather than
-by a hard-coded name — an ordered list of candidate names and argument names,
-matched against the server's own `tools/list` at call time — so a vendor
-rename does not silently kill the tool group. When nothing matches, the error
-names the remote tools that do exist.
+`connector_list_tools` / `connector_call_tool` pair.
 
 ## Plugins
 

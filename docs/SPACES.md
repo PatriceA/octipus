@@ -1225,8 +1225,9 @@ member sees which are connected.
 
 - **GitHub**: a token an owner pastes (a fine-grained token limited to the
   team's repositories). The GitHub tool uses it in the space's sessions.
-- **Atlassian, Linear**: OAuth, each with its own connect, callback and
-  refresh flow storing the tokens under the space. The callback must come
+- **OAuth connectors** (any in `src/connectors/definitions.ts`; none ships
+  today, since Atlassian and Linear were removed): each with its own
+  connect, callback and refresh flow storing the tokens under the space. The callback must come
   from the browser that started the connect (an HttpOnly `SameSite=Lax`
   cookie whose hash the OAuth state keeps), so an authorization link handed
   to someone else cannot connect their account to the space; the same holds

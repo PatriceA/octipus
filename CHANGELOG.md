@@ -139,6 +139,26 @@ labels reflect blast radius, not contract guarantees.
 
 ### Removed
 
+- **The Atlassian (Jira/Confluence), Linear and GitLab integrations are gone,
+  with no plugin replacement.** Removed: the Atlassian and Linear connector
+  definitions and logos, the `atlassian` tool (`atlassian_sites`, `jira_*`,
+  `confluence_*`) and the capability table it resolved remote tools with, the
+  `gitlab` tool (glab CLI) and its card under Settings → Accounts & services,
+  the deprecated `*Atlassian*` OAuth helpers and vault-key constants, the
+  Jira and Linear choices in the onboarding tracker question (now GitHub
+  Issues, an MCP server for admins, or none), and `atlassian` from the `pm`
+  role, whose prompt now works from the task list, the knowledge base and
+  GitHub. GitHub is unchanged. The OAuth connector framework itself stays,
+  with no connector built in, so Settings → MCP → Connectors shows only
+  CocoIndex. Existing installs need no migration: a saved `connector:atlassian`
+  or `connector:linear` binding, stored connector tokens (personal or a
+  space's) and a saved `tools.tracker` answer of `jira` or `linear` are
+  ignored; `atlassian` and `gitlab` are dropped from stored role tool lists
+  when they are read (the seeder also drops them from unedited system rows),
+  so editing a role that still names them saves. Permission rules and vault
+  entries that name them stay until deleted on the permissions and secrets
+  pages.
+
 - **The `.octipus/` design notes are gone from the repository.** The 19 notes
   (swarm, multi-repo, UX, audits, archived plans) are removed and `.octipus/` is
   git-ignored: it is the Octipus runtime folder (project skills, attachments,

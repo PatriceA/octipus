@@ -13,9 +13,9 @@ It also opens on its own page at `/onboarding`, for setting up more later.
 
 | Use case | What it sets up |
 |---|---|
-| **Build software** | Coding CLIs as models (Claude Code, Codex, Gemini CLI), the folder with your repositories, a GitHub token, Jira or Linear, a coding agent for your tasks |
+| **Build software** | Coding CLIs as models (Claude Code, Codex, Gemini CLI), the folder with your repositories, a GitHub token, your issue tracker, a coding agent for your tasks |
 | **Run my company** | Your mailbox, the inbox watch, standing instructions, permissions for background agents, an agent for your ideas |
-| **Product management** | Jira or Linear, a product agent (role `pm`), calendar check-ins |
+| **Product management** | Your issue tracker, a product agent (role `pm`), calendar check-ins |
 | **Research and knowledge** | Document search (an embedding model), a research agent |
 
 **2. A few questions, one section at a time.** Three sections are asked of
@@ -27,7 +27,7 @@ everyone; the others come with a use case:
 | Areas of work | everyone | separate areas (personal workspaces), a shared space for a team, one login per company with its own mailbox |
 | Your chat | everyone | Telegram (bot token and link code), Slack, Teams or WhatsApp |
 | Building software | Build software | coding CLIs, coding lane, repositories folder, GitHub token, coding agent and how it works tasks |
-| Issue tracker | Build software, Product management | Jira (Atlassian), Linear, or another tool by its MCP address |
+| Issue tracker | Build software, Product management | GitHub Issues (through the GitHub tool, nothing to connect), or, for admins, another tool by its MCP address |
 | Your company | Run my company | name and what it does, inbox watch, what is urgent, draft or send replies, check interval, idea agent |
 | Product work | Product management | product agent, calendar check-ins |
 | Mailbox and calendar | Run my company, Product management | Google or Microsoft |

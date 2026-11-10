@@ -1745,8 +1745,8 @@ refusal.
   route them into a shell or HTTP call; `isVaultAuthenticated` never exempts
   them.
 - Each space connector has its own connect, callback and refresh flow storing
-  under the space (`oauth.ts:728-760`). *As built:* Atlassian and Linear use
-  OAuth this way; GitHub takes a token an owner pastes (a fine-grained token
+  under the space (`oauth.ts:728-760`). *As built:* Atlassian and Linear used
+  OAuth this way (both since removed); GitHub takes a token an owner pastes (a fine-grained token
   limited to the team's repositories), stored the same way.
 - Space sessions never act with the host's GitHub identity. The shell already
   strips `GH_TOKEN`/`GITHUB_TOKEN` (`src/security/child-env.ts:56-66`); the

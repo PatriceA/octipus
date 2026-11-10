@@ -41,7 +41,8 @@ are not an instruction to expand scope during this cycle.
   read-only SQL against a registered database or a workspace CSV;
   `export_document` writes a deliverable out as .docx or .xlsx; Jira and
   Confluence are named tools the `pm` role holds and Linear is a second
-  connector; `channel_history` / `channel_search` read Slack and Teams back;
+  connector (all three, and the GitLab tool, were removed later; see the
+  CHANGELOG); `channel_history` / `channel_search` read Slack and Teams back;
   meetings become notes linked to the people who attended, and knowledge
   chunks carry a `last_verified_at` that retrieval down-ranks by. Phase 6 the
   same day, and it started by measuring: `recalls_memory` turned out to have
