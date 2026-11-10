@@ -28,6 +28,13 @@ export function registerCommand(handler: CommandHandler): void {
   commands.set(handler.name.toLowerCase(), handler);
 }
 
+/** Remove `name`, only while it is still `handler` (a later registration of the name is kept). */
+export function unregisterCommand(name: string, handler: CommandHandler): boolean {
+  const key = name.toLowerCase();
+  if (commands.get(key) !== handler) return false;
+  return commands.delete(key);
+}
+
 export function getCommand(name: string): CommandHandler | undefined {
   return commands.get(name.toLowerCase());
 }

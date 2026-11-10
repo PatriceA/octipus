@@ -174,6 +174,8 @@ export interface PluginPackageView {
    * `changed` (not the signature file approved with the content).
    */
   signature: PluginSignatureStatus | null;
+  /** What it adds besides tools (docs/PLUGIN-PACKAGES.md#contributions). */
+  contributions: PluginContributionsView;
   installedBy: string | null;
   installedAt: string;
   updatedAt: string;

@@ -67,6 +67,7 @@ import {
   pluginRuntime,
 } from '@/shared/plugin-package';
 import { coreLogger } from '@/utils/logger';
+import { contributionInstallProblems, contributionsView, syncContributions } from './contributions';
 import { CONTENT_MISMATCH_PROBLEM, hashPackageContent, isContentHash, verifyPackageContent } from './integrity';
 import { ManifestError, parseManifest, settingEnvName } from './manifest';
 import { checkSignatureOnDisk, readSignatureFile, SIGNATURE_FILE, type SignatureCheck, SignatureError, type TrustedPublisher } from './signature';
@@ -353,6 +354,9 @@ export async function installFromDirectory(
     if (manifest.entry !== undefined) await checkEntry(staging, manifest.entry);
     contentHash = await hashPackageContent(staging, manifest);
     signature = await acceptSignature(staging, manifest.name, contentHash, opts.requireTrustedSignature === true);
+    // Its contributions must fit beside what is installed (a command name taken), and its prompt file be readable.
+    const fit = await contributionInstallProblems(manifest, staging, await db.select({ name: pluginPackages.name, manifest: pluginPackages.manifest }).from(pluginPackages));
+    if (fit.length > 0) throw new PluginPackageError('conflict', `${manifest.name}: ${fit.join('; ')}`, fit);
   } catch (err) {
     await rm(staging, { recursive: true, force: true }).catch(() => {});
     throw err;
@@ -820,6 +824,7 @@ async function viewOf(row: PluginPackageRow, secrets: string[]): Promise<PluginP
     signature,
     runtime,
     inProcess,
+    contributions: await contributionsView(row),
     installedBy: row.installedBy,
     installedAt: row.installedAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -1085,6 +1090,8 @@ export async function syncPluginServers(): Promise<void> {
   await bridge.setPluginServers(servers, problems);
   const { syncInProcessPlugins } = await import('./in-process');
   await syncInProcessPlugins();
+  // Commands, schedules, events, prompt and context follow (./contributions).
+  await syncContributions(rows);
 }
 
 async function audit(actorUserId: string, op: string, name: string, details: Record<string, unknown>): Promise<void> {
