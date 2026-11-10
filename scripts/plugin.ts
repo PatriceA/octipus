@@ -24,7 +24,7 @@
  *   octi plugin install-bundled <name> [--upgrade]  Install one (disabled).
  *   octi plugin marketplace [query] [--category <c>]  What the marketplace and the registries offer.
  *   octi plugin updates          Installed packages with a newer version from the same source.
- *   octi plugin install <name> [--version v] [--registry r] [--upgrade] …  Install from the marketplace (disabled).
+ *   octi plugin install|upgrade <name> [--version v] [--registry r] [--accept all|ids] [--enable] …  Install from the marketplace, with consent per item.
  *   octi plugin sign-keys <keys.json> --key <root.key>  Sign a marketplace keys file with a root key.
  *
  * Delegated from bin/octi. The offline subcommands (validate, keygen, sign,
@@ -163,11 +163,17 @@ Usage:
                                 offer, what each asks for, installed and update state.
   octi plugin updates           Installed packages with a newer version from the same
                                 source, with what changes in what they ask for.
-  octi plugin install <name> [--version <v>] [--registry <name>] [--upgrade]
+  octi plugin install <name> [--version <v>] [--registry <name>]
+                         [--accept all|<id,id,…>] [--enable]
                          [--allow-source-change] [--allow-signer-change]
                          [--allow-downgrade] [--allow-incompatible]
-                                Install from the marketplace (or a registry) by name,
-                                the newest compatible version; lands disabled.
+  octi plugin upgrade <name> [the same options]
+                                Install (or upgrade) from the marketplace or a registry
+                                by name, the newest compatible version. Prints what it
+                                declares; each item not unchanged from the installed
+                                version is agreed to, y/n at a terminal or with
+                                --accept (refused otherwise). Lands disabled unless
+                                --enable. --allow-* agree to that change item.
   octi plugin sign-keys <keys.json> --key <root.key> [--passphrase-file <path|->] [--json]
                                 Sign the marketplace's keys file with a ROOT key
                                 (keys.json.sig). Offline.
@@ -176,7 +182,7 @@ validate, keygen, sign, sign-index, hash, pack, permissions, verify and verify-i
 work offline: they need no running server. With --json they print one JSON
 document on stdout and every diagnostic on stderr; every subcommand exits non-zero on error.
 
-list, approve, approve-in-process, approve-contributions, approve-cli-tools, set, secret, uninstall, bundled, install-bundled, marketplace, updates and install call the running backend (http://localhost:$API_PORT, 3005 by
+list, approve, approve-in-process, approve-contributions, approve-cli-tools, set, secret, uninstall, bundled, install-bundled, marketplace, updates, install and upgrade call the running backend (http://localhost:$API_PORT, 3005 by
 default) with the admin API token in OCTIPUS_API_TOKEN (Settings → API Tokens).
 `;
 
@@ -402,7 +408,8 @@ async function main(): Promise<void> {
     case 'updates':
       process.exit(await updatesCommand(apiIo()));
       break;
-    case 'install': {
+    case 'install':
+    case 'upgrade': {
       let parsed: { values: Record<string, string | boolean | undefined>; positionals: string[] };
       try {
         parsed = parseArgs({
@@ -411,6 +418,7 @@ async function main(): Promise<void> {
             version: { type: 'string' }, registry: { type: 'string' }, upgrade: { type: 'boolean' },
             'allow-source-change': { type: 'boolean' }, 'allow-signer-change': { type: 'boolean' },
             'allow-downgrade': { type: 'boolean' }, 'allow-incompatible': { type: 'boolean' },
+            accept: { type: 'string' }, enable: { type: 'boolean' },
           },
         });
       } catch (err) {
@@ -419,7 +427,8 @@ async function main(): Promise<void> {
       if (parsed.positionals.length !== 1) usage(sub, 'expected <name> [--version <v>] [--registry <name>] [--upgrade]');
       const v = parsed.values;
       process.exit(await installCommand(apiIo(), parsed.positionals[0], {
-        version: v.version as string | undefined, registry: v.registry as string | undefined, upgrade: v.upgrade === true,
+        version: v.version as string | undefined, registry: v.registry as string | undefined, upgrade: sub === 'upgrade' || v.upgrade === true,
+        accept: v.accept as string | undefined, enable: v.enable === true,
         allowSourceChange: v['allow-source-change'] === true, allowSignerChange: v['allow-signer-change'] === true,
         allowDowngrade: v['allow-downgrade'] === true, allowIncompatible: v['allow-incompatible'] === true,
       }));

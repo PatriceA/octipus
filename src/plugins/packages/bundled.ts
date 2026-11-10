@@ -75,7 +75,7 @@ export function isBundledName(name: string): boolean {
  * files are the bundle's (same content hash). Anything else holding the name
  * is another package that took it.
  */
-async function installedFromBundle(row: Pick<PluginPackageRow, 'name' | 'version' | 'contentHash'>, dir: string): Promise<boolean> {
+export async function installedFromBundle(row: Pick<PluginPackageRow, 'name' | 'version' | 'contentHash'>, dir: string): Promise<boolean> {
   const [last] = await auditRepository.findPluginInstalls([row.name]);
   if ((last?.details as { source?: unknown } | undefined)?.source === `bundled:${row.name}`) return true;
   if (!row.contentHash) return false;

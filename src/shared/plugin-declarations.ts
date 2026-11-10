@@ -25,6 +25,8 @@ import {
   MODEL_CLI_TOOLS_WARNING,
   PLUGIN_MODEL_CLI_TOOLS_APPROVAL,
   type PluginManifest,
+  type PluginOrigin,
+  type PluginPermissionDiff,
   type PluginPermissionsSummary,
 } from './plugin-package';
 import { HOST_SCOPE_WORDS } from './plugin-permissions';
@@ -160,4 +162,86 @@ export function declarationItems(p: PluginPermissionsSummary, manifest?: Pick<Pl
   }
   items.push({ id: 'protection', kind: 'protection', label: `Sees data up to protection level ${p.maxProtection}`, detail: `maxProtection ${p.maxProtection}` });
   return items;
+}
+
+// ── Install consent (docs/PLUGIN-PACKAGES.md#installing-and-managing) ──────
+
+/** A declaration on the consent screen: whether the installed version already had it, agreed (`carried`). */
+export interface PluginConsentItem extends PluginDeclarationItem {
+  /** Unchanged from the installed version, whose consent covered it: shown ticked, not asked again. */
+  carried: boolean;
+  /** `new`: the installed version did not declare it (or nothing is installed); `changed`: it did, otherwise. */
+  status: 'new' | 'changed' | 'unchanged';
+}
+
+/** `POST /api/plugin-packages/preview`: a package downloaded, verified and staged, not installed. */
+export interface PluginInstallPreview {
+  previewId: string;
+  name: string;
+  version: string;
+  title: string;
+  contentHash: string;
+  signedBy: string | null;
+  origin: PluginOrigin;
+  declarations: PluginConsentItem[];
+  /** Notes for the whole package (a signature caveat, deprecation); never a refusal. */
+  guidance: PluginGuidanceWarning[];
+  /** For an upgrade: the installed version's permissions against these. */
+  diff: PluginPermissionDiff | null;
+  /** The installed version an upgrade replaces, or null. */
+  upgradeFrom: string | null;
+  expiresAt: string;
+}
+
+/** `GET /api/plugin-packages/:name/consent`: the declarations of an installed package's content, to agree to before enabling. */
+export interface PluginConsentView {
+  name: string;
+  version: string;
+  title: string;
+  contentHash: string;
+  signedBy: string | null;
+  origin: PluginOrigin | null;
+  enabled: boolean;
+  declarations: PluginConsentItem[];
+  guidance: PluginGuidanceWarning[];
+}
+
+/** What an install or consent with the admin's agreement answers. */
+export interface PluginConsentResult {
+  name: string;
+  version: string;
+  contentHash: string;
+  enabled: boolean;
+  /** Why it was not enabled although asked (a required setting or secret missing), or null. */
+  enableProblem: string | null;
+  warnings: string[];
+}
+
+/** The ids the admin must tick: every item not carried over. */
+export function requiredConsentIds(items: readonly PluginConsentItem[]): string[] {
+  return items.filter((i) => !i.carried).map((i) => i.id);
+}
+
+/** Whether an item's guidance is a warning (weigh it) or information. */
+export function guidanceTone(item: PluginDeclarationItem): 'warning' | 'info' {
+  if (item.kind === 'in-process' || item.kind === 'model-cli-tools' || item.kind === 'change' || (item.kind === 'runtime' && item.detail.includes('in-process'))) return 'warning';
+  if (item.kind === 'tool' && item.id && item.label.endsWith('(external)')) return 'warning';
+  if (item.guidance?.includes('send what it reads anywhere')) return 'warning';
+  return 'info';
+}
+
+/**
+ * The consent items of `after` against the installed version's `before`
+ * items: equal items (same id, label, detail and guidance) are `unchanged`,
+ * and carried when `covered(id)` says the installed version's consent
+ * covered them. Without `before` every item is new.
+ */
+export function consentItems(after: readonly PluginDeclarationItem[], before: readonly PluginDeclarationItem[] | null, covered: (id: string) => boolean = () => false): PluginConsentItem[] {
+  const was = new Map((before ?? []).map((i) => [i.id, i]));
+  return after.map((item) => {
+    const old = was.get(item.id);
+    const same = old !== undefined && old.label === item.label && old.detail === item.detail && old.kind === item.kind && (old.guidance ?? '') === (item.guidance ?? '');
+    const status = old === undefined ? 'new' : same ? 'unchanged' : 'changed';
+    return { ...item, status, carried: same && item.kind !== 'change' && covered(item.id) };
+  });
 }

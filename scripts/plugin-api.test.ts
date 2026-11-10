@@ -593,14 +593,61 @@ describe('octi plugin marketplace, updates and install', () => {
     expect(h.out.join('')).toContain('+ added host API scope notes:write');
   });
 
-  test('install: by name from the marketplace, with the consents asked for; a source change says how to consent', async () => {
-    const ok = harness({ respond: (method) => (method === 'POST' ? [200, { name: 'weekly', version: '1.1.0', contentHash: 'sha256:x', signedBy: 'Octipus', warnings: [], guidance: [{ code: 'review_before_enabling', message: 'Installed disabled' }] }] : undefined) });
-    expect(await installCommand(ok.io, 'weekly', { upgrade: true, allowSourceChange: true })).toBe(0);
-    expect(ok.requests[0]).toMatchObject({ method: 'POST', body: { registry: 'marketplace', name: 'weekly', upgrade: true, allowSourceChange: true } });
-    expect(ok.out.join('')).toContain('Installed weekly 1.1.0 (disabled), signed by Octipus');
-    const refused = harness({ respond: () => [409, { error: 'weekly came from a directory install', sourceChange: { from: 'direct', to: 'marketplace' } }] });
-    expect(await installCommand(refused.io, 'weekly', { upgrade: true })).toBe(1);
-    expect(refused.err.join('')).toContain('--allow-source-change');
+  const PREVIEW = {
+    previewId: '33333333-3333-4333-8333-333333333333', name: 'weekly', version: '1.1.0', title: 'Weekly‮ review', contentHash: `sha256:${'c'.repeat(64)}`,
+    signedBy: 'Octipus', origin: { source: 'marketplace', registry: 'Octipus' }, guidance: [{ code: 'g', message: 'Mind\u0007 this' }],
+    diff: { widened: true, changes: [{ kind: 'host', change: 'added', text: 'host API scope notes:write', widens: true }] }, upgradeFrom: '1.0.0', expiresAt: '2026-11-10T10:00:00Z',
+    declarations: [
+      { id: 'runtime', kind: 'runtime', label: 'Runs as a separate, sandboxed program', detail: 'runtime: package', carried: true, status: 'unchanged' },
+      { id: 'host:notes:write', kind: 'host', label: 'Writes notes', detail: 'notes:write', carried: false, status: 'new' },
+      { id: 'schedule:nightly', kind: 'schedule', label: 'Runs on a schedule (nightly)', detail: '15 2 * * * UTC → sync', carried: false, status: 'changed', guidance: 'Runs unattended' },
+    ],
+  };
+  const installed = { name: 'weekly', version: '1.1.0', contentHash: PREVIEW.contentHash, enabled: false, enableProblem: null, warnings: [] };
+  const consentHarness = (interactive: boolean, answer = 'y') => harness({
+    interactive, answer,
+    respond: (method, body) => (method === 'POST' && (body as { previewId?: string }).previewId ? [200, installed] : method === 'POST' ? [200, PREVIEW] : undefined),
+  });
+
+  test('install: previews, prints every declaration (server text cleaned), and installs with --accept all, bound to the content hash', async () => {
+    const h = consentHarness(false);
+    expect(await installCommand(h.io, 'weekly', { accept: 'all' })).toBe(0);
+    expect(h.requests.map((r) => [r.method, r.url.replace('http://localhost:4999/api/plugin-packages', '')])).toEqual([['POST', '/preview'], ['POST', '/install']]);
+    expect(h.requests[0].body).toEqual({ registry: 'marketplace', name: 'weekly' });
+    expect(h.requests[1].body).toEqual({ previewId: PREVIEW.previewId, contentHash: PREVIEW.contentHash, accepted: ['host:notes:write', 'schedule:nightly'] });
+    const text = h.out.join('');
+    expect(text).toContain('[x] runtime  Runs as a separate, sandboxed program  (unchanged, agreed before)');
+    expect(text).toContain('[ ] host:notes:write  Writes notes  (NEW)');
+    expect(text).toContain('[ ] schedule:nightly  Runs on a schedule (nightly)  (CHANGED)');
+    expect(text).toContain('+ added host API scope notes:write');
+    expect(text).toContain('Weekly review');
+    expect(text).toContain('note: Mind this');
+    expect(text).not.toMatch(/[\u0007‮]/);
+    expect(text).toContain('Installed weekly 1.1.0 (disabled)');
+  });
+
+  test('install: --accept naming ids must cover every item; --allow-* agree to a change item', async () => {
+    const short = consentHarness(false);
+    expect(await installCommand(short.io, 'weekly', { accept: 'host:notes:write' })).toBe(2);
+    expect(short.err.join('')).toContain('does not agree to schedule:nightly');
+    expect(short.requests).toHaveLength(1);
+    const named = consentHarness(false);
+    expect(await installCommand(named.io, 'weekly', { accept: 'host:notes:write,schedule:nightly', allowSourceChange: true, enable: true })).toBe(0);
+    expect(named.requests[1].body).toMatchObject({ accepted: ['host:notes:write', 'schedule:nightly', 'change:source'], enable: true });
+  });
+
+  test('install: without a terminal and without --accept it refuses with the list; at a terminal it asks per item', async () => {
+    const batch = consentHarness(false);
+    expect(await installCommand(batch.io, 'weekly', { upgrade: true })).toBe(2);
+    expect(batch.err.join('')).toContain('--accept host:notes:write,schedule:nightly');
+    expect(batch.requests).toHaveLength(1);
+    const yes = consentHarness(true, 'y');
+    expect(await installCommand(yes.io, 'weekly')).toBe(0);
+    expect(yes.asked).toEqual(['Agree: Writes notes (host:notes:write)? [y/N] ', 'Agree: Runs on a schedule (nightly) (schedule:nightly)? [y/N] ']);
+    const no = consentHarness(true, 'n');
+    expect(await installCommand(no.io, 'weekly')).toBe(1);
+    expect(no.requests).toHaveLength(1);
+    expect(no.out.join('')).toContain('Not installed.');
     const bad = harness();
     expect(await installCommand(bad.io, '../etc')).toBe(2);
     expect(bad.requests).toEqual([]);

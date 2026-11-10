@@ -259,6 +259,95 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
     },
   )
 
+  // The install consent (docs/PLUGIN-PACKAGES.md#installing-and-managing): download, verify and stage a
+  // package without installing it, and answer with what it declares, item by item.
+  .post(
+    '/preview',
+    async ({ user, principal, body, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
+      const sources = [body.path, body.url, body.bundled, body.registry].filter((v) => v !== undefined).length;
+      if (sources !== 1) {
+        set.status = 400;
+        return { error: 'Give one of path, url (with sha256), bundled or registry (with name)' };
+      }
+      if (body.registry !== undefined && body.name === undefined) {
+        set.status = 400;
+        return { error: 'A registry preview names the package (name), and optionally its version' };
+      }
+      try {
+        const { previewInstall } = await import('@/plugins/packages/consent');
+        const source = body.registry !== undefined ? { registry: body.registry, name: body.name as string, version: body.version }
+          : body.url !== undefined ? { url: body.url, sha256: body.sha256, name: body.name, version: body.version }
+            : body.bundled !== undefined ? { bundled: body.bundled } : { path: body.path as string };
+        return await previewInstall(source, principal.userId);
+      } catch (err) {
+        return refused(err, set);
+      }
+    },
+    {
+      body: t.Object({
+        path: t.Optional(t.String({ minLength: 1, maxLength: 1000, pattern: '^(/|[A-Za-z]:\\\\)' })),
+        bundled: t.Optional(t.String({ minLength: 2, maxLength: 50, pattern: '^[a-z][a-z0-9-]+$' })),
+        registry: t.Optional(t.String({ minLength: 1, maxLength: 100 })),
+        url: t.Optional(t.String({ minLength: 9, maxLength: 2000, pattern: '^https://' })),
+        sha256: t.Optional(t.String({ maxLength: 71, pattern: '^(sha256:)?[0-9a-fA-F]{64}$' })),
+        name: t.Optional(t.String({ minLength: 1, maxLength: 50 })),
+        version: t.Optional(t.String({ minLength: 1, maxLength: 100 })),
+      }),
+      detail: { tags: ['plugin-packages'] },
+    },
+  )
+
+  // Install a preview: only with every item not carried agreed to, for the content hash shown.
+  .post(
+    '/install',
+    async ({ user, principal, body, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
+      try {
+        const { installPreview } = await import('@/plugins/packages/consent');
+        return await installPreview(body.previewId, { contentHash: body.contentHash, accepted: body.accepted, enable: body.enable === true }, principal.userId);
+      } catch (err) {
+        return refused(err, set);
+      }
+    },
+    {
+      body: t.Object({
+        previewId: t.String({ minLength: 36, maxLength: 36 }),
+        contentHash: t.String({ maxLength: 71, pattern: '^sha256:[0-9a-f]{64}$' }),
+        accepted: t.Array(t.String({ maxLength: 400 }), { maxItems: 1000 }),
+        enable: t.Optional(t.Boolean()),
+      }),
+      detail: { tags: ['plugin-packages'] },
+    },
+  )
+
+  // The signed-in user's own use of each plugin (any user): the usage of every enabled package, and their running runs.
+  .get(
+    '/my-usage',
+    async ({ principal, set, query }) => {
+      if (!isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Authentication required' };
+      }
+      const { getDb } = await import('@/db/postgres');
+      const { pluginPackages } = await import('@/db/schema/plugin-packages');
+      const { eq } = await import('drizzle-orm');
+      const { listRunningRuns } = await import('@/plugins/packages/host-agent');
+      const rows = await getDb().select({ name: pluginPackages.name, manifest: pluginPackages.manifest }).from(pluginPackages).where(eq(pluginPackages.enabled, true));
+      const out = [];
+      for (const row of rows.sort((a, b) => a.name.localeCompare(b.name))) {
+        const usage = await usageOf(row.name, query.days, principal.userId);
+        const runs = await listRunningRuns(row.name, principal.userId);
+        if (usage.modelCalls === 0 && usage.runs === 0 && runs.length === 0) continue;
+        out.push({ name: row.name, title: row.manifest.title, usage, runs });
+      }
+      return out;
+    },
+    { query: USAGE_QUERY, detail: { tags: ['plugin-packages'] } },
+  )
+
   // One plugin's tokens, spend, model calls and runs: every user's (admins).
   .get(
     '/:name/usage',
@@ -281,6 +370,60 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
       return usageOf(params.name, query.days, principal.userId);
     },
     { params: NAME_PARAM, query: USAGE_QUERY, detail: { tags: ['plugin-packages'] } },
+  )
+
+  // A plugin's running background runs: every user's (admins). Ids, role and title only.
+  .get(
+    '/:name/runs',
+    async ({ user, principal, set, params, query }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
+      if (query.status !== undefined && query.status !== 'running') {
+        set.status = 400;
+        return { error: 'Only status=running is listed' };
+      }
+      const { listRunningRuns } = await import('@/plugins/packages/host-agent');
+      return listRunningRuns(params.name);
+    },
+    { params: NAME_PARAM, query: t.Object({ status: t.Optional(t.String({ maxLength: 20 })) }), detail: { tags: ['plugin-packages'] } },
+  )
+
+  // The declarations of an installed package's content, to agree to before enabling it (an agent's install, say).
+  .get(
+    '/:name/consent',
+    async ({ user, principal, set, params }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
+      try {
+        const { consentView } = await import('@/plugins/packages/consent');
+        return await consentView(params.name);
+      } catch (err) {
+        return refused(err, set);
+      }
+    },
+    { params: NAME_PARAM, detail: { tags: ['plugin-packages'] } },
+  )
+  .post(
+    '/:name/consent',
+    async ({ user, principal, set, params, body }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
+      try {
+        const { consentToInstalled } = await import('@/plugins/packages/consent');
+        return await consentToInstalled(params.name, { contentHash: body.contentHash, accepted: body.accepted, enable: body.enable === true }, principal.userId);
+      } catch (err) {
+        return refused(err, set);
+      }
+    },
+    {
+      params: NAME_PARAM,
+      body: t.Object({
+        contentHash: t.String({ maxLength: 71, pattern: '^sha256:[0-9a-f]{64}$' }),
+        accepted: t.Array(t.String({ maxLength: 400 }), { maxItems: 1000 }),
+        enable: t.Optional(t.Boolean()),
+      }),
+      detail: { tags: ['plugin-packages'] },
+    },
   )
 
   // Stop a plugin's background run from the app: the user who started it, or an admin (audited).

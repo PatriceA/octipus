@@ -222,7 +222,7 @@ async function checkTree(dir: string): Promise<void> {
   }
 }
 
-async function findRow(name: string): Promise<PluginPackageRow | null> {
+export async function findRow(name: string): Promise<PluginPackageRow | null> {
   const [row] = await getDb().select().from(pluginPackages).where(eq(pluginPackages.name, name)).limit(1);
   return row ?? null;
 }
@@ -407,6 +407,173 @@ function describeSource(origin: PluginOrigin | null | undefined): string {
   return `a ${origin.source} install`;
 }
 
+export interface InstallOptions {
+  upgrade?: boolean;
+  requireTrustedSignature?: boolean;
+  source?: string;
+  /** The name (and version) the package must have: what a registry entry promised. */
+  expect?: { name?: string; version?: string };
+  /** An upgrade may be signed by another key than the installed version (audited). */
+  allowSignerChange?: boolean;
+  /** An upgrade may install an older version (audited). */
+  allowDowngrade?: boolean;
+  /** The agent that wrote the package (creator mode, ./authoring): recorded in the audit row, shown on the admin page. */
+  authoredBy?: AgentAuthoredDetails;
+  /** The runtime the package must declare (creator mode installs `package` only), checked on the staged copy. */
+  requireRuntime?: PluginRuntime;
+  /**
+   * What a registry listing promised beyond name and version
+   * (docs/PLUGIN-PACKAGES.md#marketplace): the content hash, and the
+   * permissions (`computePermissions`) the listing shows. Each is compared
+   * with the staged copy; any difference refuses the install (audited), so
+   * a listing can never understate what a package asks for.
+   */
+  expectListing?: { contentHash?: string | null; permissions?: PluginPermissionsSummary | null };
+  /** Where it comes from (provenance, recorded on the row and in the audit row). Default: a directory, or `agent` with `authoredBy`. */
+  origin?: PluginOrigin;
+  /** Only these publishers' keys count for its signature (an install from the marketplace: its keys alone). */
+  trustOnly?: readonly TrustedPublisher[];
+  /** An upgrade may come from another source than the installed version (another registry, the marketplace; audited). */
+  allowSourceChange?: boolean;
+  /**
+   * The admin's consent from an install preview (./consent.ts): checked on
+   * the staged copy before anything is claimed, and its approvals recorded
+   * in the same transaction as the row.
+   */
+  consent?: InstallConsent;
+}
+
+/** A package copied, read, checked, hashed and its signature accepted: not installed yet. */
+export interface StagedPackage {
+  dir: string;
+  manifest: PluginManifest;
+  contentHash: string;
+  signature: { signedBy: string | null; keyId: string | null; signatureHash: string | null; warnings: string[] };
+}
+
+/** What an install records besides the content when it comes with the admin's consent. */
+export interface ConsentApprovals {
+  hostScopes: PluginHostApproval[];
+  contributionsHash: string | null;
+  inProcessHash: string | null;
+}
+
+export interface InstallConsent {
+  /** The content hash the admin agreed to: the staged copy must hash to it. */
+  contentHash: string;
+  /** The installed version when the admin agreed (its content hash), or null when nothing was installed. */
+  baseline: { contentHash: string | null } | null;
+  /** Checks the staged copy (the declarations recomputed from it); throws to refuse. */
+  verify: (staged: StagedPackage) => Promise<void>;
+  /** The approvals to record, read from the staged copy. */
+  approvals: (staged: StagedPackage) => Promise<ConsentApprovals>;
+}
+
+/**
+ * Copy `sourceDir` into `area` and read, check, hash and verify only the
+ * copy: the manifest, the tree, the runtime, the expected name and version,
+ * a revocation, the listing's permissions and content hash, an in-process
+ * entry, the signature and how its contributions fit beside what is
+ * installed. The checked copy ends at `place(manifest)`. Nothing installed is
+ * touched; a refusal removes the copy.
+ */
+export async function stagePackage(
+  sourceDir: string, actorUserId: string, opts: InstallOptions, area: string, place: (manifest: PluginManifest) => string,
+): Promise<StagedPackage> {
+  const source = resolve(sourceDir);
+  const fromStore = relative(pluginsRoot(), source);
+  if (fromStore === '' || (fromStore !== '..' && !fromStore.startsWith(`..${sep}`) && !isAbsolute(fromStore))) throw new PluginPackageError('invalid', 'The package is already in the plugin directory');
+  // A first look at the source, so a linked or unbounded tree is refused
+  // before anything is copied. It is not what decides: the source may be
+  // written by someone else (an agent) while this runs, so everything below
+  // is read and checked on the staged copy only.
+  await checkTree(source);
+  await installHook?.(source);
+  await mkdir(area, { recursive: true });
+  let staging = join(area, `.installing-${process.pid}-${Date.now()}-${randomBytes(4).toString('hex')}`);
+  try {
+    await cp(source, staging, { recursive: true, errorOnExist: true, verbatimSymlinks: true });
+    await dropListingFile(staging);
+    const manifest = await readManifest(staging);
+    await checkTree(staging);
+    if (opts.requireRuntime !== undefined && pluginRuntime(manifest) !== opts.requireRuntime) {
+      throw new PluginPackageError('invalid', `${manifest.name} declares runtime "${pluginRuntime(manifest)}"; only runtime "${opts.requireRuntime}" is accepted here; not installed`);
+    }
+    if (opts.expect?.name !== undefined && opts.expect.name !== manifest.name) {
+      throw new PluginPackageError('invalid', `The package is "${manifest.name}", not the expected "${opts.expect.name}"; not installed`);
+    }
+    if (opts.expect?.version !== undefined && opts.expect.version !== manifest.version) {
+      throw new PluginPackageError('invalid', `${manifest.name} is version ${manifest.version}, not the expected ${opts.expect.version}; not installed`);
+    }
+    // A version the marketplace revoked installs from nowhere (docs/PLUGIN-PACKAGES.md#online-revocation).
+    const revoked = await packageRevocation(manifest.name, manifest.version);
+    if (revoked) {
+      await auditQuietly('install_refused_revoked', manifest.name, { version: manifest.version, reason: revoked.reason, actor: actorUserId });
+      throw new PluginPackageError('invalid', `${manifest.name} ${manifest.version} is revoked by the marketplace (${revoked.reason || 'no reason given'}); not installed`);
+    }
+    if (opts.expectListing?.permissions) {
+      const actual = await packagePermissions(manifest, staging);
+      if (canonicalJson(actual) !== canonicalJson(opts.expectListing.permissions)) {
+        await auditQuietly('listing_mismatch', manifest.name, {
+          version: manifest.version, actor: actorUserId, what: 'permissions', listed: opts.expectListing.permissions, actual, source: opts.origin?.source ?? null,
+        });
+        throw new PluginPackageError('invalid',
+          `The listing of ${manifest.name} ${manifest.version} does not state what the package asks for: its permissions differ from those computed from its manifest; not installed`,
+          [`listed: ${canonicalJson(opts.expectListing.permissions)}`, `actual: ${canonicalJson(actual)}`]);
+      }
+    }
+    const named = place(manifest);
+    await rename(staging, named);
+    staging = named;
+    // Hashed as copied, so what the admin installs is what is pinned.
+    if (manifest.entry !== undefined) await checkEntry(staging, manifest.entry);
+    const contentHash = await hashPackageContent(staging, manifest);
+    if (opts.expectListing?.contentHash && opts.expectListing.contentHash !== contentHash) {
+      await auditQuietly('listing_mismatch', manifest.name, {
+        version: manifest.version, actor: actorUserId, what: 'contentHash', listed: opts.expectListing.contentHash, actual: contentHash, source: opts.origin?.source ?? null,
+      });
+      throw new PluginPackageError('invalid',
+        `${manifest.name} ${manifest.version} hashes to ${contentHash}, not to the ${opts.expectListing.contentHash} its listing states; not installed`);
+    }
+    const signature = await acceptSignature(staging, manifest.name, contentHash, opts.requireTrustedSignature === true, opts.trustOnly);
+    // Its contributions must fit beside what is installed (a command name taken), and its prompt file be readable.
+    const fit = await contributionInstallProblems(manifest, staging, await getDb().select({ name: pluginPackages.name, manifest: pluginPackages.manifest }).from(pluginPackages));
+    if (fit.length > 0) throw new PluginPackageError('conflict', `${manifest.name}: ${fit.join('; ')}`, fit);
+    return { dir: staging, manifest, contentHash, signature };
+  } catch (err) {
+    await rm(staging, { recursive: true, force: true }).catch(() => {});
+    throw err;
+  }
+}
+
+/** What an upgrade from `current` to the staged package changes that the admin must agree to. */
+export interface UpgradeChanges {
+  downgrade: { from: string; to: string } | null;
+  sourceChange: { from: string; to: string; fromOrigin: PluginOrigin | null } | null;
+  signerChange: { from: string; to: string | null; fromKeyId: string | null; toKeyId: string | null } | null;
+}
+
+/** The changes an upgrade of `current` to `staged` (from `origin`) makes that need the admin's say. */
+export async function upgradeChanges(current: PluginPackageRow, staged: Pick<StagedPackage, 'manifest' | 'signature'>, origin: PluginOrigin): Promise<UpgradeChanges> {
+  return {
+    downgrade: compareVersions(staged.manifest.version, current.version) < 0 ? { from: current.version, to: staged.manifest.version } : null,
+    sourceChange: sourceClass(current.origin) !== sourceClass(origin)
+      ? { from: sourceClass(current.origin), to: sourceClass(origin), fromOrigin: current.origin ?? null } : null,
+    signerChange: await signerChange(current, staged.signature),
+  };
+}
+
+/** How an upgrade's changes are described to the admin. */
+export function describeUpgradeChange(name: string, current: PluginPackageRow, change: UpgradeChanges, origin: PluginOrigin): { downgrade?: string; sourceChange?: string; signerChange?: string } {
+  return {
+    ...(change.downgrade ? { downgrade: `${name} ${change.downgrade.to} is older than the installed ${change.downgrade.from}` } : {}),
+    ...(change.sourceChange ? { sourceChange: `${name} ${current.version} came from ${describeSource(current.origin)}; this version comes from ${describeSource(origin)}` } : {}),
+    ...(change.signerChange ? {
+      signerChange: `${name} ${current.version} is signed by ${change.signerChange.from}, this upgrade ${change.signerChange.to === null ? 'is not signed by a trusted publisher' : `by ${change.signerChange.to}`}`,
+    } : {}),
+  };
+}
+
 /**
  * Install a package from a local directory. With `upgrade`, an installed
  * package of the same name is replaced: its settings stay, and it is disabled
@@ -440,143 +607,61 @@ function describeSource(origin: PluginOrigin | null | undefined): string {
 export async function installFromDirectory(
   sourceDir: string,
   actorUserId: string,
-  opts: {
-    upgrade?: boolean;
-    requireTrustedSignature?: boolean;
-    source?: string;
-    /** The name (and version) the package must have: what a registry entry promised. */
-    expect?: { name?: string; version?: string };
-    /** An upgrade may be signed by another key than the installed version (audited). */
-    allowSignerChange?: boolean;
-    /** An upgrade may install an older version (audited). */
-    allowDowngrade?: boolean;
-    /** The agent that wrote the package (creator mode, ./authoring): recorded in the audit row, shown on the admin page. */
-    authoredBy?: AgentAuthoredDetails;
-    /** The runtime the package must declare (creator mode installs `package` only), checked on the staged copy. */
-    requireRuntime?: PluginRuntime;
-    /**
-     * What a registry listing promised beyond name and version
-     * (docs/PLUGIN-PACKAGES.md#marketplace): the content hash, and the
-     * permissions (`computePermissions`) the listing shows. Each is compared
-     * with the staged copy; any difference refuses the install (audited), so
-     * a listing can never understate what a package asks for.
-     */
-    expectListing?: { contentHash?: string | null; permissions?: PluginPermissionsSummary | null };
-    /** Where it comes from (provenance, recorded on the row and in the audit row). Default: a directory, or `agent` with `authoredBy`. */
-    origin?: PluginOrigin;
-    /** Only these publishers' keys count for its signature (an install from the marketplace: its keys alone). */
-    trustOnly?: readonly TrustedPublisher[];
-    /** An upgrade may come from another source than the installed version (another registry, the marketplace; audited). */
-    allowSourceChange?: boolean;
-  } = {},
+  opts: InstallOptions = {},
 ): Promise<PluginPackageRow & { warnings: string[] }> {
   assertStoreOutsideInstall();
-  const source = resolve(sourceDir);
-  const fromStore = relative(pluginsRoot(), source);
-  if (fromStore === '' || (fromStore !== '..' && !fromStore.startsWith(`..${sep}`) && !isAbsolute(fromStore))) throw new PluginPackageError('invalid', 'The package is already in the plugin directory');
-  // A first look at the source, so a linked or unbounded tree is refused
-  // before anything is copied. It is not what decides: the source may be
-  // written by someone else (an agent) while this runs, so everything below
-  // is read and checked on the staged copy only.
-  await checkTree(source);
-  await installHook?.(source);
   const db = getDb();
-
   // Copy into the plugin directory, then read, check, hash and verify only
   // the copy, before anything installed is touched: a refused package leaves
   // an installed one (and whether it runs) as it was, and what was checked is
   // exactly what is installed.
-  await mkdir(pluginsRoot(), { recursive: true });
-  let staging = join(pluginsRoot(), `.installing-${process.pid}-${Date.now()}-${randomBytes(4).toString('hex')}`);
-  let manifest: PluginManifest;
-  let contentHash: string;
-  let signature: Awaited<ReturnType<typeof acceptSignature>>;
-  try {
-    await cp(source, staging, { recursive: true, errorOnExist: true, verbatimSymlinks: true });
-    await dropListingFile(staging);
-    manifest = await readManifest(staging);
-    await checkTree(staging);
-    if (opts.requireRuntime !== undefined && pluginRuntime(manifest) !== opts.requireRuntime) {
-      throw new PluginPackageError('invalid', `${manifest.name} declares runtime "${pluginRuntime(manifest)}"; only runtime "${opts.requireRuntime}" is accepted here; not installed`);
-    }
-    if (opts.expect?.name !== undefined && opts.expect.name !== manifest.name) {
-      throw new PluginPackageError('invalid', `The package is "${manifest.name}", not the expected "${opts.expect.name}"; not installed`);
-    }
-    if (opts.expect?.version !== undefined && opts.expect.version !== manifest.version) {
-      throw new PluginPackageError('invalid', `${manifest.name} is version ${manifest.version}, not the expected ${opts.expect.version}; not installed`);
-    }
-    // A version the marketplace revoked installs from nowhere (docs/PLUGIN-PACKAGES.md#online-revocation).
-    const revoked = await packageRevocation(manifest.name, manifest.version);
-    if (revoked) {
-      await auditQuietly('install_refused_revoked', manifest.name, { version: manifest.version, reason: revoked.reason, actor: actorUserId });
-      throw new PluginPackageError('invalid', `${manifest.name} ${manifest.version} is revoked by the marketplace (${revoked.reason || 'no reason given'}); not installed`);
-    }
-    if (opts.expectListing?.permissions) {
-      const actual = await packagePermissions(manifest, staging);
-      if (canonicalJson(actual) !== canonicalJson(opts.expectListing.permissions)) {
-        await auditQuietly('listing_mismatch', manifest.name, {
-          version: manifest.version, actor: actorUserId, what: 'permissions', listed: opts.expectListing.permissions, actual, source: opts.origin?.source ?? null,
-        });
-        throw new PluginPackageError('invalid',
-          `The listing of ${manifest.name} ${manifest.version} does not state what the package asks for: its permissions differ from those computed from its manifest; not installed`,
-          [`listed: ${canonicalJson(opts.expectListing.permissions)}`, `actual: ${canonicalJson(actual)}`]);
-      }
-    }
-    // Named after the package from here on, beside its target.
-    const named = `${packageDir(manifest.name)}.installing-${process.pid}-${Date.now()}`;
-    await rename(staging, named);
-    staging = named;
-    // Hashed as copied, so what the admin installs is what is pinned.
-    if (manifest.entry !== undefined) await checkEntry(staging, manifest.entry);
-    contentHash = await hashPackageContent(staging, manifest);
-    if (opts.expectListing?.contentHash && opts.expectListing.contentHash !== contentHash) {
-      await auditQuietly('listing_mismatch', manifest.name, {
-        version: manifest.version, actor: actorUserId, what: 'contentHash', listed: opts.expectListing.contentHash, actual: contentHash, source: opts.origin?.source ?? null,
-      });
-      throw new PluginPackageError('invalid',
-        `${manifest.name} ${manifest.version} hashes to ${contentHash}, not to the ${opts.expectListing.contentHash} its listing states; not installed`);
-    }
-    signature = await acceptSignature(staging, manifest.name, contentHash, opts.requireTrustedSignature === true, opts.trustOnly);
-    // Its contributions must fit beside what is installed (a command name taken), and its prompt file be readable.
-    const fit = await contributionInstallProblems(manifest, staging, await db.select({ name: pluginPackages.name, manifest: pluginPackages.manifest }).from(pluginPackages));
-    if (fit.length > 0) throw new PluginPackageError('conflict', `${manifest.name}: ${fit.join('; ')}`, fit);
-  } catch (err) {
-    await rm(staging, { recursive: true, force: true }).catch(() => {});
-    throw err;
-  }
+  const stagedPkg = await stagePackage(sourceDir, actorUserId, opts, pluginsRoot(), (m) => `${packageDir(m.name)}.installing-${process.pid}-${Date.now()}`);
+  const { manifest, contentHash, signature } = stagedPkg;
+  const staging = stagedPkg.dir;
   const target = packageDir(manifest.name);
   const serverId = `${PLUGIN_SERVER_PREFIX}${manifest.name}`;
 
   let previous: PluginPackageRow | null = null;
   const overrides: Record<string, unknown> = {};
   const origin: PluginOrigin = opts.origin ?? (opts.authoredBy ? { source: 'agent' } : { source: 'directory' });
+  let approvals: ConsentApprovals | null = null;
   try {
+    if (opts.consent) {
+      // What the admin agreed to: these bytes, these declarations, over this installed version.
+      if (opts.consent.contentHash !== contentHash) {
+        await auditQuietly('consent_refused', manifest.name, { version: manifest.version, actor: actorUserId, what: 'contentHash', agreed: opts.consent.contentHash, actual: contentHash });
+        throw new PluginPackageError('conflict',
+          `${manifest.name} ${manifest.version} hashes to ${contentHash}, not to the ${opts.consent.contentHash} you agreed to; not installed. Preview it again`);
+      }
+      const installed = await findRow(manifest.name);
+      const baseline = opts.consent.baseline;
+      if (baseline === null ? installed !== null : installed === null || installed.contentHash !== baseline.contentHash) {
+        throw new PluginPackageError('conflict', `The installed ${manifest.name} changed since the preview; not installed. Preview it again`);
+      }
+      await opts.consent.verify(stagedPkg);
+      approvals = await opts.consent.approvals(stagedPkg);
+    }
     if (opts.upgrade) {
       const current = await findRow(manifest.name);
       if (!current) throw new PluginPackageError('not_found', `Plugin package not found: ${manifest.name}; install it first`);
-      if (compareVersions(manifest.version, current.version) < 0) {
-        if (!opts.allowDowngrade) {
-          throw new PluginPackageError('conflict',
-            `${manifest.name} ${manifest.version} is older than the installed ${current.version}; pass allowDowngrade to install it anyway`);
-        }
+      const changes = await upgradeChanges(current, stagedPkg, origin);
+      const said = describeUpgradeChange(manifest.name, current, changes, origin);
+      if (changes.downgrade) {
+        if (!opts.allowDowngrade) throw new PluginPackageError('conflict', `${said.downgrade}; pass allowDowngrade to install it anyway`);
         overrides.downgrade = true;
       }
       // Another registry (or the marketplace) offering the same name must not take the package over in silence.
-      if (sourceClass(current.origin) !== sourceClass(origin)) {
+      if (changes.sourceChange) {
         if (!opts.allowSourceChange) {
           throw new PluginPackageError('conflict',
-            `${manifest.name} ${current.version} came from ${describeSource(current.origin)}; this version comes from ${describeSource(origin)}. Confirm the change of source to continue (allowSourceChange: true); it is recorded in the audit log`,
-            [`source: ${sourceClass(current.origin)} → ${sourceClass(origin)}`], { sourceChange: { from: sourceClass(current.origin), to: sourceClass(origin) } });
+            `${said.sourceChange}. Confirm the change of source to continue (allowSourceChange: true); it is recorded in the audit log`,
+            [`source: ${changes.sourceChange.from} → ${changes.sourceChange.to}`], { sourceChange: { from: changes.sourceChange.from, to: changes.sourceChange.to } });
         }
         overrides.sourceChange = { from: current.origin ?? null, to: origin };
       }
-      const change = await signerChange(current, signature);
-      if (change) {
-        if (!opts.allowSignerChange) {
-          throw new PluginPackageError('conflict',
-            `${manifest.name} ${current.version} is signed by ${change.from}, this upgrade ${change.to === null ? 'is not signed by a trusted publisher' : `by ${change.to}`}; pass allowSignerChange to accept another publisher`);
-        }
-        overrides.signerChange = change;
+      if (changes.signerChange) {
+        if (!opts.allowSignerChange) throw new PluginPackageError('conflict', `${said.signerChange}; pass allowSignerChange to accept another publisher`);
+        overrides.signerChange = changes.signerChange;
       }
       // Claimed only now: disabled before any file is replaced, since its tools may have changed.
       const [disabled] = await db.update(pluginPackages).set({ enabled: false, updatedAt: new Date() })
@@ -616,6 +701,12 @@ export async function installFromDirectory(
           // differ, so the host API scopes are approved again (docs/PLUGIN-PACKAGES.md#host-api),
           // and so is model:cli-tools: what its prompts are built from can differ too.
           approvedHostScopes: null,
+          // ...unless the admin agreed to exactly these bytes and what they declare, item by item.
+          ...(approvals ? {
+            approvedHostScopes: approvals.hostScopes,
+            approvedContributionsHash: approvals.contributionsHash,
+            ...(approvals.inProcessHash ? { inProcessApprovedHash: approvals.inProcessHash, inProcessApprovedBy: actorUserId, inProcessApprovedAt: new Date() } : {}),
+          } : {}),
           installedBy: actorUserId, updatedAt: new Date(),
         })
         .where(eq(pluginPackages.name, manifest.name))
@@ -653,8 +744,9 @@ export async function installFromDirectory(
     runtime: pluginRuntime(manifest),
     ...(opts.source ? { source: opts.source } : {}),
     origin,
-    ...(previous?.approvedContributionsHash ? { contributionsApprovalCleared: previous.approvedContributionsHash } : {}),
-    ...(previous?.approvedHostScopes?.includes(PLUGIN_MODEL_CLI_TOOLS_APPROVAL) ? { modelCliToolsApprovalCleared: true } : {}),
+    ...(previous?.approvedContributionsHash && previous.approvedContributionsHash !== approvals?.contributionsHash ? { contributionsApprovalCleared: previous.approvedContributionsHash } : {}),
+    ...(previous?.approvedHostScopes?.includes(PLUGIN_MODEL_CLI_TOOLS_APPROVAL) && !approvals?.hostScopes.includes(PLUGIN_MODEL_CLI_TOOLS_APPROVAL) ? { modelCliToolsApprovalCleared: true } : {}),
+    ...(approvals ? { consented: true } : {}),
     ...(opts.authoredBy ? { authoredBy: opts.authoredBy } : {}),
     ...overrides,
   });
@@ -1071,7 +1163,7 @@ export function updateSettings(name: string, values: unknown, actorUserId: strin
 }
 
 /** What a package still needs before it can run: labels of required settings and secrets without a value. */
-async function missingConfiguration(row: PluginPackageRow, setSecrets?: readonly string[]): Promise<string[]> {
+export async function missingConfiguration(row: PluginPackageRow, setSecrets?: readonly string[]): Promise<string[]> {
   const missing: string[] = [];
   for (const f of row.manifest.settings ?? []) {
     if (f.required && !Object.hasOwn(row.settings, f.key)) missing.push(f.label);
@@ -1539,7 +1631,7 @@ export async function syncPluginServers(): Promise<void> {
   await syncContributions(rows);
 }
 
-async function audit(actorUserId: string, op: string, name: string, details: Record<string, unknown>): Promise<void> {
+export async function audit(actorUserId: string, op: string, name: string, details: Record<string, unknown>): Promise<void> {
   await auditRepository.log({
     userId: actorUserId,
     action: 'settings_changed',

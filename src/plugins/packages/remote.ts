@@ -149,9 +149,41 @@ export async function installFromUrl(
     registry?: Pick<InstallOptions, 'expectListing' | 'origin' | 'trustOnly' | 'requireRuntime' | 'allowSourceChange'>;
   } = {},
 ): Promise<PluginPackageRow & { warnings: string[] }> {
+  const download = await downloadPackage(url, opts.sha256);
+  try {
+    return await installFromDirectory(download.root, actorUserId, remoteInstallOptions(url, opts));
+  } finally {
+    await download.cleanup();
+  }
+}
+
+/** The install options of a package from `url` (requires a trusted signature; a registry's promises on top). */
+export function remoteInstallOptions(
+  url: string,
+  opts: { upgrade?: boolean; name?: string; version?: string; allowSignerChange?: boolean; allowDowngrade?: boolean; registry?: Pick<InstallOptions, 'expectListing' | 'origin' | 'trustOnly' | 'requireRuntime' | 'allowSourceChange'> },
+): InstallOptions {
+  return {
+    upgrade: opts.upgrade,
+    requireTrustedSignature: true,
+    source: url,
+    expect: { name: opts.name, version: opts.version },
+    allowSignerChange: opts.allowSignerChange,
+    allowDowngrade: opts.allowDowngrade,
+    origin: { source: 'url', url },
+    ...opts.registry,
+  };
+}
+
+/**
+ * Download a package tarball over https (checked against `sha256` before it
+ * is unpacked, when given) and unpack it with the strict tar reader into a
+ * work directory of its own. `root` is the package directory in it;
+ * `cleanup` removes the work directory.
+ */
+export async function downloadPackage(url: string, sha256?: string): Promise<{ root: string; cleanup: () => Promise<void> }> {
   let expected: string | null = null;
-  if (opts.sha256 !== undefined) {
-    expected = normalizeSha256(opts.sha256);
+  if (sha256 !== undefined) {
+    expected = normalizeSha256(sha256);
     if (!expected) throw new PluginPackageError('invalid', 'sha256 must be 64 hex digits (optionally after "sha256:")');
   }
   let tarball: Buffer;
@@ -166,28 +198,19 @@ export async function installFromUrl(
     throw new PluginPackageError('invalid', `The download from ${url} hashes to ${actual}, not to the expected ${expected}; not unpacked`);
   }
   const work = join(downloadsRoot(), `${process.pid}-${randomBytes(8).toString('hex')}`);
+  const cleanup = () => rm(work, { recursive: true, force: true }).catch((err: unknown) => coreLogger.warn({ err, dir: work }, 'Could not remove a plugin download'));
   try {
     await mkdir(work, { recursive: true, mode: 0o700 });
-    let root: string;
     try {
       await extractTarGz(tarball, work);
-      root = await packageRootIn(work);
+      return { root: await packageRootIn(work), cleanup };
     } catch (err) {
       if (err instanceof TarError) throw new PluginPackageError('invalid', `${err.message}; not installed`);
       throw err;
     }
-    return await installFromDirectory(root, actorUserId, {
-      upgrade: opts.upgrade,
-      requireTrustedSignature: true,
-      source: url,
-      expect: { name: opts.name, version: opts.version },
-      allowSignerChange: opts.allowSignerChange,
-      allowDowngrade: opts.allowDowngrade,
-      origin: { source: 'url', url },
-      ...opts.registry,
-    });
-  } finally {
-    await rm(work, { recursive: true, force: true }).catch((err: unknown) => coreLogger.warn({ err, dir: work }, 'Could not remove a plugin download'));
+  } catch (err) {
+    await cleanup();
+    throw err;
   }
 }
 

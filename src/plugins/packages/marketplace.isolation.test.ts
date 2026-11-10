@@ -252,6 +252,34 @@ describe('listing and install', () => {
     expect((await (await import('./service')).listPackages())).toEqual([]);
   });
 
+  test('a preview from the marketplace verifies exactly as an install does, installs nothing, and installs with consent', async () => {
+    publishKeys(1, [keyA]);
+    const p = await publishPackage('1.0.0', keyA);
+    publishIndex([entryOf(p)]);
+    const { previewInstall, installPreview, _resetPreviewsForTesting } = await import('./consent');
+    await _resetPreviewsForTesting();
+    const preview = await previewInstall({ registry: 'marketplace', name: NAME }, admin);
+    expect(preview).toMatchObject({ name: NAME, version: '1.0.0', contentHash: p.contentHash, signedBy: 'Octipus', origin: { source: 'marketplace' }, upgradeFrom: null });
+    expect(preview.declarations.map((d) => d.id)).toContain('tool:send_letter');
+    const svc = await import('./service');
+    expect(await svc.listPackages()).toEqual([]);
+    const result = await installPreview(preview.previewId, { contentHash: preview.contentHash, accepted: preview.declarations.map((d) => d.id) }, admin);
+    expect(result).toMatchObject({ name: NAME, version: '1.0.0', enabled: false });
+    expect((await svc.packageView(NAME)).origin).toMatchObject({ source: 'marketplace', listingVersion: '1.0.0' });
+  });
+
+  test('a preview refuses what an install refuses: a listing that understates, another key', async () => {
+    publishKeys(1, [keyA]);
+    const p = await publishPackage('1.0.0', keyA);
+    publishIndex([entryOf(p, { permissions: { ...p.permissions, network: [] } })]);
+    const { previewInstall } = await import('./consent');
+    await expect(previewInstall({ registry: 'marketplace', name: NAME }, admin)).rejects.toThrow(/does not state what the package asks for/);
+    await clearCaches();
+    publishIndex([entryOf(await publishPackage('1.0.0', keyB))]);
+    await expect(previewInstall({ registry: 'marketplace', name: NAME }, admin)).rejects.toThrow(/must carry a valid signature|not in plugins.trustedPublishers/);
+    expect(await (await import('./service')).listPackages()).toEqual([]);
+  });
+
   test('a contentHash the package does not hash to is refused', async () => {
     publishKeys(1, [keyA]);
     const p = await publishPackage('1.0.0', keyA);
@@ -484,7 +512,7 @@ describe('updates', () => {
     const updates = await listUpdates();
     expect(updates).toEqual([expect.objectContaining({ name: NAME, installed: '1.0.0', latest: '1.1.0', registry: 'marketplace' })]);
     expect(updates[0].diff).toMatchObject({ widened: true, changes: [expect.objectContaining({ kind: 'host', change: 'added', text: 'host API scope notes:write' })] });
-    expect(updates[0].warnings.map((w) => w.code)).toEqual(expect.arrayContaining(['widens', 'approvals_cleared']));
+    expect(updates[0].warnings.map((w) => w.code)).toEqual(expect.arrayContaining(['widens', 'consent']));
     expect(await notifyUpdates()).toBe(1);
     expect(await notifyUpdates()).toBe(0);
     expect((await (await import('./service')).packageView(NAME)).version).toBe('1.0.0');

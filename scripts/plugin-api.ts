@@ -22,6 +22,7 @@ import {
   PLUGIN_MODEL_CLI_TOOLS_APPROVAL,
   type PluginPackageView,
 } from '@/shared/plugin-package';
+import type { PluginConsentResult, PluginInstallPreview } from '@/shared/plugin-declarations';
 
 export interface PluginApiIo {
   fetch: typeof fetch;
@@ -649,33 +650,80 @@ export interface InstallFlags {
   allowSignerChange?: boolean;
   allowDowngrade?: boolean;
   allowIncompatible?: boolean;
+  /** `all`, or the declaration ids agreed to, comma-separated. */
+  accept?: string;
+  /** Enable it once installed (when its required settings and secrets are set). */
+  enable?: boolean;
 }
 
+/** Text from the server, printable: no C0/C1 control characters, no bidirectional or invisible formatting. */
+export function printable(text: string): string {
+  return text.replace(/[\u0000-\u001F\u007F-\u009F­؜ᅟ᠎​-‏‪-‮⁠-⁤⁦-⁩ㅤ﻿]|[\u{E0000}-\u{E007F}]/gu, '');
+}
+
+/** The change items an `--allow-*` flag agrees to. */
+const FLAG_ITEMS: Array<[keyof InstallFlags, string]> = [
+  ['allowSourceChange', 'change:source'], ['allowSignerChange', 'change:signer'], ['allowDowngrade', 'change:downgrade'], ['allowIncompatible', 'change:incompatible'],
+];
+
 /**
- * `octi plugin install <name>`: install from the marketplace (or `--registry`)
- * by name, the newest compatible version unless `--version` says otherwise.
- * It lands disabled, like every install.
+ * `octi plugin install <name>` (and `upgrade <name>`): from the marketplace
+ * (or `--registry`) by name, the newest compatible version unless
+ * `--version` says otherwise. The backend downloads and verifies it without
+ * installing it (a preview); every item it declares is printed, and each one
+ * not carried over from the installed version is agreed to: at a terminal
+ * one by one (y/N), else with `--accept all|<id,id,…>` (refused without it,
+ * with the list). Only then is it installed, bound to the content hash shown.
+ * It lands disabled unless `--enable`.
  */
 export async function installCommand(io: PluginApiIo, name: string, flags: InstallFlags = {}): Promise<number> {
   try {
     checkName(name);
-    const res = await request<{ name: string; version: string; contentHash: string | null; signedBy: string | null; warnings?: string[]; guidance?: Array<{ code: string; message: string }> }>(
-      io, 'POST', '/', {
-        registry: flags.registry ?? 'marketplace', name,
-        ...(flags.version ? { version: flags.version } : {}),
-        ...(flags.upgrade ? { upgrade: true } : {}),
-        ...(flags.allowSourceChange ? { allowSourceChange: true } : {}),
-        ...(flags.allowSignerChange ? { allowSignerChange: true } : {}),
-        ...(flags.allowDowngrade ? { allowDowngrade: true } : {}),
-        ...(flags.allowIncompatible ? { allowIncompatible: true } : {}),
-      });
-    io.out(`Installed ${res.name} ${res.version} (disabled), signed by ${res.signedBy ?? 'nobody trusted'}, content ${res.contentHash ?? 'not pinned'}.\n`);
-    for (const w of res.warnings ?? []) io.out(`  ⚠ ${w}\n`);
-    for (const g of res.guidance ?? []) io.out(`  note: ${g.message}\n`);
+    const preview = await request<PluginInstallPreview>(io, 'POST', '/preview', {
+      registry: flags.registry ?? 'marketplace', name, ...(flags.version ? { version: flags.version } : {}),
+    });
+    const clean = (t: string | null | undefined) => printable(t ?? '');
+    io.out(`${clean(preview.name)} ${clean(preview.version)}${preview.upgradeFrom ? ` (upgrade from ${clean(preview.upgradeFrom)})` : ''}: ${clean(preview.title)}\n`);
+    io.out(`  content ${clean(preview.contentHash)}, signed by ${clean(preview.signedBy) || 'nobody trusted'}, from ${clean(preview.origin.registry ?? preview.origin.source)}\n`);
+    for (const g of preview.guidance) io.out(`  note: ${clean(g.message)}\n`);
+    if (preview.diff) for (const c of preview.diff.changes) io.out(`  ${c.widens ? '+' : '-'} ${clean(c.change)} ${clean(c.text)}\n`);
+    io.out('\nIt declares:\n');
+    for (const d of preview.declarations) {
+      const mark = d.carried ? 'unchanged, agreed before' : d.status === 'changed' ? 'CHANGED' : d.status === 'new' && preview.upgradeFrom ? 'NEW' : '';
+      io.out(`  ${d.carried ? '[x]' : '[ ]'} ${clean(d.id)}  ${clean(d.label)}${mark ? `  (${mark})` : ''}\n      ${clean(d.detail)}\n`);
+      if (d.guidance) io.out(`      note: ${clean(d.guidance)}\n`);
+    }
+    const required = preview.declarations.filter((d) => !d.carried).map((d) => d.id);
+    let accepted: string[];
+    if (flags.accept !== undefined) {
+      const given = flags.accept.trim() === 'all' ? required : flags.accept.split(',').map((x) => x.trim()).filter(Boolean);
+      for (const [flag, id] of FLAG_ITEMS) if (flags[flag] === true) given.push(id);
+      const missing = required.filter((id) => !given.includes(id));
+      if (missing.length > 0) throw new CliError(`not installed: --accept does not agree to ${missing.map(clean).join(', ')}`, 2);
+      accepted = [...new Set(given)];
+    } else if (io.interactive) {
+      accepted = [];
+      for (const d of preview.declarations.filter((x) => !x.carried)) {
+        const answer = (await io.ask(`Agree: ${clean(d.label)} (${clean(d.id)})? [y/N] `)).trim().toLowerCase();
+        if (answer !== 'y' && answer !== 'yes') {
+          io.out('Not installed.\n');
+          return 1;
+        }
+        accepted.push(d.id);
+      }
+    } else {
+      throw new CliError(`not at a terminal: agree to every item with --accept all, or name them: --accept ${required.map(clean).join(',')}`, 2);
+    }
+    const res = await request<PluginConsentResult>(io, 'POST', '/install', {
+      previewId: preview.previewId, contentHash: preview.contentHash, accepted, ...(flags.enable ? { enable: true } : {}),
+    });
+    io.out(`Installed ${clean(res.name)} ${clean(res.version)} (${res.enabled ? 'enabled' : 'disabled'}), content ${clean(res.contentHash)}.\n`);
+    if (res.enableProblem) io.out(`  not enabled: ${clean(res.enableProblem)}\n`);
+    for (const w of res.warnings ?? []) io.out(`  ⚠ ${clean(w)}\n`);
     return 0;
   } catch (err) {
     if (!(err instanceof CliError)) throw err;
-    io.err(`octi plugin install: ${err.message}\n`);
+    io.err(`octi plugin ${flags.upgrade ? 'upgrade' : 'install'}: ${err.message.split('\n').map(printable).join('\n')}\n`);
     return err.exitCode;
   }
 }

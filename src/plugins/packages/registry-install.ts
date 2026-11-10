@@ -32,8 +32,8 @@ import type { IndexEntry } from './index-v2';
 import { apiVersionProblem } from './manifest';
 import { MARKETPLACE_REGISTRY } from './marketplace-config';
 import { compatibility, newestInstallable, originSource, revokedVersions, sourceByName } from './marketplace';
-import { installFromUrl, readIndex } from './remote';
-import { compareVersions, PluginPackageError, sourceClass } from './service';
+import { downloadPackage, readIndex, remoteInstallOptions } from './remote';
+import { compareVersions, type InstallOptions, installFromDirectory, PluginPackageError, sourceClass } from './service';
 import type { PluginPackageRow } from '@/db/schema/plugin-packages';
 
 export interface RegistryInstallRequest {
@@ -51,10 +51,23 @@ export interface RegistryInstallRequest {
   allowIncompatible?: boolean;
 }
 
-/** Install `name` from a registry. Returns the row, the signature warnings, and the guidance for the admin. */
-export async function installFromRegistry(
-  actorUserId: string, req: RegistryInstallRequest,
-): Promise<PluginPackageRow & { warnings: string[]; guidance: PluginGuidanceWarning[]; listing: IndexEntry }> {
+/** A registry listing resolved for an install: the entry, how to install it, and the guidance. */
+export interface ResolvedRegistryInstall {
+  entry: IndexEntry;
+  /** The install options: what the listing promised, the provenance, whose keys count, the runtime. */
+  options: InstallOptions;
+  /** Set when the version needs a newer Octipus (`minOctipus`): the admin's call, not a boundary. */
+  incompatible: string | null;
+  guidance: PluginGuidanceWarning[];
+}
+
+/**
+ * Find the listing to install and check what is a boundary (a revoked
+ * version, another plugin API, an in-process plugin from the marketplace, a
+ * strict registry's listing without permissions or content hash). A version
+ * that needs a newer Octipus comes back as `incompatible`.
+ */
+export async function resolveRegistryInstall(req: RegistryInstallRequest): Promise<ResolvedRegistryInstall> {
   const found = await sourceByName(req.registry);
   if ('error' in found) throw new PluginPackageError('invalid', found.error);
   const { source, hooks } = found;
@@ -76,14 +89,13 @@ export async function installFromRegistry(
   const reason = revoked.get(`${entry.name}@${entry.version}`);
   if (reason) throw new PluginPackageError('invalid', `${entry.name} ${entry.version} is revoked by the marketplace (${reason}); not installed`);
   const compat = compatibility(entry, appVersion);
+  let incompatible: string | null = null;
   if (!compat.ok) {
     // Only minOctipus is the admin's call; another plugin API, or an in-process plugin from the marketplace, is a boundary.
     const onlyVersion = entry.minOctipus !== null && compareVersions(appVersion, entry.minOctipus) < 0
       && compatibility({ ...entry, minOctipus: null }, appVersion).ok;
-    if (!onlyVersion || req.allowIncompatible !== true) {
-      throw new PluginPackageError(onlyVersion ? 'conflict' : 'invalid',
-        onlyVersion ? `${compat.reason}. Confirm to install it anyway (allowIncompatible: true)` : `${compat.reason}; not installed`);
-    }
+    if (!onlyVersion) throw new PluginPackageError('invalid', `${compat.reason}; not installed`);
+    incompatible = compat.reason ?? `Needs Octipus ${entry.minOctipus} or newer`;
   }
   const marketplace = req.registry === MARKETPLACE_REGISTRY;
   if (source.strict && (entry.permissions === null || entry.contentHash === null)) {
@@ -94,8 +106,8 @@ export async function installFromRegistry(
     source: originSource(req.registry), registry: marketplace ? 'Octipus' : req.registry, url: entry.url,
     listingVersion: entry.version, indexGeneratedAt: result.fetched.index.generatedAt?.toISOString() ?? null,
   };
-  const row = await installFromUrl(entry.url, actorUserId, {
-    sha256: entry.sha256, name: entry.name, version: entry.version,
+  const options = remoteInstallOptions(entry.url, {
+    name: entry.name, version: entry.version,
     upgrade: req.upgrade, allowSignerChange: req.allowSignerChange, allowDowngrade: req.allowDowngrade,
     registry: {
       expectListing: { contentHash: entry.contentHash, permissions: entry.permissions },
@@ -105,10 +117,32 @@ export async function installFromRegistry(
     },
   });
   const guidance: PluginGuidanceWarning[] = [
-    ...(entry.permissions ? permissionsGuidance(entry.permissions) : [{ code: 'no_permissions_listed', message: 'This registry does not list what the package asks for (index v1); read its manifest before enabling it.' }]),
+    ...(entry.permissions ? permissionsGuidance(entry.permissions) : [{ code: 'no_permissions_listed', message: 'This registry does not list what the package asks for (index v1); read what it declares before you agree.' }]),
     ...(entry.deprecated ? [{ code: 'deprecated', message: `Deprecated: ${entry.deprecated}` }] : []),
-    ...(!compat.ok ? [{ code: 'incompatible', message: compat.reason ?? 'Not compatible' }] : []),
+    ...(incompatible ? [{ code: 'incompatible', message: incompatible }] : []),
     ...(current && sourceClass(current.origin) !== sourceClass(origin) ? [{ code: 'source_change', message: `The source changed from ${sourceClass(current.origin)} to ${sourceClass(origin)} (recorded in the audit log)` }] : []),
+  ];
+  return { entry, options, incompatible, guidance };
+}
+
+/** Install `name` from a registry. Returns the row, the signature warnings, and the guidance for the admin. */
+export async function installFromRegistry(
+  actorUserId: string, req: RegistryInstallRequest,
+): Promise<PluginPackageRow & { warnings: string[]; guidance: PluginGuidanceWarning[]; listing: IndexEntry }> {
+  const resolved = await resolveRegistryInstall(req);
+  if (resolved.incompatible && req.allowIncompatible !== true) {
+    throw new PluginPackageError('conflict', `${resolved.incompatible}. Confirm to install it anyway (allowIncompatible: true)`);
+  }
+  const { entry } = resolved;
+  const download = await downloadPackage(entry.url, entry.sha256);
+  let row: PluginPackageRow & { warnings: string[] };
+  try {
+    row = await installFromDirectory(download.root, actorUserId, resolved.options);
+  } finally {
+    await download.cleanup();
+  }
+  const guidance: PluginGuidanceWarning[] = [
+    ...resolved.guidance,
     { code: 'review_before_enabling', message: 'Installed disabled: review what it declares, approve it and enable it on the Plugin packages page.' },
   ];
   return { ...row, guidance, listing: entry };

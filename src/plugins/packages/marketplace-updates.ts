@@ -52,7 +52,7 @@ export async function listUpdates(): Promise<PluginUpdateView[]> {
       ...(diff?.widened ? [{ code: 'widens', message: `This version asks for more: ${diff.changes.filter((c) => c.widens).map((c) => c.text).join('; ')}` }] : []),
       ...(diff === null ? [{ code: 'no_permissions_listed', message: 'The registry does not list what this version asks for; read its manifest after upgrading, before enabling it.' }] : []),
       ...(latest.permissions ? permissionsGuidance(latest.permissions) : []),
-      { code: 'approvals_cleared', message: 'Upgrading disables the package and clears its approvals until you approve and enable it again.' },
+      { code: 'consent', message: 'Upgrading asks you to agree to what is new or changed; what is unchanged and you agreed to before carries over. It lands disabled unless you enable it after the upgrade.' },
     ];
     out.push({ name: row.name, installed: row.version, latest: latest.version, registry, diff, warnings });
   }

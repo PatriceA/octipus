@@ -323,3 +323,36 @@ export async function cancelRunFromApp(plugin: string, id: string, actor: { user
   const outcome = await cancelRow(row, actor.userId === row.userId ? 'Cancelled by the user' : 'Cancelled by an admin');
   return outcome.ok ? { ok: true, value: { ...outcome.value, userId: row.userId } } : outcome;
 }
+
+/** A running background run of a package, as the app lists it (`GET /api/plugin-packages/:name/runs`). */
+export interface PluginRunListItem {
+  id: string;
+  userId: string;
+  startedAt: string;
+  role: string;
+  title: string;
+}
+
+/**
+ * The running (or queued) background runs of `plugin`: every user's, or one
+ * user's with `userId`. Ids, the role and the title only, never the prompt or
+ * any output.
+ */
+export async function listRunningRuns(plugin: string, userId?: string): Promise<PluginRunListItem[]> {
+  const { getDb } = await import('@/db/postgres');
+  const { backgroundJobs } = await import('@/db/schema/background-jobs');
+  const { and, desc, eq, inArray, sql } = await import('drizzle-orm');
+  const rows = await getDb().select().from(backgroundJobs)
+    .where(and(
+      eq(backgroundJobs.kind, 'agent'),
+      inArray(backgroundJobs.status, ['running', 'queued']),
+      sql`${backgroundJobs.payload}->>'plugin' = ${plugin}`,
+      ...(userId ? [eq(backgroundJobs.userId, userId)] : []),
+    ))
+    .orderBy(desc(backgroundJobs.createdAt))
+    .limit(200);
+  return rows.map((r) => ({
+    id: r.id, userId: r.userId, startedAt: (r.startedAt ?? r.createdAt).toISOString(),
+    role: typeof r.payload.role === 'string' ? r.payload.role : DEFAULT_RUN_ROLE, title: r.title,
+  }));
+}
