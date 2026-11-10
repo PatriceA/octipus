@@ -17,8 +17,7 @@
  *   user first). Personal workspaces only: a run in a space is refused
  *   (`409 space`). The role is one of the host's (not `general`, the root),
  *   and its tools are narrowed to `PLUGIN_RUN_TOOL_IDS`: search, fetch and
- *   read, never a shell, a message, a mail or another plugin. The user's
- *   connectors still join a worker, as for any worker of theirs.
+ *   read, never a shell, a message, a mail or another plugin.
  * - **Cost.** At most `RUNS_PER_HOUR` starts an hour (a burst of
  *   `RUN_BURST`) and `MAX_RUNS_IN_FLIGHT` running per package and user;
  *   `plugins.hostAgentRunTokens` tokens a run (the worker's own budget; 0
@@ -219,7 +218,7 @@ async function runInBackground(
     const { getAgentService } = await import('@/core/agent');
     const result = await withAgentUsage(grant.userId, scope, () => getAgentService().spawnWorker(run.role, run.prompt, '', parent, {
       toolIds: run.toolIds,
-      // The approved list is the whole set: no connector or test-container tools join it.
+      // The approved list is the whole set: no test-container tools join it.
       exactTools: true,
       maxTokenBudget: run.budget,
       onTokens: (n: number) => { tokens += n; },

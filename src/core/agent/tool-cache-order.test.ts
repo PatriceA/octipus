@@ -1,6 +1,6 @@
 /**
  * C3 for the tool block: two users of one install, with different per-user
- * and runtime tools (connectors, direct MCP tools, extension tools, the
+ * and runtime tools (plugin tools, direct MCP tools, extension tools, the
  * inline-UI tool) and
  * different sticky lazy groups, send the same bytes up to and including the
  * tools breakpoint, because those tools come after the ones the install
@@ -35,7 +35,7 @@ const mcpMeta = ['mcp_list_resources', 'mcp_read_resource', 'mcp_get_prompt', 'm
  * then MCP (where `getToolsForRole` appends it: the bridge's direct tools,
  * which differ here as servers change, then its meta-tools, which every user
  * of the install gets), the inline-UI tool, the
- * discovery and meta-tools, the self-report tool; connectors and extension
+ * discovery and meta-tools, the self-report tool; plugin and extension
  * tools where a worker gets them (after the role's tools).
  */
 function registered(user: 'alice' | 'bob'): ToolHandler[] {
@@ -45,7 +45,7 @@ function registered(user: 'alice' | 'bob'): ToolHandler[] {
     ...(alice ? [h('mcp__crm__lookup', 'mcp'), h('mcp__plugin_weather__forecast', 'mcp')] : []),
     ...mcpMeta,
     ...(alice ? [h('ext_quotes__get', 'ext_quotes')] : [h('ext_tides__get', 'ext_tides')]),
-    ...(alice ? [h('gmail_search', 'connector')] : [h('slack_post', 'connector'), h('slack_read', 'connector')]),
+    ...(alice ? [h('gmail_search', 'plugin-gmail')] : [h('slack_post', 'plugin-slack'), h('slack_read', 'plugin-slack')]),
     ...(alice ? [h('inline_ui_ask', 'inline-ui')] : []),
     ...discovery,
     ...meta,

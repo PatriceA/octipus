@@ -16,7 +16,6 @@ const fresh = (over: Partial<OnboardingState> = {}): OnboardingState => ({
   workspaces: [{ id: 'w1', name: 'Personal', slug: 'personal', kind: 'personal', isDefault: true }],
   mailbox: null,
   oauthClients: { google: true, microsoft: false },
-  connectors: [],
   channels: { configured: [], linked: [] },
   heartbeat: { serverEnabled: false, enabled: false, watchEmail: false, intervalMinutes: null, timezone: 'UTC' },
   permissions: { tasksWrite: 'ASK', messagingSend: 'ASK' },

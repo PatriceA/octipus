@@ -3,13 +3,13 @@ import { json, stubAllDefaults } from './fixtures/api-stubs';
 import { expect, test } from './fixtures/auth';
 
 /**
- * The group-channel bridge and space connectors in the web (coworking §9.4,
- * §9.5), every /api call stubbed as the server answers:
+ * The group-channel bridge and a space's GitHub token in the web (coworking
+ * §9.4, §9.5), every /api call stubbed as the server answers:
  *   - Settings → Channels: "Bind to space room" lists the spaces the user
  *     owns, needs the acknowledgement before it binds, then shows the
  *     binding and unbinds;
- *   - Space settings → Connectors: owners paste a GitHub token, start an
- *     OAuth connector (its popup URL) and disconnect; others only read.
+ *   - Space settings → GitHub: owners paste the space's GitHub token and
+ *     remove it; others only read.
  */
 
 const NOW = new Date().toISOString();
@@ -89,60 +89,53 @@ test.describe('bind a group channel to a space room', () => {
   });
 });
 
-test.describe('space connectors', () => {
+test.describe('space GitHub token', () => {
   async function stubs(page: import('@playwright/test').Page, role: string) {
     const calls: Array<{ method: string; path: string; body: unknown }> = [];
-    let connectors = [
-      { id: 'github', name: 'GitHub', description: 'A GitHub token', kind: 'token', connected: false, connectedBy: null, connectedAt: null },
-      { id: 'example', name: 'Example', description: 'An OAuth connector', kind: 'oauth', connected: true, connectedBy: 'olga', connectedAt: NOW },
-    ];
+    let github: { connected: boolean; connectedBy: string | null; connectedAt: string | null } = { connected: false, connectedBy: null, connectedAt: null };
     await stubAllDefaults(page);
     await page.route(`**/api/spaces/${SPACE_ID}`, (route) => json(route, 200, space(role)));
     await page.route(`**/api/spaces/${SPACE_ID}/members`, (route) => json(route, 200, { members: [] }));
     await page.route(`**/api/spaces/${SPACE_ID}/invites`, (route) => json(route, 200, { invites: [] }));
     await page.route(`**/api/spaces/${SPACE_ID}/activity**`, (route) => json(route, 200, { activity: [] }));
-    await page.route(`**/api/spaces/${SPACE_ID}/connectors**`, (route) => {
+    await page.route(`**/api/spaces/${SPACE_ID}/github`, (route) => {
       const req = route.request();
       const path = new URL(req.url()).pathname;
-      if (req.method() === 'GET') return json(route, 200, { connectors });
-      const id = path.split('/').pop();
+      if (req.method() === 'GET') return json(route, 200, github);
       calls.push({ method: req.method(), path, body: req.postDataJSON?.() ?? null });
       if (req.method() === 'DELETE') {
-        connectors = connectors.map((c) => (c.id === id ? { ...c, connected: false, connectedBy: null } : c));
+        github = { connected: false, connectedBy: null, connectedAt: null };
         return json(route, 200, { removed: 1 });
       }
-      if (id === 'github') {
-        connectors = connectors.map((c) => (c.id === 'github' ? { ...c, connected: true, connectedBy: 'e2etest' } : c));
-        return json(route, 200, { connected: true });
-      }
-      return json(route, 200, { url: 'about:blank#oauth' });
+      github = { connected: true, connectedBy: 'e2etest', connectedAt: NOW };
+      return json(route, 200, { connected: true });
     });
     return calls;
   }
 
-  test('an owner connects GitHub with a token and disconnects an OAuth connector', async ({ authenticatedPage: page }) => {
+  test('an owner adds the space\'s GitHub token and removes it', async ({ authenticatedPage: page }) => {
     const calls = await stubs(page, 'owner');
     await page.goto(`/spaces/${SPACE_ID}/settings`);
-    const section = page.getByRole('region', { name: 'Connectors' });
-    await expect(section.getByTestId('space-connector-example')).toContainText('connected by olga');
+    const section = page.getByRole('region', { name: 'GitHub' });
+    await expect(section.getByTestId('space-github')).toContainText('not connected');
 
-    await section.getByTestId('space-connector-github').getByRole('button', { name: 'Connect' }).click();
+    await section.getByRole('button', { name: 'Add token' }).click();
     await section.getByLabel('GitHub token').fill('ghp_team');
     await section.getByRole('button', { name: 'Save' }).click();
-    await expect(section.getByTestId('space-connector-github')).toContainText('connected by e2etest');
-    expect(calls).toContainEqual({ method: 'POST', path: `/api/spaces/${SPACE_ID}/connectors/github`, body: { token: 'ghp_team' } });
+    await expect(section.getByTestId('space-github')).toContainText('connected by e2etest');
+    expect(calls).toContainEqual({ method: 'PUT', path: `/api/spaces/${SPACE_ID}/github`, body: { token: 'ghp_team' } });
 
-    await section.getByTestId('space-connector-example').getByRole('button', { name: 'Disconnect' }).click();
-    await expect(section.getByTestId('space-connector-example')).toContainText('not connected');
-    expect(calls.some((c) => c.method === 'DELETE' && c.path.endsWith('/connectors/example'))).toBe(true);
+    await section.getByRole('button', { name: 'Remove' }).click();
+    await expect(section.getByTestId('space-github')).toContainText('not connected');
+    expect(calls.some((c) => c.method === 'DELETE' && c.path.endsWith('/github'))).toBe(true);
   });
 
-  test('a member who is not an owner reads the connectors but has no controls', async ({ authenticatedPage: page }) => {
+  test('a member who is not an owner reads whether there is one but has no controls', async ({ authenticatedPage: page }) => {
     await stubs(page, 'editor');
     await page.goto(`/spaces/${SPACE_ID}/settings`);
-    const section = page.getByRole('region', { name: 'Connectors' });
-    await expect(section.getByTestId('space-connector-github')).toContainText('not connected');
-    await expect(section.getByRole('button', { name: 'Connect' })).toHaveCount(0);
-    await expect(section.getByRole('button', { name: 'Disconnect' })).toHaveCount(0);
+    const section = page.getByRole('region', { name: 'GitHub' });
+    await expect(section.getByTestId('space-github')).toContainText('not connected');
+    await expect(section.getByRole('button', { name: 'Add token' })).toHaveCount(0);
+    await expect(section.getByRole('button', { name: 'Remove' })).toHaveCount(0);
   });
 });

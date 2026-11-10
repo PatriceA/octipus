@@ -28,7 +28,6 @@ import type { SpaceRole } from '@/db/schema/organizations';
 import { resolveModel } from '@/models/resolve-model';
 import { getTopicConfig } from '@/models/topic-config';
 import { premiseNoteFor } from '@/core/premise';
-import { isRealUserId } from '@/security/principal';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { withoutPersonalOnlyTools } from '@/security/space-tools';
 import { randomUUID } from 'node:crypto';
@@ -612,17 +611,6 @@ export class SwarmSpawner {
     // ── Permission intersection ─────────────────────────────────────
     const roleTools = getToolsForRole(childRole);
 
-    if (isRealUserId(parentContext.userId)) {
-      try {
-        const { connectorOwnerOf, getConnectorRegistry } = await import('@/connectors');
-        // The child works where its parent does: in a space, the space's connectors (§9.5).
-        const connectorHandlers = await getConnectorRegistry().getUserToolHandlers(connectorOwnerOf(parentContext));
-        roleTools.push(...connectorHandlers);
-      } catch (err) {
-        coreLogger.error({ err, userId: parentContext.userId }, 'Failed to load connector tools for swarm child');
-      }
-    }
-
     const maintenanceSession = await sessionRepository.findById(parentContext.sessionId);
     const maintenanceReview = !!maintenanceSession?.context?.companionMaintenance;
     if (maintenanceReview) {
@@ -639,8 +627,7 @@ export class SwarmSpawner {
     // filtering neither: an agent short of a tool delegates, which is exactly
     // how a planning turn ended up editing the file it was asked to plan.
     //
-    // After `resolveChildTools`, and after the connector handlers above,
-    // because this is the first point the child's set is final.
+    // After `resolveChildTools`, because this is the first point the child's set is final.
     {
       // The row read above for the maintenance check: one read per spawn.
       const planSession = maintenanceSession;

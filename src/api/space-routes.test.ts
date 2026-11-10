@@ -24,7 +24,7 @@ process.env.LOG_LEVEL ??= 'error';
  */
 const PERSONAL_PREFIXES = [
   '/api/admin', '/api/agents', '/api/auth', '/api/backups', '/api/capabilities', '/api/channels', '/api/chat',
-  '/api/calendar', '/api/companion', '/api/connectors', '/api/context-hooks', '/api/devices', '/api/digest', '/api/email', '/api/eval', '/api/evaluations',
+  '/api/calendar', '/api/code-index', '/api/companion', '/api/context-hooks', '/api/devices', '/api/digest', '/api/email', '/api/eval', '/api/evaluations',
   '/api/gateway', '/api/graph', '/api/health', '/api/heartbeat', '/api/hooks', '/api/invites', '/api/logs', '/api/mcp',
   '/api/me', '/api/memory', '/api/metrics', '/api/models', '/api/modules', '/api/onboarding', '/api/permission-requests', '/api/persona',
   '/api/pipelines', '/api/plugin-host', '/api/plugin-packages', '/api/plugin-ui', '/api/plugins', '/api/recurring-tasks', '/api/roles',
@@ -138,9 +138,8 @@ const SPACE_ACTING = [
   'DELETE /api/spaces/:id/invites/:inviteId', 'GET /api/spaces/:id/activity',
   // Funding and budgets (S5): read for members, writes owner-only (sponsor raises).
   'PUT /api/spaces/:id/funding', 'GET /api/spaces/:id/budget', 'PUT /api/spaces/:id/budget',
-  // Space connectors (S5): listed for members, connect/disconnect owner-only.
-  'GET /api/spaces/:id/connectors', 'POST /api/spaces/:id/connectors/:connectorId',
-  'DELETE /api/spaces/:id/connectors/:connectorId',
+  // The space's GitHub token (S5): read for members, set/removed owner-only.
+  'GET /api/spaces/:id/github', 'PUT /api/spaces/:id/github', 'DELETE /api/spaces/:id/github',
   // Room modes (S5): read for room members, set by room creator or space owner; feedback by room members.
   'GET /api/spaces/:id/rooms/:roomId/mode', 'PUT /api/spaces/:id/rooms/:roomId/mode',
   'PUT /api/spaces/:id/rooms/:roomId/messages/:messageId/feedback',

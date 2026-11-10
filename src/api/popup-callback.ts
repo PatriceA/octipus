@@ -1,10 +1,11 @@
 /**
- * The page an OAuth popup lands on (sign-in providers and connectors): it
- * tells the window that opened it how the connect went, then closes.
+ * The page an OAuth popup lands on (the Google and Microsoft 365 mailbox
+ * connections): it tells the window that opened it how the connect went,
+ * then closes.
  *
  * Its one inline script runs under a per-response nonce. Before, these pages
- * asked for `'unsafe-inline'` (connectors) or nothing (providers), and the
- * global `script-src 'self'` replaced both, so the opener never heard back
+ * asked for `'unsafe-inline'` (the since-removed connectors) or nothing
+ * (providers), and the global `script-src 'self'` replaced both, so the opener never heard back
  * and the popup stayed open. What the request carried — the provider's
  * `error_description`, an id from the path — reaches the script only as
  * script-safe JSON and the markup only escaped: with `'unsafe-inline'`, a

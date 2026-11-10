@@ -79,7 +79,7 @@ vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ check:
 vi.mock('@/hooks/manager', () => ({ getHookManager: () => ({ triggerToolHooks: async () => ({ decision: 'allow' }) }) }));
 // A space run builds its tool home from the space's GitHub connection and the
 // member's name; this lane has no database, so both read as absent.
-vi.mock('@/core/spaces/connectors', () => ({ spaceGithubToken: async () => null }));
+vi.mock('@/core/spaces/github-token', () => ({ spaceGithubToken: async () => null }));
 vi.mock('@/db/repositories/user-repository', () => ({ userRepository: { findById: async () => null } }));
 
 beforeEach(() => {

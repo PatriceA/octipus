@@ -24,13 +24,13 @@ export const settingsGroups: Array<{ name: string; description: string; icon: st
     { title: 'Topic assignments', href: '/topics', keywords: 'roles routing models', admin: true },
     { title: 'Skills', href: '/skills', keywords: 'instructions capabilities' },
     { title: 'Memory', href: '/memory', keywords: 'remember recall' },
-    { title: 'Knowledge', href: '/knowledge', keywords: 'indexing sources embeddings documents' },
+    { title: 'Knowledge', href: '/knowledge', keywords: 'indexing sources embeddings documents code index cocoindex' },
   ] },
   { name: 'Connected accounts', description: 'Services, mailboxes, and messaging.', icon: 'connect', entries: [
     { title: 'Accounts & services', tab: 'integrations', keywords: 'oauth google github appwrite integrations' },
     { title: 'Mailboxes', tab: 'mailboxes', keywords: 'email imap smtp multiple inbox calendar', module: 'mail' },
     { title: 'Channels', tab: 'channels', keywords: 'telegram teams slack whatsapp', module: 'channels' },
-    { title: 'MCP & connectors', href: '/mcp', keywords: 'extensions plugins tools' },
+    { title: 'MCP servers', href: '/mcp', keywords: 'extensions plugins tools' },
   ] },
   { name: 'Machines & access', description: 'Where work runs and what it can reach.', icon: 'shield', entries: [
     { title: 'Workspace folders', tab: 'folders', keywords: 'paths project roots directories files' },

@@ -47,7 +47,6 @@ export function isPublicPath(path: string): boolean {
   // browser's cookie): the provider's redirect is a cross-site navigation,
   // which the SameSite=Strict session cookie does not survive.
   if (path.match(/^\/api\/auth\/oauth\/\w+\/callback/)) return true;
-  if (/^\/api\/connectors\/[a-z0-9-]+\/callback$/.test(path)) return true;
   // The probes monitoring, load balancers and k8s use are public (`/live` and
   // `/ready` are in the prefix list below). The rest of /api/health is install
   // state and needs a sign-in (routes/health.ts gates it further).

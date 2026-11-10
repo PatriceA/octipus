@@ -12,7 +12,9 @@ import type { Principal } from '@/security/principal';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { buildChildEnv } from '@/security/child-env';
 import {
-  COCOINDEX_CONNECTOR_ID,
+  COCOINDEX_MANAGED_ENV,
+  COCOINDEX_SERVER_ID,
+  currentCocoIndexEmbeddingBase,
   COCOINDEX_DEFAULT_EMBEDDING_MODEL,
   type CocoIndexStatus,
 } from '@/shared/cocoindex';
@@ -28,6 +30,9 @@ import { cocoIndexEmbeddingSettings } from './cocoindex-embedding';
 const CCC_EXECUTABLE = process.platform === 'win32' ? 'ccc.exe' : 'ccc';
 
 const MANAGED_MARKER = 'cocoindex-code';
+/** The index's model record. Named before the code index left the removed
+ * connector framework; existing indexes carry it, so the name is kept. */
+const INDEX_METADATA_FILE = 'octipus-connector.json';
 const INSTALL_PACKAGE = 'cocoindex-code[full]';
 const COMMAND_TIMEOUT_MS = 20_000;
 const INSTALL_TIMEOUT_MS = 20 * 60_000;
@@ -181,7 +186,7 @@ function defaultDependencies(): CocoIndexServiceDependencies {
 }
 
 function isManaged(server: MCPServer | undefined): boolean {
-  return server?.env?.OCTIPUS_MANAGED_CONNECTOR === MANAGED_MARKER;
+  return server?.env?.[COCOINDEX_MANAGED_ENV] === MANAGED_MARKER;
 }
 
 function cleanError(error: unknown): string {
@@ -251,7 +256,7 @@ export class CocoIndexService {
 
   private managedServer(): MCPServer | undefined {
     return this.deps.bridge.getServerConfigs().find(
-      (server) => server.id === COCOINDEX_CONNECTOR_ID && isManaged(server),
+      (server) => server.id === COCOINDEX_SERVER_ID && isManaged(server),
     );
   }
 
@@ -259,7 +264,7 @@ export class CocoIndexService {
 
   /** A managed daemon caches its API token; refresh rotations before connecting. */
   async refreshAuthentication(server: MCPServer): Promise<boolean> {
-    if (server.id !== COCOINDEX_CONNECTOR_ID || !isManaged(server) || server.env?.OCTIPUS_COCOINDEX_EMBEDDING_SOURCE !== 'octipus') return false;
+    if (server.id !== COCOINDEX_SERVER_ID || !isManaged(server) || server.env?.OCTIPUS_COCOINDEX_EMBEDDING_SOURCE !== 'octipus') return false;
     if (this.authenticationRefresh) return this.authenticationRefresh;
     if (this.removeJob || (this.job && this.state.status !== 'connecting')) throw new Error('CocoIndex configuration is changing; retry connection after it settles');
     this.authenticationRefresh = this.refreshManagedAuthentication(server).finally(() => { this.authenticationRefresh = null; });
@@ -273,16 +278,20 @@ export class CocoIndexService {
     const path = join(this.configDir(), 'global_settings.yml');
     let settings: Record<string, unknown> | null;
     try { settings = yaml.load(await this.deps.readText(path)) as Record<string, unknown> | null; }
-    catch { throw new Error('Managed CocoIndex settings cannot be read; reapply connector settings'); }
+    catch { throw new Error('Managed CocoIndex settings cannot be read; apply the CocoIndex settings again'); }
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Managed CocoIndex settings are invalid');
     if (settings.envs !== undefined && (!settings.envs || typeof settings.envs !== 'object' || Array.isArray(settings.envs))) throw new Error('Managed CocoIndex environment settings are invalid');
     const envs = settings.envs as Record<string, string> | undefined;
-    if (envs?.OPENAI_API_KEY === token) return false;
+    // A daemon set up before the code index moved still embeds through the
+    // old `/api/connectors/cocoindex` path; it is pointed at the current one
+    // here, with the same daemon restart a token rotation needs.
+    const base = envs?.OPENAI_API_BASE === undefined ? undefined : currentCocoIndexEmbeddingBase(envs.OPENAI_API_BASE);
+    if (envs?.OPENAI_API_KEY === token && base === envs?.OPENAI_API_BASE) return false;
     // Stop before changing the file: a failed stop leaves the mismatch visible
     // for the next retry rather than claiming the daemon loaded the new token.
     await this.deps.run(server.command, ['daemon', 'stop'], { cwd: server.cwd, env: this.managedEnvironment(server.cwd), timeoutMs: COMMAND_TIMEOUT_MS });
     // Preserve the embedding model/index. Token rotation never rebuilds it.
-    await this.deps.writeFile(path, yaml.dump({ ...settings, envs: { ...envs, OPENAI_API_KEY: token } }, { noRefs: true, lineWidth: -1 }));
+    await this.deps.writeFile(path, yaml.dump({ ...settings, envs: { ...envs, OPENAI_API_KEY: token, ...(base === undefined ? {} : { OPENAI_API_BASE: base }) } }, { noRefs: true, lineWidth: -1 }));
     this.deps.restrictFile(path);
     return true;
   }
@@ -302,7 +311,7 @@ export class CocoIndexService {
       COCOINDEX_CODE_DIR: configDir,
       COCOINDEX_CODE_DB_PATH_MAPPING: `${workspacePath}=${indexDir}`,
       // These upstream controls override cwd/path discovery or daemon startup.
-      // Empty values pin the managed connector to the explicit settings above.
+      // Empty values pin the managed server to the explicit settings above.
       COCOINDEX_CODE_HOST_CWD: '',
       COCOINDEX_CODE_HOST_PATH_MAPPING: '',
       COCOINDEX_CODE_DAEMON_SUPERVISED: '',
@@ -332,11 +341,11 @@ export class CocoIndexService {
   private baseStatus(): CocoIndexStatus {
     const server = this.managedServer();
     const connection = server
-      ? this.deps.bridge.getConnection(COCOINDEX_CONNECTOR_ID)
+      ? this.deps.bridge.getConnection(COCOINDEX_SERVER_ID)
       : undefined;
     const configured = !!server;
     return {
-      id: COCOINDEX_CONNECTOR_ID,
+      id: COCOINDEX_SERVER_ID,
       installed: configured,
       configured,
       workspacePath: server?.cwd ?? null,
@@ -380,20 +389,20 @@ export class CocoIndexService {
   }
 
   async install(workspacePath: string, embeddingModel?: string, source: 'local' | 'octipus' = 'local'): Promise<CocoIndexStatus> {
-    if (this.removeJob) throw new Error('CocoIndex Code connector removal is still in progress');
+    if (this.removeJob) throw new Error('CocoIndex Code removal is still in progress');
     if (this.job) return structuredClone(this.state);
     const conflicting = this.deps.bridge.getServerConfigs().find(
-      (server) => server.id === COCOINDEX_CONNECTOR_ID && !isManaged(server),
+      (server) => server.id === COCOINDEX_SERVER_ID && !isManaged(server),
     );
     if (conflicting) {
       throw new Error(
-        `An unmanaged MCP server already uses the ID ${COCOINDEX_CONNECTOR_ID}; rename or remove it first`,
+        `An unmanaged MCP server already uses the ID ${COCOINDEX_SERVER_ID}; rename or remove it first`,
       );
     }
     const shared = source === 'octipus' ? await cocoIndexEmbeddingSettings() : undefined;
     // Drain an older credential refresh before this setup can mutate its file.
     while (this.authenticationRefresh) await this.authenticationRefresh.catch(() => {});
-    if (this.removeJob) throw new Error('CocoIndex Code connector removal is still in progress');
+    if (this.removeJob) throw new Error('CocoIndex Code removal is still in progress');
     if (this.job) return structuredClone(this.state);
     const model = shared?.model ?? assertEmbeddingModel(embeddingModel ?? COCOINDEX_DEFAULT_EMBEDDING_MODEL);
     const embedding: CocoIndexStatus['embedding'] = { provider: shared ? 'octipus' : 'sentence-transformers', model: shared?.label ?? model, local: !shared };
@@ -420,7 +429,7 @@ export class CocoIndexService {
         this.setupError = cleanError(error);
         this.state.error = this.setupError;
         this.state.progress = undefined;
-        coreLogger.error({ err: error }, 'CocoIndex Code connector setup failed');
+        coreLogger.error({ err: error }, 'CocoIndex Code setup failed');
       })
       .finally(() => {
         if (generation === this.generation) {
@@ -464,7 +473,7 @@ export class CocoIndexService {
     if (workspacePath.includes(',') || workspacePath.includes('=')) {
       throw new Error('CocoIndex Code workspace paths cannot contain commas or equals signs');
     }
-    const metadataPath = join(indexDir, 'octipus-connector.json');
+    const metadataPath = join(indexDir, INDEX_METADATA_FILE);
     let previousIndexModel: string | null = null;
     try {
       const metadata = JSON.parse(await this.deps.readText(metadataPath)) as { embeddingModel?: unknown };
@@ -526,14 +535,14 @@ export class CocoIndexService {
     this.state.status = 'connecting';
     this.state.progress = { phase: 'connect', message: 'Connecting the CocoIndex Code MCP server' };
     const server: MCPServer = {
-      id: COCOINDEX_CONNECTOR_ID,
+      id: COCOINDEX_SERVER_ID,
       name: 'CocoIndex Code',
       command,
       args: ['mcp'],
       cwd: workspacePath,
       env: {
         ...env,
-        OCTIPUS_MANAGED_CONNECTOR: MANAGED_MARKER,
+        [COCOINDEX_MANAGED_ENV]: MANAGED_MARKER,
         OCTIPUS_COCOINDEX_EMBEDDING_MODEL: embedding.model,
         OCTIPUS_COCOINDEX_EMBEDDING_SOURCE: sharedSettings ? 'octipus' : 'local',
       },
@@ -542,28 +551,28 @@ export class CocoIndexService {
       requestTimeoutMs: FIRST_INDEX_TIMEOUT_MS,
       stderrAsError: false,
     };
-    await this.deps.bridge.disconnect(COCOINDEX_CONNECTOR_ID);
+    await this.deps.bridge.disconnect(COCOINDEX_SERVER_ID);
     if (generation !== this.generation) return;
     await this.deps.bridge.addServer(server);
     if (generation !== this.generation) {
-      await this.deps.bridge.removeServer(COCOINDEX_CONNECTOR_ID);
+      await this.deps.bridge.removeServer(COCOINDEX_SERVER_ID);
       return;
     }
     const connection = await this.deps.bridge.connect(server);
     if (generation !== this.generation) {
-      await this.deps.bridge.disconnect(COCOINDEX_CONNECTOR_ID);
-      if (this.managedServer()) await this.deps.bridge.removeServer(COCOINDEX_CONNECTOR_ID);
+      await this.deps.bridge.disconnect(COCOINDEX_SERVER_ID);
+      if (this.managedServer()) await this.deps.bridge.removeServer(COCOINDEX_SERVER_ID);
       return;
     }
     if (connection.status !== 'connected') {
       throw new Error(connection.error || 'CocoIndex Code MCP server did not connect');
     }
     if (!connection.tools.some((tool) => tool.name === 'search')) {
-      await this.deps.bridge.disconnect(COCOINDEX_CONNECTOR_ID);
+      await this.deps.bridge.disconnect(COCOINDEX_SERVER_ID);
       throw new Error('CocoIndex Code connected without its required search tool');
     }
     this.state = {
-      id: COCOINDEX_CONNECTOR_ID,
+      id: COCOINDEX_SERVER_ID,
       installed: true,
       configured: true,
       workspacePath,
@@ -730,9 +739,9 @@ export class CocoIndexService {
     this.job = null;
     if (workspacePath) await this.stopManagedDaemon(command, workspacePath);
     const managed = this.managedServer();
-    if (managed) await this.deps.bridge.removeServer(COCOINDEX_CONNECTOR_ID);
+    if (managed) await this.deps.bridge.removeServer(COCOINDEX_SERVER_ID);
     this.state = {
-      id: COCOINDEX_CONNECTOR_ID,
+      id: COCOINDEX_SERVER_ID,
       installed: this.installedCommand !== null && this.installedCommand !== undefined,
       configured: false,
       workspacePath: null,

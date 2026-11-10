@@ -11,6 +11,7 @@ import type { RoutedScriptTool } from '@/core/agent-base';
 import type { ToolHandler } from '@/core/agent-worker';
 import type { AgentContext, MCPServer, MCPTool } from '@/core/types';
 import { exposureConfigError, type McpExposure, type McpExposureConfig, resolveToolExposure } from '@/shared/mcp-exposure';
+import { COCOINDEX_MANAGED_ENV } from '@/shared/cocoindex';
 import { coreLogger } from '@/utils/logger';
 import { getMcpCircuitBreaker } from './circuit-breaker';
 import { mcpToolKey, mcpToolNames } from './exposure';
@@ -311,8 +312,8 @@ export class MCPBridge extends EventEmitter {
     };
 
     try {
-      if (server.id === 'cocoindex-code' && server.env?.OCTIPUS_MANAGED_CONNECTOR === 'cocoindex-code' && server.env?.OCTIPUS_COCOINDEX_EMBEDDING_SOURCE === 'octipus') {
-        const { getCocoIndexService } = await import('@/connectors/cocoindex');
+      if (server.id === 'cocoindex-code' && server.env?.[COCOINDEX_MANAGED_ENV] === 'cocoindex-code' && server.env?.OCTIPUS_COCOINDEX_EMBEDDING_SOURCE === 'octipus') {
+        const { getCocoIndexService } = await import('@/core/code-index/cocoindex');
         await getCocoIndexService().refreshAuthentication(server);
       }
       // Wire transport messages to protocol

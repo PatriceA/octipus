@@ -18,7 +18,7 @@ import { moduleOfPath, moduleOfTool } from './registry';
 const CORE_ROUTE_PREFIXES = [
   '/v1',
   '/api/admin', '/api/agents', '/api/auth', '/api/backups', '/api/capabilities',
-  '/api/chat', '/api/companion', '/api/connectors', '/api/devices', '/api/digest', '/api/documents',
+  '/api/chat', '/api/code-index', '/api/companion', '/api/devices', '/api/digest', '/api/documents',
   '/api/eval', '/api/evaluations', '/api/gateway', '/api/graph', '/api/health', '/api/heartbeat', '/api/hooks',
   '/api/invites', '/api/knowledge', '/api/logs', '/api/mcp', '/api/me', '/api/memory', '/api/metrics', '/api/models',
   '/api/modules', '/api/notes', '/api/notifications', '/api/onboarding', '/api/permission-requests', '/api/persona',

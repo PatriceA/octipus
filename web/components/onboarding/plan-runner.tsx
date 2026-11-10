@@ -29,9 +29,8 @@ async function call(c: ApiCall, extra?: Record<string, unknown>): Promise<unknow
 }
 
 function connected(step: Extract<PlanStep, { kind: 'connect' }>, s: OnboardingState): boolean {
-  if ('mailbox' in step.doneWhen) return Boolean(s.mailbox);
-  const id = step.doneWhen.connector;
-  return Boolean(s.connectors.find((c) => c.id === id)?.connected);
+  // The mailbox is the one sign-in a plan asks for.
+  return 'mailbox' in step.doneWhen && Boolean(s.mailbox);
 }
 
 const icon = (status: StepStatus) => {

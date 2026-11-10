@@ -90,7 +90,7 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
   // Set by anything the person does here: from then on the guide stays, even once finished.
   const [engaged, setEngaged] = useState(false);
   // The home page first asks only whether the guide is wanted; the full state read
-  // (models, mailbox, connectors, CLI tools…) waits until the guide is shown.
+  // (models, mailbox, channels, CLI tools…) waits until the guide is shown.
   const { data: saved } = useQuery({
     queryKey: ['onboarding', 'progress'],
     queryFn: () => api.get<OnboardingProgress>('/onboarding/progress'),

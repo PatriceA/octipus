@@ -40,7 +40,7 @@ export function ModulesTab() {
       <div className="space-y-1">
         <h2 className="section-label">modules</h2>
         <p className="text-[12px] text-on-surface-variant leading-relaxed">
-          The core (chat, agents, tasks, notes, documents, models, connectors, settings, backups) is always on. A module
+          The core (chat, agents, tasks, notes, documents, models, MCP servers, settings, backups) is always on. A module
           that is off is gone for everyone, agents included: no menu entry, no tool, no background job. Its data stays
           and comes back when it is turned on again.
         </p>

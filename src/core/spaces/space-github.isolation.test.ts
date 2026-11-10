@@ -1,22 +1,18 @@
 /**
- * Space connectors and the identity a space run acts with
+ * A space's GitHub token and the identity a space run acts with
  * (docs/plans/coworking-spec.md §9.5).
  *
  *   - every git, shell, gh and CLI-agent run in a space gets a fresh tool
- *     home of its own, seeded only with the space connector's GitHub login,
- *     removed after the run; the host's SSH agent, askpass and credential
- *     helpers never reach it (real git, real shell);
+ *     home of its own, seeded only with the space's GitHub login, removed
+ *     after the run; the host's SSH agent, askpass and credential helpers
+ *     never reach it (real git, real shell);
  *   - the GitHub tool, through a real handler call, runs gh with the space's
  *     token and refuses without one; personal sessions keep the host's gh;
- *   - in a space, connectors are the space's (`connectorOwnerOf`): never the
- *     member's personal connection, and the reverse for personal sessions;
- *     their writes follow the role, their reads do not mark the session
- *     private;
- *   - an OAuth connect (space or personal) is bound to the browser that
- *     started it; the space flow stores under the space only while the
- *     starter still owns it; a refresh writes back under the space and never
- *     creates a secret;
- *   - a reconnect or disconnect deletes the superseded ciphertext.
+ *     its writes follow the role, its reads do not mark the session private;
+ *   - a new token or a removal deletes the superseded ciphertext;
+ *   - what the removed connector framework stored (space and personal
+ *     `connector_<id>_*` rows) neither surfaces nor reaches an agent, and
+ *     its routes are gone.
  *
  * Driven through the real routes (`createServer()`) and tools. Backed by
  * ephemeral PGlite.
@@ -34,9 +30,6 @@ process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
 process.env.JWT_SECRET ??= `test-jwt-${rand(24)}`;
 process.env.SESSION_SECRET ??= `test-session-${rand(24)}`;
 process.env.LOG_LEVEL ??= 'error';
-
-// No connector ships built in; the OAuth flow is driven with a stand-in.
-vi.mock('@/connectors/definitions', async () => (await import('@/test-helpers/connector-fixtures')).mockDefinitions());
 
 /** What `gh` was asked to run, with the environment it would have had, read while the run's home existed. */
 const ghRuns: Array<{ args: string[]; env: Record<string, string>; hostsYml: string | null }> = [];
@@ -71,23 +64,6 @@ async function call(who: string, method: string, path: string, opts: { body?: un
   return app.handle(new Request(`http://localhost${path}`, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) }));
 }
 
-/** The provider's redirect back, as a browser with (or without) the cookie makes it. */
-async function callback(connectorId: string, state: string, cookie?: string): Promise<string> {
-  const res = await app.handle(new Request(`http://localhost/api/connectors/${connectorId}/callback?code=the-code&state=${state}`, {
-    headers: cookie ? { cookie } : {},
-  }));
-  return res.text();
-}
-
-/** Start a connect: the authorization URL's state and the browser cookie it set. */
-async function started(res: Response): Promise<{ state: string; cookie: string }> {
-  expect(res.status).toBe(200);
-  const { url } = await res.json() as { url: string };
-  const setCookie = res.headers.get('set-cookie') ?? '';
-  expect(setCookie).toMatch(/^octipus_oauth_browser=[A-Za-z0-9_-]{43}; HttpOnly; SameSite=Lax; Path=\/api; Max-Age=600/);
-  return { state: new URL(url).searchParams.get('state') as string, cookie: setCookie.split(';')[0] };
-}
-
 async function agentContext(userId: string, space: { workspaceId: string; role: 'owner' | 'editor' | 'commenter' } | null): Promise<AgentContext> {
   const { buildAgentContext } = await import('@/core/agent/context');
   return buildAgentContext({
@@ -105,11 +81,9 @@ async function agentContext(userId: string, space: { workspaceId: string; role: 
   });
 }
 
-const tokenResponse = (body: Record<string, unknown>) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
-
 beforeAll(async () => {
   process.env.STORAGE_MODE = 'embedded';
-  process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'octipus-space-connectors-'));
+  process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'octipus-space-github-'));
   const { initializeDb } = await import('@/db/postgres');
   await initializeDb();
   const { runMigrations } = await import('@/db/migrate');
@@ -136,15 +110,8 @@ beforeAll(async () => {
   otherSpaceId = await spaceWith(ownerId, [[coOwnerId, 'editor']], 'Second');
   const res = await call('owner', 'PATCH', `/api/spaces/${otherSpaceId}/members/${coOwnerId}`, { body: { role: 'owner' } });
   expect(res.status).toBe(200);
-  // The space's GitHub connection.
-  expect((await call('owner', 'POST', `/api/spaces/${spaceId}/connectors/github`, { body: { token: 'ghp_space' } })).status).toBe(200);
-  // An OAuth connector whose client is already registered (no discovery over the network).
-  const { connectorVaultKeys } = await import('@/security/oauth');
-  const { getVault } = await import('@/security/vault');
-  const keys = connectorVaultKeys('example');
-  await getVault().setSystemSecret(keys.clientId, 'client-id');
-  await getVault().setSystemSecret(keys.authEndpoint, 'https://auth.example.test/authorize');
-  await getVault().setSystemSecret(keys.tokenEndpoint, 'https://auth.example.test/token');
+  // The space's GitHub token.
+  expect((await call('owner', 'PUT', `/api/spaces/${spaceId}/github`, { body: { token: 'ghp_space' } })).status).toBe(200);
   const { getPermissionManager } = await import('@/security/permissions');
   for (const id of [editorId, commenterId]) await getPermissionManager().setPermission(id, 'shell', 'execute', 'ALLOW');
 }, 120_000);
@@ -155,7 +122,7 @@ afterAll(async () => {
 });
 
 describe('a space run\'s tool home (§9.5)', () => {
-  test('fresh per run, seeded only with the space connector\'s login, removed after it', async () => {
+  test('fresh per run, seeded only with the space\'s GitHub login, removed after it', async () => {
     const { openSpaceToolHome, createSpaceToolHome } = await import('@/security/space-tool-env');
     const ctx = await agentContext(editorId, { workspaceId: spaceId, role: 'editor' });
     const a = await openSpaceToolHome({ ...ctx, space: ctx.space! });
@@ -303,180 +270,95 @@ describe('the GitHub tool in a space (§9.5), through a real handler call', () =
   });
 });
 
-describe('connectors in a space are the space\'s (§9.5)', () => {
-  test('connectorOwnerOf: a space context gets the space\'s connections only, a personal one the member\'s', async () => {
-    const { connectorOwnerOf, getConnectorRegistry } = await import('@/connectors');
-    const { storeConnectorUserTokens } = await import('@/security/oauth');
-    await storeConnectorUserTokens('example', editorId, 'editor-personal', undefined, undefined);
-    const inSpace = await agentContext(editorId, { workspaceId: spaceId, role: 'editor' });
-    const personal = await agentContext(editorId, null);
-    expect(connectorOwnerOf(personal)).toBe(editorId);
-    expect(connectorOwnerOf(inSpace)).toMatchObject({ space: { workspaceId: spaceId, userId: editorId } });
-    // The member's personal connection is not the space's.
-    expect(await getConnectorRegistry().getUserToolHandlers(connectorOwnerOf(inSpace))).toEqual([]);
-    expect((await getConnectorRegistry().getUserToolHandlers(connectorOwnerOf(personal))).map((h) => h.name))
-      .toEqual(['connector_list_tools', 'connector_call_tool']);
-  });
-
-  test('their writes follow the role and their reads do not mark the session private', async () => {
+describe('the space\'s GitHub in a space session (§9.5)', () => {
+  test('its writes follow the role and its reads do not mark the session private', async () => {
     const { routeApprovalFor } = await import('@/security/approval-route');
     const { getFlowLabel } = await import('@/security/flow-guard');
     const editor = { ...await agentContext(editorId, { workspaceId: spaceId, role: 'editor' }), attended: true };
-    const writes: Array<[string, string, string, Record<string, unknown>?]> = [
-      ['github', 'write', 'create_issue'],
-      ['github', 'manage', 'pr_merge'],
-      ['connector', 'connector_call_tool', 'connector_call_tool', { connector_id: 'example', tool_name: 'create_issue' }],
-    ];
-    for (const [toolId, action, toolName, args] of writes) {
-      expect(await routeApprovalFor(editor, { toolId, action, toolName, args }, { level: 'ALLOW' }), `${toolId}.${action}`).toMatchObject({ route: 'execute' });
+    for (const [toolId, action, toolName] of [['github', 'write', 'create_issue'], ['github', 'manage', 'pr_merge']]) {
+      expect(await routeApprovalFor(editor, { toolId, action, toolName }, { level: 'ALLOW' }), `${toolId}.${action}`).toMatchObject({ route: 'execute' });
     }
     const commenter = { ...await agentContext(commenterId, { workspaceId: spaceId, role: 'commenter' }), attended: true };
     expect(await routeApprovalFor(commenter, { toolId: 'github', action: 'write', toolName: 'create_issue' }, { level: 'ALLOW' }))
       .toMatchObject({ route: 'deny', reason: expect.stringMatching(/can only read and comment/) });
-    for (const [toolId, action, toolName, args] of [
-      ['github', 'read', 'issue_list'],
-      ['connector', 'connector_call_tool', 'connector_call_tool', { connector_id: 'example', tool_name: 'search_issues' }],
-    ] as Array<[string, string, string, Record<string, unknown>?]>) {
-      expect(await routeApprovalFor(editor, { toolId, action, toolName, args }, { level: 'ALLOW' })).toMatchObject({ route: 'execute' });
-    }
+    expect(await routeApprovalFor(editor, { toolId: 'github', action: 'read', toolName: 'issue_list' }, { level: 'ALLOW' })).toMatchObject({ route: 'execute' });
     expect(getFlowLabel(editor.sessionId).private).toBe(false);
-    // A space session is offered them.
+    // A space session is offered it.
     const { withoutPersonalOnlyTools } = await import('@/security/space-tools');
     const h = (name: string, toolId: string, permissionAction: string) => ({ name, toolId, permissionAction, description: '', parameters: { type: 'object' }, execute: async () => null });
-    expect(withoutPersonalOnlyTools([h('github__issue_create', 'github', 'write'), h('connector_call_tool', 'connector', 'connector_call_tool')]).map((t) => t.name))
-      .toEqual(['github__issue_create', 'connector_call_tool']);
-  });
-});
-
-describe('OAuth connects are bound to the browser that started them (§9.5)', () => {
-  test('space connector: refused from another browser; stored under the space from the same one', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(tokenResponse({ access_token: 'space-at', refresh_token: 'space-rt', expires_in: 3600, token_type: 'bearer' }));
-    try {
-      const { spaceConnectorAccessToken } = await import('@/core/spaces/connectors');
-      const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
-      const editor = await resolvedPrincipal(editorId, spaceId);
-
-      // The URL handed to someone else: their browser has no cookie.
-      const first = await started(await call('owner', 'POST', `/api/spaces/${spaceId}/connectors/example`));
-      expect(await callback('example', first.state)).toMatch(/different browser/);
-      // Someone else's cookie does not match either.
-      const other = await started(await call('editor', 'POST', '/api/connectors/example/authorize'));
-      const second = await started(await call('owner', 'POST', `/api/spaces/${spaceId}/connectors/example`));
-      expect(await callback('example', second.state, other.cookie)).toMatch(/different browser/);
-      expect(fetchSpy).not.toHaveBeenCalled();
-      expect(await spaceConnectorAccessToken(editor, 'example')).toBeNull();
-
-      // The starting browser (its cookie reused across flows).
-      const third = await started(await call('owner', 'POST', `/api/spaces/${spaceId}/connectors/example`, { cookie: second.cookie }));
-      expect(third.cookie).toBe(second.cookie);
-      expect(await callback('example', third.state, third.cookie)).toMatch(/connector:connected/);
-      expect(await spaceConnectorAccessToken(editor, 'example')).toBe('space-at');
-      const { getVault } = await import('@/security/vault');
-      expect(await getVault().getByName(ownerId, 'connector_example_access_token')).toBeNull();
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
-
-  test('space connector: a starter who no longer owns the space when the callback comes is refused', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(tokenResponse({ access_token: 'late-at', token_type: 'bearer' }));
-    try {
-      const flow = await started(await call('coowner', 'POST', `/api/spaces/${otherSpaceId}/connectors/example`));
-      expect((await call('owner', 'PATCH', `/api/spaces/${otherSpaceId}/members/${coOwnerId}`, { body: { role: 'editor' } })).status).toBe(200);
-      expect(await callback('example', flow.state, flow.cookie)).toMatch(/connector:error/);
-      const { spaceConnectorAccessToken } = await import('@/core/spaces/connectors');
-      const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
-      expect(await spaceConnectorAccessToken(await resolvedPrincipal(ownerId, otherSpaceId), 'example')).toBeNull();
-    } finally {
-      fetchSpy.mockRestore();
-      await call('owner', 'PATCH', `/api/spaces/${otherSpaceId}/members/${coOwnerId}`, { body: { role: 'owner' } });
-    }
-  });
-
-  test('personal connector: the same browser binding', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(tokenResponse({ access_token: 'commenter-at', token_type: 'bearer' }));
-    try {
-      const { getConnectorAccessToken } = await import('@/security/oauth');
-      const flow = await started(await call('commenter', 'POST', '/api/connectors/example/authorize'));
-      expect(await callback('example', flow.state)).toMatch(/different browser/);
-      expect(await getConnectorAccessToken('example', commenterId)).toBeNull();
-      const again = await started(await call('commenter', 'POST', '/api/connectors/example/authorize', { cookie: flow.cookie }));
-      expect(await callback('example', again.state, again.cookie)).toMatch(/connector:connected/);
-      expect(await getConnectorAccessToken('example', commenterId)).toBe('commenter-at');
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
-
-  test('a refresh writes back under the space and never creates a secret', async () => {
-    const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
-    const { spaceRepos } = await import('@/db/repositories/space');
-    const { spaceConnectorAccessToken, spaceConnectorKeys } = await import('@/core/spaces/connectors');
-    const owner = await resolvedPrincipal(ownerId, spaceId);
-    const keys = spaceConnectorKeys('example');
-    await spaceRepos(owner).secrets.write(keys.tokenExpiry, new Date(Date.now() - 60_000).toISOString(), 'other');
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(tokenResponse({ access_token: 'space-at-2', expires_in: 3600 }));
-    try {
-      const editor = await resolvedPrincipal(editorId, spaceId);
-      expect(await spaceConnectorAccessToken(editor, 'example')).toBe('space-at-2');
-      expect(String(fetchSpy.mock.calls[0]![1]?.body)).toContain('refresh_token=space-rt');
-      expect(await spaceRepos(editor).secrets.read(keys.accessToken)).toBe('space-at-2');
-      // The author stays the owner who connected it.
-      expect((await spaceRepos(editor).secrets.list()).find((s) => s.name === keys.accessToken)?.storedBy).toBe(ownerId);
-      expect(await spaceRepos(editor).secrets.refresh('connector_other_access_token', 'x')).toBe(false);
-      expect(await spaceRepos(editor).secrets.read('connector_other_access_token')).toBeNull();
-    } finally {
-      fetchSpy.mockRestore();
-    }
+    expect(withoutPersonalOnlyTools([h('github__issue_create', 'github', 'write')]).map((t) => t.name)).toEqual(['github__issue_create']);
   });
 });
 
 describe('space secrets keep no superseded ciphertext', () => {
-  test('a reconnect replaces the row, a disconnect deletes it', async () => {
+  test('a new token replaces the row, a removal deletes it', async () => {
     const { queryRaw } = await import('@/db/postgres');
     const count = async () => Number((await queryRaw(
       `SELECT count(*)::int AS n FROM vault WHERE scope = 'space' AND workspace_id = $1 AND name = 'connector_github_access_token'`, [spaceId],
     )).rows[0].n);
     expect(await count()).toBe(1);
-    expect((await call('owner', 'POST', `/api/spaces/${spaceId}/connectors/github`, { body: { token: 'ghp_space_2' } })).status).toBe(200);
+    expect((await call('owner', 'PUT', `/api/spaces/${spaceId}/github`, { body: { token: 'ghp_space_2' } })).status).toBe(200);
     expect(await count()).toBe(1);
-    expect((await call('owner', 'DELETE', `/api/spaces/${spaceId}/connectors/github`)).status).toBe(200);
+    expect((await call('owner', 'DELETE', `/api/spaces/${spaceId}/github`)).status).toBe(200);
     expect(await count()).toBe(0);
+    expect(await (await call('owner', 'GET', `/api/spaces/${spaceId}/github`)).json()).toEqual({ connected: false, connectedBy: null, connectedAt: null });
+    // Back for the tests after this one.
+    expect((await call('owner', 'PUT', `/api/spaces/${spaceId}/github`, { body: { token: 'ghp_space' } })).status).toBe(200);
   });
 });
 
-describe('a removed connector (atlassian, linear) stored before the upgrade is ignored', () => {
-  test('its saved tokens neither surface, nor reach an agent, nor start a flow', async () => {
+describe('what the removed connector framework stored before the upgrade', () => {
+  test('space and personal connector tokens neither surface, nor reach an agent; the routes are gone', async () => {
     const { resolvedPrincipal } = await import('@/test-helpers/space-fixtures');
     const { spaceRepos } = await import('@/db/repositories/space');
-    const { spaceConnectorKeys } = await import('@/core/spaces/connectors');
-    const { storeConnectorUserTokens } = await import('@/security/oauth');
+    const { getVault } = await import('@/security/vault');
     const owner = await resolvedPrincipal(ownerId, spaceId);
-    for (const id of ['atlassian', 'linear']) {
-      await spaceRepos(owner).secrets.write(spaceConnectorKeys(id).accessToken, `space-${id}`, 'oauth_token');
-      await storeConnectorUserTokens(id, ownerId, `personal-${id}`, 'rt', 3600);
+    // As the connector framework wrote them: `connector_<id>_*`, space-scoped and personal.
+    for (const id of ['atlassian', 'linear', 'example']) {
+      await spaceRepos(owner).secrets.write(`connector_${id}_access_token`, `space-${id}`, 'oauth_token');
+      await spaceRepos(owner).secrets.write(`connector_${id}_refresh_token`, `space-rt-${id}`, 'oauth_token');
+      await getVault().store(ownerId, `connector_${id}_access_token`, `personal-${id}`, { credentialType: 'oauth_token' });
+      await getVault().store(ownerId, `connector_${id}_token_expiry`, new Date(Date.now() + 3600_000).toISOString(), { credentialType: 'other' });
     }
 
-    // The connector pages list only connectors that exist.
-    const personal = await call('owner', 'GET', '/api/connectors');
-    expect(personal.status).toBe(200);
-    expect((await personal.json() as { connectors: Array<{ id: string }> }).connectors.map((c) => c.id)).toEqual(['example']);
-    const space = await call('owner', 'GET', `/api/spaces/${spaceId}/connectors`);
-    expect(space.status).toBe(200);
-    expect((await space.json() as { connectors: Array<{ id: string }> }).connectors.map((c) => c.id)).toEqual(['github', 'example']);
+    // The space settings read only the GitHub token, which still works.
+    const github = await call('owner', 'GET', `/api/spaces/${spaceId}/github`);
+    expect(github.status).toBe(200);
+    expect(await github.json()).toMatchObject({ connected: true, connectedBy: 'owner' });
+    const { spaceGithubToken } = await import('@/core/spaces/github-token');
+    expect(await spaceGithubToken(await resolvedPrincipal(editorId, spaceId))).toBe('ghp_space');
 
-    // An agent bound to one (`connector:atlassian`) gets no connector tools, and the token getter never answers for it.
-    const { connectorOwnerOf, getConnectorRegistry } = await import('@/connectors');
-    const ctx = await agentContext(ownerId, null);
-    expect(await getConnectorRegistry().getUserToolHandlers(connectorOwnerOf(ctx), new Set(['atlassian', 'linear']))).toEqual([]);
-    const inSpace = await agentContext(ownerId, { workspaceId: spaceId, role: 'owner' });
-    expect(await getConnectorRegistry().getUserToolHandlers(connectorOwnerOf(inSpace), new Set(['atlassian']))).toEqual([]);
+    // The personal rows are ordinary secrets: listed on the Secrets page, and deletable there.
+    const listed = await call('owner', 'GET', '/api/vault');
+    expect(listed.status).toBe(200);
+    const credentials = (await listed.json() as { credentials: Array<{ id: string; name: string }> }).credentials;
+    const stale = credentials.find((c) => c.name === 'connector_linear_access_token');
+    expect(stale).toBeDefined();
+    expect(JSON.stringify(credentials)).not.toContain('personal-linear');
+    expect((await call('owner', 'DELETE', `/api/vault/${stale!.id}`)).status).toBe(200);
 
-    // Starting or clearing one is refused, not attempted.
-    for (const id of ['atlassian', 'linear']) {
-      expect(await (await call('owner', 'POST', `/api/connectors/${id}/authorize`)).json()).toEqual({ error: `Unknown connector: ${id}` });
-      expect((await call('owner', 'POST', `/api/spaces/${spaceId}/connectors/${id}`)).status).toBe(404);
-      expect(await callback(id, 'no-such-state')).toMatch(/connector:error/);
+    // The mailbox OAuth (Google, Microsoft 365) does not read them as its own.
+    const { getOAuthManager } = await import('@/security/oauth');
+    expect(await getOAuthManager().getConnectionStatus(ownerId, 'google')).toEqual({ connected: false, provider: 'google' });
+    expect(await getOAuthManager().getValidToken(ownerId, 'microsoft')).toBeNull();
+
+    // No connector tool reaches an agent's role tools, personal or in a space.
+    const { getToolsForRole } = await import('@/core/agent/roles');
+    for (const ctx of [await agentContext(ownerId, null), await agentContext(ownerId, { workspaceId: spaceId, role: 'owner' })]) {
+      const names = getToolsForRole(ctx.role as Parameters<typeof getToolsForRole>[0]).map((t) => t.name);
+      expect(names.filter((n) => n.startsWith('connector_'))).toEqual([]);
     }
+
+    // The connector routes, personal and space, no longer exist.
+    expect((await call('owner', 'GET', '/api/connectors')).status).toBe(404);
+    expect((await call('owner', 'POST', '/api/connectors/linear/authorize')).status).toBe(404);
+    expect((await call('owner', 'DELETE', '/api/connectors/linear')).status).toBe(404);
+    expect((await call('owner', 'GET', `/api/spaces/${spaceId}/connectors`)).status).toBe(404);
+    expect((await call('owner', 'POST', `/api/spaces/${spaceId}/connectors/github`, { body: { token: 'ghp_x' } })).status).toBe(404);
+    // An OAuth flow cannot be started for one either.
+    const flow = await call('owner', 'GET', '/api/auth/oauth/linear/authorize');
+    expect(flow.status).toBe(400);
+    const { OAuthManager } = await import('@/security/oauth');
+    await expect(new OAuthManager().generateAuthorizationUrl(ownerId, 'linear', { browserBinding: 'a'.repeat(64) })).rejects.toThrow(/not configured/);
   });
 });

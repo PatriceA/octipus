@@ -15,6 +15,7 @@ import {
   X,
 } from 'lucide-react';
 import { useState } from 'react';
+import { CocoIndexCard } from '@/components/knowledge/cocoindex-card';
 import { PageHeader } from '@/components/ui/page-header';
 import { Portal } from '@/components/ui/portal';
 import { StatusBadge } from '@/components/ui/status-badge';
@@ -805,6 +806,12 @@ export default function KnowledgePage() {
           )}
         </div>
       )}
+
+      {/* Code index: an optional, separate index agents search code by meaning through (MCP). */}
+      <div className="space-y-3">
+        <h2 className="text-sm font-medium text-on-surface">Code index</h2>
+        <CocoIndexCard />
+      </div>
 
       {/* Dialogs */}
       {selectedEntryId && <EntryDetailDialog entryId={selectedEntryId} onClose={() => setSelectedEntryId(null)} />}

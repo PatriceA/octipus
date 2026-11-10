@@ -4,6 +4,7 @@ import { getConfig } from '@/config';
 import { getModelRegistry } from '@/models/model-registry';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getMcpTokenPath } from '@/security/mcp-token-bootstrap';
+import { COCOINDEX_EMBEDDING_PATH } from '@/shared/cocoindex';
 
 async function boundModel() {
   const model = await getModelRegistry().getModelForTopic('embedding');
@@ -18,7 +19,7 @@ export async function cocoIndexEmbeddingSettings() {
   const { model, identity } = await boundModel();
   const token = (await readFile(getMcpTokenPath(), 'utf8')).trim();
   if (!token) throw new Error('Octipus API token unavailable. Restart Octipus before setting up CocoIndex.');
-  const base = `http://127.0.0.1:${getConfig().api.port}/api/connectors/cocoindex`;
+  const base = `http://127.0.0.1:${getConfig().api.port}${COCOINDEX_EMBEDDING_PATH}`;
   return {
     model: identity,
     label: model.name,

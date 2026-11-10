@@ -99,7 +99,7 @@ export interface HeartbeatProbeDeps {
    * identity belongs to whoever authenticated it — the operator — so the
    * probe is limited to admin users, and a stored DENY on `github/read`
    * still wins. A per-user GitHub credential is enterprise-track work
-   * (org-level connectors); until then a non-admin's heartbeat must not be
+   * (org-level credentials); until then a non-admin's heartbeat must not be
    * fed another person's pull requests.
    */
   githubAllowed: (userId: string) => Promise<boolean>;

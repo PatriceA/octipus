@@ -516,6 +516,11 @@ export async function stubAllDefaults(page: Page): Promise<void> {
   await stubExperts(page);
   await stubMcp(page);
   await stubKnowledge(page);
+  // The optional code index card on the Knowledge page: not installed.
+  await page.route('**/api/code-index/cocoindex', (route) => json(route, 200, {
+    id: 'cocoindex-code', installed: false, configured: false, workspacePath: null, status: 'not_installed',
+    embedding: { provider: 'sentence-transformers', model: 'Snowflake/snowflake-arctic-embed-xs', local: true },
+  }));
   await stubSkills(page);
   await stubPipelines(page);
   await stubSwarm(page);

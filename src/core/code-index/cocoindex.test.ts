@@ -108,9 +108,9 @@ function fixture(options: {
 describe('managed embedding authentication refresh', () => {
   const managed: MCPServer = { id: 'cocoindex-code', name: 'CocoIndex Code', command: '/bin/ccc', cwd: '/workspace/repo', isEnabled: true,
     env: { OCTIPUS_MANAGED_CONNECTOR: 'cocoindex-code', OCTIPUS_COCOINDEX_EMBEDDING_SOURCE: 'octipus' } };
-  function authenticationFixture(token = 'current-fixture-token') {
+  function authenticationFixture(token = 'current-fixture-token', base = 'http://localhost:3005/api/code-index/cocoindex/document') {
     const f = fixture({ servers: [managed] });
-    const initial = { embedding: { provider: 'litellm', model: 'openai/existing-index-model' }, envs: { OPENAI_API_KEY: token, OPENAI_API_BASE: 'http://localhost:3005/api/connectors/cocoindex/document', OTHER: 'preserved' } };
+    const initial = { embedding: { provider: 'litellm', model: 'openai/existing-index-model' }, envs: { OPENAI_API_KEY: token, OPENAI_API_BASE: base, OTHER: 'preserved' } };
     vi.mocked(f.deps.readText).mockImplementation(async path => path.endsWith('mcp-token') ? 'current-fixture-token' : f.writes.get(path) ?? yaml.dump(initial));
     return f;
   }
@@ -121,6 +121,18 @@ describe('managed embedding authentication refresh', () => {
     const [path, content] = [...f.writes][0];
     expect(yaml.load(content)).toMatchObject({ embedding: { model: 'openai/existing-index-model' }, envs: { OPENAI_API_KEY: 'current-fixture-token', OTHER: 'preserved' } });
     expect(f.deps.restrictFile).toHaveBeenCalledWith(path);
+    expect(await f.service.refreshAuthentication(managed)).toBe(false);
+    expect(f.calls).toHaveLength(1);
+  });
+  test('a daemon set up before the code index moved is pointed at the current embedding path, once', async () => {
+    const f = authenticationFixture('current-fixture-token', 'http://localhost:3005/api/connectors/cocoindex/document');
+    expect(await f.service.refreshAuthentication(managed)).toBe(true);
+    expect(f.calls.map(call => call.args)).toEqual([['daemon', 'stop']]);
+    const [, content] = [...f.writes][0];
+    expect(yaml.load(content)).toMatchObject({
+      embedding: { model: 'openai/existing-index-model' },
+      envs: { OPENAI_API_KEY: 'current-fixture-token', OPENAI_API_BASE: 'http://localhost:3005/api/code-index/cocoindex/document', OTHER: 'preserved' },
+    });
     expect(await f.service.refreshAuthentication(managed)).toBe(false);
     expect(f.calls).toHaveLength(1);
   });
@@ -240,7 +252,7 @@ describe.skipIf(process.platform === 'win32')('CocoIndexService', () => {
     expect(f.bridge.addServer).not.toHaveBeenCalled();
   });
 
-  test('remove during a pending add cannot resurrect the connector', async () => {
+  test('remove during a pending add cannot resurrect the managed server', async () => {
     const delayedAdd = deferred<void>();
     const f = fixture({ delayedAdd });
     await f.service.install('/workspace/repo');

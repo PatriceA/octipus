@@ -628,7 +628,7 @@ async function closeThreadIfEnded(thread: ThreadResolution | null, hook?: Hook):
 /**
  * Run a role heartbeat's turn as a worker of that role, through the same
  * `spawnWorker` pipeline stages use: the role's prompt (lite on a small
- * model), critical rules, persona, skills, connector tools and plan-mode
+ * model), critical rules, persona, skills and plan-mode
  * stripping all apply, the run is unattended (`attended: false`: nothing is
  * asked, an ASK is refused), and `tasks` is granted on top of the role's
  * tools because the turn exists to work the board.

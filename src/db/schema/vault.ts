@@ -23,7 +23,7 @@ export const credentialTypeEnum = pgEnum('credential_type', [
  *   - `workspace` : owned by a specific workspace within a user. Reserved
  *                   for Phase 2 multi-workspace support; written here so
  *                   the migration doesn't have to touch the enum twice.
- *   - `space`     : a space connector's credential (coworking §9.5).
+ *   - `space`     : a space's own credential, its GitHub token (coworking §9.5).
  *                   `workspace_id` names the space (required), `user_id` is
  *                   the owner who stored it — the author, never a grant. Its
  *                   key derives from the space (`dekForRow`). Read and written

@@ -438,10 +438,8 @@ export async function runRootAgent(
 
   // The root's own tools. `getToolsForRole` is the same gate every worker goes
   // through (capability check, MCP lazy handlers, read-only filtering).
-  // ponytail: it does NOT do the worker-spawner's per-user connector bindings or
-  // skill injection — the root had no tools at all before this, so that is a
-  // gain, not a regression. Lift `spawnWorker`'s tool assembly here if a user
-  // asks the root to reach a bound connector directly.
+  // ponytail: it does NOT do the worker-spawner's skill injection — the root
+  // had no tools at all before this, so that is a gain, not a regression.
   // MCP servers still connecting from boot are waited for (bounded), so a
   // turn right after startup sees their tools.
   await getMCPBridge().whenInitiallyConnected();

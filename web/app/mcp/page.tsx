@@ -2,7 +2,6 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Cable,
   ChevronDown,
   ChevronRight,
   Eye,
@@ -12,7 +11,6 @@ import {
   Pencil,
   Power,
   PowerOff,
-  Puzzle,
   Trash2,
   Wrench,
   X,
@@ -23,7 +21,6 @@ import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { PageHeader } from '@/components/ui/page-header';
 import { Portal } from '@/components/ui/portal';
-import { ConnectorsTab } from '@/components/mcp/connectors-tab';
 import { McpBulkPermissionControl, McpToolPermissionControl } from '@/components/mcp/tool-permission-control';
 import { EXPOSURE_HELP, EXPOSURE_LABELS, ServerExposureControl, ToolExposureControl } from '@/components/mcp/exposure-control';
 import { DESCRIPTION_HELP, ServerDescriptionControl } from '@/components/mcp/server-description';
@@ -407,7 +404,6 @@ export default function MCPPage() {
   const [editing, setEditing] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'servers' | 'connectors'>('servers');
   const queryClient = useQueryClient();
 
   const { data, isLoading } = useQuery({
@@ -514,7 +510,7 @@ export default function MCPPage() {
       <PageHeader
         title="mcp"
         description="Connect external tools and services for Octipus agents to use through MCP."
-        actions={activeTab === 'servers' ? (
+        actions={(
           <button
             onClick={() => setShowAdd(true)}
             className="px-4 py-2 bg-primary text-on-surface cursor-pointer rounded-lg hover:bg-primary-dim flex items-center gap-2"
@@ -522,33 +518,10 @@ export default function MCPPage() {
             <Plus className="w-4 h-4" />
             Add Server
           </button>
-        ) : undefined}
+        )}
       />
 
-      <div className="flex gap-1 border-b border-outline-variant/20">
-        {([
-          { id: 'servers' as const, label: 'MCP Servers', icon: Cable },
-          { id: 'connectors' as const, label: 'Connectors', icon: Puzzle },
-        ] as const).map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={cn(
-              'flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors cursor-pointer',
-              activeTab === tab.id
-                ? 'border-primary text-primary'
-                : 'border-transparent text-on-surface-variant hover:text-on-surface',
-            )}
-          >
-            <tab.icon className="w-4 h-4" />
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {activeTab === 'connectors' && <ConnectorsTab />}
-
-      {activeTab === 'servers' && <div className="space-y-3 stagger">
+      <div className="space-y-3 stagger">
         {isLoading ? (
           <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center text-on-surface-variant">
             <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
@@ -697,7 +670,7 @@ export default function MCPPage() {
             </div>
           ))
         )}
-      </div>}
+      </div>
 
       {editing && <ServerEditor serverId={editing} onClose={() => setEditing(null)} onSaved={() => void queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })} />}
       <AddServerModal
