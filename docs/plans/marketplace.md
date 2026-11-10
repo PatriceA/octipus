@@ -225,6 +225,12 @@ listing cannot understate what a package asks for.
 
    The last good index is kept, so revocation still holds when the
    marketplace is unreachable.
+
+   As built after the review: marketplace revocations apply to marketplace
+   packages, installs and index only (never to `trustedPublishers` or other
+   installs); a package revocation from a signing key revoked since stops
+   counting until a trusted key re-asserts it; every instance applies them
+   ([PLUGIN-PACKAGES.md#online-revocation](../PLUGIN-PACKAGES.md#online-revocation)).
 5. **Provenance.** The install's audit row and the package view record
    `source: marketplace:<registry>` and the listing version. The admin page
    shows "From the marketplace" next to the existing "Authored by an agent".

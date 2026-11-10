@@ -652,7 +652,10 @@ valid trusted signature is refused (`409`).
 
 A package still signed by a revoked key stops at its next start. One signed by
 an expired or removed key stops too with `requireSignature` on; with it off, it
-keeps running and its view shows the state (`signedBy: null`). Upgrading to
+keeps running and its view shows the state (`signedBy: null`). A package
+installed from the marketplace is the exception: it starts only with a valid
+signature by a key the marketplace's `keys.json` endorses now, whatever
+`requireSignature` says ([Marketplace](#trust-and-threat-model)). Upgrading to
 the re-signed version is a change of signer: pass `allowSignerChange`.
 
 What a signature guarantees: the files are byte for byte what the holder of
