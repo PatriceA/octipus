@@ -754,6 +754,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `db` | `config` | 4 |
 | `db` | `core` | 24 |
 | `db` | `models` | 1 |
+| `db` | `plugins` | 1 |
 | `db` | `security` | 27 |
 | `db` | `services` | 1 |
 | `db` | `shared` | 9 |
@@ -898,6 +899,7 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - core <-> utils
 - core <-> voice
 - db <-> models
+- db <-> plugins
 - db <-> security
 - db <-> services
 - hooks <-> tools

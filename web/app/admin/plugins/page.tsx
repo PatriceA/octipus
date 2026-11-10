@@ -573,7 +573,7 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
             onCancel={() => setConfirmingEnable(false)}
             onConfirm={() => {
               if (unapproved.length > 0
-                && !confirm(`Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? Its tools then act with them as the user who calls them.`)) return;
+                && !confirm(`Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? ${HOST_TOKEN_WHEN}`)) return;
               toggle.mutate(true);
             }}
           />

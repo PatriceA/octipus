@@ -14,7 +14,7 @@ const DEFAULT_ASSIGNMENTS: Array<{ skillId: string; topic: string; isActive: boo
   { skillId: 'data-structures', topic: 'coding', isActive: true },
   { skillId: 'api-design', topic: 'coding', isActive: true },
   { skillId: 'performance-engineering', topic: 'coding', isActive: true },
-  { skillId: 'plugin-development', topic: 'coding', isActive: true },
+  { skillId: 'plugin-development', topic: 'coding', isActive: false },
   { skillId: 'octipus-plugin-package', topic: 'coding', isActive: true },
 
   // ── Architecture topic ──
