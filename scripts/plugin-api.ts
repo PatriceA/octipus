@@ -1,6 +1,6 @@
 /**
  * `octi plugin list`, `approve`, `approve-in-process`, `approve-contributions`, `approve-cli-tools`, `set`, `secret`, `uninstall`,
- * `bundled` and `install-bundled`
+ * `bundled`, `install-bundled`, `marketplace`, `updates` and `install`
  * (docs/PLUGIN-PACKAGES.md): the installed plugin packages, through the
  * running backend's API.
  *
@@ -15,6 +15,8 @@
 import { parseArgs } from 'node:util';
 import {
   type BundledPluginView,
+  type MarketplaceListing,
+  type PluginUpdateView,
   MAX_PLUGIN_SECRET_LENGTH,
   MODEL_CLI_TOOLS_WARNING,
   PLUGIN_MODEL_CLI_TOOLS_APPROVAL,
@@ -72,7 +74,7 @@ async function request<T>(io: PluginApiIo, method: string, path: string, body?: 
   } catch (err) {
     throw new CliError(`backend unreachable at ${base} (${(err as Error).message}). Run \`octi start\` first.`);
   }
-  const data = await res.json().catch(() => ({})) as { error?: string; problems?: string[]; actualHash?: string; contributionsHash?: string };
+  const data = await res.json().catch(() => ({})) as { error?: string; problems?: string[]; actualHash?: string; contributionsHash?: string; sourceChange?: { from: string; to: string } };
   if (res.status === 401 || res.status === 403) {
     throw new CliError(`the backend refused (${res.status}): set OCTIPUS_API_TOKEN to an admin API token (Settings → API Tokens).`);
   }
@@ -81,6 +83,7 @@ async function request<T>(io: PluginApiIo, method: string, path: string, body?: 
     const next = [
       ...(data.actualHash ? [`  the files hash to ${data.actualHash} now; review them, then: octi plugin approve <name> --hash ${data.actualHash}`] : []),
       ...(data.contributionsHash ? [`  its contributions hash to ${data.contributionsHash}; review them (octi plugin approve-contributions <name>), then: octi plugin approve-contributions <name> --hash ${data.contributionsHash}`] : []),
+      ...(data.sourceChange ? [`  to take it from ${data.sourceChange.to} instead of ${data.sourceChange.from}, run the command again with --allow-source-change`] : []),
     ];
     throw new CliError([data.error ?? `HTTP ${res.status}`, ...problems.map((p) => `  ${p}`), ...next].join('\n'));
   }
@@ -586,4 +589,93 @@ export async function readAllText(input: AsyncIterable<string | Buffer>, max = M
     chunks.push(bytes);
   }
   return Buffer.concat(chunks).toString('utf8');
+}
+
+/** `octi plugin marketplace [query] [--category <c>]`: what the marketplace and the configured registries offer. */
+export async function marketplaceCommand(io: PluginApiIo, query: string | undefined, category: string | undefined): Promise<number> {
+  try {
+    const params = new URLSearchParams();
+    if (query) params.set('q', query);
+    if (category) params.set('category', category);
+    const listing = await request<MarketplaceListing>(io, 'GET', `/marketplace${params.size > 0 ? `?${params}` : ''}`);
+    if (listing.message) io.out(`${listing.message}\n`);
+    for (const e of listing.errors.filter((x) => x.registry !== 'marketplace')) io.out(`registry ${e.registry}: ${e.error}\n`);
+    if (listing.plugins.length === 0) io.out(listing.state === 'ready' ? 'No plugins match.\n' : '');
+    for (const p of listing.plugins) {
+      const state = p.revoked ? `revoked: ${p.revoked}`
+        : p.updateAvailable ? `installed ${p.installedVersion}, update ${p.updateAvailable} (octi plugin install ${p.name} --upgrade)`
+          : p.installedVersion ? `installed ${p.installedVersion}`
+            : p.latest ? `install with: octi plugin install ${p.name}${p.registry === 'marketplace' ? '' : ` --registry ${p.registry}`}`
+              : `not installable here: ${p.compatibility.reason ?? 'no compatible version'}`;
+      io.out(`${p.name} ${p.latest ?? p.versions[0]?.version ?? ''}  ${p.title}${p.registry === 'marketplace' ? '' : `  [${p.registry}]`}\n`);
+      if (p.summary || p.description) io.out(`    ${p.summary || p.description}\n`);
+      io.out(`    ${state}${p.downloads !== null ? `; ${p.downloads} downloads` : ''}\n`);
+      if (p.askSummary.length > 0) io.out(`    asks for: ${p.askSummary.join('; ')}\n`);
+      for (const w of p.warnings) io.out(`    note: ${w.message}\n`);
+    }
+    return 0;
+  } catch (err) {
+    if (!(err instanceof CliError)) throw err;
+    io.err(`octi plugin marketplace: ${err.message}\n`);
+    return err.exitCode;
+  }
+}
+
+/** `octi plugin updates`: installed packages with a newer version from the same source, and what changes. */
+export async function updatesCommand(io: PluginApiIo): Promise<number> {
+  try {
+    const updates = await request<PluginUpdateView[]>(io, 'GET', '/updates');
+    if (updates.length === 0) io.out('Every package installed from a registry is up to date.\n');
+    for (const u of updates) {
+      io.out(`${u.name} ${u.installed} → ${u.latest}  (from ${u.registry}; upgrade with: octi plugin install ${u.name} --upgrade${u.registry === 'marketplace' ? '' : ` --registry ${u.registry}`})\n`);
+      if (u.diff === null) io.out('    the registry does not list its permissions\n');
+      else if (u.diff.changes.length === 0) io.out('    asks for nothing new\n');
+      else for (const c of u.diff.changes) io.out(`    ${c.widens ? '+' : '-'} ${c.change} ${c.text}\n`);
+      for (const w of u.warnings) io.out(`    note: ${w.message}\n`);
+    }
+    return 0;
+  } catch (err) {
+    if (!(err instanceof CliError)) throw err;
+    io.err(`octi plugin updates: ${err.message}\n`);
+    return err.exitCode;
+  }
+}
+
+export interface InstallFlags {
+  registry?: string;
+  version?: string;
+  upgrade?: boolean;
+  allowSourceChange?: boolean;
+  allowSignerChange?: boolean;
+  allowDowngrade?: boolean;
+  allowIncompatible?: boolean;
+}
+
+/**
+ * `octi plugin install <name>`: install from the marketplace (or `--registry`)
+ * by name, the newest compatible version unless `--version` says otherwise.
+ * It lands disabled, like every install.
+ */
+export async function installCommand(io: PluginApiIo, name: string, flags: InstallFlags = {}): Promise<number> {
+  try {
+    checkName(name);
+    const res = await request<{ name: string; version: string; contentHash: string | null; signedBy: string | null; warnings?: string[]; guidance?: Array<{ code: string; message: string }> }>(
+      io, 'POST', '/', {
+        registry: flags.registry ?? 'marketplace', name,
+        ...(flags.version ? { version: flags.version } : {}),
+        ...(flags.upgrade ? { upgrade: true } : {}),
+        ...(flags.allowSourceChange ? { allowSourceChange: true } : {}),
+        ...(flags.allowSignerChange ? { allowSignerChange: true } : {}),
+        ...(flags.allowDowngrade ? { allowDowngrade: true } : {}),
+        ...(flags.allowIncompatible ? { allowIncompatible: true } : {}),
+      });
+    io.out(`Installed ${res.name} ${res.version} (disabled), signed by ${res.signedBy ?? 'nobody trusted'}, content ${res.contentHash ?? 'not pinned'}.\n`);
+    for (const w of res.warnings ?? []) io.out(`  ⚠ ${w}\n`);
+    for (const g of res.guidance ?? []) io.out(`  note: ${g.message}\n`);
+    return 0;
+  } catch (err) {
+    if (!(err instanceof CliError)) throw err;
+    io.err(`octi plugin install: ${err.message}\n`);
+    return err.exitCode;
+  }
 }

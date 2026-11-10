@@ -30,6 +30,7 @@ import {
   REGISTRY_INDEX_SIGNATURE_SUFFIX,
   SignatureError,
   signPackage,
+  signMarketplaceKeysFile,
   signRegistryIndexFile,
   trustedKeys,
   verifyRegistryIndex,
@@ -248,6 +249,32 @@ export async function signIndexCommand(io: OfflineIo, argv: string[]): Promise<n
     return 0;
   } catch (err) {
     return failure(io, 'sign-index', err, `${file || 'The index'} was not signed.`);
+  }
+}
+
+/**
+ * `octi plugin sign-keys <keys.json> --key <root.key> [--passphrase-file <path|->] [--json]`:
+ * sign the marketplace's keys file (its signing keys and revocations) with a
+ * ROOT key, writing `keys.json.sig` (docs/PLUGIN-PACKAGES.md#marketplace-keys).
+ * Root keys sign nothing else.
+ */
+export async function signKeysCommand(io: OfflineIo, argv: string[]): Promise<number> {
+  let file = '';
+  try {
+    const { values, positionals } = parse(argv, { key: { type: 'string', short: 'k' }, 'passphrase-file': { type: 'string' }, json: { type: 'boolean' } });
+    if (positionals.length !== 1 || !values.key) throw new UsageError('expected <keys.json> --key <root-private-key-file> [--passphrase-file <path|->]');
+    file = resolve(positionals[0]);
+    const key = await loadSigningKey(io, values.key as string, values['passphrase-file'] as string | undefined);
+    const { sigFile, keyId, sha256 } = await signMarketplaceKeysFile(file, key);
+    if (values.json) {
+      json(io, { sigFile, sha256, keyId });
+      return 0;
+    }
+    io.out(`✅ Signed ${file}\n   keys file hash: ${sha256}\n   root key id: ${keyId}\n   wrote ${sigFile}\n`);
+    io.out('   Publish both files unchanged, at <marketplace origin>/keys.json and keys.json.sig.\n');
+    return 0;
+  } catch (err) {
+    return failure(io, 'sign-keys', err, `${file || 'The keys file'} was not signed.`);
   }
 }
 

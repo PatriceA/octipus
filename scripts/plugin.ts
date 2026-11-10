@@ -22,6 +22,10 @@
  *   octi plugin uninstall <name> [--yes]  Remove a package.
  *   octi plugin bundled          The first-party plugins shipped with Octipus.
  *   octi plugin install-bundled <name> [--upgrade]  Install one (disabled).
+ *   octi plugin marketplace [query] [--category <c>]  What the marketplace and the registries offer.
+ *   octi plugin updates          Installed packages with a newer version from the same source.
+ *   octi plugin install <name> [--version v] [--registry r] [--upgrade] …  Install from the marketplace (disabled).
+ *   octi plugin sign-keys <keys.json> --key <root.key>  Sign a marketplace keys file with a root key.
  *
  * Delegated from bin/octi. The offline subcommands (validate, keygen, sign,
  * sign-index, hash, pack, permissions, verify, verify-index) live in
@@ -33,7 +37,7 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { ConvertError, convertLegacyPlugin } from '@/plugins/convert';
 import { PLUGIN_TOOL_EFFECTS, type PluginToolEffect } from '@/shared/plugin-package';
-import { approveCliToolsCommand, approveCommand, approveContributionsCommand, approveInProcessCommand, bundledCommand, installBundledCommand, listCommand, type PluginApiIo, readAllText, readHiddenLine, secretCommandFromArgs, setCommand, uninstallCommand } from './plugin-api';
+import { approveCliToolsCommand, approveCommand, approveContributionsCommand, approveInProcessCommand, bundledCommand, installBundledCommand, installCommand, listCommand, marketplaceCommand, type PluginApiIo, readAllText, readHiddenLine, secretCommandFromArgs, setCommand, uninstallCommand, updatesCommand } from './plugin-api';
 import {
   hashCommand,
   keygenCommand,
@@ -43,6 +47,7 @@ import {
   permissionsCommand,
   signCommand,
   signIndexCommand,
+  signKeysCommand,
   validateCommand,
   verifyCommand,
   verifyIndexCommand,
@@ -153,12 +158,25 @@ Usage:
   octi plugin install-bundled <name> [--upgrade]
                                 Install one, pinned and disabled like any package;
                                 enable it on the admin page, approving its host scopes.
+  octi plugin marketplace [query] [--category <c>]
+                                What the Octipus marketplace and plugins.registries
+                                offer, what each asks for, installed and update state.
+  octi plugin updates           Installed packages with a newer version from the same
+                                source, with what changes in what they ask for.
+  octi plugin install <name> [--version <v>] [--registry <name>] [--upgrade]
+                         [--allow-source-change] [--allow-signer-change]
+                         [--allow-downgrade] [--allow-incompatible]
+                                Install from the marketplace (or a registry) by name,
+                                the newest compatible version; lands disabled.
+  octi plugin sign-keys <keys.json> --key <root.key> [--passphrase-file <path|->] [--json]
+                                Sign the marketplace's keys file with a ROOT key
+                                (keys.json.sig). Offline.
 
 validate, keygen, sign, sign-index, hash, pack, permissions, verify and verify-index
 work offline: they need no running server. With --json they print one JSON
 document on stdout and every diagnostic on stderr; every subcommand exits non-zero on error.
 
-list, approve, approve-in-process, approve-contributions, approve-cli-tools, set, secret, uninstall, bundled and install-bundled call the running backend (http://localhost:$API_PORT, 3005 by
+list, approve, approve-in-process, approve-contributions, approve-cli-tools, set, secret, uninstall, bundled, install-bundled, marketplace, updates and install call the running backend (http://localhost:$API_PORT, 3005 by
 default) with the admin API token in OCTIPUS_API_TOKEN (Settings → API Tokens).
 `;
 
@@ -371,6 +389,45 @@ async function main(): Promise<void> {
       process.exit(await installBundledCommand(apiIo(), parsed.positionals[0], parsed.values.upgrade === true));
       break;
     }
+    case 'marketplace': {
+      let parsed: { values: { category?: string }; positionals: string[] };
+      try {
+        parsed = parseArgs({ args: rest, allowPositionals: true, options: { category: { type: 'string' } } });
+      } catch (err) {
+        usage(sub, (err as Error).message);
+      }
+      process.exit(await marketplaceCommand(apiIo(), parsed.positionals.join(' ') || undefined, parsed.values.category));
+      break;
+    }
+    case 'updates':
+      process.exit(await updatesCommand(apiIo()));
+      break;
+    case 'install': {
+      let parsed: { values: Record<string, string | boolean | undefined>; positionals: string[] };
+      try {
+        parsed = parseArgs({
+          args: rest, allowPositionals: true,
+          options: {
+            version: { type: 'string' }, registry: { type: 'string' }, upgrade: { type: 'boolean' },
+            'allow-source-change': { type: 'boolean' }, 'allow-signer-change': { type: 'boolean' },
+            'allow-downgrade': { type: 'boolean' }, 'allow-incompatible': { type: 'boolean' },
+          },
+        });
+      } catch (err) {
+        usage(sub, (err as Error).message);
+      }
+      if (parsed.positionals.length !== 1) usage(sub, 'expected <name> [--version <v>] [--registry <name>] [--upgrade]');
+      const v = parsed.values;
+      process.exit(await installCommand(apiIo(), parsed.positionals[0], {
+        version: v.version as string | undefined, registry: v.registry as string | undefined, upgrade: v.upgrade === true,
+        allowSourceChange: v['allow-source-change'] === true, allowSignerChange: v['allow-signer-change'] === true,
+        allowDowngrade: v['allow-downgrade'] === true, allowIncompatible: v['allow-incompatible'] === true,
+      }));
+      break;
+    }
+    case 'sign-keys':
+      await exitFlushed(await signKeysCommand(offlineIo(), rest));
+      break;
     case 'secret':
       // Its own parser: a refusal must never echo a value typed on the command line.
       process.exit(await secretCommandFromArgs(apiIo(), rest));

@@ -17,7 +17,9 @@ import {
   installBundledCommand,
   backendBase,
   type HiddenInput,
+  installCommand,
   listCommand,
+  marketplaceCommand,
   parseSettingPairs,
   type PluginApiIo,
   readAllText,
@@ -26,6 +28,7 @@ import {
   secretCommandFromArgs,
   setCommand,
   uninstallCommand,
+  updatesCommand,
 } from './plugin-api';
 
 const RECORDED = `sha256:${'a'.repeat(64)}`;
@@ -553,5 +556,53 @@ describe('octi plugin bundled / install-bundled', () => {
     const refused = harness({ token: 'tok', respond: () => [404, { error: 'No bundled plugin named "nope"' }] });
     expect(await installBundledCommand(refused.io, 'nope', false)).toBe(1);
     expect(refused.err.join('')).toContain('No bundled plugin named');
+  });
+});
+
+describe('octi plugin marketplace, updates and install', () => {
+  const card = {
+    registry: 'marketplace', name: 'weekly', title: 'Weekly review', summary: 'Looks back on the week', description: '', category: 'productivity', tags: [],
+    author: null, homepage: null, license: 'MIT', publisher: 'Octipus', icon: null, screenshots: [], readme: null, changelog: null, latest: '1.1.0',
+    versions: [], permissions: null, askSummary: ['Reads your tasks', 'No network access'], declarations: [], warnings: [{ code: 'deprecated', message: 'Deprecated: use x' }],
+    compatibility: { ok: true, reason: null }, installedVersion: null, installedOrigin: null, updateAvailable: null, revoked: null, deprecated: null, downloads: 7,
+  };
+
+  test('marketplace: query and category are sent; each plugin says what it asks for and how to install it', async () => {
+    const h = harness({ respond: () => [200, { state: 'ready', message: null, generatedAt: null, plugins: [card], categories: [], errors: [] }] });
+    expect(await marketplaceCommand(h.io, 'café', 'productivity')).toBe(0);
+    expect(h.requests[0].url).toBe('http://localhost:4999/api/plugin-packages/marketplace?q=caf%C3%A9&category=productivity');
+    const text = h.out.join('');
+    expect(text).toContain('weekly 1.1.0  Weekly review');
+    expect(text).toContain('install with: octi plugin install weekly');
+    expect(text).toContain('asks for: Reads your tasks; No network access');
+    expect(text).toContain('7 downloads');
+    expect(text).toContain('note: Deprecated: use x');
+  });
+
+  test('marketplace: an unconfigured build says so', async () => {
+    const h = harness({ respond: () => [200, { state: 'unconfigured', message: 'The Octipus marketplace is not configured in this build', generatedAt: null, plugins: [], categories: [], errors: [] }] });
+    expect(await marketplaceCommand(h.io, undefined, undefined)).toBe(0);
+    expect(h.out.join('')).toContain('The Octipus marketplace is not configured in this build');
+  });
+
+  test('updates: lists each with its permissions diff', async () => {
+    const h = harness({ respond: () => [200, [{ name: 'weekly', installed: '1.0.0', latest: '1.1.0', registry: 'marketplace', warnings: [],
+      diff: { widened: true, changes: [{ kind: 'host', change: 'added', text: 'host API scope notes:write', widens: true }] } }]] });
+    expect(await updatesCommand(h.io)).toBe(0);
+    expect(h.out.join('')).toContain('weekly 1.0.0 → 1.1.0');
+    expect(h.out.join('')).toContain('+ added host API scope notes:write');
+  });
+
+  test('install: by name from the marketplace, with the consents asked for; a source change says how to consent', async () => {
+    const ok = harness({ respond: (method) => (method === 'POST' ? [200, { name: 'weekly', version: '1.1.0', contentHash: 'sha256:x', signedBy: 'Octipus', warnings: [], guidance: [{ code: 'review_before_enabling', message: 'Installed disabled' }] }] : undefined) });
+    expect(await installCommand(ok.io, 'weekly', { upgrade: true, allowSourceChange: true })).toBe(0);
+    expect(ok.requests[0]).toMatchObject({ method: 'POST', body: { registry: 'marketplace', name: 'weekly', upgrade: true, allowSourceChange: true } });
+    expect(ok.out.join('')).toContain('Installed weekly 1.1.0 (disabled), signed by Octipus');
+    const refused = harness({ respond: () => [409, { error: 'weekly came from a directory install', sourceChange: { from: 'direct', to: 'marketplace' } }] });
+    expect(await installCommand(refused.io, 'weekly', { upgrade: true })).toBe(1);
+    expect(refused.err.join('')).toContain('--allow-source-change');
+    const bad = harness();
+    expect(await installCommand(bad.io, '../etc')).toBe(2);
+    expect(bad.requests).toEqual([]);
   });
 });

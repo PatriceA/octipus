@@ -22,6 +22,7 @@ import {
   permissionsCommand,
   signCommand,
   signIndexCommand,
+  signKeysCommand,
   validateCommand,
   verifyCommand,
   verifyIndexCommand,
@@ -130,6 +131,18 @@ describe('encrypted keys', () => {
     expect(await signIndexCommand(io({ stdin: 'from stdin' }), [index, '--key', `${prefix}.key`, '--passphrase-file', '-'])).toBe(0);
     expect(await verifyIndexCommand(io(), [index, '--pub', `${prefix}.pub`])).toBe(0);
     expect(await signIndexCommand(io({ stdin: 'not it\n' }), [index, '--key', `${prefix}.key`, '--passphrase-file', '-'])).toBe(1);
+  });
+
+  test('sign-keys signs a marketplace keys file with its own prefix: it verifies as a keys file, never as an index', async () => {
+    const prefix = join(temp(), 'root');
+    expect(await keygenCommand(io({ stdin: 'root pass' }), [prefix, '--passphrase-file', '-'])).toBe(0);
+    const file = join(temp(), 'keys.json');
+    writeFileSync(file, '{"schema":1,"version":1,"generatedAt":"2026-11-10T00:00:00Z","signingKeys":[],"revokedKeys":[]}');
+    expect(await signKeysCommand(io({ stdin: 'root pass' }), [file, '--key', `${prefix}.key`, '--passphrase-file', '-'])).toBe(0);
+    const { verifyMarketplaceKeys } = await import('@/plugins/packages/signature');
+    const pub = [{ name: 'root', publicKey: readFileSync(`${prefix}.pub`, 'utf8') }];
+    expect(verifyMarketplaceKeys(readFileSync(file), readFileSync(`${file}.sig`, 'utf8'), pub).status).toBe('valid');
+    expect(await verifyIndexCommand(io(), [file, '--pub', `${prefix}.pub`])).toBe(1);
   });
 
   test('an encrypted key without --passphrase-file is asked for at a terminal, and refused without one', async () => {
