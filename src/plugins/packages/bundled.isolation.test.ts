@@ -212,13 +212,17 @@ describe('the reader tools', () => {
     expect(withHtml.value.contentHtml).not.toContain('<script');
   });
 
-  test('a URL the SSRF guard refuses is refused, and audited', async () => {
-    const out = await callAs('read_url', { url: 'http://10.0.0.1/admin' });
-    expect(out.isError).toBe(true);
-    expect(out.value).toMatch(/SSRF|blocked/i);
+  test('a URL the SSRF guard refuses is refused without saying why, and audited by host and hash', async () => {
+    const out = await callAs('read_url', { url: 'http://10.0.0.1/admin?secret=1' });
+    expect(out).toEqual({ isError: true, value: 'This address may not be fetched' });
     const audit = await rows(`SELECT action, details FROM audit_log WHERE resource_type = 'plugin_host' ORDER BY created_at`);
     const reads = audit.map((r) => ({ action: r.action, ...(typeof r.details === 'string' ? JSON.parse(r.details) : r.details) })).filter((d) => d.op === 'web.read');
-    expect(reads.at(-1)).toMatchObject({ status: 422, scope: 'web:read', tool: 'read_url' });
+    const { createHash } = await import('node:crypto');
+    expect(reads.at(-1)).toMatchObject({
+      status: 422, scope: 'web:read', tool: 'read_url', code: 'blocked',
+      host: '10.0.0.1', urlSha256: createHash('sha256').update('http://10.0.0.1/admin?secret=1').digest('hex'),
+    });
+    expect(JSON.stringify(reads.at(-1))).not.toContain('secret=1');
     expect(reads.filter((d) => d.status === 200).length).toBeGreaterThanOrEqual(2);
   });
 
@@ -307,5 +311,31 @@ describe('the reader page', () => {
     expect((await rows(`SELECT user_id, title FROM tasks WHERE user_id = $1`, [MEMBER.id]))).toEqual([{ user_id: MEMBER.id, title: 'Read the article again' }]);
     // The admin's list did not grow.
     expect(await rows(`SELECT id FROM tasks WHERE user_id = $1 AND title = 'Read the article again'`, [ADMIN.id])).toEqual([]);
+  });
+});
+
+describe('the bundled name', () => {
+  test('another package holding a bundled name shows as taken and is not upgraded into the bundle', async () => {
+    const { isBundledName, listBundled, installBundled } = await import('./bundled');
+    expect(isBundledName('reader')).toBe(true);
+    expect(isBundledName('host-plugin')).toBe(false);
+    expect(isBundledName('../reader')).toBe(false);
+    const svc = await import('./service');
+    await svc.uninstall(NAME, ADMIN.id);
+    // A package of someone else's, named "reader", installed from a directory.
+    const { cpSync, readFileSync, writeFileSync } = await import('node:fs');
+    const squat = mkdtempSync(join(tmpdir(), 'squat-reader-'));
+    cpSync(join(__dirname, 'fixtures', 'echo-plugin'), squat, { recursive: true });
+    const manifest = JSON.parse(readFileSync(join(squat, 'octipus-plugin.json'), 'utf8'));
+    writeFileSync(join(squat, 'octipus-plugin.json'), JSON.stringify({ ...manifest, name: 'reader' }));
+    await svc.installFromDirectory(squat, ADMIN.id);
+    expect((await listBundled()).find((b) => b.name === NAME)).toMatchObject({ installed: null, taken: true });
+    await expect(installBundled(NAME, ADMIN.id, { upgrade: true })).rejects.toMatchObject({ code: 'conflict' });
+    // Once it is gone, the bundle installs and is listed as installed.
+    await svc.uninstall(NAME, ADMIN.id);
+    await installBundled(NAME, ADMIN.id);
+    const listed = (await listBundled()).find((b) => b.name === NAME);
+    expect(listed).toMatchObject({ installed: '1.0.0' });
+    expect(listed?.taken).toBeUndefined();
   });
 });

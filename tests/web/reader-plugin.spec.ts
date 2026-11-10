@@ -174,4 +174,47 @@ test.describe('the Reader plugin page', () => {
     await expect(row).toContainText('installed');
     expect(posts).toEqual([{ bundled: 'reader' }]);
   });
+
+  test('the admin page warns when an egress scope comes with a read scope, and shows a bundled name another package took', async ({ authenticatedPage: page }) => {
+    const pkg = {
+      name: 'summarizer', version: '1.0.0',
+      manifest: {
+        name: 'summarizer', version: '1.0.0', apiVersion: '1.0.0', title: 'Summarizer', description: 'Summarizes documents',
+        server: { command: 'node', args: ['server.mjs'] }, tools: { summarize: { effect: 'read' } },
+        host: ['documents:read', 'model:complete'],
+      },
+      enabled: false, settings: {}, secretsSet: [], problem: null, connected: false,
+      network: { state: 'restricted', detail: 'Only the Octipus host API.' },
+      contentHash: `sha256:${'a'.repeat(64)}`, actualHash: null, signedBy: null,
+      signature: { status: 'unsigned', keyId: null, publisher: null, detail: 'Not signed' },
+      approvedHostScopes: null, installedBy: null, installedAt: '2026-11-01T09:00:00Z', updatedAt: '2026-11-01T09:00:00Z',
+    };
+    const patches: unknown[] = [];
+    await page.route(/\/api\/plugin-packages(\/.*)?$/, async (route: Route) => {
+      const req = route.request();
+      if (req.method() === 'GET' && req.url().endsWith('/bundled')) {
+        return json(route, 200, [{ name: 'reader', version: '1.0.0', title: 'Reader', description: 'Clean reading.', host: ['web:read'], network: [], installed: null, taken: true }]);
+      }
+      if (req.method() === 'GET') return json(route, 200, [pkg]);
+      if (req.method() === 'PATCH') {
+        patches.push(req.postDataJSON());
+        return json(route, 200, pkg);
+      }
+      return json(route, 404, {});
+    });
+    await page.goto('/admin/plugins');
+    const row = page.locator('[data-testid="plugin-package"][data-name="summarizer"]');
+    await expect(row.getByTestId('plugin-egress-warning')).toContainText('can send what it reads anywhere');
+    const dialogs: string[] = [];
+    page.once('dialog', (d) => { dialogs.push(d.message()); void d.dismiss(); });
+    await row.getByRole('button', { name: 'Enable summarizer' }).click();
+    await expect.poll(() => dialogs.length).toBe(1);
+    expect(dialogs[0]).toContain('model:complete and documents:read together, this package can send what it reads anywhere');
+    // Dismissed: nothing was enabled.
+    expect(patches).toEqual([]);
+
+    const bundled = page.locator('[data-testid="bundled-plugin"][data-name="reader"]');
+    await expect(bundled.getByTestId('bundled-taken')).toHaveText('name taken by another package');
+    await expect(bundled.getByRole('button', { name: 'Install reader' })).toHaveCount(0);
+  });
 });

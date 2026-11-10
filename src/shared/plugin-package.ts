@@ -424,8 +424,10 @@ export interface BundledPluginView {
   host: PluginHostScope[];
   /** Hosts it reaches itself. */
   network: string[];
-  /** The installed version, or null. */
+  /** The installed version of this bundle, or null. */
   installed: string | null;
+  /** Another package (not this bundle) holds the name: it cannot be installed until that one is removed. */
+  taken?: boolean;
   /** Its manifest does not parse: why (it cannot be installed). */
   problem?: string;
 }

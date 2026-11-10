@@ -331,6 +331,26 @@ const HOST_TOKEN_WHEN = 'A call gets a short-lived token for them (at most 30 se
   + 'Schedules, events and context calls never get one. The token acts as that user, within their own data and permission rules. '
   + 'An upgrade asks for this approval again.';
 
+/**
+ * A package that can send data out of the house (`web:read`: any URL;
+ * `model:complete`: a remote model) and also read the user's data: what it
+ * reads it can send anywhere. Said in the approval, and the package then sees
+ * level-1 data only (docs/PLUGIN-PACKAGES.md#host-api).
+ */
+function egressReadWarning(scopes: readonly string[]): string {
+  const out = scopes.filter((s) => s === 'web:read' || s === 'model:complete');
+  const reads = scopes.filter((s) => s.endsWith(':read') && s !== 'web:read');
+  if (out.length === 0 || reads.length === 0) return '';
+  return `Warning: with ${out.join(' and ')} and ${reads.join(', ')} together, this package can send what it reads anywhere. `
+    + 'It is limited to data at protection level 1.';
+}
+
+/** The approval text for enabling `pkg` with `unapproved` host scopes. */
+function hostScopeConfirm(pkg: PluginPackageView, unapproved: string[]): string {
+  const warning = egressReadWarning(pkg.manifest.host ?? []);
+  return `Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? ${warning ? `${warning} ` : ''}${HOST_TOKEN_WHEN}`;
+}
+
 function PagesAndScopes({ pkg, unapproved }: { pkg: PluginPackageView; unapproved: string[] }) {
   const pages = pkg.manifest.ui?.pages ?? [];
   const scopes = pkg.manifest.host ?? [];
@@ -352,6 +372,7 @@ function PagesAndScopes({ pkg, unapproved }: { pkg: PluginPackageView; unapprove
             </span>
           ))}
           {unapproved.length > 0 && <span className={tone('warn')}> · {unapproved.length} not approved; enabling approves them</span>}
+          {egressReadWarning(scopes) && <span className={cn('block', tone('warn'))} data-testid="plugin-egress-warning">{egressReadWarning(scopes)}</span>}
           <span className="block">{HOST_TOKEN_WHEN}</span>
         </p>
       )}
@@ -517,7 +538,7 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
             // A package that adds commands, schedules, events, prompt text or context: review all of it first.
             if (!pkg.enabled && hasContributions(pkg)) { setConfirmingEnable(true); return; }
             if (!pkg.enabled && unapproved.length > 0
-              && !confirm(`Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? ${HOST_TOKEN_WHEN}`)) return;
+              && !confirm(hostScopeConfirm(pkg, unapproved))) return;
             toggle.mutate(!pkg.enabled);
           }}
           aria-label={`${pkg.enabled ? 'Disable' : 'Enable'} ${pkg.name}`}
@@ -573,7 +594,7 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
             onCancel={() => setConfirmingEnable(false)}
             onConfirm={() => {
               if (unapproved.length > 0
-                && !confirm(`Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? ${HOST_TOKEN_WHEN}`)) return;
+                && !confirm(hostScopeConfirm(pkg, unapproved))) return;
               toggle.mutate(true);
             }}
           />
@@ -672,7 +693,9 @@ function BundledPlugins() {
                 )}
                 {b.problem && <p className="text-xs text-error">{b.problem}</p>}
               </div>
-              {b.installed !== null && !upgrade ? (
+              {b.taken ? (
+                <span className={cn('text-xs', tone('warn'))} data-testid="bundled-taken">name taken by another package</span>
+              ) : b.installed !== null && !upgrade ? (
                 <span className={cn('text-xs', tone('ok'))}>installed</span>
               ) : (
                 <button
