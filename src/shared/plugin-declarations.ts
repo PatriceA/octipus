@@ -6,12 +6,18 @@
  *
  * Built from the permissions summary (`computePermissions`), which a
  * marketplace listing carries and the host recomputes at install, plus the
- * manifest's own words (tool descriptions, secret labels, page titles,
- * cron) when the manifest is at hand (an installed package). The same
+ * manifest's own words (tool and command descriptions, secret labels) when
+ * the manifest is at hand (a preview, an installed package). Each item's
+ * `detail` carries what it is bound to (a schedule's cron and tool, the
+ * prompt's sha256, a page's entry), so an item that changed reads as changed. The same
  * package always gives the same ids in the same order:
  *
  *   runtime, in-process, network:*, host:*, tool:*, command:*, schedule:*,
- *   event:*, prompt, context, page:*, secret:*, model:cli-tools, protection
+ *   event:*, prompt, context, page:*, ui, secret:*, model:cli-tools, protection
+ *
+ * plus, in an install preview of an upgrade, `change:*` items (another
+ * source, another signer, an older version, a newer Octipus needed) that
+ * the admin agrees to like the rest.
  *
  * `guidance` informs; it never refuses. The wording is the admin page's.
  */
@@ -25,7 +31,7 @@ import { HOST_SCOPE_WORDS } from './plugin-permissions';
 
 export type PluginDeclarationKind =
   | 'runtime' | 'in-process' | 'network' | 'host' | 'tool' | 'command' | 'schedule' | 'event' | 'prompt' | 'context'
-  | 'page' | 'secret' | 'model-cli-tools' | 'protection';
+  | 'page' | 'secret' | 'model-cli-tools' | 'protection' | 'change';
 
 export interface PluginDeclarationItem {
   /** Stable for the same package: `host:notes:read`, `tool:save_note`, … */
@@ -84,7 +90,7 @@ export function permissionsGuidance(p: PluginPermissionsSummary): PluginGuidance
  * The declaration items of a package: from its permissions summary, with the
  * manifest's own words when given.
  */
-export function declarationItems(p: PluginPermissionsSummary, manifest?: Pick<PluginManifest, 'tools' | 'secrets' | 'commands' | 'schedules' | 'events' | 'prompt' | 'context' | 'ui' | 'model'> | null): PluginDeclarationItem[] {
+export function declarationItems(p: PluginPermissionsSummary, manifest?: Pick<PluginManifest, 'tools' | 'secrets' | 'commands' | 'model'> | null): PluginDeclarationItem[] {
   const items: PluginDeclarationItem[] = [];
   const egress = egressReadWarning(p.host);
   items.push(p.runtime === 'in-process'
@@ -112,32 +118,37 @@ export function declarationItems(p: PluginPermissionsSummary, manifest?: Pick<Pl
     });
   }
   const c = p.contributions;
-  for (const name of c.commands) {
-    const decl = manifest?.commands?.find((x) => x.name === name);
-    items.push({ id: `command:${name}`, kind: 'command', label: `Slash command /${name}`, detail: decl ? `→ ${decl.tool}: ${decl.description}` : name });
+  const roles = (r: readonly string[] | undefined) => (r ? `roles ${r.join(', ')}` : 'every agent');
+  for (const x of c.commands) {
+    const description = manifest?.commands?.find((d) => d.name === x.name)?.description;
+    items.push({ id: `command:${x.name}`, kind: 'command', label: `Slash command /${x.name}`, detail: `→ ${x.tool}${description ? `: ${description}` : ''}` });
   }
-  for (const id of c.schedules) {
-    const decl = manifest?.schedules?.find((x) => x.id === id);
-    items.push({ id: `schedule:${id}`, kind: 'schedule', label: `Runs on a schedule (${id})`, detail: decl ? `${decl.cron} UTC → ${decl.tool}` : id });
+  for (const x of c.schedules) {
+    items.push({
+      id: `schedule:${x.id}`, kind: 'schedule', label: `Runs on a schedule (${x.id})`,
+      detail: `${x.cron} UTC → ${x.tool}${x.input !== undefined ? ` with ${JSON.stringify(x.input)}` : ''}`,
+      guidance: 'Runs unattended as the admin who installs it: a write tool needs that admin\'s ALLOW rule, an external one never runs.',
+    });
   }
-  for (const on of c.events) {
-    const tools = (manifest?.events ?? []).filter((x) => x.on === on).map((x) => x.tool);
-    items.push({ id: `event:${on}`, kind: 'event', label: `Reacts to ${on}`, detail: tools.length > 0 ? `→ ${tools.join(', ')}` : on });
+  for (const on of [...new Set(c.events.map((x) => x.on))]) {
+    const tools = c.events.filter((x) => x.on === on).map((x) => x.tool);
+    items.push({ id: `event:${on}`, kind: 'event', label: `Reacts to ${on}`, detail: `→ ${tools.join(', ')}` });
   }
   if (c.prompt) {
-    const roles = manifest?.prompt?.roles;
-    items.push({ id: 'prompt', kind: 'prompt', label: 'Adds text to agents\' instructions', detail: `${manifest?.prompt?.file ?? 'a prompt file'} (${roles ? `roles ${roles.join(', ')}` : 'every agent'})` });
+    items.push({
+      id: 'prompt', kind: 'prompt', label: 'Adds text to agents\' instructions',
+      detail: `${c.prompt.file} (${roles(c.prompt.roles)})${c.prompt.sha256 ? `, sha256 ${c.prompt.sha256}` : ''}`,
+      guidance: 'The text goes into the instructions of every user\'s agents of those roles. Read it in full before agreeing.',
+    });
   }
   if (c.context) {
-    const roles = manifest?.context?.roles;
-    items.push({ id: 'context', kind: 'context', label: 'Adds context to agent turns', detail: `${manifest?.context?.tool ?? 'a read tool'} (${roles ? `roles ${roles.join(', ')}` : 'every agent'})` });
+    items.push({
+      id: 'context', kind: 'context', label: 'Adds context to agent turns', detail: `${c.context.tool} (${roles(c.context.roles)})`,
+      guidance: 'The tool receives the message of every turn of every user of those roles.',
+    });
   }
-  const pages = manifest?.ui?.pages;
-  if (pages && pages.length === p.pages) {
-    for (const page of pages) items.push({ id: `page:${page.path}`, kind: 'page', label: `Adds the page "${page.title}"`, detail: page.path });
-  } else {
-    for (let i = 1; i <= p.pages; i++) items.push({ id: `page:${i}`, kind: 'page', label: `Adds a page (${i} of ${p.pages})`, detail: `page ${i}` });
-  }
+  for (const page of p.pages) items.push({ id: `page:${page.path}`, kind: 'page', label: `Adds the page "${page.title}"`, detail: `/${page.path} → ${page.entry}` });
+  if (p.ui) items.push({ id: 'ui', kind: 'page', label: 'Serves its page files', detail: `${p.ui.dir}/${p.ui.sha256 ? `, sha256 ${p.ui.sha256}` : ''}` });
   for (const secret of manifest?.secrets ?? []) {
     items.push({ id: `secret:${secret.key}`, kind: 'secret', label: `Needs the secret ${secret.label}`, detail: `${secret.key}${secret.required ? ' (required)' : ''}` });
   }

@@ -15,7 +15,7 @@ import { entriesOfDir, makeTarGz } from '@/test-helpers/tar';
 import type { PluginPermissionsSummary } from '@/shared/plugin-package';
 import { hashPackageContent } from './integrity';
 import { parseManifest } from './manifest';
-import { computePermissions } from './permissions';
+import { packagePermissions } from './permissions';
 import { generateSigningKey, serializeSignature, signMarketplaceKeys, signPackage, signRegistryIndex } from './signature';
 
 const rand = (n: number) => randomBytes(n).toString('hex');
@@ -80,7 +80,7 @@ async function publishPackage(version: string, key: Key | null, mutate?: (manife
   const tarball = makeTarGz(entriesOfDir(dir, 'package'));
   const url = `${ORIGIN}/dl/${NAME}-${version}.tar.gz`;
   served.files.set(url, tarball);
-  return { version, url, sha256: createHash('sha256').update(tarball).digest('hex'), contentHash, permissions: computePermissions(parsed) };
+  return { version, url, sha256: createHash('sha256').update(tarball).digest('hex'), contentHash, permissions: await packagePermissions(parsed, dir) };
 }
 
 function entryOf(p: Published, over: Record<string, unknown> = {}): Record<string, unknown> {

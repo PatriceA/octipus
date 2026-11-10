@@ -9,7 +9,10 @@
  * Every list is sorted (code-unit order), so the same manifest always gives
  * the same JSON, whatever order its author wrote things in.
  */
+import { join } from 'node:path';
 import { type PluginManifest, type PluginPermissionsSummary, type PluginToolEffect, pluginRuntime } from '@/shared/plugin-package';
+import { fileSha256, uiTreeHash } from './integrity';
+import { uiDirOf } from './manifest-ui-host';
 
 /**
  * The package's `maxProtection`, or when it declares none: a package that
@@ -32,13 +35,33 @@ export type PluginPermissions = PluginPermissionsSummary;
 const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const sorted = (values: readonly string[] | undefined) => [...(values ?? [])].sort(byCodeUnit);
 
-/** The permissions summary of a parsed manifest (`parseManifest`, the parser install uses). */
-export function computePermissions(manifest: PluginManifest): PluginPermissions {
+/**
+ * Hashes of files the summary pins beyond the manifest: the prompt file's
+ * bytes and the page directory's tree (./integrity.ts). Only where a package
+ * directory is at hand (`packagePermissions`); without them both read null.
+ */
+export interface PermissionFileHashes {
+  promptSha256: string | null;
+  uiSha256: string | null;
+}
+
+const rolesOf = (roles: readonly string[] | undefined) => (roles === undefined ? {} : { roles: sorted(roles) });
+
+/**
+ * The permissions summary of a parsed manifest (`parseManifest`, the parser
+ * install uses). `files` carries the hashes of the prompt file and the page
+ * directory; without it they are null (a manifest alone). The host always
+ * computes it with them (`packagePermissions`), so a listing must list them.
+ */
+export function computePermissions(manifest: PluginManifest, files: PermissionFileHashes = { promptSha256: null, uiSha256: null }): PluginPermissions {
   const tools = Object.entries(manifest.tools ?? {})
     .map(([name, decl]) => ({ name, effect: decl.effect }))
     .sort((a, b) => byCodeUnit(a.name, b.name));
   const effects: Record<PluginToolEffect, number> = { read: 0, write: 0, external: 0 };
   for (const tool of tools) effects[tool.effect] += 1;
+  const pages = (manifest.ui?.pages ?? [])
+    .map((p) => ({ path: p.path, title: p.title, entry: p.entry }))
+    .sort((a, b) => byCodeUnit(a.path, b.path));
   return {
     name: manifest.name,
     version: manifest.version,
@@ -49,14 +72,29 @@ export function computePermissions(manifest: PluginManifest): PluginPermissions 
     tools,
     effects,
     contributions: {
-      commands: sorted(manifest.commands?.map((c) => c.name)),
-      schedules: sorted(manifest.schedules?.map((s) => s.id)),
-      events: sorted(manifest.events?.map((e) => e.on)),
-      prompt: manifest.prompt !== undefined,
-      context: manifest.context !== undefined,
+      commands: (manifest.commands ?? []).map((c) => ({ name: c.name, tool: c.tool })).sort((a, b) => byCodeUnit(a.name, b.name)),
+      schedules: (manifest.schedules ?? [])
+        .map((x) => ({ id: x.id, cron: x.cron, tool: x.tool, ...(x.input !== undefined ? { input: x.input } : {}) }))
+        .sort((a, b) => byCodeUnit(a.id, b.id)),
+      events: (manifest.events ?? []).map((e) => ({ on: e.on, tool: e.tool }))
+        .sort((a, b) => byCodeUnit(a.on, b.on) || byCodeUnit(a.tool, b.tool)),
+      prompt: manifest.prompt ? { file: manifest.prompt.file, sha256: files.promptSha256, ...rolesOf(manifest.prompt.roles) } : null,
+      context: manifest.context ? { tool: manifest.context.tool, ...rolesOf(manifest.context.roles) } : null,
     },
-    pages: manifest.ui?.pages.length ?? 0,
+    pages,
+    ui: pages.length > 0 ? { dir: uiDirOf(manifest.ui), sha256: files.uiSha256 } : null,
     trustedInput: manifest.model?.trustedInput === true,
     maxProtection: defaultMaxProtection(manifest),
   };
+}
+
+/**
+ * The permissions summary of the package in `dir` (its source, a staged copy
+ * or its installed directory): `computePermissions` with the prompt file's
+ * sha256 and the page directory's tree hash read from it.
+ */
+export async function packagePermissions(manifest: PluginManifest, dir: string): Promise<PluginPermissions> {
+  const promptSha256 = manifest.prompt ? await fileSha256(join(dir, ...manifest.prompt.file.split('/'))) : null;
+  const uiSha256 = (manifest.ui?.pages ?? []).length > 0 ? await uiTreeHash(join(dir, ...uiDirOf(manifest.ui).split('/'))) : null;
+  return computePermissions(manifest, { promptSha256, uiSha256 });
 }

@@ -29,7 +29,7 @@ function perms(over: Partial<PluginPermissionsSummary> = {}): PluginPermissionsS
   return {
     name: 'weekly', version: '1.0.0', apiVersion: '1.0.0', runtime: 'package', host: ['tasks:read'], network: [],
     tools: [{ name: 'review', effect: 'read' }], effects: { read: 1, write: 0, external: 0 },
-    contributions: { commands: [], schedules: [], events: [], prompt: false, context: false }, pages: 0, trustedInput: false, maxProtection: 4,
+    contributions: { commands: [], schedules: [], events: [], prompt: null, context: null }, pages: [], ui: null, trustedInput: false, maxProtection: 4,
     ...over,
   };
 }
@@ -112,6 +112,19 @@ describe('index v2 parsing', () => {
     expect(parsed.revoked).toEqual({ packages: [{ name: 'old', version: '0.1.0', reason: 'bug' }], keys: [{ keyId: `ed25519:${'1'.repeat(64)}`, reason: 'leak' }] });
   });
 
+  test('the permissions with what contributions and pages are bound to are read as listed', () => {
+    const permissions = perms({
+      contributions: {
+        commands: [{ name: 'go', tool: 'review' }], schedules: [{ id: 'nightly', cron: '15 2 * * *', tool: 'review', input: { full: false } }],
+        events: [{ on: 'chat.response', tool: 'review' }], prompt: { file: 'notes.md', sha256: SHA, roles: ['general'] }, context: { tool: 'review' },
+      },
+      pages: [{ path: 'board', title: 'Board', entry: 'index.html' }], ui: { dir: 'ui', sha256: SHA },
+    });
+    const parsed = parseIndexDocument(index([entry({ permissions })]), REG, { tarballSameOrigin: true });
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.entries[0].permissions).toEqual(permissions);
+  });
+
   test('an unknown schema greater than 2 is refused; v1 keeps working', () => {
     expect(() => parseIndexDocument(index([entry()], { schema: 3 }), REG)).toThrow(/schema 3/);
     expect(() => parseIndexDocument(index([entry()], { schema: 2.5 }), REG)).toThrow(IndexFormatError);
@@ -144,6 +157,10 @@ describe('index v2 parsing', () => {
       entry({ name: 'b2', url: 'https://evil.example.com/x.tar.gz', permissions: perms({ name: 'b2' }) }),
       entry({ name: 'b3', permissions: perms({ name: 'b3', host: ['tasks:read', 'notes:read'] }) }),
       entry({ name: 'b4', permissions: undefined }),
+      // The summary before contributions named their tools: refused, never read as an empty one.
+      entry({ name: 'b5', permissions: { ...perms({ name: 'b5' }), pages: 0, ui: undefined, contributions: { commands: [], schedules: [], events: [], prompt: false, context: false } } }),
+      entry({ name: 'b6', permissions: perms({ name: 'b6', contributions: { commands: [], schedules: [], events: [], prompt: { file: 'p.md', sha256: 'nothex' }, context: null } }) }),
+      entry({ name: 'b7', permissions: perms({ name: 'b7', contributions: { commands: [], schedules: [{ id: 's', cron: '* * * * *', tool: 't', input: { x: 'y'.repeat(5000) } }], events: [], prompt: null, context: null } }) }),
       entry({ name: 'ok', permissions: perms({ name: 'ok' }) }),
     ];
     const parsed = parseIndexDocument(index(bad), REG, { tarballSameOrigin: true });
@@ -243,7 +260,7 @@ describe('permissions in words, the update diff and declarations', () => {
 
   test('the diff names what widens and what narrows', () => {
     const before = perms();
-    const after = perms({ host: ['notes:write', 'tasks:read'], network: ['api.example.com'], tools: [{ name: 'review', effect: 'write' }], maxProtection: 4, pages: 1 });
+    const after = perms({ host: ['notes:write', 'tasks:read'], network: ['api.example.com'], tools: [{ name: 'review', effect: 'write' }], maxProtection: 4, pages: [{ path: 'board', title: 'Board', entry: 'index.html' }], ui: { dir: 'ui', sha256: SHA } });
     const diff = diffPermissions(before, after);
     expect(diff.widened).toBe(true);
     expect(diff.changes).toEqual(expect.arrayContaining([
@@ -257,12 +274,68 @@ describe('permissions in words, the update diff and declarations', () => {
   });
 
   test('declarations are stable, ordered, and carry guidance instead of refusals', () => {
-    const p = perms({ host: ['model:complete', 'notes:read'], network: ['api.example.com'], contributions: { commands: ['go'], schedules: [], events: [], prompt: true, context: false }, trustedInput: true });
+    const p = perms({
+      host: ['model:complete', 'notes:read'], network: ['api.example.com'],
+      contributions: { commands: [{ name: 'go', tool: 'review' }], schedules: [], events: [], prompt: { file: 'notes.md', sha256: SHA }, context: null }, trustedInput: true,
+    });
     const items = declarationItems(p, { tools: { review: { effect: 'read', description: 'Reviews' } }, secrets: [{ key: 'TOKEN', label: 'Token', required: true }] });
     expect(items.map((i) => i.id)).toEqual(['runtime', 'network:api.example.com', 'host:model:complete', 'host:notes:read', 'tool:review', 'command:go', 'prompt', 'secret:TOKEN', 'model:cli-tools', 'protection']);
     expect(items.find((i) => i.id === 'host:notes:read')?.guidance).toMatch(/send what it reads anywhere/);
     expect(declarationItems(p, null).map((i) => i.id)).toEqual(declarationItems(p, null).map((i) => i.id));
     expect(permissionsGuidance(p).map((g) => g.code)).toEqual(['egress_with_read', 'model_cli_tools']);
+  });
+
+  test('the diff catches a schedule moved to another tool, a new cron, new prompt text, a context tool and pages', () => {
+    const before = perms({
+      tools: [{ name: 'review', effect: 'read' }, { name: 'sync', effect: 'read' }, { name: 'wipe', effect: 'write' }],
+      contributions: {
+        commands: [{ name: 'go', tool: 'review' }],
+        schedules: [{ id: 'nightly', cron: '15 2 * * *', tool: 'sync' }],
+        events: [{ on: 'chat.response', tool: 'review' }],
+        prompt: { file: 'notes.md', sha256: SHA, roles: ['general'] },
+        context: { tool: 'review' },
+      },
+      pages: [{ path: 'board', title: 'Board', entry: 'index.html' }], ui: { dir: 'ui', sha256: SHA },
+    });
+    expect(diffPermissions(before, before)).toEqual({ widened: false, changes: [] });
+    const texts = (after: PluginPermissionsSummary) => diffPermissions(before, after).changes.map((c) => [c.change, c.text, c.widens]);
+    const c = before.contributions;
+    expect(texts({ ...before, contributions: { ...c, schedules: [{ id: 'nightly', cron: '15 2 * * *', tool: 'wipe' }] } }))
+      .toEqual([['changed', 'schedule nightly: tool sync → wipe', true]]);
+    expect(texts({ ...before, contributions: { ...c, schedules: [{ id: 'nightly', cron: '* * * * *', tool: 'sync' }] } }))
+      .toEqual([['changed', 'schedule nightly: cron 15 2 * * * → * * * * * (UTC)', true]]);
+    expect(texts({ ...before, contributions: { ...c, schedules: [{ id: 'nightly', cron: '15 2 * * *', tool: 'sync', input: { full: true } }] } }))
+      .toEqual([['changed', 'schedule nightly: input null → {"full":true}', false]]);
+    expect(texts({ ...before, contributions: { ...c, commands: [{ name: 'go', tool: 'wipe' }] } })).toEqual([['changed', 'command /go: review → wipe', true]]);
+    expect(texts({ ...before, contributions: { ...c, events: [{ on: 'chat.response', tool: 'wipe' }] } }))
+      .toEqual([['added', 'event chat.response → wipe', true], ['removed', 'event chat.response → review', false]]);
+    expect(texts({ ...before, contributions: { ...c, prompt: { file: 'notes.md', sha256: 'ef'.repeat(32), roles: ['general'] } } }))
+      .toEqual([['changed', 'prompt text (notes.md)', true]]);
+    expect(texts({ ...before, contributions: { ...c, prompt: { file: 'notes.md', sha256: SHA } } }))
+      .toEqual([['changed', 'prompt roles general → every role', true]]);
+    expect(texts({ ...before, contributions: { ...c, prompt: { file: 'notes.md', sha256: SHA, roles: [] } } })[0]?.[2]).toBe(false);
+    expect(texts({ ...before, contributions: { ...c, context: { tool: 'sync' } } })).toEqual([['changed', 'context tool review → sync', true]]);
+    expect(texts({ ...before, pages: [{ path: 'board', title: 'Board', entry: 'other.html' }] }))
+      .toEqual([['changed', 'page board: "Board" index.html → "Board" other.html', true]]);
+    expect(texts({ ...before, ui: { dir: 'ui', sha256: 'ef'.repeat(32) } })).toEqual([['changed', 'page files (ui/)', true]]);
+    expect(texts({ ...before, pages: [], ui: null })).toEqual([['removed', 'page board ("Board")', false]]);
+  });
+
+  test('declaration details carry what each part is bound to', () => {
+    const p = perms({
+      contributions: {
+        commands: [], schedules: [{ id: 'nightly', cron: '15 2 * * *', tool: 'review', input: { full: false } }], events: [],
+        prompt: { file: 'notes.md', sha256: SHA, roles: ['general'] }, context: { tool: 'review' },
+      },
+      pages: [{ path: 'board', title: 'Board', entry: 'index.html' }], ui: { dir: 'ui', sha256: SHA },
+    });
+    const byId = new Map(declarationItems(p).map((i) => [i.id, i.detail]));
+    expect(byId.get('schedule:nightly')).toBe('15 2 * * * UTC → review with {"full":false}');
+    expect(byId.get('prompt')).toBe(`notes.md (roles general), sha256 ${SHA}`);
+    expect(byId.get('context')).toBe('review (every agent)');
+    expect(byId.get('page:board')).toBe('/board → index.html');
+    expect(byId.get('ui')).toBe(`ui/, sha256 ${SHA}`);
+    expect(permissionsAskSummary(p)).toEqual(expect.arrayContaining(['Runs on a schedule: nightly (15 2 * * * UTC)', 'Adds 1 page: Board']));
   });
 
   test('search folds case and diacritics', () => {

@@ -19,7 +19,7 @@ import { validatePluginDirectory } from '@/plugins/packages/authoring/validate';
 import { hashPackageContent } from '@/plugins/packages/integrity';
 import { ManifestError, parseManifest } from '@/plugins/packages/manifest';
 import { packPackage } from '@/plugins/packages/pack';
-import { computePermissions } from '@/plugins/packages/permissions';
+import { packagePermissions } from '@/plugins/packages/permissions';
 import {
   generateSigningKey,
   isEncryptedPrivateKey,
@@ -330,7 +330,7 @@ export async function permissionsCommand(io: OfflineIo, argv: string[]): Promise
     const { values, positionals } = parse(argv, { json: { type: 'boolean' } });
     if (positionals.length !== 1) throw new UsageError('expected <dir> [--json]');
     dir = resolve(positionals[0]);
-    const p = computePermissions(await readPackageManifest(dir));
+    const p = await packagePermissions(await readPackageManifest(dir), dir);
     if (values.json) {
       json(io, p);
       return 0;
@@ -341,8 +341,14 @@ export async function permissionsCommand(io: OfflineIo, argv: string[]): Promise
     io.out(`  tools:         ${p.tools.length ? p.tools.map((t) => `${t.name} (${t.effect})`).join(', ') : 'none'}\n`);
     io.out(`  effects:       read ${p.effects.read}, write ${p.effects.write}, external ${p.effects.external}\n`);
     const c = p.contributions;
-    io.out(`  commands:      ${list(c.commands)}\n  schedules:     ${list(c.schedules)}\n  events:        ${list(c.events)}\n`);
-    io.out(`  prompt: ${c.prompt ? 'yes' : 'no'}; context: ${c.context ? 'yes' : 'no'}; pages: ${p.pages}; trustedInput: ${p.trustedInput ? 'yes' : 'no'}; maxProtection: ${p.maxProtection}\n`);
+    const roles = (r: readonly string[] | undefined) => (r ? `roles ${r.join(', ')}` : 'every role');
+    io.out(`  commands:      ${list(c.commands.map((x) => `/${x.name} → ${x.tool}`))}\n`);
+    io.out(`  schedules:     ${list(c.schedules.map((x) => `${x.id} (${x.cron} UTC) → ${x.tool}${x.input !== undefined ? ` ${JSON.stringify(x.input)}` : ''}`))}\n`);
+    io.out(`  events:        ${list(c.events.map((x) => `${x.on} → ${x.tool}`))}\n`);
+    io.out(`  prompt:        ${c.prompt ? `${c.prompt.file} (${roles(c.prompt.roles)}), sha256 ${c.prompt.sha256 ?? 'unreadable'}` : 'none'}\n`);
+    io.out(`  context:       ${c.context ? `${c.context.tool} (${roles(c.context.roles)})` : 'none'}\n`);
+    io.out(`  pages:         ${list(p.pages.map((x) => `/${x.path} "${x.title}" → ${x.entry}`))}${p.ui ? `; ${p.ui.dir}/ sha256 ${p.ui.sha256 ?? 'unreadable'}` : ''}\n`);
+    io.out(`  trustedInput: ${p.trustedInput ? 'yes' : 'no'}; maxProtection: ${p.maxProtection}\n`);
     return 0;
   } catch (err) {
     return failure(io, 'permissions', err, `${dir || 'The package'}: no permissions computed.`);

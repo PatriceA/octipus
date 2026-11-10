@@ -1047,30 +1047,62 @@ unpacks through the remote-install reader ([Remote install](#remote-install))
 to a directory whose content hash is the one `hash` prints, and a signature
 packed with it verifies there.
 
-**The permissions summary.** `permissions --json` prints, computed only from
-the manifest as install parses it (`computePermissions` in
-`src/plugins/packages/permissions.ts`, so a host can recompute it from a
-downloaded manifest and compare it with what an index claims):
+**The permissions summary.** `permissions --json` prints what the package
+asks for, from the manifest as install parses it plus two hashes read from
+the package directory (`packagePermissions` in
+`src/plugins/packages/permissions.ts`, so a host recomputes it from a
+downloaded package and compares it with what an index claims):
 
 ```json
 {
-  "name": "reader", "version": "1.0.0", "apiVersion": "1.0.0", "runtime": "package",
-  "host": ["model:complete", "notes:write", "tasks:write", "web:read"],
+  "name": "weekly", "version": "1.2.0", "apiVersion": "1.0.0", "runtime": "package",
+  "host": ["model:complete", "tasks:read"],
   "network": [],
-  "tools": [{ "name": "create_tasks", "effect": "write" }, { "name": "read_url", "effect": "read" },
-            { "name": "reader_action", "effect": "read" }, { "name": "save_note", "effect": "write" }],
-  "effects": { "read": 2, "write": 2, "external": 0 },
-  "contributions": { "commands": [], "schedules": [], "events": [], "prompt": false, "context": false },
-  "pages": 1, "trustedInput": false, "maxProtection": 1
+  "tools": [{ "name": "review", "effect": "read" }, { "name": "sync", "effect": "write" }],
+  "effects": { "read": 1, "write": 1, "external": 0 },
+  "contributions": {
+    "commands": [{ "name": "review", "tool": "review" }],
+    "schedules": [{ "id": "nightly", "cron": "15 2 * * *", "tool": "sync", "input": { "full": false } }],
+    "events": [{ "on": "chat.response", "tool": "review" }],
+    "prompt": { "file": "agent-notes.md", "sha256": "<64 hex>", "roles": ["general"] },
+    "context": { "tool": "review" }
+  },
+  "pages": [{ "path": "board", "title": "Weekly board", "entry": "index.html" }],
+  "ui": { "dir": "ui", "sha256": "<64 hex>" },
+  "trustedInput": false, "maxProtection": 1
 }
 ```
 
-`host` and `network` are sorted, `tools` sorted by name, and the
-contribution lists (command names, schedule ids, event types) sorted too, so
-the same manifest always gives the same JSON. `effects` always has all three
-keys. `maxProtection` is the manifest's, or the default a host derives when
-it declares none (1 for a package that reaches the network, may fetch any
-URL, runs an agent or has pages; else 4).
+- `host` and `network` are sorted, `tools` by name; `effects` always has all
+  three keys.
+- `contributions`: what each part is bound to. `commands` (name and tool,
+  sorted by name), `schedules` (id, cron, tool and `input` when the manifest
+  gives one, sorted by id), `events` (sorted by `on`, then tool), `prompt`
+  (the file, the **hex sha256 of its bytes**, and `roles` when the manifest
+  names any, sorted) and `context` (the tool, and `roles`), each `null` when
+  absent. A part left out of the manifest is an empty list or `null`.
+- `pages`: every page's path, title and entry file, sorted by path; `ui`: the
+  page directory and the **hex sha256 of its tree**, `null` without pages.
+  The tree hash is sha256 over `octipus-plugin-ui/v1` and one line per file,
+  `file <hex sha256 of its bytes> "<path relative to the ui directory>"`,
+  sorted by path (code-unit order), each line ending in a newline
+  (`uiTreeHash` in `src/plugins/packages/integrity.ts`).
+- `maxProtection` is the manifest's, or the default a host derives when it
+  declares none (1 for a package that reaches the network, may fetch any URL,
+  runs an agent or has pages; else 4).
+
+The same package always gives the same JSON. An index lists exactly this;
+the host recomputes it from the staged copy at install and refuses any
+difference (a deep equality of the whole object). From a manifest alone
+(`computePermissions` without a directory) the two hashes read `null`.
+
+**What counts as a change.** The update diff (`diffPermissions`) and the
+install consent compare these summaries: any difference in a command's tool,
+a schedule's tool, cron or input, an event's tool, the prompt's file, text
+(its sha256) or roles, the context tool or roles, a page's title or entry,
+or the page files is a change. It widens when it adds a contribution or page,
+points one at another tool, moves a cron, changes the prompt text, the
+context tool, a page or the page files, or reaches roles it did not.
 
 ## Network
 

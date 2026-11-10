@@ -50,12 +50,12 @@ export function permissionsAskSummary(p: PluginPermissionsSummary): string[] {
   ].filter(Boolean);
   out.push(tools.length > 0 ? `Tools: ${tools.join(', ')}` : 'No tools');
   const c = p.contributions;
-  if (c.commands.length > 0) out.push(`Adds slash commands: ${c.commands.map((x) => `/${x}`).join(', ')}`);
-  if (c.schedules.length > 0) out.push(`Runs on a schedule (${c.schedules.join(', ')})`);
-  if (c.events.length > 0) out.push(`Reacts to events: ${c.events.join(', ')}`);
-  if (c.prompt) out.push('Adds text to every agent\'s instructions');
-  if (c.context) out.push('Adds context to agent turns');
-  if (p.pages > 0) out.push(`Adds ${plural(p.pages, 'page', 'pages')}`);
+  if (c.commands.length > 0) out.push(`Adds slash commands: ${c.commands.map((x) => `/${x.name}`).join(', ')}`);
+  if (c.schedules.length > 0) out.push(`Runs on a schedule: ${c.schedules.map((x) => `${x.id} (${x.cron} UTC)`).join(', ')}`);
+  if (c.events.length > 0) out.push(`Reacts to events: ${[...new Set(c.events.map((x) => x.on))].join(', ')}`);
+  if (c.prompt) out.push(`Adds text to ${c.prompt.roles ? 'some agents\' instructions' : 'every agent\'s instructions'}`);
+  if (c.context) out.push(`Adds context to ${c.context.roles ? 'some agents\' turns' : 'every agent turn'}`);
+  if (p.pages.length > 0) out.push(`Adds ${plural(p.pages.length, 'page', 'pages')}: ${p.pages.map((x) => x.title).join(', ')}`);
   if (p.trustedInput) out.push('Asks to run its model calls on CLI lanes (needs a separate approval)');
   out.push(`Sees data up to protection level ${p.maxProtection}`);
   return out;
@@ -89,17 +89,7 @@ export function diffPermissions(before: PluginPermissionsSummary, after: PluginP
     }
   }
   for (const [name, effect] of was) if (!now.has(name)) add('tool', 'removed', `tool ${name} (${effect})`, false);
-  const contribLists: Array<['commands' | 'schedules' | 'events', string]> = [['commands', 'command /'], ['schedules', 'schedule '], ['events', 'event ']];
-  for (const [kind, label] of contribLists) {
-    for (const v of after.contributions[kind]) if (!before.contributions[kind].includes(v)) add('contribution', 'added', `${label}${v}`, true);
-    for (const v of before.contributions[kind]) if (!after.contributions[kind].includes(v)) add('contribution', 'removed', `${label}${v}`, false);
-  }
-  for (const kind of ['prompt', 'context'] as const) {
-    if (!before.contributions[kind] && after.contributions[kind]) add('contribution', 'added', kind, true);
-    if (before.contributions[kind] && !after.contributions[kind]) add('contribution', 'removed', kind, false);
-  }
-  if (after.pages > before.pages) add('pages', 'added', `pages ${before.pages} → ${after.pages}`, true);
-  if (after.pages < before.pages) add('pages', 'removed', `pages ${before.pages} → ${after.pages}`, false);
+  diffContributions(before, after, add);
   if (!before.trustedInput && after.trustedInput) add('trustedInput', 'added', 'model.trustedInput', true);
   if (before.trustedInput && !after.trustedInput) add('trustedInput', 'removed', 'model.trustedInput', false);
   if (before.maxProtection !== after.maxProtection) {
@@ -107,6 +97,82 @@ export function diffPermissions(before: PluginPermissionsSummary, after: PluginP
     add('maxProtection', wider ? 'wider' : 'narrower', `maxProtection ${before.maxProtection} → ${after.maxProtection}`, wider);
   }
   return { widened: changes.some((c) => c.widens), changes };
+}
+
+type AddChange = (kind: PluginPermissionChange['kind'], change: PluginPermissionChange['change'], text: string, widens: boolean) => void;
+
+const json = (v: unknown) => JSON.stringify(v ?? null);
+const rolesText = (roles: readonly string[] | undefined) => (roles ? `roles ${roles.join(', ')}` : 'every role');
+/** Whether `after` reaches a role `before` did not (no roles: every role). */
+const reachesMore = (before: readonly string[] | undefined, after: readonly string[] | undefined) =>
+  before !== undefined && (after === undefined || after.some((r) => !before.includes(r)));
+
+/**
+ * Commands, schedules, events, prompt, context, pages and page files. Any
+ * difference is a change; it widens when it adds one, points one at another
+ * tool, moves a cron, changes the prompt text or file, the context tool, a
+ * page or the page files, or reaches roles it did not.
+ */
+function diffContributions(before: PluginPermissionsSummary, after: PluginPermissionsSummary, add: AddChange): void {
+  const b = before.contributions;
+  const a = after.contributions;
+  const was = new Map(b.commands.map((c) => [c.name, c]));
+  const now = new Map(a.commands.map((c) => [c.name, c]));
+  for (const [name, c] of now) {
+    const old = was.get(name);
+    if (!old) add('contribution', 'added', `command /${name} → ${c.tool}`, true);
+    else if (old.tool !== c.tool) add('contribution', 'changed', `command /${name}: ${old.tool} → ${c.tool}`, true);
+  }
+  for (const [name, c] of was) if (!now.has(name)) add('contribution', 'removed', `command /${name} → ${c.tool}`, false);
+
+  const wasS = new Map(b.schedules.map((x) => [x.id, x]));
+  const nowS = new Map(a.schedules.map((x) => [x.id, x]));
+  for (const [id, x] of nowS) {
+    const old = wasS.get(id);
+    if (!old) {
+      add('contribution', 'added', `schedule ${id} (${x.cron} UTC) → ${x.tool}`, true);
+      continue;
+    }
+    if (old.tool !== x.tool) add('contribution', 'changed', `schedule ${id}: tool ${old.tool} → ${x.tool}`, true);
+    if (old.cron !== x.cron) add('contribution', 'changed', `schedule ${id}: cron ${old.cron} → ${x.cron} (UTC)`, true);
+    if (json(old.input) !== json(x.input)) add('contribution', 'changed', `schedule ${id}: input ${json(old.input)} → ${json(x.input)}`, false);
+  }
+  for (const [id, x] of wasS) if (!nowS.has(id)) add('contribution', 'removed', `schedule ${id} (${x.cron} UTC) → ${x.tool}`, false);
+
+  const key = (e: { on: string; tool: string }) => `${e.on} → ${e.tool}`;
+  const wasE = new Set(b.events.map(key));
+  const nowE = new Set(a.events.map(key));
+  for (const e of nowE) if (!wasE.has(e)) add('contribution', 'added', `event ${e}`, true);
+  for (const e of wasE) if (!nowE.has(e)) add('contribution', 'removed', `event ${e}`, false);
+
+  if (!b.prompt && a.prompt) add('contribution', 'added', `prompt ${a.prompt.file} (${rolesText(a.prompt.roles)})`, true);
+  else if (b.prompt && !a.prompt) add('contribution', 'removed', `prompt ${b.prompt.file}`, false);
+  else if (b.prompt && a.prompt) {
+    if (b.prompt.file !== a.prompt.file || b.prompt.sha256 !== a.prompt.sha256) add('contribution', 'changed', `prompt text (${a.prompt.file})`, true);
+    if (json(b.prompt.roles) !== json(a.prompt.roles)) {
+      add('contribution', 'changed', `prompt ${rolesText(b.prompt.roles)} → ${rolesText(a.prompt.roles)}`, reachesMore(b.prompt.roles, a.prompt.roles));
+    }
+  }
+  if (!b.context && a.context) add('contribution', 'added', `context → ${a.context.tool} (${rolesText(a.context.roles)})`, true);
+  else if (b.context && !a.context) add('contribution', 'removed', `context → ${b.context.tool}`, false);
+  else if (b.context && a.context) {
+    if (b.context.tool !== a.context.tool) add('contribution', 'changed', `context tool ${b.context.tool} → ${a.context.tool}`, true);
+    if (json(b.context.roles) !== json(a.context.roles)) {
+      add('contribution', 'changed', `context ${rolesText(b.context.roles)} → ${rolesText(a.context.roles)}`, reachesMore(b.context.roles, a.context.roles));
+    }
+  }
+
+  const wasP = new Map(before.pages.map((p) => [p.path, p]));
+  const nowP = new Map(after.pages.map((p) => [p.path, p]));
+  for (const [path, p] of nowP) {
+    const old = wasP.get(path);
+    if (!old) add('pages', 'added', `page ${path} ("${p.title}")`, true);
+    else if (old.title !== p.title || old.entry !== p.entry) add('pages', 'changed', `page ${path}: "${old.title}" ${old.entry} → "${p.title}" ${p.entry}`, true);
+  }
+  for (const [path, p] of wasP) if (!nowP.has(path)) add('pages', 'removed', `page ${path} ("${p.title}")`, false);
+  if (before.ui && after.ui && (before.ui.dir !== after.ui.dir || before.ui.sha256 !== after.ui.sha256)) {
+    add('pages', 'changed', `page files (${after.ui.dir}/)`, true);
+  }
 }
 
 /** Lower case without diacritics, for search (`Café` matches `cafe`). */

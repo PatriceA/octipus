@@ -12,7 +12,7 @@ import { Readable } from 'node:stream';
 import { afterEach, describe, expect, test } from 'vitest';
 import { extractTarGz, packageRootIn } from '@/plugins/packages/tar';
 import { hashPackageContent } from '@/plugins/packages/integrity';
-import { computePermissions } from '@/plugins/packages/permissions';
+import { computePermissions, packagePermissions } from '@/plugins/packages/permissions';
 import { parseManifest } from '@/plugins/packages/manifest';
 import {
   hashCommand,
@@ -264,14 +264,14 @@ describe('permissions', () => {
   test('the reader example plugin', async () => {
     const fake = io();
     expect(await permissionsCommand(fake, [join(ROOT, 'plugins/reader'), '--json'])).toBe(0);
-    expect(jsonOut(fake)).toMatchInlineSnapshot(`
+    expect(jsonOut(fake)).toMatchInlineSnapshot({ ui: { dir: 'ui', sha256: expect.stringMatching(/^[0-9a-f]{64}$/) } }, `
       {
         "apiVersion": "1.0.0",
         "contributions": {
           "commands": [],
-          "context": false,
+          "context": null,
           "events": [],
-          "prompt": false,
+          "prompt": null,
           "schedules": [],
         },
         "effects": {
@@ -288,7 +288,13 @@ describe('permissions', () => {
         "maxProtection": 1,
         "name": "reader",
         "network": [],
-        "pages": 1,
+        "pages": [
+          {
+            "entry": "index.html",
+            "path": "read",
+            "title": "Reader",
+          },
+        ],
         "runtime": "package",
         "tools": [
           {
@@ -309,6 +315,10 @@ describe('permissions', () => {
           },
         ],
         "trustedInput": false,
+        "ui": {
+          "dir": "ui",
+          "sha256": StringMatching /\\^\\[0-9a-f\\]\\{64\\}\\$/,
+        },
         "version": "1.0.0",
       }
     `);
@@ -317,14 +327,14 @@ describe('permissions', () => {
   test('the research example plugin', async () => {
     const fake = io();
     expect(await permissionsCommand(fake, [join(ROOT, 'plugins/research'), '--json'])).toBe(0);
-    expect(jsonOut(fake)).toMatchInlineSnapshot(`
+    expect(jsonOut(fake)).toMatchInlineSnapshot({ ui: { dir: 'ui', sha256: expect.stringMatching(/^[0-9a-f]{64}$/) } }, `
       {
         "apiVersion": "1.0.0",
         "contributions": {
           "commands": [],
-          "context": false,
+          "context": null,
           "events": [],
-          "prompt": false,
+          "prompt": null,
           "schedules": [],
         },
         "effects": {
@@ -339,7 +349,13 @@ describe('permissions', () => {
         "maxProtection": 1,
         "name": "research",
         "network": [],
-        "pages": 1,
+        "pages": [
+          {
+            "entry": "index.html",
+            "path": "run",
+            "title": "Research",
+          },
+        ],
         "runtime": "package",
         "tools": [
           {
@@ -356,19 +372,25 @@ describe('permissions', () => {
           },
         ],
         "trustedInput": false,
+        "ui": {
+          "dir": "ui",
+          "sha256": StringMatching /\\^\\[0-9a-f\\]\\{64\\}\\$/,
+        },
         "version": "1.0.0",
       }
     `);
   });
 
-  test('the keys come in the documented order, and computePermissions is what the command prints', async () => {
+  test('the keys come in the documented order, and packagePermissions is what the command prints', async () => {
     const dir = join(ROOT, 'plugins/research');
     const fake = io();
     await permissionsCommand(fake, [dir, '--json']);
     const printed = jsonOut(fake);
-    expect(Object.keys(printed)).toEqual(['name', 'version', 'apiVersion', 'runtime', 'host', 'network', 'tools', 'effects', 'contributions', 'pages', 'trustedInput', 'maxProtection']);
+    expect(Object.keys(printed)).toEqual(['name', 'version', 'apiVersion', 'runtime', 'host', 'network', 'tools', 'effects', 'contributions', 'pages', 'ui', 'trustedInput', 'maxProtection']);
     expect(Object.keys(printed.contributions as object)).toEqual(['commands', 'schedules', 'events', 'prompt', 'context']);
-    expect(printed).toEqual(computePermissions(parseManifest(JSON.parse(readFileSync(join(dir, 'octipus-plugin.json'), 'utf8')))));
+    expect(printed).toEqual(await packagePermissions(parseManifest(JSON.parse(readFileSync(join(dir, 'octipus-plugin.json'), 'utf8'))), dir));
+    // The page tree hash is over the ui directory's files, so another byte there changes it.
+    expect((printed.ui as { sha256: string }).sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
   test('lists are sorted, contributions and the default maxProtection are counted', () => {
@@ -379,12 +401,24 @@ describe('permissions', () => {
       host: ['tasks:read'],
       network: ['b.example.com', 'a.example.com'],
       commands: [{ name: 'zz', tool: 'alpha', description: 'z' }, { name: 'aa', tool: 'alpha', description: 'a' }],
-      schedules: [{ id: 'weekly', cron: '0 9 * * 1', tool: 'mid' }],
+      schedules: [{ id: 'weekly', cron: '0 9 * * 1', tool: 'mid', input: { full: true } }],
+      events: [{ on: 'document.failed', tool: 'mid' }, { on: 'chat.response', tool: 'alpha' }],
+      prompt: { file: 'notes.md', roles: ['writer', 'general'] },
+      context: { tool: 'alpha' },
     }));
     expect(p.tools.map((t) => t.name)).toEqual(['alpha', 'mid', 'zeta']);
     expect(p.effects).toEqual({ read: 1, write: 1, external: 1 });
     expect(p.network).toEqual(['a.example.com', 'b.example.com']);
-    expect(p.contributions).toEqual({ commands: ['aa', 'zz'], schedules: ['weekly'], events: [], prompt: false, context: false });
+    expect(p.contributions).toEqual({
+      commands: [{ name: 'aa', tool: 'alpha' }, { name: 'zz', tool: 'alpha' }],
+      schedules: [{ id: 'weekly', cron: '0 9 * * 1', tool: 'mid', input: { full: true } }],
+      events: [{ on: 'chat.response', tool: 'alpha' }, { on: 'document.failed', tool: 'mid' }],
+      // From a manifest alone the prompt file is not hashed.
+      prompt: { file: 'notes.md', sha256: null, roles: ['general', 'writer'] },
+      context: { tool: 'alpha' },
+    });
+    expect(p.pages).toEqual([]);
+    expect(p.ui).toBeNull();
     expect(p.maxProtection).toBe(1);
   });
 

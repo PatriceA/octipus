@@ -57,6 +57,16 @@ const markdown = (max: number) => z.string().max(max).refine((s) => !CONTROL_RE.
 export const isoTime = z.string().max(40).regex(ISO_RE, 'an ISO date-time with a zone').refine((s) => !Number.isNaN(Date.parse(s)), 'not a real time');
 const sortedUnique = (items: readonly string[]) => items.every((v, i) => i === 0 || items[i - 1] < v);
 
+const sha256Hex = z.string().regex(/^[0-9a-f]{64}$/, 'a hex sha256');
+const roles = z.array(line(64)).max(30);
+function jsonSize(value: unknown): number {
+  try {
+    return JSON.stringify(value)?.length ?? 0;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
 /** `computePermissions` output, as an index lists it: exactly these keys, bounded. */
 export const indexPermissionsSchema = z.object({
   name: z.string().max(50),
@@ -68,13 +78,17 @@ export const indexPermissionsSchema = z.object({
   tools: z.array(z.object({ name: line(64), effect: z.enum(PLUGIN_TOOL_EFFECTS) }).strict()).max(200),
   effects: z.object({ read: z.number().int().min(0).max(200), write: z.number().int().min(0).max(200), external: z.number().int().min(0).max(200) }).strict(),
   contributions: z.object({
-    commands: z.array(line(64)).max(100),
-    schedules: z.array(line(64)).max(100),
-    events: z.array(line(64)).max(100),
-    prompt: z.boolean(),
-    context: z.boolean(),
+    commands: z.array(z.object({ name: line(64), tool: line(64) }).strict()).max(100),
+    schedules: z.array(z.object({
+      id: line(64), cron: line(100), tool: line(64),
+      input: z.record(z.string().max(100), z.unknown()).refine((v) => jsonSize(v) <= 4000, 'input is at most 4000 characters of JSON').optional(),
+    }).strict()).max(100),
+    events: z.array(z.object({ on: line(64), tool: line(64) }).strict()).max(100),
+    prompt: z.object({ file: line(300), sha256: sha256Hex.nullable(), roles: roles.optional() }).strict().nullable(),
+    context: z.object({ tool: line(64), roles: roles.optional() }).strict().nullable(),
   }).strict(),
-  pages: z.number().int().min(0).max(100),
+  pages: z.array(z.object({ path: line(200), title: line(100), entry: line(300) }).strict()).max(100),
+  ui: z.object({ dir: line(300), sha256: sha256Hex.nullable() }).strict().nullable(),
   trustedInput: z.boolean(),
   maxProtection: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
 }).strict().refine((p) => sortedUnique(p.host) && sortedUnique(p.network), 'host and network are sorted lists without repeats');

@@ -88,7 +88,7 @@ import { checkInProcessBundle } from './in-process-bundle';
 import { contributionsHashOf, hasContributions } from './contributions/approval';
 import { CONTENT_MISMATCH_PROBLEM, hashPackageContent, isContentHash, LISTING_FILE, verifyPackageContent } from './integrity';
 import { ManifestError, parseManifest, settingEnvName } from './manifest';
-import { computePermissions, defaultMaxProtection } from './permissions';
+import { defaultMaxProtection, packagePermissions } from './permissions';
 import { checkSignatureOnDisk, keyFingerprint, parsePublicKey, readSignatureFile, SIGNATURE_FILE, type SignatureCheck, SignatureError, type TrustedPublisher } from './signature';
 import { keyRevocation, packageRevocation, revokedKeyIds } from './revocations';
 import { checkPackageTree, PackageTreeError } from './tree';
@@ -512,7 +512,7 @@ export async function installFromDirectory(
       throw new PluginPackageError('invalid', `${manifest.name} ${manifest.version} is revoked by the marketplace (${revoked.reason || 'no reason given'}); not installed`);
     }
     if (opts.expectListing?.permissions) {
-      const actual = computePermissions(manifest);
+      const actual = await packagePermissions(manifest, staging);
       if (canonicalJson(actual) !== canonicalJson(opts.expectListing.permissions)) {
         await auditQuietly('listing_mismatch', manifest.name, {
           version: manifest.version, actor: actorUserId, what: 'permissions', listed: opts.expectListing.permissions, actual, source: opts.origin?.source ?? null,
@@ -1197,7 +1197,7 @@ async function viewOf(row: PluginPackageRow, secrets: string[], authoredBy?: Plu
     authoredBy: authoredBy !== undefined ? authoredBy : await agentAuthorship(row.name),
     origin: row.origin ?? null,
     revocation: await revocationOf(row, signature),
-    declarations: declarationItems(computePermissions(row.manifest), row.manifest),
+    declarations: declarationItems(await packagePermissions(row.manifest, packageDir(row.name)), row.manifest),
     installedBy: row.installedBy,
     installedAt: row.installedAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

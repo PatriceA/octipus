@@ -614,10 +614,33 @@ export interface PluginPermissionsSummary {
   network: string[];
   tools: Array<{ name: string; effect: PluginToolEffect }>;
   effects: Record<PluginToolEffect, number>;
-  contributions: { commands: string[]; schedules: string[]; events: string[]; prompt: boolean; context: boolean };
-  pages: number;
+  /**
+   * What it adds besides tools, with what each part is bound to, so a schedule
+   * switched to another tool, a new cron, new prompt text or another context
+   * tool is a change of its own (docs/PLUGIN-PACKAGES.md#packing-and-publishing).
+   */
+  contributions: PluginPermissionsContributions;
+  /** Its pages, sorted by path. */
+  pages: Array<{ path: string; title: string; entry: string }>;
+  /** The directory its pages are served from and the hash of that tree (`uiTreeHash`); null without pages. */
+  ui: { dir: string; sha256: string | null } | null;
   trustedInput: boolean;
   maxProtection: 1 | 2 | 3 | 4;
+}
+
+/**
+ * `PluginPermissionsSummary.contributions`. Lists are sorted (commands by
+ * name, schedules by id, events by `on` then tool); `roles` is sorted and
+ * left out when the manifest names none (every role). `prompt.sha256` is the
+ * hex sha256 of the prompt file's bytes, null only where no package directory
+ * was at hand (a manifest alone).
+ */
+export interface PluginPermissionsContributions {
+  commands: Array<{ name: string; tool: string }>;
+  schedules: Array<{ id: string; cron: string; tool: string; input?: Record<string, unknown> }>;
+  events: Array<{ on: string; tool: string }>;
+  prompt: { file: string; sha256: string | null; roles?: string[] } | null;
+  context: { tool: string; roles?: string[] } | null;
 }
 
 /** One change between two permission summaries (`PluginUpdateView.diff`). */

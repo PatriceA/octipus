@@ -21,10 +21,10 @@ import { coreLogger } from '@/utils/logger';
 import { getAppVersion } from '@/utils/version';
 import { MARKETPLACE_REGISTRY } from './marketplace-config';
 import { newestInstallable, revokedVersions, sourceByName } from './marketplace';
-import { computePermissions } from './permissions';
+import { packagePermissions } from './permissions';
 import { readIndex } from './remote';
 import { notifyAdmins } from './revocation-effects';
-import { compareVersions } from './service';
+import { compareVersions, packageDir } from './service';
 
 /** How often the check runs from the cron tick. */
 export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60_000;
@@ -47,7 +47,7 @@ export async function listUpdates(): Promise<PluginUpdateView[]> {
     const listed = indexes.get(registry)?.fetched?.index.entries.filter((e) => e.name === row.name) ?? [];
     const latest = newestInstallable(listed, revoked, appVersion);
     if (!latest || compareVersions(latest.version, row.version) <= 0) continue;
-    const diff = latest.permissions ? diffPermissions(computePermissions(row.manifest), latest.permissions) : null;
+    const diff = latest.permissions ? diffPermissions(await packagePermissions(row.manifest, packageDir(row.name)), latest.permissions) : null;
     const warnings: PluginGuidanceWarning[] = [
       ...(diff?.widened ? [{ code: 'widens', message: `This version asks for more: ${diff.changes.filter((c) => c.widens).map((c) => c.text).join('; ')}` }] : []),
       ...(diff === null ? [{ code: 'no_permissions_listed', message: 'The registry does not list what this version asks for; read its manifest after upgrading, before enabling it.' }] : []),
