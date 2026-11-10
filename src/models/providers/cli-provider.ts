@@ -4,7 +4,8 @@ import { describeCliCapabilities } from '@/shared/cli-capabilities';
 import { cliCredentialOwnerFor, cliEnvFor, cliWorkDirFor } from '@/core/cli-child-env';
 import { discoverCodexMcpServers, getClaudeSpaceSettingsPath, getEmptyMcpConfigPath, getEmptyVibeHome } from '@/core/cli-adapters';
 import { spawn } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync } from 'fs';
+import { tmpdir } from 'os';
 import { delimiter, extname, join } from 'path';
 import { getConfig } from '@/config';
 import { classifyError } from '@/core/errors/classification';
@@ -408,7 +409,17 @@ const vibeCliConfig: CLIToolConfig = {
   },
 };
 
-/** Workspace root for one-shot CLI completions (falls back to cwd). */
+/**
+ * The working directory of an install row's one-shot completion: empty, so a
+ * tool-less CLI picks up no project file (CLAUDE.md, AGENTS.md) of the workspace.
+ */
+function emptyCompletionDir(): string {
+  const dir = join(tmpdir(), 'octipus-cli', 'completion-cwd');
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/** Workspace root for CLI runs other than one-shot completions (falls back to cwd). */
 function resolveWorkspaceRoot(): string {
   try {
     return getConfig().workspace.rootPath || process.cwd();
@@ -513,6 +524,9 @@ function makeAnthropicCompatCliConfig(spec: AnthropicCompatCliSpec): CLIToolConf
     adapter: 'Claude Code',
     buildArgs: () => ['-p', '--output-format', 'json', '--strict-mcp-config', '--mcp-config', getEmptyMcpConfigPath()],
     promptVia: 'stdin',
+    // The same `claude` binary: the same tool-less one-shot mode as Claude Code.
+    toolLessArgs: () => ['-p', '--output-format', 'json', '--strict-mcp-config', '--mcp-config', getEmptyMcpConfigPath(),
+      '--tools=', '--setting-sources=', '--settings', getClaudeSpaceSettingsPath(false)],
     parseOutput: parseClaudeStyleOutput(spec.modelLabel),
     buildEnv: async () => {
       const token = await resolveCliVendorKey(spec.keyEnv, spec.keyVault);
@@ -645,11 +659,15 @@ export class CLIProvider implements ModelProvider {
     const { assertRowServesCall } = await import('./instrumented');
     await assertRowServesCall(row, options);
     const credentialOwner = await cliCredentialOwnerFor(row, requesterId);
-    // A personal row's one-shot runs tool-less, in the owner's own directory
-    // (§8.4): its callers summarize external mail and fetched pages, and a
-    // CLI with native tools in the shared root would read every user's data.
-    if (credentialOwner && !tool.toolLessArgs) {
-      throw classifyError(new Error(`${tool.name} cannot answer one-shot completions on a personal model: it has no mode without its own tools. Use it as an agent model (/model) instead of binding it to a lane.`), 'cli');
+    // Every one-shot completion runs tool-less (§8.4), a personal row's in its
+    // owner's own directory and an install row's in an empty one: its callers
+    // summarize external mail, fetched pages and plugin-supplied prompts, and a
+    // CLI with native tools (agy --dangerously-skip-permissions, vibe
+    // --auto-approve, codex exec) would act on the host with the server's
+    // rights. A CLI with no tool-less mode answers no completion; it runs only
+    // as an agent model (the CLI agent worker, with its own isolation).
+    if (!tool.toolLessArgs) {
+      throw classifyError(new Error(`${tool.name} cannot answer one-shot completions: it has no mode without its own tools. Use it as an agent model (/model) instead of binding it to a lane.`), 'cli');
     }
     const quotaKey = cliQuotaKey(tool.quotaProvider, credentialOwner);
 
@@ -664,17 +682,16 @@ export class CLIProvider implements ModelProvider {
     const prompt = this.buildPrompt(options);
     // In stdin mode the prompt must not reach argv at all — the builders take
     // an empty string and place `-` (or nothing) instead.
-    const viaStdin = credentialOwner ? true : tool.promptVia === 'stdin';
-    const argvPrompt = viaStdin ? '' : prompt;
-    const cwd = credentialOwner ? cliWorkDirFor(credentialOwner.userId) : resolveWorkspaceRoot();
+    // The tool-less mode reads the prompt from stdin: it never reaches argv.
+    const viaStdin = true;
+    const cwd = credentialOwner ? cliWorkDirFor(credentialOwner.userId) : emptyCompletionDir();
     // Same allowlisted child env as the agent worker — never the server's
     // full environment (DB credentials, every provider key). The model row's
     // `cliAgent.inheritApiKeys` opts a key-mode CLI back into its own key,
     // exactly as it does for managed runs.
     const inheritApiKeys = row?.metadata?.cliAgent?.inheritApiKeys === true;
     const childEnv = cliEnvFor(credentialOwner, tool, tool.buildEnv ? await tool.buildEnv() : undefined, inheritApiKeys);
-    const args = credentialOwner && tool.toolLessArgs ? tool.toolLessArgs()
-      : tool.buildArgsAsync ? await tool.buildArgsAsync(argvPrompt, cwd, childEnv) : tool.buildArgs(argvPrompt);
+    const args = tool.toolLessArgs();
     const startTime = Date.now();
 
     modelLogger.debug({ tool: tool.name, model: options.model }, 'Executing CLI tool');
