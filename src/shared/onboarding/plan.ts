@@ -429,8 +429,12 @@ function productSteps(plan: Plan, a: Answers, s: OnboardingState): void {
   }
 }
 
+/** Where the reader went: it is the bundled Reader plugin now, not a module (docs/MODULES.md). */
+export const READER_PLUGIN_HINT = 'The reader is a plugin now: install "Reader" under Admin → Plugin packages → Bundled, then enable it';
+
 function researchSteps(plan: Plan, a: Answers, s: OnboardingState): void {
   if (yes(a, 'research.roleAgent')) roleAgent(plan, s, 'research', str(a, 'research.pipeline'), 'Turn on the research agent');
+  plan.done('plugin:reader', s.isAdmin ? READER_PLUGIN_HINT : 'Your admin installs the Reader plugin (Admin → Plugin packages → Bundled)');
 }
 
 /** The answer that holds the modules picked in the guide's review, when changed there. */

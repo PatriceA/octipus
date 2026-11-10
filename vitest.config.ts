@@ -42,6 +42,9 @@ const ALL = [
   // migration — still importing `bun:test`, never run, and covering the CLI
   // that every install goes through.
   'bin/**/*.test.ts',
+  // The first-party plugins' tests sit beside their packages (plugins/<name>.test.ts),
+  // never inside one: a package directory is what gets hashed and installed.
+  'plugins/*.test.ts',
   'src/**/*.spec.ts',
   'scripts/**/*.spec.ts',
 ];
