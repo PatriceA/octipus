@@ -2,11 +2,16 @@
 /**
  * `octi plugin <subcommand>` (WS3).
  *
- *   octi plugin validate <dir>   Validate a plugin against the contract.
+ *   octi plugin validate <dir> [--json]  Validate a plugin package (or a legacy plugin) against the contract.
  *   octi plugin convert <dir>    Convert a legacy plugin into a plugin package.
- *   octi plugin keygen <prefix>  Make an Ed25519 signing key pair.
+ *   octi plugin keygen <prefix> [--passphrase-file <path|->]  Make an Ed25519 signing key pair.
  *   octi plugin sign <dir> --key <file>  Sign a plugin package (octipus-plugin.sig).
  *   octi plugin sign-index <index.json> --key <file>  Sign a registry index (<index.json>.sig).
+ *   octi plugin hash <dir> [--json]  The content hash install records.
+ *   octi plugin pack <dir> --out <file.tar.gz> [--json]  A reproducible tarball of the package.
+ *   octi plugin permissions <dir> [--json]  What the package asks for, from its manifest.
+ *   octi plugin verify <dir> --pub <file.pub>  Check the package's signature.
+ *   octi plugin verify-index <index.json> --pub <file.pub>...  Check a registry index's signature.
  *   octi plugin list             Installed packages (through the running backend).
  *   octi plugin approve <name> [--hash sha256:…]  Approve a package's changed content.
  *   octi plugin approve-in-process <name> [--hash sha256:…]  Approve an in-process plugin to run in the server process.
@@ -18,25 +23,40 @@
  *   octi plugin bundled          The first-party plugins shipped with Octipus.
  *   octi plugin install-bundled <name> [--upgrade]  Install one (disabled).
  *
- * Delegated from bin/octi.ts. Uses the published validation kit so authors and
- * the host run identical checks.
+ * Delegated from bin/octi. The offline subcommands (validate, keygen, sign,
+ * sign-index, hash, pack, permissions, verify, verify-index) live in
+ * ./plugin-offline.ts and need no server; they run the host's own code, so
+ * authors, a marketplace's CI and the host run identical checks.
  */
-import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
-import { validatePlugin } from '@octipus/plugin-sdk/testing';
 import { ConvertError, convertLegacyPlugin } from '@/plugins/convert';
-import { ManifestError } from '@/plugins/packages/manifest';
-import { generateSigningKey, SignatureError, signPackage, signRegistryIndexFile } from '@/plugins/packages/signature';
-import { PackageTreeError } from '@/plugins/packages/tree';
 import { PLUGIN_TOOL_EFFECTS, type PluginToolEffect } from '@/shared/plugin-package';
 import { approveCliToolsCommand, approveCommand, approveContributionsCommand, approveInProcessCommand, bundledCommand, installBundledCommand, listCommand, type PluginApiIo, readAllText, readHiddenLine, secretCommandFromArgs, setCommand, uninstallCommand } from './plugin-api';
+import {
+  hashCommand,
+  keygenCommand,
+  MAX_PASSPHRASE_BYTES,
+  type OfflineIo,
+  packCommand,
+  permissionsCommand,
+  signCommand,
+  signIndexCommand,
+  validateCommand,
+  verifyCommand,
+  verifyIndexCommand,
+} from './plugin-offline';
 
 const HELP = `octi plugin — plugin tooling
 
 Usage:
-  octi plugin validate <dir>    Validate a plugin directory against the contract
+  octi plugin validate <dir> [--json]
+                                Validate a plugin package (octipus-plugin.json) the way
+                                an install checks it: manifest, tree, server files,
+                                contributions. A legacy plugin (plugin.json) is checked
+                                with the plugin SDK's kit. --json prints
+                                {"ok","problems","warnings"}; exit 1 when not ok.
   octi plugin convert <legacy-dir> [--out <dir>] [--effect <tool>=<read|write|external>]... [--network <host>]... [--check-handlers]
                                 Convert a legacy plugin (plugin.json; they load from
                                 ~/.octipus/legacy-plugins/<name>, no longer from
@@ -47,19 +67,50 @@ Usage:
                                 is "external" (always ask) unless --effect lowers it.
                                 --check-handlers imports the plugin here to check every
                                 tool has a handler: that runs its code with your rights.
-  octi plugin keygen <out-prefix>
+  octi plugin keygen <out-prefix> [--passphrase-file <path|->] [--json]
                                 Make an Ed25519 key pair: <out-prefix>.key (private,
-                                keep it secret) and <out-prefix>.pub (public, for
+                                0600, keep it secret) and <out-prefix>.pub (public, for
                                 plugins.trustedPublishers). Never overwrites a file.
-  octi plugin sign <dir> --key <private-key-file>
+                                --passphrase-file encrypts the private key (PKCS#8,
+                                AES-256-CBC) with the passphrase in that file, or on
+                                stdin for "-" (one trailing newline dropped; empty
+                                refused).
+  octi plugin sign <dir> --key <private-key-file> [--passphrase-file <path|->] [--json]
                                 Sign a plugin package: writes <dir>/octipus-plugin.sig
                                 over its content hash. Sign last: any later change to
-                                the files invalidates the signature.
-  octi plugin sign-index <index.json> --key <private-key-file>
+                                the files invalidates the signature. An encrypted key
+                                takes its passphrase from --passphrase-file, else it is
+                                asked at the terminal (no echo); with no terminal, sign
+                                is refused.
+  octi plugin sign-index <index.json> --key <private-key-file> [--passphrase-file <path|->] [--json]
                                 Sign a registry index: writes <index.json>.sig over its
                                 exact bytes. Publish both side by side; a registry
                                 configured with "publisher" lists the index only when
                                 the .sig verifies with a trusted key of that publisher.
+                                Passphrases as for sign.
+  octi plugin hash <dir> [--json]
+                                The package's content hash, as install records it
+                                (octipus-plugin.sig and marketplace.json left out).
+                                Refuses what install refuses. --json prints
+                                {"name","version","contentHash"}.
+  octi plugin pack <dir> --out <file.tar.gz> [--json]
+                                A reproducible tarball of the package under
+                                <name>-<version>/: sorted entries, mtime 0, owner 0,
+                                modes 0644/0755, fixed gzip; octipus-plugin.sig
+                                included, marketplace.json left out. --json prints
+                                {"file","sha256","contentHash","name","version"}.
+  octi plugin permissions <dir> [--json]
+                                What the package asks for, from its manifest alone:
+                                host scopes, network hosts, tools and effects,
+                                contributions, pages, model.trustedInput, maxProtection.
+  octi plugin verify <dir> --pub <public-key-file> [--json]
+                                Check <dir>/octipus-plugin.sig against the key and the
+                                current content hash. Exit 0 when valid, 1 otherwise;
+                                --json prints {"valid","keyId","contentHash","error"?}.
+  octi plugin verify-index <index.json> --pub <public-key-file>... [--json]
+                                Check <index.json>.sig over the exact index bytes;
+                                passes when any one --pub verifies it, and names it.
+                                --json prints {"valid","keyId","pub","sha256","error"?}.
   octi plugin list              Installed plugin packages: state, signature, network,
                                 approved and actual content hash.
   octi plugin approve <name> [--hash sha256:<hex>]
@@ -103,83 +154,32 @@ Usage:
                                 Install one, pinned and disabled like any package;
                                 enable it on the admin page, approving its host scopes.
 
+validate, keygen, sign, sign-index, hash, pack, permissions, verify and verify-index
+work offline: they need no running server. With --json they print one JSON
+document on stdout and every diagnostic on stderr; every subcommand exits non-zero on error.
+
 list, approve, approve-in-process, approve-contributions, approve-cli-tools, set, secret, uninstall, bundled and install-bundled call the running backend (http://localhost:$API_PORT, 3005 by
 default) with the admin API token in OCTIPUS_API_TOKEN (Settings → API Tokens).
 `;
 
-async function runKeygen(argv: string[]): Promise<never> {
-  if (argv.length !== 1) {
-    process.stderr.write(`octi plugin keygen: expected one <out-prefix>\n\n${HELP}`);
-    process.exit(2);
-  }
-  const prefix = resolve(argv[0]);
-  const { privateKeyPem, publicKeyPem, keyId } = generateSigningKey();
-  try {
-    // 'wx': never overwrite a key someone may already have published.
-    await writeFile(`${prefix}.key`, privateKeyPem, { flag: 'wx', mode: 0o600 });
-    await writeFile(`${prefix}.pub`, publicKeyPem, { flag: 'wx', mode: 0o644 });
-  } catch (err) {
-    process.stderr.write(`octi plugin keygen: ${(err as Error).message}\n`);
-    process.exit(1);
-  }
-  process.stdout.write(`✅ Wrote ${prefix}.key (private: keep it secret) and ${prefix}.pub\n`);
-  process.stdout.write(`   key id: ${keyId}\n\n`);
-  process.stdout.write('Trust it on a host with plugins.trustedPublishers:\n');
-  process.stdout.write(`${JSON.stringify([{ name: '<publisher name>', publicKey: publicKeyPem.trim() }], null, 2)}\n`);
-  process.exit(0);
+/**
+ * Exit once stdout and stderr are flushed: on a pipe they may be written
+ * asynchronously (macOS), and `process.exit` would cut off the JSON a
+ * script is reading.
+ */
+async function exitFlushed(code: number): Promise<never> {
+  await Promise.all([process.stdout, process.stderr].map((s) => new Promise<void>((done) => s.write('', () => done()))));
+  process.exit(code);
 }
 
-async function runSign(argv: string[]): Promise<never> {
-  let values: { key?: string };
-  let positionals: string[];
-  try {
-    ({ values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { key: { type: 'string', short: 'k' } } }));
-  } catch (err) {
-    process.stderr.write(`octi plugin sign: ${(err as Error).message}\n\n${HELP}`);
-    process.exit(2);
-  }
-  if (positionals.length !== 1 || !values.key) {
-    process.stderr.write(`octi plugin sign: expected <dir> --key <private-key-file>\n\n${HELP}`);
-    process.exit(2);
-  }
-  const dir = resolve(positionals[0]);
-  try {
-    const { contentHash, keyId, file } = await signPackage(dir, await readFile(resolve(values.key), 'utf8'));
-    process.stdout.write(`✅ Signed ${dir}\n   content hash: ${contentHash}\n   key id: ${keyId}\n   wrote ${file}\n`);
-    process.exit(0);
-  } catch (err) {
-    const problems = err instanceof ManifestError ? err.problems : [(err as Error).message];
-    if (!(err instanceof ManifestError || err instanceof SignatureError || err instanceof PackageTreeError || err instanceof SyntaxError || (err as NodeJS.ErrnoException).code)) throw err;
-    for (const p of problems) process.stderr.write(`  ✗ ${p}\n`);
-    process.stderr.write(`\n❌ ${dir} was not signed.\n`);
-    process.exit(1);
-  }
-}
-
-async function runSignIndex(argv: string[]): Promise<never> {
-  let values: { key?: string };
-  let positionals: string[];
-  try {
-    ({ values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { key: { type: 'string', short: 'k' } } }));
-  } catch (err) {
-    process.stderr.write(`octi plugin sign-index: ${(err as Error).message}\n\n${HELP}`);
-    process.exit(2);
-  }
-  if (positionals.length !== 1 || !values.key) {
-    process.stderr.write(`octi plugin sign-index: expected <index.json> --key <private-key-file>\n\n${HELP}`);
-    process.exit(2);
-  }
-  const file = resolve(positionals[0]);
-  try {
-    const { sigFile, keyId, sha256 } = await signRegistryIndexFile(file, await readFile(resolve(values.key), 'utf8'));
-    process.stdout.write(`✅ Signed ${file}\n   index hash: ${sha256}\n   key id: ${keyId}\n   wrote ${sigFile}\n`);
-    process.stdout.write('   Publish both files unchanged: any change to the index bytes invalidates the signature.\n');
-    process.exit(0);
-  } catch (err) {
-    if (!(err instanceof SignatureError || (err as NodeJS.ErrnoException).code)) throw err;
-    process.stderr.write(`  ✗ ${(err as Error).message}\n\n❌ ${file} was not signed.\n`);
-    process.exit(1);
-  }
+function offlineIo(): OfflineIo {
+  return {
+    out: (t) => process.stdout.write(t),
+    err: (t) => process.stderr.write(t),
+    stdin: process.stdin,
+    interactive: process.stdin.isTTY === true,
+    readHidden: (prompt) => readHiddenLine(process.stdin, (t) => process.stderr.write(t), prompt, MAX_PASSPHRASE_BYTES),
+  };
 }
 
 function apiIo(): PluginApiIo {
@@ -249,22 +249,6 @@ async function runApprove(sub: 'approve' | 'approve-in-process' | 'approve-contr
   process.exit(await command(apiIo(), positionals[0], values.hash));
 }
 
-async function runValidate(dir: string): Promise<never> {
-  const abs = resolve(dir);
-  const report = await validatePlugin(abs);
-
-  for (const p of report.passed) process.stdout.write(`  ✓ ${p}\n`);
-  for (const w of report.warnings) process.stdout.write(`  ⚠ ${w}\n`);
-  for (const e of report.errors) process.stderr.write(`  ✗ ${e}\n`);
-
-  if (report.ok) {
-    process.stdout.write(`\n✅ ${abs} is a valid plugin${report.warnings.length ? ' (with warnings)' : ''}.\n`);
-    process.exit(0);
-  }
-  process.stderr.write(`\n❌ ${abs} failed validation (${report.errors.length} error(s)).\n`);
-  process.exit(1);
-}
-
 async function runConvert(argv: string[]): Promise<never> {
   let parsed: ReturnType<typeof parseConvertArgs>;
   try {
@@ -320,26 +304,35 @@ async function main(): Promise<void> {
   if (process.env.OCTI_USER_CWD) process.chdir(process.env.OCTI_USER_CWD);
   const [sub, ...rest] = process.argv.slice(2);
   switch (sub) {
-    case 'validate': {
-      const dir = rest[0];
-      if (!dir) {
-        process.stderr.write('octi plugin validate: missing <dir>\n');
-        process.exit(2);
-      }
-      await runValidate(dir);
+    case 'validate':
+      await exitFlushed(await validateCommand(offlineIo(), rest));
       break;
-    }
     case 'convert':
       await runConvert(rest);
       break;
     case 'keygen':
-      await runKeygen(rest);
+      await exitFlushed(await keygenCommand(offlineIo(), rest));
       break;
     case 'sign':
-      await runSign(rest);
+      await exitFlushed(await signCommand(offlineIo(), rest));
       break;
     case 'sign-index':
-      await runSignIndex(rest);
+      await exitFlushed(await signIndexCommand(offlineIo(), rest));
+      break;
+    case 'hash':
+      await exitFlushed(await hashCommand(offlineIo(), rest));
+      break;
+    case 'pack':
+      await exitFlushed(await packCommand(offlineIo(), rest));
+      break;
+    case 'permissions':
+      await exitFlushed(await permissionsCommand(offlineIo(), rest));
+      break;
+    case 'verify':
+      await exitFlushed(await verifyCommand(offlineIo(), rest));
+      break;
+    case 'verify-index':
+      await exitFlushed(await verifyIndexCommand(offlineIo(), rest));
       break;
     case 'list':
       process.exit(await listCommand(apiIo()));

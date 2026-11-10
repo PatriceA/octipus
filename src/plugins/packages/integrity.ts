@@ -21,6 +21,16 @@
  * the package root, ./signature.ts), since it signs this hash and cannot be
  * part of it. It is not code the package runs, and swapping it changes no
  * byte the server sees; whether it is valid is checked on its own.
+ *
+ * The listing file (`marketplace.json`, a regular file in the package root)
+ * is marketplace metadata: title, tags, screenshots, the author's name. It is
+ * not package content, so editing a listing must never change what was
+ * signed. A package's SOURCE (what `octi plugin hash`, `pack`, `sign` and
+ * `validate` read: `{ source: true }`) is hashed without it, and install
+ * leaves it out of the copy it installs (service.ts), so an installed package
+ * never has one. The installed directory is hashed without the option: a
+ * `marketplace.json` that appears there later is content like any other file
+ * and changes the hash.
  */
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
@@ -32,6 +42,13 @@ export const CONTENT_HASH_PREFIX = 'sha256:';
 const FORMAT = 'octipus-plugin-content/v1';
 /** The signature file in the package root (./signature.ts), the one file the hash leaves out. */
 export const SIGNATURE_FILE = 'octipus-plugin.sig';
+/** The marketplace listing file in the package root: left out of a source hash and of an install (see above). */
+export const LISTING_FILE = 'marketplace.json';
+
+/** How a directory is hashed: `source` leaves the listing file out (a package before it is installed). */
+export interface HashOptions {
+  source?: boolean;
+}
 
 function fileHash(path: string): Promise<string> {
   return new Promise((resolvePromise, reject) => {
@@ -44,7 +61,7 @@ function fileHash(path: string): Promise<string> {
 }
 
 /** The canonical listing of a package directory (what `hashPackageContent` hashes). */
-export async function contentListing(dir: string, identity: { name: string; version: string }): Promise<string> {
+export async function contentListing(dir: string, identity: { name: string; version: string }, opts: HashOptions = {}): Promise<string> {
   const entries: Array<[string, string]> = [];
   const walk = async (abs: string, rel: string): Promise<void> => {
     for (const name of await readdir(abs)) {
@@ -55,6 +72,7 @@ export async function contentListing(dir: string, identity: { name: string; vers
         await walk(childAbs, childRel);
       } else if (info.isFile()) {
         if (childRel === SIGNATURE_FILE) continue;
+        if (opts.source === true && childRel === LISTING_FILE) continue;
         entries.push([childRel, `file ${await fileHash(childAbs)}`]);
       } else if (info.isSymbolicLink()) {
         // Install refuses links; one that appears later must change the hash.
@@ -74,8 +92,8 @@ export async function contentListing(dir: string, identity: { name: string; vers
 }
 
 /** The content hash of a package directory, `sha256:<hex>`. */
-export async function hashPackageContent(dir: string, identity: { name: string; version: string }): Promise<string> {
-  const listing = await contentListing(dir, identity);
+export async function hashPackageContent(dir: string, identity: { name: string; version: string }, opts: HashOptions = {}): Promise<string> {
+  const listing = await contentListing(dir, identity, opts);
   return `${CONTENT_HASH_PREFIX}${createHash('sha256').update(listing).digest('hex')}`;
 }
 

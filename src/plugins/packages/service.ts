@@ -82,8 +82,9 @@ import { type AgentAuthoredDetails, agentAuthorship, agentAuthorships } from './
 import { contributionInstallProblems, contributionsView, syncContributions } from './contributions';
 import { checkInProcessBundle } from './in-process-bundle';
 import { contributionsHashOf, hasContributions } from './contributions/approval';
-import { CONTENT_MISMATCH_PROBLEM, hashPackageContent, isContentHash, verifyPackageContent } from './integrity';
+import { CONTENT_MISMATCH_PROBLEM, hashPackageContent, isContentHash, LISTING_FILE, verifyPackageContent } from './integrity';
 import { ManifestError, parseManifest, settingEnvName } from './manifest';
+import { defaultMaxProtection } from './permissions';
 import { checkSignatureOnDisk, readSignatureFile, SIGNATURE_FILE, type SignatureCheck, SignatureError, type TrustedPublisher } from './signature';
 import { checkPackageTree, PackageTreeError } from './tree';
 import { HOST_API_URL, hostApiTarget, isHostScope, issueHostCallMeta, revokePluginTokens } from './host-api';
@@ -318,6 +319,18 @@ async function signerChange(
 }
 
 /**
+ * Leave the marketplace listing file (`marketplace.json` in the package root)
+ * out of a staged copy: it is listing metadata, not package content, and a
+ * source hash leaves it out (./integrity.ts), so what is installed is exactly
+ * what was hashed and signed. Only a regular file is listing metadata; a
+ * directory or anything else of that name stays and counts.
+ */
+async function dropListingFile(staging: string): Promise<void> {
+  const path = join(staging, LISTING_FILE);
+  if ((await lstat(path).catch(() => null))?.isFile()) await rm(path);
+}
+
+/**
  * Install a package from a local directory. With `upgrade`, an installed
  * package of the same name is replaced: its settings stay, and it is disabled
  * until an admin enables the new version (its tools may have changed).
@@ -389,6 +402,7 @@ export async function installFromDirectory(
   let signature: Awaited<ReturnType<typeof acceptSignature>>;
   try {
     await cp(source, staging, { recursive: true, errorOnExist: true, verbatimSymlinks: true });
+    await dropListingFile(staging);
     manifest = await readManifest(staging);
     await checkTree(staging);
     if (opts.requireRuntime !== undefined && pluginRuntime(manifest) !== opts.requireRuntime) {
@@ -1134,20 +1148,8 @@ export function grantedHostScopes(row: Pick<PluginPackageRow, 'manifest' | 'appr
   return (row.manifest.host ?? []).filter((s) => approved.has(s));
 }
 
-/**
- * The package's `maxProtection`, or when it declares none: a package that
- * reaches the network leaves the house (1), and so does one that may have the
- * host fetch any URL it names (`web:read`: the URL itself can carry data out)
- * or run an agent that searches and fetches the web on a prompt it writes
- * (`agent:run`), and so does one with pages, which can navigate their frame
- * anywhere with what they were shown in the URL (docs/PLUGIN-PACKAGES.md#pages);
- * one that can do none of these keeps everything in (4).
- */
-export function defaultMaxProtection(m: Pick<PluginManifest, 'maxProtection' | 'network' | 'host' | 'ui'>): 1 | 2 | 3 | 4 {
-  if (m.maxProtection !== undefined) return m.maxProtection;
-  const host = m.host ?? [];
-  return (m.network ?? []).length > 0 || host.includes('web:read') || host.includes('agent:run') || (m.ui?.pages ?? []).length > 0 ? 1 : 4;
-}
+// defaultMaxProtection lives in ./permissions.ts (offline: the CLI computes a package's permissions without the server).
+export { defaultMaxProtection } from './permissions';
 
 /**
  * Host scopes that send what the package hands them out of the house: any URL

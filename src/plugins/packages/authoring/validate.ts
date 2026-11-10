@@ -158,5 +158,6 @@ export async function validatePluginDirectory(
   if (current) {
     warnings.push(`${manifest.name} is installed (version ${current.version}): plugin_install with upgrade: true replaces it, only if an agent of the same user installed it`);
   }
-  return result(manifest, treeOk ? await hashPackageContent(dir, manifest) : null);
+  // The source hash: the listing file (marketplace.json) is left out, as install leaves it out.
+  return result(manifest, treeOk ? await hashPackageContent(dir, manifest, { source: true }) : null);
 }
