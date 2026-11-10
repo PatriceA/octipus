@@ -14,6 +14,7 @@ import {
   type PluginPackageView,
   type PluginSignatureStatus,
 } from '@/lib/plugin-packages';
+import { PLUGIN_PAGES_KEY } from '@/lib/plugin-pages';
 import { cn } from '@/lib/utils';
 
 const NETWORK_LABEL: Record<PluginNetworkStatus['state'], string> = {
@@ -317,6 +318,38 @@ function PackageConfig({ pkg }: { pkg: PluginPackageView }) {
   );
 }
 
+/**
+ * What a package adds besides tools: its pages (sidebar entries while it is
+ * enabled) and the host API scopes it asks for, each approved or not. A scope
+ * a new version adds is not approved: enabling asks for it.
+ */
+function PagesAndScopes({ pkg, unapproved }: { pkg: PluginPackageView; unapproved: string[] }) {
+  const pages = pkg.manifest.ui?.pages ?? [];
+  const scopes = pkg.manifest.host ?? [];
+  if (pages.length === 0 && scopes.length === 0) return null;
+  return (
+    <div className="mt-1 space-y-0.5 text-xs text-on-surface-variant">
+      {pages.length > 0 && (
+        <p data-testid="plugin-pages">
+          pages: {pages.map((p) => `${p.title} (/plugins/${pkg.name}/${p.path})`).join(', ')}
+        </p>
+      )}
+      {scopes.length > 0 && (
+        <p data-testid="plugin-host-scopes">
+          host API:{' '}
+          {scopes.map((s, i) => (
+            <span key={s}>
+              {i > 0 && ', '}
+              <code className={cn('font-mono', unapproved.includes(s) ? tone('warn') : tone('ok'))} data-scope={s} data-approved={!unapproved.includes(s)}>{s}</code>
+            </span>
+          ))}
+          {unapproved.length > 0 && <span className={tone('warn')}> · {unapproved.length} not approved; enabling approves them</span>}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function PackageRow({ pkg }: { pkg: PluginPackageView }) {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
@@ -326,9 +359,18 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
     onSuccess: () => { setError(null); void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY }); },
     onError: (err: Error) => setError(problemsOf(err)),
   });
+  const declaredScopes = pkg.manifest.host ?? [];
+  const unapproved = declaredScopes.filter((s) => !(pkg.approvedHostScopes ?? []).includes(s));
   const toggle = useMutation({
-    mutationFn: (enabled: boolean) => api.patch<PluginPackageView>(`/plugin-packages/${encodeURIComponent(pkg.name)}`, { enabled }),
-    onSuccess: () => { setError(null); void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY }); },
+    // Enabling approves the declared host API scopes the admin was just shown (docs/PLUGIN-PACKAGES.md#host-api).
+    mutationFn: (enabled: boolean) => api.patch<PluginPackageView>(`/plugin-packages/${encodeURIComponent(pkg.name)}`,
+      enabled && unapproved.length > 0 ? { enabled, approveHostScopes: declaredScopes } : { enabled }),
+    onSuccess: () => {
+      setError(null);
+      void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY });
+      // Its pages come and go with it in the sidebar.
+      void qc.invalidateQueries({ queryKey: PLUGIN_PAGES_KEY });
+    },
     // A refusal can come from files changed since the page loaded: reload, so the review shows.
     onError: (err: Error) => { setError(problemsOf(err)); void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY }); },
   });
@@ -354,7 +396,11 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
         <button
           type="button"
           disabled={toggle.isPending}
-          onClick={() => toggle.mutate(!pkg.enabled)}
+          onClick={() => {
+            if (!pkg.enabled && unapproved.length > 0
+              && !confirm(`Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? Its tools then act with them as the user who calls them.`)) return;
+            toggle.mutate(!pkg.enabled);
+          }}
           aria-label={`${pkg.enabled ? 'Disable' : 'Enable'} ${pkg.name}`}
           className="inline-flex items-center gap-1 text-xs text-on-surface-variant hover:text-on-surface cursor-pointer disabled:opacity-50"
         >
@@ -393,6 +439,7 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
         </p>
       )}
       <p className="mt-1 text-xs text-on-surface-variant" data-testid="plugin-network-detail">{pkg.network.detail}</p>
+      <PagesAndScopes pkg={pkg} unapproved={unapproved} />
       {pkg.signature && pkg.signature.status !== 'valid' && pkg.signature.status !== 'unsigned' && (
         <p className="mt-1 text-xs text-on-surface-variant">{pkg.signature.detail}</p>
       )}
