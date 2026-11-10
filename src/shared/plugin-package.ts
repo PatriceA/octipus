@@ -80,6 +80,10 @@ export interface PluginManifest extends PluginManifestContributions {
   /** Non-secret settings, handed to the package as `OCTIPUS_SETTING_<KEY>`. */
   settings?: FieldDef[];
   secrets?: PluginSecretDecl[];
+  /** Pages shown in the web app (see "Pages and host API" below). */
+  ui?: PluginUiDecl;
+  /** Host API scopes the package asks for (see "Pages and host API" below). */
+  host?: PluginHostScope[];
 }
 
 /** An installed package as the API returns it. */
@@ -176,6 +180,13 @@ export interface PluginPackageView {
   signature: PluginSignatureStatus | null;
   /** What it adds besides tools (docs/PLUGIN-PACKAGES.md#contributions). */
   contributions: PluginContributionsView;
+
+  /**
+   * The host API scopes an admin approved (docs/PLUGIN-PACKAGES.md#host-api);
+   * null before any approval. A scope the manifest declares and this list
+   * lacks is not granted, and enabling asks for it again.
+   */
+  approvedHostScopes: PluginHostScope[] | null;
   installedBy: string | null;
   installedAt: string;
   updatedAt: string;
@@ -316,3 +327,68 @@ export interface PluginContributionsView {
   problems: string[];
 }
 // ── end contributions ───────────────────────────────────────────────────────
+
+// ── Pages and host API (docs/PLUGIN-PACKAGES.md#pages, #host-api) ─────────
+
+/**
+ * What a package may do through the host API, as the user who triggered the
+ * call. A small explicit set: each scope maps to one narrow endpoint group of
+ * `/api/plugin-host/*`. Write scopes (`notes:write`, `tasks:write`, `notify`)
+ * are handed only to calls of a tool whose declared effect is `write` or
+ * `external`: a `read` tool reads.
+ */
+export const PLUGIN_HOST_SCOPES = ['notes:read', 'notes:write', 'tasks:read', 'tasks:write', 'documents:read', 'notify'] as const;
+export type PluginHostScope = (typeof PLUGIN_HOST_SCOPES)[number];
+
+/** The scopes that change data or reach the user: only for `write`/`external` tools. */
+export const PLUGIN_HOST_WRITE_SCOPES: readonly PluginHostScope[] = ['notes:write', 'tasks:write', 'notify'];
+
+/** One page a package adds to the web app. */
+export interface PluginUiPage {
+  /** The page's path under `/plugins/<name>/`, e.g. `dashboard` (lower-case, `a-z0-9-`, `/`-separated). */
+  path: string;
+  /** Sidebar label and page title. */
+  title: string;
+  /** A lucide icon name (e.g. `chart-bar`); a default icon when missing or unknown. */
+  icon?: string;
+  /** The static HTML file, relative to `ui.dir`. */
+  entry: string;
+}
+
+export interface PluginUiDecl {
+  /** The directory (relative to the package root) whose files are served; default `ui`. */
+  dir?: string;
+  pages: PluginUiPage[];
+}
+
+/** A page of an enabled package, as the sidebar lists it (`GET /api/plugin-ui`). */
+export interface PluginPageLink {
+  plugin: string;
+  /** The package's title. */
+  pluginTitle: string;
+  path: string;
+  title: string;
+  icon: string | null;
+  /** The entry file's URL, served by `/api/plugin-ui/<name>/…`. */
+  src: string;
+}
+
+/** What `_meta["octipus/host"]` of a `tools/call` carries to a package that declares `host`. */
+export interface PluginHostCallMeta {
+  /** Where the host API is reached, through the package's egress proxy: `http://octipus-host.internal`. */
+  url: string;
+  /** The bearer token for this one call. */
+  token: string;
+  /** ISO time the token expires (the call's timeout). */
+  expiresAt: string;
+  /** What the token may do: the declared, approved scopes the user holds, for this tool's effect. */
+  scopes: PluginHostScope[];
+}
+
+/** The `_meta` key a tool call carries the host API token under. */
+export const PLUGIN_HOST_META_KEY = 'octipus/host';
+
+/** The name a package reaches the host API by, through its egress proxy only (never resolved by DNS). */
+export const PLUGIN_HOST_ALIAS = 'octipus-host.internal';
+
+// ── end pages and host API ─────────────────────────────────────────────
