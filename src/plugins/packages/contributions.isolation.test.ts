@@ -167,6 +167,18 @@ describe('plugin contributions', () => {
     expect((await calls()).map((c) => c.name).sort()).toEqual(['hello', 'hello', 'record']);
     view = (await svc.packageView(PKG)).contributions;
     expect(view.schedules[1].lastRun).toMatchObject({ ok: true });
+
+    // An installer who is no longer an admin stops the schedules.
+    await executeRaw(`UPDATE users SET is_admin = false WHERE id = '${admin}'`);
+    try {
+      await clearCalls();
+      await Promise.all(await runDuePluginSchedules(new Date(now.getTime() + 120_000)));
+      expect(await calls()).toEqual([]);
+      view = (await svc.packageView(PKG)).contributions;
+      expect(view.schedules[0].lastRun).toMatchObject({ ok: false, error: expect.stringContaining('no longer an active admin') });
+    } finally {
+      await executeRaw(`UPDATE users SET is_admin = true WHERE id = '${admin}'`);
+    }
   });
 
   test('an event calls its tool with ids only, as the user it belongs to; a failing tool is recorded, not thrown', async () => {

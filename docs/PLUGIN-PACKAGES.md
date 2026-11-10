@@ -266,8 +266,8 @@ numbers, ranges `1-5`, steps `*/15`, lists `1,15`; Sunday is 0 or 7).
   default and, with nobody to ask, refused, until that admin gives it an ALLOW
   rule (`mcp`, `plugin-<name>.<tool>`). An `external` tool is always refused:
   the same policy as every unattended run, no bypass. When the installer's
-  account is gone, the schedule does not run (its `lastRun` says so):
-  reinstall or upgrade the package as an admin.
+  account is gone or no longer an active admin, the schedule does not run
+  (its `lastRun` says so): reinstall or upgrade the package as an admin.
 - **Once:** every instance runs the loop, and each minute of a schedule is
   claimed in the shared store before it runs. A tick that comes late fires the
   minutes it missed, up to five back.

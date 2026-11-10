@@ -8,7 +8,7 @@
  * decides as for any unattended run: a `read` runs; a `write` runs only where
  * that admin's permission rules allow it (default ASK, and with nobody to
  * ask the call is refused); an `external` one is always refused. A package
- * whose installer is gone runs no schedule.
+ * whose installer is gone, or no longer an active admin, runs no schedule.
  *
  * Every instance runs the loop; a minute of a schedule is claimed in the
  * shared store before it runs, so it runs once. At most
@@ -68,6 +68,12 @@ export async function runSchedule(entry: BoundSchedule): Promise<void> {
     return;
   }
   try {
+    // Read on every run: an installer who is no longer an active admin stops the schedules.
+    const { isAdminInDatabase } = await import('@/core/gateway/commands');
+    if (!(await isAdminInDatabase(entry.actor))) {
+      await recordRun(entry.pkg, runKey, false, 'Not run: the admin who installed the package is no longer an active admin; reinstall or upgrade it as an admin');
+      return;
+    }
     const context = await actingContext({ pkg: entry.pkg, userId: entry.actor, kind: 'schedule', attended: false });
     const { text, isError } = await callPluginTool(entry.pkg, entry.decl.tool, entry.decl.input ?? {}, context);
     if (isError) {
