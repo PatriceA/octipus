@@ -558,6 +558,12 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
         </p>
       )}
       <p className="mt-1 text-xs text-on-surface-variant" data-testid="plugin-network-detail">{pkg.network.detail}</p>
+      {pkg.authoredBy && (
+        <p className="mt-1 text-xs text-warning" data-testid="plugin-authored-by">
+          Authored by an agent (session <span className="font-mono">{pkg.authoredBy.sessionId ?? 'none'}</span>, for user{' '}
+          <span className="font-mono">{pkg.authoredBy.userId}</span>). Review its content hash, tools, effects and hosts before enabling it.
+        </p>
+      )}
       <PagesAndScopes pkg={pkg} unapproved={unapproved} />
       {confirmingEnable
         ? (

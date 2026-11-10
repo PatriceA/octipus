@@ -12,6 +12,7 @@
 export type {
   BundledPluginView,
   PluginContributionsView,
+  PluginAgentAuthorship,
   PluginInProcessStatus,
   PluginNetworkStatus,
   PluginPackageView,
