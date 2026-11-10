@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-652 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
+648 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -143,6 +143,10 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/chat/approvals/pending` | `src/api/routes/chat.ts` |
 | POST | `/api/chat/approve` | `src/api/routes/chat.ts` |
 | GET | `/api/chat/commands` | `src/api/routes/chat.ts` |
+| DELETE | `/api/code-index/cocoindex` | `src/api/routes/code-index.ts` |
+| GET | `/api/code-index/cocoindex` | `src/api/routes/code-index.ts` |
+| POST | `/api/code-index/cocoindex/:side/embeddings` | `src/api/routes/code-index.ts` |
+| POST | `/api/code-index/cocoindex/install` | `src/api/routes/code-index.ts` |
 | GET | `/api/companion/goals` | `src/api/routes/companion.ts` |
 | POST | `/api/companion/goals` | `src/api/routes/companion.ts` |
 | GET | `/api/companion/goals/:id` | `src/api/routes/companion.ts` |
@@ -158,14 +162,6 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/companion/goals/:id/sessions/:sessionId` | `src/api/routes/companion.ts` |
 | GET | `/api/companion/settings` | `src/api/routes/companion.ts` |
 | PUT | `/api/companion/settings` | `src/api/routes/companion.ts` |
-| GET | `/api/connectors` | `src/api/routes/connectors.ts` |
-| DELETE | `/api/connectors/:id` | `src/api/routes/connectors.ts` |
-| POST | `/api/connectors/:id/authorize` | `src/api/routes/connectors.ts` |
-| GET | `/api/connectors/:id/callback` | `src/api/routes/connectors.ts` |
-| DELETE | `/api/connectors/cocoindex` | `src/api/routes/connectors.ts` |
-| GET | `/api/connectors/cocoindex` | `src/api/routes/connectors.ts` |
-| POST | `/api/connectors/cocoindex/:side/embeddings` | `src/api/routes/connectors.ts` |
-| POST | `/api/connectors/cocoindex/install` | `src/api/routes/connectors.ts` |
 | GET | `/api/contacts` | `src/api/routes/cases.ts` |
 | POST | `/api/contacts` | `src/api/routes/cases.ts` |
 | DELETE | `/api/contacts/:id` | `src/api/routes/cases.ts` |
@@ -573,13 +569,13 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/spaces/:id/archive` | `src/api/routes/spaces.ts` |
 | GET | `/api/spaces/:id/budget` | `src/api/routes/spaces.ts` |
 | PUT | `/api/spaces/:id/budget` | `src/api/routes/spaces.ts` |
-| GET | `/api/spaces/:id/connectors` | `src/api/routes/spaces.ts` |
-| DELETE | `/api/spaces/:id/connectors/:connectorId` | `src/api/routes/spaces.ts` |
-| POST | `/api/spaces/:id/connectors/:connectorId` | `src/api/routes/spaces.ts` |
 | DELETE | `/api/spaces/:id/file-leases` | `src/api/routes/spaces.ts` |
 | GET | `/api/spaces/:id/file-leases` | `src/api/routes/spaces.ts` |
 | POST | `/api/spaces/:id/file-leases` | `src/api/routes/spaces.ts` |
 | PUT | `/api/spaces/:id/funding` | `src/api/routes/spaces.ts` |
+| DELETE | `/api/spaces/:id/github` | `src/api/routes/spaces.ts` |
+| GET | `/api/spaces/:id/github` | `src/api/routes/spaces.ts` |
+| PUT | `/api/spaces/:id/github` | `src/api/routes/spaces.ts` |
 | GET | `/api/spaces/:id/invites` | `src/api/routes/spaces.ts` |
 | POST | `/api/spaces/:id/invites` | `src/api/routes/spaces.ts` |
 | DELETE | `/api/spaces/:id/invites/:inviteId` | `src/api/routes/spaces.ts` |
@@ -687,16 +683,15 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `utils` | 1 |
 | `api` | `capabilities` | 1 |
 | `api` | `channels` | 22 |
-| `api` | `config` | 29 |
-| `api` | `connectors` | 3 |
-| `api` | `core` | 190 |
+| `api` | `config` | 28 |
+| `api` | `core` | 192 |
 | `api` | `db` | 131 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 5 |
 | `api` | `models` | 39 |
 | `api` | `plugins` | 11 |
-| `api` | `security` | 172 |
+| `api` | `security` | 170 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 24 |
 | `api` | `skills` | 6 |
@@ -724,31 +719,23 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `config` | `shared` | 2 |
 | `config` | `utils` | 5 |
 | `config` | `voice` | 1 |
-| `connectors` | `config` | 2 |
-| `connectors` | `core` | 1 |
-| `connectors` | `mcp` | 2 |
-| `connectors` | `models` | 2 |
-| `connectors` | `security` | 6 |
-| `connectors` | `shared` | 1 |
-| `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 2 |
 | `core` | `channels` | 14 |
-| `core` | `config` | 67 |
-| `core` | `connectors` | 4 |
+| `core` | `config` | 69 |
 | `core` | `db` | 483 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
-| `core` | `mcp` | 10 |
-| `core` | `models` | 132 |
+| `core` | `mcp` | 11 |
+| `core` | `models` | 134 |
 | `core` | `modules` | 2 |
 | `core` | `plugins` | 6 |
-| `core` | `security` | 229 |
+| `core` | `security` | 228 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
-| `core` | `shared` | 62 |
+| `core` | `shared` | 64 |
 | `core` | `skills` | 11 |
 | `core` | `tools` | 34 |
-| `core` | `utils` | 226 |
+| `core` | `utils` | 229 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
 | `db` | `core` | 25 |
@@ -780,10 +767,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `hooks` | `tools` | 1 |
 | `hooks` | `utils` | 8 |
 | `mcp` | `config` | 2 |
-| `mcp` | `connectors` | 1 |
-| `mcp` | `core` | 4 |
+| `mcp` | `core` | 5 |
 | `mcp` | `security` | 8 |
-| `mcp` | `shared` | 3 |
+| `mcp` | `shared` | 4 |
 | `mcp` | `utils` | 5 |
 | `models` | `config` | 10 |
 | `models` | `core` | 37 |
@@ -804,8 +790,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `plugins` | `utils` | 24 |
 | `security` | `api` | 1 |
 | `security` | `config` | 20 |
-| `security` | `connectors` | 3 |
-| `security` | `core` | 40 |
+| `security` | `core` | 39 |
 | `security` | `db` | 87 |
 | `security` | `mcp` | 2 |
 | `security` | `shared` | 8 |
@@ -882,9 +867,6 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - config <-> models
 - config <-> security
 - config <-> voice
-- connectors <-> core
-- connectors <-> mcp
-- connectors <-> security
 - core <-> db
 - core <-> extensions
 - core <-> hooks

@@ -225,11 +225,11 @@ export class GitHubTool extends BaseTool {
       } catch (error) { throw credentials.maskError(error); }
     }
     const [{ agentPrincipal }, { spaceGithubToken }, { openSpaceToolHome }] = await Promise.all([
-      import('@/security/principal'), import('@/core/spaces/connectors'), import('@/security/space-tool-env'),
+      import('@/security/principal'), import('@/core/spaces/github-token'), import('@/security/space-tool-env'),
     ]);
     const token = await spaceGithubToken(agentPrincipal(context));
     if (!token) {
-      throw new Error('This space has no GitHub connection. A space owner can connect one under the space\'s settings → Connectors; '
+      throw new Error('This space has no GitHub connection. A space owner can add one under the space\'s settings → GitHub; '
         + 'the host\'s GitHub login is never used in a space.');
     }
     const toolHome = await openSpaceToolHome({ ...context, space: context.space });

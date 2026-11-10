@@ -55,7 +55,7 @@ to help you understand what ran and what needs attention.
 
 This is an alpha project. Model output and tool execution can fail, and completed
 work still needs verification. Local models support a self-hosted setup; hosted
-providers and external connectors receive the data sent to them. Self-hosting
+providers and external services you connect receive the data sent to them. Self-hosting
 lets you choose those connections, but does not make every workflow local.
 
 The current improvement cycle focuses on measuring workflow reliability and

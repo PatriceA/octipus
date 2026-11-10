@@ -227,7 +227,7 @@ describe('agent:run', () => {
     for (const tool of w.overrides.toolIds) expect(PLUGIN_RUN_TOOL_IDS).toContain(tool);
     expect(w.overrides.toolIds).not.toContain('filesystem');
     expect(w.overrides.toolIds).not.toContain('mcp');
-    // The list is final: no connector or test-container tools are appended to it.
+    // The list is final: no test-container tools are appended to it.
     expect(w.overrides.exactTools).toBe(true);
     expect(w.overrides.maxTokenBudget).toBe(DEFAULT_RUN_TOKENS);
     // The run has a session of its own, owned by the user; calls inside it get no host token.

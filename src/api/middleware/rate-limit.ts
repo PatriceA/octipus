@@ -58,7 +58,7 @@ export function isPublicFormPath(path: string): boolean {
 // allowance. The route gets a fixed bounded bucket even before authentication;
 // authorization still runs normally and rejects invalid credentials.
 export function apiRateWorkload(path: string, method: string): 'api' | 'indexing' {
-  return method === 'POST' && /^\/api\/connectors\/cocoindex\/(document|query)\/embeddings$/.test(path) ? 'indexing' : 'api';
+  return method === 'POST' && /^\/api\/code-index\/cocoindex\/(document|query)\/embeddings$/.test(path) ? 'indexing' : 'api';
 }
 
 const USER_QUOTA_WINDOW_SECS = 60;

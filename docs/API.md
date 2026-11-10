@@ -305,7 +305,7 @@ inert and stays in the array.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/onboarding` | What is already set up, for the setup guide (models, CLI tools, areas, mailbox, connectors, chats, heartbeat, permissions, role agents, templates, saved progress). Install-wide details for admins only |
+| GET | `/api/onboarding` | What is already set up, for the setup guide (models, CLI tools, areas, mailbox, chats, heartbeat, permissions, role agents, templates, saved progress). Install-wide details for admins only |
 | PUT | `/api/onboarding/progress` | Save the guide's progress (`dismissed`, `useCases`, `answers` without secrets, `completed`) |
 | PUT | `/api/onboarding/standing-instructions` | Write (or append to) the pinned user-level `heartbeat` note (`{body}`) |
 
@@ -411,9 +411,9 @@ Shared workspaces ([SPACES.md](SPACES.md)). A caller who is not a member gets
 | GET | `/api/spaces/:id/file-leases` | member | Live file leases ("Ben is editing"): `{path, holderUserId, holderName, holderKind, expiresAt}` |
 | POST | `/api/spaces/:id/file-leases` | editor, owner | `{path, renew?}` take (or renew) the lease on a space file; 409 `lease_held` with `heldBy` when someone else has it (or a directory above it, or a file under it) |
 | DELETE | `/api/spaces/:id/file-leases?path=` | member | Release your lease |
-| GET | `/api/spaces/:id/connectors` | member | The space's connectors (GitHub, and any OAuth connector defined): `{id, name, kind, connected, connectedBy, connectedAt}`; never a value |
-| POST | `/api/spaces/:id/connectors/:connectorId` | owner | Connect: `{token}` for GitHub; an OAuth connector returns `{url}` for the popup, whose callback stores the tokens under the space |
-| DELETE | `/api/spaces/:id/connectors/:connectorId` | owner | Disconnect (the space's secrets of that connector are deactivated) |
+| GET | `/api/spaces/:id/github` | member | Whether the space has a GitHub token: `{connected, connectedBy, connectedAt}`; never the value |
+| PUT | `/api/spaces/:id/github` | owner | `{token}`: store the space's GitHub token (replaces the previous one) |
+| DELETE | `/api/spaces/:id/github` | owner | Remove it → `{removed}` |
 | GET | `/api/spaces/:id/rooms` | member | Rooms I can enter, with `unreadCount` and `muted` |
 | POST | `/api/spaces/:id/rooms` | editor, owner | `{title, visibility: "space" \| "private", memberIds?}` |
 | GET | `/api/spaces/:id/rooms/:roomId/messages` | room access | `?before=&after=&limit=` (message ids); posts and replies with `authorUserId`, `authorName` |
@@ -656,33 +656,23 @@ required by their routes; see `src/security/scopes.ts` for supported names.
 | GET | `/api/auth/oauth/:provider/callback` | OAuth callback |
 | POST | `/api/auth/oauth/:provider/disconnect` | Disconnect OAuth provider |
 
-## Connectors
+## Code index
 
-A connector is a remote MCP server the user authorises once, per user, over
-OAuth 2.1 with PKCE. Octipus registers itself as a public client dynamically
-against the server's own discovery document, so a connector is a definition
-file (id, name, MCP endpoint, discovery URL, scopes) and nothing else — there
-is no per-connector OAuth code. None is built in today: the Atlassian (Jira
-and Confluence) and Linear connectors were removed, so `GET /api/connectors`
-returns an empty list. An id that names no connector (`atlassian`, `linear`
-on an older install) is ignored: it is not listed, its authorize, callback
-and disconnect answer `Unknown connector`, and tokens still stored under it
-are never read.
+The optional CocoIndex Code index (Knowledge page →
+[MCP-INTEGRATION.md](MCP-INTEGRATION.md#optional-code-search-with-cocoindex-code)): a managed MCP
+server that finds code by meaning.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/connectors` | List available connectors with this user's connection status |
-| POST | `/api/connectors/:id/authorize` | Start the OAuth flow; returns `{ url }` to open in a popup |
-| GET | `/api/connectors/:id/callback` | OAuth redirect target; posts `connector:connected` to the opener |
-| DELETE | `/api/connectors/:id` | Disconnect — deletes this user's stored tokens |
+| GET | `/api/code-index/cocoindex` | Status; a member gets it without paths or diagnostics |
+| POST | `/api/code-index/cocoindex/install` | Admin: `{workspacePath, embeddingSource?: "local" \| "octipus", embeddingModel?}` → `202` and the status; installs or reconfigures in the background |
+| DELETE | `/api/code-index/cocoindex` | Admin: disconnect and remove the managed server (the package and index files stay) |
+| POST | `/api/code-index/cocoindex/:side/embeddings` | Admin token only: the OpenAI-compatible endpoint the managed daemon embeds through with the embedding topic's model (`side`: `document` or `query`) |
 
-Tokens live in the vault under `connector_<id>_access_token` /
-`_refresh_token` / `_token_expiry`, per user; the dynamically registered client
-and its endpoints are system-scoped under `connector_<id>_client_id` /
-`_auth_endpoint` / `_token_endpoint`.
-
-Every connected connector is reachable through the generic
-`connector_list_tools` / `connector_call_tool` pair.
+The built-in OAuth connector framework (`/api/connectors`, the space
+connectors, `connector_list_tools` / `connector_call_tool`) was removed; a
+[plugin package](PLUGIN-PACKAGES.md) brings its own tools, network hosts and
+secrets instead.
 
 ## Plugin host API
 

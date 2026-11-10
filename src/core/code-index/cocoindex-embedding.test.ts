@@ -5,6 +5,7 @@ vi.mock('@/models/litellm-client', () => ({ getLiteLLMClient: () => ({ embed: mo
 vi.mock('@/security/mcp-token-bootstrap', () => ({ getMcpTokenPath: () => '/test/token' }));
 vi.mock('node:fs/promises', () => ({ readFile: mock.token }));
 vi.mock('@/config', () => ({ getConfig: () => ({ api: { port: 3005 } }) }));
+import { currentCocoIndexEmbeddingBase } from '@/shared/cocoindex';
 import { cocoIndexEmbeddingSettings, embedCocoIndex } from './cocoindex-embedding';
 beforeEach(() => {
   vi.resetAllMocks();
@@ -14,7 +15,7 @@ beforeEach(() => {
 });
 test('routes through the configured model with prefixes and serial batches of eight', async () => {
   const config = await cocoIndexEmbeddingSettings();
-  expect(config.settings.envs.OPENAI_API_BASE).toBe('http://127.0.0.1:3005/api/connectors/cocoindex/document');
+  expect(config.settings.envs.OPENAI_API_BASE).toBe('http://127.0.0.1:3005/api/code-index/cocoindex/document');
   expect(config.settings.embedding.indexing_params).toEqual({ input_type: 'document' });
   expect(config.settings.embedding.query_params).toEqual({ input_type: 'query' });
   const result = await embedCocoIndex(Array(17).fill('text'), config.model, 'query', 'admin');
@@ -43,4 +44,11 @@ test('admits only one embedding request at a time', async () => {
   await vi.waitFor(() => expect(release).toBeDefined());
   try { expect(await embedCocoIndex(['second'], config.model, 'query', 'admin')).toBeNull(); }
   finally { release([[1, 2]]); await first; }
+});
+
+test('the embedding path of a daemon set up before the code index moved maps to the current one', () => {
+  expect(currentCocoIndexEmbeddingBase('http://127.0.0.1:3005/api/connectors/cocoindex/document')).toBe('http://127.0.0.1:3005/api/code-index/cocoindex/document');
+  expect(currentCocoIndexEmbeddingBase('http://127.0.0.1:3005/api/code-index/cocoindex/document')).toBe('http://127.0.0.1:3005/api/code-index/cocoindex/document');
+  expect(currentCocoIndexEmbeddingBase('https://api.example.test/v1')).toBe('https://api.example.test/v1');
+  expect(currentCocoIndexEmbeddingBase('not a url')).toBe('not a url');
 });

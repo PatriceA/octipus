@@ -8,7 +8,7 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { CocoIndexWindowsSetup } from './cocoindex-windows-setup';
 
-const endpoint = '/connectors/cocoindex';
+const endpoint = '/code-index/cocoindex';
 const busyStates = new Set(['installing', 'configuring', 'connecting']);
 const statusLabels: Record<CocoIndexStatus['status'], string> = {
   not_installed: 'Not installed', installing: 'Installing', configuring: 'Setting up',
@@ -24,8 +24,13 @@ export function CocoIndexCard() {
   const [submitting, setSubmitting] = useState(false);
   const [actionError, setActionError] = useState('');
   const { data, error, isLoading } = useQuery({
-    queryKey: ['cocoindex-connector'],
-    queryFn: () => api.get<CocoIndexStatus>(endpoint),
+    queryKey: ['cocoindex'],
+    queryFn: async () => {
+      const status = await api.get<CocoIndexStatus>(endpoint);
+      // The card sits on the Knowledge page: a malformed answer is an error here, never a crashed page.
+      if (!status || typeof status.status !== 'string' || !status.embedding) throw new Error('unexpected status response');
+      return status;
+    },
     enabled: !!user?.isAdmin,
     refetchInterval: query => busyStates.has(query.state.data?.status ?? '') ? 1500 : 15_000,
   });
@@ -35,7 +40,7 @@ export function CocoIndexCard() {
   const source = embeddingSource ?? (data?.configured && data.embedding.provider === 'sentence-transformers' ? 'local' : 'octipus');
   const refresh = async () => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['cocoindex-connector'] }),
+      queryClient.invalidateQueries({ queryKey: ['cocoindex'] }),
       queryClient.invalidateQueries({ queryKey: ['mcp-servers'] }),
     ]);
   };
@@ -47,7 +52,7 @@ export function CocoIndexCard() {
         workspacePath: folder.trim(), embeddingSource: source,
         ...(source === 'local' ? { embeddingModel: model.trim() } : {}),
       });
-      queryClient.setQueryData(['cocoindex-connector'], status);
+      queryClient.setQueryData(['cocoindex'], status);
       await refresh();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
@@ -88,7 +93,7 @@ export function CocoIndexCard() {
       <CocoIndexWindowsSetup />
 
       {!user?.isAdmin ? (
-        <p className="text-sm text-on-surface-variant">Ask an administrator to install and configure this connector.</p>
+        <p className="text-sm text-on-surface-variant">Ask an administrator to install and configure the code index.</p>
       ) : isLoading ? (
         <p role="status" className="flex items-center gap-2 text-sm text-on-surface-variant"><Loader2 className="w-4 h-4 animate-spin" />Checking installation…</p>
       ) : error ? (
@@ -120,15 +125,15 @@ export function CocoIndexCard() {
           <p className="text-xs text-on-surface-variant">{source === 'octipus'
             ? 'Uses the model, endpoint and credentials assigned to the embedding topic. Octipus sends serial batches of eight. Remote providers receive the indexed code. After changing the embedding configuration, apply these settings again to rebuild the index.'
             : 'Runs Sentence-Transformers / PyTorch in the CocoIndex Python environment, independently of Ollama. The default Snowflake arctic-embed-xs has about 22 million parameters (~90 MB float32 weights); Python, PyTorch and indexing need additional RAM and disk space. CPU threads are limited to two.'}</p>
-          {data.configured && <p className="text-xs text-on-surface-variant">Removing the connector disconnects it from Octipus. The installed package and index files remain on disk.</p>}
+          {data.configured && <p className="text-xs text-on-surface-variant">Removing the code index disconnects it from Octipus. The installed package and index files remain on disk.</p>}
           {data.progress && <p role="status" className="text-sm text-primary break-words">{data.progress.message}</p>}
           {(actionError || data.error) && <p role="alert" className="text-sm text-error break-words">{actionError || data.error}</p>}
           <div className="flex gap-2 flex-wrap">
             <button type="submit" disabled={busy || !folder.trim() || (source === 'local' && !model.trim())} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-primary text-on-primary hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
               {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-              {busy ? 'Setting up…' : data.configured ? 'Apply and reconnect' : data.installed ? 'Set up connector' : 'Install and connect'}
+              {busy ? 'Setting up…' : data.configured ? 'Apply and reconnect' : data.installed ? 'Set up code index' : 'Install and connect'}
             </button>
-            {data.configured && <button type="button" disabled={busy} onClick={() => void remove()} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-on-surface-variant hover:text-error disabled:opacity-50 cursor-pointer"><Unplug className="w-4 h-4" />Remove connector</button>}
+            {data.configured && <button type="button" disabled={busy} onClick={() => void remove()} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-on-surface-variant hover:text-error disabled:opacity-50 cursor-pointer"><Unplug className="w-4 h-4" />Remove code index</button>}
           </div>
         </form>
       ) : null}

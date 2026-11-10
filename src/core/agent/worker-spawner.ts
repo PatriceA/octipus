@@ -43,7 +43,7 @@ import { estimateToolSchemaTokens, logPromptComposition } from './prompt-budget'
 import { FILE_CHANGES_REFUSED_KEY } from '@/core/tool-executor';
 import { asTrailingBlock, PromptBuilder } from './prompt-builder';
 import { type DeclaredPurpose, toolsetGaps } from './role-contract';
-import { formatCriticalRules, getBoundConnectorIds, getRoleConfig, getToolsForRole } from './roles';
+import { formatCriticalRules, getRoleConfig, getToolsForRole } from './roles';
 import type { TurnEvent } from './service';
 import { applyToolCap, isSmallModel } from './small-model';
 import { selectCoreToolIds } from './tool-intent';
@@ -296,7 +296,7 @@ export async function spawnWorker(
     extraToolIds?: string[];
     /**
      * `toolIds` is the whole tool set: nothing is appended after the narrowing
-     * (no connector handlers, no test-container tools). For work started by a
+     * (no test-container tools). For work started by a
      * plugin (`agent:run`), whose tool list the host fixes and an admin
      * approved; a role's extras must not widen it.
      */
@@ -365,24 +365,8 @@ export async function spawnWorker(
     }
   }
 
-  if (isRealUserId(context.userId) && !overrides?.exactTools) {
-    try {
-      const { connectorOwnerOf, getConnectorRegistry } = await import('@/connectors');
-      // Role↔connector binding: if the role binds specific connectors
-      // (`connector:<id>` in its toolIds), expose only those; otherwise expose
-      // all of the user's active connectors (backward-compatible default).
-      // In a space, the space's connectors instead of the member's (§9.5).
-      const boundConnectorIds = getBoundConnectorIds(agentRole);
-      const allowed = boundConnectorIds.length > 0 ? new Set(boundConnectorIds) : undefined;
-      const connectorHandlers = await getConnectorRegistry().getUserToolHandlers(connectorOwnerOf(context), allowed);
-      roleTools.push(...connectorHandlers);
-    } catch (err) {
-      coreLogger.warn({ err, userId: context.userId }, 'Failed to load connector tool handlers');
-    }
-  }
-
   // Plan mode is inherited, and applied HERE — after the stage's declared
-  // toolIds, after `extraToolIds` grants, after connector handlers — because
+  // toolIds and after `extraToolIds` grants — because
   // this is the first point the set is final. Applied at the top instead, it
   // was undone one block later: a runtime grant of `filesystem` re-adds
   // `write_file`, and a planning turn duly edited the file it had been asked
@@ -556,7 +540,7 @@ export async function spawnWorker(
 
   // Small-tier worker: cap the tool surface. Role tool lists are
   // priority-ordered so the core tools survive; the long tail (and MCP
-  // meta-tools / connector handlers appended above) is dropped. Skipped for
+  // meta-tools appended above) is dropped. Skipped for
   // larger models, which keep the full surface. Keyed off `finalIsSmall` (the
   // model that actually runs), not the topic model — an expert modelPreference
   // or override otherwise capped a big model to 7 tools, or handed a small one
@@ -985,7 +969,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   }
 
   // Lazy tool discovery (docs/plans/lazy-tool-discovery.md). Decided here, after
-  // roleTools is fully assembled (connector handlers + spawn_child injected
+  // roleTools is fully assembled (spawn_child injected
   // above), where model + size are known — agent-worker never re-derives it.
   // The per-request tool-schema payload only hurts local Ollama (each request
   // re-prefills the schemas on the iGPU; no cross-request server-side prompt

@@ -75,7 +75,6 @@ src/
                   docker, docs, knowledge, messaging, m365, google-workspace,
                   websearch, voice, visual, scheduling, tasks, artifacts…)
   mcp/            external MCP client bridge
-  connectors/     OAuth MCP connector framework + registry (none built in)
   extensions/     extension API + loader (host-side plugin runtime)
   plugins/        plugin loader + plugin-as-tool wrapper; packages/ (plugin packages)
   hooks/          event hook manager (triggers, actions, suggestions)
@@ -222,8 +221,10 @@ think you need to break one, open an issue first.
   (`plugins/reader`) ships there, and every other plugin lives outside the
   repository (`docs/PLUGIN-PACKAGES.md#where-plugins-live`).
 - **Persona** → a YAML file in `personas/`; loaded by `src/core/personas/`.
-- **Connector** → `src/connectors/<name>/definition.ts`, register in the
-  connector registry. OAuth via `oauth-http-transport.ts`.
+- **Third-party service** (an issue tracker, a wiki, a SaaS API) → a plugin
+  package that brings its own tools, network hosts and secrets
+  (`docs/PLUGIN-PACKAGES.md`); the built-in OAuth connector framework was
+  removed.
 - **Hook** → wire triggers/actions in `src/hooks/` (`triggers.ts`, `actions.ts`).
 - **Profile** → seed in `src/db/seed-presets.ts`, or POST via API. A role
   carries its tools, rules and prompt directly.

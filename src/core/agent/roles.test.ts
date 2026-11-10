@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import {
-  CONNECTOR_TOOL_PREFIX,
-  getBoundConnectorIds,
   getToolsForRole,
   OUTPUT_FORMATTING_RULES,
   ROLE_CONFIGS,
@@ -120,25 +118,11 @@ describe('role↔tool binding (W7)', () => {
     }
   }
 
-  describe('getBoundConnectorIds', () => {
-    test('extracts connector ids (prefix stripped)', () => {
-      withTestRole(['filesystem', `${CONNECTOR_TOOL_PREFIX}example`, 'mcp'], () => {
-        expect(getBoundConnectorIds(TEST_ROLE)).toEqual(['example']);
-      });
-    });
-
-    test('empty when the role binds no connectors', () => {
-      withTestRole(['filesystem', 'shell', 'mcp'], () => {
-        expect(getBoundConnectorIds(TEST_ROLE)).toEqual([]);
-      });
-    });
-  });
-
-  describe('getToolsForRole connector handling', () => {
-    test('a connector-only role resolves to no builtin/MCP handlers', () => {
-      // Connector handlers are resolved per-user at spawn time, not here, so a
-      // role with only connector ids must not dead-end in the builtin registry.
-      withTestRole([`${CONNECTOR_TOOL_PREFIX}example`], () => {
+  describe('getToolsForRole with a removed connector binding', () => {
+    test('a role still naming `connector:<id>` or the `connector` container resolves to no handlers', () => {
+      // The built-in connector framework was removed; a role saved before
+      // that may still bind one. It must not dead-end in the builtin registry.
+      withTestRole(['connector:example', 'connector', 'connector_call_tool'], () => {
         expect(getToolsForRole(TEST_ROLE)).toEqual([]);
       });
     });
@@ -169,9 +153,8 @@ describe('role↔tool binding (W7)', () => {
       // creates a role that passes every other check and then spawns a worker
       // with no tools, because getToolsForRole drops unknown ids and continues.
       expect(unknownToolIds(['filesystem', 'flesystem'])).toEqual(['flesystem']);
-      // Connector bindings resolve per user at spawn time and MCP is bridged,
-      // so neither is in the manifests and neither is "unknown".
-      expect(unknownToolIds(['mcp', `${CONNECTOR_TOOL_PREFIX}gmail`])).toEqual([]);
+      // MCP is bridged, so it is not in the manifests and not "unknown".
+      expect(unknownToolIds(['mcp'])).toEqual([]);
     });
 
     beforeAll(async () => {
@@ -241,7 +224,6 @@ describe('role↔tool binding (W7)', () => {
       withTestRole(['filesystem'], () => {
         setRoleToolIdsInMemory(TEST_ROLE, ['shell', 'git']);
         expect(ROLE_CONFIGS[TEST_ROLE].toolIds).toEqual(['shell', 'git']);
-        expect(getBoundConnectorIds(TEST_ROLE)).toEqual([]);
       });
     });
 

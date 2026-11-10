@@ -16,7 +16,7 @@ vi.mock('@/security/quotas', () => ({ getQuotaManager: () => ({
 import { apiRateWorkload, rateLimitMiddleware } from './rate-limit';
 
 const admin: Principal = { kind: 'user', userId: 'owner', username: 'owner', isAdmin: true };
-const indexing = '/api/connectors/cocoindex/document/embeddings';
+const indexing = '/api/code-index/cocoindex/document/embeddings';
 function app(principal: Principal = admin) {
   return new Elysia().derive(() => ({ principal })).use(rateLimitMiddleware)
     .post(indexing, ({ set }) => {

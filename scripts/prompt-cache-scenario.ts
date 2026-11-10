@@ -74,7 +74,7 @@ function personaBlock(user: UserKey): string {
 /**
  * One user's registered tools, in the root's registration order (see
  * `tool-cache-order.test.ts`): built-ins, the bridge's direct MCP tools,
- * its meta-tools, extension tools, connectors, the inline-UI tool, discovery,
+ * its meta-tools, extension tools, plugin tools, the inline-UI tool, discovery,
  * delegation meta-tools, the self-report tool.
  */
 export function scenarioTools(user: UserKey, builtins: ToolHandler[], withLateMcp: boolean): ToolHandler[] {
@@ -85,7 +85,7 @@ export function scenarioTools(user: UserKey, builtins: ToolHandler[], withLateMc
     ...(a && withLateMcp ? [fixtureHandler(LATE_MCP_TOOL, 'mcp', 'Search GitHub issues')] : []),
     ...MCP_META.map((n) => fixtureHandler(n, 'mcp')),
     ...(a ? [fixtureHandler('ext_quotes__get', 'ext_quotes')] : [fixtureHandler('ext_tides__get', 'ext_tides')]),
-    ...(a ? [fixtureHandler('gmail_search', 'connector')] : [fixtureHandler('slack_post', 'connector'), fixtureHandler('slack_read', 'connector')]),
+    ...(a ? [fixtureHandler('gmail_search', 'plugin-gmail')] : [fixtureHandler('slack_post', 'plugin-slack'), fixtureHandler('slack_read', 'plugin-slack')]),
     fixtureHandler('inline_ui_ask', 'inline-ui', 'Ask the user with an inline form'),
     ...buildToolDiscoveryHandlers(builtins),
     fixtureHandler('spawn_child', undefined, 'Delegate a task to a specialist child agent'),

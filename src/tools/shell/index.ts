@@ -40,7 +40,7 @@ export function effectiveShellTimeout(requested: unknown, metadata?: Record<stri
  * How a command runs: the caller's `env`, and in a space (coworking §9.5)
  * the run's own tool home — `HOME`, `XDG_CONFIG_HOME`, `GH_CONFIG_DIR` and
  * the version-control config at a fresh directory holding only the space
- * connector's GitHub login, the host's identity variables removed from the
+ * GitHub login, the host's identity variables removed from the
  * inherited environment and from the call's `env` alike, and the home bound
  * into the process sandbox. Exported for the tests.
  */

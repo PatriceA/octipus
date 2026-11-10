@@ -10,24 +10,24 @@ vi.mock('@/api/context', async () => {
   const { App } = await import('@/api/http');
   return { apiContext: new App().derive(() => ({ user: fixture.user, principal: fixture.user ? { userId: fixture.user.id } : null })) };
 });
-vi.mock('@/connectors/cocoindex', async importOriginal => {
-  const original = await importOriginal<typeof import('@/connectors/cocoindex')>();
+vi.mock('@/core/code-index/cocoindex', async importOriginal => {
+  const original = await importOriginal<typeof import('@/core/code-index/cocoindex')>();
   return {
     ...original,
     getCocoIndexService: () => ({ getStatus: fixture.status, install: fixture.install, remove: fixture.remove }),
     resolveCocoIndexWorkspacePath: fixture.resolvePath,
   };
 });
-import { connectorRoutes } from './connectors';
-vi.mock('@/connectors/cocoindex-embedding', () => ({ embedCocoIndex: fixture.embed }));
-const app = new App().group('/api', group => group.use(connectorRoutes));
+import { codeIndexRoutes } from './code-index';
+vi.mock('@/core/code-index/cocoindex-embedding', () => ({ embedCocoIndex: fixture.embed }));
+const app = new App().group('/api', group => group.use(codeIndexRoutes));
 const state: CocoIndexStatus = {
   id: 'cocoindex-code', installed: false, configured: false, workspacePath: '/private/repo',
   status: 'error', error: 'Private install diagnostic',
   progress: { phase: 'install', message: 'Private progress' },
   embedding: { provider: 'sentence-transformers', model: 'test/local-model', local: true },
 };
-const request = (method: string, suffix = '', body?: unknown) => app.handle(new Request(`http://test/api/connectors/cocoindex${suffix}`, {
+const request = (method: string, suffix = '', body?: unknown) => app.handle(new Request(`http://test/api/code-index/cocoindex${suffix}`, {
   method, headers: { 'Content-Type': 'application/json' },
   ...(body === undefined ? {} : { body: JSON.stringify(body) }),
 }));
@@ -49,7 +49,7 @@ test.each(['GET', 'POST', 'DELETE'])('unauthenticated %s cannot inspect or confi
   expect(fixture.remove).not.toHaveBeenCalled();
 });
 
-test.each(['POST', 'DELETE'])('non-admin %s cannot install or remove the shared connector', async method => {
+test.each(['POST', 'DELETE'])('non-admin %s cannot install or remove the shared code index', async method => {
   fixture.user = { id: 'member', isAdmin: false };
   const response = await request(method, method === 'POST' ? '/install' : '', method === 'POST' ? { workspacePath: '/repo' } : undefined);
   expect(response.status).toBe(403);
@@ -108,7 +108,7 @@ test('status inspection failures do not leak private diagnostics to a member', a
   fixture.status.mockRejectedValue(new Error('Private executable path'));
   const response = await request('GET');
   expect(response.status).toBe(503);
-  expect(await response.json()).toEqual({ error: 'Could not inspect CocoIndex connector' });
+  expect(await response.json()).toEqual({ error: 'Could not inspect CocoIndex' });
 });
 
 test.each([null, { id: 'member', isAdmin: false }])('embedding endpoint requires an administrator', async user => {

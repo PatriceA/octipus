@@ -139,6 +139,35 @@ labels reflect blast radius, not contract guarantees.
 
 ### Removed
 
+- **The built-in OAuth connector framework is gone; plugins cover the need.**
+  With Atlassian, Linear and GitLab removed it had nothing left to connect, and
+  a [plugin package](docs/PLUGIN-PACKAGES.md) brings its own tools, network
+  hosts and secrets. Removed: `src/connectors/` (the empty connector list, the
+  registry, definitions, `OAuthHTTPTransport`), the `connector_list_tools` /
+  `connector_call_tool` agent tools and their injection into workers and swarm
+  children, `connector:<id>` role bindings, the `/api/connectors` routes with
+  their OAuth authorize, callback and disconnect flows, the connector parts of
+  `src/security/oauth.ts` (dynamic client registration, connector token
+  storage and refresh, space OAuth state), the space OAuth connectors
+  (`/api/spaces/:id/connectors…`), the Connectors tab of the MCP page and the
+  onboarding state's connector list. **Kept:** the space's GitHub token, now
+  its own section of Space settings (*GitHub*) and API
+  (`GET`/`PUT`/`DELETE /api/spaces/:id/github`, same stored secret); the
+  Google and Microsoft 365 mailbox OAuth, its browser binding and popup page;
+  generic authenticated connections; MCP servers; plugins. **CocoIndex Code
+  moved** to the Knowledge page (*Code index*), its code to
+  `src/core/code-index/` and its API to `/api/code-index/cocoindex`; a managed
+  daemon set up against `/api/connectors/cocoindex` is pointed at the new
+  embedding path on its next connect, and its stored MCP server entry and
+  index metadata keep their names. Existing installs need no migration:
+  `connector:<id>` bindings, the `connector` container and `connector_*` ids
+  are dropped from stored role tool lists when they are read (the seeder also
+  drops them from unedited system rows), so a role that names one loads,
+  spawns and saves; stored connector tokens (`connector_<id>_*`, personal or a
+  space's) are never read, the personal ones stay listed and deletable on the
+  Secrets page and a space's go with the space when it is purged; permission
+  rules naming `connector` stay until deleted on the permissions page.
+
 - **The Atlassian (Jira/Confluence), Linear and GitLab integrations are gone,
   with no plugin replacement.** Removed: the Atlassian and Linear connector
   definitions and logos, the `atlassian` tool (`atlassian_sites`, `jira_*`,
@@ -148,9 +177,8 @@ labels reflect blast radius, not contract guarantees.
   Jira and Linear choices in the onboarding tracker question (now GitHub
   Issues, an MCP server for admins, or none), and `atlassian` from the `pm`
   role, whose prompt now works from the task list, the knowledge base and
-  GitHub. GitHub is unchanged. The OAuth connector framework itself stays,
-  with no connector built in, so Settings → MCP → Connectors shows only
-  CocoIndex. Existing installs need no migration: a saved `connector:atlassian`
+  GitHub. GitHub is unchanged. The OAuth connector framework, left with no
+  connector built in, was removed next (above). Existing installs need no migration: a saved `connector:atlassian`
   or `connector:linear` binding, stored connector tokens (personal or a
   space's) and a saved `tools.tracker` answer of `jira` or `linear` are
   ignored; `atlassian` and `gitlab` are dropped from stored role tool lists

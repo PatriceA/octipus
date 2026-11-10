@@ -104,7 +104,7 @@ multi-user platform; OpenClaw's is better for a personal assistant.
 | MCP client | Yes | Yes | Both with lifecycle mgmt; Octipus adds MCP circuit breaker |
 | MCP server (expose itself) | Yes | Yes | |
 | Knowledge/RAG tools | Partial (plugin memory backends) | Yes (hybrid BM25+vector, indexer, retention) | Octipus built-in |
-| Office suites (M365, Google Workspace) | Partial (skills, gmail-ops hooks) | Yes (dedicated tool groups + OAuth connectors) | |
+| Office suites (M365, Google Workspace) | Partial (skills, gmail-ops hooks) | Yes (dedicated tool groups + OAuth sign-in) | |
 | Media generation (image/music/video) | Yes (fal, comfy, runway…) | No | |
 | Media understanding (audio/vision pipelines) | Yes | Partial (visual screenshots, Whisper STT) | |
 | Canvas / visual workspace | Yes (Canvas + A2UI on nodes) | Partial (interactive answers inside replies in the web chat and rooms; Live Artifacts BETA, hosted app artifacts) | Different shape, similar intent |

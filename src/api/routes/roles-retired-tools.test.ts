@@ -1,8 +1,11 @@
 /**
- * A role row that still names a removed built-in tool (`atlassian`, `gitlab`).
+ * A role row that still names a removed built-in tool (`atlassian`, `gitlab`)
+ * or a binding of the removed connector framework (`connector:<id>`, the
+ * `connector` container).
  *
- * The seeder used to merge `atlassian` into every install's `pm` row, so the
- * id is in existing databases. Against PGlite and the real role routes:
+ * The seeder used to merge `atlassian` into every install's `pm` row, and an
+ * operator could bind `connector:<id>` in the role editor, so the ids are in
+ * existing databases. Against PGlite and the real role routes:
  *
  *   - the seeder drops it from an unedited system row;
  *   - an edited row keeps what the user saved, but the id is not loaded into
@@ -126,5 +129,36 @@ describe('a role row naming a removed tool', () => {
     // A new role cannot name one.
     const created = await call('POST', '/roles', { role: 'tracker', toolIds: ['gitlab'], systemPromptTemplate: 'x' });
     expect(created.status).toBe(400);
+  });
+
+  test('a removed connector binding: dropped by the seeder, not loaded or listed, not refused on save', async () => {
+    const { ROLE_CONFIGS, getToolsForRole } = await import('@/core/agent/roles');
+    const { loadRolesFromDb, seedRoles } = await import('@/db/seed-roles');
+    const stale = ['connector:linear', 'connector', 'connector_call_tool'];
+
+    // Unedited: the seeder removes them from the row itself.
+    await setPm({ toolIds: ['filesystem', 'github', ...stale], customized: false });
+    await seedRoles();
+    for (const id of stale) expect((await pmRow()).toolIds as string[]).not.toContain(id);
+
+    // Edited: kept as saved, ignored everywhere it is read.
+    await setPm({ toolIds: ['filesystem', 'github', ...stale], coreToolIds: ['connector', 'github'], customized: true });
+    await loadRolesFromDb();
+    expect(ROLE_CONFIGS.pm.toolIds).toEqual(['filesystem', 'github']);
+    expect(ROLE_CONFIGS.pm.coreToolIds).toEqual(['github']);
+    expect(getToolsForRole('pm').map((h) => h.toolId)).not.toContain('connector');
+
+    const list = await call('GET', '/roles');
+    const pm = list.body.roles.find((r: { role: string }) => r.role === 'pm');
+    expect(pm.toolIds).toEqual(['filesystem', 'github']);
+    expect(pm.coreToolIds).toEqual(['github']);
+
+    const saved = await call('PATCH', '/roles/pm', { toolIds: ['filesystem', ...stale] });
+    expect(saved.status).toBe(200);
+    expect(saved.body.toolIds).toEqual(['filesystem']);
+    // A role of nothing but stale bindings has no tools: refused, as any empty list.
+    const empty = await call('PATCH', '/roles/pm', { toolIds: stale });
+    expect(empty.status).toBe(400);
+    expect(ROLE_CONFIGS.pm.toolIds).toEqual(['filesystem']);
   });
 });

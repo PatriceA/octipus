@@ -12,7 +12,7 @@ The design and its reasons are in [plans/modules.md](plans/modules.md).
 
 Chat, sessions, agents, roles, pipelines, hooks and schedules; tasks and
 notifications; notes, documents, knowledge and memory; models, topics, MCP
-servers, connectors and plugin packages; the vault, permissions, users and
+servers and plugin packages; the vault, permissions, users and
 spaces; settings, skills, the tools page and evaluations; backups.
 
 ## The modules

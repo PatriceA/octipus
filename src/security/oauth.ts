@@ -33,16 +33,10 @@ interface OAuthState {
   codeVerifier: string;
   createdAt: number;
   /**
-   * Set for a space connector's flow (coworking §9.5): the tokens are stored
-   * under that space, never as the user's own, after the user's ownership of
-   * the space is read again.
-   */
-  spaceId?: string;
-  /**
    * The hash of the nonce the starting browser holds in a cookie
    * (`src/api/oauth-browser.ts`): the callback must come from that browser,
    * so an authorization URL handed to someone else cannot connect their
-   * account as the user's, or as a space's.
+   * account as the user's.
    */
   browserBinding: string;
 }
@@ -86,32 +80,6 @@ export const OAUTH_VAULT_NAMES = {
     tenantId: 'microsoft_oauth_tenant_id',
   },
 } as const;
-
-// --- Connector OAuth vault keys ---
-
-/**
- * Vault entry names for one connector's OAuth material.
- *
- * The first three are system-scoped (the dynamically registered client and the
- * endpoints it was registered against); the last three are per-user.
- */
-export function connectorVaultKeys(connectorId: string): {
-  clientId: string;
-  authEndpoint: string;
-  tokenEndpoint: string;
-  accessToken: string;
-  refreshToken: string;
-  tokenExpiry: string;
-} {
-  return {
-    clientId: `connector_${connectorId}_client_id`,
-    authEndpoint: `connector_${connectorId}_auth_endpoint`,
-    tokenEndpoint: `connector_${connectorId}_token_endpoint`,
-    accessToken: `connector_${connectorId}_access_token`,
-    refreshToken: `connector_${connectorId}_refresh_token`,
-    tokenExpiry: `connector_${connectorId}_token_expiry`,
-  };
-}
 
 // --- Provider Configs ---
 
@@ -169,31 +137,8 @@ async function getProviderConfig(provider: string): Promise<OAuthProviderConfig 
         redirectUri: `${publicUrl}/api/auth/oauth/microsoft/callback`,
       };
     }
-    default: {
-      // Every remaining provider is a built-in connector: a public OAuth 2.1
-      // client registered dynamically against the connector's own discovery
-      // document. Nothing here is connector-specific except the id.
-      const { findConnector } = await import('@/connectors/definitions');
-      const connector = findConnector(provider);
-      if (!connector) return null;
-
-      const keys = connectorVaultKeys(connector.id);
-      const clientId = await v.getSystemSecret(keys.clientId);
-      const authorizationUrl = await v.getSystemSecret(keys.authEndpoint);
-      const tokenUrl = await v.getSystemSecret(keys.tokenEndpoint);
-      if (!clientId || !authorizationUrl || !tokenUrl) return null;
-
-      return {
-        authorizationUrl,
-        tokenUrl,
-        clientId,
-        // A public client: PKCE is the proof, there is no secret to keep.
-        clientSecret: '',
-        scopes: connector.oauthScopes,
-        redirectUri: `${publicUrl}/api/connectors/${connector.id}/callback`,
-        additionalParams: {},
-      };
-    }
+    default:
+      return null;
   }
 }
 
@@ -206,7 +151,7 @@ export class OAuthManager {
    * Generate an authorization URL for the given provider.
    * Returns { url, state } — the frontend should redirect or open the URL.
    */
-  async generateAuthorizationUrl(userId: string, provider: string, opts: { spaceId?: string; browserBinding: string }): Promise<{ url: string }> {
+  async generateAuthorizationUrl(userId: string, provider: string, opts: { browserBinding: string }): Promise<{ url: string }> {
     if (!/^[0-9a-f]{64}$/.test(opts.browserBinding)) throw new Error('OAuth: the flow must be bound to the browser that starts it');
     const providerConfig = await getProviderConfig(provider);
     if (!providerConfig) {
@@ -224,7 +169,6 @@ export class OAuthManager {
       provider,
       codeVerifier,
       createdAt: Date.now(),
-      ...(opts.spaceId ? { spaceId: opts.spaceId } : {}),
       browserBinding: opts.browserBinding,
     };
 
@@ -253,7 +197,7 @@ export class OAuthManager {
    * Exchange an authorization code for tokens.
    * Called by the callback endpoint after the provider redirects back.
    */
-  async exchangeCode(provider: string, code: string, state: string, browserBinding: string | null): Promise<{ userId: string; spaceId?: string }> {
+  async exchangeCode(provider: string, code: string, state: string, browserBinding: string | null): Promise<{ userId: string }> {
     // Validate state
     const stateJson = await this.store.get(`oauth:state:${state}`);
     if (!stateJson) {
@@ -270,7 +214,7 @@ export class OAuthManager {
     // Completed in another browser than the one that started it: refused
     // before the code is redeemed (a state from before the binding has none).
     if (!stateData.browserBinding || !sameBrowser(stateData.browserBinding, browserBinding)) {
-      securityLogger.warn({ provider, userId: stateData.userId, spaceId: stateData.spaceId }, 'OAuth callback from another browser than the one that started the flow');
+      securityLogger.warn({ provider, userId: stateData.userId }, 'OAuth callback from another browser than the one that started the flow');
       throw new Error('This sign-in was finished in a different browser than the one that started it. Start the connection again from Octipus, in this browser.');
     }
 
@@ -307,42 +251,12 @@ export class OAuthManager {
       : undefined;
 
     // Store tokens in vault.
-    // A connector uses dedicated per-key vault entries (connector_<id>_*)
-    // consumed by getConnectorAccessToken; the generic storage path is skipped
-    // to avoid maintaining two writers that can drift out of sync.
-    const { isConnectorId } = await import('@/connectors/definitions');
-    if (stateData.spaceId) {
-      // A space connector's own flow: stored under the space, through the
-      // space access layer, if the user still owns the space.
-      if (!isConnectorId(provider)) throw new Error('Only connectors can be connected to a space');
-      const { storeSpaceConnectorTokens } = await import('@/core/spaces/connectors');
-      await storeSpaceConnectorTokens({
-        userId: stateData.userId,
-        workspaceId: stateData.spaceId,
-        connectorId: provider,
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
-        expiresInSeconds: tokens.expires_in,
-      });
-      securityLogger.info({ userId: stateData.userId, provider, spaceId: stateData.spaceId }, 'Space connector tokens stored');
-      return { userId: stateData.userId, spaceId: stateData.spaceId };
-    }
-    if (isConnectorId(provider)) {
-      await storeConnectorUserTokens(
-        provider,
-        stateData.userId,
-        tokens.access_token,
-        tokens.refresh_token,
-        tokens.expires_in,
-      );
-    } else {
-      await this.storeTokens(stateData.userId, provider, {
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
-        expiresAt,
-        scopes: providerConfig.scopes,
-      });
-    }
+    await this.storeTokens(stateData.userId, provider, {
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      expiresAt,
+      scopes: providerConfig.scopes,
+    });
 
     securityLogger.info({ userId: stateData.userId, provider }, 'OAuth tokens stored');
     return { userId: stateData.userId };
@@ -362,8 +276,8 @@ export class OAuthManager {
       .where(
         and(
           eq(vault.userId, userId),
-          // The user's own tokens only: a space connector's token stored by
-          // this user (scope 'space') is the space's, never theirs (§9.5).
+          // The user's own tokens only: a space secret this user stored
+          // (scope 'space') is the space's, never theirs (§9.5).
           eq(vault.scope, 'user'),
           eq(vault.credentialType, 'oauth_token'),
           eq(vault.isActive, true)
@@ -484,8 +398,8 @@ export class OAuthManager {
       .where(
         and(
           eq(vault.userId, userId),
-          // The user's own tokens only: a space connector's token stored by
-          // this user (scope 'space') is the space's, never theirs (§9.5).
+          // The user's own tokens only: a space secret this user stored
+          // (scope 'space') is the space's, never theirs (§9.5).
           eq(vault.scope, 'user'),
           eq(vault.credentialType, 'oauth_token'),
           eq(vault.isActive, true)
@@ -536,8 +450,8 @@ export class OAuthManager {
       .where(
         and(
           eq(vault.userId, userId),
-          // The user's own tokens only: a space connector's token stored by
-          // this user (scope 'space') is the space's, never theirs (§9.5).
+          // The user's own tokens only: a space secret this user stored
+          // (scope 'space') is the space's, never theirs (§9.5).
           eq(vault.scope, 'user'),
           eq(vault.credentialType, 'oauth_token'),
           eq(vault.isActive, true)
@@ -579,8 +493,8 @@ export class OAuthManager {
       .where(
         and(
           eq(vault.userId, userId),
-          // The user's own tokens only: a space connector's token stored by
-          // this user (scope 'space') is the space's, never theirs (§9.5).
+          // The user's own tokens only: a space secret this user stored
+          // (scope 'space') is the space's, never theirs (§9.5).
           eq(vault.scope, 'user'),
           eq(vault.credentialType, 'oauth_token'),
           eq(vault.isActive, true)
@@ -613,219 +527,4 @@ export function getOAuthManager(): OAuthManager {
     oauthManagerInstance = new OAuthManager();
   }
   return oauthManagerInstance;
-}
-
-// --- Connector Dynamic Client Registration ---
-
-interface ConnectorOAuthMetadata {
-  clientId: string;
-  authorizationEndpoint: string;
-  tokenEndpoint: string;
-}
-
-/**
- * Register Octipus as a public OAuth client with a connector's authorization
- * server, using the RFC 7591 dynamic registration endpoint its discovery
- * document advertises.
- *
- * This is what makes a connector a definition rather than a code path: the
- * server tells us where to send the user and where to redeem the code, and we
- * tell it where to send them back.
- */
-export async function discoverAndRegisterConnector(
-  connectorId: string,
-  publicUrl: string,
-): Promise<ConnectorOAuthMetadata> {
-  const { findConnector } = await import('@/connectors/definitions');
-  const connector = findConnector(connectorId);
-  if (!connector) throw new Error(`Unknown connector: ${connectorId}`);
-
-  const discoveryRes = await fetch(connector.oauthDiscoveryUrl);
-  if (!discoveryRes.ok) {
-    throw new Error(`${connector.name} OAuth discovery failed (${discoveryRes.status})`);
-  }
-  const discovery = await discoveryRes.json() as {
-    authorization_endpoint: string;
-    token_endpoint: string;
-    registration_endpoint?: string;
-  };
-
-  if (!discovery.registration_endpoint) {
-    throw new Error(`${connector.name} OAuth discovery did not return a registration_endpoint`);
-  }
-
-  const registrationRes = await fetch(discovery.registration_endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      client_name: 'Octipus',
-      redirect_uris: [`${publicUrl}/api/connectors/${connector.id}/callback`],
-      grant_types: ['authorization_code', 'refresh_token'],
-      response_types: ['code'],
-      token_endpoint_auth_method: 'none',
-    }),
-  });
-
-  if (!registrationRes.ok) {
-    const body = await registrationRes.text().catch(() => '');
-    throw new Error(`${connector.name} client registration failed (${registrationRes.status}): ${body}`);
-  }
-
-  const registration = await registrationRes.json() as { client_id: string };
-  if (!registration.client_id) {
-    throw new Error(`${connector.name} registration response missing client_id`);
-  }
-
-  return {
-    clientId: registration.client_id,
-    authorizationEndpoint: discovery.authorization_endpoint,
-    tokenEndpoint: discovery.token_endpoint,
-  };
-}
-
-/**
- * Register the install's OAuth client with a connector once (system secrets),
- * before its first authorization — personal or a space's. Throws with the
- * reason when the registration fails.
- */
-export async function ensureConnectorClient(connectorId: string, publicUrl: string): Promise<void> {
-  const v = getVault();
-  const keys = connectorVaultKeys(connectorId);
-  if (await v.getSystemSecret(keys.clientId)) return;
-  const metadata = await discoverAndRegisterConnector(connectorId, publicUrl);
-  await v.setSystemSecret(keys.clientId, metadata.clientId);
-  await v.setSystemSecret(keys.authEndpoint, metadata.authorizationEndpoint);
-  await v.setSystemSecret(keys.tokenEndpoint, metadata.tokenEndpoint);
-}
-
-/** The public URL OAuth redirect URIs are built on. */
-export function oauthPublicUrl(): string {
-  const config = getConfig();
-  return config.oauth?.publicUrl || `http://localhost:${config.api.port}`;
-}
-
-// --- Connector User Token Storage ---
-
-export async function storeConnectorUserTokens(
-  connectorId: string,
-  userId: string,
-  accessToken: string,
-  refreshToken: string | undefined,
-  expiresInSeconds: number | undefined,
-): Promise<void> {
-  const v = getVault();
-  const keys = connectorVaultKeys(connectorId);
-  const expiresAt = expiresInSeconds
-    ? new Date(Date.now() + expiresInSeconds * 1000).toISOString()
-    : '';
-
-  // Delete existing tokens to avoid accumulation
-  const existing = await v.list(userId);
-  const tokenNames = [keys.accessToken, keys.refreshToken, keys.tokenExpiry];
-  for (const entry of existing) {
-    if (tokenNames.includes(entry.name ?? '')) {
-      await v.delete(userId, entry.id);
-    }
-  }
-
-  await v.store(userId, keys.accessToken, accessToken, { credentialType: 'oauth_token' });
-  if (refreshToken) {
-    await v.store(userId, keys.refreshToken, refreshToken, { credentialType: 'oauth_token' });
-  }
-  if (expiresAt) {
-    await v.store(userId, keys.tokenExpiry, expiresAt, { credentialType: 'other' });
-  }
-}
-
-// --- Connector Access Token Retrieval (with refresh) ---
-
-// Refresh buffer matches OAuthManager.getValidToken (5 minutes) so all
-// providers refresh on the same cadence.
-const CONNECTOR_REFRESH_BUFFER_MS = 5 * 60 * 1000;
-
-// Per-(connector, user) in-flight refresh promises. Concurrent callers during
-// expiry share a single token-endpoint round-trip instead of stampeding.
-const connectorRefreshInFlight = new Map<string, Promise<string | null>>();
-
-/**
- * Redeem `refreshToken` at the connector's token endpoint with the install's
- * registered client. Null when the client is not registered or the endpoint
- * refuses. Shared by the personal refresh below and the space connectors'
- * own refresh (`src/core/spaces/connectors.ts`), which stores under the space.
- */
-export async function redeemConnectorRefreshToken(
-  connectorId: string,
-  refreshToken: string,
-  who: Record<string, string>,
-): Promise<{ access_token: string; refresh_token?: string; expires_in?: number } | null> {
-  const v = getVault();
-  const keys = connectorVaultKeys(connectorId);
-  const tokenEndpoint = await v.getSystemSecret(keys.tokenEndpoint);
-  const clientId = await v.getSystemSecret(keys.clientId);
-  if (!tokenEndpoint || !clientId) return null;
-
-  const res = await fetch(tokenEndpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-      client_id: clientId,
-    }).toString(),
-  });
-
-  if (!res.ok) {
-    securityLogger.warn({ ...who, connectorId, status: res.status }, 'Connector token refresh failed');
-    return null;
-  }
-  return await res.json() as { access_token: string; refresh_token?: string; expires_in?: number };
-}
-
-async function refreshConnectorAccessToken(
-  connectorId: string,
-  userId: string,
-): Promise<string | null> {
-  const v = getVault();
-  const keys = connectorVaultKeys(connectorId);
-  const refreshToken = await v.getByName(userId, keys.refreshToken);
-  if (!refreshToken) return null;
-
-  const tokens = await redeemConnectorRefreshToken(connectorId, refreshToken, { userId });
-  if (!tokens) return null;
-
-  await storeConnectorUserTokens(
-    connectorId,
-    userId,
-    tokens.access_token,
-    tokens.refresh_token,
-    tokens.expires_in,
-  );
-  return tokens.access_token;
-}
-
-export async function getConnectorAccessToken(
-  connectorId: string,
-  userId: string,
-): Promise<string | null> {
-  const v = getVault();
-  const keys = connectorVaultKeys(connectorId);
-  const accessToken = await v.getByName(userId, keys.accessToken);
-  if (!accessToken) return null;
-
-  const expiryStr = await v.getByName(userId, keys.tokenExpiry);
-  const isExpired = expiryStr
-    ? new Date(expiryStr).getTime() - CONNECTOR_REFRESH_BUFFER_MS < Date.now()
-    : false;
-
-  if (!isExpired) return accessToken;
-
-  const inFlightKey = `${connectorId}:${userId}`;
-  const existing = connectorRefreshInFlight.get(inFlightKey);
-  if (existing) return existing;
-
-  const refreshPromise = refreshConnectorAccessToken(connectorId, userId).finally(() => {
-    connectorRefreshInFlight.delete(inFlightKey);
-  });
-  connectorRefreshInFlight.set(inFlightKey, refreshPromise);
-  return refreshPromise;
 }

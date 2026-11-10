@@ -71,7 +71,7 @@ export function orderByGroup(handlers: ToolHandler[], groupOrder: readonly strin
  *    (`MCP_META_TOOL_NAMES`) and the discovery and self-report tools: the
  *    same bytes for every user of a role on this install.
  *  - `variable`: what differs per user or session, or changes at runtime.
- *    Connector tools (per user), the inline-UI tool (per user and client),
+ *    The inline-UI tool (per user and client),
  *    direct MCP tools (`mcp__<server>__<tool>`: servers connect, reconnect
  *    and change what they expose; plugin packages run as `plugin-*` MCP
  *    servers and are enabled and disabled at runtime), extension tools (`ext_*`, loaded and unloaded at
@@ -104,7 +104,7 @@ export function toolCacheTier(handler: ToolHandler, lazy: boolean): ToolCacheTie
   const id = handler.toolId;
   if (CONDITIONAL_TOOLS.has(handler.name)) return 'variable';
   if (id === 'mcp') return MCP_META_TOOL_NAMES.has(handler.name) ? 'shared' : 'variable';
-  if (id === 'connector' || id === 'inline-ui' || id?.startsWith('ext_') || id?.startsWith('plugin-')) return 'variable';
+  if (id === 'inline-ui' || id?.startsWith('ext_') || id?.startsWith('plugin-')) return 'variable';
   if (lazy && isIntentGatedGroup(id)) return 'sticky';
   return 'shared';
 }
