@@ -798,6 +798,24 @@ export class ScopedDocumentRepo {
     return row ?? null;
   }
 
+  /**
+   * Replace a document's text and what describes it (a plugin updating the
+   * document it created, `documents:write`), within the scope; the level only
+   * rises. Null when the row is not the scope's.
+   */
+  async updateContent(
+    id: string,
+    patch: { originalName: string; size: number; ocrText: string; summary: string | null; protectionLevel: number },
+  ): Promise<DocumentRecord | null> {
+    if (!isUuid(id)) return null;
+    this.scope.can('write');
+    const [row] = await this.db.update(documents)
+      .set({ ...patch, protectionLevel: sql`greatest(coalesce(${documents.protectionLevel}, 4), ${patch.protectionLevel})`, processedAt: new Date() })
+      .where(and(eq(documents.id, id), ...this.scope.shared(documents)))
+      .returning();
+    return row ?? null;
+  }
+
   /** Update status — restricted to documents the principal may write. */
   async updateStatus(id: string, status: DocumentRecord['status'], error?: string): Promise<boolean> {
     if (!isUuid(id)) return false;

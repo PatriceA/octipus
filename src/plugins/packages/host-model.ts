@@ -24,11 +24,12 @@
  *   and the user's spend budgets, all checked before the call; the cost row is
  *   tagged `requestType: plugin:<name>`.
  */
-import { and, eq, gte, like, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, like, or, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { checkRateLimit } from '@/core/artifacts/rate-limit';
 import { getDb } from '@/db/postgres';
 import { costLog } from '@/db/schema/models';
+import { sessions } from '@/db/schema/sessions';
 import type { Principal } from '@/security/principal';
 import type { HostTokenGrant } from './host-api';
 
@@ -54,12 +55,24 @@ function utcDayStart(now: Date): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 }
 
-/** Tokens `userId`'s plugin model calls used today (UTC), all packages together. */
+/** The channel type of the session of a plugin's background run (`agent:run`, host-agent.ts). */
+export const PLUGIN_RUN_CHANNEL = 'plugin-run';
+
+/**
+ * Tokens `userId`'s plugin model calls used today (UTC), all packages
+ * together: `model:complete` calls (request type `plugin:<name>`) and the
+ * model calls of plugin background runs (`agent:run`: rows of their sessions).
+ */
 export async function pluginTokensToday(userId: string, now = new Date()): Promise<number> {
+  const runSessions = getDb().select({ id: sessions.id }).from(sessions)
+    .where(and(eq(sessions.userId, userId), eq(sessions.channelType, PLUGIN_RUN_CHANNEL)));
   const [row] = await getDb()
     .select({ total: sql<string>`coalesce(sum(${costLog.inputTokens} + ${costLog.outputTokens}), 0)` })
     .from(costLog)
-    .where(and(eq(costLog.userId, userId), like(costLog.requestType, 'plugin:%'), gte(costLog.createdAt, utcDayStart(now))));
+    .where(and(
+      eq(costLog.userId, userId), gte(costLog.createdAt, utcDayStart(now)),
+      or(like(costLog.requestType, 'plugin:%'), inArray(costLog.sessionId, runSessions)),
+    ));
   return Number(row?.total ?? 0);
 }
 

@@ -20,6 +20,7 @@ import { MAX_PROMPT_CHARS } from '../contributions/prompt';
 import { manifestSchema, parseManifest } from '../manifest';
 import { contributionProblems } from '../manifest-contributions';
 import { defaultMaxProtection } from '../service';
+import { PLUGIN_HOST_SCOPES } from '@/shared/plugin-package';
 import { MAX_PACKAGE_FILES } from '../tree';
 import { manifestJsonSchema, PLUGIN_DEV_TOOLS, pluginApiContract, pluginDevToolName } from './contract';
 import { PLUGIN_AUTHORING_SKILL } from './skill';
@@ -93,9 +94,14 @@ describe('plugin_api contract', () => {
     expect(c.sandbox.shellCommandsSandboxed).toBe(false);
     expect((await pluginApiContract({ canInstall: true, network: () => ({ state: 'x', detail: 'x' }), adminPage: 'x', shellSandboxed: true })).sandbox.shellCommandsSandboxed).toBe(true);
     // The default protection level, from the function the server uses.
-    expect(c.defaultMaxProtection.examples).toEqual({ nothing: 4, networkHosts: 1, hostWebRead: 1, uiPages: 1 });
+    expect(c.defaultMaxProtection.examples).toEqual({ nothing: 4, networkHosts: 1, hostWebRead: 1, hostAgentRun: 1, uiPages: 1 });
     expect(c.defaultMaxProtection.examples.networkHosts).toBe(defaultMaxProtection({ network: ['a.example.com'] }));
     expect(c.templates.map((t) => t.name)).toEqual(['tool-only', 'with-command', 'with-schedule']);
+    // Every host scope is described, with its endpoint.
+    expect(Object.keys(c.hostApi.scopes).sort()).toEqual([...PLUGIN_HOST_SCOPES].sort());
+    expect(c.hostApi.scopes['documents:write']).toContain('POST /api/plugin-host/documents');
+    expect(c.hostApi.scopes['agent:run']).toContain('POST /api/plugin-host/agent/runs');
+    expect(c.hostApi.effects).toContain('agent:run');
   });
 
   test('the tools it names are the tools plugin_dev registers', async () => {

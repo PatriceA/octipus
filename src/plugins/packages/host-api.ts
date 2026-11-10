@@ -61,6 +61,12 @@ export interface HostTokenGrant {
   maxProtection: 1 | 2 | 3 | 4;
   /** The tool whose call the token belongs to, for the audit. */
   tool: string;
+  /**
+   * That tool's declared effect. A scope of `PLUGIN_HOST_START_SCOPES`
+   * (`agent:run`) starts something only for a `write` or `external` tool;
+   * unset counts as `read`.
+   */
+  effect?: PluginToolEffect;
   expiresAt: number;
   /**
    * The highest protection level of what this call has read through the host
@@ -119,9 +125,38 @@ export function revokeHostToken(token: string): void {
   live.delete(hashOf(token));
 }
 
-/** Revoke every token of a package (it was disabled, upgraded or removed). */
+/**
+ * Revoke every token of a package (it was disabled, upgraded or removed, or
+ * its approval changed), and stop its background agent runs (`agent:run`):
+ * they were started under the approval that just went.
+ */
 export function revokePluginTokens(plugin: string): void {
   for (const [key, grant] of live) if (grant.plugin === plugin) live.delete(key);
+  for (const run of runs.values()) if (run.plugin === plugin) run.stop('The plugin was disabled, upgraded or removed, or its approval changed');
+}
+
+// ── Background agent runs (`agent:run`, src/plugins/packages/host-agent.ts) ──
+// Kept here, beside the tokens, because the token issuer consults them: a tool
+// call made inside a plugin's background run gets no host token (nobody
+// started that call by hand), and revoking a package's tokens stops its runs.
+
+interface LiveRun { plugin: string; userId: string; sessionId: string; stop: (reason: string) => void }
+const runs = new Map<string, LiveRun>();
+
+/** Register a running background run (its job id); `stop` ends it. */
+export function trackPluginRun(jobId: string, run: LiveRun): void {
+  runs.set(jobId, run);
+}
+
+export function untrackPluginRun(jobId: string): void {
+  runs.delete(jobId);
+}
+
+/** Whether `sessionId` is the session of a running plugin background run. */
+export function isPluginRunSession(sessionId: string | undefined | null): boolean {
+  if (!sessionId) return false;
+  for (const run of runs.values()) if (run.sessionId === sessionId) return true;
+  return false;
 }
 
 function sweep(now: number): void {
@@ -152,8 +187,9 @@ export function grantableScopes(
 
 /**
  * The built-in tool action a scope stands for: the user's rules on it apply.
- * `notify` reaches only the user and `model:complete` runs on the user's own
- * model lane; neither has one. `web:read` is the web tool's page fetch: a user
+ * `notify` reaches only the user, `model:complete` runs on the user's own
+ * model lane and `agent:run` is an agent whose every tool call meets the
+ * user's rules; none has one. `web:read` is the web tool's page fetch: a user
  * whose rules deny `websearch.fetch` does not get it.
  */
 export const SCOPE_TOOL_ACTION: Record<PluginHostScope, { toolId: string; action: string } | null> = {
@@ -162,9 +198,13 @@ export const SCOPE_TOOL_ACTION: Record<PluginHostScope, { toolId: string; action
   'tasks:read': { toolId: 'tasks', action: 'read' },
   'tasks:write': { toolId: 'tasks', action: 'write' },
   'documents:read': { toolId: 'documents', action: 'read' },
+  // The documents tool's own write action (it creates a document); a user whose rules deny it does not get the scope.
+  'documents:write': { toolId: 'documents', action: 'export_document' },
   notify: null,
   'web:read': { toolId: 'websearch', action: 'fetch' },
   'model:complete': null,
+  // The run is the host's own agent: each of its tool calls goes through the user's rules itself.
+  'agent:run': null,
 };
 
 /**
@@ -252,8 +292,9 @@ export async function issueHostCallMeta(
 ): Promise<{ meta: Record<string, unknown>; release: () => void } | null> {
   const binding = server.plugin;
   if (!binding?.hostScopes?.length || !context?.userId) return null;
-  // Only a call the user started: never a schedule, an event or a context call.
-  if (hostCallKind(context) === null) return null;
+  // Only a call the user started: never a schedule, an event or a context call,
+  // nor a call an agent makes inside a plugin's background run (agent:run).
+  if (hostCallKind(context) === null || isPluginRunSession(context.sessionId)) return null;
   const effect = Object.hasOwn(binding.tools, toolName) ? binding.tools[toolName] : undefined;
   if (!effect) return null;
   const candidates = grantableScopes(binding.hostScopes, binding.hostScopes, effect);
@@ -268,6 +309,7 @@ export async function issueHostCallMeta(
     scopes,
     maxProtection: binding.maxProtection,
     tool: toolName,
+    effect,
     ...(binding.modelCliTools && scopes.includes('model:complete') ? { modelCliTools: true as const } : {}),
   }, ttl);
   coreLogger.debug({ pkg: binding.package, tool: toolName, scopes }, 'Plugin host API token issued for a call');

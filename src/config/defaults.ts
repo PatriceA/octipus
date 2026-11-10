@@ -144,6 +144,7 @@ export const defaultConfig: Partial<Config> = {
     requireSignature: false,
     registries: [],
     hostModelDailyTokens: 200_000,
+    hostAgentRunTokens: 150_000,
   },
   protection: {
     remoteAtLevel3: false,

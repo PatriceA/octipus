@@ -333,18 +333,44 @@ const HOST_TOKEN_WHEN = 'A call gets a short-lived token for them (at most 30 se
   + 'Schedules, events and context calls never get one. The token acts as that user, within their own data and permission rules. '
   + 'An upgrade asks for this approval again.';
 
+/** Host scopes that can carry data out of the house (src/plugins/packages/service.ts, `EGRESS_HOST_SCOPES`). */
+const EGRESS_SCOPES = ['web:read', 'model:complete', 'agent:run'];
+
 /**
  * A package that can send data out of the house (`web:read`: any URL;
- * `model:complete`: a remote model) and also read the user's data: what it
+ * `model:complete`: a remote model; `agent:run`: an agent that searches and
+ * fetches the web on its prompt) and also read the user's data: what it
  * reads it can send anywhere. Said in the approval, and the package then sees
  * level-1 data only (docs/PLUGIN-PACKAGES.md#host-api).
  */
 function egressReadWarning(scopes: readonly string[]): string {
-  const out = scopes.filter((s) => s === 'web:read' || s === 'model:complete');
+  const out = scopes.filter((s) => EGRESS_SCOPES.includes(s));
   const reads = scopes.filter((s) => s.endsWith(':read') && s !== 'web:read');
   if (out.length === 0 || reads.length === 0) return '';
   return `Warning: with ${out.join(' and ')} and ${reads.join(', ')} together, this package can send what it reads anywhere. `
     + 'It is limited to data at protection level 1.';
+}
+
+/**
+ * What `agent:run` lets a package do (src/plugins/packages/host-agent.ts):
+ * work that goes on after the call, spending the user's model budget.
+ * Said in the row and in the approval.
+ */
+const AGENT_RUN_NOTE = 'agent:run starts background agent runs as the user who asks (from a write tool only): the host\'s own agent of a role, '
+  + 'with web search, the user\'s knowledge and documents (no shell, messages or mail), unattended (nothing is asked; an ASK is refused), '
+  + 'for up to 20 minutes and plugins.hostAgentRunTokens tokens a run, counted in the user\'s daily plugin allowance and spend budgets. '
+  + 'The package gets only the run\'s id and its final text.';
+
+/** What `documents:write` lets a package do (src/plugins/packages/host-documents.ts). */
+const DOCUMENTS_WRITE_NOTE = 'documents:write creates text documents in the user\'s Documents and updates the ones this package created, '
+  + 'as that user, marked with the package and tool that made them.';
+
+/** The notes of the scopes in `scopes` that need saying in the approval. */
+function scopeNotes(scopes: readonly string[]): string[] {
+  return [
+    ...(scopes.includes('agent:run') ? [AGENT_RUN_NOTE] : []),
+    ...(scopes.includes('documents:write') ? [DOCUMENTS_WRITE_NOTE] : []),
+  ];
 }
 
 /**
@@ -364,7 +390,8 @@ function modelCliToolsNote(pkg: PluginPackageView): string {
 function hostScopeConfirm(pkg: PluginPackageView, unapproved: string[]): string {
   const warning = egressReadWarning(pkg.manifest.host ?? []);
   const model = modelCliToolsNote(pkg);
-  return `Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? ${warning ? `${warning} ` : ''}${model ? `${model} ` : ''}${HOST_TOKEN_WHEN}`;
+  const notes = scopeNotes(unapproved).join(' ');
+  return `Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? ${warning ? `${warning} ` : ''}${notes ? `${notes} ` : ''}${model ? `${model} ` : ''}${HOST_TOKEN_WHEN}`;
 }
 
 /** The confirmation of approving `model:cli-tools` for `pkg`. */
@@ -446,6 +473,7 @@ function PagesAndScopes({ pkg, unapproved }: { pkg: PluginPackageView; unapprove
           ))}
           {unapproved.length > 0 && <span className={tone('warn')}> · {unapproved.length} not approved; enabling approves them</span>}
           {egressReadWarning(scopes) && <span className={cn('block', tone('warn'))} data-testid="plugin-egress-warning">{egressReadWarning(scopes)}</span>}
+          {scopeNotes(scopes).map((note) => <span key={note} className="block" data-testid="plugin-scope-note">{note}</span>)}
           <span className="block">{HOST_TOKEN_WHEN}</span>
         </p>
       )}

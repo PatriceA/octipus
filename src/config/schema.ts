@@ -889,6 +889,11 @@ export const configSchema = z.object({
      * per UTC day, all packages together; 0 turns those calls off.
      */
     hostModelDailyTokens: z.number().int().min(0).max(100_000_000).default(200_000),
+    /**
+     * Tokens one plugin background run (`agent:run`) may use, its worker's own
+     * budget; its tokens also count in `hostModelDailyTokens`. 0 turns those runs off.
+     */
+    hostAgentRunTokens: z.number().int().min(0).max(10_000_000).default(150_000),
   }).prefault({}),
   oauth: oauthConfigSchema,
   rateLimit: rateLimitConfigSchema,

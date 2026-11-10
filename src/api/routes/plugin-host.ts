@@ -333,6 +333,96 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
     detail: { tags: ['plugin-host'] },
   })
 
+  // Create a text document for the user in the call's workspace (src/plugins/packages/host-documents.ts):
+  // the space's role rules apply, the row records the package and tool
+  // (`metadata.sourceRef`), and its level is at least what the call has read.
+  .post('/documents', (ctx) => run(ctx, 'documents.create', 'documents:write', async ({ grant, principal }, details) => {
+    const { createPluginDocument } = await import('@/plugins/packages/host-documents');
+    const outcome = await createPluginDocument(grant, contentRepos(principal), ctx.body);
+    if (!outcome.ok) {
+      ctx.set.status = outcome.status;
+      details.code = outcome.code;
+      return { error: outcome.error, code: outcome.code };
+    }
+    details.documentId = outcome.id;
+    return { id: outcome.id, name: outcome.name, protectionLevel: outcome.protectionLevel, size: outcome.size };
+  }), {
+    body: t.Object({
+      name: t.String({ minLength: 1, maxLength: 200 }),
+      content: t.String({ minLength: 1, maxLength: 500_000 }),
+      mimeType: t.Optional(t.Union([t.Literal('text/markdown'), t.Literal('text/plain')])),
+      category: t.Optional(t.String({ minLength: 1, maxLength: 100 })),
+      summary: t.Optional(t.String({ maxLength: 2000 })),
+      protectionLevel: t.Optional(t.Integer({ minimum: 1, maximum: 4 })),
+    }),
+    detail: { tags: ['plugin-host'] },
+  })
+
+  // Replace the content of a document this package created (and no other),
+  // within its maxProtection, in the call's workspace.
+  .put('/documents/:id', (ctx) => run(ctx, 'documents.update', 'documents:write', async ({ grant, principal }, details) => {
+    details.documentId = ctx.params.id;
+    const { updatePluginDocument } = await import('@/plugins/packages/host-documents');
+    const outcome = await updatePluginDocument(grant, contentRepos(principal), ctx.params.id, ctx.body);
+    if (!outcome.ok) {
+      ctx.set.status = outcome.status;
+      details.code = outcome.code;
+      return { error: outcome.error, code: outcome.code };
+    }
+    return { id: outcome.id, name: outcome.name, protectionLevel: outcome.protectionLevel, size: outcome.size };
+  }), {
+    params: t.Object({ id: t.String({ maxLength: 64 }) }),
+    body: t.Object({
+      content: t.String({ minLength: 1, maxLength: 500_000 }),
+      name: t.Optional(t.String({ minLength: 1, maxLength: 200 })),
+      summary: t.Optional(t.String({ maxLength: 2000 })),
+    }),
+    detail: { tags: ['plugin-host'] },
+  })
+
+  // Start a background agent run as the user (src/plugins/packages/host-agent.ts):
+  // the host's own worker of the role, unattended, in a session of its own,
+  // under the user's rules, budgets and protection routing. Answers its id at
+  // once; a write or external tool only.
+  .post('/agent/runs', (ctx) => run(ctx, 'agent.start', 'agent:run', async ({ grant, principal }, details) => {
+    const { startPluginAgentRun } = await import('@/plugins/packages/host-agent');
+    const outcome = await startPluginAgentRun(grant, principal, ctx.body);
+    if (!outcome.ok) {
+      ctx.set.status = outcome.status;
+      if (outcome.retryAfter) ctx.set.headers['retry-after'] = String(outcome.retryAfter);
+      details.code = outcome.code;
+      return { error: outcome.error, code: outcome.code };
+    }
+    ctx.set.status = 202;
+    details.runId = outcome.value.id;
+    details.role = outcome.value.role;
+    return outcome.value;
+  }), {
+    body: t.Object({
+      prompt: t.String({ minLength: 1, maxLength: 20_000 }),
+      role: t.Optional(t.String({ minLength: 1, maxLength: 50, pattern: '^[a-z][a-z0-9_-]*$' })),
+      title: t.Optional(t.String({ maxLength: 200 })),
+    }),
+    detail: { tags: ['plugin-host'] },
+  })
+
+  // A run of this package for this user: its status and, once done, its final
+  // text (withheld above the package's maxProtection).
+  .get('/agent/runs/:id', (ctx) => run(ctx, 'agent.read', 'agent:run', async ({ grant }, details) => {
+    details.runId = ctx.params.id;
+    const { readPluginAgentRun } = await import('@/plugins/packages/host-agent');
+    const outcome = await readPluginAgentRun(grant, ctx.params.id);
+    if (!outcome.ok) {
+      ctx.set.status = outcome.status;
+      details.code = outcome.code;
+      return { error: outcome.error, code: outcome.code };
+    }
+    return outcome.value;
+  }), {
+    params: t.Object({ id: t.String({ maxLength: 64 }) }),
+    detail: { tags: ['plugin-host'] },
+  })
+
   // One public web page, fetched by the host through its SSRF guard and turned
   // into a clean article (src/core/web-read): the package never touches
   // the network itself. Size and time are capped by the fetcher (5 MB, 15 s);
@@ -414,7 +504,11 @@ export const PLUGIN_HOST_ENDPOINTS: ReadonlyArray<{ method: string; path: string
   { method: 'GET', path: '/api/plugin-host/tasks', scope: 'tasks:read' },
   { method: 'POST', path: '/api/plugin-host/tasks', scope: 'tasks:write' },
   { method: 'GET', path: '/api/plugin-host/documents/:id', scope: 'documents:read' },
+  { method: 'POST', path: '/api/plugin-host/documents', scope: 'documents:write' },
+  { method: 'PUT', path: '/api/plugin-host/documents/:id', scope: 'documents:write' },
   { method: 'POST', path: '/api/plugin-host/notify', scope: 'notify' },
   { method: 'POST', path: '/api/plugin-host/web/read', scope: 'web:read' },
   { method: 'POST', path: '/api/plugin-host/model/complete', scope: 'model:complete' },
+  { method: 'POST', path: '/api/plugin-host/agent/runs', scope: 'agent:run' },
+  { method: 'GET', path: '/api/plugin-host/agent/runs/:id', scope: 'agent:run' },
 ];
