@@ -10,14 +10,15 @@
  * error. With `--json`, stdout carries one JSON document and nothing else;
  * every diagnostic goes to stderr.
  */
-import { createHash } from 'node:crypto';
-import { lstat, readFile, writeFile } from 'node:fs/promises';
+import { createHash, createPublicKey } from 'node:crypto';
+import { lstat, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { validatePlugin } from '@octipus/plugin-sdk/testing';
 import { validatePluginDirectory } from '@/plugins/packages/authoring/validate';
 import { hashPackageContent } from '@/plugins/packages/integrity';
 import { ManifestError, parseManifest } from '@/plugins/packages/manifest';
+import { KeysFileError, keysFileExpired, parseKeysFile, rootRevocationProblem, type RootKeyRef } from '@/plugins/packages/marketplace-keys-format';
 import { packPackage } from '@/plugins/packages/pack';
 import { packagePermissions } from '@/plugins/packages/permissions';
 import {
@@ -33,9 +34,11 @@ import {
   signMarketplaceKeysFile,
   signRegistryIndexFile,
   trustedKeys,
+  verifyMarketplaceKeys,
   verifyRegistryIndex,
   verifySignature,
 } from '@/plugins/packages/signature';
+import { extractTarGz, packageRootIn, TarError } from '@/plugins/packages/tar';
 import { checkPackageTree, PackageTreeError } from '@/plugins/packages/tree';
 import { PLUGIN_MANIFEST_FILE, type PluginManifest } from '@/shared/plugin-package';
 
@@ -96,7 +99,7 @@ function failure(io: OfflineIo, sub: string, err: unknown, what: string): number
 function knownProblems(err: unknown): string[] | null {
   if (err instanceof ManifestError) return err.problems.map((p) => `${PLUGIN_MANIFEST_FILE}: ${p}`);
   if (err instanceof Refusal) return err.problems;
-  if (err instanceof SignatureError || err instanceof PackageTreeError) return [err.message];
+  if (err instanceof SignatureError || err instanceof PackageTreeError || err instanceof KeysFileError || err instanceof TarError) return [err.message];
   if (err instanceof SyntaxError) return [`not valid JSON: ${err.message}`];
   const code = (err as NodeJS.ErrnoException | null)?.code;
   if (typeof code === 'string' && /^E[A-Z]+$/.test(code)) return [(err as Error).message];
@@ -196,6 +199,11 @@ export async function keygenCommand(io: OfflineIo, argv: string[]): Promise<numb
     const prefix = resolve(positionals[0]);
     const passphraseFile = values['passphrase-file'] as string | undefined;
     const passphrase = passphraseFile === undefined ? undefined : await readPassphraseFile(io, passphraseFile);
+    if (passphrase === undefined) {
+      // Guidance, not a refusal: a CI key may be kept in a secret store instead.
+      io.err('⚠ WARNING: the private key is written UNENCRYPTED. Anyone who reads the .key file can sign as you.\n'
+        + '  Pass --passphrase-file <path|-> to encrypt it; a marketplace ROOT key must always be encrypted and kept offline.\n');
+    }
     const { privateKeyPem, publicKeyPem, keyId } = generateSigningKey(passphrase);
     // 'wx': never overwrite a key someone may already have published.
     await writeFile(`${prefix}.key`, privateKeyPem, { flag: 'wx', mode: 0o600 });
@@ -261,10 +269,18 @@ export async function signIndexCommand(io: OfflineIo, argv: string[]): Promise<n
 export async function signKeysCommand(io: OfflineIo, argv: string[]): Promise<number> {
   let file = '';
   try {
-    const { values, positionals } = parse(argv, { key: { type: 'string', short: 'k' }, 'passphrase-file': { type: 'string' }, json: { type: 'boolean' } });
-    if (positionals.length !== 1 || !values.key) throw new UsageError('expected <keys.json> --key <root-private-key-file> [--passphrase-file <path|->]');
+    const { values, positionals } = parse(argv, { key: { type: 'string', short: 'k' }, 'passphrase-file': { type: 'string' }, 'root-pub': { type: 'string', multiple: true }, json: { type: 'boolean' } });
+    if (positionals.length !== 1 || !values.key) throw new UsageError('expected <keys.json> --key <root-private-key-file> [--root-pub <file>...] [--passphrase-file <path|->]');
     file = resolve(positionals[0]);
     const key = await loadSigningKey(io, values.key as string, values['passphrase-file'] as string | undefined);
+    // Checked exactly as a host reads it before anything is signed: the schema
+    // (a whole version, known fields only), no root among the signing keys
+    // (this one, and any --root-pub), and not already expired.
+    const signer = keyFingerprint(createPublicKey(key));
+    const otherRoots = await readPublicKeys((values['root-pub'] as string[] | undefined) ?? []);
+    const parsed = parseKeysFile(await readFile(file), [{ keyId: signer }, ...otherRoots.map((r) => ({ keyId: r.keyId }))]);
+    const expired = keysFileExpired(parsed);
+    if (expired) throw new Refusal(expired);
     const { sigFile, keyId, sha256 } = await signMarketplaceKeysFile(file, key);
     if (values.json) {
       json(io, { sigFile, sha256, keyId });
@@ -458,6 +474,101 @@ export async function verifyIndexCommand(io: OfflineIo, argv: string[]): Promise
     }
   } catch (err) {
     return report(false, errorMessage(err));
+  }
+}
+
+/**
+ * `octi plugin verify-keys <keys.json> --root-pub <file>... [--json]`: the
+ * marketplace keys file as a host checks it: `<keys.json>.sig` by one of the
+ * roots (the first --root-pub is `root`, the second `rootBackup`), its schema,
+ * no root among its signing keys, the root revocation rule, and `expires`.
+ * --json prints `{ valid, keyId, version, endorsed: [keyId], revoked: [keyId], error? }`
+ * (`keyId`: the root that signed it). A host also accepts a revocation only
+ * for a key some accepted keys.json endorsed; this command cannot know that history.
+ */
+export async function verifyKeysCommand(io: OfflineIo, argv: string[]): Promise<number> {
+  let values: { 'root-pub'?: string[]; json?: boolean };
+  let positionals: string[];
+  try {
+    ({ values, positionals } = parse(argv, { 'root-pub': { type: 'string', multiple: true }, json: { type: 'boolean' } }) as { values: typeof values; positionals: string[] });
+    if (positionals.length !== 1 || !values['root-pub']?.length) throw new UsageError('expected <keys.json> --root-pub <public-key-file>... [--json]');
+    if (values['root-pub'].length > 2) throw new UsageError('at most two --root-pub: root, then rootBackup');
+  } catch (err) {
+    return failure(io, 'verify-keys', err, '');
+  }
+  const file = resolve(positionals[0]);
+  const sigFile = `${file}${REGISTRY_INDEX_SIGNATURE_SUFFIX}`;
+  let keyId: string | null = null;
+  let version: number | null = null;
+  let endorsed: string[] = [];
+  let revoked: string[] = [];
+  const report = (valid: boolean, error?: string): number => {
+    const body = { valid, keyId, version, endorsed, revoked };
+    if (values.json) json(io, error === undefined ? body : { ...body, error });
+    if (error !== undefined) io.err(`  ✗ ${error}\n\n❌ ${file} does not verify as a marketplace keys file.\n`);
+    else if (!values.json) io.out(`✅ ${file} version ${version} is signed by the root ${keyId}\n   endorses: ${endorsed.join(', ') || '(none)'}\n   revokes: ${revoked.join(', ') || '(none)'}\n`);
+    return valid ? 0 : 1;
+  };
+  try {
+    const bytes = await readFile(file);
+    let sigText: string;
+    try {
+      sigText = await readFile(sigFile, 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return report(false, `${file} is not signed (no ${sigFile})`);
+      throw err;
+    }
+    const keys = await readPublicKeys(values['root-pub'] as string[]);
+    const roots: RootKeyRef[] = keys.map((k, i) => ({ role: i === 0 ? 'root' : 'rootBackup', keyId: k.keyId }));
+    const check = verifyMarketplaceKeys(bytes, sigText, keys.map((k, i) => ({ name: roots[i].role, publicKey: k.publicKey })));
+    if ('keyId' in check) keyId = check.keyId;
+    if (check.status !== 'valid') {
+      switch (check.status) {
+        case 'unknown_key': return report(false, `signed by ${check.keyId}, which is none of the roots in ${(values['root-pub'] as string[]).join(', ')}`);
+        case 'invalid': return report(false, check.reason);
+        case 'unsigned': return report(false, `${file} is not signed`);
+        default: return report(false, check.detail);
+      }
+    }
+    const parsed = parseKeysFile(bytes, roots);
+    version = parsed.version;
+    endorsed = parsed.signingKeys.map((k) => k.keyId);
+    revoked = parsed.revokedKeys.map((k) => k.keyId);
+    const problem = rootRevocationProblem(check.keyId, roots, revoked) ?? keysFileExpired(parsed);
+    if (problem) return report(false, problem);
+    return report(true);
+  } catch (err) {
+    return report(false, errorMessage(err));
+  }
+}
+
+/**
+ * `octi plugin unpack <tarball> --out <dir> [--json]`: unpack a package
+ * tarball with the strict tar reader an install uses (no links, no path out
+ * of the target, no duplicate path, the size and file limits) into `<dir>`,
+ * which must be missing or empty. --json prints
+ * `{ out, root, sha256, name, version }` (`root`: the package directory in it).
+ */
+export async function unpackCommand(io: OfflineIo, argv: string[]): Promise<number> {
+  let file = '';
+  try {
+    const { values, positionals } = parse(argv, { out: { type: 'string', short: 'o' }, json: { type: 'boolean' } });
+    if (positionals.length !== 1 || !values.out) throw new UsageError('expected <tarball> --out <dir> [--json]');
+    file = resolve(positionals[0]);
+    const out = resolve(values.out as string);
+    const tarball = await readFile(file);
+    await mkdir(out, { recursive: true, mode: 0o700 });
+    if ((await readdir(out)).length > 0) throw new Refusal(`--out ${out} is not empty; unpack into a new or empty directory`);
+    await extractTarGz(tarball, out);
+    const root = await packageRootIn(out);
+    await checkPackageTree(root);
+    const manifest = await readPackageManifest(root);
+    const sha256 = `sha256:${createHash('sha256').update(tarball).digest('hex')}`;
+    if (values.json) json(io, { out, root, sha256, name: manifest.name, version: manifest.version });
+    else io.out(`✅ Unpacked ${manifest.name} ${manifest.version} into ${root}\n   sha256: ${sha256}\n`);
+    return 0;
+  } catch (err) {
+    return failure(io, 'unpack', err, `${file || 'The tarball'} was not unpacked (what was written stays for inspection).`);
   }
 }
 

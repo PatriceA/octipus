@@ -26,9 +26,12 @@
  *   octi plugin updates          Installed packages with a newer version from the same source.
  *   octi plugin install|upgrade <name> [--version v] [--registry r] [--accept all|ids] [--enable] …  Install from the marketplace, with consent per item.
  *   octi plugin sign-keys <keys.json> --key <root.key>  Sign a marketplace keys file with a root key.
+ *   octi plugin verify-keys <keys.json> --root-pub <file>...  Check a marketplace keys file.
+ *   octi plugin unpack <tarball> --out <dir>      Unpack with the strict tar reader install uses.
  *
  * Delegated from bin/octi. The offline subcommands (validate, keygen, sign,
- * sign-index, hash, pack, permissions, verify, verify-index) live in
+ * sign-index, sign-keys, verify-keys, hash, pack, unpack, permissions, verify,
+ * verify-index) live in
  * ./plugin-offline.ts and need no server; they run the host's own code, so
  * authors, a marketplace's CI and the host run identical checks.
  */
@@ -48,9 +51,11 @@ import {
   signCommand,
   signIndexCommand,
   signKeysCommand,
+  unpackCommand,
   validateCommand,
   verifyCommand,
   verifyIndexCommand,
+  verifyKeysCommand,
 } from './plugin-offline';
 
 const HELP = `octi plugin — plugin tooling
@@ -174,12 +179,24 @@ Usage:
                                 version is agreed to, y/n at a terminal or with
                                 --accept (refused otherwise). Lands disabled unless
                                 --enable. --allow-* agree to that change item.
-  octi plugin sign-keys <keys.json> --key <root.key> [--passphrase-file <path|->] [--json]
+  octi plugin sign-keys <keys.json> --key <root.key> [--root-pub <file>...]
+                         [--passphrase-file <path|->] [--json]
                                 Sign the marketplace's keys file with a ROOT key
-                                (keys.json.sig). Offline.
+                                (keys.json.sig), after checking it as a host reads it:
+                                the schema, no root (this one, any --root-pub) among
+                                the signing keys, not expired. Offline.
+  octi plugin verify-keys <keys.json> --root-pub <file>... [--json]
+                                Check <keys.json>.sig by a root (first --root-pub is
+                                root, second rootBackup), the schema, the root
+                                revocation rule and expires. --json prints {"valid",
+                                "keyId","version","endorsed","revoked","error"?}.
+  octi plugin unpack <tarball> --out <dir> [--json]
+                                Unpack with the strict tar reader install uses into a
+                                new or empty <dir>. --json prints {"out","root",
+                                "sha256","name","version"}.
 
-validate, keygen, sign, sign-index, hash, pack, permissions, verify and verify-index
-work offline: they need no running server. With --json they print one JSON
+validate, keygen, sign, sign-index, sign-keys, verify-keys, hash, pack, unpack,
+permissions, verify and verify-index work offline: they need no running server. With --json they print one JSON
 document on stdout and every diagnostic on stderr; every subcommand exits non-zero on error.
 
 list, approve, approve-in-process, approve-contributions, approve-cli-tools, set, secret, uninstall, bundled, install-bundled, marketplace, updates, install and upgrade call the running backend (http://localhost:$API_PORT, 3005 by
@@ -436,6 +453,12 @@ async function main(): Promise<void> {
     }
     case 'sign-keys':
       await exitFlushed(await signKeysCommand(offlineIo(), rest));
+      break;
+    case 'verify-keys':
+      await exitFlushed(await verifyKeysCommand(offlineIo(), rest));
+      break;
+    case 'unpack':
+      await exitFlushed(await unpackCommand(offlineIo(), rest));
       break;
     case 'secret':
       // Its own parser: a refusal must never echo a value typed on the command line.

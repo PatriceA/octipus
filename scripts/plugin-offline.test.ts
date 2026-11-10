@@ -23,10 +23,13 @@ import {
   signCommand,
   signIndexCommand,
   signKeysCommand,
+  unpackCommand,
   validateCommand,
   verifyCommand,
   verifyIndexCommand,
+  verifyKeysCommand,
 } from './plugin-offline';
+import { makeTarGz } from '@/test-helpers/tar';
 
 const ROOT = join(__dirname, '..');
 const FIXTURE = join(ROOT, 'src/plugins/packages/fixtures/echo-plugin');
@@ -525,5 +528,100 @@ describe('validate', () => {
     const fake = io();
     expect(await validateCommand(fake, [temp(), '--json'])).toBe(1);
     expect(jsonOut(fake)).toMatchObject({ ok: false, problems: [expect.stringMatching(/No octipus-plugin.json/)] });
+  });
+});
+
+describe('marketplace keys files and unpacking (review finding 12, marketplace repo commands)', () => {
+  const keysJson = (over: Record<string, unknown> = {}) => JSON.stringify({ schema: 1, version: 1, generatedAt: '2026-11-10T00:00:00Z', signingKeys: [], revokedKeys: [], ...over });
+  async function rootKeys(): Promise<{ root: { key: string; pub: string; id: string }; backup: { key: string; pub: string; id: string }; signing: { key: string; pub: string; id: string } }> {
+    const make = async (name: string) => {
+      const prefix = join(temp('octipus-offline-root-'), name);
+      const fake = io();
+      expect(await keygenCommand(fake, [prefix, '--json'])).toBe(0);
+      return { key: `${prefix}.key`, pub: `${prefix}.pub`, id: jsonOut(fake).keyId as string };
+    };
+    return { root: await make('root'), backup: await make('backup'), signing: await make('signing') };
+  }
+
+  test('keygen warns loudly about an unencrypted key, and still writes it', async () => {
+    const prefix = join(temp(), 'plain');
+    const fake = io();
+    expect(await keygenCommand(fake, [prefix])).toBe(0);
+    expect(fake.stderr).toMatch(/WARNING: the private key is written UNENCRYPTED/);
+    expect(existsSync(`${prefix}.key`)).toBe(true);
+    const encrypted = io();
+    expect(await keygenCommand(encrypted, [join(temp(), 'enc'), '--passphrase-file', passFile('secret')])).toBe(0);
+    expect(encrypted.stderr).not.toMatch(/UNENCRYPTED/);
+  });
+
+  test('sign-keys checks the file as a host reads it before signing: schema, no root as a signing key, not expired', async () => {
+    const { root, backup, signing } = await rootKeys();
+    const file = join(temp(), 'keys.json');
+    const entry = (k: { pub: string; id: string }) => ({ keyId: k.id, publicKey: readFileSync(k.pub, 'utf8') });
+    const refused = async (content: string, extra: string[] = []) => {
+      writeFileSync(file, content);
+      rmSync(`${file}.sig`, { force: true });
+      const fake = io();
+      expect(await signKeysCommand(fake, [file, '--key', root.key, ...extra])).toBe(1);
+      expect(existsSync(`${file}.sig`)).toBe(false);
+      return fake.stderr;
+    };
+    expect(await refused(keysJson({ version: 1.5 }))).toMatch(/version/);
+    expect(await refused(keysJson({ extra: true }))).toMatch(/schema/);
+    expect(await refused(keysJson({ signingKeys: [entry(root)] }))).toMatch(/root key/);
+    expect(await refused(keysJson({ signingKeys: [entry(backup)] }), ['--root-pub', backup.pub])).toMatch(/root key/);
+    expect(await refused(keysJson({ expires: '2020-01-01T00:00:00Z' }))).toMatch(/expired/);
+    writeFileSync(file, keysJson({ signingKeys: [entry(signing)], expires: '2099-01-01T00:00:00Z' }));
+    expect(await signKeysCommand(io(), [file, '--key', root.key, '--root-pub', backup.pub])).toBe(0);
+  });
+
+  test('verify-keys reports the signer, version, endorsed and revoked keys, and refuses what a host refuses', async () => {
+    const { root, backup, signing } = await rootKeys();
+    const file = join(temp(), 'keys.json');
+    const entry = { keyId: signing.id, publicKey: readFileSync(signing.pub, 'utf8') };
+    writeFileSync(file, keysJson({ version: 3, signingKeys: [entry], revokedKeys: [{ keyId: `ed25519:${'1'.repeat(64)}`, reason: 'old' }] }));
+    expect(await signKeysCommand(io(), [file, '--key', root.key])).toBe(0);
+    let fake = io();
+    expect(await verifyKeysCommand(fake, [file, '--root-pub', root.pub, '--root-pub', backup.pub, '--json'])).toBe(0);
+    expect(jsonOut(fake)).toEqual({ valid: true, keyId: root.id, version: 3, endorsed: [signing.id], revoked: [`ed25519:${'1'.repeat(64)}`] });
+
+    // Signed by a key that is not a root given.
+    fake = io();
+    expect(await verifyKeysCommand(fake, [file, '--root-pub', backup.pub, '--json'])).toBe(1);
+    expect(jsonOut(fake)).toMatchObject({ valid: false, keyId: root.id, error: expect.stringMatching(/none of the roots/) });
+
+    // The root may never revoke the backup.
+    writeFileSync(file, keysJson({ revokedKeys: [{ keyId: backup.id }] }));
+    expect(await signKeysCommand(io(), [file, '--key', root.key])).toBe(0);
+    fake = io();
+    expect(await verifyKeysCommand(fake, [file, '--root-pub', root.pub, '--root-pub', backup.pub, '--json'])).toBe(1);
+    expect(jsonOut(fake)).toMatchObject({ valid: false, error: expect.stringMatching(/may not revoke the rootBackup/) });
+
+    // Changed after signing.
+    writeFileSync(file, keysJson({ version: 9 }));
+    fake = io();
+    expect(await verifyKeysCommand(fake, [file, '--root-pub', root.pub, '--json'])).toBe(1);
+    expect(jsonOut(fake)).toMatchObject({ valid: false, error: expect.any(String) });
+    expect(await verifyKeysCommand(io(), [file])).toBe(2);
+  });
+
+  test('unpack uses the strict tar reader: a packed package round-trips; an escaping path or a non-empty --out is refused', async () => {
+    const out = temp();
+    const packed = join(out, 'echo.tar.gz');
+    expect(await packCommand(io(), [fixture(), '--out', packed])).toBe(0);
+    const target = join(temp(), 'unpacked');
+    const fake = io();
+    expect(await unpackCommand(fake, [packed, '--out', target, '--json'])).toBe(0);
+    const result = jsonOut(fake);
+    expect(result).toMatchObject({ out: target, name: 'echo-plugin', sha256: `sha256:${createHash('sha256').update(readFileSync(packed)).digest('hex')}` });
+    expect(existsSync(join(result.root as string, 'octipus-plugin.json'))).toBe(true);
+    expect(await unpackCommand(io(), [packed, '--out', target])).toBe(1);
+
+    const evil = join(out, 'evil.tar.gz');
+    writeFileSync(evil, makeTarGz([{ name: '../escape.txt', data: 'x' }]));
+    const refused = io();
+    expect(await unpackCommand(refused, [evil, '--out', join(temp(), 'e')])).toBe(1);
+    expect(existsSync(join(out, '..', 'escape.txt'))).toBe(false);
+    expect(await unpackCommand(io(), [evil])).toBe(2);
   });
 });
