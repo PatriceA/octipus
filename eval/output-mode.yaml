@@ -1,7 +1,6 @@
 name: Chat/Work Split (output mode)
 description: >
-  Verify the classifier's chat/work split heuristic (.octipus/end-user-ux-design.md
-  Thread 3): document-authoring requests default to a file deliverable; questions,
+  Verify the classifier's chat/work split heuristic: document-authoring requests default to a file deliverable; questions,
   chit-chat, and code/infra tasks default to an inline chat answer. This is the
   DEFAULT only — the composer toggle can force a mode at runtime.
 

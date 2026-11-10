@@ -220,7 +220,7 @@ export interface SessionContext {
   /**
    * Multi-repo binding — the registry ids (`workspace_repos.id`) this session
    * works across, when bound to a suite rather than a single `projectPath`.
-   * See `.octipus/multi-repo-design.md`.
+   * See docs/MULTI-REPO.md.
    */
   repoIds?: string[];
   /**

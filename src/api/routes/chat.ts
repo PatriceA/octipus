@@ -254,7 +254,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
         devMode: t.Optional(t.Boolean()),
         projectPath: t.Optional(t.String()),
         // Edit-and-continue: session files to inline (current version) into
-        // this turn's context — `.octipus/end-user-ux-design.md` Thread 2.
+        // this turn's context.
         fileRefs: t.Optional(t.Array(t.Object({
           path: t.String(),
           version: t.Optional(t.String()),

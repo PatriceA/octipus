@@ -4,9 +4,6 @@ Octipus supports self-hosted deployments using local models through Ollama. This
 covers the realistic setup for a small machine — a single chat model around or
 below ~10B parameters — what works, what degrades, and how to configure it.
 
-> Design background and the per-feature feasibility analysis live in
-> [`.octipus/small-model-feasibility.md`](../.octipus/small-model-feasibility.md).
-
 ## The realistic minimum: 1 chat model + 1 embedding model
 
 Text chat can use a single model. Retrieval needs an embedding-capable model;

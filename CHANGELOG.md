@@ -139,6 +139,13 @@ labels reflect blast radius, not contract guarantees.
 
 ### Removed
 
+- **The `.octipus/` design notes are gone from the repository.** The 19 notes
+  (swarm, multi-repo, UX, audits, archived plans) are removed and `.octipus/` is
+  git-ignored: it is the Octipus runtime folder (project skills, attachments,
+  extensions). Code comments and docs that pointed at the notes now point at the
+  maintained docs (`docs/AGENT-ARCHITECTURE.md`, `docs/MULTI-REPO.md`) or say
+  nothing. The notes stay in git history.
+
 - **The core Reader is gone; Reader is the example plugin.** The `reader`
   module, `POST /api/reader` (and `/action`, `/tasks`) and the `/reader` page
   are removed. Reading a page is the example plugin `plugins/reader`: install

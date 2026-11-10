@@ -94,7 +94,6 @@ plugins/          the example plugin package only (plugins/reader, plugins/READM
 eval/             YAML eval scenarios
 scripts/          migrate, setup, backup, doctor, e2e, integration, key rotation
 docs/             feature & architecture docs (see README Documentation table)
-.octipus/         design notes (swarm-design, audits, plans)
 AGENT.md          canonical contributor guidance for coding agents
 ```
 
@@ -267,7 +266,7 @@ Octipus has a voice subsystem (`src/voice/`) divided into three execution paths.
 | Question                              | File / dir                                |
 | ------------------------------------- | ----------------------------------------- |
 | How does a message become a worker?   | `src/core/agent/`, `src/core/router.ts` |
-| Swarm semantics, budgets, cancel      | `src/core/swarm/`, `.octipus/swarm-design.md` |
+| Swarm semantics, budgets, cancel      | `src/core/swarm/`, `docs/AGENT-ARCHITECTURE.md` |
 | Model routing & failover              | `src/models/`, `src/core/errors/classification.ts` |
 | Permission model                      | `src/security/`, `src/core/tool-executor.ts` |
 | DB schema                             | `src/db/schema/`                          |
@@ -289,8 +288,7 @@ Octipus has a voice subsystem (`src/voice/`) divided into three execution paths.
    The rebuild plan records historical decisions; re-check its findings against
    the implementation before using them as a description of current behavior.
 1. Search `docs/` for an existing doc on the area.
-2. Check `.octipus/` for design notes and audits.
-3. Look at a sibling implementation (existing role, tool, channel) and follow
+2. Look at a sibling implementation (existing role, tool, channel) and follow
    the same shape.
-4. If the answer still isn't obvious, ask in the PR / issue rather than
+3. If the answer still isn't obvious, ask in the PR / issue rather than
    guessing — wrong abstractions are expensive here.

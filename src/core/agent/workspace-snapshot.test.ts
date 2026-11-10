@@ -90,7 +90,7 @@ describe('snapshotWorkspace', () => {
   test('a stage writing real content under .octipus still counts', async () => {
     // The over-correction this closes: pruning the bare name `.octipus`
     // exempted the whole directory, and a project workspace keeps real user
-    // content there — this repository keeps its plans under `.octipus/plans/`.
+    // content there (plans under `.octipus/plans/`, say).
     // A stage asked to write a design document there produced a snapshot of
     // zero changed files, and the evidence gate then failed it for producing
     // nothing. Only the spill path is the harness's.

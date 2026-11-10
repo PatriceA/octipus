@@ -7,8 +7,7 @@ import { browserRuntimeMounts, browserRuntimePaths } from '@/security/runtime-pa
  * call to check the child actually met its contract, instead of trusting the
  * child's word.
  *
- * Inspired by CodeWhale's Fleet scorers (see
- * `.octipus/codewhale-borrowed-ideas.md`). This operationalizes house-rule #4
+ * Inspired by CodeWhale's Fleet scorers. This operationalizes house-rule #4
  * ("typed deliverable per role"): a role already declares an `expectedOutput`
  * shape; a scorer is a cheap, deterministic check that the deliverable
  * satisfies it. A failed scorer downgrades the child's status to

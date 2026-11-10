@@ -3,7 +3,7 @@ import { boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid 
 /**
  * Swarm node schema — sibling table to `agents` representing a node in the
  * agent delegation tree (root → Agent → Subagent). See
- * `.octipus/swarm-design.md` §Observability for the authoritative design.
+ * docs/AGENT-ARCHITECTURE.md.
  *
  * The `id` equals the corresponding `agents.id` (1:1 relationship). `agents`
  * remains the historical record; `swarm_nodes` drives the live tree view,

@@ -281,8 +281,8 @@ export const AuthMessageSchema = z.object({
 
 /**
  * A reference to a session-scoped workspace file the user attached to a turn,
- * so the agent operates on the file's current contents (edit-and-continue,
- * `.octipus/end-user-ux-design.md` Thread 2) instead of a copy pasted into the
+ * so the agent operates on the file's current contents (edit-and-continue)
+ * instead of a copy pasted into the
  * transcript. `version` is the version the UI last saw — a mismatch is surfaced
  * to the agent, not silently ignored.
  */

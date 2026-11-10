@@ -92,7 +92,7 @@ Channels → Gateway (WebSocket, typed Zod protocol)
 
 **Hierarchy:** Tools (executable capabilities) → Skills (domain knowledge) → Roles (a tool set, a permission boundary and a prompt, editable from the Topics page) → Lanes (which model serves a kind of work) → Agents (runtime workers, 3-level Swarm via `spawn_child`) → Pipelines (sequential handover with approval gates).
 
-Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus/swarm-design.md](.octipus/swarm-design.md).
+Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md).
 
 ## New in v0.6.0
 

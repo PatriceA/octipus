@@ -408,7 +408,7 @@ export const compactionConfigSchema = z.object({
 });
 
 // Swarm (agent delegation tree) configuration schema.
-// See `.octipus/swarm-design.md`. Phase 3 adds per-user fan-out caps +
+// See docs/AGENT-ARCHITECTURE.md. Phase 3 adds per-user fan-out caps +
 // orphan reaper cadence; both have safe defaults so existing deployments
 // don't need to set anything.
 const swarmLevelSchema = z.object({

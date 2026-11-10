@@ -11,7 +11,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
  * Lets a worker see which repositories exist, what each is for, read a repo's
  * structural digest (instead of re-reading the tree), and query the cross-repo
  * dependency graph ("what breaks if I change this library?"). Backed by
- * `workspace_repos`; see `.octipus/multi-repo-design.md`.
+ * `workspace_repos`; see docs/MULTI-REPO.md.
  */
 export class RepoRegistryTool extends BaseTool {
   readonly id = 'repo_registry';

@@ -1073,8 +1073,7 @@ Three deferred items moved to **Now** above.
   `AbortSignal` tree, escalation (1/Agent lifetime), parallel
   `parallelGroup` fan-out, orphan reaper, per-node `swarm_nodes` schema,
   `swarm.*` gateway events with replay, web `SwarmTree` component.
-  See `.octipus/swarm-design.md` for the design; lives under
-  `src/core/swarm/`. New config: `config.swarm.*`.
+  Lives under `src/core/swarm/`. New config: `config.swarm.*`.
 - **Anti-thrashing session compaction.** `src/core/agent/session-compaction.ts`
   + `CompactionState` on sessions. Pure `decideCompaction` function;
   stall flag cleared only when a pass clears ≥15% savings; hard-ceiling

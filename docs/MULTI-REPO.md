@@ -4,8 +4,6 @@ Octipus can work across a **suite** of interconnected repositories — products
 and the shared libraries they depend on — instead of a single project. This
 page covers the repo registry, how agents navigate the suite, and the setup.
 
-> Design and roadmap: [`.octipus/multi-repo-design.md`](../.octipus/multi-repo-design.md).
-
 ## Concept
 
 A **repo registry** records each repository in your workspace as a first-class
@@ -172,6 +170,3 @@ and [→ Code-exclusion policy](./RAG.md#code-exclusion-policy-raw-code-is-never
 - **No cross-repo fan-out yet** — a change spanning several repos is coordinated
   by the root agent routing workers per repo, not by automatic parallel
   worktrees.
-
-See [`.octipus/multi-repo-design.md`](../.octipus/multi-repo-design.md) for the
-full plan.
