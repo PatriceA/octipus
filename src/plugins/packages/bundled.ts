@@ -126,5 +126,5 @@ export async function installBundled(name: string, actorUserId: string, opts: { 
   if (row && !await installedFromBundle(row, dir)) {
     throw new PluginPackageError('conflict', `The name ${name} is taken by another package, not the bundled one; uninstall it first`);
   }
-  return installFromDirectory(dir, actorUserId, { upgrade: opts.upgrade === true, expect: { name }, source: `bundled:${name}` });
+  return installFromDirectory(dir, actorUserId, { upgrade: opts.upgrade === true, expect: { name }, source: `bundled:${name}`, origin: { source: 'bundled' } });
 }
