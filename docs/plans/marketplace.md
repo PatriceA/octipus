@@ -84,12 +84,57 @@ octipus-plugins/
 2. **Sign** the content hash, then the index, in a protected GitHub
    environment with a required maintainer approval. The private key exists
    only there (see Decisions).
-3. **Publish** the tarball as a GitHub Release asset (`<name>-v<version>`), and
-   the index with its `.sig` on GitHub Pages, at
-   `https://patricea.github.io/octipus-plugins/index.json`.
+3. **Publish** the tarball as a GitHub Release asset (`<name>-v<version>`).
+   Then build and deploy the marketplace website (below). It also serves the
+   index and its `.sig` at `https://plugins.octipus.cc/index.json`.
 
 The index keeps every published version of a plugin, not only the newest, so
 a host can stay on an older version and a downgrade remains possible.
+
+### The marketplace website: `plugins.octipus.cc`
+
+The marketplace is a public website on a subdomain of octipus.cc, with **the
+same design as octipus.cc**, so that it reads as part of the same site. It is
+the place to discover plugins before installing them, and to link to them.
+
+- **Built from `octipus-plugins`.** A static Astro site (octipus.cc is Astro)
+  is generated from the plugins' `marketplace.json`, READMEs, changelogs and
+  the computed permissions on every publish. It is deployed to GitHub Pages
+  with a custom domain (`CNAME plugins.octipus.cc`). The same deployment
+  serves the signed `index.json`, so the host's registry URL is on the
+  Octipus domain, not on `github.io`.
+- **Same design as octipus.cc:**
+  - **Layout:** the site's own header, navigation and footer (`ocean-header`,
+    `ocean-navigation`, `ocean-footer`), with Plugins as an entry next to Docs
+    and GitHub, and octipus.cc linking back.
+  - **Tokens:** deep ink `#071923`, panel `#0b222d`, lines `#29424a`, text
+    `#edf4ed`, muted `#a6bec3`, sea glass `#92c9c5`, coral `#efa99b`, paper
+    `#f0eee5`, max width 1180–1200px.
+  - **Type:** Manrope 400–800, tight negative letter-spacing on headings.
+  - **Surfaces:** soft corners (10–13px, pills at 100px), fine borders, blurred
+    glass panels, soft deep shadows.
+  - **Voice:** `docs/design/IDENTITY.md`, warm and practical; errors and
+    permissions in direct language.
+
+  The layout and tokens are shared with octipus.cc's source, not copied by
+  eye, so a change to the main site reaches the marketplace (see Decisions).
+- **Pages:**
+  - **Home:** search, categories, and featured plugins (the examples first).
+  - **One page per plugin:**
+    - its README;
+    - screenshots, served from the site itself;
+    - **what it asks for**: host scopes, network hosts, tool effects,
+      contributions and pages, in the same words the admin page uses;
+    - its versions and changelog, publisher, signature and licence;
+    - "Install in Octipus": Admin → Plugins → Marketplace, or
+      `octi plugin install <name>`.
+  - **Publish:** how to submit a plugin, and the review checklist (phase 5).
+- **Static, no accounts, no tracking.** It sets no cookies and runs no
+  analytics script. The site's CSP allows its own files and the Manrope font
+  only.
+
+The in-app Marketplace page (Host side 2) keeps the web app's own design. It
+reads the same index and links to a plugin's page on `plugins.octipus.cc`.
 
 ### Index v2
 
@@ -123,7 +168,8 @@ listing cannot understate what a package asks for.
 
 1. **Default registry.** Octipus ships the marketplace as a built-in registry
    entry, with `publisher: "Octipus"` and the marketplace public key in
-   `trustedPublishers`. The index must be signed.
+   `trustedPublishers`. The registry URL is
+   `https://plugins.octipus.cc/index.json`, and the index must be signed.
    - `plugins.marketplace: false` turns it off, for air-gapped installs and
      organisations with their own registry.
    - Other registries keep working as now.
@@ -194,9 +240,14 @@ budgets. The docs and the detail page say so.
 
 ## Phases
 
-1. **Registry:** the repository layout, the CI checks, reproducible builds,
-   signing in a protected environment, Releases and Pages publishing, and
-   index v2. The reader and research are published from there.
+1. **Registry and website:**
+   - the repository layout and the CI checks;
+   - reproducible builds and signing in a protected environment;
+   - publishing to Releases, and index v2;
+   - the `plugins.octipus.cc` site in the octipus.cc design, serving the
+     index.
+
+   The reader and research are published from there.
 2. **Host:** the default registry and key, index v2 parsing with the
    permission cross-check, `minOctipus`, and provenance.
 3. **Marketplace page:** search and categories, the detail view, permissions
@@ -220,10 +271,19 @@ budgets. The docs and the detail page say so.
    - Recommended for now: first-party only (you and maintainers).
    - Open community submissions are phase 5.
 3. **Hosting.**
-   - Recommended: GitHub Releases for the tarballs and GitHub Pages for the
-     index. The host's remote install follows up to three https redirects,
-     which covers Releases.
-4. **The examples in the marketplace too.**
+   - Recommended: GitHub Releases for the tarballs, and the website plus the
+     index on GitHub Pages under `plugins.octipus.cc`. The DNS record is a
+     CNAME to `patricea.github.io`. The host's remote install follows up to
+     three https redirects, which covers Releases.
+   - The subdomain name: `plugins.octipus.cc` (recommended) or
+     `marketplace.octipus.cc`.
+4. **Sharing the octipus.cc design.** Its source is not in the repositories
+   this work can see. Recommended: move the site's layout (header, navigation,
+   footer) and tokens into a small shared package, or a `design/` folder the
+   site and the marketplace both import, so there is one source.
+   - Until then, the marketplace copies them from the published site, and
+     that copy is replaced once the source is shared.
+5. **The examples in the marketplace too.**
    - Recommended: yes, from the same source (above).
 
 ## Not doing
