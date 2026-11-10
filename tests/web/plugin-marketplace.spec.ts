@@ -225,6 +225,18 @@ test.describe('plugin marketplace', () => {
     await expect(consent.getByRole('button', { name: 'Install', exact: true })).toBeDisabled();
   });
 
+  test('a stale marketplace shows a banner; an entry refused as replaced is named, the rest listed', async ({ authenticatedPage: page }) => {
+    await stubPlugins(page, { listing: {
+      ...LISTING,
+      errors: [{ registry: 'marketplace', error: 'weekly 1.0.0: replaced: refused (pinned sha256:a, now listed as sha256:b)' }],
+      stale: [{ file: 'index', generatedAt: '2026-11-01T00:00:00Z', message: 'The last marketplace index accepted here was generated 9 days ago (2026-11-01T00:00:00.000Z).' }],
+    } });
+    await page.goto('/admin/plugins/marketplace');
+    await expect(page.getByTestId('marketplace-stale')).toContainText('generated 9 days ago');
+    await expect(page.getByTestId('marketplace-registry-error')).toContainText('weekly 1.0.0: replaced: refused');
+    await expect(cards(page)).toHaveCount(4);
+  });
+
   test('an unconfigured build says so', async ({ authenticatedPage: page }) => {
     await stubPlugins(page, { listing: { state: 'unconfigured', message: 'The Octipus marketplace is not configured in this build', generatedAt: null, plugins: [], categories: [], errors: [] } });
     await page.goto('/admin/plugins/marketplace');
@@ -247,13 +259,18 @@ test.describe('plugin marketplace', () => {
     let revocations = [{
       id: '55555555-5555-4555-8555-555555555555', kind: 'package', name: 'cafe', version: '0.9.0', keyId: null, reason: 'leaks notes', registryUrl: `${ORIGIN}/index.json`,
       signedByKey: 'ed25519:x', indexGeneratedAt: '2026-11-09T00:00:00Z', firstSeenAt: '2026-11-09T00:00:00Z', clearedAt: null as string | null, clearedBy: null, clearReason: null as string | null,
+      scope: 'marketplace', enforced: true, signerRevoked: false,
+    }, {
+      id: '66666666-6666-4666-8666-666666666666', kind: 'package', name: 'other', version: '1.0.0', keyId: null, reason: 'by a leaked key', registryUrl: `${ORIGIN}/index.json`,
+      signedByKey: 'ed25519:leaked', indexGeneratedAt: '2026-11-08T00:00:00Z', firstSeenAt: '2026-11-08T00:00:00Z', clearedAt: null as string | null, clearedBy: null, clearReason: null as string | null,
+      scope: 'marketplace', enforced: false, signerRevoked: true,
     }];
     const calls = await stubPlugins(page, {
       handle: (c) => {
         if (c.path === '/updates') return [200, [{ name: 'weekly', installed: '1.0.0', latest: '1.1.0', registry: 'marketplace', diff, warnings: [] }]];
         if (c.path === '/revocations') return [200, revocations];
         if (c.method === 'DELETE' && c.path.startsWith('/revocations/')) {
-          revocations = revocations.map((r) => ({ ...r, clearedAt: '2026-11-10T00:00:00Z', clearReason: (c.body as { reason: string }).reason }));
+          revocations = revocations.map((r) => (c.path.endsWith(r.id) ? { ...r, clearedAt: '2026-11-10T00:00:00Z', clearReason: (c.body as { reason: string }).reason, enforced: false } : r));
           return [200, { cleared: true }];
         }
         if (c.path === '/preview') return [200, upgrade];
@@ -290,8 +307,12 @@ test.describe('plugin marketplace', () => {
     await expect(page.getByTestId('updates-message')).toContainText('weekly is now 1.1.0, disabled');
     expect((calls.find((c) => c.path === '/install')?.body as { accepted: string[] }).accepted.sort()).toEqual(['host:notes:write', 'schedule:nightly']);
 
+    // One from a signing key revoked since says it is not enforced.
+    const flagged = page.locator(`[data-testid="plugin-revocation"][data-id="${revocations[1].id}"]`);
+    await expect(flagged).toHaveAttribute('data-enforced', 'false');
+    await expect(flagged.getByTestId('revocation-signer-revoked')).toHaveText('from a revoked signer · not enforced');
     // A revocation is cleared only with a reason.
-    const revocation = page.getByTestId('plugin-revocation');
+    const revocation = page.locator(`[data-testid="plugin-revocation"][data-id="${revocations[0].id}"]`);
     await revocation.getByRole('button', { name: 'Clear the revocation of cafe' }).click();
     const submit = revocation.getByRole('button', { name: 'Clear revocation' });
     await expect(submit).toBeDisabled();

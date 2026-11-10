@@ -75,6 +75,12 @@ export interface PluginRevocationRow {
   clearedAt: string | null;
   clearedBy: string | null;
   clearReason: string | null;
+  /** Marketplace revocations apply to marketplace packages, installs and index only. */
+  scope: 'marketplace';
+  /** In force now: not cleared, and its signer not revoked since. */
+  enforced: boolean;
+  /** Its signing key was revoked since: not enforced until a trusted key lists it again. */
+  signerRevoked: boolean;
 }
 
 /** A running background run of a package (`GET /api/plugin-packages/:name/runs?status=running`). */

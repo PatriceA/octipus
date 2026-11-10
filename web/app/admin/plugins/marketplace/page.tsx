@@ -294,8 +294,12 @@ export default function MarketplacePage() {
       {data?.state === 'off' && <p role="status" className="rounded-xs border border-outline-variant/50 p-2 text-xs text-on-surface" data-testid="marketplace-state">{displayText(data.message) || 'The Octipus marketplace is turned off (plugins.marketplace: false).'}</p>}
       {data?.state === 'error' && <p role="alert" className="rounded-xs border border-error/50 p-2 text-xs text-error" data-testid="marketplace-state">! {displayText(data.message) || 'The Octipus marketplace could not be read.'}</p>}
       {error && <p role="alert" className="text-xs text-error">! {(error as Error).message}</p>}
-      {(data?.errors ?? []).filter((e) => e.registry !== 'marketplace').map((e) => (
-        <p key={e.registry} role="alert" className="text-xs text-warning">! {registryLabel(e.registry)}: {displayText(e.error)}</p>
+      {(data?.stale ?? []).map((s) => (
+        <p key={s.file} role="alert" className="rounded-xs border border-warning/60 p-2 text-xs text-warning" data-testid="marketplace-stale">! {displayText(s.message)}</p>
+      ))}
+      {/* The marketplace's own read error is the state line above; its refused ("replaced") entries are listed here. */}
+      {(data?.errors ?? []).filter((e) => e.registry !== 'marketplace' || data?.state !== 'error').map((e, i) => (
+        <p key={`${e.registry}-${i}`} role="alert" className="text-xs text-warning" data-testid="marketplace-registry-error">! {registryLabel(e.registry)}: {displayText(e.error)}</p>
       ))}
       {registries.length > 0 && (
         <p className="text-xs text-on-surface-variant" data-testid="marketplace-registries">

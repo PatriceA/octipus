@@ -579,6 +579,17 @@ describe('octi plugin marketplace, updates and install', () => {
     expect(text).toContain('note: Deprecated: use x');
   });
 
+  test('marketplace: a stale marketplace and an entry refused as replaced are printed, without control characters', async () => {
+    const h = harness({ respond: () => [200, { state: 'ready', message: null, generatedAt: null, plugins: [card], categories: [],
+      errors: [{ registry: 'marketplace', error: 'weekly 1.0.0: replaced: refused\u001b[2K' }],
+      stale: [{ file: 'index', generatedAt: '2026-11-01T00:00:00Z', message: 'The last marketplace index accepted here was generated 9 days ago.' }] }] });
+    expect(await marketplaceCommand(h.io, undefined, undefined)).toBe(0);
+    const text = h.out.join('');
+    expect(text).toContain('warning: The last marketplace index accepted here was generated 9 days ago.');
+    expect(text).toContain('registry marketplace: weekly 1.0.0: replaced: refused[2K');
+    expect(text).not.toContain('\u001b');
+  });
+
   test('marketplace: an unconfigured build says so', async () => {
     const h = harness({ respond: () => [200, { state: 'unconfigured', message: 'The Octipus marketplace is not configured in this build', generatedAt: null, plugins: [], categories: [], errors: [] }] });
     expect(await marketplaceCommand(h.io, undefined, undefined)).toBe(0);

@@ -601,7 +601,9 @@ export async function marketplaceCommand(io: PluginApiIo, query: string | undefi
     if (category) params.set('category', category);
     const listing = await request<MarketplaceListing>(io, 'GET', `/marketplace${params.size > 0 ? `?${params}` : ''}`);
     if (listing.message) out(`${listing.message}\n`);
-    for (const e of listing.errors.filter((x) => x.registry !== 'marketplace')) out(`registry ${e.registry}: ${e.error}\n`);
+    for (const s of listing.stale ?? []) out(`warning: ${s.message}\n`);
+    // The marketplace's own read error is the message above; its entries refused as replaced are listed.
+    for (const e of listing.errors.filter((x) => x.registry !== 'marketplace' || listing.state !== 'error')) out(`registry ${e.registry}: ${e.error}\n`);
     if (listing.plugins.length === 0) out(listing.state === 'ready' ? 'No plugins match.\n' : '');
     for (const p of listing.plugins) {
       const state = p.revoked ? `revoked: ${p.revoked}`

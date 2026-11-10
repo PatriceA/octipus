@@ -107,14 +107,22 @@ export default function UpdatesPage() {
 
       <section className="space-y-2" aria-labelledby="revocations-title">
         <h2 id="revocations-title" className="section-label">revocations</h2>
-        <p className="text-xs text-on-surface-variant">Versions and keys the marketplace revoked. A revoked version does not start and cannot be enabled.</p>
+        <p className="text-xs text-on-surface-variant">
+          Versions and keys the marketplace revoked. They apply to packages installed from the marketplace only: a revoked version does not
+          start and cannot be enabled. One published by a signing key revoked since is not enforced until a trusted key lists it again.
+        </p>
         {revocations.error && <p role="alert" className="text-xs text-error">! {problemsOf(revocations.error)}</p>}
         {revoked.length === 0 ? <p className="text-xs text-on-surface-variant">None.</p> : (
           <ul className="term-frame divide-y divide-outline-variant/10 rounded-xs">
             {revoked.map((r) => (
-              <li key={r.id} className="flex flex-wrap items-center gap-3 px-4 py-2 text-xs" data-testid="plugin-revocation" data-id={r.id}>
-                <ShieldOff className={cn('h-3.5 w-3.5', r.clearedAt ? 'text-on-surface-variant' : 'text-error')} aria-hidden />
+              <li key={r.id} className="flex flex-wrap items-center gap-3 px-4 py-2 text-xs" data-testid="plugin-revocation" data-id={r.id} data-enforced={r.enforced}>
+                <ShieldOff className={cn('h-3.5 w-3.5', r.enforced ? 'text-error' : 'text-on-surface-variant')} aria-hidden />
                 <span className="font-medium text-on-surface">{r.kind === 'package' ? `${displayText(r.name)} ${displayText(r.version)}` : <code className="font-mono">{displayText(r.keyId)}</code>}</span>
+                {r.signerRevoked && !r.clearedAt && (
+                  <span className="rounded-xs border border-warning/60 px-1 text-[11px] text-warning" data-testid="revocation-signer-revoked" title={`Signed by ${r.signedByKey}, revoked since`}>
+                    from a revoked signer · not enforced
+                  </span>
+                )}
                 <span className="flex-1 text-on-surface-variant">{displayText(r.reason) || 'no reason given'} · since {new Date(r.firstSeenAt).toLocaleDateString()}</span>
                 <ClearRevocation r={r} />
               </li>
