@@ -15,7 +15,7 @@ import { coreLogger } from '@/utils/logger';
 import { getMcpCircuitBreaker } from './circuit-breaker';
 import { mcpToolKey, mcpToolNames } from './exposure';
 import { configuredExposures, renderServersSection, type ServerListing } from './servers-section';
-import { type MCPCapabilities, MCPMethods, type MCPPrompt, MCPProtocol, type MCPResource, type MCPToolDefinition } from './protocol';
+import { MCP_PROTOCOL_VERSION, type MCPCapabilities, MCPMethods, type MCPPrompt, MCPProtocol, type MCPResource, type MCPToolDefinition } from './protocol';
 import type { MCPTransport } from './transports/interface';
 import { SSETransport } from './transports/sse';
 import { StdioTransport } from './transports/stdio';
@@ -369,7 +369,7 @@ export class MCPBridge extends EventEmitter {
 
       // Initialize the connection
       const initResult = await protocol.sendRequest(send, MCPMethods.Initialize, {
-        protocolVersion: '2024-11-05',
+        protocolVersion: MCP_PROTOCOL_VERSION,
         capabilities: {
           tools: {},
           resources: {},

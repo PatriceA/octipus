@@ -10,6 +10,7 @@ import {
   setSecret,
   uninstall,
 } from '@/plugins/packages/service';
+import { installBundled, listBundled } from '@/plugins/packages/bundled';
 import { installFromUrl, listRegistry } from '@/plugins/packages/remote';
 import { MAX_PLUGIN_SECRET_LENGTH } from '@/shared/plugin-package';
 import { apiLogger } from '@/utils/logger';
@@ -32,7 +33,8 @@ function refused(err: unknown, set: { status?: number | string }): { error: stri
  * Installing takes a directory on the server, signed or not (signature checked
  * against plugins.trustedPublishers), or an https tarball, which must carry a
  * valid trusted signature; `GET /registry` lists what plugins.registries
- * offer. A package starts disabled. An `in-process` plugin also needs
+ * offer, and `GET /bundled` the first-party plugins shipped with Octipus
+ * (installed with `{ bundled: <name> }`). A package starts disabled. An `in-process` plugin also needs
  * `approveInProcess` before it can be enabled.
  */
 export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
@@ -59,14 +61,26 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
     { detail: { tags: ['plugin-packages'] } },
   )
 
+  // The first-party plugins shipped with Octipus (plugins/ in the install), with the version installed here.
+  .get(
+    '/bundled',
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
+      return listBundled();
+    },
+    { detail: { tags: ['plugin-packages'] } },
+  )
+
   .post(
     '/',
     async ({ user, principal, body, set }) => {
       const denied = adminDenied({ set, user, principal });
       if (denied) return denied;
-      if ((body.path === undefined) === (body.url === undefined)) {
+      const sources = [body.path, body.url, body.bundled].filter((v) => v !== undefined).length;
+      if (sources !== 1) {
         set.status = 400;
-        return { error: 'Give either path (a directory on the server) or url (an https .tar.gz)' };
+        return { error: 'Give one of path (a directory on the server), url (an https .tar.gz) or bundled (a plugin shipped with Octipus)' };
       }
       if (body.sha256 !== undefined && body.url === undefined) {
         set.status = 400;
@@ -81,7 +95,9 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
         };
         const row = body.url !== undefined
           ? await installFromUrl(body.url, principal.userId, { ...common, sha256: body.sha256, name: body.name, version: body.version })
-          : await installFromDirectory(body.path as string, principal.userId, { ...common, expect: { name: body.name, version: body.version } });
+          : body.bundled !== undefined
+            ? await installBundled(body.bundled, principal.userId, { upgrade })
+            : await installFromDirectory(body.path as string, principal.userId, { ...common, expect: { name: body.name, version: body.version } });
         return { name: row.name, version: row.version, enabled: row.enabled, contentHash: row.contentHash, signedBy: row.signedBy, warnings: row.warnings, manifest: row.manifest };
       } catch (err) {
         return refused(err, set);
@@ -91,6 +107,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
       body: t.Object({
         /** An absolute path on the server to the package directory. */
         path: t.Optional(t.String({ minLength: 1, maxLength: 1000, pattern: '^(/|[A-Za-z]:\\\\)' })),
+        /** Or the name of a plugin shipped with Octipus (`GET /bundled`); installed like a directory, disabled. */
+        bundled: t.Optional(t.String({ minLength: 2, maxLength: 50, pattern: '^[a-z][a-z0-9-]+$' })),
         /** Or an https URL of a .tar.gz; it must carry a valid signature by a trusted publisher. */
         url: t.Optional(t.String({ minLength: 9, maxLength: 2000, pattern: '^https://' })),
         /** With url: the sha256 the tarball must hash to (`sha256:<hex>` or bare hex), checked before it is unpacked. */

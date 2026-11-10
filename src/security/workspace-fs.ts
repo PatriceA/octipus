@@ -281,6 +281,12 @@ export function spaceDirectories(workspaceId: string): { root: string; documents
   };
 }
 
+/** `<dataRoot>/users/<userId>/workspaces`: every personal workspace of one user. */
+export function userWorkspacesDir(userId: string, dataRoot: string = configuredDataRoot()): string {
+  if (!isRealUserId(userId)) throw new WorkspaceFsError('INVALID_INPUT', `not a user id: ${JSON.stringify(userId)}`);
+  return pathResolve(dataRoot, 'users', userId, 'workspaces');
+}
+
 /** `<dataRoot>/users/<userId>/workspaces/<filesDir>`: everything a workspace keeps on disk. */
 export function workspaceDir(userId: string, filesDir: string, dataRoot: string = configuredDataRoot()): string {
   if (!isRealUserId(userId)) throw new WorkspaceFsError('INVALID_INPUT', `not a user id: ${JSON.stringify(userId)}`);

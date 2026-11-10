@@ -116,6 +116,11 @@ export default function ReaderPage() {
         description="paste a link for a clean, distraction-free read — then summarize, simplify, translate, or ask"
       />
 
+      <p className="text-xs text-on-surface-variant" data-testid="reader-deprecated">
+        The reader moves to the bundled Reader plugin: an admin installs it under Admin → Plugin packages → Bundled.
+        This page keeps working until then.
+      </p>
+
       <div className="flex gap-2">
         <input
           type="url"

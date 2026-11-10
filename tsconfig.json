@@ -27,6 +27,6 @@
       "@octipus/plugin-sdk/testing": ["./plugin-sdk/testing.ts"]
     }
   },
-  "include": ["src/**/*", "scripts/**/*"],
+  "include": ["src/**/*", "scripts/**/*", "plugins/*.test.ts"],
   "exclude": ["node_modules", "dist", "web"]
 }

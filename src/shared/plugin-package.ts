@@ -346,8 +346,16 @@ export interface PluginContributionsView {
  * `/api/plugin-host/*`. Write scopes (`notes:write`, `tasks:write`, `notify`)
  * are handed only to calls of a tool whose declared effect is `write` or
  * `external`: a `read` tool reads.
+ *
+ * `web:read` has the host fetch one public web page (through its SSRF guard)
+ * and hand back its readable text; `model:complete` runs one text completion
+ * on the calling user's `everyday` model. Neither changes data, so a `read`
+ * tool gets them; `web:read` lets a package name any URL, so it counts as
+ * network for the package's default `maxProtection` (docs/PLUGIN-PACKAGES.md#host-api).
  */
-export const PLUGIN_HOST_SCOPES = ['notes:read', 'notes:write', 'tasks:read', 'tasks:write', 'documents:read', 'notify'] as const;
+export const PLUGIN_HOST_SCOPES = [
+  'notes:read', 'notes:write', 'tasks:read', 'tasks:write', 'documents:read', 'notify', 'web:read', 'model:complete',
+] as const;
 export type PluginHostScope = (typeof PLUGIN_HOST_SCOPES)[number];
 
 /** The scopes that change data or reach the user: only for `write`/`external` tools. */
@@ -402,3 +410,51 @@ export const PLUGIN_HOST_META_KEY = 'octipus/host';
 export const PLUGIN_HOST_ALIAS = 'octipus-host.internal';
 
 // ── end pages and host API ─────────────────────────────────────────────
+
+/**
+ * A first-party plugin shipped with Octipus (`plugins/<name>` in the install),
+ * as `GET /api/plugin-packages/bundled` lists it (docs/PLUGIN-PACKAGES.md#bundled-plugins).
+ */
+export interface BundledPluginView {
+  name: string;
+  version: string;
+  title: string;
+  description: string;
+  /** Host API scopes it asks for (approved when enabling). */
+  host: PluginHostScope[];
+  /** Hosts it reaches itself. */
+  network: string[];
+  /** The installed version of this bundle, or null. */
+  installed: string | null;
+  /** Another package (not this bundle) holds the name: it cannot be installed until that one is removed. */
+  taken?: boolean;
+  /** Its manifest does not parse: why (it cannot be installed). */
+  problem?: string;
+}
+
+
+// ── Creator mode (docs/PLUGIN-PACKAGES.md#writing-a-plugin-with-an-agent) ───
+// An agent may write a `package` plugin in its workspace and install it with
+// `plugin_dev__plugin_install` (src/tools/plugin-dev): always disabled, for an
+// admin to review and enable. The install's audit row records who asked.
+
+/** The agent that wrote and installed a package's current version. */
+export interface PluginAgentAuthorship {
+  /** The user whose agent installed it (an admin, who approved the call). */
+  userId: string;
+  /** The chat session the agent ran in, when it ran in one. */
+  sessionId: string | null;
+  agentId: string | null;
+  /** When it was installed. */
+  at: string;
+}
+
+export interface PluginPackageView {
+  /**
+   * Set when the current version was installed by an agent (creator mode),
+   * read from its `installed`/`upgraded` audit row; null when a person
+   * installed it.
+   */
+  authoredBy: PluginAgentAuthorship | null;
+}
+// ── end creator mode ────────────────────────────────────────────────────────

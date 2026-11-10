@@ -201,5 +201,6 @@ export function moduleViews(): ModuleView[] {
     tools: [...m.tools],
     jobs: [...m.jobs],
     on: on.has(m.id),
+    ...(m.replacedBy ? { replacedBy: { ...m.replacedBy } } : {}),
   }));
 }

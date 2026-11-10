@@ -1,0 +1,59 @@
+/**
+ * The built-in skill "Write an Octipus plugin" (creator mode,
+ * docs/PLUGIN-PACKAGES.md#writing-a-plugin-with-an-agent): the loop an agent
+ * follows to write a sandboxed plugin package and hand it to an admin.
+ * Seeded as a system skill (src/db/seed-skills.ts); the tool names come from
+ * ./names.ts, so the skill names the tools that exist.
+ */
+import { MCP_PROTOCOL_VERSION } from '@/mcp/protocol';
+import { PLUGIN_MANIFEST_FILE } from '@/shared/plugin-package';
+import { pluginDevToolName } from './names';
+
+export const PLUGIN_AUTHORING_SKILL_ID = 'octipus-plugin-package';
+
+const api = pluginDevToolName('api');
+const template = pluginDevToolName('template');
+const validate = pluginDevToolName('validate');
+const install = pluginDevToolName('install');
+
+export const PLUGIN_AUTHORING_SKILL_CONTENT = `Use this when the user wants a new capability as an Octipus plugin: a sandboxed plugin package (an MCP server over stdio with declared tools, and optionally slash commands, schedules, events, a prompt section or turn context). You write it in your workspace; an admin reviews and enables it. You never install code that runs in the server process (runtime "in-process"), and you cannot enable a plugin.
+
+## The loop
+
+1. **Read the contract.** Call \`${api}\`. It is the live source: the manifest JSON schema, rules the schema cannot express, tool effects, events, cron syntax, limits, the MCP stdio contract, the environment variables a package gets, the sandbox and network rules on this host, the templates, and \`install.youCanInstall\`. Do not rely on memory for any of it.
+2. **Start from a template.** \`${template}\` lists them; \`${template}\` with \`name\` returns its files. Write every file into one new directory of your workspace with the filesystem tool (e.g. \`plugins/<name>/\`). Rename the package: \`name\` in ${PLUGIN_MANIFEST_FILE} (lower-case, digits, \`-\`) and \`NAME\` in server.mjs.
+3. **Implement.** Keep the server dependency-free (plain \`.mjs\`, Node built-ins) or vendor what it needs inside the package. Every tool the server lists must be declared in \`tools\` with the narrowest true effect: \`read\` reads, \`write\` changes data in the connected system, \`external\` acts outside the organisation (payments, messages to people). Declare every host it talks to in \`network\`; nothing else is reachable under the sandbox. Keep state only in \`OCTIPUS_PLUGIN_DATA_DIR\`; the package directory is read-only and its files are pinned by hash. Credentials are \`secrets\` (an admin sets them), never in files. Log to stderr; stdout carries only JSON-RPC.
+4. **Validate.** \`${validate}\` with the directory. Fix every problem and validate again until \`ok\` is true. Read the warnings too.
+5. **Test the server, only in a sandboxed shell.** Only if \`sandbox.shellCommandsSandboxed\` in \`${api}\` is true (and you have a shell): starting the server runs the code you wrote, and without the shell sandbox it would run as the Octipus server's user, with its files and network. Otherwise skip this step: do not run the server, rely on \`${validate}\`, and say in the hand-over that the server was not run. From the package directory, with a scratch data directory outside it:
+   \`\`\`
+   printf '%s\\n' \\
+     '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"${MCP_PROTOCOL_VERSION}","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}' \\
+     '{"jsonrpc":"2.0","method":"notifications/initialized"}' \\
+     '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \\
+     '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"<tool>","arguments":{}}}' \\
+     | OCTIPUS_PLUGIN_DATA_DIR="$(mktemp -d)" node server.mjs
+   \`\`\`
+   Each request must get exactly one line back with its \`id\`; a tool failure is a result with \`isError: true\`. Call every tool once. Remove anything the test wrote into the package directory, then validate again.
+6. **Install.** Only if \`install.youCanInstall\` is true: \`${install}\` with the directory (\`upgrade: true\` to replace a version you installed before). The user is asked to approve. It installs the package **disabled** and returns its content hash. If you may not install, stop after step 5 and tell the user where the package is so an admin can install it.
+7. **Hand over.** Tell the user plainly: the plugin is installed but disabled; Octipus does not start it until an admin opens the admin page (the \`review\` text has the link), checks the content hash you report, its tools, effects and hosts, sets any required settings and secrets, approves what it adds for every user (commands, schedules, events, prompt, context), and enables it. You cannot enable or approve it. Any later change to its files needs a new install and a new review.
+
+## Rules
+
+- Never claim the plugin works or is active before an admin enabled it.
+- Never run code of the plugin on the host outside the shell sandbox (step 5).
+- Never ask the user to paste a secret into the chat; declare it in \`secrets\` and let the admin set it.
+- A schedule runs unattended as the installing admin: a \`write\` tool needs their ALLOW rule, an \`external\` one never runs. Prefer \`read\` tools for schedules and context.
+- Do not write into another installed package or the plugin store; work only in your workspace.`;
+
+export const PLUGIN_AUTHORING_SKILL = {
+  id: PLUGIN_AUTHORING_SKILL_ID,
+  name: 'Write an Octipus plugin',
+  category: 'coding',
+  description: 'Write a sandboxed Octipus plugin package with the plugin_dev tools: contract, template, validate, test, install disabled for an admin to enable.',
+  content: PLUGIN_AUTHORING_SKILL_CONTENT,
+  triggers: ['octipus plugin', 'plugin package', 'write a plugin', 'build a plugin', 'create a plugin', 'make a plugin', 'new plugin'],
+  principles: [],
+  bestPractices: [],
+  antiPatterns: [],
+  frameworks: ['MCP', 'Octipus plugin packages'],
+};

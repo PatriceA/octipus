@@ -17,6 +17,7 @@
  * documents above the package's `maxProtection` are refused, and what is
  * read raises the calling session's protection level.
  */
+import { createHash } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
@@ -29,7 +30,7 @@ import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { contentRepos } from '@/db/repositories/content';
 import { users } from '@/db/schema/users';
-import { type HostTokenGrant, verifyHostToken } from '@/plugins/packages/host-api';
+import { type HostTokenGrant, noteHostRead, verifyHostToken } from '@/plugins/packages/host-api';
 import { clientIp } from '@/security/client-ip';
 import { egressStampValid, HOST_API_EGRESS_HEADER, HOST_API_EGRESS_KEY_HEADER } from '@/security/egress-proxy';
 import type { Principal } from '@/security/principal';
@@ -144,27 +145,47 @@ async function authorize(ctx: HostCtx, op: string, scope: PluginHostScope | null
 }
 
 /** Run an endpoint body: audit the outcome, map a space refusal to its status. */
-async function run<T>(ctx: HostCtx, op: string, scope: PluginHostScope | null, body: (a: Authorized) => Promise<T>): Promise<T | { error: string; code?: string }> {
+async function run<T>(
+  ctx: HostCtx, op: string, scope: PluginHostScope | null,
+  body: (a: Authorized, details: Record<string, unknown>) => Promise<T>,
+): Promise<T | { error: string; code?: string }> {
   const a = await authorize(ctx, op, scope);
   if ('error' in a) return a;
+  // What the endpoint adds to its audit row (a URL's host and hash, a refusal code).
+  const details: Record<string, unknown> = {};
   try {
-    const out = await body(a);
+    const out = await body(a, details);
     const status = typeof ctx.set.status === 'number' ? ctx.set.status : 200;
-    await audit(a.grant, a.grant.plugin, op, status, scope ? { scope } : {});
+    await audit(a.grant, a.grant.plugin, op, status, { ...(scope ? { scope } : {}), ...details });
     return out;
   } catch (err) {
     if (err instanceof SpaceError) {
       const status = spaceErrorStatus(err);
       ctx.set.status = status;
-      await audit(a.grant, a.grant.plugin, op, status, { scope, code: err.code });
+      await audit(a.grant, a.grant.plugin, op, status, { scope, code: err.code, ...details });
       return { error: err.message, code: err.code };
     }
     apiLogger.error({ err, plugin: a.grant.plugin, op }, 'plugin-host: request failed');
     ctx.set.status = 500;
-    await audit(a.grant, a.grant.plugin, op, 500, { scope });
+    await audit(a.grant, a.grant.plugin, op, 500, { scope, ...details });
     return { error: 'The host API request failed' };
   }
 }
+
+/**
+ * A `web:read` URL as the audit records it: its host and a sha256 of the
+ * whole URL, never the URL (its path and query can carry what the package read).
+ */
+export function webReadAuditOf(url: string): { host: string; urlSha256: string } {
+  let host = '';
+  try { host = new URL(url).host; } catch { host = ''; }
+  return { host, urlSha256: createHash('sha256').update(url).digest('hex') };
+}
+
+/** `web:read`: the article text handed back at most (the rest is cut, `truncated`). */
+const WEB_READ_MAX_CHARS = 100_000;
+/** `web:read`: cleaned HTML longer than this is left out (`contentHtml: ''`, `truncated`). */
+const WEB_READ_MAX_HTML = 400_000;
 
 const noteView = (n: { id: string; slug: string; title: string; body: string; tags?: unknown; noteKind?: unknown; updatedAt: Date }) => ({
   id: n.id, slug: n.slug, title: n.title, body: n.body, tags: n.tags ?? [], kind: n.noteKind ?? 'note', updatedAt: n.updatedAt,
@@ -228,6 +249,7 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
     const provenance = await Promise.all(all.map((task) => taskProvenance(grant.userId, [task])));
     const tasks = all.filter((_task, i) => provenance[i].protectionLevel <= grant.maxProtection);
     const kept = provenance.filter((p) => p.protectionLevel <= grant.maxProtection);
+    for (const p of kept) noteHostRead(grant, p.protectionLevel);
     if (grant.sessionId && kept.length > 0) {
       observeTaskProvenance(grant.sessionId, {
         protectionLevel: Math.max(...kept.map((p) => p.protectionLevel)),
@@ -252,16 +274,22 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
       ctx.set.status = 400;
       return { error: 'dueAt is not a date', code: 'invalid' };
     }
+    const link = ctx.body.link;
+    if (link && !/^https?:\/\//i.test(link.url)) {
+      ctx.set.status = 400;
+      return { error: 'link.url is an http(s) URL', code: 'invalid' };
+    }
     const task = await contentRepos(principal).tasks.create({
       title: ctx.body.title,
       notes: ctx.body.notes ?? null,
       priority: ctx.body.priority ?? 0,
       dueAt,
+      ...(ctx.body.category ? { category: ctx.body.category } : {}),
       source: 'agent',
-      sourceRef: { plugin: grant.plugin, tool: grant.tool } as never,
+      sourceRef: { plugin: grant.plugin, tool: grant.tool, ...(link ? { url: link.url, ...(link.label ? { label: link.label } : {}) } : {}) } as never,
     });
     await auditTaskMutation({
-      userId: task.userId, taskId: task.id, op: 'create', change: ['title', 'notes', 'priority', 'dueAt'],
+      userId: task.userId, taskId: task.id, op: 'create', change: ['title', 'notes', 'priority', 'dueAt', ...(ctx.body.category ? ['category'] : [])],
       actor: { kind: 'system', id: `plugin:${grant.plugin}` }, runId: grant.sessionId,
     });
     return { id: task.id, title: task.title, status: task.status };
@@ -271,6 +299,10 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
       notes: t.Optional(t.String({ maxLength: 10_000 })),
       priority: t.Optional(t.Integer({ minimum: 0, maximum: 3 })),
       dueAt: t.Optional(t.String({ maxLength: 40 })),
+      /** A user list to file it under (e.g. "Reading"). */
+      category: t.Optional(t.String({ minLength: 1, maxLength: 100 })),
+      /** Where it came from: shown with the task and linked back to. */
+      link: t.Optional(t.Object({ url: t.String({ minLength: 1, maxLength: 2048 }), label: t.Optional(t.String({ maxLength: 500 })) })),
     }),
     detail: { tags: ['plugin-host'] },
   })
@@ -288,14 +320,72 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
       ctx.set.status = 403;
       return { error: `The document is at protection level ${level}; this package may see up to ${grant.maxProtection}`, code: 'protection_level' };
     }
-    // The text goes back into the calling conversation with the tool's result.
+    // The text goes back into the calling conversation with the tool's result,
+    // and whatever this call sends to a model afterwards carries its level.
     if (grant.sessionId) raiseSessionLevel(grant.sessionId, doc.protectionLevel);
+    noteHostRead(grant, level);
     return {
       id: doc.id, name: doc.originalName, mimeType: doc.mimeType, size: doc.size, category: doc.category,
       summary: doc.summary, text: doc.ocrText, protectionLevel: level, createdAt: doc.createdAt,
     };
   }), {
     params: t.Object({ id: t.String({ maxLength: 64 }) }),
+    detail: { tags: ['plugin-host'] },
+  })
+
+  // One public web page, fetched by the host through its SSRF guard and turned
+  // into a clean article (the reader extraction): the package never touches
+  // the network itself. Size and time are capped by the fetcher (5 MB, 15 s);
+  // the text handed back is capped here.
+  .post('/web/read', (ctx) => run(ctx, 'web.read', 'web:read', async ({ grant }, details) => {
+    Object.assign(details, webReadAuditOf(ctx.body.url));
+    const { fetchReaderDoc, ReaderFetchError } = await import('@/core/reader/fetch');
+    let doc: Awaited<ReturnType<typeof fetchReaderDoc>>;
+    try {
+      doc = await fetchReaderDoc(ctx.body.url);
+    } catch (err) {
+      // The package learns only that it was refused or failed, never why
+      // (an address, a status, a size): no probing of what lies behind the guard.
+      const code = err instanceof ReaderFetchError && err.blocked ? 'blocked' : 'fetch_failed';
+      apiLogger.info({ err: (err as Error).message, plugin: grant.plugin, ...details }, 'plugin-host: web:read refused or failed');
+      details.code = code;
+      ctx.set.status = 422;
+      return code === 'blocked'
+        ? { error: 'This address may not be fetched', code }
+        : { error: 'The page could not be fetched', code };
+    }
+    const truncated = doc.textContent.length > WEB_READ_MAX_CHARS || doc.contentHtml.length > WEB_READ_MAX_HTML;
+    return {
+      ...doc,
+      textContent: doc.textContent.slice(0, WEB_READ_MAX_CHARS),
+      contentHtml: doc.contentHtml.length > WEB_READ_MAX_HTML ? '' : doc.contentHtml,
+      truncated,
+    };
+  }), {
+    body: t.Object({ url: t.String({ minLength: 1, maxLength: 2048, pattern: '^https?://' }) }),
+    detail: { tags: ['plugin-host'] },
+  })
+
+  // One text completion on the calling user's `everyday` model (their own
+  // binding first, then the install's). No tools, no history: a system text
+  // and a prompt in, the model's text out. Input and output are capped.
+  .post('/model/complete', (ctx) => run(ctx, 'model.complete', 'model:complete', async ({ grant, principal }, details) => {
+    const { pluginModelComplete } = await import('@/plugins/packages/host-model');
+    const outcome = await pluginModelComplete(grant, principal, ctx.body);
+    if (!outcome.ok) {
+      ctx.set.status = outcome.status;
+      if (outcome.retryAfter) ctx.set.headers['retry-after'] = String(outcome.retryAfter);
+      details.code = outcome.code;
+      return { error: outcome.error, code: outcome.code };
+    }
+    return { output: outcome.output, model: outcome.model };
+  }), {
+    body: t.Object({
+      system: t.Optional(t.String({ maxLength: 4000 })),
+      prompt: t.String({ minLength: 1, maxLength: 40_000 }),
+      maxTokens: t.Optional(t.Integer({ minimum: 1, maximum: 4000 })),
+      temperature: t.Optional(t.Number({ minimum: 0, maximum: 1 })),
+    }),
     detail: { tags: ['plugin-host'] },
   })
 
@@ -322,4 +412,6 @@ export const PLUGIN_HOST_ENDPOINTS: ReadonlyArray<{ method: string; path: string
   { method: 'POST', path: '/api/plugin-host/tasks', scope: 'tasks:write' },
   { method: 'GET', path: '/api/plugin-host/documents/:id', scope: 'documents:read' },
   { method: 'POST', path: '/api/plugin-host/notify', scope: 'notify' },
+  { method: 'POST', path: '/api/plugin-host/web/read', scope: 'web:read' },
+  { method: 'POST', path: '/api/plugin-host/model/complete', scope: 'model:complete' },
 ];

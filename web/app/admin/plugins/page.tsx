@@ -7,7 +7,9 @@ import { useRef, useState } from 'react';
 import { FieldInputs, type FieldValues, fromFieldValues, problemsOf, toFieldValues } from '@/components/business/common';
 import { api } from '@/lib/api';
 import {
+  type BundledPluginView,
   MAX_PLUGIN_SECRET_LENGTH,
+  PLUGIN_BUNDLED_KEY,
   PLUGIN_PACKAGES_KEY,
   type PluginInstallResult,
   type PluginNetworkStatus,
@@ -329,6 +331,26 @@ const HOST_TOKEN_WHEN = 'A call gets a short-lived token for them (at most 30 se
   + 'Schedules, events and context calls never get one. The token acts as that user, within their own data and permission rules. '
   + 'An upgrade asks for this approval again.';
 
+/**
+ * A package that can send data out of the house (`web:read`: any URL;
+ * `model:complete`: a remote model) and also read the user's data: what it
+ * reads it can send anywhere. Said in the approval, and the package then sees
+ * level-1 data only (docs/PLUGIN-PACKAGES.md#host-api).
+ */
+function egressReadWarning(scopes: readonly string[]): string {
+  const out = scopes.filter((s) => s === 'web:read' || s === 'model:complete');
+  const reads = scopes.filter((s) => s.endsWith(':read') && s !== 'web:read');
+  if (out.length === 0 || reads.length === 0) return '';
+  return `Warning: with ${out.join(' and ')} and ${reads.join(', ')} together, this package can send what it reads anywhere. `
+    + 'It is limited to data at protection level 1.';
+}
+
+/** The approval text for enabling `pkg` with `unapproved` host scopes. */
+function hostScopeConfirm(pkg: PluginPackageView, unapproved: string[]): string {
+  const warning = egressReadWarning(pkg.manifest.host ?? []);
+  return `Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? ${warning ? `${warning} ` : ''}${HOST_TOKEN_WHEN}`;
+}
+
 function PagesAndScopes({ pkg, unapproved }: { pkg: PluginPackageView; unapproved: string[] }) {
   const pages = pkg.manifest.ui?.pages ?? [];
   const scopes = pkg.manifest.host ?? [];
@@ -350,6 +372,7 @@ function PagesAndScopes({ pkg, unapproved }: { pkg: PluginPackageView; unapprove
             </span>
           ))}
           {unapproved.length > 0 && <span className={tone('warn')}> · {unapproved.length} not approved; enabling approves them</span>}
+          {egressReadWarning(scopes) && <span className={cn('block', tone('warn'))} data-testid="plugin-egress-warning">{egressReadWarning(scopes)}</span>}
           <span className="block">{HOST_TOKEN_WHEN}</span>
         </p>
       )}
@@ -515,7 +538,7 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
             // A package that adds commands, schedules, events, prompt text or context: review all of it first.
             if (!pkg.enabled && hasContributions(pkg)) { setConfirmingEnable(true); return; }
             if (!pkg.enabled && unapproved.length > 0
-              && !confirm(`Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? ${HOST_TOKEN_WHEN}`)) return;
+              && !confirm(hostScopeConfirm(pkg, unapproved))) return;
             toggle.mutate(!pkg.enabled);
           }}
           aria-label={`${pkg.enabled ? 'Disable' : 'Enable'} ${pkg.name}`}
@@ -556,6 +579,12 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
         </p>
       )}
       <p className="mt-1 text-xs text-on-surface-variant" data-testid="plugin-network-detail">{pkg.network.detail}</p>
+      {pkg.authoredBy && (
+        <p className="mt-1 text-xs text-warning" data-testid="plugin-authored-by">
+          Authored by an agent (session <span className="font-mono">{pkg.authoredBy.sessionId ?? 'none'}</span>, for user{' '}
+          <span className="font-mono">{pkg.authoredBy.userId}</span>). Review its content hash, tools, effects and hosts before enabling it.
+        </p>
+      )}
       <PagesAndScopes pkg={pkg} unapproved={unapproved} />
       {confirmingEnable
         ? (
@@ -565,7 +594,7 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
             onCancel={() => setConfirmingEnable(false)}
             onConfirm={() => {
               if (unapproved.length > 0
-                && !confirm(`Enable ${pkg.name} and approve its host API scopes ${unapproved.join(', ')}? Its tools then act with them as the user who calls them.`)) return;
+                && !confirm(hostScopeConfirm(pkg, unapproved))) return;
               toggle.mutate(true);
             }}
           />
@@ -623,6 +652,72 @@ function InstallForm() {
 }
 
 /**
+ * The first-party plugins shipped with Octipus (docs/PLUGIN-PACKAGES.md#bundled-plugins).
+ * Installing one is an install like any other: pinned, disabled until an
+ * admin enables it and approves its host API scopes on its row above.
+ */
+function BundledPlugins() {
+  const qc = useQueryClient();
+  const [message, setMessage] = useState<{ kind: 'error' | 'ok'; text: string } | null>(null);
+  const { data } = useQuery({
+    queryKey: PLUGIN_BUNDLED_KEY,
+    queryFn: () => api.get<BundledPluginView[]>('/plugin-packages/bundled'),
+  });
+  const install = useMutation({
+    mutationFn: (b: { name: string; upgrade: boolean }) => api.post<PluginInstallResult>('/plugin-packages', { bundled: b.name, ...(b.upgrade ? { upgrade: true } : {}) }),
+    onSuccess: (res) => {
+      setMessage({ kind: 'ok', text: `Installed ${res.name} ${res.version} (disabled). Review it below, then enable it and approve its scopes.` });
+      void qc.invalidateQueries({ queryKey: PLUGIN_PACKAGES_KEY });
+    },
+    onError: (err: Error) => setMessage({ kind: 'error', text: err.message }),
+  });
+  const bundled = Array.isArray(data) ? data : [];
+  if (bundled.length === 0) return null;
+  return (
+    <section className="space-y-2" data-testid="bundled-plugins" aria-labelledby="bundled-plugins-title">
+      <h3 id="bundled-plugins-title" className="section-label">bundled</h3>
+      <p className="text-xs text-on-surface-variant">
+        Plugins that ship with Octipus. They install like any package: pinned to their content and disabled until you
+        enable them and approve the host API scopes they ask for.
+      </p>
+      <ul className="term-frame rounded-xs divide-y divide-outline-variant/10">
+        {bundled.map((b) => {
+          const upgrade = b.installed !== null && b.installed !== b.version;
+          return (
+            <li key={b.name} className="p-3 flex flex-wrap items-start gap-3 text-sm" data-testid="bundled-plugin" data-name={b.name}>
+              <div className="flex-1 min-w-0 space-y-0.5">
+                <p className="text-on-surface"><span className="font-semibold">{b.title}</span> <span className="text-xs text-on-surface-variant">{b.name} {b.version}</span></p>
+                <p className="text-xs text-on-surface-variant">{b.description}</p>
+                {(b.host ?? []).length > 0 && (
+                  <p className="text-xs text-on-surface-variant">asks for <code className="font-mono">{b.host.join(', ')}</code></p>
+                )}
+                {b.problem && <p className="text-xs text-error">{b.problem}</p>}
+              </div>
+              {b.taken ? (
+                <span className={cn('text-xs', tone('warn'))} data-testid="bundled-taken">name taken by another package</span>
+              ) : b.installed !== null && !upgrade ? (
+                <span className={cn('text-xs', tone('ok'))}>installed</span>
+              ) : (
+                <button
+                  type="button"
+                  disabled={install.isPending || Boolean(b.problem)}
+                  onClick={() => install.mutate({ name: b.name, upgrade })}
+                  className="px-2 py-1 rounded-xs bg-primary text-on-primary text-xs cursor-pointer disabled:opacity-50"
+                  aria-label={`${upgrade ? 'Upgrade' : 'Install'} ${b.name}`}
+                >
+                  {upgrade ? `Upgrade to ${b.version}` : 'Install'}
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {message && <p role={message.kind === 'error' ? 'alert' : 'status'} className={cn('text-xs', message.kind === 'error' ? 'text-error' : 'text-on-surface-variant')}>{message.text}</p>}
+    </section>
+  );
+}
+
+/**
  * Admin → Plugin packages (docs/PLUGIN-PACKAGES.md): what is installed, who
  * signed it, whether its network is enforced, content waiting for approval
  * after a hash mismatch, its settings and secrets (write-only), and uninstall.
@@ -662,6 +757,7 @@ export default function AdminPluginPackagesPage() {
           {packages.map((p) => <PackageRow key={p.name} pkg={p} />)}
         </ul>
       )}
+      <BundledPlugins />
     </div>
   );
 }

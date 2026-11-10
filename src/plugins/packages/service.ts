@@ -44,8 +44,9 @@
  * (`signatureHash`) is recorded with the content hash and compared at every
  * start, whatever `requireSignature` says.
  */
+import { randomBytes } from 'node:crypto';
 import { cp, lstat, mkdir, readFile, rename, rm } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { and, eq, isNull } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { RecordValidationError, validateRecordData } from '@/core/records/fields';
@@ -60,14 +61,17 @@ import type { MCPServer } from '@/shared/mcp-server';
 import {
   PLUGIN_MANIFEST_FILE,
   type PluginHostScope,
+  type PluginAgentAuthorship,
   type PluginInProcessStatus,
   type PluginManifest,
+  type PluginRuntime,
   type PluginNetworkStatus,
   type PluginPackageView,
   type PluginSignatureStatus,
   pluginRuntime,
 } from '@/shared/plugin-package';
 import { coreLogger } from '@/utils/logger';
+import { type AgentAuthoredDetails, agentAuthorship, agentAuthorships } from './authoring/authorship';
 import { contributionInstallProblems, contributionsView, syncContributions } from './contributions';
 import { checkInProcessBundle } from './in-process-bundle';
 import { contributionsHashOf, hasContributions } from './contributions/approval';
@@ -329,31 +333,49 @@ export async function installFromDirectory(
     allowSignerChange?: boolean;
     /** An upgrade may install an older version (audited). */
     allowDowngrade?: boolean;
+    /** The agent that wrote the package (creator mode, ./authoring): recorded in the audit row, shown on the admin page. */
+    authoredBy?: AgentAuthoredDetails;
+    /** The runtime the package must declare (creator mode installs `package` only), checked on the staged copy. */
+    requireRuntime?: PluginRuntime;
   } = {},
 ): Promise<PluginPackageRow & { warnings: string[] }> {
   const source = resolve(sourceDir);
-  const manifest = await readManifest(source);
+  const fromStore = relative(pluginsRoot(), source);
+  if (fromStore === '' || (fromStore !== '..' && !fromStore.startsWith(`..${sep}`) && !isAbsolute(fromStore))) throw new PluginPackageError('invalid', 'The package is already in the plugin directory');
+  // A first look at the source, so a linked or unbounded tree is refused
+  // before anything is copied. It is not what decides: the source may be
+  // written by someone else (an agent) while this runs, so everything below
+  // is read and checked on the staged copy only.
   await checkTree(source);
-  const target = packageDir(manifest.name);
-  if (resolve(target) === source) throw new PluginPackageError('invalid', 'The package is already in the plugin directory');
-  if (opts.expect?.name !== undefined && opts.expect.name !== manifest.name) {
-    throw new PluginPackageError('invalid', `The package is "${manifest.name}", not the expected "${opts.expect.name}"; not installed`);
-  }
-  if (opts.expect?.version !== undefined && opts.expect.version !== manifest.version) {
-    throw new PluginPackageError('invalid', `${manifest.name} is version ${manifest.version}, not the expected ${opts.expect.version}; not installed`);
-  }
+  await installHook?.(source);
   const db = getDb();
-  const serverId = `${PLUGIN_SERVER_PREFIX}${manifest.name}`;
 
-  // Copy beside the target, hash the copy and check its signature before
-  // anything installed is touched: a refused package leaves an installed one
-  // (and whether it runs) as it was.
-  const staging = `${target}.installing-${process.pid}-${Date.now()}`;
+  // Copy into the plugin directory, then read, check, hash and verify only
+  // the copy, before anything installed is touched: a refused package leaves
+  // an installed one (and whether it runs) as it was, and what was checked is
+  // exactly what is installed.
+  await mkdir(pluginsRoot(), { recursive: true });
+  let staging = join(pluginsRoot(), `.installing-${process.pid}-${Date.now()}-${randomBytes(4).toString('hex')}`);
+  let manifest: PluginManifest;
   let contentHash: string;
   let signature: Awaited<ReturnType<typeof acceptSignature>>;
   try {
-    await mkdir(pluginsRoot(), { recursive: true });
     await cp(source, staging, { recursive: true, errorOnExist: true, verbatimSymlinks: true });
+    manifest = await readManifest(staging);
+    await checkTree(staging);
+    if (opts.requireRuntime !== undefined && pluginRuntime(manifest) !== opts.requireRuntime) {
+      throw new PluginPackageError('invalid', `${manifest.name} declares runtime "${pluginRuntime(manifest)}"; only runtime "${opts.requireRuntime}" is accepted here; not installed`);
+    }
+    if (opts.expect?.name !== undefined && opts.expect.name !== manifest.name) {
+      throw new PluginPackageError('invalid', `The package is "${manifest.name}", not the expected "${opts.expect.name}"; not installed`);
+    }
+    if (opts.expect?.version !== undefined && opts.expect.version !== manifest.version) {
+      throw new PluginPackageError('invalid', `${manifest.name} is version ${manifest.version}, not the expected ${opts.expect.version}; not installed`);
+    }
+    // Named after the package from here on, beside its target.
+    const named = `${packageDir(manifest.name)}.installing-${process.pid}-${Date.now()}`;
+    await rename(staging, named);
+    staging = named;
     // Hashed as copied, so what the admin installs is what is pinned.
     if (manifest.entry !== undefined) await checkEntry(staging, manifest.entry);
     contentHash = await hashPackageContent(staging, manifest);
@@ -365,6 +387,8 @@ export async function installFromDirectory(
     await rm(staging, { recursive: true, force: true }).catch(() => {});
     throw err;
   }
+  const target = packageDir(manifest.name);
+  const serverId = `${PLUGIN_SERVER_PREFIX}${manifest.name}`;
 
   let previous: PluginPackageRow | null = null;
   const overrides: Record<string, unknown> = {};
@@ -461,10 +485,17 @@ export async function installFromDirectory(
     runtime: pluginRuntime(manifest),
     ...(opts.source ? { source: opts.source } : {}),
     ...(previous?.approvedContributionsHash ? { contributionsApprovalCleared: previous.approvedContributionsHash } : {}),
+    ...(opts.authoredBy ? { authoredBy: opts.authoredBy } : {}),
     ...overrides,
   });
   await syncPluginServers();
   return { ...row, warnings: signature.warnings };
+}
+
+let installHook: ((source: string) => Promise<void> | void) | null = null;
+/** Test-only: runs between the first look at the source and its copy (when another writer could change it). */
+export function _setInstallHookForTesting(hook: ((source: string) => Promise<void> | void) | null): void {
+  installHook = hook;
 }
 
 /**
@@ -873,7 +904,7 @@ export function inProcessApproved(row: PluginPackageRow): boolean {
   return row.contentHash !== null && row.inProcessApprovedHash === row.contentHash;
 }
 
-async function viewOf(row: PluginPackageRow, secrets: string[]): Promise<PluginPackageView> {
+async function viewOf(row: PluginPackageRow, secrets: string[], authoredBy?: PluginAgentAuthorship | null): Promise<PluginPackageView> {
   const bridge = getMCPBridge();
   const signature = await currentSignature(row);
   const serverId = `${PLUGIN_SERVER_PREFIX}${row.name}`;
@@ -938,6 +969,7 @@ async function viewOf(row: PluginPackageRow, secrets: string[]): Promise<PluginP
     inProcess,
     contributions: await contributionsView(row),
     approvedHostScopes: row.approvedHostScopes ?? null,
+    authoredBy: authoredBy !== undefined ? authoredBy : await agentAuthorship(row.name),
     installedBy: row.installedBy,
     installedAt: row.installedAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -1007,7 +1039,8 @@ export function networkStatus(m: PluginManifest, runner = activeSandboxRunner({ 
 export async function listPackages(): Promise<PluginPackageView[]> {
   const rows = await getDb().select().from(pluginPackages).orderBy(pluginPackages.name);
   const entries = rows.some((r) => (r.manifest.secrets ?? []).length > 0) ? await getVault().list('system') : [];
-  return Promise.all(rows.map(async (row) => viewOf(row, await secretsSet(row, entries))));
+  const authors = await agentAuthorships(rows.map((r) => r.name));
+  return Promise.all(rows.map(async (row) => viewOf(row, await secretsSet(row, entries), authors.get(row.name) ?? null)));
 }
 
 /** One installed package, for the admin API. */
@@ -1020,6 +1053,35 @@ export async function packageView(name: string): Promise<PluginPackageView> {
 export function grantedHostScopes(row: Pick<PluginPackageRow, 'manifest' | 'approvedHostScopes'>): PluginHostScope[] {
   const approved = new Set(row.approvedHostScopes ?? []);
   return (row.manifest.host ?? []).filter((s) => approved.has(s));
+}
+
+/**
+ * The package's `maxProtection`, or when it declares none: a package that
+ * reaches the network leaves the house (1), and so does one that may have the
+ * host fetch any URL it names (`web:read`: the URL itself can carry data out),
+ * and so does one with pages, which can navigate their frame anywhere with
+ * what they were shown in the URL (docs/PLUGIN-PACKAGES.md#pages); one that
+ * can do none of these keeps everything in (4).
+ */
+export function defaultMaxProtection(m: Pick<PluginManifest, 'maxProtection' | 'network' | 'host' | 'ui'>): 1 | 2 | 3 | 4 {
+  if (m.maxProtection !== undefined) return m.maxProtection;
+  return (m.network ?? []).length > 0 || (m.host ?? []).includes('web:read') || (m.ui?.pages ?? []).length > 0 ? 1 : 4;
+}
+
+/** Host scopes that send what the package hands them out of the house: any URL (`web:read`), a remote model (`model:complete`). */
+export const EGRESS_HOST_SCOPES: readonly PluginHostScope[] = ['web:read', 'model:complete'];
+
+/**
+ * The level a package may see, as enforced: its `maxProtection` (or the
+ * default above), clamped to 1 while it is granted a scope that can carry
+ * data out (`EGRESS_HOST_SCOPES`), whatever its manifest says: such a package
+ * could pass whatever it reads to any URL or model.
+ */
+export function effectiveMaxProtection(
+  m: Pick<PluginManifest, 'maxProtection' | 'network' | 'host' | 'ui'>, granted: readonly PluginHostScope[],
+): 1 | 2 | 3 | 4 {
+  const level = defaultMaxProtection(m);
+  return granted.some((s) => EGRESS_HOST_SCOPES.includes(s)) ? 1 : level;
 }
 
 /** The MCP server an installed package runs as. */
@@ -1071,10 +1133,8 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
     toolExposure: { ...Object.fromEntries(Object.keys(tools).map((t) => [t, 'deferred' as const])), '*': 'hidden' },
     plugin: {
       package: row.name, version: row.version, tools: Object.fromEntries(Object.entries(tools).map(([t, d]) => [t, d.effect])),
-      // Undeclared: a package that reaches the network leaves the house (1); so does one with
-      // pages, which can navigate their frame anywhere with what they were shown in the URL
-      // (docs/PLUGIN-PACKAGES.md#pages). Only one with neither keeps everything in (4).
-      maxProtection: m.maxProtection ?? ((m.network ?? []).length > 0 || (m.ui?.pages ?? []).length > 0 ? 1 : 4),
+      // Undeclared: see defaultMaxProtection; clamped by egress scopes (effectiveMaxProtection).
+      maxProtection: effectiveMaxProtection(m, hostScopes),
       ...(hostScopes.length > 0 ? { hostScopes } : {}),
     },
   };

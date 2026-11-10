@@ -216,6 +216,7 @@ test.describe('plugin pages', () => {
     }];
     await page.route(/\/api\/plugin-packages(\/.*)?$/, async (route) => {
       const req = route.request();
+      if (req.method() === 'GET' && req.url().endsWith('/bundled')) return json(route, 200, []);
       if (req.method() === 'GET') return json(route, 200, view());
       if (req.method() === 'PATCH') {
         const body = req.postDataJSON() as { enabled: boolean };

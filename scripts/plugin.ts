@@ -14,6 +14,8 @@
  *   octi plugin set <name> key=value...  Change a package's settings.
  *   octi plugin secret <name> <KEY> [--clear]  Set (from stdin or a hidden prompt) or remove a secret.
  *   octi plugin uninstall <name> [--yes]  Remove a package.
+ *   octi plugin bundled          The first-party plugins shipped with Octipus.
+ *   octi plugin install-bundled <name> [--upgrade]  Install one (disabled).
  *
  * Delegated from bin/octi.ts. Uses the published validation kit so authors and
  * the host run identical checks.
@@ -28,7 +30,7 @@ import { ManifestError } from '@/plugins/packages/manifest';
 import { generateSigningKey, SignatureError, signPackage, signRegistryIndexFile } from '@/plugins/packages/signature';
 import { PackageTreeError } from '@/plugins/packages/tree';
 import { PLUGIN_TOOL_EFFECTS, type PluginToolEffect } from '@/shared/plugin-package';
-import { approveCommand, approveContributionsCommand, approveInProcessCommand, listCommand, type PluginApiIo, readAllText, readHiddenLine, secretCommandFromArgs, setCommand, uninstallCommand } from './plugin-api';
+import { approveCommand, approveContributionsCommand, approveInProcessCommand, bundledCommand, installBundledCommand, listCommand, type PluginApiIo, readAllText, readHiddenLine, secretCommandFromArgs, setCommand, uninstallCommand } from './plugin-api';
 
 const HELP = `octi plugin — plugin tooling
 
@@ -83,8 +85,13 @@ Usage:
   octi plugin uninstall <name> [--yes]
                                 Remove a package, its files, data, settings and secrets.
                                 Asks at a terminal; elsewhere refused without --yes.
+  octi plugin bundled           The first-party plugins shipped with Octipus (plugins/
+                                in the install) and whether each is installed.
+  octi plugin install-bundled <name> [--upgrade]
+                                Install one, pinned and disabled like any package;
+                                enable it on the admin page, approving its host scopes.
 
-list, approve, approve-in-process, approve-contributions, set, secret and uninstall call the running backend (http://localhost:$API_PORT, 3005 by
+list, approve, approve-in-process, approve-contributions, set, secret, uninstall, bundled and install-bundled call the running backend (http://localhost:$API_PORT, 3005 by
 default) with the admin API token in OCTIPUS_API_TOKEN (Settings → API Tokens).
 `;
 
@@ -334,6 +341,20 @@ async function main(): Promise<void> {
     case 'uninstall':
       await runApiCommand(sub, rest);
       break;
+    case 'bundled':
+      process.exit(await bundledCommand(apiIo()));
+      break;
+    case 'install-bundled': {
+      let parsed: { values: { upgrade?: boolean }; positionals: string[] };
+      try {
+        parsed = parseArgs({ args: rest, allowPositionals: true, options: { upgrade: { type: 'boolean' } } });
+      } catch (err) {
+        usage(sub, (err as Error).message);
+      }
+      if (parsed.positionals.length !== 1) usage(sub, 'expected <name> [--upgrade]');
+      process.exit(await installBundledCommand(apiIo(), parsed.positionals[0], parsed.values.upgrade === true));
+      break;
+    }
     case 'secret':
       // Its own parser: a refusal must never echo a value typed on the command line.
       process.exit(await secretCommandFromArgs(apiIo(), rest));

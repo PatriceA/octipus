@@ -883,6 +883,11 @@ export const configSchema = z.object({
       url: z.string().url().max(2000).refine((v) => v.startsWith('https://'), 'a registry is reached over https'),
       publisher: z.string().min(1).max(100).optional(),
     })).default([]),
+    /**
+     * Tokens (input + output) one user's plugin `model:complete` calls may use
+     * per UTC day, all packages together; 0 turns those calls off.
+     */
+    hostModelDailyTokens: z.number().int().min(0).max(100_000_000).default(200_000),
   }).prefault({}),
   oauth: oauthConfigSchema,
   rateLimit: rateLimitConfigSchema,

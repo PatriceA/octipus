@@ -117,6 +117,7 @@ const ALLOWLIST: Record<string, string> = {
   'src/core/companion/stalls.ts': 'Suspicion-only monitoring binds enabled settings to active owned goal/session/worker; progress metadata creates inspection events, never execution.',
   'src/core/tasks/provenance.ts': 'Protection metadata only from owner-bound task source sessions; shared writes skip personal snapshots and the destination heartbeat must be personal and owned.',
   'src/db/repositories/companion-supervision-repository.ts': 'Personal Companion access layer: assertScope requires the active local owner of an active personal workspace; source/session predicates reject rooms/groups and bind owner/workspace.',
+  'src/plugins/packages/host-model.ts': 'Sums one user\'s own plugin model tokens for today (cost_log by user_id and request type); returns a number, never row content.',
   'src/core/agent/session-context.ts': 'one session\'s user rows and the cost rows of an agent read from them; the only caller (GET /sessions/:id/context) has already required the session owner (canActInSession settings)',
   'src/core/agent/activity-tools.ts': 'Read-only diagnostic access layer: owner and exact workspace scope plus current target-session control access before returning identities/events.',
   'src/db/repositories/credential-remediation.ts': 'Administrative security cleanup, not an agent tool: server-owned owner predicates on every read and CAS mutation; reports only redacted metadata.',

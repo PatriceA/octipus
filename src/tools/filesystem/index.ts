@@ -694,6 +694,18 @@ export class FilesystemTool extends BaseTool {
     );
   }
 
+  /**
+   * Resolve a path an agent names the way the read-side filesystem tools do
+   * (session directory, project, sandbox gate), for another tool that reads
+   * what the agent wrote with `write_file` (plugin_dev). Returns the
+   * canonical path and the root of the agent's workspace; throws
+   * `ToolNotExecutedError` for a path outside the allowed directories.
+   */
+  resolveForRead(rawPath: string, context: AgentContext): { path: string; root: string } {
+    const fs = this.workspaceFor(context);
+    return { path: this.resolveSessionAware(rawPath, context, fs), root: fs.root };
+  }
+
   private requireString(args: Record<string, unknown>, key: string): string {
     const value = args[key];
     if (typeof value !== 'string' || value.length === 0) {

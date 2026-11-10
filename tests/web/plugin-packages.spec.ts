@@ -66,6 +66,7 @@ test.describe('plugin packages', () => {
     await stubAllDefaults(page);
     await page.route(/\/api\/plugin-packages(\/.*)?$/, async (route: Route) => {
       const req = route.request();
+      if (req.method() === 'GET' && req.url().endsWith('/bundled')) return json(route, 200, []);
       if (req.method() === 'GET') return json(route, 200, packages);
       if (req.method() === 'PATCH') {
         const body = req.postDataJSON() as { approveContent?: string };
@@ -132,6 +133,7 @@ test.describe('plugin packages', () => {
     await page.route(/\/api\/plugin-packages(\/.*)?$/, async (route: Route) => {
       const req = route.request();
       const path = new URL(req.url()).pathname;
+      if (req.method() === 'GET' && req.url().endsWith('/bundled')) return json(route, 200, []);
       if (req.method() === 'GET') return json(route, 200, packages);
       const body = req.postData() ? req.postDataJSON() : undefined;
       writes.push({ method: req.method(), url: path, body });
@@ -250,6 +252,7 @@ test.describe('plugin packages', () => {
     await stubAllDefaults(page);
     await page.route(/\/api\/plugin-packages(\/.*)?$/, async (route: Route) => {
       const req = route.request();
+      if (req.method() === 'GET' && req.url().endsWith('/bundled')) return json(route, 200, []);
       if (req.method() === 'GET') return json(route, 200, packages);
       if (req.method() === 'PATCH') {
         const body = req.postDataJSON() as { approveInProcess?: string };
@@ -294,6 +297,17 @@ test.describe('plugin packages', () => {
     await expect(row.getByTestId('plugin-runtime')).toHaveText('in-process');
     await expect(row).toContainText(`approved to run in the server process for ${RECORDED}`);
     expect(patches).toEqual([{ approveInProcess: RECORDED }, { approveInProcess: RECORDED }]);
+  });
+
+  test('a package an agent wrote says so, with its session, until a person installs it', async ({ authenticatedPage: page }) => {
+    const authoredBy = { userId: 'e2e-user-id', sessionId: '11111111-2222-4333-8444-555555555555', agentId: 'agent-1', at: '2026-11-10T09:00:00Z' };
+    const packages = [pkg({ name: 'my-tools', enabled: false, connected: false, authoredBy }), pkg({ authoredBy: null })];
+    await stubAllDefaults(page);
+    await page.route(/\/api\/plugin-packages(\/.*)?$/, async (route: Route) => json(route, 200, packages));
+    await page.goto('/admin/plugins');
+    const agentRow = page.locator('[data-testid="plugin-package"][data-name="my-tools"]');
+    await expect(agentRow.getByTestId('plugin-authored-by')).toContainText(`Authored by an agent (session ${authoredBy.sessionId}`);
+    await expect(page.locator('[data-testid="plugin-package"][data-name="finapi"]').getByTestId('plugin-authored-by')).toHaveCount(0);
   });
 
   test('browse lists the registries and installs a package with its URL and sha256', async ({ authenticatedPage: page }) => {

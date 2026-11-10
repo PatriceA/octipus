@@ -17,7 +17,7 @@ vi.mock('@/security/permissions', () => ({
 vi.mock('@/core/modules/registry', () => ({ isToolOn: (toolId: string) => !held.off.has(toolId) }));
 
 const {
-  _liveHostTokens, grantableScopes, hostCallKind, hostApiTarget, issueHostCallMeta, mintHostToken, revokeHostToken, revokePluginTokens,
+  _liveHostTokens, grantableScopes, hostCallKind, hostApiTarget, issueHostCallMeta, mintHostToken, noteHostRead, revokeHostToken, revokePluginTokens,
   setHostApiPort, userHeldScopes, verifyHostToken,
 } = await import('./host-api');
 
@@ -40,6 +40,18 @@ describe('scope intersection', () => {
     expect(grantableScopes(undefined, [...declared], 'write')).toEqual([]);
     // Approved but no longer declared (an upgrade dropped it): not granted.
     expect(grantableScopes(['notes:read'], ['notes:read', 'tasks:write'], 'write')).toEqual(['notes:read']);
+  });
+
+  test('web:read and model:complete change no data: a read tool gets them', () => {
+    expect(grantableScopes(['web:read', 'model:complete', 'notes:write'], ['web:read', 'model:complete', 'notes:write'], 'read')).toEqual(['web:read', 'model:complete']);
+  });
+
+  test('web:read is the web tool\'s fetch: a user whose rules deny it does not get it; model:complete has no tool action', async () => {
+    held.denied.add('websearch.fetch');
+    expect(await userHeldScopes('u1', ['web:read', 'model:complete'])).toEqual(['model:complete']);
+    held.denied.clear();
+    held.off.add('websearch');
+    expect(await userHeldScopes('u1', ['web:read', 'model:complete'])).toEqual(['model:complete']);
   });
 
   test('the user holds a scope unless its module is off or their rules deny the matching action', async () => {
@@ -163,5 +175,18 @@ describe('the host API target', () => {
     setHostApiPort(45678);
     expect(hostApiTarget().port).toBe(45678);
     setHostApiPort(null);
+  });
+});
+
+describe('content read by a call', () => {
+  test('the highest level read is kept on the live grant; an unknown level counts as 4', () => {
+    const { token } = mintHostToken(grant, 30_000);
+    const live = verifyHostToken(token, 'acme');
+    expect(live?.readLevel).toBeUndefined();
+    noteHostRead(live!, 2);
+    noteHostRead(live!, 1);
+    expect(verifyHostToken(token, 'acme')?.readLevel).toBe(2);
+    noteHostRead(live!, null);
+    expect(verifyHostToken(token, 'acme')?.readLevel).toBe(4);
   });
 });
