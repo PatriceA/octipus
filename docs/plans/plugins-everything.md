@@ -1,6 +1,6 @@
 # Plugins for everything
 
-Status: accepted; phases 1 and 2 landed, phase 3 started with the reader (2026-11-10).
+Status: accepted; phases 1, 2 and 4 implemented, phase 3 started with the reader (2026-11-10).
 
 ## Why
 
@@ -116,6 +116,19 @@ Behaviour differences: the page shows no lead image and loads no remote
 image (the page CSP allows its own files only); a link in an article fills
 the address field instead of navigating; translate and ask take their
 argument in a field (a sandboxed frame opens no dialog). `research` is next.
+
+   *Status: implemented.* The `plugin_dev` tool group (`plugin_api`,
+   `plugin_template`, `plugin_validate`, `plugin_install`; the plan's
+   `install_plugin` is `plugin_install`), three templates under
+   `src/plugins/templates/`, the system skill "Write an Octipus plugin", and
+   "Authored by an agent" on the admin page, read from the install's audit row
+   (no migration). Only an admin's agent installs (decided: a non-admin's
+   agent is refused and told to ask an admin); runtime `in-process` and paths
+   outside the agent's workspace are refused; an agent upgrades only packages
+   an agent installed. See
+   [PLUGIN-PACKAGES.md](../PLUGIN-PACKAGES.md#writing-a-plugin-with-an-agent).
+   Left: the older `plugin-development` skill still teaches the deprecated
+   in-process extensions; retire or redirect it once phase 3 lands.
 
 ## What we do not copy
 

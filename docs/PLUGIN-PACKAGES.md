@@ -1274,6 +1274,65 @@ without `--yes`.
 
 Every change is in the audit log (`resource_type = plugin_package`).
 
+## Writing a plugin with an agent
+
+An agent can write a `package` plugin and install it **disabled**; an admin
+reviews its content hash and enables it ("creator mode",
+[plan phase 4](plans/plugins-everything.md)). Nothing the agent writes runs
+before a person has approved those exact bytes, and the agent never gets code
+into the server process.
+
+The built-in tool group `plugin_dev` (in the general and coding roles; not in a
+shared space) has four tools, and the system skill **Write an Octipus plugin**
+(`octipus-plugin-package`, assigned to the `general` and `coding` topics)
+walks an agent through them:
+
+| Tool | Permission | What it does |
+|---|---|---|
+| `plugin_dev__plugin_api` | read (ALLOW) | The live contract: the manifest's JSON schema (generated from the zod schema an install parses with, so a new manifest field appears in it at once), the rules the schema cannot express, tool effects, events, cron syntax, limits, the MCP stdio contract, the environment a package gets (the host variables, `OCTIPUS_PLUGIN_DATA_DIR`, `OCTIPUS_SETTING_<KEY>`, secrets, proxy variables), the sandbox and network state of this host, the templates, and `install.youCanInstall`. Derived from the code's constants wherever they exist. |
+| `plugin_dev__plugin_template` | read (ALLOW) | Without `name`, the templates; with `name`, that template's files (path → text). |
+| `plugin_dev__plugin_validate` | read (ALLOW) | Checks a plugin directory in the agent's workspace the way an install would, without installing: the manifest, its contributions (tools they name, cron, command names Octipus, an extension or an installed package uses), the tree (links, special files, size), and that the files `server.command` / `server.args` name are in the package. Every problem at once, warnings (a command not on `PATH`, an installed name), and the content hash an install would record. |
+| `plugin_dev__plugin_install` | write (ASK, dangerous) | Installs the package from a directory in the agent's workspace with the ordinary directory install, disabled. |
+
+**Templates** live in `src/plugins/templates/` (copied to
+`dist/plugin-templates` by the build): `tool-only` (a read and a write tool and
+a setting), `with-schedule` (a read tool every 15 minutes) and `with-command`
+(a slash command). Each is a complete, valid package: a manifest and a
+dependency-free MCP server in plain `.mjs`. The agent writes a template's files
+into its workspace with the filesystem tool and edits them; a read tool rather
+than a scaffolding write, because the filesystem tool already decides where an
+agent's files go and asks for its writes.
+
+**What `plugin_install` refuses:**
+
+- **A user who is not an active admin.** Only admins install plugins, so only
+  an admin's agent may; another user's agent is told to ask an admin, who can
+  install the directory from the admin page or the API. (`plugin_api` says
+  `youCanInstall: false` up front.) The call itself is a `write` the user
+  approves, so the admin says yes to each install.
+- **A path outside the agent's own workspace** (resolved as the filesystem
+  tool resolves reads, then checked against the real path of the workspace
+  root), the workspace root itself, the plugin store, a remote execution
+  environment, and a shared space.
+- **`runtime: "in-process"`**, with a message saying so.
+- **A package that does not validate**, with every problem.
+- **Replacing a person's package.** `upgrade: true` replaces only a package
+  whose current version an agent installed; an upgrade is disabled again, like
+  any other.
+
+There is **no tool to enable or approve** a plugin. The answer gives the
+content hash and the admin page (`<public URL>/admin/plugins`); the admin
+checks the hash, the tools, their effects and hosts, sets settings and
+secrets, and enables it there or with `octi plugin`.
+
+**Authorship.** The `installed`/`upgraded` audit row of an agent's install
+carries `authoredBy: { kind: "agent", userId, sessionId, agentId }`. The
+package view reads it from the latest install or upgrade row
+(`authoredBy: { userId, sessionId, agentId, at }`, null when a person installed
+the current version; no migration), the admin page shows **Authored by an
+agent (session …)** on the row, and `octi plugin list` prints an `authored:`
+line.
+
 ## Not yet
 
 - Packages reporting events back on their own (a new invoice in DATEV opening
