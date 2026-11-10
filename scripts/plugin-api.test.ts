@@ -12,6 +12,8 @@ import {
   approveCommand,
   approveContributionsCommand,
   approveInProcessCommand,
+  bundledCommand,
+  installBundledCommand,
   backendBase,
   type HiddenInput,
   listCommand,
@@ -474,5 +476,31 @@ describe('octi plugin approve-contributions', () => {
     expect(await approveContributionsCommand(refused.io, 'greeter', `sha256:${'d'.repeat(64)}`)).toBe(1);
     expect(refused.err.join('')).toContain(`--hash ${CONTRIB}`);
     expect(await approveContributionsCommand(harness().io, 'greeter', 'sha256:nope')).toBe(2);
+  });
+});
+
+describe('octi plugin bundled / install-bundled', () => {
+  test('lists the bundled plugins and installs one, disabled, through the backend', async () => {
+    const listed = harness({ token: 'tok', respond: (m) => (m === 'GET' ? [200, [
+      { name: 'reader', version: '1.0.0', title: 'Reader', description: 'Clean reading', host: ['web:read'], network: [], installed: null },
+    ]] : undefined) });
+    expect(await bundledCommand(listed.io)).toBe(0);
+    expect(listed.requests[0].url).toBe('http://localhost:4999/api/plugin-packages/bundled');
+    expect(listed.out.join('')).toContain('reader 1.0.0  not installed');
+    expect(listed.out.join('')).toContain('host scopes: web:read');
+
+    const h = harness({ token: 'tok', respond: (m) => (m === 'POST' ? [200, { name: 'reader', version: '1.0.0', contentHash: RECORDED }] : undefined) });
+    expect(await installBundledCommand(h.io, 'reader', true)).toBe(0);
+    expect(h.requests).toEqual([{ method: 'POST', url: 'http://localhost:4999/api/plugin-packages/', headers: { authorization: 'Bearer tok', 'content-type': 'application/json' }, body: { bundled: 'reader', upgrade: true } }]);
+    expect(h.out.join('')).toContain(`Installed reader 1.0.0 (disabled), content ${RECORDED}`);
+  });
+
+  test('a name that is no package name is not sent; a refusal is shown', async () => {
+    const h = harness({ token: 'tok' });
+    expect(await installBundledCommand(h.io, '../x', false)).toBe(2);
+    expect(h.requests).toEqual([]);
+    const refused = harness({ token: 'tok', respond: () => [404, { error: 'No bundled plugin named "nope"' }] });
+    expect(await installBundledCommand(refused.io, 'nope', false)).toBe(1);
+    expect(refused.err.join('')).toContain('No bundled plugin named');
   });
 });

@@ -66,6 +66,7 @@ test.describe('plugin packages', () => {
     await stubAllDefaults(page);
     await page.route(/\/api\/plugin-packages(\/.*)?$/, async (route: Route) => {
       const req = route.request();
+      if (req.method() === 'GET' && req.url().endsWith('/bundled')) return json(route, 200, []);
       if (req.method() === 'GET') return json(route, 200, packages);
       if (req.method() === 'PATCH') {
         const body = req.postDataJSON() as { approveContent?: string };
@@ -132,6 +133,7 @@ test.describe('plugin packages', () => {
     await page.route(/\/api\/plugin-packages(\/.*)?$/, async (route: Route) => {
       const req = route.request();
       const path = new URL(req.url()).pathname;
+      if (req.method() === 'GET' && req.url().endsWith('/bundled')) return json(route, 200, []);
       if (req.method() === 'GET') return json(route, 200, packages);
       const body = req.postData() ? req.postDataJSON() : undefined;
       writes.push({ method: req.method(), url: path, body });
@@ -250,6 +252,7 @@ test.describe('plugin packages', () => {
     await stubAllDefaults(page);
     await page.route(/\/api\/plugin-packages(\/.*)?$/, async (route: Route) => {
       const req = route.request();
+      if (req.method() === 'GET' && req.url().endsWith('/bundled')) return json(route, 200, []);
       if (req.method() === 'GET') return json(route, 200, packages);
       if (req.method() === 'PATCH') {
         const body = req.postDataJSON() as { approveInProcess?: string };

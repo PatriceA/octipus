@@ -1,6 +1,7 @@
 /**
- * The plugin package routes are admin-only, path and URL installs alike, and
- * the registry listing too; a POST names exactly one source.
+ * The plugin package routes are admin-only, path, URL and bundled installs
+ * alike, and the registry and bundled listings too; a POST names exactly one
+ * source.
  */
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { App } from '@/api/http';
@@ -32,6 +33,10 @@ vi.mock('@/plugins/packages/service', async (importOriginal) => ({
   setSecret: async () => {},
   uninstall: async () => {},
 }));
+vi.mock('@/plugins/packages/bundled', () => ({
+  installBundled: async (...args: unknown[]) => { fixture.calls.push({ fn: 'installBundled', args }); return row; },
+  listBundled: async () => { fixture.calls.push({ fn: 'listBundled', args: [] }); return [{ name: 'reader', installed: null }]; },
+}));
 vi.mock('@/plugins/packages/remote', () => ({
   installFromUrl: async (...args: unknown[]) => { fixture.calls.push({ fn: 'installFromUrl', args }); return row; },
   listRegistry: async () => { fixture.calls.push({ fn: 'listRegistry', args: [] }); return { packages: [], errors: [] }; },
@@ -53,7 +58,9 @@ const SHA = `sha256:${'b'.repeat(64)}`;
 const ROUTES: Array<[string, string, unknown?]> = [
   ['GET', '/'],
   ['GET', '/registry'],
+  ['GET', '/bundled'],
   ['POST', '/', { path: '/opt/plugins/demo' }],
+  ['POST', '/', { bundled: 'reader' }],
   ['POST', '/', { url: 'https://plugins.example.com/demo.tar.gz', sha256: SHA }],
   ['PATCH', '/demo', { approveContent: SHA }],
   ['PUT', '/demo/secrets/TOKEN', { value: 'x' }],
@@ -84,6 +91,28 @@ describe('plugin package routes', () => {
       { fn: 'installFromUrl', args: ['https://plugins.example.com/demo.tar.gz', ADMIN.id, { upgrade: false, allowSignerChange: true, sha256: SHA, name: 'demo', version: '1.0.0' }] },
       { fn: 'listRegistry', args: [] },
     ]);
+  });
+
+  test('an admin lists and installs the bundled plugins', async () => {
+    fixture.user = ADMIN;
+    expect((await call('GET', '/bundled')).body).toEqual([{ name: 'reader', installed: null }]);
+    expect((await call('POST', '/', { bundled: 'reader' })).status).toBe(200);
+    expect((await call('POST', '/', { bundled: 'reader', upgrade: true })).status).toBe(200);
+    expect((await call('POST', '/', { bundled: '../etc' })).status).toBe(422);
+    expect((await call('POST', '/', { bundled: 'reader', path: '/opt/x' })).status).toBe(400);
+    expect(fixture.calls).toEqual([
+      { fn: 'listBundled', args: [] },
+      { fn: 'installBundled', args: ['reader', ADMIN.id, { upgrade: false }] },
+      { fn: 'installBundled', args: ['reader', ADMIN.id, { upgrade: true }] },
+    ]);
+  });
+
+  test('a PATCH hands the host API scopes the admin approves to the service', async () => {
+    fixture.user = ADMIN;
+    expect((await call('PATCH', '/demo', { enabled: true, approveHostScopes: ['web:read', 'tasks:write'] })).status).toBe(200);
+    expect(fixture.calls).toEqual([{ fn: 'configure', args: ['demo', {
+      settings: undefined, enabled: true, approveContent: undefined, approveInProcess: undefined, approveHostScopes: ['web:read', 'tasks:write'],
+    }, ADMIN.id] }]);
   });
 
   test('a POST names exactly one source; a URL is https and sha256 goes with it', async () => {

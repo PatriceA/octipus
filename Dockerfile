@@ -77,6 +77,9 @@ COPY browser-extension/ browser-extension/
 # finds nothing in the image.
 COPY docs/ docs/
 COPY personas/ personas/
+# First-party plugins (docs/PLUGIN-PACKAGES.md#bundled-plugins): offered under
+# Admin → Plugin packages → Bundled, installed (pinned, disabled) from here.
+COPY plugins/ plugins/
 
 # Create data directories
 RUN mkdir -p /data/workspace /data/documents /data/extensions

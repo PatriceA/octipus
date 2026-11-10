@@ -1,5 +1,6 @@
 /**
- * `octi plugin list`, `approve`, `approve-in-process`, `approve-contributions`, `set`, `secret` and `uninstall`
+ * `octi plugin list`, `approve`, `approve-in-process`, `approve-contributions`, `set`, `secret`, `uninstall`,
+ * `bundled` and `install-bundled`
  * (docs/PLUGIN-PACKAGES.md): the installed plugin packages, through the
  * running backend's API.
  *
@@ -12,7 +13,7 @@
  * tested with a fetch and a prompt of the test's own.
  */
 import { parseArgs } from 'node:util';
-import { MAX_PLUGIN_SECRET_LENGTH, type PluginPackageView } from '@/shared/plugin-package';
+import { type BundledPluginView, MAX_PLUGIN_SECRET_LENGTH, type PluginPackageView } from '@/shared/plugin-package';
 
 export interface PluginApiIo {
   fetch: typeof fetch;
@@ -287,6 +288,45 @@ export async function uninstallCommand(io: PluginApiIo, name: string, yes: boole
   } catch (err) {
     if (!(err instanceof CliError)) throw err;
     io.err(`octi plugin uninstall: ${err.message}\n`);
+    return err.exitCode;
+  }
+}
+
+/** `octi plugin bundled`: the first-party plugins shipped with Octipus, and whether each is installed. */
+export async function bundledCommand(io: PluginApiIo): Promise<number> {
+  try {
+    const bundled = await request<BundledPluginView[]>(io, 'GET', '/bundled');
+    if (bundled.length === 0) io.out('No bundled plugins in this install.\n');
+    for (const b of bundled) {
+      const state = b.problem ? `problem: ${b.problem}` : b.installed === null ? 'not installed'
+        : b.installed === b.version ? 'installed' : `installed ${b.installed} (upgrade with: octi plugin install-bundled ${b.name} --upgrade)`;
+      io.out(`${b.name} ${b.version}  ${state}\n    ${b.title}: ${b.description}\n${b.host.length ? `    host scopes: ${b.host.join(', ')}\n` : ''}`);
+    }
+    return 0;
+  } catch (err) {
+    if (!(err instanceof CliError)) throw err;
+    io.err(`octi plugin bundled: ${err.message}\n`);
+    return err.exitCode;
+  }
+}
+
+/**
+ * `octi plugin install-bundled <name> [--upgrade]`: install a plugin shipped
+ * with Octipus. Like any install it is pinned to its content hash and starts
+ * disabled; enabling it (and approving its host scopes) stays an admin's step.
+ */
+export async function installBundledCommand(io: PluginApiIo, name: string, upgrade: boolean): Promise<number> {
+  try {
+    checkName(name);
+    const res = await request<{ name: string; version: string; contentHash: string | null; warnings?: string[] }>(
+      io, 'POST', '/', { bundled: name, ...(upgrade ? { upgrade: true } : {}) });
+    io.out(`Installed ${res.name} ${res.version} (disabled), content ${res.contentHash ?? 'not pinned'}.\n`);
+    for (const w of res.warnings ?? []) io.out(`  ⚠ ${w}\n`);
+    io.out('Review it on Admin → Plugin packages, then enable it there and approve the host API scopes it asks for.\n');
+    return 0;
+  } catch (err) {
+    if (!(err instanceof CliError)) throw err;
+    io.err(`octi plugin install-bundled: ${err.message}\n`);
     return err.exitCode;
   }
 }
