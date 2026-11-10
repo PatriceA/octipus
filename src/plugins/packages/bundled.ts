@@ -1,7 +1,8 @@
 /**
  * First-party plugins shipped with Octipus (docs/PLUGIN-PACKAGES.md#bundled-plugins):
  * the package directories under `plugins/` at the root of the checkout or the
- * install that `SHIPPED_PLUGINS` names. Only the example plugin, Reader, ships.
+ * install that `SHIPPED_PLUGINS` names. Only the example plugins, Reader and
+ * Research, ship.
  * Any other directory there (a plugin someone made and dropped in) is never
  * listed, installed as bundled or treated as a shipped name: local plugins
  * live outside the install (docs/PLUGIN-PACKAGES.md#where-plugins-live). They are offered to admins (`GET /api/plugin-packages/bundled`,
@@ -25,8 +26,8 @@ import { installFromDirectory, PluginPackageError, readManifest } from './servic
 
 const NAME_RE = /^[a-z][a-z0-9-]{1,49}$/;
 
-/** The plugins Octipus ships, by directory name under `<install>/plugins`: the example plugin only. */
-export const SHIPPED_PLUGINS: readonly string[] = ['reader'];
+/** The plugins Octipus ships, by directory name under `<install>/plugins`: the two example plugins. */
+export const SHIPPED_PLUGINS: readonly string[] = ['reader', 'research'];
 
 let rootOverride: string | null = null;
 let shippedOverride: readonly string[] | null = null;

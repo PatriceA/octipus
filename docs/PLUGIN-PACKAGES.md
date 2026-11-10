@@ -1334,14 +1334,16 @@ Codex ([CLI-AGENTS.md](CLI-AGENTS.md#one-shot-completions-lanes)).
 
 ## Bundled plugins
 
-Octipus ships one plugin: **the example plugin**, Reader (`plugins/reader`,
-[plugins/README.md](../plugins/README.md)). It is the reference
-implementation of a package plugin: tools with effects, host API scopes and a
-page that calls its tools through the bridge. Read it before you write your
-own. It is an example, not a product feature, so onboarding does not offer it.
+Octipus ships two plugins, **the example plugins** ([plugins/README.md](../plugins/README.md)):
+Reader (`plugins/reader`), work done inside one call, and Research
+(`plugins/research`), work that outlives the call (a background run read
+back by its id). They are the reference implementations of a package plugin:
+tools with effects, host API scopes and a page that calls its tools through
+the bridge. Read them before you write your own. They are examples, not
+product features, so onboarding does not offer them.
 
 The plugins Octipus ships are an explicit list, `SHIPPED_PLUGINS` in
-`src/plugins/packages/bundled.ts` (today `['reader']`), of package directories
+`src/plugins/packages/bundled.ts` (today `['reader', 'research']`), of package directories
 under `plugins/` in the checkout or install (the Docker image included). Any
 other directory under `plugins/` is never listed, installed as bundled or
 treated as a shipped name; Octipus logs it once, as a warning. A bundled
@@ -1370,7 +1372,8 @@ under `plugins.requireSignature` they are refused like any unsigned package.
 
 | Plugin | What it does | Host scopes |
 |---|---|---|
-| `reader` | The example plugin (it replaced the core reader, [MODULES.md](MODULES.md#modules-that-move-to-plugins)): a page in a clean view, summarized, simplified, translated, its action items or an answer about it, saved as a note or as to-dos. Tools `read_url`, `reader_action` (read), `save_note`, `create_tasks` (write); the page *Reader* at `/plugins/reader/read`. | `web:read`, `model:complete`, `notes:write`, `tasks:write` |
+| `reader` | An example plugin (it replaced the core reader, [MODULES.md](MODULES.md#modules-that-move-to-plugins)): a page in a clean view, summarized, simplified, translated, its action items or an answer about it, saved as a note or as to-dos. Tools `read_url`, `reader_action` (read), `save_note`, `create_tasks` (write); the page *Reader* at `/plugins/reader/read`. | `web:read`, `model:complete`, `notes:write`, `tasks:write` |
+| `research` | An example plugin (it replaced the core research module, [MODULES.md](MODULES.md#modules-that-move-to-plugins)): deep research on a question in the background by the host's research agent, as the user (web search, the user's knowledge), and the cited report saved to the user's documents. Tools `start_research` (write: starts the run, keeps its id), `research_status` (read: the run's status and report), `save_report` (write: a document, or an update of the one saved before); the page *Research* at `/plugins/research/run`. | `agent:run`, `documents:write` |
 
 ## Where plugins live
 
@@ -1387,7 +1390,7 @@ you run a release install or a git checkout:
   refuses a plugin store or data directory that resolves inside
   `<install>/plugins` (a misconfigured `workspace.rootPath`), with an error
   that says so.
-- **Only the example plugin ships in `plugins/`.** The repository's
+- **Only the example plugins ship in `plugins/`.** The repository's
   `.gitignore` ignores every other path under `plugins/`, and Octipus does not
   offer one as bundled. New plugins are not added to the repository.
 - **No plugin system reads plugins from the Octipus checkout.** Plugin
@@ -1536,9 +1539,10 @@ into its workspace with the filesystem tool and edits them; a read tool rather
 than a scaffolding write, because the filesystem tool already decides where an
 agent's files go and asks for its writes.
 
-Beyond the templates, the skill points the agent to **the example plugin**,
-`plugins/reader` ([Bundled plugins](#bundled-plugins)), as the complete
-package to read: tools, host scopes and a page through the bridge. The skill
+Beyond the templates, the skill points the agent to **the example plugins**,
+`plugins/reader` and `plugins/research` ([Bundled plugins](#bundled-plugins)),
+as complete packages to read: tools, host scopes and a page through the
+bridge, and (Research) work longer than a call through `agent:run`. The skill
 tells the agent to write its package in its own workspace
 (`my-plugins/<name>/`), never in the Octipus repository ([Where plugins
 live](#where-plugins-live)).

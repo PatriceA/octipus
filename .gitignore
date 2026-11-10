@@ -94,11 +94,13 @@ logs.zip
 .last-good-build/
 .last-good-build.tmp/
 
-# Plugins: only the example plugin ships in the repository (plugins/README.md).
+# Plugins: only the example plugins ship in the repository (plugins/README.md).
 # A plugin you make stays on your machine, outside the repository.
 /plugins/*
 !/plugins/reader/
 !/plugins/reader.test.ts
+!/plugins/research/
+!/plugins/research.test.ts
 !/plugins/README.md
 
 # Local plugins and extensions never live in the repository. Legacy plugins

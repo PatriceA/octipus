@@ -66,7 +66,7 @@ const extensionOf = (mime: HostDocumentMimeType) => (mime === 'text/markdown' ? 
 export function documentName(raw: string, mime: HostDocumentMimeType): string {
   const ext = extensionOf(mime);
   const base = raw.replace(/[\u0000-\u001f<>:"/\\|?*]+/g, ' ').replace(/\s+/g, ' ').trim()
-    .replace(/\.(md|markdown|txt)$/i, '').slice(0, 150).trim();
+    .replace(/\.(md|markdown|txt)$/i, '').slice(0, 150).replace(/[.\s]+$/, '');
   return `${base || 'document'}.${ext}`;
 }
 
