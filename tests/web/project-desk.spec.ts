@@ -3,6 +3,31 @@ import { test, expect } from './fixtures/auth';
 import { json } from './fixtures/api-stubs';
 import { stubGateway } from './fixtures/gateway';
 import type { WorkspaceDesk, DeskSession } from '../../src/shared/workspace-desk';
+
+test('workspace banner follows the saved companion appearance after a change', async ({ authenticatedPage: page }) => {
+  let appearance = { form: 'ink', color: 'lavender' };
+  await page.route('**/api/persona', route => json(route, 200, {
+    id: 'octipus', presetId: 'octipus', name: 'Sparkle', pronouns: 'they/them', tone: 'playful',
+    narration: 'minimal', signaturePhrases: [], userFacts: [], appearance,
+  }));
+  await page.route('**/api/persona/appearance', route => {
+    appearance = route.request().postDataJSON();
+    return json(route, 200, { appearance });
+  });
+  await page.goto('/');
+  const portrait = page.locator('.desk-companion-strip img');
+  await expect(portrait).toHaveAttribute('src', '/companions/ink-lavender.webp');
+  expect(await portrait.evaluate(el => (el as HTMLImageElement).decode().then(() => (el as HTMLImageElement).naturalWidth))).toBe(512);
+  await page.goto('/persona');
+  await page.getByRole('radio', { name: 'Reef', exact: true }).check();
+  await page.getByRole('radio', { name: 'Ocean blue', exact: true }).check();
+  await page.getByRole('button', { name: 'Save appearance', exact: true }).click();
+  await expect(page.getByText('Appearance saved.', { exact: true })).toBeVisible();
+  await page.goto('/');
+  await expect(portrait).toHaveAttribute('src', '/companions/ribbon-blue.webp');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
 const at = '2026-11-09T14:32:00Z';
 const row = (id: string, title: string, state: DeskSession['state']): DeskSession => ({ id, title, state, activity: state === 'working' ? 'Running release checks' : 'A request needs your answer', outcome: 'Recorded in plan: Run tests', next: 'Check the connected phone', updatedAt: at, pipelineId: null,
   events: [{ at, text: 'Review finished' }], plan: { title: 'Release plan', revision: 3, updatedAt: at, changes: [{ at, summary: 'Phone acceptance added after review' }] } });

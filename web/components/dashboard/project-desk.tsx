@@ -11,6 +11,8 @@ import { useWorkspace } from '@/lib/workspace-context';
 import { useGateway, useGatewayStatus } from '@/lib/gateway-context';
 import { PageHeader } from '@/components/ui/page-header';
 import { OnboardingGuide } from '@/components/onboarding/onboarding-guide';
+import { CompanionAvatar } from '@/components/companion/companion-avatar';
+import type { CompanionAppearance } from '../../../src/shared/companion';
 
 const chat = (id: string) => `/chat?session=${encodeURIComponent(id)}`;
 function Badge({ state }: { state: DeskState }) { return <span className={`desk-state state-${state}`}><span aria-hidden />{DESK_STATE_LABEL[state]}</span>; }
@@ -29,6 +31,7 @@ function Desk({ personal, workspaceName }: { personal: boolean; workspaceName: s
   const { activeWorkspace } = useWorkspace();
   const router = useRouter();
   const companion = useCompanionChat();
+  const { data: persona } = useQuery({ queryKey: ['persona', 'me'], queryFn: () => api.get<{ appearance?: CompanionAppearance }>('/persona'), enabled: personal });
   const gateway = useGateway();
   const connected = useGatewayStatus() === 'connected';
   useEffect(() => { if (window.location.hash === '#budgets') router.replace('/settings?tab=usage'); }, [router]);
@@ -66,7 +69,7 @@ function Desk({ personal, workspaceName }: { personal: boolean; workspaceName: s
   return <div className="project-desk">
     <PageHeader title="Workspace" badge={<span className="desk-workspace-name">{workspaceName}</span>} actions={<Link className="desk-primary" href="/chat?new=1"><Plus size={16} aria-hidden />New session</Link>} />
     <OnboardingGuide variant="home" />
-    <section className="desk-companion-strip" aria-label="Companion"><img src="/companion-mark.svg" alt="" /><div><div className="flex items-center gap-3 flex-wrap"><strong>Companion</strong><span>{companion.isError ? 'Status unavailable' : companion.isPending ? 'Loading…' : companion.data?.enabled ? 'Supervision enabled' : 'Supervision disabled'}</span></div><p>{sessions.some(session => session.state === 'needs_you') ? `${sessions.filter(session => session.state === 'needs_you').length} ${sessions.filter(session => session.state === 'needs_you').length === 1 ? 'session needs' : 'sessions need'} your answer.` : snapshot.isError ? 'Workspace status could not be refreshed.' : 'Follow your work or hand over the next step.'}</p></div><Link className="desk-companion-button" href={companionId ? chat(companionId) : '/companion'}>{companionId ? 'Open Companion' : 'Set up Companion'}<ArrowRight size={15} aria-hidden /></Link></section>
+    <section className="desk-companion-strip" aria-label="Companion"><CompanionAvatar appearance={persona?.appearance} size={40} /><div><div className="flex items-center gap-3 flex-wrap"><strong>Companion</strong><span>{companion.isError ? 'Status unavailable' : companion.isPending ? 'Loading…' : companion.data?.enabled ? 'Supervision enabled' : 'Supervision disabled'}</span></div><p>{sessions.some(session => session.state === 'needs_you') ? `${sessions.filter(session => session.state === 'needs_you').length} ${sessions.filter(session => session.state === 'needs_you').length === 1 ? 'session needs' : 'sessions need'} your answer.` : snapshot.isError ? 'Workspace status could not be refreshed.' : 'Follow your work or hand over the next step.'}</p></div><Link className="desk-companion-button" href={companionId ? chat(companionId) : '/companion'}>{companionId ? 'Open Companion' : 'Set up Companion'}<ArrowRight size={15} aria-hidden /></Link></section>
     {(snapshot.isError || !!snapshot.data?.warnings.length) && <div role="status" className="desk-warning"><strong>{snapshot.isError ? 'Workspace status is unavailable.' : 'Some status could not be confirmed.'}</strong>{snapshot.data && snapshot.isError && <p>Showing a saved snapshot from {new Date(snapshot.data.observedAt).toLocaleTimeString()}. It may be out of date.</p>}{snapshot.error && <p>{snapshot.error.message}</p>}{snapshot.data?.warnings.map(warning => <p key={warning}>{warning}</p>)}<button onClick={() => void snapshot.refetch()} className="desk-link">Retry <RefreshCw size={13} /></button></div>}
     <div className="desk-layout"><section aria-label="Sessions" className="desk-sessions"><header className="desk-section-heading"><h2>Sessions</h2><span>{snapshot.data ? `Snapshot ${new Date(snapshot.data.observedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : snapshot.isPending ? 'Loading…' : 'Unavailable'}</span></header>
       <div className="desk-filters" role="group" aria-label="Filter sessions">{(['all', 'working', 'needs_you', 'blocked', 'paused', 'updated', 'idle', 'unknown'] as const).map(state => { const count = state === 'all' ? sessions.length : sessions.filter(session => session.state === state).length; if (!count && state !== 'all' && filter !== state) return null; return <button key={state} type="button" aria-pressed={filter === state} onClick={() => setFilter(state)}>{state === 'all' ? 'All' : DESK_STATE_LABEL[state]}<span>{count}</span></button>; })}</div>
