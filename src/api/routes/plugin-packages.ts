@@ -32,7 +32,8 @@ function refused(err: unknown, set: { status?: number | string }): { error: stri
  * Installing takes a directory on the server, signed or not (signature checked
  * against plugins.trustedPublishers), or an https tarball, which must carry a
  * valid trusted signature; `GET /registry` lists what plugins.registries
- * offer. A package starts disabled.
+ * offer. A package starts disabled. An `in-process` plugin also needs
+ * `approveInProcess` before it can be enabled.
  */
 export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   .use(apiContext)
@@ -113,7 +114,9 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
       const denied = adminDenied({ set, user, principal });
       if (denied) return denied;
       try {
-        await configure(params.name, { settings: body.settings, enabled: body.enabled, approveContent: body.approveContent }, principal.userId);
+        await configure(params.name, {
+          settings: body.settings, enabled: body.enabled, approveContent: body.approveContent, approveInProcess: body.approveInProcess,
+        }, principal.userId);
         return await packageView(params.name);
       } catch (err) {
         return refused(err, set);
@@ -130,6 +133,15 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
          * message asking for the hash; it is accepted here only to say so.
          */
         approveContent: t.Optional(t.Union([t.String({ maxLength: 100 }), t.Boolean()])),
+        /**
+         * An `in-process` plugin only: approve running it in the server
+         * process, for the content hash the admin reviewed (the approved
+         * `contentHash`). Refused (409) unless it is the approved content and
+         * the files hash to it now; approving other content clears it.
+         * Enabling such a plugin without it is refused (409). A boolean is
+         * refused (400) with a message asking for the hash.
+         */
+        approveInProcess: t.Optional(t.Union([t.String({ maxLength: 100 }), t.Boolean()])),
         settings: t.Optional(t.Record(t.String({ maxLength: 50 }), t.Unknown())),
       }),
       detail: { tags: ['plugin-packages'] },

@@ -10,6 +10,7 @@ import { describe, expect, test } from 'vitest';
 import { MAX_PLUGIN_SECRET_LENGTH, type PluginPackageView } from '@/shared/plugin-package';
 import {
   approveCommand,
+  approveInProcessCommand,
   backendBase,
   type HiddenInput,
   listCommand,
@@ -33,6 +34,7 @@ function view(over: Partial<PluginPackageView> = {}): PluginPackageView {
     network: { state: 'refused', detail: 'Not started' }, connected: false,
     contentHash: RECORDED, actualHash: ACTUAL, signedBy: null,
     signature: { status: 'invalid', keyId: null, publisher: null, detail: 'does not match' },
+    runtime: 'package', inProcess: null,
     installedBy: null, installedAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-01T00:00:00Z',
     ...over,
   };
@@ -165,6 +167,62 @@ describe('octi plugin approve', () => {
     expect(await approveCommand(harness().io, 'datev', undefined)).toBe(1);
     const bad = harness();
     expect(await approveCommand(bad.io, 'finapi', 'abc')).toBe(2);
+    expect(bad.requests).toEqual([]);
+  });
+});
+
+describe('octi plugin approve-in-process', () => {
+  const inProcessView = (over: Partial<PluginPackageView> = {}) => view({
+    name: 'auditlog', runtime: 'in-process', problem: null, actualHash: null, enabled: false,
+    inProcess: { approved: false, approvedHash: null, approvedBy: null, approvedAt: null, loaded: false },
+    ...over,
+  });
+  const approvedView = (body: { approveInProcess?: string }): [number, unknown] => [200, inProcessView({
+    inProcess: { approved: true, approvedHash: body.approveInProcess ?? null, approvedBy: 'u', approvedAt: '2026-11-10T00:00:00Z', loaded: false },
+  })];
+
+  test('list shows the runtime and the missing approval with the command to give it', async () => {
+    const h = harness({ packages: [inProcessView()] });
+    expect(await listCommand(h.io)).toBe(0);
+    const text = h.out.join('');
+    expect(text).toContain('runtime:   in-process');
+    expect(text).toContain(`octi plugin approve-in-process auditlog --hash ${RECORDED}`);
+  });
+
+  test('with --hash: sends exactly that hash as approveInProcess', async () => {
+    const h = harness({ respond: (method, body) => (method === 'PATCH' ? approvedView(body as { approveInProcess?: string }) : undefined) });
+    expect(await approveInProcessCommand(h.io, 'auditlog', RECORDED)).toBe(0);
+    expect(h.requests).toEqual([expect.objectContaining({ method: 'PATCH', url: 'http://localhost:4999/api/plugin-packages/auditlog', body: { approveInProcess: RECORDED } })]);
+    expect(h.out.join('')).toContain(`Approved auditlog to run in the server process, for ${RECORDED}. Enable it to load it.`);
+  });
+
+  test('without --hash: asks at a terminal for the approved content hash; refuses to guess elsewhere', async () => {
+    const yes = harness({ packages: [inProcessView()], interactive: true, answer: 'y', respond: (method, body) => (method === 'PATCH' ? approvedView(body as { approveInProcess?: string }) : undefined) });
+    expect(await approveInProcessCommand(yes.io, 'auditlog', undefined)).toBe(0);
+    expect(yes.asked[0]).toContain(RECORDED);
+    expect(yes.asked[0]).toContain('full authority');
+    expect(yes.requests.at(-1)?.body).toEqual({ approveInProcess: RECORDED });
+
+    const no = harness({ packages: [inProcessView()], interactive: true, answer: 'n' });
+    expect(await approveInProcessCommand(no.io, 'auditlog', undefined)).toBe(1);
+    expect(no.requests.filter((r) => r.method === 'PATCH')).toEqual([]);
+
+    const away = harness({ packages: [inProcessView()] });
+    expect(await approveInProcessCommand(away.io, 'auditlog', undefined)).toBe(2);
+    expect(away.err.join('')).toContain(`octi plugin approve-in-process auditlog --hash ${RECORDED}`);
+  });
+
+  test('a package, changed content or a bad hash are refused before anything is sent', async () => {
+    const pkgHarness = harness({ packages: [view({ name: 'finapi', runtime: 'package' })] });
+    expect(await approveInProcessCommand(pkgHarness.io, 'finapi', undefined)).toBe(1);
+    expect(pkgHarness.err.join('')).toMatch(/sandboxed package/);
+
+    const changed = harness({ packages: [inProcessView({ actualHash: ACTUAL })] });
+    expect(await approveInProcessCommand(changed.io, 'auditlog', undefined)).toBe(1);
+    expect(changed.err.join('')).toContain('octi plugin approve auditlog first');
+
+    const bad = harness();
+    expect(await approveInProcessCommand(bad.io, 'auditlog', 'sha256:nope')).toBe(2);
     expect(bad.requests).toEqual([]);
   });
 });

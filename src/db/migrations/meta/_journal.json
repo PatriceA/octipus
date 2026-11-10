@@ -1233,6 +1233,13 @@
       "when": 1794225600000,
       "tag": "0175_automation_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 176,
+      "version": "7",
+      "when": 1794229200000,
+      "tag": "0176_plugin_package_in_process",
+      "breakpoints": true
     }
   ]
 }

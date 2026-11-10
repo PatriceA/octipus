@@ -1,5 +1,5 @@
 /**
- * `octi plugin list`, `approve`, `set`, `secret` and `uninstall`
+ * `octi plugin list`, `approve`, `approve-in-process`, `set`, `secret` and `uninstall`
  * (docs/PLUGIN-PACKAGES.md): the installed plugin packages, through the
  * running backend's API.
  *
@@ -78,13 +78,20 @@ async function request<T>(io: PluginApiIo, method: string, path: string, body?: 
 }
 
 function line(p: PluginPackageView): string {
-  const state = p.problem ? `problem: ${p.problem}` : p.enabled ? (p.connected ? 'running' : 'enabled, not connected') : 'disabled';
+  const inProcess = p.runtime === 'in-process';
+  const running = inProcess ? (p.connected ? 'loaded' : 'enabled, not loaded') : (p.connected ? 'running' : 'enabled, not connected');
+  const state = p.problem ? `problem: ${p.problem}` : p.enabled ? running : 'disabled';
   const signer = p.signature ? `${p.signature.status}${p.signature.publisher ? ` (${p.signature.publisher})` : ''}` : 'not pinned yet';
+  const approval = p.inProcess?.approved
+    ? `approved for ${p.inProcess.approvedHash}`
+    : `not approved (approve with: octi plugin approve-in-process ${p.name} --hash ${p.contentHash ?? '<content hash>'})`;
   return [
     `${p.name} ${p.version}  ${state}`,
+    `    runtime:   ${p.runtime ?? 'package'}`,
     `    signature: ${signer}; network: ${p.network.state}`,
     `    content:   ${p.contentHash ?? 'not pinned yet'}`,
     ...(p.actualHash ? [`    actual:    ${p.actualHash}   (approve with: octi plugin approve ${p.name} --hash ${p.actualHash})`] : []),
+    ...(inProcess ? [`    in-process: ${approval}`] : []),
   ].join('\n');
 }
 
@@ -139,6 +146,53 @@ export async function approveCommand(io: PluginApiIo, name: string, hash: string
   } catch (err) {
     if (!(err instanceof CliError)) throw err;
     io.err(`octi plugin approve: ${err.message}\n`);
+    return err.exitCode;
+  }
+}
+
+/**
+ * `octi plugin approve-in-process <name> [--hash sha256:…]`: approve an
+ * in-process plugin to run in the server process, for its approved content.
+ * With --hash, that hash is sent as reviewed; without it, the approved
+ * content hash is shown and must be confirmed at a terminal (refused
+ * otherwise). The backend refuses (409) a hash that is not the approved
+ * content, or files that no longer hash to it.
+ */
+export async function approveInProcessCommand(io: PluginApiIo, name: string, hash: string | undefined): Promise<number> {
+  try {
+    checkName(name);
+    if (hash !== undefined && !/^sha256:[0-9a-f]{64}$/.test(hash)) throw new CliError('--hash takes sha256:<64 hex>, the content hash `octi plugin list` shows', 2);
+    let reviewed = hash;
+    if (reviewed === undefined) {
+      const packages = await request<PluginPackageView[]>(io, 'GET', '/');
+      const pkg = packages.find((p) => p.name === name);
+      if (!pkg) throw new CliError(`no plugin package named ${name}`);
+      if (pkg.runtime !== 'in-process') throw new CliError(`${name} runs as a sandboxed package; only an in-process plugin is approved to run in the server process`);
+      if (pkg.actualHash || !pkg.contentHash) {
+        throw new CliError(`${name} has content waiting for approval; review it and run octi plugin approve ${name} first`);
+      }
+      if (pkg.inProcess?.approved) {
+        io.out(`${name} is already approved to run in the server process (${pkg.contentHash}).\n`);
+        return 0;
+      }
+      io.out(`${line(pkg)}\n\n`);
+      if (!io.interactive) {
+        throw new CliError(`not at a terminal: review the files of ${name}, then run\n  octi plugin approve-in-process ${name} --hash ${pkg.contentHash}`, 2);
+      }
+      const answer = (await io.ask(`Run ${name} in the server process, with the server's full authority, for the content that hashes to ${pkg.contentHash}? [y/N] `)).trim().toLowerCase();
+      if (answer !== 'y' && answer !== 'yes') {
+        io.out('Not approved.\n');
+        return 1;
+      }
+      reviewed = pkg.contentHash;
+    }
+    const view = await request<PluginPackageView>(io, 'PATCH', `/${encodeURIComponent(name)}`, { approveInProcess: reviewed });
+    io.out(`Approved ${name} to run in the server process, for ${view.inProcess?.approvedHash ?? reviewed}.${view.enabled ? '' : ` Enable it to load it.`}\n`);
+    if (view.problem) io.out(`  still: ${view.problem}\n`);
+    return 0;
+  } catch (err) {
+    if (!(err instanceof CliError)) throw err;
+    io.err(`octi plugin approve-in-process: ${err.message}\n`);
     return err.exitCode;
   }
 }

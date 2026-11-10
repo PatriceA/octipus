@@ -54,15 +54,22 @@ export interface PluginManifest {
   description: string;
   publisher?: string;
   homepage?: string;
-  /** How the host starts the package: a local MCP server over stdio, in the package directory. */
-  server: {
+  /**
+   * How the host starts the package: a local MCP server over stdio, in the
+   * package directory. Required for runtime `package`; absent for `in-process`.
+   */
+  server?: {
     command: string;
     args?: string[];
     /** Per-request timeout for slow tools, in milliseconds. */
     requestTimeoutMs?: number;
   };
-  /** Every tool the package offers and what it does. */
-  tools: Record<string, PluginToolDecl>;
+  /**
+   * Every tool the package offers and what it does. Required for runtime
+   * `package`; absent for `in-process` (its tools are registered with
+   * `octi.registerTool`, each with its own effect).
+   */
+  tools?: Record<string, PluginToolDecl>;
   /** Hosts the package talks to. Shown at install; the sandbox gets network only when there is at least one. */
   network?: string[];
   /**
@@ -171,3 +178,55 @@ export interface PluginPackageView {
   installedAt: string;
   updatedAt: string;
 }
+
+// ---------------------------------------------------------------------------
+// Runtimes (docs/PLUGIN-PACKAGES.md#runtimes, docs/plans/plugins-everything.md
+// phase 1): a package runs as a sandboxed MCP server (`package`, the default)
+// or as a trusted extension loaded into the server process (`in-process`).
+// The fields below merge into the interfaces above.
+// ---------------------------------------------------------------------------
+
+/** How a plugin runs. */
+export const PLUGIN_RUNTIMES = ['package', 'in-process'] as const;
+export type PluginRuntime = (typeof PLUGIN_RUNTIMES)[number];
+
+export interface PluginManifest {
+  /** How the plugin runs; `package` when absent. */
+  runtime?: PluginRuntime;
+  /**
+   * For `in-process`: the module (`.ts`, `.js` or `.mjs`, relative to the
+   * package root) whose default export is the extension factory
+   * (`(octi) => void | Promise<void>`, docs/PLUGINS.md#from-an-extension-octihook-trusted-extensions-only).
+   */
+  entry?: string;
+}
+
+/**
+ * The extra approval an `in-process` plugin needs before it may be enabled:
+ * running in the server process, recorded with the content hash it covers.
+ * Approving other content (an upgrade, a content approval of new bytes)
+ * clears it.
+ */
+export interface PluginInProcessStatus {
+  /** Whether the approval covers the approved content now (`approvedHash === contentHash`). */
+  approved: boolean;
+  /** The content hash approved to run in the server process, or null. */
+  approvedHash: string | null;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  /** Whether its module is loaded in this server process now. */
+  loaded: boolean;
+}
+
+export interface PluginPackageView {
+  /** `manifest.runtime`, defaulted. */
+  runtime: PluginRuntime;
+  /** For an `in-process` plugin, its in-process approval and whether it is loaded; null for `package`. */
+  inProcess: PluginInProcessStatus | null;
+}
+
+/** The runtime a manifest declares, defaulted. */
+export function pluginRuntime(m: { runtime?: PluginRuntime }): PluginRuntime {
+  return m.runtime ?? 'package';
+}
+// --- end runtimes ----------------------------------------------------------

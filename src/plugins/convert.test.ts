@@ -149,8 +149,8 @@ describe('convertLegacyPlugin: the shipped example', () => {
   test('effects can be lowered per tool, and the output must be empty', async () => {
     const out = join(tmp('octipus-convert-'), 'pkg');
     const result = await convertLegacyPlugin(EXAMPLE, { outDir: out, effects: { greet: 'read' } });
-    expect(result.manifest.tools.greet.effect).toBe('read');
-    expect(result.manifest.tools.calculate.effect).toBe('external');
+    expect(result.manifest.tools?.greet.effect).toBe('read');
+    expect(result.manifest.tools?.calculate.effect).toBe('external');
     await expect(convertLegacyPlugin(EXAMPLE, { outDir: out })).rejects.toThrow(/exists and is not empty/);
   });
 });

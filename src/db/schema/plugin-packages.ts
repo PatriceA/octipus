@@ -21,6 +21,11 @@ import { users } from './users';
  * file's bytes recorded with `contentHash` (null: no signature file): the
  * file is outside the content hash, so it is pinned on its own and compared
  * before every start.
+ *
+ * `inProcessApprovedHash` is the content hash an admin approved to run in the
+ * server process (runtime `in-process`, docs/PLUGIN-PACKAGES.md#runtimes),
+ * with who and when; it holds only while it equals `contentHash`, and
+ * approving other content clears it.
  */
 export const pluginPackages = pgTable('plugin_packages', {
   name: text('name').primaryKey(),
@@ -30,6 +35,9 @@ export const pluginPackages = pgTable('plugin_packages', {
   contentHash: text('content_hash'),
   signedBy: text('signed_by'),
   signatureHash: text('signature_hash'),
+  inProcessApprovedHash: text('in_process_approved_hash'),
+  inProcessApprovedBy: uuid('in_process_approved_by').references(() => users.id, { onDelete: 'set null' }),
+  inProcessApprovedAt: timestamp('in_process_approved_at', { withTimezone: true }),
   settings: jsonb('settings').$type<Record<string, string | number | boolean>>().default({}).notNull(),
   installedBy: uuid('installed_by').references(() => users.id, { onDelete: 'set null' }),
   installedAt: timestamp('installed_at', { withTimezone: true }).defaultNow().notNull(),

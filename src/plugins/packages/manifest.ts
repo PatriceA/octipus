@@ -7,6 +7,7 @@
 import { z } from 'zod';
 import { fieldListSchema } from '@/core/records/fields';
 import { SIGNATURE_FILE } from './integrity';
+import { refineRuntime, runtimeFields } from './manifest-runtime';
 import {
   PLUGIN_PACKAGE_API_VERSION,
   PLUGIN_TOOL_EFFECTS,
@@ -37,11 +38,12 @@ export const manifestSchema = z.object({
   description: z.string().trim().min(1).max(1000),
   publisher: z.string().trim().max(200).optional(),
   homepage: z.string().url().max(500).optional(),
+  ...runtimeFields,
   server: z.object({
     command: z.string().trim().min(1).max(500),
     args: z.array(z.string().max(1000)).max(50).optional(),
     requestTimeoutMs: z.number().int().min(1000).max(600_000).optional(),
-  }).strict(),
+  }).strict().optional(),
   tools: z.record(
     z.string().regex(TOOL_NAME_RE, 'tools: a tool name is letters, digits, _ and - (at most 64)'),
     z.object({
@@ -49,7 +51,7 @@ export const manifestSchema = z.object({
       description: z.string().max(500).optional(),
     }).strict(),
   ).refine((tools) => Object.keys(tools).length > 0, 'tools: declare at least one tool')
-    .refine((tools) => Object.keys(tools).length <= 200, 'tools: at most 200'),
+    .refine((tools) => Object.keys(tools).length <= 200, 'tools: at most 200').optional(),
   network: z.array(z.string().regex(HOST_RE, 'network: host names such as api.example.com, *.example.com or api.example.com:8443')
     .refine(hostPortOk, 'network: a port is 1-65535')).max(50).optional(),
   maxProtection: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).optional(),
@@ -61,9 +63,10 @@ export const manifestSchema = z.object({
     required: z.boolean().optional(),
   }).strict()).max(20).optional(),
 }).strict().superRefine((m, ctx) => {
+  refineRuntime(m, ctx);
   // The signature file is the one file the content hash leaves out: the server may not be started from it.
   const sigName = SIGNATURE_FILE.toLowerCase();
-  if ([m.server.command, ...(m.server.args ?? [])].some((part) => part.toLowerCase().includes(sigName))) {
+  if (m.server && [m.server.command, ...(m.server.args ?? [])].some((part) => part.toLowerCase().includes(sigName))) {
     ctx.addIssue({ code: 'custom', message: `server: the command and its args may not name ${SIGNATURE_FILE} (it is not covered by the content hash)` });
   }
   const keys = new Set<string>();
