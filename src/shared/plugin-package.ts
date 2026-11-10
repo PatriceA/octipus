@@ -44,7 +44,7 @@ export interface PluginSecretDecl {
   required?: boolean;
 }
 
-export interface PluginManifest {
+export interface PluginManifest extends PluginManifestContributions {
   /** Lower-case package name, e.g. `finapi`. */
   name: string;
   version: string;
@@ -230,3 +230,87 @@ export function pluginRuntime(m: { runtime?: PluginRuntime }): PluginRuntime {
   return m.runtime ?? 'package';
 }
 // --- end runtimes ----------------------------------------------------------
+
+// ── Contributions: commands, schedules, events, prompt, context ─────────────
+// (docs/PLUGIN-PACKAGES.md#contributions; checked in
+// src/plugins/packages/manifest-contributions.ts, bound in
+// src/plugins/packages/contributions/). Each one names one of the package's
+// own declared tools and runs through the same authorization as an agent call.
+
+/**
+ * The gateway events a package may subscribe to (`events[].on`). Each reaches
+ * the tool as ids only (never message text, file contents or secrets):
+ *
+ * - `chat.response` — a root turn answered: `{ type, at, userId, sessionId }`;
+ * - `document.completed` — an uploaded document was processed: `{ type, at, userId, documentId }`;
+ * - `document.failed` — processing an uploaded document failed: `{ type, at, userId, documentId }`.
+ */
+export const PLUGIN_EVENT_TYPES = ['chat.response', 'document.completed', 'document.failed'] as const;
+export type PluginEventType = (typeof PLUGIN_EVENT_TYPES)[number];
+
+/** `/name args` calls `tool` as the user who typed it, without a model turn. */
+export interface PluginCommandDecl {
+  /** The command without the slash; also reachable as `/<package>:<name>`. */
+  name: string;
+  tool: string;
+  description: string;
+  /**
+   * The tool's arguments. A string value `"$args"` is replaced by the text
+   * after the command. Default `{ "text": "$args" }`.
+   */
+  input?: Record<string, unknown>;
+}
+
+/** The cron runner calls `tool` with `input` (UTC, five fields). */
+export interface PluginScheduleDecl {
+  id: string;
+  cron: string;
+  tool: string;
+  input?: Record<string, unknown>;
+}
+
+export interface PluginEventDecl {
+  on: PluginEventType;
+  tool: string;
+}
+
+/** Static markdown from the package, added to the system prompt of `roles` (all when omitted). */
+export interface PluginPromptDecl {
+  /** A `.md` file in the package, relative to its root. */
+  file: string;
+  roles?: string[];
+}
+
+/** A `read` tool called at the start of every turn of `roles` (all when omitted); its text rides the turn. */
+export interface PluginContextDecl {
+  tool: string;
+  roles?: string[];
+}
+
+export interface PluginManifestContributions {
+  commands?: PluginCommandDecl[];
+  schedules?: PluginScheduleDecl[];
+  events?: PluginEventDecl[];
+  prompt?: PluginPromptDecl;
+  context?: PluginContextDecl;
+}
+
+/** The last run of a schedule, event or context contribution (on the plugin's row). */
+export interface PluginContributionRun {
+  at: string;
+  ok: boolean;
+  /** Why it failed, or what was skipped (rate limit). */
+  error: string | null;
+}
+
+/** What an installed package adds to the host, and whether each part is bound now. */
+export interface PluginContributionsView {
+  commands: Array<{ name: string; tool: string; description: string; bound: boolean }>;
+  schedules: Array<{ id: string; cron: string; tool: string; bound: boolean; lastRun: PluginContributionRun | null }>;
+  events: Array<{ on: PluginEventType; tool: string; bound: boolean; lastRun: PluginContributionRun | null }>;
+  prompt: { file: string; roles: string[] | null; bound: boolean; chars: number | null } | null;
+  context: { tool: string; roles: string[] | null; bound: boolean; lastRun: PluginContributionRun | null } | null;
+  /** Why a declared contribution is not bound right now (a name taken since install, content not approved). */
+  problems: string[];
+}
+// ── end contributions ───────────────────────────────────────────────────────
