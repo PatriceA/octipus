@@ -1,6 +1,6 @@
 # What plugins can do, and what they could do next
 
-Status: draft for discussion (2026-11-11). Builds on
+Status: agreed (2026-11-11); decisions recorded under Decisions. Builds on
 [plugins for everything](plugins-everything.md) and the
 [marketplace](marketplace.md). For the current contract, see
 [PLUGIN-PACKAGES.md](../PLUGIN-PACKAGES.md).
@@ -84,7 +84,8 @@ This is what makes "build your own view" possible.
 | `sessions:read` | Session titles and summaries, not the full transcripts | "Sees the titles of your conversations" |
 
 - **Protection levels:** every item carries its level. A plugin gets only items up to its `maxProtection`, and a plugin with network access, `web:read`, `model:complete`, `agent:run` or pages is capped at 1, as today. Mail and cases above level 1 therefore reach only a plugin with no way out. That is what proposal 2 is for.
-- **Write scopes later** (`mail:draft`, `calendar:write`, `cases:write`) follow the `documents:write` pattern: as the user, a `write` effect, the user's rules, and provenance on every item.
+- **Write scopes in the same round** (`mail:draft`, `mail:send`, `calendar:write`, `cases:write`) follow the `documents:write` pattern: as the user, a `write` effect (`external` for sending mail), the user's rules, and provenance on every item.
+  - **Sending mail** keeps the host's existing approval for outgoing mail.
 - **Effort:** medium. Each scope is a host API route on existing repositories, plus tests and wording.
 
 ### 2. Host-rendered dashboards
@@ -118,7 +119,8 @@ This is what makes "build your own view" possible.
 "providers": [{ "id": "my-llm", "models": ["my-llm/large"], "tool": "complete" }]
 ```
 
-- **How:** the host routes chat completions for those model ids to the plugin's `complete` tool, streaming where possible. An admin can then bind a lane or role to `my-llm/large` like any model.
+- **How:** the host routes chat completions for those model ids to the plugin's `complete` tool, streaming where possible.
+- **Where it can be used:** only on lanes an admin explicitly binds to it. Never for the root agent, and never picked automatically.
 - **Isolation:** the plugin stays sandboxed. It reaches only its declared network hosts, such as the provider's API, with its own API key as a secret.
 - **Consent:** "Provides AI models: my-llm/large. Conversations sent to these models go to this plugin, and from it to api.example.com".
 - **Protection:** it is egress by nature, so the host's routing treats it like a remote provider. Levels 3–4 stay local unless the plugin is declared `local: true`, meaning `network: []` and talking only to a local runtime through a declared socket.
@@ -128,8 +130,8 @@ This is what makes "build your own view" possible.
 
 Scopes `store:read` and `store:write`:
 - small JSON values per key;
-- scoped per user, or shared by the plugin across users (`shared: true` declared);
-- quotas: e.g. 5 MB per user and 50 MB shared;
+- scoped **per user only**: no store shared across users;
+- a quota, e.g. 5 MB per user;
 - reachable from the plugin's tools, and from its pages through the bridge, which gives page state between visits.
 
 **Consent:** "Keeps up to 5 MB of its own data per user".
@@ -176,6 +178,8 @@ This covers plan point C2b: a new invoice in DATEV opens a case.
 
 ### 8. Windows sandbox runner
 
+*Being built in a separate session.*
+
 **Why plugins don't run there today:** the sandbox is a hard boundary, and the runners exist only for Linux (bubblewrap, firejail) and macOS (`sandbox-exec`).
 
 **Works today:** run Octipus in WSL2 or Docker Desktop, which are Linux underneath, so bubblewrap works.
@@ -194,18 +198,19 @@ Node can't create AppContainers itself, so the helper is native, e.g. Rust or C#
 | # | Proposal | Why first |
 |---|---|---|
 | 1 | Store (4) | Small; unblocks page state and real plugin data |
-| 2 | Read scopes (1), mail and calendar first | The base for "build your own view" |
+| 2 | Read and write scopes (1), mail and calendar first | The base for "build your own view" |
 | 3 | Host-rendered dashboards (2) | The safe way to show sensitive data |
 | 4 | Credential injection (6) | Plugins build on accounts users already connected |
 | 5 | Tool allowlist (5) | Lets plugins compose with MCP servers |
 | 6 | Inbound hooks (7) | Integrations that react to the outside world |
 | 7 | Sandboxed provider (3) | Smaller audience; the router change is contained |
-| 8 | Windows runner (8) | Platform work; WSL2 and Docker cover it meanwhile |
 
-## Open questions
+The Windows runner (8) is being built in a separate session.
 
-1. **Dashboards:** host-rendered only, or also allow a page at level 1 next to them? Recommended: both. Dashboards for sensitive views, pages for custom UI.
-2. **Shared stores:** should a plugin's shared store (across users) need its own consent line per space, or be personal only at first?
-3. **Write scopes for mail and calendar:** in the first round, or after the read side has shipped?
-4. **Providers:** should a sandboxed provider be allowed to serve the root agent, or only lanes and roles an admin picks?
-5. **Windows:** native runner, or document WSL2/Docker as the supported way and leave it there?
+## Decisions
+
+1. **Dashboards and pages side by side.** Host-rendered dashboards for sensitive views; pages for custom UI, capped at level 1 as today.
+2. **The store is per user only.** There is no store shared across users.
+3. **Mail and calendar write scopes come in the first round**, together with the read scopes.
+4. **A sandboxed provider serves only lanes an admin binds to it**, never the root agent.
+5. **The Windows runner** is being built in a separate session.
