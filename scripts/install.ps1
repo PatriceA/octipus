@@ -41,6 +41,28 @@ try {
     if ((Test-Path $BackupEnv) -and -not (Test-Path '.env')) { Copy-Item $BackupEnv '.env' }
     Run-Native npm.cmd @('ci', '--include=dev')
     Run-Native npm.cmd @('--prefix', 'web', 'ci', '--include=dev')
+    # Native marketplace boundary. Exact release tags use their tested binary;
+    # source checkouts compile the matching helper, never a latest-version helper.
+    $tag = (& git tag --points-at HEAD | Where-Object { $_ -match '^v[0-9][A-Za-z0-9._-]*$' } | Select-Object -First 1)
+    if ($LASTEXITCODE -eq 0 -and $tag -match '^v[0-9][A-Za-z0-9._-]*$') {
+        if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'The published sandbox helper is x64. Build from source for this Windows architecture.' }
+        $nativeDir = Join-Path $InstallDir 'native\bin'
+        New-Item -ItemType Directory -Force -Path $nativeDir | Out-Null
+        $baseUrl = "https://github.com/PatriceA/octipus/releases/download/$tag"
+        $exe = Join-Path $nativeDir 'octipus-sandbox.exe'
+        Invoke-WebRequest "$baseUrl/octipus-sandbox.exe" -OutFile "$exe.download"
+        Invoke-WebRequest "$baseUrl/octipus-sandbox.exe.sha256" -OutFile "$exe.sha256"
+        $checksum = Get-Content "$exe.sha256" -Raw
+        $expected = ($checksum -split '\s+')[0]
+        if ($expected -notmatch '^[a-fA-F0-9]{64}$' -or (Get-FileHash "$exe.download" -Algorithm SHA256).Hash -ne $expected) {
+            Remove-Item "$exe.download" -ErrorAction SilentlyContinue
+            throw 'Native sandbox checksum mismatch. Installation stopped.'
+        }
+        Move-Item -Force "$exe.download" $exe
+    } else {
+        $global:LASTEXITCODE = 0
+        Run-Native npm.cmd @('run', 'build:sandbox:windows')
+    }
     Run-Native npm.cmd @('run', 'build')
     Run-Native npm.cmd @('--prefix', 'web', 'run', 'build')
     Run-Native npm.cmd @('--prefix', 'mcp-server', 'ci', '--include=dev')

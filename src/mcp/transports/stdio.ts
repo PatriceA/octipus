@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { privateWindowsProxyPipe } from '@/security/windows-plugin-sandbox';
 import { type ChildProcess, spawn } from 'child_process';
 import { mkdir } from 'node:fs/promises';
 import { buildChildEnv, buildIsolatedChildEnv } from '@/security/child-env';
@@ -72,7 +74,7 @@ export interface SandboxedLaunch {
  * listed, or a package started with it cannot run.
  */
 export function ownNodeBinary(execPath = process.execPath): string[] {
-  return /^\/(?:usr|bin|sbin|lib(?:32|64|x32)?)\//.test(execPath) ? [] : [execPath];
+  return process.platform === 'win32' || /^\/(?:usr|bin|sbin|lib(?:32|64|x32)?)\//.test(execPath) ? [] : [execPath];
 }
 
 /**
@@ -83,11 +85,13 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
   const writable = sandbox.writable ?? [];
   for (const dir of writable) await mkdir(dir, { recursive: true });
   const mode = sandbox.mode ?? getSandboxMode();
+  const authority = createHash('sha256').update(JSON.stringify({ env: Object.entries(env).sort(([a], [b]) => a.localeCompare(b)), egress: sandbox.egress ?? null })).digest('hex');
   const mounts = {
     mode,
     workspaceRoot: sandbox.root,
     // A package server may use sandbox-exec on macOS under `auto` too.
     allowSeatbelt: true,
+    ...(process.platform === 'win32' ? { allowAppContainer: true, windowsBroker: { authority } } : {}),
     ...(sandbox.readOnlyRoot ? { workspaceReadOnly: true } : {}),
     ...(writable.length > 0 ? { extraReadWrite: writable } : {}),
   };
@@ -97,19 +101,28 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
     // Octipus's own Node binary stays readable, as on the egress path: a
     // package started with it (e.g. under nvm, or a CI tool cache in $HOME)
     // must not fail to start just because it declares no hosts.
-    const wrapped = wrapCommand(argv, { ...mounts, allowNetwork: sandbox.allowNetwork, path: env.PATH, extraReadOnly: ownNodeBinary() });
+    const wrapped = wrapCommand(argv, { ...mounts, allowNetwork: process.platform === 'win32' ? false : sandbox.allowNetwork, path: env.PATH, extraReadOnly: ownNodeBinary() });
     return { argv: wrapped.argv, env, networkEnforced: wrapped.wrapped, proxy: null, cleanup: wrapped.cleanup };
   }
   // macOS (sandbox-exec): no network namespace to bridge into, so the
   // Seatbelt profile allows outbound TCP to the proxy's own loopback port and
   // nothing else, and the server is pointed at it directly (see
   // buildSeatbeltProfile). Linux runners reach the proxy by its Unix socket.
-  const seatbelt = activeSandboxRunner({ allowSeatbelt: true, mode }) === 'sandbox-exec';
+  const runner = activeSandboxRunner({ allowSeatbelt: true, allowAppContainer: true, mode });
+  const seatbelt = runner === 'sandbox-exec';
   const proxy = await startEgressProxy({
     label: egress.label, allowed: egress.hosts, unixSocket: process.platform !== 'win32' && !seatbelt, socketParent: egress.runDir,
     ...(egress.hostApi ? { hostApi: egress.hostApi } : {}),
   });
   try {
+    if (runner === 'appcontainer') {
+      const pipe = privateWindowsProxyPipe();
+      const wrapped = wrapCommand(bridgedArgv(argv, pipe), {
+        ...mounts, allowNetwork: false, path: env.PATH, extraReadOnly: ownNodeBinary(),
+        windowsBroker: { pipe, proxyPort: proxy.port, authority },
+      });
+      return { argv: wrapped.argv, env, networkEnforced: true, proxy, cleanup: () => { wrapped.cleanup(); void proxy.close(); } };
+    }
     if (seatbelt) {
       const wrapped = wrapCommand(argv, {
         ...mounts, allowNetwork: false, loopbackPorts: [proxy.port], path: env.PATH, extraReadOnly: ownNodeBinary(),

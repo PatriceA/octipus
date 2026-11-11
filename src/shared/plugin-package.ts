@@ -801,7 +801,7 @@ export interface PluginSandboxStatus {
   /** `plugins.sandbox`. */
   setting: 'required' | 'off';
   /** The working runner, or null. */
-  runner: 'bwrap' | 'firejail' | 'sandbox-exec' | null;
+  runner: 'bwrap' | 'firejail' | 'sandbox-exec' | 'appcontainer' | null;
   /** Why no runner works here, with how to get one; null when one does. */
   unavailable: string | null;
   platform: string;

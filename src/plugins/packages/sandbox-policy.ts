@@ -2,7 +2,7 @@
  * The sandbox of plugin package servers (docs/PLUGIN-PACKAGES.md#the-sandbox).
  *
  * One of the four hard boundaries: a `package` plugin runs in a sandbox
- * runner (bwrap or firejail on Linux, sandbox-exec on macOS) with its own
+ * runner (bwrap or firejail on Linux, sandbox-exec on macOS, AppContainer on Windows) with its own
  * files read-only, one writable data directory and no direct network, so it
  * cannot read the server's environment (`/proc/<ppid>/environ`: the database
  * URL, the master key), files or network.
@@ -13,7 +13,7 @@
  * - `required`: a package plugin never starts without a working runner;
  *   enabling it and consenting to it are refused too, naming what is missing.
  * - `off`: a plugin NOT from the marketplace runs unwrapped, as the server's
- *   user (the only way on Windows, which has no runner). Plainly warned.
+ *   user. Plainly warned.
  * - A plugin from the marketplace (`origin.source === 'marketplace'`) always
  *   needs a runner, whatever the setting.
  *

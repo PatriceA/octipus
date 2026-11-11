@@ -477,6 +477,8 @@ export const SANDBOX_BRIDGE_SOURCE = `
 const net = require('node:net');
 const { spawn } = require('node:child_process');
 const [sock, ...cmd] = process.argv.slice(1);
+// Windows uses a private staged Node binary, not the installed runtime ACL.
+if (process.platform === 'win32' && /^(?:node|node\\.exe)$/i.test(cmd[0])) cmd[0] = process.execPath;
 const srv = net.createServer((c) => {
   const u = net.connect(sock);
   c.pipe(u); u.pipe(c);

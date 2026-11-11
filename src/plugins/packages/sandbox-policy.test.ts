@@ -63,7 +63,7 @@ describe('plugins.sandbox', () => {
   test('the help names the runner for each platform, and Windows plainly', () => {
     expect(sandboxRunnerHelp('linux')).toMatch(/bubblewrap.*bwrap --ro-bind \/ \/ true.*firejail/);
     expect(sandboxRunnerHelp('darwin')).toMatch(/sandbox-exec/);
-    expect(sandboxRunnerHelp('win32')).toMatch(/Windows has no sandbox runner: plugins from the marketplace cannot run here.*plugins.sandbox set to off/);
+    expect(sandboxRunnerHelp('win32')).toMatch(/native Windows plugin runner.*build:sandbox:windows/);
   });
 });
 

@@ -285,11 +285,23 @@ filter, so weigh that against running plugins at all.
 **macOS.** `/usr/bin/sandbox-exec` ships with the system ([macOS:
 sandbox-exec](#macos-sandbox-exec)).
 
-**Windows.** There is no runner (AppContainer and job objects would need a
-native helper Octipus does not ship). **Plugins from the marketplace cannot
-run on Windows.** A local plugin runs there only with `plugins.sandbox:
-off`, unsandboxed, with the server's files, environment and network: install
-only what you would run as that user yourself.
+**Windows.** Native Windows 10/11 installs use `octipus-sandbox.exe`, a Rust
+helper in `native/bin` (see [Windows native sandbox](WINDOWS-SANDBOX.md)).
+It starts each package in a less-privileged AppContainer with no networking
+capabilities and a Job object: stop kills the whole tree, with a 2 GiB
+committed-memory and 32-process cap. The package is read-only; only its
+private data and scratch directories are writable. A private SID-protected
+named pipe connects to the normal declared-host/host-API proxy; there is
+**no loopback exemption**. Marketplace plugins require this helper just as
+Linux plugins require bwrap/firejail. Missing or failing helper means no
+launch, not an unconfined fallback.
+
+Exact release installs download the tested binary and checksum from the
+same release. Source installs build it with `npm run build:sandbox:windows`
+(Rust and Visual Studio C++ Build Tools). This runner is for plugin packages,
+not unrestricted agent shell tools. Node packages work without changing
+ACLs on the installed Node runtime: the helper stages a private executable.
+Other native runtimes must be self-contained; shell shims are refused.
 
 The test lanes run plugin fixtures with `PLUGINS_SANDBOX=off` (most CI
 runners have no runner); the sandbox's own suites set it themselves.
@@ -2296,8 +2308,5 @@ line.
 - Online revocation for registries other than the marketplace: their keys
   are revoked on a host only when that host's config says so (`revoked`,
   `revokedKeys`, `notAfter`).
-- A sandbox on Windows: there is no runner, so marketplace plugins do not
-  run there and a local one only with `plugins.sandbox: off`
-  ([The sandbox](#the-sandbox)).
 - In a shared space, plugin tools follow the rules of personal connections
   (reads allowed, writes asked or refused); space-level packages come later.
