@@ -141,10 +141,10 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
         return { argv: wrapped.argv, env, networkEnforced: true, proxy, cleanup: () => { wrapped.cleanup(); void proxy.close(); } };
       }
     }
-    // No sandbox (off, no runner, Windows): the proxy is advice only.
+    // No sandbox (off or no runner): the proxy is advice only.
     // A client that ignores HTTP(S)_PROXY still connects directly. Under
     // `required` that is not good enough: refuse, as the no-hosts path does
-    // when wrapCommand finds no runner (Windows has none).
+    // when wrapCommand finds no working native runner.
     if (mode === 'required') {
       throw new Error(`A sandbox is required: the network of plugin package "${egress.label}" cannot be enforced on this platform (no sandbox runner), so it is not started`);
     }

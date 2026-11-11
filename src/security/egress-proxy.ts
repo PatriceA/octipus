@@ -34,8 +34,7 @@
  *   (`buildSeatbeltProfile` in shell-sandbox.ts) denies all network but
  *   outbound TCP to this proxy's loopback port, and the server gets the proxy
  *   variables pointing at that port directly: enforced.
- * - **Sandbox off** (a local plugin package under `plugins.sandbox: off`,
- *   the only way on Windows): the server runs unwrapped with HTTP(S)_PROXY /
+ * - **Sandbox off** (a local plugin package under `plugins.sandbox: off`): the server runs unwrapped with HTTP(S)_PROXY /
  *   ALL_PROXY pointing at the TCP listener. Well-behaved HTTP clients honour
  *   it, but nothing stops a direct connection: advisory only. The package's
  *   status and its declarations say so ("Network not enforced on this host").
@@ -477,8 +476,6 @@ export const SANDBOX_BRIDGE_SOURCE = `
 const net = require('node:net');
 const { spawn } = require('node:child_process');
 const [sock, ...cmd] = process.argv.slice(1);
-// Windows uses a private staged Node binary, not the installed runtime ACL.
-if (process.platform === 'win32' && /^(?:node|node\\.exe)$/i.test(cmd[0])) cmd[0] = process.execPath;
 const srv = net.createServer((c) => {
   const u = net.connect(sock);
   c.pipe(u); u.pipe(c);
