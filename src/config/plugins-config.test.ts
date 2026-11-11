@@ -93,7 +93,7 @@ describe('plugins config', () => {
       expect(plugins({ marketplace: { publicKeys: { active: pem() } } }).success).toBe(false);
       expect(plugins({ marketplace: { rootKeys: { root: 'PLACEHOLDER' } } }).success).toBe(false);
       expect(plugins({ marketplace: { rootKeys: { root: KEY } } }).success).toBe(false);
-      const rsa = generateKeyPairSync('rsa', { modulusLength: 1024 }).publicKey.export({ format: 'pem', type: 'spki' }).toString();
+      const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey.export({ format: 'pem', type: 'spki' }).toString();
       expect(plugins({ marketplace: { rootKeys: { root: rsa } } }).success).toBe(false);
       const priv = generateKeyPairSync('ed25519').privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
       expect(plugins({ marketplace: { rootKeys: { root: priv } } }).success).toBe(false);
