@@ -19,12 +19,13 @@ test.skipIf(process.platform !== 'win32')('AppContainer runs plugins with RO pac
   const homeSecret = join(homedir(), `octipus-denied-${Date.now()}.txt`);
   writeFileSync(homeSecret, 'must-not-read');
   writeFileSync(join(pkg, 'allowed.txt'), 'package-ok');
+  writeFileSync(join(pkg, 'support.cjs'), "module.exports='module-ok';");
   const server = createServer((_req, res) => { res.writeHead(200); res.end('host-api-ok'); });
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('no host port');
   const script = `
     const fs=require('node:fs'), http=require('node:http'), net=require('node:net');
-    const result={};
+    const result={dependency:require('./support.cjs')};
     function probe(key, f) {try {result[key]={ok:true,value:f()};}catch(e){result[key]={ok:false,code:e.code,message:e.message};}}
     probe('readPackage',()=>fs.readFileSync('allowed.txt','utf8'));
     probe('writePackage',()=>fs.writeFileSync('planted.txt','bad'));
@@ -40,7 +41,8 @@ test.skipIf(process.platform !== 'win32')('AppContainer runs plugins with RO pac
       console.log(JSON.stringify(result));
     })().catch(e=>{console.error(e);process.exit(1)});
   `;
-  const launch = await prepareSandboxedLaunch(['node', '-e', script], buildIsolatedChildEnv(), {
+  writeFileSync(join(pkg, 'probe.cjs'), script);
+  const launch = await prepareSandboxedLaunch(['node', 'probe.cjs'], buildIsolatedChildEnv(), {
     mode: 'required', root: pkg, readOnlyRoot: true, writable: [data], allowNetwork: false,
     egress: { label: 'windows-e2e', hosts: [], hostApi: { host: '127.0.0.1', port: address.port } },
   });
@@ -56,7 +58,7 @@ test.skipIf(process.platform !== 'win32')('AppContainer runs plugins with RO pac
     });
     expect(result.code, result.stderr).toBe(0);
     const probes = JSON.parse(result.stdout.trim());
-    expect(probes, result.stderr).toMatchObject({ readPackage: { ok: true, value: 'package-ok' }, writePackage: { ok: false },
+    expect(probes, result.stderr).toMatchObject({ dependency: 'module-ok', readPackage: { ok: true, value: 'package-ok' }, writePackage: { ok: false },
       readHome: { ok: false }, writeData: { ok: true }, writeTmp: { ok: true }, secretLeaked: false,
       host: { status: 200, body: 'host-api-ok' }, undeclared: { status: 403 }, direct: 'blocked' });
     expect(readFileSync(join(data, 'state.txt'), 'utf8')).toBe('data-ok');

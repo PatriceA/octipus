@@ -31,7 +31,9 @@ architecture; release assets currently target x64.
   per-launch scratch trees and Windows-managed private profile are writable. Host home, credentials and unrelated
   project folders are not granted. Junctions/reparse points are refused.
 - A private copy of the runtime executable runs in scratch. The installed Node
-  under Program Files is not modified. Node is supported; other native runtimes
+  under Program Files is not modified. Node preserves module paths instead
+  of resolving symlinks through ungranted drive/home ancestors; package trees
+  already reject reparse points, and the OS still enforces target ACLs. Node is supported; other native runtimes
   must carry their dependencies themselves. `.bat`/`.cmd` shims are refused.
 - A job limits committed memory to 2 GiB and active processes to 32. The child
   starts suspended, joins the job, then runs. AppContainer may deny child
