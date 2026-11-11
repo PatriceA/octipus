@@ -175,6 +175,25 @@ it. A declaration can only make a tool stricter:
 A tool the server offers but the manifest does not declare is hidden from the
 agent and refused if called.
 
+## What the model sees
+
+Only what the admin agreed to; nothing a package's running server sends
+(`src/mcp/plugin-catalog.ts`):
+
+- **The system prompt** (the *MCP SERVERS* section) lists a plugin server by
+  a host-written line: its title, `(plugin <name>)` and its tool count. The
+  manifest's `description` is not in it.
+- **Tools.** The server's `tools/list` is intersected with the manifest, at
+  start and at every `notifications/tools/list_changed`: a tool the manifest
+  does not declare is dropped; the description is the manifest's (consented
+  with the package), or the tool's name and effect when it gives none; the
+  input schema keeps its structure (types, properties, enums, `required`) but
+  loses its free text (`description`, `title`, `examples`, `$comment`); the
+  output schema and annotations are dropped. That is what the tool schema,
+  `mcp_list_tools` and codemode's tool search show. Describe parameters in the
+  tool's description, and name them plainly.
+- Its `instructions`, resources, resource templates and prompts are not read.
+
 ## How a package runs
 
 An enabled package runs as the MCP server `plugin-<name>`:
@@ -190,14 +209,15 @@ An enabled package runs as the MCP server `plugin-<name>`:
   removed on uninstall. A package **must keep its runtime state there** (caches,
   databases, tokens it refreshes): its own directory is read-only under the
   sandbox and pinned by hash ([Content pinning](#content-pinning)).
-- **The sandbox, when it is on.** With `security.shellSandbox` set to `auto`
-  or `required`, the server runs under bwrap or firejail (Linux) or
-  `sandbox-exec` (macOS) with its directory **read-only** (bwrap `--ro-bind`,
-  firejail `--read-only`, a Seatbelt `deny file-write*`), its data directory
-  as the only writable one, and no direct network; the hosts in
-  `network` are reached through the egress proxy ([Network](#network)). With
-  the sandbox `off` (the default), it runs unwrapped; its directory is then
-  writable and the declared hosts are advice, not enforced.
+- **The sandbox, always** ([The sandbox](#the-sandbox)). The server runs
+  under bwrap or firejail (Linux) or `sandbox-exec` (macOS) with its
+  directory **read-only** (bwrap `--ro-bind`, firejail `--read-only`, a
+  Seatbelt `deny file-write*`), its data directory as the only writable one,
+  its own process namespace (it cannot see the server's `/proc`, so not its
+  environment), no controlling terminal and no direct network; the hosts in
+  `network` are reached through the egress proxy ([Network](#network)).
+  Without a working runner it does not start, unless `plugins.sandbox` is
+  `off` and it is not from the marketplace.
 - **Network only to its declared hosts** — see [Network](#network).
 - **Not part of the MCP server list.** It does not appear among the servers on
   the MCP page and cannot be edited, removed or toggled there. Ids starting
@@ -207,6 +227,72 @@ An enabled package runs as the MCP server `plugin-<name>`:
 
 Every change (install, settings, secrets, enable, disable) restarts the
 package's server if its configuration changed.
+
+## The sandbox
+
+The sandbox is one of the four hard boundaries ([Trust and threat
+model](#trust-and-threat-model)). It is set apart from the agent shells'
+`security.shellSandbox` (off by default): **`plugins.sandbox`** decides for
+plugin package servers (env `PLUGINS_SANDBOX`).
+
+| `plugins.sandbox` | A package from the marketplace | Any other package |
+| --- | --- | --- |
+| `required` (default) | Runs in a runner; never without one. | Runs in a runner; never without one. |
+| `off` | Runs in a runner; never without one. | Runs **unsandboxed**, as the Octipus server's user: it can read that user's files, the server's environment (its database URL and master key, through `/proc/<ppid>/environ`) and connect anywhere. |
+
+The runner is bwrap or firejail on Linux, `/usr/bin/sandbox-exec` on macOS.
+bwrap is probed once (`bwrap --ro-bind / / --new-session true`): installed
+but unable to create a user namespace, it counts as unavailable. Where a
+runner is required and none works, the package is **not started**, and
+**enabling** it and **agreeing** to it (the install consent, the consent of
+an installed package) are refused with what is missing and how to install
+it. The admin page shows *plugin sandbox: active runner bwrap* or
+*unavailable: …* above the list (`GET /api/plugin-packages/sandbox`), and the
+server logs the same line at startup.
+
+What the admin is told follows the same state: the declarations, the network
+status and the marketplace card say *"Runs as a separate program in a sandbox
+(bwrap)"* and *"No network access of its own"* only where a runner wraps it,
+and otherwise *"NOT sandboxed on this host"* and *"Network not enforced on
+this host"*, as warnings.
+
+What each runner adds besides the files, network and process namespace:
+
+- **No terminal.** The server is spawned in a session of its own (`setsid`)
+  and stopped by process group; bwrap also runs every command with
+  `--new-session`, and the Seatbelt profile allows nothing on `/dev/tty`. A
+  sandboxed process can therefore not push keystrokes into the terminal
+  Octipus was started from (the `TIOCSTI` ioctl): `/dev/tty` answers ENXIO.
+- **firejail** drops every capability (`--caps.drop=all`), sets
+  `no_new_privs` (`--nonewprivs`), runs as no root (`--noroot`), and never
+  shows `$HOME`: a whitelisted path under it turns the home directory into a
+  tmpfs that shows only that path, and without one it gets an empty private
+  home (`--private`).
+
+**Linux.** Install bubblewrap (`apt-get install bubblewrap`, `dnf install
+bubblewrap`, `apk add bubblewrap`) or firejail. bwrap needs unprivileged user
+namespaces; check with `bwrap --ro-bind / / true`. Ubuntu 24.04 and later
+restrict them with AppArmor (`kernel.apparmor_restrict_unprivileged_userns`):
+allow bwrap with an AppArmor profile, or use firejail.
+
+**Docker.** The image installs bubblewrap. Docker's default seccomp and
+AppArmor profiles refuse the user namespaces bwrap creates; check with
+`docker compose exec octipus bwrap --ro-bind / / true`. If it fails, the
+commented `security_opt` lines in `docker-compose.yml` (`seccomp=unconfined`,
+`apparmor=unconfined`) allow it; they relax the container's own syscall
+filter, so weigh that against running plugins at all.
+
+**macOS.** `/usr/bin/sandbox-exec` ships with the system ([macOS:
+sandbox-exec](#macos-sandbox-exec)).
+
+**Windows.** There is no runner (AppContainer and job objects would need a
+native helper Octipus does not ship). **Plugins from the marketplace cannot
+run on Windows.** A local plugin runs there only with `plugins.sandbox:
+off`, unsandboxed, with the server's files, environment and network: install
+only what you would run as that user yourself.
+
+The test lanes run plugin fixtures with `PLUGINS_SANDBOX=off` (most CI
+runners have no runner); the sandbox's own suites set it themselves.
 
 ## Contributions
 
@@ -834,16 +920,21 @@ file that cannot be read, verified or parsed counts for nothing.
 | A replayed old index | `generatedAt` only moves forward per registry (one conditional upsert); an older index, or another index with the same `generatedAt`, is refused, as is one dated more than a day ahead. |
 | A replayed old keys file | `keys.json`'s `version` only grows; the same version with the same bytes is fine, anything else refused. |
 | A leaked signing key | The key holder revokes it in `keys.json` (signed by a root key) and endorses a new one. Revocations are sticky: a later file that drops one does not lift it. Installs and starts of marketplace packages signed by a revoked key are refused. The package revocations its indexes published are flagged `signerRevoked` and no longer enforced, unless an index signed by a trusted key lists them again. |
-| A leaked root key | `rootBackup` signs a `keys.json` that revokes `root`. From then on `root` verifies nothing. `root` can never revoke `rootBackup`: a file that tries is refused as a whole. A leaked root may have pushed `version` high; a file from the backup root that revokes it is accepted anyway (a file signed by a revoked root holds nothing back). Losing both roots needs a new release. |
+| A leaked root key | `rootBackup` signs a `keys.json` that revokes `root`. From then on `root` verifies nothing, and the key revocations `root` signed are flagged `signerRevoked` and no longer enforced (a leaked root cannot leave revoked signing keys behind), unless a `keys.json` signed by a root still trusted lists them again; a key retiring itself and a root's own revocation never lapse. `root` can never revoke `rootBackup`: a file that tries is refused as a whole. A leaked root may have pushed `version` high; a file from the backup root that revokes it is accepted anyway (a file signed by a revoked root holds nothing back). Losing both roots needs a new release. |
 | A future-dated index from a leaked key | An index signed by a key revoked since does not hold the next one back, so the backup's revocation always gets through. |
 | A revoked package version | Package revocations in a verified index are stored in the database, refused at install from the marketplace and at every start of a marketplace package, shown on the row (`revocation`), audited (`revoked_online`) and notified to admins (one notification per index, with a count); its server, tokens, background runs and in-process module are stopped on every instance. They hold while the marketplace is unreachable and across restarts. |
 | The marketplace unreachable | Listing and installing from it stop ("unavailable"). Installed marketplace packages keep running only if their signatures verify against the last stored `keys.json`, re-verified against the root keys whenever it is read. |
-| A host frozen on an old index (a mirror or a man in the middle replaying a valid one) | `keys.json` and the index may carry `expires`; past it they are refused. When the last accepted index or `keys.json` was generated more than 7 days ago, the Marketplace page shows a banner (`stale`) and admins get one `plugin_marketplace_stale` notification per stale file. |
+| A host frozen on an old index (a mirror or a man in the middle replaying a valid one) | `keys.json` and the marketplace index must carry `expires`, at most 90 and 45 days after their `generatedAt`; past it, or without it, they are refused. When the last accepted index or `keys.json` was generated more than 7 days ago, the Marketplace page shows a banner (`stale`) and admins get one `plugin_marketplace_stale` notification per stale file. |
 | Several server instances | Each instance applies the revocations in force it has not applied yet on every marketplace index read and every cron tick (stopping its own servers, tokens and runs); the instance that stored them audits and notifies. An install consent preview lives on the instance that made it ([The install consent](#the-install-consent)). |
 | Hostile text and links | Index v2 is parsed with a strict schema: a limit on every string and list, no control characters, no bidirectional or invisible formatting characters in short fields (zero-width and bidi marks, U+00AD, U+115F, U+180E, U+2060–U+2064, U+3164, U+FEFF, tag characters), an unknown `schema` above 2 refused. A v1 description, and any name or schema path echoed in a problem, has those characters removed; the CLI strips its output again. README and CHANGELOG are returned as raw Markdown for the client to render sanitized, without raw HTML or remote images. `homepage` and `author.url` are https or dropped. The index's own `keyId` field is never used: who signed is read from the signature. |
 | Hostile images | Icons and screenshots must be https on the registry's origin under `/<name>/`, else dropped. The host fetches only an image a readable index lists (never a URL a client names), through the SSRF guard, with no redirect off the origin, at most 2 MB, and keeps it only when its bytes are PNG, JPEG, WebP or GIF (no SVG). It is served with the sniffed type, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'` and `Content-Disposition: inline`. |
 | Takeover by another registry | An upgrade from another source than the installed version's (another registry, the marketplace) is a change the admin confirms (`allowSourceChange`), recorded in the audit row (`sourceChange`). |
-| Escaping the sandbox | The marketplace carries sandboxed packages only: a listing with `runtime: in-process` is shown as not installable, and an install requires runtime `package` on the staged copy. |
+| Escaping the sandbox | The marketplace carries sandboxed packages only: a listing with `runtime: in-process` is shown as not installable, and an install requires runtime `package` on the staged copy. A marketplace package never runs without a sandbox runner, whatever `plugins.sandbox` says ([The sandbox](#the-sandbox)); where none works it is not started, enabled or agreed to, and the card says so. |
+| Reading the server's secrets | A sandboxed server has its own PID namespace (bwrap) or profile (firejail, Seatbelt): it cannot read the server's `/proc/<ppid>/environ` (database URL, master key), its files or its home directory. Only a local package under `plugins.sandbox: off` runs without, said plainly on its consent. |
+| Typing into the operator's terminal | No controlling terminal: the server runs in its own session (`setsid`, bwrap `--new-session`), and Seatbelt allows nothing on `/dev/tty`; `TIOCSTI` reaches nothing. |
+| Text that steers the model | Nothing a package's server sends reaches a model: the system prompt lists a plugin by a host-written line (title, `(plugin <name>)`, tool count), tool descriptions are the manifest's consented ones (or name and effect), an undeclared tool is dropped, free text in input schemas is removed, its instructions, resources and prompts are not read, and a `tools/list_changed` cannot swap any of it ([What the model sees](#what-the-model-sees)). |
+| Laundering data to a lower level | What a package read is kept per package and user across calls: notes and tasks are refused after a read above level 1, documents are written at no lower level ([Host API](#host-api)). |
+| A token or a sibling site driving the admin routes | Every change to plugins needs `api:admin` (reads `api:read`); a cookie-signed change must come from this origin ([API](#api)). |
 | Download counts | `stats.json` is unsigned and display-only: read with the guard, capped and schema-checked, ignored on any error, never used for trust, install or default order. The host never reports its own installs. |
 
 What a marketplace signature means: these exact bytes passed the
@@ -877,8 +968,9 @@ bytes, so it can never pass for a package or index signature):
 
 The host fetches it from the marketplace origin (64 KiB at most), verifies it
 against the root keys that are not revoked, checks each listed key's id
-against its key, refuses a root listed as a signing key, refuses the file once
-its optional `expires` (an ISO date-time with a zone) has passed, applies the
+against its key, refuses a root listed as a signing key, refuses a file
+without `expires` (an ISO date-time with a zone) or with one more than **90
+days** after its `generatedAt`, refuses it once `expires` has passed, applies the
 root rule above, stores it with its signature (`plugin_marketplace_keys`) and
 the union of every signing key any accepted file listed (`endorsed_key_ids`),
 and stores its revocations (`plugin_revocations`) of keys in that union or
@@ -896,8 +988,10 @@ expired) and signs nothing otherwise. `octi plugin verify-keys keys.json
 ([Packing and publishing](#packing-and-publishing)).
 
 **What the marketplace repository publishes.** `keys.json` with the fields
-above (`expires` optional, recommended: about a month, renewed well before);
-the index v2 with an optional top-level `expires` and a `generatedAt` no more
+above, `expires` required and at most 90 days after `generatedAt`
+(recommended: 60 days, renewed well before); the index v2 with a required
+top-level `expires` at most 45 days after `generatedAt` (recommended: 30
+days) and a `generatedAt` no more
 than 7 days old (publish at least weekly, even when nothing changed, or hosts
 warn their admins); every `revoked` package entry listed again in each index
 (a revocation by a key revoked since counts again only when a trusted key
@@ -946,8 +1040,10 @@ from the marketplace only) and `{ keyId, reason }` (ignored: key revocation
 lives in `keys.json`). v1 indexes keep working for other registries; the
 marketplace requires v2 and every tarball on its origin. An entry that does
 not fit is skipped; a malformed `revoked` refuses the whole index. An index
-whose `expires` (optional, an ISO date-time with a zone) has passed is
-refused, for any registry.
+whose `expires` (an ISO date-time with a zone) has passed is refused, for any
+registry. For the marketplace (a strict registry) `expires` is **required**
+and at most **45 days** after `generatedAt`; an index without it, or with a
+longer one, is refused as a whole. Another registry may leave it out.
 
 ### Listing pins
 
@@ -1041,12 +1137,15 @@ opens the install consent, where what is unchanged carries over.
 
 ### Declarations
 
-`declarationItems(permissions, manifest?)` (`src/shared/plugin-declarations.ts`)
+`declarationItems(permissions, manifest?, host?)` (`src/shared/plugin-declarations.ts`)
 turns what a package declares into a stable, ordered list of `{ id, kind,
 label, detail, guidance? }`: `runtime`, `in-process`, `network:<host>`,
 `host:<scope>`, `tool:<name>`, `command:<name>`, `schedule:<id>`,
 `event:<on>`, `prompt`, `context`, `page:<path>`, `ui` (the page files),
-`secret:<key>`, `model:cli-tools` and `protection`, in that order. Each
+`secrets` ("Asks you for these secrets: …"), `settings`, `model:cli-tools`
+and `protection`, in that order. With `host` (what this host enforces), the
+`runtime` and `network:*` items say whether the sandbox holds here
+([The sandbox](#the-sandbox)). Each
 `detail` carries what the item is bound to (a schedule's cron, tool and
 input; the prompt file, its roles and sha256; a page's entry; the page tree's
 sha256), so an item that changed reads as changed. The package view and each
@@ -1077,7 +1176,21 @@ rows of its background runs, with the number of model calls and runs.
 | `DELETE /api/plugin-packages/pins { registry, name, version, reason }` | admins | `{ reset, registry, name, version, contentHash, note }`; 404 when there is no such pin |
 | `GET /api/plugin-packages/:name/usage`, `…/usage/me` | admins; any user | `PluginUsageView` |
 | `DELETE /api/plugin-packages/:name/runs/:id` | the run's user, or an admin | `{ id, status: "cancelled" }` |
+| `GET /api/plugin-packages/sandbox` | admins | `PluginSandboxStatus`: `{ setting, runner, unavailable, platform, summary }` ([The sandbox](#the-sandbox)) |
 | `DELETE /api/plugin-host/agent/runs/:id` | the same package, for the same user | `{ id, status: "cancelled" }` |
+
+**Scopes and cross-site requests.** An API token reaches these routes only
+with a scope that covers the request (`src/api/plugin-route-guard.ts`): every
+change (install, preview, consent, enable, approvals, secrets, settings,
+uninstall, clearing a revocation, resetting a pin, an admin cancelling
+another user's run) needs `api:admin`, every admin read `api:read`; a user's
+own usage `api:read`, cancelling their own run `api:write`, a page's tool
+call `api:read` or `api:write` by the tool's effect. An unscoped token and a
+browser session have every scope. A change signed by the session cookie
+(`SameSite=Strict`) must also come from this origin: its `Origin` is this
+host or a configured CORS origin (the desktop app's included), its
+`Sec-Fetch-Site` `same-origin` or `none`; a sibling subdomain is refused
+(`403`). Bearer-signed requests carry no ambient credential and are not checked.
 
 The shapes are `MarketplaceListing`, `MarketplacePluginView`,
 `PluginUpdateView` and `PluginUsageView` in `src/shared/plugin-package.ts`,
@@ -1159,10 +1272,12 @@ downloaded package and compares it with what an index claims):
   "name": "weekly", "version": "1.2.0", "apiVersion": "1.0.0", "runtime": "package",
   "host": ["model:complete", "tasks:read"],
   "network": [],
+  "secrets": ["API_TOKEN"],
+  "settings": ["account", "region"],
   "tools": [{ "name": "review", "effect": "read" }, { "name": "sync", "effect": "write" }],
   "effects": { "read": 1, "write": 1, "external": 0 },
   "contributions": {
-    "commands": [{ "name": "review", "tool": "review" }],
+    "commands": [{ "name": "review", "tool": "review" }, { "name": "full", "tool": "sync", "input": { "full": true } }],
     "schedules": [{ "id": "nightly", "cron": "15 2 * * *", "tool": "sync", "input": { "full": false } }],
     "events": [{ "on": "chat.response", "tool": "review" }],
     "prompt": { "file": "agent-notes.md", "sha256": "<64 hex>", "roles": ["general"] },
@@ -1174,14 +1289,19 @@ downloaded package and compares it with what an index claims):
 }
 ```
 
-- `host` and `network` are sorted, `tools` by name; `effects` always has all
-  three keys.
+- `host`, `network`, `secrets` and `settings` are sorted (code-unit order),
+  `tools` by name; `effects` always has all three keys. `secrets` and
+  `settings` are the **names** (keys) only, never labels or values, `[]` when
+  there are none; an index lists at most 100 of each, of at most 100
+  characters (a listing without them reads as `[]`, and the host's
+  recomputation then refuses one that understates).
 - `contributions`: what each part is bound to. `commands` (name and tool,
   sorted by name), `schedules` (id, cron, tool and `input` when the manifest
   gives one, sorted by id), `events` (sorted by `on`, then tool), `prompt`
   (the file, the **hex sha256 of its bytes**, and `roles` when the manifest
   names any, sorted) and `context` (the tool, and `roles`), each `null` when
-  absent. A part left out of the manifest is an empty list or `null`.
+  absent. A command carries `input` only when the manifest gives it one. A
+  part left out of the manifest is an empty list or `null`.
 - `pages`: every page's path, title and entry file, sorted by path; `ui`: the
   page directory and the **hex sha256 of its tree**, `null` without pages.
   The tree hash is sha256 over `octipus-plugin-ui/v1` and one line per file,
@@ -1189,8 +1309,9 @@ downloaded package and compares it with what an index claims):
   sorted by path (code-unit order), each line ending in a newline
   (`uiTreeHash` in `src/plugins/packages/integrity.ts`).
 - `maxProtection` is the manifest's, or the default a host derives when it
-  declares none (1 for a package that reaches the network, may fetch any URL,
-  runs an agent or has pages; else 4).
+  declares none (1 for a package that reaches the network, may fetch any URL
+  or runs an agent; else 4). A package with **pages** is 1 whatever it
+  declares: a page can send what it shows to any website ([Pages](#pages)).
 
 The same package always gives the same JSON. An index lists exactly this;
 the host recomputes it from the staged copy at install and refuses any
@@ -1198,12 +1319,25 @@ difference (a deep equality of the whole object). From a manifest alone
 (`computePermissions` without a directory) the two hashes read `null`.
 
 **What counts as a change.** The update diff (`diffPermissions`) and the
-install consent compare these summaries: any difference in a command's tool,
-a schedule's tool, cron or input, an event's tool, the prompt's file, text
-(its sha256) or roles, the context tool or roles, a page's title or entry,
-or the page files is a change. It widens when it adds a contribution or page,
-points one at another tool, moves a cron, changes the prompt text, the
-context tool, a page or the page files, or reaches roles it did not.
+install consent compare these summaries, with the same rules as the
+marketplace repository's PR summary:
+
+- **Tools.** Every effect change is listed. Up (read → write → external)
+  widens. Down to `read` (write → read, external → read) widens too, and is
+  named so ("no longer asked before each call; may run unattended"): a read
+  tool is not asked about per call and may run from schedules, events and
+  context. external → write narrows.
+- **Secrets and settings.** A new secret widens; a secret removed, and a
+  setting added or removed, is a change that does not.
+- **Contributions and pages.** Any difference in a command's tool or input,
+  a schedule's tool, cron or input, an event's tool, the prompt's file, text
+  (its sha256) or roles, the context tool or roles, a page's title or entry,
+  or the page files is a change. It widens when it adds a contribution or
+  page, points one at another tool, moves a cron, changes the prompt text,
+  the context tool, a page or the page files, or reaches roles it did not.
+  An input change does not widen.
+- Host scopes and network hosts added, `runtime` to in-process,
+  `trustedInput` set and a higher `maxProtection` widen.
 
 ## Network
 
@@ -1221,23 +1355,20 @@ What that holds depends on the platform:
 
 | Where | A package with hosts | A package without hosts | Status `network.state` |
 |---|---|---|---|
-| Linux, sandbox `auto`/`required`, bwrap or firejail found | Enforced: the server has its own network namespace with only loopback. The proxy's Unix socket is mounted in, and a small launcher (run with Octipus's own Node binary) bridges the namespace's `127.0.0.1` to it, so the proxy is the only way out. | Offline: no network at all. | `restricted` / `offline` |
-| macOS, sandbox `auto`/`required`, `/usr/bin/sandbox-exec` present | Enforced: the server runs under a generated Seatbelt profile that denies all network except outbound TCP to the proxy's own port on `localhost`, and the proxy variables point at that port. Anything else — another host, another local port, a Unix socket, DNS — is refused by the kernel. | Offline: the profile allows no network at all. | `restricted` / `offline` |
-| Linux or macOS with the sandbox `off` (the default), or no runner found | **Not enforced.** The proxy variables point well-behaved HTTP clients at the proxy, but a direct connection still works. | Not enforced: nothing blocks the network. | `not_enforced` |
-| Windows | **Not enforced**, as above: Windows has no built-in runner comparable to bwrap or Seatbelt (AppContainer and job-object network limits need a native helper Octipus does not ship). | Not enforced. | `not_enforced` |
+| Linux, a working bwrap or firejail | Enforced: the server has its own network namespace with only loopback. The proxy's Unix socket is mounted in, and a small launcher (run with Octipus's own Node binary) bridges the namespace's `127.0.0.1` to it, so the proxy is the only way out. | Offline: no network at all. | `restricted` / `offline` |
+| macOS, `/usr/bin/sandbox-exec` present | Enforced: the server runs under a generated Seatbelt profile that denies all network except outbound TCP to the proxy's own port on `localhost`, and the proxy variables point at that port. Anything else — another host, another local port, a Unix socket, DNS — is refused by the kernel. | Offline: the profile allows no network at all. | `restricted` / `offline` |
+| No working runner, `plugins.sandbox: required` (default), or any marketplace package | Not started. | Not started. | `refused` |
+| A local package under `plugins.sandbox: off` (the only way on Windows) | **Not enforced.** The proxy variables point well-behaved HTTP clients at the proxy, but a direct connection still works. | Not enforced: nothing blocks the network. | `not_enforced` |
 
 `GET /api/plugin-packages` reports this per package as `network`
 (`{ state, detail }`), so an operator sees "Network not enforced on this
-platform" where the hosts are only advice. A client that ignores proxy
-variables (some SDKs, raw sockets) fails under the sandbox and goes direct
-without it — run packages with `security.shellSandbox` on where that matters.
+host" where the hosts are only advice. A client that ignores proxy variables
+(some SDKs, raw sockets) fails under the sandbox ([The sandbox](#the-sandbox)).
 
-Under `security.shellSandbox: required`, a package that declares hosts where
-no runner can enforce them (Windows; Linux or macOS with no runner found) is
-**not started**: its server fails to connect with "the network of plugin
-package … cannot be enforced on this platform". Under `auto` it starts with
-the advisory proxy, as in the table. The status reads `refused` then, for a
-package with or without hosts.
+A wildcard host over fewer than three labels (`*.github.io`, `*.co.uk`,
+`*.example.com`) gets a guidance warning on its declaration: where anyone can
+register a name under it, the package can reach sites nobody vetted. There is
+no public suffix list here, so the rule is the label count.
 
 Host names are resolved by Octipus, not the package, once per request. If any
 address a declared host resolves to is loopback, private (RFC 1918),
@@ -1284,8 +1415,9 @@ both runners for real; CI runs it on Ubuntu.
 
 On macOS the sandbox is `/usr/bin/sandbox-exec` with a Seatbelt (SBPL)
 profile written for each start (`buildSeatbeltProfile` in
-`src/security/shell-sandbox.ts`). Package servers use it under both `auto`
-and `required`. The shell tool uses it only under `required` (where it would
+`src/security/shell-sandbox.ts`). Package servers always use it
+(`plugins.sandbox`, [The sandbox](#the-sandbox)); it never allows anything on
+`/dev/tty`. The shell tool uses it only under `required` (where it would
 otherwise refuse to run); under `auto`, shell commands on macOS keep running
 unwrapped as before. The profile starts from `(deny default)` and allows back
 only:
@@ -1331,6 +1463,13 @@ unwrapped (`not_enforced`) and `required` refuses to start the server.
 A package can add pages to the web app: static HTML of its own, shown in a
 sandboxed frame, that talks to the host only through a `postMessage` bridge
 calling the package's **own tools** as the signed-in user.
+
+**Pages are egress.** A page can navigate its frame to any website with what
+it was shown in the URL, which nothing declares or enforces. So a package
+with pages sees data up to protection level **1**, whatever its
+`maxProtection` says (the summary, the CLI and an index carry the clamped
+value), and its page declarations say *"A page can send what it shows to any
+website"*; beside a `*:read` scope it gets the egress warning.
 
 ```json
 "ui": {
@@ -1487,15 +1626,25 @@ and an admin approved:
 |---|---|---|
 | — | `GET /api/plugin-host/whoami` | The token's package, tool, scopes, workspace kind and expiry. |
 | `notes:read` | `GET /api/plugin-host/notes?limit=&tag=` | The user's notes in the call's workspace (at most 100), bodies included. Notes carry no protection level (unlike documents and tasks), so none is filtered out: approve `notes:read` only for a package you would show every note to. |
-| `notes:write` | `POST /api/plugin-host/notes { title, body?, tags? }` | Creates a note; never overwrites (`409 exists` for a taken title). |
+| `notes:write` | `POST /api/plugin-host/notes { title, body?, tags? }` | Creates a note; never overwrites (`409 exists` for a taken title). Refused (`403 read_level`) once the package has read content above level 1 for this user (below). |
 | `tasks:read` | `GET /api/plugin-host/tasks?status=` | The user's own tasks (at most 200). A task carries the protection level and flow label of the conversation it came from (its provenance): one above the package's `maxProtection` is left out (`withheld` counts them), and the rest raise the calling session's level and label, as the tasks tool does. |
-| `tasks:write` | `POST /api/plugin-host/tasks { title, notes?, priority?, dueAt?, category?, link?: { url, label? } }` | Creates a task for the user (audited as a task mutation by `plugin:<name>`), filed under `category` and linked back to `link.url` (an http(s) URL). |
+| `tasks:write` | `POST /api/plugin-host/tasks { title, notes?, priority?, dueAt?, category?, link?: { url, label? } }` | Creates a task for the user (audited as a task mutation by `plugin:<name>`), filed under `category` and linked back to `link.url` (an http(s) URL). Refused (`403 read_level`) once the package has read content above level 1 for this user (below). |
 | `documents:read` | `GET /api/plugin-host/documents/:id` | One document: metadata and extracted text. |
 | `documents:write` | `POST /api/plugin-host/documents { name, content, mimeType?, category?, summary?, protectionLevel? }`; `PUT /api/plugin-host/documents/:id { content, name?, summary? }` | Creates a text document (Markdown or plain text) for the user; replaces the content of one this package created. See below. |
 | `notify` | `POST /api/plugin-host/notify { title, body? }` | A notification to the calling user, and to nobody else. |
 | `web:read` | `POST /api/plugin-host/web/read { url }` | One public web page, fetched by the host and turned into a clean article: `{ url, title, byline?, siteName?, publishedAt?, contentHtml, textContent, wordCount, estReadMinutes, truncated }`. |
 | `model:complete` | `POST /api/plugin-host/model/complete { system?, prompt, maxTokens?, temperature? }` | One text completion on the calling user's `everyday` model: `{ output, model }`. |
 | `agent:run` | `POST /api/plugin-host/agent/runs { prompt, role?, title? }`; `GET /api/plugin-host/agent/runs/:id`; `DELETE /api/plugin-host/agent/runs/:id` | Starts a background agent run as the user and answers its id at once; a later call reads its status and final text; `DELETE` cancels it (its own runs for the same user only; any of its tools may). See below. |
+
+**What a package read, it keeps.** The highest protection level a package
+has read through the host API (a document, a task's provenance, a run's
+result) is kept per package and user across calls, in the key-value store,
+and every request starts from it. Notes and tasks have no protection level,
+so a package that has read above level 1 for that user may not write them
+(`403 read_level`, audited): it cannot carry level-2 content down to level 1
+in a later call. A document it writes is stored at no lower level, and its
+`model:complete` calls run at it. Disabling, upgrading or uninstalling the
+package forgets it.
 
 **`web:read`** lets a package read any public page without network of its
 own: the host fetches it through the same SSRF guard as the agents' web
@@ -2147,7 +2296,8 @@ line.
 - Online revocation for registries other than the marketplace: their keys
   are revoked on a host only when that host's config says so (`revoked`,
   `revokedKeys`, `notAfter`).
-- Network enforcement on Windows: the egress proxy is advisory there (no
-  built-in runner; see [Network](#network)).
+- A sandbox on Windows: there is no runner, so marketplace plugins do not
+  run there and a local one only with `plugins.sandbox: off`
+  ([The sandbox](#the-sandbox)).
 - In a shared space, plugin tools follow the rules of personal connections
   (reads allowed, writes asked or refused); space-level packages come later.

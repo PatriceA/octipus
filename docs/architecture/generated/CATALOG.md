@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-664 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
+665 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -441,6 +441,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/plugin-packages/registry` | `src/api/routes/plugin-packages.ts` |
 | GET | `/api/plugin-packages/revocations` | `src/api/routes/plugin-packages.ts` |
 | DELETE | `/api/plugin-packages/revocations/:id` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/sandbox` | `src/api/routes/plugin-packages.ts` |
 | GET | `/api/plugin-packages/updates` | `src/api/routes/plugin-packages.ts` |
 | GET | `/api/plugin-ui` | `src/api/routes/plugin-ui.ts` |
 | GET | `/api/plugin-ui/:name/*` | `src/api/routes/plugin-ui.ts` |
@@ -692,22 +693,22 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `mcp` | 1 |
 | `(root)` | `models` | 2 |
 | `(root)` | `modules` | 1 |
-| `(root)` | `plugins` | 3 |
+| `(root)` | `plugins` | 4 |
 | `(root)` | `security` | 5 |
 | `(root)` | `skills` | 1 |
 | `(root)` | `tools` | 4 |
 | `(root)` | `utils` | 1 |
 | `api` | `capabilities` | 1 |
 | `api` | `channels` | 22 |
-| `api` | `config` | 28 |
+| `api` | `config` | 29 |
 | `api` | `core` | 192 |
 | `api` | `db` | 135 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 5 |
 | `api` | `models` | 39 |
-| `api` | `plugins` | 28 |
-| `api` | `security` | 171 |
+| `api` | `plugins` | 30 |
+| `api` | `security` | 175 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 24 |
 | `api` | `skills` | 6 |
@@ -794,16 +795,16 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `models` | `services` | 1 |
 | `models` | `shared` | 4 |
 | `models` | `utils` | 43 |
-| `plugins` | `config` | 10 |
+| `plugins` | `config` | 11 |
 | `plugins` | `core` | 27 |
-| `plugins` | `db` | 47 |
+| `plugins` | `db` | 49 |
 | `plugins` | `extensions` | 2 |
-| `plugins` | `mcp` | 6 |
+| `plugins` | `mcp` | 7 |
 | `plugins` | `models` | 2 |
 | `plugins` | `security` | 18 |
 | `plugins` | `shared` | 29 |
 | `plugins` | `tools` | 1 |
-| `plugins` | `utils` | 34 |
+| `plugins` | `utils` | 35 |
 | `security` | `api` | 1 |
 | `security` | `config` | 20 |
 | `security` | `core` | 39 |

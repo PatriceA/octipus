@@ -9,6 +9,49 @@ labels reflect blast radius, not contract guarantees.
 
 ### Security
 
+- **Plugin sandbox is a boundary of its own, required by default (final
+  security review).** Package plugins were sandboxed only under
+  `security.shellSandbox`, which defaults to off: an unwrapped plugin could
+  read `DATABASE_URL` and `MASTER_KEY` from `/proc/<ppid>/environ`. New
+  setting **`plugins.sandbox: required | off`** (default `required`, env
+  `PLUGINS_SANDBOX`): a package plugin never starts without a working runner
+  (bwrap or firejail on Linux, sandbox-exec on macOS), and starting, enabling
+  and consenting are refused with what to install. `off` applies only to
+  plugins not from the marketplace; a marketplace plugin always needs a
+  runner. **Upgrade note:** on a host without a runner, enabled plugins stop
+  until one is installed (or, for local plugins only, `plugins.sandbox: off`).
+  **Windows** has no runner: marketplace plugins cannot run there. The
+  Docker image installs bubblewrap (`docker-compose.yml` documents the
+  seccomp/AppArmor options bwrap may need); a startup log line and the admin
+  page say *plugin sandbox: active runner X / unavailable*. Declarations, the
+  network status and the marketplace card say "NOT sandboxed on this host" /
+  "Network not enforced on this host" where that is so.
+- **No terminal for sandboxed commands (TIOCSTI).** bwrap runs with
+  `--new-session`, package servers are spawned in their own session and
+  stopped by process group, and the Seatbelt profile allows nothing on
+  `/dev/tty`. firejail adds `--caps.drop=all --nonewprivs`, and `--private`
+  when nothing under `$HOME` is whitelisted.
+- **Pages are egress:** a package with pages sees data up to level 1 whatever
+  its `maxProtection` says (also in `octi plugin permissions` and the index).
+- **A plugin's own text never reaches a model:** the system prompt lists a
+  plugin server by a host-written line, tool descriptions are the manifest's
+  (consented), undeclared tools are dropped, free text is removed from input
+  schemas, and a `tools/list_changed` cannot swap any of it.
+- **Expiry:** `keys.json` must carry `expires`, at most 90 days after
+  `generatedAt`; the marketplace index at most 45 days (recommended 60 and 30).
+- **Plugin routes check API token scopes** (`api:admin` for every change,
+  `api:read` for reads; user routes `api:read`/`api:write`) and refuse a
+  cookie-signed change from another origin (a sibling subdomain included).
+- **Protection-level laundering:** what a package read is kept per package and
+  user across calls; notes and tasks are refused after a read above level 1,
+  documents are written at no lower level; reset on disable, upgrade, uninstall.
+- **Key revocations signed by a root revoked since lapse** (`signerRevoked`)
+  unless a trusted root lists them again.
+- **Permissions summary:** `secrets` and `settings` (names, sorted, after
+  `network`) and a command's `input`; the diff lists every tool effect change
+  (down to read widens, external → write narrows), a new secret widens, and a
+  wildcard host over a short domain gets a guidance warning.
+
 - **Plugin marketplace hardening (independent review).** Marketplace trust
   stays inside the marketplace: `keys.json` may revoke only keys it endorses
   or ever endorsed (and roots), and its key revocations and the index's
