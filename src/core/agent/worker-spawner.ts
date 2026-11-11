@@ -868,12 +868,12 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   // failed probe" reported a stop as its work (#16).
   staticParts.push(`\n\nVISIBLE PLAN: get_work_plan/update_work_plan belong to the root coordinator. Record decisions and verification evidence in your handoff and contract; the pipeline synchronizes its items to the visible plan. Do not call unavailable visible-plan tools. Reuse toolchain versions and availability checks recorded by earlier stages of this run unless code or dependencies changed, or the earlier evidence failed.\n\nRECOVERING FROM YOUR OWN PROBES: a guessed path that does not exist, a helper binary that is not installed, or an exploratory command that exits non-zero is something to recover from — list or search for the real path, use an available alternative, re-run — and keep working. Report something as unavailable only when what the task needs truly is; never invent the result of a call that failed.`);
 
-  // Knowledge-tool roles: point them at the auto-indexed product docs so
+  // Knowledge-tool roles: point them at on-demand local product help so
   // "how do I set up / configure / connect X" questions are answered from
   // the shipped manual instead of a guess. Small models get the leaner
   // surface (they tend to misfire on extra tool guidance).
   if (!finalIsSmall && roleTools.some((t) => t.toolId === 'knowledge')) {
-    staticParts.push(`\n\nPRODUCT DOCS: Octipus's own product documentation (setup, channels, model providers, configuration) is indexed in the knowledge base (source "octipus-docs"). For any "how do I set up / configure / connect / enable X" question about Octipus itself, call search_knowledge FIRST and answer from the retrieved docs — cite the source file — rather than guessing.`);
+    staticParts.push(`\n\nPRODUCT DOCS: Octipus's bundled manual is available locally without embeddings or a model. For questions about setting up, configuring or using Octipus, call search_product_docs, then read_product_doc for the relevant file and lines. Answer from those sources and cite the file; search_knowledge is for the user's knowledge, not product help.`);
   }
 
   // Prompt sections of enabled plugin packages for this role

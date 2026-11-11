@@ -78,9 +78,7 @@ COPY mcp-server/ mcp-server/
 COPY eval/ eval/
 COPY bin/ bin/
 COPY browser-extension/ browser-extension/
-# Product docs — auto-indexed into the knowledge base at boot so users can ask
-# "how do I set up X?" (see src/db/seed-docs.ts). Without this the indexer
-# finds nothing in the image.
+# Bundled manual — searched locally on demand, without embeddings or models.
 COPY docs/ docs/
 COPY personas/ personas/
 # First-party plugins (docs/PLUGIN-PACKAGES.md#bundled-plugins): offered under

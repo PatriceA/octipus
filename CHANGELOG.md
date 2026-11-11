@@ -9,6 +9,8 @@ labels reflect blast radius, not contract guarantees.
 
 ### Changed
 
+- Product help now searches the bundled manual locally on demand, without startup or scheduled documentation embeddings.
+
 - **Useful token budgets from the first run.** The default per-user daily
   cap is now 10,000,000 tokens. Shared root turns start with 2,000,000,
   agents/subagents with 800,000/300,000, pipelines with 10,000,000, and

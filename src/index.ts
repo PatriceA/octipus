@@ -197,36 +197,10 @@ async function main() {
     await registerBuiltinTools();
     logger.info('Tools registered');
 
-    // Auto-index Octipus's own product docs into the knowledge base so users
-    // can ask "how do I set up Telegram / a model provider / X?" and get an
-    // answer grounded in the shipped manual. Must run AFTER runtime config is
-    // loaded (the embedding provider needs vault-resolved credentials, or the
-    // embed call 401s) — it is here, after registerBuiltinTools() and the
-    // loadRuntimeConfig()/resetLiteLLMClient() above. Non-fatal and idempotent
-    // (skips unchanged files); the cron refresh retries if the embedding model
-    // is only bound after first boot.
-    //
-    // Detached on purpose: the first index does slow LLM-bound work (embed every
-    // chunk + a per-chunk abstract via the default model — minutes when the
-    // default is a remote model). Awaiting it inline kept boot on the critical
-    // path long enough for the `octi` launcher's startup timeout to SIGTERM the
-    // process *before* the index committed — so the per-file SHA stamps that make
-    // it idempotent were never written, and it re-ran (and re-failed) on every
-    // boot. Running it fire-and-forget lets the server reach ready immediately;
-    // the index finishes in the background and stamps the files, so subsequent
-    // boots skip unchanged docs (truly a one-time cost).
-    //
-    // It needs the knowledge-base self-check's verdict, so it follows it. That
-    // check (DB + a real embedding call + a vector write) runs here too: after
-    // the runtime config, so the embedding provider has its keys, and off the
-    // boot path, with a short wait on the embedding call — it used to run
-    // inside gateway.start() on the client's 120 s timeout and retries. KB
-    // write endpoints wait for its verdict (awaitKBReadiness) meanwhile.
+    // Check readiness for user knowledge features without indexing the bundled
+    // manual. Product help uses local on-demand search, independent of models.
     void runKBSelfCheck({ embedTimeoutMs: BOOT_KB_EMBED_TIMEOUT_MS })
-      .catch((err) => logger.error({ err }, 'KB self-check threw unexpectedly — KB endpoints will 503 until /knowledge/readiness passes'))
-      .then(() => import('@/db/seed-docs'))
-      .then(({ indexProductDocs }) => indexProductDocs())
-      .catch((err) => logger.error({ err }, 'Product docs auto-index failed (non-fatal) — server continues'));
+      .catch((err) => logger.error({ err }, 'KB self-check threw unexpectedly — KB endpoints will 503 until /knowledge/readiness passes'));
 
     // Probe optional capabilities (Playwright, MCP, docker, …) and persist
     // their state to the `capabilities` table so the root agent can
