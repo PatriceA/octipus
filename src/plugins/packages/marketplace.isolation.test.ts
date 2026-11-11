@@ -142,6 +142,10 @@ beforeEach(async () => {
   plugins.registries = [];
   plugins.requireSignature = false;
   await clearCaches();
+  // These tests are about keys, the index and revocation, not the sandbox: a
+  // marketplace package needs a working runner to start, so give the checks one
+  // (a binary that does not exist: a test that really spawned a server would fail).
+  (await import('@/security/shell-sandbox'))._forceSandboxRunnerForTests('bwrap', '/nonexistent/bwrap-for-tests');
 });
 
 afterEach(async () => {
@@ -152,6 +156,7 @@ afterEach(async () => {
   served.files.clear();
   served.redirects.clear();
   served.fetched = [];
+  (await import('@/security/shell-sandbox'))._resetSandboxDetectionForTests();
 });
 
 afterAll(async () => {
