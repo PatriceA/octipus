@@ -238,6 +238,7 @@ See [BACKUP.md](BACKUP.md).
 |---|---|---|
 | `modules.enabled` | `[]` | The modules that are on, set in Settings → Modules or by the onboarding. Empty: the core only. Installs from before modules start with every module on. Env: `MODULES_ENABLED` (comma-separated), read only while nothing is stored: an upgraded install, or one where a module was switched, keeps the stored list, and the upgrade that declares a new module stores a list too. Use Settings → Modules rather than the env var. Changed through `/api/modules` only, not the generic settings routes. |
 | `protection.remoteAtLevel3` | `false` | Let conversations holding level 3 content (personal data) use remote models, pseudonymized ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md)). Off: level 3 stays on local models, like level 4. Env: `PROTECTION_REMOTE_AT_LEVEL3`. |
+| `plugins.calendarProtectionLevel` | `3` | The protection level (1-4) plugin packages see the connected calendars' events at (host scopes `calendar:read` and `calendar:write`): events carry no level of their own. A plugin reads them only if it may see this level, and writes to them only from a call that holds nothing above it ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#mail-and-calendar)). Settings → System → Advanced configuration → Security. |
 
 See [MODULES.md](MODULES.md).
 

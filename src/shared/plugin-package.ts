@@ -361,9 +361,9 @@ export interface PluginContributionsView {
 /**
  * What a package may do through the host API, as the user who triggered the
  * call. A small explicit set: each scope maps to one narrow endpoint group of
- * `/api/plugin-host/*`. Write scopes (`notes:write`, `tasks:write`,
- * `documents:write`, `notify`) are handed only to calls of a tool whose
- * declared effect is `write` or `external`: a `read` tool reads.
+ * `/api/plugin-host/*`. Write scopes (`PLUGIN_HOST_WRITE_SCOPES`) are handed
+ * only to calls of a tool whose declared effect is `write` or `external`: a
+ * `read` tool reads.
  *
  * `web:read` has the host fetch one public web page (through its SSRF guard)
  * and hand back its readable text; `model:complete` runs one text completion
@@ -377,15 +377,29 @@ export interface PluginContributionsView {
  * tool gets it to read a run; starting one needs a `write` or `external` tool
  * (`PLUGIN_HOST_START_SCOPES`). Its agent can search and fetch the web with the
  * user's tools, so it counts as network too.
+ *
+ * Mail and calendar (docs/PLUGIN-PACKAGES.md#mail-and-calendar): `mail:read`
+ * lists and reads the user's mail (the Mail module's mailboxes, and the
+ * connected Gmail or Microsoft 365 inbox); `mail:draft` saves drafts, never
+ * sending; `mail:send` sends, and only an `external` tool gets it
+ * (`PLUGIN_HOST_EXTERNAL_SCOPES`). Sending carries data out of the house, so
+ * it counts as network. `calendar:read` lists the connected calendars' events
+ * in a window; `calendar:write` creates events and changes the ones the
+ * package created.
  */
 export const PLUGIN_HOST_SCOPES = [
   'notes:read', 'notes:write', 'tasks:read', 'tasks:write', 'documents:read', 'documents:write', 'notify', 'web:read', 'model:complete',
-  'agent:run', 'store:read', 'store:write',
+  'agent:run', 'store:read', 'store:write', 'mail:read', 'mail:draft', 'mail:send', 'calendar:read', 'calendar:write',
 ] as const;
 export type PluginHostScope = (typeof PLUGIN_HOST_SCOPES)[number];
 
 /** The scopes that change data or reach the user: only for `write`/`external` tools. */
-export const PLUGIN_HOST_WRITE_SCOPES: readonly PluginHostScope[] = ['notes:write', 'tasks:write', 'documents:write', 'notify', 'store:write'];
+export const PLUGIN_HOST_WRITE_SCOPES: readonly PluginHostScope[] = [
+  'notes:write', 'tasks:write', 'documents:write', 'notify', 'store:write', 'mail:draft', 'mail:send', 'calendar:write',
+];
+
+/** The scopes that act outside Octipus: only for `external` tools, whose every call is asked about. */
+export const PLUGIN_HOST_EXTERNAL_SCOPES: readonly PluginHostScope[] = ['mail:send'];
 
 /**
  * Scopes a `read` tool holds to read with, whose starting endpoint still needs

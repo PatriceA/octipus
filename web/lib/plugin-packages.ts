@@ -49,7 +49,11 @@ export type {
 
 export {
   AGENT_RUN_NOTE,
+  CALENDAR_NOTE,
   DOCUMENTS_WRITE_NOTE,
+  MAIL_DRAFT_NOTE,
+  MAIL_READ_NOTE,
+  MAIL_SEND_NOTE,
   egressReadWarning,
   EGRESS_SCOPES,
   guidanceTone,

@@ -146,6 +146,7 @@ export const defaultConfig: Partial<Config> = {
     registries: [],
     hostModelDailyTokens: TOKEN_BUDGET_DEFAULTS.pluginDaily,
     hostAgentRunTokens: TOKEN_BUDGET_DEFAULTS.pluginRun,
+    calendarProtectionLevel: 3,
     marketplace: true,
     sandbox: 'required',
   },

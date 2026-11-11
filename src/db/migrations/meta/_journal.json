@@ -1282,6 +1282,13 @@
       "when": 1794420000000,
       "tag": "0182_plugin_store",
       "breakpoints": true
+    },
+    {
+      "idx": 183,
+      "version": "7",
+      "when": 1794423600000,
+      "tag": "0183_plugin_mail_calendar",
+      "breakpoints": true
     }
   ]
 }

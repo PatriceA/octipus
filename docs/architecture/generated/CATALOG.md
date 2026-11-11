@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-674 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
+684 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -409,9 +409,19 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/plugin-host/agent/runs` | `src/api/routes/plugin-host.ts` |
 | DELETE | `/api/plugin-host/agent/runs/:id` | `src/api/routes/plugin-host.ts` |
 | GET | `/api/plugin-host/agent/runs/:id` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/calendar/events` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/calendar/events` | `src/api/routes/plugin-host.ts` |
+| PUT | `/api/plugin-host/calendar/events/:id` | `src/api/routes/plugin-host.ts` |
 | POST | `/api/plugin-host/documents` | `src/api/routes/plugin-host.ts` |
 | GET | `/api/plugin-host/documents/:id` | `src/api/routes/plugin-host.ts` |
 | PUT | `/api/plugin-host/documents/:id` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/mail/accounts` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/mail/drafts` | `src/api/routes/plugin-host.ts` |
+| PUT | `/api/plugin-host/mail/drafts/:id` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/mail/drafts/:id/send` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/mail/messages` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/mail/messages/:id` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/mail/send` | `src/api/routes/plugin-host.ts` |
 | POST | `/api/plugin-host/model/complete` | `src/api/routes/plugin-host.ts` |
 | GET | `/api/plugin-host/notes` | `src/api/routes/plugin-host.ts` |
 | POST | `/api/plugin-host/notes` | `src/api/routes/plugin-host.ts` |
@@ -716,7 +726,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 5 |
 | `api` | `models` | 39 |
-| `api` | `plugins` | 38 |
+| `api` | `plugins` | 48 |
 | `api` | `security` | 177 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 25 |
@@ -804,16 +814,16 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `models` | `services` | 1 |
 | `models` | `shared` | 4 |
 | `models` | `utils` | 43 |
-| `plugins` | `config` | 11 |
-| `plugins` | `core` | 28 |
-| `plugins` | `db` | 56 |
+| `plugins` | `config` | 12 |
+| `plugins` | `core` | 52 |
+| `plugins` | `db` | 63 |
 | `plugins` | `extensions` | 2 |
 | `plugins` | `mcp` | 7 |
 | `plugins` | `models` | 2 |
-| `plugins` | `security` | 18 |
-| `plugins` | `shared` | 33 |
+| `plugins` | `security` | 19 |
+| `plugins` | `shared` | 34 |
 | `plugins` | `tools` | 1 |
-| `plugins` | `utils` | 35 |
+| `plugins` | `utils` | 36 |
 | `security` | `api` | 1 |
 | `security` | `config` | 20 |
 | `security` | `core` | 39 |

@@ -17,12 +17,14 @@ const KEY_ID = `ed25519:${'a'.repeat(64)}`;
 describe('plugins config', () => {
   it('defaults agree: schema, defaults, legacy loader, settings registry', () => {
     const parsed = plugins({});
-    const defaults = { trustedPublishers: [], revokedKeys: [], requireSignature: false, registries: [], hostModelDailyTokens: 10_000_000, hostAgentRunTokens: 1_000_000, marketplace: true, sandbox: 'required' };
+    const defaults = { trustedPublishers: [], revokedKeys: [], requireSignature: false, registries: [], hostModelDailyTokens: 10_000_000, hostAgentRunTokens: 1_000_000, calendarProtectionLevel: 3, marketplace: true, sandbox: 'required' };
     expect(parsed.success && parsed.data).toEqual(defaults);
     expect(defaultConfig.plugins).toEqual(defaults);
     expect(loadFromEnvLegacy().plugins).toMatchObject({ revokedKeys: [], registries: [], hostModelDailyTokens: 10_000_000, hostAgentRunTokens: 1_000_000 });
     expect(SETTINGS_REGISTRY.find((s) => s.key === 'plugins.hostModelDailyTokens')?.defaultValue).toBe(10_000_000);
     expect(SETTINGS_REGISTRY.find((s) => s.key === 'plugins.hostAgentRunTokens')?.defaultValue).toBe(1_000_000);
+    expect(SETTINGS_REGISTRY.find((s) => s.key === 'plugins.calendarProtectionLevel')?.defaultValue).toBe(3);
+    expect(loadFromEnvLegacy().plugins).toMatchObject({ calendarProtectionLevel: 3 });
     for (const key of ['plugins.marketplace', 'plugins.trustedPublishers', 'plugins.revokedKeys', 'plugins.requireSignature', 'plugins.registries', 'plugins.hostModelDailyTokens', 'plugins.hostAgentRunTokens', 'plugins.sandbox']) {
       expect(SETTINGS_REGISTRY.find((s) => s.key === key), key).toBeDefined();
     }
@@ -36,6 +38,11 @@ describe('plugins config', () => {
     for (const notAfter of ['next year', '2027-13-45', '2027-02-30', '2027-04-31T00:00:00Z', '01.01.2027', '2027-01-01T00:00']) {
       expect(plugins({ trustedPublishers: [{ name: 'Acme', publicKey: KEY, notAfter }] }).success, notAfter).toBe(false);
     }
+  });
+
+  it('calendarProtectionLevel is a protection level, 1 to 4', () => {
+    for (const level of [1, 2, 3, 4]) expect(plugins({ calendarProtectionLevel: level }).success, String(level)).toBe(true);
+    for (const level of [0, 5, 2.5, '3']) expect(plugins({ calendarProtectionLevel: level }).success, String(level)).toBe(false);
   });
 
   it('hostModelDailyTokens is a whole number of tokens, 0 to turn plugin model calls off', () => {

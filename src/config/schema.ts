@@ -945,6 +945,13 @@ export const configSchema = z.object({
      */
     hostAgentRunTokens: z.number().int().min(0).max(10_000_000).default(TOKEN_BUDGET_DEFAULTS.pluginRun),
     /**
+     * The protection level (1-4) plugin packages see the connected calendars'
+     * events at (host scopes calendar:read and calendar:write,
+     * docs/PLUGIN-PACKAGES.md#mail-and-calendar): events carry no level of
+     * their own. Default 3 (confidential: they name people).
+     */
+    calendarProtectionLevel: z.number().int().min(1).max(4).default(3),
+    /**
      * The built-in Octipus marketplace (docs/PLUGIN-PACKAGES.md#marketplace):
      * `true` (default), `false` (off entirely: never fetched, never trusted),
      * or `{ enabled?, url?, rootKeys?: { root, rootBackup? } }` to point it at

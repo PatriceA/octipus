@@ -28,6 +28,7 @@ import type { AgentContext } from '@/core/types';
 import type { MCPServer } from '@/shared/mcp-server';
 import {
   PLUGIN_HOST_ALIAS,
+  PLUGIN_HOST_EXTERNAL_SCOPES,
   PLUGIN_HOST_META_KEY,
   PLUGIN_HOST_SCOPES,
   PLUGIN_HOST_WRITE_SCOPES,
@@ -80,6 +81,11 @@ export interface HostTokenGrant {
    * (docs/PLUGIN-PACKAGES.md#model-calls-on-cli-lanes). Unset: refused there.
    */
   modelCliTools?: true;
+  /**
+   * This call has sent a message (`mail:send`): one approved call sends one
+   * message (docs/PLUGIN-PACKAGES.md#mail-and-calendar).
+   */
+  mailSent?: true;
 }
 
 /**
@@ -188,7 +194,8 @@ export function isHostScope(value: unknown): value is PluginHostScope {
 
 /**
  * The scopes a call of a tool with `effect` may be handed: declared and
- * approved, and for a `read` tool only the read scopes.
+ * approved; for a `read` tool only the read scopes, and the scopes that act
+ * outside Octipus (`mail:send`) for an `external` tool only.
  */
 export function grantableScopes(
   declared: readonly PluginHostScope[] | undefined,
@@ -196,7 +203,9 @@ export function grantableScopes(
   effect: PluginToolEffect,
 ): PluginHostScope[] {
   const ok = new Set(approved ?? []);
-  return (declared ?? []).filter((s) => ok.has(s) && (effect !== 'read' || !PLUGIN_HOST_WRITE_SCOPES.includes(s)));
+  return (declared ?? []).filter((s) => ok.has(s)
+    && (effect !== 'read' || !PLUGIN_HOST_WRITE_SCOPES.includes(s))
+    && (effect === 'external' || !PLUGIN_HOST_EXTERNAL_SCOPES.includes(s)));
 }
 
 /**
@@ -222,6 +231,15 @@ export const SCOPE_TOOL_ACTION: Record<PluginHostScope, { toolId: string; action
   // The package's own data for this user (docs/PLUGIN-PACKAGES.md#store): no built-in tool stands for it.
   'store:read': null,
   'store:write': null,
+  // Mail and calendar reach more than one source (the Mail module's mailboxes,
+  // the connected Google or Microsoft 365 account), each with a tool of its own:
+  // the source's module and the user's rules on that tool's action are checked
+  // per request (src/plugins/packages/host-sources.ts).
+  'mail:read': null,
+  'mail:draft': null,
+  'mail:send': null,
+  'calendar:read': null,
+  'calendar:write': null,
 };
 
 /**

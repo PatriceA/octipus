@@ -1702,6 +1702,11 @@ and an admin approved:
 | `agent:run` | `POST /api/plugin-host/agent/runs { prompt, role?, title? }`; `GET /api/plugin-host/agent/runs/:id`; `DELETE /api/plugin-host/agent/runs/:id` | Starts a background agent run as the user and answers its id at once; a later call reads its status and final text; `DELETE` cancels it (its own runs for the same user only; any of its tools may). See below. |
 | `store:read` | `GET /api/plugin-host/store/<key>`; `GET /api/plugin-host/store?prefix=&limit=` | One entry of the package's store for the calling user, or their keys. See [Store](#store). |
 | `store:write` | `PUT /api/plugin-host/store/<key> { value, ifVersion? }`; `DELETE /api/plugin-host/store/<key>` | Writes or deletes one entry for the calling user only. See [Store](#store). |
+| `mail:read` | `GET /api/plugin-host/mail/accounts`; `GET /api/plugin-host/mail/messages?source=&…`; `GET /api/plugin-host/mail/messages/:id?source=` | The user's mailboxes, their mail (newest first, no text), one message with its text. See [Mail and calendar](#mail-and-calendar). |
+| `mail:draft` | `POST /api/plugin-host/mail/drafts { source, … }`; `PUT /api/plugin-host/mail/drafts/:id` | Saves a draft as the user, never sending; changes a draft this package created. |
+| `mail:send` | `POST /api/plugin-host/mail/send { source, … }`; `POST /api/plugin-host/mail/drafts/:id/send` | Sends as the user. An `external` tool only; the package is limited to level 1. |
+| `calendar:read` | `GET /api/plugin-host/calendar/events?from=&to=&limit=` | The connected calendars' events in a window of at most 93 days. |
+| `calendar:write` | `POST /api/plugin-host/calendar/events { provider, title, start, end, allDay, location?, description? }`; `PUT /api/plugin-host/calendar/events/:id` | Creates an event; changes an event this package created. |
 
 **What a package read, it keeps.** The highest protection level a package
 has read through the host API (a document, a task's provenance, a run's
@@ -1932,6 +1937,101 @@ A request refused before that (no or a forged stamp, no or a dead token) is
 limited per client address (then `429`) and audited in aggregate: one row
 (op `refused`, its `code`, `count`) per kind and package per minute, carrying
 the refusals counted since the previous row.
+
+### Mail and calendar
+
+`mail:read`, `mail:draft`, `mail:send`, `calendar:read` and `calendar:write`
+let a package work with the calling user's mail and calendars, as that user
+(src/plugins/packages/host-mail.ts, host-calendar.ts, host-sources.ts). The
+user's permission rules apply per source, as for their own agent: a rule
+that denies the source's tool action refuses the request (`403
+denied_by_rule`), and the source's module must be on (`404 module_off`).
+
+**Two mail sources**, named by `source`:
+
+- `mail`: the Mail module's mailboxes (IMAP/SMTP, docs/MAIL.md), personal or
+  a space's, through the user's content scope in the call's workspace. Each
+  message is at its own protection level (none: 4). Rules: the `mail` tool's
+  `read`, `draft` and `send`.
+- `inbox`: the Gmail or Microsoft 365 inbox the user connected (the Inbox
+  module; Google first when both are). Its messages carry no level, so they
+  count as **level 4**: a package reads them only with `maxProtection` 4
+  (no network, no pages, no egress scope). Personal workspace only (`403
+  personal_only` in a space). Rules: the provider tool's `email_read`, and
+  `email_send` for drafts and sends.
+
+**Reading.** `GET mail/accounts` → `{ accounts: [{ id, label, address,
+canSend }], inbox: { provider, protectionLevel: 4 } | null }`. `GET
+mail/messages?source=mail&accountId=&status=received|sent|draft&unread=true&q=&limit=&cursor=`
+lists newest first without text (`limit` default 25, at most 100; `next` is
+the cursor of the next page); for `source=inbox` only `limit` and `cursor`.
+A Mail module message above the package's `maxProtection` is left out **in
+the query**, so it neither uses up the limit nor shows that it exists; named
+by id it is `404`, as a message that does not exist (its level is not said). `GET mail/messages/:id?source=` → the
+message with its plain text (at most 50,000 characters, `truncated`). What a
+list or read hands over raises the calling session and the package's level
+for this user, as a document does.
+
+**Drafts.** `POST mail/drafts { source, accountId?, to?, cc?, subject?, body,
+replyTo?, replyAll? }` saves a draft as the user and never sends. Source
+`mail`: a new message from `accountId` to `to`/`cc` ("a@x.de, Jane
+<j@y.de>" or a list), or a reply to the received message `replyTo` (its
+recipients, subject and thread, the original quoted; the original must be
+within `maxProtection`, and replying reads it, so it needs `mail:read` and
+the user's rule on reading too). The draft is at least at the level the call has
+read and at the account's default (a reply: the original's), and records
+the package and tool (`mail_messages.plugin_source`). Source `inbox`: a
+reply to a message by the provider's id, or a new message to `to`, saved in
+the provider's drafts: **such a draft is stored at Google or Microsoft**, in
+the user's connected account, like everything in that inbox. `PUT
+mail/drafts/:id { to?, cc?, subject?, body? }` changes a Mail module draft
+**this package created for this user** (`plugin_items`; `403
+not_created_by_plugin` for any other), within `maxProtection`; its level
+only rises, and a reply keeps its recipients (it quotes the original). A
+plugin that only drafts keeps its full level: the user reviews and sends
+from Octipus or their mail app.
+
+**Sending.** `mail:send` is handed to **`external` tools only** (each call is
+asked about by the user's rules; a schedule or event never runs one), and a
+manifest declaring it without an external tool is refused. Sending carries
+data out of the house, so `mail:send` counts like `web:read`: the package
+sees **level 1** at most, and a call holding more than that (what the package
+read for this user, or what the calling session holds) is refused (`403
+read_level`), so a confidential conversation cannot be mailed out through a
+plugin. `POST mail/send { the fields of a draft }` sends now (source `mail`:
+saved as the package's draft, then sent through the account's server, at
+most 50 recipients; source `inbox`: exactly one recipient, no cc or reply).
+`POST mail/drafts/:id/send` sends a Mail module draft this package created,
+if its level is within `maxProtection` (a draft in a mailbox kept above level
+1 is sent with `mail/send` in one call instead), exactly as it was checked:
+a change meanwhile refuses it. **One approved call sends one message** (`409
+one_send_per_call` for a second), and a package sends at most 20 an hour
+for one user (`429 rate_limited`).
+The outcome is audited (`mail.send`, `mail.draft.send`) with the message's
+id, never its addresses or text.
+
+**Calendars.** `calendar:read` and `calendar:write` reach the calendars the
+user connected (Google, Microsoft 365), in the personal workspace only.
+Events carry no protection level: they count as the level an admin sets,
+**`plugins.calendarProtectionLevel` (default 3**, confidential: events name
+people). `GET calendar/events?from=&to=&limit=` → `{ events: [{ id, provider,
+title, start, end, allDay, location, description, organizer, attendees,
+protectionLevel }], providers, partial, truncated }`, a window of at most 93
+days and 250 events; `403 protection_level` when the calendar's level is
+above `maxProtection`. `POST calendar/events { provider, title, start, end,
+allDay, location?, description? }` creates an event (no attendees: a write
+invites nobody); `PUT calendar/events/:id` changes an event this package
+created, unless the user has since invited someone to it (`409
+has_attendees`: the change would reach them). A call holding data above the calendar's level may not write
+(`403 read_level`): it would carry that data into a place kept at a lower
+level. There is no delete. Rules: the provider tool's `calendar_read` and
+`calendar_write`.
+
+**What a package created.** `plugin_items` records the Mail module drafts
+and calendar events a package created, per user. Uninstalling the package
+deletes its rows; so does an upgrade to **another signer or source**: the
+drafts and events stay the user's, and the new publisher can change or send
+none of them. A sent draft is no longer the package's.
 
 ### Model calls on CLI lanes
 

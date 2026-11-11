@@ -1338,6 +1338,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
       'Tokens one plugin background run (host scope agent:run) may use; its tokens also count in plugins.hostModelDailyTokens (docs/PLUGIN-PACKAGES.md#host-api). 0 turns plugin background runs off.',
     isSecret: false,
   },
+  {
+    key: 'plugins.calendarProtectionLevel',
+    category: 'security',
+    valueType: 'number',
+    defaultValue: 3,
+    description:
+      'The protection level (1-4) plugin packages see the connected calendars\' events at (host scopes calendar:read and calendar:write, docs/PLUGIN-PACKAGES.md#mail-and-calendar): events carry no level of their own. A plugin reads them only if it may see this level, and writes to them only from a call that read nothing above it. Default 3 (confidential: events name people).',
+    isSecret: false,
+  },
 
   {
     key: 'plugins.marketplace',
