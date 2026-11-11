@@ -7,9 +7,9 @@
  * Every key is generated here, in the test, and never written anywhere.
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { entriesOfDir, makeTarGz } from '@/test-helpers/tar';
 import type { PluginPermissionsSummary } from '@/shared/plugin-package';
@@ -70,10 +70,14 @@ function publishKeys(version: number, signing: Key[], opts: { revoked?: string[]
 
 interface Published { version: string; url: string; sha256: string; contentHash: string; permissions: PluginPermissionsSummary }
 
-/** The fixture at `version`, signed by `key` (unless null), served as a tarball on the marketplace origin. */
-async function publishPackage(version: string, key: Key | null, mutate?: (manifest: Record<string, unknown>) => void): Promise<Published> {
+/** The fixture at `version` (with `files` added), signed by `key` (unless null), served as a tarball on the marketplace origin. */
+async function publishPackage(version: string, key: Key | null, mutate?: (manifest: Record<string, unknown>) => void, files: Record<string, string> = {}): Promise<Published> {
   const dir = mkdtempSync(join(tmpdir(), 'octipus-mp-pkg-'));
   cpSync(FIXTURE_DIR, dir, { recursive: true });
+  for (const [rel, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, rel)), { recursive: true });
+    writeFileSync(join(dir, rel), text);
+  }
   const manifest = JSON.parse(readFileSync(join(dir, 'octipus-plugin.json'), 'utf8'));
   manifest.version = version;
   mutate?.(manifest);
@@ -514,6 +518,135 @@ describe('the key model: roots, keys.json, rotation', () => {
     getConfig().plugins.marketplace = { enabled: true, url: INDEX_URL, rootKeys: { root: keyB.publicKeyPem } };
     await clearCaches();
     expect((await svc.packageView(NAME)).signature).toMatchObject({ status: 'unknown_key' });
+  });
+});
+
+describe('the store across upgrades (docs/PLUGIN-PACKAGES.md#store)', () => {
+  /** The fixture with a store (and, with `pages`, a page). */
+  const withStore = (pages = false) => (m: Record<string, unknown>) => {
+    m.host = ['store:read', 'store:write'];
+    m.store = {};
+    if (pages) m.ui = { pages: [{ path: 'main', title: 'Main', entry: 'index.html' }] };
+  };
+  const PAGE_FILES = { 'ui/index.html': '<!doctype html><title>Echo</title>' };
+  /** An entry the admin's calls kept, at `level`. */
+  async function keep(key: string, level = 1): Promise<void> {
+    const { pluginStoreRepository } = await import('@/db/repositories/plugin-store-repository');
+    const out = await pluginStoreRepository.put({ pkg: NAME, userId: admin, workspaceId: null }, key, JSON.stringify(`value of ${key}`),
+      { protectionLevel: level, maxProtection: 4, quotaBytes: 1 << 20 });
+    expect(out.ok).toBe(true);
+  }
+  async function keys(): Promise<string[]> {
+    const { queryRaw } = await import('@/db/postgres');
+    return (await queryRaw(`SELECT key FROM plugin_store WHERE package_name = $1 ORDER BY key`, [NAME])).rows.map((r: { key: string }) => r.key);
+  }
+  async function preview() {
+    const { previewInstall } = await import('./consent');
+    return previewInstall({ registry: 'marketplace', name: NAME }, admin);
+  }
+
+  test('another signer gets the stored data only when the admin ticks change:store-handover; unticked, it is deleted at install', async () => {
+    publishKeys(1, [keyA, keyB]);
+    publishIndex([entryOf(await publishPackage('1.0.0', keyA, withStore()))]);
+    await install();
+    await keep('a');
+    await keep('b');
+
+    // Signed by B now: the handover is offered, optional, not pre-ticked.
+    await clearCaches();
+    publishIndex([entryOf(await publishPackage('1.0.1', keyB, withStore()))]);
+    const p1 = await preview();
+    const item = p1.declarations.find((d) => d.id === 'change:store-handover');
+    expect(item).toMatchObject({ kind: 'change', optional: true, carried: false, label: 'Hands the stored data of 1 user (0.01 MB) to the new publisher' });
+    const { requiredConsentIds } = await import('@/shared/plugin-declarations');
+    expect(requiredConsentIds(p1.declarations)).toContain('change:signer');
+    expect(requiredConsentIds(p1.declarations)).not.toContain('change:store-handover');
+    const { installPreview } = await import('./consent');
+    await installPreview(p1.previewId, { contentHash: p1.contentHash, accepted: requiredConsentIds(p1.declarations) }, admin);
+    expect(await keys()).toEqual([]);
+    expect((await auditOps('upgraded')).at(-1)).toMatchObject({ version: '1.0.1', storeDeleted: { reason: 'publisher_changed', entries: 2, users: 1 } });
+
+    // Back to A, and this time the admin keeps the data: handed over, audited.
+    await keep('c');
+    await clearCaches();
+    publishIndex([entryOf(await publishPackage('1.0.2', keyA, withStore()))]);
+    const p2 = await preview();
+    await installPreview(p2.previewId, { contentHash: p2.contentHash, accepted: [...requiredConsentIds(p2.declarations), 'change:store-handover'] }, admin);
+    expect(await keys()).toEqual(['c']);
+    expect((await auditOps('upgraded')).at(-1)).toMatchObject({ version: '1.0.2', storeHandedOver: { entries: 1, users: 1 } });
+
+    // The API's flag: without keepStoreData the data goes, with it it stays.
+    await clearCaches();
+    publishIndex([entryOf(await publishPackage('1.0.3', keyB, withStore()))]);
+    await install({ upgrade: true, allowSignerChange: true, keepStoreData: true });
+    expect(await keys()).toEqual(['c']);
+    await clearCaches();
+    publishIndex([entryOf(await publishPackage('1.0.4', keyA, withStore()))]);
+    await install({ upgrade: true, allowSignerChange: true });
+    expect(await keys()).toEqual([]);
+  });
+
+  test('the same publisher keeps the data (what an agent\'s own upgrade is); entries above the new maxProtection go; a store removed takes every entry', async () => {
+    publishKeys(1, [keyA]);
+    publishIndex([entryOf(await publishPackage('1.0.0', keyA, (m) => { withStore()(m); m.maxProtection = 3; }))]);
+    await install();
+    await keep('low', 1);
+    await keep('high', 3);
+    await clearCaches();
+    publishIndex([entryOf(await publishPackage('1.0.1', keyA, withStore()))]);
+    const p = await preview();
+    expect(p.declarations.map((d) => d.id)).not.toContain('change:store-handover');
+    // maxProtection 2 now: the level-3 entry goes with the upgrade.
+    await install({ upgrade: true });
+    expect(await keys()).toEqual(['low']);
+    expect((await auditOps('upgraded')).at(-1)).toMatchObject({ storeDeleted: { reason: 'above_max_protection', maxProtection: 2, entries: 1, users: 1 } });
+    // A version without a store: every entry goes, so a store added back later starts empty.
+    await clearCaches();
+    publishIndex([entryOf(await publishPackage('1.0.2', keyA))]);
+    await install({ upgrade: true });
+    expect(await keys()).toEqual([]);
+    expect((await auditOps('upgraded')).at(-1)).toMatchObject({ storeDeleted: { reason: 'store_removed', entries: 1, users: 1 } });
+  });
+
+  test('a revoked version or key serves no page', async () => {
+    publishKeys(1, [keyA]);
+    const p = await publishPackage('1.0.0', keyA, withStore(true), PAGE_FILES);
+    publishIndex([entryOf(p)]);
+    await install();
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(`UPDATE plugin_packages SET enabled = true WHERE name = '${NAME}'`);
+    const { listEnabledPages, readUiFile } = await import('./ui');
+    const { packageRunProblem } = await import('./run-check');
+    expect(await packageRunProblem(NAME)).toBeNull();
+    expect((await readUiFile(NAME, 'index.html')).status).toBe(200);
+    expect((await listEnabledPages()).map((x) => x.plugin)).toEqual([NAME]);
+
+    // The version revoked: recorded on the next index read, and the cached check forgotten at once.
+    await clearCaches();
+    publishIndex([entryOf(p)], { revoked: [{ name: NAME, version: '1.0.0', reason: 'bad' }] });
+    const { marketplaceListing } = await import('./marketplace');
+    await marketplaceListing();
+    expect((await readUiFile(NAME, 'index.html')).status).toBe(404);
+    expect(await listEnabledPages()).toEqual([]);
+    expect(await packageRunProblem(NAME)).toMatch(/revoked/);
+  });
+
+  test('a page of a package signed by a key revoked since is not served', async () => {
+    publishKeys(1, [keyA]);
+    const p = await publishPackage('1.0.0', keyA, withStore(true), PAGE_FILES);
+    publishIndex([entryOf(p)]);
+    await install();
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(`UPDATE plugin_packages SET enabled = true WHERE name = '${NAME}'`);
+    const { listEnabledPages, readUiFile } = await import('./ui');
+    expect((await readUiFile(NAME, 'index.html')).status).toBe(200);
+    await clearCaches();
+    publishKeys(2, [keyB], { revoked: [keyA.keyId] });
+    publishIndex([entryOf(await publishPackage('1.0.1', keyB))], { signer: keyB });
+    const { marketplaceListing } = await import('./marketplace');
+    expect((await marketplaceListing()).state).toBe('ready');
+    expect((await readUiFile(NAME, 'index.html')).status).toBe(404);
+    expect(await listEnabledPages()).toEqual([]);
   });
 });
 

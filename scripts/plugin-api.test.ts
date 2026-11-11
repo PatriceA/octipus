@@ -647,6 +647,28 @@ describe('octi plugin marketplace, updates and install', () => {
     expect(named.requests[1].body).toMatchObject({ accepted: ['host:notes:write', 'schedule:nightly', 'change:source'], enable: true });
   });
 
+  test('install: handing the stored data to a new publisher is optional, never in --accept all, and kept only with --keep-store-data', async () => {
+    const handover = { id: 'change:store-handover', kind: 'change', label: 'Hands the stored data of 3 users (1.5 MB) to the new publisher', detail: 'change:store-handover: keep what the package stored', carried: false, status: 'new', optional: true };
+    const withHandover = (interactive: boolean) => harness({
+      interactive, answer: 'y',
+      respond: (method, body) => (method === 'POST' && (body as { previewId?: string }).previewId ? [200, installed] : method === 'POST' ? [200, { ...PREVIEW, declarations: [...PREVIEW.declarations, handover] }] : undefined),
+    });
+    const all = withHandover(false);
+    expect(await installCommand(all.io, 'weekly', { accept: 'all', upgrade: true })).toBe(0);
+    expect(all.requests[1].body).toMatchObject({ accepted: ['host:notes:write', 'schedule:nightly'] });
+    expect(all.out.join('')).toContain('[ ] change:store-handover  Hands the stored data of 3 users (1.5 MB) to the new publisher  (OPTIONAL, not done unless chosen)');
+    expect(all.out.join('')).toContain('not chosen: Hands the stored data of 3 users (1.5 MB) to the new publisher (the stored data is deleted at install; --keep-store-data keeps it)');
+    const keep = withHandover(false);
+    expect(await installCommand(keep.io, 'weekly', { accept: 'all', upgrade: true, keepStoreData: true })).toBe(0);
+    expect(keep.requests[1].body).toMatchObject({ accepted: ['host:notes:write', 'schedule:nightly', 'change:store-handover'] });
+    // At a terminal: asked after the required items, No by default.
+    const no = withHandover(true);
+    no.io.ask = async (q) => { no.asked.push(q); return q.startsWith('Optional:') ? '' : 'y'; };
+    expect(await installCommand(no.io, 'weekly', { upgrade: true })).toBe(0);
+    expect(no.asked.at(-1)).toBe('Optional: Hands the stored data of 3 users (1.5 MB) to the new publisher (change:store-handover)? [y/N] ');
+    expect(no.requests[1].body).toMatchObject({ accepted: ['host:notes:write', 'schedule:nightly'] });
+  });
+
   test('install: without a terminal and without --accept it refuses with the list; at a terminal it asks per item', async () => {
     const batch = consentHarness(false);
     expect(await installCommand(batch.io, 'weekly', { upgrade: true })).toBe(2);

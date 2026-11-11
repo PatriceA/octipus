@@ -67,7 +67,9 @@ function Guidance({ text, tone }: { text: string; tone: 'warning' | 'info' }) {
  * exactly is declared, and the guidance under it, never blocking. In an
  * upgrade, items unchanged and agreed to before are ticked and greyed; new
  * and changed ones are marked. Install stays disabled until every required
- * item is ticked, and for a moment after the list shows. What is agreed to
+ * item is ticked, and for a moment after the list shows. An optional item
+ * (handing the stored data to a new publisher) is a choice, never pre-ticked,
+ * sent only when ticked. What is agreed to
  * is bound to the content hash shown: the server refuses anything else.
  */
 export function ConsentDialog({ source, onClose, onDone, enableByDefault }: {
@@ -107,7 +109,8 @@ export function ConsentDialog({ source, onClose, onDone, enableByDefault }: {
   const submit = useMutation({
     mutationFn: () => {
       if (!data) throw new Error('Nothing to agree to');
-      const accepted = required.filter((id) => ticked[id]);
+      // Every required item, and an optional choice only when ticked (never pre-ticked).
+      const accepted = data.declarations.filter((i) => !i.carried && ticked[i.id] === true).map((i) => i.id);
       return data.previewId
         ? api.post<PluginConsentResult>('/plugin-packages/install', { previewId: data.previewId, contentHash: data.contentHash, accepted, enable })
         : api.post<PluginConsentResult>(`/plugin-packages/${encodeURIComponent(data.name)}/consent`, { contentHash: data.contentHash, accepted, enable });
@@ -208,6 +211,7 @@ export function ConsentDialog({ source, onClose, onDone, enableByDefault }: {
                               {item.carried && <span className="ml-2 text-xs text-on-surface-variant">(unchanged, agreed before)</span>}
                               {fresh && item.status === 'new' && <span className="ml-2 rounded-xs bg-primary px-1 text-[11px] font-medium text-on-primary">new</span>}
                               {fresh && item.status === 'changed' && <span className="ml-2 rounded-xs bg-primary px-1 text-[11px] font-medium text-on-primary">changed</span>}
+                              {item.optional && <span className="ml-2 text-xs text-on-surface-variant" data-testid="consent-optional">(optional: left unticked, it is not done)</span>}
                             </label>
                             <p id={`${id}-detail`} className="break-all font-mono text-xs text-on-surface-variant">{displayText(item.detail)}</p>
                             {item.guidance && <Guidance text={item.guidance} tone={guidanceTone(item)} />}

@@ -271,6 +271,7 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
             registry: body.registry, name: body.name, version: body.version, upgrade: body.upgrade === true,
             allowSignerChange: body.allowSignerChange === true, allowDowngrade: body.allowDowngrade === true,
             allowSourceChange: body.allowSourceChange === true, allowIncompatible: body.allowIncompatible === true,
+            keepStoreData: body.keepStoreData === true,
           });
           return {
             name: row.name, version: row.version, enabled: row.enabled, contentHash: row.contentHash, signedBy: row.signedBy,
@@ -290,6 +291,7 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
           upgrade,
           ...(body.allowSignerChange === true ? { allowSignerChange: true } : {}),
           ...(body.allowDowngrade === true ? { allowDowngrade: true } : {}),
+          ...(body.keepStoreData === true ? { keepStoreData: true } : {}),
         };
         const row = body.url !== undefined
           ? await installFromUrl(body.url, principal.userId, { ...common, sha256: body.sha256, name: body.name, version: body.version })
@@ -325,6 +327,11 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
         allowSignerChange: t.Optional(t.Boolean()),
         /** An upgrade to an older version (refused, 409, without it; audited). */
         allowDowngrade: t.Optional(t.Boolean()),
+        /**
+         * An upgrade to another signer or source keeps the package's stored data
+         * (every user's); without it the data is deleted at install (audited, counts only).
+         */
+        keepStoreData: t.Optional(t.Boolean()),
       }),
       detail: { tags: ['plugin-packages'] },
     },

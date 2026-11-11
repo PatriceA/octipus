@@ -48,6 +48,7 @@ import {
   type PluginInstallPreview,
   permissionsGuidance,
   requiredConsentIds,
+  STORE_HANDOVER_CONSENT_ID,
 } from '@/shared/plugin-declarations';
 import {
   declaresTrustedModelInput,
@@ -77,6 +78,7 @@ import {
   PluginPackageError,
   type StagedPackage,
   stagePackage,
+  storeHandover,
   upgradeChanges,
 } from './service';
 
@@ -213,6 +215,21 @@ function changeItem(id: string, label: string, detail: string, guidance: string)
 }
 
 /**
+ * The choice to hand a package's stored data to the new signer or source of
+ * an upgrade (docs/PLUGIN-PACKAGES.md#store): optional, never pre-ticked;
+ * left unticked, the data is deleted at install.
+ */
+function storeHandoverItem(users: number, bytes: number): PluginDeclarationItem {
+  const mb = Math.max(0.01, Math.round((bytes / (1024 * 1024)) * 100) / 100);
+  return {
+    ...changeItem('store-handover', `Hands the stored data of ${users} ${users === 1 ? 'user' : 'users'} (${mb} MB) to the new publisher`,
+      `${STORE_HANDOVER_CONSENT_ID}: keep what the package stored for its users; unticked, it is deleted at install`,
+      'The new publisher\'s code reads everything the previous one kept for each user. Leave it unticked to start the store empty. Recorded in the audit log.'),
+    optional: true,
+  };
+}
+
+/**
  * Download (or copy), verify and stage a package for the admin's consent.
  * Everything an install refuses is refused here, the same way; the rest is
  * listed for consent.
@@ -268,6 +285,12 @@ export async function previewInstall(source: PreviewSource, actorUserId: string)
     if (said.sourceChange) changes.push(changeItem('source', 'Comes from another source', said.sourceChange, 'Another registry, or the marketplace, takes over this package. Recorded in the audit log.'));
     if (said.signerChange) changes.push(changeItem('signer', 'Signed by another publisher', said.signerChange, 'Who vouches for these bytes changes. Recorded in the audit log.'));
     if (said.downgrade) changes.push(changeItem('downgrade', 'Installs an older version', said.downgrade, 'An older version may lack fixes the installed one has. Recorded in the audit log.'));
+    // Another publisher gets the users' stored data only if the admin says so: unticked, it is deleted at install.
+    if (storeHandover(change) && manifest.store) {
+      const { pluginStoreRepository } = await import('@/db/repositories/plugin-store-repository');
+      const stored = await pluginStoreRepository.usage(manifest.name);
+      if (stored.entries > 0) changes.push(storeHandoverItem(stored.byUser.length, stored.bytes));
+    }
   }
   if (resolved.incompatible) changes.push(changeItem('incompatible', 'Asks for a newer Octipus', resolved.incompatible, 'It may not work here as its publisher intends.'));
   const items = consentItems([...base, ...changes], before, covered);
@@ -354,6 +377,8 @@ export async function installPreview(
       allowSourceChange: accepted.has('change:source'),
       allowSignerChange: accepted.has('change:signer'),
       allowDowngrade: accepted.has('change:downgrade'),
+      // Only when offered and ticked: otherwise an upgrade to another publisher deletes the store.
+      keepStoreData: accepted.has(STORE_HANDOVER_CONSENT_ID) && preview.items.some((i) => i.id === STORE_HANDOVER_CONSENT_ID),
       consent: {
         contentHash: preview.contentHash,
         baseline: preview.baseline,

@@ -47,6 +47,8 @@ export interface RegistryInstallRequest {
   allowDowngrade?: boolean;
   /** The admin consents to taking the package from another source than the installed version's (audited). */
   allowSourceChange?: boolean;
+  /** An upgrade to another signer or source keeps the stored data (else it is deleted at install). */
+  keepStoreData?: boolean;
   /** The admin consents to installing a version that asks for a newer Octipus (`minOctipus`). */
   allowIncompatible?: boolean;
 }
@@ -111,7 +113,7 @@ export async function resolveRegistryInstall(req: RegistryInstallRequest): Promi
   };
   const options = remoteInstallOptions(entry.url, {
     name: entry.name, version: entry.version,
-    upgrade: req.upgrade, allowSignerChange: req.allowSignerChange, allowDowngrade: req.allowDowngrade,
+    upgrade: req.upgrade, allowSignerChange: req.allowSignerChange, allowDowngrade: req.allowDowngrade, keepStoreData: req.keepStoreData,
     registry: {
       expectListing: { contentHash: entry.contentHash, permissions: entry.permissions },
       origin,

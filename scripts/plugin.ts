@@ -171,14 +171,16 @@ Usage:
   octi plugin install <name> [--version <v>] [--registry <name>]
                          [--accept all|<id,id,…>] [--enable]
                          [--allow-source-change] [--allow-signer-change]
-                         [--allow-downgrade] [--allow-incompatible]
+                         [--allow-downgrade] [--allow-incompatible] [--keep-store-data]
   octi plugin upgrade <name> [the same options]
                                 Install (or upgrade) from the marketplace or a registry
                                 by name, the newest compatible version. Prints what it
                                 declares; each item not unchanged from the installed
                                 version is agreed to, y/n at a terminal or with
                                 --accept (refused otherwise). Lands disabled unless
-                                --enable. --allow-* agree to that change item.
+                                --enable. --allow-* agree to that change item. An
+                                upgrade to another signer or source deletes the
+                                package's stored data unless --keep-store-data.
   octi plugin sign-keys <keys.json> --key <root.key> [--root-pub <file>...]
                          [--passphrase-file <path|->] [--json]
                                 Sign the marketplace's keys file with a ROOT key
@@ -434,7 +436,7 @@ async function main(): Promise<void> {
           options: {
             version: { type: 'string' }, registry: { type: 'string' }, upgrade: { type: 'boolean' },
             'allow-source-change': { type: 'boolean' }, 'allow-signer-change': { type: 'boolean' },
-            'allow-downgrade': { type: 'boolean' }, 'allow-incompatible': { type: 'boolean' },
+            'allow-downgrade': { type: 'boolean' }, 'allow-incompatible': { type: 'boolean' }, 'keep-store-data': { type: 'boolean' },
             accept: { type: 'string' }, enable: { type: 'boolean' },
           },
         });
@@ -448,6 +450,7 @@ async function main(): Promise<void> {
         accept: v.accept as string | undefined, enable: v.enable === true,
         allowSourceChange: v['allow-source-change'] === true, allowSignerChange: v['allow-signer-change'] === true,
         allowDowngrade: v['allow-downgrade'] === true, allowIncompatible: v['allow-incompatible'] === true,
+        keepStoreData: v['keep-store-data'] === true,
       }));
       break;
     }

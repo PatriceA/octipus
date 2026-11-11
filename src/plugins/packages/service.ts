@@ -446,6 +446,14 @@ export interface InstallOptions {
   /** An upgrade may come from another source than the installed version (another registry, the marketplace; audited). */
   allowSourceChange?: boolean;
   /**
+   * An upgrade that changes the signer or the source hands the package's
+   * store (every user's entries) to the new version only with this; without
+   * it they are deleted in the upgrade's transaction (audited, counts only).
+   * The admin's explicit consent: the preview's `change:store-handover`, the
+   * API's and the CLI's `keepStoreData`.
+   */
+  keepStoreData?: boolean;
+  /**
    * The admin's consent from an install preview (./consent.ts): checked on
    * the staged copy before anything is claimed, and its approvals recorded
    * in the same transaction as the row.
@@ -586,6 +594,35 @@ export function describeUpgradeChange(name: string, current: PluginPackageRow, c
   };
 }
 
+/** Whether an upgrade hands the package's store to someone else: another signer, or another source. */
+export function storeHandover(change: Pick<UpgradeChanges, 'signerChange' | 'sourceChange'>): boolean {
+  return change.signerChange !== null || change.sourceChange !== null;
+}
+
+/**
+ * The store of an upgraded package (docs/PLUGIN-PACKAGES.md#store), in the
+ * upgrade's transaction: every user's entries deleted when the new version
+ * declares no store (a store re-added later starts empty) or when it is
+ * handed to another publisher without the admin's consent (`handover`);
+ * else the entries above the new version's `maxProtection` deleted. What
+ * the audit row records: counts only.
+ */
+async function upgradeStore(tx: Tx, row: PluginPackageRow, handover: 'keep' | 'delete' | null): Promise<Record<string, unknown>> {
+  const { pluginStoreRepository } = await import('@/db/repositories/plugin-store-repository');
+  if (handover === 'delete' || !row.manifest.store) {
+    const gone = await pluginStoreRepository.deletePackage(row.name, tx);
+    if (gone.entries === 0) return {};
+    return { storeDeleted: { reason: handover === 'delete' ? 'publisher_changed' : 'store_removed', entries: gone.entries, users: gone.users } };
+  }
+  const cap = effectiveMaxProtection(row.manifest, grantedHostScopes(row));
+  const above = await pluginStoreRepository.deleteAbove(row.name, cap, tx);
+  const kept = handover === 'keep' ? await pluginStoreRepository.usage(row.name, undefined, tx) : null;
+  return {
+    ...(above.entries > 0 ? { storeDeleted: { reason: 'above_max_protection', maxProtection: cap, entries: above.entries, users: above.users } } : {}),
+    ...(kept ? { storeHandedOver: { entries: kept.entries, users: kept.byUser.length, bytes: kept.bytes } } : {}),
+  };
+}
+
 /**
  * Install a package from a local directory. With `upgrade`, an installed
  * package of the same name is replaced: its settings stay, and it is disabled
@@ -634,6 +671,8 @@ export async function installFromDirectory(
   const serverId = `${PLUGIN_SERVER_PREFIX}${manifest.name}`;
 
   let previous: PluginPackageRow | null = null;
+  /** Whether the upgrade hands the store to another signer or source (and so deletes it unless `keepStoreData`). */
+  let publisherChanges = false;
   const overrides: Record<string, unknown> = {};
   const origin: PluginOrigin = opts.origin ?? (opts.authoredBy ? { source: 'agent' } : { source: 'directory' });
   let approvals: ConsentApprovals | null = null;
@@ -675,6 +714,7 @@ export async function installFromDirectory(
         if (!opts.allowSignerChange) throw new PluginPackageError('conflict', `${said.signerChange}; pass allowSignerChange to accept another publisher`);
         overrides.signerChange = changes.signerChange;
       }
+      publisherChanges = storeHandover(changes);
       // Claimed only now: disabled before any file is replaced, since its tools may have changed.
       const [disabled] = await db.update(pluginPackages).set({ enabled: false, updatedAt: new Date() })
         .where(eq(pluginPackages.name, manifest.name)).returning();
@@ -698,6 +738,7 @@ export async function installFromDirectory(
 
   const settings = previous ? keptSettings(manifest, previous.settings) : {};
   const swap = { done: false, backup: null as string | null };
+  let storeChanges: Record<string, unknown> = {};
   let row: PluginPackageRow;
   try {
     await getMCPBridge().disconnect(serverId);
@@ -724,6 +765,8 @@ export async function installFromDirectory(
         .where(eq(pluginPackages.name, manifest.name))
         .returning();
       if (!updated) throw new PluginPackageError('not_found', `Plugin package not found: ${manifest.name}`);
+      // What the store holds that this version may not have (docs/PLUGIN-PACKAGES.md#store), with the row.
+      if (previous) storeChanges = await upgradeStore(tx, updated, publisherChanges ? (opts.keepStoreData ? 'keep' : 'delete') : null);
       swap.backup = await swapIn(staging, target);
       swap.done = true;
       return updated;
@@ -763,6 +806,7 @@ export async function installFromDirectory(
     ...(approvals ? { consented: true } : {}),
     ...(opts.authoredBy ? { authoredBy: opts.authoredBy } : {}),
     ...overrides,
+    ...storeChanges,
   });
   await syncPluginServers();
   return { ...row, warnings: [...signature.warnings, ...modelTrustWarnings(manifest)] };

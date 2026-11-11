@@ -45,6 +45,11 @@ export interface PluginDeclarationItem {
   detail: string;
   /** What to weigh before agreeing; never a refusal. */
   guidance?: string;
+  /**
+   * Not needed to install: a choice, never pre-ticked, that does something
+   * only when ticked (`change:store-handover`: keep the stored data).
+   */
+  optional?: true;
 }
 
 /** A structured note for the admin: on a marketplace entry, an install response, an update. */
@@ -301,10 +306,13 @@ export interface PluginConsentResult {
   warnings: string[];
 }
 
-/** The ids the admin must tick: every item not carried over. */
+/** The ids the admin must tick: every item not carried over, except the optional ones (a choice). */
 export function requiredConsentIds(items: readonly PluginConsentItem[]): string[] {
-  return items.filter((i) => !i.carried).map((i) => i.id);
+  return items.filter((i) => !i.carried && !i.optional).map((i) => i.id);
 }
+
+/** The id of the choice to hand a package's stored data to a new signer or source (`change:store-handover`). */
+export const STORE_HANDOVER_CONSENT_ID = 'change:store-handover';
 
 /** Whether an item's guidance is a warning (weigh it) or information. */
 export function guidanceTone(item: PluginDeclarationItem): 'warning' | 'info' {

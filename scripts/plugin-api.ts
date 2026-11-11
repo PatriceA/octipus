@@ -22,7 +22,7 @@ import {
   PLUGIN_MODEL_CLI_TOOLS_APPROVAL,
   type PluginPackageView,
 } from '@/shared/plugin-package';
-import type { PluginConsentResult, PluginInstallPreview } from '@/shared/plugin-declarations';
+import { type PluginConsentResult, type PluginInstallPreview, STORE_HANDOVER_CONSENT_ID } from '@/shared/plugin-declarations';
 
 export interface PluginApiIo {
   fetch: typeof fetch;
@@ -654,6 +654,12 @@ export interface InstallFlags {
   allowSignerChange?: boolean;
   allowDowngrade?: boolean;
   allowIncompatible?: boolean;
+  /**
+   * An upgrade to another signer or source keeps the package's stored data
+   * (`change:store-handover`, never implied by `--accept all`); without it
+   * the data is deleted at install.
+   */
+  keepStoreData?: boolean;
   /** `all`, or the declaration ids agreed to, comma-separated. */
   accept?: string;
   /** Enable it once installed (when its required settings and secrets are set). */
@@ -668,6 +674,7 @@ export function printable(text: string): string {
 /** The change items an `--allow-*` flag agrees to. */
 const FLAG_ITEMS: Array<[keyof InstallFlags, string]> = [
   ['allowSourceChange', 'change:source'], ['allowSignerChange', 'change:signer'], ['allowDowngrade', 'change:downgrade'], ['allowIncompatible', 'change:incompatible'],
+  ['keepStoreData', STORE_HANDOVER_CONSENT_ID],
 ];
 
 /**
@@ -693,21 +700,23 @@ export async function installCommand(io: PluginApiIo, name: string, flags: Insta
     if (preview.diff) for (const c of preview.diff.changes) io.out(`  ${c.widens ? '+' : '-'} ${clean(c.change)} ${clean(c.text)}\n`);
     io.out('\nIt declares:\n');
     for (const d of preview.declarations) {
-      const mark = d.carried ? 'unchanged, agreed before' : d.status === 'changed' ? 'CHANGED' : d.status === 'new' && preview.upgradeFrom ? 'NEW' : '';
+      const mark = d.carried ? 'unchanged, agreed before' : d.optional ? 'OPTIONAL, not done unless chosen' : d.status === 'changed' ? 'CHANGED' : d.status === 'new' && preview.upgradeFrom ? 'NEW' : '';
       io.out(`  ${d.carried ? '[x]' : '[ ]'} ${clean(d.id)}  ${clean(d.label)}${mark ? `  (${mark})` : ''}\n      ${clean(d.detail)}\n`);
       if (d.guidance) io.out(`      note: ${clean(d.guidance)}\n`);
     }
-    const required = preview.declarations.filter((d) => !d.carried).map((d) => d.id);
+    const required = preview.declarations.filter((d) => !d.carried && !d.optional).map((d) => d.id);
+    const optional = preview.declarations.filter((d) => !d.carried && d.optional);
     let accepted: string[];
     if (flags.accept !== undefined) {
-      const given = flags.accept.trim() === 'all' ? required : flags.accept.split(',').map((x) => x.trim()).filter(Boolean);
+      // `all` is every required item; an optional choice only by its own flag or by name.
+      const given = flags.accept.trim() === 'all' ? [...required] : flags.accept.split(',').map((x) => x.trim()).filter(Boolean);
       for (const [flag, id] of FLAG_ITEMS) if (flags[flag] === true) given.push(id);
       const missing = required.filter((id) => !given.includes(id));
       if (missing.length > 0) throw new CliError(`not installed: --accept does not agree to ${missing.map(clean).join(', ')}`, 2);
       accepted = [...new Set(given)];
     } else if (io.interactive) {
       accepted = [];
-      for (const d of preview.declarations.filter((x) => !x.carried)) {
+      for (const d of preview.declarations.filter((x) => !x.carried && !x.optional)) {
         const answer = (await io.ask(`Agree: ${clean(d.label)} (${clean(d.id)})? [y/N] `)).trim().toLowerCase();
         if (answer !== 'y' && answer !== 'yes') {
           io.out('Not installed.\n');
@@ -715,8 +724,19 @@ export async function installCommand(io: PluginApiIo, name: string, flags: Insta
         }
         accepted.push(d.id);
       }
+      for (const d of optional) {
+        if (flags.keepStoreData === true && d.id === STORE_HANDOVER_CONSENT_ID) {
+          accepted.push(d.id);
+          continue;
+        }
+        const answer = (await io.ask(`Optional: ${clean(d.label)} (${clean(d.id)})? [y/N] `)).trim().toLowerCase();
+        if (answer === 'y' || answer === 'yes') accepted.push(d.id);
+      }
     } else {
       throw new CliError(`not at a terminal: agree to every item with --accept all, or name them: --accept ${required.map(clean).join(',')}`, 2);
+    }
+    for (const d of optional) {
+      if (!accepted.includes(d.id)) io.out(`  not chosen: ${clean(d.label)}${d.id === STORE_HANDOVER_CONSENT_ID ? ' (the stored data is deleted at install; --keep-store-data keeps it)' : ''}\n`);
     }
     const res = await request<PluginConsentResult>(io, 'POST', '/install', {
       previewId: preview.previewId, contentHash: preview.contentHash, accepted, ...(flags.enable ? { enable: true } : {}),
