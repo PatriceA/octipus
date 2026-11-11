@@ -23,6 +23,9 @@ describe('poolExhaustedSummary', () => {
 
   test('spending the pool exactly stops the run — it is a ceiling on the run', () => {
     const summary = poolExhaustedSummary(2_000_000, 2_000_000, 'Implementation');
+    expect(summary).toContain('resume_pipeline');
+    expect(summary).toContain('saved pool');
+    expect(summary).toContain('Advanced configuration → Agent');
     expect(summary).toContain('exhausted');
     expect(summary).toContain('Implementation');
   });

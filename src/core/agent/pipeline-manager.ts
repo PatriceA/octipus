@@ -667,7 +667,8 @@ export function poolExhaustedSummary(pool: number, spent: number, nextNodeName: 
   if (pool <= 0 || spent < pool) return null;
   return (
     `Pipeline exhausted its ${pool.toLocaleString()}-token pool (${spent.toLocaleString()} spent) ` +
-    `before "${nextNodeName}".`
+    `before "${nextNodeName}". Raise tokenBudget on resume_pipeline to continue. This is this run's saved pool, separate from the daily cap. ` +
+    'An admin can change the default agent.pipelineTokenBudget in Settings → System → Advanced configuration → Agent; changing the default does not replace a saved run budget.'
   );
 }
 
