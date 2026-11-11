@@ -1,3 +1,4 @@
+import { TOKEN_BUDGET_DEFAULTS } from '@/shared/token-budget-defaults';
 import { executionEnvironmentsSchema } from '@/shared/execution-environment';
 import { companionMaintenanceSchema } from '@/shared/companion-maintenance';
 import { createPublicKey } from 'node:crypto';
@@ -269,7 +270,7 @@ export const agentConfigSchema = z.object({
   defaultTimeout: z.number().min(0).default(3_600_000), // 1 hour
   maxIterations: z.number().min(0).default(0), // 0 = unlimited (turn timeout + token budget still bound a run)
   contextWindowSize: z.number().min(1000).default(32000),
-  maxTokenBudget: z.number().min(0).default(100000), // 0 = unlimited
+  maxTokenBudget: z.number().min(0).default(TOKEN_BUDGET_DEFAULTS.general), // 0 = unlimited
   /** Stream the root agent's text to chat clients as it is produced. Off = whole reply at the end. */
   streaming: z.boolean().default(true),
   /** Write each agent run's full prompt to ~/.octipus/prompts (0600, swept after 7 days). */
@@ -332,7 +333,7 @@ export const agentConfigSchema = z.object({
    * does not depend on knowing it. Generous by design — it exists to stop a
    * non-converging run, not to shape a converging one.
    */
-  pipelineTokenBudget: z.number().min(0).default(2_000_000),
+  pipelineTokenBudget: z.number().min(0).default(TOKEN_BUDGET_DEFAULTS.pipeline),
   // Soft cap on full tool-result messages kept in context before the OLDEST
   // ones are truncated (recent kept full). Left optional with NO default so
   // omitting it preserves today's behaviour (DEFAULT_TOOL_OUTPUT_SOFT_CAP);
@@ -456,9 +457,9 @@ export const swarmConfigSchema = z.object({
    */
   worktreeLinkNodeModules: z.boolean().default(true),
   levelDefaults: z.object({
-    root: swarmLevelSchema.default({ tokens: 200_000, wallMs: 36_000_000, fanOut: 6, maxPendingDetached: 6 }),
-    agent: swarmLevelSchema.default({ tokens: 80_000, wallMs: 3_600_000, fanOut: 4, maxPendingDetached: 3 }),
-    subagent: swarmLevelSchema.default({ tokens: 30_000, wallMs: 3_600_000, fanOut: 0, maxPendingDetached: 0 }),
+    root: swarmLevelSchema.default({ tokens: TOKEN_BUDGET_DEFAULTS.root, wallMs: 36_000_000, fanOut: 6, maxPendingDetached: 6 }),
+    agent: swarmLevelSchema.default({ tokens: TOKEN_BUDGET_DEFAULTS.agent, wallMs: 3_600_000, fanOut: 4, maxPendingDetached: 3 }),
+    subagent: swarmLevelSchema.default({ tokens: TOKEN_BUDGET_DEFAULTS.subagent, wallMs: 3_600_000, fanOut: 0, maxPendingDetached: 0 }),
   }).prefault({}),
 });
 
@@ -937,12 +938,12 @@ export const configSchema = z.object({
      * Tokens (input + output) one user's plugin `model:complete` calls may use
      * per UTC day, all packages together; 0 turns those calls off.
      */
-    hostModelDailyTokens: z.number().int().min(0).max(100_000_000).default(200_000),
+    hostModelDailyTokens: z.number().int().min(0).max(100_000_000).default(TOKEN_BUDGET_DEFAULTS.pluginDaily),
     /**
      * Tokens one plugin background run (`agent:run`) may use, its worker's own
      * budget; its tokens also count in `hostModelDailyTokens`. 0 turns those runs off.
      */
-    hostAgentRunTokens: z.number().int().min(0).max(10_000_000).default(150_000),
+    hostAgentRunTokens: z.number().int().min(0).max(10_000_000).default(TOKEN_BUDGET_DEFAULTS.pluginRun),
     /**
      * The built-in Octipus marketplace (docs/PLUGIN-PACKAGES.md#marketplace):
      * `true` (default), `false` (off entirely: never fetched, never trusted),

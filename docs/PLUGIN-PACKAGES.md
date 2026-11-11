@@ -1689,7 +1689,7 @@ first, then the install's; in a space, with the user's space role):
   ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md)).
 - Cost is bounded before the call: at most 6 calls a minute per package and
   user (`429 rate_limited`), a per-user daily token allowance for all
-  packages together, `plugins.hostModelDailyTokens` (default 200,000 tokens
+  packages together, `plugins.hostModelDailyTokens` (default 10,000,000 tokens
   per UTC day, 0 turns plugin model calls off: `403 model_off`; `429
   token_cap` when used up), and the user's spend budgets (`429
   spend_budget`). Its cost rows have the request type `plugin:<name>`.
@@ -1761,7 +1761,7 @@ package only ever holds its id.
 - **Cost and time**, all checked before it starts: at most 3 starts in a
   burst and 6 an hour per package and user (`429 rate_limited`), 2 runs of a
   package running at once per user (`429 too_many_runs`), a token budget per
-  run, `plugins.hostAgentRunTokens` (default 150,000; 0 turns runs off: `403
+  run, `plugins.hostAgentRunTokens` (default 1,000,000; 0 turns runs off: `403
   agent_off`), reserved whole against the same daily allowance as
   `model:complete` (`plugins.hostModelDailyTokens`, `429 token_cap`; the
   run's model calls count in it), and the user's spend budgets (`429

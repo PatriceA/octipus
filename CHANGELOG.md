@@ -7,6 +7,18 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Changed
+
+- **Useful token budgets from the first run.** The default per-user daily
+  cap is now 10,000,000 tokens. Shared root turns start with 2,000,000,
+  agents/subagents with 800,000/300,000, pipelines with 10,000,000, and
+  plugin models/background runs with 10,000,000 per day and 1,000,000 per
+  run. Explicit admin, user and saved-run limits remain in place.
+- **Actionable budget refusals.** Chat and API errors name the applicable
+  limit, daily reset and settings page; typed quota/spend refusals remain
+  HTTP 429 rather than generic server errors. Explicit session zero budgets
+  correctly mean unlimited. See [configuration](docs/CONFIGURATION.md#default-token-budgets).
+
 ### Security
 
 - **Native Windows plugin sandbox.** Marketplace and local package plugins

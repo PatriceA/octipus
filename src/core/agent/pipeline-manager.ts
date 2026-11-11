@@ -667,7 +667,8 @@ export function poolExhaustedSummary(pool: number, spent: number, nextNodeName: 
   if (pool <= 0 || spent < pool) return null;
   return (
     `Pipeline exhausted its ${pool.toLocaleString()}-token pool (${spent.toLocaleString()} spent) ` +
-    `before "${nextNodeName}".`
+    `before "${nextNodeName}". Raise tokenBudget on resume_pipeline to continue. This is this run's saved pool, separate from the daily cap. ` +
+    'An admin can change the default agent.pipelineTokenBudget in Settings → System → Advanced configuration → Agent; changing the default does not replace a saved run budget.'
   );
 }
 
@@ -3640,7 +3641,7 @@ export class PipelineManager {
       const current = await this.getPipeline(pipeline.id);
       const budget = pipelineBudget(current ?? pipeline, await pipelineRepository.getNodes(pipeline.id), items, getConfig().agent.pipelineTokenBudget);
       if (budget.exhausted) {
-        const summary = `Pipeline token pool exhausted (${budget.spent}/${budget.pool}) after finishing the current item. Raise tokenBudget on resume_pipeline to continue with the remaining items.`;
+        const summary = `Pipeline token pool exhausted (${budget.spent}/${budget.pool}) after finishing the current item. Raise tokenBudget on resume_pipeline to continue with the remaining items. This is the saved pipeline run pool, separate from your daily cap. An admin can change the default agent.pipelineTokenBudget in Settings → System → Advanced configuration → Agent; changing a default does not replace this run's saved budget.`;
         await this.updatePipeline(pipeline.id, { status: 'paused', summary, metadata: { ...current?.metadata, budgetWarning: budget } });
         return { outcome: 'loop_done', item: null, stopped: { pipelineId: pipeline.id, result: summary } };
       }

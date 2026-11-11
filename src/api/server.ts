@@ -1,3 +1,4 @@
+import { budgetErrorBody } from './budget-error';
 import { DESKTOP_ORIGINS } from '@/api/desktop-origins';
 import { eq } from 'drizzle-orm';
 import { cors, Elysia, listen, type RunningServer } from '@/api/http';
@@ -196,6 +197,8 @@ export function createServer() {
     })
     // Error handling
     .onError(({ error, code, set }) => {
+      const budget = budgetErrorBody(error);
+      if (budget) { set.status = 429; return budget; }
       // A space access refusal from the access layer (`contentRepos`) is
       // its typed status — 404 for a non-member, 403 for a role that lacks
       // the action, 409 for an archived space — never a 500.

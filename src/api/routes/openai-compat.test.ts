@@ -1,3 +1,5 @@
+import { QuotaExceededError } from '@/security/quota-error';
+import { SpendBudgetExceededError } from '@/security/spend-budget-error';
 /**
  * OpenAI-compatible API (WS6) — route-level contract tests.
  *
@@ -272,5 +274,20 @@ describe('POST /v1/chat/completions — agent mode', () => {
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error.code).toBe('model_not_found');
+  });
+});
+
+
+describe('platform budget refusals retain actionable guidance', () => {
+  test.each([
+    new QuotaExceededError({ kind: 'tokensPerDay', current: 10_000_001, max: 10_000_000, userId: 'u1' }),
+    new SpendBudgetExceededError({ budgetId: 'b', userId: 'u1', scopeKind: 'user', scopeRef: null, period: 'day', spentUsd: 5, limitUsd: 5 }),
+  ])('$code is HTTP 429, not an internal/provider error', async error => {
+    completeImpl = async () => { throw error; };
+    const response = await post(appFor(fullUser), { model: 'custom-model', messages: [{ role: 'user', content: 'hello' }] });
+    expect(response.status).toBe(429);
+    const body = await response.json();
+    expect(body.error).toMatchObject({ code: error.code, type: 'rate_limit_exceeded', message: error.message });
+    expect(body.error.message).toContain('/admin/quotas');
   });
 });
