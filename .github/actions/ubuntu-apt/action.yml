@@ -1,0 +1,26 @@
+name: Prepare Ubuntu package sources
+description: Use the signed Ubuntu archive instead of the runner's unreliable Azure mirror.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        # Playwright brings Chromium; the image's unused Chrome repository can
+        # fail apt update independently of the packages these jobs need.
+        sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                   /etc/apt/sources.list.d/google-chrome.sources
+        # Ubuntu runner images use either direct sources or mirror+file lists.
+        # Preserve distribution suites, signing keys and all unrelated sources.
+        for source in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources \
+                      /etc/apt/apt-mirrors.txt /etc/apt/apt-mirrors-security.txt; do
+          if [ -f "$source" ]; then
+            sudo sed -i -E 's#https?://azure\.archive\.ubuntu\.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' "$source"
+          fi
+        done
+        # These options also cover apt invoked indirectly by Playwright.
+        sudo tee /etc/apt/apt.conf.d/99-octipus-ci >/dev/null <<'APT'
+        Acquire::Retries "2";
+        Acquire::http::Timeout "30";
+        Acquire::https::Timeout "30";
+        APT
