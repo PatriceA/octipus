@@ -46,7 +46,7 @@ import { backgroundJobRepository } from '@/db/repositories/background-job-reposi
 import type { BackgroundJob } from '@/db/schema/background-jobs';
 import type { Principal } from '@/security/principal';
 import { coreLogger } from '@/utils/logger';
-import { type HostTokenGrant, noteHostRead, trackPluginRun, untrackPluginRun } from './host-api';
+import { type HostTokenGrant, noteHostRead, stopPluginRun, trackPluginRun, untrackPluginRun } from './host-api';
 import { estimateTokens, PLUGIN_RUN_CHANNEL, pluginTokensToday } from './host-model';
 
 /** The role a run gets when the package names none. */
@@ -271,7 +271,7 @@ export async function readPluginAgentRun(grant: HostTokenGrant, id: string): Pro
       withheld = { protectionLevel: level };
     } else {
       output = result.output ?? '';
-      noteHostRead(grant, level);
+      await noteHostRead(grant, level);
       if (grant.sessionId) raiseSessionLevel(grant.sessionId, level);
     }
   }
@@ -284,4 +284,64 @@ export async function readPluginAgentRun(grant: HostTokenGrant, id: string): Pro
       startedAt: (row.startedAt ?? row.createdAt).toISOString(), finishedAt: row.finishedAt ? row.finishedAt.toISOString() : null,
     },
   };
+}
+
+/**
+ * Cancel a running background run: its worker is stopped (when it runs in
+ * this process) and the row is closed as `cancelled`, so a worker elsewhere
+ * cannot report it done. Only the same package for the same user (the host
+ * API), or that user or an admin from the app (`cancelRunFromApp`). Reads as
+ * `error` with "Cancelled …" to the package afterwards.
+ */
+async function cancelRow(row: BackgroundJob, reason: string): Promise<HostAgentOutcome<{ id: string; status: 'cancelled' }>> {
+  if (row.status !== 'running' && row.status !== 'queued') return { ok: false, status: 409, code: 'not_running', error: `The run is ${row.status}, not running` };
+  const stoppedHere = stopPluginRun(row.id, reason);
+  await backgroundJobRepository.finish(row.id, { status: 'cancelled', error: reason });
+  coreLogger.info({ jobId: row.id, stoppedHere }, 'plugin-host: background run cancelled');
+  return { ok: true, value: { id: row.id, status: 'cancelled' } };
+}
+
+/** Cancel a run (`DELETE /api/plugin-host/agent/runs/:id`): this package's, for this user only. */
+export async function cancelPluginAgentRun(grant: HostTokenGrant, id: string): Promise<HostAgentOutcome<{ id: string; status: 'cancelled' }>> {
+  const row = await runRow(grant, id);
+  if (!row) return { ok: false, status: 404, code: 'not_found', error: 'Run not found' };
+  return cancelRow(row, `Cancelled by ${grant.plugin}`);
+}
+
+/**
+ * Cancel a run of `plugin` from the app (`DELETE /api/plugin-packages/:name/runs/:id`):
+ * the user who started it, or an admin. Anyone else, another package's run,
+ * or not a run: not found.
+ */
+export async function cancelRunFromApp(plugin: string, id: string, actor: { userId: string; isAdmin: boolean }): Promise<HostAgentOutcome<{ id: string; status: 'cancelled'; userId: string }>> {
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return { ok: false, status: 404, code: 'not_found', error: 'Run not found' };
+  const row = await backgroundJobRepository.findById(id);
+  const payload = row?.payload as unknown as RunPayload | undefined;
+  if (!row || row.kind !== 'agent' || payload?.plugin !== plugin || (!actor.isAdmin && row.userId !== actor.userId)) {
+    return { ok: false, status: 404, code: 'not_found', error: 'Run not found' };
+  }
+  const outcome = await cancelRow(row, actor.userId === row.userId ? 'Cancelled by the user' : 'Cancelled by an admin');
+  return outcome.ok ? { ok: true, value: { ...outcome.value, userId: row.userId } } : outcome;
+}
+
+/** A running background run of a package, as the app lists it (`GET /api/plugin-packages/:name/runs`). */
+export interface PluginRunListItem {
+  id: string;
+  userId: string;
+  startedAt: string;
+  role: string;
+  title: string;
+}
+
+/**
+ * The running (or queued) background runs of `plugin`: every user's, or one
+ * user's with `userId`. Ids, the role and the title only, never the prompt or
+ * any output.
+ */
+export async function listRunningRuns(plugin: string, userId?: string): Promise<PluginRunListItem[]> {
+  const rows = await backgroundJobRepository.runningForPlugin(plugin, userId);
+  return rows.map((r) => ({
+    id: r.id, userId: r.userId, startedAt: (r.startedAt ?? r.createdAt).toISOString(),
+    role: typeof r.payload.role === 'string' ? r.payload.role : DEFAULT_RUN_ROLE, title: r.title,
+  }));
 }

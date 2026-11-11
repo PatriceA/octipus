@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { defaultConfig } from './defaults';
 import { loadFromEnvLegacy } from './legacy-loader';
@@ -16,13 +17,13 @@ const KEY_ID = `ed25519:${'a'.repeat(64)}`;
 describe('plugins config', () => {
   it('defaults agree: schema, defaults, legacy loader, settings registry', () => {
     const parsed = plugins({});
-    const defaults = { trustedPublishers: [], revokedKeys: [], requireSignature: false, registries: [], hostModelDailyTokens: 200_000, hostAgentRunTokens: 150_000 };
+    const defaults = { trustedPublishers: [], revokedKeys: [], requireSignature: false, registries: [], hostModelDailyTokens: 200_000, hostAgentRunTokens: 150_000, marketplace: true, sandbox: 'required' };
     expect(parsed.success && parsed.data).toEqual(defaults);
     expect(defaultConfig.plugins).toEqual(defaults);
     expect(loadFromEnvLegacy().plugins).toMatchObject({ revokedKeys: [], registries: [], hostModelDailyTokens: 200_000, hostAgentRunTokens: 150_000 });
     expect(SETTINGS_REGISTRY.find((s) => s.key === 'plugins.hostModelDailyTokens')?.defaultValue).toBe(200_000);
     expect(SETTINGS_REGISTRY.find((s) => s.key === 'plugins.hostAgentRunTokens')?.defaultValue).toBe(150_000);
-    for (const key of ['plugins.trustedPublishers', 'plugins.revokedKeys', 'plugins.requireSignature', 'plugins.registries', 'plugins.hostModelDailyTokens', 'plugins.hostAgentRunTokens']) {
+    for (const key of ['plugins.marketplace', 'plugins.trustedPublishers', 'plugins.revokedKeys', 'plugins.requireSignature', 'plugins.registries', 'plugins.hostModelDailyTokens', 'plugins.hostAgentRunTokens', 'plugins.sandbox']) {
       expect(SETTINGS_REGISTRY.find((s) => s.key === key), key).toBeDefined();
     }
   });
@@ -62,8 +63,43 @@ describe('plugins config', () => {
     expect(plugins({ registries: [{ name: 'Acme', url: 'not a url' }] }).success).toBe(false);
   });
 
+  it('"marketplace" is reserved and registry names are unique (review P5)', () => {
+    const url = 'https://plugins.example.com/index.json';
+    expect(plugins({ registries: [{ name: 'marketplace', url }] }).success).toBe(false);
+    expect(plugins({ registries: [{ name: ' Marketplace ', url }] }).success).toBe(false);
+    expect(plugins({ registries: [{ name: 'Acme', url }, { name: 'Acme', url: 'https://other.example.com/index.json' }] }).success).toBe(false);
+    expect(plugins({ registries: [{ name: 'Acme', url }, { name: 'Beta', url }] }).success).toBe(true);
+  });
+
   it('a registry may name the publisher whose signature its index must carry', () => {
     expect(plugins({ registries: [{ name: 'Acme', url: 'https://plugins.example.com/index.json', publisher: 'Acme' }] }).success).toBe(true);
     expect(plugins({ registries: [{ name: 'Acme', url: 'https://plugins.example.com/index.json', publisher: '' }] }).success).toBe(false);
+  });
+
+  describe('marketplace (docs/PLUGIN-PACKAGES.md#marketplace)', () => {
+    const pem = () => generateKeyPairSync('ed25519').publicKey.export({ format: 'pem', type: 'spki' }).toString();
+    it('is true by default, false turns it off, an object overrides URL and root keys', () => {
+      expect(plugins({ marketplace: false }).success).toBe(true);
+      expect(plugins({ marketplace: true }).success).toBe(true);
+      expect(plugins({ marketplace: { url: 'https://plugins.example.com/index.json' } }).success).toBe(true);
+      expect(plugins({ marketplace: { rootKeys: { root: pem(), rootBackup: pem() } } }).success).toBe(true);
+      expect(plugins({ marketplace: { enabled: false } }).success).toBe(true);
+    });
+
+    it('refuses a non-https or credentialed URL, unknown keys, and anything but an Ed25519 public key PEM', () => {
+      expect(plugins({ marketplace: { url: 'http://plugins.example.com/index.json' } }).success).toBe(false);
+      expect(plugins({ marketplace: { url: 'https://u:p@plugins.example.com/index.json' } }).success).toBe(false);
+      expect(plugins({ marketplace: { url: 'https://plugins.example.com/index.json#x' } }).success).toBe(false);
+      expect(plugins({ marketplace: { publicKeys: { active: pem() } } }).success).toBe(false);
+      expect(plugins({ marketplace: { rootKeys: { root: 'PLACEHOLDER' } } }).success).toBe(false);
+      expect(plugins({ marketplace: { rootKeys: { root: KEY } } }).success).toBe(false);
+      const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey.export({ format: 'pem', type: 'spki' }).toString();
+      expect(plugins({ marketplace: { rootKeys: { root: rsa } } }).success).toBe(false);
+      const priv = generateKeyPairSync('ed25519').privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
+      expect(plugins({ marketplace: { rootKeys: { root: priv } } }).success).toBe(false);
+      const same = pem();
+      expect(plugins({ marketplace: { rootKeys: { root: same, rootBackup: same } } }).success).toBe(false);
+      expect(plugins({ marketplace: 'yes' }).success).toBe(false);
+    });
   });
 });

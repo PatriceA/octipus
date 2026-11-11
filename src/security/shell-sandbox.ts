@@ -53,6 +53,7 @@ import { androidSdkPaths, browserRuntimeMounts, browserRuntimePaths, runtimePath
  * tool's `useShell` / `unsafe` paths set when the user has opted in
  * to a less-restrictive run).
  */
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -176,6 +177,43 @@ function seatbeltAllowed(mode: SandboxMode, allowSeatbelt: boolean | undefined):
 /** Test-only: reset the runner cache so a test can force re-detection. */
 export function _resetSandboxDetectionForTests(): void {
   detectedCache.clear();
+  probeCache.clear();
+  forced = false;
+}
+
+/** Why a runner binary cannot start a sandbox here (or null: it can), by binary. */
+const probeCache = new Map<string, string | null>();
+/** A test forced the runner (`_forceSandboxRunnerForTests`): it is taken to work. */
+let forced = false;
+
+/**
+ * Whether `detected` can actually start a sandbox on this host: null when it
+ * can, else why not. Only bwrap is probed (`bwrap --ro-bind / / --new-session
+ * true`, once per process): it is found on hosts where unprivileged user
+ * namespaces are off (a default Docker seccomp profile, a hardened kernel),
+ * and then every wrapped start would fail. firejail (setuid) and sandbox-exec
+ * need nothing of the kind.
+ */
+export function runnerProblem(detected: Detected): string | null {
+  if (forced || detected.runner !== 'bwrap') return null;
+  const cached = probeCache.get(detected.binary);
+  if (cached !== undefined) return cached;
+  let problem: string | null = null;
+  try {
+    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- fixed argv of a runner found at a known system path
+    const r = spawnSync(detected.binary, ['--ro-bind', '/', '/', '--new-session', 'true'], {
+      encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    if (r.error || r.status !== 0) {
+      const why = (r.error?.message ?? r.stderr ?? '').trim().split('\n')[0]?.slice(0, 200) || `exit ${r.status}`;
+      problem = `${detected.binary} is installed but cannot start a sandbox here (${why}); it needs unprivileged user namespaces (check: bwrap --ro-bind / / true)`;
+    }
+  } catch (err) {
+    problem = `${detected.binary} could not be run (${(err as Error).message})`;
+  }
+  if (problem) coreLogger.warn({ runner: detected.runner, binary: detected.binary, problem }, 'Sandbox runner found but not working');
+  probeCache.set(detected.binary, problem);
+  return problem;
 }
 
 /**
@@ -187,6 +225,43 @@ export function _resetSandboxDetectionForTests(): void {
 export function _forceSandboxRunnerForTests(runner: SandboxRunner, binary: string): void {
   detectedCache.set(false, { runner, binary });
   detectedCache.set(true, { runner, binary });
+  forced = true;
+}
+
+/** Test-only: make detection find no runner at all (both cache entries). */
+export function _forceNoSandboxRunnerForTests(): void {
+  detectedCache.set(false, null);
+  detectedCache.set(true, null);
+}
+
+/** The runner a plugin package server would run in here, found and working, or why there is none. */
+export interface PluginRunnerState {
+  runner: SandboxRunner | null;
+  binary: string | null;
+  /** Why no runner works here (none found, or found and not working); null when one does. */
+  problem: string | null;
+}
+
+/** How to get a runner on this platform, for refusals and the admin page. */
+export function sandboxRunnerHelp(platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'win32') {
+    return 'Windows has no sandbox runner: plugins from the marketplace cannot run here, and a local plugin runs only with plugins.sandbox set to off (unsandboxed)';
+  }
+  if (platform === 'darwin') return '/usr/bin/sandbox-exec, which ships with macOS, was not found';
+  return 'install bubblewrap (apt-get install bubblewrap, dnf install bubblewrap or apk add bubblewrap; it needs unprivileged user namespaces, check with: bwrap --ro-bind / / true) or firejail';
+}
+
+/**
+ * The runner plugin package servers use, independent of `security.shellSandbox`
+ * (which governs agent shells): bwrap or firejail on Linux, sandbox-exec on
+ * macOS, found at its system path and (bwrap) able to start a sandbox here.
+ */
+export function pluginRunnerState(): PluginRunnerState {
+  const detected = detectRunner({ allowSeatbelt: true });
+  if (!detected) return { runner: null, binary: null, problem: `no sandbox runner found: ${sandboxRunnerHelp()}` };
+  const problem = runnerProblem(detected);
+  if (problem) return { runner: null, binary: detected.binary, problem: `${problem}; or install firejail` };
+  return { runner: detected.runner, binary: detected.binary, problem: null };
 }
 
 /** Read the configured sandbox mode. Defaults to 'off' if config
@@ -215,6 +290,10 @@ function buildBwrapArgs(binary: string, options: WrapOptions, scratch: string): 
     binary,
     // New mount namespace + tmp root.
     '--die-with-parent',
+    // A new session (setsid): the command has no controlling terminal, so it
+    // cannot open /dev/tty or push keystrokes into the terminal Octipus was
+    // started from (TIOCSTI). The private /dev below has no host tty either.
+    '--new-session',
     '--unshare-pid',
     '--unshare-uts',
     '--unshare-ipc',
@@ -316,6 +395,8 @@ function buildFirejailArgs(binary: string, options: WrapOptions): string[] {
     ...(options.allowHostUsb ? ['--read-only=/sys/bus/usb', '--read-only=/sys/devices'] : ['--blacklist=/dev/bus/usb']),
     '--noroot',
     '--seccomp',
+    '--caps.drop=all',
+    '--nonewprivs',
     `--whitelist=${options.workspaceRoot}`,
     ...(options.workspaceReadOnly ? [`--read-only=${options.workspaceRoot}`] : []),
   ];
@@ -347,6 +428,14 @@ function buildFirejailArgs(binary: string, options: WrapOptions): string[] {
     }
     args.push(`--env=SSH_AUTH_SOCK=${options.sshAgent.socket}`);
   }
+  // $HOME is never exposed. A whitelisted path under it already turns the
+  // home directory into a tmpfs that shows only the whitelisted entries; when
+  // none is, nothing would hide it (--noprofile loads no profile that does),
+  // so it is replaced by an empty temporary one. The whitelisted workspace
+  // and data directories outside it are not affected.
+  const home = homedir();
+  const whitelisted = args.filter((a) => a.startsWith('--whitelist=')).map((a) => a.slice('--whitelist='.length));
+  if (!whitelisted.some((p) => p === home || p.startsWith(`${home}/`))) args.push('--private');
   // firejail uses `--` to separate flags from the command.
   args.push('--');
   return args;
@@ -482,8 +571,9 @@ export interface SeatbeltInputs {
  *   only under the system directories above (with package-manager `var` and
  *   `etc` denied, but for CA bundles), the user runtime directories,
  *   `extraReadOnly`, the workspace, the writable directories and a few
- *   devices (/dev/null, /dev/zero, /dev/random, /dev/urandom, /dev/tty,
- *   /dev/fd). The rest of the home directory, ~/.ssh included, is unreadable.
+ *   devices (/dev/null, /dev/zero, /dev/random, /dev/urandom, /dev/fd;
+ *   never /dev/tty, so no ioctl such as TIOCSTI reaches the terminal).
+ *   The rest of the home directory, ~/.ssh included, is unreadable.
  * - **Writing:** only the scratch directory, `extraReadWrite`, the
  *   workspace unless `workspaceReadOnly`, and the character devices above.
  *   A read-only workspace also gets an explicit `deny file-write*`, placed
@@ -531,7 +621,9 @@ export function buildSeatbeltProfile(options: WrapOptions, inputs: SeatbeltInput
     // Paths the caller asked for come after the deny, so they win.
     ...(readOnly.length > 0 ? [`(allow file-read* file-map-executable ${subpaths(readOnly)})`] : []),
     '(allow file-read* (literal "/dev/random") (literal "/dev/urandom"))',
-    '(allow file-read* file-write-data file-ioctl (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (literal "/dev/dtracehelper") (subpath "/dev/fd"))',
+    // No /dev/tty: a sandboxed command never reaches the terminal Octipus
+    // runs in (no ioctl such as TIOCSTI, no reads or writes).
+    '(allow file-read* file-write-data file-ioctl (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (subpath "/dev/fd"))',
     options.workspaceReadOnly
       ? `(allow file-read* file-map-executable ${subpaths([options.workspaceRoot])})`
       : `(allow file-read* file-write* file-map-executable ${subpaths([options.workspaceRoot])})`,
@@ -596,8 +688,8 @@ function buildSandboxExecArgs(binary: string, options: WrapOptions, scratch: str
  * the command unwrapped (sandbox `off`, or `auto` with no runner found). In
  * `required` mode with no runner it is null too: `wrapCommand` then throws.
  */
-export function activeSandboxRunner(options: DetectOptions = {}): SandboxRunner | null {
-  const mode = getSandboxMode();
+export function activeSandboxRunner(options: DetectOptions & { mode?: SandboxMode } = {}): SandboxRunner | null {
+  const mode = options.mode ?? getSandboxMode();
   if (mode === 'off') return null;
   return detectRunner({ allowSeatbelt: seatbeltAllowed(mode, options.allowSeatbelt) })?.runner ?? null;
 }

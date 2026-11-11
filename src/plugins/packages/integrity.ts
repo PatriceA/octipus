@@ -40,6 +40,7 @@ import { join } from 'node:path';
 /** The prefix of a recorded hash; a later format would get a new one. */
 export const CONTENT_HASH_PREFIX = 'sha256:';
 const FORMAT = 'octipus-plugin-content/v1';
+const UI_FORMAT = 'octipus-plugin-ui/v1';
 /** The signature file in the package root (./signature.ts), the one file the hash leaves out. */
 export const SIGNATURE_FILE = 'octipus-plugin.sig';
 /** The marketplace listing file in the package root: left out of a source hash and of an install (see above). */
@@ -60,8 +61,8 @@ function fileHash(path: string): Promise<string> {
   });
 }
 
-/** The canonical listing of a package directory (what `hashPackageContent` hashes). */
-export async function contentListing(dir: string, identity: { name: string; version: string }, opts: HashOptions = {}): Promise<string> {
+/** Every entry under `dir` as `[relative path, "file <sha256>" | "link <sha256>" | "special"]`, sorted by path; `skip` leaves files out. */
+async function treeEntries(dir: string, skip: (rel: string) => boolean): Promise<Array<[string, string]>> {
   const entries: Array<[string, string]> = [];
   const walk = async (abs: string, rel: string): Promise<void> => {
     for (const name of await readdir(abs)) {
@@ -71,8 +72,7 @@ export async function contentListing(dir: string, identity: { name: string; vers
       if (info.isDirectory()) {
         await walk(childAbs, childRel);
       } else if (info.isFile()) {
-        if (childRel === SIGNATURE_FILE) continue;
-        if (opts.source === true && childRel === LISTING_FILE) continue;
+        if (skip(childRel)) continue;
         entries.push([childRel, `file ${await fileHash(childAbs)}`]);
       } else if (info.isSymbolicLink()) {
         // Install refuses links; one that appears later must change the hash.
@@ -85,10 +85,46 @@ export async function contentListing(dir: string, identity: { name: string; vers
   await walk(dir, '');
   // Code-unit order, independent of locale and of the order the file system lists entries in.
   entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return entries;
+}
+
+/** The canonical listing of a package directory (what `hashPackageContent` hashes). */
+export async function contentListing(dir: string, identity: { name: string; version: string }, opts: HashOptions = {}): Promise<string> {
+  const entries = await treeEntries(dir, (rel) => rel === SIGNATURE_FILE || (opts.source === true && rel === LISTING_FILE));
   const lines = [FORMAT, `name ${identity.name}`, `version ${identity.version}`];
   // JSON-quoted paths: a newline in a file name cannot forge another line.
   for (const [rel, what] of entries) lines.push(`${what} ${JSON.stringify(rel)}`);
   return `${lines.join('\n')}\n`;
+}
+
+/**
+ * The hash of a package's page directory (`ui.dir`), for its permissions
+ * summary (`ui.sha256`): hex sha256 over
+ *
+ *   octipus-plugin-ui/v1
+ *   file <sha256 of the bytes> "<path relative to the ui directory>"   one line per file, sorted by path
+ *
+ * each line ending in a newline (links and special files as in the content
+ * listing). Nothing is left out. Null when the directory cannot be read.
+ */
+export async function uiTreeHash(uiDir: string): Promise<string | null> {
+  let entries: Array<[string, string]>;
+  try {
+    entries = await treeEntries(uiDir, () => false);
+  } catch {
+    return null;
+  }
+  const lines = [UI_FORMAT, ...entries.map(([rel, what]) => `${what} ${JSON.stringify(rel)}`)];
+  return createHash('sha256').update(`${lines.join('\n')}\n`).digest('hex');
+}
+
+/** The hex sha256 of one file's bytes, or null when it cannot be read. */
+export async function fileSha256(path: string): Promise<string | null> {
+  try {
+    return await fileHash(path);
+  } catch {
+    return null;
+  }
 }
 
 /** The content hash of a package directory, `sha256:<hex>`. */

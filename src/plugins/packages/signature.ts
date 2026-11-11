@@ -38,6 +38,8 @@ export { SIGNATURE_FILE } from './integrity';
 const MESSAGE_PREFIX = 'octipus-plugin-signature/v1\n';
 /** The domain prefix of a registry index signature: never a message a package signature is made over. */
 const REGISTRY_INDEX_PREFIX = 'octipus-registry-index/v1\n';
+/** The domain prefix of a marketplace keys file signature (`keys.json`, signed by a root key): never a package or index message. */
+const MARKETPLACE_KEYS_PREFIX = 'octipus-marketplace-keys/v1\n';
 /** Where a registry index's detached signature is published: beside the index, `<index url>.sig`. */
 export const REGISTRY_INDEX_SIGNATURE_SUFFIX = '.sig';
 /** A signature file larger than this is not one (the canonical form is about 200 bytes). */
@@ -115,6 +117,11 @@ function message(contentHash: string): Buffer {
  */
 function registryIndexMessage(indexBytes: Uint8Array): Buffer {
   return Buffer.from(`${REGISTRY_INDEX_PREFIX}sha256:${createHash('sha256').update(indexBytes).digest('hex')}`, 'utf8');
+}
+
+/** The bytes a marketplace keys file signature is made over: its own prefix and the sha256 of the exact file bytes. */
+function marketplaceKeysMessage(bytes: Uint8Array): Buffer {
+  return Buffer.from(`${MARKETPLACE_KEYS_PREFIX}sha256:${createHash('sha256').update(bytes).digest('hex')}`, 'utf8');
 }
 
 function requireEd25519(key: KeyObject, what: string): KeyObject {
@@ -198,6 +205,42 @@ export function signContentHash(contentHash: string, privateKey: SigningKey): Si
  */
 export function signRegistryIndex(indexBytes: Uint8Array, privateKey: SigningKey): SignatureFile {
   return signMessage(registryIndexMessage(indexBytes), privateKey);
+}
+
+/** Sign a marketplace keys file (its exact bytes) with a ROOT key: the contents of `keys.json.sig`. */
+export function signMarketplaceKeys(bytes: Uint8Array, privateKey: SigningKey): SignatureFile {
+  return signMessage(marketplaceKeysMessage(bytes), privateKey);
+}
+
+/** Sign a marketplace keys file on disk: writes `<file>.sig` beside it. The file must be JSON; publish exactly these bytes. */
+export async function signMarketplaceKeysFile(file: string, privateKey: SigningKey): Promise<{ keyId: string; sigFile: string; sha256: string }> {
+  const bytes = await readFile(file);
+  try {
+    JSON.parse(bytes.toString('utf8'));
+  } catch {
+    throw new SignatureError(`${file} is not valid JSON; a keys file is { "schema": 1, "version": …, "signingKeys": [...] }`);
+  }
+  const sig = signMarketplaceKeys(bytes, privateKey);
+  const sigFile = `${file}${REGISTRY_INDEX_SIGNATURE_SUFFIX}`;
+  await writeFile(sigFile, serializeSignature(sig), { mode: 0o644 });
+  return { keyId: sig.keyId, sigFile, sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}` };
+}
+
+/**
+ * Check a marketplace keys file's detached signature (null: none) against
+ * its exact bytes and the ROOT keys (as publisher entries). Revoked or
+ * expired roots never verify.
+ */
+export function verifyMarketplaceKeys(bytes: Uint8Array, signatureText: string | null, roots: readonly TrustedPublisher[], opts?: KeyTrustOptions): SignatureCheck {
+  if (signatureText === null) return { status: 'unsigned' };
+  let sig: SignatureFile;
+  try {
+    sig = parseSignatureFile(signatureText, 'The keys file signature (keys.json.sig)');
+  } catch (err) {
+    if (err instanceof SignatureError) return { status: 'invalid', reason: err.message };
+    throw err;
+  }
+  return verifyMessage(marketplaceKeysMessage(bytes), sig, trustedKeys(roots, undefined, opts), 'the marketplace keys file');
 }
 
 /**

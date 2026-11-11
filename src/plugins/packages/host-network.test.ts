@@ -194,18 +194,39 @@ describe('launch and server config', () => {
     expect((await serverFor(row({ ...trusted, model: undefined }, ['model:complete', 'model:cli-tools']) as never)).plugin).not.toHaveProperty('modelCliTools');
   });
 
-  test('a package with pages leaves the house like one with network: maxProtection 1 unless declared', async () => {
+  test('a package with pages leaves the house: maxProtection 1, whatever it declares', async () => {
     const { serverFor } = await import('./service');
+    const { computePermissions } = await import('./permissions');
     const ui = { pages: [{ path: 'dash', title: 'Dash', entry: 'index.html' }] };
     expect((await serverFor(row({ ...base, ui }, null) as never)).plugin?.maxProtection).toBe(1);
-    expect((await serverFor(row({ ...base, ui, maxProtection: 3 }, null) as never)).plugin?.maxProtection).toBe(3);
+    // A page can navigate anywhere with what it shows: an explicit maxProtection does not lift that.
+    expect((await serverFor(row({ ...base, ui, maxProtection: 3 }, null) as never)).plugin?.maxProtection).toBe(1);
+    expect((await serverFor(row({ ...base, ui, maxProtection: 4 }, null) as never)).plugin?.maxProtection).toBe(1);
+    // The summary the CLI prints and an index lists carries the clamped value too.
+    expect(computePermissions({ ...base, ui, maxProtection: 3 } as never).maxProtection).toBe(1);
     expect((await serverFor(row(base, null) as never)).plugin?.maxProtection).toBe(4);
+    expect((await serverFor(row({ ...base, maxProtection: 3 }, null) as never)).plugin?.maxProtection).toBe(3);
+  });
+
+  test('pages count as egress in the warnings and the page declaration', async () => {
+    const { computePermissions } = await import('./permissions');
+    const { declarationItems, egressReadWarning, guidanceTone, permissionsGuidance } = await import('@/shared/plugin-declarations');
+    expect(egressReadWarning(['notes:read'])).toBeNull();
+    expect(egressReadWarning(['notes:read'], { pages: true })).toMatch(/With its pages and notes:read together, this package can send what it reads anywhere/);
+    const ui = { pages: [{ path: 'dash', title: 'Dash', entry: 'index.html' }] };
+    const p = computePermissions({ ...base, ui, host: ['notes:read'], maxProtection: 3 } as never);
+    expect(permissionsGuidance(p).map((g) => g.code)).toContain('egress_with_read');
+    const page = declarationItems(p, null).find((i) => i.id === 'page:dash');
+    expect(page?.guidance).toMatch(/A page can send what it shows to any website/);
+    expect(guidanceTone(page!)).toBe('warning');
+    expect(declarationItems(p, null).find((i) => i.id === 'protection')?.label).toBe('Sees data up to protection level 1');
   });
 
   test('the network status counts the host API as a host', async () => {
     const { networkStatus } = await import('./service');
-    expect(networkStatus({ ...base, host: ['notes:read'] }, 'bwrap').state).toBe('restricted');
-    expect(networkStatus({ ...base, host: ['notes:read'] }, 'bwrap').detail).toContain('the Octipus host API');
-    expect(networkStatus(base, 'bwrap').state).toBe('offline');
+    const bwrap = { setting: 'required' as const, runner: 'bwrap' as const, unavailable: null };
+    expect(networkStatus({ ...base, host: ['notes:read'] }, null, bwrap).state).toBe('restricted');
+    expect(networkStatus({ ...base, host: ['notes:read'] }, null, bwrap).detail).toContain('the Octipus host API');
+    expect(networkStatus(base, null, bwrap).state).toBe('offline');
   });
 });

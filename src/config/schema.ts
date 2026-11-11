@@ -1,5 +1,6 @@
 import { executionEnvironmentsSchema } from '@/shared/execution-environment';
 import { companionMaintenanceSchema } from '@/shared/companion-maintenance';
+import { createPublicKey } from 'node:crypto';
 import { isIP } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -780,6 +781,46 @@ export function normalizeRetiredConfigValues<T>(merged: T): T {
 }
 
 // Full configuration schema
+/**
+ * An Ed25519 public key as PEM (SPKI), what `octi plugin keygen` writes to
+ * `<name>.pub`: refused at config load when it is not one, so a typo never
+ * leaves the marketplace trusting nothing (or something else) in silence.
+ */
+const ed25519PublicKeyPem = z.string().min(1).max(2000).refine((pem) => {
+  const text = pem.trim();
+  if (!text.startsWith('-----BEGIN PUBLIC KEY-----') || !text.endsWith('-----END PUBLIC KEY-----')) return false;
+  try {
+    return createPublicKey(text).asymmetricKeyType === 'ed25519';
+  } catch {
+    return false;
+  }
+}, 'an Ed25519 public key in PEM (the contents of the .pub file octi plugin keygen writes)');
+
+/**
+ * `plugins.marketplace` (docs/PLUGIN-PACKAGES.md#marketplace): `true` (the
+ * default) uses the built-in Octipus marketplace, `false` turns it off
+ * entirely; an object overrides its index URL and/or its two keys, for
+ * testing or self-hosting. Root keys given here count as configured.
+ */
+export const marketplaceConfigSchema = z.union([
+  z.boolean(),
+  z.object({
+    enabled: z.boolean().default(true),
+    /** The signed index (https; its signature is `<url>.sig`). */
+    url: z.string().url().max(2000)
+      .refine((v) => v.startsWith('https://'), 'the marketplace is reached over https')
+      .refine((v) => !v.includes('#') && !/^https:\/\/[^/]*@/.test(v), 'no fragment and no credentials in the marketplace URL')
+      .optional(),
+    /**
+     * The marketplace's ROOT keys: they sign only `<origin>/keys.json`, which
+     * lists the signing keys. `rootBackup` (kept offline) may revoke `root`.
+     */
+    rootKeys: z.object({ root: ed25519PublicKeyPem, rootBackup: ed25519PublicKeyPem.optional() }).strict()
+      .refine((k) => k.rootBackup === undefined || k.rootBackup.trim() !== k.root.trim(), 'the backup root key must differ from the root key')
+      .optional(),
+  }).strict(),
+]);
+
 export const configSchema = z.object({
   storageMode: storageModeSchema,
   database: databaseConfigSchema,
@@ -880,10 +921,17 @@ export const configSchema = z.object({
      * publisher (docs/PLUGIN-PACKAGES.md#signed-registry-indexes).
      */
     registries: z.array(z.object({
-      name: z.string().min(1).max(100),
+      /** Unique; `marketplace` is reserved for the built-in Octipus marketplace. */
+      name: z.string().min(1).max(100).refine((v) => v.trim().toLowerCase() !== 'marketplace', '"marketplace" is reserved for the built-in Octipus marketplace; name the registry otherwise'),
       url: z.string().url().max(2000).refine((v) => v.startsWith('https://'), 'a registry is reached over https'),
       publisher: z.string().min(1).max(100).optional(),
-    })).default([]),
+    })).default([]).superRefine((list, ctx) => {
+      const seen = new Set<string>();
+      list.forEach((r, i) => {
+        if (seen.has(r.name)) ctx.addIssue({ code: 'custom', path: [i, 'name'], message: `the registry name "${r.name}" is used twice; registry names are unique` });
+        seen.add(r.name);
+      });
+    }),
     /**
      * Tokens (input + output) one user's plugin `model:complete` calls may use
      * per UTC day, all packages together; 0 turns those calls off.
@@ -894,6 +942,24 @@ export const configSchema = z.object({
      * budget; its tokens also count in `hostModelDailyTokens`. 0 turns those runs off.
      */
     hostAgentRunTokens: z.number().int().min(0).max(10_000_000).default(150_000),
+    /**
+     * The built-in Octipus marketplace (docs/PLUGIN-PACKAGES.md#marketplace):
+     * `true` (default), `false` (off entirely: never fetched, never trusted),
+     * or `{ enabled?, url?, rootKeys?: { root, rootBackup? } }` to point it at
+     * another index or root keys. Without root keys in the build or here it stays off.
+     */
+    marketplace: marketplaceConfigSchema.default(true),
+    /**
+     * The sandbox of plugin package servers (docs/PLUGIN-PACKAGES.md#the-sandbox),
+     * apart from `security.shellSandbox` (agent shells). `required` (default):
+     * a `package` plugin never starts without a working runner (bwrap or
+     * firejail on Linux, sandbox-exec on macOS); without one, starting,
+     * enabling and consenting are refused. `off`: a plugin NOT from the
+     * marketplace runs unsandboxed, as the server's user (Windows, which has
+     * no runner). A marketplace plugin always needs a runner, whatever this says.
+     * Env: PLUGINS_SANDBOX.
+     */
+    sandbox: z.enum(['required', 'off']).default('required'),
   }).prefault({}),
   oauth: oauthConfigSchema,
   rateLimit: rateLimitConfigSchema,

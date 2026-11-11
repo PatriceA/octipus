@@ -20,8 +20,9 @@
  *
  * Where it is enforced and where it is only advice:
  *
- * - **Linux with bwrap or firejail** (`security.shellSandbox` `auto` or
- *   `required`): the server runs in its own network namespace with only
+ * - **Linux with bwrap or firejail** (a plugin package: `plugins.sandbox`
+ *   `required`, the default, or any marketplace package; another stdio
+ *   server: `security.shellSandbox` `auto` or `required`): the server runs in its own network namespace with only
  *   loopback. The Unix socket is mounted in, and a small launcher
  *   (`SANDBOX_BRIDGE_SOURCE`, run with this Node binary inside the sandbox)
  *   listens on the namespace's 127.0.0.1 and forwards to it before starting
@@ -33,10 +34,13 @@
  *   (`buildSeatbeltProfile` in shell-sandbox.ts) denies all network but
  *   outbound TCP to this proxy's loopback port, and the server gets the proxy
  *   variables pointing at that port directly: enforced.
- * - **Sandbox off (the default), no runner found, Windows**: the
- *   server runs unwrapped with HTTP(S)_PROXY / ALL_PROXY pointing at the TCP
- *   listener. Well-behaved HTTP clients honour it, but nothing stops a direct
- *   connection: advisory only. The package's status says so.
+ * - **Sandbox off** (a local plugin package under `plugins.sandbox: off`,
+ *   the only way on Windows): the server runs unwrapped with HTTP(S)_PROXY /
+ *   ALL_PROXY pointing at the TCP listener. Well-behaved HTTP clients honour
+ *   it, but nothing stops a direct connection: advisory only. The package's
+ *   status and its declarations say so ("Network not enforced on this host").
+ *   Where a sandbox is required and no runner works, the server is not
+ *   started at all (src/plugins/packages/sandbox-policy.ts).
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { lookup } from 'node:dns/promises';

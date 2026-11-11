@@ -10,6 +10,7 @@ import { createBrowserRouter, Navigate, Outlet, RouterProvider, useParams, useRo
 import { AppShell } from '@/components/app-shell';
 import { Providers } from './app/providers';
 import AdminLayout from './app/admin/layout';
+import AdminPluginsLayout from './app/admin/plugins/layout';
 
 function LegacyArtifactRedirect() {
   const { id } = useParams();
@@ -25,7 +26,8 @@ const AdminGroupChannelsPage = lazy(() => import('./app/admin/group-channels/pag
 const AdminOrgsPage = lazy(() => import('./app/admin/orgs/page'));
 const AdminOrgsSsoPage = lazy(() => import('./app/admin/orgs/sso/page'));
 const AdminPluginsPage = lazy(() => import('./app/admin/plugins/page'));
-const AdminPluginsBrowsePage = lazy(() => import('./app/admin/plugins/browse/page'));
+const AdminPluginsMarketplacePage = lazy(() => import('./app/admin/plugins/marketplace/page'));
+const AdminPluginsUpdatesPage = lazy(() => import('./app/admin/plugins/updates/page'));
 const AdminQuotasPage = lazy(() => import('./app/admin/quotas/page'));
 const AdminUsersPage = lazy(() => import('./app/admin/users/page'));
 const AgentsPage = lazy(() => import('./app/agents/page'));
@@ -202,8 +204,17 @@ const router = createBrowserRouter([
         { path: 'group-channels', element: <AdminGroupChannelsPage /> },
         { path: 'orgs', element: <AdminOrgsPage /> },
         { path: 'orgs/sso', element: <AdminOrgsSsoPage /> },
-        { path: 'plugins', element: <AdminPluginsPage /> },
-        { path: 'plugins/browse', element: <AdminPluginsBrowsePage /> },
+        {
+          path: 'plugins',
+          element: <AdminPluginsLayout><Outlet /></AdminPluginsLayout>,
+          children: [
+            { index: true, element: <AdminPluginsPage /> },
+            { path: 'marketplace', element: <AdminPluginsMarketplacePage /> },
+            { path: 'updates', element: <AdminPluginsUpdatesPage /> },
+            // The old Browse page: the registries are on the Marketplace tab now.
+            { path: 'browse', element: <Navigate replace to="/admin/plugins/marketplace" /> },
+          ],
+        },
         { path: 'quotas', element: <AdminQuotasPage /> },
         { path: 'users', element: <AdminUsersPage /> },
         ],

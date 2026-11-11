@@ -12,6 +12,12 @@ export interface PluginBinding {
   /** What each declared tool does; an undeclared tool is hidden and refused. */
   tools: Record<string, PluginToolEffect>;
   /**
+   * The description of each declared tool the model is given: the manifest's,
+   * which the admin agreed to, else the tool name and effect. Never the
+   * running server's own text (src/mcp/plugin-catalog.ts).
+   */
+  descriptions?: Record<string, string>;
+  /**
    * The highest protection level of the conversation its tools may be called
    * from (docs/PROTECTION-LEVELS.md, C6d): the manifest's `maxProtection`,
    * else 1 for a package with network access and 4 for one without.
@@ -79,6 +85,8 @@ export interface MCPServer extends McpExposureConfig {
    * to the host's own API at that address (docs/PLUGIN-PACKAGES.md#host-api).
    */
   sandbox?: {
+    /** Overrides `security.shellSandbox` for this server (a plugin package's: `plugins.sandbox`). */
+    mode?: 'required' | 'off';
     root: string; allowNetwork: boolean; readOnlyRoot?: boolean; writable?: string[];
     egress?: { label: string; hosts: string[]; runDir?: string; hostApi?: { host: string; port: number } };
   };

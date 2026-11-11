@@ -27,7 +27,9 @@ import { pluginPackages } from '@/db/schema/plugin-packages';
 import { getMCPBridge, PLUGIN_SERVER_PREFIX } from '@/mcp/bridge';
 import { fetchDestAllowed, isSecureOrigin, listEnabledPages, pluginUiCsp, pluginUiHeaders, readUiFile, uiBaseUrl } from '@/plugins/packages/ui';
 import { ApprovalBlockedError, withDispatchAuthorization } from '@/security/dispatch-authorization';
-import { isAuthenticated } from '@/security/principal';
+import { crossSiteDenied } from '@/api/plugin-route-guard';
+import { isAuthenticated, requireScope } from '@/security/principal';
+import { API_SCOPES } from '@/security/scopes';
 import { eq } from 'drizzle-orm';
 import { apiLogger } from '@/utils/logger';
 
@@ -73,11 +75,14 @@ export const pluginUiRoutes = new Elysia({ prefix: '/plugin-ui' })
 export const pluginCallRoutes = new Elysia({ prefix: '/plugins' })
   .use(apiContext)
 
-  .post('/:name/call/:tool', async ({ user, principal, params, body, set }) => {
+  .post('/:name/call/:tool', async ({ request, user, principal, params, body, set }) => {
     if (!user || !isAuthenticated(principal)) {
       set.status = 401;
       return { error: 'Authentication required' };
     }
+    // Signed by the session cookie: only from this site (src/api/plugin-route-guard.ts).
+    const crossSite = crossSiteDenied({ set, request });
+    if (crossSite) return crossSite;
     const limited = checkRateLimit(`plugin-call:${user.id}:${params.name}`, { capacity: 20, refillPerSecond: 2 });
     if (!limited.allowed) {
       set.status = 429;
@@ -97,6 +102,12 @@ export const pluginCallRoutes = new Elysia({ prefix: '/plugins' })
       return { error: `${params.name} has no tool ${params.tool}`, code: 'unknown_tool' };
     }
     const effect = decl.effect;
+    // An API token: api:read for a read tool, api:write for one that changes something.
+    const needed = effect === 'read' ? API_SCOPES.READ : API_SCOPES.WRITE;
+    if (!requireScope(principal, needed)) {
+      set.status = 403;
+      return { error: `This API token lacks the ${needed} scope`, code: 'scope' };
+    }
     const args = (body?.args ?? {}) as Record<string, unknown>;
     if (JSON.stringify(args).length > MAX_ARGS_CHARS) {
       set.status = 413;

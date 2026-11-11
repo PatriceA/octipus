@@ -1,5 +1,5 @@
-import { boolean, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-import type { PluginHostApproval, PluginManifest } from '@/shared/plugin-package';
+import { boolean, integer, jsonb, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import type { PluginHostApproval, PluginManifest, PluginOrigin } from '@/shared/plugin-package';
 import { users } from './users';
 
 /**
@@ -52,6 +52,12 @@ export const pluginPackages = pgTable('plugin_packages', {
    * the package's current one. Null: not approved; install and upgrade clear it.
    */
   approvedContributionsHash: text('approved_contributions_hash'),
+  /**
+   * Where the installed version came from (docs/PLUGIN-PACKAGES.md#provenance):
+   * the marketplace, a named registry, a URL, a directory, the bundled
+   * plugins or an agent. Null: installed before provenance was recorded.
+   */
+  origin: jsonb('origin').$type<PluginOrigin>(),
   settings: jsonb('settings').$type<Record<string, string | number | boolean>>().default({}).notNull(),
   installedBy: uuid('installed_by').references(() => users.id, { onDelete: 'set null' }),
   installedAt: timestamp('installed_at', { withTimezone: true }).defaultNow().notNull(),
@@ -60,3 +66,77 @@ export const pluginPackages = pgTable('plugin_packages', {
 
 export type PluginPackageRow = typeof pluginPackages.$inferSelect;
 export type NewPluginPackageRow = typeof pluginPackages.$inferInsert;
+
+/**
+ * The last accepted signed index of each registry (by URL): `generatedAt`
+ * only moves forward, so a replayed older index is refused
+ * (src/plugins/packages/registry-state.ts).
+ */
+export const pluginRegistryState = pgTable('plugin_registry_state', {
+  registryUrl: text('registry_url').primaryKey(),
+  lastGeneratedAt: timestamp('last_generated_at', { withTimezone: true }).notNull(),
+  lastIndexSha256: text('last_index_sha256').notNull(),
+  /** The key id that signed it: an index from a key revoked since does not hold the next one back. */
+  lastSignedBy: text('last_signed_by').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+/**
+ * Revocations learnt from the marketplace's signed index
+ * (src/plugins/packages/revocations.ts). They accumulate: an index that drops
+ * one does not lift it; an admin may clear one (audited), and an index that
+ * still lists it revokes it again.
+ */
+export const pluginRevocations = pgTable('plugin_revocations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  kind: text('kind').$type<'package' | 'key'>().notNull(),
+  name: text('name'),
+  version: text('version'),
+  keyId: text('key_id'),
+  reason: text('reason').notNull().default(''),
+  registryUrl: text('registry_url').notNull(),
+  signedByKey: text('signed_by_key').notNull(),
+  indexGeneratedAt: timestamp('index_generated_at', { withTimezone: true }).notNull(),
+  firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).defaultNow().notNull(),
+  clearedAt: timestamp('cleared_at', { withTimezone: true }),
+  clearedBy: uuid('cleared_by').references(() => users.id, { onDelete: 'set null' }),
+  clearReason: text('clear_reason'),
+});
+
+export type PluginRevocationRow = typeof pluginRevocations.$inferSelect;
+
+/** New versions the admins were told about by the daily update check: once per version. */
+export const pluginUpdateNotices = pgTable('plugin_update_notices', {
+  name: text('name').notNull(),
+  version: text('version').notNull(),
+  notifiedAt: timestamp('notified_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [primaryKey({ columns: [t.name, t.version] })]);
+
+/**
+ * The marketplace's last accepted `keys.json` (its signing keys, signed by a
+ * built-in root key), with its signature (src/plugins/packages/marketplace-keys-file.ts).
+ * Re-verified against the root keys whenever it is read; `version` only moves forward.
+ */
+export const pluginMarketplaceKeys = pgTable('plugin_marketplace_keys', {
+  registryUrl: text('registry_url').primaryKey(),
+  version: integer('version').notNull(),
+  generatedAt: timestamp('generated_at', { withTimezone: true }).notNull(),
+  body: text('body').notNull(),
+  signature: text('signature').notNull(),
+  sha256: text('sha256').notNull(),
+  signedByRoot: text('signed_by_root').notNull(),
+  /** Every signing key any accepted keys.json listed: keys.json may revoke only these (and roots). */
+  endorsedKeyIds: jsonb('endorsed_key_ids').$type<string[]>().notNull().default([]),
+  acceptedAt: timestamp('accepted_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+/** The content hash of each name@version as first listed by each registry (src/plugins/packages/listing-pins.ts). */
+export const pluginListingPins = pgTable('plugin_listing_pins', {
+  registryUrl: text('registry_url').notNull(),
+  name: text('name').notNull(),
+  version: text('version').notNull(),
+  contentHash: text('content_hash').notNull(),
+  /** The key that signed the index that first listed it (null: an unsigned registry). A pin of a key revoked since holds nothing. */
+  signedBy: text('signed_by'),
+  firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [primaryKey({ columns: [t.registryUrl, t.name, t.version] })]);

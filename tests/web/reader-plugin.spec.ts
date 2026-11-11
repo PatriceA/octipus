@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page, Route } from '@playwright/test';
 import { test, expect } from './fixtures/auth';
+import { consentView, HASH, perms, preview, PREVIEW_ID, tickAll } from './fixtures/plugin-consent';
 import { json } from './fixtures/api-stubs';
 
 /**
@@ -148,7 +149,12 @@ test.describe('the Reader plugin page', () => {
     expect(calls.filter((c) => c.tool === 'save_note' && c.body.confirm)).toEqual([]);
   });
 
-  test('the admin page offers it under Bundled and installs it', async ({ authenticatedPage: page }) => {
+  test('the admin page offers it under Bundled and installs it, with consent per item', async ({ authenticatedPage: page }) => {
+    const readerPerms = perms('reader', {
+      host: ['model:complete', 'notes:write', 'tasks:write', 'web:read'],
+      tools: [{ name: 'create_tasks', effect: 'write' }, { name: 'read_url', effect: 'read' }, { name: 'reader_action', effect: 'read' }, { name: 'save_note', effect: 'write' }],
+      pages: [{ path: 'read', title: 'Reader', entry: 'index.html' }], ui: { dir: 'ui', sha256: 'ab'.repeat(32) },
+    });
     const posts: unknown[] = [];
     let installed: string | null = null;
     await page.route(/\/api\/plugin-packages(\/.*)?$/, async (route: Route) => {
@@ -160,10 +166,14 @@ test.describe('the Reader plugin page', () => {
         }]);
       }
       if (req.method() === 'GET') return json(route, 200, []);
-      if (req.method() === 'POST') {
+      if (req.method() === 'POST' && req.url().endsWith('/preview')) {
+        posts.push(req.postDataJSON());
+        return json(route, 200, preview(readerPerms, { title: 'Reader', origin: { source: 'bundled' }, signedBy: null }));
+      }
+      if (req.method() === 'POST' && req.url().endsWith('/install')) {
         posts.push(req.postDataJSON());
         installed = '1.0.0';
-        return json(route, 200, { name: 'reader', version: '1.0.0', enabled: false, signedBy: null, warnings: [] });
+        return json(route, 200, { name: 'reader', version: '1.0.0', contentHash: HASH, enabled: false, enableProblem: null, warnings: [] });
       }
       return json(route, 404, {});
     });
@@ -172,9 +182,14 @@ test.describe('the Reader plugin page', () => {
     await expect(row).toContainText('Reader');
     await expect(row).toContainText('web:read, model:complete, notes:write, tasks:write');
     await row.getByRole('button', { name: 'Install reader' }).click();
+    const consent = page.getByTestId('plugin-consent');
+    await expect(consent.getByRole('heading', { level: 2 })).toHaveText('Install Reader');
+    await expect(consent.locator('[data-id="host:web:read"]')).toContainText('Fetches web pages through Octipus');
+    await tickAll(consent);
+    await consent.getByRole('button', { name: 'Install', exact: true }).click();
     await expect(page.getByTestId('bundled-plugins').getByRole('status')).toContainText('Installed reader 1.0.0 (disabled)');
     await expect(row).toContainText('installed');
-    expect(posts).toEqual([{ bundled: 'reader' }]);
+    expect(posts).toEqual([{ bundled: 'reader' }, { previewId: PREVIEW_ID, contentHash: HASH, accepted: preview(readerPerms).declarations.map((d) => d.id), enable: false }]);
   });
 
   test('the admin page warns when an egress scope comes with a read scope, and shows a bundled name another package took', async ({ authenticatedPage: page }) => {
@@ -197,6 +212,9 @@ test.describe('the Reader plugin page', () => {
       if (req.method() === 'GET' && req.url().endsWith('/bundled')) {
         return json(route, 200, [{ name: 'reader', version: '1.0.0', title: 'Reader', description: 'Clean reading.', host: ['web:read'], network: [], installed: null, taken: true }]);
       }
+      if (req.method() === 'GET' && req.url().endsWith('/summarizer/consent')) {
+        return json(route, 200, consentView(perms('summarizer', { host: ['documents:read', 'model:complete'], tools: [{ name: 'summarize', effect: 'read' }] })));
+      }
       if (req.method() === 'GET') return json(route, 200, [pkg]);
       if (req.method() === 'PATCH') {
         patches.push(req.postDataJSON());
@@ -207,12 +225,16 @@ test.describe('the Reader plugin page', () => {
     await page.goto('/admin/plugins');
     const row = page.locator('[data-testid="plugin-package"][data-name="summarizer"]');
     await expect(row.getByTestId('plugin-egress-warning')).toContainText('can send what it reads anywhere');
-    const dialogs: string[] = [];
-    page.once('dialog', (d) => { dialogs.push(d.message()); void d.dismiss(); });
+    // Enabling shows the same warning under each scope it concerns, as guidance, never a refusal.
     await row.getByRole('button', { name: 'Enable summarizer' }).click();
-    await expect.poll(() => dialogs.length).toBe(1);
-    expect(dialogs[0]).toContain('model:complete and documents:read together, this package can send what it reads anywhere');
-    // Dismissed: nothing was enabled.
+    const consent = page.getByTestId('plugin-consent');
+    for (const scope of ['documents:read', 'model:complete']) {
+      const guidance = consent.locator(`[data-id="host:${scope}"]`).getByTestId('consent-guidance');
+      await expect(guidance).toContainText('model:complete and documents:read together, this package can send what it reads anywhere');
+      await expect(guidance).toHaveAttribute('data-tone', 'warning');
+    }
+    // Cancelled: nothing was enabled.
+    await consent.getByRole('button', { name: 'Cancel' }).click();
     expect(patches).toEqual([]);
 
     const bundled = page.locator('[data-testid="bundled-plugin"][data-name="reader"]');

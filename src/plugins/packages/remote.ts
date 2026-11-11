@@ -22,9 +22,16 @@ import { type PluginPackageRow, pluginPackages } from '@/db/schema/plugin-packag
 import type { PluginRegistryEntry, PluginRegistryListing } from '@/shared/plugin-package';
 import { coreLogger } from '@/utils/logger';
 import { fetchGuarded } from '@/utils/sanitize';
+import { safeText } from './listing-text';
 import { manifestSchema } from './manifest';
+import { type IndexEntry, IndexFormatError, type ParsedIndex, parseIndexDocument } from './index-v2';
+import { checkPins, type PinMismatch, pinListings } from './listing-pins';
+import { IndexRollbackError, acceptIndexTime } from './registry-state';
 import { installFromDirectory, PluginPackageError } from './service';
-import { REGISTRY_INDEX_SIGNATURE_SUFFIX, type SignatureCheck, verifyRegistryIndex } from './signature';
+import { REGISTRY_INDEX_SIGNATURE_SUFFIX, type SignatureCheck, type TrustedPublisher, verifyRegistryIndex } from './signature';
+
+/** The options of `installFromDirectory`. */
+type InstallOptions = NonNullable<Parameters<typeof installFromDirectory>[2]>;
 import { extractTarGz, packageRootIn, TarError } from './tar';
 
 /** Largest tarball a remote install downloads (compressed). */
@@ -69,8 +76,9 @@ function requireHttps(url: string): URL {
  * GET an https URL through the SSRF guard, following at most three
  * redirects (each https and checked again), and read at most `maxBytes`.
  */
-export async function downloadHttps(url: string, opts: { maxBytes: number; timeoutMs: number; accept?: string }): Promise<Buffer> {
+export async function downloadHttps(url: string, opts: { maxBytes: number; timeoutMs: number; accept?: string; sameOrigin?: boolean }): Promise<Buffer> {
   let current = requireHttps(url).toString();
+  const origin = new URL(current).origin;
   for (let hop = 0; ; hop++) {
     let res: Response;
     try {
@@ -88,6 +96,8 @@ export async function downloadHttps(url: string, opts: { maxBytes: number; timeo
       if (!location) throw new RemoteFetchError(`${current} answered ${res.status} without a Location`);
       if (hop >= MAX_REDIRECTS) throw new RemoteFetchError(`${url} redirects more than ${MAX_REDIRECTS} times`);
       current = requireHttps(new URL(location, current).toString()).toString();
+      // An asset or stats file stays on the registry's origin, redirects included.
+      if (opts.sameOrigin && new URL(current).origin !== origin) throw new RemoteFetchError(`${url} redirects off its origin (${origin}); not followed`);
       continue;
     }
     if (!res.ok) {
@@ -133,16 +143,53 @@ function downloadsRoot(): string {
 export async function installFromUrl(
   url: string,
   actorUserId: string,
-  opts: { upgrade?: boolean; sha256?: string; name?: string; version?: string; allowSignerChange?: boolean; allowDowngrade?: boolean } = {},
+  opts: {
+    upgrade?: boolean; sha256?: string; name?: string; version?: string; allowSignerChange?: boolean; allowDowngrade?: boolean;
+    /** A registry install (./registry-install.ts): what the listing promised, where it is from, whose keys count, the runtime. */
+    registry?: Pick<InstallOptions, 'expectListing' | 'origin' | 'trustOnly' | 'requireRuntime' | 'allowSourceChange'>;
+  } = {},
 ): Promise<PluginPackageRow & { warnings: string[] }> {
+  const download = await downloadPackage(url, opts.sha256);
+  try {
+    return await installFromDirectory(download.root, actorUserId, remoteInstallOptions(url, opts));
+  } finally {
+    await download.cleanup();
+  }
+}
+
+/** The install options of a package from `url` (requires a trusted signature; a registry's promises on top). */
+export function remoteInstallOptions(
+  url: string,
+  opts: { upgrade?: boolean; name?: string; version?: string; allowSignerChange?: boolean; allowDowngrade?: boolean; registry?: Pick<InstallOptions, 'expectListing' | 'origin' | 'trustOnly' | 'requireRuntime' | 'allowSourceChange'> },
+): InstallOptions {
+  return {
+    upgrade: opts.upgrade,
+    requireTrustedSignature: true,
+    source: url,
+    expect: { name: opts.name, version: opts.version },
+    allowSignerChange: opts.allowSignerChange,
+    allowDowngrade: opts.allowDowngrade,
+    origin: { source: 'url', url },
+    ...opts.registry,
+  };
+}
+
+/**
+ * Download a package tarball over https (checked against `sha256` before it
+ * is unpacked, when given) and unpack it with the strict tar reader into a
+ * work directory of its own. `root` is the package directory in it;
+ * `cleanup` removes the work directory.
+ */
+export async function downloadPackage(url: string, sha256?: string, opts: { sameOrigin?: boolean } = {}): Promise<{ root: string; cleanup: () => Promise<void> }> {
   let expected: string | null = null;
-  if (opts.sha256 !== undefined) {
-    expected = normalizeSha256(opts.sha256);
+  if (sha256 !== undefined) {
+    expected = normalizeSha256(sha256);
     if (!expected) throw new PluginPackageError('invalid', 'sha256 must be 64 hex digits (optionally after "sha256:")');
   }
   let tarball: Buffer;
   try {
-    tarball = await downloadHttps(url, { maxBytes: MAX_DOWNLOAD_BYTES, timeoutMs: DOWNLOAD_TIMEOUT_MS });
+    // A strict registry's tarball (the marketplace's) stays on its origin, redirects included.
+    tarball = await downloadHttps(url, { maxBytes: MAX_DOWNLOAD_BYTES, timeoutMs: DOWNLOAD_TIMEOUT_MS, sameOrigin: opts.sameOrigin === true });
   } catch (err) {
     if (err instanceof RemoteFetchError) throw new PluginPackageError('invalid', err.message);
     throw err;
@@ -152,26 +199,19 @@ export async function installFromUrl(
     throw new PluginPackageError('invalid', `The download from ${url} hashes to ${actual}, not to the expected ${expected}; not unpacked`);
   }
   const work = join(downloadsRoot(), `${process.pid}-${randomBytes(8).toString('hex')}`);
+  const cleanup = () => rm(work, { recursive: true, force: true }).catch((err: unknown) => coreLogger.warn({ err, dir: work }, 'Could not remove a plugin download'));
   try {
     await mkdir(work, { recursive: true, mode: 0o700 });
-    let root: string;
     try {
       await extractTarGz(tarball, work);
-      root = await packageRootIn(work);
+      return { root: await packageRootIn(work), cleanup };
     } catch (err) {
       if (err instanceof TarError) throw new PluginPackageError('invalid', `${err.message}; not installed`);
       throw err;
     }
-    return await installFromDirectory(root, actorUserId, {
-      upgrade: opts.upgrade,
-      requireTrustedSignature: true,
-      source: url,
-      expect: { name: opts.name, version: opts.version },
-      allowSignerChange: opts.allowSignerChange,
-      allowDowngrade: opts.allowDowngrade,
-    });
-  } finally {
-    await rm(work, { recursive: true, force: true }).catch((err: unknown) => coreLogger.warn({ err, dir: work }, 'Could not remove a plugin download'));
+  } catch (err) {
+    await cleanup();
+    throw err;
   }
 }
 
@@ -207,28 +247,64 @@ export function parseRegistryIndex(json: unknown, registry: string): { entries: 
       p.description !== undefined && p.description !== null && typeof p.description !== 'string' && 'description',
     ].filter(Boolean);
     if (wrong.length > 0 || !name.success || !version.success || !url || !sha256) {
-      problems.push(`${at}${typeof p.name === 'string' ? ` (${p.name.slice(0, 50)})` : ''}: ${wrong.join(', ')} missing or not valid`);
+      problems.push(`${at}${typeof p.name === 'string' ? ` (${safeText(p.name, 50)})` : ''}: ${wrong.join(', ')} missing or not valid`);
       return;
     }
-    const description = typeof p.description === 'string' ? p.description.slice(0, 500) : null;
+    // A v1 description is shown like a v2 one: without control, bidirectional or invisible characters.
+    const description = typeof p.description === 'string' ? safeText(p.description, 500) : null;
     entries.push({ registry, name: name.data, version: version.data, description, url, sha256 });
   });
   return { entries, problems };
 }
 
-type IndexResult = { entries: Array<Omit<PluginRegistryEntry, 'installedVersion'>>; error: string | null };
-const indexCache = new Map<string, { at: number; result: IndexResult }>();
-
-/** Forget the cached indexes (a config change, tests). */
-export function clearRegistryCache(): void {
-  indexCache.clear();
-}
-
-/** A registry as `plugins.registries` lists it. */
-interface RegistryConfig {
+/** A registry to read: one of `plugins.registries`, or the marketplace (./marketplace.ts). */
+export interface RegistrySource {
+  /** Its name (`marketplace` for the built-in one). */
   name: string;
   url: string;
+  /** The publisher whose key must sign the index (`<url>.sig`); none: read unsigned. */
   publisher?: string;
+  /** The keys that count for that signature instead of `plugins.trustedPublishers` (the marketplace's own). */
+  publishers?: readonly TrustedPublisher[];
+  /** Index v2 only, with each tarball on the registry's origin (the marketplace). */
+  strict?: boolean;
+  /** The built-in marketplace: the keys its keys.json revoked count for it (and only for it). */
+  marketplace?: boolean;
+}
+
+/** An index read, its signature checked and its format parsed. */
+export interface FetchedIndex {
+  index: ParsedIndex;
+  /** `sha256:<hex>` of the exact bytes. */
+  sha256: string;
+  /** The key that signed it, when the registry names a publisher. */
+  signedBy: string | null;
+  /** Entries left out because they list other content for a version already pinned ("replaced: refused"). */
+  replaced: PinMismatch[];
+}
+
+/**
+ * Hooks of a registry with rules of its own (the marketplace's revocations):
+ * `distrust` runs after the signature and format checks and before the
+ * rollback check, and returns key ids the index revokes (it throws to refuse
+ * the index); `accepted` runs once the index is accepted.
+ */
+export interface IndexHooks {
+  distrust?: (fetched: FetchedIndex) => Promise<string[]>;
+  accepted?: (fetched: FetchedIndex) => Promise<void>;
+}
+
+/** Errors of reading an index that mean "not listed", as opposed to a bug. */
+export function isIndexRefusal(err: unknown): err is Error {
+  return err instanceof RemoteFetchError || err instanceof IndexFormatError || err instanceof IndexRollbackError;
+}
+
+type IndexResult = { fetched: FetchedIndex | null; error: string | null };
+const indexCache = new Map<string, { at: number; result: IndexResult }>();
+
+/** Forget the cached indexes (a config change, a new revocation, tests). */
+export function clearRegistryCache(): void {
+  indexCache.clear();
 }
 
 /**
@@ -245,13 +321,14 @@ export function indexSignatureUrl(indexUrl: string): string {
 }
 
 /** Why a signature check of an index does not let it be listed, in words. */
-function indexSignatureShortfall(registry: RegistryConfig, sigUrl: string, check: Exclude<SignatureCheck, { status: 'valid' }>): string {
+function indexSignatureShortfall(registry: RegistrySource, sigUrl: string, check: Exclude<SignatureCheck, { status: 'valid' }>): string {
   const who = `publisher ${registry.publisher}`;
+  const where = registry.publishers ? 'the marketplace keys' : 'plugins.trustedPublishers';
   switch (check.status) {
     case 'unsigned':
       return `The index is not signed (${sigUrl} missing), and the registry requires a signature by ${who}`;
     case 'unknown_key':
-      return `The index is signed by ${check.keyId}, which is not a key of ${who} in plugins.trustedPublishers`;
+      return `The index is signed by ${check.keyId}, which is not a key of ${who} in ${where}`;
     case 'revoked':
     case 'expired':
       return `The index signature does not count: ${check.detail}`;
@@ -261,12 +338,24 @@ function indexSignatureShortfall(registry: RegistryConfig, sigUrl: string, check
 }
 
 /**
- * When the registry names a publisher: fetch `<url>.sig` and check it against
- * the exact index bytes. Throws `RemoteFetchError` (the index is not listed)
- * unless it verifies with a trusted, unrevoked, unexpired key of that publisher.
+ * Key ids that trust nothing now for `registry`: `plugins.revokedKeys`, and
+ * for the marketplace only, the keys its keys.json revoked. A marketplace
+ * key revocation never reaches another registry.
  */
-async function checkIndexSignature(registry: RegistryConfig, sigUrl: string, body: Buffer): Promise<void> {
-  if (registry.publisher === undefined) return;
+export async function revokedKeysNow(registry?: Pick<RegistrySource, 'marketplace'>): Promise<string[]> {
+  const config = getConfig().plugins?.revokedKeys ?? [];
+  if (registry?.marketplace !== true) return [...new Set(config)];
+  const { revokedNow } = await import('./marketplace-keys-file');
+  return revokedNow();
+}
+
+/**
+ * When the registry names a publisher: fetch `<url>.sig` and check it against
+ * the exact index bytes. Returns the key that signed it; throws
+ * `RemoteFetchError` (the index is not listed) unless it verifies with a
+ * trusted, unrevoked, unexpired key of that publisher.
+ */
+async function checkIndexSignature(registry: RegistrySource & { publisher: string }, sigUrl: string, body: Buffer): Promise<string> {
   let text: string | null;
   try {
     text = (await downloadHttps(sigUrl, { maxBytes: MAX_INDEX_SIGNATURE_BYTES, timeoutMs: INDEX_TIMEOUT_MS })).toString('utf8');
@@ -276,24 +365,114 @@ async function checkIndexSignature(registry: RegistryConfig, sigUrl: string, bod
     text = null;
   }
   const plugins = getConfig().plugins;
-  const check = verifyRegistryIndex(body, text, registry.publisher, plugins?.trustedPublishers ?? [], (publisher, reason) => {
+  const publishers = registry.publishers ?? plugins?.trustedPublishers ?? [];
+  const check = verifyRegistryIndex(body, text, registry.publisher, publishers, (publisher, reason) => {
     coreLogger.warn({ publisher, reason }, 'A key in plugins.trustedPublishers cannot be read; it trusts nothing');
-  }, { revokedKeys: plugins?.revokedKeys ?? [] });
+  }, { revokedKeys: await revokedKeysNow(registry) });
   if (check.status !== 'valid') throw new RemoteFetchError(indexSignatureShortfall(registry, sigUrl, check));
+  return check.keyId;
 }
 
 /**
  * A fingerprint of the trust config an index check depends on
- * (`trustedPublishers`, `revokedKeys`): part of the cache key, so revoking or
- * adding a key takes effect on the next listing, not a minute later.
+ * (`trustedPublishers`, `revokedKeys`, the marketplace setting): part of the
+ * cache key, so revoking or adding a key takes effect on the next listing,
+ * not a minute later.
  */
-function trustFingerprint(): string {
+function trustFingerprint(registry: RegistrySource): string {
   const plugins = getConfig().plugins;
-  return createHash('sha256').update(JSON.stringify([plugins?.trustedPublishers ?? [], plugins?.revokedKeys ?? []])).digest('hex');
+  return createHash('sha256').update(JSON.stringify([plugins?.trustedPublishers ?? [], plugins?.revokedKeys ?? [], registry.publishers ?? null, plugins?.marketplace ?? null])).digest('hex');
 }
 
-async function readIndex(registry: RegistryConfig): Promise<IndexResult> {
-  const key = `${registry.name}\n${registry.url}\n${registry.publisher ?? ''}\n${registry.publisher === undefined ? '' : trustFingerprint()}`;
+/**
+ * Fetch, verify and parse one index, uncached: the bytes (at most 1 MB,
+ * through the SSRF guard), the signature when the registry names a
+ * publisher, the format (./index-v2.ts), the registry's own rules
+ * (`hooks.distrust`), and for a signed index with a `generatedAt` the
+ * rollback check (./registry-state.ts). Throws on any refusal.
+ */
+export async function fetchRegistryIndex(registry: RegistrySource, hooks: IndexHooks = {}): Promise<FetchedIndex> {
+  const sigUrl = registry.publisher === undefined ? null : indexSignatureUrl(registry.url);
+  const body = await downloadHttps(registry.url, { maxBytes: MAX_INDEX_BYTES, timeoutMs: INDEX_TIMEOUT_MS, accept: 'application/json' });
+  const signedBy = sigUrl !== null ? await checkIndexSignature(registry as RegistrySource & { publisher: string }, sigUrl, body) : null;
+  let json: unknown;
+  try {
+    json = JSON.parse(body.toString('utf8'));
+  } catch {
+    throw new RemoteFetchError('The index is not valid JSON');
+  }
+  const index = parseIndexDocument(json, registry, { tarballSameOrigin: registry.strict === true, strict: registry.strict === true });
+  if (registry.strict && index.schema !== 2) throw new IndexFormatError('This registry requires index v2 (schema 2)');
+  if (index.expires !== null && index.expires.getTime() <= Date.now()) {
+    throw new IndexFormatError(`The index expired at ${index.expires.toISOString()}; refused (the registry must publish a fresh one)`);
+  }
+  const fetched: FetchedIndex = { index, sha256: `sha256:${createHash('sha256').update(body).digest('hex')}`, signedBy, replaced: [] };
+  const distrusted = hooks.distrust ? await hooks.distrust(fetched) : [];
+  const revoked = [...await revokedKeysNow(registry), ...distrusted];
+  // A published version never changes content: an entry with another hash
+  // for a name@version pinned before is refused, the rest of the index kept.
+  // A pin taken under a key revoked since holds nothing back.
+  const pins = await checkPins(registry.url, index.entries, new Set(revoked));
+  if (pins.dropped.length > 0) await reportDroppedPins(registry, pins.dropped);
+  if (signedBy !== null && index.generatedAt !== null) {
+    await acceptIndexTime(registry.url, index.generatedAt, fetched.sha256, signedBy, revoked);
+  }
+  if (pins.changed.length > 0) {
+    const refused = new Set(pins.changed.map((c) => `${c.name}@${c.version}`));
+    index.entries = index.entries.filter((e) => !refused.has(`${e.name}@${e.version}`));
+    for (const c of pins.changed) index.problems.push(`${c.name} ${c.version}: replaced: refused (pinned ${c.pinned}, now listed as ${c.listed})`);
+    fetched.replaced = pins.changed;
+    await reportChangedListings(registry, pins.changed);
+  }
+  await pinListings(registry.url, index.entries, signedBy);
+  if (index.schema === 2 && registry.publishers === undefined && (index.revoked.packages.length > 0 || index.revoked.keys.length > 0)) {
+    coreLogger.info({ registry: registry.name }, 'A registry index lists revocations; only the marketplace\'s are applied');
+  }
+  if (hooks.accepted) await hooks.accepted(fetched);
+  if (index.problems.length > 0) coreLogger.warn({ registry: registry.name, problems: index.problems.slice(0, 20) }, 'Plugin registry index has entries that were skipped');
+  return fetched;
+}
+
+/** Changed listings already reported, so an index read every minute notifies once. */
+const reportedPins = new Set<string>();
+
+/** Audit, log and tell the admins (once per registry and change) that entries were refused as replaced. */
+async function reportChangedListings(registry: RegistrySource, changed: readonly PinMismatch[]): Promise<void> {
+  const list = changed.map((c) => `${c.name} ${c.version} (pinned ${c.pinned}, now listed as ${c.listed})`).join('; ');
+  const key = `${registry.url}\n${list}`;
+  if (reportedPins.has(key)) return;
+  if (reportedPins.size > 500) reportedPins.clear();
+  reportedPins.add(key);
+  coreLogger.error({ registry: registry.name, changed }, 'A plugin registry index lists other content for versions already published; those entries are refused');
+  const { auditRepository } = await import('@/db/repositories/audit-repository');
+  const { SYSTEM_USER_ID } = await import('@/security/principal');
+  await auditRepository.log({
+    userId: SYSTEM_USER_ID, action: 'permission_denied', resourceType: 'plugin_package', resourceId: registry.name,
+    details: { op: 'listing_replaced', registry: registry.name, url: registry.url, changed },
+  }).catch((err: unknown) => coreLogger.error({ err }, 'plugin registry: audit row could not be written'));
+  const { notifyAdmins } = await import('./revocation-effects');
+  await notifyAdmins('plugin_listing_replaced', `Plugin registry ${registry.name} changed a published version`,
+    `The index of ${registry.name} lists other content for ${changed.length === 1 ? 'a version' : `${changed.length} versions`} it published before: ${list}. Those entries are refused (replaced: refused); the rest of the index is listed. If the change is legitimate, reset the pin (DELETE /api/plugin-packages/pins, with a reason).`,
+    { registry: registry.name, changed });
+}
+
+/** Pins dropped because their signer is revoked: logged and audited (once per registry and set). */
+async function reportDroppedPins(registry: RegistrySource, dropped: ReadonlyArray<{ name: string; version: string; contentHash: string; signedBy: string }>): Promise<void> {
+  coreLogger.warn({ registry: registry.name, dropped: dropped.slice(0, 20) }, 'Listing pins taken under a revoked key were dropped');
+  const { auditRepository } = await import('@/db/repositories/audit-repository');
+  const { SYSTEM_USER_ID } = await import('@/security/principal');
+  await auditRepository.log({
+    userId: SYSTEM_USER_ID, action: 'settings_changed', resourceType: 'plugin_package', resourceId: registry.name,
+    details: { op: 'listing_pins_dropped', registry: registry.name, url: registry.url, dropped: dropped.slice(0, 100) },
+  }).catch((err: unknown) => coreLogger.error({ err }, 'plugin registry: audit row could not be written'));
+}
+
+/**
+ * `fetchRegistryIndex`, cached for a minute per registry and trust config.
+ * A refusal is cached as an error the listing reports.
+ */
+export async function readIndex(registry: RegistrySource, hooks: IndexHooks = {}): Promise<IndexResult> {
+  const key = `${registry.name}\n${registry.url}\n${registry.publisher ?? ''}\n${registry.publisher === undefined ? '' : trustFingerprint(registry)}`;
   const now = Date.now();
   const cached = indexCache.get(key);
   if (cached && now - cached.at < REGISTRY_CACHE_MS) return cached.result;
@@ -301,25 +480,55 @@ async function readIndex(registry: RegistryConfig): Promise<IndexResult> {
   for (const [k, v] of indexCache) if (now - v.at >= REGISTRY_CACHE_MS) indexCache.delete(k);
   let result: IndexResult;
   try {
-    const sigUrl = registry.publisher === undefined ? null : indexSignatureUrl(registry.url);
-    const body = await downloadHttps(registry.url, { maxBytes: MAX_INDEX_BYTES, timeoutMs: INDEX_TIMEOUT_MS, accept: 'application/json' });
-    if (sigUrl !== null) await checkIndexSignature(registry, sigUrl, body);
-    let json: unknown;
-    try {
-      json = JSON.parse(body.toString('utf8'));
-    } catch {
-      throw new RemoteFetchError('The index is not valid JSON');
-    }
-    const { entries, problems } = parseRegistryIndex(json, registry.name);
-    if (problems.length > 0) coreLogger.warn({ registry: registry.name, problems: problems.slice(0, 20) }, 'Plugin registry index has entries that were skipped');
-    result = { entries, error: entries.length === 0 && problems.length > 0 ? problems[0] : null };
+    const fetched = await fetchRegistryIndex(registry, hooks);
+    const { entries, problems } = fetched.index;
+    result = { fetched, error: entries.length === 0 && problems.length > 0 ? problems[0] : null };
   } catch (err) {
-    if (!(err instanceof RemoteFetchError)) throw err;
+    if (!isIndexRefusal(err)) throw err;
     coreLogger.warn({ registry: registry.name, err: err.message }, 'Plugin registry could not be read');
-    result = { entries: [], error: err.message };
+    result = { fetched: null, error: err.message };
   }
   indexCache.set(key, { at: Date.now(), result });
   return result;
+}
+
+/** How many registry indexes are fetched at once. */
+export const REGISTRY_FETCH_CONCURRENCY = 4;
+
+/** `fn` over `items`, at most `limit` at a time, results in order. */
+export async function mapBounded<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+/** The configured registries (`plugins.registries`), as sources. */
+export function configuredRegistries(): RegistrySource[] {
+  // The config schema refuses `marketplace` and a name used twice; a config
+  // that got past it never passes for the marketplace, or shadows a registry.
+  const seen = new Set<string>();
+  const out: RegistrySource[] = [];
+  for (const r of getConfig().plugins?.registries ?? []) {
+    if (r.name.trim().toLowerCase() === 'marketplace' || seen.has(r.name)) {
+      coreLogger.warn({ registry: r.name }, 'A registry named "marketplace", or a registry name used twice, is ignored');
+      continue;
+    }
+    seen.add(r.name);
+    out.push({ name: r.name, url: r.url, ...(r.publisher !== undefined ? { publisher: r.publisher } : {}) });
+  }
+  return out;
+}
+
+/** An index entry in the v1 listing shape of `GET /registry`. */
+function v1Shape(e: IndexEntry): Omit<PluginRegistryEntry, 'installedVersion'> {
+  return { registry: e.registry, name: e.name, version: e.version, description: e.description === null ? null : e.description.slice(0, 500), url: e.url, sha256: e.sha256 };
 }
 
 /**
@@ -330,13 +539,12 @@ async function readIndex(registry: RegistryConfig): Promise<IndexResult> {
  * `errors` and the others still listed.
  */
 export async function listRegistry(): Promise<PluginRegistryListing> {
-  const registries = getConfig().plugins?.registries ?? [];
-  const results = await Promise.all(registries.map(async (r) => ({ registry: r.name, ...(await readIndex(r)) })));
+  const results = await mapBounded(configuredRegistries(), REGISTRY_FETCH_CONCURRENCY, async (r) => ({ registry: r.name, ...(await readIndex(r)) }));
   const installed = new Map(
     (await getDb().select({ name: pluginPackages.name, version: pluginPackages.version }).from(pluginPackages)).map((r) => [r.name, r.version]),
   );
   return {
-    packages: results.flatMap((r) => r.entries.map((e) => ({ ...e, installedVersion: installed.get(e.name) ?? null }))),
+    packages: results.flatMap((r) => (r.fetched?.index.entries ?? []).map((e) => ({ ...v1Shape(e), installedVersion: installed.get(e.name) ?? null }))),
     errors: results.filter((r) => r.error !== null).map((r) => ({ registry: r.registry, error: r.error as string })),
   };
 }

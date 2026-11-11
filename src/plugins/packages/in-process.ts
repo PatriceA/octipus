@@ -139,8 +139,19 @@ async function sync(): Promise<void> {
     const row = want.get(name);
     if (!row) await unload(name, 'disabled, uninstalled or no longer approved');
     else if (row.contentHash !== loaded.get(name)?.hash) await unload(name, 'its approved content changed');
+    else {
+      // What would refuse its start now (a key or version revoked since it
+      // loaded, a signature no longer trusted) unloads it: a loaded module is
+      // held to the same check as a starting one.
+      const refused = await checkPackageBeforeStart(name).catch((err: unknown) => `Could not check the package: ${(err as Error).message}`);
+      if (refused) {
+        await unload(name, refused);
+        problems.set(name, refused);
+        want.delete(name);
+      }
+    }
   }
-  for (const name of [...problems.keys()]) if (!want.has(name)) problems.delete(name);
+  for (const name of [...problems.keys()]) if (!want.has(name) && !rows.some((r) => r.name === name && wanted(r))) problems.delete(name);
   for (const row of want.values()) {
     if (loaded.has(row.name)) continue;
     try {

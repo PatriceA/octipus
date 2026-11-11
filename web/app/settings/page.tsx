@@ -23,6 +23,7 @@ import { NotificationsTab } from '@/components/settings/notifications-tab';
 import { RemoteSpacesTab } from '@/components/settings/remote-spaces-tab';
 import { SecurityTab } from '@/components/settings/security-tab';
 import { VoiceTab } from '@/components/settings/voice-tab';
+import { PluginUsageTab } from '@/components/settings/plugin-usage-tab';
 import { settingsGroups } from '@/components/settings/settings-map';
 import { BudgetsCard } from '@/components/dashboard/budgets-card';
 import { UsageSummary } from '@/components/dashboard/usage-summary';
@@ -47,7 +48,7 @@ export default function SettingsPage() {
     integrations: <IntegrationsTab />, folders: <IntegrationsTab foldersOnly />, 'cli-tools': <CliToolsTab />,
     mailboxes: <MailboxManager />, channels: <ChannelsTab />, security: <SecurityTab />, 'api-tokens': <ApiTokensTab />,
     'my-models': <MyModelsTab />, 'remote-spaces': <RemoteSpacesTab />, voice: <VoiceTab />, notifications: <NotificationsTab />,
-    heartbeat: <HeartbeatTab />, mobile: <MobileTab />, usage: <div className="space-y-5"><UsageSummary /><BudgetsCard /><UsageChart /></div>,
+    heartbeat: <HeartbeatTab />, mobile: <MobileTab />, 'plugin-usage': <PluginUsageTab />, usage: <div className="space-y-5"><UsageSummary /><BudgetsCard /><UsageChart /></div>,
     health: <div className="space-y-5"><GeneralTab section="health" /><FeatureStatus /></div>,
   };
   return <div className="settings-workspace">

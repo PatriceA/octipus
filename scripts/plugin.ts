@@ -22,9 +22,16 @@
  *   octi plugin uninstall <name> [--yes]  Remove a package.
  *   octi plugin bundled          The first-party plugins shipped with Octipus.
  *   octi plugin install-bundled <name> [--upgrade]  Install one (disabled).
+ *   octi plugin marketplace [query] [--category <c>]  What the marketplace and the registries offer.
+ *   octi plugin updates          Installed packages with a newer version from the same source.
+ *   octi plugin install|upgrade <name> [--version v] [--registry r] [--accept all|ids] [--enable] …  Install from the marketplace, with consent per item.
+ *   octi plugin sign-keys <keys.json> --key <root.key>  Sign a marketplace keys file with a root key.
+ *   octi plugin verify-keys <keys.json> --root-pub <file>...  Check a marketplace keys file.
+ *   octi plugin unpack <tarball> --out <dir>      Unpack with the strict tar reader install uses.
  *
  * Delegated from bin/octi. The offline subcommands (validate, keygen, sign,
- * sign-index, hash, pack, permissions, verify, verify-index) live in
+ * sign-index, sign-keys, verify-keys, hash, pack, unpack, permissions, verify,
+ * verify-index) live in
  * ./plugin-offline.ts and need no server; they run the host's own code, so
  * authors, a marketplace's CI and the host run identical checks.
  */
@@ -33,7 +40,7 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { ConvertError, convertLegacyPlugin } from '@/plugins/convert';
 import { PLUGIN_TOOL_EFFECTS, type PluginToolEffect } from '@/shared/plugin-package';
-import { approveCliToolsCommand, approveCommand, approveContributionsCommand, approveInProcessCommand, bundledCommand, installBundledCommand, listCommand, type PluginApiIo, readAllText, readHiddenLine, secretCommandFromArgs, setCommand, uninstallCommand } from './plugin-api';
+import { approveCliToolsCommand, approveCommand, approveContributionsCommand, approveInProcessCommand, bundledCommand, installBundledCommand, installCommand, listCommand, marketplaceCommand, type PluginApiIo, readAllText, readHiddenLine, secretCommandFromArgs, setCommand, uninstallCommand, updatesCommand } from './plugin-api';
 import {
   hashCommand,
   keygenCommand,
@@ -43,9 +50,12 @@ import {
   permissionsCommand,
   signCommand,
   signIndexCommand,
+  signKeysCommand,
+  unpackCommand,
   validateCommand,
   verifyCommand,
   verifyIndexCommand,
+  verifyKeysCommand,
 } from './plugin-offline';
 
 const HELP = `octi plugin — plugin tooling
@@ -153,12 +163,43 @@ Usage:
   octi plugin install-bundled <name> [--upgrade]
                                 Install one, pinned and disabled like any package;
                                 enable it on the admin page, approving its host scopes.
+  octi plugin marketplace [query] [--category <c>]
+                                What the Octipus marketplace and plugins.registries
+                                offer, what each asks for, installed and update state.
+  octi plugin updates           Installed packages with a newer version from the same
+                                source, with what changes in what they ask for.
+  octi plugin install <name> [--version <v>] [--registry <name>]
+                         [--accept all|<id,id,…>] [--enable]
+                         [--allow-source-change] [--allow-signer-change]
+                         [--allow-downgrade] [--allow-incompatible]
+  octi plugin upgrade <name> [the same options]
+                                Install (or upgrade) from the marketplace or a registry
+                                by name, the newest compatible version. Prints what it
+                                declares; each item not unchanged from the installed
+                                version is agreed to, y/n at a terminal or with
+                                --accept (refused otherwise). Lands disabled unless
+                                --enable. --allow-* agree to that change item.
+  octi plugin sign-keys <keys.json> --key <root.key> [--root-pub <file>...]
+                         [--passphrase-file <path|->] [--json]
+                                Sign the marketplace's keys file with a ROOT key
+                                (keys.json.sig), after checking it as a host reads it:
+                                the schema, no root (this one, any --root-pub) among
+                                the signing keys, not expired. Offline.
+  octi plugin verify-keys <keys.json> --root-pub <file>... [--json]
+                                Check <keys.json>.sig by a root (first --root-pub is
+                                root, second rootBackup), the schema, the root
+                                revocation rule and expires. --json prints {"valid",
+                                "keyId","version","endorsed","revoked","error"?}.
+  octi plugin unpack <tarball> --out <dir> [--json]
+                                Unpack with the strict tar reader install uses into a
+                                new or empty <dir>. --json prints {"out","root",
+                                "sha256","name","version"}.
 
-validate, keygen, sign, sign-index, hash, pack, permissions, verify and verify-index
-work offline: they need no running server. With --json they print one JSON
+validate, keygen, sign, sign-index, sign-keys, verify-keys, hash, pack, unpack,
+permissions, verify and verify-index work offline: they need no running server. With --json they print one JSON
 document on stdout and every diagnostic on stderr; every subcommand exits non-zero on error.
 
-list, approve, approve-in-process, approve-contributions, approve-cli-tools, set, secret, uninstall, bundled and install-bundled call the running backend (http://localhost:$API_PORT, 3005 by
+list, approve, approve-in-process, approve-contributions, approve-cli-tools, set, secret, uninstall, bundled, install-bundled, marketplace, updates, install and upgrade call the running backend (http://localhost:$API_PORT, 3005 by
 default) with the admin API token in OCTIPUS_API_TOKEN (Settings → API Tokens).
 `;
 
@@ -371,6 +412,54 @@ async function main(): Promise<void> {
       process.exit(await installBundledCommand(apiIo(), parsed.positionals[0], parsed.values.upgrade === true));
       break;
     }
+    case 'marketplace': {
+      let parsed: { values: { category?: string }; positionals: string[] };
+      try {
+        parsed = parseArgs({ args: rest, allowPositionals: true, options: { category: { type: 'string' } } });
+      } catch (err) {
+        usage(sub, (err as Error).message);
+      }
+      process.exit(await marketplaceCommand(apiIo(), parsed.positionals.join(' ') || undefined, parsed.values.category));
+      break;
+    }
+    case 'updates':
+      process.exit(await updatesCommand(apiIo()));
+      break;
+    case 'install':
+    case 'upgrade': {
+      let parsed: { values: Record<string, string | boolean | undefined>; positionals: string[] };
+      try {
+        parsed = parseArgs({
+          args: rest, allowPositionals: true,
+          options: {
+            version: { type: 'string' }, registry: { type: 'string' }, upgrade: { type: 'boolean' },
+            'allow-source-change': { type: 'boolean' }, 'allow-signer-change': { type: 'boolean' },
+            'allow-downgrade': { type: 'boolean' }, 'allow-incompatible': { type: 'boolean' },
+            accept: { type: 'string' }, enable: { type: 'boolean' },
+          },
+        });
+      } catch (err) {
+        usage(sub, (err as Error).message);
+      }
+      if (parsed.positionals.length !== 1) usage(sub, 'expected <name> [--version <v>] [--registry <name>] [--upgrade]');
+      const v = parsed.values;
+      process.exit(await installCommand(apiIo(), parsed.positionals[0], {
+        version: v.version as string | undefined, registry: v.registry as string | undefined, upgrade: sub === 'upgrade' || v.upgrade === true,
+        accept: v.accept as string | undefined, enable: v.enable === true,
+        allowSourceChange: v['allow-source-change'] === true, allowSignerChange: v['allow-signer-change'] === true,
+        allowDowngrade: v['allow-downgrade'] === true, allowIncompatible: v['allow-incompatible'] === true,
+      }));
+      break;
+    }
+    case 'sign-keys':
+      await exitFlushed(await signKeysCommand(offlineIo(), rest));
+      break;
+    case 'verify-keys':
+      await exitFlushed(await verifyKeysCommand(offlineIo(), rest));
+      break;
+    case 'unpack':
+      await exitFlushed(await unpackCommand(offlineIo(), rest));
+      break;
     case 'secret':
       // Its own parser: a refusal must never echo a value typed on the command line.
       process.exit(await secretCommandFromArgs(apiIo(), rest));

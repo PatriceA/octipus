@@ -9,6 +9,131 @@ labels reflect blast radius, not contract guarantees.
 
 ### Security
 
+- **Plugin sandbox is a boundary of its own, required by default (final
+  security review).** Package plugins were sandboxed only under
+  `security.shellSandbox`, which defaults to off: an unwrapped plugin could
+  read `DATABASE_URL` and `MASTER_KEY` from `/proc/<ppid>/environ`. New
+  setting **`plugins.sandbox: required | off`** (default `required`, env
+  `PLUGINS_SANDBOX`): a package plugin never starts without a working runner
+  (bwrap or firejail on Linux, sandbox-exec on macOS), and starting, enabling
+  and consenting are refused with what to install. `off` applies only to
+  plugins not from the marketplace; a marketplace plugin always needs a
+  runner. **Upgrade note:** on a host without a runner, enabled plugins stop
+  until one is installed (or, for local plugins only, `plugins.sandbox: off`).
+  **Windows** has no runner: marketplace plugins cannot run there. The
+  Docker image installs bubblewrap (`docker-compose.yml` documents the
+  seccomp/AppArmor options bwrap may need); a startup log line and the admin
+  page say *plugin sandbox: active runner X / unavailable*. Declarations, the
+  network status and the marketplace card say "NOT sandboxed on this host" /
+  "Network not enforced on this host" where that is so.
+- **No terminal for sandboxed commands (TIOCSTI).** bwrap runs with
+  `--new-session`, package servers are spawned in their own session and
+  stopped by process group, and the Seatbelt profile allows nothing on
+  `/dev/tty`. firejail adds `--caps.drop=all --nonewprivs`, and `--private`
+  when nothing under `$HOME` is whitelisted.
+- **Pages are egress:** a package with pages sees data up to level 1 whatever
+  its `maxProtection` says (also in `octi plugin permissions` and the index).
+- **A plugin's own text never reaches a model:** the system prompt lists a
+  plugin server by a host-written line, tool descriptions are the manifest's
+  (consented), undeclared tools are dropped, free text is removed from input
+  schemas, and a `tools/list_changed` cannot swap any of it.
+- **Expiry:** `keys.json` must carry `expires`, at most 90 days after
+  `generatedAt`; the marketplace index at most 45 days (recommended 60 and 30).
+- **Plugin routes check API token scopes** (`api:admin` for every change,
+  `api:read` for reads; user routes `api:read`/`api:write`) and refuse a
+  cookie-signed change from another origin (a sibling subdomain included).
+- **Protection-level laundering:** what a package read is kept per package and
+  user across calls; notes and tasks are refused after a read above level 1,
+  documents are written at no lower level; reset on disable, upgrade, uninstall.
+- **Key revocations signed by a root revoked since lapse** (`signerRevoked`)
+  unless a trusted root lists them again.
+- **Permissions summary:** `secrets` and `settings` (names, sorted, after
+  `network`) and a command's `input`; the diff lists every tool effect change
+  (down to read widens, external → write narrows), a new secret widens, and a
+  wildcard host over a short domain gets a guidance warning.
+
+- **Plugin marketplace hardening (independent review).** Marketplace trust
+  stays inside the marketplace: `keys.json` may revoke only keys it endorses
+  or ever endorsed (and roots), and its key revocations and the index's
+  package revocations apply only to packages installed from the marketplace,
+  installs from it and its index; never to `trustedPublishers`, directory,
+  URL or bundled installs or other registries. A marketplace package starts
+  only with a valid signature by a key `keys.json` endorses now, whatever
+  `requireSignature` says (a key simply dropped from `keys.json` stops its
+  packages). A package revocation from a signing key revoked since is
+  flagged `signerRevoked` and not enforced until a trusted key lists it
+  again; listing pins record their signer and a revoked signer's pins are
+  dropped. An entry that replaces a pinned version is refused alone
+  ("replaced: refused"), the rest of the index kept; `DELETE
+  /api/plugin-packages/pins` resets one pin (audited, with a reason). Every
+  instance applies the revocations in force (index read, cron tick), and a
+  loaded in-process plugin is unloaded when its start check refuses it now.
+  One `plugin_revoked` notification per index. A root key's revocation can no
+  longer be cleared. `keys.json` and index v2 take an optional `expires`
+  (refused after it); a banner and a `plugin_marketplace_stale` notification
+  when the last accepted one is older than 7 days. Control, bidi and
+  invisible characters are removed from v1 descriptions and echoed names, and
+  refused in more forms (U+00AD, U+115F, U+180E, U+2060–U+2064, U+3164, tag
+  characters). The asset proxy re-checks that an image is listed before
+  serving it from cache and coalesces concurrent fetches; the marketplace's
+  tarballs stay on its origin through redirects. `plugins.registries` refuses
+  the name `marketplace` and duplicate names. **Migration** 0180 adds
+  `plugin_marketplace_keys.endorsed_key_ids` and `plugin_listing_pins.signed_by`.
+- **`octi plugin`:** `sign-keys` checks the keys file as a host reads it
+  before signing; `keygen` warns loudly about an unencrypted key; new
+  `verify-keys <keys.json> --root-pub <file>... --json` and `unpack
+  <tarball> --out <dir> --json` (the install's strict tar reader).
+
+- **One install consent per item, bound to the content.** A plugin is
+  previewed first (`POST /api/plugin-packages/preview`: downloaded and
+  verified with the install's own checks, staged outside the store, nothing
+  installed) and installed only with every declaration agreed to (`POST
+  /api/plugin-packages/install { previewId, contentHash, accepted, enable? }`):
+  the staged copy must still hash to the content hash shown and declare the
+  same items, and the installed version must be the one compared against. The
+  approvals (content, contributions, host scopes, in-process,
+  `model:cli-tools`) are recorded with the row in one transaction and audited
+  as one `consent` row. Previews are per admin, single-use and expire after
+  15 minutes. An upgrade carries unchanged items it had agreed to and asks
+  for what is new or changed; another source, signer, an older version or a
+  newer Octipus needed are items to agree to, not refusals. Installed
+  packages (an agent's) are agreed to and enabled with `GET`/`POST
+  /api/plugin-packages/:name/consent`. `octi plugin install` and `upgrade`
+  ask per item at a terminal or take `--accept all|<ids>`, and refuse
+  otherwise. The web app uses this everywhere it installs, upgrades or
+  enables; the separate approval endpoints keep working.
+- **Plugin permissions name what contributions and pages are bound to
+  (M3).** `computePermissions` (`octi plugin permissions --json`, index v2
+  `permissions`) now lists commands with their tool, schedules with cron,
+  tool and input, events with their tool, the prompt with the sha256 of its
+  bytes and its roles, the context tool and roles, pages with path, title and
+  entry, and `ui: { dir, sha256 }` of the page tree, so a schedule switched
+  to another tool, a cron change, new prompt text or a replaced page is a
+  change (and widens) in the update diff and the consent. **Breaking for
+  registries:** an index must list the new shape (the host's deep-equality
+  check refuses the old one).
+
+- **The plugin marketplace, host side.** A built-in registry for
+  `https://plugins.octipus.cc/index.json`, anchored by two root public keys
+  that ship as placeholders: until a build carries real ones the marketplace
+  is off (never fetched, never trusted) and Admin says it is not configured.
+  Root keys sign only `keys.json`, which endorses the signing keys (rotation
+  and revocation without a release; the backup root may revoke the root,
+  never the reverse). An install from a registry recomputes the permissions
+  from the downloaded manifest and refuses any difference from the listing,
+  checks the content hash, and records provenance (`origin`). A published
+  version's content hash is pinned; `generatedAt` and the keys file version
+  only move forward. Package and key revocations from the marketplace are
+  stored, sticky, refused at install and at every start, and notified to
+  admins. Listing images are proxied (PNG, JPEG, WebP, GIF by their bytes;
+  no SVG; `nosniff`, `default-src 'none'`). New: `plugins.marketplace`
+  (`true` / `false` / `{ url, rootKeys }`), `GET /api/plugin-packages/marketplace`,
+  `/marketplace/asset`, `/updates`, `/revocations`, `/:name/usage`,
+  `/:name/usage/me`, `DELETE /:name/runs/:id`, `DELETE
+  /api/plugin-host/agent/runs/:id`, a daily update check, and `octi plugin
+  marketplace`, `updates`, `install <name>`, `sign-keys`. Migration 0179.
+  An upgrade from another source needs `allowSourceChange`.
+
 - **OAuth popup callback pages no longer reflect script.** The connector
   callback put `?error=` into an inline `<script>` with `JSON.stringify` under
   a CSP that allowed `'unsafe-inline'`, so `</script><script>…` ran on the
@@ -459,6 +584,16 @@ labels reflect blast radius, not contract guarantees.
   clear presence; `room.subscribe` re-checks access after joining.
 
 ### Added
+
+- **Marketplace, Updates and Installed tabs** in Admin → Plugins (Browse
+  redirects to Marketplace): instant search folding case and accents,
+  categories, sorting, cards with what each asks for, download counts and
+  install/update/incompatible/revoked badges, a detail with the README
+  rendered safely, the updates with their permissions diff and the
+  revocations (cleared with a reason), and per package its origin, revocation
+  banner, 30-day usage and running background runs with Cancel
+  (`GET /api/plugin-packages/:name/runs?status=running`). Users get Settings
+  → My plugin usage (`GET /api/plugin-packages/my-usage`).
 
 - **Offline plugin tooling for publishing: `octi plugin hash`, `pack`,
   `permissions`, `verify`, `verify-index`, and package `validate`.** None

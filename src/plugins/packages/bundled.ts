@@ -75,7 +75,7 @@ export function isBundledName(name: string): boolean {
  * files are the bundle's (same content hash). Anything else holding the name
  * is another package that took it.
  */
-async function installedFromBundle(row: Pick<PluginPackageRow, 'name' | 'version' | 'contentHash'>, dir: string): Promise<boolean> {
+export async function installedFromBundle(row: Pick<PluginPackageRow, 'name' | 'version' | 'contentHash'>, dir: string): Promise<boolean> {
   const [last] = await auditRepository.findPluginInstalls([row.name]);
   if ((last?.details as { source?: unknown } | undefined)?.source === `bundled:${row.name}`) return true;
   if (!row.contentHash) return false;
@@ -126,5 +126,5 @@ export async function installBundled(name: string, actorUserId: string, opts: { 
   if (row && !await installedFromBundle(row, dir)) {
     throw new PluginPackageError('conflict', `The name ${name} is taken by another package, not the bundled one; uninstall it first`);
   }
-  return installFromDirectory(dir, actorUserId, { upgrade: opts.upgrade === true, expect: { name }, source: `bundled:${name}` });
+  return installFromDirectory(dir, actorUserId, { upgrade: opts.upgrade === true, expect: { name }, source: `bundled:${name}`, origin: { source: 'bundled' } });
 }

@@ -94,7 +94,7 @@ describe('plugin_api contract', () => {
     expect(c.sandbox.shellCommandsSandboxed).toBe(false);
     expect((await pluginApiContract({ canInstall: true, network: () => ({ state: 'x', detail: 'x' }), adminPage: 'x', shellSandboxed: true })).sandbox.shellCommandsSandboxed).toBe(true);
     // The default protection level, from the function the server uses.
-    expect(c.defaultMaxProtection.examples).toEqual({ nothing: 4, networkHosts: 1, hostWebRead: 1, hostAgentRun: 1, uiPages: 1 });
+    expect(c.defaultMaxProtection.examples).toEqual({ nothing: 4, networkHosts: 1, hostWebRead: 1, hostAgentRun: 1, uiPages: 1, uiPagesDeclared4: 1 });
     expect(c.defaultMaxProtection.examples.networkHosts).toBe(defaultMaxProtection({ network: ['a.example.com'] }));
     expect(c.templates.map((t) => t.name)).toEqual(['tool-only', 'with-command', 'with-schedule']);
     // Every host scope is described, with its endpoint.

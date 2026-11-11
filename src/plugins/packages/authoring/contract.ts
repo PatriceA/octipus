@@ -17,6 +17,7 @@ import { DEFAULT_REQUEST_TIMEOUT_MS, MCP_PROTOCOL_VERSION } from '@/mcp/protocol
 import { MINIMAL_ENV_NAMES } from '@/security/child-env';
 import { proxyEnv } from '@/security/egress-proxy';
 import { activeSandboxRunner, getSandboxMode } from '@/security/shell-sandbox';
+import { pluginSandboxView } from '../sandbox-policy';
 import { MAX_MODEL_TRUST_REASON_CHARS, MAX_PLUGIN_SECRET_LENGTH, PLUGIN_HOST_ALIAS, PLUGIN_HOST_META_KEY, PLUGIN_HOST_START_SCOPES, PLUGIN_HOST_WRITE_SCOPES, PLUGIN_MANIFEST_FILE, PLUGIN_MODEL_CLI_TOOLS_APPROVAL, PLUGIN_PACKAGE_API_VERSION, type PluginEventType, type PluginHostScope, type PluginManifest, type PluginRuntime, type PluginToolEffect } from '@/shared/plugin-package';
 import { MAX_RESULT_CHARS } from '../contributions/call';
 import { CONTEXT_TIMEOUT_MS, MAX_CONTEXT_CHARS } from '../contributions/context';
@@ -134,7 +135,7 @@ export async function pluginApiContract(opts: {
       `model.trustedInput: leave it out (the default is untrusted). Set it to true only when every prompt the package sends to model:complete is built from its own constants or from sources the admin trusts, never from web pages, mail, files, user text or other outside data. It needs the host scope model:complete and a model.reason (at most ${MAX_MODEL_TRUST_REASON_CHARS} characters, shown to the admin); it is refused with web:read and for runtime "in-process".`,
     ],
     defaultMaxProtection: {
-      rule: 'When maxProtection is left out: 1 if the package has network hosts, the host scope web:read or agent:run, or ui pages (each can carry data out), otherwise 4. Granted web:read, model:complete or agent:run, a package sees level 1 whatever it declares.',
+      rule: 'When maxProtection is left out: 1 if the package has network hosts, the host scope web:read or agent:run (each can carry data out), otherwise 4. A package with ui pages sees level 1 whatever it declares (a page can send what it shows to any website); so does one granted web:read, model:complete or agent:run.',
       // Computed by the function the server uses, so the rule above cannot drift from it unnoticed (a unit test compares them).
       examples: {
         nothing: defaultMaxProtection({}),
@@ -142,6 +143,7 @@ export async function pluginApiContract(opts: {
         hostWebRead: defaultMaxProtection({ host: ['web:read'] as PluginManifest['host'] }),
         hostAgentRun: defaultMaxProtection({ host: ['agent:run'] as PluginManifest['host'] }),
         uiPages: defaultMaxProtection({ ui: { pages: [{ path: 'main', title: 'Main', entry: 'index.html' }] } as PluginManifest['ui'] }),
+        uiPagesDeclared4: defaultMaxProtection({ maxProtection: 4, ui: { pages: [{ path: 'main', title: 'Main', entry: 'index.html' }] } as PluginManifest['ui'] }),
       },
     },
     modelCalls: {
@@ -207,7 +209,9 @@ export async function pluginApiContract(opts: {
     sandbox: {
       files: 'The package directory is read-only and its data directory the only writable one (a private /tmp besides).',
       network: 'Only the declared hosts, through the egress proxy: an exact name, *.example.com for its subdomains (not the apex), on 443 and 80 unless a port is given. Addresses that resolve to private, loopback or link-local ranges are refused.',
-      mode: getSandboxMode(),
+      // plugins.sandbox (the plugin server's sandbox) and the runner that works here; the shell's is apart.
+      plugins: pluginSandboxView(),
+      shellMode: getSandboxMode(),
       // Whether the shell tool's commands run in a sandbox on this host: only then may an agent start its server locally to test it.
       shellCommandsSandboxed: opts.shellSandboxed ?? activeSandboxRunner() !== null,
       thisHostWithHosts: example(['api.example.com']),

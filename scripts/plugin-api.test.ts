@@ -17,7 +17,9 @@ import {
   installBundledCommand,
   backendBase,
   type HiddenInput,
+  installCommand,
   listCommand,
+  marketplaceCommand,
   parseSettingPairs,
   type PluginApiIo,
   readAllText,
@@ -26,6 +28,7 @@ import {
   secretCommandFromArgs,
   setCommand,
   uninstallCommand,
+  updatesCommand,
 } from './plugin-api';
 
 const RECORDED = `sha256:${'a'.repeat(64)}`;
@@ -41,6 +44,7 @@ function view(over: Partial<PluginPackageView> = {}): PluginPackageView {
     runtime: 'package', inProcess: null,
     contributions: { hash: null, approvedHash: null, approved: false, commands: [], schedules: [], events: [], prompt: null, context: null, problems: [] },
     approvedHostScopes: null, modelCliTools: null, authoredBy: null, installedBy: null, installedAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-01T00:00:00Z',
+    origin: null, revocation: null, declarations: [],
     ...over,
   };
 }
@@ -552,5 +556,111 @@ describe('octi plugin bundled / install-bundled', () => {
     const refused = harness({ token: 'tok', respond: () => [404, { error: 'No bundled plugin named "nope"' }] });
     expect(await installBundledCommand(refused.io, 'nope', false)).toBe(1);
     expect(refused.err.join('')).toContain('No bundled plugin named');
+  });
+});
+
+describe('octi plugin marketplace, updates and install', () => {
+  const card = {
+    registry: 'marketplace', name: 'weekly', title: 'Weekly review', summary: 'Looks back on the week', description: '', category: 'productivity', tags: [],
+    author: null, homepage: null, license: 'MIT', publisher: 'Octipus', icon: null, screenshots: [], readme: null, changelog: null, latest: '1.1.0',
+    versions: [], permissions: null, askSummary: ['Reads your tasks', 'No network access'], declarations: [], warnings: [{ code: 'deprecated', message: 'Deprecated: use x' }],
+    compatibility: { ok: true, reason: null }, installedVersion: null, installedOrigin: null, updateAvailable: null, revoked: null, deprecated: null, downloads: 7,
+  };
+
+  test('marketplace: query and category are sent; each plugin says what it asks for and how to install it', async () => {
+    const h = harness({ respond: () => [200, { state: 'ready', message: null, generatedAt: null, plugins: [card], categories: [], errors: [] }] });
+    expect(await marketplaceCommand(h.io, 'café', 'productivity')).toBe(0);
+    expect(h.requests[0].url).toBe('http://localhost:4999/api/plugin-packages/marketplace?q=caf%C3%A9&category=productivity');
+    const text = h.out.join('');
+    expect(text).toContain('weekly 1.1.0  Weekly review');
+    expect(text).toContain('install with: octi plugin install weekly');
+    expect(text).toContain('asks for: Reads your tasks; No network access');
+    expect(text).toContain('7 downloads');
+    expect(text).toContain('note: Deprecated: use x');
+  });
+
+  test('marketplace: a stale marketplace and an entry refused as replaced are printed, without control characters', async () => {
+    const h = harness({ respond: () => [200, { state: 'ready', message: null, generatedAt: null, plugins: [card], categories: [],
+      errors: [{ registry: 'marketplace', error: 'weekly 1.0.0: replaced: refused\u001b[2K' }],
+      stale: [{ file: 'index', generatedAt: '2026-11-01T00:00:00Z', message: 'The last marketplace index accepted here was generated 9 days ago.' }] }] });
+    expect(await marketplaceCommand(h.io, undefined, undefined)).toBe(0);
+    const text = h.out.join('');
+    expect(text).toContain('warning: The last marketplace index accepted here was generated 9 days ago.');
+    expect(text).toContain('registry marketplace: weekly 1.0.0: replaced: refused[2K');
+    expect(text).not.toContain('\u001b');
+  });
+
+  test('marketplace: an unconfigured build says so', async () => {
+    const h = harness({ respond: () => [200, { state: 'unconfigured', message: 'The Octipus marketplace is not configured in this build', generatedAt: null, plugins: [], categories: [], errors: [] }] });
+    expect(await marketplaceCommand(h.io, undefined, undefined)).toBe(0);
+    expect(h.out.join('')).toContain('The Octipus marketplace is not configured in this build');
+  });
+
+  test('updates: lists each with its permissions diff', async () => {
+    const h = harness({ respond: () => [200, [{ name: 'weekly', installed: '1.0.0', latest: '1.1.0', registry: 'marketplace', warnings: [],
+      diff: { widened: true, changes: [{ kind: 'host', change: 'added', text: 'host API scope notes:write', widens: true }] } }]] });
+    expect(await updatesCommand(h.io)).toBe(0);
+    expect(h.out.join('')).toContain('weekly 1.0.0 → 1.1.0');
+    expect(h.out.join('')).toContain('+ added host API scope notes:write');
+  });
+
+  const PREVIEW = {
+    previewId: '33333333-3333-4333-8333-333333333333', name: 'weekly', version: '1.1.0', title: 'Weekly‮ review', contentHash: `sha256:${'c'.repeat(64)}`,
+    signedBy: 'Octipus', origin: { source: 'marketplace', registry: 'Octipus' }, guidance: [{ code: 'g', message: 'Mind\u0007 this' }],
+    diff: { widened: true, changes: [{ kind: 'host', change: 'added', text: 'host API scope notes:write', widens: true }] }, upgradeFrom: '1.0.0', expiresAt: '2026-11-10T10:00:00Z',
+    declarations: [
+      { id: 'runtime', kind: 'runtime', label: 'Runs as a separate, sandboxed program', detail: 'runtime: package', carried: true, status: 'unchanged' },
+      { id: 'host:notes:write', kind: 'host', label: 'Writes notes', detail: 'notes:write', carried: false, status: 'new' },
+      { id: 'schedule:nightly', kind: 'schedule', label: 'Runs on a schedule (nightly)', detail: '15 2 * * * UTC → sync', carried: false, status: 'changed', guidance: 'Runs unattended' },
+    ],
+  };
+  const installed = { name: 'weekly', version: '1.1.0', contentHash: PREVIEW.contentHash, enabled: false, enableProblem: null, warnings: [] };
+  const consentHarness = (interactive: boolean, answer = 'y') => harness({
+    interactive, answer,
+    respond: (method, body) => (method === 'POST' && (body as { previewId?: string }).previewId ? [200, installed] : method === 'POST' ? [200, PREVIEW] : undefined),
+  });
+
+  test('install: previews, prints every declaration (server text cleaned), and installs with --accept all, bound to the content hash', async () => {
+    const h = consentHarness(false);
+    expect(await installCommand(h.io, 'weekly', { accept: 'all' })).toBe(0);
+    expect(h.requests.map((r) => [r.method, r.url.replace('http://localhost:4999/api/plugin-packages', '')])).toEqual([['POST', '/preview'], ['POST', '/install']]);
+    expect(h.requests[0].body).toEqual({ registry: 'marketplace', name: 'weekly' });
+    expect(h.requests[1].body).toEqual({ previewId: PREVIEW.previewId, contentHash: PREVIEW.contentHash, accepted: ['host:notes:write', 'schedule:nightly'] });
+    const text = h.out.join('');
+    expect(text).toContain('[x] runtime  Runs as a separate, sandboxed program  (unchanged, agreed before)');
+    expect(text).toContain('[ ] host:notes:write  Writes notes  (NEW)');
+    expect(text).toContain('[ ] schedule:nightly  Runs on a schedule (nightly)  (CHANGED)');
+    expect(text).toContain('+ added host API scope notes:write');
+    expect(text).toContain('Weekly review');
+    expect(text).toContain('note: Mind this');
+    expect(text).not.toMatch(/[\u0007‮]/);
+    expect(text).toContain('Installed weekly 1.1.0 (disabled)');
+  });
+
+  test('install: --accept naming ids must cover every item; --allow-* agree to a change item', async () => {
+    const short = consentHarness(false);
+    expect(await installCommand(short.io, 'weekly', { accept: 'host:notes:write' })).toBe(2);
+    expect(short.err.join('')).toContain('does not agree to schedule:nightly');
+    expect(short.requests).toHaveLength(1);
+    const named = consentHarness(false);
+    expect(await installCommand(named.io, 'weekly', { accept: 'host:notes:write,schedule:nightly', allowSourceChange: true, enable: true })).toBe(0);
+    expect(named.requests[1].body).toMatchObject({ accepted: ['host:notes:write', 'schedule:nightly', 'change:source'], enable: true });
+  });
+
+  test('install: without a terminal and without --accept it refuses with the list; at a terminal it asks per item', async () => {
+    const batch = consentHarness(false);
+    expect(await installCommand(batch.io, 'weekly', { upgrade: true })).toBe(2);
+    expect(batch.err.join('')).toContain('--accept host:notes:write,schedule:nightly');
+    expect(batch.requests).toHaveLength(1);
+    const yes = consentHarness(true, 'y');
+    expect(await installCommand(yes.io, 'weekly')).toBe(0);
+    expect(yes.asked).toEqual(['Agree: Writes notes (host:notes:write)? [y/N] ', 'Agree: Runs on a schedule (nightly) (schedule:nightly)? [y/N] ']);
+    const no = consentHarness(true, 'n');
+    expect(await installCommand(no.io, 'weekly')).toBe(1);
+    expect(no.requests).toHaveLength(1);
+    expect(no.out.join('')).toContain('Not installed.');
+    const bad = harness();
+    expect(await installCommand(bad.io, '../etc')).toBe(2);
+    expect(bad.requests).toEqual([]);
   });
 });

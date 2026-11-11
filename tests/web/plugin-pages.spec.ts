@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { Page, Route } from '@playwright/test';
 import { test, expect } from './fixtures/auth';
 import { json } from './fixtures/api-stubs';
+import { consentView, HASH, perms, tickAll } from './fixtures/plugin-consent';
 
 /**
  * Plugin package pages (docs/PLUGIN-PACKAGES.md#pages), every /api call
@@ -217,7 +218,18 @@ test.describe('plugin pages', () => {
     await page.route(/\/api\/plugin-packages(\/.*)?$/, async (route) => {
       const req = route.request();
       if (req.method() === 'GET' && req.url().endsWith('/bundled')) return json(route, 200, []);
+      if (req.method() === 'GET' && req.url().endsWith('/host-plugin/consent')) {
+        return json(route, 200, consentView(perms('host-plugin', {
+          host: ['notes:read', 'notes:write'], tools: [{ name: 'whoami', effect: 'read' }],
+          pages: [{ path: 'dashboard', title: 'Host dashboard', entry: 'index.html' }], ui: { dir: 'ui', sha256: 'ab'.repeat(32) },
+        })));
+      }
       if (req.method() === 'GET') return json(route, 200, view());
+      if (req.method() === 'POST' && req.url().endsWith('/host-plugin/consent')) {
+        patches.push(req.postDataJSON());
+        stubs.enabled = true;
+        return json(route, 200, { name: 'host-plugin', version: '1.0.0', contentHash: HASH, enabled: true, enableProblem: null, warnings: [] });
+      }
       if (req.method() === 'PATCH') {
         const body = req.postDataJSON() as { enabled: boolean };
         patches.push(body);
@@ -233,10 +245,13 @@ test.describe('plugin pages', () => {
     await expect(row.locator('[data-scope="notes:write"]')).toHaveAttribute('data-approved', 'false');
     await expect(page.locator('summary', { hasText: /^Plugins$/ })).toHaveCount(0);
 
-    page.once('dialog', (d) => { expect(d.message()).toContain('notes:read, notes:write'); void d.accept(); });
     await row.getByRole('button', { name: 'Enable host-plugin' }).click();
+    const consent = page.getByTestId('plugin-consent');
+    await expect(consent.locator('[data-id="page:dashboard"]')).toContainText('Adds the page "Host dashboard"');
+    await tickAll(consent);
+    await consent.getByRole('button', { name: 'Agree and enable' }).click();
     await expect(page.locator('summary', { hasText: /^Plugins$/ })).toHaveCount(1);
-    expect(patches).toEqual([{ enabled: true, approveHostScopes: ['notes:read', 'notes:write'] }]);
+    expect(patches).toEqual([{ contentHash: HASH, accepted: expect.arrayContaining(['host:notes:read', 'host:notes:write', 'page:dashboard']), enable: true }]);
     await expect(row.locator('[data-scope="notes:write"]')).toHaveAttribute('data-approved', 'true');
     await page.locator('summary', { hasText: /^Plugins$/ }).click();
     await page.getByRole('link', { name: 'Host dashboard' }).click();

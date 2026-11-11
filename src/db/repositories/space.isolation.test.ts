@@ -208,6 +208,7 @@ const ALLOWLIST: Record<string, string> = {
   'src/models/cost-tracker.ts': "a user's own spend",
   'src/api/routes/runs.ts': "a run's cost, after the scoped run lookup",
   'src/api/routes/orgs.ts': 'org spend, admin billing',
+  'src/db/repositories/plugin-usage-repository.ts': "one plugin package's usage: counts and sums of cost_log and its background_jobs runs, for one user or (admins) all; aggregates, never row content",
   // The vault: a user's secrets; workspace-scoped secrets follow transfer.
   'src/security/vault.ts': 'secret store',
   'src/db/repositories/vault-api-connection.ts': 'owner-only API settings for user/workspace vault rows; reads no space rows or credential values',
