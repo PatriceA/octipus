@@ -128,6 +128,8 @@ This is what makes "build your own view" possible.
 
 ### 4. A per-plugin store
 
+**Status: built** (2026-11-11). Per user only, as decided; see [Store](../PLUGIN-PACKAGES.md#store).
+
 Scopes `store:read` and `store:write`:
 - small JSON values per key;
 - scoped **per user only**: no store shared across users;
@@ -197,7 +199,7 @@ Node can't create AppContainers itself, so the helper is native, e.g. Rust or C#
 
 | # | Proposal | Why first |
 |---|---|---|
-| 1 | Store (4) | Small; unblocks page state and real plugin data |
+| 1 | Store (4), **built** | Small; unblocks page state and real plugin data |
 | 2 | Read and write scopes (1), mail and calendar first | The base for "build your own view" |
 | 3 | Host-rendered dashboards (2) | The safe way to show sensitive data |
 | 4 | Credential injection (6) | Plugins build on accounts users already connected |
