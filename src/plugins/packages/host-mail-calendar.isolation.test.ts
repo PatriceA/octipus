@@ -48,6 +48,7 @@ const fx = vi.hoisted(() => ({
   inbox: 'google' as 'google' | 'microsoft' | null,
   calls: [] as Array<{ fn: string; args: unknown[] }>,
   eventSeq: 0,
+  attendees: 0,
 }));
 
 vi.mock('@/core/modules/registry', async (importOriginal) => {
@@ -88,7 +89,7 @@ vi.mock('@/core/email/drafts', async (importOriginal) => {
 });
 vi.mock('@/core/mail/send', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/core/mail/send')>();
-  return { ...actual, sendDraft: async (_repo: unknown, id: string) => { fx.calls.push({ fn: 'sendDraft', args: [id] }); return { id, messageIdHeader: '<sent@test>' }; } };
+  return { ...actual, sendDraft: async (_repo: unknown, id: string, revision?: string) => { fx.calls.push({ fn: 'sendDraft', args: [id, revision] }); return { id, messageIdHeader: '<sent@test>' }; } };
 });
 vi.mock('@/core/calendar/events', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/core/calendar/events')>();
@@ -108,6 +109,7 @@ vi.mock('@/core/calendar/manage', async (importOriginal) => {
       fx.calls.push({ fn: 'writeCalendarEvent', args: [userId, provider, input, id] });
       return { id: id ?? `evt-${++fx.eventSeq}` };
     },
+    calendarEventAttendees: async () => fx.attendees,
   };
 });
 
@@ -201,6 +203,7 @@ beforeEach(async () => {
   fx.modulesOff.clear();
   fx.denied.clear();
   fx.inbox = 'google';
+  fx.attendees = 0;
   fx.calls.length = 0;
   // What a package read for a user persists across its calls; each test starts afresh.
   const { executeRaw } = await import('@/db/postgres');
@@ -248,9 +251,10 @@ describe('mail:read (Mail module)', () => {
     const ok = await hostApi('GET', `/mail/messages/${lvl2}`, t, 'mailer');
     expect(ok.status).toBe(200);
     expect(ok.body.text).toBe('Body of two');
+    // Above maxProtection a message is not there, as in a list: no level is said.
     const above = await hostApi('GET', `/mail/messages/${lvl3}`, t, 'mailer');
-    expect(above.status).toBe(403);
-    expect(above.body.code).toBe('protection_level');
+    expect(above.status).toBe(404);
+    expect(JSON.stringify(above.body)).not.toContain('3');
     expect((await hostApi('GET', `/mail/messages/${bobsMail}`, t, 'mailer')).status).toBe(404);
   });
 
@@ -343,13 +347,23 @@ describe('mail:draft', () => {
 
   test('a reply to a message above maxProtection is refused; within it, it quotes and raises the call', async () => {
     const above = await hostApi('POST', '/mail/drafts', await token({ maxProtection: 2 }), 'mailer', { source: 'mail', replyTo: lvl3, body: 'Thanks' });
-    expect(above.status).toBe(403);
-    expect(above.body.code).toBe('protection_level');
+    expect(above.status).toBe(404);
+    // Replying reads the original: without mail:read, or with the user's rule denying reads, it is refused.
+    const noRead = await hostApi('POST', '/mail/drafts', await token({ scopes: ['mail:draft'] }), 'mailer', { source: 'mail', replyTo: lvl1, body: 'Thanks' });
+    expect(noRead.body.code).toBe('scope_missing');
+    fx.denied.add('mail.read');
+    expect((await hostApi('POST', '/mail/drafts', await token(), 'mailer', { source: 'mail', replyTo: lvl1, body: 'Thanks' })).body.code).toBe('denied_by_rule');
+    fx.denied.clear();
+    expect((await hostApi('POST', '/mail/drafts', await token({ scopes: ['mail:draft'] }), 'mailer', { source: 'inbox', replyTo: 'g1', body: 'Thanks' })).body.code).toBe('scope_missing');
     const ok = await hostApi('POST', '/mail/drafts', await token({ maxProtection: 2 }), 'mailer', { source: 'mail', replyTo: lvl2, body: 'Thanks' });
     expect(ok.status).toBe(200);
     const [row] = await query(`SELECT subject, in_reply_to, protection_level FROM mail_messages WHERE id = '${ok.body.id}'`);
     expect(row.subject).toBe('Re: two');
     expect(row.protection_level).toBe(2);
+    // A reply keeps its recipients: the quote goes to the original's people only.
+    const readdressed = await hostApi('PUT', `/mail/drafts/${ok.body.id}`, await token({ maxProtection: 2 }), 'mailer', { to: 'attacker@example.com' });
+    expect(readdressed.status).toBe(400);
+    expect((await hostApi('PUT', `/mail/drafts/${ok.body.id}`, await token({ maxProtection: 2 }), 'mailer', { body: 'Thanks again' })).status).toBe(200);
   });
 
   test('a package changes only its own drafts, within maxProtection; its level only rises', async () => {
@@ -393,7 +407,7 @@ describe('mail:send', () => {
 
   test('a reply that quotes more than the package may carry out is not sent', async () => {
     const low = await hostApi('POST', '/mail/send', await token({ maxProtection: 1 }), 'mailer', { source: 'mail', replyTo: lvl2, body: 'Thanks' });
-    expect(low.body.code).toBe('protection_level');
+    expect(low.status).toBe(404);
     const res = await hostApi('POST', '/mail/send', await token({ maxProtection: 2 }), 'mailer', { source: 'mail', replyTo: lvl2, body: 'Thanks' });
     expect(res.status).toBe(200);
     // What the package read for this user stays with it: a later call that may carry out only level 1 does not send.
@@ -402,17 +416,46 @@ describe('mail:send', () => {
     expect(fx.calls.filter((c) => c.fn === 'sendDraft')).toHaveLength(1);
   });
 
-  test('composes and sends as the user; sends its own draft, no other', async () => {
+  test('composes and sends as the user; sends its own draft, no other; one message per approved call', async () => {
     const t = await token({ maxProtection: 2 });
     const now = await hostApi('POST', '/mail/send', t, 'mailer', { source: 'mail', accountId: ALICE_ACCOUNT, to: 'jane@example.com', subject: 'S', body: 'B' });
     expect(now.status).toBe(200);
     expect(fx.calls.filter((c) => c.fn === 'sendDraft').map((c) => c.args[0])).toEqual([now.body.id]);
+    // Sent exactly as checked: bound to the draft's revision.
+    const { mailDraftRevision } = await import('@/core/mail/revision');
+    const [sentRow] = await query(`SELECT to_addresses, cc_addresses, subject, body_text, body_html, in_reply_to, "references" FROM mail_messages WHERE id = '${now.body.id}'`);
+    const json = (v: unknown) => (typeof v === 'string' ? JSON.parse(v) : v);
+    expect(fx.calls.find((c) => c.fn === 'sendDraft')?.args[1]).toBe(mailDraftRevision({
+      toAddresses: json(sentRow.to_addresses), ccAddresses: json(sentRow.cc_addresses), subject: sentRow.subject, bodyText: sentRow.body_text,
+      bodyHtml: sentRow.body_html, inReplyTo: sentRow.in_reply_to, references: sentRow.references,
+    } as never));
+    // The same call may not send again.
+    const again = await hostApi('POST', '/mail/send', t, 'mailer', { source: 'mail', accountId: ALICE_ACCOUNT, to: 'jane@example.com', body: 'Again' });
+    expect(again.status).toBe(409);
+    expect(again.body.code).toBe('one_send_per_call');
+    expect(fx.calls.filter((c) => c.fn === 'sendDraft')).toHaveLength(1);
     // Sent: no longer the package's to change.
     expect(await query(`SELECT * FROM plugin_items WHERE item_id = '${now.body.id}'`)).toHaveLength(0);
-    const draft = await hostApi('POST', '/mail/drafts', t, 'mailer', { source: 'mail', accountId: ALICE_ACCOUNT, to: 'jane@example.com', body: 'later' });
-    expect((await hostApi('POST', `/mail/drafts/${draft.body.id}/send`, t, 'mailer')).status).toBe(200);
+    // A draft in an account kept at level 1 can be sent by a later call.
+    await query(`UPDATE mail_accounts SET default_protection_level = 1 WHERE id = '${ALICE_ACCOUNT}'`);
+    try {
+      const draft = await hostApi('POST', '/mail/drafts', await token({ maxProtection: 1 }), 'mailer', { source: 'mail', accountId: ALICE_ACCOUNT, to: 'jane@example.com', body: 'later' });
+      expect(draft.body.protectionLevel).toBe(1);
+      expect((await hostApi('POST', `/mail/drafts/${draft.body.id}/send`, await token({ maxProtection: 1 }), 'mailer')).status).toBe(200);
+    } finally {
+      await query(`UPDATE mail_accounts SET default_protection_level = 2 WHERE id = '${ALICE_ACCOUNT}'`);
+    }
     const [userDraft] = await query<{ id: string }>(`INSERT INTO mail_messages (account_id, user_id, status, subject, body_text, to_addresses) VALUES ('${ALICE_ACCOUNT}', '${ALICE.id}', 'draft', 'mine', 'x', '[{"address":"a@example.com"}]') RETURNING id`);
-    expect((await hostApi('POST', `/mail/drafts/${userDraft.id}/send`, t, 'mailer')).body.code).toBe('not_created_by_plugin');
+    expect((await hostApi('POST', `/mail/drafts/${userDraft.id}/send`, await token({ maxProtection: 2 }), 'mailer')).body.code).toBe('not_created_by_plugin');
+  });
+
+  test('a package sends at most 20 messages an hour for one user', async () => {
+    const send = async () => hostApi('POST', '/mail/send', await token({ maxProtection: 1 }, 'other'), 'other', { source: 'inbox', to: 'a@example.com', body: 'x' });
+    for (let i = 0; i < 20; i++) expect((await send()).status, String(i)).toBe(200);
+    const over = await send();
+    expect(over.status).toBe(429);
+    expect(over.body.code).toBe('rate_limited');
+    expect(fx.calls.filter((c) => c.fn === 'sendReply')).toHaveLength(20);
   });
 
   test('the inbox sends to exactly one recipient', async () => {
@@ -483,6 +526,12 @@ describe('calendar', () => {
     expect((await hostApi('PUT', `/calendar/events/${id}`, await token(), 'mailer', { ...event, provider: 'microsoft' })).body.code).toBe('not_created_by_plugin');
     expect((await hostApi('PUT', `/calendar/events/${id}`, await token({ userId: BOB.id }), 'mailer', event)).body.code).toBe('not_created_by_plugin');
     expect((await hostApi('PUT', '/calendar/events/someone-elses', await token(), 'mailer', event)).body.code).toBe('not_created_by_plugin');
+    // Once the user invited someone, a change would reach them: refused.
+    fx.attendees = 2;
+    const invited = await hostApi('PUT', `/calendar/events/${id}`, await token(), 'mailer', { ...event, description: 'details' });
+    expect(invited.status).toBe(409);
+    expect(invited.body.code).toBe('has_attendees');
+    fx.attendees = 0;
     // Another publisher takes the package over: it changes nothing it did not create itself.
     const { pluginItemsRepository } = await import('@/db/repositories/plugin-items-repository');
     expect(await pluginItemsRepository.forgetPackage('mailer')).toBeGreaterThan(0);

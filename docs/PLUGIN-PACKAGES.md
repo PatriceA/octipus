@@ -1967,7 +1967,7 @@ lists newest first without text (`limit` default 25, at most 100; `next` is
 the cursor of the next page); for `source=inbox` only `limit` and `cursor`.
 A Mail module message above the package's `maxProtection` is left out **in
 the query**, so it neither uses up the limit nor shows that it exists; named
-by id it is `403 protection_level`. `GET mail/messages/:id?source=` → the
+by id it is `404`, as a message that does not exist (its level is not said). `GET mail/messages/:id?source=` → the
 message with its plain text (at most 50,000 characters, `truncated`). What a
 list or read hands over raises the calling session and the package's level
 for this user, as a document does.
@@ -1977,15 +1977,19 @@ replyTo?, replyAll? }` saves a draft as the user and never sends. Source
 `mail`: a new message from `accountId` to `to`/`cc` ("a@x.de, Jane
 <j@y.de>" or a list), or a reply to the received message `replyTo` (its
 recipients, subject and thread, the original quoted; the original must be
-within `maxProtection`). The draft is at least at the level the call has
+within `maxProtection`, and replying reads it, so it needs `mail:read` and
+the user's rule on reading too). The draft is at least at the level the call has
 read and at the account's default (a reply: the original's), and records
 the package and tool (`mail_messages.plugin_source`). Source `inbox`: a
 reply to a message by the provider's id, or a new message to `to`, saved in
-the provider's drafts. `PUT mail/drafts/:id { to?, cc?, subject?, body? }`
-changes a Mail module draft **this package created for this user**
-(`plugin_items`; `403 not_created_by_plugin` for any other), within
-`maxProtection`; its level only rises. A plugin that only drafts keeps its
-full level: the user reviews and sends from Octipus or their mail app.
+the provider's drafts: **such a draft is stored at Google or Microsoft**, in
+the user's connected account, like everything in that inbox. `PUT
+mail/drafts/:id { to?, cc?, subject?, body? }` changes a Mail module draft
+**this package created for this user** (`plugin_items`; `403
+not_created_by_plugin` for any other), within `maxProtection`; its level
+only rises, and a reply keeps its recipients (it quotes the original). A
+plugin that only drafts keeps its full level: the user reviews and sends
+from Octipus or their mail app.
 
 **Sending.** `mail:send` is handed to **`external` tools only** (each call is
 asked about by the user's rules; a schedule or event never runs one), and a
@@ -1997,7 +2001,12 @@ read_level`), so a confidential conversation cannot be mailed out through a
 plugin. `POST mail/send { the fields of a draft }` sends now (source `mail`:
 saved as the package's draft, then sent through the account's server, at
 most 50 recipients; source `inbox`: exactly one recipient, no cc or reply).
-`POST mail/drafts/:id/send` sends a Mail module draft this package created.
+`POST mail/drafts/:id/send` sends a Mail module draft this package created,
+if its level is within `maxProtection` (a draft in a mailbox kept above level
+1 is sent with `mail/send` in one call instead), exactly as it was checked:
+a change meanwhile refuses it. **One approved call sends one message** (`409
+one_send_per_call` for a second), and a package sends at most 20 an hour
+for one user (`429 rate_limited`).
 The outcome is audited (`mail.send`, `mail.draft.send`) with the message's
 id, never its addresses or text.
 
@@ -2012,7 +2021,8 @@ days and 250 events; `403 protection_level` when the calendar's level is
 above `maxProtection`. `POST calendar/events { provider, title, start, end,
 allDay, location?, description? }` creates an event (no attendees: a write
 invites nobody); `PUT calendar/events/:id` changes an event this package
-created. A call holding data above the calendar's level may not write
+created, unless the user has since invited someone to it (`409
+has_attendees`: the change would reach them). A call holding data above the calendar's level may not write
 (`403 read_level`): it would carry that data into a place kept at a lower
 level. There is no delete. Rules: the provider tool's `calendar_read` and
 `calendar_write`.

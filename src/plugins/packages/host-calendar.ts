@@ -14,7 +14,8 @@
  *   session holds) may not write there (403 `read_level`), or it would carry
  *   that data down. A package changes only the events it created
  *   (`plugin_items`); there is no delete. Events take no attendees, so a
- *   write never invites anyone.
+ *   write never invites anyone, and an event the user has since added
+ *   attendees to is not changed (409 `has_attendees`): the change would reach them.
  */
 import type { CalendarEvent, CalendarProvider } from '@/shared/calendar';
 import type { Principal } from '@/security/principal';
@@ -36,6 +37,7 @@ export async function calendarLevel(): Promise<number> {
 export interface CalendarDeps {
   list?: (userId: string, opts: { from: Date; to: Date; limit: number }) => Promise<{ events: CalendarEvent[]; providers: CalendarProvider[]; partial: boolean; truncated?: boolean }>;
   write?: (userId: string, provider: CalendarProvider, input: CalendarEventInput, id?: string) => Promise<{ id: string }>;
+  attendees?: (userId: string, provider: CalendarProvider, id: string) => Promise<number>;
 }
 
 export interface CalendarEventInput {
@@ -120,10 +122,15 @@ export async function updatePluginEvent(grant: HostTokenGrant, principal: Princi
   if (!(await pluginItemsRepository.owns({ plugin: grant.plugin, userId: grant.userId, kind: 'calendar_event', provider, itemId: id }))) {
     return { ok: false, status: 403, code: 'not_created_by_plugin', error: 'This package may change only the events it created' };
   }
-  const { CalendarInputError, calendarWriteBody, writeCalendarEvent } = await import('@/core/calendar/manage');
+  const { CalendarInputError, calendarEventAttendees, calendarWriteBody, writeCalendarEvent } = await import('@/core/calendar/manage');
   const write = deps.write ?? writeCalendarEvent;
   try {
     calendarWriteBody(provider, input);
+    // Someone the user invited since would get the change: the package writes only events it alone sees.
+    const attendees = await (deps.attendees ?? calendarEventAttendees)(grant.userId, provider, id);
+    if (attendees > 0) {
+      return { ok: false, status: 409, code: 'has_attendees', error: 'The event has attendees now; a change would reach them, so the package may not change it' };
+    }
     await write(grant.userId, provider, input, id);
   } catch (err) {
     if (err instanceof CalendarInputError) return { ok: false, status: 400, code: 'invalid', error: err.message };

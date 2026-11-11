@@ -37,6 +37,9 @@ export const INBOX_PROTECTION_LEVEL = UNCLEAR_PROTECTION_LEVEL;
 /** The most characters of a message's text handed back. */
 export const MAIL_TEXT_MAX = 50_000;
 
+/** Messages one package may send for one user in an hour (on top of one per approved call). */
+export const MAIL_SENDS_PER_HOUR = 20;
+
 /** A provider's message or draft id, as it may appear in a URL path segment. */
 const PROVIDER_ID_RE = /^[A-Za-z0-9_=+/-]{1,1024}$/;
 
@@ -77,6 +80,20 @@ function sendRefusal(grant: HostTokenGrant): SourceRefusal | null {
     error: `This call works at protection level ${level} (what the package has read for this user, or what the calling session holds); `
       + `a package that sends mail may carry out data up to level ${grant.maxProtection} only`,
   };
+}
+
+/**
+ * Take this call's one send: an approved external call sends one message, and
+ * a package at most MAIL_SENDS_PER_HOUR an hour for one user. Taken just
+ * before sending, once everything else is checked.
+ */
+async function claimSend(grant: HostTokenGrant): Promise<SourceRefusal | null> {
+  if (grant.mailSent) return { status: 409, code: 'one_send_per_call', error: 'One approved call sends one message' };
+  const { checkRateLimit } = await import('@/core/artifacts/rate-limit');
+  const limited = checkRateLimit(`plugin-mail-send:${grant.plugin}:${grant.userId}`, { capacity: MAIL_SENDS_PER_HOUR, refillPerSecond: MAIL_SENDS_PER_HOUR / 3600 });
+  if (!limited.allowed) return { status: 429, code: 'rate_limited', error: `A package sends at most ${MAIL_SENDS_PER_HOUR} messages an hour for one user` };
+  grant.mailSent = true;
+  return null;
 }
 
 const summaryOf = (m: Omit<MailMessage, 'bodyText' | 'bodyHtml'>) => ({
@@ -173,9 +190,9 @@ export async function readMail(grant: HostTokenGrant, principal: Principal, repo
   const refused = await mailModuleRefusal(grant, 'read');
   if (refused) return fail(refused);
   const m = await repos.mail.message(id);
-  if (!m) return notFound();
-  const level = effectiveProtectionLevel(m.protectionLevel);
-  if (level > grant.maxProtection) return aboveMax(level, grant.maxProtection);
+  const level = effectiveProtectionLevel(m?.protectionLevel);
+  // Above maxProtection a message is not there for the package, as in a list: its level is not said either.
+  if (!m || level > grant.maxProtection) return notFound();
   await noteRead(grant, level);
   return {
     ok: true,
@@ -203,20 +220,37 @@ export interface MailCompose {
   replyAll?: boolean;
 }
 
-type ComposeError = { error: string };
+/** Why a draft could not be composed: invalid input, or a refusal with its own status. */
+type ComposeError = { error: string; refusal?: SourceRefusal };
+
+/** A draft's provenance: the package, its tool, and for a reply the message it answers. */
+const sourceOf = (grant: HostTokenGrant, replyTo?: string) => ({ plugin: grant.plugin, tool: grant.tool, ...(replyTo ? { replyTo } : {}) });
+
+/** Replying reads the original: it needs mail:read and the user's rule on reading. */
+async function replyReadRefusal(grant: HostTokenGrant, principal: Principal, source: MailSource, deps: InboxDeps): Promise<SourceRefusal | null> {
+  if (!grant.scopes.includes('mail:read')) {
+    return { status: 403, code: 'scope_missing', error: 'A reply reads the message it answers: it needs the scope mail:read' };
+  }
+  if (source === 'mail') return mailModuleRefusal(grant, 'read');
+  const reached = await inboxProvider(grant, principal, 'read', deps);
+  return 'provider' in reached ? null : reached;
+}
 
 /** A Mail module draft composed from `req`: the account, what to store, the level it is at (at least the call's). */
-async function composeMailDraft(grant: HostTokenGrant, repos: ContentRepos, req: MailCompose): Promise<
-  { account: MailAccount; data: Parameters<ContentRepos['mail']['createDraft']>[1]; level: number } | ComposeError | null
+async function composeMailDraft(grant: HostTokenGrant, principal: Principal, repos: ContentRepos, req: MailCompose): Promise<
+  { account: MailAccount; data: Parameters<ContentRepos['mail']['createDraft']>[1]; level: number; replyTo?: string } | ComposeError | null
 > {
   const { cleanBody, cleanSubject, MailInputError, parseRecipients, replyDraft, replyProtectionLevel } = await import('@/core/mail/drafts');
   try {
     if (req.replyTo) {
       if (req.accountId || req.to || req.cc || req.subject) return { error: 'A reply takes its account, recipients and subject from replyTo' };
+      const readRefused = await replyReadRefusal(grant, principal, 'mail', {});
+      if (readRefused) return { error: readRefused.error, refusal: readRefused };
       const original = await repos.mail.message(req.replyTo);
       if (!original || original.status !== 'received') return null;
       const originalLevel = effectiveProtectionLevel(original.protectionLevel);
-      if (originalLevel > grant.maxProtection) return { error: `protection_level:${originalLevel}` };
+      // Above maxProtection the original is not there for the package.
+      if (originalLevel > grant.maxProtection) return null;
       const account = await repos.mail.account(original.accountId);
       if (!account) return null;
       // The draft quotes the original, and its answer names the original's people and subject.
@@ -225,6 +259,7 @@ async function composeMailDraft(grant: HostTokenGrant, repos: ContentRepos, req:
         account,
         data: replyDraft(account, original, cleanBody(req.body), req.replyAll === true),
         level: Math.max(grant.readLevel ?? 1, effectiveProtectionLevel(replyProtectionLevel(account, original))),
+        replyTo: original.id,
       };
     }
     if (req.replyAll) return { error: 'replyAll goes with replyTo' };
@@ -246,9 +281,7 @@ async function composeMailDraft(grant: HostTokenGrant, repos: ContentRepos, req:
 /** A composed draft's refusal, as an outcome. */
 function composeRefusal<T>(c: ComposeError | null, what = 'Message'): Outcome<T> {
   if (c === null) return notFound(what);
-  const level = /^protection_level:(\d)$/.exec(c.error)?.[1];
-  if (level) return { ok: false, status: 403, code: 'protection_level', error: `The message replied to is at protection level ${level}, above what this package may see` };
-  return invalid(c.error);
+  return c.refusal ? fail(c.refusal) : invalid(c.error);
 }
 
 /** Inbox recipients: plain addresses (the providers' send takes one, a draft several). */
@@ -275,6 +308,9 @@ export async function createMailDraft(grant: HostTokenGrant, principal: Principa
     if (req.replyTo) {
       if (req.to || req.cc || req.subject || req.accountId || req.replyAll) return invalid('An inbox reply takes its recipient and subject from replyTo');
       if (!PROVIDER_ID_RE.test(req.replyTo)) return notFound();
+      const readRefused = await replyReadRefusal(grant, principal, 'inbox', deps);
+      if (readRefused) return fail(readRefused);
+      if (INBOX_PROTECTION_LEVEL > grant.maxProtection) return aboveMax(INBOX_PROTECTION_LEVEL, grant.maxProtection);
       const saveReply = deps.saveReply ?? (async (u: string, p: InboxProvider, mid: string, b: string) => (await import('@/core/email/drafts')).saveReplyDraft(u, p, mid, b));
       // saveReplyDraft encodes the id into its path itself.
       const saved = await saveReply(grant.userId, reached.provider, req.replyTo, body);
@@ -294,9 +330,9 @@ export async function createMailDraft(grant: HostTokenGrant, principal: Principa
   const refused = await mailModuleRefusal(grant, 'draft');
   if (refused) return fail(refused);
   repos.can('write');
-  const composed = await composeMailDraft(grant, repos, req);
+  const composed = await composeMailDraft(grant, principal, repos, req);
   if (composed === null || 'error' in composed) return composeRefusal(composed);
-  const draft = await repos.mail.createDraft(composed.account, composed.data, composed.level, { plugin: grant.plugin, tool: grant.tool });
+  const draft = await repos.mail.createDraft(composed.account, composed.data, composed.level, sourceOf(grant, composed.replyTo));
   const { pluginItemsRepository } = await import('@/db/repositories/plugin-items-repository');
   await pluginItemsRepository.record({ plugin: grant.plugin, userId: grant.userId, kind: 'mail_draft', provider: 'mail', itemId: draft.id });
   return { ok: true, value: { id: draft.id, source: 'mail', protectionLevel: composed.level } };
@@ -339,6 +375,8 @@ export async function updateMailDraft(grant: HostTokenGrant, repos: ContentRepos
   repos.can('write');
   const own = await ownDraft(grant, repos, id);
   if (!own.ok) return own;
+  // A reply quotes the message it answers: it goes to that message's people, and to nobody else.
+  if ((own.value.pluginSource?.replyTo || own.value.inReplyTo) && (req.to !== undefined || req.cc !== undefined)) return invalid('A reply keeps its recipients');
   const { cleanBody, cleanSubject, MailInputError, parseRecipients } = await import('@/core/mail/drafts');
   let patch: Parameters<ContentRepos['mail']['updateDraft']>[1];
   try {
@@ -360,12 +398,17 @@ export async function updateMailDraft(grant: HostTokenGrant, repos: ContentRepos
   return { ok: true, value: { id: updated.id, protectionLevel: level } };
 }
 
-/** Send a Mail module draft through the account's server; the item is the package's no more. */
+/**
+ * Send a Mail module draft through the account's server, exactly as it was
+ * checked (a change meanwhile, by the user or a space's editor, refuses it);
+ * the item is the package's no more.
+ */
 async function sendOwnDraft(grant: HostTokenGrant, repos: ContentRepos, draft: MailMessage): Promise<Outcome<{ id: string; source: 'mail' }>> {
   const { MailSendError, sendDraft } = await import('@/core/mail/send');
+  const { mailDraftRevision } = await import('@/core/mail/revision');
   const { pluginItemsRepository } = await import('@/db/repositories/plugin-items-repository');
   try {
-    const sent = await sendDraft(repos.mail, draft.id);
+    const sent = await sendDraft(repos.mail, draft.id, mailDraftRevision(draft));
     await pluginItemsRepository.forget({ plugin: grant.plugin, userId: grant.userId, kind: 'mail_draft', provider: 'mail', itemId: draft.id });
     return { ok: true, value: { id: sent.id, source: 'mail' } };
   } catch (err) {
@@ -381,6 +424,8 @@ export async function sendMailDraft(grant: HostTokenGrant, repos: ContentRepos, 
   repos.can('write');
   const own = await ownDraft(grant, repos, id);
   if (!own.ok) return own;
+  const claimed = await claimSend(grant);
+  if (claimed) return fail(claimed);
   return sendOwnDraft(grant, repos, own.value);
 }
 
@@ -400,6 +445,8 @@ export async function sendMail(grant: HostTokenGrant, principal: Principal, repo
     const { cleanBody, cleanSubject } = await import('@/core/mail/drafts');
     const body = cleanBody(req.body);
     if (!body.trim()) return invalid('A message needs a body');
+    const claimed = await claimSend(grant);
+    if (claimed) return fail(claimed);
     const send = deps.send ?? (async (u: string, p: InboxProvider, msg: { to: string; subject: string; body: string }) => (await import('@/core/email/service')).sendReply(u, p, msg));
     await send(grant.userId, reached.provider, { to: to[0], subject: cleanSubject(req.subject), body });
     return { ok: true, value: { id: null, source: 'inbox', provider: reached.provider } };
@@ -407,12 +454,17 @@ export async function sendMail(grant: HostTokenGrant, principal: Principal, repo
   const refused = (await mailModuleRefusal(grant, 'send')) ?? sendRefusal(grant);
   if (refused) return fail(refused);
   repos.can('write');
-  const composed = await composeMailDraft(grant, repos, req);
+  const composed = await composeMailDraft(grant, principal, repos, req);
   if (composed === null || 'error' in composed) return composeRefusal(composed);
   // A reply may have raised the call's level (the original it quotes): checked again.
   const after = sendRefusal(grant);
   if (after) return fail(after);
-  const draft = await repos.mail.createDraft(composed.account, composed.data, composed.level, { plugin: grant.plugin, tool: grant.tool });
+  // What leaves is checked above: the call holds nothing above maxProtection, and
+  // a reply's original is within it. The sent copy is stored at the account's
+  // level, a label of the mailbox, which can be higher than what was sent.
+  const claimed = await claimSend(grant);
+  if (claimed) return fail(claimed);
+  const draft = await repos.mail.createDraft(composed.account, composed.data, composed.level, sourceOf(grant, composed.replyTo));
   const { pluginItemsRepository } = await import('@/db/repositories/plugin-items-repository');
   await pluginItemsRepository.record({ plugin: grant.plugin, userId: grant.userId, kind: 'mail_draft', provider: 'mail', itemId: draft.id });
   return sendOwnDraft(grant, repos, draft);

@@ -187,7 +187,7 @@ export class MailRepo {
    * `protectionLevel`: absent, the account's default; a reply passes the higher of that and the original's.
    * `pluginSource`: the plugin package and tool that composed it (the host API).
    */
-  async createDraft(account: MailAccount, data: MailDraftWrite, protectionLevel?: number | null, pluginSource?: { plugin: string; tool: string }): Promise<MailMessage> {
+  async createDraft(account: MailAccount, data: MailDraftWrite, protectionLevel?: number | null, pluginSource?: { plugin: string; tool: string; replyTo?: string }): Promise<MailMessage> {
     this.scope.can('write');
     if (!(await this.account(account.id))) throw new Error('Mail account not found');
     const now = new Date();

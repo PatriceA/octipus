@@ -81,6 +81,11 @@ export interface HostTokenGrant {
    * (docs/PLUGIN-PACKAGES.md#model-calls-on-cli-lanes). Unset: refused there.
    */
   modelCliTools?: true;
+  /**
+   * This call has sent a message (`mail:send`): one approved call sends one
+   * message (docs/PLUGIN-PACKAGES.md#mail-and-calendar).
+   */
+  mailSent?: true;
 }
 
 /**

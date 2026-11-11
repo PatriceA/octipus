@@ -665,6 +665,13 @@ labels reflect blast radius, not contract guarantees.
   package created; an uninstall or a change of signer or source deletes its
   rows. `writeCalendarEvent` now returns the provider's event id.
 
+  Before release, a security review tightened it: one approved call sends one
+  message, and a package at most 20 an hour per user; a send is bound to the
+  exact draft checked; replying needs `mail:read` and keeps the original's
+  recipients; a Mail module message above `maxProtection` answers `404` (its
+  level unsaid); a package's event is not changed once the user invited
+  someone to it (`409 has_attendees`).
+
 - **A per-user store for plugin packages** (docs/PLUGIN-PACKAGES.md#store).
   A package declares `store: { quotaBytes }` (default 5 MB, at most 20 MB per
   user) with the host scopes `store:read` and/or `store:write`, and keeps

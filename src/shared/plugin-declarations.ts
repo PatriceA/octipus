@@ -71,9 +71,11 @@ export const DOCUMENTS_WRITE_NOTE = 'documents:write creates text documents in t
 export const MAIL_READ_NOTE = 'mail:read lists and reads the user\'s mail: the Mail module\'s mailboxes (each message at its own protection level) '
   + 'and the connected Gmail or Microsoft 365 inbox (counted as level 4: it carries no level). Messages above what the plugin may see stay hidden.';
 export const MAIL_DRAFT_NOTE = 'mail:draft saves drafts as the user, marked with the plugin that wrote them. It never sends: the user reviews '
-  + 'and sends a draft from Octipus or their mail app. A plugin that only drafts keeps its full protection level.';
+  + 'and sends a draft from Octipus or their mail app. A plugin that only drafts keeps its full protection level. '
+  + 'A draft in the connected Gmail or Microsoft 365 inbox is stored at Google or Microsoft, like everything in that inbox.';
 export const MAIL_SEND_NOTE = 'mail:send sends mail as the user to any address, from an external tool only (each call is asked about '
-  + 'by the user\'s permission rules; a schedule or event never sends). What it sends leaves the house, so the plugin is limited to data at protection level 1.';
+  + 'by the user\'s permission rules; a schedule or event never sends): one message per approved call, at most 20 an hour. '
+  + 'What it sends leaves the house, so the plugin is limited to data at protection level 1.';
 export const CALENDAR_NOTE = 'The calendars connected in Settings → Integrations (Google, Microsoft 365), in the personal workspace only. '
   + 'Events carry no protection level of their own: they count as the level an admin sets (plugins.calendarProtectionLevel, default 3). '
   + 'calendar:write adds events and changes only the ones this plugin added.';
