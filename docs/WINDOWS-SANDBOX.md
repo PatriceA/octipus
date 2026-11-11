@@ -34,7 +34,8 @@ architecture; release assets currently target x64.
   under Program Files is not modified. Node is supported; other native runtimes
   must carry their dependencies themselves. `.bat`/`.cmd` shims are refused.
 - A job limits committed memory to 2 GiB and active processes to 32. The child
-  starts suspended, joins the job, then runs. Closing/killing the helper closes
+  starts suspended, joins the job, then runs. AppContainer may deny child
+  process creation; plugins must handle that denial. Closing/killing the helper closes
   the non-inherited job handle and terminates every descendant.
 - For declared network/host scopes, a SID-protected local named pipe carries
   traffic to Octipus's existing per-package proxy. The Node bridge runs inside

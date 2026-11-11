@@ -664,7 +664,7 @@ pub fn launch(config: Launch) -> Result<i32, String> {
                 .unwrap_or_default();
             env.insert(
                 "NODE_OPTIONS".into(),
-                format!("--require {} {existing}", quote(preload)).into(),
+                format!("{} {existing}", super::node_preload_option(preload)).into(),
             );
             env.insert("OCTIPUS_EGRESS_PIPE".into(), pipe.into());
             let url = format!("http://127.0.0.1:{port}");

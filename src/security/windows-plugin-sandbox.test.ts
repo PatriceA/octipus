@@ -1,5 +1,6 @@
+import { execFileSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test } from 'vitest';
@@ -52,4 +53,14 @@ test('proxy adapter handles Node connect overloads and leaves direct sockets to 
   socket.connect({ host: '127.0.0.1', port: 4321 });
   socket.connect({ path: 'another-pipe' });
   expect(calls).toEqual([[{ host: 'example.com', port: 1234 }], [{ host: '127.0.0.1', port: 4321 }], [{ path: 'another-pipe' }]]);
+});
+
+
+test('Node parses a quoted preload path containing spaces from NODE_OPTIONS', () => {
+  const file = join(root(), 'preload with spaces.cjs');
+  writeFileSync(file, "globalThis.preloadLoaded = 'ok';");
+  const output = execFileSync(process.execPath, ['-e', 'console.log(globalThis.preloadLoaded)'], {
+    env: { ...process.env, NODE_OPTIONS: `--require "${file.replaceAll('\\', '/')}"` }, encoding: 'utf8',
+  });
+  expect(output.trim()).toBe('ok');
 });

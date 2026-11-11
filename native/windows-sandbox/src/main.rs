@@ -82,6 +82,12 @@ fn run() -> Result<i32, String> {
 }
 
 /// CommandLineToArgvW / CRT quoting, including empty values and trailing backslashes.
+fn node_preload_option(path: &str) -> String {
+    // NODE_OPTIONS has its own parser: unlike CreateProcess/CRT arguments,
+    // backslashes inside quoted values are escapes. Windows accepts '/'.
+    format!("--require {}", quote(&path.replace('\\', "/")))
+}
+
 fn profile_name(identity: &str) -> String {
     // CreateAppContainerProfile limits names to 64 characters.
     format!("Octipus.Plugin.{}", &identity[..48])
@@ -114,6 +120,13 @@ mod windows;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn node_options_uses_forward_slashes() {
+        assert_eq!(
+            node_preload_option(r"C:\Users\a b\egress.cjs"),
+            "--require \"C:/Users/a b/egress.cjs\""
+        );
+    }
     #[test]
     fn profile_name_fits_windows_limit() {
         assert_eq!(profile_name(&"a".repeat(64)).len(), 63);
