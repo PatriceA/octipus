@@ -10,7 +10,7 @@
  * the same JSON, whatever order its author wrote things in.
  */
 import { join } from 'node:path';
-import { type PluginManifest, type PluginPermissionsSummary, type PluginToolEffect, pluginRuntime } from '@/shared/plugin-package';
+import { type PluginManifest, type PluginPermissionsSummary, type PluginToolEffect, pluginRuntime, pluginStoreQuota } from '@/shared/plugin-package';
 import { fileSha256, uiTreeHash } from './integrity';
 import { uiDirOf } from './manifest-ui-host';
 
@@ -77,6 +77,7 @@ export function computePermissions(manifest: PluginManifest, files: PermissionFi
     network: sorted(manifest.network),
     secrets: sorted((manifest.secrets ?? []).map((s) => s.key)),
     settings: sorted((manifest.settings ?? []).map((f) => f.key)),
+    store: manifest.store ? { quotaBytes: pluginStoreQuota(manifest) as number } : null,
     tools,
     effects,
     contributions: {

@@ -13,7 +13,7 @@
  * package always gives the same ids in the same order:
  *
  *   runtime, in-process, network:*, host:*, tool:*, command:*, schedule:*,
- *   event:*, prompt, context, page:*, ui, secrets, settings, model:cli-tools, protection
+ *   event:*, prompt, context, page:*, ui, secrets, settings, store, model:cli-tools, protection
  *
  * plus, in an install preview of an upgrade, `change:*` items (another
  * source, another signer, an older version, a newer Octipus needed) that
@@ -29,11 +29,11 @@ import {
   type PluginPermissionDiff,
   type PluginPermissionsSummary,
 } from './plugin-package';
-import { HOST_SCOPE_WORDS } from './plugin-permissions';
+import { HOST_SCOPE_WORDS, storeWords } from './plugin-permissions';
 
 export type PluginDeclarationKind =
   | 'runtime' | 'in-process' | 'network' | 'host' | 'tool' | 'command' | 'schedule' | 'event' | 'prompt' | 'context'
-  | 'page' | 'secret' | 'setting' | 'model-cli-tools' | 'protection' | 'change';
+  | 'page' | 'secret' | 'setting' | 'store' | 'model-cli-tools' | 'protection' | 'change';
 
 export interface PluginDeclarationItem {
   /** Stable for the same package: `host:notes:read`, `tool:save_note`, … */
@@ -63,6 +63,8 @@ export const AGENT_RUN_NOTE = 'agent:run starts background agent runs as the use
   + 'The package gets only the run\'s id and its final text.';
 export const DOCUMENTS_WRITE_NOTE = 'documents:write creates text documents in the user\'s Documents and updates the ones this package created, '
   + 'as that user, marked with the package and tool that made them.';
+export const STORE_NOTE = 'Octipus keeps this data for each user apart: the plugin only ever reaches the data of the user it acts for, never another user\'s. '
+  + 'Each user can delete theirs in Settings → My plugin usage; uninstalling the plugin deletes everyone\'s.';
 export const IN_PROCESS_NOTE = 'Runs in the server process: no sandbox, so it has the server\'s network, files and data.';
 
 /** A page's egress: it can navigate its frame anywhere, with what it shows in the URL. */
@@ -76,7 +78,8 @@ export const PAGE_EGRESS_NOTE = 'A page can send what it shows to any website: i
  */
 export function egressReadWarning(scopes: readonly string[], opts: { pages?: boolean } = {}): string | null {
   const out = [...scopes.filter((s) => EGRESS_SCOPES.includes(s)), ...(opts.pages ? ['its pages'] : [])];
-  const reads = scopes.filter((s) => s.endsWith(':read') && s !== 'web:read');
+  // store:read reads back what the package itself stored, not the user's data.
+  const reads = scopes.filter((s) => s.endsWith(':read') && s !== 'web:read' && s !== 'store:read');
   if (out.length === 0 || reads.length === 0) return null;
   return `With ${out.join(' and ')} and ${reads.join(', ')} together, this package can send what it reads anywhere. `
     + 'It is limited to data at protection level 1.';
@@ -164,7 +167,7 @@ export function declarationItems(
     const guidance = [
       scope === 'agent:run' ? AGENT_RUN_NOTE : null,
       scope === 'documents:write' ? DOCUMENTS_WRITE_NOTE : null,
-      egress && (EGRESS_SCOPES.includes(scope) || (scope.endsWith(':read') && scope !== 'web:read')) ? egress : null,
+      egress && (EGRESS_SCOPES.includes(scope) || (scope.endsWith(':read') && scope !== 'web:read' && scope !== 'store:read')) ? egress : null,
     ].filter((g): g is string => g !== null).join(' ');
     items.push({ id: `host:${scope}`, kind: 'host', label: HOST_SCOPE_WORDS[scope] ?? `Host API scope ${scope}`, detail: scope, ...(guidance ? { guidance } : {}) });
   }
@@ -224,6 +227,13 @@ export function declarationItems(
   }
   if (p.settings.length > 0) {
     items.push({ id: 'settings', kind: 'setting', label: `Asks you for these settings: ${p.settings.join(', ')}`, detail: p.settings.join(', ') });
+  }
+  if (p.store) {
+    items.push({
+      id: 'store', kind: 'store', label: storeWords(p.store.quotaBytes),
+      detail: `store: up to ${p.store.quotaBytes} bytes per user (${p.host.filter((s) => s.startsWith('store:')).join(', ') || 'no store scope'})`,
+      guidance: STORE_NOTE,
+    });
   }
   if (p.trustedInput) {
     items.push({

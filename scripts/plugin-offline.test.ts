@@ -301,6 +301,7 @@ describe('permissions', () => {
         "runtime": "package",
         "secrets": [],
         "settings": [],
+        "store": null,
         "tools": [
           {
             "effect": "write",
@@ -364,6 +365,7 @@ describe('permissions', () => {
         "runtime": "package",
         "secrets": [],
         "settings": [],
+        "store": null,
         "tools": [
           {
             "effect": "read",
@@ -393,7 +395,7 @@ describe('permissions', () => {
     const fake = io();
     await permissionsCommand(fake, [dir, '--json']);
     const printed = jsonOut(fake);
-    expect(Object.keys(printed)).toEqual(['name', 'version', 'apiVersion', 'runtime', 'host', 'network', 'secrets', 'settings', 'tools', 'effects', 'contributions', 'pages', 'ui', 'trustedInput', 'maxProtection']);
+    expect(Object.keys(printed)).toEqual(['name', 'version', 'apiVersion', 'runtime', 'host', 'network', 'secrets', 'settings', 'store', 'tools', 'effects', 'contributions', 'pages', 'ui', 'trustedInput', 'maxProtection']);
     expect(Object.keys(printed.contributions as object)).toEqual(['commands', 'schedules', 'events', 'prompt', 'context']);
     expect(printed).toEqual(await packagePermissions(parseManifest(JSON.parse(readFileSync(join(dir, 'octipus-plugin.json'), 'utf8'))), dir));
     // The page tree hash is over the ui directory's files, so another byte there changes it.

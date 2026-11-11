@@ -585,6 +585,29 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **A per-user store for plugin packages** (docs/PLUGIN-PACKAGES.md#store).
+  A package declares `store: { quotaBytes }` (default 5 MB, at most 20 MB per
+  user) with the host scopes `store:read` and/or `store:write`, and keeps
+  small JSON values per key through `/api/plugin-host/store` (get, list, put
+  with compare-and-set, delete) or, from its pages, over the bridge
+  (`{ octipus: 'store', op: 'store.get' | 'store.set' | 'store.delete' |
+  'store.list' }`, `/api/plugins/:name/store/…`). The host keeps the entries
+  apart for each user, on the user of the call's token or the signed-in
+  page: there is no shared store and no way to name another user. The quota
+  is checked atomically with each write; a read tool gets `store:read` only;
+  an entry records the call's read level and reading it raises the call to
+  it, so a notes or tasks write after it is refused. Writes are audited in
+  aggregate. The consent shows *"Keeps up to 5 MB of its own data per
+  user"*; the permissions summary carries `store: { quotaBytes } | null`
+  after `settings` (index v2 too; a new store or a larger quota widens).
+  Settings → My plugin usage shows each plugin's size for you with **Delete
+  my data**; admins see the total and per-user size; uninstalling deletes
+  every user's data, deleting a user deletes theirs. New migration
+  `0181_plugin_store`, a `with-store` template, and the contract and the
+  authoring skill tell agents to keep per-user data there.
+  **`OCTIPUS_PLUGIN_DATA_DIR` is shared by all users of an install**: it must
+  never hold user data.
+
 - **Marketplace, Updates and Installed tabs** in Admin → Plugins (Browse
   redirects to Marketplace): instant search folding case and accents,
   categories, sorting, cards with what each asks for, download counts and

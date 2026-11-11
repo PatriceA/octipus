@@ -32,6 +32,8 @@ import { contentRepos } from '@/db/repositories/content';
 import { users } from '@/db/schema/users';
 import { type HostTokenGrant, noteHostRead, verifyHostToken } from '@/plugins/packages/host-api';
 import { readLevelOf } from '@/plugins/packages/read-level';
+import { STORE_AUDIT_WINDOW_MS, storeAuditAggregator } from '@/plugins/packages/store-audit';
+import { storeDelete, storeGet, storeKeyFromPath, storeList, storePut, type StoreOutcome } from '@/plugins/packages/store';
 import { clientIp } from '@/security/client-ip';
 import { egressStampValid, HOST_API_EGRESS_HEADER, HOST_API_EGRESS_KEY_HEADER } from '@/security/egress-proxy';
 import type { Principal } from '@/security/principal';
@@ -163,10 +165,29 @@ function launderingRefusal(ctx: HostCtx, grant: HostTokenGrant, what: string): {
   };
 }
 
-/** Run an endpoint body: audit the outcome, map a space refusal to its status. */
+/**
+ * Store requests audited in aggregate (src/plugins/packages/store-audit.ts):
+ * one row per package, user, op, status and code per minute, carrying the
+ * requests counted since the previous row. Refusals before the token is
+ * accepted, and failures, keep their own rows.
+ */
+const storeAudit = storeAuditAggregator();
+
+async function auditStoreAggregate(grant: HostTokenGrant, op: string, status: number, details: Record<string, unknown>): Promise<void> {
+  const kind = [grant.plugin, grant.userId, op, status, String(details.code ?? '')].join('\n');
+  await storeAudit.count(kind, (count) => audit(grant, grant.plugin, op, status, { ...details, count, windowMs: STORE_AUDIT_WINDOW_MS, aggregated: true }));
+}
+
+/** Test-only. */
+export function _resetStoreAudit(): void {
+  storeAudit.reset();
+}
+
+/** Run an endpoint body: audit the outcome (in aggregate with `aggregate`), map a space refusal to its status. */
 async function run<T>(
   ctx: HostCtx, op: string, scope: PluginHostScope | null,
   body: (a: Authorized, details: Record<string, unknown>) => Promise<T>,
+  opts: { aggregate?: boolean } = {},
 ): Promise<T | { error: string; code?: string }> {
   const a = await authorize(ctx, op, scope);
   if ('error' in a) return a;
@@ -175,7 +196,8 @@ async function run<T>(
   try {
     const out = await body(a, details);
     const status = typeof ctx.set.status === 'number' ? ctx.set.status : 200;
-    await audit(a.grant, a.grant.plugin, op, status, { ...(scope ? { scope } : {}), ...details });
+    if (opts.aggregate) await auditStoreAggregate(a.grant, op, status, { ...(scope ? { scope } : {}), ...details });
+    else await audit(a.grant, a.grant.plugin, op, status, { ...(scope ? { scope } : {}), ...details });
     return out;
   } catch (err) {
     if (err instanceof SpaceError) {
@@ -205,6 +227,33 @@ export function webReadAuditOf(url: string): { host: string; urlSha256: string }
 const WEB_READ_MAX_CHARS = 100_000;
 /** `web:read`: cleaned HTML longer than this is left out (`contentHtml: ''`, `truncated`). */
 const WEB_READ_MAX_HTML = 400_000;
+
+/** Where a store key starts in a host API path. */
+const STORE_MARKER = '/plugin-host/store/';
+
+/** A store refusal: its status (and a version conflict's current version), its code in the audit details. */
+function storeRefusal(ctx: HostCtx, outcome: Extract<StoreOutcome<unknown>, { ok: false }>, details: Record<string, unknown>): { error: string; code: string; current?: number } {
+  ctx.set.status = outcome.status;
+  details.code = outcome.code;
+  return { error: outcome.error, code: outcome.code, ...(outcome.current !== undefined ? { current: outcome.current } : {}) };
+}
+
+/** Store writes and deletes: at most 30 in a burst per package and user, 5 a second after that (on top of the host API's own limit). */
+function storeWriteLimited(ctx: HostCtx, grant: HostTokenGrant, details: Record<string, unknown>): { error: string; code: string } | null {
+  const limited = checkRateLimit(`plugin-host-store:${grant.plugin}:${grant.userId}`, { capacity: 30, refillPerSecond: 5 });
+  if (limited.allowed) return null;
+  ctx.set.status = 429;
+  ctx.set.headers['retry-after'] = String(limited.retryAfterSeconds ?? 1);
+  details.code = 'rate_limited';
+  return { error: 'Too many store writes', code: 'rate_limited' };
+}
+
+/** What a store read handed over raises the call (and the calling session, and the package's level for this user) to. */
+async function noteStoreRead(grant: HostTokenGrant, level: number): Promise<void> {
+  if (level <= 1) return;
+  if (grant.sessionId) raiseSessionLevel(grant.sessionId, level);
+  await noteHostRead(grant, level);
+}
 
 const noteView = (n: { id: string; slug: string; title: string; body: string; tags?: unknown; noteKind?: unknown; updatedAt: Date }) => ({
   id: n.id, slug: n.slug, title: n.title, body: n.body, tags: n.tags ?? [], kind: n.noteKind ?? 'note', updatedAt: n.updatedAt,
@@ -529,6 +578,55 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
     detail: { tags: ['plugin-host'] },
   })
 
+  // ── The store (docs/PLUGIN-PACKAGES.md#store): the package's own data for
+  // the token's user, and for nobody else. Nothing here names a user: the
+  // token's is the only one. Audited in aggregate.
+
+  // The token's user's keys, sorted, with size and version (no values).
+  .get('/store', (ctx) => run(ctx, 'store.list', 'store:read', async ({ grant }, details) => {
+    const limit = ctx.query.limit === undefined ? undefined : Number.parseInt(String(ctx.query.limit), 10);
+    const outcome = await storeList(grant.plugin, grant.userId, { prefix: ctx.query.prefix, limit }, grant.maxProtection);
+    if (!outcome.ok) return storeRefusal(ctx, outcome, details);
+    // A key can carry data: what a list hands over raises the call like a value.
+    await noteStoreRead(grant, outcome.value.protectionLevel);
+    const { protectionLevel: _level, ...rest } = outcome.value;
+    return rest;
+  }, { aggregate: true }), {
+    query: t.Object({ prefix: t.Optional(t.String({ maxLength: 200 })), limit: t.Optional(t.String({ maxLength: 5 })) }),
+    detail: { tags: ['plugin-host'] },
+  })
+
+  // One entry of the token's user: its value and version. Reading it raises
+  // the call's level to the level it was written at.
+  .get('/store/*', (ctx) => run(ctx, 'store.get', 'store:read', async ({ grant }, details) => {
+    const outcome = await storeGet(grant.plugin, grant.userId, storeKeyFromPath(ctx.request.url, STORE_MARKER), grant.maxProtection);
+    if (!outcome.ok) return storeRefusal(ctx, outcome, details);
+    await noteStoreRead(grant, outcome.value.protectionLevel);
+    return { value: outcome.value.value, version: outcome.value.version };
+  }, { aggregate: true }), { detail: { tags: ['plugin-host'] } })
+
+  // Write one entry of the token's user, at the call's read level, within the
+  // package's quota per user; compare-and-set with ifVersion (0: only if new).
+  .put('/store/*', (ctx) => run(ctx, 'store.put', 'store:write', async ({ grant }, details) => {
+    const limited = storeWriteLimited(ctx, grant, details);
+    if (limited) return limited;
+    const outcome = await storePut(grant.plugin, grant.userId, storeKeyFromPath(ctx.request.url, STORE_MARKER), ctx.body as { value?: unknown; ifVersion?: number }, grant.readLevel ?? 1);
+    if (!outcome.ok) return storeRefusal(ctx, outcome, details);
+    return { version: outcome.value.version };
+  }, { aggregate: true }), {
+    body: t.Object({ value: t.Optional(t.Any()), ifVersion: t.Optional(t.Integer({ minimum: 0 })) }),
+    detail: { tags: ['plugin-host'] },
+  })
+
+  // Delete one entry of the token's user.
+  .delete('/store/*', (ctx) => run(ctx, 'store.delete', 'store:write', async ({ grant }, details) => {
+    const limited = storeWriteLimited(ctx, grant, details);
+    if (limited) return limited;
+    const outcome = await storeDelete(grant.plugin, grant.userId, storeKeyFromPath(ctx.request.url, STORE_MARKER));
+    if (!outcome.ok) return storeRefusal(ctx, outcome, details);
+    return outcome.value;
+  }, { aggregate: true }), { detail: { tags: ['plugin-host'] } })
+
   // A notification to the user who triggered the call (and to nobody else).
   .post('/notify', (ctx) => run(ctx, 'notify', 'notify', async ({ grant, principal }) => {
     const { getNotificationService } = await import('@/core/notification-service');
@@ -559,4 +657,8 @@ export const PLUGIN_HOST_ENDPOINTS: ReadonlyArray<{ method: string; path: string
   { method: 'POST', path: '/api/plugin-host/agent/runs', scope: 'agent:run' },
   { method: 'GET', path: '/api/plugin-host/agent/runs/:id', scope: 'agent:run' },
   { method: 'DELETE', path: '/api/plugin-host/agent/runs/:id', scope: 'agent:run' },
+  { method: 'GET', path: '/api/plugin-host/store', scope: 'store:read' },
+  { method: 'GET', path: '/api/plugin-host/store/:key', scope: 'store:read' },
+  { method: 'PUT', path: '/api/plugin-host/store/:key', scope: 'store:write' },
+  { method: 'DELETE', path: '/api/plugin-host/store/:key', scope: 'store:write' },
 ];

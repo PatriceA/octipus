@@ -14,7 +14,7 @@ import { installBundled, listBundled } from '@/plugins/packages/bundled';
 import { installFromUrl, listRegistry } from '@/plugins/packages/remote';
 import { isAdmin, requireScope } from '@/security/principal';
 import { API_SCOPES } from '@/security/scopes';
-import { MAX_PLUGIN_SECRET_LENGTH, type PluginUsageView } from '@/shared/plugin-package';
+import { MAX_PLUGIN_SECRET_LENGTH, type PluginStoreUsage, type PluginUsageView } from '@/shared/plugin-package';
 import { apiLogger } from '@/utils/logger';
 
 const NAME_PARAM = t.Object({ name: t.String({ maxLength: 50, pattern: '^[a-z][a-z0-9-]{1,49}$' }) });
@@ -27,7 +27,15 @@ async function usageOf(name: string, daysParam: string | undefined, userId: stri
   const { pluginUsageRepository } = await import('@/db/repositories/plugin-usage-repository');
   const totals = await pluginUsageRepository.usage(name, since, userId ?? undefined);
   const { byUser, ...rest } = totals;
-  return { name, days, since: since.toISOString(), scope: userId === null ? 'all' : 'me', ...rest, ...(userId === null ? { byUser } : {}) };
+  return { name, days, since: since.toISOString(), scope: userId === null ? 'all' : 'me', ...rest, ...(userId === null ? { byUser } : {}), store: await storeUsageOf(name, userId) };
+}
+
+/** What a plugin keeps in the store now (docs/PLUGIN-PACKAGES.md#store): every user's, by user (admins), or one user's own. Sizes only. */
+async function storeUsageOf(name: string, userId: string | null): Promise<PluginStoreUsage> {
+  const { pluginStoreRepository } = await import('@/db/repositories/plugin-store-repository');
+  const { storeQuotaOf } = await import('@/plugins/packages/store');
+  const totals = await pluginStoreRepository.usage(name, userId ?? undefined);
+  return { bytes: totals.bytes, entries: totals.entries, quotaBytes: await storeQuotaOf(name), ...(userId === null ? { byUser: totals.byUser } : {}) };
 }
 
 const STATUS: Record<PluginPackageError['code'], number> = { not_found: 404, exists: 409, invalid: 400, incomplete: 409, conflict: 409 };
@@ -386,7 +394,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
     },
   )
 
-  // The signed-in user's own use of each plugin (any user): the usage of every enabled package, and their running runs.
+  // The signed-in user's own use of each plugin (any user): the usage of every enabled package, and their running runs,
+  // and what any installed package keeps for them in its store (enabled or not: they can delete it either way).
   .get(
     '/my-usage',
     async ({ request, principal, set, query }) => {
@@ -394,19 +403,44 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
       if (denied) return denied;
       const { getDb } = await import('@/db/postgres');
       const { pluginPackages } = await import('@/db/schema/plugin-packages');
-      const { eq } = await import('drizzle-orm');
+      const { pluginStoreRepository } = await import('@/db/repositories/plugin-store-repository');
+      const { pluginStoreQuota } = await import('@/shared/plugin-package');
       const { listRunningRuns } = await import('@/plugins/packages/host-agent');
-      const rows = await getDb().select({ name: pluginPackages.name, manifest: pluginPackages.manifest }).from(pluginPackages).where(eq(pluginPackages.enabled, true));
+      const rows = await getDb().select({ name: pluginPackages.name, manifest: pluginPackages.manifest, enabled: pluginPackages.enabled }).from(pluginPackages);
+      const stored = await pluginStoreRepository.usageOfUser(principal.userId);
       const out = [];
       for (const row of rows.sort((a, b) => a.name.localeCompare(b.name))) {
+        const mine = stored.get(row.name);
+        if (!row.enabled && !mine) continue;
         const usage = await usageOf(row.name, query.days, principal.userId);
-        const runs = await listRunningRuns(row.name, principal.userId);
-        if (usage.modelCalls === 0 && usage.runs === 0 && runs.length === 0) continue;
-        out.push({ name: row.name, title: row.manifest.title, usage, runs });
+        const runs = row.enabled ? await listRunningRuns(row.name, principal.userId) : [];
+        if (usage.modelCalls === 0 && usage.runs === 0 && runs.length === 0 && !mine) continue;
+        const store: PluginStoreUsage | null = row.manifest.store || mine
+          ? { bytes: mine?.bytes ?? 0, entries: mine?.entries ?? 0, quotaBytes: pluginStoreQuota(row.manifest) }
+          : null;
+        out.push({ name: row.name, title: row.manifest.title, usage, runs, store });
       }
       return out;
     },
     { query: USAGE_QUERY, detail: { tags: ['plugin-packages'] } },
+  )
+
+  // "Delete my data": every entry the plugin keeps for the signed-in user in its store (any user, their own only; audited).
+  .delete(
+    '/:name/store/me',
+    async ({ request, principal, set, params }) => {
+      const denied = pluginUserDenied({ set, principal, request }, 'write');
+      if (denied) return denied;
+      const { pluginStoreRepository } = await import('@/db/repositories/plugin-store-repository');
+      const deleted = await pluginStoreRepository.deleteUser(params.name, principal.userId);
+      const { auditRepository } = await import('@/db/repositories/audit-repository');
+      await auditRepository.log({
+        userId: principal.userId, action: 'settings_changed', resourceType: 'plugin_package', resourceId: params.name,
+        details: { op: 'store_deleted_by_user', entries: deleted.entries, bytes: deleted.bytes },
+      });
+      return { name: params.name, ...deleted };
+    },
+    { params: NAME_PARAM, detail: { tags: ['plugin-packages'] } },
   )
 
   // One plugin's tokens, spend, model calls and runs: every user's (admins).

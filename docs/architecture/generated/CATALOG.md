@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-665 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
+674 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -416,6 +416,10 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/plugin-host/notes` | `src/api/routes/plugin-host.ts` |
 | POST | `/api/plugin-host/notes` | `src/api/routes/plugin-host.ts` |
 | POST | `/api/plugin-host/notify` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/store` | `src/api/routes/plugin-host.ts` |
+| DELETE | `/api/plugin-host/store/*` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/store/*` | `src/api/routes/plugin-host.ts` |
+| PUT | `/api/plugin-host/store/*` | `src/api/routes/plugin-host.ts` |
 | GET | `/api/plugin-host/tasks` | `src/api/routes/plugin-host.ts` |
 | POST | `/api/plugin-host/tasks` | `src/api/routes/plugin-host.ts` |
 | POST | `/api/plugin-host/web/read` | `src/api/routes/plugin-host.ts` |
@@ -429,6 +433,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/plugin-packages/:name/runs` | `src/api/routes/plugin-packages.ts` |
 | DELETE | `/api/plugin-packages/:name/runs/:id` | `src/api/routes/plugin-packages.ts` |
 | PUT | `/api/plugin-packages/:name/secrets/:key` | `src/api/routes/plugin-packages.ts` |
+| DELETE | `/api/plugin-packages/:name/store/me` | `src/api/routes/plugin-packages.ts` |
 | GET | `/api/plugin-packages/:name/usage` | `src/api/routes/plugin-packages.ts` |
 | GET | `/api/plugin-packages/:name/usage/me` | `src/api/routes/plugin-packages.ts` |
 | GET | `/api/plugin-packages/bundled` | `src/api/routes/plugin-packages.ts` |
@@ -449,6 +454,10 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/plugins/:name` | `src/api/routes/plugins.ts` |
 | POST | `/api/plugins/:name/call/:tool` | `src/api/routes/plugin-ui.ts` |
 | POST | `/api/plugins/:name/reload` | `src/api/routes/plugins.ts` |
+| GET | `/api/plugins/:name/store` | `src/api/routes/plugin-ui.ts` |
+| DELETE | `/api/plugins/:name/store/*` | `src/api/routes/plugin-ui.ts` |
+| GET | `/api/plugins/:name/store/*` | `src/api/routes/plugin-ui.ts` |
+| PUT | `/api/plugins/:name/store/*` | `src/api/routes/plugin-ui.ts` |
 | PUT | `/api/protection/:entity/:id` | `src/api/routes/protection.ts` |
 | GET | `/api/record-types` | `src/api/routes/records.ts` |
 | POST | `/api/record-types` | `src/api/routes/records.ts` |
@@ -702,15 +711,15 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 29 |
 | `api` | `core` | 192 |
-| `api` | `db` | 135 |
+| `api` | `db` | 139 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 5 |
 | `api` | `models` | 39 |
-| `api` | `plugins` | 30 |
+| `api` | `plugins` | 37 |
 | `api` | `security` | 175 |
 | `api` | `services` | 5 |
-| `api` | `shared` | 24 |
+| `api` | `shared` | 25 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 6 |
 | `api` | `utils` | 77 |
@@ -797,12 +806,12 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `models` | `utils` | 43 |
 | `plugins` | `config` | 11 |
 | `plugins` | `core` | 27 |
-| `plugins` | `db` | 49 |
+| `plugins` | `db` | 53 |
 | `plugins` | `extensions` | 2 |
 | `plugins` | `mcp` | 7 |
 | `plugins` | `models` | 2 |
 | `plugins` | `security` | 18 |
-| `plugins` | `shared` | 29 |
+| `plugins` | `shared` | 31 |
 | `plugins` | `tools` | 1 |
 | `plugins` | `utils` | 35 |
 | `security` | `api` | 1 |

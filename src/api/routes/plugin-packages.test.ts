@@ -87,6 +87,13 @@ vi.mock('@/db/repositories/plugin-usage-repository', () => ({
   },
 }));
 
+vi.mock('@/db/repositories/plugin-store-repository', () => ({
+  pluginStoreRepository: {
+    usage: async (pkg: string, userId?: string) => ({ bytes: userId ? 10 : 30, entries: userId ? 1 : 3, byUser: [{ userId: 'u', bytes: 30, entries: 3 }] }),
+  },
+}));
+vi.mock('@/plugins/packages/store', () => ({ storeQuotaOf: async () => 5_242_880 }));
+
 const { pluginPackageRoutes } = await import('./plugin-packages');
 const app = new App({ prefix: '/api' }).use(pluginPackageRoutes);
 
@@ -284,6 +291,9 @@ describe('plugin package routes', () => {
     expect((await call('GET', '/demo/usage')).status).toBe(403);
     const mine = await call('GET', '/demo/usage/me');
     expect([mine.status, mine.body.scope, mine.body.byUser]).toEqual([200, 'me', undefined]);
+    // The store: every user's by user for the admin, the caller's own otherwise (sizes only).
+    expect(all.body.store).toEqual({ bytes: 30, entries: 3, quotaBytes: 5_242_880, byUser: [{ userId: 'u', bytes: 30, entries: 3 }] });
+    expect(mine.body.store).toEqual({ bytes: 10, entries: 1, quotaBytes: 5_242_880 });
     fixture.user = null;
     expect((await call('GET', '/demo/usage/me')).status).toBe(401);
     expect(fixture.calls.map((c) => [c.fn, c.args[0], c.args[2]])).toEqual([['usage', 'demo', undefined], ['usage', 'demo', MEMBER.id]]);

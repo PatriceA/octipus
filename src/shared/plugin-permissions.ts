@@ -11,7 +11,7 @@
  * and refuses any difference: these words describe the listing, never decide
  * anything.
  */
-import type { PluginPermissionChange, PluginPermissionDiff, PluginPermissionsSummary, PluginToolEffect } from './plugin-package';
+import { formatStoreBytes, type PluginPermissionChange, type PluginPermissionDiff, type PluginPermissionsSummary, type PluginToolEffect } from './plugin-package';
 
 /** How each host API scope reads, as the user's data is concerned. */
 export const HOST_SCOPE_WORDS: Record<string, string> = {
@@ -25,7 +25,14 @@ export const HOST_SCOPE_WORDS: Record<string, string> = {
   'web:read': 'Fetches web pages through Octipus',
   'model:complete': 'Uses your AI model',
   'agent:run': 'Starts background agent runs as you',
+  'store:read': 'Reads the data it keeps for you',
+  'store:write': 'Keeps data for you',
 };
+
+/** The store in words: "Keeps up to 5 MB of its own data per user". */
+export function storeWords(quotaBytes: number): string {
+  return `Keeps up to ${formatStoreBytes(quotaBytes)} of its own data per user`;
+}
 
 const EFFECT_RANK: Record<PluginToolEffect, number> = { read: 0, write: 1, external: 2 };
 
@@ -44,6 +51,7 @@ export function permissionsAskSummary(p: PluginPermissionsSummary): string[] {
   out.push(p.network.length === 0 ? 'No network access' : `Connects to ${p.network.join(', ')}`);
   if (p.secrets.length > 0) out.push(`Asks you for these secrets: ${p.secrets.join(', ')}`);
   if (p.settings.length > 0) out.push(`Settings: ${p.settings.join(', ')}`);
+  if (p.store) out.push(storeWords(p.store.quotaBytes));
   const { read, write, external } = p.effects;
   const tools = [
     read > 0 ? plural(read, 'read tool', 'read tools') : '',
@@ -96,6 +104,15 @@ export function diffPermissions(before: PluginPermissionsSummary, after: PluginP
     const now = after[kind] ?? [];
     for (const v of now) if (!was.includes(v)) add(kind, 'added', `${label} ${v}`, widens);
     for (const v of was) if (!now.includes(v)) add(kind, 'removed', `${label} ${v}`, false);
+  }
+  // A new store, or a larger quota, widens; a smaller one narrows. (A summary from before the store reads as none.)
+  const storeWas = before.store ?? null;
+  const storeNow = after.store ?? null;
+  if (!storeWas && storeNow) add('store', 'added', `store (${formatStoreBytes(storeNow.quotaBytes)} per user)`, true);
+  else if (storeWas && !storeNow) add('store', 'removed', `store (${formatStoreBytes(storeWas.quotaBytes)} per user)`, false);
+  else if (storeWas && storeNow && storeWas.quotaBytes !== storeNow.quotaBytes) {
+    const wider = storeNow.quotaBytes > storeWas.quotaBytes;
+    add('store', wider ? 'wider' : 'narrower', `store quota ${formatStoreBytes(storeWas.quotaBytes)} → ${formatStoreBytes(storeNow.quotaBytes)} per user`, wider);
   }
   const was = new Map(before.tools.map((t) => [t.name, t.effect]));
   const now = new Map(after.tools.map((t) => [t.name, t.effect]));

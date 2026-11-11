@@ -838,10 +838,13 @@ function keptSettings(manifest: PluginManifest, previous: PluginPackageRow['sett
   return kept;
 }
 
-/** Remove a package: its server, its files, its row and its secrets. */
+/** Remove a package: its server, its files, its row, its secrets and every user's store entries. */
 export async function uninstall(name: string, actorUserId: string): Promise<void> {
   const row = await requireRow(name);
   await getMCPBridge().disconnect(`${PLUGIN_SERVER_PREFIX}${name}`);
+  // Every user's store entries go with it (docs/PLUGIN-PACKAGES.md#store; the row's delete cascades too).
+  const { pluginStoreRepository } = await import('@/db/repositories/plugin-store-repository');
+  const storeEntries = await pluginStoreRepository.deletePackage(name);
   await getDb().delete(pluginPackages).where(eq(pluginPackages.name, name));
   await rm(packageDir(name), { recursive: true, force: true });
   await rm(pluginDataDir(name), { recursive: true, force: true });
@@ -850,7 +853,7 @@ export async function uninstall(name: string, actorUserId: string): Promise<void
   await resetReadLevels(name);
   const entries = (row.manifest.secrets ?? []).length > 0 ? await getVault().list('system') : [];
   for (const s of row.manifest.secrets ?? []) await deleteSecret(name, s.key, entries);
-  await audit(actorUserId, 'uninstalled', name, { version: row.version });
+  await audit(actorUserId, 'uninstalled', name, { version: row.version, storeEntriesDeleted: storeEntries });
   await syncPluginServers();
 }
 

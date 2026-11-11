@@ -28,7 +28,7 @@ const HASH = `sha256:${'cd'.repeat(32)}`;
 
 function perms(over: Partial<PluginPermissionsSummary> = {}): PluginPermissionsSummary {
   return {
-    name: 'weekly', version: '1.0.0', apiVersion: '1.0.0', runtime: 'package', host: ['tasks:read'], network: [], secrets: [], settings: [],
+    name: 'weekly', version: '1.0.0', apiVersion: '1.0.0', runtime: 'package', host: ['tasks:read'], network: [], secrets: [], settings: [], store: null,
     tools: [{ name: 'review', effect: 'read' }], effects: { read: 1, write: 0, external: 0 },
     contributions: { commands: [], schedules: [], events: [], prompt: null, context: null }, pages: [], ui: null, trustedInput: false, maxProtection: 4,
     ...over,

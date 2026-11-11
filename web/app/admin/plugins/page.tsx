@@ -12,6 +12,7 @@ import {
   displayText,
   DOCUMENTS_WRITE_NOTE,
   egressReadWarning,
+  formatStoreBytes,
   MAX_PLUGIN_SECRET_LENGTH,
   MODEL_CLI_TOOLS_APPROVAL,
   MODEL_CLI_TOOLS_WARNING,
@@ -562,6 +563,25 @@ function UsagePanel({ pkg }: { pkg: PluginPackageView }) {
           <div><dt className="text-on-surface-variant">background runs</dt><dd className="text-on-surface">{u.runs}</dd></div>
         </dl>
       )}
+      {u?.store && (u.store.quotaBytes !== null || u.store.entries > 0) && (
+        <div data-testid="plugin-store-usage">
+          <p className="text-on-surface">
+            store: <span data-testid="plugin-store-total">{formatStoreBytes(u.store.bytes)}</span> in {u.store.entries} {u.store.entries === 1 ? 'entry' : 'entries'}
+            {u.store.quotaBytes !== null ? <span className="text-on-surface-variant"> · quota {formatStoreBytes(u.store.quotaBytes)} per user</span> : null}
+          </p>
+          {(u.store.byUser ?? []).length > 0 && (
+            <table className="w-full text-left" data-testid="plugin-store-by-user">
+              <caption className="text-left text-on-surface-variant">stored by user</caption>
+              <thead className="text-on-surface-variant"><tr><th className="font-normal">user</th><th className="font-normal">size</th><th className="font-normal">entries</th></tr></thead>
+              <tbody>
+                {(u.store.byUser ?? []).map((x) => (
+                  <tr key={x.userId} className="border-t border-outline-variant/30"><td className="font-mono">{x.userId}</td><td>{formatStoreBytes(x.bytes)}</td><td>{x.entries}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
       {u?.byUser && u.byUser.length > 0 && (
         <table className="w-full text-left" data-testid="plugin-usage-by-user">
           <caption className="text-left text-on-surface-variant">by user</caption>
@@ -673,7 +693,7 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
           type="button"
           disabled={uninstall.isPending}
           onClick={() => {
-            if (confirm(`Uninstall ${pkg.name}? Its files, data directory, settings and secrets are deleted.`)) uninstall.mutate();
+            if (confirm(`Uninstall ${pkg.name}? Its files, data directory, settings and secrets are deleted${pkg.manifest.store ? ', and so is the data it stored for every user' : ''}.`)) uninstall.mutate();
           }}
           aria-label={`Uninstall ${pkg.name}`}
           className="inline-flex items-center gap-1 text-xs text-on-surface-variant hover:text-error cursor-pointer disabled:opacity-50"

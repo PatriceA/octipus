@@ -219,6 +219,9 @@ export const SCOPE_TOOL_ACTION: Record<PluginHostScope, { toolId: string; action
   'model:complete': null,
   // The run is the host's own agent: each of its tool calls goes through the user's rules itself.
   'agent:run': null,
+  // The package's own data for this user (docs/PLUGIN-PACKAGES.md#store): no built-in tool stands for it.
+  'store:read': null,
+  'store:write': null,
 };
 
 /**

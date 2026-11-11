@@ -1,7 +1,9 @@
 // A plugin package's MCP server: newline-delimited JSON-RPC 2.0 over stdio,
 // no dependencies. Octipus starts it in the package directory (read-only under
 // the sandbox) and calls initialize, tools/list and tools/call.
-// Keep state in OCTIPUS_PLUGIN_DATA_DIR, the only writable directory.
+// Keep the plugin's own state in OCTIPUS_PLUGIN_DATA_DIR, the only writable
+// directory. It is shared by every user of the install: never keep a user's
+// data there; per-user data goes in the store (see the with-store template).
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';

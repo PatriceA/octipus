@@ -23,7 +23,7 @@
  *   index, since skipping one would silently un-revoke it.
  */
 import { z } from 'zod';
-import { PLUGIN_RUNTIMES, PLUGIN_TOOL_EFFECTS, type PluginPermissionsSummary } from '@/shared/plugin-package';
+import { PLUGIN_RUNTIMES, PLUGIN_STORE_MAX_QUOTA_BYTES, PLUGIN_STORE_MIN_QUOTA_BYTES, PLUGIN_TOOL_EFFECTS, type PluginPermissionsSummary } from '@/shared/plugin-package';
 import { isoTime, line, markdown, safeText } from './listing-text';
 import { manifestSchema } from './manifest';
 import { normalizeSha256, parseRegistryIndex } from './remote';
@@ -70,6 +70,8 @@ export const indexPermissionsSchema = z.object({
   // Names only, sorted; a listing from before they were listed reads as none (the host recomputes and compares them).
   secrets: z.array(line(100)).max(100).default([]),
   settings: z.array(line(100)).max(100).default([]),
+  // The per-user store's quota (defaulted); a listing from before the store reads as none (the host recomputes and compares it).
+  store: z.object({ quotaBytes: z.number().int().min(PLUGIN_STORE_MIN_QUOTA_BYTES).max(PLUGIN_STORE_MAX_QUOTA_BYTES) }).strict().nullable().default(null),
   tools: z.array(z.object({ name: line(64), effect: z.enum(PLUGIN_TOOL_EFFECTS) }).strict()).max(200),
   effects: z.object({ read: z.number().int().min(0).max(200), write: z.number().int().min(0).max(200), external: z.number().int().min(0).max(200) }).strict(),
   contributions: z.object({

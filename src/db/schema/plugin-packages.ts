@@ -1,4 +1,4 @@
-import { boolean, integer, jsonb, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, pgTable, primaryKey, smallint, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
 import type { PluginHostApproval, PluginManifest, PluginOrigin } from '@/shared/plugin-package';
 import { users } from './users';
 
@@ -140,3 +140,27 @@ export const pluginListingPins = pgTable('plugin_listing_pins', {
   signedBy: text('signed_by'),
   firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [primaryKey({ columns: [t.registryUrl, t.name, t.version] })]);
+
+/**
+ * The per-user plugin store (docs/PLUGIN-PACKAGES.md#store,
+ * src/db/repositories/plugin-store-repository.ts): small JSON values a
+ * package keeps, per key, separately for each user. Every row has a user;
+ * there is no store shared across users. `sizeBytes` (key and JSON value,
+ * UTF-8) counts against the package's quota per user; `protectionLevel` is
+ * the call's read level when it was written, and reading the entry raises
+ * the call's level to it; `version` moves by one on every write
+ * (compare-and-set). Uninstalling the package or deleting the user deletes
+ * the rows.
+ */
+export const pluginStore = pgTable('plugin_store', {
+  packageName: text('package_name').notNull().references(() => pluginPackages.name, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  key: text('key').notNull(),
+  value: jsonb('value').$type<unknown>().notNull(),
+  sizeBytes: integer('size_bytes').notNull(),
+  protectionLevel: smallint('protection_level').notNull().default(1),
+  version: integer('version').notNull().default(1),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [unique('plugin_store_key_uq').on(t.packageName, t.userId, t.key), index('plugin_store_user_idx').on(t.userId)]);
+
+export type PluginStoreRow = typeof pluginStore.$inferSelect;
