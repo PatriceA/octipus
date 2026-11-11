@@ -12,6 +12,12 @@ export interface PluginBinding {
   /** What each declared tool does; an undeclared tool is hidden and refused. */
   tools: Record<string, PluginToolEffect>;
   /**
+   * The description of each declared tool the model is given: the manifest's,
+   * which the admin agreed to, else the tool name and effect. Never the
+   * running server's own text (src/mcp/plugin-catalog.ts).
+   */
+  descriptions?: Record<string, string>;
+  /**
    * The highest protection level of the conversation its tools may be called
    * from (docs/PROTECTION-LEVELS.md, C6d): the manifest's `maxProtection`,
    * else 1 for a package with network access and 4 for one without.

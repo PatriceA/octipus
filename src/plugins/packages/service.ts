@@ -55,6 +55,7 @@ import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { type PluginPackageRow, pluginPackages } from '@/db/schema/plugin-packages';
 import { getMCPBridge, PLUGIN_SERVER_PREFIX } from '@/mcp/bridge';
+import { pluginServerListing } from '@/mcp/plugin-catalog';
 import { SYSTEM_USER_ID } from '@/security/principal';
 import { getVault } from '@/security/vault';
 import type { MCPServer } from '@/shared/mcp-server';
@@ -1439,6 +1440,7 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
     const value = await vault.getSystemSecret(secretName(row.name, s.key));
     if (value !== null) env[s.key] = value;
   }
+  const effects = Object.fromEntries(Object.entries(tools).map(([t, d]) => [t, d.effect]));
   const dir = packageDir(row.name);
   const dataDir = pluginDataDir(row.name);
   // Set last, so no secret can claim the name.
@@ -1454,7 +1456,8 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
   return {
     id: `${PLUGIN_SERVER_PREFIX}${row.name}`,
     name: m.title,
-    description: m.description,
+    // Host-written: the manifest's description never reaches a system prompt (src/mcp/plugin-catalog.ts).
+    description: pluginServerListing({ package: row.name, tools: effects }, m.title),
     command: m.server.command,
     args: m.server.args,
     cwd: dir,
@@ -1476,7 +1479,9 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
     // every other name the server offers is hidden (an exact name wins over `*`).
     toolExposure: { ...Object.fromEntries(Object.keys(tools).map((t) => [t, 'deferred' as const])), '*': 'hidden' },
     plugin: {
-      package: row.name, version: row.version, tools: Object.fromEntries(Object.entries(tools).map(([t, d]) => [t, d.effect])),
+      package: row.name, version: row.version, tools: effects,
+      // What the model is told each tool does: the manifest's words the admin agreed to, never the running server's.
+      descriptions: Object.fromEntries(Object.entries(tools).flatMap(([t, d]) => (d.description?.trim() ? [[t, d.description.trim()]] : []))),
       // Undeclared: see defaultMaxProtection; clamped by egress scopes (effectiveMaxProtection).
       maxProtection: effectiveMaxProtection(m, hostScopes),
       ...(hostScopes.length > 0 ? { hostScopes } : {}),

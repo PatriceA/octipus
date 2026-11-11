@@ -138,13 +138,19 @@ describe('plugin packages', () => {
     expect((await packageView('echo-plugin')).network.state).toBe('not_enforced');
   });
 
-  test('only declared tools are listed; an undeclared one is refused', async () => {
+  test('only declared tools are listed, in the manifest\'s words; an undeclared one is refused', async () => {
     const { getMCPBridge } = await import('@/mcp/bridge');
     const bridge = getMCPBridge();
     const listed = bridge.getAllTools().filter((t) => t.serverId === SERVER);
-    expect(listed.filter((t) => t.exposure !== 'hidden').map((t) => t.name).sort()).toEqual(['echo', 'env_report', 'send_letter']);
-    expect(listed.find((t) => t.name === 'undeclared_tool')?.exposure).toBe('hidden');
-    await expect(bridge.callTool(SERVER, 'undeclared_tool', {}, agentContext(true))).rejects.toThrow(/hidden/);
+    // The server also offers undeclared_tool: it is not listed at all.
+    expect(listed.map((t) => t.name).sort()).toEqual(['echo', 'env_report', 'send_letter']);
+    // The server describes env_report as "Environment names"; the model is told what the admin agreed to.
+    expect(listed.find((t) => t.name === 'env_report')?.description).toBe('Which environment variables the server sees');
+    // The system prompt lists it by a host-written line, never the manifest's description.
+    const section = bridge.serversSection({ codemode: false }) ?? '';
+    expect(section).toContain('Echo (test fixture) (plugin echo-plugin), 3 tools');
+    expect(section).not.toContain('A minimal plugin package for the tests');
+    await expect(bridge.callTool(SERVER, 'undeclared_tool', {}, agentContext(true))).rejects.toThrow(/hidden|not declare|undeclared/);
     expect(textOf(await bridge.callTool(SERVER, 'echo', { text: 'hallo' }, agentContext(false)))).toBe('hallo');
   });
 
