@@ -250,9 +250,12 @@ describe('plugin package routes', () => {
     expect((await call('POST', '/', { registry: 'marketplace' })).status).toBe(400);
     const res = await call('POST', '/', { registry: 'marketplace', name: 'demo', allowSourceChange: true });
     expect([res.status, res.body.guidance, res.body.origin]).toEqual([200, [], { source: 'marketplace' }]);
+    // Keeping the store across a change of publisher is asked for explicitly (keepStoreData), never implied.
+    expect((await call('POST', '/', { registry: 'marketplace', name: 'demo', upgrade: true, allowSignerChange: true, keepStoreData: true })).status).toBe(200);
     expect(fixture.calls).toEqual([
       { fn: 'marketplaceListing', args: [{ q: 'café', category: 'productivity' }] },
-      { fn: 'installFromRegistry', args: [ADMIN.id, { registry: 'marketplace', name: 'demo', version: undefined, upgrade: false, allowSignerChange: false, allowDowngrade: false, allowSourceChange: true, allowIncompatible: false }] },
+      { fn: 'installFromRegistry', args: [ADMIN.id, { registry: 'marketplace', name: 'demo', version: undefined, upgrade: false, allowSignerChange: false, allowDowngrade: false, allowSourceChange: true, allowIncompatible: false, keepStoreData: false }] },
+      { fn: 'installFromRegistry', args: [ADMIN.id, { registry: 'marketplace', name: 'demo', version: undefined, upgrade: true, allowSignerChange: true, allowDowngrade: false, allowSourceChange: false, allowIncompatible: false, keepStoreData: true }] },
     ]);
   });
 
