@@ -47,7 +47,7 @@ export function wrapWindowsPluginCommand(binary: string, argv: string[], options
   const scratch = mkdtempSync(join(tmpdir(), 'octipus-plugin-'));
   // The launch record is outside the granted scratch: the child cannot alter it.
   const record = `${scratch}.json`;
-  const cleanup = () => { rmSync(record, { force: true }); rmSync(scratch, { recursive: true, force: true }); };
+  const cleanup = () => { rmSync(record, { force: true }); rmSync(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); };
   try {
     const command = [executable(argv[0], options.workspaceRoot, options.path), ...argv.slice(1)];
     const preload = broker.pipe ? join(scratch, 'egress.cjs') : null;

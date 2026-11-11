@@ -82,6 +82,26 @@ fn run() -> Result<i32, String> {
 }
 
 /// CommandLineToArgvW / CRT quoting, including empty values and trailing backslashes.
+fn broker_pipe_name(namespace: &str, session: u32, leaf: &str) -> Result<String, String> {
+    let namespace = namespace.trim_matches('\\');
+    if namespace.is_empty()
+        || namespace
+            .split('\\')
+            .any(|p| p == "." || p == ".." || p.is_empty())
+    {
+        return Err("invalid AppContainer namespace".into());
+    }
+    let prefix = format!("Sessions\\{session}\\");
+    if namespace.starts_with("Sessions\\") {
+        if !namespace.starts_with(&prefix) {
+            return Err("AppContainer session mismatch".into());
+        }
+        Ok(format!(r"\\.\pipe\{namespace}\{leaf}"))
+    } else {
+        Ok(format!(r"\\.\pipe\Sessions\{session}\{namespace}\{leaf}"))
+    }
+}
+
 fn node_preload_option(path: &str) -> String {
     // NODE_OPTIONS has its own parser: unlike CreateProcess/CRT arguments,
     // backslashes inside quoted values are escapes. Windows accepts '/'.
@@ -120,6 +140,19 @@ mod windows;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pipe_name_uses_child_session_for_relative_and_absolute_namespaces() {
+        let expected = r"\\.\pipe\Sessions\7\AppContainerNamedObjects\SID\name";
+        assert_eq!(
+            broker_pipe_name(r"AppContainerNamedObjects\SID", 7, "name").unwrap(),
+            expected
+        );
+        assert_eq!(
+            broker_pipe_name(r"\Sessions\7\AppContainerNamedObjects\SID\", 7, "name").unwrap(),
+            expected
+        );
+        assert!(broker_pipe_name(r"\Sessions\8\AppContainerNamedObjects\SID", 7, "name").is_err());
+    }
     #[test]
     fn node_options_uses_forward_slashes() {
         assert_eq!(

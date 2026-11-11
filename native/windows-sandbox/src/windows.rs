@@ -1,11 +1,14 @@
 use super::{quote, Launch};
 use std::{
     ffi::c_void,
-    fs::File,
-    io,
+    io::{self, Read, Write},
     mem::{size_of, zeroed},
     net::TcpStream,
-    os::windows::{ffi::OsStrExt, fs::MetadataExt, io::FromRawHandle},
+    os::windows::{
+        ffi::OsStrExt,
+        fs::MetadataExt,
+        io::{AsRawHandle, FromRawHandle, OwnedHandle},
+    },
     path::{Path, PathBuf},
     ptr::{null, null_mut},
 };
@@ -13,7 +16,7 @@ use windows_sys::Win32::{
     Foundation::*,
     Security::{Authorization::*, Isolation::*, *},
     Storage::FileSystem::*,
-    System::{Console::*, JobObjects::*, Pipes::*, Threading::*},
+    System::{Console::*, JobObjects::*, Pipes::*, Threading::*, IO::*},
 };
 
 fn wide(s: impl AsRef<std::ffi::OsStr>) -> Vec<u16> {
@@ -327,6 +330,7 @@ fn pipe_handle(
         CreateNamedPipeW(
             name.as_ptr(),
             PIPE_ACCESS_DUPLEX
+                | FILE_FLAG_OVERLAPPED
                 | if first {
                     FILE_FLAG_FIRST_PIPE_INSTANCE
                 } else {
@@ -344,6 +348,77 @@ fn pipe_handle(
         Err(last("CreateNamedPipe"))
     } else {
         Ok(Handle(handle))
+    }
+}
+
+fn pipe_connect(handle: HANDLE) -> Result<(), String> {
+    unsafe {
+        let event = Handle(CreateEventW(null(), 1, 0, null()));
+        if event.0.is_null() {
+            return Err(last("pipe connect event"));
+        }
+        let mut overlapped: OVERLAPPED = zeroed();
+        overlapped.hEvent = event.0;
+        if ConnectNamedPipe(handle, &mut overlapped) != 0 {
+            return Ok(());
+        }
+        match GetLastError() {
+            ERROR_PIPE_CONNECTED => Ok(()),
+            ERROR_IO_PENDING => {
+                let mut count = 0;
+                win(
+                    GetOverlappedResult(handle, &mut overlapped, &mut count, 1),
+                    "broker connect",
+                )
+            }
+            _ => Err(last("broker connect")),
+        }
+    }
+}
+
+fn pipe_io(handle: HANDLE, buffer: &mut [u8], write: bool) -> io::Result<usize> {
+    unsafe {
+        let event = Handle(CreateEventW(null(), 1, 0, null()));
+        if event.0.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let mut overlapped: OVERLAPPED = zeroed();
+        overlapped.hEvent = event.0;
+        let mut count = 0;
+        let ok = if write {
+            WriteFile(
+                handle,
+                buffer.as_ptr(),
+                buffer.len() as u32,
+                &mut count,
+                &mut overlapped,
+            )
+        } else {
+            ReadFile(
+                handle,
+                buffer.as_mut_ptr(),
+                buffer.len() as u32,
+                &mut count,
+                &mut overlapped,
+            )
+        };
+        if ok == 0 {
+            let code = GetLastError();
+            if code == ERROR_BROKEN_PIPE || code == ERROR_HANDLE_EOF {
+                return Ok(0);
+            }
+            if code != ERROR_IO_PENDING {
+                return Err(io::Error::from_raw_os_error(code as i32));
+            }
+            if GetOverlappedResult(handle, &mut overlapped, &mut count, 1) == 0 {
+                let code = GetLastError();
+                if code == ERROR_BROKEN_PIPE || code == ERROR_HANDLE_EOF {
+                    return Ok(0);
+                }
+                return Err(io::Error::from_raw_os_error(code as i32));
+            }
+        }
+        Ok(count as usize)
     }
 }
 
@@ -387,37 +462,60 @@ fn broker(name: &str, sid: &str, port: u16) -> Result<(), String> {
         };
         let mut current = Handle(first_raw as HANDLE);
         loop {
-            let connected = unsafe {
-                ConnectNamedPipe(current.0, null_mut()) != 0
-                    || GetLastError() == ERROR_PIPE_CONNECTED
-            };
-            if !connected {
-                eprintln!("octipus-sandbox: {}", last("broker connect"));
+            if let Err(error) = pipe_connect(current.0) {
+                eprintln!("octipus-sandbox: {error}");
                 break;
             }
             let stream = current.0 as usize;
             std::mem::forget(current);
             std::thread::spawn(move || {
-                let mut pipe = unsafe { File::from_raw_handle(stream as HANDLE) };
+                let pipe =
+                    std::sync::Arc::new(unsafe { OwnedHandle::from_raw_handle(stream as HANDLE) });
                 match TcpStream::connect(("127.0.0.1", port)) {
-                    Ok(mut tcp) => {
-                        let clones = pipe
-                            .try_clone()
-                            .and_then(|p| tcp.try_clone().map(|t| (p, t)));
-                        match clones {
-                            Ok((mut p, mut t)) => {
-                                let upload = std::thread::spawn(move || {
-                                    let _ = io::copy(&mut p, &mut t);
-                                    let _ = t.shutdown(std::net::Shutdown::Write);
-                                });
-                                let _ = io::copy(&mut tcp, &mut pipe);
-                                let _ = tcp.shutdown(std::net::Shutdown::Both);
-                                // Closing the job/process terminates outstanding blocked pipe readers.
-                                drop(upload);
+                    Ok(mut tcp) => match tcp.try_clone() {
+                        Ok(mut up) => {
+                            let upload_pipe = pipe.clone();
+                            let upload = std::thread::spawn(move || {
+                                let mut buffer = vec![0; 65536];
+                                loop {
+                                    match pipe_io(upload_pipe.as_raw_handle(), &mut buffer, false) {
+                                        Ok(0) | Err(_) => break,
+                                        Ok(count) => {
+                                            if up.write_all(&buffer[..count]).is_err() {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                let _ = up.shutdown(std::net::Shutdown::Write);
+                            });
+                            let mut buffer = vec![0; 65536];
+                            'download: loop {
+                                match tcp.read(&mut buffer) {
+                                    Ok(0) | Err(_) => break,
+                                    Ok(count) => {
+                                        let mut sent = 0;
+                                        while sent < count {
+                                            match pipe_io(
+                                                pipe.as_raw_handle(),
+                                                &mut buffer[sent..count],
+                                                true,
+                                            ) {
+                                                Ok(0) | Err(_) => break 'download,
+                                                Ok(written) => sent += written,
+                                            }
+                                        }
+                                    }
+                                }
                             }
-                            Err(error) => eprintln!("octipus-sandbox: broker stream: {error}"),
+                            let _ = tcp.shutdown(std::net::Shutdown::Both);
+                            unsafe {
+                                CancelIoEx(pipe.as_raw_handle(), null());
+                            }
+                            let _ = upload.join();
                         }
-                    }
+                        Err(error) => eprintln!("octipus-sandbox: broker stream: {error}"),
+                    },
                     Err(error) => eprintln!("octipus-sandbox: broker proxy: {error}"),
                 }
             });
@@ -738,20 +836,44 @@ pub fn launch(config: Launch) -> Result<i32, String> {
                 "open AppContainer token",
             )?;
             let _token = Handle(token);
+            let mut session: u32 = 0;
             let mut len = 0;
-            GetAppContainerNamedObjectPath(token, null_mut(), 0, null_mut(), &mut len);
-            let mut path = vec![0u16; len as usize];
             win(
-                GetAppContainerNamedObjectPath(token, null_mut(), len, path.as_mut_ptr(), &mut len),
-                "AppContainer pipe namespace",
+                GetTokenInformation(
+                    token,
+                    TokenSessionId,
+                    (&mut session as *mut u32).cast(),
+                    size_of::<u32>() as u32,
+                    &mut len,
+                ),
+                "AppContainer session",
             )?;
-            let end = path.iter().position(|c| *c == 0).unwrap_or(path.len());
-            let namespace = String::from_utf16_lossy(&path[..end]);
             let leaf = pipe
                 .strip_prefix(r"\\.\pipe\LOCAL\")
                 .ok_or("invalid broker pipe prefix")?;
-            let resolved = format!(r"\\.\pipe{namespace}\{leaf}");
-            broker(&resolved, &profile.sid_text()?, port)?;
+            let sid = profile.sid_text()?;
+            let mut needed = 0;
+            GetAppContainerNamedObjectPath(token, null_mut(), 0, null_mut(), &mut needed);
+            let mut object_path = vec![0u16; needed as usize];
+            win(
+                GetAppContainerNamedObjectPath(
+                    token,
+                    null_mut(),
+                    needed,
+                    object_path.as_mut_ptr(),
+                    &mut needed,
+                ),
+                "AppContainer object namespace",
+            )?;
+            let end = object_path
+                .iter()
+                .position(|c| *c == 0)
+                .unwrap_or(object_path.len());
+            let namespace = String::from_utf16_lossy(&object_path[..end]);
+            // Match Microsoft's CoreCLR pipe builder: session + object path.
+            let resolved = super::broker_pipe_name(&namespace, session, leaf)?;
+            broker(&resolved, &sid, port)
+                .map_err(|error| format!("{error}; broker namespace {resolved}"))?;
         }
         if ResumeThread(thread.0) == u32::MAX {
             return Err(last("ResumeThread"));
