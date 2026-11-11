@@ -38,27 +38,27 @@ The plugin never gets a credential, a database handle or a code path into the se
 | **Prompt and context** | Add static text to agents' system prompt; add turn context from a `read` tool | `prompt`, `context` |
 | **Pages** | Its own pages in the sidebar, in a sandboxed frame, calling its own tools | `ui.pages` |
 | **Octipus data** | Notes and tasks (read/write), documents (read/write), notifications | Host API scopes |
+| **Mail** | Read the user's mailboxes and connected inbox; save drafts; send (external tools only, level 1) | `mail:read`, `mail:draft`, `mail:send` |
+| **Calendar** | Read the connected calendars in a window; add events and change its own | `calendar:read`, `calendar:write` |
 | **The web** | Fetch a page through the host's SSRF guard and extraction | `web:read` |
 | **The model** | One completion on the user's lane | `model:complete` |
 | **Background agents** | Start a host agent run (web search, knowledge, documents…) and read its result | `agent:run` |
 | **Its own network** | Talk to declared hosts only, through its egress proxy | `network` |
 | **Its own secrets** | API keys an admin sets, given to it as environment variables | `secrets`, `settings` |
-| **Its own storage** | Files in a private folder only it can see (`OCTIPUS_PLUGIN_DATA_DIR`) | — |
+| **Its own storage** | Files in a private folder only it can see (`OCTIPUS_PLUGIN_DATA_DIR`), and a per-user store its tools and pages reach | `store` |
 
 ## What a plugin cannot do, and why
 
 | It cannot… | Why | Possible later? |
 |---|---|---|
-| Read your mail, calendar, cases, contacts or knowledge | No scope for them yet | **Yes:** read scopes (proposal 1) |
+| Read your cases, contacts or knowledge | No scope for them yet | **Yes:** read scopes (proposal 1; mail and calendar are built) |
 | Show a dashboard of sensitive data | A page can leak what it shows by navigating away, so pages are capped at protection level 1 | **Yes:** host-rendered dashboards (proposal 2) |
 | Add an AI model provider | Only in-process plugins can (`registerProvider`), and the marketplace refuses those | **Yes:** a sandboxed provider (proposal 3) |
-| Keep structured data or page state | It has files in its data folder, but no database and no store a page can reach | **Yes:** a per-plugin store (proposal 4) |
 | Call your MCP servers or Octipus tools | A plugin reaches only its own tools and the host API | **Yes:** an allowlist of tool calls (proposal 5) |
 | Use your connected accounts (Google, GitHub…) | It sees only the secrets declared for it, never the vault | **Yes:** credential injection (proposal 6) |
 | Receive webhooks from outside | No public endpoint for plugins | **Yes:** inbound hooks (proposal 7) |
 | Hook into the agent loop, or replace a core service | Only in-process code could, which runs with the server's full rights | **No** for sandboxed plugins: that is the trust line |
 | Read another plugin's data or the database directly | It would break isolation between plugins and users | **No** |
-| Run on Windows | No sandbox runner there yet | **Yes:** an AppContainer runner (proposal 8) |
 
 ## How other systems compare
 
@@ -72,6 +72,16 @@ That's maximal reach with no trust boundary. The proposals below aim for the sam
 ## Proposals
 
 ### 1. Read scopes for Octipus data
+
+**Status: mail and calendar built** (2026-11-11), with their write scopes; see
+[Mail and calendar](../PLUGIN-PACKAGES.md#mail-and-calendar). As built:
+`mail:read` covers the Mail module's mailboxes (each message at its own
+level) and the connected Gmail or Microsoft 365 inbox (level 4: it carries
+none); `mail:draft` never sends; `mail:send` is for external tools only and
+counts as egress (level 1), with the per-call tool approval as the send's
+approval; the calendars count as the level an admin sets
+(`plugins.calendarProtectionLevel`, default 3). Contacts, cases, records,
+knowledge and sessions are still to come.
 
 This is what makes "build your own view" possible.
 
@@ -180,9 +190,9 @@ This covers plan point C2b: a new invoice in DATEV opens a case.
 
 ### 8. Windows sandbox runner
 
-*Being built in a separate session.*
+**Status: built** (an AppContainer runner, merged separately).
 
-**Why plugins don't run there today:** the sandbox is a hard boundary, and the runners exist only for Linux (bubblewrap, firejail) and macOS (`sandbox-exec`).
+**Why plugins did not run there before:** the sandbox is a hard boundary, and the runners exist only for Linux (bubblewrap, firejail) and macOS (`sandbox-exec`).
 
 **Works today:** run Octipus in WSL2 or Docker Desktop, which are Linux underneath, so bubblewrap works.
 
@@ -200,14 +210,14 @@ Node can't create AppContainers itself, so the helper is native, e.g. Rust or C#
 | # | Proposal | Why first |
 |---|---|---|
 | 1 | Store (4), **built** | Small; unblocks page state and real plugin data |
-| 2 | Read and write scopes (1), mail and calendar first | The base for "build your own view" |
+| 2 | Read and write scopes (1), mail and calendar first, **mail and calendar built** | The base for "build your own view" |
 | 3 | Host-rendered dashboards (2) | The safe way to show sensitive data |
 | 4 | Credential injection (6) | Plugins build on accounts users already connected |
 | 5 | Tool allowlist (5) | Lets plugins compose with MCP servers |
 | 6 | Inbound hooks (7) | Integrations that react to the outside world |
 | 7 | Sandboxed provider (3) | Smaller audience; the router change is contained |
 
-The Windows runner (8) is being built in a separate session.
+The Windows runner (8) is built: an AppContainer runner, merged separately.
 
 ## Decisions
 
@@ -215,4 +225,4 @@ The Windows runner (8) is being built in a separate session.
 2. **The store is per user only.** There is no store shared across users.
 3. **Mail and calendar write scopes come in the first round**, together with the read scopes.
 4. **A sandboxed provider serves only lanes an admin binds to it**, never the root agent.
-5. **The Windows runner** is being built in a separate session.
+5. **The Windows runner** is built (merged separately).

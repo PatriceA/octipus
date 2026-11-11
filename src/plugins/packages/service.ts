@@ -767,6 +767,12 @@ export async function installFromDirectory(
       if (!updated) throw new PluginPackageError('not_found', `Plugin package not found: ${manifest.name}`);
       // What the store holds that this version may not have (docs/PLUGIN-PACKAGES.md#store), with the row.
       if (previous) storeChanges = await upgradeStore(tx, updated, publisherChanges ? (opts.keepStoreData ? 'keep' : 'delete') : null);
+      // The drafts and events the package created stay the users'; another publisher may not change or send them.
+      if (previous && publisherChanges) {
+        const { pluginItemsRepository } = await import('@/db/repositories/plugin-items-repository');
+        const forgotten = await pluginItemsRepository.forgetPackage(manifest.name, tx);
+        if (forgotten > 0) storeChanges = { ...storeChanges, itemsForgotten: forgotten };
+      }
       swap.backup = await swapIn(staging, target);
       swap.done = true;
       return updated;
@@ -1477,9 +1483,10 @@ export { defaultMaxProtection } from './permissions';
 /**
  * Host scopes that send what the package hands them out of the house: any URL
  * (`web:read`), a remote model (`model:complete`), an agent that searches and
- * fetches the web on the package's prompt (`agent:run`).
+ * fetches the web on the package's prompt (`agent:run`), mail to any address
+ * (`mail:send`).
  */
-export const EGRESS_HOST_SCOPES: readonly PluginHostScope[] = ['web:read', 'model:complete', 'agent:run'];
+export const EGRESS_HOST_SCOPES: readonly PluginHostScope[] = ['web:read', 'model:complete', 'agent:run', 'mail:send'];
 
 /**
  * The level a package may see, as enforced: its `maxProtection` (or the

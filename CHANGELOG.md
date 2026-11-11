@@ -645,6 +645,26 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Mail and calendar for plugin packages**
+  (docs/PLUGIN-PACKAGES.md#mail-and-calendar). New host scopes:
+  - `mail:read`: the user's Mail module mailboxes, each message at its own
+    protection level (those above the package's `maxProtection` left out in
+    the query), and the connected Gmail or Microsoft 365 inbox, which counts
+    as level 4.
+  - `mail:draft`: drafts as the user, never sent, marked with the package and
+    tool (`mail_messages.plugin_source`); a package changes only its own.
+  - `mail:send`: for `external` tools only; it counts as egress, so the
+    package sees level 1 at most and a call holding more may not send.
+  - `calendar:read` and `calendar:write`: the connected Google and Microsoft
+    365 calendars at the level an admin sets (`plugins.calendarProtectionLevel`,
+    default 3); a package changes only the events it created.
+
+  Personal accounts (the inbox, the calendars) are reached from the personal
+  workspace only, and the user's permission rules on each source's own tool
+  apply. Migration `0183_plugin_mail_calendar` adds `plugin_items`, what a
+  package created; an uninstall or a change of signer or source deletes its
+  rows. `writeCalendarEvent` now returns the provider's event id.
+
 - **A per-user store for plugin packages** (docs/PLUGIN-PACKAGES.md#store).
   A package declares `store: { quotaBytes }` (default 5 MB, at most 20 MB per
   user) with the host scopes `store:read` and/or `store:write`, and keeps

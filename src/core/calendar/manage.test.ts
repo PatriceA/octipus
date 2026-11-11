@@ -21,6 +21,15 @@ test.each([
 ])('bad event ranges fail before a token lookup', async value => {
   await expect(writeCalendarEvent('alice', 'google', value)).rejects.toThrow(); expect(token).not.toHaveBeenCalled();
 });
+test('a write answers the event id the provider names', async () => {
+  token.mockResolvedValue('caller-secret');
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{"id":"evt-42","summary":"Review"}')));
+  expect(await writeCalendarEvent('alice', 'google', input)).toEqual({ id: 'evt-42' });
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('not json')));
+  expect(await writeCalendarEvent('alice', 'google', input, 'known')).toEqual({ id: 'known' });
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 403 })));
+  await expect(writeCalendarEvent('alice', 'google', input)).rejects.toThrow('HTTP 403');
+});
 test('provider writes use only the caller token and encode event IDs as one segment', async () => {
   token.mockResolvedValue('caller-secret'); const request = vi.fn(async () => new Response('{}')); vi.stubGlobal('fetch', request);
   await writeCalendarEvent('alice', 'google', input, 'event/with?parts');

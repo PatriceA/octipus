@@ -9,10 +9,14 @@ import { api } from '@/lib/api';
 import {
   AGENT_RUN_NOTE,
   type BundledPluginView,
+  CALENDAR_NOTE,
   displayText,
   DOCUMENTS_WRITE_NOTE,
   egressReadWarning,
   formatStoreBytes,
+  MAIL_DRAFT_NOTE,
+  MAIL_READ_NOTE,
+  MAIL_SEND_NOTE,
   MAX_PLUGIN_SECRET_LENGTH,
   MODEL_CLI_TOOLS_APPROVAL,
   MODEL_CLI_TOOLS_WARNING,
@@ -354,6 +358,10 @@ function scopeNotes(scopes: readonly string[]): string[] {
   return [
     ...(scopes.includes('agent:run') ? [AGENT_RUN_NOTE] : []),
     ...(scopes.includes('documents:write') ? [DOCUMENTS_WRITE_NOTE] : []),
+    ...(scopes.includes('mail:read') ? [MAIL_READ_NOTE] : []),
+    ...(scopes.includes('mail:draft') ? [MAIL_DRAFT_NOTE] : []),
+    ...(scopes.includes('mail:send') ? [MAIL_SEND_NOTE] : []),
+    ...(scopes.includes('calendar:read') || scopes.includes('calendar:write') ? [CALENDAR_NOTE] : []),
   ];
 }
 

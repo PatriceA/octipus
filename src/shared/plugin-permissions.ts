@@ -27,6 +27,11 @@ export const HOST_SCOPE_WORDS: Record<string, string> = {
   'agent:run': 'Starts background agent runs as you',
   'store:read': 'Reads the data it keeps for you',
   'store:write': 'Keeps data for you',
+  'mail:read': 'Reads your mail',
+  'mail:draft': 'Saves mail drafts (never sends them)',
+  'mail:send': 'Sends mail as you',
+  'calendar:read': 'Reads your calendar',
+  'calendar:write': 'Adds events to your calendar and changes the ones it added',
 };
 
 /** The store in words: "Keeps up to 5 MB of its own data per user". */

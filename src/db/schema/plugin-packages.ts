@@ -187,3 +187,26 @@ export const pluginStoreUsage = pgTable('plugin_store_usage', {
 }, (t) => [uniqueIndex('plugin_store_usage_uq').on(t.packageName, t.userId, t.workspaceId)]);
 
 export type PluginStoreRow = typeof pluginStore.$inferSelect;
+
+/**
+ * What a plugin package created in the user's mail and calendars through the
+ * host API (docs/PLUGIN-PACKAGES.md#mail-and-calendar), so that it may change
+ * or send those and nothing else: a draft in a Mail module mailbox
+ * (`provider` `mail`, `item_id` the message id), or an event in a connected
+ * calendar (`provider` `google` or `microsoft`, the provider's event id).
+ * Only the user the call acted for, through the same package, reaches the
+ * row. Uninstalling the package deletes its rows, and so does an upgrade to
+ * another signer or source: the items stay the user's, no package may change
+ * them any more.
+ */
+export const pluginItems = pgTable('plugin_items', {
+  packageName: text('package_name').notNull().references(() => pluginPackages.name, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  kind: text('kind').$type<'mail_draft' | 'calendar_event'>().notNull(),
+  provider: text('provider').$type<'mail' | 'google' | 'microsoft'>().notNull(),
+  itemId: text('item_id').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.packageName, t.kind, t.provider, t.itemId] }),
+  index('plugin_items_user_idx').on(t.userId),
+]);

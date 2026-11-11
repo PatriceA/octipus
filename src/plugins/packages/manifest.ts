@@ -80,6 +80,10 @@ export const manifestSchema = z.object({
   for (const message of contributionProblems(m)) ctx.addIssue({ code: 'custom', message });
   for (const message of modelProblems(m)) ctx.addIssue({ code: 'custom', message });
   for (const message of storeProblems(m)) ctx.addIssue({ code: 'custom', message });
+  // mail:send is handed to external tools only (each call is asked about): without one it could never be used.
+  if (m.host?.includes('mail:send') && !Object.values(m.tools ?? {}).some((t) => t.effect === 'external')) {
+    ctx.addIssue({ code: 'custom', message: 'host: mail:send is handed only to external tools; declare the tool that sends with "effect": "external"' });
+  }
   // The signature file is the one file the content hash leaves out: the server may not be started from it.
   const sigName = SIGNATURE_FILE.toLowerCase();
   if (m.server && [m.server.command, ...(m.server.args ?? [])].some((part) => part.toLowerCase().includes(sigName))) {

@@ -99,6 +99,12 @@ export const mailMessages = pgTable('mail_messages', {
   error: text('error'),
   /** Who wrote a draft or sent the message (null for received mail). */
   authorId: uuid('author_id').references(() => users.id, { onDelete: 'set null' }),
+  /**
+   * A draft or message a plugin package composed through the host API
+   * (docs/PLUGIN-PACKAGES.md#mail-and-calendar): the package and its tool.
+   * Provenance only; what the package may change is `plugin_items`.
+   */
+  pluginSource: jsonb('plugin_source').$type<{ plugin: string; tool: string }>(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({

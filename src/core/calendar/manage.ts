@@ -36,8 +36,11 @@ export function calendarWriteBody(provider: CalendarProvider, input: CalendarWri
   };
 }
 
-/** Fixed provider endpoints, caller-owned OAuth token, no arbitrary URL or tenant input. */
-export async function writeCalendarEvent(userId: string, provider: CalendarProvider, input: CalendarWrite, id?: string): Promise<void> {
+/**
+ * Fixed provider endpoints, caller-owned OAuth token, no arbitrary URL or tenant input.
+ * Returns the event's id as the provider answers it (empty when it names none).
+ */
+export async function writeCalendarEvent(userId: string, provider: CalendarProvider, input: CalendarWrite, id?: string): Promise<{ id: string }> {
   const body = calendarWriteBody(provider, input);
   const token = await getOAuthManager().getValidToken(userId, provider);
   if (!token) throw new CalendarInputError('This calendar is not connected. Connect it in Settings → Integrations.');
@@ -48,6 +51,10 @@ export async function writeCalendarEvent(userId: string, provider: CalendarProvi
     method: id ? 'PATCH' : 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body), signal: AbortSignal.timeout(15_000),
   });
-  await response.body?.cancel();
-  if (!response.ok) throw new Error(`The calendar provider rejected the change (HTTP ${response.status}).`);
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`The calendar provider rejected the change (HTTP ${response.status}).`);
+  }
+  const answer = (await response.json().catch(() => null)) as { id?: unknown } | null;
+  return { id: typeof answer?.id === 'string' ? answer.id : (id ?? '') };
 }

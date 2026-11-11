@@ -277,6 +277,37 @@ async function noteStoreRead(grant: HostTokenGrant, level: number): Promise<void
   await noteHostRead(grant, level);
 }
 
+/** A host module's outcome as the answer: the value, or the refusal (its status, its code in the audit details). */
+function outcomeOf<T>(ctx: HostCtx, details: Record<string, unknown>, out: { ok: true; value: T } | { ok: false; status: number; code: string; error: string }): T | { error: string; code: string } {
+  if (out.ok) return out.value;
+  ctx.set.status = out.status;
+  details.code = out.code;
+  return { error: out.error, code: out.code };
+}
+
+const mailSource = t.Union([t.Literal('mail'), t.Literal('inbox')]);
+/** "a@x.de, Jane <j@y.de>" or a list of addresses. */
+const recipients = t.Union([t.String({ maxLength: 10_000 }), t.Array(t.String({ maxLength: 400 }), { maxItems: 50 })]);
+const mailCompose = t.Object({
+  source: mailSource,
+  accountId: t.Optional(t.String({ maxLength: 64 })),
+  to: t.Optional(recipients),
+  cc: t.Optional(recipients),
+  subject: t.Optional(t.String({ maxLength: 500 })),
+  body: t.String({ minLength: 1, maxLength: 100_000 }),
+  replyTo: t.Optional(t.String({ minLength: 1, maxLength: 1024 })),
+  replyAll: t.Optional(t.Boolean()),
+});
+const calendarEvent = t.Object({
+  provider: t.Union([t.Literal('google'), t.Literal('microsoft')]),
+  title: t.String({ minLength: 1, maxLength: 500 }),
+  start: t.String({ maxLength: 40 }),
+  end: t.String({ maxLength: 40 }),
+  allDay: t.Boolean(),
+  location: t.Optional(t.String({ maxLength: 2000 })),
+  description: t.Optional(t.String({ maxLength: 20_000 })),
+});
+
 const noteView = (n: { id: string; slug: string; title: string; body: string; tags?: unknown; noteKind?: unknown; updatedAt: Date }) => ({
   id: n.id, slug: n.slug, title: n.title, body: n.body, tags: n.tags ?? [], kind: n.noteKind ?? 'note', updatedAt: n.updatedAt,
 });
@@ -654,6 +685,108 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
     return outcome.value;
   }, { aggregate: true }), { detail: { tags: ['plugin-host'] } })
 
+  // ── Mail and calendar (docs/PLUGIN-PACKAGES.md#mail-and-calendar,
+  // src/plugins/packages/host-mail.ts and host-calendar.ts): the user's own,
+  // at their protection levels; a package changes and sends only what it created.
+
+  // The Mail module's mailboxes the call reaches, and the connected inbox.
+  .get('/mail/accounts', (ctx) => run(ctx, 'mail.accounts', 'mail:read', async ({ grant, principal }, details) => {
+    const { listMailSources } = await import('@/plugins/packages/host-mail');
+    return outcomeOf(ctx, details, await listMailSources(grant, principal, contentRepos(principal)));
+  }), { detail: { tags: ['plugin-host'] } })
+
+  // Messages, newest first, without their text; above the package's maxProtection left out.
+  .get('/mail/messages', (ctx) => run(ctx, 'mail.list', 'mail:read', async ({ grant, principal }, details) => {
+    const { listMail } = await import('@/plugins/packages/host-mail');
+    const limit = ctx.query.limit === undefined ? undefined : Number.parseInt(ctx.query.limit, 10) || undefined;
+    return outcomeOf(ctx, details, await listMail(grant, principal, contentRepos(principal), {
+      source: ctx.query.source ?? 'mail', accountId: ctx.query.accountId, status: ctx.query.status,
+      unread: ctx.query.unread === 'true' ? true : undefined, q: ctx.query.q, limit, cursor: ctx.query.cursor,
+    }));
+  }), {
+    query: t.Object({
+      source: t.Optional(mailSource),
+      accountId: t.Optional(t.String({ maxLength: 64 })),
+      status: t.Optional(t.Union([t.Literal('received'), t.Literal('sent'), t.Literal('draft')])),
+      unread: t.Optional(t.Union([t.Literal('true'), t.Literal('false')])),
+      q: t.Optional(t.String({ maxLength: 200 })),
+      limit: t.Optional(t.String({ maxLength: 4 })),
+      cursor: t.Optional(t.String({ maxLength: 2048 })),
+    }),
+    detail: { tags: ['plugin-host'] },
+  })
+
+  // One message with its plain text.
+  .get('/mail/messages/:id', (ctx) => run(ctx, 'mail.read', 'mail:read', async ({ grant, principal }, details) => {
+    const { readMail } = await import('@/plugins/packages/host-mail');
+    return outcomeOf(ctx, details, await readMail(grant, principal, contentRepos(principal), ctx.query.source ?? 'mail', ctx.params.id));
+  }), {
+    params: t.Object({ id: t.String({ minLength: 1, maxLength: 1024 }) }),
+    query: t.Object({ source: t.Optional(mailSource) }),
+    detail: { tags: ['plugin-host'] },
+  })
+
+  // Save a draft as the user (never sends). A write or external tool only.
+  .post('/mail/drafts', (ctx) => run(ctx, 'mail.draft', 'mail:draft', async ({ grant, principal }, details) => {
+    const { createMailDraft } = await import('@/plugins/packages/host-mail');
+    const out = await createMailDraft(grant, principal, contentRepos(principal), ctx.body);
+    if (out.ok) details.draftId = out.value.id;
+    return outcomeOf(ctx, details, out);
+  }), { body: mailCompose, detail: { tags: ['plugin-host'] } })
+
+  // Change a Mail module draft this package created.
+  .put('/mail/drafts/:id', (ctx) => run(ctx, 'mail.draft.update', 'mail:draft', async ({ grant, principal }, details) => {
+    details.draftId = ctx.params.id;
+    const { updateMailDraft } = await import('@/plugins/packages/host-mail');
+    return outcomeOf(ctx, details, await updateMailDraft(grant, contentRepos(principal), ctx.params.id, ctx.body));
+  }), {
+    params: t.Object({ id: t.String({ maxLength: 64 }) }),
+    body: t.Object({ to: t.Optional(recipients), cc: t.Optional(recipients), subject: t.Optional(t.String({ maxLength: 500 })), body: t.Optional(t.String({ maxLength: 100_000 })) }),
+    detail: { tags: ['plugin-host'] },
+  })
+
+  // Send a Mail module draft this package created. An external tool only.
+  .post('/mail/drafts/:id/send', (ctx) => run(ctx, 'mail.draft.send', 'mail:send', async ({ grant, principal }, details) => {
+    details.draftId = ctx.params.id;
+    const { sendMailDraft } = await import('@/plugins/packages/host-mail');
+    return outcomeOf(ctx, details, await sendMailDraft(grant, contentRepos(principal), ctx.params.id));
+  }), { params: t.Object({ id: t.String({ maxLength: 64 }) }), detail: { tags: ['plugin-host'] } })
+
+  // Compose and send a message now. An external tool only.
+  .post('/mail/send', (ctx) => run(ctx, 'mail.send', 'mail:send', async ({ grant, principal }, details) => {
+    const { sendMail } = await import('@/plugins/packages/host-mail');
+    const out = await sendMail(grant, principal, contentRepos(principal), ctx.body);
+    if (out.ok) Object.assign(details, { source: out.value.source, ...(out.value.id ? { messageId: out.value.id } : {}) });
+    return outcomeOf(ctx, details, out);
+  }), { body: mailCompose, detail: { tags: ['plugin-host'] } })
+
+  // Events of the connected calendars in a window (at most 93 days).
+  .get('/calendar/events', (ctx) => run(ctx, 'calendar.list', 'calendar:read', async ({ grant, principal }, details) => {
+    const { listPluginCalendar } = await import('@/plugins/packages/host-calendar');
+    const limit = ctx.query.limit === undefined ? undefined : Number.parseInt(ctx.query.limit, 10) || undefined;
+    return outcomeOf(ctx, details, await listPluginCalendar(grant, principal, { from: ctx.query.from, to: ctx.query.to, limit }));
+  }), {
+    query: t.Object({ from: t.String({ maxLength: 40 }), to: t.String({ maxLength: 40 }), limit: t.Optional(t.String({ maxLength: 4 })) }),
+    detail: { tags: ['plugin-host'] },
+  })
+
+  // Create an event in a connected calendar. A write or external tool only.
+  .post('/calendar/events', (ctx) => run(ctx, 'calendar.create', 'calendar:write', async ({ grant, principal }, details) => {
+    const { createPluginEvent } = await import('@/plugins/packages/host-calendar');
+    const { provider, ...input } = ctx.body;
+    const out = await createPluginEvent(grant, principal, provider, input);
+    if (out.ok) Object.assign(details, { provider, eventId: out.value.id });
+    return outcomeOf(ctx, details, out);
+  }), { body: calendarEvent, detail: { tags: ['plugin-host'] } })
+
+  // Change an event this package created.
+  .put('/calendar/events/:id', (ctx) => run(ctx, 'calendar.update', 'calendar:write', async ({ grant, principal }, details) => {
+    const { updatePluginEvent } = await import('@/plugins/packages/host-calendar');
+    const { provider, ...input } = ctx.body;
+    Object.assign(details, { provider, eventId: ctx.params.id });
+    return outcomeOf(ctx, details, await updatePluginEvent(grant, principal, provider, ctx.params.id, input));
+  }), { params: t.Object({ id: t.String({ minLength: 1, maxLength: 1024 }) }), body: calendarEvent, detail: { tags: ['plugin-host'] } })
+
   // A notification to the user who triggered the call (and to nobody else).
   .post('/notify', (ctx) => run(ctx, 'notify', 'notify', async ({ grant, principal }) => {
     const { getNotificationService } = await import('@/core/notification-service');
@@ -688,4 +821,14 @@ export const PLUGIN_HOST_ENDPOINTS: ReadonlyArray<{ method: string; path: string
   { method: 'GET', path: '/api/plugin-host/store/:key', scope: 'store:read' },
   { method: 'PUT', path: '/api/plugin-host/store/:key', scope: 'store:write' },
   { method: 'DELETE', path: '/api/plugin-host/store/:key', scope: 'store:write' },
+  { method: 'GET', path: '/api/plugin-host/mail/accounts', scope: 'mail:read' },
+  { method: 'GET', path: '/api/plugin-host/mail/messages', scope: 'mail:read' },
+  { method: 'GET', path: '/api/plugin-host/mail/messages/:id', scope: 'mail:read' },
+  { method: 'POST', path: '/api/plugin-host/mail/drafts', scope: 'mail:draft' },
+  { method: 'PUT', path: '/api/plugin-host/mail/drafts/:id', scope: 'mail:draft' },
+  { method: 'POST', path: '/api/plugin-host/mail/drafts/:id/send', scope: 'mail:send' },
+  { method: 'POST', path: '/api/plugin-host/mail/send', scope: 'mail:send' },
+  { method: 'GET', path: '/api/plugin-host/calendar/events', scope: 'calendar:read' },
+  { method: 'POST', path: '/api/plugin-host/calendar/events', scope: 'calendar:write' },
+  { method: 'PUT', path: '/api/plugin-host/calendar/events/:id', scope: 'calendar:write' },
 ];

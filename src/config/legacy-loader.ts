@@ -206,6 +206,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       registries: defaultConfig.plugins!.registries,
       hostModelDailyTokens: defaultConfig.plugins!.hostModelDailyTokens,
       hostAgentRunTokens: defaultConfig.plugins!.hostAgentRunTokens,
+      calendarProtectionLevel: defaultConfig.plugins!.calendarProtectionLevel,
       marketplace: process.env.PLUGINS_MARKETPLACE === undefined ? defaultConfig.plugins!.marketplace : process.env.PLUGINS_MARKETPLACE !== 'false',
       // Passed through as written: the schema refuses anything but required and off.
       sandbox: (process.env.PLUGINS_SANDBOX as 'required' | 'off' | undefined) || defaultConfig.plugins!.sandbox,

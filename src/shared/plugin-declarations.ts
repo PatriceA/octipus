@@ -59,7 +59,7 @@ export interface PluginGuidanceWarning {
 }
 
 /** Host scopes that can carry data out of the house (src/plugins/packages/service.ts, `EGRESS_HOST_SCOPES`). */
-export const EGRESS_SCOPES: readonly string[] = ['web:read', 'model:complete', 'agent:run'];
+export const EGRESS_SCOPES: readonly string[] = ['web:read', 'model:complete', 'agent:run', 'mail:send'];
 
 /** The admin page's notes on scopes that need saying (web/app/admin/plugins/page.tsx). */
 export const AGENT_RUN_NOTE = 'agent:run starts background agent runs as the user who asks (from a write tool only): the host\'s own agent of a role, '
@@ -68,6 +68,15 @@ export const AGENT_RUN_NOTE = 'agent:run starts background agent runs as the use
   + 'The package gets only the run\'s id and its final text.';
 export const DOCUMENTS_WRITE_NOTE = 'documents:write creates text documents in the user\'s Documents and updates the ones this package created, '
   + 'as that user, marked with the package and tool that made them.';
+export const MAIL_READ_NOTE = 'mail:read lists and reads the user\'s mail: the Mail module\'s mailboxes (each message at its own protection level) '
+  + 'and the connected Gmail or Microsoft 365 inbox (counted as level 4: it carries no level). Messages above what the plugin may see stay hidden.';
+export const MAIL_DRAFT_NOTE = 'mail:draft saves drafts as the user, marked with the plugin that wrote them. It never sends: the user reviews '
+  + 'and sends a draft from Octipus or their mail app. A plugin that only drafts keeps its full protection level.';
+export const MAIL_SEND_NOTE = 'mail:send sends mail as the user to any address, from an external tool only (each call is asked about '
+  + 'by the user\'s permission rules; a schedule or event never sends). What it sends leaves the house, so the plugin is limited to data at protection level 1.';
+export const CALENDAR_NOTE = 'The calendars connected in Settings → Integrations (Google, Microsoft 365), in the personal workspace only. '
+  + 'Events carry no protection level of their own: they count as the level an admin sets (plugins.calendarProtectionLevel, default 3). '
+  + 'calendar:write adds events and changes only the ones this plugin added.';
 export const STORE_NOTE = 'Octipus keeps this data for each user apart: the plugin only ever reaches the data of the user it acts for, never another user\'s. '
   + 'Each user can delete theirs in Settings → My plugin usage; uninstalling the plugin deletes everyone\'s.';
 export const IN_PROCESS_NOTE = 'Runs in the server process: no sandbox, so it has the server\'s network, files and data.';
@@ -78,7 +87,7 @@ export const PAGE_EGRESS_NOTE = 'A page can send what it shows to any website: i
 
 /**
  * The warning when a package can send data out (`web:read`, `model:complete`,
- * `agent:run`, or a page, which can navigate anywhere) and also read the
+ * `agent:run`, `mail:send`, or a page, which can navigate anywhere) and also read the
  * user's data: what it reads it can send anywhere. Null when it cannot do both.
  */
 export function egressReadWarning(scopes: readonly string[], opts: { pages?: boolean } = {}): string | null {
@@ -172,6 +181,10 @@ export function declarationItems(
     const guidance = [
       scope === 'agent:run' ? AGENT_RUN_NOTE : null,
       scope === 'documents:write' ? DOCUMENTS_WRITE_NOTE : null,
+      scope === 'mail:read' ? MAIL_READ_NOTE : null,
+      scope === 'mail:draft' ? MAIL_DRAFT_NOTE : null,
+      scope === 'mail:send' ? MAIL_SEND_NOTE : null,
+      scope === 'calendar:read' || scope === 'calendar:write' ? CALENDAR_NOTE : null,
       egress && (EGRESS_SCOPES.includes(scope) || (scope.endsWith(':read') && scope !== 'web:read' && scope !== 'store:read')) ? egress : null,
     ].filter((g): g is string => g !== null).join(' ');
     items.push({ id: `host:${scope}`, kind: 'host', label: HOST_SCOPE_WORDS[scope] ?? `Host API scope ${scope}`, detail: scope, ...(guidance ? { guidance } : {}) });

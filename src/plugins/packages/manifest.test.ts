@@ -22,6 +22,13 @@ describe('plugin manifest', () => {
     expect(m.settings?.[0].key).toBe('region');
   });
 
+  test('mail:send needs an external tool to be handed to', () => {
+    const tools = (effect: string) => ({ ...FIXTURE, host: ['mail:read', 'mail:send'], tools: { send_it: { description: 'Sends', effect } } });
+    expect(problems(tools('write')).some((p) => p.includes('mail:send is handed only to external tools'))).toBe(true);
+    expect(() => parseManifest(tools('external'))).not.toThrow();
+    expect(parseManifest({ ...FIXTURE, host: ['mail:read', 'mail:draft', 'calendar:read', 'calendar:write'] }).host).toHaveLength(4);
+  });
+
   test('every problem is reported at once', () => {
     const found = problems({ ...FIXTURE, name: 'Bad Name', version: 'one', tools: { 'bad tool!': { effect: 'delete' } }, network: ['not a host'] });
     expect(found.some((p) => p.startsWith('name:'))).toBe(true);

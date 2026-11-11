@@ -45,6 +45,18 @@ describe('scope intersection', () => {
     expect(grantableScopes(['notes:read'], ['notes:read', 'tasks:write'], 'write')).toEqual(['notes:read']);
   });
 
+  test('mail and calendar: a read tool reads; only an external tool sends mail', () => {
+    const declared = ['mail:read', 'mail:draft', 'mail:send', 'calendar:read', 'calendar:write'] as const;
+    expect(grantableScopes([...declared], [...declared], 'read')).toEqual(['mail:read', 'calendar:read']);
+    expect(grantableScopes([...declared], [...declared], 'write')).toEqual(['mail:read', 'mail:draft', 'calendar:read', 'calendar:write']);
+    expect(grantableScopes([...declared], [...declared], 'external')).toEqual([...declared]);
+  });
+
+  test('mail and calendar are checked per source and request, not here: the user holds them', async () => {
+    held.off.add('mail');
+    expect(await userHeldScopes('u1', ['mail:read', 'calendar:read'])).toEqual(['mail:read', 'calendar:read']);
+  });
+
   test('web:read and model:complete change no data: a read tool gets them', () => {
     expect(grantableScopes(['web:read', 'model:complete', 'notes:write'], ['web:read', 'model:complete', 'notes:write'], 'read')).toEqual(['web:read', 'model:complete']);
   });
