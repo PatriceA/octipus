@@ -847,7 +847,7 @@ export async function uninstall(name: string, actorUserId: string): Promise<void
   await getMCPBridge().disconnect(`${PLUGIN_SERVER_PREFIX}${name}`);
   // Every user's store entries go with it (docs/PLUGIN-PACKAGES.md#store; the row's delete cascades too).
   const { pluginStoreRepository } = await import('@/db/repositories/plugin-store-repository');
-  const storeEntries = await pluginStoreRepository.deletePackage(name);
+  const storeEntries = (await pluginStoreRepository.deletePackage(name)).entries;
   await getDb().delete(pluginPackages).where(eq(pluginPackages.name, name));
   await rm(packageDir(name), { recursive: true, force: true });
   await rm(pluginDataDir(name), { recursive: true, force: true });
@@ -1070,9 +1070,22 @@ export async function configure(
         [`approveContributions: required, contributions hash ${current}`], current ? { contributionsHash: current } : {});
     }
   }
-  const [updated] = await getDb().update(pluginPackages)
-    .set({ settings, enabled, contentHash, signatureHash, signedBy, approvedHostScopes, approvedContributionsHash, ...inProcessApproval, updatedAt: new Date() })
-    .where(eq(pluginPackages.name, name)).returning();
+  // An approval that lowers the level the package may see (an egress scope
+  // approved) takes the store entries above it away, with the row
+  // (docs/PLUGIN-PACKAGES.md#store): what it could no longer read stays out of reach.
+  const capBefore = effectiveMaxProtection(row.manifest, grantedHostScopes(row));
+  const capAfter = effectiveMaxProtection(row.manifest, grantedHostScopes({ manifest: row.manifest, approvedHostScopes }));
+  const { updated, storeAbove } = await getDb().transaction(async (tx) => {
+    const [next] = await tx.update(pluginPackages)
+      .set({ settings, enabled, contentHash, signatureHash, signedBy, approvedHostScopes, approvedContributionsHash, ...inProcessApproval, updatedAt: new Date() })
+      .where(eq(pluginPackages.name, name)).returning();
+    if (capAfter >= capBefore || !row.manifest.store) return { updated: next, storeAbove: null };
+    const { pluginStoreRepository } = await import('@/db/repositories/plugin-store-repository');
+    return { updated: next, storeAbove: await pluginStoreRepository.deleteAbove(name, capAfter, tx) };
+  });
+  if (storeAbove && storeAbove.entries > 0) {
+    await audit(actorUserId, 'store_deleted_above_max_protection', name, { version: row.version, maxProtection: capAfter, previous: capBefore, entries: storeAbove.entries, users: storeAbove.users });
+  }
   if (approvingContributions) {
     await audit(actorUserId, 'contributions_approved', name, { version: row.version, hash: approvingContributions, previous: row.approvedContributionsHash });
   }

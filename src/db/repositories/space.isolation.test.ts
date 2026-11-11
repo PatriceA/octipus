@@ -208,6 +208,7 @@ const ALLOWLIST: Record<string, string> = {
   'src/models/cost-tracker.ts': "a user's own spend",
   'src/api/routes/runs.ts': "a run's cost, after the scoped run lookup",
   'src/api/routes/orgs.ts': 'org spend, admin billing',
+  'src/db/repositories/plugin-store-repository.ts': "the plugin store: every entry query bound to package, user and workspace (a space's entries only to that space's calls); usage and bulk deletes return sizes and counts, never content",
   'src/db/repositories/plugin-usage-repository.ts': "one plugin package's usage: counts and sums of cost_log and its background_jobs runs, for one user or (admins) all; aggregates, never row content",
   // The vault: a user's secrets; workspace-scoped secrets follow transfer.
   'src/security/vault.ts': 'secret store',

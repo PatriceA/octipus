@@ -200,7 +200,7 @@ async function fakeStoreHost(): Promise<{ url: string; server: Server; entries: 
       const key = url.pathname.startsWith('/api/plugin-host/store/') ? url.pathname.slice('/api/plugin-host/store/'.length) : null;
       if (req.method === 'GET' && url.pathname === '/api/plugin-host/store') {
         const prefix = url.searchParams.get('prefix') ?? '';
-        return answer(200, { keys: [...entries.keys()].filter((k) => k.startsWith(prefix)).sort().map((k) => ({ key: k, size: 1, version: entries.get(k)?.version, updatedAt: '' })), withheld: 0, truncated: false });
+        return answer(200, { keys: [...entries.keys()].filter((k) => k.startsWith(prefix)).sort().map((k) => ({ key: k, size: 1, version: entries.get(k)?.version, updatedAt: '' })), truncated: false });
       }
       if (key && req.method === 'GET') return entries.has(key) ? answer(200, entries.get(key)) : answer(404, { error: 'No such key', code: 'not_found' });
       if (key && req.method === 'PUT') {

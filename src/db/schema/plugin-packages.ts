@@ -1,5 +1,6 @@
-import { boolean, index, integer, jsonb, pgTable, primaryKey, smallint, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
+import { bigint, boolean, index, integer, jsonb, pgTable, primaryKey, smallint, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import type { PluginHostApproval, PluginManifest, PluginOrigin } from '@/shared/plugin-package';
+import { workspaces } from './organizations';
 import { users } from './users';
 
 /**
@@ -144,23 +145,45 @@ export const pluginListingPins = pgTable('plugin_listing_pins', {
 /**
  * The per-user plugin store (docs/PLUGIN-PACKAGES.md#store,
  * src/db/repositories/plugin-store-repository.ts): small JSON values a
- * package keeps, per key, separately for each user. Every row has a user;
- * there is no store shared across users. `sizeBytes` (key and JSON value,
- * UTF-8) counts against the package's quota per user; `protectionLevel` is
- * the call's read level when it was written, and reading the entry raises
- * the call's level to it; `version` moves by one on every write
- * (compare-and-set). Uninstalling the package or deleting the user deletes
- * the rows.
+ * package keeps, per key, separately for each user and workspace
+ * (`workspaceId` null: the user's personal one). Every row has a user; there
+ * is no store shared across users. `sizeBytes` (128 bytes of overhead, the
+ * key, and the value as the database serialises it) counts against the
+ * package's quota per user; `protectionLevel` is the call's level when it was
+ * written (never lowered by an overwrite), and reading the entry raises the
+ * call's level to it; `version` moves by one on every write
+ * (compare-and-set). Uninstalling the package, deleting the user or the
+ * workspace deletes the rows. Migration 0181 makes the unique index NULLS NOT
+ * DISTINCT (drizzle's builder has no such option).
  */
 export const pluginStore = pgTable('plugin_store', {
   packageName: text('package_name').notNull().references(() => pluginPackages.name, { onDelete: 'cascade' }),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
   key: text('key').notNull(),
   value: jsonb('value').$type<unknown>().notNull(),
   sizeBytes: integer('size_bytes').notNull(),
   protectionLevel: smallint('protection_level').notNull().default(1),
   version: integer('version').notNull().default(1),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
-}, (t) => [unique('plugin_store_key_uq').on(t.packageName, t.userId, t.key), index('plugin_store_user_idx').on(t.userId)]);
+}, (t) => [
+  uniqueIndex('plugin_store_key_uq').on(t.packageName, t.userId, t.workspaceId, t.key),
+  index('plugin_store_user_idx').on(t.userId),
+  index('plugin_store_workspace_idx').on(t.workspaceId),
+]);
+
+/**
+ * What each (package, user, workspace) keeps in the store: a running total
+ * of `plugin_store.size_bytes` and its entries, updated in the same
+ * transaction as every write and delete there, so the quota check reads a
+ * few rows instead of summing every entry.
+ */
+export const pluginStoreUsage = pgTable('plugin_store_usage', {
+  packageName: text('package_name').notNull().references(() => pluginPackages.name, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
+  bytes: bigint('bytes', { mode: 'number' }).notNull().default(0),
+  entries: integer('entries').notNull().default(0),
+}, (t) => [uniqueIndex('plugin_store_usage_uq').on(t.packageName, t.userId, t.workspaceId)]);
 
 export type PluginStoreRow = typeof pluginStore.$inferSelect;

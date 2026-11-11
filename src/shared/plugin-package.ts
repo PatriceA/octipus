@@ -465,6 +465,10 @@ export const PLUGIN_STORE_MAX_VALUE_BYTES = 64 * 1024;
 export const PLUGIN_STORE_KEY_RE = /^[A-Za-z0-9._:/-]{1,200}$/;
 /** The most keys one list answers. */
 export const PLUGIN_STORE_MAX_LIST = 1000;
+/** What every entry counts against the quota on top of its key and value: 128 bytes. */
+export const PLUGIN_STORE_ENTRY_OVERHEAD_BYTES = 128;
+/** The most entries a user keeps in one package's store (every workspace): 10,000. */
+export const PLUGIN_STORE_MAX_ENTRIES = 10_000;
 
 /** What `store` in the manifest declares. */
 export interface PluginStoreDecl {
@@ -489,7 +493,7 @@ export function formatStoreBytes(bytes: number): string {
 /** One entry of a list (`GET /api/plugin-host/store`, the page bridge's `store.list`). */
 export interface PluginStoreKeyView {
   key: string;
-  /** Its size as counted against the quota (key and JSON value, UTF-8 bytes). */
+  /** Its size as counted against the quota (128 bytes of overhead, the key, and the value as the database keeps it). */
   size: number;
   version: number;
   updatedAt: string;

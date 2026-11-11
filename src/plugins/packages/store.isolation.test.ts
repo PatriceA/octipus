@@ -19,14 +19,15 @@
  * Backed by ephemeral PGlite.
  */
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, onTestFinished, test, vi } from 'vitest';
 import type { RunningServer } from '@/api/http';
 import type { AgentContext } from '@/core/types';
 import type { MCPServer } from '@/shared/mcp-server';
 import type { PluginHostScope } from '@/shared/plugin-package';
+import { generateSigningKey, signPackage } from './signature';
 
 const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
@@ -43,13 +44,18 @@ const fixture = vi.hoisted(() => ({
   user: null as null | { id: string; username: string; isAdmin: boolean },
   /** An API token's scopes for the signed-in user (undefined: a browser session, every scope). */
   scopes: undefined as undefined | string[],
+  /** The shared space the request is made in (null: the user's personal workspace). */
+  space: null as null | string,
 }));
 vi.mock('@/api/context', async () => {
   const { principalFromUser } = await import('@/security/principal');
   return {
     apiContext: new (await import('@/api/http')).App().derive(() => ({
       user: fixture.user,
-      principal: fixture.user ? { ...principalFromUser(fixture.user), ...(fixture.scopes ? { scopes: fixture.scopes } : {}) } : { kind: 'anonymous' },
+      principal: fixture.user ? {
+        ...principalFromUser(fixture.user), ...(fixture.scopes ? { scopes: fixture.scopes } : {}),
+        ...(fixture.space ? { workspaceId: fixture.space, workspaceKind: 'shared', spaceRole: 'editor' } : {}),
+      } : { kind: 'anonymous' },
     })),
   };
 });
@@ -72,7 +78,13 @@ const PACKAGES: Record<string, [Record<string, unknown>, boolean, string[]]> = {
   plain: [manifest('plain', { ui: PAGES }), true, []],
   // Declares the store, but the admin approved nothing.
   unapproved: [manifest('unapproved', { host: ['store:read', 'store:write'], store: {}, ui: PAGES }), true, []],
+  // Pages and a store, signed by a key revoked later: its pages and store stop with it.
+  signed: [manifest('signed', { host: ['store:read', 'store:write'], store: {}, ui: PAGES }), true, ['store:read', 'store:write']],
+  // maxProtection 3 and web:read declared, not approved yet (disabled): approving it lowers what it may see to 1.
+  clamp: [manifest('clamp', { host: ['store:read', 'store:write', 'web:read'], store: {}, maxProtection: 3 }), false, ['store:read', 'store:write']],
 };
+/** The key `signed` is signed by. */
+const SIGNER = generateSigningKey();
 
 let server: RunningServer;
 let app: import('@/api/http').App;
@@ -119,6 +131,9 @@ async function route(method: string, path: string, body?: unknown, headers: Reco
   return { status: res.status, body: parsed };
 }
 
+/** The store of `pkg` for `userId` (Alice by default) in their personal workspace. */
+const scopeOf = (pkg: string, userId = ALICE.id) => ({ pkg, userId, workspaceId: null });
+
 async function rows(where = 'TRUE'): Promise<Array<{ package_name: string; user_id: string; key: string; value: unknown; protection_level: number; version: number }>> {
   const { queryRaw } = await import('@/db/postgres');
   return (await queryRaw(`SELECT package_name, user_id, key, value, protection_level, version FROM plugin_store WHERE ${where} ORDER BY package_name, user_id, key`)).rows;
@@ -136,9 +151,22 @@ beforeAll(async () => {
   }
   const { getDb } = await import('@/db/postgres');
   const { pluginPackages } = await import('@/db/schema/plugin-packages');
+  const { getConfig } = await import('@/config');
+  getConfig().workspace.rootPath = process.env.WORKSPACE_PATH as string;
+  const { packageDir } = await import('./service');
   for (const [name, [m, enabled, approved]] of Object.entries(PACKAGES)) {
     await getDb().insert(pluginPackages).values({ name, version: '1.0.0', manifest: m as never, enabled, approvedHostScopes: approved as never });
+    // Real files: a page and its store are served only while the package may start (its content checked).
+    const dir = packageDir(name);
+    mkdirSync(join(dir, 'ui'), { recursive: true });
+    writeFileSync(join(dir, 'octipus-plugin.json'), JSON.stringify(m));
+    writeFileSync(join(dir, 'server.mjs'), '// not started in this test\n');
+    writeFileSync(join(dir, 'ui', 'index.html'), `<!doctype html><title>${name}</title>`);
+    if (name === 'signed') await signPackage(dir, SIGNER.privateKeyPem);
   }
+  // Approved as installed: the content hash (and signature) pinned, as the first check before a start does.
+  const { checkPackageBeforeStart } = await import('./service');
+  for (const name of Object.keys(PACKAGES)) expect(await checkPackageBeforeStart(name)).toBeNull();
   const { App, listen } = await import('@/api/http');
   const { pluginHostRoutes } = await import('@/api/routes/plugin-host');
   const { pluginCallRoutes } = await import('@/api/routes/plugin-ui');
@@ -156,6 +184,8 @@ beforeEach(async () => {
   _resetRateLimits();
   fixture.user = null;
   fixture.scopes = undefined;
+  fixture.space = null;
+  (await import('./run-check')).forgetRunChecks();
 });
 
 afterAll(async () => {
@@ -173,7 +203,7 @@ describe('one user\'s entries are theirs alone', () => {
     expect(await host('GET', '/store/prefs/theme', a, 'other')).toEqual({ status: 200, body: { value: { theme: 'dark' }, version: 1 } });
     // Bob, same package, same key: nothing there for him.
     expect(await host('GET', '/store/prefs/theme', b, 'other')).toMatchObject({ status: 404, body: { code: 'not_found' } });
-    expect(await host('GET', '/store', b, 'other')).toEqual({ status: 200, body: { keys: [], withheld: 0, truncated: false } });
+    expect(await host('GET', '/store', b, 'other')).toEqual({ status: 200, body: { keys: [], truncated: false } });
     expect(await host('DELETE', '/store/prefs/theme', b, 'other')).toMatchObject({ status: 404 });
     // His write makes his own entry; Alice's is untouched.
     expect(await host('PUT', '/store/prefs/theme', b, 'other', { value: 'light', ifVersion: 0 })).toEqual({ status: 200, body: { version: 1 } });
@@ -232,9 +262,10 @@ describe('quota and compare-and-set', () => {
 
   test('concurrent writes cannot together pass the quota', async () => {
     const { pluginStoreRepository } = await import('@/db/repositories/plugin-store-repository');
-    const json = JSON.stringify('y'.repeat(900));
+    // 128 bytes of overhead, the key and 852 bytes of JSON: four fit in 4096 bytes, five do not.
+    const json = JSON.stringify('y'.repeat(850));
     const results = await Promise.all(Array.from({ length: 10 }, (_, i) =>
-      pluginStoreRepository.put('notebook', ALICE.id, `c${i}`, json, { protectionLevel: 1, quotaBytes: 4096 })));
+      pluginStoreRepository.put(scopeOf('notebook'), `c${i}`, json, { protectionLevel: 1, maxProtection: 4, quotaBytes: 4096 })));
     expect(results.filter((r) => r.ok)).toHaveLength(4);
     expect(results.filter((r) => !r.ok).every((r) => !r.ok && r.code === 'quota')).toBe(true);
     const usage = await pluginStoreRepository.usage('notebook', ALICE.id);
@@ -280,15 +311,15 @@ describe('protection levels', () => {
     const { pluginStoreRepository } = await import('@/db/repositories/plugin-store-repository');
     const { readLevelOf, resetReadLevels } = await import('./read-level');
     await resetReadLevels('vault');
-    await pluginStoreRepository.put('vault', ALICE.id, 'secret/l2', JSON.stringify('level two'), { protectionLevel: 2, quotaBytes: 1 << 20 });
-    await pluginStoreRepository.put('vault', ALICE.id, 'secret/l3', JSON.stringify('level three'), { protectionLevel: 3, quotaBytes: 1 << 20 });
+    await pluginStoreRepository.put(scopeOf('vault'), 'secret/l2', JSON.stringify('level two'), { protectionLevel: 2, maxProtection: 4, quotaBytes: 1 << 20 });
+    await pluginStoreRepository.put(scopeOf('vault'), 'secret/l3', JSON.stringify('level three'), { protectionLevel: 3, maxProtection: 4, quotaBytes: 1 << 20 });
     const scopes: PluginHostScope[] = ['store:read', 'store:write', 'notes:write'];
     // Before reading anything above 1, a note may be written.
     expect((await host('POST', '/notes', token('vault', ALICE.id, scopes, 2), 'vault', { title: 'Before' })).status).toBe(200);
-    // Above maxProtection (2): refused, and left out of a list (a key can carry data too).
-    expect(await host('GET', '/store/secret/l3', token('vault', ALICE.id, scopes, 2), 'vault')).toMatchObject({ status: 403, body: { code: 'protection_level' } });
+    // Above maxProtection (2): not there for this package, and left out of a list (a key can carry data too).
+    expect(await host('GET', '/store/secret/l3', token('vault', ALICE.id, scopes, 2), 'vault')).toMatchObject({ status: 404, body: { code: 'not_found' } });
     const listed = await host('GET', '/store?prefix=secret/', token('vault', ALICE.id, scopes, 2), 'vault');
-    expect(listed.body).toMatchObject({ keys: [{ key: 'secret/l2' }], withheld: 1 });
+    expect(listed.body).toEqual({ keys: [expect.objectContaining({ key: 'secret/l2' })], truncated: false });
     expect(await readLevelOf('vault', ALICE.id)).toBe(2);
     await resetReadLevels('vault');
     // Reading the level-2 entry raises what the package has read for Alice...
@@ -379,12 +410,273 @@ describe('the page routes', () => {
   });
 });
 
+// ── Regression tests of the store's security review (docs/plans/marketplace.md: four hard boundaries) ──
+
+/** Put a row as an earlier write would have left it (any level), bypassing the API. */
+async function seed(pkg: string, userId: string, key: string, value: unknown, level: number): Promise<void> {
+  const { queryRaw } = await import('@/db/postgres');
+  await queryRaw(`INSERT INTO plugin_store (package_name, user_id, key, value, size_bytes, protection_level) VALUES ($1, $2, $3, $4::jsonb, 200, $5)`,
+    [pkg, userId, key, JSON.stringify(value), level]);
+}
+
+const VAULT_SCOPES: PluginHostScope[] = ['store:read', 'store:write', 'notes:write'];
+
+describe('review: a write follows the calling session\'s level (no laundering)', () => {
+  test('a tool in a level-2 session stores at 2; a level-1 session reading it is raised, and its notes write is refused', async () => {
+    const { raiseSessionLevel } = await import('@/core/protection/session-level');
+    const { readLevelOf, resetReadLevels } = await import('./read-level');
+    await resetReadLevels('vault');
+    raiseSessionLevel('sess-hot', 2);
+    const hot = mintToken({ plugin: 'vault', userId: ALICE.id, workspaceId: null, sessionId: 'sess-hot', scopes: VAULT_SCOPES, maxProtection: 2, tool: 'save', effect: 'write' });
+    expect((await host('PUT', '/store/from-hot', hot, 'vault', { value: 'level-2 conversation text' })).status).toBe(200);
+    expect((await rows(`key = 'from-hot'`))[0].protection_level).toBe(2);
+    // The same session may not write a note either: it holds level-2 content.
+    expect(await host('POST', '/notes', hot, 'vault', { title: 'From a level-2 session' })).toMatchObject({ status: 403, body: { code: 'read_level' } });
+    await resetReadLevels('vault');
+    const cold = mintToken({ plugin: 'vault', userId: ALICE.id, workspaceId: null, sessionId: 'sess-cold', scopes: VAULT_SCOPES, maxProtection: 2, tool: 'save', effect: 'write' });
+    expect(await host('GET', '/store/from-hot', cold, 'vault')).toEqual({ status: 200, body: { value: 'level-2 conversation text', version: 1 } });
+    expect(await readLevelOf('vault', ALICE.id)).toBe(2);
+    expect(await host('POST', '/notes', cold, 'vault', { title: 'level-2 conversation text' })).toMatchObject({ status: 403, body: { code: 'read_level' } });
+    const { queryRaw } = await import('@/db/postgres');
+    expect((await queryRaw(`SELECT count(*)::int AS n FROM notes WHERE title LIKE '%level-2%'`)).rows[0].n).toBe(0);
+    await resetReadLevels('vault');
+  });
+});
+
+describe('review: nothing about an entry above maxProtection leaks, and what is told raises the caller', () => {
+  test('a get, a write, a compare-and-set and a delete of an entry above the cap answer as for a missing key, and leave it as it was', async () => {
+    const { resetReadLevels, readLevelOf } = await import('./read-level');
+    await resetReadLevels('vault');
+    await seed('vault', ALICE.id, 'hidden/l3', 'level three', 3);
+    const tok = () => token('vault', ALICE.id, VAULT_SCOPES, 2);
+    const missing = { status: 404, body: { error: 'No such key', code: 'not_found' } };
+    expect(await host('GET', '/store/hidden/l3', tok(), 'vault')).toEqual(missing);
+    expect(await host('GET', '/store/hidden/nothing', tok(), 'vault')).toEqual(missing);
+    expect(await host('PUT', '/store/hidden/l3', tok(), 'vault', { value: 'x', ifVersion: 0 })).toEqual(missing);
+    expect(await host('PUT', '/store/hidden/l3', tok(), 'vault', { value: 'x', ifVersion: 1 })).toEqual(missing);
+    expect(await host('PUT', '/store/hidden/l3', tok(), 'vault', { value: 'overwritten' })).toEqual(missing);
+    expect(await host('DELETE', '/store/hidden/l3', tok(), 'vault')).toEqual(missing);
+    const listed = await host('GET', '/store?prefix=hidden/', tok(), 'vault');
+    expect(listed).toEqual({ status: 200, body: { keys: [], truncated: false } });
+    expect((await rows(`package_name = 'vault' AND key = 'hidden/l3'`))[0]).toMatchObject({ value: 'level three', version: 1, protection_level: 3 });
+    // Nothing above was handed over: the package's level for Alice is untouched.
+    expect(await readLevelOf('vault', ALICE.id)).toBe(1);
+  });
+
+  test('an overwrite never lowers an entry\'s level and raises the writer; a conflict and a delete raise the caller too', async () => {
+    const { resetReadLevels, readLevelOf } = await import('./read-level');
+    await seed('vault', ALICE.id, 'mid/over', 'level two', 2);
+    await seed('vault', ALICE.id, 'mid/cas', 'level two', 2);
+    await seed('vault', ALICE.id, 'mid/del', 'level two', 2);
+    const tok = () => token('vault', ALICE.id, VAULT_SCOPES, 2);
+    await resetReadLevels('vault');
+    expect(await host('PUT', '/store/mid/over', tok(), 'vault', { value: 'written at level 1' })).toEqual({ status: 200, body: { version: 2 } });
+    expect((await rows(`package_name = 'vault' AND key = 'mid/over'`))[0].protection_level).toBe(2);
+    expect(await readLevelOf('vault', ALICE.id)).toBe(2);
+    expect(await host('POST', '/notes', tok(), 'vault', { title: 'after an overwrite' })).toMatchObject({ status: 403, body: { code: 'read_level' } });
+    await resetReadLevels('vault');
+    expect(await host('PUT', '/store/mid/cas', tok(), 'vault', { value: 'x', ifVersion: 0 })).toMatchObject({ status: 409, body: { current: 1 } });
+    expect(await readLevelOf('vault', ALICE.id)).toBe(2);
+    await resetReadLevels('vault');
+    expect(await host('DELETE', '/store/mid/del', tok(), 'vault')).toEqual({ status: 200, body: { deleted: true } });
+    expect(await readLevelOf('vault', ALICE.id)).toBe(2);
+    await resetReadLevels('vault');
+  });
+
+  test('a quota refusal says the quota, not what is used', async () => {
+    const { pluginStoreRepository } = await import('@/db/repositories/plugin-store-repository');
+    await pluginStoreRepository.deleteUser('notebook', BOB.id);
+    const a = token('notebook', BOB.id);
+    const big = 'x'.repeat(1500);
+    expect((await host('PUT', '/store/qq1', a, 'notebook', { value: big })).status).toBe(200);
+    expect((await host('PUT', '/store/qq2', a, 'notebook', { value: big })).status).toBe(200);
+    const refused = await host('PUT', '/store/qq3', a, 'notebook', { value: big });
+    expect(refused).toMatchObject({ status: 413, body: { code: 'quota' } });
+    expect(refused.body.error).not.toMatch(/used/);
+    for (const k of ['qq1', 'qq2']) await host('DELETE', `/store/${k}`, a, 'notebook');
+  });
+
+  test('approving an egress scope lowers maxProtection: the entries above it are deleted with the approval, audited with counts only', async () => {
+    // (Nothing enabled while the approval syncs the servers: the rows have no real servers to start.)
+    const { executeRaw } = await import('@/db/postgres');
+    const enabled = Object.entries(PACKAGES).filter(([, [, on]]) => on).map(([n]) => n);
+    await executeRaw('UPDATE plugin_packages SET enabled = false');
+    onTestFinished(async () => {
+      for (const n of enabled) await executeRaw(`UPDATE plugin_packages SET enabled = true WHERE name = '${n}'`);
+    });
+    await seed('clamp', ALICE.id, 'k1', 1, 1);
+    await seed('clamp', ALICE.id, 'k2', 2, 2);
+    await seed('clamp', BOB.id, 'k3', 3, 3);
+    const { configure } = await import('./service');
+    await configure('clamp', { approveHostScopes: ['store:read', 'store:write', 'web:read'] }, ADMIN.id);
+    expect((await rows(`package_name = 'clamp'`)).map((r) => [r.key, r.protection_level])).toEqual([['k1', 1]]);
+    const { queryRaw } = await import('@/db/postgres');
+    const { rows: audited } = await queryRaw(`SELECT details FROM audit_log WHERE resource_type = 'plugin_package' AND resource_id = 'clamp' AND details->>'op' = 'store_deleted_above_max_protection'`);
+    expect(audited).toHaveLength(1);
+    const details = typeof audited[0].details === 'string' ? JSON.parse(audited[0].details) : audited[0].details;
+    expect(details).toMatchObject({ maxProtection: 1, previous: 3, entries: 2, users: 2 });
+    expect(JSON.stringify(details)).not.toMatch(/k2|k3/);
+  });
+});
+
+describe('review: a revoked or unapproved package serves no page and no store', () => {
+  test('content changed since it was approved: no store, no page, not listed', async () => {
+    fixture.user = ALICE;
+    expect((await route('GET', '/api/plugins/notebook/store')).status).toBe(200);
+    const { listEnabledPages, readUiFile } = await import('./ui');
+    expect((await listEnabledPages()).map((p) => p.plugin)).toContain('notebook');
+    const { packageDir } = await import('./service');
+    const file = join(packageDir('notebook'), 'ui', 'index.html');
+    const before = readFileSync(file, 'utf8');
+    writeFileSync(file, `${before}<!-- changed -->`);
+    // The check is cached for 30 seconds; a file changed on disk is seen when it runs again.
+    const { forgetRunChecks } = await import('./run-check');
+    forgetRunChecks();
+    try {
+      expect(await route('GET', '/api/plugins/notebook/store')).toMatchObject({ status: 404, body: { error: 'No such plugin page' } });
+      expect(await route('PUT', '/api/plugins/notebook/store/x', { value: 1 })).toMatchObject({ status: 404, body: { error: 'No such plugin page' } });
+      expect((await readUiFile('notebook', 'index.html')).status).toBe(404);
+      expect((await listEnabledPages()).map((p) => p.plugin)).not.toContain('notebook');
+    } finally {
+      writeFileSync(file, before);
+      forgetRunChecks();
+    }
+    expect((await route('GET', '/api/plugins/notebook/store')).status).toBe(200);
+  });
+
+  test('signed by a key revoked since: no store, no page, not listed', async () => {
+    fixture.user = ALICE;
+    const { listEnabledPages, readUiFile } = await import('./ui');
+    expect((await route('GET', '/api/plugins/signed/store')).status).toBe(200);
+    expect((await readUiFile('signed', 'index.html')).status).toBe(200);
+    expect((await listEnabledPages()).map((p) => p.plugin)).toContain('signed');
+    const { getConfig } = await import('@/config');
+    const { forgetRunChecks } = await import('./run-check');
+    getConfig().plugins.revokedKeys = [SIGNER.keyId];
+    forgetRunChecks();
+    try {
+      expect(await route('GET', '/api/plugins/signed/store')).toMatchObject({ status: 404, body: { error: 'No such plugin page' } });
+      expect((await readUiFile('signed', 'index.html')).status).toBe(404);
+      expect((await listEnabledPages()).map((p) => p.plugin)).not.toContain('signed');
+    } finally {
+      getConfig().plugins.revokedKeys = [];
+      forgetRunChecks();
+    }
+  });
+});
+
+describe('review: the quota counts what is kept', () => {
+  test('each entry costs 128 bytes on top of its key and its value as the database serialises it; the running total follows', async () => {
+    const a = token('other', ALICE.id);
+    expect((await host('PUT', '/store/tiny', a, 'other', { value: 1 })).status).toBe(200);
+    expect((await rows(`package_name = 'other' AND user_id = '${ALICE.id}' AND key = 'tiny'`))).toHaveLength(1);
+    const { queryRaw } = await import('@/db/postgres');
+    const size = async (key: string) => (await queryRaw(`SELECT size_bytes FROM plugin_store WHERE package_name = 'other' AND user_id = $1 AND key = $2`, [ALICE.id, key])).rows[0].size_bytes;
+    expect(await size('tiny')).toBe(128 + 'tiny'.length + 1);
+    // 1e300 is "1e+300" in JSON, and 301 digits in the database: that is what counts.
+    expect((await host('PUT', '/store/numbers', a, 'other', { value: Array(100).fill(1e300) })).status).toBe(200);
+    expect(await size('numbers')).toBeGreaterThan(100 * 301);
+    // Past 64 KB as the database keeps it: too large, however short the JSON sent.
+    expect(await host('PUT', '/store/numbers2', a, 'other', { value: Array(300).fill(1e300) })).toMatchObject({ status: 413, body: { code: 'too_large' } });
+    const totals = (await queryRaw(`SELECT bytes::int AS bytes, entries FROM plugin_store_usage WHERE package_name = 'other' AND user_id = $1 AND workspace_id IS NULL`, [ALICE.id])).rows[0];
+    const actual = (await queryRaw(`SELECT sum(size_bytes)::int AS bytes, count(*)::int AS entries FROM plugin_store WHERE package_name = 'other' AND user_id = $1`, [ALICE.id])).rows[0];
+    expect(totals).toEqual(actual);
+    for (const k of ['tiny', 'numbers']) expect((await host('DELETE', `/store/${k}`, a, 'other')).status).toBe(200);
+    const after = (await queryRaw(`SELECT bytes::int AS bytes, entries FROM plugin_store_usage WHERE package_name = 'other' AND user_id = $1 AND workspace_id IS NULL`, [ALICE.id])).rows[0];
+    expect(after).toEqual((await queryRaw(`SELECT coalesce(sum(size_bytes), 0)::int AS bytes, count(*)::int AS entries FROM plugin_store WHERE package_name = 'other' AND user_id = $1`, [ALICE.id])).rows[0]);
+  });
+
+  test('a user keeps at most 10,000 entries per package: a new key beyond is refused (413 too_many_entries), an overwrite is not', async () => {
+    const { pluginStoreRepository } = await import('@/db/repositories/plugin-store-repository');
+    await pluginStoreRepository.deleteUser('other', BOB.id);
+    const { queryRaw } = await import('@/db/postgres');
+    await queryRaw(`INSERT INTO plugin_store (package_name, user_id, key, value, size_bytes) SELECT 'other', $1, 'many/' || i, '1'::jsonb, 140 FROM generate_series(1, 10000) AS i`, [BOB.id]);
+    await queryRaw(`INSERT INTO plugin_store_usage (package_name, user_id, workspace_id, bytes, entries) VALUES ('other', $1, NULL, 1400000, 10000)`, [BOB.id]);
+    const b = token('other', BOB.id);
+    try {
+      expect(await host('PUT', '/store/one-more', b, 'other', { value: 1 })).toMatchObject({ status: 413, body: { code: 'too_many_entries' } });
+      expect((await host('PUT', '/store/many/1', b, 'other', { value: 2 })).status).toBe(200);
+    } finally {
+      await queryRaw(`DELETE FROM plugin_store WHERE package_name = 'other' AND user_id = $1 AND key LIKE 'many/%'`, [BOB.id]);
+      await queryRaw(`DELETE FROM plugin_store_usage WHERE package_name = 'other' AND user_id = $1`, [BOB.id]);
+    }
+  });
+
+  test('a value nested too deeply says so', async () => {
+    fixture.user = ALICE;
+    const raw = `{"value":${'['.repeat(5000)}${']'.repeat(5000)}}`;
+    const res = await app.handle(new Request('http://localhost/api/plugins/notebook/store/deep', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: raw }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ code: 'invalid_value', error: 'The value is too deeply nested' });
+  });
+});
+
+describe('review: page writes share the store\'s write limit', () => {
+  test('after a burst of writes by the package\'s tools, the page\'s write is limited too', async () => {
+    const a = token('notebook', ALICE.id);
+    // 30 in a burst, 5 a second after that: write until the tools are limited.
+    let status = 200;
+    for (let i = 0; i < 100 && status === 200; i++) status = (await host('PUT', '/store/burst', a, 'notebook', { value: i })).status;
+    expect(status).toBe(429);
+    fixture.user = ALICE;
+    expect(await route('PUT', '/api/plugins/notebook/store/burst', { value: 'from the page' })).toMatchObject({ status: 429, body: { code: 'rate_limited' } });
+    // Reads are not writes.
+    expect((await route('GET', '/api/plugins/notebook/store/burst')).status).toBe(200);
+    const { _resetRateLimits } = await import('@/core/artifacts/rate-limit');
+    _resetRateLimits();
+    expect((await route('DELETE', '/api/plugins/notebook/store/burst')).status).toBe(200);
+  });
+});
+
+describe('review: the store is per user and per workspace', () => {
+  test('what a call keeps in a space is read in that space only; leaving the space deletes it; "Delete my data" can name a workspace', async () => {
+    const { createSpace, removeMember } = await import('@/core/spaces/service');
+    const space = await createSpace({ userId: ALICE.id }, { name: `Store ${rand(3)}` });
+    const { queryRaw } = await import('@/db/postgres');
+    await queryRaw(`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'editor')`, [space.id, BOB.id]);
+    const inSpace = (userId: string) => mintToken({ plugin: 'other', userId, workspaceId: space.id, sessionId: null, scopes: ['store:read', 'store:write'], maxProtection: 1, tool: 'save', effect: 'write' });
+    const personal = (userId: string) => token('other', userId);
+    expect((await host('PUT', '/store/ws/note', inSpace(ALICE.id), 'other', { value: 'in the space' })).status).toBe(200);
+    expect((await host('PUT', '/store/ws/note', personal(ALICE.id), 'other', { value: 'personal' })).status).toBe(200);
+    expect(await host('GET', '/store/ws/note', inSpace(ALICE.id), 'other')).toEqual({ status: 200, body: { value: 'in the space', version: 1 } });
+    expect(await host('GET', '/store/ws/note', personal(ALICE.id), 'other')).toEqual({ status: 200, body: { value: 'personal', version: 1 } });
+    expect((await host('GET', '/store?prefix=ws/', inSpace(ALICE.id), 'other')).body.keys.map((k: { key: string }) => k.key)).toEqual(['ws/note']);
+    expect((await rows(`package_name = 'other' AND key = 'ws/note'`))).toHaveLength(2);
+    // Another member of the space has their own entries there: never Alice's.
+    expect(await host('GET', '/store/ws/note', inSpace(BOB.id), 'other')).toMatchObject({ status: 404 });
+    expect((await host('PUT', '/store/ws/bob', inSpace(BOB.id), 'other', { value: 'bob in the space' })).status).toBe(200);
+    expect((await host('PUT', '/store/ws/bob', personal(BOB.id), 'other', { value: 'bob personal' })).status).toBe(200);
+
+    // The page, in the space and out of it.
+    fixture.user = ALICE;
+    fixture.space = space.id;
+    expect(await route('PUT', '/api/plugins/notebook/store/ws/page', { value: 'page in the space' })).toEqual({ status: 200, body: { version: 1 } });
+    expect(await route('GET', '/api/plugins/notebook/store/ws/page')).toEqual({ status: 200, body: { value: 'page in the space', version: 1 } });
+    fixture.space = null;
+    expect(await route('GET', '/api/plugins/notebook/store/ws/page')).toMatchObject({ status: 404 });
+
+    // Bob leaves (is removed): his entries of that space go, his personal ones stay.
+    await removeMember({ userId: ALICE.id }, space.id, BOB.id);
+    const { rows: bobs } = await queryRaw(`SELECT key, workspace_id FROM plugin_store WHERE user_id = $1 AND key = 'ws/bob'`, [BOB.id]);
+    expect(bobs).toEqual([{ key: 'ws/bob', workspace_id: null }]);
+    const usage = (await queryRaw(`SELECT count(*)::int AS n FROM plugin_store_usage WHERE user_id = $1 AND workspace_id = $2`, [BOB.id, space.id])).rows[0].n;
+    expect(usage).toBe(0);
+
+    // "Delete my data" in one workspace only, then everywhere.
+    const out = await route('DELETE', '/api/plugin-packages/other/store/me?workspace=personal');
+    expect(out).toMatchObject({ status: 200, body: { name: 'other' } });
+    expect((await rows(`package_name = 'other' AND user_id = '${ALICE.id}' AND key = 'ws/note'`)).map((r) => r.value)).toEqual(['in the space']);
+    expect((await route('DELETE', `/api/plugin-packages/other/store/me?workspace=${space.id}`)).status).toBe(200);
+    expect(await rows(`package_name = 'other' AND user_id = '${ALICE.id}' AND key = 'ws/note'`)).toEqual([]);
+  });
+});
+
 describe('deleting', () => {
   test('"Delete my data" removes the user\'s entries of that package only, and is audited', async () => {
     const { pluginStoreRepository } = await import('@/db/repositories/plugin-store-repository');
-    await pluginStoreRepository.put('notebook', ALICE.id, 'd1', '1', { protectionLevel: 1, quotaBytes: 4096 });
-    await pluginStoreRepository.put('notebook', BOB.id, 'd1', '1', { protectionLevel: 1, quotaBytes: 4096 });
-    await pluginStoreRepository.put('other', ALICE.id, 'd1', '1', { protectionLevel: 1, quotaBytes: 4096 });
+    await pluginStoreRepository.put(scopeOf('notebook'), 'd1', '1', { protectionLevel: 1, maxProtection: 4, quotaBytes: 4096 });
+    await pluginStoreRepository.put(scopeOf('notebook', BOB.id), 'd1', '1', { protectionLevel: 1, maxProtection: 4, quotaBytes: 4096 });
+    await pluginStoreRepository.put(scopeOf('other'), 'd1', '1', { protectionLevel: 1, maxProtection: 4, quotaBytes: 4096 });
     fixture.user = ALICE;
     const usage = await route('GET', '/api/plugin-packages/my-usage');
     const mine = (usage.body as Array<{ name: string; store: { entries: number; bytes: number; quotaBytes: number } | null }>).find((p) => p.name === 'notebook');
@@ -413,8 +705,8 @@ describe('deleting', () => {
 
   test('deleting a user deletes their entries; uninstalling a package deletes every user\'s', async () => {
     const { pluginStoreRepository } = await import('@/db/repositories/plugin-store-repository');
-    await pluginStoreRepository.put('other', BOB.id, 'gone', '1', { protectionLevel: 1, quotaBytes: 4096 });
-    await pluginStoreRepository.put('vault', BOB.id, 'gone', '1', { protectionLevel: 1, quotaBytes: 4096 });
+    await pluginStoreRepository.put(scopeOf('other', BOB.id), 'gone', '1', { protectionLevel: 1, maxProtection: 4, quotaBytes: 4096 });
+    await pluginStoreRepository.put(scopeOf('vault', BOB.id), 'gone', '1', { protectionLevel: 1, maxProtection: 4, quotaBytes: 4096 });
     expect((await rows(`user_id = '${BOB.id}'`)).length).toBeGreaterThan(0);
     const { userRepository } = await import('@/db/repositories/user-repository');
     expect(await userRepository.delete(BOB.id)).toBe(true);

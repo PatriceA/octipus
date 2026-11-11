@@ -425,22 +425,28 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
     { query: USAGE_QUERY, detail: { tags: ['plugin-packages'] } },
   )
 
-  // "Delete my data": every entry the plugin keeps for the signed-in user in its store (any user, their own only; audited).
+  // "Delete my data": every entry the plugin keeps for the signed-in user in its store (any user, their own only; audited):
+  // in every workspace, or with `workspace` in one (`personal`, or a space's id).
   .delete(
     '/:name/store/me',
-    async ({ request, principal, set, params }) => {
+    async ({ request, principal, set, params, query }) => {
       const denied = pluginUserDenied({ set, principal, request }, 'write');
       if (denied) return denied;
+      const workspaceId = query.workspace === undefined ? undefined : query.workspace === 'personal' ? null : query.workspace;
       const { pluginStoreRepository } = await import('@/db/repositories/plugin-store-repository');
-      const deleted = await pluginStoreRepository.deleteUser(params.name, principal.userId);
+      const deleted = await pluginStoreRepository.deleteUser(params.name, principal.userId, workspaceId);
       const { auditRepository } = await import('@/db/repositories/audit-repository');
       await auditRepository.log({
         userId: principal.userId, action: 'settings_changed', resourceType: 'plugin_package', resourceId: params.name,
-        details: { op: 'store_deleted_by_user', entries: deleted.entries, bytes: deleted.bytes },
+        details: { op: 'store_deleted_by_user', entries: deleted.entries, bytes: deleted.bytes, workspace: workspaceId === undefined ? 'all' : workspaceId ?? 'personal' },
       });
       return { name: params.name, ...deleted };
     },
-    { params: NAME_PARAM, detail: { tags: ['plugin-packages'] } },
+    {
+      params: NAME_PARAM,
+      query: t.Object({ workspace: t.Optional(t.String({ pattern: '^(personal|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$' })) }),
+      detail: { tags: ['plugin-packages'] },
+    },
   )
 
   // One plugin's tokens, spend, model calls and runs: every user's (admins).
