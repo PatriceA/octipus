@@ -73,7 +73,7 @@ export function buildChildEnv(
  * still gets: enough to find binaries, a home and a locale. Nothing else of
  * the host's environment crosses, credential-looking or not.
  */
-export const MINIMAL_ENV_NAMES = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TEMP', 'TMP', 'SystemRoot', 'ComSpec', 'PATHEXT', 'WINDIR'];
+export const MINIMAL_ENV_NAMES = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TEMP', 'TMP', 'SystemRoot', 'ComSpec', 'PATHEXT', 'WINDIR', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'ALLUSERSPROFILE', 'ProgramData'];
 
 /** The environment of an isolated child: the minimal host variables plus exactly `extra`. */
 export function buildIsolatedChildEnv(extra?: Record<string, string>): Record<string, string> {

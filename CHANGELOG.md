@@ -44,6 +44,16 @@ labels reflect blast radius, not contract guarantees.
     there only, and leaving the space deletes it. "Delete my data" takes an
     optional workspace. Migration `0181_plugin_store` (not released yet) is
     changed in place.
+- **Native Windows plugin sandbox.** Marketplace and local package plugins
+  can run in a less-privileged AppContainer through `octipus-sandbox.exe`,
+  with a kill-on-close Job object (2 GiB, 32 processes). Package files are
+  read-only; dedicated data and scratch are writable. A private named-pipe
+  broker enforces declared hosts without an internet capability or loopback
+  exemption. Node proxy adaptation supports existing proxy-aware packages.
+  Exact release installs obtain the tested binary; source Windows installs
+  and updates build it with Rust and Visual Studio C++ Build Tools. See
+  [Windows sandbox](docs/WINDOWS-SANDBOX.md) for persistent folder permissions,
+  runtime limits and Windows CI evidence.
 
 - **Plugin sandbox is a boundary of its own, required by default (final
   security review).** Package plugins were sandboxed only under
@@ -56,7 +66,7 @@ labels reflect blast radius, not contract guarantees.
   plugins not from the marketplace; a marketplace plugin always needs a
   runner. **Upgrade note:** on a host without a runner, enabled plugins stop
   until one is installed (or, for local plugins only, `plugins.sandbox: off`).
-  **Windows** has no runner: marketplace plugins cannot run there. The
+  **Windows** uses the native AppContainer helper described above. The
   Docker image installs bubblewrap (`docker-compose.yml` documents the
   seccomp/AppArmor options bwrap may need); a startup log line and the admin
   page say *plugin sandbox: active runner X / unavailable*. Declarations, the

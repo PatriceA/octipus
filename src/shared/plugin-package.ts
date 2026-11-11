@@ -106,7 +106,7 @@ export interface PluginManifest extends PluginManifestContributions {
  * - `restricted` — it declares hosts and reaches only those, through the
  *   egress proxy, with direct network off in the sandbox;
  * - `not_enforced` — no sandbox wraps it on this platform (sandbox off, no
- *   bwrap/firejail on Linux, no sandbox-exec on macOS, Windows): the
+ *   bwrap/firejail on Linux, no sandbox-exec on macOS, no native Windows helper): the
  *   declared hosts are advice, and a package with hosts is only pointed at
  *   the proxy;
  * - `refused` — `security.shellSandbox` is `required` and no runner can
@@ -879,7 +879,7 @@ export interface PluginSandboxStatus {
   /** `plugins.sandbox`. */
   setting: 'required' | 'off';
   /** The working runner, or null. */
-  runner: 'bwrap' | 'firejail' | 'sandbox-exec' | null;
+  runner: 'bwrap' | 'firejail' | 'sandbox-exec' | 'appcontainer' | null;
   /** Why no runner works here, with how to get one; null when one does. */
   unavailable: string | null;
   platform: string;

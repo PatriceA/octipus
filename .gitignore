@@ -112,3 +112,7 @@ logs.zip
 # The Octipus runtime folder (project skills, attachments, extensions) is
 # never tracked.
 .octipus/
+
+# Native Windows plugin runner (reproducible source and lockfile are tracked).
+/native/windows-sandbox/target/
+/native/bin/

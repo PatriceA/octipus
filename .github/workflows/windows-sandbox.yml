@@ -1,0 +1,33 @@
+name: Windows plugin sandbox
+on:
+  pull_request:
+  push:
+    branches: [main, 'feat/windows-plugin-sandbox']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-sandbox-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows-sandbox:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/node-setup
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - name: Build native AppContainer helper
+        run: npm run build:sandbox:windows
+      - name: Rust contracts
+        run: cargo test --locked --manifest-path native/windows-sandbox/Cargo.toml
+      - name: Real Windows isolation and broker tests
+        run: npx vitest run --project unit src/security/windows-plugin-sandbox.test.ts src/security/shell-sandbox.windows.e2e.test.ts
+      - uses: actions/upload-artifact@v7
+        with:
+          name: octipus-sandbox-win32-x64
+          path: native/bin/octipus-sandbox.exe
+          if-no-files-found: error

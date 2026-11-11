@@ -1,3 +1,4 @@
+import { windowsSandboxBinary, wrapWindowsPluginCommand } from './windows-plugin-sandbox';
 import { approvedCliRuntimes } from './cli-runtimes';
 import type { ShellSshAgent } from './shell-ssh-agent';
 import { androidSdkPaths, browserRuntimeMounts, browserRuntimePaths, runtimePath } from './runtime-path';
@@ -21,8 +22,10 @@ import { androidSdkPaths, browserRuntimeMounts, browserRuntimePaths, runtimePath
  *     release and is what the system's own services use underneath; if a
  *     release ever drops it, detection finds nothing and `auto` falls back
  *     to unwrapped (and `required` refuses), as on a Linux host without
- *     bwrap. Windows has no comparable built-in runner (AppContainer and
- *     job objects need a native helper), so nothing wraps there.
+ *     bwrap.
+ *   - appcontainer — native Windows plugin-only helper; no capabilities, a
+ *     kill-on-close Job object, and a private pipe to the host egress proxy.
+ *     General shell tools do not opt into this runner.
  *
  * Activation is gated by `config.security.shellSandbox`:
  *
@@ -60,7 +63,7 @@ import { dirname, join } from 'node:path';
 import { getConfig } from '@/config';
 import { coreLogger } from '@/utils/logger';
 
-export type SandboxRunner = 'bwrap' | 'firejail' | 'sandbox-exec';
+export type SandboxRunner = 'bwrap' | 'firejail' | 'sandbox-exec' | 'appcontainer';
 export type SandboxMode = 'off' | 'auto' | 'required';
 
 export interface WrapOptions {
@@ -90,6 +93,8 @@ export interface WrapOptions {
    * on macOS keeps running shell commands unwrapped as it always has.
    */
   allowSeatbelt?: boolean;
+  /** Native Windows runner: plugin transports only, never general shell tools. */
+  allowAppContainer?: boolean;
   /** Server-authorized host USB access for device tests; not implied by network access. */
   allowHostUsb?: boolean;
   /** Additional read-only paths to expose (e.g. /Users for macOS-style
@@ -100,6 +105,8 @@ export interface WrapOptions {
   extraReadWrite?: string[];
   /** Command environment PATH, before adding the mounted user executables. */
   path?: string;
+  /** Server-owned private broker, never a plugin/tool argument. */
+  windowsBroker?: { pipe?: string; proxyPort?: number; authority: string };
 }
 
 export interface WrapResult {
@@ -131,7 +138,7 @@ const KNOWN_SANDBOX_EXEC = ['/usr/bin/sandbox-exec'];
 
 type Detected = { runner: SandboxRunner; binary: string };
 /** One cache per `allowSeatbelt` value. */
-const detectedCache = new Map<boolean, Detected | null>();
+const detectedCache = new Map<string, Detected | null>();
 
 export interface DetectOptions {
   /**
@@ -141,15 +148,20 @@ export interface DetectOptions {
    * what it saw before sandbox-exec support existed: none.
    */
   allowSeatbelt?: boolean;
+  /** Native Windows runner: plugin transports only, never general shell tools. */
+  allowAppContainer?: boolean;
 }
 
 export function detectRunner(options: DetectOptions = {}): Detected | null {
   const allowSeatbelt = options.allowSeatbelt === true;
-  const cached = detectedCache.get(allowSeatbelt);
+  const key = `${allowSeatbelt}:${options.allowAppContainer === true}`;
+  const cached = detectedCache.get(key);
   if (cached !== undefined) return cached;
   // macOS first looks for Seatbelt when allowed; elsewhere sandbox-exec is
   // never used. Windows finds none of these paths, so nothing wraps there.
+  const windowsBinary = process.platform === 'win32' && options.allowAppContainer ? windowsSandboxBinary() : null;
   const candidates: Array<[SandboxRunner, string[]]> = [
+    ...(windowsBinary ? [['appcontainer', [windowsBinary]] as [SandboxRunner, string[]]] : []),
     ...(allowSeatbelt && process.platform === 'darwin' ? [['sandbox-exec', KNOWN_SANDBOX_EXEC] as [SandboxRunner, string[]]] : []),
     ['bwrap', KNOWN_BWRAP],
     ['firejail', KNOWN_FIREJAIL],
@@ -158,11 +170,11 @@ export function detectRunner(options: DetectOptions = {}): Detected | null {
     const binary = paths.find((path) => existsSync(path));
     if (binary) {
       const found = { runner, binary };
-      detectedCache.set(allowSeatbelt, found);
+      detectedCache.set(key, found);
       return found;
     }
   }
-  detectedCache.set(allowSeatbelt, null);
+  detectedCache.set(key, null);
   return null;
 }
 
@@ -195,18 +207,20 @@ let forced = false;
  * need nothing of the kind.
  */
 export function runnerProblem(detected: Detected): string | null {
-  if (forced || detected.runner !== 'bwrap') return null;
+  if (forced || (detected.runner !== 'bwrap' && detected.runner !== 'appcontainer')) return null;
   const cached = probeCache.get(detected.binary);
   if (cached !== undefined) return cached;
   let problem: string | null = null;
   try {
     // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- fixed argv of a runner found at a known system path
-    const r = spawnSync(detected.binary, ['--ro-bind', '/', '/', '--new-session', 'true'], {
+    const r = spawnSync(detected.binary, detected.runner === 'appcontainer' ? ['--probe'] : ['--ro-bind', '/', '/', '--new-session', 'true'], {
       encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'ignore', 'pipe'],
     });
     if (r.error || r.status !== 0) {
       const why = (r.error?.message ?? r.stderr ?? '').trim().split('\n')[0]?.slice(0, 200) || `exit ${r.status}`;
-      problem = `${detected.binary} is installed but cannot start a sandbox here (${why}); it needs unprivileged user namespaces (check: bwrap --ro-bind / / true)`;
+      problem = detected.runner === 'appcontainer'
+        ? `${detected.binary} cannot initialize AppContainer (${why}); rebuild with npm run build:sandbox:windows`
+        : `${detected.binary} is installed but cannot start a sandbox here (${why}); it needs unprivileged user namespaces (check: bwrap --ro-bind / / true)`;
     }
   } catch (err) {
     problem = `${detected.binary} could not be run (${(err as Error).message})`;
@@ -223,15 +237,13 @@ export function runnerProblem(detected: Detected): string | null {
  * installed runner in turn. Production never calls it.
  */
 export function _forceSandboxRunnerForTests(runner: SandboxRunner, binary: string): void {
-  detectedCache.set(false, { runner, binary });
-  detectedCache.set(true, { runner, binary });
+  for (const a of [false, true]) for (const b of [false, true]) detectedCache.set(`${a}:${b}`, { runner, binary });
   forced = true;
 }
 
 /** Test-only: make detection find no runner at all (both cache entries). */
 export function _forceNoSandboxRunnerForTests(): void {
-  detectedCache.set(false, null);
-  detectedCache.set(true, null);
+  for (const a of [false, true]) for (const b of [false, true]) detectedCache.set(`${a}:${b}`, null);
 }
 
 /** The runner a plugin package server would run in here, found and working, or why there is none. */
@@ -245,7 +257,7 @@ export interface PluginRunnerState {
 /** How to get a runner on this platform, for refusals and the admin page. */
 export function sandboxRunnerHelp(platform: NodeJS.Platform = process.platform): string {
   if (platform === 'win32') {
-    return 'Windows has no sandbox runner: plugins from the marketplace cannot run here, and a local plugin runs only with plugins.sandbox set to off (unsandboxed)';
+    return 'install the native Windows plugin runner with npm run build:sandbox:windows (Rust and Visual Studio C++ Build Tools required); it uses AppContainer and a Job object without administrator privileges';
   }
   if (platform === 'darwin') return '/usr/bin/sandbox-exec, which ships with macOS, was not found';
   return 'install bubblewrap (apt-get install bubblewrap, dnf install bubblewrap or apk add bubblewrap; it needs unprivileged user namespaces, check with: bwrap --ro-bind / / true) or firejail';
@@ -257,10 +269,10 @@ export function sandboxRunnerHelp(platform: NodeJS.Platform = process.platform):
  * macOS, found at its system path and (bwrap) able to start a sandbox here.
  */
 export function pluginRunnerState(): PluginRunnerState {
-  const detected = detectRunner({ allowSeatbelt: true });
+  const detected = detectRunner({ allowSeatbelt: true, allowAppContainer: true });
   if (!detected) return { runner: null, binary: null, problem: `no sandbox runner found: ${sandboxRunnerHelp()}` };
   const problem = runnerProblem(detected);
-  if (problem) return { runner: null, binary: detected.binary, problem: `${problem}; or install firejail` };
+  if (problem) return { runner: null, binary: detected.binary, problem: detected.runner === 'appcontainer' ? problem : `${problem}; or install firejail` };
   return { runner: detected.runner, binary: detected.binary, problem: null };
 }
 
@@ -691,7 +703,7 @@ function buildSandboxExecArgs(binary: string, options: WrapOptions, scratch: str
 export function activeSandboxRunner(options: DetectOptions & { mode?: SandboxMode } = {}): SandboxRunner | null {
   const mode = options.mode ?? getSandboxMode();
   if (mode === 'off') return null;
-  return detectRunner({ allowSeatbelt: seatbeltAllowed(mode, options.allowSeatbelt) })?.runner ?? null;
+  return detectRunner({ allowSeatbelt: seatbeltAllowed(mode, options.allowSeatbelt), allowAppContainer: options.allowAppContainer })?.runner ?? null;
 }
 
 /**
@@ -705,13 +717,13 @@ export function activeSandboxRunner(options: DetectOptions & { mode?: SandboxMod
  * failure).
  */
 export function wrapCommand(argv: string[], options: WrapOptions): WrapResult {
-  options = { ...options, extraReadOnly: [...new Set([...(options.extraReadOnly ?? []), ...browserRuntimeMounts(), ...androidSdkPaths()])] };
+  if (process.platform !== 'win32') options = { ...options, extraReadOnly: [...new Set([...(options.extraReadOnly ?? []), ...browserRuntimeMounts(), ...androidSdkPaths()])] };
   const mode = options.mode ?? getSandboxMode();
   if (mode === 'off') {
     return { wrapped: false, runner: null, argv, cleanup: () => {} };
   }
 
-  const detected = detectRunner({ allowSeatbelt: seatbeltAllowed(mode, options.allowSeatbelt) });
+  const detected = detectRunner({ allowSeatbelt: seatbeltAllowed(mode, options.allowSeatbelt), allowAppContainer: options.allowAppContainer });
   if (!detected) {
     if (mode === 'required') {
       throw new Error(
@@ -724,6 +736,8 @@ export function wrapCommand(argv: string[], options: WrapOptions): WrapResult {
     );
     return { wrapped: false, runner: null, argv, cleanup: () => {} };
   }
+
+  if (detected.runner === 'appcontainer') return wrapWindowsPluginCommand(detected.binary, argv, options, options.windowsBroker);
 
   if (detected.runner === 'bwrap') {
     const scratch = mkdtempSync(join(tmpdir(), 'octipus-shell-'));

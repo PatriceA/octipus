@@ -96,7 +96,8 @@ export const securityConfigSchema = z.object({
    *     runner is found. Operational deployments use this once
    *     they've installed a runner.
    *
-   * Windows has no runner, so there `auto` reduces to `off`. On macOS,
+   * Windows agent shells have no runner (`auto` reduces to `off`); the
+   * native AppContainer helper is for plugin packages only. On macOS,
    * `auto` uses sandbox-exec only for plugin package servers; shell
    * commands use it only under `required`.
    */

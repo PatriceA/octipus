@@ -29,6 +29,7 @@ try {
     run('npm', ['ci', '--include=dev']);
     run('npm', ['--prefix', 'web', 'ci', '--include=dev']);
     run('npm', ['--prefix', 'mcp-server', 'ci', '--include=dev']);
+    if (process.platform === 'win32') run('npm', ['run', 'build:sandbox:windows']);
     run('npm', ['run', 'build']);
     run('npm', ['run', 'build:cli']);
     run('npm', ['--prefix', 'web', 'run', 'build']);
