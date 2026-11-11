@@ -614,6 +614,12 @@ describe('review: the quota counts what is kept', () => {
 describe('review: page writes share the store\'s write limit', () => {
   test('after a burst of writes by the package\'s tools, the page\'s write is limited too', async () => {
     const a = token('notebook', ALICE.id);
+    // Hold the limiter's clock still: under load the writes below take long
+    // enough for the bucket (5 a second) to refill between the tools' last
+    // write and the page's, which made this test depend on timing.
+    const frozen = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(frozen);
+    onTestFinished(() => clock.mockRestore());
     // 30 in a burst, 5 a second after that: write until the tools are limited.
     let status = 200;
     for (let i = 0; i < 100 && status === 200; i++) status = (await host('PUT', '/store/burst', a, 'notebook', { value: i })).status;
