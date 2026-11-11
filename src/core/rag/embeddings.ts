@@ -1169,7 +1169,7 @@ export class EmbeddingService {
    * Has this exact source FILE already been indexed for `(purpose, sourceId)`?
    * Compares the SHA-256 of the whole file against the `metadata.fileSha`
    * stamped on prior chunks by an idempotent re-indexer (see
-   * `src/db/seed-docs.ts`). A `true` means the file is unchanged since its
+   * the retired product-docs indexer). A `true` means the file is unchanged since its
    * last index, so the caller can skip re-embedding entirely — `indexText`
    * would otherwise embed every chunk before the per-chunk dedup upsert
    * short-circuits, which is the expensive part we want to avoid.
