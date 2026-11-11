@@ -204,8 +204,9 @@ describe('launch and server config', () => {
 
   test('the network status counts the host API as a host', async () => {
     const { networkStatus } = await import('./service');
-    expect(networkStatus({ ...base, host: ['notes:read'] }, 'bwrap').state).toBe('restricted');
-    expect(networkStatus({ ...base, host: ['notes:read'] }, 'bwrap').detail).toContain('the Octipus host API');
-    expect(networkStatus(base, 'bwrap').state).toBe('offline');
+    const bwrap = { setting: 'required' as const, runner: 'bwrap' as const, unavailable: null };
+    expect(networkStatus({ ...base, host: ['notes:read'] }, null, bwrap).state).toBe('restricted');
+    expect(networkStatus({ ...base, host: ['notes:read'] }, null, bwrap).detail).toContain('the Octipus host API');
+    expect(networkStatus(base, null, bwrap).state).toBe('offline');
   });
 });

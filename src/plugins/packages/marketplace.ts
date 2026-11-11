@@ -45,6 +45,7 @@ import { marketplaceSigningKeys } from './marketplace-keys-file';
 import { applyNewRevocations, catchUpRevocations, notifyAdmins } from './revocation-effects';
 import { activeRevocations, recordRevocations } from './revocations';
 import { lastIndexTime } from './registry-state';
+import { hostEnforcement } from './sandbox-policy';
 import { configuredRegistries, type FetchedIndex, type IndexHooks, mapBounded, REGISTRY_FETCH_CONCURRENCY, readIndex, type RegistrySource } from './remote';
 import { compareVersions } from './service';
 
@@ -172,7 +173,10 @@ function pluginView(
   const updateAvailable = sameSource && latest !== null && compareVersions(latest.version, installed.version) > 0 ? latest.version : null;
   const installedRevoked = installed && installed.origin?.source === 'marketplace' ? revoked.get(`${newest.name}@${installed.version}`) ?? null : null;
   const allRevoked = sorted.every((e) => revoked.has(`${e.name}@${e.version}`)) ? revoked.get(`${newest.name}@${newest.version}`) ?? null : null;
+  // As this host would run it (./sandbox-policy.ts): a marketplace plugin always needs a sandbox runner.
+  const enforcement = hostEnforcement({ source: originSource(registry) });
   const warnings: PluginGuidanceWarning[] = [
+    ...(enforcement.refused && shown.permissions?.runtime !== 'in-process' ? [{ code: 'sandbox_unavailable', message: enforcement.refused }] : []),
     ...(shown.permissions ? permissionsGuidance(shown.permissions) : [{ code: 'no_permissions_listed', message: 'This registry does not list what the package asks for (index v1); read its manifest after installing, before enabling it.' }]),
     ...(newest.deprecated ? [{ code: 'deprecated', message: `Deprecated: ${newest.deprecated}` }] : []),
     ...(installed && !sameSource ? [{ code: 'source_change', message: `The installed version came from ${installed.origin?.source ?? 'an install made before provenance was recorded'}; installing this one changes its source (you will be asked to confirm).` }] : []),
@@ -198,7 +202,7 @@ function pluginView(
     versions,
     permissions: shown.permissions,
     askSummary: shown.permissions ? permissionsAskSummary(shown.permissions) : [],
-    declarations: shown.permissions ? declarationItems(shown.permissions) : [],
+    declarations: shown.permissions ? declarationItems(shown.permissions, null, enforcement) : [],
     warnings,
     compatibility: latest ? { ok: true, reason: null } : compatibility(newest, appVersion).ok ? { ok: false, reason: 'No version can be installed here (revoked or deprecated)' } : compatibility(newest, appVersion),
     installedVersion: installed?.version ?? null,

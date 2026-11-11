@@ -18,7 +18,9 @@ import {
   PLUGIN_BUNDLED_KEY,
   originLabel,
   PLUGIN_PACKAGES_KEY,
+  PLUGIN_SANDBOX_KEY,
   type PluginConsentResult,
+  type PluginSandboxStatus,
   type PluginNetworkStatus,
   type PluginPackageView,
   type PluginRunItem,
@@ -851,6 +853,27 @@ function BundledPlugins() {
   );
 }
 
+/** "plugin sandbox: active runner X / unavailable: …" (docs/PLUGIN-PACKAGES.md#the-sandbox). */
+function SandboxState() {
+  const { data, error } = useQuery({
+    queryKey: PLUGIN_SANDBOX_KEY,
+    queryFn: () => api.get<PluginSandboxStatus>('/plugin-packages/sandbox'),
+  });
+  if (error) return <p role="alert" className="text-xs text-error">! {(error as Error).message}</p>;
+  if (!data) return null;
+  return (
+    <p role={data.runner ? undefined : 'alert'} data-testid="plugin-sandbox-state" data-runner={data.runner ?? ''}
+      className={cn('flex items-start gap-2 rounded-xs border p-2 text-xs',
+        data.runner ? 'border-outline-variant/40 text-on-surface-variant' : 'border-error/60 bg-error/10 text-on-surface')}>
+      {data.runner ? <CircleCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden /> : <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-error" aria-hidden />}
+      <span>
+        plugin sandbox: {data.summary}
+        {data.setting === 'off' && <> · <code>plugins.sandbox</code> is off: plugins not from the marketplace run NOT sandboxed, as the server&apos;s user</>}
+      </span>
+    </p>
+  );
+}
+
 /**
  * Admin → Plugin packages (docs/PLUGIN-PACKAGES.md): what is installed, who
  * signed it, whether its network is enforced, content waiting for approval
@@ -876,6 +899,7 @@ export default function AdminPluginPackagesPage() {
           </p>
         </div>
       </div>
+      <SandboxState />
       <InstallForm />
       {error && <p role="alert" className="text-xs text-error">! {(error as Error).message}</p>}
       {isLoading ? (

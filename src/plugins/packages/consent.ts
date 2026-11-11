@@ -62,6 +62,7 @@ import { coreLogger } from '@/utils/logger';
 import { contributionsHashOf, hasContributions } from './contributions/approval';
 import { hashPackageContent } from './integrity';
 import { packagePermissions } from './permissions';
+import { hostEnforcement, pluginSandboxPlan } from './sandbox-policy';
 import {
   audit,
   configure,
@@ -146,9 +147,20 @@ export function _previewForTesting(id: string): { base: PluginDeclarationItem[];
   return previews.get(id) ?? null;
 }
 
-/** The declarations of a package directory: the base items, from its permissions and manifest. */
-async function baseItems(manifest: PluginManifest, dir: string): Promise<PluginDeclarationItem[]> {
-  return declarationItems(await packagePermissions(manifest, dir), manifest);
+/** The declarations of a package directory: the base items, from its permissions and manifest, as this host runs a package of `origin`. */
+async function baseItems(manifest: PluginManifest, dir: string, origin: PluginOrigin | null | undefined): Promise<PluginDeclarationItem[]> {
+  return declarationItems(await packagePermissions(manifest, dir), manifest, hostEnforcement(origin));
+}
+
+/**
+ * Refuse a consent that would leave a package plugin able to run where its
+ * sandbox is required and no runner works (./sandbox-policy.ts): a boundary,
+ * not an item to agree to.
+ */
+function refuseWithoutSandbox(manifest: PluginManifest, origin: PluginOrigin | null | undefined): void {
+  if (pluginRuntime(manifest) !== 'package') return;
+  const plan = pluginSandboxPlan(origin);
+  if (plan.problem) throw new PluginPackageError('incomplete', `${manifest.name} cannot be installed or agreed to here. ${plan.problem}`);
 }
 
 /**
@@ -240,7 +252,7 @@ export async function previewInstall(source: PreviewSource, actorUserId: string)
   const { manifest, contentHash, signature } = staged;
   const origin: PluginOrigin = options.origin ?? { source: 'directory' };
   const permissions = await packagePermissions(manifest, staged.dir);
-  const base = declarationItems(permissions, manifest);
+  const base = declarationItems(permissions, manifest, hostEnforcement(origin));
   const current = await findRow(manifest.name);
   const changes: PluginDeclarationItem[] = [];
   let before: PluginDeclarationItem[] | null = null;
@@ -248,7 +260,7 @@ export async function previewInstall(source: PreviewSource, actorUserId: string)
   let diff = null;
   if (current) {
     const installedPerms = await packagePermissions(current.manifest, packageDir(current.name));
-    before = declarationItems(installedPerms, current.manifest);
+    before = declarationItems(installedPerms, current.manifest, hostEnforcement(current.origin));
     covered = await coveredBy(current);
     diff = diffPermissions(installedPerms, permissions);
     const change = await upgradeChanges(current, staged, origin);
@@ -331,6 +343,7 @@ export async function installPreview(
     throw new PluginPackageError('conflict', `You agreed to ${req.contentHash}, but this preview is ${preview.contentHash}; preview the package again`);
   }
   checkAccepted(requiredConsentIds(preview.items), req.accepted);
+  refuseWithoutSandbox(preview.manifest, preview.options.origin);
   // Single use: from here on the preview is spent, whatever happens.
   previews.delete(preview.id);
   const accepted = new Set(req.accepted);
@@ -345,7 +358,7 @@ export async function installPreview(
         contentHash: preview.contentHash,
         baseline: preview.baseline,
         verify: async (staged) => {
-          const now = await baseItems(staged.manifest, staged.dir);
+          const now = await baseItems(staged.manifest, staged.dir, preview.options.origin);
           if (comparable(now) !== comparable(preview.base)) {
             throw new PluginPackageError('conflict', `What ${staged.manifest.name} declares is not what you agreed to; not installed. Preview it again`);
           }
@@ -376,7 +389,7 @@ export async function consentView(name: string): Promise<PluginConsentView> {
     name, version: row.version, title: row.manifest.title, contentHash, signedBy: row.signedBy, origin: row.origin ?? null, enabled: row.enabled,
     // What its consent already covers for exactly these files (approved scopes, contributions, in-process) is carried.
     declarations: (() => {
-      const items = declarationItems(permissions, row.manifest);
+      const items = declarationItems(permissions, row.manifest, hostEnforcement(row.origin));
       return consentItems(items, items, covered);
     })(),
     guidance: [...permissionsGuidance(permissions), ...modelTrustWarnings(row.manifest).map((message) => ({ code: 'model_cli_tools', message }))],
@@ -399,6 +412,7 @@ export async function consentToInstalled(
   checkAccepted(requiredConsentIds(view.declarations), req.accepted);
   const row = await findRow(name);
   if (!row) throw new PluginPackageError('not_found', `Plugin package not found: ${name}`);
+  refuseWithoutSandbox(row.manifest, row.origin);
   const m = row.manifest;
   const missing = req.enable === true ? await missingConfiguration(row) : [];
   const enable = req.enable === true && missing.length === 0;

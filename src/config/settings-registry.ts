@@ -1300,6 +1300,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'PLUGINS_REQUIRE_SIGNATURE',
   },
   {
+    key: 'plugins.sandbox',
+    category: 'security',
+    valueType: 'string',
+    defaultValue: 'required',
+    description:
+      'The sandbox of plugin package servers, apart from security.shellSandbox: required (default; a plugin never starts without bwrap or firejail on Linux, or sandbox-exec on macOS, and enabling or consenting to one is refused) or off (a plugin not from the marketplace runs unsandboxed, as the Octipus server\'s user, with its files, environment and network; the only way to run a local plugin on Windows). A marketplace plugin always needs a sandbox.',
+    isSecret: false,
+    envVar: 'PLUGINS_SANDBOX',
+  },
+  {
     key: 'plugins.registries',
     category: 'security',
     valueType: 'json',

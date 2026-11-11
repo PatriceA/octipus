@@ -36,7 +36,12 @@ WORKDIR /app
 # Archives: zip, unzip
 # Remote access: openssh-client
 # Scripting: python3-minimal
+# Sandbox: bubblewrap — plugin package servers never start without a working
+#   sandbox runner (plugins.sandbox: required, docs/PLUGIN-PACKAGES.md#the-sandbox).
+#   bwrap needs unprivileged user namespaces; check in the container with
+#   `bwrap --ro-bind / / true` and see docker-compose.yml for the options.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    bubblewrap \
     curl \
     ca-certificates \
     git \

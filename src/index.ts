@@ -255,6 +255,10 @@ async function main() {
     const mcpBridge = getMCPBridge();
     void mcpBridge.startConnectAll().then(() => logger.info('MCP servers connected'));
     // Plugin packages run as MCP servers too (docs/PLUGIN-PACKAGES.md); same rule: not awaited.
+    // Which runner plugin servers get here, or why none (docs/PLUGIN-PACKAGES.md#the-sandbox).
+    import('@/plugins/packages/sandbox-policy')
+      .then(({ logPluginSandboxState }) => logPluginSandboxState())
+      .catch((err) => logger.error({ err }, 'Plugin sandbox state could not be read'));
     import('@/plugins/packages/service')
       .then(({ syncPluginServers }) => syncPluginServers())
       .then(() => logger.info('Plugin packages started'))

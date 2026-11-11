@@ -26,6 +26,7 @@ export type {
   PluginPackageView,
   PluginRegistryEntry,
   PluginRegistryListing,
+  PluginSandboxStatus,
   PluginSignatureStatus,
 } from '../../src/shared/plugin-package';
 
@@ -58,6 +59,7 @@ export const PLUGIN_PACKAGES_KEY = ['admin', 'plugin-packages'] as const;
 export const PLUGIN_MARKETPLACE_KEY = ['admin', 'plugin-packages', 'marketplace'] as const;
 export const PLUGIN_UPDATES_KEY = ['admin', 'plugin-packages', 'updates'] as const;
 export const PLUGIN_REVOCATIONS_KEY = ['admin', 'plugin-packages', 'revocations'] as const;
+export const PLUGIN_SANDBOX_KEY = ['admin', 'plugin-packages', 'sandbox'] as const;
 export const MY_PLUGIN_USAGE_KEY = ['plugin-packages', 'my-usage'] as const;
 
 /** A revocation as `GET /api/plugin-packages/revocations` lists it. */

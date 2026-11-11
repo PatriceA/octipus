@@ -79,6 +79,8 @@ export interface MCPServer extends McpExposureConfig {
    * to the host's own API at that address (docs/PLUGIN-PACKAGES.md#host-api).
    */
   sandbox?: {
+    /** Overrides `security.shellSandbox` for this server (a plugin package's: `plugins.sandbox`). */
+    mode?: 'required' | 'off';
     root: string; allowNetwork: boolean; readOnlyRoot?: boolean; writable?: string[];
     egress?: { label: string; hosts: string[]; runDir?: string; hostApi?: { host: string; port: number } };
   };

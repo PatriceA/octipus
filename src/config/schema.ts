@@ -949,6 +949,17 @@ export const configSchema = z.object({
      * another index or root keys. Without root keys in the build or here it stays off.
      */
     marketplace: marketplaceConfigSchema.default(true),
+    /**
+     * The sandbox of plugin package servers (docs/PLUGIN-PACKAGES.md#the-sandbox),
+     * apart from `security.shellSandbox` (agent shells). `required` (default):
+     * a `package` plugin never starts without a working runner (bwrap or
+     * firejail on Linux, sandbox-exec on macOS); without one, starting,
+     * enabling and consenting are refused. `off`: a plugin NOT from the
+     * marketplace runs unsandboxed, as the server's user (Windows, which has
+     * no runner). A marketplace plugin always needs a runner, whatever this says.
+     * Env: PLUGINS_SANDBOX.
+     */
+    sandbox: z.enum(['required', 'off']).default('required'),
   }).prefault({}),
   oauth: oauthConfigSchema,
   rateLimit: rateLimitConfigSchema,

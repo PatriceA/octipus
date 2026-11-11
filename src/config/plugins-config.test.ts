@@ -17,13 +17,13 @@ const KEY_ID = `ed25519:${'a'.repeat(64)}`;
 describe('plugins config', () => {
   it('defaults agree: schema, defaults, legacy loader, settings registry', () => {
     const parsed = plugins({});
-    const defaults = { trustedPublishers: [], revokedKeys: [], requireSignature: false, registries: [], hostModelDailyTokens: 200_000, hostAgentRunTokens: 150_000, marketplace: true };
+    const defaults = { trustedPublishers: [], revokedKeys: [], requireSignature: false, registries: [], hostModelDailyTokens: 200_000, hostAgentRunTokens: 150_000, marketplace: true, sandbox: 'required' };
     expect(parsed.success && parsed.data).toEqual(defaults);
     expect(defaultConfig.plugins).toEqual(defaults);
     expect(loadFromEnvLegacy().plugins).toMatchObject({ revokedKeys: [], registries: [], hostModelDailyTokens: 200_000, hostAgentRunTokens: 150_000 });
     expect(SETTINGS_REGISTRY.find((s) => s.key === 'plugins.hostModelDailyTokens')?.defaultValue).toBe(200_000);
     expect(SETTINGS_REGISTRY.find((s) => s.key === 'plugins.hostAgentRunTokens')?.defaultValue).toBe(150_000);
-    for (const key of ['plugins.marketplace', 'plugins.trustedPublishers', 'plugins.revokedKeys', 'plugins.requireSignature', 'plugins.registries', 'plugins.hostModelDailyTokens', 'plugins.hostAgentRunTokens']) {
+    for (const key of ['plugins.marketplace', 'plugins.trustedPublishers', 'plugins.revokedKeys', 'plugins.requireSignature', 'plugins.registries', 'plugins.hostModelDailyTokens', 'plugins.hostAgentRunTokens', 'plugins.sandbox']) {
       expect(SETTINGS_REGISTRY.find((s) => s.key === key), key).toBeDefined();
     }
   });

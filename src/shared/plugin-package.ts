@@ -790,3 +790,16 @@ export interface PluginUsageView {
   /** Per user (admin view only; ids, no content). */
   byUser?: Array<{ userId: string; modelCalls: number; runs: number; tokens: number; cost: number }>;
 }
+
+/** `GET /api/plugin-packages/sandbox`: the sandbox plugin package servers get on this host (src/plugins/packages/sandbox-policy.ts). */
+export interface PluginSandboxStatus {
+  /** `plugins.sandbox`. */
+  setting: 'required' | 'off';
+  /** The working runner, or null. */
+  runner: 'bwrap' | 'firejail' | 'sandbox-exec' | null;
+  /** Why no runner works here, with how to get one; null when one does. */
+  unavailable: string | null;
+  platform: string;
+  /** One line: "active runner bwrap" or "unavailable: …". */
+  summary: string;
+}

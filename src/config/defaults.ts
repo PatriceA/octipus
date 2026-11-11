@@ -146,6 +146,7 @@ export const defaultConfig: Partial<Config> = {
     hostModelDailyTokens: 200_000,
     hostAgentRunTokens: 150_000,
     marketplace: true,
+    sandbox: 'required',
   },
   protection: {
     remoteAtLevel3: false,

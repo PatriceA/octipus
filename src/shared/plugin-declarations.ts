@@ -89,20 +89,61 @@ export function permissionsGuidance(p: PluginPermissionsSummary): PluginGuidance
 }
 
 /**
- * The declaration items of a package: from its permissions summary, with the
- * manifest's own words when given.
+ * How the sandbox holds on the host that shows the declarations
+ * (src/plugins/packages/sandbox-policy.ts, `hostEnforcement`): the runner
+ * that wraps the server, or null; and why it may not run here, or null.
  */
-export function declarationItems(p: PluginPermissionsSummary, manifest?: Pick<PluginManifest, 'tools' | 'secrets' | 'commands' | 'model'> | null): PluginDeclarationItem[] {
+export interface PluginHostEnforcement {
+  runner: string | null;
+  refused: string | null;
+}
+
+export const NOT_SANDBOXED_NOTE = 'plugins.sandbox is off and no sandbox wraps it: it runs as the Octipus server\'s user, '
+  + 'and can read that user\'s files, the server\'s environment (its database URL and master key) and connect anywhere. '
+  + 'Only a plugin that is not from the marketplace can run this way.';
+export const NETWORK_NOT_ENFORCED_NOTE = 'Network not enforced on this host: no sandbox takes direct network away, so nothing stops it from connecting anywhere.';
+
+/** The runtime item: what it runs as, and whether this host sandboxes it (`host`), never "sandboxed" where it is not. */
+function runtimeItem(p: PluginPermissionsSummary, host: PluginHostEnforcement | null): PluginDeclarationItem {
+  if (p.runtime === 'in-process') return { id: 'runtime', kind: 'runtime', label: 'Runs inside the Octipus server process', detail: 'runtime: in-process', guidance: IN_PROCESS_NOTE };
+  if (!host) {
+    return { id: 'runtime', kind: 'runtime', label: 'Runs as a separate program', detail: 'runtime: package', guidance: 'Sandboxed where the host has a sandbox runner; the host you install it on says whether it has one.' };
+  }
+  if (host.runner) return { id: 'runtime', kind: 'runtime', label: `Runs as a separate program in a sandbox (${host.runner})`, detail: 'runtime: package' };
+  if (host.refused) return { id: 'runtime', kind: 'runtime', label: 'NOT sandboxed on this host, so it does not run here', detail: 'runtime: package', guidance: host.refused };
+  return { id: 'runtime', kind: 'runtime', label: 'NOT sandboxed on this host', detail: 'runtime: package', guidance: NOT_SANDBOXED_NOTE };
+}
+
+/** The network items: what it declares, and whether this host enforces it (`host`). */
+function networkItems(p: PluginPermissionsSummary, host: PluginHostEnforcement | null): PluginDeclarationItem[] {
+  const enforced = p.runtime !== 'in-process' && !!host?.runner;
+  const unenforced = !!host && !enforced;
+  if (p.network.length === 0) {
+    if (unenforced) return [{ id: 'network:none', kind: 'network', label: 'Network not enforced on this host', detail: 'network: []', guidance: `It declares no network. ${NETWORK_NOT_ENFORCED_NOTE}` }];
+    return [{ id: 'network:none', kind: 'network', label: enforced ? 'No network access of its own' : 'Declares no network access', detail: 'network: []' }];
+  }
+  return p.network.map((h) => ({
+    id: `network:${h}`, kind: 'network' as const, label: `Connects to ${h}`, detail: h,
+    ...(unenforced ? { guidance: NETWORK_NOT_ENFORCED_NOTE } : {}),
+  }));
+}
+
+/**
+ * The declaration items of a package: from its permissions summary, with the
+ * manifest's own words when given, and with what this host enforces (`host`:
+ * the runtime and network items say "NOT sandboxed" / "Network not enforced"
+ * where that is so; without it they only say what is declared).
+ */
+export function declarationItems(
+  p: PluginPermissionsSummary, manifest?: Pick<PluginManifest, 'tools' | 'secrets' | 'commands' | 'model'> | null, host: PluginHostEnforcement | null = null,
+): PluginDeclarationItem[] {
   const items: PluginDeclarationItem[] = [];
   const egress = egressReadWarning(p.host);
-  items.push(p.runtime === 'in-process'
-    ? { id: 'runtime', kind: 'runtime', label: 'Runs inside the Octipus server process', detail: 'runtime: in-process', guidance: IN_PROCESS_NOTE }
-    : { id: 'runtime', kind: 'runtime', label: 'Runs as a separate, sandboxed program', detail: 'runtime: package' });
+  items.push(runtimeItem(p, host));
   if (p.runtime === 'in-process') {
     items.push({ id: 'in-process', kind: 'in-process', label: 'Has the server\'s full authority', detail: 'Needs its own approval (approveInProcess) for this content', guidance: IN_PROCESS_NOTE });
   }
-  if (p.network.length === 0) items.push({ id: 'network:none', kind: 'network', label: 'No network access of its own', detail: 'network: []' });
-  for (const host of p.network) items.push({ id: `network:${host}`, kind: 'network', label: `Connects to ${host}`, detail: host });
+  items.push(...networkItems(p, host));
   for (const scope of p.host) {
     const guidance = [
       scope === 'agent:run' ? AGENT_RUN_NOTE : null,
@@ -225,6 +266,7 @@ export function requiredConsentIds(items: readonly PluginConsentItem[]): string[
 /** Whether an item's guidance is a warning (weigh it) or information. */
 export function guidanceTone(item: PluginDeclarationItem): 'warning' | 'info' {
   if (item.kind === 'in-process' || item.kind === 'model-cli-tools' || item.kind === 'change' || (item.kind === 'runtime' && item.detail.includes('in-process'))) return 'warning';
+  if (item.label.startsWith('NOT sandboxed') || item.label === 'Network not enforced on this host' || item.guidance?.startsWith('Network not enforced')) return 'warning';
   if (item.kind === 'tool' && item.id && item.label.endsWith('(external)')) return 'warning';
   if (item.guidance?.includes('send what it reads anywhere')) return 'warning';
   return 'info';

@@ -15,13 +15,14 @@
  *   settings (`OCTIPUS_SETTING_<KEY>`) and its secrets (vault system rows
  *   `plugin:<name>:<KEY>`, handed over under their own key) — no provider
  *   key, master key or database URL of the host;
- * - in the shell sandbox when `security.shellSandbox` is on, with its
- *   directory read-only, its data directory (`pluginDataDir`,
- *   `OCTIPUS_PLUGIN_DATA_DIR`) as the only writable one and no direct
- *   network; a package that declares hosts reaches only those, through a
- *   per-package egress proxy
- *   (src/security/egress-proxy.ts). Without a sandbox (off, no runner, macOS,
- *   Windows) the proxy is advisory and the status says "not enforced";
+ * - in a sandbox runner (./sandbox-policy.ts, `plugins.sandbox`, required
+ *   by default and always for a marketplace package; never started without
+ *   one then), with its directory read-only, its data directory
+ *   (`pluginDataDir`, `OCTIPUS_PLUGIN_DATA_DIR`) as the only writable one
+ *   and no direct network; a package that declares hosts reaches only those,
+ *   through a per-package egress proxy (src/security/egress-proxy.ts). With
+ *   `plugins.sandbox: off` (a local package only) it runs unwrapped, the
+ *   proxy is advisory and the status says "not enforced";
  * - with only its declared tools reachable, each permitted by its declared
  *   effect (src/security/mcp-authorization.ts).
  *
@@ -54,7 +55,6 @@ import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { type PluginPackageRow, pluginPackages } from '@/db/schema/plugin-packages';
 import { getMCPBridge, PLUGIN_SERVER_PREFIX } from '@/mcp/bridge';
-import { activeSandboxRunner, getSandboxMode } from '@/security/shell-sandbox';
 import { SYSTEM_USER_ID } from '@/security/principal';
 import { getVault } from '@/security/vault';
 import type { MCPServer } from '@/shared/mcp-server';
@@ -91,6 +91,7 @@ import { ManifestError, parseManifest, settingEnvName } from './manifest';
 import { defaultMaxProtection, packagePermissions } from './permissions';
 import { checkSignatureOnDisk, keyFingerprint, parsePublicKey, readSignatureFile, SIGNATURE_FILE, type SignatureCheck, SignatureError, type TrustedPublisher } from './signature';
 import { keyRevocation, packageRevocation, revokedKeyIds } from './revocations';
+import { hostEnforcement, type PluginSandboxHost, pluginSandboxHost, pluginSandboxPlan } from './sandbox-policy';
 import { checkPackageTree, PackageTreeError } from './tree';
 import { HOST_API_URL, hostApiTarget, isHostScope, issueHostCallMeta, revokePluginTokens } from './host-api';
 
@@ -921,6 +922,11 @@ export async function configure(
       throw new PluginPackageError('incomplete', `${name} ${row.version} is revoked by the marketplace (${revoked.reason || 'no reason given'}); it cannot be enabled or approved. Upgrade to a version that is not revoked`);
     }
   }
+  if (enabled && !row.enabled && !inProcess) {
+    // A boundary: a package plugin never runs without its sandbox where one is required.
+    const plan = pluginSandboxPlan(row.origin);
+    if (plan.problem) throw new PluginPackageError('incomplete', `${name} cannot be enabled. ${plan.problem}`);
+  }
   if (enabled) {
     const missing = await missingConfiguration({ ...row, settings });
     if (missing.length > 0) {
@@ -1281,7 +1287,7 @@ async function viewOf(row: PluginPackageRow, secrets: string[], authoredBy?: Plu
     settings: row.settings,
     secretsSet: secrets,
     problem,
-    network: networkStatus(row.manifest),
+    network: networkStatus(row.manifest, row.origin),
     connected,
     contentHash: row.contentHash,
     actualHash,
@@ -1295,7 +1301,7 @@ async function viewOf(row: PluginPackageRow, secrets: string[], authoredBy?: Plu
     authoredBy: authoredBy !== undefined ? authoredBy : await agentAuthorship(row.name),
     origin: row.origin ?? null,
     revocation: await revocationOf(row, signature),
-    declarations: declarationItems(await packagePermissions(row.manifest, packageDir(row.name)), row.manifest),
+    declarations: declarationItems(await packagePermissions(row.manifest, packageDir(row.name)), row.manifest, hostEnforcement(row.origin)),
     installedBy: row.installedBy,
     installedAt: row.installedAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -1318,9 +1324,6 @@ async function revocationOf(row: PluginPackageRow, signature: PluginSignatureSta
   }
   return null;
 }
-
-/** Why no runner wraps the server: off, none found, or Windows (no built-in one). */
-const NO_RUNNER = 'security.shellSandbox off, no bwrap/firejail on Linux, no /usr/bin/sandbox-exec on macOS, or Windows, which has none';
 
 /**
  * The signature over the package's approved content now: checked against the
@@ -1355,27 +1358,27 @@ async function currentSignature(row: PluginPackageRow): Promise<PluginSignatureS
 
 /**
  * How a package's network is held on this host, decided the same way the
- * transport decides at start (`prepareSandboxedLaunch`): only a sandbox
- * runner (bwrap/firejail on Linux, sandbox-exec on macOS) can take direct
- * network away; without one the declared hosts are advice.
+ * server is started (`pluginSandboxPlan`, `prepareSandboxedLaunch`): only a
+ * sandbox runner (bwrap/firejail on Linux, sandbox-exec on macOS) can take
+ * direct network away; without one the declared hosts are advice.
  */
-export function networkStatus(m: PluginManifest, runner = activeSandboxRunner({ allowSeatbelt: true }), mode = getSandboxMode()): PluginNetworkStatus {
+export function networkStatus(m: PluginManifest, origin?: Pick<PluginOrigin, 'source'> | null, host: PluginSandboxHost = pluginSandboxHost()): PluginNetworkStatus {
   if (pluginRuntime(m) === 'in-process') {
     return { state: 'not_enforced', detail: 'Runs in the server process: no sandbox, so it has the server\'s network, files and data.' };
   }
   // The host API counts as a host here: it is reached through the egress proxy (docs/PLUGIN-PACKAGES.md#host-api).
   const hosts = [...(m.network ?? []), ...((m.host ?? []).length > 0 ? ['the Octipus host API'] : [])];
-  if (!runner && mode === 'required') {
-    return { state: 'refused', detail: `Not started: security.shellSandbox is required and no sandbox can wrap the server here (${NO_RUNNER}).` };
-  }
-  if (runner) {
+  const plan = pluginSandboxPlan(origin, host);
+  if (plan.problem) return { state: 'refused', detail: plan.problem };
+  if (plan.runner) {
     return hosts.length === 0
-      ? { state: 'offline', detail: `No network: the sandbox (${runner}) runs the server without one.` }
-      : { state: 'restricted', detail: `Only ${hosts.join(', ')}: the sandbox (${runner}) has no direct network, and the egress proxy allows only the declared hosts.` };
+      ? { state: 'offline', detail: `No network: the sandbox (${plan.runner}) runs the server without one.` }
+      : { state: 'restricted', detail: `Only ${hosts.join(', ')}: the sandbox (${plan.runner}) has no direct network, and the egress proxy allows only the declared hosts.` };
   }
+  const why = `plugins.sandbox is off, so the server runs unsandboxed as the Octipus server's user`;
   return hosts.length === 0
-    ? { state: 'not_enforced', detail: `Network not enforced on this platform: no sandbox wraps the server (${NO_RUNNER}), so nothing stops it from connecting.` }
-    : { state: 'not_enforced', detail: `Network not enforced on this platform: no sandbox wraps the server (${NO_RUNNER}). It is pointed at an egress proxy that allows only ${hosts.join(', ')}, but it can still connect directly.` };
+    ? { state: 'not_enforced', detail: `Network not enforced on this host: ${why}, and nothing stops it from connecting.` }
+    : { state: 'not_enforced', detail: `Network not enforced on this host: ${why}. It is pointed at an egress proxy that allows only ${hosts.join(', ')}, but it can still connect directly.` };
 }
 
 /** Every installed package, for the admin API. */
@@ -1460,6 +1463,9 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
     // Hosts go through the egress proxy; direct network stays off wherever the
     // sandbox can turn it off. allowNetwork is kept for a sandbox without egress support.
     sandbox: {
+      // plugins.sandbox, never security.shellSandbox: required (or from the
+      // marketplace) refuses to start without a runner; off runs it unwrapped.
+      mode: pluginSandboxPlan(row.origin).required ? 'required' : 'off',
       root: dir, readOnlyRoot: true, writable: [dataDir], allowNetwork: hosts.length > 0,
       ...egress,
     },
@@ -1527,6 +1533,16 @@ export async function checkBeforeStart(server: MCPServer): Promise<string | null
 export async function checkPackageBeforeStart(name: string): Promise<string | null> {
   const row = await findRow(name);
   if (!row) return `Plugin package ${name} is not installed`;
+  if (pluginRuntime(row.manifest) === 'package') {
+    // A boundary: never started without its sandbox where one is required.
+    const plan = pluginSandboxPlan(row.origin);
+    if (plan.problem) {
+      coreLogger.warn({ pkg: name, problem: plan.problem }, 'Plugin package needs a sandbox and none works here; not started');
+      await auditOnce(`${name}\nsandbox\n${plan.problem}`, 'sandbox_unavailable', name, { version: row.version, problem: plan.problem });
+      return plan.problem;
+    }
+    if (!plan.runner) coreLogger.warn({ pkg: name }, 'Plugin package starts NOT sandboxed (plugins.sandbox is off): it runs as the Octipus server user');
+  }
   let check: Awaited<ReturnType<typeof verifyPackageContent>>;
   try {
     check = await verifyPackageContent(packageDir(name), row, async (hash) => {

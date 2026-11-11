@@ -64,6 +64,19 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
     { detail: { tags: ['plugin-packages'] } },
   )
 
+  // The sandbox plugin servers get here (plugins.sandbox and the working runner, or why none):
+  // the admin page's "plugin sandbox: active runner X / unavailable" line.
+  .get(
+    '/sandbox',
+    async ({ user, principal, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
+      const { pluginSandboxView } = await import('@/plugins/packages/sandbox-policy');
+      return pluginSandboxView();
+    },
+    { detail: { tags: ['plugin-packages'] } },
+  )
+
   // What plugins.registries list (each index cached briefly), with the version installed here.
   .get(
     '/registry',
