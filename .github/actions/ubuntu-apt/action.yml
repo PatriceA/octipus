@@ -1,5 +1,5 @@
 name: Prepare Ubuntu package sources
-description: Use the signed Ubuntu archive instead of the runner's unreliable Azure mirror.
+description: Select a reachable signed Ubuntu mirror before installing system packages.
 runs:
   using: composite
   steps:
@@ -10,12 +10,34 @@ runs:
         # fail apt update independently of the packages these jobs need.
         sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
                    /etc/apt/sources.list.d/google-chrome.sources
-        # Ubuntu runner images use either direct sources or mirror+file lists.
-        # Preserve distribution suites, signing keys and all unrelated sources.
+        . /etc/os-release
+        mirror=''
+        # Ubuntu-domain DNS can fail across both Azure and the main archive.
+        # Probe a separately hosted mirror too; apt still verifies Ubuntu's
+        # signatures with the existing Signed-By keys, suites and components.
+        for candidate in https://archive.ubuntu.com/ubuntu https://mirrors.edge.kernel.org/ubuntu; do
+          if curl --fail --silent --show-error --head --connect-timeout 4 --max-time 12 \
+              "$candidate/dists/$VERSION_CODENAME/InRelease" >/dev/null \
+            && curl --fail --silent --show-error --head --connect-timeout 4 --max-time 12 \
+              "$candidate/dists/$VERSION_CODENAME-security/InRelease" >/dev/null; then
+            mirror="$candidate"
+            break
+          fi
+          echo "::warning::Ubuntu package mirror unavailable: $candidate"
+        done
+        if [ -z "$mirror" ]; then
+          echo '::error::No reachable signed Ubuntu package mirror; package installation cannot proceed.'
+          exit 1
+        fi
+        echo "Using signed Ubuntu package mirror: $mirror"
+        # Direct sources avoid mirror transport retaining an unreachable entry.
+        # Preserve distribution suites, signing keys and unrelated repositories.
         for source in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources \
                       /etc/apt/apt-mirrors.txt /etc/apt/apt-mirrors-security.txt; do
           if [ -f "$source" ]; then
-            sudo sed -i -E 's#https?://azure\.archive\.ubuntu\.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' "$source"
+            sudo sed -i -E \
+              -e "s#https?://(azure\\.archive|archive|security)\\.ubuntu\\.com/ubuntu#$mirror#g" \
+              -e "s#mirror[+]file:/etc/apt/apt-mirrors(-security)?\\.txt#$mirror#g" "$source"
           fi
         done
         # These options also cover apt invoked indirectly by Playwright.
@@ -23,4 +45,5 @@ runs:
         Acquire::Retries "2";
         Acquire::http::Timeout "30";
         Acquire::https::Timeout "30";
+        APT::Update::Error-Mode "any";
         APT
