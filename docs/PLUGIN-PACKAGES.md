@@ -288,7 +288,7 @@ sandbox-exec](#macos-sandbox-exec)).
 **Windows.** Native Windows 10/11 installs use `octipus-sandbox.exe`, a Rust
 helper in `native/bin` (see [Windows native sandbox](WINDOWS-SANDBOX.md)).
 It starts each package in a less-privileged AppContainer with no networking
-capabilities and a Job object: stop kills the whole tree, with a 2 GiB
+capabilities (`registryRead` permits OS socket-library initialization) and a Job object: stop kills the whole tree, with a 2 GiB
 committed-memory and 32-process cap. The package is read-only; only its
 private data and scratch directories are writable. A private SID-protected
 named pipe connects to the normal declared-host/host-API proxy; there is

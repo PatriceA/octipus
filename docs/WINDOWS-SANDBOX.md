@@ -24,9 +24,11 @@ architecture; release assets currently target x64.
 ## What is enforced
 
 - A less-privileged AppContainer (LPAC) has no networking capabilities, no host
-  process handles and no broad ALL APPLICATION PACKAGES read entitlement.
+  process handles and no broad ALL APPLICATION PACKAGES file entitlement.
+  The non-network `registryRead` capability allows Windows' socket library to
+  initialize its OS protocol catalog; it grants no internet or LAN access.
 - The package tree is readable/executable. Only the dedicated package data and
-  per-launch scratch trees are writable. Host home, credentials and unrelated
+  per-launch scratch trees and Windows-managed private profile are writable. Host home, credentials and unrelated
   project folders are not granted. Junctions/reparse points are refused.
 - A private copy of the runtime executable runs in scratch. The installed Node
   under Program Files is not modified. Node is supported; other native runtimes

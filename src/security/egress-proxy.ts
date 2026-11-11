@@ -34,7 +34,12 @@
  *   (`buildSeatbeltProfile` in shell-sandbox.ts) denies all network but
  *   outbound TCP to this proxy's loopback port, and the server gets the proxy
  *   variables pointing at that port directly: enforced.
- * - **Sandbox off** (a local plugin package under `plugins.sandbox: off`): the server runs unwrapped with HTTP(S)_PROXY /
+ * - **Windows with AppContainer**: no network capabilities or loopback
+ *   exemption. The native helper brokers a private SID-protected named pipe
+ *   to this TCP listener; the bridge and server share the AppContainer's
+ *   identity. Direct host loopback and internet remain inaccessible.
+ * - **Sandbox off** (a local plugin package under `plugins.sandbox: off`):
+ *   the server runs unwrapped with HTTP(S)_PROXY /
  *   ALL_PROXY pointing at the TCP listener. Well-behaved HTTP clients honour
  *   it, but nothing stops a direct connection: advisory only. The package's
  *   status and its declarations say so ("Network not enforced on this host").

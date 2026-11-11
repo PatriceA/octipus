@@ -290,7 +290,7 @@ fn acl_lock() -> Result<AclLock, String> {
         let handle = Handle(CreateMutexW(
             &security,
             0,
-            wide(format!("Local\\Octipus.Plugin.ACL.{text}")).as_ptr(),
+            wide(format!("Global\\Octipus.Plugin.ACL.{text}")).as_ptr(),
         ));
         if handle.0.is_null() {
             return Err(last("ACL mutex"));
@@ -433,6 +433,42 @@ fn broker(name: &str, sid: &str, port: u16) -> Result<(), String> {
     Ok(())
 }
 
+/// Winsock initializes its protocol catalog through OS registry keys. LPAC
+/// needs this non-network capability even when no sockets may leave the
+/// container. It grants no internetClient/privateNetwork capability.
+fn registry_read_capability() -> Result<Local, String> {
+    unsafe {
+        let mut groups = null_mut();
+        let mut group_count = 0;
+        let mut caps = null_mut();
+        let mut cap_count = 0;
+        win(
+            DeriveCapabilitySidsFromName(
+                wide("registryRead").as_ptr(),
+                &mut groups,
+                &mut group_count,
+                &mut caps,
+                &mut cap_count,
+            ),
+            "derive registryRead capability",
+        )?;
+        for i in 0..group_count {
+            LocalFree(*groups.add(i as usize));
+        }
+        LocalFree(groups.cast());
+        if cap_count != 1 {
+            for i in 0..cap_count {
+                LocalFree(*caps.add(i as usize));
+            }
+            LocalFree(caps.cast());
+            return Err("registryRead returned an unexpected capability count".into());
+        }
+        let capability = Local(*caps);
+        LocalFree(caps.cast());
+        Ok(capability)
+    }
+}
+
 struct Attributes(Vec<usize>);
 impl Drop for Attributes {
     fn drop(&mut self) {
@@ -475,6 +511,7 @@ pub fn launch(config: Launch) -> Result<i32, String> {
     // fingerprint (env/secrets and egress/host scopes supplied by the server).
     use sha2::{Digest, Sha256};
     let mut identity = Sha256::new();
+    identity.update(b"lpac/registryRead/v1");
     identity.update(config.authority.as_bytes());
     for path in std::iter::once(&root)
         .chain(ro.iter())
@@ -548,10 +585,15 @@ pub fn launch(config: Launch) -> Result<i32, String> {
             InitializeProcThreadAttributeList(list, 3, 0, &mut bytes),
             "startup attributes",
         )?;
+        let registry = registry_read_capability()?;
+        let mut registry_entry = SID_AND_ATTRIBUTES {
+            Sid: registry.0,
+            Attributes: 4, /* SE_GROUP_ENABLED */
+        };
         let capabilities = SECURITY_CAPABILITIES {
             AppContainerSid: profile.sid,
-            Capabilities: null_mut(),
-            CapabilityCount: 0,
+            Capabilities: &mut registry_entry,
+            CapabilityCount: 1,
             Reserved: 0,
         };
         win(
