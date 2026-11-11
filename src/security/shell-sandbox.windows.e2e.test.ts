@@ -130,3 +130,25 @@ test.skipIf(process.platform !== 'win32')('job kills descendants on forced termi
     rmSync(base, { recursive: true, force: true });
   }
 }, 60000);
+
+test.skipIf(process.platform !== 'win32')('ESM plugin entry and relative imports load from a read-only package', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'octipus-windows-esm-'));
+  const pkg = join(base, 'package'); const data = join(base, 'data'); mkdirSync(pkg); mkdirSync(data);
+  writeFileSync(join(pkg, 'support.mjs'), "export const message='esm-ok';");
+  writeFileSync(join(pkg, 'server.mjs'), "import {message} from './support.mjs'; console.log(message);");
+  const launch = await prepareSandboxedLaunch(['node', 'server.mjs'], buildIsolatedChildEnv(), {
+    mode: 'required', root: pkg, readOnlyRoot: true, writable: [data], allowNetwork: false,
+  });
+  try {
+    const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+      const child = spawn(launch.argv[0], launch.argv.slice(1), { cwd: pkg, env: launch.env, stdio: 'pipe', windowsHide: true });
+      let stdout = ''; let stderr = '';
+      const timer = setTimeout(() => { child.kill(); reject(new Error(`ESM load timed out: ${stderr}`)); }, 15000);
+      child.stdout.on('data', d => { stdout += d; }); child.stderr.on('data', d => { stderr += d; });
+      child.on('error', error => { clearTimeout(timer); reject(error); });
+      child.on('close', code => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
+    });
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe('esm-ok');
+  } finally { launch.cleanup(); rmSync(base, { recursive: true, force: true }); }
+}, 30000);

@@ -536,10 +536,6 @@ pub fn launch(config: Launch) -> Result<i32, String> {
         grants.push(Grant::new(path, profile.sid, true)?);
     }
     drop(_lock);
-    if let (Some(pipe), Some(port)) = (&config.pipe, config.proxy_port) {
-        broker(pipe, &profile.sid_text()?, port)?;
-    }
-
     unsafe {
         // Job handle is never inherited. Closing it kills every descendant,
         // including when Node terminates this helper before orderly cleanup.
@@ -731,6 +727,31 @@ pub fn launch(config: Launch) -> Result<i32, String> {
             let error = last("AssignProcessToJobObject");
             TerminateProcess(child.0, 125);
             return Err(error);
+        }
+        if let (Some(pipe), Some(port)) = (&config.pipe, config.proxy_port) {
+            // LOCAL is expanded by the kernel inside AppContainer, but a
+            // full-trust broker must create the corresponding explicit path.
+            // Query the child's real namespace only after suspended creation.
+            let mut token = null_mut();
+            win(
+                OpenProcessToken(child.0, TOKEN_QUERY, &mut token),
+                "open AppContainer token",
+            )?;
+            let _token = Handle(token);
+            let mut len = 0;
+            GetAppContainerNamedObjectPath(token, null_mut(), 0, null_mut(), &mut len);
+            let mut path = vec![0u16; len as usize];
+            win(
+                GetAppContainerNamedObjectPath(token, null_mut(), len, path.as_mut_ptr(), &mut len),
+                "AppContainer pipe namespace",
+            )?;
+            let end = path.iter().position(|c| *c == 0).unwrap_or(path.len());
+            let namespace = String::from_utf16_lossy(&path[..end]);
+            let leaf = pipe
+                .strip_prefix(r"\\.\pipe\LOCAL\")
+                .ok_or("invalid broker pipe prefix")?;
+            let resolved = format!(r"\\.\pipe{namespace}\{leaf}");
+            broker(&resolved, &profile.sid_text()?, port)?;
         }
         if ResumeThread(thread.0) == u32::MAX {
             return Err(last("ResumeThread"));
