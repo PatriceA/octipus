@@ -65,13 +65,17 @@ export const DOCUMENTS_WRITE_NOTE = 'documents:write creates text documents in t
   + 'as that user, marked with the package and tool that made them.';
 export const IN_PROCESS_NOTE = 'Runs in the server process: no sandbox, so it has the server\'s network, files and data.';
 
+/** A page's egress: it can navigate its frame anywhere, with what it shows in the URL. */
+export const PAGE_EGRESS_NOTE = 'A page can send what it shows to any website: it can navigate to any address with that data in the URL. '
+  + 'A package with pages is limited to data at protection level 1, whatever it declares.';
+
 /**
  * The warning when a package can send data out (`web:read`, `model:complete`,
- * `agent:run`) and also read the user's data: what it reads it can send
- * anywhere. Null when it cannot do both.
+ * `agent:run`, or a page, which can navigate anywhere) and also read the
+ * user's data: what it reads it can send anywhere. Null when it cannot do both.
  */
-export function egressReadWarning(scopes: readonly string[]): string | null {
-  const out = scopes.filter((s) => EGRESS_SCOPES.includes(s));
+export function egressReadWarning(scopes: readonly string[], opts: { pages?: boolean } = {}): string | null {
+  const out = [...scopes.filter((s) => EGRESS_SCOPES.includes(s)), ...(opts.pages ? ['its pages'] : [])];
   const reads = scopes.filter((s) => s.endsWith(':read') && s !== 'web:read');
   if (out.length === 0 || reads.length === 0) return null;
   return `With ${out.join(' and ')} and ${reads.join(', ')} together, this package can send what it reads anywhere. `
@@ -82,7 +86,7 @@ export function egressReadWarning(scopes: readonly string[]): string | null {
 export function permissionsGuidance(p: PluginPermissionsSummary): PluginGuidanceWarning[] {
   const out: PluginGuidanceWarning[] = [];
   if (p.runtime === 'in-process') out.push({ code: 'in_process', message: IN_PROCESS_NOTE });
-  const egress = egressReadWarning(p.host);
+  const egress = egressReadWarning(p.host, { pages: p.pages.length > 0 });
   if (egress) out.push({ code: 'egress_with_read', message: egress });
   if (p.trustedInput) out.push({ code: 'model_cli_tools', message: `It declares model.trustedInput: ${MODEL_CLI_TOOLS_WARNING}` });
   return out;
@@ -138,7 +142,7 @@ export function declarationItems(
   p: PluginPermissionsSummary, manifest?: Pick<PluginManifest, 'tools' | 'secrets' | 'commands' | 'model'> | null, host: PluginHostEnforcement | null = null,
 ): PluginDeclarationItem[] {
   const items: PluginDeclarationItem[] = [];
-  const egress = egressReadWarning(p.host);
+  const egress = egressReadWarning(p.host, { pages: p.pages.length > 0 });
   items.push(runtimeItem(p, host));
   if (p.runtime === 'in-process') {
     items.push({ id: 'in-process', kind: 'in-process', label: 'Has the server\'s full authority', detail: 'Needs its own approval (approveInProcess) for this content', guidance: IN_PROCESS_NOTE });
@@ -190,7 +194,12 @@ export function declarationItems(
       guidance: 'The tool receives the message of every turn of every user of those roles.',
     });
   }
-  for (const page of p.pages) items.push({ id: `page:${page.path}`, kind: 'page', label: `Adds the page "${page.title}"`, detail: `/${page.path} → ${page.entry}` });
+  for (const page of p.pages) {
+    items.push({
+      id: `page:${page.path}`, kind: 'page', label: `Adds the page "${page.title}"`, detail: `/${page.path} → ${page.entry}`,
+      guidance: egress ? `${PAGE_EGRESS_NOTE} ${egress}` : PAGE_EGRESS_NOTE,
+    });
+  }
   if (p.ui) items.push({ id: 'ui', kind: 'page', label: 'Serves its page files', detail: `${p.ui.dir}/${p.ui.sha256 ? `, sha256 ${p.ui.sha256}` : ''}` });
   for (const secret of manifest?.secrets ?? []) {
     items.push({ id: `secret:${secret.key}`, kind: 'secret', label: `Needs the secret ${secret.label}`, detail: `${secret.key}${secret.required ? ' (required)' : ''}` });
@@ -201,7 +210,10 @@ export function declarationItems(
       detail: `model.trustedInput${manifest?.model?.reason ? `: "${manifest.model.reason}"` : ''}`, guidance: MODEL_CLI_TOOLS_WARNING,
     });
   }
-  items.push({ id: 'protection', kind: 'protection', label: `Sees data up to protection level ${p.maxProtection}`, detail: `maxProtection ${p.maxProtection}` });
+  items.push({
+    id: 'protection', kind: 'protection', label: `Sees data up to protection level ${p.maxProtection}`, detail: `maxProtection ${p.maxProtection}`,
+    ...(p.pages.length > 0 ? { guidance: 'Level 1 at most, whatever it declares: its pages can send what they show to any website.' } : {}),
+  });
   return items;
 }
 
@@ -268,7 +280,7 @@ export function guidanceTone(item: PluginDeclarationItem): 'warning' | 'info' {
   if (item.kind === 'in-process' || item.kind === 'model-cli-tools' || item.kind === 'change' || (item.kind === 'runtime' && item.detail.includes('in-process'))) return 'warning';
   if (item.label.startsWith('NOT sandboxed') || item.label === 'Network not enforced on this host' || item.guidance?.startsWith('Network not enforced')) return 'warning';
   if (item.kind === 'tool' && item.id && item.label.endsWith('(external)')) return 'warning';
-  if (item.guidance?.includes('send what it reads anywhere')) return 'warning';
+  if (item.guidance?.includes('send what it reads anywhere') || item.guidance?.includes('send what it shows to any website')) return 'warning';
   return 'info';
 }
 

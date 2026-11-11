@@ -343,8 +343,8 @@ const HOST_TOKEN_WHEN = 'A call gets a short-lived token for them (at most 30 se
   + 'An upgrade asks for this approval again.';
 
 /** The egress warning, as the shared declarations word it (src/shared/plugin-declarations.ts), or ''. */
-function egressWarningText(scopes: readonly string[]): string {
-  const warning = egressReadWarning(scopes);
+function egressWarningText(scopes: readonly string[], pages: boolean): string {
+  const warning = egressReadWarning(scopes, { pages });
   return warning ? `Warning: ${warning}` : '';
 }
 
@@ -434,7 +434,7 @@ function PagesAndScopes({ pkg, unapproved }: { pkg: PluginPackageView; unapprove
             </span>
           ))}
           {unapproved.length > 0 && <span className={tone('warn')}> · {unapproved.length} not approved; enabling asks you to agree to them</span>}
-          {egressWarningText(scopes) && <span className={cn('block', tone('warn'))} data-testid="plugin-egress-warning">{egressWarningText(scopes)}</span>}
+          {egressWarningText(scopes, pages.length > 0) && <span className={cn('block', tone('warn'))} data-testid="plugin-egress-warning">{egressWarningText(scopes, pages.length > 0)}</span>}
           {scopeNotes(scopes).map((note) => <span key={note} className="block" data-testid="plugin-scope-note">{note}</span>)}
           <span className="block">{HOST_TOKEN_WHEN}</span>
         </p>

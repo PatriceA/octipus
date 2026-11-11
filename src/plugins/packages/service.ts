@@ -1413,9 +1413,10 @@ export const EGRESS_HOST_SCOPES: readonly PluginHostScope[] = ['web:read', 'mode
 
 /**
  * The level a package may see, as enforced: its `maxProtection` (or the
- * default above), clamped to 1 while it is granted a scope that can carry
- * data out (`EGRESS_HOST_SCOPES`), whatever its manifest says: such a package
- * could pass whatever it reads to any URL or model.
+ * default above; 1 for a package with pages, whatever it declares), clamped
+ * to 1 while it is granted a scope that can carry data out
+ * (`EGRESS_HOST_SCOPES`), whatever its manifest says: such a package could
+ * pass whatever it reads to any URL or model, and a page to any website.
  */
 export function effectiveMaxProtection(
   m: Pick<PluginManifest, 'maxProtection' | 'network' | 'host' | 'ui'>, granted: readonly PluginHostScope[],

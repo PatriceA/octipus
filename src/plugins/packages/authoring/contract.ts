@@ -135,7 +135,7 @@ export async function pluginApiContract(opts: {
       `model.trustedInput: leave it out (the default is untrusted). Set it to true only when every prompt the package sends to model:complete is built from its own constants or from sources the admin trusts, never from web pages, mail, files, user text or other outside data. It needs the host scope model:complete and a model.reason (at most ${MAX_MODEL_TRUST_REASON_CHARS} characters, shown to the admin); it is refused with web:read and for runtime "in-process".`,
     ],
     defaultMaxProtection: {
-      rule: 'When maxProtection is left out: 1 if the package has network hosts, the host scope web:read or agent:run, or ui pages (each can carry data out), otherwise 4. Granted web:read, model:complete or agent:run, a package sees level 1 whatever it declares.',
+      rule: 'When maxProtection is left out: 1 if the package has network hosts, the host scope web:read or agent:run (each can carry data out), otherwise 4. A package with ui pages sees level 1 whatever it declares (a page can send what it shows to any website); so does one granted web:read, model:complete or agent:run.',
       // Computed by the function the server uses, so the rule above cannot drift from it unnoticed (a unit test compares them).
       examples: {
         nothing: defaultMaxProtection({}),
@@ -143,6 +143,7 @@ export async function pluginApiContract(opts: {
         hostWebRead: defaultMaxProtection({ host: ['web:read'] as PluginManifest['host'] }),
         hostAgentRun: defaultMaxProtection({ host: ['agent:run'] as PluginManifest['host'] }),
         uiPages: defaultMaxProtection({ ui: { pages: [{ path: 'main', title: 'Main', entry: 'index.html' }] } as PluginManifest['ui'] }),
+        uiPagesDeclared4: defaultMaxProtection({ maxProtection: 4, ui: { pages: [{ path: 'main', title: 'Main', entry: 'index.html' }] } as PluginManifest['ui'] }),
       },
     },
     modelCalls: {

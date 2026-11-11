@@ -15,18 +15,24 @@ import { fileSha256, uiTreeHash } from './integrity';
 import { uiDirOf } from './manifest-ui-host';
 
 /**
- * The package's `maxProtection`, or when it declares none: a package that
- * reaches the network leaves the house (1), and so does one that may have the
- * host fetch any URL it names (`web:read`: the URL itself can carry data out)
- * or run an agent that searches and fetches the web on a prompt it writes
- * (`agent:run`), and so does one with pages, which can navigate their frame
- * anywhere with what they were shown in the URL (docs/PLUGIN-PACKAGES.md#pages);
- * one that can do none of these keeps everything in (4).
+ * The level a package may see, from its manifest alone: its `maxProtection`,
+ * or when it declares none: a package that reaches the network leaves the
+ * house (1), and so does one that may have the host fetch any URL it names
+ * (`web:read`: the URL itself can carry data out) or run an agent that
+ * searches and fetches the web on a prompt it writes (`agent:run`); one that
+ * can do none of these keeps everything in (4).
+ *
+ * A package with pages is 1 whatever it declares: a page can navigate its
+ * frame to any website with what it was shown in the URL
+ * (docs/PLUGIN-PACKAGES.md#pages), an egress nothing declares or enforces.
+ * The permissions summary (`computePermissions`), so the CLI and an index,
+ * carry this clamped value.
  */
 export function defaultMaxProtection(m: Pick<PluginManifest, 'maxProtection' | 'network' | 'host' | 'ui'>): 1 | 2 | 3 | 4 {
+  if ((m.ui?.pages ?? []).length > 0) return 1;
   if (m.maxProtection !== undefined) return m.maxProtection;
   const host = m.host ?? [];
-  return (m.network ?? []).length > 0 || host.includes('web:read') || host.includes('agent:run') || (m.ui?.pages ?? []).length > 0 ? 1 : 4;
+  return (m.network ?? []).length > 0 || host.includes('web:read') || host.includes('agent:run') ? 1 : 4;
 }
 
 /** The permissions summary of a package (`octi plugin permissions --json`); the shape lives in src/shared so the web app reads the same type. */
