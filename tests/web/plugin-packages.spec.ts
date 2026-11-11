@@ -56,6 +56,27 @@ const pkg = (over: Record<string, unknown>) => ({
 });
 
 test.describe('plugin packages', () => {
+  test('the page says which sandbox plugin servers get: an active runner, or unavailable and why', async ({ authenticatedPage: page }) => {
+    let sandbox = { setting: 'required', runner: 'bwrap', unavailable: null as string | null, platform: 'linux', summary: 'active runner bwrap' };
+    await stubAllDefaults(page);
+    await page.route(/\/api\/plugin-packages(\/.*)?$/, async (route: Route) => {
+      const url = route.request().url();
+      if (url.endsWith('/sandbox')) return json(route, 200, sandbox);
+      if (url.endsWith('/bundled')) return json(route, 200, []);
+      return json(route, 200, [pkg({})]);
+    });
+    await page.goto('/admin/plugins');
+    const line = page.getByTestId('plugin-sandbox-state');
+    await expect(line).toContainText('plugin sandbox: active runner bwrap');
+    await expect(line).toHaveAttribute('data-runner', 'bwrap');
+    sandbox = {
+      setting: 'required', runner: null as unknown as string, platform: 'linux', summary: 'unavailable: no sandbox runner found: install bubblewrap (plugin packages do not run)',
+      unavailable: 'no sandbox runner found: install bubblewrap',
+    };
+    await page.reload();
+    await expect(page.getByRole('alert').filter({ hasText: 'plugin sandbox: unavailable' })).toContainText('install bubblewrap');
+  });
+
   test('approving changed content sends the hash shown, and a later change is refused with a message', async ({ authenticatedPage: page }) => {
     let packages = [
       pkg({ problem: MISMATCH, connected: false, actualHash: ACTUAL, signedBy: null, signature: { status: 'invalid', keyId: null, publisher: null, detail: 'The signature by Acme does not match the package content' } }),
