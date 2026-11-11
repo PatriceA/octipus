@@ -1615,7 +1615,7 @@ for their own entries only:
 // { octipus: 'store', id, op: 'store.get', key }                    → result { value, version } (code not_found when missing)
 // { octipus: 'store', id, op: 'store.set', key, value, ifVersion? } → result { version }  (code version_conflict, with current)
 // { octipus: 'store', id, op: 'store.delete', key }                 → result { deleted: true }
-// { octipus: 'store', id, op: 'store.list', prefix?, limit? }       → result { keys, withheld, truncated }
+// { octipus: 'store', id, op: 'store.list', prefix?, limit? }       → result { keys, truncated }
 let next = 100;
 function store(op, fields) {
   const id = next++;
@@ -1693,13 +1693,17 @@ and an admin approved:
 
 **What a package read, it keeps.** The highest protection level a package
 has read through the host API (a document, a task's provenance, a run's
-result) is kept per package and user across calls, in the key-value store,
-and every request starts from it. Notes and tasks have no protection level,
-so a package that has read above level 1 for that user may not write them
-(`403 read_level`, audited): it cannot carry level-2 content down to level 1
-in a later call. A document it writes is stored at no lower level, and its
-`model:complete` calls run at it. Disabling, upgrading or uninstalling the
-package forgets it.
+result, a store entry) is kept per package and user across calls, in the
+key-value store, and every request starts from it, **and from the calling
+session's level**: a tool runs inside a conversation that may hold level-2
+content, and what it writes may carry it. Notes and tasks have no protection
+level, so a call working above level 1 (the package has read above it for
+that user, or its session holds such content) may not write them (`403
+read_level`, audited): it cannot carry level-2 content down to level 1 in a
+later call. A document or a store entry it writes is stored at no lower
+level, and its `model:complete` calls run at it. Disabling, upgrading or
+uninstalling the package forgets what it read (the session's level stays the
+session's).
 
 **`web:read`** lets a package read any public page without network of its
 own: the host fetches it through the same SSRF guard as the agents' web
@@ -1982,12 +1986,12 @@ Codex ([CLI-AGENTS.md](CLI-AGENTS.md#one-shot-completions-lanes)).
 
 ## Store
 
-A package can keep small JSON values per key, **for each user apart**: the
-host keeps them, separated by the user on the call's token, so a package
-cannot mix users even by mistake. There is no store shared across users, and
-no way to name another user. Use it for any per-user data: never
-`OCTIPUS_PLUGIN_DATA_DIR`, which every user's calls share
-([How a package runs](#how-a-package-runs)).
+A package can keep small JSON values per key, **for each user apart, and in
+each workspace apart**: the host keeps them, separated by the user on the
+call's token and the workspace the call ran in, so a package cannot mix users
+even by mistake. There is no store shared across users, and no way to name
+another user. Use it for any per-user data: never `OCTIPUS_PLUGIN_DATA_DIR`,
+which every user's calls share ([How a package runs](#how-a-package-runs)).
 
 ```json
 "host": ["store:read", "store:write"],
@@ -2005,15 +2009,27 @@ no way to name another user. Use it for any per-user data: never
 - **Diffed.** The permissions summary carries `store: { quotaBytes } | null`
   (right after `settings`). An upgrade that adds a store, or raises the quota,
   widens and is asked again; a smaller quota narrows.
-- **Per user, enforced by the host.** The table `plugin_store` keys every
-  entry by package, user and key; every read and write goes through one
-  repository (`src/db/repositories/plugin-store-repository.ts`) bound to the
-  package of the token and the user of the token, or of the signed-in page.
+- **Per user and per workspace, enforced by the host.** The table
+  `plugin_store` keys every entry by package, user, workspace and key; every
+  read and write goes through one repository
+  (`src/db/repositories/plugin-store-repository.ts`) bound to the package of
+  the token, the user of the token (or of the signed-in page) and the
+  workspace (below).
+
+**Workspaces.** The workspace is the call's: a tool called in a shared space
+reads and writes that user's entries **of that space**, and a call anywhere
+else (the user's own workspace) their personal entries. A page works in the
+workspace it is opened in, the space the web app is in, else the personal
+one. What a user's calls keep in a space is readable in that space only, by
+that user only: another member of the space has entries of their own there.
+When the user leaves the space (or is removed), their entries of that space
+are deleted with the membership; deleting the space deletes every entry of
+it.
 
 | Request (`store:read`) | Answer |
 | --- | --- |
 | `GET /api/plugin-host/store/<key>` | `{ value, version }`; `404 not_found` |
-| `GET /api/plugin-host/store?prefix=&limit=` | `{ keys: [{ key, size, version, updatedAt }], withheld, truncated }`: the user's keys, sorted (`limit` default 100, at most 1000), no values |
+| `GET /api/plugin-host/store?prefix=&limit=` | `{ keys: [{ key, size, version, updatedAt }], truncated }`: the user's keys in this workspace, sorted (`limit` default 100, at most 1000), no values |
 
 | Request (`store:write`) | Answer |
 | --- | --- |
@@ -2026,61 +2042,115 @@ no way to name another user. Use it for any per-user data: never
   (`^[A-Za-z0-9._:/-]{1,200}$`), with no empty, `.` or `..` segment between
   slashes (`400 invalid_key`). It goes in the path as it is: the egress proxy
   forwards no `%`.
-- A value is any JSON of at most 64 KB as UTF-8 (`413 too_large`; `400
-  invalid_value` for no value or a NUL character).
-- The quota counts each entry's key and JSON, in bytes, for the user and the
-  package. It is checked in the same transaction as the write, under a lock
-  per package and user, so concurrent writes cannot pass it together (`413
-  quota`). A write that does not grow its entry always goes through, so a
-  quota lowered by an upgrade leaves room to shrink.
+- A value is any JSON of at most 64 KB as UTF-8, both as sent and as the
+  database keeps it (`413 too_large`; `400 invalid_value` for no value, a NUL
+  character, or a value too deeply nested).
+- The quota counts, for each entry, **128 bytes of overhead**, its key, and
+  its value as the database serialises it (`octet_length(value::text)`: a
+  number such as `1e300` counts as its 301 digits), for the user and the
+  package across their workspaces. A user keeps at most **10,000 entries** per
+  package (`413 too_many_entries`). Both are checked in the same transaction
+  as the write, under a lock per package and user, against a running total
+  per package, user and workspace (`plugin_store_usage`, updated in that
+  transaction), so concurrent writes cannot pass them together (`413 quota`;
+  the answer names the quota, not what is used). A write that does not grow
+  its entry always goes through, so a quota lowered by an upgrade leaves room
+  to shrink.
 - Rate: the host API's own limit (60 requests in a burst per package and
-  user), and for writes and deletes 30 in a burst then 5 a second (`429
-  rate_limited`).
+  user), and for writes and deletes 30 in a burst then 5 a second, **shared
+  by the package's tools and its pages** (`429 rate_limited`).
 
 **Effects.** `store:write` is a write scope: a `read` tool's token carries
 `store:read` only, so a read tool can never write the store.
 
-**Protection levels.** An entry records the protection level of the call
-that wrote it: what the package had read for this user so far
-([What a package read, it keeps](#host-api)). Reading an entry raises the
-call to that level, the calling session and the package's kept level for this
-user with it, so data cannot be laundered through the store into notes or
-tasks: after reading a level-2 entry, a `notes:write` or `tasks:write` is
-refused (`403 read_level`), and what the package stores next is kept at level
-2. The package's `maxProtection` still caps what it reads: an entry above it
-is refused (`403 protection_level`), and a list leaves its key out (a key can
-carry data too; `withheld` counts them) and raises the call to the highest
-level of the keys it hands over.
+**Protection levels.** Levels protect the store as they protect everything
+else a package touches: they are enforced on every request, not trusted to
+the package.
+
+- *What an entry is written at.* The level the call works at: the highest of
+  what the call has read, what the package has read for this user in any call
+  ([What a package read, it keeps](#host-api)) and **the calling session's
+  level** (a tool runs inside a conversation that may hold level-2 content,
+  and whatever it writes may carry it). The same level governs the call's
+  `notes:write` and `tasks:write` (refused above 1, `403 read_level`) and what
+  `documents:write` stores at, so a level-2 session's tool cannot write a
+  note even before it reads anything.
+- *An overwrite never lowers an entry's level*: it keeps the higher of the
+  entry's level and the call's.
+- *Reading raises.* Reading an entry raises the call to its level, the
+  calling session and the package's kept level for this user with it, so
+  data cannot be laundered through the store into notes or tasks. So does
+  everything else an answer tells about an entry: a write over it, a version
+  conflict on it, a delete that found it, a list that hands its key over (a
+  key can carry data too).
+- *Above `maxProtection`, nothing is there.* An entry above the package's
+  `maxProtection` answers a get, a write, a compare-and-set and a delete
+  exactly as a missing key does (`404 not_found`, no level, no version, left
+  as it was), and a list leaves it out without counting it.
+- *When `maxProtection` drops*, the entries above the new cap are deleted, in
+  the same transaction: an upgrade whose manifest lowers it, or an approval
+  that clamps it (an egress scope approved, [above](#host-api)). The audit
+  row (`store_deleted_above_max_protection`, or `storeDeleted` on the
+  `upgraded` row) carries counts only.
+
+**Upgrades.** The store follows the package across upgrades from the same
+publisher and source, with what holds above. Three exceptions, each in the
+upgrade's transaction and audited with counts only (`storeDeleted` on the
+`upgraded` row):
+
+- *Another publisher.* An upgrade that changes the signer or the source
+  (`change:signer`, `change:source`) would hand every user's data to code
+  someone else wrote, so **the data is deleted by default**. Keeping it is the
+  admin's explicit choice: the consent preview offers the item
+  `change:store-handover`, *"Hands the stored data of N users (X MB) to the
+  new publisher"*, optional and never pre-ticked; left unticked, the data is
+  deleted at install. Without the preview, the API's `keepStoreData: true`
+  (`POST /api/plugin-packages`) and the CLI's `--keep-store-data` (`octi
+  plugin install|upgrade`) keep it. Kept, the `upgraded` row records
+  `storeHandedOver` (entries, users, bytes). An agent's install
+  (`plugin_install`) may upgrade only its own package from the same source
+  and refuses another signer, so it never reaches this.
+- *The store removed.* A version that no longer declares `store` deletes
+  every entry, so a store added back later starts empty.
+- *A lower `maxProtection`*: the entries above it (above).
 
 **Audit.** Store requests are audited in aggregate, as the host API's
 refusals are: one row (`resource_type = plugin_host`, op `store.get`,
 `store.list`, `store.put` or `store.delete`) per package, user, op, status
-and code per minute, with `count`, the requests since the previous row. No
-key or value is in the audit. A refusal before the token is accepted, and a
-failure, has its own row.
+and code per minute, with `count`, the requests since the previous row. The
+requests counted after a row are written when the minute ends (a timer), at
+shutdown, and before the counts are cleared: none is lost. No key or value
+is in the audit. A refusal before the token is accepted, and a failure, has
+its own row.
 
 **From a page.** A page reaches its own user's entries directly over its
 bridge ([Pages](#pages)), for page state between visits; or it calls one of
 its package's tools, which uses the store as any call does.
 
 **Deleting.** Uninstalling the package deletes every user's entries (the
-uninstall confirmation says so); deleting a user deletes theirs. Each user
-sees what each plugin keeps for them in Settings → My plugin usage, and can
-delete it there (**Delete my data**, with a confirmation; audited as
-`store_deleted_by_user`). Admins see each package's total and per-user size
-in the Installed tab's usage.
+uninstall confirmation says so); deleting a user deletes theirs, leaving a
+space deletes theirs of that space. Each user sees what each plugin keeps for
+them in Settings → My plugin usage, and can delete it there (**Delete my
+data**, with a confirmation; audited as `store_deleted_by_user`), in every
+workspace or in one. Admins see each package's total and per-user size in the
+Installed tab's usage.
 
 | Route | Who | Answer |
 | --- | --- | --- |
-| `GET /api/plugins/:name/store?prefix=&limit=`, `GET …/store/<key>` | the signed-in user, on the package's page | as the host API, for their own entries |
-| `PUT /api/plugins/:name/store/<key> { value, ifVersion? }`, `DELETE …/store/<key>` | the same | as the host API, for their own entries |
-| `DELETE /api/plugin-packages/:name/store/me` | any user | `{ name, entries, bytes }`: every entry of that package for the caller |
+| `GET /api/plugins/:name/store?prefix=&limit=`, `GET …/store/<key>` | the signed-in user, on the package's page | as the host API, for their own entries in the page's workspace |
+| `PUT /api/plugins/:name/store/<key> { value, ifVersion? }`, `DELETE …/store/<key>` | the same | as the host API, for their own entries in the page's workspace |
+| `DELETE /api/plugin-packages/:name/store/me?workspace=` | any user | `{ name, entries, bytes }`: the caller's entries of that package, in every workspace, or with `workspace` (`personal`, or a space's id) in that one |
 
-The page routes answer only while the package is enabled and has pages, and
-only with the scope its admin approved: `store:read` to read, `store:write` to
-write (`403 scope_missing` otherwise, `404` for no page). They need a
-signed-in user; an API token needs `api:read` to read and `api:write` to
-write; a write signed by the session cookie must come from this site
+The page routes answer only while the package is enabled, has pages and **may
+start** (the check before every start of its server: not revoked, its version
+or its signing key; its files still the approved content; its signature and
+sandbox in order), and only with the scope its admin approved: `store:read`
+to read, `store:write` to write (`403 scope_missing` otherwise, `404` for no
+page). The same check keeps the page's files and its sidebar entry away
+while it fails. It is cached for 30 seconds, and forgotten at once on an
+install, an upgrade, an approval, an uninstall and a revocation. The routes
+need a signed-in user; an API token needs `api:read` to read and `api:write`
+to write; a write signed by the session cookie must come from this site
 ([API](#api)). A page writes at the package's level for its user, which is 1
 for a package with pages. Writes and deletes are audited in aggregate
 (`resource_type = plugin_page`).
