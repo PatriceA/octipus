@@ -14,6 +14,7 @@ COPY scripts/ scripts/
 COPY bin/ bin/
 COPY web/ web/
 COPY mcp-server/ mcp-server/
+COPY plugin-sdk/ plugin-sdk/
 COPY tsconfig.json ./
 
 # Bundle the backend. `start` runs this artifact, not the source under a
@@ -35,7 +36,7 @@ WORKDIR /app
 # CLI tools: jq, make, wget, tree, less, file, procps, rsync, ripgrep
 # Archives: zip, unzip
 # Remote access: openssh-client
-# Scripting: python3-minimal
+# Scripting: python3 (full stdlib — python3-minimal has no unittest)
 # Sandbox: bubblewrap — plugin package servers never start without a working
 #   sandbox runner (plugins.sandbox: required, docs/PLUGIN-PACKAGES.md#the-sandbox).
 #   bwrap needs unprivileged user namespaces; check in the container with
@@ -58,7 +59,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zip \
     unzip \
     openssh-client \
-    python3-minimal \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy built app
@@ -85,6 +86,9 @@ COPY personas/ personas/
 # First-party plugins (docs/PLUGIN-PACKAGES.md#bundled-plugins): offered under
 # Admin → Plugin packages → Bundled, installed (pinned, disabled) from here.
 COPY plugins/ plugins/
+# Resolved through tsconfig `paths`, not node_modules: the bundle and the
+# source-run tools (migrations, wizard, TUI) both need the folder itself.
+COPY plugin-sdk/ plugin-sdk/
 
 # Create data directories
 RUN mkdir -p /data/workspace /data/documents /data/extensions
