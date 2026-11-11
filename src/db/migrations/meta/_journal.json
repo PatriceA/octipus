@@ -1275,6 +1275,13 @@
       "when": 1794416400000,
       "tag": "0181_remove_product_doc_embeddings",
       "breakpoints": true
+    },
+    {
+      "idx": 182,
+      "version": "7",
+      "when": 1794420000000,
+      "tag": "0182_plugin_store",
+      "breakpoints": true
     }
   ]
 }

@@ -322,6 +322,46 @@ test.describe('plugin marketplace', () => {
     expect(calls.find((c) => c.method === 'DELETE')).toMatchObject({ path: `/revocations/${revocations[0].id}`, body: { reason: 'fixed upstream' } });
   });
 
+  test('an upgrade to another publisher offers to hand the stored data over: optional, unticked, sent only when ticked', async ({ authenticatedPage: page }) => {
+    const after = perms('weekly', { ...weeklyPerms, version: '1.1.0' });
+    const signer = { id: 'change:signer', kind: 'change' as const, label: 'Signed by another publisher', detail: 'weekly 1.0.0 is signed by A, this upgrade by B', guidance: 'Who vouches for these bytes changes.', carried: false, status: 'new' as const };
+    const handover = {
+      id: 'change:store-handover', kind: 'change' as const, label: 'Hands the stored data of 3 users (1.5 MB) to the new publisher',
+      detail: 'change:store-handover: keep what the package stored for its users; unticked, it is deleted at install', guidance: 'Leave it unticked to start the store empty.',
+      carried: false, status: 'new' as const, optional: true as const,
+    };
+    const upgrade = preview(after, { title: 'Weekly review', version: '1.1.0', upgradeFrom: '1.0.0', declarations: [...items(after, null, weeklyPerms), signer, handover] });
+    const calls = await stubPlugins(page, {
+      handle: (c) => {
+        if (c.path === '/updates') return [200, [{ name: 'weekly', installed: '1.0.0', latest: '1.1.0', registry: 'marketplace', diff: null, warnings: [] }]];
+        if (c.path === '/revocations') return [200, []];
+        if (c.path === '/preview') return [200, upgrade];
+        if (c.path === '/install') return [200, { name: 'weekly', version: '1.1.0', contentHash: HASH, enabled: false, enableProblem: null, warnings: [] }];
+        return undefined;
+      },
+    });
+    const run = async (keep: boolean) => {
+      await page.goto('/admin/plugins/updates');
+      await page.locator('[data-testid="plugin-update"][data-name="weekly"]').getByRole('button', { name: 'Upgrade weekly to 1.1.0' }).click();
+      const consent = page.getByTestId('plugin-consent');
+      const item = consent.locator('[data-id="change:store-handover"]');
+      await expect(item).toContainText('Hands the stored data of 3 users (1.5 MB) to the new publisher');
+      await expect(item.getByTestId('consent-optional')).toBeVisible();
+      await expect(item.locator('input')).not.toBeChecked();
+      const required = upgrade.declarations.filter((d) => !d.carried && !d.optional).map((d) => d.id);
+      for (const id of required) await consent.locator(`[data-id="${id}"] input`).check();
+      await expect(consent.getByTestId('consent-progress')).toHaveText(`${required.length} of ${required.length} agreed`);
+      const button = consent.getByRole('button', { name: 'Upgrade', exact: true });
+      await expect(button).toBeEnabled();
+      if (keep) await item.locator('input').check();
+      await button.click();
+      await expect(page.getByTestId('updates-message')).toContainText('weekly is now 1.1.0');
+      return (calls.filter((c) => c.path === '/install').at(-1)?.body as { accepted: string[] }).accepted;
+    };
+    expect(await run(false)).not.toContain('change:store-handover');
+    expect(await run(true)).toContain('change:store-handover');
+  });
+
   test('the installed tab shows origin, revocation, usage, and cancels a running run', async ({ authenticatedPage: page }) => {
     const pkg = {
       name: 'research', version: '1.0.0',
@@ -371,6 +411,82 @@ test.describe('plugin marketplace', () => {
     await item.getByRole('button', { name: 'Cancel the run Competitors' }).click();
     await expect(item.getByTestId('my-plugin-run')).toHaveCount(0);
     expect(calls.find((c) => c.method === 'DELETE')?.path).toBe('/research/runs/77777777-7777-4777-8777-777777777777');
+  });
+
+  test('the consent shows the per-user store as its own item, with its quota', async ({ authenticatedPage: page }) => {
+    const notesPerms = perms('notebook', { host: ['store:read', 'store:write'], store: { quotaBytes: 5 * 1024 * 1024 }, tools: [{ name: 'save', effect: 'write' }] });
+    const p = preview(notesPerms, { title: 'Notebook' });
+    const calls = await stubPlugins(page, {
+      listing: { ...LISTING, plugins: [card({ name: 'notebook', title: 'Notebook', permissions: notesPerms, askSummary: permissionsAskSummary(notesPerms), declarations: items(notesPerms) })] },
+      handle: (c) => (c.path === '/preview' ? [200, p] : undefined),
+    });
+    await page.goto('/admin/plugins/marketplace');
+    await page.getByRole('button', { name: 'Notebook: details' }).click();
+    await page.getByRole('dialog', { name: 'Notebook' }).getByRole('button', { name: 'Install' }).click();
+    const consent = page.getByTestId('plugin-consent');
+    const store = consent.locator('[data-id="store"]');
+    await expect(store).toContainText('Keeps up to 5 MB of its own data per user');
+    await expect(store).toContainText('store: up to 5242880 bytes per user (store:read, store:write)');
+    await expect(store.getByTestId('consent-guidance')).toContainText('never another user');
+    await expect(consent.locator('[data-id="host:store:write"]')).toContainText('Keeps data for you');
+    expect(calls.find((c) => c.path === '/preview')?.body).toMatchObject({ name: 'notebook' });
+  });
+
+  test('the installed tab shows what a plugin stores, in total and per user, and uninstalling says every user\'s data goes', async ({ authenticatedPage: page }) => {
+    const pkg = {
+      name: 'notebook', version: '1.0.0',
+      manifest: { name: 'notebook', version: '1.0.0', apiVersion: '1.0.0', title: 'Notebook', description: 'Notes per user', server: { command: 'node', args: ['s.mjs'] }, tools: { save: { effect: 'write' } }, host: ['store:read', 'store:write'], store: {} },
+      enabled: true, settings: {}, secretsSet: [], problem: null, connected: true,
+      network: { state: 'restricted', detail: 'Only the Octipus host API.' }, contentHash: HASH, actualHash: null, signedBy: null, runtime: 'package', inProcess: null,
+      signature: null, approvedHostScopes: ['store:read', 'store:write'], origin: { source: 'directory' }, revocation: null,
+      installedBy: 'e2e-user-id', installedAt: '2026-11-01T09:00:00Z', updatedAt: '2026-11-01T09:00:00Z',
+    };
+    const store = { bytes: 3 * 1024 * 1024, entries: 30, quotaBytes: 5 * 1024 * 1024, byUser: [{ userId: 'u-1', bytes: 2 * 1024 * 1024, entries: 20 }, { userId: 'u-2', bytes: 1024 * 1024, entries: 10 }] };
+    await stubPlugins(page, {
+      handle: (c) => {
+        if (c.method === 'GET' && c.path === '/') return [200, [pkg]];
+        if (c.path === '/notebook/usage') return [200, { name: 'notebook', days: 30, since: '', scope: 'all', modelCalls: 0, runs: 0, inputTokens: 0, outputTokens: 0, cost: 0, byUser: [], store }];
+        if (c.path === '/notebook/runs') return [200, []];
+        return undefined;
+      },
+    });
+    await page.goto('/admin/plugins');
+    const row = page.locator('[data-testid="plugin-package"][data-name="notebook"]');
+    await row.getByRole('button', { name: 'Usage of notebook' }).click();
+    const usage = row.getByRole('group', { name: 'Usage of notebook' });
+    await expect(usage.getByTestId('plugin-store-usage')).toContainText('store: 3 MB in 30 entries · quota 5 MB per user');
+    await expect(usage.getByTestId('plugin-store-by-user')).toContainText('u-1');
+    await expect(usage.getByTestId('plugin-store-by-user')).toContainText('2 MB');
+    page.once('dialog', (d) => { expect(d.message()).toContain('the data it stored for every user'); void d.dismiss(); });
+    await row.getByRole('button', { name: 'Uninstall notebook' }).click();
+  });
+
+  test('a user sees the size of what each plugin keeps for them, and deletes it', async ({ authenticatedPage: page }) => {
+    let store = { bytes: 3 * 1024 * 1024 / 2, entries: 12, quotaBytes: 5 * 1024 * 1024 };
+    const usage = { name: 'notebook', days: 30, since: '', scope: 'me', modelCalls: 0, runs: 0, inputTokens: 0, outputTokens: 0, cost: 0 };
+    const calls = await stubPlugins(page, {
+      handle: (c) => {
+        if (c.path === '/my-usage') return [200, [{ name: 'notebook', title: 'Notebook', usage: { ...usage, store }, runs: [], store }]];
+        if (c.method === 'DELETE' && c.path === '/notebook/store/me') {
+          const deleted = { name: 'notebook', entries: store.entries, bytes: store.bytes };
+          store = { ...store, bytes: 0, entries: 0 };
+          return [200, deleted];
+        }
+        return undefined;
+      },
+    });
+    await page.goto('/settings?tab=plugin-usage');
+    const item = page.locator('[data-testid="my-plugin"][data-name="notebook"]');
+    await expect(item.getByTestId('my-plugin-store-size')).toHaveText('Stored for you: 1.5 MB in 12 entries of 5 MB');
+    // The confirmation names the plugin and the size; dismissing it deletes nothing.
+    page.once('dialog', (d) => { expect(d.message()).toContain('Notebook'); void d.dismiss(); });
+    await item.getByRole('button', { name: 'Delete my data of Notebook' }).click();
+    expect(calls.filter((c) => c.method === 'DELETE')).toHaveLength(0);
+    page.once('dialog', (d) => { void d.accept(); });
+    await item.getByRole('button', { name: 'Delete my data of Notebook' }).click();
+    await expect(item.getByTestId('my-plugin-store-size')).toHaveText('Stored for you: 0 bytes in 0 entries of 5 MB');
+    await expect(item.getByRole('button', { name: 'Delete my data of Notebook' })).toHaveCount(0);
+    expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.path)).toEqual(['/notebook/store/me']);
   });
 
   for (const theme of ['light', 'dark']) {

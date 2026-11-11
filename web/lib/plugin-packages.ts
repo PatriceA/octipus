@@ -28,9 +28,11 @@ export type {
   PluginRegistryListing,
   PluginSandboxStatus,
   PluginSignatureStatus,
+  PluginStoreUsage,
 } from '../../src/shared/plugin-package';
 
 export {
+  formatStoreBytes,
   MAX_PLUGIN_SECRET_LENGTH,
   MODEL_CLI_TOOLS_WARNING,
   PLUGIN_MODEL_CLI_TOOLS_APPROVAL as MODEL_CLI_TOOLS_APPROVAL,
@@ -100,6 +102,8 @@ export interface MyPluginUsage {
   title: string;
   usage: import('../../src/shared/plugin-package').PluginUsageView;
   runs: PluginRunItem[];
+  /** What it keeps for the caller in its store (docs/PLUGIN-PACKAGES.md#store); null when it has no store and keeps nothing. */
+  store: import('../../src/shared/plugin-package').PluginStoreUsage | null;
 }
 
 /**

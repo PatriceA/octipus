@@ -594,6 +594,14 @@ async function main() {
       // force-exit watchdog on a long-poll socket.
       stopApiServer();
 
+      // The store requests counted since their last audit row (src/plugins/packages/store-audit.ts).
+      try {
+        const { flushStoreAudits } = await import('@/plugins/packages/store-audit');
+        await flushStoreAudits();
+      } catch (err) {
+        logger.warn({ err }, 'Writing the pending store audit rows failed');
+      }
+
       // Close the long-lived task_state LISTEN connection (if it was
       // ever opened). Safe to call when no subscribers were active.
       try {

@@ -23,6 +23,41 @@ labels reflect blast radius, not contract guarantees.
 
 ### Security
 
+- **The plugin store holds the four boundaries (security review of the
+  store, before release).** Protection levels are enforced at runtime on the
+  store as everywhere else:
+  - A host API call now works at the calling session's protection level too:
+    a tool in a level-2 conversation stores its entries at 2 and may not write
+    notes or tasks (`403 read_level`), and `documents:write` stores at no
+    lower. Before, a store write took only what the package itself had read,
+    so a level-2 conversation could be laundered to level 1 through the store.
+  - An entry above the package's `maxProtection` answers a get, a write, a
+    compare-and-set and a delete as a missing key (`404`, no version, no
+    level); a list no longer counts them (`withheld` is gone) and a quota
+    refusal no longer says what is used. A write, a version conflict and a
+    delete raise the caller to the entry's level, and an overwrite never
+    lowers it. When `maxProtection` drops (an upgrade, an egress scope
+    approved), the entries above it are deleted in the same transaction
+    (audited with counts).
+  - An upgrade to another signer or source deletes the store by default;
+    keeping it is the optional, unticked consent item
+    `change:store-handover` (*"Hands the stored data of N users (X MB) to the
+    new publisher"*), `keepStoreData` in the API and `--keep-store-data` in
+    the CLI, audited. An upgrade that drops `store` deletes the entries.
+  - A plugin's pages, sidebar entries and page store are served only while
+    the package may start (not revoked, its content approved: the check
+    before every start, cached 30 seconds and forgotten on any approval,
+    install or revocation).
+  - The quota charges 128 bytes per entry and counts the value as the
+    database serialises it; at most 10,000 entries per user and package
+    (`413 too_many_entries`); a running total per package, user and
+    workspace replaces a sum on every write. Page writes share the tools'
+    store write limit. Aggregated store audit counts are written on a timer
+    and at shutdown instead of being dropped.
+  - The store is per user and per workspace: what is kept in a space is read
+    there only, and leaving the space deletes it. "Delete my data" takes an
+    optional workspace. Migration `0182_plugin_store` (not released yet) is
+    changed in place.
 - **Native Windows plugin sandbox.** Marketplace and local package plugins
   can run in a less-privileged AppContainer through `octipus-sandbox.exe`,
   with a kill-on-close Job object (2 GiB, 32 processes). Package files are
@@ -609,6 +644,33 @@ labels reflect blast radius, not contract guarantees.
   clear presence; `room.subscribe` re-checks access after joining.
 
 ### Added
+
+- **A per-user store for plugin packages** (docs/PLUGIN-PACKAGES.md#store).
+  A package declares `store: { quotaBytes }` (default 5 MB, at most 20 MB per
+  user) with the host scopes `store:read` and/or `store:write`, and keeps
+  small JSON values per key through `/api/plugin-host/store` (get, list, put
+  with compare-and-set, delete) or, from its pages, over the bridge
+  (`{ octipus: 'store', op: 'store.get' | 'store.set' | 'store.delete' |
+  'store.list' }`, `/api/plugins/:name/store/…`). The host keeps the entries
+  apart for each user and each workspace, on the user and workspace of the
+  call's token or the signed-in page: there is no shared store and no way to
+  name another user, and what is kept in a shared space is read in that
+  space only. The quota (128 bytes per entry plus its key and value as the
+  database keeps it; at most 10,000 entries per user) is checked atomically
+  with each write against a running total; a read tool gets `store:read`
+  only; an entry records the call's level (the calling session's included)
+  and reading it raises the call to it, so a notes or tasks write after it is
+  refused. Writes are audited in aggregate. The consent shows *"Keeps up to 5 MB of its own data per
+  user"*; the permissions summary carries `store: { quotaBytes } | null`
+  after `settings` (index v2 too; a new store or a larger quota widens).
+  Settings → My plugin usage shows each plugin's size for you with **Delete
+  my data**; admins see the total and per-user size; uninstalling deletes
+  every user's data, deleting a user deletes theirs, leaving a space deletes
+  theirs of that space. New migration
+  `0182_plugin_store`, a `with-store` template, and the contract and the
+  authoring skill tell agents to keep per-user data there.
+  **`OCTIPUS_PLUGIN_DATA_DIR` is shared by all users of an install**: it must
+  never hold user data.
 
 - **Marketplace, Updates and Installed tabs** in Admin → Plugins (Browse
   redirects to Marketplace): instant search folding case and accents,

@@ -10,6 +10,7 @@ import { SIGNATURE_FILE } from './integrity';
 import { refineRuntime, runtimeFields } from './manifest-runtime';
 import { contributionFields, contributionProblems } from './manifest-contributions';
 import { MODEL_FIELDS, modelProblems } from './manifest-model';
+import { STORE_FIELDS, storeProblems } from './manifest-store';
 import { UI_HOST_FIELDS } from './manifest-ui-host';
 import {
   PLUGIN_PACKAGE_API_VERSION,
@@ -68,6 +69,7 @@ export const manifestSchema = z.object({
   ...contributionFields,
   ...UI_HOST_FIELDS,
   ...MODEL_FIELDS,
+  ...STORE_FIELDS,
 }).strict().superRefine((m, ctx) => {
   refineRuntime(m, ctx);
   // Pages call the plugin's own sandboxed tools, and the host API token rides
@@ -77,6 +79,7 @@ export const manifestSchema = z.object({
   }
   for (const message of contributionProblems(m)) ctx.addIssue({ code: 'custom', message });
   for (const message of modelProblems(m)) ctx.addIssue({ code: 'custom', message });
+  for (const message of storeProblems(m)) ctx.addIssue({ code: 'custom', message });
   // The signature file is the one file the content hash leaves out: the server may not be started from it.
   const sigName = SIGNATURE_FILE.toLowerCase();
   if (m.server && [m.server.command, ...(m.server.args ?? [])].some((part) => part.toLowerCase().includes(sigName))) {

@@ -7,9 +7,10 @@
  * the tools that exist.
  */
 import { spawn } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer, type Server } from 'node:http';
 import { createInterface } from 'node:readline';
 import { describe, expect, test } from 'vitest';
 import { DEFAULT_REQUEST_TIMEOUT_MS, MCP_PROTOCOL_VERSION } from '@/mcp/protocol';
@@ -96,12 +97,17 @@ describe('plugin_api contract', () => {
     // The default protection level, from the function the server uses.
     expect(c.defaultMaxProtection.examples).toEqual({ nothing: 4, networkHosts: 1, hostWebRead: 1, hostAgentRun: 1, uiPages: 1, uiPagesDeclared4: 1 });
     expect(c.defaultMaxProtection.examples.networkHosts).toBe(defaultMaxProtection({ network: ['a.example.com'] }));
-    expect(c.templates.map((t) => t.name)).toEqual(['tool-only', 'with-command', 'with-schedule']);
+    expect(c.templates.map((t) => t.name)).toEqual(['tool-only', 'with-command', 'with-schedule', 'with-store']);
     // Every host scope is described, with its endpoint.
     expect(Object.keys(c.hostApi.scopes).sort()).toEqual([...PLUGIN_HOST_SCOPES].sort());
     expect(c.hostApi.scopes['documents:write']).toContain('POST /api/plugin-host/documents');
     expect(c.hostApi.scopes['agent:run']).toContain('POST /api/plugin-host/agent/runs');
     expect(c.hostApi.effects).toContain('agent:run');
+    // The store: its endpoints, and the data directory said plainly to be shared by every user.
+    expect(c.hostApi.scopes['store:write']).toContain('PUT /api/plugin-host/store/<key>');
+    expect(c.hostApi.effects).toContain('store:write');
+    expect(c.environment.dataDir).toMatch(/SHARED BY ALL USERS/);
+    expect(c.manifestRules.join('\n')).toMatch(/store: \{ "quotaBytes"/);
   });
 
   test('the tools it names are the tools plugin_dev registers', async () => {
@@ -142,7 +148,10 @@ describe('templates', () => {
       const dir = join(templatesRoot(), t.name);
       const manifest = parseManifest(JSON.parse(readFileSync(join(dir, PLUGIN_MANIFEST_FILE), 'utf8')));
       const data = mkdtempSync(join(tmpdir(), 'octipus-template-data-'));
-      const server = mcp(dir, manifest.server?.command ?? '', manifest.server?.args ?? [], { OCTIPUS_PLUGIN_DATA_DIR: data });
+      // A template with host scopes reaches a stand-in for the host API, through HTTP_PROXY as under Octipus.
+      const fake = manifest.host?.length ? await fakeStoreHost() : null;
+      const env: Record<string, string> = { OCTIPUS_PLUGIN_DATA_DIR: data, ...(fake ? { HTTP_PROXY: fake.url } : {}) };
+      const server = mcp(dir, manifest.server?.command ?? '', manifest.server?.args ?? [], env);
       try {
         const init = await server.request('initialize', { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'test', version: '0' } });
         expect(init.result).toMatchObject({ protocolVersion: MCP_PROTOCOL_VERSION, capabilities: { tools: {} } });
@@ -151,20 +160,60 @@ describe('templates', () => {
         const tools = (list.result as { tools: Array<{ name: string; inputSchema: unknown }> }).tools;
         expect(tools.map((x) => x.name).sort(), t.name).toEqual(Object.keys(manifest.tools ?? {}).sort());
         for (const tool of tools) {
-          const call = await server.request('tools/call', { name: tool.name, arguments: { name: 'Ada', text: 'one two', source: 'test' } });
+          const effect = manifest.tools?.[tool.name]?.effect ?? 'read';
+          const _meta = fake ? { 'octipus/host': { url: 'http://octipus-host.internal', token: 'ocph_test', expiresAt: '', scopes: effect === 'read' ? ['store:read'] : ['store:read', 'store:write'] } } : undefined;
+          const call = await server.request('tools/call', { name: tool.name, arguments: { name: 'Ada', text: 'one two', source: 'test' }, ...(_meta ? { _meta } : {}) });
           const result = call.result as { content: Array<{ text: string }>; isError?: boolean };
           expect(result.isError, `${t.name}.${tool.name}: ${result.content[0].text}`).toBeUndefined();
+        }
+        if (t.name === 'with-store') {
+          // What remember wrote, recall read back, as the same user, through the store only.
+          expect([...(fake?.entries.keys() ?? [])]).toEqual(['memo/Ada']);
+          const recalled = await server.request('tools/call', { name: 'recall', arguments: { name: 'Ada' }, _meta: { 'octipus/host': { url: 'http://octipus-host.internal', token: 'ocph_test', expiresAt: '', scopes: ['store:read'] } } });
+          expect((recalled.result as { content: Array<{ text: string }> }).content[0].text).toBe('one two');
+          const noToken = await server.request('tools/call', { name: 'remember', arguments: { text: 'x' } });
+          expect((noToken.result as { isError?: boolean }).isError).toBe(true);
+          expect(readdirSync(data)).toEqual([]);
         }
         const unknown = await server.request('tools/call', { name: 'nope', arguments: {} });
         expect((unknown.result as { isError?: boolean }).isError).toBe(true);
         expect((await server.request('no/such/method')).error).toMatchObject({ code: -32601 });
       } finally {
         server.stop();
+        fake?.server.close();
         rmSync(data, { recursive: true, force: true });
       }
     }
   });
 });
+
+/** A stand-in for the host API's store behind an HTTP proxy: absolute-form requests to octipus-host.internal, entries in memory. */
+async function fakeStoreHost(): Promise<{ url: string; server: Server; entries: Map<string, { value: unknown; version: number }> }> {
+  const entries = new Map<string, { value: unknown; version: number }>();
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const url = new URL(req.url ?? '', 'http://x');
+      const answer = (status: number, body: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+      if (url.host !== 'octipus-host.internal' || req.headers.authorization !== 'Bearer ocph_test') return answer(401, { error: 'no' });
+      const key = url.pathname.startsWith('/api/plugin-host/store/') ? url.pathname.slice('/api/plugin-host/store/'.length) : null;
+      if (req.method === 'GET' && url.pathname === '/api/plugin-host/store') {
+        const prefix = url.searchParams.get('prefix') ?? '';
+        return answer(200, { keys: [...entries.keys()].filter((k) => k.startsWith(prefix)).sort().map((k) => ({ key: k, size: 1, version: entries.get(k)?.version, updatedAt: '' })), truncated: false });
+      }
+      if (key && req.method === 'GET') return entries.has(key) ? answer(200, entries.get(key)) : answer(404, { error: 'No such key', code: 'not_found' });
+      if (key && req.method === 'PUT') {
+        const version = (entries.get(key)?.version ?? 0) + 1;
+        entries.set(key, { value: JSON.parse(Buffer.concat(chunks).toString('utf8')).value, version });
+        return answer(200, { version });
+      }
+      return answer(404, { error: 'unexpected' });
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+  return { url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, server, entries };
+}
 
 describe('plugin_validate', () => {
   test('a missing directory, a missing or broken manifest', async () => {

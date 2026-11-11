@@ -13,7 +13,7 @@ export const PREVIEW_ID = '44444444-4444-4444-8444-444444444444';
 export function perms(name: string, over: Partial<PluginPermissionsSummary> = {}): PluginPermissionsSummary {
   const tools = over.tools ?? [{ name: 'run', effect: 'read' as const }];
   return {
-    name, version: '1.0.0', apiVersion: '1.0.0', runtime: 'package', host: [], network: [], secrets: [], settings: [], tools,
+    name, version: '1.0.0', apiVersion: '1.0.0', runtime: 'package', host: [], network: [], secrets: [], settings: [], store: null, tools,
     effects: { read: tools.filter((t) => t.effect === 'read').length, write: tools.filter((t) => t.effect === 'write').length, external: tools.filter((t) => t.effect === 'external').length },
     contributions: { commands: [], schedules: [], events: [], prompt: null, context: null }, pages: [], ui: null, trustedInput: false, maxProtection: 1,
     ...over,

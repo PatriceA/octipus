@@ -4,7 +4,7 @@ import { Loader2, ShieldAlert } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api, ApiError, getApiUrl } from '@/lib/api';
-import { bridgeNonce, isBridgeReady, pageFrameSrc, pageFrameUrl, parseBridgeCall, pluginPageHref, usePluginPages, type BridgeCall, type PluginPageLink } from '@/lib/plugin-pages';
+import { bridgeNonce, isBridgeReady, pageFrameSrc, pageFrameUrl, parseBridgeCall, parseBridgeStore, pluginPageHref, storeRequestPath, usePluginPages, type BridgeCall, type BridgeStore, type PluginPageLink } from '@/lib/plugin-pages';
 
 /** Calls a page may have in flight at once; more are answered `busy`. */
 const MAX_IN_FLIGHT = 4;
@@ -128,25 +128,43 @@ function PluginFrame({ page }: { page: PluginPageLink }) {
     }
   }, [ask, page.plugin, reply]);
 
-  // A call over the port: checked, limited, run.
+  // A store request (docs/PLUGIN-PACKAGES.md#store): the signed-in user's own entries of this package.
+  const runStore = useCallback(async (req: BridgeStore) => {
+    const path = storeRequestPath(page.plugin, req);
+    try {
+      let result: unknown;
+      if (req.op === 'store.set') result = await api.put<unknown>(path, { value: req.value, ...(req.ifVersion !== undefined ? { ifVersion: req.ifVersion } : {}) });
+      else if (req.op === 'store.delete') result = await api.delete<unknown>(path);
+      else result = await api.get<unknown>(path);
+      reply({ id: req.id, ok: true, result });
+    } catch (err) {
+      const code = err instanceof ApiError ? String(err.body.code ?? err.status) : 'failed';
+      const current = err instanceof ApiError && typeof err.body.current === 'number' ? { current: err.body.current } : {};
+      reply({ id: req.id, ok: false, error: (err as Error).message, code, ...current });
+    }
+  }, [page.plugin, reply]);
+
+  // A call or a store request over the port: checked, limited, run.
   const onCall = useCallback((data: unknown) => {
     if (detached.current) return;
     const call = parseBridgeCall(data);
-    if (!call) return;
+    const store = call ? null : parseBridgeStore(data);
+    const request = call ?? store;
+    if (!request) return;
     const now = Date.now();
     recent.current = recent.current.filter((t) => now - t < 1000);
     if (recent.current.length >= MAX_PER_SECOND) {
-      reply({ id: call.id, ok: false, error: 'Too many calls; wait a moment', code: 'rate_limited' });
+      reply({ id: request.id, ok: false, error: 'Too many calls; wait a moment', code: 'rate_limited' });
       return;
     }
     if (inFlight.current >= MAX_IN_FLIGHT) {
-      reply({ id: call.id, ok: false, error: 'Too many calls at once', code: 'busy' });
+      reply({ id: request.id, ok: false, error: 'Too many calls at once', code: 'busy' });
       return;
     }
     recent.current.push(now);
     inFlight.current += 1;
-    void run(call).finally(() => { inFlight.current -= 1; });
-  }, [reply, run]);
+    void (call ? run(call) : runStore(store as BridgeStore)).finally(() => { inFlight.current -= 1; });
+  }, [reply, run, runStore]);
 
   // The handshake: the first `ready` from this frame, with this nonce and one port. Later ones are ignored.
   useEffect(() => {

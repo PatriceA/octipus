@@ -17,6 +17,11 @@
  *
  * The port is the capability: it lives in the page's document, so a
  * navigation destroys it, and the app also detaches on any later load.
+ *
+ * The same port carries the page's store (docs/PLUGIN-PACKAGES.md#store):
+ * `{ octipus: 'store', id, op: 'store.get' | 'store.set' | 'store.delete' | 'store.list', … }`
+ * in, the same `result` out. The app calls `/api/plugins/<name>/store/…` as the
+ * signed-in user: their own entries of this package only.
  */
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
@@ -78,6 +83,72 @@ export function parseBridgeCall(data: unknown): BridgeCall | null {
     return null;
   }
   return { id, tool, args: (args ?? {}) as Record<string, unknown> };
+}
+
+/** The store operations a page may ask for over the port. */
+export const BRIDGE_STORE_OPS = ['store.get', 'store.set', 'store.delete', 'store.list'] as const;
+export type BridgeStoreOp = (typeof BRIDGE_STORE_OPS)[number];
+
+/** A store request the page asks for, once checked. */
+export type BridgeStore =
+  | { id: string | number; op: 'store.get' | 'store.delete'; key: string }
+  | { id: string | number; op: 'store.set'; key: string; value: unknown; ifVersion?: number }
+  | { id: string | number; op: 'store.list'; prefix?: string; limit?: number };
+
+/** A store key: what the server accepts (letters, digits, `._:/-`, no empty, `.` or `..` segment). */
+const STORE_KEY_RE = /^[A-Za-z0-9._:/-]{1,200}$/;
+const storeKeyOk = (key: unknown): key is string => typeof key === 'string' && STORE_KEY_RE.test(key) && key.split('/').every((s) => s !== '' && s !== '.' && s !== '..');
+/** The most a stored value may weigh, as JSON (the server counts UTF-8 bytes and refuses past 64 KB). */
+export const MAX_BRIDGE_STORE_VALUE_CHARS = 64 * 1024;
+
+/**
+ * `data` as a store request, or null: `octipus: 'store'`, an `id` as for a
+ * call, an `op` of `BRIDGE_STORE_OPS`, and exactly the fields that op takes
+ * (`key` for get, set and delete; `value` and an optional `ifVersion` for set;
+ * an optional `prefix` and `limit` for list). Anything else is refused.
+ */
+export function parseBridgeStore(data: unknown): BridgeStore | null {
+  if (!isPlainObject(data) || data.octipus !== 'store') return null;
+  const { id, op } = data;
+  if (!((typeof id === 'string' && id.length <= 100) || (typeof id === 'number' && Number.isFinite(id)))) return null;
+  if (typeof op !== 'string' || !(BRIDGE_STORE_OPS as readonly string[]).includes(op)) return null;
+  const allowed: Record<BridgeStoreOp, string[]> = {
+    'store.get': ['key'], 'store.delete': ['key'], 'store.set': ['key', 'value', 'ifVersion'], 'store.list': ['prefix', 'limit'],
+  };
+  if (Object.keys(data).some((k) => !['octipus', 'id', 'op', ...allowed[op as BridgeStoreOp]].includes(k))) return null;
+  if (op === 'store.list') {
+    const { prefix, limit } = data;
+    if (prefix !== undefined && !(typeof prefix === 'string' && /^[A-Za-z0-9._:/-]{0,200}$/.test(prefix))) return null;
+    if (limit !== undefined && !(typeof limit === 'number' && Number.isInteger(limit) && limit >= 1 && limit <= 1000)) return null;
+    return { id, op, ...(prefix ? { prefix } : {}), ...(limit !== undefined ? { limit } : {}) };
+  }
+  if (!storeKeyOk(data.key)) return null;
+  if (op === 'store.set') {
+    if (!Object.hasOwn(data, 'value')) return null;
+    const { ifVersion } = data;
+    if (ifVersion !== undefined && !(typeof ifVersion === 'number' && Number.isInteger(ifVersion) && ifVersion >= 0)) return null;
+    try {
+      const json = JSON.stringify(data.value);
+      if (json === undefined || json.length > MAX_BRIDGE_STORE_VALUE_CHARS) return null;
+    } catch {
+      return null;
+    }
+    return { id, op, key: data.key, value: data.value, ...(ifVersion !== undefined ? { ifVersion } : {}) };
+  }
+  return { id, op: op as 'store.get' | 'store.delete', key: data.key };
+}
+
+/** The app route a store request goes to, under `/api` (the key's segments each encoded). */
+export function storeRequestPath(plugin: string, req: BridgeStore): string {
+  const base = `/plugins/${encodeURIComponent(plugin)}/store`;
+  if (req.op === 'store.list') {
+    const q = new URLSearchParams();
+    if (req.prefix) q.set('prefix', req.prefix);
+    if (req.limit !== undefined) q.set('limit', String(req.limit));
+    const qs = q.toString();
+    return qs ? `${base}?${qs}` : base;
+  }
+  return `${base}/${req.key.split('/').map(encodeURIComponent).join('/')}`;
 }
 
 /** Whether `data` is the page's `ready` with exactly this nonce (and nothing else). */

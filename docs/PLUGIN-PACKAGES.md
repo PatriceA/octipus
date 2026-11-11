@@ -209,6 +209,12 @@ An enabled package runs as the MCP server `plugin-<name>`:
   removed on uninstall. A package **must keep its runtime state there** (caches,
   databases, tokens it refreshes): its own directory is read-only under the
   sandbox and pinned by hash ([Content pinning](#content-pinning)).
+- **The data directory is shared by all users of the install.** It is one
+  directory per package, and the package's token cannot tell users apart:
+  whatever it keeps there for one user, a call for another user can read. It
+  must **never hold user data** (a user's notes, preferences, history, anything
+  one user typed or owns). Keep that in the [store](#store), which the host
+  keeps apart for each user.
 - **The sandbox, always** ([The sandbox](#the-sandbox)). The server runs
   under bwrap or firejail (Linux) or `sandbox-exec` (macOS) with its
   directory **read-only** (bwrap `--ro-bind`, firejail `--read-only`, a
@@ -1047,7 +1053,9 @@ packages: [...], revoked: [...], expires? }`, each package with the v1 fields (`
 `homepage`, `author: { name, url }`, `readme` and `changelog` (the newest
 entry of each plugin only), `publisher`, `license`, `publishedAt`, `keyId`
 (ignored), `permissions` (exactly `octi plugin permissions --json`) and
-`deprecated`. `revoked` is a list of `{ name, version, reason }` (applied
+`deprecated`. Its `permissions` carry `store: { quotaBytes } | null` right
+after `settings` ([Store](#store)); an entry without the key reads as `null`,
+and the host compares it with what it recomputes like the rest. `revoked` is a list of `{ name, version, reason }` (applied
 from the marketplace only) and `{ keyId, reason }` (ignored: key revocation
 lives in `keys.json`). v1 indexes keep working for other registries; the
 marketplace requires v2 and every tarball on its origin. An entry that does
@@ -1154,8 +1162,9 @@ turns what a package declares into a stable, ordered list of `{ id, kind,
 label, detail, guidance? }`: `runtime`, `in-process`, `network:<host>`,
 `host:<scope>`, `tool:<name>`, `command:<name>`, `schedule:<id>`,
 `event:<on>`, `prompt`, `context`, `page:<path>`, `ui` (the page files),
-`secrets` ("Asks you for these secrets: …"), `settings`, `model:cli-tools`
-and `protection`, in that order. With `host` (what this host enforces), the
+`secrets` ("Asks you for these secrets: …"), `settings`, `store` ("Keeps up
+to 5 MB of its own data per user"), `model:cli-tools` and `protection`, in
+that order. With `host` (what this host enforces), the
 `runtime` and `network:*` items say whether the sandbox holds here
 ([The sandbox](#the-sandbox)). Each
 `detail` carries what the item is bound to (a schedule's cron, tool and
@@ -1169,7 +1178,10 @@ each ([The install consent](#the-install-consent)).
 `GET /api/plugin-packages/:name/usage?days=30` (admins: every user) and
 `GET /api/plugin-packages/:name/usage/me?days=30` (the signed-in user's own)
 sum the plugin's `model:complete` cost rows (`plugin:<name>`) and the cost
-rows of its background runs, with the number of model calls and runs.
+rows of its background runs, with the number of model calls and runs, and
+carry `store: { bytes, entries, quotaBytes, byUser? }`: what it keeps in the
+[store](#store) now, of every user with a row per user (admins; sizes only)
+or of the caller.
 
 ### API
 
@@ -1182,7 +1194,8 @@ rows of its background runs, with the number of model calls and runs.
 | `POST /api/plugin-packages/install { previewId, contentHash, accepted, enable? }` | the admin who made the preview | `PluginConsentResult`: `{ name, version, contentHash, enabled, enableProblem, warnings }` |
 | `GET /api/plugin-packages/:name/consent`, `POST …/consent { contentHash, accepted, enable? }` | admins | `PluginConsentView`; `PluginConsentResult` |
 | `GET /api/plugin-packages/:name/runs?status=running` | admins | `[{ id, userId, startedAt, role, title }]` |
-| `GET /api/plugin-packages/my-usage?days=30` | any user | `[{ name, title, usage, runs }]`: the caller's own use of each enabled package, and their running runs |
+| `GET /api/plugin-packages/my-usage?days=30` | any user | `[{ name, title, usage, runs, store }]`: the caller's own use of each enabled package, their running runs, and what each installed package keeps for them in its store (`{ bytes, entries, quotaBytes }`, or null) |
+| `DELETE /api/plugin-packages/:name/store/me` | any user | `{ name, entries, bytes }`: deletes everything the package keeps for the caller ([Store](#store)) |
 | `GET /api/plugin-packages/updates` | admins | `[{ name, installed, latest, registry, diff, warnings }]` |
 | `GET /api/plugin-packages/revocations`, `DELETE …/revocations/:id` | admins | the revocations, each with `scope`, `enforced` and `signerRevoked`; clearing one (409 for a root key) |
 | `DELETE /api/plugin-packages/pins { registry, name, version, reason }` | admins | `{ reset, registry, name, version, contentHash, note }`; 404 when there is no such pin |
@@ -1196,8 +1209,9 @@ with a scope that covers the request (`src/api/plugin-route-guard.ts`): every
 change (install, preview, consent, enable, approvals, secrets, settings,
 uninstall, clearing a revocation, resetting a pin, an admin cancelling
 another user's run) needs `api:admin`, every admin read `api:read`; a user's
-own usage `api:read`, cancelling their own run `api:write`, a page's tool
-call `api:read` or `api:write` by the tool's effect. An unscoped token and a
+own usage `api:read`, cancelling their own run or deleting their own store
+data `api:write`, a page's tool call `api:read` or `api:write` by the tool's
+effect, a page's store `api:read` to read and `api:write` to write. An unscoped token and a
 browser session have every scope. A change signed by the session cookie
 (`SameSite=Strict`) must also come from this origin: its `Origin` is this
 host or a configured CORS origin (the desktop app's included), its
@@ -1217,8 +1231,9 @@ comes from ("Octipus marketplace" or the registry's name; never the
 free-text `publisher`). The detail renders README and CHANGELOG with no raw
 HTML, links only when https (new tab, `noopener noreferrer`) and images only
 when they are the listing's own icon or screenshots, through the proxy URLs
-the host returned. **Users** see their own use of each plugin, and cancel
-their own background runs, in Settings → My plugin usage.
+the host returned. **Users** see their own use of each plugin, cancel
+their own background runs, and see and delete what each plugin keeps for them
+(**Delete my data**), in Settings → My plugin usage.
 
 ## Packing and publishing
 
@@ -1286,6 +1301,7 @@ downloaded package and compares it with what an index claims):
   "network": [],
   "secrets": ["API_TOKEN"],
   "settings": ["account", "region"],
+  "store": { "quotaBytes": 5242880 },
   "tools": [{ "name": "review", "effect": "read" }, { "name": "sync", "effect": "write" }],
   "effects": { "read": 1, "write": 1, "external": 0 },
   "contributions": {
@@ -1307,6 +1323,10 @@ downloaded package and compares it with what an index claims):
   there are none; an index lists at most 100 of each, of at most 100
   characters (a listing without them reads as `[]`, and the host's
   recomputation then refuses one that understates).
+- `store`: the per-user [store](#store) and its quota per user in bytes (the
+  default 5,242,880 filled in when the manifest says `{}`), or `null` when it
+  keeps none. An index lists it the same way (a listing without it reads as
+  `null`).
 - `contributions`: what each part is bound to. `commands` (name and tool,
   sorted by name), `schedules` (id, cron, tool and `input` when the manifest
   gives one, sorted by id), `events` (sorted by `on`, then tool), `prompt`
@@ -1341,6 +1361,9 @@ marketplace repository's PR summary:
   context. external → write narrows.
 - **Secrets and settings.** A new secret widens; a secret removed, and a
   setting added or removed, is a change that does not.
+- **Store.** A new store, or a larger quota, widens ("store (5 MB per user)",
+  "store quota 5 MB → 10 MB per user"); a smaller quota narrows, and removing
+  the store does not widen.
 - **Contributions and pages.** Any difference in a command's tool or input,
   a schedule's tool, cron or input, an event's tool, the prompt's file, text
   (its sha256) or roles, the context tool or roles, a page's title or entry,
@@ -1596,6 +1619,36 @@ call takes **the same path as an agent's**: the tool's declared effect, the
 user's permission rules, the protection level, the audit
 (`resource_type = tool`).
 
+**The store over the bridge.** The same port carries the page's store
+([Store](#store)), for state kept between visits, as the signed-in user and
+for their own entries only:
+
+```js
+// { octipus: 'store', id, op: 'store.get', key }                    → result { value, version } (code not_found when missing)
+// { octipus: 'store', id, op: 'store.set', key, value, ifVersion? } → result { version }  (code version_conflict, with current)
+// { octipus: 'store', id, op: 'store.delete', key }                 → result { deleted: true }
+// { octipus: 'store', id, op: 'store.list', prefix?, limit? }       → result { keys, truncated }
+let next = 100;
+function store(op, fields) {
+  const id = next++;
+  return new Promise((resolve) => {
+    waiting.set(id, resolve);
+    channel.port1.postMessage({ octipus: 'store', id, op, ...fields });
+  });
+}
+const saved = await store('store.get', { key: 'page/filters' });
+const filters = saved.ok ? saved.result.value : { range: '30d' };
+// …the user changes a filter; save it unless another tab saved first:
+await store('store.set', { key: 'page/filters', value: filters, ifVersion: saved.ok ? saved.result.version : 0 });
+```
+
+A store message has exactly the fields of its op (any other key refuses it),
+a key as the host API takes it, a value of at most 64 KB as JSON. It counts
+against the same 4 in flight and 10 a second as calls. The app answers it
+through `/api/plugins/<name>/store/…` ([Store](#store)), with no confirmation:
+a page's store holds only what its own user gave it. Its package must have
+`store:read` (get, list) or `store:write` (set, delete) approved.
+
 **Write and external effects.** A request has no approval channel, so a call the
 rules would ask about (`write` by default, `external` always) is refused with
 `409 approval_required` and the tool's effect. The web app then shows the user
@@ -1647,16 +1700,22 @@ and an admin approved:
 | `web:read` | `POST /api/plugin-host/web/read { url }` | One public web page, fetched by the host and turned into a clean article: `{ url, title, byline?, siteName?, publishedAt?, contentHtml, textContent, wordCount, estReadMinutes, truncated }`. |
 | `model:complete` | `POST /api/plugin-host/model/complete { system?, prompt, maxTokens?, temperature? }` | One text completion on the calling user's `everyday` model: `{ output, model }`. |
 | `agent:run` | `POST /api/plugin-host/agent/runs { prompt, role?, title? }`; `GET /api/plugin-host/agent/runs/:id`; `DELETE /api/plugin-host/agent/runs/:id` | Starts a background agent run as the user and answers its id at once; a later call reads its status and final text; `DELETE` cancels it (its own runs for the same user only; any of its tools may). See below. |
+| `store:read` | `GET /api/plugin-host/store/<key>`; `GET /api/plugin-host/store?prefix=&limit=` | One entry of the package's store for the calling user, or their keys. See [Store](#store). |
+| `store:write` | `PUT /api/plugin-host/store/<key> { value, ifVersion? }`; `DELETE /api/plugin-host/store/<key>` | Writes or deletes one entry for the calling user only. See [Store](#store). |
 
 **What a package read, it keeps.** The highest protection level a package
 has read through the host API (a document, a task's provenance, a run's
-result) is kept per package and user across calls, in the key-value store,
-and every request starts from it. Notes and tasks have no protection level,
-so a package that has read above level 1 for that user may not write them
-(`403 read_level`, audited): it cannot carry level-2 content down to level 1
-in a later call. A document it writes is stored at no lower level, and its
-`model:complete` calls run at it. Disabling, upgrading or uninstalling the
-package forgets it.
+result, a store entry) is kept per package and user across calls, in the
+key-value store, and every request starts from it, **and from the calling
+session's level**: a tool runs inside a conversation that may hold level-2
+content, and what it writes may carry it. Notes and tasks have no protection
+level, so a call working above level 1 (the package has read above it for
+that user, or its session holds such content) may not write them (`403
+read_level`, audited): it cannot carry level-2 content down to level 1 in a
+later call. A document or a store entry it writes is stored at no lower
+level, and its `model:complete` calls run at it. Disabling, upgrading or
+uninstalling the package forgets what it read (the session's level stays the
+session's).
 
 **`web:read`** lets a package read any public page without network of its
 own: the host fetches it through the same SSRF guard as the agents' web
@@ -1785,8 +1844,8 @@ says what `agent:run` and `documents:write` do, in the row and when
 enabling.
 
 `web:read` and `model:complete` change no data, so a `read` tool gets them;
-`notes:write`, `tasks:write`, `documents:write` and `notify` only go to
-`write` and `external` tools. A `read` tool gets `agent:run` to read a run,
+`notes:write`, `tasks:write`, `documents:write`, `notify` and `store:write`
+only go to `write` and `external` tools. A `read` tool gets `agent:run` to read a run,
 never to start one.
 
 **Approval.** Enabling a package that declares `host` needs every declared
@@ -1937,6 +1996,177 @@ Core one-shot completions (summaries, mail triage and the like) are not
 affected: they always run tool-less and are refused on Antigravity, Vibe and
 Codex ([CLI-AGENTS.md](CLI-AGENTS.md#one-shot-completions-lanes)).
 
+## Store
+
+A package can keep small JSON values per key, **for each user apart, and in
+each workspace apart**: the host keeps them, separated by the user on the
+call's token and the workspace the call ran in, so a package cannot mix users
+even by mistake. There is no store shared across users, and no way to name
+another user. Use it for any per-user data: never `OCTIPUS_PLUGIN_DATA_DIR`,
+which every user's calls share ([How a package runs](#how-a-package-runs)).
+
+```json
+"host": ["store:read", "store:write"],
+"store": { "quotaBytes": 5242880 }
+```
+
+- **Declared.** `store` declares it, with its quota per user: `quotaBytes`
+  defaults to 5 MB (5,242,880 bytes), at least 1 KB, **at most 20 MB**
+  (20,971,520 bytes); anything else is refused at install. It goes with the
+  host scopes `store:read` and/or `store:write`: a store without either, or
+  either without a store, is refused.
+- **Consented.** The install consent shows it as its own item, *"Keeps up to
+  5 MB of its own data per user"* (id `store`, detail `store: up to <bytes>
+  bytes per user (<scopes>)`), next to the two scopes.
+- **Diffed.** The permissions summary carries `store: { quotaBytes } | null`
+  (right after `settings`). An upgrade that adds a store, or raises the quota,
+  widens and is asked again; a smaller quota narrows.
+- **Per user and per workspace, enforced by the host.** The table
+  `plugin_store` keys every entry by package, user, workspace and key; every
+  read and write goes through one repository
+  (`src/db/repositories/plugin-store-repository.ts`) bound to the package of
+  the token, the user of the token (or of the signed-in page) and the
+  workspace (below).
+
+**Workspaces.** The workspace is the call's: a tool called in a shared space
+reads and writes that user's entries **of that space**, and a call anywhere
+else (the user's own workspace) their personal entries. A page works in the
+workspace it is opened in, the space the web app is in, else the personal
+one. What a user's calls keep in a space is readable in that space only, by
+that user only: another member of the space has entries of their own there.
+When the user leaves the space (or is removed), their entries of that space
+are deleted with the membership; deleting the space deletes every entry of
+it.
+
+| Request (`store:read`) | Answer |
+| --- | --- |
+| `GET /api/plugin-host/store/<key>` | `{ value, version }`; `404 not_found` |
+| `GET /api/plugin-host/store?prefix=&limit=` | `{ keys: [{ key, size, version, updatedAt }], truncated }`: the user's keys in this workspace, sorted (`limit` default 100, at most 1000), no values |
+
+| Request (`store:write`) | Answer |
+| --- | --- |
+| `PUT /api/plugin-host/store/<key> { value, ifVersion? }` | `{ version }`: 1 for a new entry, one more on each write. With `ifVersion`, only if the entry is at that version now, `0` meaning "only if it does not exist" (compare-and-set); otherwise `409 version_conflict` with `current` |
+| `DELETE /api/plugin-host/store/<key>` | `{ deleted: true }`; `404 not_found` |
+
+**Limits.**
+
+- A key is 1-200 characters of `A-Z a-z 0-9 . _ : / -`
+  (`^[A-Za-z0-9._:/-]{1,200}$`), with no empty, `.` or `..` segment between
+  slashes (`400 invalid_key`). It goes in the path as it is: the egress proxy
+  forwards no `%`.
+- A value is any JSON of at most 64 KB as UTF-8, both as sent and as the
+  database keeps it (`413 too_large`; `400 invalid_value` for no value, a NUL
+  character, or a value too deeply nested).
+- The quota counts, for each entry, **128 bytes of overhead**, its key, and
+  its value as the database serialises it (`octet_length(value::text)`: a
+  number such as `1e300` counts as its 301 digits), for the user and the
+  package across their workspaces. A user keeps at most **10,000 entries** per
+  package (`413 too_many_entries`). Both are checked in the same transaction
+  as the write, under a lock per package and user, against a running total
+  per package, user and workspace (`plugin_store_usage`, updated in that
+  transaction), so concurrent writes cannot pass them together (`413 quota`;
+  the answer names the quota, not what is used). A write that does not grow
+  its entry always goes through, so a quota lowered by an upgrade leaves room
+  to shrink.
+- Rate: the host API's own limit (60 requests in a burst per package and
+  user), and for writes and deletes 30 in a burst then 5 a second, **shared
+  by the package's tools and its pages** (`429 rate_limited`).
+
+**Effects.** `store:write` is a write scope: a `read` tool's token carries
+`store:read` only, so a read tool can never write the store.
+
+**Protection levels.** Levels protect the store as they protect everything
+else a package touches: they are enforced on every request, not trusted to
+the package.
+
+- *What an entry is written at.* The level the call works at: the highest of
+  what the call has read, what the package has read for this user in any call
+  ([What a package read, it keeps](#host-api)) and **the calling session's
+  level** (a tool runs inside a conversation that may hold level-2 content,
+  and whatever it writes may carry it). The same level governs the call's
+  `notes:write` and `tasks:write` (refused above 1, `403 read_level`) and what
+  `documents:write` stores at, so a level-2 session's tool cannot write a
+  note even before it reads anything.
+- *An overwrite never lowers an entry's level*: it keeps the higher of the
+  entry's level and the call's.
+- *Reading raises.* Reading an entry raises the call to its level, the
+  calling session and the package's kept level for this user with it, so
+  data cannot be laundered through the store into notes or tasks. So does
+  everything else an answer tells about an entry: a write over it, a version
+  conflict on it, a delete that found it, a list that hands its key over (a
+  key can carry data too).
+- *Above `maxProtection`, nothing is there.* An entry above the package's
+  `maxProtection` answers a get, a write, a compare-and-set and a delete
+  exactly as a missing key does (`404 not_found`, no level, no version, left
+  as it was), and a list leaves it out without counting it.
+- *When `maxProtection` drops*, the entries above the new cap are deleted, in
+  the same transaction: an upgrade whose manifest lowers it, or an approval
+  that clamps it (an egress scope approved, [above](#host-api)). The audit
+  row (`store_deleted_above_max_protection`, or `storeDeleted` on the
+  `upgraded` row) carries counts only.
+
+**Upgrades.** The store follows the package across upgrades from the same
+publisher and source, with what holds above. Three exceptions, each in the
+upgrade's transaction and audited with counts only (`storeDeleted` on the
+`upgraded` row):
+
+- *Another publisher.* An upgrade that changes the signer or the source
+  (`change:signer`, `change:source`) would hand every user's data to code
+  someone else wrote, so **the data is deleted by default**. Keeping it is the
+  admin's explicit choice: the consent preview offers the item
+  `change:store-handover`, *"Hands the stored data of N users (X MB) to the
+  new publisher"*, optional and never pre-ticked; left unticked, the data is
+  deleted at install. Without the preview, the API's `keepStoreData: true`
+  (`POST /api/plugin-packages`) and the CLI's `--keep-store-data` (`octi
+  plugin install|upgrade`) keep it. Kept, the `upgraded` row records
+  `storeHandedOver` (entries, users, bytes). An agent's install
+  (`plugin_install`) may upgrade only its own package from the same source
+  and refuses another signer, so it never reaches this.
+- *The store removed.* A version that no longer declares `store` deletes
+  every entry, so a store added back later starts empty.
+- *A lower `maxProtection`*: the entries above it (above).
+
+**Audit.** Store requests are audited in aggregate, as the host API's
+refusals are: one row (`resource_type = plugin_host`, op `store.get`,
+`store.list`, `store.put` or `store.delete`) per package, user, op, status
+and code per minute, with `count`, the requests since the previous row. The
+requests counted after a row are written when the minute ends (a timer), at
+shutdown, and before the counts are cleared: none is lost. No key or value
+is in the audit. A refusal before the token is accepted, and a failure, has
+its own row.
+
+**From a page.** A page reaches its own user's entries directly over its
+bridge ([Pages](#pages)), for page state between visits; or it calls one of
+its package's tools, which uses the store as any call does.
+
+**Deleting.** Uninstalling the package deletes every user's entries (the
+uninstall confirmation says so); deleting a user deletes theirs, leaving a
+space deletes theirs of that space. Each user sees what each plugin keeps for
+them in Settings → My plugin usage, and can delete it there (**Delete my
+data**, with a confirmation; audited as `store_deleted_by_user`), in every
+workspace or in one. Admins see each package's total and per-user size in the
+Installed tab's usage.
+
+| Route | Who | Answer |
+| --- | --- | --- |
+| `GET /api/plugins/:name/store?prefix=&limit=`, `GET …/store/<key>` | the signed-in user, on the package's page | as the host API, for their own entries in the page's workspace |
+| `PUT /api/plugins/:name/store/<key> { value, ifVersion? }`, `DELETE …/store/<key>` | the same | as the host API, for their own entries in the page's workspace |
+| `DELETE /api/plugin-packages/:name/store/me?workspace=` | any user | `{ name, entries, bytes }`: the caller's entries of that package, in every workspace, or with `workspace` (`personal`, or a space's id) in that one |
+
+The page routes answer only while the package is enabled, has pages and **may
+start** (the check before every start of its server: not revoked, its version
+or its signing key; its files still the approved content; its signature and
+sandbox in order), and only with the scope its admin approved: `store:read`
+to read, `store:write` to write (`403 scope_missing` otherwise, `404` for no
+page). The same check keeps the page's files and its sidebar entry away
+while it fails. It is cached for 30 seconds, and forgotten at once on an
+install, an upgrade, an approval, an uninstall and a revocation. The routes
+need a signed-in user; an API token needs `api:read` to read and `api:write`
+to write; a write signed by the session cookie must come from this site
+([API](#api)). A page writes at the package's level for its user, which is 1
+for a package with pages. Writes and deletes are audited in aggregate
+(`resource_type = plugin_page`).
+
 ## Bundled plugins
 
 Octipus ships two plugins, **the example plugins** ([plugins/README.md](../plugins/README.md)):
@@ -1990,7 +2220,9 @@ you run a release install or a git checkout:
   (the skill suggests `my-plugins/<name>/` there).
 - **The installed copy** is in `<workspace.rootPath>/plugin-packages/<name>`
   (by default `~/.octipus/workspace`), copied there at install.
-- **Its data** is in `<workspace.rootPath>/plugin-data/<name>`.
+- **Its data** is in `<workspace.rootPath>/plugin-data/<name>`: one directory
+  shared by every user of the install, never for user data. Per-user data is
+  in the database, in the [store](#store).
 - **Nothing is written into the Octipus install or repository.** An install
   refuses a plugin store or data directory that resolves inside
   `<install>/plugins` (a misconfigured `workspace.rootPath`), with an error
@@ -2237,8 +2469,9 @@ walks an agent through them:
 
 **Templates** live in `src/plugins/templates/` (copied to
 `dist/plugin-templates` by the build): `tool-only` (a read and a write tool and
-a setting), `with-schedule` (a read tool every 15 minutes) and `with-command`
-(a slash command). Each is a complete, valid package: a manifest and a
+a setting), `with-schedule` (a read tool every 15 minutes), `with-command`
+(a slash command) and `with-store` (per-user data in the [store](#store), through
+the host API with the call's token). Each is a complete, valid package: a manifest and a
 dependency-free MCP server in plain `.mjs`. The agent writes a template's files
 into its workspace with the filesystem tool and edits them; a read tool rather
 than a scaffolding write, because the filesystem tool already decides where an

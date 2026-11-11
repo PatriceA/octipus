@@ -16,6 +16,17 @@
  *   confirmation (outside the page's frame) and repeats the call with
  *   `confirm: true`, which counts as that approval for this one call only.
  *   Rate-limited per user and package.
+ * - `/api/plugins/:name/store` (GET: keys) and `/api/plugins/:name/store/<key>`
+ *   (GET, PUT, DELETE): the page's direct access to the package's store
+ *   (docs/PLUGIN-PACKAGES.md#store), for page state between visits. The
+ *   signed-in user's own entries of that package, in the workspace the page
+ *   is opened in (a shared space, else their personal one), only, and only
+ *   while the package is enabled, has pages, may start (not revoked, its
+ *   content approved) and is granted `store:read` (reads) or `store:write`
+ *   (writes); an API token needs `api:read` or `api:write`, and a
+ *   cookie-signed write must come from this site. Writes share the store's
+ *   write limit with the package's tools. Writes and deletes are audited in
+ *   aggregate.
  */
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
@@ -31,7 +42,86 @@ import { crossSiteDenied } from '@/api/plugin-route-guard';
 import { isAuthenticated, requireScope } from '@/security/principal';
 import { API_SCOPES } from '@/security/scopes';
 import { eq } from 'drizzle-orm';
+import { pluginUserDenied } from '@/api/plugin-route-guard';
+import { readLevelOf } from '@/plugins/packages/read-level';
+import { effectiveMaxProtection, grantedHostScopes } from '@/plugins/packages/service';
+import { storeDelete, storeGet, storeKeyFromPath, storeList, type StoreOutcome, storePut, storeWriteLimit } from '@/plugins/packages/store';
+import { packageRunProblem } from '@/plugins/packages/run-check';
+import type { StoreScope } from '@/db/repositories/plugin-store-repository';
+import { STORE_AUDIT_WINDOW_MS, storeAuditAggregator } from '@/plugins/packages/store-audit';
+import type { PluginHostScope } from '@/shared/plugin-package';
 import { apiLogger } from '@/utils/logger';
+
+type StoreCtx = { request: Request; principal: Parameters<typeof pluginUserDenied>[0]['principal']; set: { status?: number | string; headers: Record<string, string> } };
+
+/** Page store writes and deletes, audited in aggregate (src/plugins/packages/store-audit.ts). */
+const pageStoreAudit = storeAuditAggregator();
+
+/** Test-only. */
+export function _resetPageStoreAudit(): void {
+  pageStoreAudit.reset();
+}
+
+/**
+ * The page store's gate: signed in, the token's scope (`api:read` for a read,
+ * `api:write` for a write), from this site for a write, rate-limited (a
+ * write also by the store's own write limit, shared with the package's
+ * tools), and the package enabled with pages, allowed to start now
+ * (src/plugins/packages/run-check.ts: not revoked, its content approved) and
+ * granted `scope`. Whose store (the user, and the workspace the page is
+ * opened in: a shared space, else the user's personal one) and the
+ * package's level cap, or the refusal (written to `set`).
+ */
+async function pageStoreGate(ctx: StoreCtx, name: string, scope: PluginHostScope): Promise<{ store: StoreScope; maxProtection: number } | { error: string; code?: string }> {
+  const denied = pluginUserDenied(ctx, scope === 'store:write' ? 'write' : 'read');
+  if (denied) return denied;
+  const principal = ctx.principal as { userId: string; workspaceId?: string | null; workspaceKind?: 'personal' | 'shared' };
+  const userId = principal.userId;
+  const limited = checkRateLimit(`plugin-page-store:${userId}:${name}`, { capacity: 60, refillPerSecond: 10 });
+  const writeLimited = limited.allowed && scope === 'store:write' ? storeWriteLimit(name, userId) : null;
+  const refusal = !limited.allowed ? limited : writeLimited && !writeLimited.allowed ? writeLimited : null;
+  if (refusal) {
+    ctx.set.status = 429;
+    ctx.set.headers['retry-after'] = String(refusal.retryAfterSeconds ?? 1);
+    return { error: 'Too many store requests from this page; wait a moment', code: 'rate_limited' };
+  }
+  const [row] = await getDb().select().from(pluginPackages).where(eq(pluginPackages.name, name)).limit(1);
+  // Only an enabled package with pages, that may run now, has a bridge.
+  if (!row?.enabled || !row.manifest.ui || await packageRunProblem(name) !== null) {
+    ctx.set.status = 404;
+    return { error: 'No such plugin page', code: 'not_found' };
+  }
+  const granted = grantedHostScopes(row);
+  if (!granted.includes(scope)) {
+    ctx.set.status = 403;
+    return { error: `${name} has no approved ${scope} scope`, code: 'scope_missing' };
+  }
+  const workspaceId = principal.workspaceKind === 'shared' ? principal.workspaceId ?? null : null;
+  return { store: { pkg: name, userId, workspaceId }, maxProtection: effectiveMaxProtection(row.manifest, granted) };
+}
+
+/** A store outcome as the answer: the value, or the refusal with its status. */
+function storeAnswer<T>(ctx: StoreCtx, outcome: StoreOutcome<T>): T | { error: string; code: string; current?: number } {
+  if (outcome.ok) return outcome.value;
+  ctx.set.status = outcome.status;
+  return { error: outcome.error, code: outcome.code, ...(outcome.current !== undefined ? { current: outcome.current } : {}) };
+}
+
+async function auditPageStore(name: string, userId: string, op: string, status: number, code: string | undefined): Promise<void> {
+  await pageStoreAudit.count([name, userId, op, status, code ?? ''].join('\n'), async (count) => {
+    try {
+      await auditRepository.log({
+        userId, action: status < 400 ? 'tool_executed' : 'permission_denied', resourceType: 'plugin_page', resourceId: name,
+        details: { op, status, ...(code ? { code } : {}), count, windowMs: STORE_AUDIT_WINDOW_MS, aggregated: true },
+      });
+    } catch (err) {
+      apiLogger.error({ err, plugin: name, op }, 'plugin page store: audit row could not be written');
+    }
+  });
+}
+
+const PAGE_STORE_MARKER = '/store/';
+const STORE_NAME = t.Object({ name: t.String({ maxLength: 50 }) });
 
 /** The most a page's call arguments may weigh, as JSON. */
 const MAX_ARGS_CHARS = 100_000;
@@ -165,4 +255,51 @@ export const pluginCallRoutes = new Elysia({ prefix: '/plugins' })
       confirm: t.Optional(t.Boolean()),
     }),
     detail: { tags: ['plugin-packages'] },
-  });
+  })
+
+  // The page's store (docs/PLUGIN-PACKAGES.md#store): the signed-in user's keys of this package in the page's workspace, sorted, with size and version.
+  .get('/:name/store', async (ctx) => {
+    const gate = await pageStoreGate(ctx, ctx.params.name, 'store:read');
+    if ('error' in gate) return gate;
+    const limit = ctx.query.limit === undefined ? undefined : Number.parseInt(String(ctx.query.limit), 10);
+    const outcome = await storeList(gate.store, { prefix: ctx.query.prefix, limit }, gate.maxProtection);
+    if (!outcome.ok) return storeAnswer(ctx, outcome);
+    const { protectionLevel: _level, ...rest } = outcome.value;
+    return rest;
+  }, {
+    params: STORE_NAME,
+    query: t.Object({ prefix: t.Optional(t.String({ maxLength: 200 })), limit: t.Optional(t.String({ maxLength: 5 })) }),
+    detail: { tags: ['plugin-packages'] },
+  })
+
+  // One entry of the signed-in user: { value, version }.
+  .get('/:name/store/*', async (ctx) => {
+    const gate = await pageStoreGate(ctx, ctx.params.name, 'store:read');
+    if ('error' in gate) return gate;
+    const outcome = await storeGet(gate.store, storeKeyFromPath(ctx.request.url, `/${ctx.params.name}${PAGE_STORE_MARKER}`), gate.maxProtection);
+    return storeAnswer(ctx, outcome.ok ? { ok: true, value: { value: outcome.value.value, version: outcome.value.version } } : outcome);
+  }, { detail: { tags: ['plugin-packages'] } })
+
+  // Write one entry of the signed-in user: { value, ifVersion? } → { version }, within the package's quota per user.
+  .put('/:name/store/*', async (ctx) => {
+    const gate = await pageStoreGate(ctx, ctx.params.name, 'store:write');
+    if ('error' in gate) return gate;
+    // A page sees what its package's tools show it, within the package's level: it writes at what the package has read for this user.
+    const level = Math.min(gate.maxProtection, await readLevelOf(ctx.params.name, gate.store.userId));
+    const outcome = await storePut(gate.store, storeKeyFromPath(ctx.request.url, `/${ctx.params.name}${PAGE_STORE_MARKER}`),
+      (ctx.body ?? {}) as { value?: unknown; ifVersion?: number }, level, gate.maxProtection);
+    await auditPageStore(ctx.params.name, gate.store.userId, 'store.put', outcome.ok ? 200 : outcome.status, outcome.ok ? undefined : outcome.code);
+    return storeAnswer(ctx, outcome.ok ? { ok: true, value: { version: outcome.value.version } } : outcome);
+  }, {
+    body: t.Object({ value: t.Optional(t.Any()), ifVersion: t.Optional(t.Integer({ minimum: 0 })) }),
+    detail: { tags: ['plugin-packages'] },
+  })
+
+  // Delete one entry of the signed-in user.
+  .delete('/:name/store/*', async (ctx) => {
+    const gate = await pageStoreGate(ctx, ctx.params.name, 'store:write');
+    if ('error' in gate) return gate;
+    const outcome = await storeDelete(gate.store, storeKeyFromPath(ctx.request.url, `/${ctx.params.name}${PAGE_STORE_MARKER}`), gate.maxProtection);
+    await auditPageStore(ctx.params.name, gate.store.userId, 'store.delete', outcome.ok ? 200 : outcome.status, outcome.ok ? undefined : outcome.code);
+    return storeAnswer(ctx, outcome.ok ? { ok: true, value: outcome.value } : outcome);
+  }, { detail: { tags: ['plugin-packages'] } });

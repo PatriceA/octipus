@@ -144,7 +144,7 @@ export async function installFromUrl(
   url: string,
   actorUserId: string,
   opts: {
-    upgrade?: boolean; sha256?: string; name?: string; version?: string; allowSignerChange?: boolean; allowDowngrade?: boolean;
+    upgrade?: boolean; sha256?: string; name?: string; version?: string; allowSignerChange?: boolean; allowDowngrade?: boolean; keepStoreData?: boolean;
     /** A registry install (./registry-install.ts): what the listing promised, where it is from, whose keys count, the runtime. */
     registry?: Pick<InstallOptions, 'expectListing' | 'origin' | 'trustOnly' | 'requireRuntime' | 'allowSourceChange'>;
   } = {},
@@ -160,7 +160,7 @@ export async function installFromUrl(
 /** The install options of a package from `url` (requires a trusted signature; a registry's promises on top). */
 export function remoteInstallOptions(
   url: string,
-  opts: { upgrade?: boolean; name?: string; version?: string; allowSignerChange?: boolean; allowDowngrade?: boolean; registry?: Pick<InstallOptions, 'expectListing' | 'origin' | 'trustOnly' | 'requireRuntime' | 'allowSourceChange'> },
+  opts: { upgrade?: boolean; name?: string; version?: string; allowSignerChange?: boolean; allowDowngrade?: boolean; keepStoreData?: boolean; registry?: Pick<InstallOptions, 'expectListing' | 'origin' | 'trustOnly' | 'requireRuntime' | 'allowSourceChange'> },
 ): InstallOptions {
   return {
     upgrade: opts.upgrade,
@@ -169,6 +169,7 @@ export function remoteInstallOptions(
     expect: { name: opts.name, version: opts.version },
     allowSignerChange: opts.allowSignerChange,
     allowDowngrade: opts.allowDowngrade,
+    ...(opts.keepStoreData ? { keepStoreData: true } : {}),
     origin: { source: 'url', url },
     ...opts.registry,
   };

@@ -90,6 +90,12 @@ export interface PluginManifest extends PluginManifestContributions {
    * (see "Model calls on CLI lanes" below). Absent: untrusted.
    */
   model?: PluginModelDecl;
+  /**
+   * The per-user store (see "The store" below): the host keeps small JSON
+   * values for the package, separately for each user. Needs the host scope
+   * `store:read` and/or `store:write`.
+   */
+  store?: PluginStoreDecl;
 }
 
 /** An installed package as the API returns it. */
@@ -374,12 +380,12 @@ export interface PluginContributionsView {
  */
 export const PLUGIN_HOST_SCOPES = [
   'notes:read', 'notes:write', 'tasks:read', 'tasks:write', 'documents:read', 'documents:write', 'notify', 'web:read', 'model:complete',
-  'agent:run',
+  'agent:run', 'store:read', 'store:write',
 ] as const;
 export type PluginHostScope = (typeof PLUGIN_HOST_SCOPES)[number];
 
 /** The scopes that change data or reach the user: only for `write`/`external` tools. */
-export const PLUGIN_HOST_WRITE_SCOPES: readonly PluginHostScope[] = ['notes:write', 'tasks:write', 'documents:write', 'notify'];
+export const PLUGIN_HOST_WRITE_SCOPES: readonly PluginHostScope[] = ['notes:write', 'tasks:write', 'documents:write', 'notify', 'store:write'];
 
 /**
  * Scopes a `read` tool holds to read with, whose starting endpoint still needs
@@ -437,6 +443,73 @@ export const PLUGIN_HOST_META_KEY = 'octipus/host';
 export const PLUGIN_HOST_ALIAS = 'octipus-host.internal';
 
 // ── end pages and host API ─────────────────────────────────────────────
+
+// ── The store (docs/PLUGIN-PACKAGES.md#store) ───────────────────────────────
+// Small JSON values the host keeps for a package, per key, separately for
+// each user: a call's token names its user, and the store answers for that
+// user only. There is no store shared across users, and no way to name
+// another user. `store:read` reads, `store:write` writes (a write or
+// external tool only); a page reaches its own user's entries through the bridge.
+
+/** The store scopes; a package that declares either must declare `store`. */
+export const PLUGIN_STORE_SCOPES: readonly PluginHostScope[] = ['store:read', 'store:write'];
+/** The quota per user when `store.quotaBytes` is left out: 5 MB. */
+export const PLUGIN_STORE_DEFAULT_QUOTA_BYTES = 5 * 1024 * 1024;
+/** The largest quota per user a package may declare: 20 MB. */
+export const PLUGIN_STORE_MAX_QUOTA_BYTES = 20 * 1024 * 1024;
+/** The smallest quota per user a package may declare: 1 KB. */
+export const PLUGIN_STORE_MIN_QUOTA_BYTES = 1024;
+/** The largest value, as JSON (UTF-8 bytes): 64 KB. */
+export const PLUGIN_STORE_MAX_VALUE_BYTES = 64 * 1024;
+/** A key: letters, digits and `._:/-`, 1 to 200 characters. */
+export const PLUGIN_STORE_KEY_RE = /^[A-Za-z0-9._:/-]{1,200}$/;
+/** The most keys one list answers. */
+export const PLUGIN_STORE_MAX_LIST = 1000;
+/** What every entry counts against the quota on top of its key and value: 128 bytes. */
+export const PLUGIN_STORE_ENTRY_OVERHEAD_BYTES = 128;
+/** The most entries a user keeps in one package's store (every workspace): 10,000. */
+export const PLUGIN_STORE_MAX_ENTRIES = 10_000;
+
+/** What `store` in the manifest declares. */
+export interface PluginStoreDecl {
+  /** The most bytes (keys and JSON values) kept per user; default 5 MB, at most 20 MB. */
+  quotaBytes?: number;
+}
+
+/** The per-user quota a manifest declares (defaulted), or null when it declares no store. */
+export function pluginStoreQuota(m: Pick<PluginManifest, 'store'>): number | null {
+  if (!m.store) return null;
+  return m.store.quotaBytes ?? PLUGIN_STORE_DEFAULT_QUOTA_BYTES;
+}
+
+/** A size in words: `5 MB`, `2.5 MB`, `512 KB`, `100 bytes`. */
+export function formatStoreBytes(bytes: number): string {
+  const mb = 1024 * 1024;
+  if (bytes >= mb) return `${Number((bytes / mb).toFixed(2))} MB`;
+  if (bytes >= 1024) return `${Number((bytes / 1024).toFixed(1))} KB`;
+  return `${bytes} ${bytes === 1 ? 'byte' : 'bytes'}`;
+}
+
+/** One entry of a list (`GET /api/plugin-host/store`, the page bridge's `store.list`). */
+export interface PluginStoreKeyView {
+  key: string;
+  /** Its size as counted against the quota (128 bytes of overhead, the key, and the value as the database keeps it). */
+  size: number;
+  version: number;
+  updatedAt: string;
+}
+
+/** What a package keeps in the store (`PluginUsageView.store`, `GET /api/plugin-packages/my-usage`). */
+export interface PluginStoreUsage {
+  /** Bytes counted against the quota, entries; of every user (admin view) or the caller's own. */
+  bytes: number;
+  entries: number;
+  /** The per-user quota the installed manifest declares, or null when it declares no store. */
+  quotaBytes: number | null;
+  /** Per user (admin view only; ids and sizes, no content). */
+  byUser?: Array<{ userId: string; bytes: number; entries: number }>;
+}
+// ── end the store ───────────────────────────────────────────────────────────
 
 // ── Model calls on CLI lanes (docs/PLUGIN-PACKAGES.md#model-calls-on-cli-lanes) ──
 // A plugin's `model:complete` call is refused (409 cli_model) when the user's
@@ -498,7 +571,8 @@ export function declaresTrustedModelInput(m: Pick<PluginManifest, 'model'>): boo
  */
 export function modelCliToolsSourcesWarning(m: Pick<PluginManifest, 'network' | 'host'>): string | null {
   const hosts = m.network ?? [];
-  const reads = (m.host ?? []).filter((s) => s.endsWith(':read'));
+  // store:read reads back what the package itself stored: no new source.
+  const reads = (m.host ?? []).filter((s) => s.endsWith(':read') && s !== 'store:read');
   if (hosts.length === 0 && reads.length === 0) return null;
   const parts = [
     ...(hosts.length > 0 ? [`the network hosts ${hosts.join(', ')}`] : []),
@@ -616,6 +690,8 @@ export interface PluginPermissionsSummary {
   secrets: string[];
   /** The names (keys) of its settings, sorted. */
   settings: string[];
+  /** Its per-user store and the quota it declares (defaulted), or null when it keeps none. */
+  store: { quotaBytes: number } | null;
   tools: Array<{ name: string; effect: PluginToolEffect }>;
   effects: Record<PluginToolEffect, number>;
   /**
@@ -650,7 +726,7 @@ export interface PluginPermissionsContributions {
 
 /** One change between two permission summaries (`PluginUpdateView.diff`). */
 export interface PluginPermissionChange {
-  kind: 'runtime' | 'apiVersion' | 'host' | 'network' | 'secrets' | 'settings' | 'tool' | 'contribution' | 'pages' | 'trustedInput' | 'maxProtection';
+  kind: 'runtime' | 'apiVersion' | 'host' | 'network' | 'secrets' | 'settings' | 'store' | 'tool' | 'contribution' | 'pages' | 'trustedInput' | 'maxProtection';
   change: 'added' | 'removed' | 'wider' | 'narrower' | 'changed';
   /** In words, e.g. "host API scope notes:write". */
   text: string;
@@ -794,6 +870,8 @@ export interface PluginUsageView {
   cost: number;
   /** Per user (admin view only; ids, no content). */
   byUser?: Array<{ userId: string; modelCalls: number; runs: number; tokens: number; cost: number }>;
+  /** What it keeps in the store now (not limited to `days`): every user's (admin view, with `byUser`) or the caller's own. */
+  store: PluginStoreUsage;
 }
 
 /** `GET /api/plugin-packages/sandbox`: the sandbox plugin package servers get on this host (src/plugins/packages/sandbox-policy.ts). */

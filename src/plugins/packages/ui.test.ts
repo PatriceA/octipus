@@ -1,7 +1,7 @@
 /**
  * Serving plugin pages (docs/PLUGIN-PACKAGES.md#pages): only files under the
- * package's UI directory, of a known type, while it is enabled and its files
- * hash to the approved content; under a CSP that sandboxes the document and
+ * package's UI directory, of a known type, while it is enabled, its files
+ * hash to the approved content and it may start (not revoked); under a CSP that sandboxes the document and
  * allows nothing but the package's own path.
  */
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -14,6 +14,8 @@ const state = vi.hoisted(() => ({
   row: null as null | Record<string, unknown>,
   hash: 'sha256:approved',
   problem: null as string | null,
+  /** What the check before a start says (`checkPackageBeforeStart`: revoked, unapproved…). */
+  startProblem: null as string | null,
 }));
 
 vi.mock('@/db/postgres', () => {
@@ -23,12 +25,13 @@ vi.mock('@/db/postgres', () => {
 vi.mock('@/mcp/bridge', () => ({ PLUGIN_SERVER_PREFIX: 'plugin-', getMCPBridge: () => ({ pluginProblem: () => state.problem }) }));
 const trusted = vi.hoisted(() => new Set<string>());
 vi.mock('@/security/client-ip', () => ({ isTrustedProxy: (address: string) => trusted.has(address) }));
-vi.mock('./service', () => ({ packageDir: (name: string) => join(state.root, name) }));
+vi.mock('./service', () => ({ packageDir: (name: string) => join(state.root, name), checkPackageBeforeStart: async () => state.startProblem }));
 vi.mock('./integrity', async (original) => ({
   ...await original<typeof import('./integrity')>(),
   hashPackageContent: async () => state.hash,
 }));
 
+const { forgetRunChecks } = await import('./run-check');
 const { _forgetUiVerification, fetchDestAllowed, isSecureOrigin, listEnabledPages, pluginUiCsp, pluginUiHeaders, readUiFile, uiBaseUrl, uiContentType, uiFileUrl } = await import('./ui');
 
 const manifest = { name: 'acme', title: 'Acme', ui: { pages: [{ path: 'dash', title: 'Dash', icon: 'zap', entry: 'index.html' }] } };
@@ -45,7 +48,9 @@ beforeEach(() => {
   state.row = { name: 'acme', version: '1.0.0', enabled: true, manifest, contentHash: 'sha256:approved' };
   state.hash = 'sha256:approved';
   state.problem = null;
+  state.startProblem = null;
   _forgetUiVerification();
+  forgetRunChecks();
 });
 
 const body = async (rel: string, name = 'acme') => {
@@ -94,6 +99,19 @@ describe('plugin page files', () => {
     state.row = null;
     expect(await body('index.html')).toBe(404);
     expect(await body('index.html', 'Bad Name')).toBe(404);
+  });
+
+  test('a package that may not start (revoked, unapproved) serves no page and lists none', async () => {
+    expect(await body('index.html')).toContain('hi');
+    state.startProblem = 'acme 1.0.0 is revoked by the marketplace (bad); it does not start';
+    // Cached for a while; a revocation or an approval forgets it at once.
+    expect(await body('index.html')).toContain('hi');
+    forgetRunChecks();
+    expect(await body('index.html')).toBe(404);
+    expect(await listEnabledPages()).toEqual([]);
+    state.startProblem = null;
+    forgetRunChecks('acme');
+    expect(await listEnabledPages()).toHaveLength(1);
   });
 
   test('the sidebar lists the pages of enabled packages', async () => {
