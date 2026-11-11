@@ -75,10 +75,14 @@ export function computePermissions(manifest: PluginManifest, files: PermissionFi
     runtime: pluginRuntime(manifest),
     host: sorted(manifest.host),
     network: sorted(manifest.network),
+    secrets: sorted((manifest.secrets ?? []).map((s) => s.key)),
+    settings: sorted((manifest.settings ?? []).map((f) => f.key)),
     tools,
     effects,
     contributions: {
-      commands: (manifest.commands ?? []).map((c) => ({ name: c.name, tool: c.tool })).sort((a, b) => byCodeUnit(a.name, b.name)),
+      commands: (manifest.commands ?? [])
+        .map((c) => ({ name: c.name, tool: c.tool, ...(c.input !== undefined ? { input: c.input } : {}) }))
+        .sort((a, b) => byCodeUnit(a.name, b.name)),
       schedules: (manifest.schedules ?? [])
         .map((x) => ({ id: x.id, cron: x.cron, tool: x.tool, ...(x.input !== undefined ? { input: x.input } : {}) }))
         .sort((a, b) => byCodeUnit(a.id, b.id)),

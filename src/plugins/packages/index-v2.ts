@@ -67,10 +67,16 @@ export const indexPermissionsSchema = z.object({
   runtime: z.enum(PLUGIN_RUNTIMES),
   host: z.array(line(40)).max(30),
   network: z.array(line(300)).max(50),
+  // Names only, sorted; a listing from before they were listed reads as none (the host recomputes and compares them).
+  secrets: z.array(line(100)).max(100).default([]),
+  settings: z.array(line(100)).max(100).default([]),
   tools: z.array(z.object({ name: line(64), effect: z.enum(PLUGIN_TOOL_EFFECTS) }).strict()).max(200),
   effects: z.object({ read: z.number().int().min(0).max(200), write: z.number().int().min(0).max(200), external: z.number().int().min(0).max(200) }).strict(),
   contributions: z.object({
-    commands: z.array(z.object({ name: line(64), tool: line(64) }).strict()).max(100),
+    commands: z.array(z.object({
+      name: line(64), tool: line(64),
+      input: z.record(z.string().max(100), z.unknown()).refine((v) => jsonSize(v) <= 4000, 'input is at most 4000 characters of JSON').optional(),
+    }).strict()).max(100),
     schedules: z.array(z.object({
       id: line(64), cron: line(100), tool: line(64),
       input: z.record(z.string().max(100), z.unknown()).refine((v) => jsonSize(v) <= 4000, 'input is at most 4000 characters of JSON').optional(),
@@ -83,7 +89,8 @@ export const indexPermissionsSchema = z.object({
   ui: z.object({ dir: line(300), sha256: sha256Hex.nullable() }).strict().nullable(),
   trustedInput: z.boolean(),
   maxProtection: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
-}).strict().refine((p) => sortedUnique(p.host) && sortedUnique(p.network), 'host and network are sorted lists without repeats');
+}).strict().refine((p) => sortedUnique(p.host) && sortedUnique(p.network) && sortedUnique(p.secrets) && sortedUnique(p.settings),
+  'host, network, secrets and settings are sorted lists without repeats');
 
 const authorSchema = z.object({ name: line(80).pipe(z.string().min(1)), url: z.string().max(300).optional().nullable() }).strict();
 

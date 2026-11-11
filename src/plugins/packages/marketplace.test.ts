@@ -10,10 +10,11 @@
  */
 import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'vitest';
-import { declarationItems, permissionsGuidance } from '@/shared/plugin-declarations';
+import { declarationItems, guidanceTone, permissionsGuidance } from '@/shared/plugin-declarations';
 import { diffPermissions, foldForSearch, permissionsAskSummary } from '@/shared/plugin-permissions';
 import type { PluginPermissionsSummary } from '@/shared/plugin-package';
-import { IndexFormatError, parseIndexDocument } from './index-v2';
+import { IndexFormatError, indexPermissionsSchema, parseIndexDocument } from './index-v2';
+import { computePermissions } from './permissions';
 import { sniffImage } from './marketplace-assets';
 import { keysFileUrl, MARKETPLACE_UNCONFIGURED_MESSAGE, marketplaceSettings } from './marketplace-config';
 import { MARKETPLACE_ROOT_KEYS } from './marketplace-keys';
@@ -27,7 +28,7 @@ const HASH = `sha256:${'cd'.repeat(32)}`;
 
 function perms(over: Partial<PluginPermissionsSummary> = {}): PluginPermissionsSummary {
   return {
-    name: 'weekly', version: '1.0.0', apiVersion: '1.0.0', runtime: 'package', host: ['tasks:read'], network: [],
+    name: 'weekly', version: '1.0.0', apiVersion: '1.0.0', runtime: 'package', host: ['tasks:read'], network: [], secrets: [], settings: [],
     tools: [{ name: 'review', effect: 'read' }], effects: { read: 1, write: 0, external: 0 },
     contributions: { commands: [], schedules: [], events: [], prompt: null, context: null }, pages: [], ui: null, trustedInput: false, maxProtection: 4,
     ...over,
@@ -287,8 +288,64 @@ describe('permissions in words, the update diff and declarations', () => {
       expect.objectContaining({ kind: 'tool', change: 'wider', text: 'tool review: read → write' }),
       expect.objectContaining({ kind: 'pages', change: 'added' }),
     ]));
-    expect(diffPermissions(after, before).widened).toBe(false);
+    // Back: everything is removed, but review goes write → read, which is no longer asked about per call.
+    expect(diffPermissions(after, before).changes.filter((c) => c.widens).map((c) => c.text)).toEqual(['tool review: write → read (no longer asked before each call; may run unattended)']);
     expect(diffPermissions(before, before)).toEqual({ widened: false, changes: [] });
+  });
+
+  test('every effect change is listed; down to read widens, external → write narrows', () => {
+    const tools = (effect: 'read' | 'write' | 'external') => perms({ tools: [{ name: 'review', effect }] });
+    const one = (from: 'read' | 'write' | 'external', to: 'read' | 'write' | 'external') => diffPermissions(tools(from), tools(to)).changes.map((c) => [c.kind, c.change, c.widens]);
+    expect(one('read', 'write')).toEqual([['tool', 'wider', true]]);
+    expect(one('read', 'external')).toEqual([['tool', 'wider', true]]);
+    expect(one('write', 'external')).toEqual([['tool', 'wider', true]]);
+    expect(one('write', 'read')).toEqual([['tool', 'wider', true]]);
+    expect(one('external', 'read')).toEqual([['tool', 'wider', true]]);
+    expect(one('external', 'write')).toEqual([['tool', 'narrower', false]]);
+    expect(diffPermissions(tools('external'), tools('read')).changes[0].text).toBe('tool review: external → read (no longer asked before each call; may run unattended)');
+  });
+
+  test('a new secret widens; a setting added or removed is a change that does not', () => {
+    const d = diffPermissions(perms({ secrets: ['A'], settings: ['region'] }), perms({ secrets: ['A', 'B'], settings: ['account'] }));
+    expect(d.changes.map((c) => [c.kind, c.change, c.text, c.widens])).toEqual([
+      ['secrets', 'added', 'secret B', true],
+      ['settings', 'added', 'setting account', false],
+      ['settings', 'removed', 'setting region', false],
+    ]);
+    expect(diffPermissions(perms({ settings: ['region'] }), perms({ settings: [] })).widened).toBe(false);
+    expect(diffPermissions(perms({ secrets: ['A'] }), perms()).widened).toBe(false);
+  });
+
+  test('the summary lists secret and setting names, sorted, and a command input when the manifest gives one', () => {
+    const p = computePermissions({
+      name: 'weekly', version: '1.0.0', apiVersion: '1.0.0', title: 'W', description: 'W', server: { command: 'node' }, tools: { review: { effect: 'read' } },
+      secrets: [{ key: 'Z_TOKEN', label: 'Z', required: true }, { key: 'A_TOKEN', label: 'A' }],
+      settings: [{ key: 'region', label: 'Region', type: 'text' }, { key: 'account', label: 'Account', type: 'text' }],
+      commands: [{ name: 'go', tool: 'review', description: 'Go', input: { full: true } }, { name: 'ask', tool: 'review', description: 'Ask' }],
+    } as never);
+    expect(Object.keys(p).slice(0, 8)).toEqual(['name', 'version', 'apiVersion', 'runtime', 'host', 'network', 'secrets', 'settings']);
+    expect([p.secrets, p.settings]).toEqual([['A_TOKEN', 'Z_TOKEN'], ['account', 'region']]);
+    expect(p.contributions.commands).toEqual([{ name: 'ask', tool: 'review' }, { name: 'go', tool: 'review', input: { full: true } }]);
+    expect(permissionsAskSummary(p)).toContain('Asks you for these secrets: A_TOKEN, Z_TOKEN');
+    const before = { ...p, contributions: { ...p.contributions, commands: [{ name: 'go', tool: 'review' }] } };
+    expect(diffPermissions(before, p).changes.map((c) => [c.text, c.widens])).toEqual(expect.arrayContaining([['command /go: input null → {"full":true}', false]]));
+    // An index lists them with the same bounds: at most 100 names of at most 100 characters, sorted.
+    expect(indexPermissionsSchema.safeParse(p).success).toBe(true);
+    expect(indexPermissionsSchema.safeParse({ ...p, secrets: ['Z', 'A'] }).success).toBe(false);
+    expect(indexPermissionsSchema.safeParse({ ...p, settings: Array.from({ length: 101 }, (_, i) => `s${String(i).padStart(3, '0')}`) }).success).toBe(false);
+    expect(indexPermissionsSchema.safeParse({ ...p, secrets: ['x'.repeat(101)] }).success).toBe(false);
+    const { secrets: _s, settings: _t, ...older } = p;
+    expect(indexPermissionsSchema.parse(older)).toMatchObject({ secrets: [], settings: [] });
+  });
+
+  test('a wildcard over a short domain gets a guidance warning on its network item', () => {
+    const items = declarationItems(perms({ network: ['*.github.io', '*.cdn.example.com', 'api.example.com', '*.co.uk:8443'] }), null);
+    const g = (h: string) => items.find((i) => i.id === `network:${h}`);
+    expect(g('*.github.io')?.guidance).toMatch(/sites nobody vetted/);
+    expect(guidanceTone(g('*.github.io')!)).toBe('warning');
+    expect(g('*.co.uk:8443')?.guidance).toMatch(/sites nobody vetted/);
+    expect(g('*.cdn.example.com')?.guidance).toBeUndefined();
+    expect(g('api.example.com')?.guidance).toBeUndefined();
   });
 
   test('declarations are stable, ordered, and carry guidance instead of refusals', () => {
@@ -296,8 +353,9 @@ describe('permissions in words, the update diff and declarations', () => {
       host: ['model:complete', 'notes:read'], network: ['api.example.com'],
       contributions: { commands: [{ name: 'go', tool: 'review' }], schedules: [], events: [], prompt: { file: 'notes.md', sha256: SHA }, context: null }, trustedInput: true,
     });
-    const items = declarationItems(p, { tools: { review: { effect: 'read', description: 'Reviews' } }, secrets: [{ key: 'TOKEN', label: 'Token', required: true }] });
-    expect(items.map((i) => i.id)).toEqual(['runtime', 'network:api.example.com', 'host:model:complete', 'host:notes:read', 'tool:review', 'command:go', 'prompt', 'secret:TOKEN', 'model:cli-tools', 'protection']);
+    const items = declarationItems({ ...p, secrets: ['TOKEN'] }, { tools: { review: { effect: 'read', description: 'Reviews' } }, secrets: [{ key: 'TOKEN', label: 'Token', required: true }] });
+    expect(items.map((i) => i.id)).toEqual(['runtime', 'network:api.example.com', 'host:model:complete', 'host:notes:read', 'tool:review', 'command:go', 'prompt', 'secrets', 'model:cli-tools', 'protection']);
+    expect(items.find((i) => i.id === 'secrets')).toMatchObject({ label: 'Asks you for these secrets: TOKEN', detail: 'TOKEN ("Token", required)' });
     expect(items.find((i) => i.id === 'host:notes:read')?.guidance).toMatch(/send what it reads anywhere/);
     expect(declarationItems(p, null).map((i) => i.id)).toEqual(declarationItems(p, null).map((i) => i.id));
     expect(permissionsGuidance(p).map((g) => g.code)).toEqual(['egress_with_read', 'model_cli_tools']);

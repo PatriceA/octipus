@@ -612,6 +612,10 @@ export interface PluginPermissionsSummary {
   runtime: PluginRuntime;
   host: string[];
   network: string[];
+  /** The names (keys) of the secrets it asks for, sorted; never their labels or values. */
+  secrets: string[];
+  /** The names (keys) of its settings, sorted. */
+  settings: string[];
   tools: Array<{ name: string; effect: PluginToolEffect }>;
   effects: Record<PluginToolEffect, number>;
   /**
@@ -636,7 +640,8 @@ export interface PluginPermissionsSummary {
  * was at hand (a manifest alone).
  */
 export interface PluginPermissionsContributions {
-  commands: Array<{ name: string; tool: string }>;
+  /** `input` only when the manifest gives the command one. */
+  commands: Array<{ name: string; tool: string; input?: Record<string, unknown> }>;
   schedules: Array<{ id: string; cron: string; tool: string; input?: Record<string, unknown> }>;
   events: Array<{ on: string; tool: string }>;
   prompt: { file: string; sha256: string | null; roles?: string[] } | null;
@@ -645,7 +650,7 @@ export interface PluginPermissionsContributions {
 
 /** One change between two permission summaries (`PluginUpdateView.diff`). */
 export interface PluginPermissionChange {
-  kind: 'runtime' | 'apiVersion' | 'host' | 'network' | 'tool' | 'contribution' | 'pages' | 'trustedInput' | 'maxProtection';
+  kind: 'runtime' | 'apiVersion' | 'host' | 'network' | 'secrets' | 'settings' | 'tool' | 'contribution' | 'pages' | 'trustedInput' | 'maxProtection';
   change: 'added' | 'removed' | 'wider' | 'narrower' | 'changed';
   /** In words, e.g. "host API scope notes:write". */
   text: string;

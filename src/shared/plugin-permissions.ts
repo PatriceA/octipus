@@ -42,6 +42,8 @@ export function permissionsAskSummary(p: PluginPermissionsSummary): string[] {
   if (p.runtime === 'in-process') out.push('Runs inside the Octipus server process, with its full authority');
   for (const scope of p.host) out.push(HOST_SCOPE_WORDS[scope] ?? `Host API scope ${scope}`);
   out.push(p.network.length === 0 ? 'No network access' : `Connects to ${p.network.join(', ')}`);
+  if (p.secrets.length > 0) out.push(`Asks you for these secrets: ${p.secrets.join(', ')}`);
+  if (p.settings.length > 0) out.push(`Settings: ${p.settings.join(', ')}`);
   const { read, write, external } = p.effects;
   const tools = [
     read > 0 ? plural(read, 'read tool', 'read tools') : '',
@@ -62,9 +64,21 @@ export function permissionsAskSummary(p: PluginPermissionsSummary): string[] {
 }
 
 /**
+ * Whether a tool's effect change widens what it may do unasked. Up (read →
+ * write → external) it does more; down to `read` it is no longer asked about
+ * per call and may run unattended (schedules, events, context), so write →
+ * read and external → read widen too. external → write narrows (a write
+ * tool is asked about by default, and runs unattended only under an ALLOW rule).
+ */
+export function effectChangeWidens(from: PluginToolEffect, to: PluginToolEffect): boolean {
+  return EFFECT_RANK[to] > EFFECT_RANK[from] || (to === 'read' && from !== 'read');
+}
+
+/**
  * What changed from `before` (the installed version's permissions, recomputed
  * from its manifest) to `after` (a newer listing's). `widened` is true when
- * anything asks for more than before.
+ * anything asks for more than before. The marketplace repository's PR
+ * summary applies the same rules, so the two agree.
  */
 export function diffPermissions(before: PluginPermissionsSummary, after: PluginPermissionsSummary): PluginPermissionDiff {
   const changes: PluginPermissionChange[] = [];
@@ -73,10 +87,15 @@ export function diffPermissions(before: PluginPermissionsSummary, after: PluginP
   };
   if (before.runtime !== after.runtime) add('runtime', 'changed', `runtime ${before.runtime} → ${after.runtime}`, after.runtime === 'in-process');
   if (before.apiVersion !== after.apiVersion) add('apiVersion', 'changed', `apiVersion ${before.apiVersion} → ${after.apiVersion}`, false);
-  const lists: Array<['host' | 'network', string]> = [['host', 'host API scope'], ['network', 'network host']];
-  for (const [kind, label] of lists) {
-    for (const v of after[kind]) if (!before[kind].includes(v)) add(kind, 'added', `${label} ${v}`, true);
-    for (const v of before[kind]) if (!after[kind].includes(v)) add(kind, 'removed', `${label} ${v}`, false);
+  // A new secret widens (it asks for a credential); a setting added or removed is a change that does not.
+  const lists: Array<['host' | 'network' | 'secrets' | 'settings', string, boolean]> = [
+    ['host', 'host API scope', true], ['network', 'network host', true], ['secrets', 'secret', true], ['settings', 'setting', false],
+  ];
+  for (const [kind, label, widens] of lists) {
+    const was = before[kind] ?? [];
+    const now = after[kind] ?? [];
+    for (const v of now) if (!was.includes(v)) add(kind, 'added', `${label} ${v}`, widens);
+    for (const v of was) if (!now.includes(v)) add(kind, 'removed', `${label} ${v}`, false);
   }
   const was = new Map(before.tools.map((t) => [t.name, t.effect]));
   const now = new Map(after.tools.map((t) => [t.name, t.effect]));
@@ -84,8 +103,12 @@ export function diffPermissions(before: PluginPermissionsSummary, after: PluginP
     const old = was.get(name);
     if (old === undefined) add('tool', 'added', `tool ${name} (${effect})`, true);
     else if (old !== effect) {
-      const wider = EFFECT_RANK[effect] > EFFECT_RANK[old];
-      add('tool', wider ? 'wider' : 'narrower', `tool ${name}: ${old} → ${effect}`, wider);
+      const wider = effectChangeWidens(old, effect);
+      // Down to read: fewer prompts, not fewer powers. Named so.
+      const text = effect === 'read'
+        ? `tool ${name}: ${old} → read (no longer asked before each call; may run unattended)`
+        : `tool ${name}: ${old} → ${effect}`;
+      add('tool', wider ? 'wider' : 'narrower', text, wider);
     }
   }
   for (const [name, effect] of was) if (!now.has(name)) add('tool', 'removed', `tool ${name} (${effect})`, false);
@@ -121,7 +144,10 @@ function diffContributions(before: PluginPermissionsSummary, after: PluginPermis
   for (const [name, c] of now) {
     const old = was.get(name);
     if (!old) add('contribution', 'added', `command /${name} → ${c.tool}`, true);
-    else if (old.tool !== c.tool) add('contribution', 'changed', `command /${name}: ${old.tool} → ${c.tool}`, true);
+    else {
+      if (old.tool !== c.tool) add('contribution', 'changed', `command /${name}: ${old.tool} → ${c.tool}`, true);
+      if (json(old.input) !== json(c.input)) add('contribution', 'changed', `command /${name}: input ${json(old.input)} → ${json(c.input)}`, false);
+    }
   }
   for (const [name, c] of was) if (!now.has(name)) add('contribution', 'removed', `command /${name} → ${c.tool}`, false);
 

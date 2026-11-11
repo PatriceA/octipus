@@ -205,7 +205,7 @@ describe('listing and install', () => {
     const view = await svc.packageView(NAME);
     expect(view.origin).toMatchObject({ source: 'marketplace', listingVersion: '1.0.0', url: p.url });
     expect(view.signature).toMatchObject({ status: 'valid', keyId: keyA.keyId });
-    expect(view.declarations.find((d) => d.id === 'secret:ECHO_TOKEN')).toBeDefined();
+    expect(view.declarations.find((d) => d.id === 'secrets')).toBeDefined();
     expect((await auditOps('installed')).at(-1)).toMatchObject({ origin: { source: 'marketplace' }, keyId: keyA.keyId });
     expect(await svc.checkPackageBeforeStart(NAME)).toBeNull();
   });

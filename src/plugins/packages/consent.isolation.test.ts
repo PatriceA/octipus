@@ -77,7 +77,7 @@ afterAll(async () => {
 
 const ALL_IDS = [
   'runtime', 'network:api.example.com', 'host:notes:read', 'tool:echo', 'tool:env_report', 'tool:send_letter',
-  'command:echo-it', 'schedule:nightly', 'prompt', 'secret:ECHO_TOKEN', 'protection',
+  'command:echo-it', 'schedule:nightly', 'prompt', 'secrets', 'settings', 'protection',
 ];
 
 describe('install consent', () => {

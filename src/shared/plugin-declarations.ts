@@ -13,7 +13,7 @@
  * package always gives the same ids in the same order:
  *
  *   runtime, in-process, network:*, host:*, tool:*, command:*, schedule:*,
- *   event:*, prompt, context, page:*, ui, secret:*, model:cli-tools, protection
+ *   event:*, prompt, context, page:*, ui, secrets, settings, model:cli-tools, protection
  *
  * plus, in an install preview of an upgrade, `change:*` items (another
  * source, another signer, an older version, a newer Octipus needed) that
@@ -33,7 +33,7 @@ import { HOST_SCOPE_WORDS } from './plugin-permissions';
 
 export type PluginDeclarationKind =
   | 'runtime' | 'in-process' | 'network' | 'host' | 'tool' | 'command' | 'schedule' | 'event' | 'prompt' | 'context'
-  | 'page' | 'secret' | 'model-cli-tools' | 'protection' | 'change';
+  | 'page' | 'secret' | 'setting' | 'model-cli-tools' | 'protection' | 'change';
 
 export interface PluginDeclarationItem {
   /** Stable for the same package: `host:notes:read`, `tool:save_note`, … */
@@ -107,6 +107,18 @@ export const NOT_SANDBOXED_NOTE = 'plugins.sandbox is off and no sandbox wraps i
   + 'Only a plugin that is not from the marketplace can run this way.';
 export const NETWORK_NOT_ENFORCED_NOTE = 'Network not enforced on this host: no sandbox takes direct network away, so nothing stops it from connecting anywhere.';
 
+/**
+ * A wildcard host that may cover sites anyone can register: `*.github.io`,
+ * `*.co.uk`. Without a public suffix list, any wildcard over fewer than three
+ * labels (`*.example.com` included) is flagged. Guidance, never a refusal.
+ */
+export function broadWildcardNote(host: string): string | null {
+  if (!host.startsWith('*.')) return null;
+  const domain = host.slice(2).replace(/:\d+$/, '');
+  if (domain.split('.').length >= 3) return null;
+  return `${host} covers every name under ${domain}; if anyone can register one there (as with *.github.io or *.co.uk), the package can reach sites nobody vetted.`;
+}
+
 /** The runtime item: what it runs as, and whether this host sandboxes it (`host`), never "sandboxed" where it is not. */
 function runtimeItem(p: PluginPermissionsSummary, host: PluginHostEnforcement | null): PluginDeclarationItem {
   if (p.runtime === 'in-process') return { id: 'runtime', kind: 'runtime', label: 'Runs inside the Octipus server process', detail: 'runtime: in-process', guidance: IN_PROCESS_NOTE };
@@ -126,10 +138,10 @@ function networkItems(p: PluginPermissionsSummary, host: PluginHostEnforcement |
     if (unenforced) return [{ id: 'network:none', kind: 'network', label: 'Network not enforced on this host', detail: 'network: []', guidance: `It declares no network. ${NETWORK_NOT_ENFORCED_NOTE}` }];
     return [{ id: 'network:none', kind: 'network', label: enforced ? 'No network access of its own' : 'Declares no network access', detail: 'network: []' }];
   }
-  return p.network.map((h) => ({
-    id: `network:${h}`, kind: 'network' as const, label: `Connects to ${h}`, detail: h,
-    ...(unenforced ? { guidance: NETWORK_NOT_ENFORCED_NOTE } : {}),
-  }));
+  return p.network.map((h) => {
+    const guidance = [broadWildcardNote(h), unenforced ? NETWORK_NOT_ENFORCED_NOTE : null].filter((g): g is string => g !== null).join(' ');
+    return { id: `network:${h}`, kind: 'network' as const, label: `Connects to ${h}`, detail: h, ...(guidance ? { guidance } : {}) };
+  });
 }
 
 /**
@@ -139,7 +151,7 @@ function networkItems(p: PluginPermissionsSummary, host: PluginHostEnforcement |
  * where that is so; without it they only say what is declared).
  */
 export function declarationItems(
-  p: PluginPermissionsSummary, manifest?: Pick<PluginManifest, 'tools' | 'secrets' | 'commands' | 'model'> | null, host: PluginHostEnforcement | null = null,
+  p: PluginPermissionsSummary, manifest?: Pick<PluginManifest, 'tools' | 'secrets' | 'settings' | 'commands' | 'model'> | null, host: PluginHostEnforcement | null = null,
 ): PluginDeclarationItem[] {
   const items: PluginDeclarationItem[] = [];
   const egress = egressReadWarning(p.host, { pages: p.pages.length > 0 });
@@ -201,8 +213,17 @@ export function declarationItems(
     });
   }
   if (p.ui) items.push({ id: 'ui', kind: 'page', label: 'Serves its page files', detail: `${p.ui.dir}/${p.ui.sha256 ? `, sha256 ${p.ui.sha256}` : ''}` });
-  for (const secret of manifest?.secrets ?? []) {
-    items.push({ id: `secret:${secret.key}`, kind: 'secret', label: `Needs the secret ${secret.label}`, detail: `${secret.key}${secret.required ? ' (required)' : ''}` });
+  // Names from the summary (a listing carries them); the manifest's labels and required flags when at hand.
+  if (p.secrets.length > 0) {
+    const of = new Map((manifest?.secrets ?? []).map((s) => [s.key, s]));
+    items.push({
+      id: 'secrets', kind: 'secret', label: `Asks you for these secrets: ${p.secrets.join(', ')}`,
+      detail: p.secrets.map((k) => { const s = of.get(k); return s ? `${k} ("${s.label}"${s.required ? ', required' : ''})` : k; }).join('; '),
+      guidance: 'You enter them; the package gets each one as an environment variable of its server, and whatever it can reach with them.',
+    });
+  }
+  if (p.settings.length > 0) {
+    items.push({ id: 'settings', kind: 'setting', label: `Asks you for these settings: ${p.settings.join(', ')}`, detail: p.settings.join(', ') });
   }
   if (p.trustedInput) {
     items.push({
@@ -278,6 +299,7 @@ export function requiredConsentIds(items: readonly PluginConsentItem[]): string[
 /** Whether an item's guidance is a warning (weigh it) or information. */
 export function guidanceTone(item: PluginDeclarationItem): 'warning' | 'info' {
   if (item.kind === 'in-process' || item.kind === 'model-cli-tools' || item.kind === 'change' || (item.kind === 'runtime' && item.detail.includes('in-process'))) return 'warning';
+  if (item.kind === 'network' && item.guidance?.includes('sites nobody vetted')) return 'warning';
   if (item.label.startsWith('NOT sandboxed') || item.label === 'Network not enforced on this host' || item.guidance?.startsWith('Network not enforced')) return 'warning';
   if (item.kind === 'tool' && item.id && item.label.endsWith('(external)')) return 'warning';
   if (item.guidance?.includes('send what it reads anywhere') || item.guidance?.includes('send what it shows to any website')) return 'warning';
