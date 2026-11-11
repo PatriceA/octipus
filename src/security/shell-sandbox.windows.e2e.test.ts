@@ -37,6 +37,16 @@ test.skipIf(process.platform !== 'win32')('AppContainer runs plugins with RO pac
     (async()=>{
       result.host=await request(process.env.HTTP_PROXY,'http://octipus-host.internal/api/plugin-host/probe');
       result.undeclared=await request(process.env.HTTP_PROXY,'http://undeclared.invalid/');
+      result.proxyClose=[];
+      for(let i=0;i<5;i++) result.proxyClose.push(await new Promise(resolve=>{
+        const s=net.connect({path:process.env.OCTIPUS_EGRESS_PIPE});
+        s.setTimeout(3000); let body='';
+        s.on('connect',()=>s.write('GET http://octipus-host.internal/api/plugin-host/probe HTTP/1.0\\r\\nHost: octipus-host.internal\\r\\n\\r\\n'));
+        s.on('data',d=>body+=d);
+        s.on('end',()=>resolve(body.includes('host-api-ok')?'closed':'bad response'));
+        s.on('timeout',()=>{s.destroy();resolve('timeout')});
+        s.on('error',e=>resolve(e.code));
+      }));
       result.direct=await new Promise(resolve=>{const s=net.connect(${address.port},'127.0.0.1');s.setTimeout(3000);s.on('connect',()=>{s.destroy();resolve('connected')});s.on('timeout',()=>{s.destroy();resolve('blocked')});s.on('error',()=>resolve('blocked'));});
       console.log(JSON.stringify(result));
     })().catch(e=>{console.error(e);process.exit(1)});
@@ -60,7 +70,8 @@ test.skipIf(process.platform !== 'win32')('AppContainer runs plugins with RO pac
     const probes = JSON.parse(result.stdout.trim());
     expect(probes, result.stderr).toMatchObject({ dependency: 'module-ok', readPackage: { ok: true, value: 'package-ok' }, writePackage: { ok: false },
       readHome: { ok: false }, writeData: { ok: true }, writeTmp: { ok: true }, secretLeaked: false,
-      host: { status: 200, body: 'host-api-ok' }, undeclared: { status: 403 }, direct: 'blocked' });
+      host: { status: 200, body: 'host-api-ok' }, undeclared: { status: 403 }, direct: 'blocked',
+      proxyClose: ['closed', 'closed', 'closed', 'closed', 'closed'] });
     expect(readFileSync(join(data, 'state.txt'), 'utf8')).toBe('data-ok');
   } finally {
     launch.cleanup(); await launch.proxy?.close();

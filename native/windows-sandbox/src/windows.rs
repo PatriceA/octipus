@@ -376,7 +376,7 @@ fn pipe_connect(handle: HANDLE) -> Result<(), String> {
     }
 }
 
-fn pipe_io(handle: HANDLE, buffer: &mut [u8], write: bool) -> io::Result<usize> {
+fn pipe_io(handle: HANDLE, stop: HANDLE, buffer: &mut [u8], write: bool) -> io::Result<usize> {
     unsafe {
         let event = Handle(CreateEventW(null(), 1, 0, null()));
         if event.0.is_null() {
@@ -409,6 +409,16 @@ fn pipe_io(handle: HANDLE, buffer: &mut [u8], write: bool) -> io::Result<usize> 
             }
             if code != ERROR_IO_PENDING {
                 return Err(io::Error::from_raw_os_error(code as i32));
+            }
+            // A manual-reset stop event closes the check/submit cancellation
+            // race: even a read submitted after shutdown immediately wakes,
+            // cancels and drains before its buffer/OVERLAPPED can be dropped.
+            let events = [event.0, stop];
+            let waited = WaitForMultipleObjects(2, events.as_ptr(), 0, INFINITE);
+            if waited != WAIT_OBJECT_0 {
+                CancelIoEx(handle, &overlapped);
+                GetOverlappedResult(handle, &mut overlapped, &mut count, 1);
+                return Err(io::Error::new(io::ErrorKind::Interrupted, "broker closed"));
             }
             if GetOverlappedResult(handle, &mut overlapped, &mut count, 1) == 0 {
                 let code = GetLastError();
@@ -471,14 +481,26 @@ fn broker(name: &str, sid: &str, port: u16) -> Result<(), String> {
             std::thread::spawn(move || {
                 let pipe =
                     std::sync::Arc::new(unsafe { OwnedHandle::from_raw_handle(stream as HANDLE) });
+                let event = unsafe { CreateEventW(null(), 1, 0, null()) };
+                if event.is_null() {
+                    eprintln!("octipus-sandbox: {}", last("broker stop event"));
+                    return;
+                }
+                let stop = std::sync::Arc::new(unsafe { OwnedHandle::from_raw_handle(event) });
                 match TcpStream::connect(("127.0.0.1", port)) {
                     Ok(mut tcp) => match tcp.try_clone() {
                         Ok(mut up) => {
                             let upload_pipe = pipe.clone();
+                            let upload_stop = stop.clone();
                             let upload = std::thread::spawn(move || {
                                 let mut buffer = vec![0; 65536];
                                 loop {
-                                    match pipe_io(upload_pipe.as_raw_handle(), &mut buffer, false) {
+                                    match pipe_io(
+                                        upload_pipe.as_raw_handle(),
+                                        upload_stop.as_raw_handle(),
+                                        &mut buffer,
+                                        false,
+                                    ) {
                                         Ok(0) | Err(_) => break,
                                         Ok(count) => {
                                             if up.write_all(&buffer[..count]).is_err() {
@@ -498,6 +520,7 @@ fn broker(name: &str, sid: &str, port: u16) -> Result<(), String> {
                                         while sent < count {
                                             match pipe_io(
                                                 pipe.as_raw_handle(),
+                                                stop.as_raw_handle(),
                                                 &mut buffer[sent..count],
                                                 true,
                                             ) {
@@ -508,10 +531,10 @@ fn broker(name: &str, sid: &str, port: u16) -> Result<(), String> {
                                     }
                                 }
                             }
-                            let _ = tcp.shutdown(std::net::Shutdown::Both);
                             unsafe {
-                                CancelIoEx(pipe.as_raw_handle(), null());
+                                SetEvent(stop.as_raw_handle());
                             }
+                            let _ = tcp.shutdown(std::net::Shutdown::Both);
                             let _ = upload.join();
                         }
                         Err(error) => eprintln!("octipus-sandbox: broker stream: {error}"),
