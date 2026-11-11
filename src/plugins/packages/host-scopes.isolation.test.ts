@@ -139,6 +139,32 @@ afterAll(async () => {
   await closeDb();
 });
 
+describe('protection-level laundering', () => {
+  const L = 'launder-plugin';
+
+  test('what a package read in one call is kept: notes and tasks are refused, documents keep the level, until reset', async () => {
+    // A level-2 document of the user.
+    const secret = await hostApi('POST', '/documents', await token('doc-writer', ['documents:write'], { maxProtection: 2 }), 'doc-writer', { name: 'Payroll', content: 'salaries', protectionLevel: 2 });
+    expect(secret.body.protectionLevel).toBe(2);
+    // One call of the package reads it ...
+    const read = await hostApi('GET', `/documents/${secret.body.id}`, await token(L, ['documents:read'], { maxProtection: 2, effect: 'read' }), L);
+    expect(read).toMatchObject({ status: 200, body: { protectionLevel: 2 } });
+    // ... a later call, with a fresh token that read nothing itself, may not write it out at level 1.
+    const fresh = () => token(L, ['notes:write', 'tasks:write', 'documents:write'], { maxProtection: 2 });
+    expect(await hostApi('POST', '/notes', await fresh(), L, { title: 'Leak', body: 'salaries' })).toMatchObject({ status: 403, body: { code: 'read_level' } });
+    expect(await hostApi('POST', '/tasks', await fresh(), L, { title: 'Leak: salaries' })).toMatchObject({ status: 403, body: { code: 'read_level' } });
+    expect((await hostAudit('notes.create')).at(-1)).toMatchObject({ action: 'permission_denied', details: { code: 'read_level' } });
+    // A document it writes is stored at that level at least.
+    expect((await hostApi('POST', '/documents', await fresh(), L, { name: 'Copy', content: 'salaries' })).body.protectionLevel).toBe(2);
+    // Another user, or another package, is not affected.
+    expect((await hostApi('POST', '/tasks', await token('other-plugin', ['tasks:write']), 'other-plugin', { title: 'fine' })).status).toBe(200);
+    // Disabled, upgraded or uninstalled: forgotten.
+    const { resetReadLevels } = await import('./read-level');
+    await resetReadLevels(L);
+    expect((await hostApi('POST', '/tasks', await fresh(), L, { title: 'fine now' })).status).toBe(200);
+  });
+});
+
 describe('documents:write', () => {
   const P = 'doc-plugin';
 

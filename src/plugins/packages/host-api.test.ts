@@ -14,6 +14,9 @@ vi.mock('@/security/permissions', () => ({
     check: async (_userId: string, toolId: string, action: string) => ({ level: held.denied.has(`${toolId}.${action}`) ? 'DENY' : 'ASK' }),
   }),
 }));
+// What a package read is kept per package and user (./read-level.ts); here only the calls are noted.
+const recorded = vi.hoisted(() => [] as Array<[string, string, number]>);
+vi.mock('./read-level', () => ({ recordReadLevel: async (pkg: string, userId: string, level: number) => { recorded.push([pkg, userId, level]); } }));
 vi.mock('@/core/modules/registry', () => ({ isToolOn: (toolId: string) => !held.off.has(toolId) }));
 
 const {
@@ -194,14 +197,15 @@ describe('the host API target', () => {
 });
 
 describe('content read by a call', () => {
-  test('the highest level read is kept on the live grant; an unknown level counts as 4', () => {
+  test('the highest level read is kept on the live grant and for the package and user; an unknown level counts as 4', async () => {
     const { token } = mintHostToken(grant, 30_000);
     const live = verifyHostToken(token, 'acme');
     expect(live?.readLevel).toBeUndefined();
-    noteHostRead(live!, 2);
-    noteHostRead(live!, 1);
+    await noteHostRead(live!, 2);
+    await noteHostRead(live!, 1);
     expect(verifyHostToken(token, 'acme')?.readLevel).toBe(2);
-    noteHostRead(live!, null);
+    await noteHostRead(live!, null);
     expect(verifyHostToken(token, 'acme')?.readLevel).toBe(4);
+    expect(recorded.map(([pkg, , level]) => [pkg, level])).toEqual([['acme', 2], ['acme', 1], ['acme', 4]]);
   });
 });

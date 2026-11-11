@@ -271,7 +271,7 @@ export async function readPluginAgentRun(grant: HostTokenGrant, id: string): Pro
       withheld = { protectionLevel: level };
     } else {
       output = result.output ?? '';
-      noteHostRead(grant, level);
+      await noteHostRead(grant, level);
       if (grant.sessionId) raiseSessionLevel(grant.sessionId, level);
     }
   }

@@ -31,6 +31,7 @@ import { auditRepository } from '@/db/repositories/audit-repository';
 import { contentRepos } from '@/db/repositories/content';
 import { users } from '@/db/schema/users';
 import { type HostTokenGrant, noteHostRead, verifyHostToken } from '@/plugins/packages/host-api';
+import { readLevelOf } from '@/plugins/packages/read-level';
 import { clientIp } from '@/security/client-ip';
 import { egressStampValid, HOST_API_EGRESS_HEADER, HOST_API_EGRESS_KEY_HEADER } from '@/security/egress-proxy';
 import type { Principal } from '@/security/principal';
@@ -141,7 +142,25 @@ async function authorize(ctx: HostCtx, op: string, scope: PluginHostScope | null
   if (scope && !grant.scopes.includes(scope)) return refuse(403, `This call's token does not carry the scope ${scope}`, 'scope_missing', grant);
   const principal = await principalOf(grant);
   if (!principal) return refuse(403, 'The user or workspace of this call is no longer available', 'principal_gone', grant);
+  // What the package has read for this user so far, in any call (src/plugins/packages/read-level.ts).
+  const kept = await readLevelOf(grant.plugin, grant.userId);
+  if (kept > (grant.readLevel ?? 1)) grant.readLevel = kept;
   return { grant, principal };
+}
+
+/**
+ * Notes and tasks have no protection level: a package that has read content
+ * above level 1 for this user may not write there, or it could carry that
+ * content down to level 1. The refusal, or null.
+ */
+function launderingRefusal(ctx: HostCtx, grant: HostTokenGrant, what: string): { error: string; code: string } | null {
+  const level = grant.readLevel ?? 1;
+  if (level <= 1) return null;
+  ctx.set.status = 403;
+  return {
+    error: `This package has read content at protection level ${level} for this user; ${what} have no protection level, so it may not write them (it may write a document, stored at level ${level} or higher)`,
+    code: 'read_level',
+  };
 }
 
 /** Run an endpoint body: audit the outcome, map a space refusal to its status. */
@@ -212,7 +231,12 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
   })
 
   // Create a note. Never overwrites: a note at the same slug is a 409.
-  .post('/notes', (ctx) => run(ctx, 'notes.create', 'notes:write', async ({ grant, principal }) => {
+  .post('/notes', (ctx) => run(ctx, 'notes.create', 'notes:write', async ({ grant, principal }, details) => {
+    const refusal = launderingRefusal(ctx, grant, 'notes');
+    if (refusal) {
+      details.code = refusal.code;
+      return refusal;
+    }
     try {
       const result = await getNoteService().save({
         scope: contentRepos(principal).noteScope,
@@ -249,7 +273,7 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
     const provenance = await Promise.all(all.map((task) => taskProvenance(grant.userId, [task])));
     const tasks = all.filter((_task, i) => provenance[i].protectionLevel <= grant.maxProtection);
     const kept = provenance.filter((p) => p.protectionLevel <= grant.maxProtection);
-    for (const p of kept) noteHostRead(grant, p.protectionLevel);
+    for (const p of kept) await noteHostRead(grant, p.protectionLevel);
     if (grant.sessionId && kept.length > 0) {
       observeTaskProvenance(grant.sessionId, {
         protectionLevel: Math.max(...kept.map((p) => p.protectionLevel)),
@@ -268,7 +292,12 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
   })
 
   // Create a task for the user.
-  .post('/tasks', (ctx) => run(ctx, 'tasks.create', 'tasks:write', async ({ grant, principal }) => {
+  .post('/tasks', (ctx) => run(ctx, 'tasks.create', 'tasks:write', async ({ grant, principal }, details) => {
+    const refusal = launderingRefusal(ctx, grant, 'tasks');
+    if (refusal) {
+      details.code = refusal.code;
+      return refusal;
+    }
     const dueAt = ctx.body.dueAt ? new Date(ctx.body.dueAt) : null;
     if (dueAt && Number.isNaN(dueAt.getTime())) {
       ctx.set.status = 400;
@@ -323,7 +352,7 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
     // The text goes back into the calling conversation with the tool's result,
     // and whatever this call sends to a model afterwards carries its level.
     if (grant.sessionId) raiseSessionLevel(grant.sessionId, doc.protectionLevel);
-    noteHostRead(grant, level);
+    await noteHostRead(grant, level);
     return {
       id: doc.id, name: doc.originalName, mimeType: doc.mimeType, size: doc.size, category: doc.category,
       summary: doc.summary, text: doc.ocrText, protectionLevel: level, createdAt: doc.createdAt,

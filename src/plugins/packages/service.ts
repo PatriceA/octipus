@@ -91,6 +91,7 @@ import { CONTENT_MISMATCH_PROBLEM, hashPackageContent, isContentHash, LISTING_FI
 import { ManifestError, parseManifest, settingEnvName } from './manifest';
 import { defaultMaxProtection, packagePermissions } from './permissions';
 import { checkSignatureOnDisk, keyFingerprint, parsePublicKey, readSignatureFile, SIGNATURE_FILE, type SignatureCheck, SignatureError, type TrustedPublisher } from './signature';
+import { resetReadLevels } from './read-level';
 import { keyRevocation, packageRevocation, revokedKeyIds } from './revocations';
 import { hostEnforcement, type PluginSandboxHost, pluginSandboxHost, pluginSandboxPlan } from './sandbox-policy';
 import { checkPackageTree, PackageTreeError } from './tree';
@@ -747,6 +748,8 @@ export async function installFromDirectory(
   if (swap.backup) await rm(swap.backup, { recursive: true, force: true }).catch((err: unknown) => coreLogger.warn({ err, dir: swap.backup }, 'Could not remove the previous package files'));
   forgetMismatches(manifest.name);
   revokePluginTokens(manifest.name);
+  // What the previous version read for each user is not carried to this one (./read-level.ts).
+  await resetReadLevels(manifest.name);
   await audit(actorUserId, previous ? 'upgraded' : 'installed', manifest.name, {
     version: manifest.version, from: previous?.version ?? null, contentHash, signedBy: signature.signedBy, keyId: signature.keyId,
     runtime: pluginRuntime(manifest),
@@ -844,6 +847,7 @@ export async function uninstall(name: string, actorUserId: string): Promise<void
   await rm(pluginDataDir(name), { recursive: true, force: true });
   forgetMismatches(name);
   revokePluginTokens(name);
+  await resetReadLevels(name);
   const entries = (row.manifest.secrets ?? []).length > 0 ? await getVault().list('system') : [];
   for (const s of row.manifest.secrets ?? []) await deleteSecret(name, s.key, entries);
   await audit(actorUserId, 'uninstalled', name, { version: row.version });
@@ -1091,6 +1095,8 @@ export async function configure(
   if (change.enabled !== undefined && change.enabled !== row.enabled) await audit(actorUserId, enabled ? 'enabled' : 'disabled', name, { version: row.version });
   // A token of a call in flight dies with the package's enabled state or a narrower approval.
   if (!enabled || change.approveHostScopes !== undefined) revokePluginTokens(name);
+  // Disabled: what it read for each user is forgotten (./read-level.ts).
+  if (!enabled && row.enabled) await resetReadLevels(name);
   await syncPluginServers();
   return updated;
 }

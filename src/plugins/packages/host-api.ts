@@ -82,10 +82,16 @@ export interface HostTokenGrant {
   modelCliTools?: true;
 }
 
-/** Record that the call of `grant` read content at `level` (its `model:complete` runs at the highest). */
-export function noteHostRead(grant: HostTokenGrant, level: number | null | undefined): void {
+/**
+ * Record that the call of `grant` read content at `level`: its `model:complete`
+ * runs at the highest, and the package's level for this user is kept across
+ * calls (./read-level.ts), so a later call cannot write it out at a lower one.
+ */
+export async function noteHostRead(grant: HostTokenGrant, level: number | null | undefined): Promise<void> {
   const l = typeof level === 'number' && Number.isFinite(level) ? level : 4;
   if (l > (grant.readLevel ?? 1)) grant.readLevel = l;
+  const { recordReadLevel } = await import('./read-level');
+  await recordReadLevel(grant.plugin, grant.userId, l);
 }
 
 const live = new Map<string, HostTokenGrant>();
