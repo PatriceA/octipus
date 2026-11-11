@@ -92,10 +92,13 @@ import { ManifestError, parseManifest, settingEnvName } from './manifest';
 import { defaultMaxProtection, packagePermissions } from './permissions';
 import { checkSignatureOnDisk, keyFingerprint, parsePublicKey, readSignatureFile, SIGNATURE_FILE, type SignatureCheck, SignatureError, type TrustedPublisher } from './signature';
 import { resetReadLevels } from './read-level';
+import { forgetRunChecks } from './run-check';
 import { keyRevocation, packageRevocation, revokedKeyIds } from './revocations';
 import { hostEnforcement, type PluginSandboxHost, pluginSandboxHost, pluginSandboxPlan } from './sandbox-policy';
 import { checkPackageTree, PackageTreeError } from './tree';
 import { HOST_API_URL, hostApiTarget, isHostScope, issueHostCallMeta, revokePluginTokens } from './host-api';
+
+type Tx = Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0];
 
 export class PluginPackageError extends Error {
   constructor(
@@ -1658,6 +1661,8 @@ export async function checkPackageBeforeStart(name: string): Promise<string | nu
  * them to match their rows (./in-process.ts).
  */
 export async function syncPluginServers(): Promise<void> {
+  // What may run changed (an install, an approval, an uninstall): pages and their store ask again (./run-check.ts).
+  forgetRunChecks();
   const rows = await getDb().select().from(pluginPackages);
   const bridge = getMCPBridge();
   bridge.setPluginStartGuard(checkBeforeStart);

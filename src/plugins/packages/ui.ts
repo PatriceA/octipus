@@ -36,6 +36,7 @@ import { isTrustedProxy } from '@/security/client-ip';
 import { coreLogger } from '@/utils/logger';
 import { CONTENT_MISMATCH_PROBLEM, hashPackageContent } from './integrity';
 import { isPlainRelativePath, uiDirOf } from './manifest-ui-host';
+import { packageRunProblem } from './run-check';
 import { packageDir } from './service';
 
 /** Where the files are served. */
@@ -214,24 +215,33 @@ async function enabledRow(name: string) {
   return row?.enabled ? row : null;
 }
 
-/** The pages of every enabled package, for the sidebar. */
+/**
+ * The pages of every enabled package that may run now, for the sidebar: a
+ * package whose files changed, whose version or key is revoked, or that may
+ * not start for another reason (./run-check.ts) offers none.
+ */
 export async function listEnabledPages(): Promise<PluginPageLink[]> {
   const rows = await getDb().select().from(pluginPackages).where(eq(pluginPackages.enabled, true)).orderBy(pluginPackages.name);
   const bridge = getMCPBridge();
-  return rows.flatMap((row) => {
+  const out: PluginPageLink[] = [];
+  for (const row of rows) {
     const ui = row.manifest.ui;
-    if (!ui || row.contentHash === null) return [];
+    if (!ui || row.contentHash === null) continue;
     // A package whose files changed is not started; its pages are not offered either.
-    if (bridge.pluginProblem(`${PLUGIN_SERVER_PREFIX}${row.name}`) === CONTENT_MISMATCH_PROBLEM) return [];
-    return ui.pages.map((page) => ({
-      plugin: row.name,
-      pluginTitle: row.manifest.title,
-      path: page.path,
-      title: page.title,
-      icon: page.icon ?? null,
-      src: uiFileUrl(row.name, page.entry),
-    }));
-  });
+    if (bridge.pluginProblem(`${PLUGIN_SERVER_PREFIX}${row.name}`) === CONTENT_MISMATCH_PROBLEM) continue;
+    if (await packageRunProblem(row.name) !== null) continue;
+    for (const page of ui.pages) {
+      out.push({
+        plugin: row.name,
+        pluginTitle: row.manifest.title,
+        path: page.path,
+        title: page.title,
+        icon: page.icon ?? null,
+        src: uiFileUrl(row.name, page.entry),
+      });
+    }
+  }
+  return out;
 }
 
 export type UiFileResult =
@@ -240,7 +250,8 @@ export type UiFileResult =
 
 /**
  * A file of an enabled package's UI directory, or 404 for anything else
- * (not installed, disabled, no `ui`, changed since approved, outside the
+ * (not installed, disabled, no `ui`, changed since approved, not allowed to
+ * start (revoked, unapproved: ./run-check.ts), outside the
  * directory, a link, not a regular file, an unknown type, too large).
  */
 export async function readUiFile(name: string, rel: string): Promise<UiFileResult> {
@@ -251,6 +262,8 @@ export async function readUiFile(name: string, rel: string): Promise<UiFileResul
   if (!row?.manifest.ui) return { status: 404 };
   if (getMCPBridge().pluginProblem(`${PLUGIN_SERVER_PREFIX}${name}`) === CONTENT_MISMATCH_PROBLEM) return { status: 404 };
   if (!(await contentStillApproved(name, row))) return { status: 404 };
+  // Revoked, unapproved, or otherwise not allowed to start: no page either.
+  if (await packageRunProblem(name) !== null) return { status: 404 };
   const root = resolve(packageDir(name), uiDirOf(row.manifest.ui));
   const file = resolve(root, ...rel.split('/'));
   if (!file.startsWith(`${root}${sep}`)) return { status: 404 };

@@ -38,6 +38,7 @@ import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { type PluginRevocationRow, pluginRevocations } from '@/db/schema/plugin-packages';
 import { currentMarketplace } from './marketplace-config';
+import { forgetRunChecks } from './run-check';
 
 export interface RevocationInput {
   kind: 'package' | 'key';
@@ -169,6 +170,7 @@ export async function recordRevocations(items: readonly RevocationInput[], sourc
   const added: PluginRevocationRow[] = [];
   for (let i = 0; i < keys.length; i += 500) added.push(...await getDb().insert(pluginRevocations).values(keys.slice(i, i + 500)).onConflictDoNothing().returning());
   for (let i = 0; i < packages.length; i += 500) added.push(...await getDb().insert(pluginRevocations).values(packages.slice(i, i + 500)).onConflictDoNothing().returning());
+  if (added.length > 0) forgetRunChecks();
   const fresh = new Set(added.map((r) => r.id));
   // Re-assert a key revocation that a root revoked since listed, and this (trusted) keys.json lists too.
   if (keys.length > 0) {
@@ -183,6 +185,7 @@ export async function recordRevocations(items: readonly RevocationInput[], sourc
         .where(and(eq(pluginRevocations.kind, 'key'), isNull(pluginRevocations.clearedAt), inArray(pluginRevocations.id, lapsed)))
         .returning();
       added.push(...reasserted.filter((r) => !fresh.has(r.id)));
+      if (reasserted.length > 0) forgetRunChecks();
     }
   }
   if (packages.length === 0) return added;
@@ -199,6 +202,7 @@ export async function recordRevocations(items: readonly RevocationInput[], sourc
       ))
       .returning();
     added.push(...reasserted.filter((r) => !fresh.has(r.id)));
+    if (reasserted.length > 0) forgetRunChecks();
   }
   return added;
 }
@@ -238,6 +242,7 @@ export async function clearRevocation(id: string, actorUserId: string, reason: s
     .set({ clearedAt: new Date(), clearedBy: actorUserId, clearReason: reason.slice(0, 500) })
     .where(and(eq(pluginRevocations.id, id), isNull(pluginRevocations.clearedAt))).returning();
   if (!row) return null;
+  forgetRunChecks();
   await auditRepository.log({
     userId: actorUserId,
     action: 'settings_changed',
