@@ -31,6 +31,8 @@ test('bundled help tools are registered and dispatch independently of the embedd
   await tool.initialize();
   const context: AgentContext = { space: null, trigger: 'user', funding: 'own', id: randomUUID(), sessionId: randomUUID(), userId, workspaceId: null, topic: 'test', model: 'test', role: 'research', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} };
   const search = vi.spyOn(productDocs, 'search').mockResolvedValue([{ file: 'CHANNELS.md', title: 'Channels', heading: 'Telegram', line: 2, excerpt: 'BotFather' }]);
+  const { getEmbeddingService } = await import('@/core/rag/embeddings');
+  const embedding = vi.mocked(getEmbeddingService().generateEmbedding);
   const read = vi.spyOn(productDocs, 'read').mockResolvedValue({ file: 'CHANNELS.md', line: 2, totalLines: 3, content: '2: Telegram', truncated: false });
   try {
     const handlers = new Map(tool.getToolHandlers().map(h => [h.name, h]));
@@ -38,5 +40,6 @@ test('bundled help tools are registered and dispatch independently of the embedd
     expect(search).toHaveBeenCalledWith('Telegram', undefined);
     expect(await handlers.get('knowledge__read_product_doc')!.execute({ path: 'CHANNELS.md' }, context)).toMatchObject({ content: '2: Telegram' });
     expect(read).toHaveBeenCalledWith('CHANNELS.md', undefined, undefined);
+    expect(embedding).not.toHaveBeenCalled();
   } finally { vi.restoreAllMocks(); }
 });

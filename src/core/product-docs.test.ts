@@ -3,6 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test, vi } from 'vitest';
 import { ProductDocs } from './product-docs';
+import fullPrompt from './agent/roles/general/prompt.md';
+import litePrompt from './agent/roles/general/prompt.lite.md';
+import { meta } from './agent/roles/general/config';
 const roots: string[] = [];
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'octipus-manual-')); roots.push(root);
@@ -55,4 +58,13 @@ test('setup synonyms and parent section names lead to setup instructions', async
   const { root, docs } = fixture();
   writeFileSync(join(root, 'CHANNELS.md'), '# Channels\n## Telegram\n### Setup\nCreate a bot with BotFather.\n### Bot Commands\nThe bot supports commands.');
   expect((await docs.search('configure Telegram bot', 1))[0]).toMatchObject({ heading: 'Telegram › Setup' });
+});
+
+test('root General keeps product help available and explains local help in both prompt tiers', () => {
+  expect(meta.coreToolIds).toContain('knowledge');
+  for (const prompt of [fullPrompt, litePrompt]) {
+    expect(prompt).toContain('search_product_docs');
+    expect(prompt).toContain('read_product_doc');
+    expect(prompt).toContain('needs no embeddings');
+  }
 });
