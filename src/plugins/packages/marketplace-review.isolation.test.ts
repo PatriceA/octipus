@@ -455,6 +455,40 @@ describe('roots, expiry and freshness (findings 9, 10)', () => {
     expect(await rev.keyRevocation(root.keyId)).not.toBeNull();
   });
 
+  test('a key revocation signed by a root revoked since lapses, until a trusted root lists it again', async () => {
+    const rev = await import('./revocations');
+    const { marketplaceListing } = await import('./marketplace');
+    // The root (leaked, say) revokes signing key B, which it endorsed before.
+    publishKeys(1, [keyA, keyB]);
+    publishIndex([]);
+    await marketplaceListing();
+    await clearCaches();
+    publishKeys(2, [keyA], { revoked: [keyB.keyId] });
+    publishIndex([]);
+    await marketplaceListing();
+    expect(await rev.keyRevocation(keyB.keyId)).not.toBeNull();
+    expect(await rev.revokedKeyIds()).toContain(keyB.keyId);
+    // The backup root revokes the root and endorses B again: the root's revocation of B no longer counts.
+    await clearCaches();
+    publishKeys(3, [keyA, keyB], { signer: rootBackup, revoked: [root.keyId] });
+    publishIndex([]);
+    await marketplaceListing();
+    expect(await rev.keyRevocation(keyB.keyId)).toBeNull();
+    expect(await rev.revokedKeyIds()).not.toContain(keyB.keyId);
+    // The root's own revocation never lapses.
+    expect(await rev.revokedKeyIds()).toContain(root.keyId);
+    const states = await rev.listRevocations();
+    expect(states.find((x) => x.row.keyId === keyB.keyId)).toMatchObject({ signerRevoked: true, enforced: false });
+    expect(states.find((x) => x.row.keyId === root.keyId)).toMatchObject({ signerRevoked: false, enforced: true });
+    // A trusted root lists it again: re-asserted under that root, and enforced.
+    await clearCaches();
+    publishKeys(4, [keyA, keyB], { signer: rootBackup, revoked: [root.keyId, keyB.keyId] });
+    publishIndex([]);
+    await marketplaceListing();
+    expect(await rev.keyRevocation(keyB.keyId)).toMatchObject({ signedByKey: rootBackup.keyId });
+    expect((await rev.listRevocations()).find((x) => x.row.keyId === keyB.keyId)).toMatchObject({ signerRevoked: false, enforced: true });
+  });
+
   test('an expired keys.json or index is refused; one not expired yet is accepted', async () => {
     const past = new Date(Date.now() - 60_000).toISOString();
     const future = new Date(Date.now() + 86_400_000).toISOString();

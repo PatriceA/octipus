@@ -109,7 +109,8 @@ export default function UpdatesPage() {
         <h2 id="revocations-title" className="section-label">revocations</h2>
         <p className="text-xs text-on-surface-variant">
           Versions and keys the marketplace revoked. They apply to packages installed from the marketplace only: a revoked version does not
-          start and cannot be enabled. One published by a signing key revoked since is not enforced until a trusted key lists it again.
+          start and cannot be enabled. One published by a key revoked since (a version revoked by a signing key, or a key revoked by a root key that the
+          backup root revoked) is not enforced until a trusted key lists it again.
         </p>
         {revocations.error && <p role="alert" className="text-xs text-error">! {problemsOf(revocations.error)}</p>}
         {revoked.length === 0 ? <p className="text-xs text-on-surface-variant">None.</p> : (

@@ -15,7 +15,11 @@
  * A package revocation whose signer is revoked since (by keys.json, or
  * `plugins.revokedKeys`) is flagged `signerRevoked` and no longer enforced,
  * unless an index signed by a key still trusted lists it again (it is then
- * re-asserted under that key). A leaked signing key therefore cannot leave
+ * re-asserted under that key). The same holds for a key revocation whose
+ * root is revoked since (the backup root revoked a leaked root): it lapses
+ * unless a keys.json signed by a root still trusted lists it again. Two kinds
+ * of key revocation never lapse: a key retiring itself, and the revocation
+ * of a root key (only ever taken away). A leaked key therefore cannot leave
  * revocations behind that outlive it.
  *
  * They only accumulate otherwise. A later index that no longer lists one does
@@ -64,23 +68,58 @@ async function uncleared(): Promise<PluginRevocationRow[]> {
   return getDb().select().from(pluginRevocations).where(isNull(pluginRevocations.clearedAt));
 }
 
-/** Key ids the marketplace's keys.json revoked (not cleared). Marketplace trust only. */
-export async function revokedKeyIds(): Promise<string[]> {
-  const rows = await getDb().select({ keyId: pluginRevocations.keyId }).from(pluginRevocations)
-    .where(and(eq(pluginRevocations.kind, 'key'), isNull(pluginRevocations.clearedAt)));
-  return rows.map((r) => r.keyId).filter((k): k is string => typeof k === 'string');
+/** The marketplace's root key ids, as configured now (empty when it is not). */
+function rootKeyIds(): Set<string> {
+  const settings = currentMarketplace();
+  return new Set(settings.state === 'ready' ? settings.roots.map((r) => r.keyId) : []);
 }
 
-/** Signers whose revocations no longer count: keys revoked by keys.json, and `plugins.revokedKeys`. */
-function revokedSigners(rows: readonly PluginRevocationRow[]): Set<string> {
-  const out = new Set<string>(getConfig().plugins?.revokedKeys ?? []);
-  for (const r of rows) if (r.kind === 'key' && r.keyId) out.add(r.keyId);
+/** Every key revocation not cleared. */
+async function keyRows(): Promise<PluginRevocationRow[]> {
+  return getDb().select().from(pluginRevocations).where(and(eq(pluginRevocations.kind, 'key'), isNull(pluginRevocations.clearedAt)));
+}
+
+/**
+ * Whether a key revocation's signer (a root) is revoked since, so that it no
+ * longer counts: never for a key retiring itself or for a root's revocation.
+ */
+function keySignerRevoked(row: PluginRevocationRow, revoked: ReadonlySet<string>, roots: ReadonlySet<string>): boolean {
+  return row.kind === 'key' && !!row.keyId && row.keyId !== row.signedByKey && !roots.has(row.keyId) && revoked.has(row.signedByKey);
+}
+
+/**
+ * Key ids revoked now: `plugins.revokedKeys`, and the key revocations still
+ * enforced (their root not revoked since, or re-asserted).
+ */
+function enforcedRevokedKeys(rows: readonly PluginRevocationRow[]): Set<string> {
+  const config = getConfig().plugins?.revokedKeys ?? [];
+  const keys = rows.filter((r) => r.kind === 'key' && r.clearedAt === null && r.keyId);
+  // Roots are the signers of key revocations; whether one is revoked never depends on a lapsing row (a root's revocation never lapses).
+  const anyRevoked = new Set<string>([...config, ...keys.map((r) => r.keyId as string)]);
+  const roots = rootKeyIds();
+  const out = new Set<string>(config);
+  for (const r of keys) if (!keySignerRevoked(r, anyRevoked, roots)) out.add(r.keyId as string);
   return out;
 }
 
-function stateOf(row: PluginRevocationRow, signers: ReadonlySet<string>): RevocationState {
-  // A key revocation (from keys.json, signed by a root) is never undone this way: it only takes trust away.
-  const signerRevoked = row.kind === 'package' && signers.has(row.signedByKey);
+/** Key ids the marketplace's keys.json revoked and that are enforced now. Marketplace trust only. */
+export async function revokedKeyIds(): Promise<string[]> {
+  const rows = await keyRows();
+  return rows.filter((r) => stateOf(r, new Set(), rows).enforced).map((r) => r.keyId).filter((k): k is string => typeof k === 'string');
+}
+
+/** Signers whose revocations no longer count: keys revoked now (keys.json, enforced), and `plugins.revokedKeys`. */
+function revokedSigners(rows: readonly PluginRevocationRow[]): Set<string> {
+  return enforcedRevokedKeys(rows);
+}
+
+function stateOf(row: PluginRevocationRow, signers: ReadonlySet<string>, allRows: readonly PluginRevocationRow[] = []): RevocationState {
+  let signerRevoked: boolean;
+  if (row.kind === 'package') signerRevoked = signers.has(row.signedByKey);
+  else {
+    const anyRevoked = new Set<string>([...(getConfig().plugins?.revokedKeys ?? []), ...allRows.filter((r) => r.kind === 'key' && r.clearedAt === null && r.keyId).map((r) => r.keyId as string)]);
+    signerRevoked = keySignerRevoked(row, anyRevoked, rootKeyIds());
+  }
   return { row, signerRevoked, enforced: row.clearedAt === null && !signerRevoked };
 }
 
@@ -88,7 +127,7 @@ function stateOf(row: PluginRevocationRow, signers: ReadonlySet<string>): Revoca
 export async function activeRevocations(): Promise<PluginRevocationRow[]> {
   const rows = await uncleared();
   const signers = revokedSigners(rows);
-  return rows.filter((r) => stateOf(r, signers).enforced);
+  return rows.filter((r) => stateOf(r, signers, rows).enforced);
 }
 
 /** The revocation in force of `name@version`, or null. It applies to marketplace packages only (the caller checks the origin). */
@@ -97,17 +136,16 @@ export async function packageRevocation(name: string, version: string): Promise<
     eq(pluginRevocations.kind, 'package'), eq(pluginRevocations.name, name), eq(pluginRevocations.version, version), isNull(pluginRevocations.clearedAt),
   )).limit(1);
   if (!row) return null;
-  const signers = revokedSigners(await getDb().select().from(pluginRevocations)
-    .where(and(eq(pluginRevocations.kind, 'key'), isNull(pluginRevocations.clearedAt))));
+  const signers = revokedSigners(await keyRows());
   return stateOf(row, signers).enforced ? row : null;
 }
 
-/** The revocation in force of a key id, or null. */
+/** The revocation in force of a key id, or null (none, cleared, or signed by a root revoked since). */
 export async function keyRevocation(keyId: string): Promise<PluginRevocationRow | null> {
-  const [row] = await getDb().select().from(pluginRevocations).where(and(
-    eq(pluginRevocations.kind, 'key'), eq(pluginRevocations.keyId, keyId), isNull(pluginRevocations.clearedAt),
-  )).limit(1);
-  return row ?? null;
+  const rows = await keyRows();
+  const row = rows.find((r) => r.keyId === keyId);
+  if (!row) return null;
+  return stateOf(row, new Set(), rows).enforced ? row : null;
 }
 
 /**
@@ -131,12 +169,26 @@ export async function recordRevocations(items: readonly RevocationInput[], sourc
   const added: PluginRevocationRow[] = [];
   for (let i = 0; i < keys.length; i += 500) added.push(...await getDb().insert(pluginRevocations).values(keys.slice(i, i + 500)).onConflictDoNothing().returning());
   for (let i = 0; i < packages.length; i += 500) added.push(...await getDb().insert(pluginRevocations).values(packages.slice(i, i + 500)).onConflictDoNothing().returning());
+  const fresh = new Set(added.map((r) => r.id));
+  // Re-assert a key revocation that a root revoked since listed, and this (trusted) keys.json lists too.
+  if (keys.length > 0) {
+    const current = await keyRows();
+    const anyRevoked = new Set<string>([...(getConfig().plugins?.revokedKeys ?? []), ...current.map((r) => r.keyId as string)]);
+    const roots = rootKeyIds();
+    const listed = new Set(keys.map((k) => k.keyId));
+    const lapsed = current.filter((r) => listed.has(r.keyId) && r.signedByKey !== source.signedByKey && keySignerRevoked(r, anyRevoked, roots)).map((r) => r.id);
+    if (lapsed.length > 0) {
+      const reasserted = await getDb().update(pluginRevocations)
+        .set({ signedByKey: source.signedByKey, registryUrl: source.registryUrl, indexGeneratedAt: source.indexGeneratedAt })
+        .where(and(eq(pluginRevocations.kind, 'key'), isNull(pluginRevocations.clearedAt), inArray(pluginRevocations.id, lapsed)))
+        .returning();
+      added.push(...reasserted.filter((r) => !fresh.has(r.id)));
+    }
+  }
   if (packages.length === 0) return added;
   // Re-assert what a revoked signer listed and this (trusted) source lists too.
-  const signers = [...revokedSigners(await getDb().select().from(pluginRevocations)
-    .where(and(eq(pluginRevocations.kind, 'key'), isNull(pluginRevocations.clearedAt))))].filter((k) => k !== source.signedByKey);
+  const signers = [...revokedSigners(await keyRows())].filter((k) => k !== source.signedByKey);
   if (signers.length === 0) return added;
-  const fresh = new Set(added.map((r) => r.id));
   for (let i = 0; i < packages.length; i += 500) {
     const pairs = packages.slice(i, i + 500).map((p) => sql`(${p.name}, ${p.version})`);
     const reasserted = await getDb().update(pluginRevocations)
@@ -154,8 +206,9 @@ export async function recordRevocations(items: readonly RevocationInput[], sourc
 /** Every revocation, cleared ones too (newest first), with whether it is enforced, for the admin. */
 export async function listRevocations(): Promise<RevocationState[]> {
   const rows = await getDb().select().from(pluginRevocations);
-  const signers = revokedSigners(rows.filter((r) => r.clearedAt === null));
-  return rows.sort((a, b) => b.firstSeenAt.getTime() - a.firstSeenAt.getTime()).map((r) => stateOf(r, signers));
+  const open = rows.filter((r) => r.clearedAt === null);
+  const signers = revokedSigners(open);
+  return rows.sort((a, b) => b.firstSeenAt.getTime() - a.firstSeenAt.getTime()).map((r) => stateOf(r, signers, open));
 }
 
 export class RevocationClearError extends Error {

@@ -149,7 +149,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
 
   // Revocations the marketplace published (in force and cleared), and clearing one (audited).
   // `enforced` is false for a cleared one, and for a package revocation whose
-  // signing key is revoked since (`signerRevoked`), until a trusted key re-asserts it.
+  // signing key is revoked since, and for a key revocation whose root is revoked since (`signerRevoked`),
+  // until a trusted key re-asserts it.
   .get(
     '/revocations',
     async ({ request, user, principal, set }) => {

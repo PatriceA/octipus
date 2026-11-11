@@ -164,13 +164,14 @@ describe('plugin package routes', () => {
   test('a change signed by the session cookie from another site is refused; this site and a bearer token pass', async () => {
     fixture.user = ADMIN;
     const body = { approveContent: SHA };
-    for (const headers of [
+    const refused: Array<Record<string, string>> = [
       { origin: 'https://evil.example', cookie: 'session_token=x' },
       { origin: 'http://sibling.localhost', cookie: 'session_token=x' },
       { origin: 'null', cookie: 'session_token=x' },
       { 'sec-fetch-site': 'same-site', cookie: 'session_token=x' },
       { 'sec-fetch-site': 'cross-site', cookie: 'session_token=x' },
-    ]) {
+    ];
+    for (const headers of refused) {
       const res = await call('PATCH', '/demo', body, headers);
       expect([res.status, res.body.error], JSON.stringify(headers)).toEqual([403, 'Cross-site request refused: a change signed by the session cookie must come from this site']);
     }
