@@ -1,3 +1,4 @@
+import { DESKTOP_ORIGINS } from '@/api/desktop-origins';
 import { eq } from 'drizzle-orm';
 import { cors, Elysia, listen, type RunningServer } from '@/api/http';
 import { getConfig } from '@/config';
@@ -112,12 +113,7 @@ import { setupWebSocket } from './websocket';
  * are the desktop app's own origins (not remote hosts), always allowed so the
  * thin client's cross-origin requests reach the backend.
  */
-const DESKTOP_ORIGINS = [
-  'tauri://localhost',
-  'http://tauri.localhost',
-  'https://tauri.localhost',
-  'http://localhost:3008',
-];
+// Kept in src/api/desktop-origins.ts, which the cross-site check of cookie-signed changes reads too.
 
 type Resolution = Awaited<ReturnType<typeof import('@/security/workspace-resolver').resolveWorkspace>>;
 

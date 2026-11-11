@@ -1,4 +1,4 @@
-import { adminDenied } from '@/api/admin-guard';
+import { pluginAdminDenied, pluginUserDenied } from '@/api/plugin-route-guard';
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
 import {
@@ -12,7 +12,8 @@ import {
 } from '@/plugins/packages/service';
 import { installBundled, listBundled } from '@/plugins/packages/bundled';
 import { installFromUrl, listRegistry } from '@/plugins/packages/remote';
-import { isAdmin, isAuthenticated } from '@/security/principal';
+import { isAdmin, requireScope } from '@/security/principal';
+import { API_SCOPES } from '@/security/scopes';
 import { MAX_PLUGIN_SECRET_LENGTH, type PluginUsageView } from '@/shared/plugin-package';
 import { apiLogger } from '@/utils/logger';
 
@@ -56,8 +57,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
 
   .get(
     '/',
-    async ({ user, principal, set }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, set }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'read');
       if (denied) return denied;
       return listPackages();
     },
@@ -68,8 +69,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   // the admin page's "plugin sandbox: active runner X / unavailable" line.
   .get(
     '/sandbox',
-    async ({ user, principal, set }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, set }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'read');
       if (denied) return denied;
       const { pluginSandboxView } = await import('@/plugins/packages/sandbox-policy');
       return pluginSandboxView();
@@ -80,8 +81,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   // What plugins.registries list (each index cached briefly), with the version installed here.
   .get(
     '/registry',
-    async ({ user, principal, set }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, set }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'read');
       if (denied) return denied;
       return listRegistry();
     },
@@ -92,8 +93,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   // README and CHANGELOG are raw Markdown: the client renders them sanitized, without raw HTML or remote images.
   .get(
     '/marketplace',
-    async ({ user, principal, set, query }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, set, query }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'read');
       if (denied) return denied;
       const { marketplaceListing } = await import('@/plugins/packages/marketplace');
       return marketplaceListing({ q: query.q, category: query.category });
@@ -109,8 +110,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   // their bytes, never SVG, served under a CSP that runs nothing.
   .get(
     '/marketplace/asset',
-    async ({ user, principal, set, query }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, set, query }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'read');
       if (denied) return denied;
       const { AssetError, fetchListingAsset } = await import('@/plugins/packages/marketplace-assets');
       try {
@@ -137,8 +138,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   // Installed packages with a newer version from the same source, each with a permissions diff.
   .get(
     '/updates',
-    async ({ user, principal, set }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, set }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'read');
       if (denied) return denied;
       const { listUpdates } = await import('@/plugins/packages/marketplace-updates');
       return listUpdates();
@@ -151,8 +152,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   // signing key is revoked since (`signerRevoked`), until a trusted key re-asserts it.
   .get(
     '/revocations',
-    async ({ user, principal, set }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, set }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'read');
       if (denied) return denied;
       const { listRevocations } = await import('@/plugins/packages/revocations');
       return (await listRevocations()).map(({ row: r, enforced, signerRevoked }) => ({
@@ -166,8 +167,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   )
   .delete(
     '/revocations/:id',
-    async ({ user, principal, set, params, body }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, set, params, body }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'admin');
       if (denied) return denied;
       const { clearRevocation, RevocationClearError } = await import('@/plugins/packages/revocations');
       let row: Awaited<ReturnType<typeof clearRevocation>>;
@@ -196,8 +197,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   // after a legitimate re-publish. Audited with the admin's reason.
   .delete(
     '/pins',
-    async ({ user, principal, set, body }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, set, body }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'admin');
       if (denied) return denied;
       const { currentMarketplace, MARKETPLACE_REGISTRY } = await import('@/plugins/packages/marketplace-config');
       const { configuredRegistries, clearRegistryCache } = await import('@/plugins/packages/remote');
@@ -232,8 +233,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   // The first-party plugins shipped with Octipus (plugins/ in the install), with the version installed here.
   .get(
     '/bundled',
-    async ({ user, principal, set }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, set }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'read');
       if (denied) return denied;
       return listBundled();
     },
@@ -242,8 +243,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
 
   .post(
     '/',
-    async ({ user, principal, body, set }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, body, set }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'admin');
       if (denied) return denied;
       const sources = [body.path, body.url, body.bundled, body.registry].filter((v) => v !== undefined).length;
       if (sources !== 1) {
@@ -324,8 +325,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   // package without installing it, and answer with what it declares, item by item.
   .post(
     '/preview',
-    async ({ user, principal, body, set }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, body, set }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'admin');
       if (denied) return denied;
       const sources = [body.path, body.url, body.bundled, body.registry].filter((v) => v !== undefined).length;
       if (sources !== 1) {
@@ -363,8 +364,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   // Install a preview: only with every item not carried agreed to, for the content hash shown.
   .post(
     '/install',
-    async ({ user, principal, body, set }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, body, set }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'admin');
       if (denied) return denied;
       try {
         const { installPreview } = await import('@/plugins/packages/consent');
@@ -387,11 +388,9 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   // The signed-in user's own use of each plugin (any user): the usage of every enabled package, and their running runs.
   .get(
     '/my-usage',
-    async ({ principal, set, query }) => {
-      if (!isAuthenticated(principal)) {
-        set.status = 401;
-        return { error: 'Authentication required' };
-      }
+    async ({ request, principal, set, query }) => {
+      const denied = pluginUserDenied({ set, principal, request }, 'read');
+      if (denied) return denied;
       const { getDb } = await import('@/db/postgres');
       const { pluginPackages } = await import('@/db/schema/plugin-packages');
       const { eq } = await import('drizzle-orm');
@@ -412,8 +411,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   // One plugin's tokens, spend, model calls and runs: every user's (admins).
   .get(
     '/:name/usage',
-    async ({ user, principal, set, params, query }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, set, params, query }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'read');
       if (denied) return denied;
       return usageOf(params.name, query.days, null);
     },
@@ -423,11 +422,9 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   // The same, for the signed-in user's own use only (any user).
   .get(
     '/:name/usage/me',
-    async ({ principal, set, params, query }) => {
-      if (!isAuthenticated(principal)) {
-        set.status = 401;
-        return { error: 'Authentication required' };
-      }
+    async ({ request, principal, set, params, query }) => {
+      const denied = pluginUserDenied({ set, principal, request }, 'read');
+      if (denied) return denied;
       return usageOf(params.name, query.days, principal.userId);
     },
     { params: NAME_PARAM, query: USAGE_QUERY, detail: { tags: ['plugin-packages'] } },
@@ -436,8 +433,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   // A plugin's running background runs: every user's (admins). Ids, role and title only.
   .get(
     '/:name/runs',
-    async ({ user, principal, set, params, query }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, set, params, query }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'read');
       if (denied) return denied;
       if (query.status !== undefined && query.status !== 'running') {
         set.status = 400;
@@ -452,8 +449,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   // The declarations of an installed package's content, to agree to before enabling it (an agent's install, say).
   .get(
     '/:name/consent',
-    async ({ user, principal, set, params }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, set, params }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'read');
       if (denied) return denied;
       try {
         const { consentView } = await import('@/plugins/packages/consent');
@@ -466,8 +463,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   )
   .post(
     '/:name/consent',
-    async ({ user, principal, set, params, body }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, set, params, body }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'admin');
       if (denied) return denied;
       try {
         const { consentToInstalled } = await import('@/plugins/packages/consent');
@@ -490,13 +487,12 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   // Stop a plugin's background run from the app: the user who started it, or an admin (audited).
   .delete(
     '/:name/runs/:id',
-    async ({ principal, set, params }) => {
-      if (!isAuthenticated(principal)) {
-        set.status = 401;
-        return { error: 'Authentication required' };
-      }
+    async ({ request, principal, set, params }) => {
+      // One's own run: api:write. Another user's, as an admin: api:admin too.
+      const denied = pluginUserDenied({ set, principal, request }, 'write');
+      if (denied) return denied;
       const { cancelRunFromApp } = await import('@/plugins/packages/host-agent');
-      const outcome = await cancelRunFromApp(params.name, params.id, { userId: principal.userId, isAdmin: isAdmin(principal) });
+      const outcome = await cancelRunFromApp(params.name, params.id, { userId: principal.userId, isAdmin: isAdmin(principal) && requireScope(principal, API_SCOPES.ADMIN) });
       if (!outcome.ok) {
         set.status = outcome.status;
         return { error: outcome.error, code: outcome.code };
@@ -513,8 +509,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
 
   .patch(
     '/:name',
-    async ({ user, principal, params, body, set }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, params, body, set }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'admin');
       if (denied) return denied;
       try {
         await configure(params.name, {
@@ -572,8 +568,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
   // Set (or with null remove) one declared secret. The value is never returned.
   .put(
     '/:name/secrets/:key',
-    async ({ user, principal, params, body, set }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, params, body, set }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'admin');
       if (denied) return denied;
       try {
         await setSecret(params.name, params.key, body.value, principal.userId);
@@ -591,8 +587,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
 
   .delete(
     '/:name',
-    async ({ user, principal, params, set }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, params, set }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'admin');
       if (denied) return denied;
       try {
         await uninstall(params.name, principal.userId);

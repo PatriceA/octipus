@@ -13,13 +13,15 @@ const MEMBER: TestUser = { id: '22222222-2222-4222-8222-222222222222', username:
 
 const fixture = vi.hoisted(() => ({
   user: null as TestUser | null,
+  /** The API token's scopes; null: a browser session (or an unscoped token), every scope. */
+  scopes: null as string[] | null,
   calls: [] as Array<{ fn: string; args: unknown[] }>,
 }));
 
 vi.mock('@/api/context', async () => ({
   apiContext: new (await import('@/api/http')).App().derive(() => ({
     user: fixture.user,
-    principal: fixture.user ? principalFromUser(fixture.user) : { kind: 'anonymous' },
+    principal: fixture.user ? { ...principalFromUser(fixture.user), ...(fixture.scopes ? { scopes: fixture.scopes } : {}) } : { kind: 'anonymous' },
   })),
 }));
 
@@ -88,10 +90,10 @@ vi.mock('@/db/repositories/plugin-usage-repository', () => ({
 const { pluginPackageRoutes } = await import('./plugin-packages');
 const app = new App({ prefix: '/api' }).use(pluginPackageRoutes);
 
-async function call(method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+async function call(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await app.handle(new Request(`http://localhost/api/plugin-packages${path}`, {
     method,
-    headers: body === undefined ? {} : { 'content-type': 'application/json' },
+    headers: { ...headers, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
     body: body === undefined ? undefined : JSON.stringify(body),
   }));
   return { status: res.status, body: await res.json().catch(() => ({})) as Record<string, unknown> };
@@ -121,6 +123,64 @@ const ROUTES: Array<[string, string, unknown?]> = [
 describe('plugin package routes', () => {
   beforeEach(() => {
     fixture.calls = [];
+    fixture.scopes = null;
+  });
+
+  // Every change needs api:admin; a read at least api:read (src/api/plugin-route-guard.ts).
+  const MUTATING: Array<[string, string, unknown?]> = [
+    ...ROUTES.filter(([m]) => m !== 'GET'),
+    ['POST', '/preview', { registry: 'marketplace', name: 'demo' }],
+    ['POST', '/install', { previewId: '44444444-4444-4444-8444-444444444444', contentHash: SHA, accepted: [] }],
+    ['POST', '/demo/consent', { contentHash: SHA, accepted: [] }],
+  ];
+  test.each(MUTATING)('%s %s: an admin\'s token without api:admin is refused, and nothing is called', async (method, path, body) => {
+    fixture.user = ADMIN;
+    for (const scopes of [['api:read'], ['api:write'], ['api:chat', 'api:read', 'api:write']]) {
+      fixture.scopes = scopes;
+      const res = await call(method, path, body);
+      expect([res.status, res.body.error]).toEqual([403, 'This API token lacks the api:admin scope']);
+    }
+    expect(fixture.calls).toEqual([]);
+  });
+
+  test.each(ROUTES.filter(([m]) => m === 'GET'))('%s %s: a token needs at least api:read', async (method, path) => {
+    fixture.user = ADMIN;
+    fixture.scopes = ['api:chat'];
+    expect((await call(method, path)).status).toBe(403);
+    fixture.scopes = ['api:read'];
+    expect((await call(method, path)).status).not.toBe(403);
+  });
+
+  test('a member\'s own usage needs api:read, cancelling their own run api:write', async () => {
+    fixture.user = MEMBER;
+    fixture.scopes = ['api:chat'];
+    expect((await call('GET', '/my-usage')).status).toBe(403);
+    expect((await call('GET', '/demo/usage/me')).status).toBe(403);
+    fixture.scopes = ['api:read'];
+    expect((await call('DELETE', '/demo/runs/run-1')).status).toBe(403);
+    expect(fixture.calls).toEqual([]);
+  });
+
+  test('a change signed by the session cookie from another site is refused; this site and a bearer token pass', async () => {
+    fixture.user = ADMIN;
+    const body = { approveContent: SHA };
+    for (const headers of [
+      { origin: 'https://evil.example', cookie: 'session_token=x' },
+      { origin: 'http://sibling.localhost', cookie: 'session_token=x' },
+      { origin: 'null', cookie: 'session_token=x' },
+      { 'sec-fetch-site': 'same-site', cookie: 'session_token=x' },
+      { 'sec-fetch-site': 'cross-site', cookie: 'session_token=x' },
+    ]) {
+      const res = await call('PATCH', '/demo', body, headers);
+      expect([res.status, res.body.error], JSON.stringify(headers)).toEqual([403, 'Cross-site request refused: a change signed by the session cookie must come from this site']);
+    }
+    expect(fixture.calls).toEqual([]);
+    expect((await call('PATCH', '/demo', body, { origin: 'http://localhost', 'sec-fetch-site': 'same-origin' })).status).toBe(200);
+    expect((await call('PATCH', '/demo', body, { 'sec-fetch-site': 'same-origin' })).status).toBe(200);
+    expect((await call('PATCH', '/demo', body, { origin: 'tauri://localhost' })).status).toBe(200);
+    expect((await call('PATCH', '/demo', body, { origin: 'https://evil.example', authorization: 'Bearer octi_x' })).status).toBe(200);
+    // A read is never refused for its origin.
+    expect((await call('GET', '/', undefined, { origin: 'https://evil.example' })).status).toBe(200);
   });
 
   test.each(ROUTES)('%s %s: 401 signed out, 403 for a member, and nothing is called', async (method, path, body) => {
