@@ -50,6 +50,8 @@ type Key = ReturnType<typeof generateSigningKey>;
 
 let clock = Date.parse('2026-11-10T00:00:00Z');
 const nextTime = () => new Date((clock += 60_000)).toISOString();
+/** 30 days after `generatedAt`: keys.json and the marketplace index must say when they expire (at most 90 and 45 days on). */
+const in30Days = (generatedAt: string) => new Date(Date.parse(generatedAt) + 30 * 86_400_000).toISOString();
 
 function serveSigned(url: string, body: string, sig: string): void {
   served.files.set(url, body);
@@ -57,8 +59,9 @@ function serveSigned(url: string, body: string, sig: string): void {
 }
 
 function publishKeys(version: number, signing: Key[], opts: { revoked?: string[]; signer?: Key; notAfter?: string } = {}): void {
+  const generatedAt = nextTime();
   const body = `${JSON.stringify({
-    schema: 1, version, generatedAt: nextTime(),
+    schema: 1, version, generatedAt, expires: in30Days(generatedAt),
     signingKeys: signing.map((k) => ({ keyId: k.keyId, publicKey: k.publicKeyPem, ...(opts.notAfter ? { notAfter: opts.notAfter } : {}) })),
     revokedKeys: (opts.revoked ?? []).map((keyId) => ({ keyId, reason: 'leaked' })),
   }, null, 2)}\n`;
@@ -93,7 +96,8 @@ function entryOf(p: Published, over: Record<string, unknown> = {}): Record<strin
 }
 
 function publishIndex(entries: unknown[], opts: { signer?: Key; revoked?: unknown[]; generatedAt?: string } = {}): string {
-  const body = `${JSON.stringify({ schema: 2, generatedAt: opts.generatedAt ?? nextTime(), publisher: 'Octipus', url: INDEX_URL, packages: entries, revoked: opts.revoked ?? [] }, null, 2)}\n`;
+  const generatedAt = opts.generatedAt ?? nextTime();
+  const body = `${JSON.stringify({ schema: 2, generatedAt, expires: in30Days(generatedAt), publisher: 'Octipus', url: INDEX_URL, packages: entries, revoked: opts.revoked ?? [] }, null, 2)}\n`;
   serveSigned(INDEX_URL, body, serializeSignature(signRegistryIndex(Buffer.from(body), (opts.signer ?? keyA).privateKeyPem)));
   return body;
 }

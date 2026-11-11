@@ -27,7 +27,11 @@ import { PLUGIN_RUNTIMES, PLUGIN_TOOL_EFFECTS, type PluginPermissionsSummary } f
 import { isoTime, line, markdown, safeText } from './listing-text';
 import { manifestSchema } from './manifest';
 import { normalizeSha256, parseRegistryIndex } from './remote';
+import { lifetimeProblem } from './marketplace-keys-format';
 import { isKeyId } from './signature';
+
+/** The longest a strict registry's (the marketplace's) index may be valid: `expires` at most this many days after `generatedAt`. */
+export const MAX_INDEX_LIFETIME_DAYS = 45;
 
 /** The highest index format this host reads. */
 export const INDEX_SCHEMA_VERSION = 2;
@@ -119,7 +123,11 @@ const revokedSchema = z.array(z.union([
 const topSchema = z.object({
   schema: z.literal(2),
   generatedAt: isoTime,
-  /** After this time the index is refused (a mirror or a man in the middle cannot freeze a host on it). */
+  /**
+   * After this time the index is refused (a mirror or a man in the middle
+   * cannot freeze a host on it). Required for a strict registry (the
+   * marketplace), at most MAX_INDEX_LIFETIME_DAYS after generatedAt.
+   */
   expires: isoTime.optional().nullable(),
   publisher: line(100).optional().nullable(),
   url: z.string().max(2000).optional().nullable(),
@@ -237,7 +245,7 @@ function zodProblem(err: z.ZodError): string {
  * reported in `problems`. `tarballSameOrigin` also requires each tarball to
  * be on the registry's origin (the marketplace).
  */
-export function parseIndexDocument(json: unknown, registry: { name: string; url: string }, opts: { tarballSameOrigin?: boolean } = {}): ParsedIndex {
+export function parseIndexDocument(json: unknown, registry: { name: string; url: string }, opts: { tarballSameOrigin?: boolean; strict?: boolean } = {}): ParsedIndex {
   if (typeof json !== 'object' || json === null || Array.isArray(json)) throw new IndexFormatError('The index is not a JSON object');
   const raw = json as Record<string, unknown>;
   const schema = raw.schema;
@@ -252,6 +260,14 @@ export function parseIndexDocument(json: unknown, registry: { name: string; url:
   if (schema !== 2) throw new IndexFormatError(`The index "schema" ${schema} is not one this host reads`);
   const top = topSchema.safeParse(raw);
   if (!top.success) throw new IndexFormatError(`The index does not fit index v2: ${zodProblem(top.error)}`);
+  // A strict registry (the marketplace) must say when its index stops being
+  // valid, and soon: a replayed old index (a revocation left out) is refused
+  // after at most MAX_INDEX_LIFETIME_DAYS.
+  if (opts.strict) {
+    if (!top.data.expires) throw new IndexFormatError(`The index has no "expires"; this registry's index must expire at most ${MAX_INDEX_LIFETIME_DAYS} days after it was generated`);
+    const problem = lifetimeProblem(top.data.generatedAt, top.data.expires, MAX_INDEX_LIFETIME_DAYS);
+    if (problem) throw new IndexFormatError(`The index "expires" is refused: ${problem}`);
+  }
 
   const revoked: ParsedIndex['revoked'] = { packages: [], keys: [] };
   for (const r of top.data.revoked ?? []) {

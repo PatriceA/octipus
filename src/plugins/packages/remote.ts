@@ -401,7 +401,7 @@ export async function fetchRegistryIndex(registry: RegistrySource, hooks: IndexH
   } catch {
     throw new RemoteFetchError('The index is not valid JSON');
   }
-  const index = parseIndexDocument(json, registry, { tarballSameOrigin: registry.strict === true });
+  const index = parseIndexDocument(json, registry, { tarballSameOrigin: registry.strict === true, strict: registry.strict === true });
   if (registry.strict && index.schema !== 2) throw new IndexFormatError('This registry requires index v2 (schema 2)');
   if (index.expires !== null && index.expires.getTime() <= Date.now()) {
     throw new IndexFormatError(`The index expired at ${index.expires.toISOString()}; refused (the registry must publish a fresh one)`);

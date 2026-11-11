@@ -140,7 +140,7 @@ describe('encrypted keys', () => {
     const prefix = join(temp(), 'root');
     expect(await keygenCommand(io({ stdin: 'root pass' }), [prefix, '--passphrase-file', '-'])).toBe(0);
     const file = join(temp(), 'keys.json');
-    writeFileSync(file, '{"schema":1,"version":1,"generatedAt":"2026-11-10T00:00:00Z","signingKeys":[],"revokedKeys":[]}');
+    writeFileSync(file, JSON.stringify({ schema: 1, version: 1, generatedAt: new Date().toISOString(), expires: new Date(Date.now() + 30 * 86_400_000).toISOString(), signingKeys: [], revokedKeys: [] }));
     expect(await signKeysCommand(io({ stdin: 'root pass' }), [file, '--key', `${prefix}.key`, '--passphrase-file', '-'])).toBe(0);
     const { verifyMarketplaceKeys } = await import('@/plugins/packages/signature');
     const pub = [{ name: 'root', publicKey: readFileSync(`${prefix}.pub`, 'utf8') }];
@@ -532,7 +532,10 @@ describe('validate', () => {
 });
 
 describe('marketplace keys files and unpacking (review finding 12, marketplace repo commands)', () => {
-  const keysJson = (over: Record<string, unknown> = {}) => JSON.stringify({ schema: 1, version: 1, generatedAt: '2026-11-10T00:00:00Z', signingKeys: [], revokedKeys: [], ...over });
+  // Generated now, expiring in 30 days (keys.json must expire, at most 90 days after it was generated).
+  const keysJson = (over: Record<string, unknown> = {}) => JSON.stringify({
+    schema: 1, version: 1, generatedAt: new Date().toISOString(), expires: new Date(Date.now() + 30 * 86_400_000).toISOString(), signingKeys: [], revokedKeys: [], ...over,
+  });
   async function rootKeys(): Promise<{ root: { key: string; pub: string; id: string }; backup: { key: string; pub: string; id: string }; signing: { key: string; pub: string; id: string } }> {
     const make = async (name: string) => {
       const prefix = join(temp('octipus-offline-root-'), name);
@@ -570,8 +573,10 @@ describe('marketplace keys files and unpacking (review finding 12, marketplace r
     expect(await refused(keysJson({ extra: true }))).toMatch(/schema/);
     expect(await refused(keysJson({ signingKeys: [entry(root)] }))).toMatch(/root key/);
     expect(await refused(keysJson({ signingKeys: [entry(backup)] }), ['--root-pub', backup.pub])).toMatch(/root key/);
-    expect(await refused(keysJson({ expires: '2020-01-01T00:00:00Z' }))).toMatch(/expired/);
-    writeFileSync(file, keysJson({ signingKeys: [entry(signing)], expires: '2099-01-01T00:00:00Z' }));
+    expect(await refused(keysJson({ generatedAt: '2019-12-15T00:00:00Z', expires: '2020-01-01T00:00:00Z' }))).toMatch(/expired/);
+    expect(await refused(keysJson({ expires: undefined }))).toMatch(/expires/);
+    expect(await refused(keysJson({ expires: '2099-01-01T00:00:00Z' }))).toMatch(/at most 90 days/);
+    writeFileSync(file, keysJson({ signingKeys: [entry(signing)] }));
     expect(await signKeysCommand(io(), [file, '--key', root.key, '--root-pub', backup.pub])).toBe(0);
   });
 

@@ -134,6 +134,15 @@ describe('index v2 parsing', () => {
     expect(v1.entries[0]).toMatchObject({ name: 'finapi', permissions: null, contentHash: null });
   });
 
+  test('a strict registry\'s (the marketplace\'s) index must expire, at most 45 days after it was generated', () => {
+    expect(() => parseIndexDocument(index([entry()]), REG, { strict: true })).toThrow(/no "expires"/);
+    expect(() => parseIndexDocument(index([entry()], { expires: '2026-12-25T12:00:01Z' }), REG, { strict: true })).toThrow(/at most 45 days/);
+    expect(() => parseIndexDocument(index([entry()], { expires: '2026-11-10T11:00:00Z' }), REG, { strict: true })).toThrow(/after generatedAt/);
+    expect(parseIndexDocument(index([entry()], { expires: '2026-12-25T12:00:00Z' }), REG, { strict: true }).expires?.toISOString()).toBe('2026-12-25T12:00:00.000Z');
+    // Another registry may leave it out.
+    expect(parseIndexDocument(index([entry()]), REG).expires).toBeNull();
+  });
+
   test('a malformed header or revocation list refuses the whole index', () => {
     expect(() => parseIndexDocument(index([entry()], { generatedAt: 'yesterday' }), REG)).toThrow(IndexFormatError);
     expect(() => parseIndexDocument(index([entry()], { revoked: [{ name: 'x' }] }), REG)).toThrow(IndexFormatError);
@@ -202,7 +211,7 @@ describe('root keys and keys.json', () => {
   });
 
   test('keys.json: the key id must be the key\'s, a root is never a signing key, no key twice', () => {
-    const file = (signingKeys: unknown[], over: Record<string, unknown> = {}) => Buffer.from(JSON.stringify({ schema: 1, version: 1, generatedAt: '2026-11-10T00:00:00Z', signingKeys, revokedKeys: [], ...over }));
+    const file = (signingKeys: unknown[], over: Record<string, unknown> = {}) => Buffer.from(JSON.stringify({ schema: 1, version: 1, generatedAt: '2026-11-10T00:00:00Z', expires: '2026-12-10T00:00:00Z', signingKeys, revokedKeys: [], ...over }));
     expect(parseKeysFile(file([{ keyId: signer.keyId, publicKey: signer.publicKeyPem }]), roots).signingKeys).toHaveLength(1);
     expect(() => parseKeysFile(file([{ keyId: root.keyId, publicKey: signer.publicKeyPem }]), roots)).toThrow(KeysFileError);
     expect(() => parseKeysFile(file([{ keyId: root.keyId, publicKey: root.publicKeyPem }]), roots)).toThrow(/root key/);
@@ -212,10 +221,19 @@ describe('root keys and keys.json', () => {
     expect(() => parseKeysFile(Buffer.from('not json'), roots)).toThrow(KeysFileError);
   });
 
+  test('keys.json must expire, at most 90 days after it was generated', () => {
+    const file = (over: Record<string, unknown>) => Buffer.from(JSON.stringify({ schema: 1, version: 1, generatedAt: '2026-11-10T00:00:00Z', signingKeys: [], revokedKeys: [], ...over }));
+    expect(() => parseKeysFile(file({}), roots)).toThrow(/expires/);
+    expect(() => parseKeysFile(file({ expires: null }), roots)).toThrow(KeysFileError);
+    expect(() => parseKeysFile(file({ expires: '2027-02-09T00:00:01Z' }), roots)).toThrow(/at most 90 days/);
+    expect(() => parseKeysFile(file({ expires: '2026-11-09T00:00:00Z' }), roots)).toThrow(/after generatedAt/);
+    expect(parseKeysFile(file({ expires: '2027-02-08T00:00:00Z' }), roots).expires.toISOString()).toBe('2027-02-08T00:00:00.000Z');
+  });
+
   test('a revoked signing key is not trusted, even when still listed', () => {
     const other = generateSigningKey();
     const file = parseKeysFile(Buffer.from(JSON.stringify({
-      schema: 1, version: 2, generatedAt: '2026-11-10T00:00:00Z',
+      schema: 1, version: 2, generatedAt: '2026-11-10T00:00:00Z', expires: '2026-12-10T00:00:00Z',
       signingKeys: [{ keyId: signer.keyId, publicKey: signer.publicKeyPem }, { keyId: other.keyId, publicKey: other.publicKeyPem, notAfter: '2030-01-01' }],
       revokedKeys: [{ keyId: signer.keyId, reason: 'leaked' }],
     })), roots);

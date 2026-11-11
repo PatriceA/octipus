@@ -8,8 +8,11 @@
  *     "signingKeys": [{ "keyId": "ed25519:…", "publicKey": "-----BEGIN PUBLIC KEY-----…", "notAfter": "2027-12-31" }],
  *     "revokedKeys": [{ "keyId": "ed25519:…", "reason": "…" }] }
  *
- * `expires` is optional: after it, a host refuses the file (it cannot be
- * frozen on an old one forever).
+ * `expires` is required, at most `MAX_KEYS_FILE_LIFETIME_DAYS` (90) days
+ * after `generatedAt`: after it, a host refuses the file, so a mirror or a
+ * man in the middle cannot freeze a host on an old one (with a revocation
+ * left out) for long. Publish a fresh one well before (30-60 days is a good
+ * rhythm). A file without it, or with a longer one, is refused.
  */
 import { z } from 'zod';
 import { isoTime, line, safeText } from './listing-text';
@@ -28,6 +31,10 @@ export interface RootKeyRef {
   keyId: string;
 }
 
+/** The longest a keys file may be valid: `expires` at most this many days after `generatedAt`. */
+export const MAX_KEYS_FILE_LIFETIME_DAYS = 90;
+const DAY_MS = 24 * 60 * 60_000;
+
 const keyIdSchema = z.string().max(80).refine(isKeyId, 'a key id, ed25519:<64 hex>');
 const dateOrTime = z.string().max(40).regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/, 'an ISO date or date-time with a zone')
   .refine((s) => !Number.isNaN(Date.parse(s)), 'not a real date');
@@ -36,16 +43,31 @@ export const keysFileSchema = z.object({
   schema: z.literal(1),
   version: z.number().int().min(1).max(2_147_483_647),
   generatedAt: isoTime,
-  expires: isoTime.optional().nullable(),
+  expires: isoTime,
   signingKeys: z.array(z.object({ keyId: keyIdSchema, publicKey: z.string().min(1).max(2000), notAfter: dateOrTime.optional().nullable() }).strict()).max(20),
   revokedKeys: z.array(z.object({ keyId: keyIdSchema, reason: line(500).optional().nullable() }).strict()).max(1000),
-}).strict();
+}).strict().superRefine((f, ctx) => {
+  const problem = lifetimeProblem(f.generatedAt, f.expires, MAX_KEYS_FILE_LIFETIME_DAYS);
+  if (problem) ctx.addIssue({ code: 'custom', path: ['expires'], message: problem });
+});
+
+/**
+ * Why `expires` does not fit a lifetime of at most `maxDays` after
+ * `generatedAt`, or null: it must come after it, and at most that far.
+ */
+export function lifetimeProblem(generatedAt: string, expires: string, maxDays: number): string | null {
+  const from = Date.parse(generatedAt);
+  const to = Date.parse(expires);
+  if (!(to > from)) return 'expires must be after generatedAt';
+  if (to - from > maxDays * DAY_MS) return `expires is at most ${maxDays} days after generatedAt (a shorter life limits how long an old copy can be replayed)`;
+  return null;
+}
 
 export interface KeysFile {
   version: number;
   generatedAt: Date;
-  /** After this the file is refused; null: it does not expire. */
-  expires: Date | null;
+  /** After this the file is refused. */
+  expires: Date;
   signingKeys: Array<{ keyId: string; publicKey: string; notAfter: string | null }>;
   revokedKeys: Array<{ keyId: string; reason: string }>;
 }
@@ -79,7 +101,7 @@ export function parseKeysFile(bytes: Uint8Array, roots: readonly Pick<RootKeyRef
   return {
     version: parsed.data.version,
     generatedAt: new Date(parsed.data.generatedAt),
-    expires: parsed.data.expires ? new Date(parsed.data.expires) : null,
+    expires: new Date(parsed.data.expires),
     signingKeys: parsed.data.signingKeys.map((k) => ({ keyId: k.keyId, publicKey: k.publicKey, notAfter: k.notAfter ?? null })),
     revokedKeys: parsed.data.revokedKeys.map((k) => ({ keyId: k.keyId, reason: k.reason ?? '' })),
   };
@@ -87,7 +109,7 @@ export function parseKeysFile(bytes: Uint8Array, roots: readonly Pick<RootKeyRef
 
 /** Why a keys file has expired at `now`, or null. */
 export function keysFileExpired(file: Pick<KeysFile, 'expires' | 'version'>, now = new Date()): string | null {
-  if (file.expires === null || file.expires.getTime() > now.getTime()) return null;
+  if (file.expires.getTime() > now.getTime()) return null;
   return `keys.json version ${file.version} expired at ${file.expires.toISOString()}; refused (the marketplace must publish a fresh one)`;
 }
 
