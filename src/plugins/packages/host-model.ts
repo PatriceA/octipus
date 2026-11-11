@@ -1,3 +1,4 @@
+import { TOKEN_BUDGET_DEFAULTS } from '@/shared/token-budget-defaults';
 /**
  * `model:complete` of the plugin host API (docs/PLUGIN-PACKAGES.md#host-api):
  * one text completion on the calling user's `everyday` model, for a package
@@ -98,11 +99,11 @@ export async function pluginModelComplete(
     return { ok: false, status: 429, code: 'rate_limited', error: `At most ${MODEL_CALLS_PER_MINUTE} model calls a minute per plugin`, retryAfter: limited.retryAfterSeconds ?? 10 };
   }
 
-  const cap = getConfig().plugins?.hostModelDailyTokens ?? 200_000;
+  const cap = getConfig().plugins?.hostModelDailyTokens ?? TOKEN_BUDGET_DEFAULTS.pluginDaily;
   if (cap <= 0) return { ok: false, status: 403, code: 'model_off', error: 'Plugin model calls are turned off on this install (plugins.hostModelDailyTokens is 0)' };
   const used = await pluginTokensToday(grant.userId);
   if (used + estimateTokens(req) > cap) {
-    return { ok: false, status: 429, code: 'token_cap', error: `Today's plugin model allowance is used up (${used} of ${cap} tokens); it resets at midnight UTC` };
+    return { ok: false, status: 429, code: 'token_cap', error: `Today's plugin model allowance is used up (${used} of ${cap} tokens); it resets at midnight UTC. An admin can change plugins.hostModelDailyTokens in Settings → System → Advanced configuration → Security` };
   }
 
   const inSpace = principal.workspaceKind === 'shared';

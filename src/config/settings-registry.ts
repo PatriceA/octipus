@@ -1,3 +1,4 @@
+import { TOKEN_BUDGET_DEFAULTS } from '@/shared/token-budget-defaults';
 /**
  * Static manifest of all runtime-configurable settings.
  * Used for: DB seeding, migration from env, API validation, UI rendering.
@@ -354,9 +355,9 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'agent.maxTokenBudget',
     category: 'agent',
     valueType: 'number',
-    defaultValue: 100000,
+    defaultValue: TOKEN_BUDGET_DEFAULTS.general,
     description:
-      'General agent and session token budget (0 = unlimited). The root’s shared swarm pool is separately configured by swarm.levelDefaults.root.tokens. New agents use the updated cap; running agents keep their spawn-time budget.',
+      'Default per-user daily token cap (resets at midnight UTC), and default per-agent/session token budget (0 = unlimited). Per-user overrides are in Settings → System → Administration → Quotas & budgets (/admin/quotas). The root’s shared swarm pool is separately configured by swarm.levelDefaults.root.tokens. New agents use the updated cap; running agents keep their spawn-time budget.',
     isSecret: false,
     envVar: 'AGENT_MAX_TOKEN_BUDGET',
   },
@@ -486,7 +487,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'agent.pipelineTokenBudget',
     category: 'agent',
     valueType: 'number',
-    defaultValue: 2_000_000,
+    defaultValue: TOKEN_BUDGET_DEFAULTS.pipeline,
     description:
       'Token pool for one pipeline RUN, summed over every node visit (0 = unlimited). Per-node caps bound a single visit; this is the only bound a foreach loop respects.',
     isSecret: false,
@@ -555,7 +556,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'swarm.levelDefaults.root.tokens',
     category: 'swarm',
     valueType: 'number',
-    defaultValue: 200_000,
+    defaultValue: TOKEN_BUDGET_DEFAULTS.root,
     description: 'Initial shared token pool for the root and its descendants per turn, recorded in the swarm tree. Separate from agent.maxTokenBudget. Applies to new root turns; existing tree nodes retain their original cap.',
     isSecret: false,
   },
@@ -588,7 +589,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'swarm.levelDefaults.agent.tokens',
     category: 'swarm',
     valueType: 'number',
-    defaultValue: 80_000,
+    defaultValue: TOKEN_BUDGET_DEFAULTS.agent,
     description: 'Agent (depth 1) token cap',
     isSecret: false,
   },
@@ -620,7 +621,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'swarm.levelDefaults.subagent.tokens',
     category: 'swarm',
     valueType: 'number',
-    defaultValue: 30_000,
+    defaultValue: TOKEN_BUDGET_DEFAULTS.subagent,
     description: 'Subagent (depth 2) token cap',
     isSecret: false,
   },
@@ -1323,7 +1324,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'plugins.hostModelDailyTokens',
     category: 'security',
     valueType: 'number',
-    defaultValue: 200_000,
+    defaultValue: TOKEN_BUDGET_DEFAULTS.pluginDaily,
     description:
       'Tokens (input + output) one user\'s plugin model:complete calls and background runs may use per UTC day, all plugin packages together (docs/PLUGIN-PACKAGES.md#host-api). 0 turns plugin model calls off.',
     isSecret: false,
@@ -1332,7 +1333,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'plugins.hostAgentRunTokens',
     category: 'security',
     valueType: 'number',
-    defaultValue: 150_000,
+    defaultValue: TOKEN_BUDGET_DEFAULTS.pluginRun,
     description:
       'Tokens one plugin background run (host scope agent:run) may use; its tokens also count in plugins.hostModelDailyTokens (docs/PLUGIN-PACKAGES.md#host-api). 0 turns plugin background runs off.',
     isSecret: false,

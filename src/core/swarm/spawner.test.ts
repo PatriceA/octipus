@@ -223,7 +223,7 @@ describe('syncParentTokenUsage', () => {
       depth: 0 as const,
       topicPath: '',
       budget: {
-        tokens: { cap: 200_000, used },
+        tokens: { cap: LEVEL_DEFAULT[0].tokens, used },
         wallClockMs: { cap: 600_000, startedAt: Date.now() },
         fanOut: { cap: 6, used: 0 },
         depth: 0 as const,
@@ -259,7 +259,7 @@ describe('syncParentTokenUsage', () => {
   test('after sync, deriveChildBudget refuses a spawn near exhaustion', () => {
     // Regression: previously `used` stayed 0, so the guard never fired even
     // when the worker had burned nearly the whole pool.
-    const node = makeNode(0, 195_000);
+    const node = makeNode(0, LEVEL_DEFAULT[0].tokens - 5_000);
     syncParentTokenUsage(node);
     expect(() => deriveChildBudget(node.budget, 1)).toThrow(/Insufficient token budget/);
   });
@@ -272,9 +272,9 @@ describe('syncParentTokenUsage', () => {
 
   test('child spend alone drives the guard even without a workerRef', () => {
     // No workerRef (own spend counts as 0), but children have burned the pool.
-    const node = makeNode(0, null, 190_000);
+    const node = makeNode(0, null, LEVEL_DEFAULT[0].tokens - 10_000);
     syncParentTokenUsage(node);
-    expect(node.budget.tokens.used).toBe(190_000);
+    expect(node.budget.tokens.used).toBe(LEVEL_DEFAULT[0].tokens - 10_000);
     expect(() => deriveChildBudget(node.budget, 1)).toThrow(/Insufficient token budget/);
   });
 });
@@ -284,14 +284,13 @@ describe('syncParentTokenUsage', () => {
 describe('deriveChildBudget', () => {
   test('clamps child tokens to LEVEL_DEFAULT when parent has ample room', () => {
     const parent: NodeBudget = {
-      tokens: { cap: 200_000, used: 0 },
+      tokens: { cap: LEVEL_DEFAULT[0].tokens, used: 0 },
       wallClockMs: { cap: 10 * 60_000, startedAt: Date.now() },
       fanOut: { cap: 6, used: 0 },
       depth: 0,
     };
     const child = deriveChildBudget(parent, 1);
-    // LEVEL_DEFAULT[1].tokens = 80_000. Parent remaining 200k - 20k reserve = 180k.
-    // Child cap = min(80k, 180k) = 80_000.
+    // The child gets its full configured cap when the parent has ample room.
     expect(child.tokens.cap).toBe(LEVEL_DEFAULT[1].tokens);
     expect(child.depth).toBe(1);
     expect(child.fanOut.cap).toBe(LEVEL_DEFAULT[1].fanOut);
@@ -299,24 +298,24 @@ describe('deriveChildBudget', () => {
 
   test('clamps child tokens to parent remaining when remaining < default', () => {
     const parent: NodeBudget = {
-      tokens: { cap: 200_000, used: 150_000 }, // remaining = 50_000
+      tokens: { cap: LEVEL_DEFAULT[0].tokens, used: LEVEL_DEFAULT[0].tokens * .75 },
       wallClockMs: { cap: 10 * 60_000, startedAt: Date.now() },
       fanOut: { cap: 6, used: 0 },
       depth: 0,
     };
     const child = deriveChildBudget(parent, 1);
-    // remaining 50_000 - reserve 20_000 = 30_000. min(80_000, 30_000) = 30_000.
-    expect(child.tokens.cap).toBe(30_000);
+    // 25% remaining minus the 10% reserve leaves 15% for the child.
+    expect(child.tokens.cap).toBe(LEVEL_DEFAULT[0].tokens * .15);
   });
 
   test('throws InsufficientBudgetError when parent has no token room (reserve exhausted)', () => {
     const parent: NodeBudget = {
-      tokens: { cap: 200_000, used: 195_000 },
+      tokens: { cap: LEVEL_DEFAULT[0].tokens, used: LEVEL_DEFAULT[0].tokens - 5_000 },
       wallClockMs: { cap: 10 * 60_000, startedAt: Date.now() },
       fanOut: { cap: 6, used: 0 },
       depth: 0,
     };
-    // remaining 5000 - reserve 20000 → below MIN_CHILD_TOKENS → refused
+    // Remaining tokens below the parent reserve must still be refused.
     expect(() => deriveChildBudget(parent, 1)).toThrow(/Insufficient token budget/);
   });
 

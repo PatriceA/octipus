@@ -71,3 +71,18 @@ test('fresh reads and atomic transforms preserve direct database changes, and fa
   await expect(service.update('mcp.servers', () => { throw new Error('conflict'); })).rejects.toThrow('conflict');
   expect(await service.getFresh('mcp.servers')).toEqual(updated);
 });
+
+
+test('fresh installs inherit 10M while a saved lower admin cap is preserved on upgrade', async () => {
+  const { SettingsService } = await import('./settings-service');
+  const { executeRaw } = await import('@/db/postgres');
+  vi.stubEnv('AGENT_MAX_TOKEN_BUDGET', undefined);
+  try {
+    const fresh = new SettingsService(); await fresh.warmCache();
+    expect(await fresh.get('agent.maxTokenBudget')).toBe(10_000_000);
+    await fresh.set('agent.maxTokenBudget', 100_000);
+    const upgraded = new SettingsService(); await upgraded.warmCache();
+    expect(await upgraded.get('agent.maxTokenBudget')).toBe(100_000);
+    await executeRaw("DELETE FROM settings WHERE key='agent.maxTokenBudget'");
+  } finally { vi.unstubAllEnvs(); }
+});
