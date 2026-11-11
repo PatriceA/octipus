@@ -117,7 +117,7 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
   try {
     if (runner === 'appcontainer') {
       const pipe = privateWindowsProxyPipe();
-      const wrapped = wrapCommand(bridgedArgv(argv, pipe), {
+      const wrapped = wrapCommand(argv, {
         ...mounts, allowNetwork: false, path: env.PATH, extraReadOnly: ownNodeBinary(),
         windowsBroker: { pipe, proxyPort: proxy.port, authority },
       });

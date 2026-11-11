@@ -143,7 +143,7 @@ fn checked_path(value: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/// A unique per-launch SID means revocation never removes another launch's grants.
+/// Persistent access is tied to a complete authority identity, never rolled back on stop.
 struct Grant {
     path: Vec<u16>,
 }
@@ -498,15 +498,6 @@ pub fn launch(config: Launch) -> Result<i32, String> {
     std::fs::copy(&exe, &runtime).map_err(|e| format!("stage native runtime: {e}"))?;
     let mut argv = config.argv.clone();
     argv[0] = runtime.to_string_lossy().into_owned();
-    let secondary = if config.bridge {
-        let source = checked_path(&config.argv[5])?;
-        let target = scratch.join("command.exe");
-        std::fs::copy(&source, &target).map_err(|e| format!("stage plugin command: {e}"))?;
-        argv[5] = target.to_string_lossy().into_owned();
-        Some((source, target))
-    } else {
-        None
-    };
     // Identity includes every persistent grant and the complete authority
     // fingerprint (env/secrets and egress/host scopes supplied by the server).
     use sha2::{Digest, Sha256};
@@ -522,10 +513,6 @@ pub fn launch(config: Launch) -> Result<i32, String> {
         identity.update([0]);
     }
     identity.update(std::fs::read(&runtime).map_err(|e| e.to_string())?);
-    if let Some((source, target)) = &secondary {
-        identity.update(source.to_string_lossy().to_lowercase().as_bytes());
-        identity.update(std::fs::read(target).map_err(|e| e.to_string())?);
-    }
     let _lock = acl_lock()?;
     // Re-check while serialized, before changing any ACL. Package directories
     // are host-owned; other plugin launches cannot mutate their contents.
@@ -662,6 +649,39 @@ pub fn launch(config: Launch) -> Result<i32, String> {
         // The helper receives the transport's isolated environment. Never import
         // workstation variables here; point writable runtime caches at scratch.
         let mut env: std::collections::BTreeMap<_, _> = std::env::vars_os().collect();
+        if let (Some(pipe), Some(port)) = (&config.pipe, config.proxy_port) {
+            let preload = config
+                .preload
+                .as_ref()
+                .ok_or("missing Node proxy preload")?;
+            let preload_path = checked_path(preload)?;
+            if !preload_path.starts_with(&scratch) {
+                return Err("proxy preload must be in private scratch".into());
+            }
+            let existing = env
+                .get(std::ffi::OsStr::new("NODE_OPTIONS"))
+                .map(|v| v.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            env.insert(
+                "NODE_OPTIONS".into(),
+                format!("--require {} {existing}", quote(preload)).into(),
+            );
+            env.insert("OCTIPUS_EGRESS_PIPE".into(), pipe.into());
+            let url = format!("http://127.0.0.1:{port}");
+            for key in [
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+            ] {
+                env.insert(key.into(), url.clone().into());
+            }
+            for key in ["NO_PROXY", "no_proxy"] {
+                env.insert(key.into(), "".into());
+            }
+        }
         env.insert("TEMP".into(), scratch.as_os_str().into());
         env.insert("TMP".into(), scratch.as_os_str().into());
         let mut environment = Vec::new();

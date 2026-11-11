@@ -74,16 +74,22 @@ test.skipIf(process.platform !== 'win32')('job kills descendants on forced termi
   const children: ReturnType<typeof spawn>[] = [];
   async function start(name: string, authority: string) {
     const path = join(data, `${name}.txt`);
-    const code = `const {spawn}=require('node:child_process');
-      const child=spawn(process.execPath,['-e',${JSON.stringify(`setInterval(()=>require('node:fs').writeFileSync(${JSON.stringify(path)},String(Date.now())),50)`)}],{stdio:'ignore'});
-      console.log(JSON.stringify({pid:process.pid,grandchild:child.pid}));setInterval(()=>{},1000);`;
+    const code = `const {spawn}=require('node:child_process'),fs=require('node:fs');
+      const pulse=()=>fs.writeFileSync(${JSON.stringify(path)},String(Date.now()));
+      pulse();setInterval(pulse,50);
+      const report=(extra)=>console.log(JSON.stringify({pid:process.pid,...extra}));
+      try {
+        const child=spawn(process.execPath,['-e',${JSON.stringify(`setInterval(()=>{},1000)`)}],{stdio:'inherit'});
+        child.on('spawn',()=>report({grandchild:child.pid}));
+        child.on('error',e=>report({grandchild:null,spawnDenied:e.code}));
+      } catch(e) {report({grandchild:null,spawnDenied:e.code})}`;
     const launch = await prepareSandboxedLaunch([process.execPath, '-e', code], buildIsolatedChildEnv({ TEST_AUTHORITY: authority }), {
       mode: 'required', root: pkg, readOnlyRoot: true, writable: [data], allowNetwork: false,
     });
     launches.push(launch);
     const child = spawn(launch.argv[0], launch.argv.slice(1), { cwd: pkg, env: launch.env, stdio: 'pipe', windowsHide: true });
     children.push(child);
-    const pids = await new Promise<{ pid: number; grandchild: number }>((resolve, reject) => {
+    const pids = await new Promise<{ pid: number; grandchild: number | null; spawnDenied?: string }>((resolve, reject) => {
       let output = ''; let errors = '';
       const timer = setTimeout(() => reject(new Error(`job readiness timeout: ${errors}`)), 10000);
       child.stderr!.on('data', d => { errors += d; });
@@ -104,7 +110,10 @@ test.skipIf(process.platform !== 'win32')('job kills descendants on forced termi
     await new Promise(r => setTimeout(r, 500));
     expect(readFileSync(a.path, 'utf8')).toBe(first);
     expect(readFileSync(b.path, 'utf8')).not.toBe(second);
-    for (const pid of [a.pids.pid, a.pids.grandchild]) expect(() => process.kill(pid, 0)).toThrow();
+    for (const pid of [a.pids.pid, a.pids.grandchild]) {
+      if (pid !== null) expect(() => process.kill(pid, 0)).toThrow();
+    }
+    if (a.pids.grandchild === null) expect(a.pids.spawnDenied).toMatch(/EPERM|EACCES/);
     // Provisioning remains usable after abrupt stop, including a changed
     // authority whose SID must be different from still-running b's identity.
     const c = await start('third', 'changed');

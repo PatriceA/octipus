@@ -6,8 +6,7 @@ use serde::Deserialize;
 struct Launch {
     version: u32,
     authority: String,
-    #[serde(default)]
-    bridge: bool,
+    preload: Option<String>,
     argv: Vec<String>,
     root: String,
     read_only: Vec<String>,
@@ -38,14 +37,6 @@ impl Launch {
             {
                 return Err("invalid private broker pipe".into());
             }
-        }
-        if self.bridge
-            && (self.pipe.is_none()
-                || self.argv.len() < 6
-                || self.argv[3] != "--"
-                || Some(&self.argv[4]) != self.pipe.as_ref())
-        {
-            return Err("invalid broker bridge argv".into());
         }
         Ok(())
     }

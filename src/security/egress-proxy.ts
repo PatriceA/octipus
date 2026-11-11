@@ -36,8 +36,8 @@
  *   variables pointing at that port directly: enforced.
  * - **Windows with AppContainer**: no network capabilities or loopback
  *   exemption. The native helper brokers a private SID-protected named pipe
- *   to this TCP listener; the bridge and server share the AppContainer's
- *   identity. Direct host loopback and internet remain inaccessible.
+ *   to this TCP listener; a Node preload routes proxy-aware clients straight
+ *   to that pipe without a local TCP listener. Direct host loopback and internet remain inaccessible.
  * - **Sandbox off** (a local plugin package under `plugins.sandbox: off`):
  *   the server runs unwrapped with HTTP(S)_PROXY /
  *   ALL_PROXY pointing at the TCP listener. Well-behaved HTTP clients honour

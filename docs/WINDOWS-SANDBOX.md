@@ -41,7 +41,11 @@ architecture; release assets currently target x64.
   the AppContainer. It does not add an internet capability or a host loopback
   exemption; arbitrary localhost services remain inaccessible. The existing
   proxy still enforces declared hosts, private-address rejection and host API
-  stamping. Missing isolation means refusal, never a sandboxed status badge.
+  stamping. A Node preload adapts connections aimed at HTTP(S)_PROXY to the
+  pipe without opening a TCP listener. It is a compatibility adapter; removing
+  it cannot grant network access. Native runtimes may use OCTIPUS_EGRESS_PIPE
+  directly; automatic HTTP proxy adaptation currently supports Node only.
+  Missing isolation means refusal, never a sandboxed status badge.
 
 ## Persistent folder permissions
 
@@ -70,7 +74,9 @@ shell sandbox is implied.
 ## Tests and release artifacts
 
 `Windows plugin sandbox` CI builds the helper, tests its protocol/argument
-quoting, and executes real AppContainer filesystem and network probes. The
+quoting, and executes real AppContainer filesystem and network probes, concurrent
+launches, forced termination and restart. A descendant is either denied by
+AppContainer or must die with the job. The
 release workflow gates the Windows binary on the same real isolation tests,
 then attaches the binary and checksum to the matching GitHub Release. Linux
 cross-target checking verifies the Windows API bindings compile but is not a

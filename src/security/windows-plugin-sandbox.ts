@@ -50,15 +50,13 @@ export function wrapWindowsPluginCommand(binary: string, argv: string[], options
   const cleanup = () => { rmSync(record, { force: true }); rmSync(scratch, { recursive: true, force: true }); };
   try {
     const command = [executable(argv[0], options.workspaceRoot, options.path), ...argv.slice(1)];
-    if (broker.pipe) {
-      if (argv.length < 6 || argv[3] !== '--' || argv[4] !== broker.pipe) throw new Error('Invalid Windows broker bridge argv');
-      command[5] = executable(argv[5], options.workspaceRoot, options.path);
-    }
+    const preload = broker.pipe ? join(scratch, 'egress.cjs') : null;
+    if (preload) writeFileSync(preload, windowsProxyPreload(broker.pipe!, broker.proxyPort!));
     writeFileSync(record, JSON.stringify({
       version: WINDOWS_SANDBOX_PROTOCOL,
       authority: broker.authority ?? createHash('sha256').update('offline').digest('hex'),
       argv: command,
-      bridge: !!broker.pipe,
+      preload,
       root: options.workspaceRoot,
       readOnly: options.extraReadOnly ?? [],
       writable: options.extraReadWrite ?? [],
@@ -71,4 +69,27 @@ export function wrapWindowsPluginCommand(binary: string, argv: string[], options
 
 export function privateWindowsProxyPipe(): string {
   return `\\\\.\\pipe\\LOCAL\\octipus-${randomUUID()}`;
+}
+
+
+/** A compatibility adapter, not a security check: the OS still denies every
+ * direct socket. Only a proxy-aware Node client's connection to its configured
+ * proxy is replaced with the private broker pipe. No TCP listener/exemption. */
+export function windowsProxyPreload(pipe: string, port: number): string {
+  return `
+const net = require('node:net');
+const original = net.Socket.prototype.connect;
+const pipe = ${JSON.stringify(pipe)}, port = ${JSON.stringify(port)};
+net.Socket.prototype.connect = function(...args) {
+  const normalized = Array.isArray(args[0]) ? args[0] : args;
+  const first = normalized[0];
+  const opts = typeof first === 'object' && first !== null ? first : { port:first, host:typeof normalized[1]==='string'?normalized[1]:'localhost' };
+  const host = opts.host || opts.hostname || 'localhost';
+  if (!opts.path && Number(opts.port) === port && ['127.0.0.1','localhost','::1'].includes(host)) {
+    const callback = normalized.find(value=>typeof value==='function');
+    return original.call(this, { path:pipe }, callback);
+  }
+  return original.apply(this,args);
+};
+`;
 }
