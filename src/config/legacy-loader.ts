@@ -1,3 +1,4 @@
+import { TOKEN_BUDGET_DEFAULTS } from '@/shared/token-budget-defaults';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { defaultConfig } from './defaults';
@@ -135,7 +136,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       defaultTimeout: parseInt(process.env.AGENT_DEFAULT_TIMEOUT || '3600000', 10),
       maxIterations: parseInt(process.env.AGENT_MAX_ITERATIONS || '0', 10),
       contextWindowSize: parseInt(process.env.CONTEXT_WINDOW_SIZE || '32000', 10),
-      maxTokenBudget: parseInt(process.env.AGENT_MAX_TOKEN_BUDGET || '100000', 10),
+      maxTokenBudget: parseInt(process.env.AGENT_MAX_TOKEN_BUDGET || String(TOKEN_BUDGET_DEFAULTS.general), 10),
       streaming: true, // no env form: the `agent.streaming` setting owns it
       promptDumps: true, // same: the `agent.promptDumps` setting owns it
       cliShellGuard: process.env.AGENT_CLI_SHELL_GUARD !== 'false',
@@ -148,7 +149,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       smallModelMaxParams: parseInt(env('AGENT_SMALL_MODEL_MAX_PARAMS', 'ORCHESTRATOR_ROUTER_MAX_PARAMS') || '10000000000', 10),
       liteModelMaxParams: parseInt(env('AGENT_LITE_MAX_PARAMS', 'ORCHESTRATOR_LITE_MAX_PARAMS') || '24000000000', 10),
       smallModelMaxTools: parseInt(env('AGENT_SMALL_MODEL_MAX_TOOLS', 'ORCHESTRATOR_SMALL_MODEL_MAX_TOOLS') || '7', 10),
-      pipelineTokenBudget: parseInt(process.env.PIPELINE_TOKEN_BUDGET || '2000000', 10),
+      pipelineTokenBudget: parseInt(process.env.PIPELINE_TOKEN_BUDGET || String(TOKEN_BUDGET_DEFAULTS.pipeline), 10),
       lazyToolDiscovery: env('AGENT_LAZY_TOOLS', 'ORCHESTRATOR_LAZY_TOOLS') !== 'false',
       nativeToolSearch: process.env.AGENT_NATIVE_TOOL_SEARCH !== 'false',
       turnTimeoutMs: parseInt(env('AGENT_TURN_TIMEOUT_MS', 'ORCHESTRATOR_TIMEOUT_MS') || '36000000', 10),

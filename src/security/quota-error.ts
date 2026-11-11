@@ -39,7 +39,7 @@ export class QuotaExceededError extends Error {
   private static formatMessage(r: QuotaExceededReason): string {
     const base = `Quota exceeded for ${r.kind}: ${r.current}/${r.max}`;
     if (r.kind === 'tokensPerDay') {
-      return `${base}. This is a per-user daily safety budget across all models, not a provider limit. Raise or disable it at /admin/quotas (set 0 = unlimited), or via the agent.maxTokenBudget setting.`;
+      return `${base}. This is a per-user daily safety budget across all models, not a provider limit. It resets at midnight UTC. Ask an admin to open Settings → System → Administration → Quotas & budgets (/admin/quotas) to change your per-user cap or reset it to the installation default. The installation default is agent.maxTokenBudget in Settings → System → Advanced configuration → Agent (0 = unlimited there). Starting a new chat does not reset today's usage.`;
     }
     if (r.kind === 'concurrentAgents') {
       return `${base}. Raise the cap at /admin/quotas or via agent.maxConcurrentAgents.`;

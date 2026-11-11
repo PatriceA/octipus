@@ -20,7 +20,7 @@
  *     cleanup, boot indexing).
  *
  * Product docs (`user_id NULL`, `metadata.source = 'octipus-docs'`, written by
- * `seed-docs.ts`) are readable under every scope, never writable outside
+ * the retired product-docs indexer) are readable under every scope, never writable outside
  * `install`. A row with no owner that is not a product doc is an install row:
  * admins (audited) and system jobs only.
  *
@@ -67,7 +67,7 @@ export type KnowledgeOwner =
   | { ownerUserId: string; workspaceId: string | null }
   | { product: true };
 
-/** Provenance tag of the product documentation corpus (`seed-docs.ts`). */
+/** Provenance tag of the product documentation corpus (the retired product-docs indexer). */
 export const PRODUCT_DOCS_SOURCE = 'octipus-docs';
 
 /** Reads see product docs too; writes touch only rows the scope owns. */

@@ -7,6 +7,20 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Changed
+
+- Product help now searches the bundled manual locally on demand, without startup or scheduled documentation embeddings.
+
+- **Useful token budgets from the first run.** The default per-user daily
+  cap is now 10,000,000 tokens. Shared root turns start with 2,000,000,
+  agents/subagents with 800,000/300,000, pipelines with 10,000,000, and
+  plugin models/background runs with 10,000,000 per day and 1,000,000 per
+  run. Explicit admin, user and saved-run limits remain in place.
+- **Actionable budget refusals.** Chat and API errors name the applicable
+  limit, daily reset and settings page; typed quota/spend refusals remain
+  HTTP 429 rather than generic server errors. Explicit session zero budgets
+  correctly mean unlimited. See [configuration](docs/CONFIGURATION.md#default-token-budgets).
+
 ### Security
 
 - **The plugin store holds the four boundaries (security review of the
@@ -42,7 +56,7 @@ labels reflect blast radius, not contract guarantees.
     and at shutdown instead of being dropped.
   - The store is per user and per workspace: what is kept in a space is read
     there only, and leaving the space deletes it. "Delete my data" takes an
-    optional workspace. Migration `0181_plugin_store` (not released yet) is
+    optional workspace. Migration `0182_plugin_store` (not released yet) is
     changed in place.
 - **Native Windows plugin sandbox.** Marketplace and local package plugins
   can run in a less-privileged AppContainer through `octipus-sandbox.exe`,
@@ -653,7 +667,7 @@ labels reflect blast radius, not contract guarantees.
   my data**; admins see the total and per-user size; uninstalling deletes
   every user's data, deleting a user deletes theirs, leaving a space deletes
   theirs of that space. New migration
-  `0181_plugin_store`, a `with-store` template, and the contract and the
+  `0182_plugin_store`, a `with-store` template, and the contract and the
   authoring skill tell agents to keep per-user data there.
   **`OCTIPUS_PLUGIN_DATA_DIR` is shared by all users of an install**: it must
   never hold user data.

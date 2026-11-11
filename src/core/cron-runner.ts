@@ -21,7 +21,6 @@ const CRON_INTERVAL_MS = 60_000; // Check every minute
 const SESSION_CLEANUP_INTERVAL_MS = 3600_000; // Check every hour
 const KNOWLEDGE_CLEANUP_INTERVAL_MS = 7 * 24 * 3600_000; // Weekly
 const AGENT_CLEANUP_INTERVAL_MS = 7 * 24 * 3600_000; // Weekly
-const DOCS_REINDEX_INTERVAL_MS = 6 * 3600_000; // Every 6 hours
 const TRAJECTORY_COMPRESS_INTERVAL_MS = 24 * 3600_000; // Daily
 const SPACE_FILES_SWEEP_INTERVAL_MS = 3600_000; // Hourly
 const VECTOR_INDEX_INTERVAL_MS = 24 * 3600_000; // Daily
@@ -40,14 +39,6 @@ let lastSessionCleanup = 0;
 let lastKnowledgeCleanup = 0;
 let lastAgentCleanup = 0;
 let lastSpaceFilesSweep = 0;
-// Seed to boot time, NOT 0: the boot sequence already runs `indexProductDocs()`
-// (src/index.ts) before the cron loop starts, so the immediate first tick must
-// NOT re-run it. The first cron refresh fires one DOCS_REINDEX_INTERVAL_MS
-// later; the first-install / KB-not-ready-at-boot case is still handled because
-// the boot pass bailed and subsequent ticks (every 6h) will land the docs once
-// an embedding model is bound. (Session/knowledge cleanup init to 0 on purpose
-// — they have no boot-time pass, so they SHOULD run on the first tick.)
-let lastDocsReindex = Date.now();
 // Seed to 0 so the first tick after boot compresses yesterday's file (idempotent).
 let lastTrajectoryCompress = 0;
 // Seeded to boot time: src/index.ts runs the same check during boot.
@@ -220,27 +211,6 @@ async function maybeCleanupAgents(): Promise<void> {
   }
 }
 
-async function maybeReindexDocs(): Promise<void> {
-  const now = Date.now();
-  if (now - lastDocsReindex < DOCS_REINDEX_INTERVAL_MS) return;
-  lastDocsReindex = now;
-
-  try {
-    // Refresh the product-docs corpus in the KB. Idempotent — unchanged files
-    // are skipped, so this is cheap. Also covers first-install where the
-    // embedding model is bound AFTER boot: the boot-time index found the KB
-    // not-ready and bailed, and this is what actually lands the docs once a
-    // model is assigned.
-    const { indexProductDocs } = await import('@/db/seed-docs');
-    const res = await indexProductDocs();
-    if (res.filesIndexed > 0) {
-      coreLogger.info(res, 'Docs reindex: refreshed product docs in the knowledge base');
-    }
-  } catch (err) {
-    coreLogger.error({ err }, 'Docs reindex failed');
-  }
-}
-
 /**
  * Gzip yesterday's trajectory JSONL once a day. Without this the recorder's
  * daily files accumulate uncompressed forever (the `compress` script existed
@@ -359,7 +329,6 @@ async function processCronTick(): Promise<void> {
     await maybeCleanupKnowledge();
     await maybeCleanupAgents();
     await maybeSweepPurgedSpaceFiles();
-    await maybeReindexDocs();
     await maybeCompressTrajectories();
     maybeEnsureVectorIndexes();
     maybePruneLogs();

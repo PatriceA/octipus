@@ -1,3 +1,4 @@
+import { TOKEN_BUDGET_DEFAULTS } from '@/shared/token-budget-defaults';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { Config } from './schema';
@@ -75,7 +76,7 @@ export const defaultConfig: Partial<Config> = {
     defaultTimeout: 3_600_000,
     maxIterations: 0,
     contextWindowSize: 32000,
-    maxTokenBudget: 100000,
+    maxTokenBudget: TOKEN_BUDGET_DEFAULTS.general,
     streaming: true,
     promptDumps: true,
     cliShellGuard: true,
@@ -98,7 +99,7 @@ export const defaultConfig: Partial<Config> = {
     /** Root-turn timeout for unattended hook-triggered runs (10 h). */
     hookTurnTimeoutMs: 36_000_000,
     /** Token pool for one pipeline run, summed over node visits. 0 = off. */
-    pipelineTokenBudget: 2_000_000,
+    pipelineTokenBudget: TOKEN_BUDGET_DEFAULTS.pipeline,
   },
   multiuser: {
     // Octipus is always multi-user — there is no single-user mode and no
@@ -143,8 +144,8 @@ export const defaultConfig: Partial<Config> = {
     revokedKeys: [],
     requireSignature: false,
     registries: [],
-    hostModelDailyTokens: 200_000,
-    hostAgentRunTokens: 150_000,
+    hostModelDailyTokens: TOKEN_BUDGET_DEFAULTS.pluginDaily,
+    hostAgentRunTokens: TOKEN_BUDGET_DEFAULTS.pluginRun,
     marketplace: true,
     sandbox: 'required',
   },
@@ -195,9 +196,9 @@ export const defaultConfig: Partial<Config> = {
     worktreeIsolation: false,
     worktreeLinkNodeModules: true,
     levelDefaults: {
-      root: { tokens: 200_000, wallMs: 36_000_000, fanOut: 6, maxPendingDetached: 6 },
-      agent: { tokens: 80_000, wallMs: 3_600_000, fanOut: 4, maxPendingDetached: 3 },
-      subagent: { tokens: 30_000, wallMs: 3_600_000, fanOut: 0, maxPendingDetached: 0 },
+      root: { tokens: TOKEN_BUDGET_DEFAULTS.root, wallMs: 36_000_000, fanOut: 6, maxPendingDetached: 6 },
+      agent: { tokens: TOKEN_BUDGET_DEFAULTS.agent, wallMs: 3_600_000, fanOut: 4, maxPendingDetached: 3 },
+      subagent: { tokens: TOKEN_BUDGET_DEFAULTS.subagent, wallMs: 3_600_000, fanOut: 0, maxPendingDetached: 0 },
     },
   },
 };

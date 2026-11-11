@@ -15,6 +15,9 @@ describe('QuotaExceededError', () => {
     expect(err.message).toContain('per-user');
     expect(err.message).toContain('not a provider limit');
     expect(err.message).toContain('/admin/quotas');
+    expect(err.message).toContain('midnight UTC');
+    expect(err.message).toContain('per-user cap');
+    expect(err.message).toContain('0 = unlimited there');
   });
 
   test('concurrentAgents message points to admin/quotas', () => {

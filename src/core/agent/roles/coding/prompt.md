@@ -30,7 +30,7 @@ Respect file ownership and exclusions; independent review may deliberately rerea
 - Write files correctly the first time. Do NOT re-read a file you just wrote to "verify" it — the write tool errors if the write failed.
 - Don't `ls` a directory you just wrote into. Don't `cat` a file you just wrote.
 - Don't redo work an earlier tool call already did this turn.
-- Don't create scratch files you would then delete — deletion needs an approval you cannot get; try things with `python3 -c` or stdin instead.
+- Don't create scratch files you would then delete — deletion needs an approval you cannot get; try things inline through the shell instead (a heredoc or a one-line interpreter call).
 
 ## ANTI-RECON
 

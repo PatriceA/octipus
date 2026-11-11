@@ -1,3 +1,4 @@
+import { sessionTokenBudget, sessionBudgetMessage } from './session-budget';
 import { isSessionControlMessage } from '@/core/session-controls';
 import { withSessionTurn } from '@/core/session-turn-lock';
 import { sessionGeneration } from '@/db/schema/sessions';
@@ -718,12 +719,12 @@ export class AgentService {
       // impossible there; each requester's own spend budgets and quotas
       // apply, and the room's history is bounded by its compaction window.
       const config = getConfig();
-      const tokenBudget = (session?.context as Record<string, unknown>)?.tokenBudget as number || config.agent.maxTokenBudget;
+      const { cap: tokenBudget, explicit: explicitBudget } = sessionTokenBudget(session?.context, config.agent.maxTokenBudget);
       const sessionTokens = session?.tokenCount || 0;
       if (tokenBudget > 0 && !isRoom) {
         if (sessionTokens >= tokenBudget) {
           return {
-            response: `Session token budget (${tokenBudget.toLocaleString()}) exhausted. Start a new session to continue.`,
+            response: sessionBudgetMessage(sessionTokens, tokenBudget, explicitBudget),
             sessionId: resolvedSessionId,
             classification: { type: 'casual', confidence: 1 },
           };

@@ -153,7 +153,7 @@ export const pluginListingPins = pgTable('plugin_listing_pins', {
  * written (never lowered by an overwrite), and reading the entry raises the
  * call's level to it; `version` moves by one on every write
  * (compare-and-set). Uninstalling the package, deleting the user or the
- * workspace deletes the rows. Migration 0181 makes the unique index NULLS NOT
+ * workspace deletes the rows. Migration 0182 makes the unique index NULLS NOT
  * DISTINCT (drizzle's builder has no such option).
  */
 export const pluginStore = pgTable('plugin_store', {

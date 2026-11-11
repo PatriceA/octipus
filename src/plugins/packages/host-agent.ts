@@ -1,3 +1,4 @@
+import { TOKEN_BUDGET_DEFAULTS } from '@/shared/token-budget-defaults';
 /**
  * `agent:run` of the plugin host API (docs/PLUGIN-PACKAGES.md#host-api): a
  * package starts a background agent run as the calling user, with a prompt
@@ -70,7 +71,7 @@ export const MAX_RUN_OUTPUT_CHARS = 100_000;
 /** The longest prompt a package may start a run with. */
 export const MAX_RUN_PROMPT_CHARS = 20_000;
 /** The default of `plugins.hostAgentRunTokens`. */
-export const DEFAULT_RUN_TOKENS = 150_000;
+export const DEFAULT_RUN_TOKENS = TOKEN_BUDGET_DEFAULTS.pluginRun;
 
 export interface HostAgentRunRequest {
   prompt: string;
@@ -150,12 +151,12 @@ export async function startPluginAgentRun(
   }
 
   const { getConfig } = await import('@/config');
-  const cap = getConfig().plugins?.hostModelDailyTokens ?? 200_000;
+  const cap = getConfig().plugins?.hostModelDailyTokens ?? TOKEN_BUDGET_DEFAULTS.pluginDaily;
   if (cap <= 0) return { ok: false, status: 403, code: 'model_off', error: 'Plugin model calls are turned off on this install (plugins.hostModelDailyTokens is 0)' };
   const used = await pluginTokensToday(grant.userId);
   // The whole run budget is reserved against today's allowance, as model:complete reserves its estimate.
   if (used + Math.max(budget, estimateTokens({ prompt: req.prompt })) > cap) {
-    return { ok: false, status: 429, code: 'token_cap', error: `Today's plugin model allowance is too low for a run (${used} of ${cap} tokens used, a run may take ${budget}); it resets at midnight UTC` };
+    return { ok: false, status: 429, code: 'token_cap', error: `Today's plugin model allowance is too low for a run (${used} of ${cap} tokens used, a run may take ${budget}); it resets at midnight UTC. An admin can change plugins.hostModelDailyTokens or plugins.hostAgentRunTokens in Settings → System → Advanced configuration → Security` };
   }
   try {
     const { checkSpend } = await import('@/security/spend-budgets');

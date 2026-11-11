@@ -1,3 +1,4 @@
+import { productDocs } from '@/core/product-docs';
 import { filterRelevance } from './relevance';
 import { readKnowledge } from '@/core/protection/content-read';
 import { type EntityRef, entityRefFromSourceId, getKnowledgeGraph, type TraversalDirection } from '@/core/knowledge/graph';
@@ -101,6 +102,8 @@ export class KnowledgeTool extends BaseTool {
         { action: 'link', description: 'Create explicit edges between knowledge entities', defaultLevel: 'ALLOW' },
       ],
       tools: [
+        { name: 'search_product_docs', description: 'Search bundled Octipus help locally; no embedding model or knowledge database needed', parameters: { query: { type: 'string', description: 'Product help keywords', required: true } }, returns: 'Matching files, headings, line numbers and excerpts' },
+        { name: 'read_product_doc', description: 'Read a bounded excerpt from bundled Octipus help', parameters: { path: { type: 'string', description: 'File from search_product_docs', required: true } }, returns: 'Source lines from the bundled manual' },
         { name: 'search_knowledge', description: 'Search the knowledge base for relevant information using hybrid search', parameters: { query: { type: 'string', description: 'Search query', required: true } }, returns: 'Matching knowledge entries with similarity scores' },
         { name: 'read_knowledge', description: 'Read the full content of a knowledge entry by ID', parameters: { id: { type: 'string', description: 'Entry ID from search results', required: true } }, returns: 'Full content of the knowledge entry' },
         { name: 'index_file', description: 'Index a file into the knowledge base', parameters: { path: { type: 'string', description: 'File path', required: true } }, returns: 'Number of chunks indexed' },
@@ -116,6 +119,13 @@ export class KnowledgeTool extends BaseTool {
   }
 
   protected async registerTools(): Promise<void> {
+    this.registerTool('search_product_docs', 'Search the bundled Octipus manual locally by keywords. No model, embeddings or knowledge database required. Returns source files and lines; read_product_doc retrieves more context.',
+      createParameterSchema({ query: { type: 'string', description: 'Keywords about Octipus setup, configuration or features', required: true }, limit: { type: 'number', description: '1–10 results (default 5)', default: 5 } }),
+      args => productDocs.search(args.query as string, args.limit as number | undefined), { permissionAction: 'search' });
+    this.registerTool('read_product_doc', 'Read source lines from a bundled Octipus manual file returned by search_product_docs. Cannot read user files or arbitrary filesystem paths.',
+      createParameterSchema({ path: { type: 'string', description: 'Relative documentation file from search_product_docs', required: true }, line: { type: 'number', description: 'Start line (default 1)', default: 1 }, max_lines: { type: 'number', description: '1–120 lines (default 60)', default: 60 } }),
+      args => productDocs.read(args.path as string, args.line as number | undefined, args.max_lines as number | undefined), { permissionAction: 'search' });
+
     this.registerTool(
       'knowledge_stats',
       'Get detailed knowledge base statistics including entry counts by source type, age distribution, content metrics, and abstract coverage.',
