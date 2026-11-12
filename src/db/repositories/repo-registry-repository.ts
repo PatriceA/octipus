@@ -8,7 +8,7 @@ import { type NewWorkspaceRepo, type WorkspaceRepo, workspaceRepos } from '../sc
  * `userId` (the agent/route already holds the authenticated user), mirroring
  * the unscoped repository pattern (`profile-repository`).
  *
- * See `.octipus/multi-repo-design.md`.
+ * See docs/MULTI-REPO.md.
  */
 export class RepoRegistryRepository {
   private get db() { return getDb(); }

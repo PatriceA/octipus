@@ -6,6 +6,7 @@ import type { AgentRole, RoleConfig } from '@/core/agent/types';
 import { getDb } from '@/db/postgres';
 import { roles } from '@/db/schema/roles';
 import { canonicalTopic, TOPICS } from '@/models/topics';
+import { withoutRetiredToolIds } from '@/core/agent/retired-tools';
 import { apiLogger } from '@/utils/logger';
 
 /**
@@ -77,8 +78,10 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
             description: r.description ?? '',
             defaultTopic: r.defaultTopic,
             lane: laneOf(r.defaultTopic),
-            toolIds: (r.toolIds as string[]) ?? [],
-            coreToolIds: (r.coreToolIds as string[]) ?? [],
+            // A removed built-in tool still named in the row is not offered:
+            // the editor sends this list back on save.
+            toolIds: withoutRetiredToolIds((r.toolIds as string[]) ?? []),
+            coreToolIds: withoutRetiredToolIds((r.coreToolIds as string[]) ?? []),
             readOnly: r.readOnly,
             customized: r.customized,
             isSystem: r.isSystem,
@@ -206,7 +209,9 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
       const patch: Partial<RoleConfig> = {};
 
       if (body.toolIds !== undefined) {
-        const toolIds = trimmedList(body.toolIds);
+        // A list read back from a row saved before a tool was removed still
+        // names it; drop it rather than refuse the whole edit.
+        const toolIds = withoutRetiredToolIds(trimmedList(body.toolIds));
         if (toolIds.length === 0) {
           set.status = 400;
           return { error: 'toolIds must not be empty — a role with no tools cannot run' };

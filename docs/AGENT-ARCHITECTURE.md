@@ -76,7 +76,7 @@ The LLM-facing tool is `spawn_child`. Agents also get the lane escalation tool
 (one use per Agent lifetime) to retry a task on a different configured lane
 when children hit budget or timeout. It no longer selects a database expert.
 
-**Location:** `src/core/swarm/` — `spawner.ts`, `call-graph.ts`, `types.ts`, `errors.ts`, `escalate-tool.ts`, `swarm-tool.ts`, `orphan-reaper.ts`, `fan-out-budget.ts`, `node-repository.ts`. DB table `swarm_nodes`. The full design lives in `.octipus/swarm-design.md`.
+**Location:** `src/core/swarm/` — `spawner.ts`, `call-graph.ts`, `types.ts`, `errors.ts`, `escalate-tool.ts`, `swarm-tool.ts`, `orphan-reaper.ts`, `fan-out-budget.ts`, `node-repository.ts`. DB table `swarm_nodes`.
 
 ## Root agent persona
 
@@ -258,7 +258,7 @@ Children **inherit topic bindings, not the parent's model**. If a research Agent
 | qa | browser, browser-ext, shell, docker, filesystem, knowledge, task_state, visual, artifacts, artifacts_toolbox | test-automation, performance | Testing |
 | finance | browser, websearch, filesystem | financial-analysis | Financial work |
 | automation | shell, docker, filesystem, scheduling, mcp | automation-patterns, devops | Workflows |
-| pm | filesystem, messaging, tasks, knowledge, github, atlassian, skill-distill | project-management, technical-writing | Project mgmt |
+| pm | filesystem, messaging, tasks, knowledge, github, skill-distill | project-management, technical-writing | Project mgmt |
 | writing | filesystem, browser, websearch, knowledge, task_state, messaging, documents | technical-writing, api-design | Documentation |
 | communication | google-workspace, microsoft365, messaging, scheduling, profiles, notes, email-processor, voice | — | Email/calendar |
 | architecture | filesystem, shell, knowledge, task_state, websearch, mcp | — | System design |

@@ -1,3 +1,5 @@
+import { budgetErrorBody } from './budget-error';
+import { DESKTOP_ORIGINS } from '@/api/desktop-origins';
 import { eq } from 'drizzle-orm';
 import { cors, Elysia, listen, type RunningServer } from '@/api/http';
 import { getConfig } from '@/config';
@@ -46,7 +48,7 @@ import { healthRoutes } from './routes/health';
 import { hookRoutes } from './routes/hooks';
 import { knowledgeRoutes } from './routes/knowledge';
 import { logRoutes } from './routes/logs';
-import { connectorRoutes } from './routes/connectors';
+import { codeIndexRoutes } from './routes/code-index';
 import { mcpRoutes } from './routes/mcp';
 import { graphRoutes } from './routes/graph';
 import { memoryRoutes } from './routes/memory';
@@ -55,7 +57,6 @@ import { noteRoutes } from './routes/notes';
 import { personaRoutes } from './routes/persona';
 import { modelRoutes } from './routes/models';
 import { digestRoutes } from './routes/digest';
-import { readerRoutes } from './routes/reader';
 import { notificationRoutes } from './routes/notifications';
 import { spendBudgetRoutes } from './routes/spend-budgets';
 import { permissionRequestRoutes } from './routes/permission-requests';
@@ -70,7 +71,6 @@ import { scimRoutes } from './routes/scim';
 import { pipelineRoutes } from './routes/pipelines';
 import { pluginRoutes } from './routes/plugins';
 import { recurringTaskRoutes } from './routes/recurring-tasks';
-import { researchRoutes } from './routes/research';
 import { searchRoutes } from './routes/search';
 import { sessionRoutes } from './routes/sessions';
 import { inlineUiRoutes } from './routes/inline-ui';
@@ -86,6 +86,8 @@ import { taskRoutes } from './routes/tasks';
 import { caseRoutes, contactRoutes } from './routes/cases';
 import { publicFormRoutes, recordRoutes, recordTypeRoutes } from './routes/records';
 import { pluginPackageRoutes } from './routes/plugin-packages';
+import { pluginHostRoutes } from './routes/plugin-host';
+import { pluginCallRoutes, pluginUiRoutes } from './routes/plugin-ui';
 import { mailRoutes } from './routes/mail';
 import { moduleRoutes } from './routes/modules';
 import { scanFolderRoutes } from './routes/scan-folders';
@@ -112,12 +114,7 @@ import { setupWebSocket } from './websocket';
  * are the desktop app's own origins (not remote hosts), always allowed so the
  * thin client's cross-origin requests reach the backend.
  */
-const DESKTOP_ORIGINS = [
-  'tauri://localhost',
-  'http://tauri.localhost',
-  'https://tauri.localhost',
-  'http://localhost:3008',
-];
+// Kept in src/api/desktop-origins.ts, which the cross-site check of cookie-signed changes reads too.
 
 type Resolution = Awaited<ReturnType<typeof import('@/security/workspace-resolver').resolveWorkspace>>;
 
@@ -185,7 +182,9 @@ export function createServer() {
       // would override that and break the outer→embed iframe load.
       const path = new URL(request.url).pathname;
       const isArtifactPage = path.startsWith('/a/') || path.startsWith('/__artifacts__/');
-      if (!isArtifactPage) {
+      // Plugin package pages likewise: a sandboxing CSP of their own, framed by the app (routes/plugin-ui.ts).
+      const isPluginPage = path.startsWith('/api/plugin-ui/');
+      if (!isArtifactPage && !isPluginPage) {
         set.headers['X-Frame-Options'] = 'DENY';
         // A handler that serves its own page may set a narrower policy (the
         // OAuth popup callbacks: one nonce'd script, nothing else). Keep it.
@@ -198,6 +197,8 @@ export function createServer() {
     })
     // Error handling
     .onError(({ error, code, set }) => {
+      const budget = budgetErrorBody(error);
+      if (budget) { set.status = 429; return budget; }
       // A space access refusal from the access layer (`contentRepos`) is
       // its typed status — 404 for a non-member, 403 for a role that lacks
       // the action, 409 for an archived space — never a 500.
@@ -465,12 +466,14 @@ export function createServer() {
         .use(recordRoutes)
         .use(publicFormRoutes)
         .use(pluginPackageRoutes)
+        .use(pluginUiRoutes)
+        .use(pluginCallRoutes)
+        .use(pluginHostRoutes)
         .use(mailRoutes)
         .use(scanFolderRoutes)
         .use(companionRoutes)
         .use(backupRoutes)
         .use(protectionRoutes)
-        .use(readerRoutes)
         .use(digestRoutes)
         .use(emailRoutes)
         .use(calendarRoutes)
@@ -480,7 +483,7 @@ export function createServer() {
         .use(vaultRoutes)
         .use(chatRoutes)
         .use(pipelineRoutes)
-        .use(connectorRoutes)
+        .use(codeIndexRoutes)
         .use(mcpRoutes)
         .use(toolRoutes)
         .use(roleRoutes)
@@ -498,7 +501,6 @@ export function createServer() {
         .use(skillRoutes)
         .use(artifactRoutes)
         .use(recurringTaskRoutes)
-        .use(researchRoutes)
         .use(evalRoutes)
         .use(evaluationRoutes)
         .use(documentRoutes)

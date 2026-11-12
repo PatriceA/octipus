@@ -4,7 +4,7 @@ import type { MCPServer } from '@/core/types';
 import type { MCPTransport, ErrorHandler, MessageHandler, CloseHandler } from './transports/interface';
 
 const managedAuth = vi.hoisted(() => ({ refresh: vi.fn() }));
-vi.mock('@/connectors/cocoindex', () => ({ getCocoIndexService: () => ({ refreshAuthentication: managedAuth.refresh }) }));
+vi.mock('@/core/code-index/cocoindex', () => ({ getCocoIndexService: () => ({ refreshAuthentication: managedAuth.refresh }) }));
 
 const server: MCPServer = { id: 'broken', name: 'Broken integration', command: 'missing-mcp-server', isEnabled: true };
 

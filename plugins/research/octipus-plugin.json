@@ -1,0 +1,20 @@
+{
+  "name": "research",
+  "version": "1.0.0",
+  "apiVersion": "1.0.0",
+  "title": "Research",
+  "description": "Deep research in the background on a question: Octipus's research agent searches the web and your knowledge, reads the sources and writes a cited report, which you can save to your documents.",
+  "publisher": "Octipus",
+  "server": { "command": "node", "args": ["server.mjs"], "requestTimeoutMs": 30000 },
+  "tools": {
+    "start_research": { "effect": "write", "description": "Start deep research on a question in the background (a run of Octipus's research agent, as the user); returns its run id" },
+    "research_status": { "effect": "read", "description": "Read a research run: its status, stage and, once done, the cited report" },
+    "save_report": { "effect": "write", "description": "Save a finished research report as a document of the user's, or update the one saved before" }
+  },
+  "host": ["agent:run", "documents:write"],
+  "ui": {
+    "pages": [
+      { "path": "run", "title": "Research", "icon": "telescope", "entry": "index.html" }
+    ]
+  }
+}

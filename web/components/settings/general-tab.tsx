@@ -10,7 +10,7 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import type { HealthStatus, UserProfile } from '@/lib/types/settings';
 
-export function GeneralTab() {
+export function GeneralTab({ section = 'profile' }: { section?: 'profile' | 'health' }) {
   const { data: profile } = useQuery({
     queryKey: ['profile'],
     queryFn: () => api.get<UserProfile>('/auth/me'),
@@ -27,7 +27,7 @@ export function GeneralTab() {
   const isAdmin = !!user?.isAdmin;
   const { data: health } = useQuery({
     queryKey: ['health', 'detailed'],
-    enabled: isAdmin,
+    enabled: isAdmin && section === 'health',
     queryFn: async () => {
       try {
         return await api.get<HealthStatus>('/health/detailed');
@@ -41,10 +41,10 @@ export function GeneralTab() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">General Settings</h2>
+      <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">{section === 'health' ? 'System health' : 'Profile'}</h2>
 
       {/* Service Status */}
-      {isAdmin && <section>
+      {section === 'health' && isAdmin && <section>
         <h3 className="text-xs font-bold text-on-surface-variant uppercase mb-2">Service Status</h3>
         {services.length === 0 ? (
           <p className="text-sm text-on-surface-variant border border-outline-variant rounded-md px-3 py-2">
@@ -78,6 +78,7 @@ export function GeneralTab() {
         )}
       </section>}
 
+      {section === 'profile' && <>
       {/* Profile */}
       <div>
         <h3 className="text-xs font-bold text-on-surface-variant uppercase mb-2">Profile</h3>
@@ -131,6 +132,7 @@ export function GeneralTab() {
         </div>
         <ArrowRight className="w-4 h-4 text-primary group-hover:translate-x-0.5 transition-transform" />
       </Link>
+      </>}
     </div>
   );
 }

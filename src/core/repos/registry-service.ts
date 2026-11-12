@@ -15,7 +15,7 @@ import { indexRepoSymbols } from './symbols';
 /**
  * Registry service — orchestrates scanner + persistence + graph for a user.
  * Shared by the `repo_registry` tool and the workspace API route so the
- * scan/scope logic lives in one place. See `.octipus/multi-repo-design.md`.
+ * scan/scope logic lives in one place. See docs/MULTI-REPO.md.
  */
 
 /**

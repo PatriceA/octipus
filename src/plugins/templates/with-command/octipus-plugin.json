@@ -1,0 +1,14 @@
+{
+  "name": "my-command",
+  "version": "0.1.0",
+  "apiVersion": "1.0.0",
+  "title": "My command",
+  "description": "A starting point: a slash command, /wordcount, that calls a read tool as the user who typed it, with no model turn.",
+  "server": { "command": "node", "args": ["server.mjs"] },
+  "tools": {
+    "count_words": { "effect": "read", "description": "Count the words and characters of a text" }
+  },
+  "commands": [
+    { "name": "wordcount", "tool": "count_words", "description": "Count the words of the text after the command", "input": { "text": "$args" } }
+  ]
+}

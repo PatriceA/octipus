@@ -71,6 +71,23 @@ describe('getEffectiveQuota', () => {
   });
 });
 
+test('the fresh daily default permits work past 100k and lower per-user caps still enforce', async () => {
+  const config = await import('@/config');
+  const { agentConfigSchema } = await import('@/config/schema');
+  const { getQuotaManager, _resetQuotaManagerForTests } = await import('@/security/quotas');
+  const current = config.getConfig();
+  const spy = vi.spyOn(config, 'getConfig').mockReturnValue({ ...current, agent: { ...current.agent, maxTokenBudget: agentConfigSchema.parse({}).maxTokenBudget } });
+  _resetQuotaManagerForTests();
+  try {
+    const manager = getQuotaManager();
+    expect((await manager.getEffectiveQuota(bobId)).maxTokensPerDay).toBe(10_000_000);
+    expect((await manager.willExceed(bobId, 'tokensPerDay', 100_001)).allowed).toBe(true);
+    await manager.setOverride(bobId, { maxTokensPerDay: 50_000 });
+    expect((await manager.willExceed(bobId, 'tokensPerDay', 100_001)).allowed).toBe(false);
+    await manager.clearOverride(bobId);
+  } finally { spy.mockRestore(); _resetQuotaManagerForTests(); }
+});
+
 describe('setOverride', () => {
   test('first call inserts a row; subsequent calls update', async () => {
     const { getQuotaManager } = await import('@/security/quotas');

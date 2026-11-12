@@ -147,7 +147,7 @@ export function SessionList({
   };
 
   return (
-    <div className="flex h-full flex-col bg-surface-container-lowest font-mono">
+    <div className="flex h-full flex-col bg-surface-container-lowest font-sans">
       <div className="flex items-center justify-between border-b border-outline-variant/60 px-3 py-2">
         <h2 className="text-[12px] uppercase tracking-wider text-on-surface flex items-center gap-1.5">
           <span aria-hidden className="text-primary font-bold">&gt;</span>
@@ -180,19 +180,19 @@ export function SessionList({
 
       <div className="px-2 py-2 border-b border-outline-variant/60">
         <div className="relative">
-          <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-outline-variant" />
+          <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-on-surface-variant" />
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="search…"
-            className="w-full rounded-xs py-1 pl-7 pr-2 text-[12px] bg-surface-container-low border border-outline-variant/60 text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary transition-colors"
+            className="w-full rounded-xs py-1 pl-7 pr-2 text-[12px] bg-surface-container-low border border-outline-variant/60 text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:border-primary transition-colors"
           />
         </div>
       </div>
 
       {retentionDays != null && retentionDays > 0 && (
-        <div className="px-3 py-1 border-b border-outline-variant/60 text-[10px] text-outline">
+        <div className="px-3 py-1 border-b border-outline-variant/60 text-[10px] text-on-surface-variant">
           idle sessions are deleted after {retentionDays}d · <Pin className="inline h-2.5 w-2.5" /> keep to save
         </div>
       )}
@@ -207,7 +207,7 @@ export function SessionList({
 
         {GROUP_ORDER.filter((g) => grouped[g]).map((group) => (
           <div key={group} className="mt-1 first:mt-0">
-            <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-outline-variant flex items-center gap-1.5">
+            <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-on-surface-variant flex items-center gap-1.5">
               <span aria-hidden>&gt;</span>
               {group.toLowerCase()}
             </div>
@@ -221,7 +221,7 @@ export function SessionList({
                   <div
                     key={session.id}
                     className={cn(
-                      'group relative px-2 py-1.5 cursor-pointer transition-colors border-l-2',
+                      'group relative rounded-lg px-2 py-2 my-1 cursor-pointer transition-colors border-l-2',
                       isActive
                         ? 'border-l-primary bg-primary-container/30'
                         : 'border-l-transparent hover:border-l-outline-variant hover:bg-surface-container-low'
@@ -266,7 +266,7 @@ export function SessionList({
                             {session.title}
                           </p>
 
-                          <div className="mt-0.5 flex items-center gap-2 text-[10px] text-outline">
+                          <div className="mt-0.5 flex items-center gap-2 text-[10px] text-on-surface-variant">
                           {session.channelType && session.channelType !== 'webchat' && session.channelType !== 'api' && (
                             <span className="inline-flex items-center gap-0.5 text-primary" title={session.channelType}>
                               {session.channelType === 'telegram' ? <Smartphone className="h-2.5 w-2.5" /> :
@@ -304,7 +304,7 @@ export function SessionList({
                           }}
                           aria-label="Session actions"
                           className={cn(
-                            'mt-0.5 rounded-xs p-0.5 text-outline-variant transition-opacity hover:bg-surface-container hover:text-on-surface',
+                            'mt-0.5 rounded-xs p-0.5 text-on-surface-variant transition-opacity hover:bg-surface-container hover:text-on-surface',
                             menuOpenId === session.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
                           )}
                         >

@@ -1,5 +1,6 @@
 'use client';
 
+import { EnvironmentSelector } from '@/components/chat/environment-selector';
 import { reconcileChatMessages } from '../../../src/shared/chat-reconciliation';
 import { CHAT_INBOX_RESOURCE, CHAT_MESSAGE_MAX_CHARS, EXTERNAL_CHANNEL_TYPES } from '../../../src/shared/chat-gateway';
 import { SessionCost } from '@/components/chat/session-cost';
@@ -30,7 +31,6 @@ import SidePanel from '@/components/chat/side-panel';
 import MonitorPanel from '@/components/chat/monitor-panel';
 import LearningPanel from '@/components/chat/learning-panel';
 import WorkPlanPanel from '@/components/chat/work-plan-panel';
-import { AgentStrip } from '@/components/chat/agent-strip';
 import ContextPanel from '@/components/chat/context-panel';
 import { GlobalPermissionBanner } from '@/components/global-permission-banner';
 import type { SwarmTreeEvent } from '@/components/swarm-tree';
@@ -214,8 +214,6 @@ export default function ChatPage() {
   // feature disables itself when neither is present.
   const [voiceAvailable, setVoiceAvailable] = useState<boolean | null>(null);
   const [voiceUnavailableReason, setVoiceUnavailableReason] = useState<string | null>(null);
-  const [models, setModels] = useState<Array<{ name: string; isDefault: boolean }>>([]);
-  const [selectedModel, setSelectedModel] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   /** Root reply text streamed so far for one session/iteration; superseded by chat_response. */
   const [streaming, setStreaming] = useState<{ sessionId: string; iteration: number; text: string } | null>(null);
@@ -662,20 +660,6 @@ export default function ChatPage() {
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWorkspace?.id, mounted]);
-
-  // Load models
-  const loadModels = useCallback(async () => {
-    try {
-      const data = await api.get<{ models: Array<{ name: string; isDefault: boolean }> }>('/models');
-      if (data?.models) {
-        setModels(data.models);
-        const defaultModel = data.models.find(m => m.isDefault);
-        if (defaultModel && !selectedModel) setSelectedModel(defaultModel.name);
-      }
-    } catch {}
-  }, [selectedModel]);
-
-  useEffect(() => { loadModels(); }, [loadModels]);
 
   // Poll the open session's history only when the gateway can't deliver it:
   // the connection is down, or the session belongs to an external channel
@@ -1628,6 +1612,8 @@ export default function ChatPage() {
   // A companion notification opens its conversation with `?session=`; on an
   // already-open chat page that changes the query without a remount.
   const sessionParam = useSearchParams().get('session');
+  const newSessionParam = useSearchParams().get('new');
+  useEffect(() => { if (mounted && newSessionParam === '1') { setShowNewSessionDialog(true); const params = new URLSearchParams(window.location.search); params.delete('new'); router.replace(`/chat?${params.toString()}`); } }, [mounted, newSessionParam, router]);
   useEffect(() => {
     if (mounted && sessionParam) selectSession(sessionParam);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2110,9 +2096,10 @@ export default function ChatPage() {
 
       {/* Center — Messages + Input */}
       <div className="workspace-conversation flex-1 flex flex-col min-w-0 min-h-0">
-        <div className="flex items-center gap-3 border-b border-outline-variant/50 px-4 py-3">
+        <section className="session-chat-header" aria-label="Conversation header">
+        <div className="session-title-row">
           <h1
-            className="desktop-session-title min-w-0 flex-1 truncate text-sm font-medium text-on-surface"
+            className="desktop-session-title min-w-0 flex-1 truncate text-base font-semibold text-on-surface"
             data-testid="current-session-title"
             title={activeSessionTitle}
           >
@@ -2121,7 +2108,7 @@ export default function ChatPage() {
           <button
             ref={compactSessionButtonRef}
             type="button"
-            className="compact-session-button min-w-0 flex-1 truncate text-left text-sm font-medium text-on-surface"
+            className="compact-session-button min-w-0 flex-1 truncate text-left text-base font-semibold text-on-surface"
             aria-label={`Switch conversation: ${activeSessionTitle}`}
             aria-haspopup="dialog"
             aria-expanded={showCompactSessions}
@@ -2130,20 +2117,23 @@ export default function ChatPage() {
             <span className="text-primary" aria-hidden>&gt; </span>
             {activeSessionTitle}
           </button>
-          {!isCompanionChat && companionSessionId && <button type="button" onClick={() => selectSession(companionSessionId)} className="inline-flex items-center gap-1 text-xs text-primary whitespace-nowrap"><Sparkles className="h-3.5 w-3.5" aria-hidden />Companion</button>}
+          {!isCompanionChat && companionSessionId && <button type="button" onClick={() => selectSession(companionSessionId)} className="session-companion-shortcut inline-flex items-center gap-1 text-xs text-secondary whitespace-nowrap"><Sparkles className="h-3.5 w-3.5" aria-hidden />Companion</button>}
           <button type="button" onClick={createSession} className="text-xs text-primary whitespace-nowrap">New work</button>
         </div>
-        {isCompanionChat && <section aria-label="Companion chat identity" className="border-b border-primary/20 bg-primary/5 px-4 py-3">
+        <EnvironmentSelector key={`environment-${activeSessionId ?? 'new'}`} sessionId={activeSessionId} running={isLoading} />
+        {isCompanionChat && <section aria-label="Companion chat identity" className="border-b border-secondary/30 bg-secondary-container px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="flex items-center gap-2 text-sm font-medium text-primary"><Sparkles className="h-4 w-4" aria-hidden />Your cross-project coordinator</p>
-            <Link href="/companion" className="text-xs text-primary underline">Goals & supervision settings</Link>
+            <p className="flex items-center gap-2 text-sm font-medium text-secondary"><Sparkles className="h-4 w-4" aria-hidden />Your cross-project coordinator</p>
+            <Link href="/companion" className="text-xs text-secondary underline">Goals & supervision settings</Link>
           </div>
           <p className="mt-1 text-xs text-on-surface-variant">Plan work, follow your projects, or save an idea for later. You can also work directly in any session chat.</p>
           <p className="mt-1 text-xs text-on-surface-variant">{companionChat.data?.modelName} · {companionChat.data?.enabled ? 'Supervision enabled' : 'Supervision disabled'}</p>
         </section>}
-        {activeSessionId && <SessionCost sessionId={activeSessionId} />}
-        {activeSessionId && <SkillUsage key={activeSessionId} sessionId={activeSessionId} running={isLoading} />}
-        <AgentStrip agents={trackedAgents} />
+        {activeSessionId && <div className="session-tools-row">
+          <SessionCost sessionId={activeSessionId} />
+          <SkillUsage key={`skills-${activeSessionId}`} sessionId={activeSessionId} running={isLoading} />
+        </div>}
+        </section>
         {activeSessionId && historyErrors[activeSessionId] && <div role="status" data-testid="chat-sync-status"
           className="mx-4 my-2 rounded border border-outline-variant/30 bg-surface-container px-3 py-2 text-xs text-on-surface-variant">
           <p>{historyErrors[activeSessionId]}</p>
@@ -2278,9 +2268,6 @@ export default function ChatPage() {
             sessionFiles={activeState?.fileChanges}
             onOpenFile={setOpenFilePath}
             connectionStatus={connectionStatus}
-            selectedModel={selectedModel}
-            models={models}
-            onModelChange={setSelectedModel}
             swarmSessionId={activeSessionId}
             swarmEvents={swarmEvents}
             swarmDurationMs={swarmDurationMs}

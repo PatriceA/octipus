@@ -48,6 +48,12 @@ process.env.LOG_LEVEL = process.env.LOG_LEVEL ?? 'error';
 // the suites of a module's routes and tools run against it switched on. The
 // tests of switching off set the module list themselves.
 process.env.MODULES_ENABLED = process.env.MODULES_ENABLED ?? MODULES.map((m) => m.id).join(',');
+// Plugin package fixtures run unwrapped, as on any host without a sandbox
+// runner (most CI runners): `plugins.sandbox` defaults to `required`, which
+// would refuse every fixture there. The sandbox's own suites set it (and the
+// runner) themselves: src/plugins/packages/sandbox-policy.test.ts,
+// src/mcp/transports/stdio.plugin-sandbox.test.ts, src/security/shell-sandbox.tty.test.ts.
+process.env.PLUGINS_SANDBOX = process.env.PLUGINS_SANDBOX ?? 'off';
 
 export const TEST_CONFIG = {
   masterKey: process.env.MASTER_KEY,

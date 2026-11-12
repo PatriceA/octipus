@@ -22,7 +22,12 @@ import { workspaces } from './organizations';
  * durable thing the run produced (the saved document) for anything that
  * outlives the row. `stage` / `detail` are the worker's progress line.
  */
-export type BackgroundJobKind = 'research' | 'document' | 'learning';
+/**
+ * `research`: the core research module's runs, kept for the rows it left (the
+ * module is removed; plugins/research runs through `agent`). `agent`: a
+ * plugin's background agent run (host scope `agent:run`, src/plugins/packages/host-agent.ts).
+ */
+export type BackgroundJobKind = 'research' | 'document' | 'learning' | 'agent';
 /** `cancelled`: the thing the job was for went away (a document deleted mid-run) — not news, not a failure. */
 export type BackgroundJobStatus = 'queued' | 'running' | 'done' | 'error' | 'interrupted' | 'cancelled';
 

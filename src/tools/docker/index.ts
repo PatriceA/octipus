@@ -1,3 +1,4 @@
+import { executionEnvironmentFor, hasAccountAuthority } from '@/security/execution-environments';
 import { hostname, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { claimDockerProject } from '@/db/repositories/docker-project-repository';
@@ -61,6 +62,7 @@ export class DockerTool extends BaseTool {
 
   getManifest(): ToolManifest {
     return {
+      execution: { kind: 'host', program: 'docker' },
       id: this.id,
       name: this.name,
       version: this.version,
@@ -169,6 +171,29 @@ export class DockerTool extends BaseTool {
     );
   }
 
+  /** Explicit Docker-account authority supports normal Compose, including builds/env files and host stacks. */
+  private async accountCompose(args: Record<string, unknown>, ctx: AgentContext, cwd: string, file: string, services: string[], timeout: number) {
+    const deadline = Date.now() + timeout;
+    const run = (argv: string[]) => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error('Compose operation deadline exceeded; inspect its outcome before retrying');
+      return this.runDocker(['--host', 'unix:///var/run/docker.sock', ...argv], remaining, cwd);
+    };
+    const existing = await run(['ps', '-a', '--filter', `label=com.docker.compose.project=${args.project}`, '--format', '{{.ID}}']);
+    if (existing.exitCode !== 0) return { ...existing, executed: false };
+    for (const id of existing.stdout.trim().split(/\s+/).filter(Boolean)) {
+      const owner = await run(['inspect', '-f', '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}', id]);
+      if (owner.exitCode !== 0 || owner.stdout.trim() !== cwd) throw new ToolNotExecutedError('docker', 'Compose project belongs to another repository; select that repository explicitly');
+    }
+    const daemon = createHash('sha256').update(JSON.stringify([hostname(), 'unix:///var/run/docker.sock'])).digest('hex');
+    await claimDockerProject(`${daemon}:${args.project}`, cwd, ctx, true, !!existing.stdout.trim(), true);
+    const base = ['compose', '--project-directory', cwd, '-f', file, '-p', String(args.project)];
+    const operation = args.operation === 'up' ? ['up', '-d', ...(args.build ? ['--build'] : []), ...(args.forceRecreate ? ['--force-recreate'] : []), '--wait']
+      : args.operation === 'down' ? ['down', '--remove-orphans'] : args.operation === 'logs' ? ['logs', '--tail', '200', '--no-color'] : ['ps', '--all', '--format', 'json'];
+    const result = await run([...base, ...operation, ...services]);
+    return { ...result, project: args.project, operation: args.operation, executed: true, authority: 'account', volumesPreserved: args.operation === 'down' ? true : undefined };
+  }
+
   private async runDocker(args: string[], timeout: number = EXEC_TIMEOUT, cwd?: string): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
     return new Promise((resolve, reject) => {
       // The args come from the model, and `docker run --env NAME` forwards a
@@ -243,8 +268,12 @@ export class DockerTool extends BaseTool {
     const file = await realpath(resolve(cwd, typeof args.file === 'string' ? args.file : 'compose.yaml'));
     const rel = relative(cwd, file);
     if (rel.startsWith('..') || isAbsolute(rel)) throw new ToolNotExecutedError('docker', 'Compose file must be inside the approved repository');
-    let rawText: string;
-    try { rawText = await validateRawCompose(file, cwd); } catch (error) { throw new ToolNotExecutedError('docker', (error as Error).message); }
+    const environment = executionEnvironmentFor(ctx);
+    const account = hasAccountAuthority(ctx) && environment?.backend === 'host' && environment.hostServices;
+    let rawText = '';
+    if (!account) {
+      try { rawText = await validateRawCompose(file, cwd); } catch (error) { throw new ToolNotExecutedError('docker', (error as Error).message); }
+    }
     const ports = args.approvedPorts ?? [];
     if (!Array.isArray(ports) || ports.some(port => !Number.isInteger(port) || port < 1 || port > 65535)) throw new ToolNotExecutedError('docker', 'approvedPorts must contain integer host ports from 1 to 65535');
     const bindPaths = args.approvedBindPaths ?? [];
@@ -256,6 +285,7 @@ export class DockerTool extends BaseTool {
     if (!Array.isArray(services) || services.some(name => typeof name !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name))) throw new ToolNotExecutedError('docker', 'services must contain explicit Compose service names');
     if (args.operation === 'down' && services.length) throw new ToolNotExecutedError('docker', 'down operates on the whole named project; omit services');
     if (args.operation !== 'up' && (args.build || args.forceRecreate)) throw new ToolNotExecutedError('docker', 'build and forceRecreate apply only to up');
+    if (account) return this.accountCompose(args, ctx, cwd, file, services as string[], timeout);
     const deadline = Date.now() + timeout;
     const run = (argv: string[], limit = EXEC_TIMEOUT) => {
       const remaining = deadline - Date.now();

@@ -1,7 +1,7 @@
 import { expect, test } from './fixtures/auth';
 import { json } from './fixtures/api-stubs';
 
-test('native selects use Deep Sea surfaces and light text', async ({ authenticatedPage: page }) => {
+test('native selects use workspace surfaces with readable text', async ({ authenticatedPage: page }) => {
   await page.route('**/api/models/', route => json(route, 200, {
     models: [{ id: 'deepsea-model', name: 'Deepsea model', modelId: 'deepsea-model' }],
   }));
@@ -28,13 +28,13 @@ test('native selects use Deep Sea surfaces and light text', async ({ authenticat
   });
 
   expect(colors).toEqual({
-    colorScheme: 'dark',
-    controlBackground: 'rgb(20, 48, 59)',
-    controlColor: 'rgb(237, 245, 243)',
-    controlBorder: 'rgb(146, 201, 197)',
-    optionBackground: 'rgb(13, 37, 48)',
-    optionColor: 'rgb(237, 245, 243)',
-    outlineColor: 'rgb(146, 201, 197)',
+    colorScheme: 'light',
+    controlBackground: 'rgb(238, 243, 245)',
+    controlColor: 'rgb(32, 50, 61)',
+    controlBorder: 'rgb(38, 94, 89)',
+    optionBackground: 'rgb(255, 255, 255)',
+    optionColor: 'rgb(32, 50, 61)',
+    outlineColor: 'rgb(38, 94, 89)',
     outlineStyle: 'solid',
     outlineWidth: '2px',
   });

@@ -1,5 +1,5 @@
 /**
- * Convert a legacy in-process plugin (`extensions/<name>/plugin.json` + an
+ * Convert a legacy in-process plugin (`~/.octipus/legacy-plugins/<name>/plugin.json` + an
  * index module, docs/PLUGINS.md) into a plugin package (`octipus-plugin.json`
  * + a local MCP server, docs/PLUGIN-PACKAGES.md).
  *

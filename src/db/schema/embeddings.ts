@@ -124,7 +124,7 @@ export const embeddings = pgTable('embeddings', {
    */
   docId: uuid('doc_id').references((): AnyPgColumn => documents.id, { onDelete: 'cascade' }),
   /**
-   * Multi-repo scoping (see `.octipus/multi-repo-design.md`). When the chunk
+   * Multi-repo scoping (see docs/MULTI-REPO.md). When the chunk
    * comes from a registered repository's generated/curated content (repo map,
    * AGENTS.md, …) this points at the `workspace_repos` row, so search can be
    * scoped to one repo, a subset, or span the suite. NULL for non-repo content.
@@ -163,14 +163,14 @@ export interface EmbeddingMetadata {
   /**
    * Provenance tag for rows that were not user-supplied. Lets a surface
    * scope retrieval/display to a known corpus — e.g. `'octipus-docs'` for
-   * the product documentation auto-indexed at boot (see `src/db/seed-docs.ts`).
+   * the legacy product documentation previously indexed at boot (see the retired product-docs indexer).
    */
   source?: string;
   /**
    * SHA-256 of the FULL source file this chunk came from (distinct from the
    * row's `content_sha256`, which hashes only the chunk). Stamped on every
    * chunk by an idempotent re-indexer so it can detect "file unchanged since
-   * last index" with one query and skip re-embedding. See `src/db/seed-docs.ts`.
+   * last index" with one query and skip re-embedding. See the retired product-docs indexer.
    */
   fileSha?: string;
 }

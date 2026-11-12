@@ -6,8 +6,7 @@
  *
  * Only types that are genuinely the SAME contract on both sides belong here.
  * Server domain models, DB rows, WS wire payloads, and per-page API response
- * shapes that merely share a name are intentionally NOT unified — see
- * `.octipus/audit-2026-05-29.md` (M19) for the rationale.
+ * shapes that merely share a name are intentionally NOT unified.
  */
 
 /** Channels a user can link their account to for notifications / chat. */

@@ -7,9 +7,15 @@
  * metacharacter or a leading dash there.
  */
 import { describe, expect, test } from 'vitest';
-import { spawnProcess } from './proc';
+import { runCommand, spawnProcess } from './proc';
 
 describe('spawnProcess argv[0] guard', () => {
+  test('a missing executable reports its cause without exposing arguments', async () => {
+    const result = await runCommand({ command: 'octipus-missing-binary-regression-6381', args: ['private-token-do-not-print'] });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('could not start (ENOENT)');
+    expect(result.stderr).not.toContain('private-token-do-not-print');
+  });
   test('a flag-shaped command is refused', () => {
     expect(() => spawnProcess({ command: '-rf', args: ['/'] })).toThrow(/starts with "-"/);
   });

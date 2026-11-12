@@ -1,7 +1,7 @@
 /**
  * Browser entry point.
  *
- * The document shell — `<html class="dark">`, the metadata, the icons — lives
+ * The document shell — `<html>`, the metadata, the icons — lives
  * in `index.html` now rather than in a layout component, which is the one real
  * structural difference from the file-router: there is no server render, so
  * there is nothing for a React component to emit into `<head>`.

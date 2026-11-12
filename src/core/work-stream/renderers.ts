@@ -1,5 +1,5 @@
 /**
- * Per-tool work-stream renderers — `.octipus/end-user-ux-design.md` Thread 1.
+ * Per-tool work-stream renderers.
  *
  * Pure functions that map a tool call (`name` + `args`) and, when available,
  * its `result` into a human one-liner plus a structured, size-capped preview

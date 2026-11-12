@@ -30,20 +30,14 @@ interface WorkspaceConfig {
   additionalPaths?: string[];
 }
 
-export function IntegrationsTab() {
+export function IntegrationsTab({ foldersOnly = false }: { foldersOnly?: boolean }) {
   // The CLI integration status reads the install's tool inventory (admin-only).
   const isAdmin = !!useAuth().user?.isAdmin;
+  if (foldersOnly) return <WorkspaceSection isAdmin={isAdmin} />;
   return (
     <div className="space-y-8">
       <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">Integrations</h2>
-      <WorkspaceSection isAdmin={isAdmin} />
-      <hr className="border-outline-variant/10" />
-      {isAdmin && (
-        <>
-          <CLIIntegrationsSection />
-          <hr className="border-outline-variant/10" />
-        </>
-      )}
+      <p className="text-sm text-on-surface-variant">Program and login access lives in <a className="text-primary underline" href="/settings?tab=environments">Environments & Access</a>. Project directories live in <a className="text-primary underline" href="/settings?tab=folders">Workspace folders</a>.</p>
       <OAuthIntegrationsSection />
       <hr className="border-outline-variant/10" />
       <IntegrationSettingsSection />
@@ -171,7 +165,7 @@ function WorkspaceSection({ isAdmin }: { isAdmin: boolean }) {
             <button
               onClick={handleAddPath}
               disabled={!newPath.trim() || validating || saving}
-              className="px-3 py-1.5 text-xs bg-primary text-[#0e0e0e] cursor-pointer rounded-lg hover:bg-primary-container disabled:opacity-50 flex items-center gap-1"
+              className="px-3 py-1.5 text-xs bg-primary text-on-primary cursor-pointer rounded-lg hover:bg-primary-dim disabled:opacity-50 flex items-center gap-1"
             >
               {validating || saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
               Add
@@ -190,7 +184,7 @@ function WorkspaceSection({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
-function CLIIntegrationsSection() {
+export function CLIIntegrationsSection() {
   const { data: ghStatus, isLoading: ghLoading, refetch: refetchGh } = useQuery({
     queryKey: ['github-status'],
     queryFn: async () => {
@@ -198,19 +192,6 @@ function CLIIntegrationsSection() {
         const skills = await api.get<{ tools: { id: string; status: string; isInitialized: boolean }[] }>('/tools');
         const ghSkill = skills?.tools?.find((s) => s.id === 'github');
         return { available: ghSkill?.status === 'active', configured: !!ghSkill?.isInitialized };
-      } catch {
-        return { available: false, configured: false };
-      }
-    },
-  });
-
-  const { data: glStatus, isLoading: glLoading, refetch: refetchGl } = useQuery({
-    queryKey: ['gitlab-status'],
-    queryFn: async () => {
-      try {
-        const skills = await api.get<{ tools: { id: string; status: string; isInitialized: boolean }[] }>('/tools');
-        const glSkill = skills?.tools?.find((s) => s.id === 'gitlab');
-        return { available: glSkill?.status === 'active', configured: !!glSkill?.isInitialized };
       } catch {
         return { available: false, configured: false };
       }
@@ -225,14 +206,6 @@ function CLIIntegrationsSection() {
       loading: ghLoading,
       refetch: refetchGh,
       setupHint: 'Install gh CLI and run: gh auth login',
-    },
-    {
-      name: 'GitLab',
-      description: 'Manage projects, issues, MRs, and pipelines via glab CLI',
-      status: glStatus,
-      loading: glLoading,
-      refetch: refetchGl,
-      setupHint: 'Install glab CLI and run: glab auth login',
     },
   ];
 

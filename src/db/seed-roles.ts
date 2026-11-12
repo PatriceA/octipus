@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import type { RoleConfig } from '@/core/agent/types';
 import { getDb } from '@/db/postgres';
 import { type Role, roles } from '@/db/schema/roles';
+import { withoutRetiredToolIds } from '@/core/agent/retired-tools';
 import { logger } from '@/utils/logger';
 
 /**
@@ -48,10 +49,12 @@ export async function seedRoles(): Promise<void> {
       // lane is not user-editable for a system role — a rename in code
       // (analysis → research) has to propagate.
       if (!existing.customized) {
-        // Merge any new toolIds from code (preserves user additions).
-        const dbToolIds = new Set((existing.toolIds as string[]) || []);
+        // Merge any new toolIds from code (preserves user additions), and
+        // drop the ids of removed built-in tools the merge once put there.
+        const stored = (existing.toolIds as string[]) || [];
+        const dbToolIds = new Set(withoutRetiredToolIds(stored));
         const newTools = (config.toolIds || []).filter(id => !dbToolIds.has(id));
-        if (newTools.length > 0) {
+        if (newTools.length > 0 || dbToolIds.size !== stored.length) {
           updates.toolIds = [...dbToolIds, ...newTools];
         }
         if (existing.isSystem) {
@@ -154,7 +157,7 @@ export async function loadRolesFromDb(): Promise<void> {
       // The same bar `loadRoles` holds the built-ins to: a row with no prompt
       // or no tools is skipped rather than registered as something that would
       // fail at spawn time.
-      const toolIds = (dbRole.toolIds as string[]) ?? [];
+      const toolIds = withoutRetiredToolIds((dbRole.toolIds as string[]) ?? []);
       if (!dbRole.systemPromptTemplate?.trim() || toolIds.length === 0) {
         logger.warn({ role: dbRole.role }, 'Skipping user role with no prompt or no tools');
         continue;
@@ -176,13 +179,15 @@ export async function loadRolesFromDb(): Promise<void> {
       // tool-discovery gate) and `liteSystemPromptTemplate`. All three were
       // present in tests and absent in a booted server, which is why nothing
       // caught it.
+      // A customized row can still name a removed tool; it is dropped here.
+      const toolIds = withoutRetiredToolIds((dbRole.toolIds as string[]) ?? []);
       ROLE_CONFIGS[dbRole.role as keyof typeof ROLE_CONFIGS] = {
         ...existing,
         role: dbRole.role as any,
-        toolIds: dbRole.toolIds as string[],
+        toolIds,
         defaultTopic: dbRole.defaultTopic,
         systemPromptTemplate: dbRole.systemPromptTemplate,
-        ...dbOwnedFields(dbRole, (dbRole.toolIds as string[]) ?? []),
+        ...dbOwnedFields(dbRole, toolIds),
       };
     }
   }

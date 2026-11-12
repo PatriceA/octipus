@@ -188,6 +188,27 @@ export class BackgroundJobRepository {
       .orderBy(desc(backgroundJobs.seq))
       .limit(limit);
   }
+
+  /**
+   * The running (or queued) background runs of plugin package `plugin`
+   * (`payload.plugin`): every user's for the admin view, or one user's own.
+   * Plugin runs start in personal workspaces only.
+   */
+  async runningForPlugin(plugin: string, userId?: string, limit = 200): Promise<BackgroundJob[]> {
+    return this.db
+      .select()
+      // i2: plugin runs are personal; a space's job is never listed
+      .from(backgroundJobs)
+      .where(and(
+        eq(backgroundJobs.kind, 'agent'),
+        inArray(backgroundJobs.status, ['running', 'queued']),
+        sql`${backgroundJobs.payload}->>'plugin' = ${plugin}`,
+        notInSharedWorkspace(backgroundJobs.workspaceId),
+        ...(userId ? [eq(backgroundJobs.userId, userId)] : []),
+      ))
+      .orderBy(desc(backgroundJobs.seq))
+      .limit(limit);
+  }
 }
 
 export const backgroundJobRepository = new BackgroundJobRepository();

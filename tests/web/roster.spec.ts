@@ -24,9 +24,7 @@ async function open(page: Page) {
   await page.goto('/agents/roster');
 }
 
-test('the roster shows each role as an agent and toggles its heartbeat', async ({ authenticatedPage: page }) => {
-  let put: unknown = null;
-  await page.route('**/api/tasks/role-agents', (route) => { put = route.request().postDataJSON(); return json(route, 200, { ok: true }); });
+test('the roster reports heartbeat status and directs configuration to Settings', async ({ authenticatedPage: page }) => {
   await open(page);
   await expect(page.getByRole('heading', { name: 'Roster' })).toBeVisible();
   await expect(page.getByRole('note')).toContainText('Role agents cannot update to-dos');
@@ -43,7 +41,26 @@ test('the roster shows each role as an agent and toggles its heartbeat', async (
   await page.getByRole('button', { name: /research/ }).click();
   const research = page.getByRole('complementary', { name: 'research profile' });
   await expect(research).toContainText('waiting: its heartbeat is off');
-  // Controlled by the server's state: it flips once the roster is read again.
-  await research.getByRole('switch').click();
-  await expect.poll(() => put).toEqual({ role: 'research', enabled: true });
+  await expect(page.getByRole('switch')).toHaveCount(0);
+  await expect(research.getByRole('link', { name: 'Manage heartbeat in Settings' })).toHaveAttribute('href', '/settings?tab=heartbeat');
+});
+
+test('Octipus reports the same personal heartbeat as Settings without another control', async ({ authenticatedPage: page }) => {
+  const state = structuredClone(roster);
+  state.roles[0].heartbeat = { enabled: true, hookId: 'personal', nextCheckAt: at(10, 15), intervalMinutes: 15, lastCheck: null };
+  await page.route('**/api/agents/roster', route => json(route, 200, state));
+  await page.goto('/agents/roster');
+  const profile = page.getByRole('complementary', { name: 'Octipus profile' });
+  await expect(profile).toContainText('Uses the same personal heartbeat as Settings');
+  await expect(profile.getByRole('switch')).toHaveCount(0);
+  await expect(profile.getByRole('link', { name: 'Manage heartbeat in Settings' })).toHaveAttribute('href', '/settings?tab=heartbeat');
+});
+
+test('an enabled personal heartbeat reports the server pause clearly', async ({ authenticatedPage: page }) => {
+  const state = structuredClone(roster); state.heartbeatEnabled = false;
+  state.roles[0].heartbeat.enabled = true;
+  await page.route('**/api/agents/roster', route => json(route, 200, state));
+  await page.goto('/agents/roster');
+  await expect(page.getByRole('button', { name: /^O Octipus/ })).toContainText('heartbeat on · server paused');
+  await expect(page.getByRole('link', { name: 'Open heartbeat settings' })).toBeVisible();
 });

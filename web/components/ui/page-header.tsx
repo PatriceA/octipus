@@ -22,7 +22,7 @@ export function PageHeader({
   return (
     <div
       className={cn(
-        'flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5 font-sans animate-enter',
+        'flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5 font-sans',
         className,
       )}
     >

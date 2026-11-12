@@ -24,10 +24,10 @@ process.env.LOG_LEVEL ??= 'error';
  */
 const PERSONAL_PREFIXES = [
   '/api/admin', '/api/agents', '/api/auth', '/api/backups', '/api/capabilities', '/api/channels', '/api/chat',
-  '/api/calendar', '/api/companion', '/api/connectors', '/api/context-hooks', '/api/devices', '/api/digest', '/api/email', '/api/eval', '/api/evaluations',
+  '/api/calendar', '/api/code-index', '/api/companion', '/api/context-hooks', '/api/devices', '/api/digest', '/api/email', '/api/eval', '/api/evaluations',
   '/api/gateway', '/api/graph', '/api/health', '/api/heartbeat', '/api/hooks', '/api/invites', '/api/logs', '/api/mcp',
   '/api/me', '/api/memory', '/api/metrics', '/api/models', '/api/modules', '/api/onboarding', '/api/permission-requests', '/api/persona',
-  '/api/pipelines', '/api/plugin-packages', '/api/plugins', '/api/reader', '/api/recurring-tasks', '/api/research', '/api/roles',
+  '/api/pipelines', '/api/plugin-host', '/api/plugin-packages', '/api/plugin-ui', '/api/plugins', '/api/recurring-tasks', '/api/roles',
   '/api/runs', '/api/saml', '/api/scim', '/api/search', '/api/settings', '/api/skills', '/api/spend-budgets',
   '/api/swarm', '/api/tools', '/api/topics', '/api/trajectories', '/api/vault', '/api/verification',
   '/api/voice', '/api/webhooks', '/api/workspace', '/v1',
@@ -138,9 +138,8 @@ const SPACE_ACTING = [
   'DELETE /api/spaces/:id/invites/:inviteId', 'GET /api/spaces/:id/activity',
   // Funding and budgets (S5): read for members, writes owner-only (sponsor raises).
   'PUT /api/spaces/:id/funding', 'GET /api/spaces/:id/budget', 'PUT /api/spaces/:id/budget',
-  // Space connectors (S5): listed for members, connect/disconnect owner-only.
-  'GET /api/spaces/:id/connectors', 'POST /api/spaces/:id/connectors/:connectorId',
-  'DELETE /api/spaces/:id/connectors/:connectorId',
+  // The space's GitHub token (S5): read for members, set/removed owner-only.
+  'GET /api/spaces/:id/github', 'PUT /api/spaces/:id/github', 'DELETE /api/spaces/:id/github',
   // Room modes (S5): read for room members, set by room creator or space owner; feedback by room members.
   'GET /api/spaces/:id/rooms/:roomId/mode', 'PUT /api/spaces/:id/rooms/:roomId/mode',
   'PUT /api/spaces/:id/rooms/:roomId/messages/:messageId/feedback',
@@ -158,7 +157,10 @@ const SPACE_ACTING = [
   // Mission control: the principal's own agents, hooks and spend through its scoped repositories.
   'GET /api/agents/overview (by target)', 'GET /api/agents/triggers (by target)', 'GET /api/agents/roster (by target)', 'GET /api/agents/:id/run (by target)', 'GET /api/agents/pulse (by target)',
   // Context inspector: the session owner only (canActInSession settings), never a room member.
+  // Home returns an empty scoped snapshot in shared workspaces, never personal fallback.
+  'GET /api/sessions/desk',
   'GET /api/sessions/:id/context',
+  'GET /api/sessions/:id/execution-environment', 'PUT /api/sessions/:id/execution-environment',
   'GET /api/sessions/:id/plan', 'POST /api/sessions/:id/plan/feedback', 'POST /api/sessions', 'PATCH /api/sessions/:id',
   'DELETE /api/sessions/:id', 'GET /api/sessions/:id/messages', 'POST /api/sessions/:id/attachments', 'GET /api/sessions/:id/files',
   'PUT /api/sessions/:id/files', 'GET /api/sessions/:id/changes', 'GET /api/sessions/:id/changes/diff', 'POST /api/sessions/:id/complete',

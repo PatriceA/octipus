@@ -7,6 +7,12 @@
 import { z } from 'zod';
 import { fieldListSchema } from '@/core/records/fields';
 import { SIGNATURE_FILE } from './integrity';
+import { refineRuntime, runtimeFields } from './manifest-runtime';
+import { contributionFields, contributionProblems } from './manifest-contributions';
+import { MODEL_FIELDS, modelProblems } from './manifest-model';
+import { STORE_FIELDS, storeProblems } from './manifest-store';
+import { DASHBOARD_FIELDS, dashboardProblems } from './manifest-dashboards';
+import { UI_HOST_FIELDS } from './manifest-ui-host';
 import {
   PLUGIN_PACKAGE_API_VERSION,
   PLUGIN_TOOL_EFFECTS,
@@ -37,11 +43,12 @@ export const manifestSchema = z.object({
   description: z.string().trim().min(1).max(1000),
   publisher: z.string().trim().max(200).optional(),
   homepage: z.string().url().max(500).optional(),
+  ...runtimeFields,
   server: z.object({
     command: z.string().trim().min(1).max(500),
     args: z.array(z.string().max(1000)).max(50).optional(),
     requestTimeoutMs: z.number().int().min(1000).max(600_000).optional(),
-  }).strict(),
+  }).strict().optional(),
   tools: z.record(
     z.string().regex(TOOL_NAME_RE, 'tools: a tool name is letters, digits, _ and - (at most 64)'),
     z.object({
@@ -49,7 +56,7 @@ export const manifestSchema = z.object({
       description: z.string().max(500).optional(),
     }).strict(),
   ).refine((tools) => Object.keys(tools).length > 0, 'tools: declare at least one tool')
-    .refine((tools) => Object.keys(tools).length <= 200, 'tools: at most 200'),
+    .refine((tools) => Object.keys(tools).length <= 200, 'tools: at most 200').optional(),
   network: z.array(z.string().regex(HOST_RE, 'network: host names such as api.example.com, *.example.com or api.example.com:8443')
     .refine(hostPortOk, 'network: a port is 1-65535')).max(50).optional(),
   maxProtection: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).optional(),
@@ -60,10 +67,29 @@ export const manifestSchema = z.object({
     help: z.string().max(500).optional(),
     required: z.boolean().optional(),
   }).strict()).max(20).optional(),
+  ...contributionFields,
+  ...UI_HOST_FIELDS,
+  ...MODEL_FIELDS,
+  ...STORE_FIELDS,
+  ...DASHBOARD_FIELDS,
 }).strict().superRefine((m, ctx) => {
+  refineRuntime(m, ctx);
+  // Pages call the plugin's own sandboxed tools, and the host API token rides
+  // those tool calls: both need the package runtime.
+  if (m.runtime === 'in-process' && (m.ui || m.host?.length || m.dashboards?.length)) {
+    ctx.addIssue({ code: 'custom', message: 'ui, host and dashboards apply to the package runtime only; an in-process plugin has no sandboxed tools to serve them' });
+  }
+  for (const message of contributionProblems(m)) ctx.addIssue({ code: 'custom', message });
+  for (const message of modelProblems(m)) ctx.addIssue({ code: 'custom', message });
+  for (const message of storeProblems(m)) ctx.addIssue({ code: 'custom', message });
+  for (const message of dashboardProblems(m)) ctx.addIssue({ code: 'custom', message });
+  // mail:send is handed to external tools only (each call is asked about): without one it could never be used.
+  if (m.host?.includes('mail:send') && !Object.values(m.tools ?? {}).some((t) => t.effect === 'external')) {
+    ctx.addIssue({ code: 'custom', message: 'host: mail:send is handed only to external tools; declare the tool that sends with "effect": "external"' });
+  }
   // The signature file is the one file the content hash leaves out: the server may not be started from it.
   const sigName = SIGNATURE_FILE.toLowerCase();
-  if ([m.server.command, ...(m.server.args ?? [])].some((part) => part.toLowerCase().includes(sigName))) {
+  if (m.server && [m.server.command, ...(m.server.args ?? [])].some((part) => part.toLowerCase().includes(sigName))) {
     ctx.addIssue({ code: 'custom', message: `server: the command and its args may not name ${SIGNATURE_FILE} (it is not covered by the content hash)` });
   }
   const keys = new Set<string>();

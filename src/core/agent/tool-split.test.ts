@@ -150,7 +150,7 @@ describe('orderForCache', () => {
     handler('web_search', 'websearch'),
     handler('mcp__crm__lookup', 'mcp'),
     handler('read_file', 'filesystem'),
-    handler('gmail_search', 'connector'),
+    handler('gmail_search', 'plugin-gmail'),
     handler('ext_quotes__get', 'ext_quotes'),
     handler('kb_search', 'knowledge'),
     handler('inline_ui_ask', 'inline-ui'),
@@ -201,7 +201,7 @@ describe('orderForCache', () => {
     expect(toolCacheTier(handler('mcp__crm__lookup', 'mcp'), true)).toBe('variable');
     expect(toolCacheTier(handler('mcp__plugin_weather__forecast', 'mcp'), false)).toBe('variable');
     // A meta-tool's name under another group is not an MCP meta-tool.
-    expect(toolCacheTier(handler('mcp_call_tool', 'connector'), true)).toBe('variable');
+    expect(toolCacheTier(handler('mcp_call_tool', 'plugin-acme'), true)).toBe('variable');
     const { tools, sharedCount } = orderForCache([handler('mcp__crm__lookup', 'mcp'), handler('mcp_list_tools', 'mcp'), handler('read_file', 'filesystem')], { lazy: true });
     expect(tools.map((h) => h.name)).toEqual(['mcp_list_tools', 'read_file', 'mcp__crm__lookup']);
     expect(sharedCount).toBe(2);

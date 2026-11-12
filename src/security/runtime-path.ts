@@ -1,6 +1,6 @@
-import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { accessSync, constants, existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { delimiter, join, isAbsolute, relative } from 'node:path';
+import { delimiter, join, isAbsolute, relative, parse } from 'node:path';
 
 /** Installed Android toolchains only; never the adjacent .android credentials. */
 export function androidSdkPaths(): string[] {
@@ -59,3 +59,28 @@ export function browserRuntimeMounts(): string[] {
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
   });
 }
+
+/** Read-only program exposure, never the adjacent home/configuration directories. */
+export function installedProgramPaths(searchPath: string): string[] {
+  const directories = new Set<string>();
+  const targets = new Set<string>();
+  const configuredPrivate = [...['.ssh', '.kube', '.aws', '.config', '.octipus', '.gnupg'].map(name => join(homedir(), name)),
+    ...(process.env.XDG_CONFIG_HOME && isAbsolute(process.env.XDG_CONFIG_HOME) ? [process.env.XDG_CONFIG_HOME] : [])];
+  const privateRoots = configuredPrivate.flatMap(root => { try { return [root, realpathSync(root)]; } catch { return [root]; } });
+  const privatePath = (file: string) => privateRoots.some(root => { const rel = relative(root, file); return rel === '' || !rel.startsWith('..') && !isAbsolute(rel); });
+  for (const entry of searchPath.split(delimiter).filter(isAbsolute)) {
+    try {
+      const directory = realpathSync(entry);
+      const toHome = relative(directory, homedir());
+      if (directory === resolveFilesystemRoot(directory) || toHome === '' || !toHome.startsWith('..') && !isAbsolute(toHome) || privatePath(directory) || !statSync(directory).isDirectory()) continue;
+      directories.add(directory);
+      for (const name of readdirSync(directory).slice(0, 8192)) {
+        try { const file = join(directory, name); accessSync(file, constants.X_OK);
+          const target = realpathSync(file); if (target !== file && !privatePath(target) && statSync(target).isFile()) targets.add(target);
+        } catch { /* An inaccessible PATH entry is not an available program. */ }
+      }
+    } catch { /* Nonexistent PATH directories are ignored by process lookup too. */ }
+  }
+  return [...directories, ...targets];
+}
+function resolveFilesystemRoot(directory: string): string { return parse(directory).root; }

@@ -1,3 +1,6 @@
+import { buildAgentContext } from './context';
+import { pluginPromptSections } from '@/plugins/packages/contributions/prompt';
+import { executionEnvironmentFor } from '@/security/execution-environments';
 import { COMPANION_TOKEN_LIMITS } from '@/shared/companion-supervision';
 import { companionBudgetResponse, companionControllerLimits } from '@/core/companion/turn-limits';
 import { getCLIToolConfig } from '@/core/cli-agent-factory';
@@ -325,9 +328,17 @@ export async function runRootAgent(
   // The row this turn already read: re-reading it here cost a query per attachment turn.
   const attachmentSession = extras.attachedFiles?.length ? session : null;
   if (extras.attachedFiles?.length && !attachmentSession) throw new Error('Attachment session no longer exists');
-  const companionSourceRefs=attachmentSession?(await import('@/core/companion/sources')).companionSourceFiles(WorkspaceFS.forSession(attachmentSession,{space}),extras.attachedFiles!):planSessionCtx?.companion?.sourceFiles??[];
-  const attachments = attachmentSession
-    ? await buildRootAttachmentContext(WorkspaceFS.forSession(attachmentSession, { space }), extras.attachedFiles!, (modelMeta ? modelMeta.provider === 'cli' : !!getCLIToolConfig(modelName)), userId, message, sessionId)
+  const attachmentEnvironment = attachmentSession ? executionEnvironmentFor({ userId, workspaceId, space, metadata: (attachmentSession.context ?? {}) as Record<string, unknown> }) : undefined;
+  const localUpload = (path: string) => /^\.octipus\/attachments\/[a-f0-9-]{36}\/[a-zA-Z0-9._-]+$/.test(path);
+  const sourceRefs = attachmentEnvironment?.backend === 'ssh' ? extras.attachedFiles!.filter(ref => localUpload(ref.path)) : extras.attachedFiles!;
+  const attachmentFs = attachmentSession ? WorkspaceFS.forSessionAttachments(attachmentSession, { space }) : undefined;
+  const companionSourceRefs = attachmentFs ? (await import('@/core/companion/sources')).companionSourceFiles(attachmentFs, sourceRefs) : planSessionCtx?.companion?.sourceFiles ?? [];
+  const remoteAttachmentContext = attachmentEnvironment?.backend === 'ssh' ? buildAgentContext({ id: `attachments-${sessionId}`, sessionId, userId, scope, role: 'general', topic: 'general', model: modelName, status: 'running', metadata: (attachmentSession!.context ?? {}) as Record<string, unknown> }) : undefined;
+  const readAttachment = remoteAttachmentContext && attachmentFs ? async (path: string) => localUpload(path)
+    ? (await import('@/core/session-files')).readSessionFile(attachmentFs, path)
+    : await (await import('@/tools/filesystem/environment-operations')).remoteFilesystemOperation('read_session_file', { path }, remoteAttachmentContext) as import('@/core/session-files').ReadFileResult : undefined;
+  const attachments = attachmentFs
+    ? await buildRootAttachmentContext(attachmentFs, extras.attachedFiles!, (modelMeta ? modelMeta.provider === 'cli' : !!getCLIToolConfig(modelName)), userId, message, sessionId, readAttachment)
     : { context: '', imagePaths: [] };
   extraSystemContext += attachments.context;
 
@@ -427,10 +438,8 @@ export async function runRootAgent(
 
   // The root's own tools. `getToolsForRole` is the same gate every worker goes
   // through (capability check, MCP lazy handlers, read-only filtering).
-  // ponytail: it does NOT do the worker-spawner's per-user connector bindings or
-  // skill injection — the root had no tools at all before this, so that is a
-  // gain, not a regression. Lift `spawnWorker`'s tool assembly here if a user
-  // asks the root to reach a bound connector directly.
+  // ponytail: it does NOT do the worker-spawner's skill injection — the root
+  // had no tools at all before this, so that is a gain, not a regression.
   // MCP servers still connecting from boot are waited for (bounded), so a
   // turn right after startup sees their tools.
   await getMCPBridge().whenInitiallyConnected();
@@ -468,7 +477,7 @@ export async function runRootAgent(
   }
   // The small-model answer to "what runs the loop now": the same loop, a reduced
   // tool set, and a hard iteration cap (below). Gated on `isSmallModel` — the
-  // SMALL tier — and not on `isLite`, which is the 24B prompt tier: every worker
+  // SMALL tier — and not on `isLite`, which is the 30B prompt tier: every worker
   // caps on the small tier, and gating the root differently would take eight
   // tool groups off a 14B root while an identically-bound worker on the same
   // model kept all fifteen.
@@ -505,7 +514,7 @@ export async function runRootAgent(
       role: rootAgentRole,
       ...(fileChangesRefused ? {
         refused: {
-          reason: fileChangesRefused === 'plan_mode' ? 'plan mode: nothing is changed (built-in git, GitHub and GitLab writes are refused too; an action computed from its arguments is refused when it writes)' : 'this space role may not change files',
+          reason: fileChangesRefused === 'plan_mode' ? 'plan mode: nothing is changed (built-in git and GitHub writes are refused too; an action computed from its arguments is refused when it writes)' : 'this space role may not change files',
           tools: rootTools.filter((t) => FILE_CHANGE_TOOLS.has(t.name)
             || (fileChangesRefused === 'plan_mode' && t.toolId !== undefined && REPO_WRITER_TOOL_IDS.has(t.toolId)
               && t.replaySafety !== 'read_only' && typeof t.permissionAction === 'string' && t.permissionAction !== 'read')).map((t) => t.name),
@@ -718,6 +727,9 @@ export async function runRootAgent(
   // they were, and the routing table gained the sentence about what NOT to
   // delegate — the root holds those tools itself.
   if (!isLite && !supervisor) prompt.add(roleTier, 'delegation-mechanics', `\n\n${delegationPrompt}`);
+  // Prompt sections of enabled plugin packages (docs/PLUGIN-PACKAGES.md#prompt-sections):
+  // static files, the same bytes for every user, so they stay in the install tier.
+  for (const section of pluginPromptSections(rootAgentRole)) prompt.add(roleTier, section.label, section.text);
   // The persona (and anything else the hook appended): the first per-user block.
   if (hookedSplit) prompt.add('user', 'persona', asTrailingBlock(hookedSplit.user));
   volatileParts.push(tagger.tag('volatile', 'turn', 'Topic hint', buildTopicHint(isLite, classification)));
@@ -736,7 +748,9 @@ export async function runRootAgent(
   // Inject workspace awareness
   const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
   // No dev-mode project root in a space: its agents work in the space's files.
-  const isDevMode = !space && sessionCtx?.devMode === true && !!sessionCtx.projectPath;
+  const sessionEnvironment = executionEnvironmentFor({ userId, workspaceId, space, metadata: sessionCtx as Record<string, unknown> | undefined });
+  const environmentProject = sessionCtx?.projectPath ?? sessionEnvironment?.roots[0];
+  const isDevMode = !space && (!!sessionEnvironment || sessionCtx?.devMode === true) && !!environmentProject;
 
   // Plan mode: state what the tool filter below cannot enforce. Volatile tier,
   // because it is a property of this session right now rather than of the
@@ -746,7 +760,7 @@ export async function runRootAgent(
 
   if (isDevMode) {
     // Dev mode: focused on a specific project
-    const projectPath = sessionCtx!.projectPath!;
+    const projectPath = environmentProject!;
     const projectName = sessionCtx!.projectName || projectPath.split(/[/\\]/).pop() || 'project';
     let wsContext = `\n\nDEV MODE SESSION — Project: ${projectName}`;
     wsContext += `\nProject path: ${projectPath}`;
@@ -754,7 +768,7 @@ export async function runRootAgent(
     // Load the curated AGENTS.md guide for the root agent (lightweight brief)
     try {
       const { loadAgentsMd } = await import('./agents-md');
-      const guide = await loadAgentsMd(projectPath);
+      const guide = sessionEnvironment?.backend === 'ssh' ? null : await loadAgentsMd(projectPath);
       if (guide) {
         if (guide.length > 500) blockNotes['dev-project'] = { status: 'truncated', note: `AGENTS.md: first 500 of ${guide.length.toLocaleString('en-US')} chars` };
         wsContext += `\nProject overview (from AGENTS.md): ${guide.slice(0, 500)}`;
@@ -782,7 +796,7 @@ export async function runRootAgent(
 
     // Multi-repo: when the repo registry has been scanned, inject the map of
     // the suite (kinds + dependency edges) — the root agent's "mental model"
-    // — instead of a bare directory listing. See .octipus/multi-repo-design.md.
+    // — instead of a bare directory listing. See docs/MULTI-REPO.md.
     let injectedSuite = false;
     if (!space&&!supervisor) try {
       const { loadRepoGraph } = await import('@/core/repos/registry-service');
@@ -972,13 +986,14 @@ export async function runRootAgent(
     // user-reported TUI bug where `--project` was effectively ignored.
     contextMetadata: {
       originalRequest: message,
+      ...(typeof sessionCtx?.executionEnvironmentId === 'string' ? { executionEnvironmentId: sessionCtx.executionEnvironmentId } : {}),
       ...(briefingModel?{companionBriefing:true}:{}),
       companionSourceFiles: companionSourceRefs,
       ...(supervisor ? { companionAuthorityRevision: supervisor.revision } : {}),
       ...(attachments.imagePaths.length ? { imageAttachments: attachments.imagePaths } : {}),
       sessionGeneration: sessionGeneration(sessionCtx),
       inputGuardFlags: guardFlags,
-      ...(isDevMode ? { projectPath: sessionCtx!.projectPath! } : {}),
+      ...(isDevMode ? { projectPath: environmentProject! } : {}),
       ...(extras.room ? { room: { postedMessageId: extras.room.postedMessageId } } : {}),
       // A CLI agent brings its own tools: refused for a remote room (agent-manager).
       // Its text stays in the session's rows (F-D11): no prompt dump, spill,

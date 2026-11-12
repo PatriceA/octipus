@@ -42,6 +42,14 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
     );
   });
 
+  const allowRuntime = async (credential: Credential) => {
+    try {
+      await api.patch(`/vault/${credential.id}`, { allowedTools: [...new Set([...(credential.allowedTools ?? []), 'execution-environment'])] });
+      setNotice(`Execution environments may now use ${credential.name}. Other credential restrictions remain in effect.`);
+      onRefresh();
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Could not update credential access'); }
+  };
+
   const handleDelete = async (id: string) => {
     try {
       await api.delete(`/vault/${id}`);
@@ -88,7 +96,7 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
         </h2>
         <button
           onClick={() => setShowAddModal(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-primary text-[#0e0e0e] rounded-lg hover:bg-primary-container cursor-pointer"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-primary text-on-primary rounded-lg hover:bg-primary-dim cursor-pointer"
         >
           <Plus className="w-3.5 h-3.5" />
           Add Secret
@@ -171,6 +179,7 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
                     </td>
                     <td className="py-2.5 px-4">
                       <div className="flex items-center gap-1">
+                        {cred.scope !== 'system' && cred.credentialType !== 'login' && !!cred.allowedTools?.length && !cred.allowedTools.includes('execution-environment') && !cred.allowedAgents?.length && <button onClick={() => void allowRuntime(cred)} className="p-1.5 text-xs text-primary" aria-label={`Allow execution environments for ${cred.name}`}>Allow runtime</button>}
                         {cred.scope !== 'system' && <button onClick={() => setConnectCredential(cred)} title={`Connect API for ${cred.name}`} aria-label={`Connect API for ${cred.name}`} className="p-1.5 text-on-surface-variant hover:text-primary rounded-md hover:bg-surface-container-high cursor-pointer"><Link2 className="w-3.5 h-3.5" /></button>}
                         <button
                           onClick={() => cred.credentialType==='login'?setEditLogin(cred):setRotateId(cred.id)}
@@ -380,7 +389,7 @@ function AddSecretForm({
             })
           }
           disabled={!name || !value || (credentialType==='login'&&(!username||!domain||(domain.startsWith('http:')&&!allowHttp)))}
-          className="px-4 py-2 text-sm bg-primary text-[#0e0e0e] rounded-lg hover:bg-primary-container disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+          className="px-4 py-2 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary-dim disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
         >
           {connectApi && !isSystemSecret && !['ssh_key','certificate','login'].includes(credentialType) ? 'Save secret & set up API' : 'Save secret'}
         </button>
@@ -419,7 +428,7 @@ function RotateForm({
         <button
           onClick={() => onRotate(value)}
           disabled={!value}
-          className="px-4 py-2 text-sm bg-primary text-[#0e0e0e] rounded-lg hover:bg-primary-container disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+          className="px-4 py-2 text-sm bg-primary text-on-primary rounded-lg hover:bg-primary-dim disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
         >
           Rotate
         </button>
@@ -445,5 +454,5 @@ function EditLoginForm({credential,workspaceId,onCancel,onSaved}:{credential:Cre
   async function save(){setBusy(true);setError('');try{
     await api.put(`/vault/${credential.id}/login${workspaceId?`?workspaceId=${encodeURIComponent(workspaceId)}`:''}`,{domain,allowInsecureHttp:allowHttp,...(username?{username}:{}),...(password?{password}:{})});onSaved();
   }catch(e){setError(e instanceof Error?e.message:'Could not save Login');}finally{setBusy(false);}}
-  return <form className="space-y-4" onSubmit={e=>{e.preventDefault();void save();}}><p className="text-sm">{credential.name}. Leave credentials blank to keep them. Changing the domain removes the existing API connection; approve it again afterwards.</p><LoginFields username={username} onUsername={setUsername} password={password} onPassword={setPassword} domain={domain} onDomain={setDomain} allowHttp={allowHttp} onAllowHttp={setAllowHttp} editing/>{error&&<p role="alert" className="text-error text-sm">{error}</p>}<div className="flex justify-end gap-3"><button type="button" onClick={onCancel} disabled={busy}>Cancel</button><button type="submit" disabled={busy||!domain||(domain.startsWith('http:')&&!allowHttp)} className="rounded-lg bg-primary px-4 py-2 text-sm text-[#0e0e0e] disabled:opacity-40">{busy?'Saving…':'Save Login'}</button></div></form>;
+  return <form className="space-y-4" onSubmit={e=>{e.preventDefault();void save();}}><p className="text-sm">{credential.name}. Leave credentials blank to keep them. Changing the domain removes the existing API connection; approve it again afterwards.</p><LoginFields username={username} onUsername={setUsername} password={password} onPassword={setPassword} domain={domain} onDomain={setDomain} allowHttp={allowHttp} onAllowHttp={setAllowHttp} editing/>{error&&<p role="alert" className="text-error text-sm">{error}</p>}<div className="flex justify-end gap-3"><button type="button" onClick={onCancel} disabled={busy}>Cancel</button><button type="submit" disabled={busy||!domain||(domain.startsWith('http:')&&!allowHttp)} className="rounded-lg bg-primary px-4 py-2 text-sm text-on-primary disabled:opacity-40">{busy?'Saving…':'Save Login'}</button></div></form>;
 }

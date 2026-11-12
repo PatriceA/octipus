@@ -311,7 +311,7 @@ For events anyone can trigger, a hook can run its turn read-only. The agent then
 }
 ```
 
-- **Allowed:** reads (`read`, `list`, `search`) of files, git, GitHub, GitLab, Atlassian and the knowledge base, tools that declare themselves read-only, and `send_to_user` to you, which is the notify step. The notify step needs no approval in a read-only turn even though `messaging.send` defaults to ASK. A stored DENY still applies.
+- **Allowed:** reads (`read`, `list`, `search`) of files, git, GitHub and the knowledge base, tools that declare themselves read-only, and `send_to_user` to you, which is the notify step. The notify step needs no approval in a read-only turn even though `messaging.send` defaults to ASK. A stored DENY still applies.
 - **Refused before they run:** shell, file writes, web search and fetch (a URL can carry data out), MCP, posting, pushing, and delegation (`spawn_child`, pipelines). The list is an allowlist, so a tool added later stays refused until it is named.
 - **The agent's answer is not sent** to your chats, whatever `notifyOwner` says. It stays in the session, and `send_to_user` is the only way the turn reaches you.
 - **Needs `orchestrated: true`.** A direct spawn has no messaging tool and could never notify you, so the run is refused.

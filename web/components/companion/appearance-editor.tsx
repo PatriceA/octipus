@@ -5,10 +5,11 @@ import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { COMPANION_COLORS, COMPANION_FORMS, type CompanionAppearance, DEFAULT_COMPANION_APPEARANCE } from '../../../src/shared/companion';
 import { CompanionAvatar, type CompanionState } from './companion-avatar';
+import { COMPANION_LOOK_NAMES } from '../../../src/shared/companion-artwork';
 
-const formNames = { pebble: 'Pebble', ribbon: 'Ribbon', ink: 'Inky' };
+const formNames = COMPANION_LOOK_NAMES;
 const states: Array<{ state: CompanionState; label: string }> = [
-  { state: 'idle', label: 'Looking around' }, { state: 'listening', label: 'Listening' },
+  { state: 'idle', label: 'Idle' }, { state: 'listening', label: 'Listening' },
   { state: 'working', label: 'Working' }, { state: 'waiting', label: 'Waiting' },
   { state: 'sleeping', label: 'Dozing' },
 ];

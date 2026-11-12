@@ -88,7 +88,6 @@ describe('plan mode also refuses repository writes', () => {
     ['git__commit', 'git', 'write'],
     ['git__push', 'git', 'push'],
     ['github__create_pull_request', 'github', 'write'],
-    ['gitlab__merge', 'gitlab', 'manage'],
   ])('%s (%s/%s) is refused before it runs', async (name, toolId, action) => {
     const execute = vi.fn(async () => 'ran');
     const exec = new ToolExecutor(makeContext({ [FILE_CHANGES_REFUSED_KEY]: 'plan_mode' }), () => {});

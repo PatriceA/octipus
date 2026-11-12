@@ -41,7 +41,8 @@ are not an instruction to expand scope during this cycle.
   read-only SQL against a registered database or a workspace CSV;
   `export_document` writes a deliverable out as .docx or .xlsx; Jira and
   Confluence are named tools the `pm` role holds and Linear is a second
-  connector; `channel_history` / `channel_search` read Slack and Teams back;
+  connector (all three, and the GitLab tool, were removed later; see the
+  CHANGELOG); `channel_history` / `channel_search` read Slack and Teams back;
   meetings become notes linked to the people who attended, and knowledge
   chunks carry a `last_verified_at` that retrieval down-ranks by. Phase 6 the
   same day, and it started by measuring: `recalls_memory` turned out to have
@@ -1073,8 +1074,7 @@ Three deferred items moved to **Now** above.
   `AbortSignal` tree, escalation (1/Agent lifetime), parallel
   `parallelGroup` fan-out, orphan reaper, per-node `swarm_nodes` schema,
   `swarm.*` gateway events with replay, web `SwarmTree` component.
-  See `.octipus/swarm-design.md` for the design; lives under
-  `src/core/swarm/`. New config: `config.swarm.*`.
+  Lives under `src/core/swarm/`. New config: `config.swarm.*`.
 - **Anti-thrashing session compaction.** `src/core/agent/session-compaction.ts`
   + `CompactionState` on sessions. Pure `decideCompaction` function;
   stall flag cleared only when a pass clears ≥15% savings; hard-ceiling

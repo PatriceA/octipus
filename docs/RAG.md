@@ -61,7 +61,7 @@ PR #28 / migration 0056). Valid values:
 
 | Purpose | What writes it | Default retention |
 |---|---|---|
-| `document` | Document uploads via `/api/documents/upload`, `index_file(path, 'document')`, and the boot/cron product-docs auto-index (`metadata.source='octipus-docs'`, see [Product docs auto-index](#product-docs-auto-index-at-boot)) | Tied to the parent `documents` row (cascade delete via FK); the auto-indexed product docs carry no `doc_id` and are refreshed in place |
+| `document` | Document uploads via `/api/documents/upload` and `index_file(path, 'document')` | Tied to the parent `documents` row (cascade delete via FK) |
 | `code` | **Retired.** Raw source code is never indexed (see [Code-exclusion policy](#code-exclusion-policy-raw-code-is-never-indexed)). The value is kept only so the indexer can reject it loudly. | n/a |
 | `image_description` | Vision-LLM caption + OCR text written by `documents/processor.ts` for image uploads | Tied to the parent `documents` row |
 | `knowledge_artifact` | Reserved for agent-flagged outputs worth long-term storage | 365 days, LFU prune below 1 access after 180 days |
@@ -114,34 +114,22 @@ Agents also get the closest passages without asking: the knowledge recall
 context hook searches with each message and injects what is near enough. See
 [CONTEXT-HOOKS.md](CONTEXT-HOOKS.md).
 
-### Product docs auto-index at boot
+### Product help without embeddings
 
-`src/db/seed-docs.ts` (`indexProductDocs()`) indexes Octipus's own
-documentation — top-level `docs/*.md` plus `docs/architecture/**` and
-`docs/guides/**` — into `embeddings` as **global** rows
-(`user_id = NULL`) tagged `metadata.source = 'octipus-docs'`, so users
-can ask the assistant "how do I set up Telegram / a model provider /
-X?" and get an answer grounded in the shipped manual. High-churn /
-low-signal files are excluded (`*CHANGELOG*`, `WEEKLY-CHANGELOG-*`,
-`QA.md`, and the `plans/`, `superpowers/`, `images/` trees).
+Octipus's bundled manual is searched locally **only when requested**. Startup
+and cron no longer embed the manual or generate abstracts. No embedding model,
+provider credentials or knowledge database is needed for product help.
 
-- **When it runs:** once at boot (after tools are registered and the
-  runtime config — hence the embedding provider's credentials — is
-  loaded; gated on `isKBReady()`), and on a 6-hour cron refresh
-  (`maybeReindexDocs()` in `src/core/cron-runner.ts`). The cron refresh
-  also covers first-install, where the embedding model is bound *after*
-  boot: the boot-time pass bails as KB-not-ready and the cron pass lands
-  the docs once a model is assigned.
-- **Idempotent:** every chunk is stamped with the source file's
-  SHA-256 (`metadata.fileSha`); a re-run skips any unchanged file, so
-  re-indexing is cheap. A changed file is deleted-by-source and
-  re-indexed so shrinking edits don't strand orphan chunks.
-- **In the image:** the Dockerfile `COPY docs/ docs/` ships the manual
-  into the runtime stage — without it the indexer finds nothing in prod.
-- **Consume it:** the `/docs <query>` chat command
-  (`src/core/commands/docs.ts`) searches this corpus directly (no LLM
-  call), and knowledge-tool worker roles are nudged to `search_knowledge`
-  for "how do I set up X" questions before answering.
+- `/docs <keywords>` returns relevant passages with source files and line numbers.
+- Agents use `search_product_docs` followed by `read_product_doc` for bounded,
+  source-grounded answers. User knowledge still uses `search_knowledge`.
+- The in-memory keyword catalog is built lazily on the first request and reused
+  for a minute. It covers top-level `docs/*.md`, architecture and guides; plans,
+  generated catalogs, changelogs and symlinked files are excluded.
+- The manual ships with the application and Docker image. Search uses the
+  installation directory, independently of the process's working directory.
+- An upgrade migration removes only the old globally owned `octipus-docs`
+  document embeddings. User uploads, notes and workspace knowledge remain intact.
 
 ## Who sees what (knowledge scope)
 
@@ -153,10 +141,10 @@ write time from the user an agent works for (or the signed-in caller of
 
 | Scope | Reads | Writes (delete, cleanup, verify) |
 |---|---|---|
-| `personal` (default everywhere) | the user's own rows, narrowed to the current workspace when one is set (rows with no workspace show in every workspace), plus product docs | the user's own rows only |
+| `personal` (default everywhere) | the user's own rows, narrowed to the current workspace when one is set (rows with no workspace show in every workspace) | the user's own rows only |
 | `install` | every row | every row |
 
-Product docs (`user_id` NULL, `metadata.source = 'octipus-docs'`) are
+Legacy product docs (`user_id` NULL, `metadata.source = 'octipus-docs'`) were
 readable under every scope and never writable outside `install`. A row with no
 owner that is not a product doc is an *install row*: admins and system jobs
 only. Admins get the personal scope like everyone else; the install scope is

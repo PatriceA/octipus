@@ -29,11 +29,39 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write # create the GitHub Release
-  id-token: write # npm publish --provenance (OIDC attestation)
+  contents: read
 
 jobs:
+  windows-sandbox:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - uses: ./.github/actions/node-setup
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - run: npm run build:sandbox:windows
+      - run: npx vitest run --project unit src/security/shell-sandbox.windows.e2e.test.ts
+      - name: Checksum release binary
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash native/bin/octipus-sandbox.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content native/bin/octipus-sandbox.exe.sha256 "$hash  octipus-sandbox.exe" -Encoding ascii
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-sandbox-release
+          path: native/bin/*
+          if-no-files-found: error
   release:
+    needs: windows-sandbox
+    permissions:
+      contents: write # create the GitHub Release
+      id-token: write # npm publish --provenance (OIDC attestation)
     name: Release ${{ inputs.tag || github.ref_name }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -129,6 +157,11 @@ jobs:
           npm run build
           npm pack
 
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-sandbox-release
+          path: native/bin
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
@@ -139,6 +172,8 @@ jobs:
           prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
           files: |
             mcp-server/*.tgz
+            native/bin/octipus-sandbox.exe
+            native/bin/octipus-sandbox.exe.sha256
 
       # ── Publish mcp-server to npm (skipped when NPM_TOKEN isn't set) ──
       - name: Publish mcp-server to npm

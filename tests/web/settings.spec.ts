@@ -32,7 +32,7 @@ test.describe('settings page', () => {
     });
 
     await page.goto('/settings');
-    await page.getByRole('button', { name: 'Configuration' }).click();
+    await page.getByRole('button', { name: 'Advanced configuration' }).click();
     await page.getByRole('switch', { name: 'promptDumps' }).click();
     await expect.poll(() => puts).toEqual([{ value: false }]);
   });
@@ -61,7 +61,7 @@ test('root and child swarm budgets have distinct labels and root tokens save to 
     return json(route, 200, { ok: true });
   });
   await page.goto('/settings');
-  await page.getByRole('button', { name: 'Configuration', exact: true }).click();
+  await page.getByRole('button', { name: 'Advanced configuration', exact: true }).click();
   await expect(page.getByRole('spinbutton', { name: 'agent.tokens', exact: true })).toBeVisible();
   await expect(page.getByRole('spinbutton', { name: 'subagent.tokens', exact: true })).toBeVisible();
   const root = page.getByRole('spinbutton', { name: 'root.tokens', exact: true });
@@ -69,7 +69,6 @@ test('root and child swarm budgets have distinct labels and root tokens save to 
   await root.press('Enter');
   await expect.poll(() => puts).toEqual([{ value: 20000000 }]);
   await page.reload();
-  await page.getByRole('button', { name: 'Configuration', exact: true }).click();
   await expect(page.getByRole('spinbutton', { name: 'root.tokens', exact: true })).toHaveValue('20000000');
 });
 

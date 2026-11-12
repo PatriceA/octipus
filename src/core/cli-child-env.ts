@@ -157,7 +157,7 @@ export function cliEnvFor(
  * A CLI agent's environment inside a space (coworking §9.5): `HOME`,
  * `XDG_CONFIG_HOME`, `GH_CONFIG_DIR` and the version-control config move to
  * the run's own tool home (`space-tool-env.ts`: fresh, removed after the run,
- * holding only the space connector's GitHub login), and the host's agent and
+ * holding only the space's GitHub login), and the host's agent and
  * helper variables go, so the CLI's native tools (shell, gh, version
  * control) find none of the host's — or the credential owner's, or another
  * member's — logins. The vendor's own config directory stays where `env` had

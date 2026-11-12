@@ -1,5 +1,5 @@
 /**
- * The group-channel bridge and space connectors (docs/plans/coworking-spec.md
+ * The group-channel bridge and a space's GitHub token (docs/plans/coworking-spec.md
  * §9.4, §9.5, §9.6).
  *
  *   - binding needs the acknowledgement and a space owner who owns the
@@ -10,7 +10,7 @@
  *     board, once per message;
  *   - a space secret is unusable through `{{secret:}}` and never exempts a
  *     call from the flow guard; personal paths never return it;
- *   - space connector routes: members list, owners connect and disconnect;
+ *   - the space GitHub routes: members read, owners store and remove the token;
  *   - the binding follows the space: a bridged room stays open while bound
  *     and only open rooms of the channel's current space are relayed; the
  *     binding ends when its owner stops owning the space; leftover mappings
@@ -19,7 +19,7 @@
  *   - permission requests of a bridged room ask in the thread only for a
  *     turn asked from the platform, and are never denied for the channel.
  *
- * (Tool homes and the GitHub tool in a space: space-connectors.isolation.test.ts.)
+ * (Tool homes and the GitHub tool in a space: space-github.isolation.test.ts.)
  *
  * Driven through the real routes (`createServer()`), the real group handler
  * and the real bridge. Backed by ephemeral PGlite.
@@ -372,15 +372,15 @@ describe('space secrets (§9.5)', () => {
     expect(() => spaceRepos(owner).secrets && spaceRepos({ ...owner, workspaceKind: 'personal' })).toThrow();
   });
 
-  test('connector routes: members list, owners connect a GitHub token and disconnect', async () => {
-    let res = await call('outsider', 'GET', `/api/spaces/${spaceId}/connectors`);
+  test('GitHub routes: members read, owners store the token and remove it', async () => {
+    let res = await call('outsider', 'GET', `/api/spaces/${spaceId}/github`);
     expect(res.status).toBe(404);
-    res = await call('editor', 'POST', `/api/spaces/${spaceId}/connectors/github`, { token: 'ghp_team' });
+    res = await call('editor', 'PUT', `/api/spaces/${spaceId}/github`, { token: 'ghp_team' });
     expect(res.status).toBe(403);
-    res = await call('owner', 'POST', `/api/spaces/${spaceId}/connectors/github`, { token: 'ghp_team' });
+    res = await call('owner', 'PUT', `/api/spaces/${spaceId}/github`, { token: 'ghp_team' });
     expect(res.status).toBe(200);
-    const list = await (await call('editor', 'GET', `/api/spaces/${spaceId}/connectors`)).json();
-    expect(list.connectors.find((c: { id: string }) => c.id === 'github')).toMatchObject({ connected: true, connectedBy: 'owner', kind: 'token' });
+    const list = await (await call('editor', 'GET', `/api/spaces/${spaceId}/github`)).json();
+    expect(list).toMatchObject({ connected: true, connectedBy: 'owner' });
     expect(JSON.stringify(list)).not.toContain('ghp_team');
     const audits = await auditRows('github');
     expect(audits.at(-1)).toMatchObject({ action: 'space_updated', workspace_id: spaceId });

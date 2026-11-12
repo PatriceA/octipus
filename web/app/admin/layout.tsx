@@ -7,6 +7,8 @@ import { useEffect, type ReactNode } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { useAuth } from '@/lib/auth-context';
 import { usePageOn } from '@/lib/modules';
+import { ADMIN_SECTIONS } from '@/lib/admin-navigation';
+import './admin-workspace.css';
 
 /**
  * Admin layout — Phase 2c.
@@ -34,47 +36,35 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   }, [isLoading, isAuthenticated, user, router]);
 
   if (isLoading || !user?.isAdmin) {
-    return <div className="p-8 text-on-surface-variant font-mono">checking permissions…</div>;
+    return <div className="p-8 text-on-surface-variant font-sans">checking permissions…</div>;
   }
 
-  const tabs = [
-    { href: '/admin/users', label: 'Users' },
-    { href: '/admin/orgs', label: 'Orgs' },
-    { href: '/admin/quotas', label: 'Quotas & budgets' },
-    { href: '/admin/destinations', label: 'Notification destinations' },
-    { href: '/admin/group-channels', label: 'Group channels' },
-    { href: '/admin/federation', label: 'Federation' },
-    { href: '/admin/plugins', label: 'Plugin packages' },
-    { href: '/admin/audit', label: 'Audit log' },
-  ].filter((t) => pageOn(t.href));
+  const tabs = [{ href: '/admin', title: 'Overview' }, ...ADMIN_SECTIONS.filter(section => pageOn(section.href))];
 
   return (
-    <div className="space-y-6 max-w-6xl font-mono">
+    <div className="admin-workspace">
       <PageHeader
-        title="admin"
-        description="manage users, orgs, quotas and spend budgets, and inspect the audit log."
+        title="Administration"
+        description="Manage people, connections and controls for this installation."
       />
 
-      <div className="flex gap-2 border-b border-outline-variant/60">
+      <nav className="admin-navigation" aria-label="Administration sections">
         {tabs.map((t) => {
-          const active = pathname === t.href || pathname.startsWith(t.href + '/');
+          const active = pathname === t.href || (t.href !== '/admin' && pathname.startsWith(t.href + '/'));
           return (
             <Link
               key={t.href}
               href={t.href}
-              className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
-                active
-                  ? 'border-primary text-on-surface'
-                  : 'border-transparent text-on-surface-variant hover:text-on-surface'
-              }`}
+              aria-current={active ? 'page' : undefined}
+              className={active ? 'admin-section-link is-current' : 'admin-section-link'}
             >
-              {t.label}
+              {t.title}
             </Link>
           );
         })}
-      </div>
+      </nav>
 
-      <div>{children}</div>
+      <div className="admin-content">{children}</div>
     </div>
   );
 }

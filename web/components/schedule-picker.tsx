@@ -389,7 +389,7 @@ export function SchedulePicker({ value, onChange, onScheduledAtChange, scheduled
                 className={cn(
                   'w-10 h-10 rounded-lg text-xs font-medium transition-colors cursor-pointer',
                   days.includes(day.value)
-                    ? 'bg-primary text-[#0e0e0e] shadow-xs'
+                    ? 'bg-primary text-on-primary shadow-xs'
                     : 'bg-surface-container-high text-on-surface-variant hover:bg-surface-container-high',
                 )}
                 title={day.label}

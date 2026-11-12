@@ -11,6 +11,8 @@ import Link from 'next/link';
 import type { Notification } from '@/lib/types/notifications';
 import { SpacePresence } from './rooms/space-presence';
 import { WorkspacePicker } from './workspace-picker';
+import { useTheme } from '@/lib/theme';
+import { Moon, Sun } from 'lucide-react';
 import { useWorkspaceId } from '@/lib/workspace-context';
 
 interface SearchResult {
@@ -32,6 +34,8 @@ const SEARCH_TYPE_META: Record<SearchResult['type'], { label: string; icon: type
 
 export function Header() {
   const workspaceId = useWorkspaceId();
+  const { dark, setTheme } = useTheme();
+  const [themeError, setThemeError] = useState('');
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -248,6 +252,11 @@ export function Header() {
       <div className="flex items-center gap-1.5">
         <SpacePresence />
         <WorkspacePicker />
+        <button type="button" aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'} title={dark ? 'Switch to light mode' : 'Switch to dark mode'} className="p-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high cursor-pointer" onClick={() => {
+          try { setTheme(dark ? 'light' : 'dark'); setThemeError(''); }
+          catch { setThemeError('Could not save appearance preference.'); }
+        }}>{dark ? <Sun size={17} /> : <Moon size={17} />}</button>
+        {themeError && <span role="alert" className="text-error text-xs">{themeError}</span>}
 
         <div className="relative" ref={notifRef}>
           <button

@@ -14,7 +14,7 @@ carries three flags. Once a flag is set, it stays set for the session.
 
 | Flag | Set after reading | Examples |
 | --- | --- | --- |
-| `suspicious` | text written by people outside the user's control | web search/fetch, browser, email, chat messages, GitHub/GitLab/Jira items, external MCP results, Claude `WebFetch`/`WebSearch`, Codex `web_search` |
+| `suspicious` | text written by people outside the user's control | web search/fetch, browser, email, chat messages, GitHub items, external MCP results, Claude `WebFetch`/`WebSearch`, Codex `web_search` |
 | `private` | the user's own data | mail, calendar, drive, docs, chat, `data` queries |
 | `secret` | credential material | `.env`, `~/.ssh`, `~/.aws`, `.npmrc`, `.git-credentials`, `.kube`, `/proc/*/environ`, private keys; through the filesystem tool, a shell command, or a CLI `Read`/`Bash` |
 
@@ -36,7 +36,7 @@ A static contract for each tool decides which flags the call sets, and whether
 the call can send data out ("egress"):
 
 - **read egress**: only a URL or query leaves (web search, fetch, navigate).
-- **write egress**: sending mail or messages, posting to GitHub/GitLab/Jira,
+- **write egress**: sending mail or messages, posting to GitHub,
   `git push`, calendar invites, non-read MCP tools, and shell commands that use
   the network (`curl`, `wget`, `scp`, `ssh`, `gh pr`, `npm publish`, …).
 

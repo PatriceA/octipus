@@ -1,6 +1,5 @@
 /**
- * Dependency-free line diff for the work stream + in-chat file view —
- * `.octipus/end-user-ux-design.md` Threads 1 & 2.
+ * Dependency-free line diff for the work stream and the in-chat file view.
  *
  * Produces a unified-style patch (lines prefixed with `+`/`-`/` `) plus
  * added/removed counts so:

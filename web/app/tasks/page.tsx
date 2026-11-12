@@ -55,7 +55,7 @@ const REFRESH_MS = 30_000;
 const TASK_CHANGED_DEBOUNCE_MS = 400;
 
 /** Patchable fields a row can edit inline (besides notes/status). */
-type TaskPatch = Partial<Pick<Task, 'priority' | 'category' | 'dueAt' | 'estimate' | 'assigneeKind' | 'assigneeRef'>>;
+type TaskPatch = Partial<Pick<Task, 'title' | 'notes' | 'status' | 'priority' | 'category' | 'dueAt' | 'estimate' | 'assigneeKind' | 'assigneeRef'>>;
 
 function readView(): View {
   try {
@@ -189,7 +189,7 @@ export default function TasksPage() {
   // A space on another install: its tasks through the remote source (federation §8.3).
   const { activeWorkspace } = useWorkspace();
   if (activeWorkspace?.kind === 'remote') return <RemoteTasks key={activeWorkspace.id} remote={activeWorkspace} />;
-  return <LocalTasksPage />;
+  return <LocalTasksPage key={activeWorkspace?.id ?? 'personal'} />;
 }
 
 function LocalTasksPage() {
@@ -203,6 +203,7 @@ function LocalTasksPage() {
   // see the board without create, edit or drag; commenters still comment.
   const { canWrite, canComment } = useWorkspaceAccess();
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [newTitle, setNewTitle] = useState('');
@@ -345,16 +346,18 @@ function LocalTasksPage() {
   // Every task write goes through here: the optimistic local change, the
   // request, then a fresh read (always after a failure, which also undoes the
   // optimistic change). See `writes` above for why the counter.
-  const write = async (optimistic: (() => void) | null, request: () => Promise<unknown>, refetch = true) => {
+  const write = async (optimistic: (() => void) | null, request: () => Promise<unknown>, refetch = true, throwOnError = false) => {
     const w = writes.current;
     w.pending++;
     w.version++;
     optimistic?.();
     let failed = false;
+    let failure: unknown;
     try {
       await request();
     } catch (err) {
       failed = true;
+      failure = err;
       setError((err as Error).message);
     } finally {
       w.pending--;
@@ -364,6 +367,8 @@ function LocalTasksPage() {
       w.dropped = false;
       await fetchTasks();
     }
+    if (failed && throwOnError) throw failure;
+    return !failed;
   };
 
   // `opts.title`/`opts.category` come from a per-group inline add (grouping by
@@ -394,12 +399,13 @@ function LocalTasksPage() {
 
   // Generic field patch (priority/category/dueAt) used by the inline row editor.
   // Optimistic so the row reflects the change before the request resolves.
-  const updateFields = async (task: Task, patch: TaskPatch) => {
+  const updateFields = async (task: Task, patch: TaskPatch, throwOnError = false) => {
     // An assignee clear sends only the null kind; mirror the server locally.
     if (patch.assigneeKind === null) patch = { ...patch, assigneeRef: null };
-    await write(
+    return write(
       () => setTasks((xs) => xs.map((t) => (t.id === task.id ? { ...t, ...patch } : t))),
       () => api.patch(`/tasks/${task.id}`, patch.dueAt !== undefined ? { ...patch, tz: browserTimezone() } : patch),
+      true, throwOnError,
     );
   };
 
@@ -470,6 +476,7 @@ function LocalTasksPage() {
     onUpdateNotes: updateNotes,
     onUpdateFields: updateFields,
     onRelease: releaseClaim,
+    onEdit: setEditingTask,
     canWrite,
     canComment,
   };
@@ -611,6 +618,7 @@ function LocalTasksPage() {
           onSetStatus={setStatus}
           onDelete={deleteTask}
           onRelease={releaseClaim}
+          onEdit={setEditingTask}
           canWrite={canWrite}
           canComment={canComment}
         />
@@ -638,10 +646,96 @@ function LocalTasksPage() {
         ))
       )}
 
+      {editingTask && canWrite && (
+        <TaskEditor key={editingTask.id} task={editingTask} roles={pickableRoles}
+          onClose={() => setEditingTask(null)}
+          onSave={(patch) => updateFields(editingTask, patch, true)} />
+      )}
       {view === 'list' && done.length > 0 && (
         <TaskGroup title={`Done (${done.length})`} tasks={done} lookup={lookup} roles={pickableRoles} actions={actions} />
       )}
     </div>
+  );
+}
+
+/** Keep the draft outside rows so regrouping or a failed save cannot discard it. */
+function TaskEditor({ task, roles, onSave, onClose }: {
+  task: Task;
+  roles: readonly string[];
+  onSave: (patch: TaskPatch) => Promise<boolean>;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    const previous = document.activeElement;
+    dialog?.showModal();
+    return () => {
+      dialog?.close();
+      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
+    };
+  }, []);
+  const [draft, setDraft] = useState(task);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const fieldClass = 'mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-sm text-on-surface';
+  const close = () => { if (!busy) onClose(); };
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (busy || !draft.title.trim()) return;
+    // Send only edited fields: do not overwrite an agent's concurrent changes.
+    const patch: TaskPatch = {};
+    const values: TaskPatch = {
+      title: draft.title.trim(), notes: draft.notes || null,
+      status: draft.status, priority: draft.priority,
+      category: draft.category?.trim() || null, estimate: draft.estimate?.trim() || null,
+      dueAt: draft.dueAt || null,
+      assigneeKind: draft.assigneeKind ?? null, assigneeRef: draft.assigneeRef ?? null,
+    };
+    for (const key of Object.keys(values) as (keyof TaskPatch)[]) {
+      if ((draft[key] ?? null) !== (task[key] ?? null)) Object.assign(patch, { [key]: values[key] });
+    }
+    // The API validates assignment as a pair, including when only the role changed.
+    if ('assigneeKind' in patch || 'assigneeRef' in patch) {
+      patch.assigneeKind = values.assigneeKind;
+      patch.assigneeRef = values.assigneeRef;
+    }
+    if (!Object.keys(patch).length) { onClose(); return; }
+    setBusy(true);
+    setError('');
+    try {
+      if (await onSave(patch)) onClose();
+      else setError('Could not save your changes. Your draft is still here; try again.');
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <dialog ref={dialogRef} aria-label="Edit task" onCancel={(event) => { event.preventDefault(); close(); }}
+      className="m-auto w-[calc(100%-2rem)] max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-outline-variant bg-surface-container p-5 text-on-surface shadow-2xl backdrop:bg-black/70">
+      <h2 className="mb-4 text-lg font-semibold">Edit task</h2>
+      <form onSubmit={save} className="space-y-4">
+        <fieldset disabled={busy} className="space-y-4">
+          <label className="block text-sm">Title<input autoFocus required maxLength={500} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} className={fieldClass} /></label>
+          <label className="block text-sm">Notes<textarea aria-label="Notes" rows={3} maxLength={10000} value={draft.notes ?? ''} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} className={fieldClass} /></label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="text-sm">Status<select aria-label="Status" value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value as TaskStatus })} className={fieldClass}>{Object.entries(TASK_STATUS_TITLE).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+            <label className="text-sm">Priority<select aria-label="Priority" value={draft.priority} onChange={(e) => setDraft({ ...draft, priority: Number(e.target.value) })} className={fieldClass}>{PRIORITY.map((label, value) => <option key={value} value={value}>{label}</option>)}</select></label>
+            <label className="text-sm">Category<input maxLength={100} value={draft.category ?? ''} onChange={(e) => setDraft({ ...draft, category: e.target.value })} className={fieldClass} /></label>
+            <label className="text-sm">Due date<input type="date" value={toDateInput(draft.dueAt)} onChange={(e) => setDraft({ ...draft, dueAt: e.target.value || null })} className={fieldClass} /></label>
+            <label className="text-sm">Estimate<input maxLength={40} value={draft.estimate ?? ''} onChange={(e) => setDraft({ ...draft, estimate: e.target.value })} className={fieldClass} /></label>
+          </div>
+          <div className="space-y-2 text-sm"><p>Assigned to</p><AssigneeEditor task={draft} roles={roles} onChange={(patch) => setDraft({ ...draft, ...patch, ...(patch.assigneeKind === null ? { assigneeRef: null } : {}) })} /><p className="text-xs text-on-surface-variant">Assign to a role for background work. Assigning to a person keeps it on their list.</p></div>
+        </fieldset>
+        {error && <p role="alert" className="text-sm text-error">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <button type="button" disabled={busy} onClick={close} className="rounded-lg border border-outline-variant px-4 py-2 text-sm">Cancel</button>
+          <button type="submit" disabled={busy || !draft.title.trim()} className="rounded-lg bg-primary px-4 py-2 text-sm text-on-primary disabled:opacity-50">{busy ? 'Saving…' : 'Save changes'}</button>
+        </div>
+      </form>
+    </dialog>
   );
 }
 
@@ -653,6 +747,7 @@ interface RowActions {
   onUpdateNotes: (t: Task, notes: string) => void;
   onUpdateFields: (t: Task, patch: TaskPatch) => void;
   onRelease: (t: Task) => void;
+  onEdit: (t: Task) => void;
   /** Edit, move, delete (owner and editor in a space). */
   canWrite: boolean;
   canComment: boolean;
@@ -725,7 +820,7 @@ function TaskGroup({
 /** task.dueAt → a `<input type="date">` value (YYYY-MM-DD), or '' if unset. */
 function toDateInput(dueAt?: string | null): string {
   if (!dueAt) return '';
-  if (/^\d{4}-\d{2}-\d{2}/.test(dueAt)) return dueAt.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dueAt)) return dueAt.slice(0, 10);
   const ms = dueMs(dueAt);
   if (Number.isNaN(ms)) return '';
   const d = new Date(ms);
@@ -744,6 +839,7 @@ function TaskRow({
   onUpdateNotes,
   onUpdateFields,
   onRelease,
+  onEdit,
   canWrite,
   canComment,
 }: {
@@ -854,12 +950,13 @@ function TaskRow({
               <button
                 onClick={() => setEditingMeta((v) => !v)}
                 className="text-[10px] inline-flex items-center gap-0.5 text-on-surface-variant/70 hover:text-on-surface"
-                title="Set due date, category, priority, assignee"
+                title="Quick fields: due date, category, priority, assignee"
               >
-                <Pencil className="w-2.5 h-2.5" /> edit
+                <Pencil className="w-2.5 h-2.5" /> fields
               </button>
             )}
-            {canWrite && <ReleaseClaimButton task={task} onRelease={() => onRelease(task)} />}
+            {canWrite && <button onClick={() => onEdit(task)} aria-label="Edit task" className="text-xs text-primary hover:underline">Edit</button>}
+        {canWrite && <ReleaseClaimButton task={task} onRelease={() => onRelease(task)} />}
           </div>
         </div>
         {canWrite && (
@@ -973,6 +1070,7 @@ function TaskBoard({
   onSetStatus,
   onDelete,
   onRelease,
+  onEdit,
   canWrite,
   canComment,
 }: {
@@ -981,6 +1079,7 @@ function TaskBoard({
   onSetStatus: (t: Task, status: TaskStatus) => void;
   onDelete: (id: string) => void;
   onRelease: (t: Task) => void;
+  onEdit: (t: Task) => void;
   /** Without it the board is read-only: no drag, no moves, no delete. */
   canWrite: boolean;
   canComment: boolean;
@@ -1065,6 +1164,7 @@ function TaskBoard({
                             onMove={(st) => onSetStatus(task, st)}
                             onDelete={() => onDelete(task.id)}
                             onRelease={() => onRelease(task)}
+                            onEdit={() => onEdit(task)}
                             canWrite={canWrite}
                             canComment={canComment}
                           />
@@ -1095,6 +1195,7 @@ function BoardCard({
   onMove,
   onDelete,
   onRelease,
+  onEdit,
   canWrite,
   canComment,
 }: {
@@ -1110,6 +1211,7 @@ function BoardCard({
   onMove: (status: TaskStatus) => void;
   onDelete: () => void;
   onRelease: () => void;
+  onEdit: () => void;
   canWrite: boolean;
   canComment: boolean;
 }) {
@@ -1187,6 +1289,7 @@ function BoardCard({
         )}
         <span className="flex-1" />
         <CommentsToggle open={showComments} onToggle={() => setShowComments((v) => !v)} />
+        {canWrite && <button onClick={onEdit} aria-label="Edit task" className="text-xs text-primary hover:underline">Edit</button>}
         {canWrite && <ReleaseClaimButton task={task} onRelease={onRelease} compact />}
         {canWrite && (
           <button onClick={onDelete} aria-label="Delete task" className="text-on-surface-variant hover:text-error">

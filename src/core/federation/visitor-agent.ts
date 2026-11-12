@@ -23,7 +23,7 @@
  *    `remote_space_post`, `remote_space_propose_note`, `remote_space_task_op`
  *    — beside the web search the root runner adds. No page fetch (it would
  *    send to a URL the space's text chose) and no personal tool: no mail,
- *    calendar, notes, memory, files, shell or connectors. Their arguments
+ *    calendar, notes, memory, files, shell or plugins. Their arguments
  *    are checked here (UUID ids, bounded and normalised paths, the op an
  *    enum) before anything is forwarded; their descriptions name no host
  *    string, and the approval summaries quote the host's names cleaned to

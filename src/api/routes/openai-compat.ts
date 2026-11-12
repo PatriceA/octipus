@@ -1,3 +1,4 @@
+import { budgetErrorBody } from '@/api/budget-error';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { SSE_HEADERS, chunkText, sseData, sseDone } from '@/api/sse';
@@ -129,6 +130,8 @@ export const openaiCompatRoutes = new Elysia()
   // for expected cases; this catches body-schema VALIDATION (thrown by Elysia
   // before the handler runs) and any unexpected throw.
   .onError(({ code, error, set }) => {
+    const budget = budgetErrorBody(error);
+    if (budget) { set.status = 429; return oaiError(budget.error, 'rate_limit_exceeded', budget.code); }
     if (code === 'NOT_FOUND') return; // let the router's default 404 stand
     if (code === 'VALIDATION') {
       set.status = 400;
@@ -268,6 +271,8 @@ export const openaiCompatRoutes = new Elysia()
         }
         return toChatCompletion(id, result.model || model, result.content, usage);
       } catch (err) {
+        const budget = budgetErrorBody(err);
+        if (budget) { set.status = 429; return oaiError(budget.error, 'rate_limit_exceeded', budget.code); }
         const message = (err as Error).message || 'Internal error';
         // Unknown model / provider-resolution failures → 400 model_not_found;
         // everything else → 500 server_error.

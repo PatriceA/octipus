@@ -1,0 +1,15 @@
+{
+  "name": "my-schedule",
+  "version": "0.1.0",
+  "apiVersion": "1.0.0",
+  "title": "My schedule",
+  "description": "A starting point: a read tool the cron runner calls every 15 minutes (UTC), and one that reports its last runs.",
+  "server": { "command": "node", "args": ["server.mjs"] },
+  "tools": {
+    "check": { "effect": "read", "description": "Run the periodic check and record when it ran" },
+    "last_checks": { "effect": "read", "description": "The most recent checks" }
+  },
+  "schedules": [
+    { "id": "quarter-hourly", "cron": "*/15 * * * *", "tool": "check", "input": { "source": "schedule" } }
+  ]
+}

@@ -353,6 +353,7 @@ function clampPriority(p: unknown): number {
   return Math.max(0, Math.min(3, Math.trunc(n)));
 }
 
+// `reader` and `research` are kept for existing tasks made by the removed core reader and research module.
 const TASK_SOURCES = new Set(['user', 'agent', 'reader', 'research', 'email']);
 /** Constrain the LLM-supplied source to the canonical set. */
 function normalizeSource(s: unknown): string {

@@ -1,3 +1,4 @@
+import { activeHostServiceEnvironment } from './execution-environments';
 /**
  * Docker isolation — Phase 3f multi-user.
  *
@@ -39,6 +40,7 @@ const LABEL_KEY = 'octipus.user_id';
 export function isolationActive(userId: string | null | undefined): boolean {
   if (getConfig().security.dockerIsolation !== 'enforce') return false;
   if (userId === SYSTEM_USER_ID) return false;
+  if (userId && activeHostServiceEnvironment(userId)) return false;
   requireRealUserId(userId);
   return true;
 }

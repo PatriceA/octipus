@@ -154,7 +154,7 @@ function ProviderCard({
         <button
           onClick={handleSave}
           disabled={!value || saving}
-          className="px-3 py-2 text-xs font-medium bg-primary text-[#0e0e0e] rounded-lg hover:bg-primary-container disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+          className="px-3 py-2 text-xs font-medium bg-primary text-on-primary rounded-lg hover:bg-primary-dim disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
         >
           {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Save'}
         </button>

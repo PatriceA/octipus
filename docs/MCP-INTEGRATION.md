@@ -382,8 +382,8 @@ Reset the breaker after you've fixed the underlying issue (restarted the server,
 
 ## Optional code search with CocoIndex Code
 
-The **MCP → Connectors** tab offers **CocoIndex Code** alongside the account
-connectors. It is optional: ordinary Octipus installation and filesystem search
+The **Knowledge** page (Settings → Models & knowledge → Knowledge) offers
+**CocoIndex Code** under **Code index**. It is optional: ordinary Octipus installation and filesystem search
 work without it. CocoIndex maintains its own code index; source chunks are not
 added to Octipus's general knowledge base.
 
@@ -417,26 +417,30 @@ After connection, agents with MCP access discover CocoIndex through
 execution permissions still apply. Setup downloads the selected embedding model
 and builds the initial index before reporting connected. This may take time for
 large folders. Later searches refresh the index incrementally by default.
+The status, install and removal calls are under `/api/code-index/cocoindex`
+([API.md](API.md#code-index)); a managed daemon set up when they lived under
+`/api/connectors/cocoindex` is pointed at the new embedding path on its next
+connect.
 Search results help locate relevant code; agents should inspect the current
 files before editing.
 
 **Apply and reconnect** updates the selected folder/model and refreshes its
-index. Changing models rebuilds the managed index. **Remove connector**
+index. Changing models rebuilds the managed index. **Remove code index**
 disconnects and removes the managed MCP server configuration; installed packages
 and index files remain on disk. General knowledge search and built-in repository
 navigation are unaffected.
 
-This connector provides semantic code search, not a cross-repository call graph.
+The code index provides semantic code search, not a cross-repository call graph.
 See the [CocoIndex Code documentation](https://github.com/cocoindex-io/cocoindex-code)
 for upstream search and indexing behavior.
 
 ### Windows manual CocoIndex setup
 
 Windows backends can use an individually configured stdio MCP server instead
-of the managed connector. Prefer the managed installer above — it does these
+of the managed code index. Prefer the managed installer above — it does these
 steps for you, and it now runs on Windows. Use this route when the backend has
 no `uv`, when CocoIndex is already installed another way, or when you want the
-server outside the connector's lifecycle.
+server outside the managed lifecycle.
 
 Run PowerShell on the **backend machine**, under the Windows account that runs
 Octipus. Installing on a Windows desktop client does not install anything on a
@@ -464,18 +468,18 @@ Write-Output "COCOINDEX_CODE_DIR=$env:COCOINDEX_CODE_DIR"
 ```
 
 During `init`, select **sentence-transformers** for local embeddings and choose
-a model. This uses separate manual-connector settings under LocalAppData.
+a model. This uses separate manual settings under LocalAppData.
 Wait for indexing to finish and confirm that a query relevant to your code
 returns results. Stop and resolve any command errors before adding the server.
 The package and model downloads can take time and use several GB of disk space.
 See [upstream CocoIndex setup](https://github.com/cocoindex-io/cocoindex-code).
 
-As an Octipus administrator, open **MCP → MCP Servers → Add Server**, choose
+As an Octipus administrator, open **Settings → MCP servers → Add Server**, choose
 **stdio**, and enter:
 
 | Field | Value |
 |---|---|
-| Name | `CocoIndex Windows` (keeps it distinct from the managed connector) |
+| Name | `CocoIndex Windows` (keeps it distinct from the managed code index) |
 | Command | The full `ccc.exe` path printed above, without surrounding quotes |
 | Arguments | `mcp` |
 | Working directory | Your repository folder, for example `C:\src\project` |
@@ -485,7 +489,7 @@ As an Octipus administrator, open **MCP → MCP Servers → Add Server**, choose
 
 Save the server. Confirm that it becomes connected and that its tool list
 contains `search`. It uses the normal MCP execution permissions and is shared
-with agents on this server. Manage connection/removal in **MCP Servers**; the
+with agents on this server. Manage connection/removal on the **MCP servers** page; the
 managed CocoIndex card does not track this manual installation.
 
 If startup fails:

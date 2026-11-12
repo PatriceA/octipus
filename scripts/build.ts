@@ -11,7 +11,7 @@
  * binaries at runtime and cannot be inlined.
  */
 import { build } from 'esbuild';
-import { copyFileSync, readdirSync, readFileSync } from 'node:fs';
+import { copyFileSync, cpSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { backendInputFingerprint, writeBackendBuildInfo } from './needs-build.mjs';
 
@@ -66,4 +66,8 @@ for (const file of readdirSync('src/voice').filter((name) => name.endsWith('.py'
   copyFileSync(join('src/voice', file), join('dist', file));
   runtimeFiles.push(file);
 }
+// Plugin package templates (src/plugins/packages/authoring/templates.ts) are
+// read off disk at runtime, `plugin-templates` beside the bundle.
+rmSync(join('dist', 'plugin-templates'), { recursive: true, force: true });
+cpSync(join('src', 'plugins', 'templates'), join('dist', 'plugin-templates'), { recursive: true });
 writeBackendBuildInfo(process.cwd(), inputsFingerprint, runtimeFiles);
