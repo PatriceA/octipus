@@ -5,8 +5,7 @@ import { swarmNodeRepository } from './node-repository';
 import { formatReceiptBlock } from './receipt';
 import { getLevelDefault } from './types';
 import type { AgentNode, ChildResult, ChildUserRequest } from './types';
-
-const attr = (value: string) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+import { escapeHtml } from '@/shared/html';
 
 /**
  * A child blocked on the user. Says plainly that the user, not the parent,
@@ -15,11 +14,11 @@ const attr = (value: string) => value.replace(/&/g, '&amp;').replace(/"/g, '&quo
  */
 function formatUserRequests(requests: ChildUserRequest[]): string {
   const elements = requests.map((r) =>
-    `\n  <${r.kind === 'question' ? 'pendingQuestion' : 'pendingApproval'} id="${attr(r.id)}" kind="${r.kind}" summary="${attr(r.summary)}" />`);
+    `\n  <${r.kind === 'question' ? 'pendingQuestion' : 'pendingApproval'} id="${escapeHtml(r.id)}" kind="${r.kind}" summary="${escapeHtml(r.summary)}" />`);
   return elements.join('') +
     '\n  <notes>WAITING ON THE USER — this child asked the user in this session and is blocked until they answer. ' +
     'It was NOT cancelled. You cannot answer this request for them; do not retry or duplicate the child. ' +
-    'Continue other work, and call collect_children again later.</notes>';
+    'Continue other work. A later collect_children waits for the child (it returns early only if another request opens).</notes>';
 }
 
 /**
@@ -138,10 +137,12 @@ export function formatCollectedResults(results: ChildResult[]): string {
       `nodeId="${r.nodeId}" status="${displayStatus}" ` +
       `tokens="${r.usedTokens}" durationMs="${r.durationMs}"`;
     const interrupted = /collect_children interrupted/i.test(r.notes ?? '');
+    const guidanceNote = '\n  <notes>STILL RUNNING — collection was interrupted by new user guidance. The child was not cancelled or automatically steered. Review the guidance; use steer_child only if this child needs to change course, or handle the change after collecting its result.</notes>';
+    // Guidance first: the user's new instruction outranks the child's wait.
     const notes = waiting
-      ? formatUserRequests(r.userRequests!)
+      ? `${interrupted ? guidanceNote : ''}${formatUserRequests(r.userRequests!)}`
       : interrupted
-      ? '\n  <notes>STILL RUNNING — collection was interrupted by new user guidance. The child was not cancelled or automatically steered. Review the guidance; use steer_child only if this child needs to change course, or handle the change after collecting its result.</notes>'
+      ? guidanceNote
       : /collect_children paused/i.test(r.notes ?? '')
       ? '\n  <notes>STILL RUNNING — collection returned early because another child is waiting on the user. This one was NOT cancelled and is still working. Call collect_children again to keep waiting for it.</notes>'
       : stillRunning

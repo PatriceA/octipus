@@ -1,4 +1,7 @@
+import { getAgentManager } from '@/core/agent-manager';
 import { getPermissionManager } from '@/security/permissions';
+import { CLI_QUESTION_TOOL } from '@/shared/cli-questions';
+import { redactedCommand } from '@/utils/command-log';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { getLevelDefault } from '../swarm/types';
 import type { ChildResult, ChildUserRequest, PendingChild } from '../swarm/types';
@@ -18,28 +21,42 @@ export interface ChildRequestSource {
 interface ChildRequestOpened { requestId: string; agentId: string; toolId: string; toolName: string; args: Record<string, unknown> }
 
 export interface DetachedChildManagerOptions {
-  /**
-   * Tell a parent that is not collecting that a child is waiting on the user.
-   * Returns a withdraw callback, called if the request resolves first, so a
-   * notice not yet delivered does not report a wait that is over.
-   */
-  notify?: (content: string) => (() => void) | void;
   /** Defaults to the permission manager; tests pass a fake. */
   requests?: () => ChildRequestSource;
+  /**
+   * Whether `agentId` was spawned, at any depth, under `ancestorId`. A
+   * grandchild's request blocks the child that is waiting on it, so the
+   * parent is told about it as the child's. Defaults to the agent manager's
+   * in-memory spawn tree.
+   */
+  isDescendant?: (agentId: string, ancestorId: string) => boolean;
 }
 
 const GUIDANCE_INTERRUPT = 'collect_children interrupted by new guidance; child is still running. Review guidance and decide whether to steer_child or handle it after collection.';
 const USER_REQUEST_PAUSE = 'collect_children paused: a child is waiting on the user; this one is still running.';
 
+/**
+ * The argument worth naming, per key. Any other argument is left out: tool
+ * arguments can carry payloads and secrets the parent has no need to see.
+ */
+const SUMMARY_ARGS: Record<string, (value: string) => string> = {
+  command: redactedCommand,
+  file_path: (v) => v,
+  path: (v) => v,
+  // Origin and path only: a query string or userinfo can carry a token.
+  url: (v) => { try { const u = new URL(v); return `${u.origin}${u.pathname}`; } catch { return ''; } },
+  query: (v) => v,
+};
+
 /** One line for the parent: the question, or the tool and its main argument. */
-function describeUserRequest(request: ChildRequestOpened): ChildUserRequest {
-  const isQuestion = request.toolId === 'cli-native:AskUserQuestion';
+function describeUserRequest(request: ChildRequestOpened, viaDescendant: boolean): ChildUserRequest {
+  const isQuestion = request.toolId === CLI_QUESTION_TOOL;
   const firstQuestion = (request.args.questions as Array<{ question?: unknown }> | undefined)?.[0]?.question;
-  const mainArg = ['command', 'file_path', 'path', 'url', 'query'].map(key => request.args[key]).find(v => typeof v === 'string')
-    ?? Object.values(request.args).find(v => typeof v === 'string');
-  const text = isQuestion
+  const key = Object.keys(SUMMARY_ARGS).find(k => typeof request.args[k] === 'string');
+  const mainArg = key ? SUMMARY_ARGS[key](request.args[key] as string) : '';
+  const text = (viaDescendant ? 'from one of its own subagents: ' : '') + (isQuestion
     ? (typeof firstQuestion === 'string' ? firstQuestion : 'a question')
-    : `${request.toolName}${mainArg ? `: ${String(mainArg)}` : ''}`;
+    : `${request.toolName}${mainArg ? `: ${mainArg}` : ''}`);
   const line = text.replace(/\s+/g, ' ').trim();
   return { id: request.requestId, kind: isQuestion ? 'question' : 'approval', summary: line.length > 160 ? `${line.slice(0, 159)}…` : line };
 }
@@ -69,8 +86,14 @@ export class DetachedChildManager {
   /** The subset of `waiters` from `collect_children` itself, which a child's request to the user ends early. */
   private requestWaiters = new Set<(reason?: Error) => void>();
   private generationWaiters = new Map<string, Set<(reason?: Error) => void>>();
-  /** Withdraw callbacks of notices sent for still-open requests, by request id. */
-  private noticeWithdrawals = new Map<string, () => void>();
+  /**
+   * Notices for a parent that was not collecting when a child's request
+   * opened, by request id, until the worker takes them. Kept apart from
+   * steering on purpose: a notice is not user guidance, so it must not wake a
+   * later collect as "new guidance", grant iterations, or interrupt a CLI
+   * turn. A request that resolves first takes its undelivered notice with it.
+   */
+  private notices = new Map<string, string>();
   private unsubscribeRequests: (() => void) | null = null;
 
   /** Wake the parent only; child promises and results remain intact. */
@@ -87,6 +110,18 @@ export class DetachedChildManager {
   ) {}
 
   /**
+   * Undelivered child-waiting notices, removed as they are returned. The
+   * worker adds them to the model's context where it delivers other context:
+   * before the next model call (native) or on the next Octipus tool
+   * response's run context (CLI).
+   */
+  takeNotices(): string[] {
+    const notices = [...this.notices.values()];
+    this.notices.clear();
+    return notices;
+  }
+
+  /**
    * Listen for the children's requests only while some are pending: the
    * permission manager is process-wide and outlives this worker.
    */
@@ -101,40 +136,46 @@ export class DetachedChildManager {
     } else if (this.pending.size === 0 && this.unsubscribeRequests) {
       this.unsubscribeRequests();
       this.unsubscribeRequests = null;
-      this.noticeWithdrawals.clear();
+      this.notices.clear();
     }
   }
 
+  private isDescendant(agentId: string, ancestorId: string): boolean {
+    try {
+      return (this.options.isDescendant ?? ((a, b) => getAgentManager().isDescendant(a, b)))(agentId, ancestorId);
+    } catch { return false; /* agent manager unavailable (tests / early boot) */ }
+  }
+
   /**
-   * A child opened an approval or CLI question. The user is asked in the
-   * session either way; this only keeps the parent from waiting blind. A
-   * `collect_children` wait returns at once with the child marked waiting. A
-   * parent doing other work gets one notice through its steering path. A
+   * A child (or one of its own subagents) opened an approval or CLI question.
+   * The user is asked in the session either way; this only keeps the parent
+   * from waiting blind. A `collect_children` wait returns at once with the
+   * child marked waiting. A parent doing other work gets one notice. A
    * finalize-time auto-collect is left alone: a CLI parent cancels whatever is
    * still pending after it, which would kill the child the user is answering.
+   * Pipeline handles carry no agent id and are not matched.
    */
   private childRequestOpened(request: ChildRequestOpened): void {
-    const pc = [...this.pending.values()].find(p => p.agentId !== undefined && p.agentId === request.agentId);
+    const children = [...this.pending.values()].filter(p => p.agentId !== undefined);
+    let pc = children.find(p => p.agentId === request.agentId);
+    const viaDescendant = !pc;
+    pc ??= children.find(p => this.isDescendant(request.agentId, p.agentId!));
     if (!pc) return;
-    const userRequest = describeUserRequest(request);
+    const userRequest = describeUserRequest(request, viaDescendant);
     pc.userRequests = [...(pc.userRequests ?? []), userRequest];
     if (this.requestWaiters.size > 0) {
       for (const wake of [...this.requestWaiters]) wake(new Error(USER_REQUEST_PAUSE));
       return;
     }
-    if (this.waiters.size > 0 || !this.options.notify) return;
-    const withdraw = this.options.notify(
+    if (this.waiters.size > 0) return;
+    this.notices.set(userRequest.id,
       `Subagent ${pc.childId} is waiting on the user (${userRequest.kind} ${userRequest.id}: ${userRequest.summary}). ` +
         'The user is being asked in this session; the child was not cancelled and continues once they answer. ' +
-        'You cannot answer it for them. Carry on, and call collect_children later.',
-    );
-    if (withdraw) this.noticeWithdrawals.set(userRequest.id, withdraw);
+        'You cannot answer it for them. Carry on with other work; collect_children will wait for the child.');
   }
 
   private childRequestResolved(requestId: string): void {
-    const withdraw = this.noticeWithdrawals.get(requestId);
-    this.noticeWithdrawals.delete(requestId);
-    withdraw?.();
+    this.notices.delete(requestId);
     for (const pc of this.pending.values()) {
       if (!pc.userRequests?.some(r => r.id === requestId)) continue;
       const open = pc.userRequests.filter(r => r.id !== requestId);
@@ -235,7 +276,10 @@ export class DetachedChildManager {
         durationMs: Date.now() - pc.startedAt,
         spawnedChildren: [],
         notes: (err as Error).message,
-        ...(pc.userRequests?.length ? { userRequests: [...pc.userRequests] } : {}),
+        // Only for the explicit tool: its text tells the parent to collect again
+        // later. The finalize auto-collect (after which a CLI parent cancels what
+        // is still pending) must not promise the child carries on.
+        ...(opts.wakeOnUserRequest && pc.userRequests?.length ? { userRequests: [...pc.userRequests] } : {}),
       };
     } finally {
       clearTimeout(timer);

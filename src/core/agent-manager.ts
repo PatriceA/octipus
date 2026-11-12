@@ -611,6 +611,19 @@ export class AgentManager {
     return this.agents.get(agentId);
   }
 
+  /** Whether `agentId` was spawned, at any depth, under `ancestorId` (in-memory spawn edges). */
+  isDescendant(agentId: string, ancestorId: string): boolean {
+    const seen = new Set<string>();
+    const queue = [ancestorId];
+    while (queue.length) {
+      for (const child of this.childrenByParent.get(queue.shift()!) ?? []) {
+        if (child === agentId) return true;
+        if (!seen.has(child)) { seen.add(child); queue.push(child); }
+      }
+    }
+    return false;
+  }
+
   /**
    * Get all agents for a session
    */

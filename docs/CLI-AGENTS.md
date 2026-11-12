@@ -454,13 +454,18 @@ automatically steering any child. The root decides whether to use `steer_child`
 on one of its own pending children or handle the change after collecting.
 
 A child's tool approvals and Claude questions go to the user in the root session,
-as for any agent. Its parent is told too. A `collect_children` wait returns early
+as for any agent. Its parent is told too, and so is the parent of a child whose
+own subagent asked. Requests inside a pipeline are not reported this way. A
+`collect_children` wait returns early
 with that child as `status="waiting"` and a `pendingApproval` or `pendingQuestion`
 element (request id, kind, summary). The other children are reported as still
-running, and none is cancelled. A parent that is not collecting gets one short
-notice through its steering path, withdrawn if the request is answered before
-delivery. Automatic collection at finalize is not woken. Neither path lets the
-parent answer the request. A CLI child is told to use `request_user_approval` only
+running, and none is cancelled. A later collect waits for the child as usual.
+A parent that is not collecting gets one short notice. A CLI parent receives it
+as `childNotices` in the run context of its next Octipus tool response; a native
+parent receives it as system context before its next model call. It is not
+steering: it neither interrupts the turn nor wakes a collect. It is dropped if
+the request is answered before delivery. Automatic collection at finalize is not
+woken. No path lets the parent answer the request. A CLI child is told to use `request_user_approval` only
 when that tool is in its tool set. Otherwise it is told that approvals reach the
 user automatically, and to state any other decision it needs in its final answer.
 

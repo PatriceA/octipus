@@ -261,10 +261,22 @@ describe('collect_children', () => {
     expect(out).toContain('<pendingQuestion id="q-1" kind="question" summary="Which database?" />');
     expect(out).toContain('You cannot answer this request for them');
     expect(out).toContain('It was NOT cancelled');
-    expect(out).toContain('call collect_children again later');
+    expect(out).toContain('A later collect_children waits for the child');
     // The sibling it woke is still running, not failed or waiting.
     expect(out).toContain('nodeId="n3" status="running"');
     expect(out).toContain('another child is waiting on the user');
+  });
+
+  test('formatCollectedResults: user guidance that interrupted the collect is kept, ahead of the wait', () => {
+    const out = formatCollectedResults([
+      { nodeId: 'n1', kind: 'subagent', status: 'timeout', output: null, usedTokens: 0, durationMs: 5, spawnedChildren: [],
+        notes: 'collect_children interrupted by new guidance; child is still running.',
+        userRequests: [{ id: 'req-1', kind: 'approval', summary: 'shell: make' }] },
+    ]);
+    expect(out).toContain('status="waiting"');
+    const guidance = out.indexOf('interrupted by new user guidance');
+    expect(guidance).toBeGreaterThan(-1);
+    expect(guidance).toBeLessThan(out.indexOf('<pendingApproval'));
   });
 
   test('collect_children asks to be woken when a child opens a request to the user', async () => {

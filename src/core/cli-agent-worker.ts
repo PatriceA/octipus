@@ -240,15 +240,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
    * own credit is a no-op here — crediting both would count the wait twice.
    */
   private detached = new DetachedChildManager(this.context.id, () => this.config.timeout, () => {},
-    () => this.steeringQueue.length > 0 || [...this.liveGuidance.keys()].some(id => !this.liveGuidancePassed.has(id)),
-    { notify: content => {
-      // A child waiting on the user: one notice through the normal steering
-      // path. Withdrawable only while still queued; once written to the CLI's
-      // input stream it is delivered.
-      const message: AgentMessage = { role: 'system', content, timestamp: new Date() };
-      if (!this.steer(message)) return;
-      return () => { const at = this.steeringQueue.indexOf(message); if (at >= 0) this.steeringQueue.splice(at, 1); };
-    } });
+    () => this.steeringQueue.length > 0 || [...this.liveGuidance.keys()].some(id => !this.liveGuidancePassed.has(id)));
   registerPendingChild(pc: PendingChild): void { this.detached.registerPendingChild(pc); }
   pendingDetachedCount(): number { return this.detached.count(); }
   listPendingDetached(): PendingChild[] { return this.detached.list(); }
@@ -426,6 +418,10 @@ When a task matches one of these skills, load it with get_skill before starting 
         note: executionEnvironmentFor(this.context) ? 'Registered shell commands follow executionEnvironment above. Host runs use the OS account; sandbox runs require isolation; SSH runs use the remote machine. API connections have separate service targets.' : 'Registered shell commands use the Octipus sandbox. Without approved hostServices a missing Docker socket describes that sandbox, not the host. Native vendor CLI Bash may have different host access. A root context does not inherit child pipeline approval; inspect that pipeline status for its scope.' },
       workPlan: formatWorkPlanContext(state), guidance: guidance.map(m => m.content),
       ...(this.isCodex() ? { guidanceItems: [...this.pendingCodexGuidance].map(([id, message]) => ({ id, content: message.content })) } : {}),
+      // Child-waiting notices go out passively here, on the next Octipus tool
+      // response, not as steering: they must not interrupt the CLI's turn or
+      // read as user text, and stay withdrawable until this point.
+      ...((notices => notices.length ? { childNotices: notices } : {})(this.detached.takeNotices())),
       ...(this.detached.count() > 0 ? {
         detachedChildren: this.detached.list().map(pc => ({ childId: pc.childId, topic: pc.topic, runningMs: Date.now() - pc.startedAt })),
         detachedChildrenNote: 'Call collect_children before your final answer to receive their results; otherwise the run collects them for you.',

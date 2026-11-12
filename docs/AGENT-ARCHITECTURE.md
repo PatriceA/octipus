@@ -163,7 +163,7 @@ Parent abort propagates to children via an `AbortSignal` chain rooted on the Roo
 
 ### Child Approvals and Questions
 
-A child's approval request (and a CLI child's question) goes to the user in the root session, like any agent's. Its parent is told as well. The `DetachedChildManager` listens to the permission manager's request and resolution events for its pending children's agent ids. An open request ends a `collect_children` wait early: that child comes back `status="waiting"` with a `pendingApproval` / `pendingQuestion` element, and its siblings come back as still running. A parent doing other work gets one notice through `steer()`, withdrawn if the request is answered before delivery. The finalize auto-collect is not woken. The parent cannot answer the request; it collects again later.
+A child's approval request (and a CLI child's question) goes to the user in the root session, like any agent's. Its parent is told as well. The `DetachedChildManager` listens to the permission manager's request and resolution events for its pending children's agent ids and their descendants (`AgentManager.isDescendant`). Pipeline handles carry no agent id and are not matched. An open request ends a `collect_children` wait early: that child comes back `status="waiting"` with a `pendingApproval` / `pendingQuestion` element, and its siblings come back as still running. A parent doing other work gets one notice, kept apart from steering (`takeNotices()`): a native parent receives it as system context before its next model call, a CLI parent on its next tool response's run context. It is dropped if the request is answered before delivery. The finalize auto-collect is not woken. The parent cannot answer the request; it collects again later.
 
 ### Observability
 
