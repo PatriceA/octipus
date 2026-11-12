@@ -1,6 +1,7 @@
 import { isModuleOn } from '@/core/modules/registry';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
+import { idempotencyTrack, idempotent } from '@/api/idempotency';
 import { getAllCommands } from '@/core/commands';
 import { getAgentService } from '@/core/agent';
 import { getAgentManager } from '@/core/agent-manager';
@@ -120,7 +121,10 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
   // Send a chat message through the root agent
   .post(
     '/',
-    async ({ user, principal, body, set, request }) => {
+    // `Idempotency-Key`: a retried call (the MCP server's 25 s client timeout)
+    // returns this turn's answer, or 409 with its sessionId while it still
+    // runs, instead of adding the message again and starting a second turn.
+    idempotent('chat', async ({ user, principal, body, set, request }) => {
       if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
@@ -174,6 +178,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           },
         });
         sessionId = session.id;
+        await idempotencyTrack(request)?.setMeta({ sessionId });
       } else {
         // Verify session ownership through the scoped repo.
         // A room is never a personal chat, its creator's included (§6.2).
@@ -182,6 +187,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           set.status = 404;
           return { error: 'Session not found' };
         }
+        await idempotencyTrack(request)?.setMeta({ sessionId });
       }
 
       const rootAgent = getAgentService();
@@ -256,7 +262,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           details: (error as Error).message,
         };
       }
-    },
+    }),
     {
       body: t.Object({
         message: t.String({ minLength: 1 }),

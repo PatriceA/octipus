@@ -6,6 +6,7 @@ import { can, SpaceError, spaceErrorStatus } from '@/security/space-access';
 import { normalizeAcceptance } from '@/tools/plan';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
+import { idempotent } from '@/api/idempotency';
 import { getAgentService, getPipelineManager } from '@/core/agent';
 import { ROOT_ROLE } from '@/core/agent/types';
 import { getModelRegistry } from '@/models/model-registry';
@@ -166,7 +167,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
   // continues in the background and `GET /pipelines/:id` follows it.
   .post(
     '/',
-    async ({ user, principal, body, set }) => {
+    idempotent('pipelines.create', async ({ user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) {
         set.status = 401;
         return { error: 'Not authenticated' };
@@ -293,7 +294,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         set.status = 400;
         return { error: (err as Error).message };
       }
-    },
+    }),
     {
       body: t.Object({
         templateName: t.String({ minLength: 1 }),

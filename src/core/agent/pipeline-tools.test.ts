@@ -299,3 +299,29 @@ it.each(['unconfigured', 'space'])('rejects an external profile repo when %s acc
     expect(fixture.resume).not.toHaveBeenCalled();
   } finally { session.mockRestore(); forgetWorkspaceRow(workspaceId); getConfig().workspace.additionalPaths = previous; rmSync(root, { recursive: true, force: true }); }
 });
+
+describe('create_pipeline clientRequestId (retry key)', () => {
+  it('a retry on a later turn returns the pipeline already created instead of starting another', async () => {
+    const { initializeStorage } = await import('@/db/storage');
+    initializeStorage({ mode: 'embedded' });
+    let n = 0;
+    const createAndRunPipeline = vi.fn(async (_title, _template, _description, _context, options) => {
+      await Promise.resolve(); options.onCreated(`pipeline-${++n}`); return new Promise(() => {});
+    });
+    const args = { title: 'Build', templateName: 'Build', description: 'Implement', clientRequestId: 'req-1' };
+    const turn = () => createMetaTools({ createAndRunPipeline } as never).find(tool => tool.name === 'create_pipeline')!;
+    const first = turn();
+    expect(await first.execute(args, context)).toMatchObject({ id: 'pipeline-1', status: 'running' });
+    // Same turn: the per-turn gate replays the result for the same key …
+    expect(await first.execute(args, context)).toMatchObject({ id: 'pipeline-1' });
+    // … and still refuses a second pipeline without it.
+    await expect(first.execute({ ...args, clientRequestId: undefined }, context)).rejects.toThrow('already been created');
+    // A later turn (new tool set, gate reset) with the same key.
+    fixture.find.mockResolvedValue({ id: 'pipeline-1', status: 'running_stage' });
+    expect(await turn().execute(args, context)).toMatchObject({ id: 'pipeline-1', status: 'running_stage', replayed: true });
+    expect(createAndRunPipeline).toHaveBeenCalledOnce();
+    // The key reused for a different request is refused, not run.
+    expect(await turn().execute({ ...args, description: 'Something else' }, context)).toContain('already used for a different');
+    expect(createAndRunPipeline).toHaveBeenCalledOnce();
+  });
+});

@@ -51,6 +51,29 @@ path (one leading `/`, no `//`, no backslash, no whitespace or control
 characters). Anything else is refused with 400; a valid one is echoed back as
 `returnTo` in the response (`/` when none was sent).
 
+## Idempotency keys
+
+`POST /api/chat`, `POST /api/agents`, `POST /api/sessions`,
+`POST /api/pipelines`, `POST /api/hooks` and
+`POST /api/tools/:toolId/tools/:toolName/execute` accept an
+`Idempotency-Key` header (or `X-Idempotency-Key`, at most 255 characters).
+Keys are per user and per endpoint. Without the header nothing changes.
+
+- First request: runs. A success (status below 400, no `error` field) is kept
+  for 24 h; a failure frees the key so a retry runs again.
+- Retry after it finished: the stored status and body, with
+  `Idempotent-Replayed: true`. A chat retry does not add the message again or
+  start a second turn.
+- Retry while it still runs: waits for it up to ~20 s, then answers
+  `409 { code: "idempotency_in_progress", status: "in_progress", sessionId? }`
+  with `Retry-After: 5`. Retry with the same key later for the result.
+- Same key, different request body: `422 { code: "idempotency_key_reused" }`
+  (for sessions, `channelId` is ignored when comparing).
+
+The claim lives in the shared kv store (the same mechanism as webhook delivery
+ids, in-process only while the store is down) and is renewed while the work
+runs; a crashed run frees its key after 15 minutes.
+
 ## Agents
 
 | Method | Endpoint | Description |

@@ -2,6 +2,7 @@ import { desc, eq, or, sql } from 'drizzle-orm';
 import { buildAgentContext, fundingFor } from '@/core/agent/context';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
+import { idempotent } from '@/api/idempotency';
 import { disableDailyBriefingHook, ensureDailyBriefingHook } from '@/core/briefing';
 import { roleHeartbeatHookError, sanitizeTriggerConfig } from '@/core/heartbeat';
 import type { ChannelType } from '@/core/types';
@@ -207,7 +208,7 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
   // Create hook
   .post(
     '/',
-    async ({ user, body, set }) => {
+    idempotent('hooks.create', async ({ user, body, set }) => {
       if (!user) {
         return { error: 'Not authenticated' };
       }
@@ -249,7 +250,7 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
       });
 
       return hook;
-    },
+    }),
     {
       body: t.Object({
         name: t.String(),

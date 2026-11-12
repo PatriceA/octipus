@@ -5,6 +5,7 @@ import type { AgentContext } from '@/core/types';
 import { type AgentScope, resolveAgentScope, withAgentUsage } from '@/core/agent/context';
 import { SpaceError, spaceErrorStatus } from '@/security/space-access';
 import { apiContext } from '@/api/context';
+import { idempotent } from '@/api/idempotency';
 import { getAgentManager } from '@/core/agent-manager';
 import { getRouter } from '@/core/router';
 import { isRegisteredModel, resolveModel } from '@/models/resolve-model';
@@ -325,7 +326,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
   // Spawn a new agent
   .post(
     '/',
-    async ({ user, principal, body, set }) => {
+    idempotent('agents.spawn', async ({ user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
@@ -406,7 +407,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       } catch (error) {
         return { error: (error as Error).message };
       }
-    },
+    }),
     {
       body: t.Object({
         sessionId: t.String(),

@@ -6,6 +6,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { OctiClient } from '../client.js';
+import { clientRequestIdSchema, retryKey, retryNotice } from './retry-key.js';
 
 function asText(result: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
@@ -41,11 +42,15 @@ export function registerTasksTools(server: McpServer, client: OctiClient): void 
       priority: z.number().min(0).max(3).optional().describe('Priority 0 (none) to 3 (high)'),
       category: z.string().optional().describe('Optional user category/list, e.g. "Shopping" or "Car"'),
       dueAt: z.string().optional().describe('Due date/time, ISO 8601'),
+      clientRequestId: clientRequestIdSchema,
     },
-    async ({ title, notes, priority, category, dueAt }) => {
+    async ({ title, notes, priority, category, dueAt, clientRequestId }) => {
+      const key = retryKey(clientRequestId);
       try {
-        return asText(await client.executeTool('tasks', 'create_task', { title, notes, priority, category, dueAt, source: 'agent' }));
+        return asText(await client.executeTool('tasks', 'create_task', { title, notes, priority, category, dueAt, source: 'agent' }, key));
       } catch (error) {
+        const notice = retryNotice(error, 'octipus_create_task', key);
+        if (notice) return { content: [{ type: 'text' as const, text: notice }], isError: true };
         return asError(error);
       }
     },

@@ -5,6 +5,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { OctiClient } from '../client.js';
+import { clientRequestIdSchema, retryKey, retryNotice } from './retry-key.js';
 
 export function registerAgentTools(server: McpServer, client: OctiClient): void {
   server.tool(
@@ -57,10 +58,12 @@ export function registerAgentTools(server: McpServer, client: OctiClient): void 
       message: z.string().describe('The task or question for the agent'),
       model: z.string().optional().describe('Model to use (e.g., "qwen3:14b", "gemma3:12b"). Uses default if not specified.'),
       topic: z.string().optional().describe('Topic hint for routing (e.g., "research", "coding", "review")'),
+      clientRequestId: clientRequestIdSchema,
     },
-    async ({ message, model, topic }) => {
+    async ({ message, model, topic, clientRequestId }) => {
+      const key = retryKey(clientRequestId);
       try {
-        const agent = await client.spawnAgent(message, model, topic);
+        const agent = await client.spawnAgent(message, model, topic, key);
         return {
           content: [
             {
@@ -77,6 +80,8 @@ export function registerAgentTools(server: McpServer, client: OctiClient): void 
           ],
         };
       } catch (error) {
+        const notice = retryNotice(error, 'octipus_spawn_agent', key);
+        if (notice) return { content: [{ type: 'text' as const, text: notice }], isError: true };
         return {
           content: [{ type: 'text' as const, text: `Failed to spawn agent: ${(error as Error).message}` }],
           isError: true,

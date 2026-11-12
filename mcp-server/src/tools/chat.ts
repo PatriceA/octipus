@@ -5,6 +5,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { OctiClient } from '../client.js';
+import { clientRequestIdSchema, retryKey, retryNotice } from './retry-key.js';
 
 export function registerChatTools(server: McpServer, client: OctiClient): void {
   server.tool(
@@ -14,8 +15,12 @@ export function registerChatTools(server: McpServer, client: OctiClient): void {
       message: z.string().describe('The message to send to Octipus'),
       session_id: z.string().optional().describe('Session ID for conversation continuity. Omit to create a new session.'),
       project_path: z.string().optional().describe('Absolute path to a project/repo to create a dev-mode session pinned to that project. Only used when session_id is not provided.'),
+      clientRequestId: clientRequestIdSchema,
     },
-    async ({ message, session_id, project_path }) => {
+    async ({ message, session_id, project_path, clientRequestId }) => {
+      // Always keyed: a turn outlives the client timeout, and the answer to a
+      // timeout names this key so the retry joins the turn instead of starting another.
+      const key = retryKey(clientRequestId);
       try {
         // Create dev-mode session if project_path is provided and no session exists
         let effectiveSessionId = session_id;
@@ -26,12 +31,13 @@ export function registerChatTools(server: McpServer, client: OctiClient): void {
               channelType: 'webchat',
               title: `Dev: ${projectName}`,
               context: { devMode: true, projectPath: project_path, projectName },
+              clientRequestId: key,
             });
             effectiveSessionId = session.id;
           } catch {}
         }
 
-        const result = await client.chat(message, effectiveSessionId);
+        const result = await client.chat(message, effectiveSessionId, key);
         const meta = [
           `Session: ${result.sessionId}`,
           result.agentId ? `Agent: ${result.agentId}` : null,
@@ -53,6 +59,8 @@ export function registerChatTools(server: McpServer, client: OctiClient): void {
           ],
         };
       } catch (error) {
+        const notice = retryNotice(error, 'octipus_chat', key);
+        if (notice) return { content: [{ type: 'text' as const, text: notice }] };
         return {
           content: [{ type: 'text' as const, text: `Chat failed: ${(error as Error).message}` }],
           isError: true,

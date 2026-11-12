@@ -34,6 +34,28 @@ Standalone MCP server (`mcp-server/`) that exposes Octipus capabilities as MCP t
 
 The table above shows commonly used tools. The server registers 83 tools across 23 groups — see `mcp-server/src/tools/` for the complete list, or ask the running server for `tools/list`.
 
+### Retries without duplicates (`clientRequestId`)
+
+`octipus_chat`, `octipus_spawn_agent`, `octipus_create_task`,
+`octipus_create_pipeline` and `octipus_create_recurring_task` take an optional
+`clientRequestId`, sent to the backend as `Idempotency-Key` (see
+[API](API.md#idempotency-keys)). Use a fresh value per new request and the same
+value when retrying it: the first call's result comes back instead of a second
+message, agent, task, pipeline or hook. When none is given the tool generates
+one for that call.
+
+The server gives up on a backend request after 25 s, but a chat turn keeps
+running. A timed-out tool now answers that the work may still be running and
+names the `clientRequestId` to retry with; the retry waits for the running turn
+(up to ~20 s) and returns its answer, or says it is still running and in which
+session (`octipus_get_messages`).
+
+Inside a CLI agent run, every Octipus tool that changes something also takes an
+optional `clientRequestId`: a retried call whose first response was lost gets
+that response instead of running again (kept for the run). `create_pipeline`
+keeps its key for 24 h, so a retry on a later turn returns the existing
+pipeline.
+
 Direct execution runs unattended: ASK actions return an approval-required error.
 Configure reviewed permissions before automation; possession of an MCP/API token
 does not bypass the permission gate. See [Tools API](API.md#tools).
