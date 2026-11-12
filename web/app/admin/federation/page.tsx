@@ -57,7 +57,7 @@ export default function AdminFederationPage() {
   return (
     <div className="space-y-4" data-testid="admin-federation">
       <div>
-        <h2 className="section-label">federation</h2>
+        <h2 className="section-label">Federation</h2>
         <p className="mt-1 text-xs text-on-surface-variant">
           Other installs whose members joined a space here with an invite. Each is known by its fingerprint, verified on
           every connection. Blocking an install closes its link and removes every membership its members hold here; their

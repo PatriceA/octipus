@@ -159,7 +159,7 @@ describe('Extension API (factory + dispose)', () => {
     await loaded.dispose();
   });
 
-  test('onDispose callbacks fire on dispose, even if one throws', async () => {
+  test('onDispose callbacks fire on dispose, newest first, even if one throws', async () => {
     const { api, loaded } = buildExtensionContext('teardown-ext', '/fake/path.ts', bus);
 
     const calls: string[] = [];
@@ -168,7 +168,21 @@ describe('Extension API (factory + dispose)', () => {
     api.onDispose(async () => { calls.push('c'); });
 
     await loaded.dispose();
-    expect(calls).toEqual(['a', 'c']);
+    expect(calls).toEqual(['c', 'a']);
+  });
+
+  test('every registration is undone in reverse registration order', async () => {
+    const { api, loaded } = buildExtensionContext('order-ext', '/fake/path.ts', bus);
+    const has = (name: string) => getCommandRegistry().getAvailable(true).some((c) => c.name === name);
+    const steps: string[] = [];
+    api.onDispose(() => { steps.push(`first callback (command registered: ${has('order-cmd')})`); });
+    api.registerCommand({ name: 'order-cmd', description: 'x', handler: async () => ({ text: '' }) });
+    api.on('test.event', () => {});
+    api.onDispose(() => { steps.push(`last callback (command registered: ${has('order-cmd')})`); });
+
+    await loaded.dispose();
+    // The last callback still sees the command; the first runs after it is gone.
+    expect(steps).toEqual(['last callback (command registered: true)', 'first callback (command registered: false)']);
   });
 
   test('after dispose, on() is a no-op', async () => {

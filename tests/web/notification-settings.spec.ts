@@ -27,9 +27,14 @@ test('notification checkboxes load saved values and retain changes after leaving
     await expect(checkbox).toBeEnabled();
   }
   await expect.poll(() => writes.length).toBe(4);
-  const sections = page.getByRole('navigation', { name: 'Settings sections' });
-  await sections.getByRole('button', { name: 'General', exact: true }).click();
-  await sections.getByRole('button', { name: 'Notifications', exact: true }).click();
+  await page.getByRole('button', { name: 'All settings', exact: true }).click();
+  await expect(page).toHaveURL(/\/settings$/);
+  await page.getByRole('button', { name: 'Profile', exact: true }).click();
+  await expect(page).toHaveURL(/tab=general/);
+  await page.getByRole('button', { name: 'All settings', exact: true }).click();
+  await expect(page).toHaveURL(/\/settings$/);
+  await page.getByRole('main').getByRole('button', { name: 'Notifications', exact: true }).click();
+  await expect(page).toHaveURL(/tab=notifications/);
   for (let index = 0; index < keys.length; index++) {
     await expect(page.getByRole('checkbox', { name: new RegExp(labels[index]) })).toBeChecked({ checked: index !== 3 });
   }

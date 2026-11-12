@@ -10,7 +10,7 @@ import type { FieldDef, RecordData } from '../../../src/shared/record-fields';
 
 export const INPUT = 'w-full bg-surface-container rounded-xs px-3 py-2 text-sm text-on-surface border border-outline-variant/30 focus:border-primary/60 outline-none';
 export const BUTTON = 'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-surface-container-high text-on-surface/80 rounded-lg cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed';
-export const PRIMARY = 'inline-flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-[#0e0e0e] rounded-full font-bold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed';
+export const PRIMARY = 'inline-flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-on-primary rounded-full font-bold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed';
 export const LABEL = 'block text-xs font-medium text-on-surface-variant mb-1';
 export const CARD = 'bg-surface-container rounded-xs border border-outline-variant/10';
 
@@ -84,18 +84,19 @@ const INPUT_TYPE: Partial<Record<FieldDef['type'], string>> = {
   number: 'number', money: 'number', date: 'date', email: 'email', phone: 'tel', url: 'url',
 };
 
-/** The inputs of a record type's fields. */
-export function FieldInputs({ fields, values, onChange, disabled }: {
+/** The inputs of a record type's fields. `idPrefix` keeps ids unique when several forms share a page. */
+export function FieldInputs({ fields, values, onChange, disabled, idPrefix = 'field' }: {
   fields: readonly FieldDef[];
   values: FieldValues;
   onChange: (next: FieldValues) => void;
   disabled?: boolean;
+  idPrefix?: string;
 }) {
   const set = (key: string, value: string | boolean) => onChange({ ...values, [key]: value });
   return (
     <div className="space-y-3">
       {fields.map((f) => {
-        const id = `field-${f.key}`;
+        const id = `${idPrefix}-${f.key}`;
         const label = `${f.label}${f.required ? ' *' : ''}`;
         let input: ReactNode;
         if (f.type === 'boolean') {

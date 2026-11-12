@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { buildChildEnv, isSensitiveEnvName } from './child-env';
+import { buildChildEnv, buildIsolatedChildEnv, isSensitiveEnvName } from './child-env';
 
 /** Plant vars, run `fn`, restore whatever was there before. */
 function withEnv<T>(vars: Record<string, string>, fn: () => T): T {
@@ -68,5 +68,17 @@ describe('buildChildEnv', () => {
       buildChildEnv({ MASTER_KEY: 'passed-on-purpose' }),
     );
     expect(env.MASTER_KEY).toBe('passed-on-purpose');
+  });
+});
+
+
+test('isolated Windows startup keeps profile paths without host credentials', () => {
+  withEnv({ USERPROFILE: 'C:\\Users\\operator', LOCALAPPDATA: 'C:\\Users\\operator\\AppData\\Local', APPDATA: 'C:\\Users\\operator\\AppData\\Roaming', MASTER_KEY: 'blocked', ARBITRARY_HOST_SETTING: 'blocked' }, () => {
+    const env = buildIsolatedChildEnv();
+    expect(env.USERPROFILE).toBe(process.env.USERPROFILE);
+    expect(env.LOCALAPPDATA).toBe(process.env.LOCALAPPDATA);
+    expect(env.APPDATA).toBe(process.env.APPDATA);
+    expect(env.MASTER_KEY).toBeUndefined();
+    expect(env.ARBITRARY_HOST_SETTING).toBeUndefined();
   });
 });

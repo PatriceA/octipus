@@ -342,7 +342,7 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
     detail: { tags: ['workspace'] },
   })
 
-  // ── Repo registry (multi-repo) — see .octipus/multi-repo-design.md ──
+  // ── Repo registry (multi-repo) — see docs/MULTI-REPO.md ──
 
   .get('/repos', async ({ user, principal, set }) => {
     if (!user) {

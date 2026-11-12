@@ -1,3 +1,4 @@
+import { executionEnvironmentFor } from './execution-environments';
 import { createHash } from 'node:crypto';
 import { effectiveProfileCall, profileMismatch, profileExplicitlyAllows, profileAllows, runPermissionProfile } from './pipeline-permissions';
 /**
@@ -35,7 +36,7 @@ import { effectiveProfileCall, profileMismatch, profileExplicitlyAllows, profile
  * other source file.
  */
 import type { AgentSpace, AgentTrigger, PermissionLevel } from '@/core/types';
-import { type ApprovalDecision, routeApproval } from './approval-policy';
+import { type ApprovalDecision, routeApproval, canPromptHuman } from './approval-policy';
 import { isApprovedCall } from './approved-calls';
 import { classifyFlow, federatedAudienceReason, federatedSpaceWriteReason, getFlowLabel, isSharedAudience, loadFlowLabel, observeFlow } from './flow-guard';
 import { can } from './space-access';
@@ -158,11 +159,21 @@ export async function routeApprovalFor(
         + (spaceFederated ? '; members of this space on other installs will read it' : '');
     }
   }
+  const environment = !space && context.trigger !== 'remote' ? executionEnvironmentFor(context) : undefined;
+  const background = !canPromptHuman(context);
+  if (environment && (level !== 'DENY' || environment.authority === 'account' && source === 'manifest')) {
+    if (background && environment.background === 'deny' && !isReadCall(call)) return deny('This environment does not allow background changes. Open Settings → Environments & Access.');
+    const automatic = background ? environment.background === 'automatic' : environment.approval === 'automatic';
+    if (automatic && (source !== 'flow-guard' || (environment.network && environment.allowDataTransfer))) {
+      level = 'ALLOW'; source = `execution-environment:${environment.id}:${environment.revision}`;
+      reason = 'Owner-approved environment policy';
+    }
+  }
   const decision = routeApproval({
     level,
     role: context.role,
     root: context.root,
-    attended: context.attended,
+    attended: context.attended || !!(environment && environment.background === 'ask' && context.sessionId),
     toolId: call.toolId,
     action: call.action,
     unattendedDenyActions: options.unattendedDenyActions,

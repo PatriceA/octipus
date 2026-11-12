@@ -1,3 +1,5 @@
+import { executionEnvironmentFor } from '@/security/execution-environments';
+import { remoteFilesystemOperation } from './environment-operations';
 import { existsSync, statSync } from 'fs';
 import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'path';
@@ -11,7 +13,7 @@ import { WORK_STREAM_META_KEY } from '@/shared/work-stream';
 import { withFileMutationQueue } from '@/utils/file-mutation-queue';
 import { coreLogger } from '@/utils/logger';
 import { safeRegExp } from '@/utils/sanitize';
-import { BaseTool, createParameterSchema } from '../base-tool';
+import { BaseTool, createParameterSchema, type ToolExecutionOptions } from '../base-tool';
 import { ToolNotExecutedError } from '@/core/tool-execution-error';
 import { assertTargetsFree, describeLeaseConflict, FileLeaseConflictError, withPathLocks } from '@/core/docs/file-leases';
 
@@ -208,8 +210,14 @@ export class FilesystemTool extends BaseTool {
   readonly version = '1.0.0';
   readonly description = 'Read and write files within the workspace';
 
+  protected override registerTool(name: string, description: string, parameters: Record<string, unknown>, execute: (args: Record<string, unknown>, context: AgentContext) => Promise<unknown>, options?: ToolExecutionOptions): void {
+    super.registerTool(name, description, parameters, (args, context) => executionEnvironmentFor(context)?.backend === 'ssh'
+      ? remoteFilesystemOperation(name, args, context) : execute(args, context), options);
+  }
+
   getManifest(): ToolManifest {
     return {
+      execution: { kind: 'environment' },
       id: this.id,
       name: this.name,
       version: this.version,
@@ -684,6 +692,18 @@ export class FilesystemTool extends BaseTool {
       },
       { permissionAction: 'list' }
     );
+  }
+
+  /**
+   * Resolve a path an agent names the way the read-side filesystem tools do
+   * (session directory, project, sandbox gate), for another tool that reads
+   * what the agent wrote with `write_file` (plugin_dev). Returns the
+   * canonical path and the root of the agent's workspace; throws
+   * `ToolNotExecutedError` for a path outside the allowed directories.
+   */
+  resolveForRead(rawPath: string, context: AgentContext): { path: string; root: string } {
+    const fs = this.workspaceFor(context);
+    return { path: this.resolveSessionAware(rawPath, context, fs), root: fs.root };
   }
 
   private requireString(args: Record<string, unknown>, key: string): string {

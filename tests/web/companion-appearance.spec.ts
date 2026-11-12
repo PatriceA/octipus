@@ -21,7 +21,7 @@ test('preview, save and reload appearance; private chat uses the saved look', as
   await page.setViewportSize({ width: 1280, height: 1100 });
   await page.goto('/persona');
   const preview = page.getByTestId('appearance-preview').locator('.octi-companion');
-  await page.getByRole('radio', { name: 'Ribbon', exact: true }).check();
+  await page.getByRole('radio', { name: 'Reef', exact: true }).check();
   await page.getByRole('radio', { name: 'Coral', exact: true }).check();
   await expect(preview).toHaveAttribute('data-form', 'ribbon');
   await expect(preview).toHaveAttribute('data-color', 'coral');

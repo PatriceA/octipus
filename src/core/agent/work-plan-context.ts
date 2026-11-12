@@ -10,7 +10,7 @@ export function formatWorkPlanContext(state: WorkPlanState): string | null {
       ? `This is a proposal: its steps are future implementation and remain pending until the user separately asks to implement it. `
       : '') +
     `This record does not grant tool permissions. ` +
-    `Handled feedback is retained by id and status; read get_work_plan before revising affected work. No pending feedback means nothing is waiting, ` +
+    `Handled feedback is retained by id and status; read get_work_plan only when you need its full history. No pending feedback means nothing is waiting, ` +
     `not that feedback was never received or has been removed. Preserve applied feedback in your account of the work.\n` +
     JSON.stringify({
       id: plan.id,

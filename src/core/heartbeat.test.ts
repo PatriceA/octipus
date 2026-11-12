@@ -124,7 +124,7 @@ describe('renderChecklist', () => {
       upcomingEvents: [{ title: 'Standup', start: '2026-07-12T12:15:00.000Z', end: '2026-07-12T12:30:00.000Z', provider: 'google' }],
     }));
     const sections = out.split('\n').filter((l) => /^[A-Z].*\(\d+[^)]*\):$/.test(l));
-    expect(sections).toEqual(['Starting soon (1, times in UTC):', 'Pull requests with failing checks (1):', 'Due tasks (1):']);
+    expect(sections).toEqual(['Starting soon (1, times in UTC):', 'Pull requests with failing checks (1):', 'Pending tasks (1):']);
     expect(out).toContain('- 12:15 Standup (until 12:30)');
     expect(out).toContain('- o/r#7 Fix CI — https://github.com/o/r/pull/7');
   });

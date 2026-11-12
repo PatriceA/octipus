@@ -1,0 +1,9 @@
+{
+  "name": "inproc",
+  "version": "1.0.0",
+  "apiVersion": "1.0.0",
+  "title": "In-process (test fixture)",
+  "description": "A minimal in-process plugin for the tests: registers a tool and an agent hook.",
+  "runtime": "in-process",
+  "entry": "index.mjs"
+}

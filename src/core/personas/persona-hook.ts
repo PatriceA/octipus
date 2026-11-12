@@ -46,24 +46,26 @@ export function installPersonaHook(): () => void {
     if (!ctx.root) return;
 
     const persona = await resolvePersonaForUser(ctx.userId);
-    const personaBlock = persona.promptBlock;
-
-    // Insert AFTER SECURITY_PREAMBLE so the security rules remain the
-    // first thing the model reads. If the prompt doesn't start with
-    // the preamble (e.g. a unit test that swapped the prompt), prepend
-    // the persona block whole.
-    if (ctx.systemPrompt.startsWith(SECURITY_PREAMBLE)) {
-      const after = ctx.systemPrompt.slice(SECURITY_PREAMBLE.length);
-      ctx.systemPrompt = SECURITY_PREAMBLE + personaBlock + after;
-    } else {
-      ctx.systemPrompt = personaBlock + ctx.systemPrompt;
-    }
+    ctx.systemPrompt = insertPersonaBlock(ctx.systemPrompt, persona.promptBlock);
   });
 
   return () => {
     off();
     registered = false;
   };
+}
+
+/**
+ * Where the hook puts a persona block: AFTER SECURITY_PREAMBLE so the security
+ * rules remain the first thing the model reads. If the prompt doesn't start
+ * with the preamble (e.g. a unit test that swapped the prompt), the persona
+ * block is prepended whole.
+ */
+export function insertPersonaBlock(systemPrompt: string, personaBlock: string): string {
+  if (systemPrompt.startsWith(SECURITY_PREAMBLE)) {
+    return SECURITY_PREAMBLE + personaBlock + systemPrompt.slice(SECURITY_PREAMBLE.length);
+  }
+  return personaBlock + systemPrompt;
 }
 
 /** Test helper — reset the registration guard so tests can install fresh. */

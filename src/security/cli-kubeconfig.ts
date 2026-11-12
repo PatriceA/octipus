@@ -1,3 +1,4 @@
+import { executionEnvironmentFor } from './execution-environments';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, isAbsolute, join } from 'node:path';
@@ -35,9 +36,11 @@ export function discoverCliKubeconfigs(): Array<Omit<CliKubeconfig, 'userId'>> {
 }
 /** Operator-approved identity is personal; shared spaces and other users never receive it. */
 export function withCliKubeconfig<T extends { env?: Record<string, string>; extraReadOnly?: string[]; timeout?: number; allowNetwork?: boolean }>(
-  caller: { userId?: string; space?: unknown; trigger?: unknown; audienceFederated?: boolean } | undefined, options: T,
+  caller: { userId?: string; workspaceId?: string | null; metadata?: Record<string, unknown>; space?: unknown; trigger?: unknown; audienceFederated?: boolean } | undefined, options: T,
 ): T {
   if (!caller?.userId || caller.space || caller.trigger === 'remote' || caller.audienceFederated) return options;
+  const environment = executionEnvironmentFor({ userId: caller.userId, workspaceId: caller.workspaceId, metadata: caller.metadata, space: caller.space });
+  if (environment && (environment.backend !== 'host' || !environment.hostIdentity)) return options;
   const entry = (getConfig().security.cliKubeconfigs ?? []).find(entry => entry.userId === caller.userId);
   if (!entry) return options;
   const current = inspectCliKubeconfig(entry.path);

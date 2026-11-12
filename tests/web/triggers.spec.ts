@@ -38,11 +38,11 @@ test('the triggers page shows what each trigger decided today and why a heartbea
   const funnel = page.getByRole('region', { name: 'Heartbeat checks today' });
   await expect(funnel).toContainText('Quiet hours');
   await expect(funnel).toContainText('Needs permission to update to-dos');
-  await expect(funnel).toContainText('= Started a turn');
+  await expect(funnel).toContainText('= Handled pending work');
   await expect(funnel).toContainText('3 skipped checks used no model tokens.');
 
   const why = page.getByRole('region', { name: 'Why did it run, or not?' });
-  await expect(why).toContainText('Started a turn for 2 ready to-dos');
+  await expect(why).toContainText('Found 2 ready to-dos');
   await expect(why).toContainText('Needs permission to update to-dos (2 ready)');
   await expect(why).toContainText('Next check');
 
@@ -57,6 +57,7 @@ test('the triggers page shows what each trigger decided today and why a heartbea
   await expect(goal).toContainText('Companion goal');
   await expect(goal).toContainText('needs decision');
   await expect(goal).toContainText('1 ran');
+  await page.locator('aside summary', { hasText: 'Automation' }).click();
   // The page's nav item is the active one, not Mission control too.
   await expect(page.locator('aside nav').getByRole('link', { name: 'triggers' })).toHaveAttribute('aria-current', 'page');
   await expect(page.locator('aside nav').getByRole('link', { name: 'mission control' })).not.toHaveAttribute('aria-current', 'page');

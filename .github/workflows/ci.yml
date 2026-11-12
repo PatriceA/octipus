@@ -78,11 +78,11 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
 
+      - name: Prepare Ubuntu package sources
+        uses: ./.github/actions/ubuntu-apt
+
       - name: Install browser for page extraction tests
-        run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
-                     /etc/apt/sources.list.d/google-chrome.sources
-          npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium
 
       - name: Test
         run: npm run test -- --coverage
@@ -168,22 +168,12 @@ jobs:
         run: TAURI_BUILD=true npm run build
         working-directory: web
 
+      - name: Prepare Ubuntu package sources
+        uses: ./.github/actions/ubuntu-apt
+
       - name: Install Tauri system dependencies
         run: |
-          # The runner image ships Google's Chrome apt source, and when its
-          # index is broken upstream ("Hash Sum mismatch") every apt-get update
-          # on the machine fails with it — a red build for a repository nothing
-          # here installs from. Drop it first.
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
-                     /etc/apt/sources.list.d/google-chrome.sources
-          # The Azure mirror timed out this job while downloading build deps.
-          # Use Ubuntu's primary archive, retaining the signed distribution sources.
-          for source in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
-            if [ -f "$source" ]; then
-              sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' "$source"
-            fi
-          done
-          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update
+          sudo apt-get update
           # --no-install-recommends: the plain install pulls ~188 packages
           # (gstreamer, pipewire, docs) and spent 16 min in the Azure mirror
           # on 2026-08-19. Only the link-time deps are needed to compile.

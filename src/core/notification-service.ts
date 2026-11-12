@@ -18,6 +18,14 @@ export class NotificationService {
     return () => this.wsHandlers.delete(handler);
   }
 
+  /** Publish an already committed notification locally, without external delivery. */
+  publishStored(notification: Parameters<NotificationHandler>[0]): void {
+    for (const handler of this.wsHandlers) {
+      try { handler(notification); }
+      catch (err) { coreLogger.error({ err }, 'Notification handler error'); }
+    }
+  }
+
   async notify(
     userId: string,
     type: string,
@@ -61,14 +69,7 @@ export class NotificationService {
           .catch((err) => coreLogger.error({ err, userId, type }, 'Push delivery failed'));
       }
 
-      // Push to WebSocket handlers
-      for (const handler of this.wsHandlers) {
-        try {
-          handler({ userId, type, title, body, metadata });
-        } catch (err) {
-          coreLogger.error({ err }, 'Notification handler error');
-        }
-      }
+      this.publishStored({ userId, type, title, body, metadata });
 
       // Cross-channel delivery if configured
       const deliverTo = metadata?.deliverTo as string[] | undefined;

@@ -12,9 +12,7 @@ into concrete machinery:
 | **Ledger + resume** | *What happens to in-flight work when the process dies?* | the framework, on boot |
 
 They build on the existing swarm substrate (see
-[AGENT-ARCHITECTURE.md](AGENT-ARCHITECTURE.md#swarm-3-level-hierarchy) and
-[.octipus/swarm-design.md](../.octipus/swarm-design.md)). Background on why these
-were chosen: [.octipus/codewhale-borrowed-ideas.md](../.octipus/codewhale-borrowed-ideas.md).
+[AGENT-ARCHITECTURE.md](AGENT-ARCHITECTURE.md#swarm-3-level-hierarchy)).
 
 ---
 

@@ -43,7 +43,7 @@ root itself runs as `general`, so anything in that row it does without spawning.
 | review | review | filesystem, shell, git, github, knowledge, task_state, repo_registry, visual | "review the code", "code review", "linting", "test coverage" |
 | ai | ai | shell, filesystem, browser, browser-ext, websearch, knowledge, task_state, mcp | "ML model", "RAG", "training", "neural network", "embedding" |
 | general | general | filesystem, shell, browser-ext, websearch, messaging, knowledge, notes, tasks, task_state, scheduling, profiles, email-processor, artifacts, artifacts_toolbox, documents, skill-distill, mcp, mcp_admin | "browser", "screenshot", "telegram", "send message", "knowledge base" |
-| pm | pm | filesystem, messaging, tasks, knowledge, github, atlassian, skill-distill | "project plan", "estimates", "timeline", "deliverables", "jira", "confluence" |
+| pm | pm | filesystem, messaging, tasks, knowledge, github, skill-distill | "project plan", "estimates", "timeline", "deliverables" |
 
 ### Prompt Examples → Routing
 

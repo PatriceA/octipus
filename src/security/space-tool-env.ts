@@ -12,8 +12,8 @@
  * So in a space every git, shell, `gh` and CLI-agent run gets a tool home of
  * its own: a fresh temporary directory (0700), removed when the run ends,
  * that `HOME`, `XDG_CONFIG_HOME`, `GH_CONFIG_DIR` and git's global config
- * point at. It holds only what the space's GitHub connector provides, when an
- * owner connected one and the member's role may have the agent write: a `gh`
+ * point at. It holds only what the space's GitHub token provides, when an
+ * owner added one and the member's role may have the agent write: a `gh`
  * login (`hosts.yml`) and a git credential helper for github.com, both with
  * the space's token, plus the member's name as git author. Nothing in it outlives the run, so one member's run cannot plant a
  * login, a hook or an alias that another member's run picks up.
@@ -44,9 +44,9 @@ export const HOST_IDENTITY_ENV: readonly string[] = [
   'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH',
 ];
 
-/** What the space's connectors provide to one run. */
+/** What the space's own connections provide to one run. */
 export interface SpaceToolSeed {
-  /** The space's GitHub token, when an owner connected GitHub to the space. */
+  /** The space's GitHub token, when an owner added one to the space. */
   githubToken: string | null;
   /** The member the run is for, as git author. */
   author?: { name: string; email: string };
@@ -164,7 +164,7 @@ export interface SpaceRunContext {
  */
 export async function openSpaceToolHome(context: SpaceRunContext & { space: NonNullable<SpaceRunContext['space']> }): Promise<SpaceToolHome> {
   const [{ agentPrincipal }, { spaceGithubToken }, { can }, { userRepository }] = await Promise.all([
-    import('./principal'), import('@/core/spaces/connectors'), import('./space-access'), import('@/db/repositories/user-repository'),
+    import('./principal'), import('@/core/spaces/github-token'), import('./space-access'), import('@/db/repositories/user-repository'),
   ]);
   const principal = agentPrincipal(context as Parameters<typeof agentPrincipal>[0]);
   const githubToken = can(principal.spaceRole, 'run_agent_write') ? await spaceGithubToken(principal) : null;

@@ -1,7 +1,8 @@
+import { TOKEN_BUDGET_DEFAULTS } from '@/shared/token-budget-defaults';
 /**
  * Swarm Phase 1 — public types.
  *
- * Mirrors the design in `.octipus/swarm-design.md`. Phase 1 covers
+ * See docs/AGENT-ARCHITECTURE.md. Phase 1 covers
  * Root agent (depth 0) → Agent (depth 1) only; Subagent (depth 2) is
  * defined for forward compatibility but not spawnable yet.
  */
@@ -87,9 +88,9 @@ export const LEVEL_DEFAULT: Record<0 | 1 | 2, LevelDefault> = {
   // the final reply). Previously 0, which forced a blocking await on every
   // spawn — root agent could not narrate, supervise, or chat with the
   // user while children ran.
-  0: { tokens: 200_000, wallMs: 10 * 3_600_000, fanOut: 6, maxPendingDetached: 6 },
-  1: { tokens: 80_000, wallMs: 3_600_000, fanOut: 4, maxPendingDetached: 3 },
-  2: { tokens: 30_000, wallMs: 3_600_000, fanOut: 0, maxPendingDetached: 0 },
+  0: { tokens: TOKEN_BUDGET_DEFAULTS.root, wallMs: 10 * 3_600_000, fanOut: 6, maxPendingDetached: 6 },
+  1: { tokens: TOKEN_BUDGET_DEFAULTS.agent, wallMs: 3_600_000, fanOut: 4, maxPendingDetached: 3 },
+  2: { tokens: TOKEN_BUDGET_DEFAULTS.subagent, wallMs: 3_600_000, fanOut: 0, maxPendingDetached: 0 },
 };
 
 /**

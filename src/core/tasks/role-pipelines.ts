@@ -87,6 +87,7 @@ export async function runRoleTaskPipeline(input: {
   templateRef: string;
   sessionId: string;
   userId: string;
+  signal?: AbortSignal;
 }): Promise<RolePipelineResult> {
   const { hookId, role, templateRef, sessionId, userId } = input;
   const template = await resolveRoleTemplate(userId, templateRef);
@@ -121,10 +122,17 @@ export async function runRoleTaskPipeline(input: {
   renew.unref?.();
 
   let pipelineId: string | undefined;
+  const stop = () => {
+    if (!pipelineId) return;
+    void import('@/core/agent/pipeline-manager').then(({ getPipelineManager }) => getPipelineManager().stop(pipelineId!))
+      .catch((err: unknown) => coreLogger.error({ err, pipelineId }, 'Heartbeat could not stop pipeline after losing its lease'));
+  };
+  input.signal?.addEventListener('abort', stop, { once: true });
   let outcome: { status: string; summary: string };
   try {
     const {taskProvenance,persistHeartbeatTaskProvenance}=await import('./provenance');
     await persistHeartbeatTaskProvenance(userId,sessionId,await taskProvenance(userId,[task]));
+    input.signal?.throwIfAborted();
     const context = await pipelineContext({ role, sessionId, userId, taskTitle: task.title });
     const { getAgentService } = await import('@/core/agent');
     const { withAgentUsage } = await import('@/core/agent/context');
@@ -136,6 +144,7 @@ export async function runRoleTaskPipeline(input: {
       {
         onCreated: (id) => {
           pipelineId = id;
+          if (input.signal?.aborted) stop();
           void comment(`Started pipeline "${template.name}" (run ${id}) for this task. You can follow it on the Pipelines page.`);
         },
       },
@@ -147,6 +156,7 @@ export async function runRoleTaskPipeline(input: {
   } catch (err) {
     outcome = { status: 'failed', summary: (err as Error).message };
   } finally {
+    input.signal?.removeEventListener('abort', stop);
     clearInterval(renew);
   }
 
@@ -170,7 +180,7 @@ async function pipelineContext(input: { role: string; sessionId: string; userId:
   const { getModelRegistry } = await import('@/models/model-registry');
   let session = await sessionRepository.findById(input.sessionId);
   if (!session) {
-    session = await sessionRepository.create({
+    session = await sessionRepository.createAutomation({
       id: input.sessionId,
       userId: input.userId,
       channelType: 'heartbeat',

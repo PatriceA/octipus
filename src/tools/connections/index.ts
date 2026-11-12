@@ -9,7 +9,8 @@ export class ConnectionsTool extends BaseTool {
   readonly name = 'Authenticated connections';
   readonly version = '1.0.0';
   readonly description = 'Use operator-configured HTTP API and Git connections with named vault credentials, without exposing credentials to tools or scripts';
-  getManifest(): ToolManifest { return { id: this.id, name: this.name, version: this.version, description: this.description, permissions: [
+  getManifest(): ToolManifest { return {
+      execution: { kind: 'connection' }, id: this.id, name: this.name, version: this.version, description: this.description, permissions: [
     { action: 'read', description: 'List authorized profiles and read HTTP APIs using GET', defaultLevel: 'ALLOW' },
     { action: 'request', description: 'Send an authenticated HTTP API request to an approved service', defaultLevel: 'ASK' },
     { action: 'fetch', description: 'Fetch Git refs into an approved local repository', defaultLevel: 'ASK' },
@@ -51,7 +52,7 @@ export class ConnectionsTool extends BaseTool {
       query: { type: 'object', description: 'Query string fields' }, headers: { type: 'object', description: 'Non-authentication headers' },
       timeout: { type: 'number', description: 'Execution timeout in milliseconds (1–600000)', default: 120000 },
     }), (args, c) => request({ ...args, method: 'GET', json: undefined, form: undefined }, c), { permissionAction: 'read', readOnly: true });
-    for (const operation of ['fetch', 'push'] as const) this.registerTool(`git_${operation}`, `Authenticated Git ${operation} using a configured connection. Credentials stay in a temporary HTTP broker, never in git's environment, command line or config. Does not require glab. Validate one repository before batching calls; fix argument errors before trying other repositories.`, createParameterSchema({
+    for (const operation of ['fetch', 'push'] as const) this.registerTool(`git_${operation}`, `Authenticated Git ${operation} using a configured connection. Credentials stay in a temporary HTTP broker, never in git's environment, command line or config. Validate one repository before batching calls; fix argument errors before trying other repositories.`, createParameterSchema({
       connection: { type: 'string', required: true, description: 'Configured connection name' }, path: { type: 'string', required: true, description: 'Local repository under the connection repositoryRoots' },
       remotePath: { type: 'string', required: true, description: '/group/project.git on the configured origin, with exactly one leading slash. No // prefix or full URL.' },
       timeout: { type: 'number', description: 'Git timeout in milliseconds (1–1800000)', default: 600000 },

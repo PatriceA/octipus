@@ -1,7 +1,9 @@
 'use client';
 
+import { RoleAgentsPanel } from '@/components/tasks/work-board';
 import { HeartPulse, Loader2, Mail } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { useAuth } from '@/lib/auth-context';
 import { usePageOn } from '@/lib/modules';
 import { api } from '@/lib/api';
 
@@ -45,6 +47,7 @@ export function HeartbeatTab() {
   const [data, setData] = useState<HeartbeatMe | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const { user } = useAuth();
   const inboxOn = usePageOn()('/email');
 
   const load = useCallback(async () => {
@@ -93,16 +96,17 @@ export function HeartbeatTab() {
           <HeartPulse className="w-5 h-5 text-primary" /> Heartbeat
         </h2>
         <p className="text-sm text-on-surface-variant mt-1">
-          A regular check-in on your behalf. Each time, Octipus looks — without using any AI — for due tasks, unread notifications,
-          meetings about to start, failing pull requests and, if you turn it on, new email. Only when something is there does an agent
-          start, follow your standing instructions, and act or stay quiet.
+          A background check, without a chat or AI call. Octipus checks pending tasks, important unread notifications,
+          upcoming meetings, failing pull requests and optional new email. New findings appear in notifications.
+          Ready tasks assigned to a role start that role’s worker; paused role settings are respected.
         </p>
       </div>
 
       {!server.enabled && (
         <div role="note" className="bg-error/10 border border-error/20 rounded-xs px-3 py-2 text-xs text-on-surface">
-          The heartbeat is switched off on this server, so nothing runs yet. An admin can turn it on with the{' '}
-          <span className="font-mono">heartbeat.enabled</span> setting under Configuration.
+          <p>The heartbeat is switched off on this server, so your enabled preference cannot run yet.</p>
+          {user?.isAdmin ? <p>Turn on Run my heartbeat below to enable checks. This also enables the server heartbeat service.</p> : <p>An admin needs to enable heartbeat on this server.</p>}
+          {data.enabled && <button type="button" disabled={saving} onClick={() => void save({ enabled: false })} className="mt-2 text-primary underline">Turn off saved personal heartbeat</button>}
         </div>
       )}
       {error && <p className="text-sm text-error">{error}</p>}
@@ -110,8 +114,8 @@ export function HeartbeatTab() {
       <label className="flex items-start gap-3 cursor-pointer">
         <input
           type="checkbox"
-          checked={data.enabled}
-          disabled={saving}
+          checked={data.enabled && server.enabled}
+          disabled={saving || (!server.enabled && !user?.isAdmin)}
           onChange={(e) => save({ enabled: e.target.checked })}
           className="w-4 h-4 rounded accent-primary mt-0.5"
           aria-label="Run my heartbeat"
@@ -119,7 +123,7 @@ export function HeartbeatTab() {
         <div>
           <span className="text-on-surface">Run my heartbeat</span>
           <p className="text-xs text-on-surface-variant mt-0.5">
-            At most {server.maxRunsPerDay} agent runs a day, {quiet}. A check that finds nothing costs nothing.
+            At most {server.maxRunsPerDay} updates or task runs a day, {quiet}. Background checks use no model tokens.
           </p>
         </div>
       </label>
@@ -155,10 +159,9 @@ export function HeartbeatTab() {
           <div>
             <span className="text-on-surface flex items-center gap-1.5"><Mail className="w-4 h-4" /> Watch my inbox</span>
             <p className="text-xs text-on-surface-variant mt-0.5">
-              New mail wakes the heartbeat (checked every {interval} minutes). The agent reads it and decides: nothing to do, a task for
-              your list, a short message to you, or a reply saved in your Drafts for you to send. It never sends mail unless you allow
-              sending and say so in your standing instructions. Newsletters and social mail are skipped; mail from before you turn this
-              on is never looked at.
+              Check for new email every {interval} minutes and notify you without starting an agent. This watch does not
+              create tasks or drafts, send mail, or mark mail read. Newsletters and social mail are skipped; mail from
+              before you turn this on is never looked at.
             </p>
             {!data.mailbox && <p className="text-xs text-error mt-1">Connect Google or Microsoft 365 under Integrations first.</p>}
             {!server.probeEmail && <p className="text-xs text-error mt-1">The inbox watch is switched off on this server (heartbeat.probeEmail).</p>}
@@ -185,16 +188,17 @@ export function HeartbeatTab() {
       </div>
       )}
 
+      <RoleAgentsPanel refreshKey={`${data.enabled}:${server.enabled}`} controls onChanged={load} />
+
       <div className="border-t border-outline-variant/20 pt-4 text-xs text-on-surface-variant space-y-1">
         <p>
           <span className="text-on-surface">Standing instructions:</span>{' '}
           {data.standingInstructions
-            ? 'your pinned note with the slug "heartbeat" is read on every run.'
+            ? 'your note with the slug "heartbeat" guides workers when there is actual task work.'
             : 'none yet. Write a note with the slug "heartbeat" (who you are, what counts as urgent, what the agent may do on its own) and pin it.'}
         </p>
         <p>
-          Ideas and to-dos can be worked on their own too: assign a task to a role and turn that role&apos;s agent on in the Role agents
-          panel on the <a href="/tasks" className="underline text-primary">tasks page</a>.
+          Assign a to-do to a role on the <a href="/tasks" className="underline text-primary">tasks page</a>, and the personal heartbeat picks it up. Configure a role here to override that behavior or pause it.
         </p>
       </div>
     </div>

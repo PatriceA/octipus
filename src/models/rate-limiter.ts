@@ -64,6 +64,8 @@ export interface RateLimitStats {
   queueDepth: number;
   rpm: { current: number; limit: number };
   backoffUntil: number | null;
+  /** Ms since the last request started or finished; 0 while busy, null if never used. */
+  idleMs: number | null;
   metrics: {
     totalRequests: number;
     totalErrors: number;
@@ -128,6 +130,7 @@ class ProviderRateLimiter {
 
   // Min delay tracking
   private lastRequestTime = 0;
+  private lastReleaseTime = 0;
 
   // Adaptive concurrency
   private lastAdaptiveIncrease = 0;
@@ -242,6 +245,7 @@ class ProviderRateLimiter {
 
   /** Release a token after request completes */
   release(): void {
+    this.lastReleaseTime = Date.now();
     this.activeSemaphore = Math.max(0, this.activeSemaphore - 1);
     this.metrics.currentConcurrency = this.activeSemaphore;
     this.drainQueue();
@@ -329,6 +333,8 @@ class ProviderRateLimiter {
         limit: this.config.rpm,
       },
       backoffUntil: this.backoffUntil > now ? this.backoffUntil : null,
+      idleMs: this.activeSemaphore > 0 || this.queue.length > 0 ? 0
+        : this.lastRequestTime === 0 ? null : now - Math.max(this.lastRequestTime, this.lastReleaseTime),
       metrics: {
         totalRequests: this.metrics.totalRequests,
         totalErrors: this.metrics.totalErrors,

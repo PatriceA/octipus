@@ -772,7 +772,7 @@ export default function PromptInput({
           className={cn(
             'rounded-lg p-2 transition-colors',
             canSend
-              ? 'bg-primary text-on-primary hover:bg-primary-container'
+              ? 'bg-primary text-on-primary hover:bg-primary-dim'
               : 'bg-surface-container-high text-on-surface-variant'
           )}
           title="Send message"

@@ -1,3 +1,5 @@
+import { hasAccountAuthority, executionEnvironmentFor } from '@/security/execution-environments';
+import { buildAgentContext } from '@/core/agent/context';
 import { withCliKubeconfig } from '@/security/cli-kubeconfig';
 import { browserRuntimeMounts, browserRuntimePaths } from '@/security/runtime-path';
 /**
@@ -5,8 +7,7 @@ import { browserRuntimeMounts, browserRuntimePaths } from '@/security/runtime-pa
  * call to check the child actually met its contract, instead of trusting the
  * child's word.
  *
- * Inspired by CodeWhale's Fleet scorers (see
- * `.octipus/codewhale-borrowed-ideas.md`). This operationalizes house-rule #4
+ * Inspired by CodeWhale's Fleet scorers. This operationalizes house-rule #4
  * ("typed deliverable per role"): a role already declares an `expectedOutput`
  * shape; a scorer is a cheap, deterministic check that the deliverable
  * satisfies it. A failed scorer downgrades the child's status to
@@ -24,7 +25,7 @@ import { existsSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { detectRunner, getSandboxMode } from '@/security/shell-sandbox';
-import { basename as programName, commandPolicyViolation, matchElevatedCommand, tokenizeSafe } from '@/tools/shell/policy';
+import { basename as programName, commandPolicyViolation, matchDestructiveCommand, matchElevatedCommand, tokenizeSafe } from '@/tools/shell/policy';
 import { coreLogger } from '@/utils/logger';
 import type { SwarmReceipt } from './receipt';
 
@@ -459,6 +460,7 @@ export interface ScorerContext {
   space?: import('@/core/types').AgentSpace | null;
   /** The pipeline stage opted into host network + Docker socket (`hostServices`). */
   hostServices?: boolean;
+  executionEnvironmentId?: string;
   /** What started the run: a `listen` turn's gate commands are refused like its writes (§9.3). */
   trigger?: import('@/core/types').AgentTrigger;
   /** Members of other installs read the run (federation §7.5): its gate commands follow the federated rules. */
@@ -506,6 +508,27 @@ export interface ScorerContext {
  * null when the context names none. The scorer is a check the system runs
  * over a root the spawner resolved, hence the explicit system-job form.
  */
+function scorerAgentContext(ctx: ScorerContext) {
+  return buildAgentContext({ id: `scorer-${ctx.sessionId ?? 'gate'}`, userId: ctx.userId ?? '', sessionId: ctx.sessionId ?? '',
+    role: ctx.role ?? 'general', topic: 'general', model: 'scorer', status: 'running', attended: false,
+    scope: { workspaceId: ctx.workspaceId ?? null, space: ctx.space ?? null, trigger: ctx.trigger ?? 'user', funding: 'own' },
+    metadata: { ...(ctx.executionEnvironmentId ? { executionEnvironmentId: ctx.executionEnvironmentId } : {}), ...(ctx.projectPath ? { projectPath: ctx.projectPath } : {}), hostServices: ctx.hostServices } });
+}
+
+/** Same permission, flow label and environment policy as the child's shell tool. */
+async function authorizeScorerCommand(ctx: ScorerContext, command: string) {
+  const [{ getPermissionManager }, { routeApprovalFor }, { applyFlowGuard, loadFlowLabel }, { getConfig }] = await Promise.all([
+    import('@/security/permissions'), import('@/security/approval-route'), import('@/security/flow-guard'), import('@/config'),
+  ]);
+  const context = scorerAgentContext(ctx);
+  const action = matchElevatedCommand(command) ? 'execute_elevated' : matchDestructiveCommand(command) ? 'execute_destructive' : 'execute';
+  const call = { toolId: 'shell', action, toolName: 'run', args: { command } };
+  await loadFlowLabel(ctx.sessionId);
+  const permission = await getPermissionManager().check(ctx.userId!, 'shell', action, call.args, context, { revalidate: true });
+  const guarded = applyFlowGuard(getConfig().agent.flowGuard, ctx.sessionId, call, permission);
+  return routeApprovalFor(context, call, guarded, { unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions });
+}
+
 function scorerWorkspace(ctx: ScorerContext): WorkspaceFS | null {
   return ctx.workspaceRoot ? WorkspaceFS.forAgent({ system: true, root: ctx.workspaceRoot }) : null;
 }
@@ -815,6 +838,11 @@ async function evaluate(
     }
 
     case 'file_exists': {
+      const context = scorerAgentContext(ctx);
+      if (executionEnvironmentFor(context)?.backend === 'ssh') {
+        try { await (await import('@/tools/filesystem/environment-operations')).remoteFilesystemOperation('file_info', { path: scorer.path }, context); return null; }
+        catch (error) { return { scorer: 'file_exists', reason: `Remote file could not be verified: ${error instanceof Error ? error.message : String(error)}`, retryable: false }; }
+      }
       // Resolve through the child's workspace sandbox — the same resolver the
       // filesystem tool uses — so the check respects per-user roots and path
       // relocation instead of guessing at an absolute path.
@@ -935,7 +963,8 @@ async function evaluate(
       // in `env sh -c "…"` and `timeout` in `timeout 60 sh -c "…"`, and misses
       // `"sh" -c` outright because the quotes are still attached — all three
       // spawn a shell.
-      const shellArg = namesShellWithCommandString(scorer.command);
+      const accountAuthority = hasAccountAuthority(scorerAgentContext(ctx));
+      const shellArg = accountAuthority ? null : namesShellWithCommandString(scorer.command);
       if (shellArg) {
         return {
           scorer: label,
@@ -947,9 +976,9 @@ async function evaluate(
       }
 
       // The shell tool's content policy, shared rather than restated.
-      const violation = commandPolicyViolation(scorer.command);
+      const violation = accountAuthority ? null : commandPolicyViolation(scorer.command);
       if (violation) return { scorer: label, reason: `refused: ${violation}`, retryable: false };
-      const elevated = matchElevatedCommand(scorer.command);
+      const elevated = accountAuthority ? null : matchElevatedCommand(scorer.command);
       if (elevated) {
         return {
           scorer: label,
@@ -988,41 +1017,11 @@ async function evaluate(
       }
       {
         try {
-          const [{ getPermissionManager }, { routeApprovalFor }] = await Promise.all([
-            import('@/security/permissions'),
-            import('@/security/approval-route'),
-          ]);
-          const permission = await getPermissionManager().check(ctx.userId, 'shell', 'execute', {
-            command: scorer.command,
-          });
-          const { getConfig } = await import('@/config');
-          // In a space the role cap and I6 apply here too (§5.6): the
-          // child's space scope rides on the scorer context.
-          const decision = await routeApprovalFor(
-            {
-              userId: ctx.userId,
-              sessionId: ctx.sessionId,
-              role: ctx.role,
-              root: false,
-              attended: false,
-              workspaceId: ctx.workspaceId ?? ctx.space?.workspaceId ?? null,
-              space: ctx.space ?? null,
-              trigger: ctx.trigger,
-              audienceFederated: ctx.audienceFederated,
-            },
-            // The SAME action the permission was read for. `matches()` builds
-            // `${toolId}__${action}`, so passing `shell__run` here makes an
-            // operator's `unattendedDenyActions: ['shell__execute']` compare
-            // against `shell__shell__run` and never fire — while that same
-            // entry does block the child's own shell tool.
-            { toolId: 'shell', action: 'execute', toolName: 'run' },
-            permission,
-            { unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions },
-          );
+          const decision = await authorizeScorerCommand(ctx, scorer.command);
           if (decision.route !== 'execute') {
             return {
               scorer: label,
-              reason: `refused: shell.execute is ${permission.level} for this user${decision.reason ? ` (${decision.reason})` : ''}`,
+              reason: `refused: shell.execute is ${decision.level} for this user${decision.reason ? ` (${decision.reason})` : ''}`,
               retryable: false,
             };
           }
@@ -1050,7 +1049,9 @@ async function evaluate(
       // So the gate verified a different tree from the one the work happened
       // in, and failed every time.
       const fs = scorerWorkspace(ctx);
-      const cwd = ctx.projectPath ?? fs?.resolveOptional('.');
+      const context = scorerAgentContext(ctx);
+      const environment = executionEnvironmentFor(context);
+      const cwd = environment ? (await import('@/security/environment-runtime')).resolveEnvironmentCwd(undefined, context) : ctx.projectPath ?? fs?.resolveOptional('.');
       if (!cwd) {
         return {
           scorer: label,
@@ -1061,7 +1062,7 @@ async function evaluate(
       // A missing workspace directory is an environment fault, not the child's
       // defect. Left unchecked it surfaces as `spawn ENOENT`, gets quoted back
       // as the thing the child must fix, and burns a contract retry on it.
-      if (!existsSync(cwd)) {
+      if (environment?.backend !== 'ssh' && !existsSync(cwd)) {
         return {
           scorer: label,
           reason: `the workspace directory does not exist (${cwd}), so the command was not run`,
@@ -1108,25 +1109,35 @@ async function evaluate(
             'Scorer command had a path split by a space — re-quoted before running',
           );
         }
-        const environmentError = await scorerEnvironmentError([scorer], cwd, { signal: ctx.signal, deadline: Math.min(ctx.deadline ?? Infinity, Date.now() + 10_000) });
+        const environmentError = environment ? null : await scorerEnvironmentError([scorer], cwd, { signal: ctx.signal, deadline: Math.min(ctx.deadline ?? Infinity, Date.now() + 10_000) });
         if (ctx.signal?.aborted) throw new ScorerNotEvaluated('the run was cancelled before the check started');
         if (environmentError) return { scorer: label, reason: environmentError, retryable: false };
         const remainingTimeout = Math.min(timeoutMs, (ctx.deadline ?? Infinity) - Date.now());
         if ((ctx.deadline ?? Infinity) - Date.now() < MIN_COMMAND_SCORER_TIMEOUT_MS) {
           return { scorer: label, reason: 'the verification gate has too little budget left after checking its environment' };
         }
-        const res = await new LocalShellOperations().exec(repaired, cwd, withCliKubeconfig(ctx, {
+        const { shellOperationsFor } = await import('@/security/environment-runtime');
+        const { environmentToolHome } = await import('@/security/environment-identity');
+        const { environmentCredentialOptions } = await import('@/security/environment-credentials');
+        const { shellRunOptions, withHostServices } = await import('@/tools/shell');
+        const home = environmentToolHome(context);
+        const runtime = environment ? shellRunOptions(context, undefined, home, cwd) : {};
+        const credentials = await environmentCredentialOptions(context, withCliKubeconfig(context, withHostServices(environment ? undefined : context.metadata, {
           timeout: remainingTimeout,
           env: { ...caches?.env, PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH ?? browserRuntimePaths()[0] },
           extraReadWrite: [...(caches?.paths ?? []), ...(ctx.hostServices ? ['/var/run/docker.sock'] : [])],
           extraReadOnly: browserRuntimeMounts(),
           // A pipeline stage's `hostServices` opt-in reaches its verify command too.
           ...(ctx.hostServices ? { allowNetwork: true, allowHostUsb: true } : {}),
+          ...runtime,
           ...(ctx.signal ? { signal: ctx.signal } : {}),
-          // Never `unsafe`. Safe mode is what makes `tokenizeSafe` reject shell
-          // metacharacters, and it is the whole security argument for letting an
-          // LLM-authored string reach a process at all.
-        }));
+          // Only explicit account authority can run shell expressions in a gate.
+          ...(accountAuthority ? { unsafe: true } : {}),
+        })));
+        if (environment && (await authorizeScorerCommand(ctx, repaired)).route !== 'execute') return { scorer: label, reason: 'Permission or data-transfer consent changed before verification; command not run', retryable: false };
+        let res;
+        try { res = credentials.mask(await shellOperationsFor(context, new LocalShellOperations()).exec(repaired, cwd, credentials.options)); }
+        catch (error) { throw credentials.maskError(error); }
         if (res.exitCode === 0) return null;
 
         // How it ended, not just that it did. `exitCode` is null for a killed

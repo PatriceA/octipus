@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { privateWindowsProxyPipe } from '@/security/windows-plugin-sandbox';
 import { type ChildProcess, spawn } from 'child_process';
 import { mkdir } from 'node:fs/promises';
 import { buildChildEnv, buildIsolatedChildEnv } from '@/security/child-env';
@@ -16,10 +18,11 @@ export interface StdioTransportOptions {
   /** Hand the child only `env` and a minimal host environment (`buildIsolatedChildEnv`). */
   isolatedEnv?: boolean;
   /**
-   * Run the child in the shell sandbox (`security.shellSandbox`), with `root`
-   * as its only writable directory — or, with `readOnlyRoot`, read-only and
-   * `writable` as the writable ones. With the sandbox off, it runs unwrapped
-   * (the mode decides, as for the shell tool).
+   * Run the child in the sandbox, with `root` as its only writable directory
+   * — or, with `readOnlyRoot`, read-only and `writable` as the writable ones.
+   * `sandbox.mode` decides (a plugin package's server: `plugins.sandbox`);
+   * without it `security.shellSandbox` does, as for the shell tool. Off, it
+   * runs unwrapped.
    *
    * With `egress`, network is limited to its hosts through an in-process
    * proxy (src/security/egress-proxy.ts): enforced when the sandbox wraps the
@@ -32,6 +35,12 @@ export interface StdioTransportOptions {
 }
 
 export interface StdioSandbox {
+  /**
+   * Overrides `security.shellSandbox` for this server: `required` refuses to
+   * start it without a runner, `off` runs it unwrapped. A plugin package's
+   * server always sets it (`plugins.sandbox`, src/plugins/packages/sandbox-policy.ts).
+   */
+  mode?: 'required' | 'off';
   root: string;
   allowNetwork: boolean;
   /** Mount `root` read-only inside the sandbox (a plugin package's files). */
@@ -43,7 +52,7 @@ export interface StdioSandbox {
    * where the proxy's socket directory goes (`runDir`; not under /tmp, see
    * `EgressProxyOptions.socketParent`).
    */
-  egress?: { label: string; hosts: string[]; runDir?: string };
+  egress?: { label: string; hosts: string[]; runDir?: string; hostApi?: { host: string; port: number } };
 }
 
 /** What `prepareSandboxedLaunch` decided: the argv and env to spawn, and what to clean up. */
@@ -65,7 +74,7 @@ export interface SandboxedLaunch {
  * listed, or a package started with it cannot run.
  */
 export function ownNodeBinary(execPath = process.execPath): string[] {
-  return /^\/(?:usr|bin|sbin|lib(?:32|64|x32)?)\//.test(execPath) ? [] : [execPath];
+  return process.platform === 'win32' || /^\/(?:usr|bin|sbin|lib(?:32|64|x32)?)\//.test(execPath) ? [] : [execPath];
 }
 
 /**
@@ -75,30 +84,45 @@ export function ownNodeBinary(execPath = process.execPath): string[] {
 export async function prepareSandboxedLaunch(argv: string[], env: Record<string, string>, sandbox: StdioSandbox): Promise<SandboxedLaunch> {
   const writable = sandbox.writable ?? [];
   for (const dir of writable) await mkdir(dir, { recursive: true });
+  const mode = sandbox.mode ?? getSandboxMode();
+  const authority = createHash('sha256').update(JSON.stringify({ env: Object.entries(env).sort(([a], [b]) => a.localeCompare(b)), egress: sandbox.egress ?? null })).digest('hex');
   const mounts = {
+    mode,
     workspaceRoot: sandbox.root,
     // A package server may use sandbox-exec on macOS under `auto` too.
     allowSeatbelt: true,
+    ...(process.platform === 'win32' ? { allowAppContainer: true, windowsBroker: { authority } } : {}),
     ...(sandbox.readOnlyRoot ? { workspaceReadOnly: true } : {}),
     ...(writable.length > 0 ? { extraReadWrite: writable } : {}),
   };
-  const egress = sandbox.egress && sandbox.egress.hosts.length > 0 ? sandbox.egress : null;
+  // A proxy for declared hosts, or for the host API alone (docs/PLUGIN-PACKAGES.md#host-api).
+  const egress = sandbox.egress && (sandbox.egress.hosts.length > 0 || sandbox.egress.hostApi) ? sandbox.egress : null;
   if (!egress) {
     // Octipus's own Node binary stays readable, as on the egress path: a
     // package started with it (e.g. under nvm, or a CI tool cache in $HOME)
     // must not fail to start just because it declares no hosts.
-    const wrapped = wrapCommand(argv, { ...mounts, allowNetwork: sandbox.allowNetwork, path: env.PATH, extraReadOnly: ownNodeBinary() });
+    const wrapped = wrapCommand(argv, { ...mounts, allowNetwork: process.platform === 'win32' ? false : sandbox.allowNetwork, path: env.PATH, extraReadOnly: ownNodeBinary() });
     return { argv: wrapped.argv, env, networkEnforced: wrapped.wrapped, proxy: null, cleanup: wrapped.cleanup };
   }
   // macOS (sandbox-exec): no network namespace to bridge into, so the
   // Seatbelt profile allows outbound TCP to the proxy's own loopback port and
   // nothing else, and the server is pointed at it directly (see
   // buildSeatbeltProfile). Linux runners reach the proxy by its Unix socket.
-  const seatbelt = activeSandboxRunner({ allowSeatbelt: true }) === 'sandbox-exec';
+  const runner = activeSandboxRunner({ allowSeatbelt: true, allowAppContainer: true, mode });
+  const seatbelt = runner === 'sandbox-exec';
   const proxy = await startEgressProxy({
     label: egress.label, allowed: egress.hosts, unixSocket: process.platform !== 'win32' && !seatbelt, socketParent: egress.runDir,
+    ...(egress.hostApi ? { hostApi: egress.hostApi } : {}),
   });
   try {
+    if (runner === 'appcontainer') {
+      const pipe = privateWindowsProxyPipe();
+      const wrapped = wrapCommand(argv, {
+        ...mounts, allowNetwork: false, path: env.PATH, extraReadOnly: ownNodeBinary(),
+        windowsBroker: { pipe, proxyPort: proxy.port, authority },
+      });
+      return { argv: wrapped.argv, env, networkEnforced: true, proxy, cleanup: () => { wrapped.cleanup(); void proxy.close(); } };
+    }
     if (seatbelt) {
       const wrapped = wrapCommand(argv, {
         ...mounts, allowNetwork: false, loopbackPorts: [proxy.port], path: env.PATH, extraReadOnly: ownNodeBinary(),
@@ -117,12 +141,12 @@ export async function prepareSandboxedLaunch(argv: string[], env: Record<string,
         return { argv: wrapped.argv, env, networkEnforced: true, proxy, cleanup: () => { wrapped.cleanup(); void proxy.close(); } };
       }
     }
-    // No sandbox (off, no runner, Windows): the proxy is advice only.
+    // No sandbox (off or no runner): the proxy is advice only.
     // A client that ignores HTTP(S)_PROXY still connects directly. Under
     // `required` that is not good enough: refuse, as the no-hosts path does
-    // when wrapCommand finds no runner (Windows has none).
-    if (getSandboxMode() === 'required') {
-      throw new Error(`security.shellSandbox=required: the network of plugin package "${egress.label}" cannot be enforced on this platform (no sandbox runner), so it is not started`);
+    // when wrapCommand finds no working native runner.
+    if (mode === 'required') {
+      throw new Error(`A sandbox is required: the network of plugin package "${egress.label}" cannot be enforced on this platform (no sandbox runner), so it is not started`);
     }
     coreLogger.warn({ pkg: egress.label, hosts: egress.hosts },
       'Plugin package network not enforced on this platform: no sandbox wraps the server, so the egress proxy is advisory');
@@ -144,6 +168,8 @@ export class StdioTransport implements MCPTransport {
   private closeHandlers: CloseHandler[] = [];
   private buffer = '';
   private sandboxCleanup: (() => void) | null = null;
+  /** The child leads a process group of its own (`detached`): signal the group. */
+  private groupLeader = false;
 
   constructor(options: StdioTransportOptions) {
     this.options = options;
@@ -160,6 +186,11 @@ export class StdioTransport implements MCPTransport {
       this.sandboxCleanup = launch.cleanup;
     }
     const run = windowsCmdShim(argv, childEnv, process.platform, this.options.cwd);
+    // A sandboxed server (a plugin package's) runs in a session of its own
+    // (setsid): it has no controlling terminal, so it cannot open /dev/tty and
+    // push keystrokes into the terminal Octipus runs in (TIOCSTI), sandboxed
+    // or not. Being a group leader, it is stopped by group (`signal`).
+    this.groupLeader = !!this.options.sandbox && process.platform !== 'win32';
     try {
       // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- operator-configured MCP server; shell only for a Windows .cmd with every arg quoted (windowsCmdShim)
       this.process = spawn(run.argv[0], run.argv.slice(1), {
@@ -168,6 +199,7 @@ export class StdioTransport implements MCPTransport {
         stdio: ['pipe', 'pipe', 'pipe'],
         shell: run.shell,
         windowsHide: true,
+        detached: this.groupLeader,
       });
     } catch (err) {
       this.sandboxCleanup?.();
@@ -246,18 +278,34 @@ export class StdioTransport implements MCPTransport {
     const within = (ms: number) => Promise.race([exited, new Promise<boolean>((done) => setTimeout(() => done(false), ms).unref())]);
     if (await within(graceMs)) return;
     if (process.platform === 'win32') killProcessTree(child.pid, child);
-    else child.kill('SIGKILL');
+    else this.signal(child, 'SIGKILL');
     if (!(await within(2000))) coreLogger.warn({ pid: child.pid, command: this.options.command }, 'MCP server process did not exit after SIGKILL');
   }
 
   close(): void {
     if (this.process) {
       // Windows: taskkill /T, or the cmd.exe wrapper of an `npx` server dies
-      // and its node.exe lives on. Posix: this child is no group leader, so a
-      // group kill would miss it — signal it directly.
+      // and its node.exe lives on. Posix: a sandboxed server leads its own
+      // group (detached), so the group is signalled; any other child is no
+      // group leader, so a group kill would miss it — signal it directly.
       if (process.platform === 'win32') killProcessTree(this.process.pid, this.process);
-      else this.process.kill();
+      else this.signal(this.process, 'SIGTERM');
       this.process = null;
     }
+  }
+
+  /** Signal the child: its whole group when it leads one, else the child alone. */
+  private signal(child: ChildProcess, signal: NodeJS.Signals): void {
+    if (this.groupLeader && child.pid !== undefined) {
+      try {
+        process.kill(-child.pid, signal);
+        return;
+      } catch (err) {
+        // ESRCH: the group is gone already; anything else, fall back to the child.
+        if ((err as NodeJS.ErrnoException).code === 'ESRCH') return;
+        coreLogger.warn({ err, pid: child.pid }, 'MCP server process group could not be signalled; signalling the process');
+      }
+    }
+    child.kill(signal);
   }
 }

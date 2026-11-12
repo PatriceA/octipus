@@ -1,0 +1,21 @@
+{
+  "name": "reader",
+  "version": "1.0.0",
+  "apiVersion": "1.0.0",
+  "title": "Reader",
+  "description": "Read a web page or article in a clean view, and turn what it says into notes and tasks: summarize, simplify, translate, list action items or ask a question about it.",
+  "publisher": "Octipus",
+  "server": { "command": "node", "args": ["server.mjs"], "requestTimeoutMs": 120000 },
+  "tools": {
+    "read_url": { "effect": "read", "description": "Fetch a web page through Octipus and return it as a clean article: title, byline, site, reading time and text" },
+    "reader_action": { "effect": "read", "description": "Summarize, simplify, translate, list the action items of, or answer a question about an article (a URL or its text)" },
+    "save_note": { "effect": "write", "description": "Save an article, or what the reader made of it, as a note of the user's" },
+    "create_tasks": { "effect": "write", "description": "Add action items to the user's to-do list, filed under Reading and linked to the article" }
+  },
+  "host": ["web:read", "model:complete", "notes:write", "tasks:write"],
+  "ui": {
+    "pages": [
+      { "path": "read", "title": "Reader", "icon": "newspaper", "entry": "index.html" }
+    ]
+  }
+}

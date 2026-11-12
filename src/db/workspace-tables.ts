@@ -83,6 +83,11 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   // A request belongs to the agent run that raised it, not to the workspace.
   { table: 'permission_requests', ownerColumn: 'user_id', transfer: 'n/a', purge: 'delete' },
   { table: 'pipelines', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
+  // A plugin's store (docs/PLUGIN-PACKAGES.md#store): what a user's calls in a
+  // space kept there; NULL is the user's personal workspace. It is the user's
+  // data in that space, so it does not follow a transfer; the totals go with it.
+  { table: 'plugin_store', ownerColumn: 'user_id', transfer: 'n/a', purge: 'delete' },
+  { table: 'plugin_store_usage', ownerColumn: 'user_id', transfer: 'n/a', purge: 'delete' },
   // Record types and records (docs/RECORDS.md); a type's form links go with it.
   // The purge deletes records first (their type is RESTRICT).
   { table: 'records', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },

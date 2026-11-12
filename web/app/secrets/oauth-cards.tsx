@@ -138,7 +138,7 @@ function OAuthGroupCard({
           <button
             onClick={handleSaveAll}
             disabled={saving || group.keys.every((k) => !values[k.vaultName])}
-            className="px-3 py-1.5 text-xs font-medium bg-primary text-[#0e0e0e] rounded-lg hover:bg-primary-container disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 cursor-pointer"
+            className="px-3 py-1.5 text-xs font-medium bg-primary text-on-primary rounded-lg hover:bg-primary-dim disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 cursor-pointer"
           >
             {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
             Save

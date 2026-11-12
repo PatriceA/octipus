@@ -10,7 +10,7 @@ import { MANIFEST_FILENAMES, type ParsedManifest, parseManifest } from './manife
  * record the registry stores. The pure helpers (`inferRepoKind`,
  * `buildRepoMapText`) are split out so they unit-test without a filesystem.
  *
- * See `.octipus/multi-repo-design.md`.
+ * See docs/MULTI-REPO.md.
  */
 
 export interface RepoScanResult {

@@ -1,3 +1,5 @@
+import type { AgentContext } from '@/core/types';
+import { executionEnvironmentFor } from '@/security/execution-environments';
 import { readdir, stat } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import { SPILL_DIR } from '@/core/tool-output-spill';
@@ -114,7 +116,7 @@ const EGG_INFO_FILES = new Set([
  *
  * Matched on the relative path, NOT on the directory name. `.octipus` in
  * `PRUNED_DIRS` looked equivalent and is not: a project workspace's `.octipus/`
- * holds real user content — this repository keeps its plans there — so pruning
+ * can hold real user content (plans, design notes), so pruning
  * the name would hide a stage asked to write a design document under
  * `.octipus/plans/`, and the evidence gate would then fail it for producing
  * nothing. Only the spill path is ours.
@@ -171,6 +173,8 @@ function isPackage(relPath: string): boolean {
 /** Above this, the tree is too big to diff reliably — see `truncated`. */
 const SNAPSHOT_MAX_FILES = 20_000;
 
+export function workspaceSnapshotConfig(maxFiles = SNAPSHOT_MAX_FILES) { return { maxFiles, pruned: [...PRUNED_DIRS], suffixes: IGNORED_SUFFIXES, egg: [...EGG_INFO_FILES], spill: SPILL_DIR }; }
+
 export interface WorkspaceSnapshot {
   /** Relative path → `"<mtimeMs>:<size>"`. */
   files: Map<string, string>;
@@ -184,6 +188,8 @@ export interface WorkspaceSnapshot {
 
 /** How one snapshot is taken. */
 export interface SnapshotOptions {
+  /** The same machine/account as the stage being measured. */
+  context?: AgentContext;
   /** Cap before the walk gives up and reports `truncated`. */
   maxFiles?: number;
 }
@@ -201,6 +207,11 @@ export async function snapshotWorkspace(
   opts: SnapshotOptions = {},
 ): Promise<WorkspaceSnapshot | null> {
   const { maxFiles = SNAPSHOT_MAX_FILES } = opts;
+  if (opts.context && executionEnvironmentFor(opts.context)?.backend === 'ssh') {
+    const { remoteFilesystemOperation } = await import('@/tools/filesystem/environment-operations');
+    const snapshot = await remoteFilesystemOperation('snapshot', { path: root, config: workspaceSnapshotConfig(maxFiles) }, opts.context) as { files: Array<[string, string]>; truncated: boolean };
+    return { files: new Map(snapshot.files), truncated: snapshot.truncated };
+  }
   const files = new Map<string, string>();
   let truncated = false;
 

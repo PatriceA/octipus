@@ -1,4 +1,4 @@
-import { buildAttachedFilesContext, type AttachedFileRef } from '@/core/session-files';
+import { buildAttachedFilesContext, type AttachedFileRef, type ReadFileResult } from '@/core/session-files';
 import type { WorkspaceFS } from '@/security/workspace-fs';
 import { getModelRegistry } from '@/models/model-registry';
 import { getLiteLLMClient } from '@/models/litellm-client';
@@ -7,7 +7,7 @@ import { modelCandidates } from './model-selector';
 
 /** CLI workers receive originals; auxiliary vision is only used for API workers. */
 export async function buildRootAttachmentContext(
-  fs: WorkspaceFS, refs: AttachedFileRef[], cli: boolean, userId: string, message: string, sessionId?: string,
+  fs: WorkspaceFS, refs: AttachedFileRef[], cli: boolean, userId: string, message: string, sessionId?: string, readFileForContext?: (path: string) => Promise<ReadFileResult>,
 ): Promise<{ context: string; imagePaths: string[] }> {
   const imagePaths: string[] = [];
   const context = await buildAttachedFilesContext(fs, refs, async (dataUrl, mimeType, path) => {
@@ -32,6 +32,6 @@ export async function buildRootAttachmentContext(
     });
     if (!result.content.trim()) throw new Error('Image analysis returned no description');
     return `Supplemental image description (may contain errors; the original image is authoritative):\n${result.content}`;
-  });
+  }, readFileForContext);
   return { context, imagePaths };
 }

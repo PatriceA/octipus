@@ -20,6 +20,9 @@ let modelCalls = 0;
 let token = '';
 let base = '';
 let backend: ChildProcess | undefined;
+let environmentWaitStarted: (() => void) | undefined;
+let releaseEnvironmentWait: (() => void) | undefined;
+let environmentWait: Promise<void> | undefined;
 const metrics: Array<{ scenario: string; passed: boolean; durationMs: number; modelCalls: number }> = [];
 
 interface ModelMessage { role: string; content?: string; tool_calls?: unknown[] }
@@ -30,6 +33,7 @@ const provider = createServer(async (req, res) => {
     const input = JSON.parse(body || '{}') as { messages?: ModelMessage[]; stream?: boolean };
     modelCalls++;
     const messages = input.messages ?? [];
+    if (environmentWait && messages.some(m => m.content?.includes('ENVIRONMENT_REVOKE_WAIT')) && messages.some(m => m.content?.includes('EXECUTION ENVIRONMENT:'))) { environmentWaitStarted?.(); await environmentWait; }
     const lastUser = messages.findLastIndex(m => m.role === 'user' && m.content?.includes('ACCEPTANCE_WRITE'));
     const marker = lastUser >= 0 ? messages[lastUser].content?.match(/ACCEPTANCE_WRITE (\S+)/)?.[1] : undefined;
     const executed = lastUser >= 0 && messages.slice(lastUser + 1).some(m => m.role === 'tool');
@@ -132,6 +136,47 @@ try {
     assert.equal(response.status, 409); assert.equal((await response.json() as { code: string }).code, 'approval_required');
     await assert.rejects(readFile(target), { code: 'ENOENT' });
   });
+  await scenario('execution environments share shell/files/Git and persist approval policy', async () => {
+    const environment = { id: 'acceptance-host', revision: 0, name: 'Acceptance computer', userId: me.id, workspaceId: null,
+      backend: 'host', roots: [userWorkspace], enabled: true, isDefault: true, credentials: [], network: true, hostIdentity: true, hostServices: true,
+      approval: 'automatic', background: 'automatic', allowDataTransfer: true };
+    const saved = await api<{ environment: typeof environment }>('/settings/execution-environments/acceptance-host', 'PUT', environment);
+    const readiness = await api<{ status: string; checks: unknown[] }>('/settings/execution-environments/acceptance-host/test', 'POST', {});
+    assert.equal(readiness.status, 'ready');
+    await api(`/sessions/${session.id}/execution-environment`, 'PUT', { environmentId: environment.id, projectPath: userWorkspace, expectedEnvironmentId: null });
+    const selection = await api<{ environment: { id: string } }>(`/sessions/${session.id}/execution-environment`);
+    assert.equal(selection.environment.id, environment.id);
+    // Broad environment grant applies to new commands, with shell still ASK.
+    await api('/tools/permissions', 'PUT', { toolId: 'shell', action: 'execute', level: 'ASK' });
+    const shell = await api<{ result: { exitCode: number; stdout: string } }>('/tools/shell/tools/run/execute', 'POST', {
+      args: { command: `node -e 'require("node:fs").writeFileSync("environment.txt","same-runtime")'`, cwd: userWorkspace },
+    });
+    assert.equal(shell.result.exitCode, 0);
+    const file = await api<{ result: { content: string } }>('/tools/filesystem/tools/read_file/execute', 'POST', { args: { path: join(userWorkspace, 'environment.txt') } });
+    assert.equal(file.result.content, 'same-runtime');
+    const git = await api<{ result: unknown }>('/tools/git/tools/status/execute', 'POST', { args: { path: userWorkspace } });
+    assert.match(JSON.stringify(git.result), /environment.txt/);
+    // Explicit DENY remains authoritative, even with automatic environment access.
+    await api('/tools/permissions', 'PUT', { toolId: 'shell', action: 'execute', level: 'DENY' });
+    const denied = await fetch(`${base}/tools/shell/tools/run/execute`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ args: { command: 'node -e "process.exit(0)"', cwd: userWorkspace } }) });
+    assert.equal(denied.status, 400); assert.match(await denied.text(), /Permission denied/);
+    await api('/tools/permissions', 'PUT', { toolId: 'shell', action: 'execute', level: 'ASK' });
+    // Revocation must stop an actual live worker, not merely change the next UI selection.
+    const started = new Promise<void>(resolve => { environmentWaitStarted = resolve; });
+    environmentWait = new Promise<void>(resolve => { releaseEnvironmentWait = resolve; });
+    const runningChat = api('/chat', 'POST', { sessionId: session.id, message: 'Wait for the owner access check. ENVIRONMENT_REVOKE_WAIT' }).then(() => undefined, () => undefined);
+    await Promise.race([started, new Promise((_, reject) => setTimeout(() => reject(new Error('Live worker did not reach the environment revocation gate')), 15000))]);
+    const activeWorkers = await api<{ agents: Array<{ status: string }> }>(`/agents?sessionId=${session.id}`);
+    assert(activeWorkers.agents.some(agent => agent.status === 'running'));
+    await api('/settings/execution-environments/acceptance-host', 'PUT', { ...saved.environment, enabled: false });
+    releaseEnvironmentWait?.(); environmentWait = undefined;
+    await runningChat;
+    const workers = await api<{ agents: Array<{ status: string }> }>(`/agents?sessionId=${session.id}`);
+    assert(workers.agents.every(agent => agent.status !== 'running'));
+    const unavailable = await fetch(`${base}/sessions/${session.id}/execution-environment`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal((await unavailable.json() as { environment: { backend: string } }).environment.backend, 'unavailable');
+  });
   await scenario('session messages survive a process restart', async () => {
     const before = await api<{ messages: unknown[] }>(`/sessions/${session.id}/messages`);
     assert(before.messages.length > 0); await stop(); await boot();
@@ -143,8 +188,11 @@ try {
     assert(login.ok && token);
     const after = await api<{ messages: unknown[] }>(`/sessions/${session.id}/messages`);
     assert.deepEqual(after.messages, before.messages);
+    const setup = await api<{ environments: Array<{ id: string; enabled: boolean }> }>('/settings/execution-environments');
+    assert(setup.environments.some(entry => entry.id === 'acceptance-host' && entry.enabled === false));
   });
 } finally {
+  releaseEnvironmentWait?.();
   await stop(); provider.closeAllConnections(); await new Promise<void>(resolve => provider.close(() => resolve()));
   const report = { provider: 'scripted OpenAI-compatible boundary', model: 'acceptance-fixture',
     artifact, evidence: 'production backend, real HTTP and filesystem/database', metrics, liveModelQuality: 'unmeasured' };

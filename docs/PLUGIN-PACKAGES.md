@@ -7,10 +7,15 @@ fenced in by Octipus. This is point C2 of the
 [business OS plan](plans/business-os.md).
 
 Plugin packages are not the older in-process plugins of [PLUGINS.md](PLUGINS.md),
-which run inside the server with its full rights. Use a package for anything
+which run inside the server with its full rights. (Trusted extensions, the
+`octi.*` modules that hook the agent loop, can now be installed as packages
+too, with `runtime: "in-process"`: see [Runtimes](#runtimes).) Use a package for anything
 that talks to the outside world or handles credentials. Those plugins are
-deprecated; `octi plugin convert <dir>` turns one into a package
-([PLUGINS.md](PLUGINS.md#converting-to-a-plugin-package)).
+deprecated; they load from `~/.octipus/legacy-plugins/<name>` (no longer from
+`<cwd>/extensions`), and `octi plugin convert <dir>` turns one into a package
+([PLUGINS.md](PLUGINS.md#converting-to-a-plugin-package)). Pass `--out` or run
+the converter outside the Octipus checkout: the output defaults to
+`<cwd>/<name>-package`.
 
 ## What a package is
 
@@ -48,12 +53,113 @@ server (any language) that the manifest says how to start:
 | `server` | `command` and `args`, run in the package directory over stdio. Optional `requestTimeoutMs`. |
 | `tools` | Every tool the server offers, with its `effect` (below). At least one. |
 | `network` | The hosts it talks to (`api.example.com`, `*.example.com` for its subdomains, `api.example.com:8443` for one port). Shown at install; the package reaches only these, on 443 and 80 unless a port is given — enforced only under the sandbox ([Network](#network)). |
-| `maxProtection` | The highest protection level (1-4) of data it may see. A call from a conversation holding content above it is refused ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md#plugin-calls-c6d)). Left out: 1 for a package with `network` hosts, 4 for one without. |
+| `maxProtection` | The highest protection level (1-4) of data it may see. A call from a conversation holding content above it is refused ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md#plugin-calls-c6d)). Left out: 1 for a package with `network` hosts, the `web:read` host scope or `ui` pages (a page can leak what it shows, [Pages](#pages)), 4 for one with none of these. |
 | `settings` | Non-secret settings as [record type fields](RECORDS.md#record-types), handed to the server as `OCTIPUS_SETTING_<KEY>`. |
 | `secrets` | Credentials, stored in the vault, handed to the server as environment variables under their own `key`. |
+| `commands`, `schedules`, `events`, `prompt`, `context` | What the package adds besides tools, each bound to one of its own tools ([Contributions](#contributions)). |
+| `runtime` | `package` (the default: this page) or `in-process` ([Runtimes](#runtimes)). |
+| `entry` | For `in-process` only: the module to load. |
+| `ui` | Pages the package adds to the web app: `{ "dir"?: "ui", "pages": [{ "path", "title", "icon"?, "entry" }] }` ([Pages](#pages)). |
+| `host` | Host API scopes it asks for, from `notes:read`, `notes:write`, `tasks:read`, `tasks:write`, `documents:read`, `notify`, `web:read`, `model:complete`; an admin approves them when enabling ([Host API](#host-api)). |
+| `model` | `{ "trustedInput": true, "reason": "…" }`: its `model:complete` prompts carry no outside data, so an admin may let them run on CLI lanes. Leave it out unless that holds ([Model calls on CLI lanes](#model-calls-on-cli-lanes)). |
 
 Every problem in a manifest is reported at once; a package that does not fit is
 refused at install.
+
+## Runtimes
+
+A plugin is installed, pinned, signed, approved, listed and audited the same
+way whatever runs it; `runtime` says what does:
+
+| Runtime | Runs as | Trust needed |
+|---|---|---|
+| `package` (default) | An MCP server over stdio, in the sandbox ([How a package runs](#how-a-package-runs)) | An admin installs it and approves its content hash |
+| `in-process` | A [trusted extension](PLUGINS.md#from-an-extension-octihook-trusted-extensions-only) loaded into the server process (`octi.*`): it can hook the agent loop, register tools and model providers | As for `package`, plus an explicit approval to run in the server process, recorded with the content hash |
+
+An in-process plugin's manifest names its module instead of a server:
+
+```json
+{
+  "name": "auditlog",
+  "version": "1.0.0",
+  "apiVersion": "1.0.0",
+  "title": "Audit every tool call",
+  "description": "Writes a line for each tool call through a tool:after hook.",
+  "runtime": "in-process",
+  "entry": "dist/index.mjs"
+}
+```
+
+- **`entry`**: a path relative to the package root (no `.`/`..` segments) to
+  an ES module (`.mjs` or `.js`) whose default export is the extension
+  factory, `(octi) => void | Promise<void>`, the same shape as an extension in
+  `~/.octipus/extensions` ([PLUGINS.md](PLUGINS.md)). It must be a file in
+  the package at install.
+- **One bundled module.** The entry is the package's only code file (no other
+  `.js`, `.mjs`, `.cjs`, `.ts`, `.jsx`, `.tsx`, `.node` or `.wasm` anywhere in
+  it; data files such as a README are fine), and it imports nothing by path
+  (`./x`, `../x`, `/x`, `file:`), only Node built-ins (`node:fs`, …). Bundle
+  the plugin and its dependencies into one file, for example
+  `esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/plugin.mjs`.
+  Install refuses a package that breaks this, saying which file or line.
+- **What applies**: `name` (lower-case letters and digits only, no `-`: its
+  tools are named `ext_<name>__<id>`), `version`, `apiVersion`, `title`,
+  `description`, `publisher`, `homepage`; content pinning, signatures,
+  revocation, registries, remote install, upgrade and uninstall, unchanged.
+- **What is refused**, because only a sandbox or a server process of its own
+  would make it true: `server` and `tools` (nothing is started; its tools are
+  registered with `octi.registerTool`, each with its effect), `network` (it
+  has the server's network), `maxProtection` (it can read whatever the server
+  can). `settings` and `secrets` are refused too: nothing hands them to an
+  in-process module yet (a provider names a system vault secret instead).
+
+**The in-process approval.** Approving its content says *these bytes are what
+I reviewed*; running them in the server process gives them the server's full
+authority, so it is a second, explicit decision:
+
+```
+PATCH /api/plugin-packages/auditlog { "approveInProcess": "sha256:<contentHash>" }
+```
+
+The hash must be the approved `contentHash` and the files must still hash to
+it (`409` otherwise), under the same signature rules as enabling (a revoked
+key is refused; under `plugins.requireSignature`, unsigned content too). It is
+recorded on the row with who and when (`inProcess` in the view) and audited
+(`in_process_approved`). Enabling an in-process plugin without it is refused
+(`409`). It covers one content hash: an upgrade, or approving changed content,
+clears it (the audit row of the content approval says so), and the plugin is
+not loaded again until it is approved for the new bytes. A plugin installed
+from a URL must carry a trusted signature, like any package, and still needs
+this approval.
+
+On the web page an in-process plugin's row says **in-process**, and while the
+approval is missing shows its content hash with **Approve running in the
+server process** (after a confirmation). From the command line:
+`octi plugin approve-in-process <name> [--hash sha256:<hex>]`.
+
+**Loading.** While an in-process plugin is enabled and approved, the
+extension system loads it from its installed directory (read in place, never
+written), after the check every package start gets: its files hash to the
+approved content hash, its signature file is the approved one, its key is
+not revoked, and under `plugins.requireSignature` it carries a trusted
+signature. Then the package is listed and hashed once more, the entry's bytes
+are read into memory and must match that listing's line for the entry (a
+listing that hashes to the approved hash), and those bytes are imported from
+memory (a `data:` URL). What runs is exactly what was checked: a file changed
+after the read never runs, and one changed before it fails the check. A plugin that fails the check, cannot be imported or whose factory
+throws is not loaded, the reason shows as its problem, and the server runs on.
+Its factory gets the same `octi` API as a trusted extension. Disabling,
+uninstalling or upgrading it disposes everything it registered (event
+handlers, commands, hooks, tools, providers, `onDispose` callbacks), the last
+registration first; enabling or approving loads it again. No restart either
+way.
+
+Because the module is its bytes, new content always loads new code and
+nothing it imports can go stale: there is no file it imports.
+
+What in-process does not give: a sandbox. The checks above make sure the code
+that runs is the code an admin approved, signed by whom it says; they do not
+limit what that code can do once it runs.
 
 ## Tool effects
 
@@ -68,6 +174,25 @@ it. A declaration can only make a tool stricter:
 
 A tool the server offers but the manifest does not declare is hidden from the
 agent and refused if called.
+
+## What the model sees
+
+Only what the admin agreed to; nothing a package's running server sends
+(`src/mcp/plugin-catalog.ts`):
+
+- **The system prompt** (the *MCP SERVERS* section) lists a plugin server by
+  a host-written line: its title, `(plugin <name>)` and its tool count. The
+  manifest's `description` is not in it.
+- **Tools.** The server's `tools/list` is intersected with the manifest, at
+  start and at every `notifications/tools/list_changed`: a tool the manifest
+  does not declare is dropped; the description is the manifest's (consented
+  with the package), or the tool's name and effect when it gives none; the
+  input schema keeps its structure (types, properties, enums, `required`) but
+  loses its free text (`description`, `title`, `examples`, `$comment`); the
+  output schema and annotations are dropped. That is what the tool schema,
+  `mcp_list_tools` and codemode's tool search show. Describe parameters in the
+  tool's description, and name them plainly.
+- Its `instructions`, resources, resource templates and prompts are not read.
 
 ## How a package runs
 
@@ -84,14 +209,21 @@ An enabled package runs as the MCP server `plugin-<name>`:
   removed on uninstall. A package **must keep its runtime state there** (caches,
   databases, tokens it refreshes): its own directory is read-only under the
   sandbox and pinned by hash ([Content pinning](#content-pinning)).
-- **The sandbox, when it is on.** With `security.shellSandbox` set to `auto`
-  or `required`, the server runs under bwrap or firejail (Linux) or
-  `sandbox-exec` (macOS) with its directory **read-only** (bwrap `--ro-bind`,
-  firejail `--read-only`, a Seatbelt `deny file-write*`), its data directory
-  as the only writable one, and no direct network; the hosts in
-  `network` are reached through the egress proxy ([Network](#network)). With
-  the sandbox `off` (the default), it runs unwrapped; its directory is then
-  writable and the declared hosts are advice, not enforced.
+- **The data directory is shared by all users of the install.** It is one
+  directory per package, and the package's token cannot tell users apart:
+  whatever it keeps there for one user, a call for another user can read. It
+  must **never hold user data** (a user's notes, preferences, history, anything
+  one user typed or owns). Keep that in the [store](#store), which the host
+  keeps apart for each user.
+- **The sandbox, always** ([The sandbox](#the-sandbox)). The server runs
+  under bwrap or firejail (Linux) or `sandbox-exec` (macOS) with its
+  directory **read-only** (bwrap `--ro-bind`, firejail `--read-only`, a
+  Seatbelt `deny file-write*`), its data directory as the only writable one,
+  its own process namespace (it cannot see the server's `/proc`, so not its
+  environment), no controlling terminal and no direct network; the hosts in
+  `network` are reached through the egress proxy ([Network](#network)).
+  Without a working runner it does not start, unless `plugins.sandbox` is
+  `off` and it is not from the marketplace.
 - **Network only to its declared hosts** — see [Network](#network).
 - **Not part of the MCP server list.** It does not appear among the servers on
   the MCP page and cannot be edited, removed or toggled there. Ids starting
@@ -101,6 +233,259 @@ An enabled package runs as the MCP server `plugin-<name>`:
 
 Every change (install, settings, secrets, enable, disable) restarts the
 package's server if its configuration changed.
+
+## The sandbox
+
+The sandbox is one of the four hard boundaries ([Trust and threat
+model](#trust-and-threat-model)). It is set apart from the agent shells'
+`security.shellSandbox` (off by default): **`plugins.sandbox`** decides for
+plugin package servers (env `PLUGINS_SANDBOX`).
+
+| `plugins.sandbox` | A package from the marketplace | Any other package |
+| --- | --- | --- |
+| `required` (default) | Runs in a runner; never without one. | Runs in a runner; never without one. |
+| `off` | Runs in a runner; never without one. | Runs **unsandboxed**, as the Octipus server's user: it can read that user's files, the server's environment (its database URL and master key, through `/proc/<ppid>/environ`) and connect anywhere. |
+
+The runner is bwrap or firejail on Linux, `/usr/bin/sandbox-exec` on macOS.
+bwrap is probed once (`bwrap --ro-bind / / --new-session true`): installed
+but unable to create a user namespace, it counts as unavailable. Where a
+runner is required and none works, the package is **not started**, and
+**enabling** it and **agreeing** to it (the install consent, the consent of
+an installed package) are refused with what is missing and how to install
+it. The admin page shows *plugin sandbox: active runner bwrap* or
+*unavailable: …* above the list (`GET /api/plugin-packages/sandbox`), and the
+server logs the same line at startup.
+
+What the admin is told follows the same state: the declarations, the network
+status and the marketplace card say *"Runs as a separate program in a sandbox
+(bwrap)"* and *"No network access of its own"* only where a runner wraps it,
+and otherwise *"NOT sandboxed on this host"* and *"Network not enforced on
+this host"*, as warnings.
+
+What each runner adds besides the files, network and process namespace:
+
+- **No terminal.** The server is spawned in a session of its own (`setsid`)
+  and stopped by process group; bwrap also runs every command with
+  `--new-session`, and the Seatbelt profile allows nothing on `/dev/tty`. A
+  sandboxed process can therefore not push keystrokes into the terminal
+  Octipus was started from (the `TIOCSTI` ioctl): `/dev/tty` answers ENXIO.
+- **firejail** drops every capability (`--caps.drop=all`), sets
+  `no_new_privs` (`--nonewprivs`), runs as no root (`--noroot`), and never
+  shows `$HOME`: a whitelisted path under it turns the home directory into a
+  tmpfs that shows only that path, and without one it gets an empty private
+  home (`--private`).
+
+**Linux.** Install bubblewrap (`apt-get install bubblewrap`, `dnf install
+bubblewrap`, `apk add bubblewrap`) or firejail. bwrap needs unprivileged user
+namespaces; check with `bwrap --ro-bind / / true`. Ubuntu 24.04 and later
+restrict them with AppArmor (`kernel.apparmor_restrict_unprivileged_userns`):
+allow bwrap with an AppArmor profile, or use firejail.
+
+**Docker.** The image installs bubblewrap. Docker's default seccomp and
+AppArmor profiles refuse the user namespaces bwrap creates; check with
+`docker compose exec octipus bwrap --ro-bind / / true`. If it fails, the
+commented `security_opt` lines in `docker-compose.yml` (`seccomp=unconfined`,
+`apparmor=unconfined`) allow it; they relax the container's own syscall
+filter, so weigh that against running plugins at all.
+
+**macOS.** `/usr/bin/sandbox-exec` ships with the system ([macOS:
+sandbox-exec](#macos-sandbox-exec)).
+
+**Windows.** Native Windows 10/11 installs use `octipus-sandbox.exe`, a Rust
+helper in `native/bin` (see [Windows native sandbox](WINDOWS-SANDBOX.md)).
+It starts each package in a less-privileged AppContainer with no networking
+capabilities (`registryRead` permits OS socket-library initialization) and a Job object: stop kills the whole tree, with a 2 GiB
+committed-memory and 32-process cap. The package is read-only; only its
+private data and scratch directories are writable. A private SID-protected
+named pipe connects to the normal declared-host/host-API proxy; there is
+**no loopback exemption**. Marketplace plugins require this helper just as
+Linux plugins require bwrap/firejail. Missing or failing helper means no
+launch, not an unconfined fallback.
+
+Exact release installs download the tested binary and checksum from the
+same release. Source installs build it with `npm run build:sandbox:windows`
+(Rust and Visual Studio C++ Build Tools). This runner is for plugin packages,
+not unrestricted agent shell tools. Node packages work without changing
+ACLs on the installed Node runtime: the helper stages a private executable.
+Other native runtimes must be self-contained; shell shims are refused.
+
+The test lanes run plugin fixtures with `PLUGINS_SANDBOX=off` (most CI
+runners have no runner); the sandbox's own suites set it themselves.
+
+## Contributions
+
+Besides its tools, a package can add slash commands, schedules, event
+handlers, a section of the agents' system prompt and per-turn context. Each
+one is declared in the manifest and names one of the package's **own
+declared tools**; the host is the only code that touches the command list,
+the scheduler, the event bus and the prompt, and every call goes through the
+same door as an agent's call to that tool (`mcp.plugin-<name>.<tool>`): its
+declared [effect](#tool-effects), the permission rules, approvals, the
+[protection level](PROTECTION-LEVELS.md#plugin-calls-c6d) and the circuit
+breaker all apply. Nothing a contribution does waves a call through.
+
+```json
+{
+  "commands": [{ "name": "balance", "tool": "list_accounts", "description": "Show balances", "input": { "account": "$args" } }],
+  "schedules": [{ "id": "nightly-sync", "cron": "15 2 * * *", "tool": "sync", "input": { "full": false } }],
+  "events": [{ "on": "document.completed", "tool": "classify_document" }],
+  "prompt": { "file": "agent-notes.md", "roles": ["general"] },
+  "context": { "tool": "account_summary", "roles": ["general"] }
+}
+```
+
+Refused at install, with every reason at once: a contribution naming a tool
+the package does not declare, a `context` tool that is not a `read`, a command
+name or schedule id used twice, a cron expression that does not parse, an
+event not on the list below, a prompt file that is not a `.md` file inside the
+package (no `..`, no link out of it, at most 8,000 characters of UTF-8), and a
+command name that Octipus, an extension or another installed package already
+uses.
+
+### Approving contributions
+
+Contributions reach every user of the install: prompt text in every user's
+agents, every user's messages sent to a context tool, every user's events,
+schedules running as an admin, commands anyone can type. So they are
+approved on their own, for exactly what was reviewed:
+
+- The **contributions hash** (`contributions.hash` in the view,
+  `sha256:<hex>`) covers the canonical JSON of the manifest's `commands`,
+  `schedules`, `events`, `prompt` and `context` (keys sorted, empty lists
+  left out) and the prompt file's bytes.
+- Enabling a package that has any contributions needs
+  `approveContributions: "<that hash>"` (in the same PATCH as `enabled`, or
+  before it); without it, or with another hash, it is refused (409, the body
+  carrying `contributionsHash`). The approval is recorded
+  (`approved_contributions_hash`) and audited (`contributions_approved`).
+- **Install and every upgrade clear it** (unless they come with the admin's
+  [consent](#the-install-consent), which approves it for the new content),
+  and approving changed content
+  whose contributions hash differs clears it too (audited as
+  `contributions_approval_cleared`); the package must be approved again
+  before it is enabled.
+- Contributions bind only while the approved hash is the current one, read
+  from the files at bind time; the prompt text bound is the text hashed.
+- On the web page each package's row lists everything it contributes: each
+  command, schedule (cron, UTC) and event with its tool and effect and whom it
+  runs as, the context tool, and the full prompt text. Enabling shows all of
+  it again and approves it ("Approve and enable"). From the command line:
+  `octi plugin approve-contributions <name>` shows the same and asks, or
+  takes `--hash`.
+
+**Bound while enabled, without a restart.** Every contribution is registered
+with a disposer when the package is enabled and approved, and disposed (in reverse
+registration order) when it is disabled, upgraded (an upgrade leaves it
+disabled) or uninstalled; re-enabling binds it again. A contribution that
+cannot bind at that moment (a command name an extension took since install,
+files that no longer hash to the approved content) is left out and its reason
+listed; the rest bind, and the next change tries again. The package view
+(`GET /api/plugin-packages`, `contributions`) lists what each package adds,
+whether each part is bound now, the last run of each schedule, event and
+context tool (`lastRun`: when, whether it worked, why not), and the
+`problems`.
+
+### Slash commands
+
+`commands: [{ name, tool, description, input? }]`. `/name args` calls the
+tool **as the user who typed it**, without a model turn, and answers with the
+tool's text (cut to 8,000 characters). It works on every surface that takes
+slash commands (web chat, the TUI, channels), as `/name` and as
+`/<package>:name`. `input` is the tool's arguments; a string value `"$args"`
+(anywhere in it) is replaced by the text after the command. Without `input`
+the tool gets `{ "text": "<args>" }`.
+
+The call is the user's: their permission rules apply, a `write` tool asks
+them where the client can show an approval (web, TUI, messaging apps) and is
+refused where it cannot (the REST API), and an `external` one always asks.
+
+Names are lower-case `a-z0-9-` (at most 32 characters). A package may not
+take a name Octipus or an extension uses (`/help`, `/status`, …), another
+installed package's command, or `/cancel`.
+
+### Schedules
+
+`schedules: [{ id, cron, tool, input? }]`. The cron runner calls the tool
+with `input` (or `{}`) at every minute the expression matches. Cron is five
+fields in **UTC** (minute, hour, day of month, month, day of week; `*`,
+numbers, ranges `1-5`, steps `*/15`, lists `1,15`; Sunday is 0 or 7).
+
+- **Who it runs as:** the install — the admin who installed or last upgraded
+  the package — **unattended**. A `read` tool runs. A `write` tool is ASK by
+  default and, with nobody to ask, refused, until that admin gives it an ALLOW
+  rule (`mcp`, `plugin-<name>.<tool>`). An `external` tool is always refused:
+  the same policy as every unattended run, no bypass. When the installer's
+  account is gone or no longer an active admin, the schedule does not run
+  (its `lastRun` says so): reinstall or upgrade the package as an admin.
+- **Once:** every instance runs the loop, and each minute of a schedule is
+  claimed in the shared store before it runs. A tick that comes late fires the
+  minutes it missed, up to five back.
+- **Bounded:** at most four schedule calls of all packages run at once, and a
+  schedule whose previous call is still running skips its turn. A failure (an
+  error, a refusal, a tool reporting an error) is logged and recorded as the
+  schedule's `lastRun`.
+
+### Events
+
+`events: [{ on, tool }]`, with `on` one of these gateway events. The tool gets
+`{ "event": {...} }` with **ids only**, never a reply, a file's contents or an
+error text:
+
+| `on` | When | `event` |
+|---|---|---|
+| `chat.response` | A root turn answered | `type`, `at`, `userId`, `sessionId` |
+| `document.completed` | An uploaded document was processed | `type`, `at`, `userId`, `documentId` |
+| `document.failed` | Processing an uploaded document failed | `type`, `at`, `userId`, `documentId` |
+
+The call runs **as the user the event belongs to, unattended** (a `write` tool
+only under that user's ALLOW rule, an `external` one never). An event of a
+session whose content is above the package's `maxProtection` is not
+delivered. Delivery is asynchronous, after the event: at most 60 events a
+minute and 4 at once per package, the rest dropped (and the drop recorded); a
+failing tool never reaches the publisher or another package.
+
+### Prompt sections
+
+`prompt: { file, roles? }`. The file's markdown is added to the system prompt
+of agents of the named roles (every role when `roles` is left out) while the
+package is enabled, ordered by package name. It is read only from files that
+still hash to the approved content and whose contributions hash was approved,
+so it is exactly what the admin reviewed ([Content pinning](#content-pinning),
+[Approving contributions](#approving-contributions)).
+
+Each section is fenced: a `<plugin-prompt plugin="<name>">` block that says it
+is third-party text from that package, approved by an administrator, which
+cannot override the system or operator instructions, change the agent's role
+or rules, or grant a permission; angle brackets in the text are replaced so it
+cannot close the fence. **The fence is advice to the model, not a boundary**:
+the text is still in the system prompt of every agent of every user and the
+model reads it. Approve a prompt section only from a publisher you would let
+write instructions to your agents, and read the whole text first (it is at
+most 8,000 characters).
+
+It is static and the same for every user, so the root agent carries it in
+the **install tier** of its prompt, after the role prompt and the delegation
+text: the cached prefix every user's sessions share
+([DIRECT-PROVIDERS.md](DIRECT-PROVIDERS.md)) stays shared; enabling or
+disabling a package changes it once for everybody. Workers carry it in their
+static base.
+
+### Context
+
+`context: { tool, roles? }`. Before every root turn and every worker of the
+named roles (all when left out), the tool is called with
+`{ "query": <the message or the worker's brief>, "role": <role> }`, and its
+text rides the **turn tier** of the system prompt, beside the
+[context hooks](CONTEXT-HOOKS.md)' blocks, as
+`<plugin-context plugin="<name>">` with angle brackets replaced so it cannot
+close the fence.
+
+- The tool must be a `read`. It runs as the user, unattended (a rule that
+  makes it ASK refuses it), and the session's protection level applies.
+- It does not run where other people read the reply (a group thread, a room),
+  where the session's text may not be copied, or in a space.
+- It has 3 seconds and 4,000 characters; a failure or a timeout costs the
+  turn the block, never the turn, and is recorded as the context's `lastRun`.
 
 ## Content pinning
 
@@ -125,6 +510,17 @@ signs this hash; it is pinned on its own instead ([Signed packages](#signed-pack
 running code could stage executable content in. Only paths relative to the
 package root enter the listing, so the copy hashed at install hashes the same
 as the installed directory.
+
+**`marketplace.json` is listing metadata, not content.** A regular file of
+that name in the package root (a marketplace's title, tags, screenshots and
+author for the listing) is left out of the hash of a package's **source** —
+what `octi plugin hash`, `pack`, `sign`, `verify` and `validate` read — and
+install leaves it out of the copy it installs, so an installed package never
+has one. Editing a listing therefore never changes the content hash or
+invalidates a signature. Only that one root file is exempt: a
+`marketplace.json` in a subdirectory, or a directory of that name, counts. In
+an **installed** directory nothing is exempt: a `marketplace.json` that
+appears there later changes the hash like any other file.
 
 Install and upgrade copy the package into a staging directory beside the
 installed one and hash **the copy**, and check its signature, before they touch
@@ -209,7 +605,23 @@ anything else the key signs. The signature file is the one file the content
 hash leaves out, so signing does not change the hash. Sign last: any change to
 the files after signing, the manifest included, invalidates the signature.
 Keep the `.key` file secret (it is written `0600`); `keygen` never overwrites a
-file. `sign` refuses a package with a symbolic link or special file anywhere
+file. To keep it encrypted at rest, give `keygen` a passphrase:
+
+```
+octi plugin keygen ./acme --passphrase-file ./passphrase.txt   # or - to read it from stdin
+octi plugin sign ./my-package --key ./acme.key --passphrase-file ./passphrase.txt
+octi plugin sign ./my-package --key ./acme.key                 # asks for it at a terminal, without echo
+```
+
+The private key is then written as passphrase-encrypted PKCS#8 PEM
+(`-----BEGIN ENCRYPTED PRIVATE KEY-----`, AES-256-CBC with a PBKDF2-derived
+key; `node:crypto`, no new dependency). The passphrase file's one trailing
+newline (`\n` or `\r\n`) is not part of the passphrase, and an empty
+passphrase is refused. `sign` and `sign-index` take `--passphrase-file
+<path|->` too; without it they ask at a terminal and, with no terminal
+(a script, CI), are refused with a message saying so. A wrong passphrase is
+refused in fixed words: no message carries the key or the passphrase. An
+unencrypted key works as before. `sign` refuses a package with a symbolic link or special file anywhere
 in it (as install does) and writes the signature through a temporary file and
 a rename, never through a link. The temporary file is made in the package's
 parent directory, so a `sign` that dies half-way leaves nothing in the package.
@@ -344,7 +756,10 @@ valid trusted signature is refused (`409`).
 
 A package still signed by a revoked key stops at its next start. One signed by
 an expired or removed key stops too with `requireSignature` on; with it off, it
-keeps running and its view shows the state (`signedBy: null`). Upgrading to
+keeps running and its view shows the state (`signedBy: null`). A package
+installed from the marketplace is the exception: it starts only with a valid
+signature by a key the marketplace's `keys.json` endorses now, whatever
+`requireSignature` says ([Marketplace](#trust-and-threat-model)). Upgrading to
 the re-signed version is a change of signer: pass `allowSignerChange`.
 
 What a signature guarantees: the files are byte for byte what the holder of
@@ -354,8 +769,9 @@ that key signed, under that name and version. What it does not:
   as an unsigned package (sandbox, network, declared tools and effects), and
   an admin still reads what it declares before enabling it;
 - that the key is still in the publisher's hands — a leaked key signs
-  anything until it is revoked or expires here; nothing tells a host a key
-  was revoked (no online revocation list): each host's config has to say so;
+  anything until it is revoked or expires here; for a publisher of your own,
+  each host's config has to say so (the marketplace revokes its keys online,
+  [Online revocation](#online-revocation));
 - anything about where the package came from: a URL or registry only says
   where the bytes were fetched; the signature says who made them.
 
@@ -437,10 +853,526 @@ or version than the entry is refused (`400`), so an entry cannot install
 something other than what it lists. `name` and `version` may be sent with any
 install (`POST /api/plugin-packages`) to the same effect.
 
-A registry is trusted only to point at tarballs: the index is not signed, and
-what installs is decided by the package's own signature against
-`trustedPublishers`. A registry can offer a package you do not trust; it
-cannot make you install one.
+A registry is trusted only to point at tarballs: what installs is decided by
+the package's own signature against `trustedPublishers`. A registry can offer
+a package you do not trust; it cannot make you install one. A signed index
+(below) additionally says who wrote the list.
+
+### Signed registry indexes
+
+A registry entry may name the publisher whose signature its index must carry:
+
+```json
+"plugins": {
+  "trustedPublishers": [{ "name": "Acme", "publicKey": "-----BEGIN PUBLIC KEY-----..." }],
+  "registries": [{ "name": "Acme", "url": "https://plugins.example.com/index.json", "publisher": "Acme" }]
+}
+```
+
+The publisher signs the index file with the key it signs packages with:
+
+```
+octi plugin sign-index ./index.json --key ./acme.key   # writes ./index.json.sig
+```
+
+and serves `index.json.sig` beside the index: `.sig` is appended to the
+URL's path and its query kept (`…/index.json?channel=stable` →
+`…/index.json.sig?channel=stable`); a registry URL with a fragment (`#…`) is
+refused when it names a publisher. The signature file
+has the canonical form of `octipus-plugin.sig` ([Signed
+packages](#signed-packages)): `{ alg, keyId, signature }`, Ed25519. The signed
+message is `octipus-registry-index/v1\n` followed by `sha256:<hex>` of the
+**exact index bytes** served — not of a re-serialised JSON, so publish the
+signed file unchanged — behind its own prefix, so a package signature can
+never pass for an index signature, nor the other way round.
+
+When `publisher` is set, the index is listed only if `<url>.sig` verifies over
+the bytes fetched with a key of **that** publisher in `trustedPublishers` that
+is neither revoked (`revoked`, `revokedKeys`) nor expired (`notAfter`).
+Otherwise the registry is reported in `errors` and none of its packages show:
+no `.sig` (404), a signature by another publisher's key (even a trusted one),
+a changed index, or a revoked or expired key. A revocation or expiry counts
+whichever `trustedPublishers` entry (or `revokedKeys`) files it, as for
+packages. The trust config is part of the index cache key, so revoking a key
+refuses its indexes on the next listing. Without `publisher`, an index is
+listed unsigned, as before. Either way, installing from it still requires the
+package's own trusted signature.
+
+## Marketplace
+
+Octipus ships one registry of its own, the Octipus marketplace
+(`https://plugins.octipus.cc/index.json`, publisher `Octipus`), built from the
+[octipus-plugins](https://github.com/PatriceA/octipus-plugins) repository.
+Admins browse it on the Marketplace page or with `octi plugin marketplace`,
+and install from it by name (`octi plugin install <name>`). Other registries
+(`plugins.registries`) keep working as before and appear beside it.
+
+### Trust and threat model
+
+Goal: let people build and share any of their ideas, safely. Four hard
+boundaries, never negotiable:
+
+- the sandbox;
+- signatures;
+- the listing has to match the downloaded plugin;
+- runtime enforcement of exactly what was declared.
+
+Everything else is guidance: every declaration shown in plain words at
+install, with consent per item. We inform and guide admins; we don't refuse an
+informed choice.
+
+What directly protects those boundaries is held as hard as they are: key
+handling, revocation, pins, the rollback checks and the SSRF guard. Every
+byte the host fetches (keys file, index, signatures, tarballs, READMEs,
+screenshots, stats) is hostile until checked, and every check fails closed: a
+file that cannot be read, verified or parsed counts for nothing.
+
+| Threat | What the host does |
+| --- | --- |
+| No keys in this build | The root keys in `src/plugins/packages/marketplace-keys.ts` are placeholders until a release ships real ones. While either is, the marketplace is off: never fetched, never trusted, nothing installs; the listing says *"The Octipus marketplace is not configured in this build"*. A placeholder never verifies anything. |
+| A forged index or package | The index must be signed by a signing key the root-signed `keys.json` endorses now; a package from the marketplace must carry a valid signature by one of those keys, and only those (a key in `trustedPublishers` does not count for the marketplace, and the marketplace's keys count for nothing else). An installed marketplace package starts only while that holds, whatever `requireSignature` says: a signature that is unknown (its key dropped from `keys.json`, or a stored `keys.json` that no longer verifies), expired, revoked, invalid or missing stops it. |
+| Marketplace trust leaking out | `keys.json` may revoke only a key it endorses or ever endorsed (`plugin_marketplace_keys.endorsed_key_ids`), or a root; any other revocation in it is ignored (logged). Its key revocations, and the index's package revocations, apply to marketplace trust only: packages installed from the marketplace, installs from it and its index. Never to `trustedPublishers`, a directory, URL or bundled install, or another registry (the admin's own `plugins.revokedKeys` reaches everything). |
+| A listing that understates | The host recomputes the permissions from the downloaded manifest (`computePermissions`) and refuses any difference from the listing's, with an audit row (`listing_mismatch`); the same for `contentHash`, name and version. |
+| A published version replaced | The `contentHash` of every `name@version` is pinned per registry the first time it is listed, with the key that signed that index ([Listing pins](#listing-pins)). A later index claiming another hash for it has that entry refused ("replaced: refused", in the listing's `errors`), audited (`listing_replaced`) and notified to admins once; the rest of the index stays usable. |
+| A leaked key squatting future versions | A pin taken under a key revoked since holds nothing back: it is dropped (audited, `listing_pins_dropped`) and the version pinned afresh by the next index. An admin can reset one pin, with a reason (`DELETE /api/plugin-packages/pins`, audited `listing_pin_reset`). |
+| A replayed old index | `generatedAt` only moves forward per registry (one conditional upsert); an older index, or another index with the same `generatedAt`, is refused, as is one dated more than a day ahead. |
+| A replayed old keys file | `keys.json`'s `version` only grows; the same version with the same bytes is fine, anything else refused. |
+| A leaked signing key | The key holder revokes it in `keys.json` (signed by a root key) and endorses a new one. Revocations are sticky: a later file that drops one does not lift it. Installs and starts of marketplace packages signed by a revoked key are refused. The package revocations its indexes published are flagged `signerRevoked` and no longer enforced, unless an index signed by a trusted key lists them again. |
+| A leaked root key | `rootBackup` signs a `keys.json` that revokes `root`. From then on `root` verifies nothing, and the key revocations `root` signed are flagged `signerRevoked` and no longer enforced (a leaked root cannot leave revoked signing keys behind), unless a `keys.json` signed by a root still trusted lists them again; a key retiring itself and a root's own revocation never lapse. `root` can never revoke `rootBackup`: a file that tries is refused as a whole. A leaked root may have pushed `version` high; a file from the backup root that revokes it is accepted anyway (a file signed by a revoked root holds nothing back). Losing both roots needs a new release. |
+| A future-dated index from a leaked key | An index signed by a key revoked since does not hold the next one back, so the backup's revocation always gets through. |
+| A revoked package version | Package revocations in a verified index are stored in the database, refused at install from the marketplace and at every start of a marketplace package, shown on the row (`revocation`), audited (`revoked_online`) and notified to admins (one notification per index, with a count); its server, tokens, background runs and in-process module are stopped on every instance. They hold while the marketplace is unreachable and across restarts. |
+| The marketplace unreachable | Listing and installing from it stop ("unavailable"). Installed marketplace packages keep running only if their signatures verify against the last stored `keys.json`, re-verified against the root keys whenever it is read. |
+| A host frozen on an old index (a mirror or a man in the middle replaying a valid one) | `keys.json` and the marketplace index must carry `expires`, at most 90 and 45 days after their `generatedAt`; past it, or without it, they are refused. When the last accepted index or `keys.json` was generated more than 7 days ago, the Marketplace page shows a banner (`stale`) and admins get one `plugin_marketplace_stale` notification per stale file. |
+| Several server instances | Each instance applies the revocations in force it has not applied yet on every marketplace index read and every cron tick (stopping its own servers, tokens and runs); the instance that stored them audits and notifies. An install consent preview lives on the instance that made it ([The install consent](#the-install-consent)). |
+| Hostile text and links | Index v2 is parsed with a strict schema: a limit on every string and list, no control characters, no bidirectional or invisible formatting characters in short fields (zero-width and bidi marks, U+00AD, U+115F, U+180E, U+2060–U+2064, U+3164, U+FEFF, tag characters), an unknown `schema` above 2 refused. A v1 description, and any name or schema path echoed in a problem, has those characters removed; the CLI strips its output again. README and CHANGELOG are returned as raw Markdown for the client to render sanitized, without raw HTML or remote images. `homepage` and `author.url` are https or dropped. The index's own `keyId` field is never used: who signed is read from the signature. |
+| Hostile images | Icons and screenshots must be https on the registry's origin under `/<name>/`, else dropped. The host fetches only an image a readable index lists (never a URL a client names), through the SSRF guard, with no redirect off the origin, at most 2 MB, and keeps it only when its bytes are PNG, JPEG, WebP or GIF (no SVG). It is served with the sniffed type, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'` and `Content-Disposition: inline`. |
+| Takeover by another registry | An upgrade from another source than the installed version's (another registry, the marketplace) is a change the admin confirms (`allowSourceChange`), recorded in the audit row (`sourceChange`). |
+| Escaping the sandbox | The marketplace carries sandboxed packages only: a listing with `runtime: in-process` is shown as not installable, and an install requires runtime `package` on the staged copy. A marketplace package never runs without a sandbox runner, whatever `plugins.sandbox` says ([The sandbox](#the-sandbox)); where none works it is not started, enabled or agreed to, and the card says so. |
+| Reading the server's secrets | A sandboxed server has its own PID namespace (bwrap) or profile (firejail, Seatbelt): it cannot read the server's `/proc/<ppid>/environ` (database URL, master key), its files or its home directory. Only a local package under `plugins.sandbox: off` runs without, said plainly on its consent. |
+| Typing into the operator's terminal | No controlling terminal: the server runs in its own session (`setsid`, bwrap `--new-session`), and Seatbelt allows nothing on `/dev/tty`; `TIOCSTI` reaches nothing. |
+| Text that steers the model | Nothing a package's server sends reaches a model: the system prompt lists a plugin by a host-written line (title, `(plugin <name>)`, tool count), tool descriptions are the manifest's consented ones (or name and effect), an undeclared tool is dropped, free text in input schemas is removed, its instructions, resources and prompts are not read, and a `tools/list_changed` cannot swap any of it ([What the model sees](#what-the-model-sees)). |
+| Laundering data to a lower level | What a package read is kept per package and user across calls: notes and tasks are refused after a read above level 1, documents are written at no lower level ([Host API](#host-api)). |
+| A token or a sibling site driving the admin routes | Every change to plugins needs `api:admin` (reads `api:read`); a cookie-signed change must come from this origin ([API](#api)). |
+| Download counts | `stats.json` is unsigned and display-only: read with the guard, capped and schema-checked, ignored on any error, never used for trust, install or default order. The host never reports its own installs. |
+
+What a marketplace signature means: these exact bytes passed the
+marketplace's CI and a maintainer's review. Not that the code is safe; the
+host's guarantees stay the sandbox, the declared network hosts, the approved
+host scopes, tool effects and the user's permission rules.
+
+### Marketplace keys
+
+```
+built-in ROOT keys (root, rootBackup)        src/plugins/packages/marketplace-keys.ts
+      │ sign only
+      ▼
+<origin>/keys.json + keys.json.sig           the signing keys, and revoked keys
+      │ endorse
+      ▼
+signing keys ──sign──▶ index.json.sig, and each package's octipus-plugin.sig
+```
+
+`keys.json`, beside its detached `keys.json.sig` (the canonical signature
+form, over `octipus-marketplace-keys/v1\n` and `sha256:<hex>` of the exact
+bytes, so it can never pass for a package or index signature):
+
+```json
+{
+  "schema": 1, "version": 3, "generatedAt": "2026-11-10T12:00:00Z", "expires": "2026-12-10T12:00:00Z",
+  "signingKeys": [{ "keyId": "ed25519:<64 hex>", "publicKey": "-----BEGIN PUBLIC KEY-----\n…", "notAfter": "2027-12-31" }],
+  "revokedKeys": [{ "keyId": "ed25519:<64 hex>", "reason": "leaked" }]
+}
+```
+
+The host fetches it from the marketplace origin (64 KiB at most), verifies it
+against the root keys that are not revoked, checks each listed key's id
+against its key, refuses a root listed as a signing key, refuses a file
+without `expires` (an ISO date-time with a zone) or with one more than **90
+days** after its `generatedAt`, refuses it once `expires` has passed, applies the
+root rule above, stores it with its signature (`plugin_marketplace_keys`) and
+the union of every signing key any accepted file listed (`endorsed_key_ids`),
+and stores its revocations (`plugin_revocations`) of keys in that union or
+roots; a revocation of any other key is ignored. Only listed, non-revoked,
+unexpired signing keys are trusted, for the marketplace only. A stored file
+past its `expires` still verifies installed packages (refusing it there would
+stop every marketplace package while the marketplace is unreachable); the
+staleness banner covers that case.
+
+Sign it with `octi plugin sign-keys keys.json --key <root.key> [--root-pub
+<other-root.pub>]` on an offline machine: it checks the file as a host reads
+it first (the schema, a whole `version`, no root among the signing keys, not
+expired) and signs nothing otherwise. `octi plugin verify-keys keys.json
+--root-pub root.pub --root-pub root-backup.pub --json` checks a signed one
+([Packing and publishing](#packing-and-publishing)).
+
+**What the marketplace repository publishes.** `keys.json` with the fields
+above, `expires` required and at most 90 days after `generatedAt`
+(recommended: 60 days, renewed well before); the index v2 with a required
+top-level `expires` at most 45 days after `generatedAt` (recommended: 30
+days) and a `generatedAt` no more
+than 7 days old (publish at least weekly, even when nothing changed, or hosts
+warn their admins); every `revoked` package entry listed again in each index
+(a revocation by a key revoked since counts again only when a trusted key
+lists it); each `keys.json` listing every revoked key (a key it never endorsed
+cannot be revoked by it).
+
+**Configuring a build.** Make the two root keys offline (`octi plugin keygen
+octipus-root`, `octi plugin keygen octipus-root-backup`), paste the two `.pub`
+files into `MARKETPLACE_ROOT_KEYS` and set `placeholder: false`. Never put a
+private key in the repository, CI or the web server.
+
+**Rotating a signing key.** Make a new signing key, publish a `keys.json`
+with a higher `version` that lists the new key and revokes the old one (sign
+it with a root key), re-sign the live versions with the new key as new
+versions (a published version's content is pinned), and sign the index with
+the new key. No Octipus host needs an update.
+
+### Configuration
+
+```json
+"plugins": {
+  "marketplace": true
+}
+```
+
+- `true` (default): the built-in marketplace, when the build has root keys.
+- `false`: off entirely (air-gapped installs, organisations with their own
+  registry): never fetched, never trusted.
+- `{ "enabled": true, "url": "https://…/index.json", "rootKeys": { "root": "<PEM>", "rootBackup": "<PEM>" } }`:
+  another index or other root keys, for testing or self-hosting. Root keys
+  given here count as configured. Each PEM must be an Ed25519 public key; the
+  config is refused at load otherwise. `keys.json` is read from the index's origin.
+
+### Index v2
+
+Read as the [octipus-plugins](https://github.com/PatriceA/octipus-plugins#index-v2)
+publish script writes it: `{ schema: 2, generatedAt, publisher, url,
+packages: [...], revoked: [...], expires? }`, each package with the v1 fields (`name`,
+`version`, `description`, `url`, `sha256`) and `contentHash`, `apiVersion`,
+`minOctipus`, `title`, `summary`, `category`, `tags`, `icon`, `screenshots`,
+`homepage`, `author: { name, url }`, `readme` and `changelog` (the newest
+entry of each plugin only), `publisher`, `license`, `publishedAt`, `keyId`
+(ignored), `permissions` (exactly `octi plugin permissions --json`) and
+`deprecated`. Its `permissions` carry `store: { quotaBytes } | null` right
+after `settings` ([Store](#store)); an entry without the key reads as `null`,
+and the host compares it with what it recomputes like the rest. `revoked` is a list of `{ name, version, reason }` (applied
+from the marketplace only) and `{ keyId, reason }` (ignored: key revocation
+lives in `keys.json`). v1 indexes keep working for other registries; the
+marketplace requires v2 and every tarball on its origin. An entry that does
+not fit is skipped; a malformed `revoked` refuses the whole index. An index
+whose `expires` (an ISO date-time with a zone) has passed is refused, for any
+registry. For the marketplace (a strict registry) `expires` is **required**
+and at most **45 days** after `generatedAt`; an index without it, or with a
+longer one, is refused as a whole. Another registry may leave it out.
+
+### Listing pins
+
+The first time a registry lists a `name@version` with a `contentHash`, the
+host pins that hash (`plugin_listing_pins`), with the key that signed the
+index (`signed_by`; null for an unsigned registry). A published version never
+changes content: a later index listing another hash for it has that entry
+refused, shown in the listing's `errors` as `<name> <version>: replaced:
+refused (pinned …, now listed as …)`, audited (`listing_replaced`) and
+notified once (`plugin_listing_replaced`); the rest of the index is listed and
+installable. A pin whose signer is revoked now (by `keys.json` for the
+marketplace, by `plugins.revokedKeys` for any registry) holds nothing: it is
+dropped and the version pinned again by the next index, so a leaked key that
+listed a future version first cannot lock out the real one. When a version was
+re-published on purpose, an admin resets its pin with `DELETE
+/api/plugin-packages/pins { registry, name, version, reason }` (audited,
+`listing_pin_reset`); the next index read pins it afresh.
+
+### Compatibility
+
+`apiVersion` and `minOctipus` are checked when listing (a version that
+cannot run here shows `compatibility: { ok: false, reason }` and is not
+`latest`) and again at install. A plugin API this host does not read is
+refused. A version that asks for a newer Octipus installs only with the
+admin's `allowIncompatible`.
+
+### Provenance
+
+A registry install records where it came from on the row (`origin`, shown in
+the package view) and in the `installed`/`upgraded` audit row:
+
+```json
+{ "source": "marketplace", "registry": "Octipus", "url": "https://plugins.octipus.cc/dl/…", "listingVersion": "1.2.0", "indexGeneratedAt": "…" }
+```
+
+`source` is `marketplace`, `registry:<name>`, `url`, `directory`, `bundled`
+or `agent`; null for a package installed before provenance was recorded. The
+marketplace's signing keys are trusted for a package only while its
+`origin.source` is `marketplace`. Moving a package to or from a registry
+source is a change of source (`allowSourceChange`); direct installs
+(directory, URL, bundled, agent, unknown) are one class.
+
+### Online revocation
+
+Package revocations come from a marketplace index verified by a currently
+endorsed signing key; key revocations come from `keys.json` (for keys it
+endorses or ever endorsed, and roots). Both are stored in `plugin_revocations`,
+with the key that signed what they came from (`signedByKey`), and only
+accumulate.
+
+**Scope.** They are about the marketplace's own packages: a revoked version
+or key is refused at install from the marketplace and at every start of a
+package installed from it (`origin.source === 'marketplace'`); enabling and
+approving a revoked version are refused; the row shows `revocation: { kind,
+keyId, reason, source, since }`. A package of the same name and version
+installed from a directory, a URL, the bundled plugins or another registry is
+not touched, and a key the admin trusts through `trustedPublishers` keeps
+counting there. `plugins.revokedKeys` is the admin's lever for those.
+
+**Signers.** A package revocation whose signer is revoked since (by
+`keys.json`, or `plugins.revokedKeys`) is flagged `signerRevoked` and not
+enforced; when an index signed by a trusted key lists it again, it is
+re-asserted under that key and enforced again. A key revocation is never
+flagged this way.
+
+**Effects.** Admins get one `plugin_revoked` notification per index (or
+keys file) that brings new revocations, with the count and the first ten.
+Every instance stops what a revocation covers: the one that stored it at
+once, the others on their next marketplace index read or cron tick (they keep
+the ids applied in memory and catch up on any revocation in force they have
+not applied). An in-process plugin already loaded is re-checked on every sync
+and unloaded when its start check refuses it now.
+
+An admin can lift one (an error on the marketplace's side, say):
+`GET /api/plugin-packages/revocations` lists them (with `scope:
+"marketplace"`, `enforced` and `signerRevoked`), and `DELETE
+/api/plugin-packages/revocations/:id { "reason": "…" }` clears one (audited,
+`revocation_cleared`; the row is kept). The revocation of a root key is never
+cleared (409). While the marketplace still lists the revocation, its next
+index revokes it again.
+
+### Updates
+
+A daily check (from the cron tick) reads the registries installed packages
+came from and finds a newer installable version from the **same** source.
+Admins get one `plugin_update` notification per new version, with the
+permissions diff between the installed version (recomputed from its
+installed files) and the new listing. Upgrades are never automatic: the
+Updates tab lists them with the diff (what widens highlighted), and Upgrade
+opens the install consent, where what is unchanged carries over.
+
+### Declarations
+
+`declarationItems(permissions, manifest?, host?)` (`src/shared/plugin-declarations.ts`)
+turns what a package declares into a stable, ordered list of `{ id, kind,
+label, detail, guidance? }`: `runtime`, `in-process`, `network:<host>`,
+`host:<scope>`, `tool:<name>`, `command:<name>`, `schedule:<id>`,
+`event:<on>`, `prompt`, `context`, `page:<path>`, `ui` (the page files),
+`secrets` ("Asks you for these secrets: …"), `settings`, `store` ("Keeps up
+to 5 MB of its own data per user"), `model:cli-tools` and `protection`, in
+that order. With `host` (what this host enforces), the
+`runtime` and `network:*` items say whether the sandbox holds here
+([The sandbox](#the-sandbox)). Each
+`detail` carries what the item is bound to (a schedule's cron, tool and
+input; the prompt file, its roles and sha256; a page's entry; the page tree's
+sha256), so an item that changed reads as changed. The package view and each
+marketplace card carry it as `declarations`; the install consent asks for
+each ([The install consent](#the-install-consent)).
+
+### Usage
+
+`GET /api/plugin-packages/:name/usage?days=30` (admins: every user) and
+`GET /api/plugin-packages/:name/usage/me?days=30` (the signed-in user's own)
+sum the plugin's `model:complete` cost rows (`plugin:<name>`) and the cost
+rows of its background runs, with the number of model calls and runs, and
+carry `store: { bytes, entries, quotaBytes, byUser? }`: what it keeps in the
+[store](#store) now, of every user with a row per user (admins; sizes only)
+or of the caller.
+
+### API
+
+| Route | Who | Answer |
+| --- | --- | --- |
+| `GET /api/plugin-packages/marketplace?q=&category=` | admins | `MarketplaceListing`: `{ state, message, generatedAt, plugins, categories, errors, stale }` |
+| `GET /api/plugin-packages/marketplace/asset?url=` | admins | the image bytes (PNG, JPEG, WebP, GIF), or `{ error }` with 400, 404, 413, 415 or 502 |
+| `POST /api/plugin-packages { registry, name, version?, upgrade?, allowSourceChange?, allowSignerChange?, allowDowngrade?, allowIncompatible? }` | admins | `{ name, version, enabled, contentHash, signedBy, warnings, guidance, origin, manifest }` |
+| `POST /api/plugin-packages/preview { registry, name, version? \| url, sha256? \| path \| bundled }` | admins | `PluginInstallPreview` ([The install consent](#the-install-consent)) |
+| `POST /api/plugin-packages/install { previewId, contentHash, accepted, enable? }` | the admin who made the preview | `PluginConsentResult`: `{ name, version, contentHash, enabled, enableProblem, warnings }` |
+| `GET /api/plugin-packages/:name/consent`, `POST …/consent { contentHash, accepted, enable? }` | admins | `PluginConsentView`; `PluginConsentResult` |
+| `GET /api/plugin-packages/:name/runs?status=running` | admins | `[{ id, userId, startedAt, role, title }]` |
+| `GET /api/plugin-packages/my-usage?days=30` | any user | `[{ name, title, usage, runs, store }]`: the caller's own use of each enabled package, their running runs, and what each installed package keeps for them in its store (`{ bytes, entries, quotaBytes }`, or null) |
+| `DELETE /api/plugin-packages/:name/store/me` | any user | `{ name, entries, bytes }`: deletes everything the package keeps for the caller ([Store](#store)) |
+| `GET /api/plugin-packages/updates` | admins | `[{ name, installed, latest, registry, diff, warnings }]` |
+| `GET /api/plugin-packages/revocations`, `DELETE …/revocations/:id` | admins | the revocations, each with `scope`, `enforced` and `signerRevoked`; clearing one (409 for a root key) |
+| `DELETE /api/plugin-packages/pins { registry, name, version, reason }` | admins | `{ reset, registry, name, version, contentHash, note }`; 404 when there is no such pin |
+| `GET /api/plugin-packages/:name/usage`, `…/usage/me` | admins; any user | `PluginUsageView` |
+| `DELETE /api/plugin-packages/:name/runs/:id` | the run's user, or an admin | `{ id, status: "cancelled" }` |
+| `GET /api/plugin-packages/sandbox` | admins | `PluginSandboxStatus`: `{ setting, runner, unavailable, platform, summary }` ([The sandbox](#the-sandbox)) |
+| `DELETE /api/plugin-host/agent/runs/:id` | the same package, for the same user | `{ id, status: "cancelled" }` |
+
+**Scopes and cross-site requests.** An API token reaches these routes only
+with a scope that covers the request (`src/api/plugin-route-guard.ts`): every
+change (install, preview, consent, enable, approvals, secrets, settings,
+uninstall, clearing a revocation, resetting a pin, an admin cancelling
+another user's run) needs `api:admin`, every admin read `api:read`; a user's
+own usage `api:read`, cancelling their own run or deleting their own store
+data `api:write`, a page's tool call `api:read` or `api:write` by the tool's
+effect, a page's store `api:read` to read and `api:write` to write. An unscoped token and a
+browser session have every scope. A change signed by the session cookie
+(`SameSite=Strict`) must also come from this origin: its `Origin` is this
+host or a configured CORS origin (the desktop app's included), its
+`Sec-Fetch-Site` `same-origin` or `none`; a sibling subdomain is refused
+(`403`). Bearer-signed requests carry no ambient credential and are not checked.
+
+The shapes are `MarketplaceListing`, `MarketplacePluginView`,
+`PluginUpdateView` and `PluginUsageView` in `src/shared/plugin-package.ts`,
+and `PluginInstallPreview`, `PluginConsentView`, `PluginConsentItem` and
+`PluginConsentResult` in `src/shared/plugin-declarations.ts`.
+
+**The Marketplace page** (Admin → Plugins → Marketplace) searches as you type
+over title, summary, tags and author, folding case and accents (and reads
+`?q=`), filters by category and sorts by relevance, name, newest or (when
+the marketplace reports them) downloads. Each card names the registry it
+comes from ("Octipus marketplace" or the registry's name; never the
+free-text `publisher`). The detail renders README and CHANGELOG with no raw
+HTML, links only when https (new tab, `noopener noreferrer`) and images only
+when they are the listing's own icon or screenshots, through the proxy URLs
+the host returned. **Users** see their own use of each plugin, cancel
+their own background runs, and see and delete what each plugin keeps for them
+(**Delete my data**), in Settings → My plugin usage.
+
+## Packing and publishing
+
+A marketplace (or any publisher) builds, checks and signs packages with the
+same code an install runs, offline: none of these needs a running server.
+
+| Command | What it does |
+| --- | --- |
+| `octi plugin validate <dir> [--json]` | Checks a package the way an install would (the checks of `plugin_validate`): the manifest against the contract, the tree, the files `server` starts from, the contributions; `runtime: "in-process"` is refused. A legacy plugin (`plugin.json`) is checked with the plugin SDK's kit. `--json`: `{"ok","problems":[],"warnings":[]}`; exit 1 when not ok. |
+| `octi plugin hash <dir> [--json]` | The content hash ([Content pinning](#content-pinning)), with the hash install uses, `marketplace.json` left out. Refuses what install refuses: links, special files, more than 200 MB or 20,000 files. `--json`: `{"name","version","contentHash"}`. |
+| `octi plugin pack <dir> --out <file.tar.gz> [--json]` | A reproducible tarball (below). `--json`: `{"file","sha256","contentHash","name","version"}`, `sha256` the hex sha256 of the tarball bytes (what an index lists), `contentHash` the package's. `--out` may not be inside the package. |
+| `octi plugin permissions <dir> [--json]` | What the package asks for, from its parsed manifest alone (below). |
+| `octi plugin sign <dir> --key <file> [--passphrase-file <path\|->] [--json]` | Signs the content hash ([Signed packages](#signed-packages)). `--json`: `{"file","contentHash","keyId"}`. |
+| `octi plugin verify <dir> --pub <file.pub> [--json]` | Checks `octipus-plugin.sig` against the key and the current content hash. Exit 0 when valid, 1 otherwise. `--json`: `{"valid","keyId","contentHash","error"?}` (`keyId`: the key the signature names; `error` only when not valid). Several `--pub` pass when any one verifies. |
+| `octi plugin sign-index <index.json> --key <file> [--passphrase-file <path\|->] [--json]` | Signs a registry index's exact bytes ([Signed registry indexes](#signed-registry-indexes)). `--json`: `{"sigFile","sha256","keyId"}`. |
+| `octi plugin verify-index <index.json> --pub <file.pub>... [--json]` | Checks `<index.json>.sig` over the exact bytes, as `sign-index` signs them. Passes when any one `--pub` verifies, and names it. `--json`: `{"valid","keyId","pub","sha256","error"?}` (`pub`: the path of the key that verified, else null; `sha256`: `sha256:<hex>` of the index bytes). |
+| `octi plugin keygen <prefix> [--passphrase-file <path\|->] [--json]` | A key pair; `--json`: `{"key","pub","keyId","encrypted"}`. Without `--passphrase-file` the private key is written unencrypted, with a loud warning on stderr (a root key must always be encrypted and kept offline). |
+| `octi plugin sign-keys <keys.json> --key <root.key> [--root-pub <file>...] [--passphrase-file <path\|->] [--json]` | Signs the marketplace's keys file with a root key ([Marketplace keys](#marketplace-keys)), after checking it as a host reads it: the schema, no root (the signer, any `--root-pub`) among the signing keys, not expired. `--json`: `{"sigFile","sha256","keyId"}`. |
+| `octi plugin verify-keys <keys.json> --root-pub <file>... [--json]` | Checks `<keys.json>.sig` by a root (the first `--root-pub` is `root`, the second `rootBackup`), the schema, the root revocation rule and `expires`. `--json`: `{"valid","keyId","version","endorsed":[keyId],"revoked":[keyId],"error"?}` (`keyId`: the root that signed). It cannot know which keys earlier files endorsed: a host ignores a revocation of a key no accepted file ever endorsed. |
+| `octi plugin unpack <tarball> --out <dir> [--json]` | Unpacks with the strict tar reader install uses (no links, no path out of the target, no duplicate path, the size and file limits) into a new or empty `<dir>`. `--json`: `{"out","root","sha256","name","version"}` (`root`: the package directory inside `<dir>`; `sha256`: `sha256:<hex>` of the tarball). |
+
+Every one exits non-zero on an error (2 for a usage error). With `--json`,
+stdout carries exactly one JSON document (one line) and every diagnostic goes
+to stderr; a command that fails before it has a result (a manifest install
+would refuse, say) prints nothing on stdout. From another directory, call
+`<octipus>/bin/octi plugin …`, or `npx --prefix <octipus> tsx --tsconfig
+<octipus>/tsconfig.json <octipus>/scripts/plugin.ts …` (the tsconfig resolves
+the `@/` imports); relative paths are taken from where you run it.
+
+**The tarball.** `pack` writes the same bytes for the same files, on Linux and
+macOS, whenever it runs:
+
+- every file of the package, `octipus-plugin.sig` included when present;
+  `marketplace.json` (in the root) is never packed;
+- one top-level directory `<name>-<version>/`, then the entries sorted by
+  relative path (code-unit order; a directory before what it holds; empty
+  directories kept);
+- POSIX ustar headers, with a pax `path` record only for a path that fits
+  neither ustar's name nor its prefix field; mtime 0, uid and gid 0, empty
+  uname and gname; mode `0644` for a file, `0755` for one with an execute bit
+  and for a directory;
+- gzip with mtime 0, no file name and OS byte 255, around a raw deflate at
+  level 9. The deflate stream is Node's bundled zlib, the same on every
+  platform for a given Node version; pin Node (24) where tarballs are built
+  and compared.
+
+Timestamps, owners, umask, permissions other than the execute bit, and the
+order the file system lists entries in do not count. File names are taken
+byte for byte: a name stored in another Unicode normalisation (an HFS+ volume
+writes NFD) is another name, so build from a git checkout. The tarball
+unpacks through the remote-install reader ([Remote install](#remote-install))
+to a directory whose content hash is the one `hash` prints, and a signature
+packed with it verifies there.
+
+**The permissions summary.** `permissions --json` prints what the package
+asks for, from the manifest as install parses it plus two hashes read from
+the package directory (`packagePermissions` in
+`src/plugins/packages/permissions.ts`, so a host recomputes it from a
+downloaded package and compares it with what an index claims):
+
+```json
+{
+  "name": "weekly", "version": "1.2.0", "apiVersion": "1.0.0", "runtime": "package",
+  "host": ["model:complete", "tasks:read"],
+  "network": [],
+  "secrets": ["API_TOKEN"],
+  "settings": ["account", "region"],
+  "store": { "quotaBytes": 5242880 },
+  "tools": [{ "name": "review", "effect": "read" }, { "name": "sync", "effect": "write" }],
+  "effects": { "read": 1, "write": 1, "external": 0 },
+  "contributions": {
+    "commands": [{ "name": "review", "tool": "review" }, { "name": "full", "tool": "sync", "input": { "full": true } }],
+    "schedules": [{ "id": "nightly", "cron": "15 2 * * *", "tool": "sync", "input": { "full": false } }],
+    "events": [{ "on": "chat.response", "tool": "review" }],
+    "prompt": { "file": "agent-notes.md", "sha256": "<64 hex>", "roles": ["general"] },
+    "context": { "tool": "review" }
+  },
+  "pages": [{ "path": "board", "title": "Weekly board", "entry": "index.html" }],
+  "ui": { "dir": "ui", "sha256": "<64 hex>" },
+  "trustedInput": false, "maxProtection": 1
+}
+```
+
+- `host`, `network`, `secrets` and `settings` are sorted (code-unit order),
+  `tools` by name; `effects` always has all three keys. `secrets` and
+  `settings` are the **names** (keys) only, never labels or values, `[]` when
+  there are none; an index lists at most 100 of each, of at most 100
+  characters (a listing without them reads as `[]`, and the host's
+  recomputation then refuses one that understates).
+- `store`: the per-user [store](#store) and its quota per user in bytes (the
+  default 5,242,880 filled in when the manifest says `{}`), or `null` when it
+  keeps none. An index lists it the same way (a listing without it reads as
+  `null`).
+- `contributions`: what each part is bound to. `commands` (name and tool,
+  sorted by name), `schedules` (id, cron, tool and `input` when the manifest
+  gives one, sorted by id), `events` (sorted by `on`, then tool), `prompt`
+  (the file, the **hex sha256 of its bytes**, and `roles` when the manifest
+  names any, sorted) and `context` (the tool, and `roles`), each `null` when
+  absent. A command carries `input` only when the manifest gives it one. A
+  part left out of the manifest is an empty list or `null`.
+- `pages`: every page's path, title and entry file, sorted by path; `ui`: the
+  page directory and the **hex sha256 of its tree**, `null` without pages.
+  The tree hash is sha256 over `octipus-plugin-ui/v1` and one line per file,
+  `file <hex sha256 of its bytes> "<path relative to the ui directory>"`,
+  sorted by path (code-unit order), each line ending in a newline
+  (`uiTreeHash` in `src/plugins/packages/integrity.ts`).
+- `maxProtection` is the manifest's, or the default a host derives when it
+  declares none (1 for a package that reaches the network, may fetch any URL
+  or runs an agent; else 4). A package with **pages** is 1 whatever it
+  declares: a page can send what it shows to any website ([Pages](#pages)).
+
+The same package always gives the same JSON. An index lists exactly this;
+the host recomputes it from the staged copy at install and refuses any
+difference (a deep equality of the whole object). From a manifest alone
+(`computePermissions` without a directory) the two hashes read `null`.
+
+**What counts as a change.** The update diff (`diffPermissions`) and the
+install consent compare these summaries, with the same rules as the
+marketplace repository's PR summary:
+
+- **Tools.** Every effect change is listed. Up (read → write → external)
+  widens. Down to `read` (write → read, external → read) widens too, and is
+  named so ("no longer asked before each call; may run unattended"): a read
+  tool is not asked about per call and may run from schedules, events and
+  context. external → write narrows.
+- **Secrets and settings.** A new secret widens; a secret removed, and a
+  setting added or removed, is a change that does not.
+- **Store.** A new store, or a larger quota, widens ("store (5 MB per user)",
+  "store quota 5 MB → 10 MB per user"); a smaller quota narrows, and removing
+  the store does not widen.
+- **Contributions and pages.** Any difference in a command's tool or input,
+  a schedule's tool, cron or input, an event's tool, the prompt's file, text
+  (its sha256) or roles, the context tool or roles, a page's title or entry,
+  or the page files is a change. It widens when it adds a contribution or
+  page, points one at another tool, moves a cron, changes the prompt text,
+  the context tool, a page or the page files, or reaches roles it did not.
+  An input change does not widen.
+- Host scopes and network hosts added, `runtime` to in-process,
+  `trustedInput` set and a higher `maxProtection` widen.
 
 ## Network
 
@@ -458,23 +1390,20 @@ What that holds depends on the platform:
 
 | Where | A package with hosts | A package without hosts | Status `network.state` |
 |---|---|---|---|
-| Linux, sandbox `auto`/`required`, bwrap or firejail found | Enforced: the server has its own network namespace with only loopback. The proxy's Unix socket is mounted in, and a small launcher (run with Octipus's own Node binary) bridges the namespace's `127.0.0.1` to it, so the proxy is the only way out. | Offline: no network at all. | `restricted` / `offline` |
-| macOS, sandbox `auto`/`required`, `/usr/bin/sandbox-exec` present | Enforced: the server runs under a generated Seatbelt profile that denies all network except outbound TCP to the proxy's own port on `localhost`, and the proxy variables point at that port. Anything else — another host, another local port, a Unix socket, DNS — is refused by the kernel. | Offline: the profile allows no network at all. | `restricted` / `offline` |
-| Linux or macOS with the sandbox `off` (the default), or no runner found | **Not enforced.** The proxy variables point well-behaved HTTP clients at the proxy, but a direct connection still works. | Not enforced: nothing blocks the network. | `not_enforced` |
-| Windows | **Not enforced**, as above: Windows has no built-in runner comparable to bwrap or Seatbelt (AppContainer and job-object network limits need a native helper Octipus does not ship). | Not enforced. | `not_enforced` |
+| Linux, a working bwrap or firejail | Enforced: the server has its own network namespace with only loopback. The proxy's Unix socket is mounted in, and a small launcher (run with Octipus's own Node binary) bridges the namespace's `127.0.0.1` to it, so the proxy is the only way out. | Offline: no network at all. | `restricted` / `offline` |
+| macOS, `/usr/bin/sandbox-exec` present | Enforced: the server runs under a generated Seatbelt profile that denies all network except outbound TCP to the proxy's own port on `localhost`, and the proxy variables point at that port. Anything else — another host, another local port, a Unix socket, DNS — is refused by the kernel. | Offline: the profile allows no network at all. | `restricted` / `offline` |
+| No working runner, `plugins.sandbox: required` (default), or any marketplace package | Not started. | Not started. | `refused` |
+| A local package under `plugins.sandbox: off` (the only way on Windows) | **Not enforced.** The proxy variables point well-behaved HTTP clients at the proxy, but a direct connection still works. | Not enforced: nothing blocks the network. | `not_enforced` |
 
 `GET /api/plugin-packages` reports this per package as `network`
 (`{ state, detail }`), so an operator sees "Network not enforced on this
-platform" where the hosts are only advice. A client that ignores proxy
-variables (some SDKs, raw sockets) fails under the sandbox and goes direct
-without it — run packages with `security.shellSandbox` on where that matters.
+host" where the hosts are only advice. A client that ignores proxy variables
+(some SDKs, raw sockets) fails under the sandbox ([The sandbox](#the-sandbox)).
 
-Under `security.shellSandbox: required`, a package that declares hosts where
-no runner can enforce them (Windows; Linux or macOS with no runner found) is
-**not started**: its server fails to connect with "the network of plugin
-package … cannot be enforced on this platform". Under `auto` it starts with
-the advisory proxy, as in the table. The status reads `refused` then, for a
-package with or without hosts.
+A wildcard host over fewer than three labels (`*.github.io`, `*.co.uk`,
+`*.example.com`) gets a guidance warning on its declaration: where anyone can
+register a name under it, the package can reach sites nobody vetted. There is
+no public suffix list here, so the rule is the label count.
 
 Host names are resolved by Octipus, not the package, once per request. If any
 address a declared host resolves to is loopback, private (RFC 1918),
@@ -521,8 +1450,9 @@ both runners for real; CI runs it on Ubuntu.
 
 On macOS the sandbox is `/usr/bin/sandbox-exec` with a Seatbelt (SBPL)
 profile written for each start (`buildSeatbeltProfile` in
-`src/security/shell-sandbox.ts`). Package servers use it under both `auto`
-and `required`. The shell tool uses it only under `required` (where it would
+`src/security/shell-sandbox.ts`). Package servers always use it
+(`plugins.sandbox`, [The sandbox](#the-sandbox)); it never allows anything on
+`/dev/tty`. The shell tool uses it only under `required` (where it would
 otherwise refuse to run); under `auto`, shell commands on macOS keep running
 unwrapped as before. The profile starts from `(deny default)` and allows back
 only:
@@ -563,46 +1493,1079 @@ macOS release and is used by the system and by other developer tools. If a
 future release removes it, detection finds nothing: `auto` then runs
 unwrapped (`not_enforced`) and `required` refuses to start the server.
 
+## Pages
+
+A package can add pages to the web app: static HTML of its own, shown in a
+sandboxed frame, that talks to the host only through a `postMessage` bridge
+calling the package's **own tools** as the signed-in user.
+
+**Pages are egress.** A page can navigate its frame to any website with what
+it was shown in the URL, which nothing declares or enforces. So a package
+with pages sees data up to protection level **1**, whatever its
+`maxProtection` says (the summary, the CLI and an index carry the clamped
+value), and its page declarations say *"A page can send what it shows to any
+website"*; beside a `*:read` scope it gets the egress warning.
+
+```json
+"ui": {
+  "dir": "ui",
+  "pages": [{ "path": "dashboard", "title": "Bank dashboard", "icon": "layout-dashboard", "entry": "index.html" }]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `dir` | The directory whose files are served, relative to the package root; default `ui`. Its scripts, styles, images and fonts sit alongside the entry. |
+| `pages[].path` | The page's route under `/plugins/<name>/`: lower-case `a-z0-9-` segments, up to four. |
+| `pages[].title` | Sidebar label and page title. |
+| `pages[].icon` | A lucide icon name (`layout-dashboard`, `list-todo`, `database`, …); an unknown one shows a puzzle piece. |
+| `pages[].entry` | The `.html` file, relative to `dir`. |
+
+Every path is a plain relative path — no `..`, no absolute path, no hidden
+segment, no backslash — or the manifest is refused at install. At most 20 pages.
+
+**What the host serves.** `GET /api/plugin-ui/<name>/<file>` serves a file of
+the package's UI directory, and only:
+
+- while the package is **enabled** and its files still hash to the approved
+  content hash ([Content pinning](#content-pinning); re-hashed at most once a
+  minute, and refused at once while the server reports a mismatch);
+- from inside `dir`: the real path of the file must be the same path under
+  the real UI directory, so no symbolic link (refused at install anyway) leads
+  anywhere else;
+- with a known static type (`.html`, `.css`, `.js`, `.mjs`, `.json`, `.map`,
+  `.txt`, `.svg`, `.png`, `.jpg`, `.gif`, `.webp`, `.ico`, `.woff`, `.woff2`;
+  anything else is a 404), `X-Content-Type-Options: nosniff`, at most 5 MB;
+- only where it belongs, by `Sec-Fetch-Dest`: the HTML entry only into a frame
+  (`iframe`; opened as a top-level `document`, an `object` or anything else it
+  is a 404), scripts as `script`, styles as `style`, images as `image`, fonts as
+  `font`. Browsers send `Sec-Fetch-*` only to https and localhost: there a
+  request without it is refused; on plain http to another address (a LAN
+  install), where no browser sends it, its absence is accepted and the CSP
+  below still sandboxes the document;
+- under this CSP, `<base>` being the configured public URL (`oauth.publicUrl` /
+  `PUBLIC_URL`) plus `/api/plugin-ui/<name>/` — or, without one, the address
+  the request came in on (`X-Forwarded-Host` / `-Proto` only from a proxy in
+  `security.trustedProxies`). With a public URL set, pages work only when the
+  app is opened at that URL:
+
+  ```
+  default-src 'none'; script-src <base>; style-src <base>; img-src <base> data:;
+  font-src <base>; media-src <base>; connect-src 'none'; frame-src 'none';
+  worker-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none';
+  frame-ancestors 'self'; sandbox allow-scripts
+  ```
+
+  No inline script, no `eval`, no `fetch` or WebSocket, no form, no frame, and
+  `sandbox allow-scripts` without `allow-same-origin`: the document has an
+  opaque origin even when opened directly, so it cannot read the app's
+  cookies, storage or DOM. Only the app itself may frame it.
+
+The files are static and the same for everyone, so they are served without a
+sign-in (a sandboxed frame's requests carry no cookie). **Put no data or
+secret in them**: whatever a page shows comes through the bridge.
+
+**In the web app.** Each enabled package's pages are listed by `GET
+/api/plugin-ui` (signed in) and appear in the sidebar under *Plugins*; disabling
+the package removes them. `/plugins/<name>/<path>` shows the page in an
+`<iframe sandbox="allow-scripts">`.
+
+**The bridge** is a `MessagePort`, never a broadcast. The app loads the frame
+at the entry's URL (built only from the server's page listing, each path
+segment checked and encoded) with a fragment:
+
+```
+/api/plugin-ui/<name>/<entry>#octipus=<nonce>&parent=<the app's origin, URL-encoded>
+```
+
+A fragment never goes over the network, and a document the frame navigates to
+does not get it. The page opens a `MessageChannel` and hands one end to its
+parent, to that exact origin (never `'*'`); from then on it talks only over its
+own end:
+
+```js
+const params = new URLSearchParams(location.hash.slice(1));
+const channel = new MessageChannel();
+const waiting = new Map();   // id (a number) → resolve
+channel.port1.onmessage = (e) => {
+  // { octipus: 'result', id: 1, ok: true, result }          — the MCP tool result
+  // { octipus: 'result', id: 1, ok: false, error, code }    — refused or failed
+  const resolve = typeof e.data?.id === 'number' ? waiting.get(e.data.id) : undefined;
+  if (resolve) { waiting.delete(e.data.id); resolve(e.data); }
+};
+parent.postMessage({ octipus: 'ready', nonce: params.get('octipus') }, params.get('parent'), [channel.port2]);
+// a call:
+waiting.set(1, (reply) => { /* … */ });
+channel.port1.postMessage({ octipus: 'call', id: 1, tool: 'list_accounts', args: {} });
+```
+
+The app takes the **first** `ready` that comes from its own frame (its window,
+with the opaque origin `"null"`), carries the nonce it chose and transfers
+exactly one port, and ignores every later `ready`. It never posts to the
+frame's window: everything goes over that port, the capability the page holds.
+Calls must have exactly this shape (`id` a short string or a number, `tool` a
+tool name, `args` a plain object under 100 kB; any other key refuses it); at
+most 4 are in flight and 10 a second. It then calls
+
+```
+POST /api/plugins/<name>/call/<tool>   { "args": {...}, "confirm"?: true }
+```
+
+as the signed-in user, always with the page's own package name: a page cannot
+address another package's tools. The server refuses a tool the manifest does
+not declare (`404 unknown_tool`), a package that is disabled or has no pages
+(`404`), and more than 20 calls in a burst per user and package (`429`). The
+call takes **the same path as an agent's**: the tool's declared effect, the
+user's permission rules, the protection level, the audit
+(`resource_type = tool`).
+
+**The store over the bridge.** The same port carries the page's store
+([Store](#store)), for state kept between visits, as the signed-in user and
+for their own entries only:
+
+```js
+// { octipus: 'store', id, op: 'store.get', key }                    → result { value, version } (code not_found when missing)
+// { octipus: 'store', id, op: 'store.set', key, value, ifVersion? } → result { version }  (code version_conflict, with current)
+// { octipus: 'store', id, op: 'store.delete', key }                 → result { deleted: true }
+// { octipus: 'store', id, op: 'store.list', prefix?, limit? }       → result { keys, truncated }
+let next = 100;
+function store(op, fields) {
+  const id = next++;
+  return new Promise((resolve) => {
+    waiting.set(id, resolve);
+    channel.port1.postMessage({ octipus: 'store', id, op, ...fields });
+  });
+}
+const saved = await store('store.get', { key: 'page/filters' });
+const filters = saved.ok ? saved.result.value : { range: '30d' };
+// …the user changes a filter; save it unless another tab saved first:
+await store('store.set', { key: 'page/filters', value: filters, ifVersion: saved.ok ? saved.result.version : 0 });
+```
+
+A store message has exactly the fields of its op (any other key refuses it),
+a key as the host API takes it, a value of at most 64 KB as JSON. It counts
+against the same 4 in flight and 10 a second as calls. The app answers it
+through `/api/plugins/<name>/store/…` ([Store](#store)), with no confirmation:
+a page's store holds only what its own user gave it. Its package must have
+`store:read` (get, list) or `store:write` (set, delete) approved.
+
+**Write and external effects.** A request has no approval channel, so a call the
+rules would ask about (`write` by default, `external` always) is refused with
+`409 approval_required` and the tool's effect. The web app then shows the user
+its own dialog — outside the page's frame, naming the package, the tool, its
+effect and the arguments — and only on *Allow once* repeats the call with
+`confirm: true`, which counts as the approval of that one call (audited as
+`resource_type = plugin_page`, op `call_confirmed`). *Refuse* answers the page
+`denied_by_user`. A DENY rule is never overridden. The page itself cannot set
+`confirm`: it only names a tool and its arguments.
+
+**Navigation.** A page can navigate its own frame (a link, `location =`, a
+meta refresh). The port lives in the page's document, so a navigation destroys
+it: nothing sent afterwards reaches anyone, and a document navigated to has no
+fragment, so no nonce and no port (even if it navigated while still parsing,
+before any `load` was seen). The app also counts the frame's `load` events: on
+any after the first, it closes the port for good, empties the frame
+(`about:blank`) and tells the user the page navigated away.
+
+**Treat a page as able to leak.** What a page is shown, it can put into the
+URL of a navigation, which leaves before the app sees the next load (the CSP
+blocks every other way out: fetch, forms, images and scripts elsewhere). A package's tools
+already see what they return, so this is a leak to the package's author, not
+a widening of what the package can read. That is why a package with `ui` and
+no declared `maxProtection` counts as leaving the house (1), like one with
+`network` hosts; declare a higher `maxProtection` only for a publisher you
+trust with that data. (Serving pages from a separate origin is not
+implemented: the sandbox already gives them an opaque origin.)
+
+## Dashboards
+
+A package can add dashboards: overviews of the outside data it reaches
+(an API, a database, a service), drawn by Octipus itself with its own
+components, so Octipus stays the one place to see what you need day to
+day without building a separate app. **No code of the package runs in the
+browser**: a dashboard is a declaration, and each widget shows what one of
+the package's `read` tools returns.
+
+```json
+"network": ["api.billing.example.com"],
+"dashboards": [{
+  "id": "billing", "title": "Billing", "icon": "layout-dashboard",
+  "widgets": [
+    { "id": "open", "type": "stat", "title": "Open invoices", "tool": "totals", "input": { "status": "open" } },
+    { "id": "late", "type": "table", "title": "Overdue", "tool": "invoices", "input": { "overdue": true }, "width": 2, "refreshSeconds": 300 },
+    { "id": "trend", "type": "chart", "title": "Paid per month", "tool": "paid_by_month" }
+  ]
+}]
+```
+
+- **Widgets:** `stat`, `list`, `table`, `chart` (bar, line, area, pie) and
+  `text`; `width` 1-3 columns of a three-column grid; `refreshSeconds`
+  (60-86400) refreshes it while it is shown, otherwise on open and on demand.
+  At most 10 dashboards of 24 widgets each.
+- **Data:** the widget's tool is called **as the user who opens the
+  dashboard**, with the `input` the manifest fixes: nothing from the browser
+  reaches the tool. It must be one of the package's own declared `read`
+  tools (a dashboard reads whenever it is shown); the call gets a host token
+  for **`store:read` only** (if the package holds it), never its other
+  scopes: a dashboard shows the package's own data, not the user's Octipus
+  data. It answers JSON, as structured content or the text of a text
+  block, in its widget's shape:
+
+  | Type | Shape |
+  |---|---|
+  | `stat` | `{ value, label?, unit?, delta?, tone?, caption? }` |
+  | `list` | `{ items: [{ title, subtitle?, value?, tone?, link? }] }` (at most 100) |
+  | `table` | `{ columns: [{ key, label, align? }], rows: [{ values, tone?, link? }] }` (20 columns, 500 rows) |
+  | `chart` | `{ kind: "bar"\|"line"\|"area"\|"pie", x, series: [{ key, label }], points: [{ … }] }` (8 series, 500 points) |
+  | `text` | `{ text }` (20,000 characters) |
+
+  Each may add `updatedAt` (an ISO time); `tone` is `good`, `warn`, `bad` or
+  `neutral`. The answer is checked against the widget's type (src/plugins/packages/dashboard-data.ts),
+  at most 256 KB of JSON; anything else is shown as the widget's error.
+- **Text is text.** Octipus draws every string as text: no HTML, no
+  Markdown, no images.
+- **Links** (`{ url, label? }` on a list item or a table row) are https only,
+  to a host the package declares in `network`, so they add no destination
+  its sandbox cannot already reach; a package without network gets no
+  links, or a click could carry what it read away. Never to a private
+  address: an IP literal, a local name (`localhost`, `*.local`,
+  `*.internal`, a single label) or a name resolving to a private, loopback
+  or metadata address is refused, as the egress proxy refuses it to the
+  sandbox (a click comes from the user's browser, inside their network).
+- **Slow APIs:** answer the widget from a cache rather than the API on every
+  view, e.g. in the package's data directory (`OCTIPUS_PLUGIN_DATA_DIR`, for
+  outside data that is the same for every user), refreshed by a
+  [schedule](#schedules) or when stale.
+
+Each dashboard is an item of the install consent: *Adds the dashboard
+"Billing"*, listing every widget's tool and input. A new dashboard, or a
+widget fed by another tool or input, is a widening an upgrade asks about
+again. The dashboards of the enabled packages show in the sidebar's Plugins
+group (`GET /api/plugin-ui` lists them); `GET
+/api/plugins/<name>/dashboards/<id>` gives a dashboard's layout (never its
+tools or input) and `POST
+/api/plugins/<name>/dashboards/<id>/widgets/<widget>` a widget's data, for
+signed-in users of this site, at most 48 requests in a burst per user and
+package, one a second after that. A user whose rules ask before the
+widget's tool runs sees the widget refused (`409`): a dashboard cannot ask.
+
+Dashboards show the package's own outside data; they do not combine it
+with the user's Octipus data (mail, calendar, notes): a widget's call holds
+no scope that reads it.
+
+## Host API
+
+A package can act in Octipus for the user who called it — read their notes,
+create a task — through a narrow host API, limited to the scopes it declares
+and an admin approved:
+
+```json
+"host": ["notes:read", "tasks:write", "notify"]
+```
+
+| Scope | Endpoint | What |
+|---|---|---|
+| — | `GET /api/plugin-host/whoami` | The token's package, tool, scopes, workspace kind and expiry. |
+| `notes:read` | `GET /api/plugin-host/notes?limit=&tag=` | The user's notes in the call's workspace (at most 100), bodies included. Notes carry no protection level (unlike documents and tasks), so none is filtered out: approve `notes:read` only for a package you would show every note to. |
+| `notes:write` | `POST /api/plugin-host/notes { title, body?, tags? }` | Creates a note; never overwrites (`409 exists` for a taken title). Refused (`403 read_level`) once the package has read content above level 1 for this user (below). |
+| `tasks:read` | `GET /api/plugin-host/tasks?status=` | The user's own tasks (at most 200). A task carries the protection level and flow label of the conversation it came from (its provenance): one above the package's `maxProtection` is left out (`withheld` counts them), and the rest raise the calling session's level and label, as the tasks tool does. |
+| `tasks:write` | `POST /api/plugin-host/tasks { title, notes?, priority?, dueAt?, category?, link?: { url, label? } }` | Creates a task for the user (audited as a task mutation by `plugin:<name>`), filed under `category` and linked back to `link.url` (an http(s) URL). Refused (`403 read_level`) once the package has read content above level 1 for this user (below). |
+| `documents:read` | `GET /api/plugin-host/documents/:id` | One document: metadata and extracted text. |
+| `documents:write` | `POST /api/plugin-host/documents { name, content, mimeType?, category?, summary?, protectionLevel? }`; `PUT /api/plugin-host/documents/:id { content, name?, summary? }` | Creates a text document (Markdown or plain text) for the user; replaces the content of one this package created. See below. |
+| `notify` | `POST /api/plugin-host/notify { title, body? }` | A notification to the calling user, and to nobody else. |
+| `web:read` | `POST /api/plugin-host/web/read { url }` | One public web page, fetched by the host and turned into a clean article: `{ url, title, byline?, siteName?, publishedAt?, contentHtml, textContent, wordCount, estReadMinutes, truncated }`. |
+| `model:complete` | `POST /api/plugin-host/model/complete { system?, prompt, maxTokens?, temperature? }` | One text completion on the calling user's `everyday` model: `{ output, model }`. |
+| `agent:run` | `POST /api/plugin-host/agent/runs { prompt, role?, title? }`; `GET /api/plugin-host/agent/runs/:id`; `DELETE /api/plugin-host/agent/runs/:id` | Starts a background agent run as the user and answers its id at once; a later call reads its status and final text; `DELETE` cancels it (its own runs for the same user only; any of its tools may). See below. |
+| `store:read` | `GET /api/plugin-host/store/<key>`; `GET /api/plugin-host/store?prefix=&limit=` | One entry of the package's store for the calling user, or their keys. See [Store](#store). |
+| `store:write` | `PUT /api/plugin-host/store/<key> { value, ifVersion? }`; `DELETE /api/plugin-host/store/<key>` | Writes or deletes one entry for the calling user only. See [Store](#store). |
+| `mail:read` | `GET /api/plugin-host/mail/accounts`; `GET /api/plugin-host/mail/messages?source=&…`; `GET /api/plugin-host/mail/messages/:id?source=` | The user's mailboxes, their mail (newest first, no text), one message with its text. See [Mail and calendar](#mail-and-calendar). |
+| `mail:draft` | `POST /api/plugin-host/mail/drafts { source, … }`; `PUT /api/plugin-host/mail/drafts/:id` | Saves a draft as the user, never sending; changes a draft this package created. |
+| `mail:send` | `POST /api/plugin-host/mail/send { source, … }`; `POST /api/plugin-host/mail/drafts/:id/send` | Sends as the user. An `external` tool only; the package is limited to level 1. |
+| `calendar:read` | `GET /api/plugin-host/calendar/events?from=&to=&limit=` | The connected calendars' events in a window of at most 93 days. |
+| `calendar:write` | `POST /api/plugin-host/calendar/events { provider, title, start, end, allDay, location?, description? }`; `PUT /api/plugin-host/calendar/events/:id` | Creates an event; changes an event this package created. |
+
+**What a package read, it keeps.** The highest protection level a package
+has read through the host API (a document, a task's provenance, a run's
+result, a store entry) is kept per package and user across calls, in the
+key-value store, and every request starts from it, **and from the calling
+session's level**: a tool runs inside a conversation that may hold level-2
+content, and what it writes may carry it. Notes and tasks have no protection
+level, so a call working above level 1 (the package has read above it for
+that user, or its session holds such content) may not write them (`403
+read_level`, audited): it cannot carry level-2 content down to level 1 in a
+later call. A document or a store entry it writes is stored at no lower
+level, and its `model:complete` calls run at it. Disabling, upgrading or
+uninstalling the package forgets what it read (the session's level stays the
+session's).
+
+**`web:read`** lets a package read any public page without network of its
+own: the host fetches it through the same SSRF guard as the agents' web
+fetch (`fetchGuarded`: public addresses only, the IP pinned for the connect,
+each redirect checked again), at most 5 MB and 15 s, HTML only, and hands
+back only the cleaned article (allowlist HTML with no script, style or event
+handler, and plain text), the text cut at 100,000 characters (cleaned HTML
+over 400,000 characters is left out; `truncated` says so). The body is read
+as a stream and cut at 5 MB whatever its `Content-Length` says. A URL the
+guard refuses (or a redirect to one) is `422 blocked`, any other failure `422
+fetch_failed`: the package learns nothing else (no address, status or size),
+so it cannot map what lies behind the guard; the reason is logged on the
+server. The audit row records the URL's host and a sha256 of the whole URL,
+never the URL itself. A user whose rules deny the web tool's fetch
+(`websearch` `fetch`) does not get the scope.
+
+**`model:complete`** runs one completion, with no tools and no history, on
+the model the calling user's `everyday` lane resolves to (their own binding
+first, then the install's; in a space, with the user's space role):
+
+- `409 no_model` when none is bound, and `409 cli_model` when the lane runs
+  on a CLI model: a vendor CLI is an agent harness on the host, and a
+  plugin's prompt never drives one. Bind an API or local model to `everyday`.
+  The one exception is a package with an approved `model.trustedInput`
+  ([Model calls on CLI lanes](#model-calls-on-cli-lanes)).
+- It runs as part of the calling session, at the highest protection level
+  the same package call has read through the host API (documents, tasks):
+  level 3-4 content stays on local models (`409 protection_level` when there
+  is none) and level 2-3 leaves pseudonymized, as the session's own turns do
+  ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md)).
+- Cost is bounded before the call: at most 6 calls a minute per package and
+  user (`429 rate_limited`), a per-user daily token allowance for all
+  packages together, `plugins.hostModelDailyTokens` (default 10,000,000 tokens
+  per UTC day, 0 turns plugin model calls off: `403 model_off`; `429
+  token_cap` when used up), and the user's spend budgets (`429
+  spend_budget`). Its cost rows have the request type `plugin:<name>`.
+- The system text is at most 4,000 characters, the prompt 40,000,
+  `maxTokens` at most 4,000 (default 1,200), `temperature` 0-1 (default
+  0.3). Every call is audited.
+
+**`documents:write`** writes the user's Documents, as that user:
+
+- `POST /api/plugin-host/documents` creates a text document: `name` (at
+  most 200 characters; path characters are dropped and the extension follows
+  the type), `content` (at most 500,000 characters), `mimeType`
+  `text/markdown` (default) or `text/plain`, an optional `category` and
+  `summary`. It answers `{ id, name, protectionLevel, size }`. The file is
+  written under the call's workspace's documents directory
+  (`…/plugin-<name>/`), the text is the document's text (search, the
+  Documents page and `documents:read` see it) and it is indexed into the
+  knowledge base when an embedding model is there (fail-soft).
+- **Spaces.** It runs in the call's workspace through the same repositories
+  as the user's own requests: in a space the member's role decides (a viewer
+  cannot write, `403`), and the row belongs to the space.
+- **Provenance.** The row's `metadata` is `{ source: "plugin", sourceRef: {
+  plugin, tool } }`, and the audit row of the request records the document id.
+- **Protection.** A new document is at the level of what the same call has
+  read through the host API (documents, tasks, a run's result), or the
+  `protectionLevel` asked for when that is higher; never lower.
+- `PUT /api/plugin-host/documents/:id` replaces the content (and optionally
+  the name and summary) of a document **this package created** (`403
+  not_created_by_plugin` for any other: the user's uploads, another
+  package's), within the package's `maxProtection` (`403 protection_level`
+  above it, as for reading). Its level only rises. A document of another
+  user or workspace is `404`.
+- A user whose rules deny the documents tool's `export_document` does not
+  get the scope.
+
+**`agent:run`** is for work that takes longer than a call's 30-second token.
+It never makes a longer token: the run is the host's own agent run, and the
+package only ever holds its id.
+
+- `POST /api/plugin-host/agent/runs { prompt, role?, title? }` answers `202 {
+  id, status: "running", role }` at once. The run is a worker of the role
+  (default `research`; any of the host's roles but `general`, the root),
+  started as the calling user in a session of its own (an automation
+  session, channel `plugin-run`), **unattended**: nothing is asked of anyone,
+  and an action the user's rules set to ASK is refused. Its prompt is the
+  worker's task, at most 20,000 characters.
+- **Its tools** are the role's, narrowed to web search and fetch
+  (`websearch`), the user's `knowledge` and `documents`, its `task_state`,
+  `artifacts` and `profiles`: never a shell, the filesystem, git, a message,
+  a mail or another plugin (`mcp`). A role with none of these is refused
+  (`400 role`). That list is the whole set: the
+  test environment of the `qa` and `review` roles never join it. Every tool call goes through the user's own permission rules, the
+  web search and fetch through the host's SSRF guard, exactly as in the
+  user's own conversation.
+- **Only a `write` or `external` tool starts a run** (`403 read_tool`
+  otherwise; the page bridge asks the user first). A `read` tool holds the
+  scope to read a run.
+- `GET /api/plugin-host/agent/runs/:id` answers `{ id, status: running |
+  done | error | interrupted, role, title, stage, output, withheld?, error,
+  tokens, startedAt, finishedAt }`, for a run of the same package and user
+  only (`404` for any other). `output` is the worker's final text, at most
+  100,000 characters, once done.
+- **Protection.** The run's session raises its level as its agent reads,
+  and its model calls are routed by that level like any turn's. A result
+  above the package's `maxProtection` is withheld (`output: null, withheld:
+  { protectionLevel }`); one that is handed over raises the calling
+  session's level, and a `model:complete` or `documents:write` of the same
+  call runs or saves at it.
+- **Cost and time**, all checked before it starts: at most 3 starts in a
+  burst and 6 an hour per package and user (`429 rate_limited`), 2 runs of a
+  package running at once per user (`429 too_many_runs`), a token budget per
+  run, `plugins.hostAgentRunTokens` (default 1,000,000; 0 turns runs off: `403
+  agent_off`), reserved whole against the same daily allowance as
+  `model:complete` (`plugins.hostModelDailyTokens`, `429 token_cap`; the
+  run's model calls count in it), and the user's spend budgets (`429
+  spend_budget`; the agent's own model calls check them again as it runs).
+  A run is stopped after 20 minutes.
+- **Personal workspaces only** for now: in a space it is `409 space`.
+- It is a `background_jobs` row (`kind: agent`): a restart marks a running
+  run `interrupted`, it does not resume. Disabling, upgrading or uninstalling
+  the package, or changing its approval, stops its runs.
+- **No tokens inside.** A tool call made inside a run (to this package or
+  another) carries no host token: nobody started it by hand.
+
+**Egress scopes cap what a package sees.** `web:read` can send anything to
+any URL, `model:complete` to a remote model, and `agent:run` to an agent
+that searches and fetches the web on the package's prompt. While a package
+is granted any of them, it may see level 1 data only, whatever its
+manifest's `maxProtection` says, and like `web:read`, `agent:run` makes an
+undeclared `maxProtection` 1. The admin page warns when such a scope comes
+with a `*:read` scope: the package can send what it reads anywhere; and it
+says what `agent:run` and `documents:write` do, in the row and when
+enabling.
+
+`web:read` and `model:complete` change no data, so a `read` tool gets them;
+`notes:write`, `tasks:write`, `documents:write`, `notify` and `store:write`
+only go to `write` and `external` tools. A `read` tool gets `agent:run` to read a run,
+never to start one.
+
+**Approval.** Enabling a package that declares `host` needs every declared
+scope approved: `PATCH /api/plugin-packages/:name { "enabled": true,
+"approveHostScopes": [...] }` (Admin → Plugin packages shows the scopes and
+asks when you enable). Only declared scopes can be approved. The approved set is
+stored with the package (`approvedHostScopes`). **Every upgrade clears it**: a
+new version's tools may have other effects (a tool that turned from `read` to
+`write` would widen what its calls' tokens carry), so it cannot be enabled
+until its scopes are approved again. Disabling, upgrading, uninstalling or
+changing the approval revokes every token in flight and stops the package's
+background runs (`agent:run`).
+
+**Which calls get a token.** Only a call a user started themselves:
+
+- a tool call of the user's own agent, in their conversation (`trigger` `user`, a session);
+- a slash command they typed (a `commands` contribution);
+- a call from the package's page, by the signed-in user.
+
+Never a call from a schedule, an event or the turn-start context (they run
+for users who did not ask, or as the installing admin), nor a heartbeat,
+cron, room, remote or listen turn, nor a contribution kind the host does not
+know: those calls carry no `_meta["octipus/host"]`.
+
+**The token.** With every `tools/call` to such a package the host sends, in the
+request's own metadata (it works over stdio, where a per-call environment
+variable cannot):
+
+```json
+"_meta": { "octipus/host": {
+  "url": "http://octipus-host.internal",
+  "token": "ocph_…",
+  "expiresAt": "2026-11-10T10:00:35.000Z",
+  "scopes": ["notes:read"]
+} }
+```
+
+The token is minted for that call and revoked when it returns; it expires with
+the call's timeout, **at most 30 seconds** whatever `requestTimeoutMs` says, so
+a token kept past its call cannot be used during another user's. It is bound to:
+
+- **the package** — another package presenting it gets `401`;
+- **the user who triggered the call** (the agent's user, or the signed-in user
+  of a page) **and the workspace it ran in** (a space, or their own);
+- **its scopes**: declared ∩ approved ∩ what the tool's effect allows (a
+  `read` tool never gets `notes:write`, `tasks:write` or `notify`) ∩ what the
+  user holds (the scope's module is on, and the user's own rules do not DENY
+  the matching action of the `notes`, `tasks` or `documents` tool). A call
+  left with no scope carries no token, and so does a call made inside a
+  plugin's background run (`agent:run`).
+
+Tokens live in memory, as hashes, never outlive their call and are never
+accepted by the rest of the API (they are neither session nor API tokens).
+`OCTIPUS_HOST_URL` is set in the server's environment when it has host scopes.
+
+**Reaching it.** The package calls `http://octipus-host.internal/api/plugin-host/…`
+with `Authorization: Bearer <token>` **through its egress proxy** (`HTTP_PROXY`,
+an absolute-form request; Node's `fetch` needs `NODE_USE_ENV_PROXY=1` or a
+proxy agent). The proxy of a package with host scopes forwards that name, on
+port 80, under `/api/plugin-host/` only, to the host's own API port on loopback
+— never resolved through DNS, never another path (`%`, `..` and empty segments
+are refused), port or loopback service, never through `CONNECT` — drops the
+client's cookies, forwarding and Octipus headers, and stamps the package name
+(`x-octipus-plugin-egress`) with the proxy's own secret
+(`x-octipus-plugin-egress-key`: random, generated when the proxy starts, held
+only in memory and dropped when it stops). The host API accepts a request
+only with the secret of a live proxy of the package it names, so the stamp
+cannot be forged by a client that reaches the API port directly. A package without approved scopes reaches nothing
+by that name, even if it lists it in `network`. A package with only `host`
+(and no `network`) still gets a proxy, so under the sandbox it is
+`restricted`, not `offline`.
+
+**What applies on the host.** Each request is checked against the token
+(present, live, this package's, carrying the endpoint's scope), the user (still
+active) and the workspace, re-resolved for the request: a space membership
+removed or a role lowered meanwhile applies at once, and the space role's
+rules (a viewer cannot write) apply as in the user's own agent. A document
+above the package's `maxProtection` is refused (`403 protection_level`; an
+unclear level counts as 4), and one that is read raises the calling session's
+protection level. 60 requests in a burst per package and user, then `429`.
+Every request with a valid stamp and token, allowed or refused, is one audit
+row (`resource_type = plugin_host`, the op, the scope, the status, the tool).
+A request refused before that (no or a forged stamp, no or a dead token) is
+limited per client address (then `429`) and audited in aggregate: one row
+(op `refused`, its `code`, `count`) per kind and package per minute, carrying
+the refusals counted since the previous row.
+
+### Mail and calendar
+
+`mail:read`, `mail:draft`, `mail:send`, `calendar:read` and `calendar:write`
+let a package work with the calling user's mail and calendars, as that user
+(src/plugins/packages/host-mail.ts, host-calendar.ts, host-sources.ts). The
+user's permission rules apply per source, as for their own agent: a rule
+that denies the source's tool action refuses the request (`403
+denied_by_rule`), and the source's module must be on (`404 module_off`).
+
+**Two mail sources**, named by `source`:
+
+- `mail`: the Mail module's mailboxes (IMAP/SMTP, docs/MAIL.md), personal or
+  a space's, through the user's content scope in the call's workspace. Each
+  message is at its own protection level (none: 4). Rules: the `mail` tool's
+  `read`, `draft` and `send`.
+- `inbox`: the Gmail or Microsoft 365 inbox the user connected (the Inbox
+  module; Google first when both are). Its messages carry no level, so they
+  count as **level 4**: a package reads them only with `maxProtection` 4
+  (no network, no pages, no egress scope). Personal workspace only (`403
+  personal_only` in a space). Rules: the provider tool's `email_read`, and
+  `email_send` for drafts and sends.
+
+**Reading.** `GET mail/accounts` → `{ accounts: [{ id, label, address,
+canSend }], inbox: { provider, protectionLevel: 4 } | null }`. `GET
+mail/messages?source=mail&accountId=&status=received|sent|draft&unread=true&q=&limit=&cursor=`
+lists newest first without text (`limit` default 25, at most 100; `next` is
+the cursor of the next page); for `source=inbox` only `limit` and `cursor`.
+A Mail module message above the package's `maxProtection` is left out **in
+the query**, so it neither uses up the limit nor shows that it exists; named
+by id it is `404`, as a message that does not exist (its level is not said). `GET mail/messages/:id?source=` → the
+message with its plain text (at most 50,000 characters, `truncated`). What a
+list or read hands over raises the calling session and the package's level
+for this user, as a document does.
+
+**Drafts.** `POST mail/drafts { source, accountId?, to?, cc?, subject?, body,
+replyTo?, replyAll? }` saves a draft as the user and never sends. Source
+`mail`: a new message from `accountId` to `to`/`cc` ("a@x.de, Jane
+<j@y.de>" or a list), or a reply to the received message `replyTo` (its
+recipients, subject and thread, the original quoted; the original must be
+within `maxProtection`, and replying reads it, so it needs `mail:read` and
+the user's rule on reading too). The draft is at least at the level the call has
+read and at the account's default (a reply: the original's), and records
+the package and tool (`mail_messages.plugin_source`). Source `inbox`: a
+reply to a message by the provider's id, or a new message to `to`, saved in
+the provider's drafts: **such a draft is stored at Google or Microsoft**, in
+the user's connected account, like everything in that inbox. `PUT
+mail/drafts/:id { to?, cc?, subject?, body? }` changes a Mail module draft
+**this package created for this user** (`plugin_items`; `403
+not_created_by_plugin` for any other), within `maxProtection`; its level
+only rises, and a reply keeps its recipients (it quotes the original). A
+plugin that only drafts keeps its full level: the user reviews and sends
+from Octipus or their mail app.
+
+**Sending.** `mail:send` is handed to **`external` tools only** (each call is
+asked about by the user's rules; a schedule or event never runs one), and a
+manifest declaring it without an external tool is refused. Sending carries
+data out of the house, so `mail:send` counts like `web:read`: the package
+sees **level 1** at most, and a call holding more than that (what the package
+read for this user, or what the calling session holds) is refused (`403
+read_level`), so a confidential conversation cannot be mailed out through a
+plugin. `POST mail/send { the fields of a draft }` sends now (source `mail`:
+saved as the package's draft, then sent through the account's server, at
+most 50 recipients; source `inbox`: exactly one recipient, no cc or reply).
+`POST mail/drafts/:id/send` sends a Mail module draft this package created,
+if its level is within `maxProtection` (a draft in a mailbox kept above level
+1 is sent with `mail/send` in one call instead), exactly as it was checked:
+a change meanwhile refuses it. **One approved call sends one message** (`409
+one_send_per_call` for a second), and a package sends at most 20 an hour
+for one user (`429 rate_limited`).
+The outcome is audited (`mail.send`, `mail.draft.send`) with the message's
+id, never its addresses or text.
+
+**Calendars.** `calendar:read` and `calendar:write` reach the calendars the
+user connected (Google, Microsoft 365), in the personal workspace only.
+Events carry no protection level: they count as the level an admin sets,
+**`plugins.calendarProtectionLevel` (default 3**, confidential: events name
+people). `GET calendar/events?from=&to=&limit=` → `{ events: [{ id, provider,
+title, start, end, allDay, location, description, organizer, attendees,
+protectionLevel }], providers, partial, truncated }`, a window of at most 93
+days and 250 events; `403 protection_level` when the calendar's level is
+above `maxProtection`. `POST calendar/events { provider, title, start, end,
+allDay, location?, description? }` creates an event (no attendees: a write
+invites nobody); `PUT calendar/events/:id` changes an event this package
+created, unless the user has since invited someone to it (`409
+has_attendees`: the change would reach them). A call holding data above the calendar's level may not write
+(`403 read_level`): it would carry that data into a place kept at a lower
+level. There is no delete. Rules: the provider tool's `calendar_read` and
+`calendar_write`.
+
+**What a package created.** `plugin_items` records the Mail module drafts
+and calendar events a package created, per user. Uninstalling the package
+deletes its rows; so does an upgrade to **another signer or source**: the
+drafts and events stay the user's, and the new publisher can change or send
+none of them. A sent draft is no longer the package's.
+
+### Model calls on CLI lanes
+
+A plugin's `model:complete` call is refused (`409 cli_model`) when the user's
+`everyday` lane is bound to a CLI model. A CLI is an agent with its own tools
+(shell, files) that runs as the Octipus server user, outside the package's
+sandbox; Antigravity runs with `--dangerously-skip-permissions`, Vibe with
+`--auto-approve`, Codex with `exec`. A plugin's prompt can carry outside
+data (a fetched page, a mail, a document, another person's words) written
+to steer it, so by default its calls stay off such a lane.
+
+A package whose prompts carry no outside data can say so in its manifest:
+
+```json
+"host": ["model:complete"],
+"model": { "trustedInput": true, "reason": "Prompts are fixed templates filled with counts from our intranet API." }
+```
+
+- `trustedInput` defaults to false; absent means untrusted.
+- `reason` is required with it, at most 300 characters, and shown to the admin.
+- The install refuses it without the host scope `model:complete`, together
+  with `web:read` (a fetched page is outside data by definition), and for
+  runtime `in-process`.
+- With `network` hosts or `*:read` host scopes it is allowed (a company API
+  can be a trusted source), but the install, `plugin_validate` and the admin
+  page warn and list them: whatever they return can reach the prompts.
+
+**The flag grants nothing by itself**: a package declares it about itself.
+An admin approves it explicitly as `model:cli-tools`, an item of
+`approveHostScopes` next to the host scopes (`PATCH /api/plugin-packages/:name
+{ "approveHostScopes": ["model:complete", "model:cli-tools"] }`; the list
+replaces the approved one, so leaving it out revokes it). On the admin page,
+the package's row shows the warning, the reason and the sources and has its
+own approve/revoke button; the enable confirmation says whether it is
+approved. Enabling does not ask for it: a package enabled without it works,
+and its model calls stay off CLI lanes. From the command line: `octi plugin
+approve-cli-tools <name>` (asks; `--yes` when not at a terminal, `--revoke`
+to take it back). Only a package that declares `model.trustedInput` can have
+it approved. **Every upgrade clears it**, with the host scopes. The approval
+and its revocation are audited (`model_cli_tools_approved`,
+`model_cli_tools_revoked`); the package view carries `modelCliTools`
+(`reason`, `approved`, `active`, `sourcesWarning`).
+
+When the lane resolves to a CLI model and the package declares the flag and
+both `model:complete` and `model:cli-tools` are approved, the call runs:
+
+- A CLI with a tool-less mode (Claude Code, GLM, Kimi) still runs in it.
+- One without (Antigravity, Vibe, Codex) runs with its normal arguments, in a
+  fresh empty directory of its own that is removed afterwards, never the
+  workspace root. The prompt, a multi-line one and the `system` text
+  included, always goes on stdin and never into the command line: Codex reads
+  it with `exec … -`, Vibe with a bare `-p` (its documented stdin mode), and
+  Antigravity as one stream-json user event (`--input-format stream-json
+  --output-format stream-json`, its documented stdin channel; `--print`
+  takes the prompt only as an argument, so it is not used here).
+- The per-user token allowance, the rate limit, the spend budgets and the
+  protection routing apply as for any `model:complete` call. Its audit row
+  (`resource_type = plugin_host`, op `model.complete`) records the package,
+  the tool, the model and `cliTools: true`.
+
+Core one-shot completions (summaries, mail triage and the like) are not
+affected: they always run tool-less and are refused on Antigravity, Vibe and
+Codex ([CLI-AGENTS.md](CLI-AGENTS.md#one-shot-completions-lanes)).
+
+## Store
+
+A package can keep small JSON values per key, **for each user apart, and in
+each workspace apart**: the host keeps them, separated by the user on the
+call's token and the workspace the call ran in, so a package cannot mix users
+even by mistake. There is no store shared across users, and no way to name
+another user. Use it for any per-user data: never `OCTIPUS_PLUGIN_DATA_DIR`,
+which every user's calls share ([How a package runs](#how-a-package-runs)).
+
+```json
+"host": ["store:read", "store:write"],
+"store": { "quotaBytes": 5242880 }
+```
+
+- **Declared.** `store` declares it, with its quota per user: `quotaBytes`
+  defaults to 5 MB (5,242,880 bytes), at least 1 KB, **at most 20 MB**
+  (20,971,520 bytes); anything else is refused at install. It goes with the
+  host scopes `store:read` and/or `store:write`: a store without either, or
+  either without a store, is refused.
+- **Consented.** The install consent shows it as its own item, *"Keeps up to
+  5 MB of its own data per user"* (id `store`, detail `store: up to <bytes>
+  bytes per user (<scopes>)`), next to the two scopes.
+- **Diffed.** The permissions summary carries `store: { quotaBytes } | null`
+  (right after `settings`). An upgrade that adds a store, or raises the quota,
+  widens and is asked again; a smaller quota narrows.
+- **Per user and per workspace, enforced by the host.** The table
+  `plugin_store` keys every entry by package, user, workspace and key; every
+  read and write goes through one repository
+  (`src/db/repositories/plugin-store-repository.ts`) bound to the package of
+  the token, the user of the token (or of the signed-in page) and the
+  workspace (below).
+
+**Workspaces.** The workspace is the call's: a tool called in a shared space
+reads and writes that user's entries **of that space**, and a call anywhere
+else (the user's own workspace) their personal entries. A page works in the
+workspace it is opened in, the space the web app is in, else the personal
+one. What a user's calls keep in a space is readable in that space only, by
+that user only: another member of the space has entries of their own there.
+When the user leaves the space (or is removed), their entries of that space
+are deleted with the membership; deleting the space deletes every entry of
+it.
+
+| Request (`store:read`) | Answer |
+| --- | --- |
+| `GET /api/plugin-host/store/<key>` | `{ value, version }`; `404 not_found` |
+| `GET /api/plugin-host/store?prefix=&limit=` | `{ keys: [{ key, size, version, updatedAt }], truncated }`: the user's keys in this workspace, sorted (`limit` default 100, at most 1000), no values |
+
+| Request (`store:write`) | Answer |
+| --- | --- |
+| `PUT /api/plugin-host/store/<key> { value, ifVersion? }` | `{ version }`: 1 for a new entry, one more on each write. With `ifVersion`, only if the entry is at that version now, `0` meaning "only if it does not exist" (compare-and-set); otherwise `409 version_conflict` with `current` |
+| `DELETE /api/plugin-host/store/<key>` | `{ deleted: true }`; `404 not_found` |
+
+**Limits.**
+
+- A key is 1-200 characters of `A-Z a-z 0-9 . _ : / -`
+  (`^[A-Za-z0-9._:/-]{1,200}$`), with no empty, `.` or `..` segment between
+  slashes (`400 invalid_key`). It goes in the path as it is: the egress proxy
+  forwards no `%`.
+- A value is any JSON of at most 64 KB as UTF-8, both as sent and as the
+  database keeps it (`413 too_large`; `400 invalid_value` for no value, a NUL
+  character, or more than 128 nested object/array containers). Nesting is checked
+  explicitly, independently of the JavaScript engine's serialization stack.
+- The quota counts, for each entry, **128 bytes of overhead**, its key, and
+  its value as the database serialises it (`octet_length(value::text)`: a
+  number such as `1e300` counts as its 301 digits), for the user and the
+  package across their workspaces. A user keeps at most **10,000 entries** per
+  package (`413 too_many_entries`). Both are checked in the same transaction
+  as the write, under a lock per package and user, against a running total
+  per package, user and workspace (`plugin_store_usage`, updated in that
+  transaction), so concurrent writes cannot pass them together (`413 quota`;
+  the answer names the quota, not what is used). A write that does not grow
+  its entry always goes through, so a quota lowered by an upgrade leaves room
+  to shrink.
+- Rate: the host API's own limit (60 requests in a burst per package and
+  user), and for writes and deletes 30 in a burst then 5 a second, **shared
+  by the package's tools and its pages** (`429 rate_limited`).
+
+**Effects.** `store:write` is a write scope: a `read` tool's token carries
+`store:read` only, so a read tool can never write the store.
+
+**Protection levels.** Levels protect the store as they protect everything
+else a package touches: they are enforced on every request, not trusted to
+the package.
+
+- *What an entry is written at.* The level the call works at: the highest of
+  what the call has read, what the package has read for this user in any call
+  ([What a package read, it keeps](#host-api)) and **the calling session's
+  level** (a tool runs inside a conversation that may hold level-2 content,
+  and whatever it writes may carry it). The same level governs the call's
+  `notes:write` and `tasks:write` (refused above 1, `403 read_level`) and what
+  `documents:write` stores at, so a level-2 session's tool cannot write a
+  note even before it reads anything.
+- *An overwrite never lowers an entry's level*: it keeps the higher of the
+  entry's level and the call's.
+- *Reading raises.* Reading an entry raises the call to its level, the
+  calling session and the package's kept level for this user with it, so
+  data cannot be laundered through the store into notes or tasks. So does
+  everything else an answer tells about an entry: a write over it, a version
+  conflict on it, a delete that found it, a list that hands its key over (a
+  key can carry data too).
+- *Above `maxProtection`, nothing is there.* An entry above the package's
+  `maxProtection` answers a get, a write, a compare-and-set and a delete
+  exactly as a missing key does (`404 not_found`, no level, no version, left
+  as it was), and a list leaves it out without counting it.
+- *When `maxProtection` drops*, the entries above the new cap are deleted, in
+  the same transaction: an upgrade whose manifest lowers it, or an approval
+  that clamps it (an egress scope approved, [above](#host-api)). The audit
+  row (`store_deleted_above_max_protection`, or `storeDeleted` on the
+  `upgraded` row) carries counts only.
+
+**Upgrades.** The store follows the package across upgrades from the same
+publisher and source, with what holds above. Three exceptions, each in the
+upgrade's transaction and audited with counts only (`storeDeleted` on the
+`upgraded` row):
+
+- *Another publisher.* An upgrade that changes the signer or the source
+  (`change:signer`, `change:source`) would hand every user's data to code
+  someone else wrote, so **the data is deleted by default**. Keeping it is the
+  admin's explicit choice: the consent preview offers the item
+  `change:store-handover`, *"Hands the stored data of N users (X MB) to the
+  new publisher"*, optional and never pre-ticked; left unticked, the data is
+  deleted at install. Without the preview, the API's `keepStoreData: true`
+  (`POST /api/plugin-packages`) and the CLI's `--keep-store-data` (`octi
+  plugin install|upgrade`) keep it. Kept, the `upgraded` row records
+  `storeHandedOver` (entries, users, bytes). An agent's install
+  (`plugin_install`) may upgrade only its own package from the same source
+  and refuses another signer, so it never reaches this.
+- *The store removed.* A version that no longer declares `store` deletes
+  every entry, so a store added back later starts empty.
+- *A lower `maxProtection`*: the entries above it (above).
+
+**Audit.** Store requests are audited in aggregate, as the host API's
+refusals are: one row (`resource_type = plugin_host`, op `store.get`,
+`store.list`, `store.put` or `store.delete`) per package, user, op, status
+and code per minute, with `count`, the requests since the previous row. The
+requests counted after a row are written when the minute ends (a timer), at
+shutdown, and before the counts are cleared: none is lost. No key or value
+is in the audit. A refusal before the token is accepted, and a failure, has
+its own row.
+
+**From a page.** A page reaches its own user's entries directly over its
+bridge ([Pages](#pages)), for page state between visits; or it calls one of
+its package's tools, which uses the store as any call does.
+
+**Deleting.** Uninstalling the package deletes every user's entries (the
+uninstall confirmation says so); deleting a user deletes theirs, leaving a
+space deletes theirs of that space. Each user sees what each plugin keeps for
+them in Settings → My plugin usage, and can delete it there (**Delete my
+data**, with a confirmation; audited as `store_deleted_by_user`), in every
+workspace or in one. Admins see each package's total and per-user size in the
+Installed tab's usage.
+
+| Route | Who | Answer |
+| --- | --- | --- |
+| `GET /api/plugins/:name/store?prefix=&limit=`, `GET …/store/<key>` | the signed-in user, on the package's page | as the host API, for their own entries in the page's workspace |
+| `PUT /api/plugins/:name/store/<key> { value, ifVersion? }`, `DELETE …/store/<key>` | the same | as the host API, for their own entries in the page's workspace |
+| `DELETE /api/plugin-packages/:name/store/me?workspace=` | any user | `{ name, entries, bytes }`: the caller's entries of that package, in every workspace, or with `workspace` (`personal`, or a space's id) in that one |
+
+The page routes answer only while the package is enabled, has pages and **may
+start** (the check before every start of its server: not revoked, its version
+or its signing key; its files still the approved content; its signature and
+sandbox in order), and only with the scope its admin approved: `store:read`
+to read, `store:write` to write (`403 scope_missing` otherwise, `404` for no
+page). The same check keeps the page's files and its sidebar entry away
+while it fails. It is cached for 30 seconds, and forgotten at once on an
+install, an upgrade, an approval, an uninstall and a revocation. The routes
+need a signed-in user; an API token needs `api:read` to read and `api:write`
+to write; a write signed by the session cookie must come from this site
+([API](#api)). A page writes at the package's level for its user, which is 1
+for a package with pages. Writes and deletes are audited in aggregate
+(`resource_type = plugin_page`).
+
+## Bundled plugins
+
+Octipus ships two plugins, **the example plugins** ([plugins/README.md](../plugins/README.md)):
+Reader (`plugins/reader`), work done inside one call, and Research
+(`plugins/research`), work that outlives the call (a background run read
+back by its id). They are the reference implementations of a package plugin:
+tools with effects, host API scopes and a page that calls its tools through
+the bridge. Read them before you write your own. They are examples, not
+product features, so onboarding does not offer them.
+
+The plugins Octipus ships are an explicit list, `SHIPPED_PLUGINS` in
+`src/plugins/packages/bundled.ts` (today `['reader', 'research']`), of package directories
+under `plugins/` in the checkout or install (the Docker image included). Any
+other directory under `plugins/` is never listed, installed as bundled or
+treated as a shipped name; Octipus logs it once, as a warning. A bundled
+plugin is an ordinary plugin package; shipping with Octipus gives it no trust
+of its own:
+
+- **Listed** on Admin → Plugin packages under *Bundled*, by `GET
+  /api/plugin-packages/bundled` (name, version, title, description, the host
+  scopes it asks for, the version installed here) and by `octi plugin bundled`.
+- **Installed** with *Install* on that list, `POST /api/plugin-packages {
+  "bundled": "<name>" }` (`"upgrade": true` for a newer bundled version) or
+  `octi plugin install-bundled <name> [--upgrade]`: exactly an install from
+  its directory, so it is copied, its content hash pinned, its signature
+  checked, and it starts **disabled**. The audit row names the source
+  (`bundled:<name>`).
+- **Enabled** by an admin like any package, approving the host API scopes it
+  asks for.
+- **Its name is its own.** A bundle shows as installed only when the package
+  under its name came from it (its last install was `bundled:<name>`, or its
+  files are the bundle's); another package holding the name shows as *name
+  taken by another package*, and installing or upgrading the bundle is
+  refused (`409`) until that package is uninstalled.
+
+Not yet: bundled plugins are not signed with an Octipus publisher key, so
+under `plugins.requireSignature` they are refused like any unsigned package.
+
+| Plugin | What it does | Host scopes |
+|---|---|---|
+| `reader` | An example plugin (it replaced the core reader, [MODULES.md](MODULES.md#modules-that-move-to-plugins)): a page in a clean view, summarized, simplified, translated, its action items or an answer about it, saved as a note or as to-dos. Tools `read_url`, `reader_action` (read), `save_note`, `create_tasks` (write); the page *Reader* at `/plugins/reader/read`. | `web:read`, `model:complete`, `notes:write`, `tasks:write` |
+| `research` | An example plugin (it replaced the core research module, [MODULES.md](MODULES.md#modules-that-move-to-plugins)): deep research on a question in the background by the host's research agent, as the user (web search, the user's knowledge), and the cited report saved to the user's documents. Tools `start_research` (write: starts the run, keeps its id), `research_status` (read: the run's status and report), `save_report` (write: a document, or an update of the one saved before); the page *Research* at `/plugins/research/run`. | `agent:run`, `documents:write` |
+
+## Where plugins live
+
+A plugin you make, by hand, with `octi plugin` or through an agent in
+[creator mode](#writing-a-plugin-with-an-agent), stays on your machine, whether
+you run a release install or a git checkout:
+
+- **The source** is in a directory of your own, or in the agent's workspace
+  (the skill suggests `my-plugins/<name>/` there).
+- **The installed copy** is in `<workspace.rootPath>/plugin-packages/<name>`
+  (by default `~/.octipus/workspace`), copied there at install.
+- **Its data** is in `<workspace.rootPath>/plugin-data/<name>`: one directory
+  shared by every user of the install, never for user data. Per-user data is
+  in the database, in the [store](#store).
+- **Nothing is written into the Octipus install or repository.** An install
+  refuses a plugin store or data directory that resolves inside
+  `<install>/plugins` (a misconfigured `workspace.rootPath`), with an error
+  that says so.
+- **Only the example plugins ship in `plugins/`.** The repository's
+  `.gitignore` ignores every other path under `plugins/`, and Octipus does not
+  offer one as bundled. New plugins are not added to the repository.
+- **No plugin system reads plugins from the Octipus checkout.** Plugin
+  packages load from the plugin store above; deprecated legacy plugins
+  (`plugin.json`, [PLUGINS.md](PLUGINS.md)) from `~/.octipus/legacy-plugins/`;
+  in-process extensions from `~/.octipus/extensions/`. The server's working
+  directory is not searched: `<cwd>/extensions/` (where legacy plugins used to
+  load from) and a project's `<cwd>/.octipus/extensions/` are not loaded, and
+  the server logs one warning naming anything it finds there. The
+  repository's `.gitignore` ignores both directories.
+
 ## Installing and managing
 
-Admins only, on the web page (Admin → Plugin packages, and Browse for the
-registries), from the command line (`octi plugin list`, `octi plugin
-approve`) or through the API. A package installs from a directory on the
-server, signed or not ([Signed packages](#signed-packages)), or from an https
-tarball, signed by a trusted publisher ([Remote install](#remote-install)).
+Admins only, on the web page (Admin → Plugin packages: **Installed**,
+**Marketplace** and **Updates**), from the command line (`octi plugin list`,
+`octi plugin install`) or through the API. A package installs from a
+directory on the server, signed or not ([Signed packages](#signed-packages)),
+from an https tarball, signed by a trusted publisher ([Remote
+install](#remote-install)), from a registry or the marketplace by name
+([Marketplace](#marketplace)), or from the plugins shipped with Octipus.
+
+### The install consent
+
+On install the plugin declares what it will do, and the admin agrees to each
+item before the install runs. Nothing slides through, and nothing an admin
+can weigh is refused: what is not one of the four boundaries (the sandbox,
+signatures, the listing matching the download, runtime enforcement of what
+was declared) is guidance under the item, never a refusal.
+
+1. **Preview.** `POST /api/plugin-packages/preview` with one source:
+   `{ "registry", "name", "version"? }`, `{ "url", "sha256"? }`, `{ "path" }`
+   or `{ "bundled" }`. The host downloads and verifies the package exactly as
+   an install does, with the same code (the sha256 of the download, the strict
+   tar reader, the tree, the signature, the listing's permissions and content
+   hash, revocation, the runtime), and stages the checked copy in
+   `<workspace>/plugin-previews`, outside the plugin store, without installing
+   anything. It answers:
+
+   ```json
+   {
+     "previewId": "<uuid>", "name": "weekly", "version": "1.1.0", "title": "Weekly review",
+     "contentHash": "sha256:<hex>", "signedBy": "Octipus", "origin": { "source": "marketplace", … },
+     "declarations": [{ "id": "schedule:nightly", "kind": "schedule", "label": "Runs on a schedule (nightly)",
+                        "detail": "15 2 * * * UTC → sync", "guidance": "…", "carried": false, "status": "changed" }, …],
+     "guidance": [{ "code": "signature", "message": "…" }],
+     "diff": { "widened": true, "changes": [ … ] }, "upgradeFrom": "1.0.0", "expiresAt": "…"
+   }
+   ```
+
+   `declarations` are the [declaration items](#declarations). For an upgrade,
+   `diff` compares the installed version's permissions (recomputed from its
+   files) with these, and each item is `unchanged` (same id and words),
+   `changed` or `new`; an unchanged item is `carried: true` when the
+   installed version's consent covered it (its host scope or
+   `model:cli-tools` approved, its contributions approved, the in-process
+   approval for its content, or, for the rest, the package agreed to or
+   enabled), so it is not asked again. An upgrade from another source,
+   signed by another key, to an older version, or a version that asks for a
+   newer Octipus adds a `change:source`, `change:signer`,
+   `change:downgrade` or `change:incompatible` item to agree to like the
+   rest (never carried).
+2. **Install.** `POST /api/plugin-packages/install { "previewId",
+   "contentHash", "accepted": [ids], "enable"? }` installs the staged copy
+   only when every item that is not carried is in `accepted` (409 otherwise,
+   naming the missing ids; the preview stays usable), `contentHash` is the
+   preview's, the install's own fresh copy of it still hashes to it, the
+   declarations recomputed from that copy equal the preview's, and the
+   installed version is still the one the preview compared against (409
+   otherwise: preview again). Every check of an install runs again on that
+   copy. It records **every approval** the items stand for, for exactly that
+   content hash, in the same transaction as the row: the content, the
+   contributions hash, the host scopes, the in-process approval (for an
+   in-process plugin, where its source allows one) and `model:cli-tools` (when
+   it declares `model.trustedInput`). One audit row (`consent`) lists the
+   accepted ids, the carried ones and the content hash. With `"enable":
+   true` it is enabled at once, unless a required setting or secret has no
+   value yet: then it is installed disabled and `enableProblem` says which.
+   Answer: `{ name, version, contentHash, enabled, enableProblem, warnings }`.
+3. **Previews** belong to the admin who made them, are single-use (spent by
+   the first install that passes the agreement check, whatever happens next),
+   expire after 15 minutes, and live on the server process that made them;
+   their staged copy is removed when spent or expired. The staged copy is a
+   directory on that instance's disk, so with several instances behind a load
+   balancer the install must reach the same one (sticky sessions); one that
+   reaches another instance is refused as "made on another server instance"
+   (fails closed) and the admin previews again.
+
+A package installed without this consent (by an agent, `plugin_install`,
+which still lands disabled; or before this flow) is agreed to from its
+installed content: `GET /api/plugin-packages/:name/consent` answers `{ name,
+version, title, contentHash, signedBy, origin, enabled, declarations,
+guidance }` for the files as they are (items its recorded approvals already
+cover are carried), and `POST /api/plugin-packages/:name/consent {
+contentHash, accepted, enable? }` approves the content, contributions, host
+scopes, in-process and `model:cli-tools` and enables it in one write, only
+while the files still hash to `contentHash`.
+
+The web app uses this flow for every install, upgrade and enable: one screen
+lists each declaration with a checkbox, its words and its exact detail, the
+guidance under it (information or a warning, never blocking), the upgrade's
+unchanged items ticked and greyed and its new or changed ones marked, and an
+"Enable after install" switch; Install stays disabled until every required
+item is ticked, and for a moment after the list shows (a click aimed at what
+was there before cannot land on it). `octi plugin install` and `upgrade`
+print the declarations and ask for each at a terminal, or take `--accept
+all|<id,id,…>`; without a terminal and without `--accept` they refuse, with
+the list. The separate approvals below (`approveContent`,
+`approveHostScopes`, `approveContributions`, `approveInProcess`) and `POST
+/api/plugin-packages` keep working for scripts and the CLI's other commands.
+
+### Step by step
 
 1. **Install:** `POST /api/plugin-packages { "path": "/opt/plugins/finapi" }`,
-   or `{ "url": "https://…/finapi-1.2.0.tar.gz", "sha256": "…" }`.
+   `{ "url": "https://…/finapi-1.2.0.tar.gz", "sha256": "…" }`, or `{ "bundled": "reader" }`
+   for a plugin shipped with Octipus ([Bundled plugins](#bundled-plugins)).
    The directory is copied into the plugin directory (no symbolic links, at most
    200 MB and 20,000 files) and its signature checked. The package starts
    **disabled**, so its tools, effects, hosts and protection level can be read
    first. The response has `signedBy` and any `warnings`.
 2. **Configure:** `PATCH /api/plugin-packages/:name { "settings": {...} }`, and
    `PUT /api/plugin-packages/:name/secrets/:key { "value": "..." }` for each
-   secret (`null` removes it). Secret values are never returned.
+   secret (`null` removes it). Secret values are never returned. On the web
+   page, **configure** on a package's row shows its settings as a form typed
+   by the manifest's fields and each secret as set or not set, with a
+   write-only field to set or replace it and Clear; or `octi plugin set` and
+   `octi plugin secret` ([From the command line](#from-the-command-line)).
 3. **Enable:** `PATCH /api/plugin-packages/:name { "enabled": true }`. Refused
    while a required setting or secret has no value; settings and `enabled` in
    one PATCH are saved together or not at all. A required secret of an enabled
-   package cannot be removed; disable it first.
-4. **Upgrade:** install again with `"upgrade": true` (`"allowSignerChange"`
+   package cannot be removed; disable it first. A package with `host` scopes
+   needs them approved too (`"approveHostScopes": [...]`, [Host API](#host-api));
+   an upgrade clears that approval.
+4. **Upgrade:** preview and install again (above), or install again with `"upgrade": true` (`"allowSignerChange"`
    and `"allowDowngrade"` for another publisher or an older version, see
    [Signed packages](#signed-packages)). Once the new files are copied and
    checked, the package is disabled before any file is replaced and stays
-   disabled until enabled again, since its tools may have changed. Each setting the new version still declares and
+   disabled until enabled again, since its tools may have changed. Without a
+   consent, its approvals are cleared; with one, they are what the admin just
+   agreed to. Each setting the new version still declares and
    accepts is kept; a new required setting must be set before enabling.
    The new files' hash replaces the old one.
 5. **Approve changed content:** `PATCH /api/plugin-packages/:name
    { "approveContent": "sha256:<reviewed hash>" }` after a hash mismatch
    ([Content pinning](#content-pinning)), or "Approve this content" on the
-   web page, or `octi plugin approve <name> [--hash sha256:<hex>]`.
+   web page, or `octi plugin approve <name> [--hash sha256:<hex>]`. An
+   in-process plugin also needs `{ "approveInProcess": "sha256:<contentHash>" }`
+   before it can be enabled, and again after new content ([Runtimes](#runtimes)).
 6. **Uninstall:** `DELETE /api/plugin-packages/:name` removes the server, the
-   files, the data directory, the row and the secrets.
+   files, the data directory, the row and the secrets (**uninstall** on the
+   web page, after a confirmation, or `octi plugin uninstall <name>`).
 
 `GET /api/plugin-packages` lists installed packages with their manifest,
 settings, which secrets are set, whether the server is connected, why it is
 not when it should be, whether its network is enforced (`network`), its
-content hash (and `actualHash` on a mismatch), who signed it (`signedBy`) and
-the signature state (`signature`).
+content hash (and `actualHash` on a mismatch), who signed it (`signedBy`),
+the signature state (`signature`), its `runtime` and, for an in-process
+plugin, its in-process approval and whether it is loaded (`inProcess`;
+`connected` then means loaded).
+
+the signature state (`signature`) and what it contributes
+(`contributions`, [Contributions](#contributions)).
 
 ### From the command line
 
@@ -610,30 +2573,150 @@ the signature state (`signature`).
 octi plugin list
 octi plugin approve finapi --hash sha256:<actualHash>
 octi plugin approve finapi            # shows the actual hash and asks (at a terminal only)
+octi plugin approve-in-process auditlog --hash sha256:<contentHash>   # an in-process plugin
+octi plugin approve-contributions finapi   # shows its commands, schedules, events, context and prompt text, and asks
+octi plugin approve-contributions finapi --hash sha256:<contributions.hash>
+octi plugin approve-cli-tools digest  # model:cli-tools for a package with model.trustedInput; asks (--yes, --revoke)
+octi plugin set finapi region=eu limit=50 note=   # settings; key= clears one
+octi plugin secret finapi FINAPI_CLIENT_SECRET    # hidden prompt
+octi plugin secret finapi FINAPI_CLIENT_SECRET < secret.txt   # or stdin
+octi plugin secret finapi FINAPI_CLIENT_SECRET --clear
+octi plugin uninstall finapi          # asks; --yes when not at a terminal
+octi plugin bundled                   # the plugins shipped with Octipus
+octi plugin install-bundled reader    # install one, disabled (--upgrade for a newer version)
+octi plugin marketplace [query] [--category productivity]   # what the marketplace and registries offer
+octi plugin updates                   # installed packages with a newer version from the same source
+octi plugin install weekly-review     # from the marketplace: prints what it declares, asks for each item
+octi plugin install weekly-review --accept all --enable   # agree to every item without a terminal
+octi plugin upgrade finapi --registry Acme --version 1.2.0 --accept host:notes:write,schedule:nightly
 ```
 
-Both call the running backend at `http://localhost:$API_PORT` (3005 by
+They call the running backend at `http://localhost:$API_PORT` (3005 by
 default) with the bearer token in `OCTIPUS_API_TOKEN` (an admin's API token,
 Settings → API Tokens; [API.md](API.md#getting-an-api-token)), as `octi
-persona` does. `list` shows each package's state, signature, network state and
-its recorded and actual hash. `approve` without `--hash` refuses when it
+persona` does. `list` shows each package's state, runtime, signature, network
+state, its recorded and actual hash and, for an in-process plugin, its
+in-process approval. `approve-in-process` works like `approve`, for the
+approved content hash. `approve` without `--hash` refuses when it
 cannot ask (not a terminal) and prints the command to run after reviewing; a
-`409` (the files changed again) is shown and exits non-zero.
+`409` (the files changed again) is shown and exits non-zero. `set` sends the
+pairs as one settings change (the backend checks them against the manifest;
+all or nothing); exactly `key=` clears a setting, and a value of spaces alone
+is refused. `secret` never takes the value on the command line, where it
+would end up in the shell history and the process list, and a refused command
+line is never repeated back: it reads the value from a prompt that does not
+echo (escape sequences and control characters other than Backspace are
+dropped), or from stdin (one trailing newline dropped), refuses one longer
+than 10,000 characters (what the API accepts), and never prints it. `uninstall` asks at a terminal and is refused elsewhere
+without `--yes`.
 
 Every change is in the audit log (`resource_type = plugin_package`).
 
+## Writing a plugin with an agent
+
+An agent can write a `package` plugin and install it **disabled**; an admin
+reviews its content hash and enables it ("creator mode",
+[plan phase 4](plans/plugins-everything.md)). Octipus does not start a
+package the agent wrote before a person has approved those exact bytes, and
+the agent never gets code into the server process.
+
+**How far that guarantee goes.** It covers what Octipus runs as a plugin. It
+is only as strong as the agent's other tools: an agent with a shell can run
+the code it wrote there, and a shell command runs inside the shell sandbox
+only when `security.shellSandbox` is on (`auto` where a runner exists, or
+`required`). With the sandbox off, a shell command the user approves runs as
+the Octipus server's user, with its files, its network and its environment
+minus the stripped secrets, so "a person approves" then rests on the ASK
+prompts alone. The skill tells the agent to start its server for a local test
+only when `plugin_api` reports `sandbox.shellCommandsSandboxed: true`, and
+to skip that test otherwise. **On installs that use creator mode, set
+`security.shellSandbox: required`.**
+
+The built-in tool group `plugin_dev` (in the general and coding roles; not in a
+shared space) has four tools, and the system skill **Write an Octipus plugin**
+(`octipus-plugin-package`, assigned to the `general` and `coding` topics)
+walks an agent through them:
+
+| Tool | Permission | What it does |
+|---|---|---|
+| `plugin_dev__plugin_api` | read (ALLOW) | The live contract: the manifest's JSON schema (generated from the zod schema an install parses with, so a new manifest field appears in it at once), the rules the schema cannot express, tool effects, events, cron syntax, limits, the MCP stdio contract, the environment a package gets (the host variables, `OCTIPUS_PLUGIN_DATA_DIR`, `OCTIPUS_SETTING_<KEY>`, secrets, proxy variables), the sandbox and network state of this host, the templates, and `install.youCanInstall`. Derived from the code's constants wherever they exist. |
+| `plugin_dev__plugin_template` | read (ALLOW) | Without `name`, the templates; with `name`, that template's files (path → text). |
+| `plugin_dev__plugin_validate` | read (ALLOW) | Checks a plugin directory in the agent's workspace the way an install would, without installing: the manifest, its contributions (tools they name, cron, command names Octipus, an extension or an installed package uses), the tree (links, special files, size), and that the files `server.command` / `server.args` name are in the package. Every problem at once, warnings (a command not on `PATH`, an installed name), and the content hash an install would record. |
+| `plugin_dev__plugin_install` | write (ASK, dangerous) | Installs the package from a directory in the agent's workspace with the ordinary directory install, disabled. |
+
+**Templates** live in `src/plugins/templates/` (copied to
+`dist/plugin-templates` by the build): `tool-only` (a read and a write tool and
+a setting), `with-schedule` (a read tool every 15 minutes), `with-command`
+(a slash command) and `with-store` (per-user data in the [store](#store), through
+the host API with the call's token). Each is a complete, valid package: a manifest and a
+dependency-free MCP server in plain `.mjs`. The agent writes a template's files
+into its workspace with the filesystem tool and edits them; a read tool rather
+than a scaffolding write, because the filesystem tool already decides where an
+agent's files go and asks for its writes.
+
+Beyond the templates, the skill points the agent to **the example plugins**,
+`plugins/reader` and `plugins/research` ([Bundled plugins](#bundled-plugins)),
+as complete packages to read: tools, host scopes and a page through the
+bridge, and (Research) work longer than a call through `agent:run`. The skill
+tells the agent to write its package in its own workspace
+(`my-plugins/<name>/`), never in the Octipus repository ([Where plugins
+live](#where-plugins-live)).
+
+**What `plugin_install` refuses:**
+
+- **A user who is not an active admin.** Only admins install plugins, so only
+  an admin's agent may; another user's agent is told to ask an admin, who can
+  install the directory from the admin page or the API. (`plugin_api` says
+  `youCanInstall: false` up front.) The call itself is a `write` the user
+  approves, so the admin says yes to each install.
+- **A path outside the calling user's own workspaces** (resolved as the
+  filesystem tool resolves reads, then checked by real path against both the
+  agent's sandbox root and `<data root>/users/<user id>/workspaces`, so an
+  execution environment rooted at `/` or a home directory does not open other
+  users' workspaces, `/etc` or the server's files), the sandbox root itself,
+  the plugin store, a remote execution environment, and a shared space.
+- **`runtime: "in-process"`**, with a message saying so.
+- **A package that does not validate**, with every problem.
+- **The name of a plugin shipped with Octipus** (one of `SHIPPED_PLUGINS`,
+  today only `reader`), so an agent cannot take its place before an admin installs it.
+- **Replacing someone else's package.** `upgrade: true` replaces only a
+  package whose current version an agent of the same user installed; never one
+  a person or another user's agent installed. An upgrade is disabled again,
+  like any other.
+
+**Checked on the copy that is installed.** The agent can still change its
+directory after `plugin_validate`, so the install itself decides on its own
+copy: `installFromDirectory` copies the source into the plugin directory first
+and reads the manifest, checks the tree, the runtime (`requireRuntime:
+"package"`), the name and version that were validated (`expect`), hashes and
+verifies only that copy. A runtime switched to `in-process`, a link added or a
+name changed after validation is refused. (Every install now works this way:
+the source is looked at once before copying, so a linked or oversized tree
+is refused early, but only the staged copy decides.)
+
+There is **no tool to enable or approve** a plugin. The answer gives the
+content hash and the admin page (`<public URL>/admin/plugins`); the admin
+checks the hash, the tools, their effects and hosts, sets settings and
+secrets, and enables it there or with `octi plugin`.
+
+**Authorship.** The `installed`/`upgraded` audit row of an agent's install
+carries `authoredBy: { kind: "agent", userId, sessionId, agentId }`. The
+package view reads it from the latest install or upgrade row
+(`authoredBy: { userId, sessionId, agentId, at }`, null when a person installed
+the current version; no migration), the admin page shows **Authored by an
+agent (session …)** on the row, and `octi plugin list` prints an `authored:`
+line.
+
 ## Not yet
 
-- Packages reporting events back (a new invoice in DATEV opening a case):
-  plan point C2b.
-- Signed registry indexes, search, ratings or publisher pages: a registry is
-  a flat list, trusted only to point at tarballs ([Registries](#registries)).
-- Online revocation: a revoked key is revoked on a host only when that host's
-  config says so (`revoked`, `revokedKeys`, `notAfter`).
-- Settings, secrets and uninstall on the web page: it shows packages,
-  enables and disables them, installs and approves content; the rest is the
-  API.
-- Network enforcement on Windows: the egress proxy is advisory there (no
-  built-in runner; see [Network](#network)).
+- Packages reporting events back on their own (a new invoice in DATEV opening
+  a case): plan point C2b. Today a package learns of host events only through
+  [Events](#events), and acts only through its tools.
+- Search, ratings or publisher pages: a registry is a flat list (signed by
+  its publisher when the host asks for it, [Signed registry
+  indexes](#signed-registry-indexes)).
+- Online revocation for registries other than the marketplace: their keys
+  are revoked on a host only when that host's config says so (`revoked`,
+  `revokedKeys`, `notAfter`).
 - In a shared space, plugin tools follow the rules of personal connections
   (reads allowed, writes asked or refused); space-level packages come later.

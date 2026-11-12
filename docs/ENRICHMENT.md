@@ -3,50 +3,37 @@
 End-user-facing capabilities layered on top of the agent runtime. Each ships as
 a tool/service + REST route + web page.
 
-## Reader
+## Reading a web page
 
-Fetch a URL, extract the readable content, and run reader actions on it.
+The core no longer has a reader of its own. Reading a page in a clean view is
+the example plugin, Reader (`plugins/reader`, see
+[PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#bundled-plugins)), which an admin
+installs under Admin → Plugin packages → Bundled.
 
-- Code: `src/core/reader/` (`fetch.ts`, `extract.ts`, `actions.ts`)
-- Route: `src/api/routes/reader.ts`
-- Web: `web/app/reader/page.tsx`
-
-The fetcher is SSRF-guarded. Extraction strips boilerplate to readable text.
+What stays in the core is the fetch and extraction that the plugin host
+scope `web:read` runs (`src/core/web-read/`: `fetch.ts`, `extract.ts`). The
+fetcher is SSRF-guarded and capped at 5 MB. Extraction strips boilerplate and
+rebuilds the article from an allowlist of tags.
 
 ## Deep Research
 
-Bounded, multi-source investigation that produces a **cited report**.
+The core no longer has a research module of its own. Researching a question in
+the background is the example plugin, Research (`plugins/research`, see
+[PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#bundled-plugins)), which an admin
+installs under Admin → Plugin packages → Bundled. It is the core research
+module moved out, with what changed:
 
-- Code: `src/core/research/` (`jobs.ts`, `gather.ts`, `synthesis.ts`, `render.ts`,
-  `persist.ts`, `service.ts`)
-- Route: `src/api/routes/research.ts`
-- Web: `web/app/research/page.tsx`
+| | The core module (removed) | The plugin |
+|---|---|---|
+| Start | `POST /api/research { question, depth }`, a background job | `start_research` (write: the page asks the user), host scope `agent:run`: a background run of the host's own `research` agent, as the user |
+| The work | A fixed pipeline on the `research` lane: plan sub-queries, SearXNG search, SSRF-guarded fetch of each hit, one synthesis call returning JSON, citations checked against the fetched sources (`quick` / `standard` / `deep`: 1-4 searches, 4-14 sources) | The `research` role's agent with web search and fetch (the host's own tools, under the user's rules), the user's knowledge and documents; the depth sets how many searches and sources the prompt asks for; the report asks for numbered sources the agent actually read. Bounded by the host: runs and starts per hour, a token budget per run, the daily plugin allowance, spend budgets, 20 minutes |
+| Status | `GET /api/research/:jobId`: stage (planning, searching, reading, synthesizing) and the structured report | `research_status` (read): status, stage and the Markdown report; withheld above the plugin's protection level (1) |
+| Saving | Always, as a document (category *Research*) indexed into the knowledge base, plus one *Review research* to-do | When the user asks (`save_report`, `documents:write`): a document (category *Research*, indexed when an embedding model is there), and saving again updates it; no to-do |
+| Spaces | Personal only | Personal only (`agent:run` is refused in a space) |
 
-Flow: plan queries → gather sources (SSRF-guarded fetch) → synthesize a sectioned,
-cited report → render. Depth (`quick` / `standard` / `deep`) bounds fan-out width
-and source count (`DEPTH_BUDGET`).
-
-The web page keeps the investigation ID in `/research?job=<id>`. Opening that
-address again checks the existing job rather than starting another one. The Work
-navigation remembers this address while you move between pages in the current app
-session; bookmark it to return after closing the app. Missing or inaccessible jobs
-stop polling and offer an explicit status retry. Investigations are personal to
-the signed-in user, including when a shared workspace is selected. For research
-visible to teammates as it happens, ask your companion in a shared room.
-
-On completion, Octipus attempts to save the Markdown report as a `Documents`
-record (category `Research`) and index it into the knowledge base. Indexing is
-fail-soft: if embeddings are unavailable, the document can still be saved and the
-reason is logged. Document persistence can also fail; the completed job can carry
-the report without a document link. Check `documentId` before treating it as a
-saved document.
-
-Job tracking is stored in `background_jobs`. The job record survives a restart;
-the running computation does not resume automatically. The boot recovery sweep
-marks abandoned work as `interrupted`, exposed by the research polling API as
-`error` with a reason. Saved documents and any successfully created follow-up
-to-do remain durable. See `src/core/research/jobs.ts` and
-`src/core/jobs/recover.ts`.
+What stays in the core is what the plugin runs on: the `research` role and
+lane, the web search tool, the guarded fetch, the documents and the
+background-job table.
 
 ## To-Do List
 
@@ -71,15 +58,16 @@ zone. The ranking is one pure function (`src/core/tasks/rank.ts`) shared by
 the tool, the API and the tasks page's *what next* grouping (the default); the
 Daily Briefing asks the tool for this view rather than re-sorting.
 
-**Provenance.** Every task carries `source` (`user | agent | reader | research |
-email`) and a `sourceRef` linking back to where it came from. The producers live
+**Provenance.** Every task carries `source` (`user | agent | email | channel`,
+and `reader` or `research` on tasks made by the removed core reader and
+research module) and a `sourceRef` linking back to where it came from. The producers live
 in `src/core/tasks/sourced.ts`:
 
 | Source | How a task gets created |
 |---|---|
-| `reader` | **save as to-dos** on a Reader *Action items* result (`POST /api/reader/tasks`) — one task per bullet, linked to the article URL, category *Reading*. |
+| `agent` | Also what the Reader example plugin's `create_tasks` writes (host scope `tasks:write`): one task per item, category *Reading*, with a `sourceRef` naming the plugin, the tool and the article URL. Older tasks from the removed core reader keep `source: reader`. |
 | `email` | **To-do** on an open message (`POST /api/email/message/:id/task`) — subject as title, sender + snippet in notes, triage priority mapped onto task priority, category *Email*. The email-processor tool also tells the agent to `create_task` for mail that needs the user. |
-| `research` | Automatic on every finished Deep Research run — one *Review research: …* task pointing at the saved document (`sourceRef.documentId`), category *Research*. |
+| `research` | Kept on existing tasks: the removed core research module made one *Review research: …* task per run, pointing at the saved document (`sourceRef.documentId`). The Research example plugin makes no task. |
 
 ## While you were away
 

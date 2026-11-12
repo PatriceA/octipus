@@ -29,7 +29,6 @@ export function WorkspaceWelcome() {
         <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
           <Link href="/chat" className="rounded-full bg-primary px-4 py-2 font-semibold text-on-primary hover:bg-primary-fixed-dim">Work on a project</Link>
           {shared && <Link href="/rooms" className="rounded-full border border-outline-variant px-4 py-2 hover:border-primary">Work together</Link>}
-          {pageOn('/research') && <Link href="/research" className="text-primary underline underline-offset-4">Research a question</Link>}
           <Link href="/tasks" className="text-primary underline underline-offset-4">Plan follow-up tasks</Link>
           {pageOn('/persona') && <Link href="/persona" className="text-on-surface-variant underline underline-offset-4">Make it yours</Link>}
         </div>

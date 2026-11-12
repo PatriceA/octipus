@@ -1,3 +1,4 @@
+import { TOKEN_BUDGET_DEFAULTS } from '@/shared/token-budget-defaults';
 /**
  * Static manifest of all runtime-configurable settings.
  * Used for: DB seeding, migration from env, API validation, UI rendering.
@@ -354,9 +355,9 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'agent.maxTokenBudget',
     category: 'agent',
     valueType: 'number',
-    defaultValue: 100000,
+    defaultValue: TOKEN_BUDGET_DEFAULTS.general,
     description:
-      'General agent and session token budget (0 = unlimited). The root’s shared swarm pool is separately configured by swarm.levelDefaults.root.tokens. New agents use the updated cap; running agents keep their spawn-time budget.',
+      'Default per-user daily token cap (resets at midnight UTC), and default per-agent/session token budget (0 = unlimited). Per-user overrides are in Settings → System → Administration → Quotas & budgets (/admin/quotas). The root’s shared swarm pool is separately configured by swarm.levelDefaults.root.tokens. New agents use the updated cap; running agents keep their spawn-time budget.',
     isSecret: false,
     envVar: 'AGENT_MAX_TOKEN_BUDGET',
   },
@@ -455,7 +456,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'agent.liteModelMaxParams',
     category: 'agent',
     valueType: 'number',
-    defaultValue: 24_000_000_000,
+    defaultValue: 30_000_000_000,
     description: 'auto mode: models with fewer params than this run in the lite tier',
     isSecret: false,
     envVar: 'AGENT_LITE_MAX_PARAMS',
@@ -486,7 +487,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'agent.pipelineTokenBudget',
     category: 'agent',
     valueType: 'number',
-    defaultValue: 2_000_000,
+    defaultValue: TOKEN_BUDGET_DEFAULTS.pipeline,
     description:
       'Token pool for one pipeline RUN, summed over every node visit (0 = unlimited). Per-node caps bound a single visit; this is the only bound a foreach loop respects.',
     isSecret: false,
@@ -555,7 +556,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'swarm.levelDefaults.root.tokens',
     category: 'swarm',
     valueType: 'number',
-    defaultValue: 200_000,
+    defaultValue: TOKEN_BUDGET_DEFAULTS.root,
     description: 'Initial shared token pool for the root and its descendants per turn, recorded in the swarm tree. Separate from agent.maxTokenBudget. Applies to new root turns; existing tree nodes retain their original cap.',
     isSecret: false,
   },
@@ -588,7 +589,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'swarm.levelDefaults.agent.tokens',
     category: 'swarm',
     valueType: 'number',
-    defaultValue: 80_000,
+    defaultValue: TOKEN_BUDGET_DEFAULTS.agent,
     description: 'Agent (depth 1) token cap',
     isSecret: false,
   },
@@ -620,7 +621,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'swarm.levelDefaults.subagent.tokens',
     category: 'swarm',
     valueType: 'number',
-    defaultValue: 30_000,
+    defaultValue: TOKEN_BUDGET_DEFAULTS.subagent,
     description: 'Subagent (depth 2) token cap',
     isSecret: false,
   },
@@ -942,6 +943,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
   },
 
   // ── Security (runtime-changeable subset) ──
+  { key: 'security.executionEnvironments', category: 'security', valueType: 'json', defaultValue: [], isSecret: false, description: 'Owner-approved execution environments, project folders, host identities and persistent approval policy. Manage in Settings → Environments & Access.' },
   { key: 'security.companionMaintenance', category: 'security', valueType: 'json', defaultValue: { enabled: false, userId: null, roots: [], hostServices: false, sshAgent: false, allowActivation: false, interruptionPolicy: 'wait' }, isSecret: false, description: 'Operator-approved Companion maintenance runtime. Configure in Settings → CLI tools. Grants scoped host maintenance independently of project runtimes.' },
   { key: 'security.cliKubeconfigs', category: 'security', valueType: 'json', defaultValue: [], isSecret: false,
     description: 'Owner-approved existing kubeconfig paths for personal shell commands and verification gates. Manage in Settings → CLI tools. Only paths/context names are stored; shared spaces never receive them.' },
@@ -1299,13 +1301,62 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'PLUGINS_REQUIRE_SIGNATURE',
   },
   {
+    key: 'plugins.sandbox',
+    category: 'security',
+    valueType: 'string',
+    defaultValue: 'required',
+    description:
+      'The sandbox of plugin package servers, apart from security.shellSandbox: required (default; a plugin never starts without bwrap or firejail on Linux, or sandbox-exec on macOS, and enabling or consenting to one is refused) or off (a plugin not from the marketplace runs unsandboxed, as the Octipus server\'s user, with its files, environment and network; the only way to run a local plugin on Windows). A marketplace plugin always needs a sandbox.',
+    isSecret: false,
+    envVar: 'PLUGINS_SANDBOX',
+  },
+  {
     key: 'plugins.registries',
     category: 'security',
     valueType: 'json',
     defaultValue: [],
     description:
-      'Plugin package indexes to browse: [{ "name": "...", "url": "https://.../index.json" }]. Each index lists { packages: [{ name, version, description, url, sha256 }] }; installing from one downloads the https tarball, checks its sha256 and requires a valid signature by a trusted publisher.',
+      'Plugin package indexes to browse: [{ "name": "...", "url": "https://.../index.json", "publisher": "..." }]. Each index lists { packages: [{ name, version, description, url, sha256 }] }; installing from one downloads the https tarball, checks its sha256 and requires a valid signature by a trusted publisher. With "publisher" (a name in plugins.trustedPublishers), the index itself must carry a valid signature by that publisher at <url>.sig (octi plugin sign-index), or it is not listed.',
     isSecret: false,
+  },
+
+  {
+    key: 'plugins.hostModelDailyTokens',
+    category: 'security',
+    valueType: 'number',
+    defaultValue: TOKEN_BUDGET_DEFAULTS.pluginDaily,
+    description:
+      'Tokens (input + output) one user\'s plugin model:complete calls and background runs may use per UTC day, all plugin packages together (docs/PLUGIN-PACKAGES.md#host-api). 0 turns plugin model calls off.',
+    isSecret: false,
+  },
+  {
+    key: 'plugins.hostAgentRunTokens',
+    category: 'security',
+    valueType: 'number',
+    defaultValue: TOKEN_BUDGET_DEFAULTS.pluginRun,
+    description:
+      'Tokens one plugin background run (host scope agent:run) may use; its tokens also count in plugins.hostModelDailyTokens (docs/PLUGIN-PACKAGES.md#host-api). 0 turns plugin background runs off.',
+    isSecret: false,
+  },
+  {
+    key: 'plugins.calendarProtectionLevel',
+    category: 'security',
+    valueType: 'number',
+    defaultValue: 3,
+    description:
+      'The protection level (1-4) plugin packages see the connected calendars\' events at (host scopes calendar:read and calendar:write, docs/PLUGIN-PACKAGES.md#mail-and-calendar): events carry no level of their own. A plugin reads them only if it may see this level, and writes to them only from a call that read nothing above it. Default 3 (confidential: events name people).',
+    isSecret: false,
+  },
+
+  {
+    key: 'plugins.marketplace',
+    category: 'security',
+    valueType: 'json',
+    defaultValue: true,
+    description:
+      'The built-in Octipus marketplace (plugins.octipus.cc): true (default) lists and installs from its signed index, false turns it off entirely (never fetched, never trusted). An object { "url": "https://.../index.json", "rootKeys": { "root": "<PEM>", "rootBackup": "<PEM>" } } points it at another index or root keys, for testing or self-hosting. A build without root keys keeps it off. Its signing keys (listed in its root-signed keys.json) are trusted only for packages installed from it.',
+    isSecret: false,
+    envVar: 'PLUGINS_MARKETPLACE',
   },
 
   // ── Protection levels (docs/PROTECTION-LEVELS.md) ──

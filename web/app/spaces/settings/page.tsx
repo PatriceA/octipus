@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { BudgetSection, FundingSection, fundingSummary } from '@/components/spaces/funding-budget';
-import { SpaceConnectors } from '@/components/spaces/space-connectors';
+import { SpaceGithubToken } from '@/components/spaces/space-github';
 import { RoleBadge } from '@/components/workspace-picker';
 import { PageHeader } from '@/components/ui/page-header';
 import type { GuestScope } from '../../../../src/shared/spaces';
@@ -86,7 +86,7 @@ function activityLabel(action: string): string {
 
 /**
  * `/spaces/:id/settings`: a space's name, members, funding and budget
- * (§9.1, §9.2), invites, connectors, activity, archive and purge. Every member reads it; the controls that change the
+ * (§9.1, §9.2), invites, GitHub token, activity, archive and purge. Every member reads it; the controls that change the
  * space (owner only, as the server enforces) are shown to owners only.
  */
 export default function SpaceSettingsPage() {
@@ -318,7 +318,7 @@ export default function SpaceSettingsPage() {
         </section>
       )}
 
-      <SpaceConnectors spaceId={id} canManage={isOwner && !archived} />
+      <SpaceGithubToken spaceId={id} canManage={isOwner && !archived} />
 
       <section aria-label="Activity" className="space-y-2">
         <h2 className="section-label">activity</h2>

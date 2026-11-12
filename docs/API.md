@@ -248,12 +248,6 @@ filesystem or shell isolation.
 | POST | `/api/chat` | Send a chat message. Without a `channel` that can show an approval prompt, the turn is unattended: actions at ASK are refused, not asked. Interactive answers are replaced by a plain line unless the body declares `renders: ["inline_ui"]`; `toolsUsed: true` adds the tool names the turn called (the eval runner) |
 | POST | `/api/chat/approve` | Respond to an approval request |
 
-## Reader
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/reader` | Fetch and extract article/page content |
-
 ## Documents
 
 | Method | Endpoint | Description |
@@ -267,10 +261,10 @@ filesystem or shell isolation.
 
 ## Research
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/research` | Start a deep research job |
-| GET | `/api/research/:jobId` | Get persisted research job status and results |
+The core research endpoints (`/api/research`) are removed: deep research is
+the example plugin `plugins/research`, which a page and agents call as plugin
+tools, and which runs through the plugin host API scopes `agent:run` and
+`documents:write` ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#host-api)).
 
 ## Tasks
 
@@ -311,7 +305,7 @@ inert and stays in the array.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/onboarding` | What is already set up, for the setup guide (models, CLI tools, areas, mailbox, connectors, chats, heartbeat, permissions, role agents, templates, saved progress). Install-wide details for admins only |
+| GET | `/api/onboarding` | What is already set up, for the setup guide (models, CLI tools, areas, mailbox, chats, heartbeat, permissions, role agents, templates, saved progress). Install-wide details for admins only |
 | PUT | `/api/onboarding/progress` | Save the guide's progress (`dismissed`, `useCases`, `answers` without secrets, `completed`) |
 | PUT | `/api/onboarding/standing-instructions` | Write (or append to) the pinned user-level `heartbeat` note (`{body}`) |
 
@@ -417,9 +411,9 @@ Shared workspaces ([SPACES.md](SPACES.md)). A caller who is not a member gets
 | GET | `/api/spaces/:id/file-leases` | member | Live file leases ("Ben is editing"): `{path, holderUserId, holderName, holderKind, expiresAt}` |
 | POST | `/api/spaces/:id/file-leases` | editor, owner | `{path, renew?}` take (or renew) the lease on a space file; 409 `lease_held` with `heldBy` when someone else has it (or a directory above it, or a file under it) |
 | DELETE | `/api/spaces/:id/file-leases?path=` | member | Release your lease |
-| GET | `/api/spaces/:id/connectors` | member | The space's connectors (GitHub, Atlassian, Linear): `{id, name, kind, connected, connectedBy, connectedAt}`; never a value |
-| POST | `/api/spaces/:id/connectors/:connectorId` | owner | Connect: `{token}` for GitHub; an OAuth connector returns `{url}` for the popup, whose callback stores the tokens under the space |
-| DELETE | `/api/spaces/:id/connectors/:connectorId` | owner | Disconnect (the space's secrets of that connector are deactivated) |
+| GET | `/api/spaces/:id/github` | member | Whether the space has a GitHub token: `{connected, connectedBy, connectedAt}`; never the value |
+| PUT | `/api/spaces/:id/github` | owner | `{token}`: store the space's GitHub token (replaces the previous one) |
+| DELETE | `/api/spaces/:id/github` | owner | Remove it → `{removed}` |
 | GET | `/api/spaces/:id/rooms` | member | Rooms I can enter, with `unreadCount` and `muted` |
 | POST | `/api/spaces/:id/rooms` | editor, owner | `{title, visibility: "space" \| "private", memberIds?}` |
 | GET | `/api/spaces/:id/rooms/:roomId/messages` | room access | `?before=&after=&limit=` (message ids); posts and replies with `authorUserId`, `authorName` |
@@ -662,38 +656,43 @@ required by their routes; see `src/security/scopes.ts` for supported names.
 | GET | `/api/auth/oauth/:provider/callback` | OAuth callback |
 | POST | `/api/auth/oauth/:provider/disconnect` | Disconnect OAuth provider |
 
-## Connectors
+## Code index
 
-A connector is a remote MCP server the user authorises once, per user, over
-OAuth 2.1 with PKCE. Octipus registers itself as a public client dynamically
-against the server's own discovery document, so a connector is a definition
-file (id, name, MCP endpoint, discovery URL, scopes) and nothing else — there
-is no per-connector OAuth code. Built in today: **Atlassian** (Jira and
-Confluence) and **Linear**.
+The optional CocoIndex Code index (Knowledge page →
+[MCP-INTEGRATION.md](MCP-INTEGRATION.md#optional-code-search-with-cocoindex-code)): a managed MCP
+server that finds code by meaning.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/connectors` | List available connectors with this user's connection status |
-| POST | `/api/connectors/:id/authorize` | Start the OAuth flow; returns `{ url }` to open in a popup |
-| GET | `/api/connectors/:id/callback` | OAuth redirect target; posts `connector:connected` to the opener |
-| DELETE | `/api/connectors/:id` | Disconnect — deletes this user's stored tokens |
+| GET | `/api/code-index/cocoindex` | Status; a member gets it without paths or diagnostics |
+| POST | `/api/code-index/cocoindex/install` | Admin: `{workspacePath, embeddingSource?: "local" \| "octipus", embeddingModel?}` → `202` and the status; installs or reconfigures in the background |
+| DELETE | `/api/code-index/cocoindex` | Admin: disconnect and remove the managed server (the package and index files stay) |
+| POST | `/api/code-index/cocoindex/:side/embeddings` | Admin token only: the OpenAI-compatible endpoint the managed daemon embeds through with the embedding topic's model (`side`: `document` or `query`) |
 
-Tokens live in the vault under `connector_<id>_access_token` /
-`_refresh_token` / `_token_expiry`, per user; the dynamically registered client
-and its endpoints are system-scoped under `connector_<id>_client_id` /
-`_auth_endpoint` / `_token_endpoint`.
+The built-in OAuth connector framework (`/api/connectors`, the space
+connectors, `connector_list_tools` / `connector_call_tool`) was removed; a
+[plugin package](PLUGIN-PACKAGES.md) brings its own tools, network hosts and
+secrets instead.
 
-Every connected connector is reachable through the generic
-`connector_list_tools` / `connector_call_tool` pair. Atlassian additionally has
-named tools (`atlassian_sites`, `jira_search`, `jira_get_issue`,
-`jira_create_issue`, `jira_update_issue`, `jira_comment`,
-`jira_transition_issue`, `jira_list_projects`, `confluence_search`,
-`confluence_get_page`, `confluence_create_page`, `confluence_update_page`),
-held by the `pm` role. Those resolve the remote tool by capability rather than
-by a hard-coded name — an ordered list of candidate names and argument names,
-matched against the server's own `tools/list` at call time — so a vendor
-rename does not silently kill the tool group. When nothing matches, the error
-names the remote tools that do exist.
+## Plugin host API
+
+Called only by a plugin package's own tool calls, through its egress proxy,
+with the per-call token (`Bearer ocph_…`); a session or API token gives
+nothing here ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#host-api)).
+
+| Method | Endpoint | Scope |
+|--------|----------|-------|
+| GET | `/api/plugin-host/whoami` | — |
+| GET / POST | `/api/plugin-host/notes` | `notes:read` / `notes:write` |
+| GET / POST | `/api/plugin-host/tasks` | `tasks:read` / `tasks:write` |
+| GET | `/api/plugin-host/documents/:id` | `documents:read` |
+| POST | `/api/plugin-host/documents` | `documents:write` (create a text document) |
+| PUT | `/api/plugin-host/documents/:id` | `documents:write` (update one the package created) |
+| POST | `/api/plugin-host/notify` | `notify` |
+| POST | `/api/plugin-host/web/read` | `web:read` |
+| POST | `/api/plugin-host/model/complete` | `model:complete` |
+| POST | `/api/plugin-host/agent/runs` | `agent:run` (start a background run; `202 { id }`) |
+| GET | `/api/plugin-host/agent/runs/:id` | `agent:run` (a run's status and result) |
 
 ## Plugins
 

@@ -1,0 +1,14 @@
+{
+  "name": "my-store",
+  "version": "0.1.0",
+  "apiVersion": "1.0.0",
+  "title": "My store",
+  "description": "A starting point: per-user data kept by Octipus in the plugin's store (store:read, store:write), never in the shared data directory.",
+  "server": { "command": "node", "args": ["server.mjs"] },
+  "tools": {
+    "remember": { "effect": "write", "description": "Remember a short text for the user who asks, under a name" },
+    "recall": { "effect": "read", "description": "Recall what the user who asks remembered under a name, or list the names" }
+  },
+  "host": ["store:read", "store:write"],
+  "store": { "quotaBytes": 1048576 }
+}

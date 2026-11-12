@@ -16,7 +16,6 @@ const fresh = (over: Partial<OnboardingState> = {}): OnboardingState => ({
   workspaces: [{ id: 'w1', name: 'Personal', slug: 'personal', kind: 'personal', isDefault: true }],
   mailbox: null,
   oauthClients: { google: true, microsoft: false },
-  connectors: [{ id: 'atlassian', name: 'Atlassian', connected: false }, { id: 'linear', name: 'Linear', connected: false }],
   channels: { configured: [], linked: [] },
   heartbeat: { serverEnabled: false, enabled: false, watchEmail: false, intervalMinutes: null, timezone: 'UTC' },
   permissions: { tasksWrite: 'ASK', messagingSend: 'ASK' },
@@ -136,17 +135,18 @@ describe('chat', () => {
 });
 
 describe('software development', () => {
-  test('coding CLIs, the repositories folder, Jira, and a coding agent through the dev pipeline', () => {
+  test('coding CLIs, the repositories folder, GitHub issues, and a coding agent through the dev pipeline', () => {
     const steps = plan(['development'], {
       'models.source': 'keep', 'dev.cli': ['cli/claude-code', 'cli/codex'], 'dev.cliForBuild': true, 'dev.root': '/home/me/code',
-      'dev.githubToken': 'ghp_x', 'tools.tracker': 'jira', 'dev.roleAgent': true,
+      'dev.githubToken': 'ghp_x', 'tools.tracker': 'github', 'dev.roleAgent': true,
     });
     // Codex is not installed: not added.
-    expect(ids(steps)).toEqual(expect.arrayContaining(['model:Claude Code CLI', 'bind:build', 'workspace-root', 'vault:github_token', 'connect:atlassian',
+    expect(ids(steps)).toEqual(expect.arrayContaining(['model:Claude Code CLI', 'bind:build', 'workspace-root', 'vault:github_token',
       'setting:heartbeat.enabled', 'perm:tasks/write', 'role:coding']));
     expect(ids(steps)).not.toContain('model:Codex CLI');
     expect(step(steps, 'role:coding')).toMatchObject({ call: { body: { role: 'coding', enabled: true, pipelineTemplate: 'tpl-dev' } } });
-    expect(step(steps, 'connect:atlassian')).toMatchObject({ kind: 'connect', start: { method: 'POST', path: '/connectors/atlassian/authorize' } });
+    // GitHub issues go through the GitHub tool: nothing to connect.
+    expect(steps.filter((s) => s.kind === 'connect')).toEqual([]);
   });
 
   test('the coding lane is bound after "use it for all work", which would overwrite it', () => {
@@ -158,6 +158,21 @@ describe('software development', () => {
   test('another tracker by its MCP address (admins)', () => {
     const steps = plan(['development'], { 'tools.tracker': 'mcp', 'tools.mcpName': 'youtrack', 'tools.mcpUrl': 'https://yt.example.com/mcp' });
     expect(step(steps, 'mcp:youtrack')).toMatchObject({ call: { path: '/mcp/servers', body: { transport: 'streamable-http', sseUrl: 'https://yt.example.com/mcp' } } });
+  });
+
+  test('a tracker answer saved before Jira and Linear were removed plans nothing', () => {
+    for (const tracker of ['jira', 'linear']) {
+      const steps = plan(['development'], { 'tools.tracker': tracker });
+      expect(ids(steps).filter((id) => id.startsWith('connect:') || id.startsWith('mcp:'))).toEqual([]);
+    }
+  });
+
+  test('the tracker question offers GitHub, an MCP server (admins) and none', async () => {
+    const { SECTIONS } = await import('./use-cases');
+    const question = SECTIONS.find((s) => s.id === 'tools')!.questions.find((q) => q.id === 'tools.tracker')!;
+    const values = (isAdmin: boolean) => (question.options as (s: OnboardingState, a: Answers) => Array<{ value: string }>)(fresh({ isAdmin }), {}).map((o) => o.value);
+    expect(values(true)).toEqual(['github', 'mcp', 'none']);
+    expect(values(false)).toEqual(['github', 'none']);
   });
 
   test('an agent already on the same way is not touched', () => {
@@ -199,19 +214,18 @@ describe('running a company', () => {
 });
 
 describe('already set up before the guide', () => {
-  test('a connected mailbox, an inbox already watched, Jira already connected and allowed permissions are all listed as done', () => {
+  test('a connected mailbox, an inbox already watched and allowed permissions are all listed as done', () => {
     const state = fresh({
       mailbox: 'google',
-      connectors: [{ id: 'atlassian', name: 'Atlassian', connected: true }],
       heartbeat: { serverEnabled: true, enabled: true, watchEmail: true, intervalMinutes: 15, timezone: 'UTC' },
       permissions: { tasksWrite: 'ALLOW', messagingSend: 'ALLOW' },
       workspaceRoot: '/home/me/code',
     });
     const steps = plan(['company', 'development'], {
-      'company.mail': true, 'company.interval': '15', 'tools.tracker': 'jira', 'dev.root': '/home/me/code', 'company.ideas': false, 'dev.roleAgent': false,
+      'company.mail': true, 'company.interval': '15', 'tools.tracker': 'github', 'dev.root': '/home/me/code', 'company.ideas': false, 'dev.roleAgent': false,
     }, state);
     expect(found(steps)).toEqual(expect.arrayContaining([
-      'connect:mailbox', 'heartbeat:me', 'connect:atlassian', 'perm:tasks/write', 'perm:messaging/send', 'setting:heartbeat.enabled', 'workspace-root',
+      'connect:mailbox', 'heartbeat:me', 'perm:tasks/write', 'perm:messaging/send', 'setting:heartbeat.enabled', 'workspace-root',
     ]));
     expect(steps.filter((s) => s.kind === 'connect')).toEqual([]);
   });
@@ -240,6 +254,13 @@ describe('answers', () => {
 });
 
 describe('modules', () => {
+  test('research offers no Reader and no research plugin: they are the example plugins, not product features', () => {
+    const steps = plan(['research'], { 'research.roleAgent': true });
+    expect(ids(steps)).not.toContain('plugin:reader');
+    expect(ids(steps)).not.toContain('plugin:research');
+    expect(steps.map((s) => s.title).join('\n')).not.toMatch(/reader|research jobs|plugin/i);
+  });
+
   test('development: the core only, no module step', () => {
     expect(ids(plan(['development'], {}))).not.toContain('modules');
   });
@@ -250,7 +271,7 @@ describe('modules', () => {
   });
 
   test('only what is missing is turned on; nothing is ever turned off', () => {
-    const some = plan(['company'], { 'company.mail': false }, fresh({ modules: { enabled: ['mail', 'research'], byUseCase: fresh().modules.byUseCase } }));
+    const some = plan(['company'], { 'company.mail': false }, fresh({ modules: { enabled: ['mail', 'recall'], byUseCase: fresh().modules.byUseCase } }));
     expect(step(some, 'modules')).toMatchObject({ call: { body: { ids: ['business'] } } });
     const all = plan(['company'], { 'company.mail': false }, fresh({ modules: { enabled: ['business', 'mail'], byUseCase: fresh().modules.byUseCase } }));
     expect(found(all)).toContain('modules');

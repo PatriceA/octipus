@@ -11,66 +11,67 @@
 @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 @import 'tailwindcss';
+@import './workspace-design.css';
 
 @custom-variant dark (&:is(.dark *));
 
-/* Deep Sea: shared identity with octipus.cc. Semantic tokens keep existing screens consistent. */
+/* Project Desk: clear work surfaces and marine identity. The navigation rail keeps its ink palette. */
 @theme {
-  /* Backgrounds ------------------------------------------------------ */
-  --color-background: #071923;
+  /* Work canvas ------------------------------------------------------ */
+  --color-background: #eef1f3;
   --color-companion-paper: #f0eee5;
   --color-on-companion-paper: #17363e;
-  --color-foreground: #edf5f3;
+  --color-foreground: #20323d;
 
   /* Primary — sea glass ------------------------------------ */
-  --color-primary: #92c9c5;
-  --color-primary-dim: #73aaa7;
-  --color-primary-container: #163b44;       /* selection-tinted block */
-  --color-primary-fixed: #92c9c5;
-  --color-primary-fixed-dim: #73aaa7;
+  --color-primary: #265e59;
+  --color-primary-dim: #204f4b;
+  --color-primary-container: #d7eae2;       /* selection-tinted block */
+  --color-primary-fixed: #265e59;
+  --color-primary-fixed-dim: #204f4b;
 
-  /* Secondary — ice blue for muted emphasis -------------------------- */
-  --color-secondary: #cce3e1;
-  --color-secondary-dim: #a6babd;
-  --color-secondary-container: #16303a;
-  --color-secondary-fixed: #cce3e1;
-  --color-secondary-fixed-dim: #a6babd;
+  /* Secondary — Companion lavender ---------------------------------- */
+  --color-secondary: #655393;
+  --color-secondary-dim: #584780;
+  --color-secondary-container: #ece8f5;
+  --color-secondary-fixed: #655393;
+  --color-secondary-fixed-dim: #584780;
 
   /* Tertiary — web semantic is "success / OK" → mobile mint ---------- */
-  --color-tertiary: #a8d4b7;
-  --color-tertiary-dim: #8cb69a;
-  --color-tertiary-container: #1C2F24;
+  --color-tertiary: #267252;
+  --color-tertiary-dim: #226347;
+  --color-tertiary-container: #e3f1e9;
   --color-tertiary-fixed: #a8d4b7;
   --color-tertiary-fixed-dim: #8cb69a;
 
   /* Accent — coral for restrained emphasis ------- */
-  --color-accent: #efa99b;
-  --color-accent-dim: #cf806d;
-  --color-accent-container: #3d2c2b;
-  --color-on-accent: #44271f;
+  --color-accent: #955e22;
+  --color-accent-dim: #7b4c1b;
+  --color-accent-container: #fbefdd;
+  --color-on-accent: #ffffff;
 
   /* Error ----------------------------------------------------------- */
-  --color-error: #f0a49a;
-  --color-error-dim: #D85550;
-  --color-error-container: #3A1B1A;
+  --color-error: #b63f35;
+  --color-error-dim: #9a352d;
+  --color-error-container: #fbe9e7;
 
   /* Warning ---------------------------------------------------------- */
-  --color-warning: #e6c291;
-  --color-warning-dim: #D9AE55;
-  --color-warning-container: #3A2F18;
+  --color-warning: #8f6114;
+  --color-warning-dim: #795211;
+  --color-warning-container: #fbf1dd;
 
-  /* Surfaces — neutral grays, every layer a step brighter ------------ */
-  --color-surface: #102a35;
-  --color-surface-dim: #071923;
-  --color-surface-bright: #24434e;
-  --color-surface-variant: #16323e;
-  --color-surface-tint: #92c9c5;
+  /* Surfaces — readable panels on a quiet canvas ---------------------- */
+  --color-surface: #ffffff;
+  --color-surface-dim: #eef1f3;
+  --color-surface-bright: #ffffff;
+  --color-surface-variant: #e4eaee;
+  --color-surface-tint: #265e59;
 
-  --color-surface-container: #0d2530;
-  --color-surface-container-low: #0a202b;
-  --color-surface-container-high: #14303b;
-  --color-surface-container-highest: #1b3b46;
-  --color-surface-container-lowest: #06151e;
+  --color-surface-container: #ffffff;
+  --color-surface-container-low: #f7f9fa;
+  --color-surface-container-high: #eef3f5;
+  --color-surface-container-highest: #e0e8ec;
+  --color-surface-container-lowest: #f8fafb;
 
   /* Outlines (single-line dim borders — TUI feel) -------------------
      `outline-variant` is the default border colour for every element
@@ -79,32 +80,32 @@
      on: inputs, cards and table cells were invisible rectangles and the
      UI read as unstyled. Lifted until an edge is legible, with a slight
      cool bias toward the periwinkle accent so it reads chosen. */
-  --color-outline: #748f97;
-  --color-outline-variant: #34515b;
+  --color-outline: #718793;
+  --color-outline-variant: #cbd6dc;
 
   /* Text-on-* (use these instead of hardcoded #fff) ----------------- */
-  --color-on-surface: #edf5f3;
-  --color-on-surface-variant: #b6cbd0;
+  --color-on-surface: #20323d;
+  --color-on-surface-variant: #536977;
 
-  --color-on-primary: #08202a;          /* dark text on accent buttons */
-  --color-on-primary-container: #cce3e1;
-  --color-on-primary-fixed: #08202a;
-  --color-on-primary-fixed-variant: #cce3e1;
+  --color-on-primary: #ffffff;          /* foreground for solid primary buttons */
+  --color-on-primary-container: #204d41;
+  --color-on-primary-fixed: #ffffff;
+  --color-on-primary-fixed-variant: #204d41;
 
-  --color-on-secondary: #455367;
-  --color-on-secondary-container: #edf5f3;
-  --color-on-secondary-fixed: #455367;
-  --color-on-secondary-fixed-variant: #edf5f3;
+  --color-on-secondary: #ffffff;
+  --color-on-secondary-container: #44345f;
+  --color-on-secondary-fixed: #ffffff;
+  --color-on-secondary-fixed-variant: #44345f;
 
-  --color-on-tertiary: #053321;
-  --color-on-tertiary-container: #edf5f3;
-  --color-on-tertiary-fixed: #053321;
-  --color-on-tertiary-fixed-variant: #edf5f3;
+  --color-on-tertiary: #ffffff;
+  --color-on-tertiary-container: #24523c;
+  --color-on-tertiary-fixed: #194a34;
+  --color-on-tertiary-fixed-variant: #24523c;
 
-  --color-on-error: #490006;
-  --color-on-error-container: #edf5f3;
-  --color-on-warning: #4A3200;
-  --color-on-warning-container: #edf5f3;
+  --color-on-error: #ffffff;
+  --color-on-error-container: #822f29;
+  --color-on-warning: #ffffff;
+  --color-on-warning-container: #724d13;
 
   --color-inverse-surface: #edf5f3;
   --color-inverse-on-surface: #071923;
@@ -141,13 +142,13 @@
 }
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 body {
   font-family: 'Manrope', ui-sans-serif, system-ui, sans-serif;
-  color: #edf5f3;
-  background: #071923;
+  color: var(--color-on-surface);
+  background: var(--color-background);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -177,7 +178,7 @@ h1 { letter-spacing: -0.02em; }
 
 /* ── Scrollbar — thin, hairline-toned ────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #071923; }
+::-webkit-scrollbar-track { background: var(--color-background); }
 ::-webkit-scrollbar-thumb {
   background: #34515b;
   border-radius: 2px;
@@ -188,11 +189,11 @@ button, a { transition: all 0.12s ease; }
 
 /* Native dropdown popups are rendered by the browser/OS and do not inherit
    Tailwind utility classes from the <select>. Give both the closed control and
-   its popup rows explicit Deep Sea colors so Chromium/WebKit do not fall back
+   its popup rows explicit workspace colors so Chromium/WebKit do not fall back
    to a gray field with a white option menu. Keep sizing and radius local to
    each screen. */
 select:not([multiple]) {
-  color-scheme: dark;
+  color-scheme: inherit;
   color: var(--color-on-surface);
   background-color: var(--color-surface-container-high);
   border-color: var(--color-outline-variant);
@@ -222,7 +223,7 @@ select:not([multiple]):disabled {
   opacity: 0.65;
 }
 
-/* ── Focus ring — accent-blue, sharp ─────────────────────────────── */
+/* ── Focus ring — primary, visible ─────────────────────────────── */
 .focus-ring {
   @apply focus:outline-hidden focus:ring-1 focus:ring-primary focus:ring-offset-0;
 }
@@ -259,11 +260,11 @@ select:not([multiple]):disabled {
 }
 
 
-/* Single-line dim frame — the web equivalent of a TUI bordered pane.
-   Pair with surface bg for the "panel" look. */
+/* Shared panels follow the current surface and text palette together. */
 .term-frame {
-  border: 1px solid #34515b;
-  background: #0d2530;
+  border: 1px solid var(--color-outline-variant);
+  background: var(--color-surface-container);
+  color: var(--color-on-surface);
 }
 
 /* Status dots — small coloured circles for connection / health state. */
@@ -404,4 +405,66 @@ select:not([multiple]):disabled {
 
 @media (min-width: 701px) {
   .workspace-chat:has(.workspace-file-view) .workspace-inspector { display: none; }
+}
+
+/* Palette overrides keep every semantic utility on the same theme. */
+:root.dark {
+  --color-background: #101b23;
+  --color-companion-paper: #1b2c32;
+  --color-on-companion-paper: #d2e5e4;
+  --color-foreground: #e0e9ed;
+  --color-primary: #9cd7c7;
+  --color-primary-dim: #83bfaf;
+  --color-primary-container: #24483e;
+  --color-primary-fixed: #9cd7c7;
+  --color-primary-fixed-dim: #83bfaf;
+  --color-on-primary: #102f2b;
+  --color-on-primary-container: #c6efdf;
+  --color-on-primary-fixed: #102f2b;
+  --color-on-primary-fixed-variant: #c6efdf;
+  --color-secondary: #c6b7f1;
+  --color-secondary-dim: #b2a1e1;
+  --color-secondary-container: #393047;
+  --color-secondary-fixed: #c6b7f1;
+  --color-secondary-fixed-dim: #b2a1e1;
+  --color-on-secondary: #2b2041;
+  --color-on-secondary-container: #e3d8fa;
+  --color-on-secondary-fixed: #2b2041;
+  --color-on-secondary-fixed-variant: #e3d8fa;
+  --color-tertiary: #a1d8b7;
+  --color-tertiary-dim: #8cc3a2;
+  --color-tertiary-container: #233e32;
+  --color-on-tertiary: #163325;
+  --color-on-tertiary-container: #c7ecd4;
+  --color-accent: #ebba80;
+  --color-accent-dim: #d5a66d;
+  --color-accent-container: #493824;
+  --color-on-accent: #34240f;
+  --color-error: #ffb4ab;
+  --color-error-dim: #e89c94;
+  --color-error-container: #512d2b;
+  --color-on-error: #441812;
+  --color-on-error-container: #ffd9d4;
+  --color-warning: #e7c47f;
+  --color-warning-dim: #cfae69;
+  --color-warning-container: #423821;
+  --color-on-warning: #32270f;
+  --color-on-warning-container: #f4dfa9;
+  --color-surface: #16242d;
+  --color-surface-dim: #101b23;
+  --color-surface-bright: #263b47;
+  --color-surface-variant: #30434f;
+  --color-surface-tint: #9cd7c7;
+  --color-surface-container: #192a34;
+  --color-surface-container-low: #15232c;
+  --color-surface-container-high: #233742;
+  --color-surface-container-highest: #304752;
+  --color-surface-container-lowest: #101d25;
+  --color-outline: #8da3ae;
+  --color-outline-variant: #425865;
+  --color-on-surface: #e0e9ed;
+  --color-on-surface-variant: #b2c4ce;
+  --color-inverse-surface: #e0e9ed;
+  --color-inverse-on-surface: #192a34;
+  --color-inverse-primary: #265e59;
 }

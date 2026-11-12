@@ -35,6 +35,8 @@ export interface MailListFilter {
   /** Messages older than this (a cursor: the last row's date and id). */
   before?: { date: Date; id: string };
   limit?: number;
+  /** Only messages at this protection level or below (a message without a level counts as 4). */
+  maxLevel?: number;
 }
 
 /** A message row without its bodies, for lists. */
@@ -115,6 +117,7 @@ export class MailRepo {
     }
     if (filter.status) filters.push(eq(mailMessages.status, filter.status));
     if (filter.unread) filters.push(eq(mailMessages.unread, true));
+    if (filter.maxLevel !== undefined) filters.push(sql`coalesce(${mailMessages.protectionLevel}, 4) <= ${filter.maxLevel}`);
     const q = filter.q?.trim();
     if (q) {
       const pattern = likePattern(q);
@@ -180,8 +183,11 @@ export class MailRepo {
   // ── Drafts ────────────────────────────────────────────────────────
 
   /** A new draft in `account` (an account of this scope). */
-  /** `protectionLevel`: absent, the account's default; a reply passes the higher of that and the original's. */
-  async createDraft(account: MailAccount, data: MailDraftWrite, protectionLevel?: number | null): Promise<MailMessage> {
+  /**
+   * `protectionLevel`: absent, the account's default; a reply passes the higher of that and the original's.
+   * `pluginSource`: the plugin package and tool that composed it (the host API).
+   */
+  async createDraft(account: MailAccount, data: MailDraftWrite, protectionLevel?: number | null, pluginSource?: { plugin: string; tool: string; replyTo?: string }): Promise<MailMessage> {
     this.scope.can('write');
     if (!(await this.account(account.id))) throw new Error('Mail account not found');
     const now = new Date();
@@ -197,6 +203,7 @@ export class MailRepo {
         fromAddress: { address: account.address, ...(account.displayName ? { name: account.displayName } : {}) },
         snippet: data.bodyText ? data.bodyText.replace(/\s+/g, ' ').trim().slice(0, 200) : '',
         authorId: this.scope.principal.userId,
+        ...(pluginSource ? { pluginSource } : {}),
         date: now,
       })
       .returning();

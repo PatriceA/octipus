@@ -1,4 +1,4 @@
-vi.mock('@/security/credential-redaction', () => ({ redactAgentDiagnostics: async (_user: string, _workspace: string, data: unknown) => data }));
+vi.mock('@/security/credential-redaction', async importOriginal => ({ ...await importOriginal<typeof import('@/security/credential-redaction')>(), redactAgentDiagnostics: async (_user: string, _workspace: string, data: unknown) => data }));
 vi.mock('./cli-executable', () => ({ configuredCliBinary: (binary: string) => binary }));
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,7 +12,7 @@ import { addPlanFeedback, type WorkPlanState } from '@/shared/work-plan';
 const fixture = vi.hoisted(() => ({ script: '', dir: '', plan: { revision: 0, current: null, previous: [] } as WorkPlanState,
   check: vi.fn(), execute: vi.fn(), cancel: vi.fn(), readFailure: false, audit: vi.fn(), status: vi.fn(), requestApproval: vi.fn(),
   wait: vi.fn(), waitListener: undefined as undefined | ((agentId: string, waiting: boolean, requestId: string) => void),
-  sessionWorkspaceId: null as string | null }));
+  sessionOwner: 'u', sessionWorkspaceId: null as string | null }));
 const commentary = vi.hoisted(() => vi.fn().mockResolvedValue({ sent: true }));
 
 it.each(['run', 'commands'] as const)('run context tells workers the actual %s permission scope', async executionScope => {
@@ -55,7 +55,7 @@ vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getModel:
 vi.mock('@/models/quota-tracker', () => ({ cliQuotaKey: (provider: string) => provider, getQuotaTracker: () => ({ getStatus: async () => ({ exhausted: false }) }) }));
 vi.mock('@/core/agent-task-recorder', () => ({ recordAgentCompletion: async () => {} }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
-  findById: async () => ({ id: 's', userId: 'u', workspaceId: fixture.sessionWorkspaceId, context: { devMode: true, projectPath: fixture.dir, planMode: false } }),
+  findById: async () => ({ id: 's', userId: fixture.sessionOwner, workspaceId: fixture.sessionWorkspaceId, context: { devMode: true, projectPath: fixture.dir, planMode: false } }),
   incrementMessageCount: async () => {},
   patchContextIfGeneration: async () => true,
   setContextKeyIfGeneration: async () => true,
@@ -63,11 +63,11 @@ vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
 vi.mock('@/db/repositories/work-plan-repository', () => ({ workPlanRepository: {
   read: async (sessionId: string, userId: string) => {
     if (fixture.readFailure) { fixture.readFailure = false; throw new Error('Context database unavailable'); }
-    if (sessionId !== 's' || userId !== 'u') throw new Error('Wrong plan owner');
+    if (sessionId !== 's' || userId !== fixture.sessionOwner) throw new Error('Wrong plan owner');
     return structuredClone(fixture.plan);
   },
   save: async (sessionId: string, userId: string, revision: number, next: WorkPlanState) => {
-    if (sessionId !== 's' || userId !== 'u' || revision !== fixture.plan.revision) throw new Error('Plan conflict');
+    if (sessionId !== 's' || userId !== fixture.sessionOwner || revision !== fixture.plan.revision) throw new Error('Plan conflict');
     fixture.plan = structuredClone(next);
   },
 } }));
@@ -79,11 +79,12 @@ vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ check:
 vi.mock('@/hooks/manager', () => ({ getHookManager: () => ({ triggerToolHooks: async () => ({ decision: 'allow' }) }) }));
 // A space run builds its tool home from the space's GitHub connection and the
 // member's name; this lane has no database, so both read as absent.
-vi.mock('@/core/spaces/connectors', () => ({ spaceGithubToken: async () => null }));
+vi.mock('@/core/spaces/github-token', () => ({ spaceGithubToken: async () => null }));
 vi.mock('@/db/repositories/user-repository', () => ({ userRepository: { findById: async () => null } }));
 
 beforeEach(() => {
   commentary.mockClear();
+  fixture.sessionOwner = 'u';
   fixture.dir = mkdtempSync(join(tmpdir(), 'octipus-cli-workflow-'));
   fixture.script = join(fixture.dir, 'fake-claude.mjs');
   fixture.plan = { revision: 0, current: null, previous: [] };
@@ -458,18 +459,18 @@ it.each([true, false])('accepts a delayed approval decision beyond the bridge ba
     fixture.waitListener?.('a', false, requestId);
     return approved;
   });
-  fixture.execute.mockResolvedValue('jira result');
+  fixture.execute.mockResolvedValue('remote result');
   writeFileSync(fixture.script, `
     const response = await fetch(process.env.OCTIPUS_AGENT_URL + '/call', {method:'POST',
       headers:{Authorization:'Bearer '+process.env.OCTIPUS_AGENT_KEY},body:JSON.stringify({name:'approval_sample',arguments:{}})});
     const result = await response.json();
     console.log(JSON.stringify({type:'result',subtype:'success',result:JSON.stringify(result),num_turns:1}));
   `);
-  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own', id: 'a', sessionId: 's', userId: 'u', root: true, model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own', id: 'a', sessionId: 's', userId: 'u', root: true, attended: true, model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
   worker.registerTool({ name: 'approval_sample', toolId: 'sample', description: '', parameters: { type: 'object' }, execute: fixture.execute });
   try {
-    if (approved) await expect(worker.run('sample')).resolves.toContain('jira result');
+    if (approved) await expect(worker.run('sample')).resolves.toContain('remote result');
     else await expect(worker.run('sample')).rejects.toThrow('approval was not granted');
     expect(fixture.execute).toHaveBeenCalledTimes(approved ? 1 : 0);
   } finally { worker.stop(); timerSpy.mockRestore(); }
@@ -493,7 +494,7 @@ it.each(['deadline', 'disconnect', 'premature-finish'] as const)('approval %s en
       headers:{Authorization:'Bearer '+process.env.OCTIPUS_AGENT_KEY},body:JSON.stringify({name:'approval_sample',arguments:{}})}).catch(()=>{});
     setInterval(()=>{},1000);
   `);
-  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own', id: 'a', sessionId: 's', userId: 'u', root: true, model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own', id: 'a', sessionId: 's', userId: 'u', root: true, attended: true, model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
   worker.registerTool({ name:'approval_sample', toolId:'sample', description:'', parameters:{type:'object'}, execute:fixture.execute });
   try {
@@ -810,4 +811,33 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('preserves a process crash after an ac
   const worker=sampleWorker();let sent=false;
   worker.onEvent(event=>{if(!sent&&(event.data as {type?:string}).type==='iteration_update'){sent=true;worker.steer({role:'user',content:'New guidance',timestamp:new Date()});}});
   await expect(worker.run('sample')).rejects.toThrow(/exited with code 1/);expect(worker.getStatus()).toBe('failed');
+});
+
+it.skipIf(!!process.env.OCTIPUS_LIVE_CLI).each(['json', 'raw'] as const)('native workstation CLI uses normal identity and redacts credential-bearing banners and trailing %s', async trailing => {
+  const { getConfig } = await import('@/config');
+  const { workstationAutomationPreset } = await import('@/shared/execution-environment');
+  const { homedir } = await import('node:os');
+  const old = getConfig().security.executionEnvironments;
+  const owner = '11111111-1111-4111-8111-111111111111';
+  const secret = 'synthetic-host-gh-secret';
+  vi.stubEnv('GH_TOKEN', secret); fixture.sessionOwner = owner;
+  getConfig().security.executionEnvironments = [{ ...workstationAutomationPreset(owner, 'account-cli', [fixture.dir]), isDefault: true }];
+  writeFileSync(fixture.script, `
+    process.stdin.resume();
+    for(let i=0;i<6;i++)console.log('banner '+process.env.GH_TOKEN);
+    if (${JSON.stringify(trailing)}==='json') {
+      console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:process.env.GH_TOKEN}]}}));
+      process.stdout.write(JSON.stringify({type:'result',subtype:'success',result:process.env.HOME+' '+process.env.GH_TOKEN,num_turns:1}));
+    } else process.stdout.write(process.env.HOME+' '+process.env.GH_TOKEN);
+    setTimeout(()=>process.exit(0),25);
+  `);
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own', id: 'native-identity', sessionId: 's', userId: owner, model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: { executionEnvironmentId: 'account-cli', devMode: true, projectPath: fixture.dir } },
+    { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
+  const events: unknown[] = []; worker.onEvent(event => events.push(event));
+  try {
+    const result = await worker.run('Report runtime identity');
+    expect(result).toContain(homedir()); expect(result).not.toContain(secret);
+    expect(JSON.stringify(events)).not.toContain(secret);
+    expect(events.some(event => JSON.stringify(event).includes('non-JSON output'))).toBe(true);
+  } finally { getConfig().security.executionEnvironments = old; vi.unstubAllEnvs(); }
 });

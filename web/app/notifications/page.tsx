@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Bell, Check, CheckCheck, Loader2, PauseCircle, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { AwayDigestCard } from '@/components/dashboard/away-digest';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import type { Notification } from '@/lib/types/notifications';
@@ -98,6 +99,7 @@ function assertOk(res: MutationResponse): void {
 }
 
 export default function NotificationsPage() {
+  const [showSummary, setShowSummary] = useState(false);
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<Filter>('unread');
   // Pages after the first, loaded on demand; reset whenever the filter changes.
@@ -229,6 +231,7 @@ export default function NotificationsPage() {
         </div>
       )}
 
+      <div><button type="button" className="desk-link" aria-expanded={showSummary} onClick={() => setShowSummary(value => !value)}>{showSummary ? 'Hide visit summary' : 'Show visit summary'}</button>{showSummary && <div className="mt-3"><AwayDigestCard /></div>}</div>
       <div className="flex items-center gap-2 text-sm text-on-surface-variant">
         <span>Show</span>
         {FILTERS.map((f) => (

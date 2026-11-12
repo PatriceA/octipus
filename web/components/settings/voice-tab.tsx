@@ -157,7 +157,7 @@ export function VoiceTab() {
             <button
               onClick={testConnection}
               disabled={testingHealth}
-              className="px-4 py-2 bg-primary text-on-primary rounded-lg text-sm font-medium hover:bg-primary-container disabled:opacity-50"
+              className="px-4 py-2 bg-primary text-on-primary rounded-lg text-sm font-medium hover:bg-primary-dim disabled:opacity-50"
             >
               {testingHealth ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Test Connection'}
             </button>

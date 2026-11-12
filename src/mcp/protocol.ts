@@ -61,6 +61,12 @@ export const MCPErrorCodes = {
   UnknownError: -32001,
 } as const;
 
+/** The MCP protocol version the bridge asks for in `initialize`. */
+export const MCP_PROTOCOL_VERSION = '2024-11-05';
+
+/** How long a request waits for its answer unless a server sets `requestTimeoutMs`. */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
 export class MCPProtocol extends EventEmitter {
   private messageId = 0;
   private pendingRequests: Map<string | number, {
@@ -68,7 +74,7 @@ export class MCPProtocol extends EventEmitter {
     reject: (error: Error) => void;
     timeout: ReturnType<typeof setTimeout>;
   }> = new Map();
-  private requestTimeout = 30000;
+  private requestTimeout = DEFAULT_REQUEST_TIMEOUT_MS;
 
   /**
    * Generate a unique message ID

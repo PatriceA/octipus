@@ -1,8 +1,7 @@
 /**
  * Swarm ledger — append-only event log + deterministic replay/reconcile.
  *
- * Idea #2 from `.octipus/codewhale-borrowed-ideas.md` (CodeWhale's Fleet
- * ledger). `swarm_nodes` holds current state; this holds the *history* of
+ * Borrowed from CodeWhale's Fleet ledger. `swarm_nodes` holds current state; this holds the *history* of
  * transitions so a swarm interrupted by a crash/restart can be replayed and
  * reconciled deterministically.
  *

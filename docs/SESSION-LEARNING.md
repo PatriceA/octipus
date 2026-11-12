@@ -4,10 +4,12 @@ Session learning runs through the durable `background_jobs` queue (`kind=learnin
 
 ## Triggers
 
-- Execution-plan steps newly marked done: one check per revision, even if several steps finish together.
-- Full execution-plan completion: all steps done or skipped, with at least one done step. This replaces the final step check rather than adding a second check. Proposals, repeated status updates and stale writes do not trigger checks.
-- Successful substantial turns: at least six recorded tool-result events, or at least two minutes with a recorded result. Work already covered by a check during the turn is excluded; substantial work after that milestone can trigger another check.
-- **Learning → Check recent work** in the chat inspector: checks an existing session. Reuses a queued/running session check instead of piling up manual requests.
+- Full execution-plan completion: all steps done or skipped, with at least one done step. A single finished step is not a milestone. Proposals, repeated status updates and stale writes do not trigger checks.
+- Accumulated work: once a session has recorded `learning.reviewEveryToolCalls` tool results (default 10) since its last check, or since it began, the next successful turn queues one. The count runs across turns, so many short turns earn one check and a long turn does not earn one per turn. Time spent is not counted: on a slow local model everything takes long.
+- Not for one-shot sessions: a `POST /api/chat` with `oneShot: true` creates a session nobody returns to, and no automatic check is queued for it.
+- **Learning → Check recent work** in the chat inspector (`POST /api/sessions/:id/learning`): checks an existing session on demand, one-shot or not. Reuses a queued/running session check instead of piling up manual requests.
+
+When the background model is local (Ollama on a private endpoint), a queued check starts only after that provider has been idle for `learning.localIdleMs` (default 60 s), so a review never holds the GPU while a turn waits behind it. Remote models are checked at once.
 
 Plan saves and their queued checks share a database transaction. The worker polls every 15 seconds, claims jobs atomically and resumes queued work after restart. In-flight checks interrupted by restart are reported as interrupted, not silently declared successful or automatically replayed.
 

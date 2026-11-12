@@ -197,36 +197,10 @@ async function main() {
     await registerBuiltinTools();
     logger.info('Tools registered');
 
-    // Auto-index Octipus's own product docs into the knowledge base so users
-    // can ask "how do I set up Telegram / a model provider / X?" and get an
-    // answer grounded in the shipped manual. Must run AFTER runtime config is
-    // loaded (the embedding provider needs vault-resolved credentials, or the
-    // embed call 401s) — it is here, after registerBuiltinTools() and the
-    // loadRuntimeConfig()/resetLiteLLMClient() above. Non-fatal and idempotent
-    // (skips unchanged files); the cron refresh retries if the embedding model
-    // is only bound after first boot.
-    //
-    // Detached on purpose: the first index does slow LLM-bound work (embed every
-    // chunk + a per-chunk abstract via the default model — minutes when the
-    // default is a remote model). Awaiting it inline kept boot on the critical
-    // path long enough for the `octi` launcher's startup timeout to SIGTERM the
-    // process *before* the index committed — so the per-file SHA stamps that make
-    // it idempotent were never written, and it re-ran (and re-failed) on every
-    // boot. Running it fire-and-forget lets the server reach ready immediately;
-    // the index finishes in the background and stamps the files, so subsequent
-    // boots skip unchanged docs (truly a one-time cost).
-    //
-    // It needs the knowledge-base self-check's verdict, so it follows it. That
-    // check (DB + a real embedding call + a vector write) runs here too: after
-    // the runtime config, so the embedding provider has its keys, and off the
-    // boot path, with a short wait on the embedding call — it used to run
-    // inside gateway.start() on the client's 120 s timeout and retries. KB
-    // write endpoints wait for its verdict (awaitKBReadiness) meanwhile.
+    // Check readiness for user knowledge features without indexing the bundled
+    // manual. Product help uses local on-demand search, independent of models.
     void runKBSelfCheck({ embedTimeoutMs: BOOT_KB_EMBED_TIMEOUT_MS })
-      .catch((err) => logger.error({ err }, 'KB self-check threw unexpectedly — KB endpoints will 503 until /knowledge/readiness passes'))
-      .then(() => import('@/db/seed-docs'))
-      .then(({ indexProductDocs }) => indexProductDocs())
-      .catch((err) => logger.error({ err }, 'Product docs auto-index failed (non-fatal) — server continues'));
+      .catch((err) => logger.error({ err }, 'KB self-check threw unexpectedly — KB endpoints will 503 until /knowledge/readiness passes'));
 
     // Probe optional capabilities (Playwright, MCP, docker, …) and persist
     // their state to the `capabilities` table so the root agent can
@@ -255,6 +229,10 @@ async function main() {
     const mcpBridge = getMCPBridge();
     void mcpBridge.startConnectAll().then(() => logger.info('MCP servers connected'));
     // Plugin packages run as MCP servers too (docs/PLUGIN-PACKAGES.md); same rule: not awaited.
+    // Which runner plugin servers get here, or why none (docs/PLUGIN-PACKAGES.md#the-sandbox).
+    import('@/plugins/packages/sandbox-policy')
+      .then(({ logPluginSandboxState }) => logPluginSandboxState())
+      .catch((err) => logger.error({ err }, 'Plugin sandbox state could not be read'));
     import('@/plugins/packages/service')
       .then(({ syncPluginServers }) => syncPluginServers())
       .then(() => logger.info('Plugin packages started'))
@@ -269,7 +247,7 @@ async function main() {
       .then(({ reportInvalidHookTargets }) => reportInvalidHookTargets())
       .catch((err) => logger.warn({ err }, 'Invalid hook target report failed'));
 
-    // Background jobs (research runs, document processing): a job still
+    // Background jobs (plugin background runs, document processing): a job still
     // `running` is a lie after a restart. Mark it interrupted, then let the
     // document worker drain what was only queued — nothing had begun on those,
     // so running them now is safe. BEFORE the channels come up: a channel
@@ -322,12 +300,21 @@ async function main() {
       if (interrupted > 0) logger.info({ interrupted }, 'Paused pipelines interrupted by a restart');
     }
 
-    // Load user-authored extensions (.octipus/extensions/)
+    // Load user-authored extensions (~/.octipus/extensions/; never the working directory's)
     try {
       const { getExtensionRegistry } = await import('@/extensions');
       await getExtensionRegistry(gatewayHub.eventBus).loadAll();
     } catch (err) {
       logger.error({ err }, 'Extension loading failed (non-fatal)');
+    }
+    // In-process plugins (docs/PLUGIN-PACKAGES.md#runtimes): installed and
+    // approved like packages, loaded into the extension system now that it has
+    // its event bus. Later changes load and unload them as they happen.
+    try {
+      const { syncInProcessPlugins } = await import('@/plugins/packages/in-process');
+      await syncInProcessPlugins();
+    } catch (err) {
+      logger.error({ err }, 'In-process plugins failed to load (non-fatal)');
     }
 
     // Swarm orphan reaper is started (boot pass + recurring interval) inside
@@ -553,6 +540,12 @@ async function main() {
 
       // Dispose extensions before tearing down the hub they subscribed to
       try {
+        const { disposeInProcessPlugins } = await import('@/plugins/packages/in-process');
+        await disposeInProcessPlugins();
+      } catch (err) {
+        logger.warn({ err }, 'Disposing in-process plugins failed');
+      }
+      try {
         const { getExtensionRegistry } = await import('@/extensions');
         await getExtensionRegistry().disposeAll();
       } catch {
@@ -600,6 +593,14 @@ async function main() {
       // as well as the listener; a drain-and-wait stop can outlast the
       // force-exit watchdog on a long-poll socket.
       stopApiServer();
+
+      // The store requests counted since their last audit row (src/plugins/packages/store-audit.ts).
+      try {
+        const { flushStoreAudits } = await import('@/plugins/packages/store-audit');
+        await flushStoreAudits();
+      } catch (err) {
+        logger.warn({ err }, 'Writing the pending store audit rows failed');
+      }
 
       // Close the long-lived task_state LISTEN connection (if it was
       // ever opened). Safe to call when no subscribers were active.

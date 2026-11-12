@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reader</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <!-- No form element: a sandboxed frame without allow-forms never submits one (and its CSP has form-action 'none'). -->
+  <div class="bar">
+    <input id="url" type="url" placeholder="https://example.com/article" aria-label="Article URL" autocomplete="off">
+    <button id="read" type="button">read</button>
+  </div>
+  <p class="hint" id="hint">Paste a link for a clean, distraction-free read, then summarize, simplify, translate, ask, or save it.</p>
+  <p id="status" role="status" aria-live="polite"></p>
+  <div id="error" role="alert" hidden></div>
+
+  <div id="layout" hidden>
+    <article id="article">
+      <h1 id="title"></h1>
+      <p id="meta" class="meta"></p>
+      <div id="content" class="content"></div>
+    </article>
+
+    <aside id="side">
+      <section class="panel">
+        <h2>actions</h2>
+        <div class="actions">
+          <button type="button" data-action="summarize">Summarize</button>
+          <button type="button" data-action="simplify">Simplify</button>
+          <button type="button" data-action="translate">Translate</button>
+          <button type="button" data-action="action_items">Action items</button>
+          <button type="button" data-action="ask">Ask</button>
+          <button type="button" id="save-article">Save article</button>
+        </div>
+        <p id="article-saved" class="saved" hidden></p>
+        <div id="arg-form" hidden>
+          <label id="arg-label" for="arg"></label>
+          <input id="arg" type="text" maxlength="500" autocomplete="off">
+          <div class="row">
+            <button type="button" id="arg-run">run</button>
+            <button type="button" id="arg-cancel" class="quiet">cancel</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="result" hidden>
+        <h2 id="result-title"></h2>
+        <ul id="items" hidden></ul>
+        <div id="output"></div>
+        <div class="row">
+          <button type="button" id="save-tasks" hidden>Save as to-dos</button>
+          <button type="button" id="save-result">Save as note</button>
+        </div>
+        <p id="saved" class="saved" hidden></p>
+      </section>
+    </aside>
+  </div>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

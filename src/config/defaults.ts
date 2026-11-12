@@ -1,3 +1,4 @@
+import { TOKEN_BUDGET_DEFAULTS } from '@/shared/token-budget-defaults';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { Config } from './schema';
@@ -37,6 +38,7 @@ export const defaultConfig: Partial<Config> = {
     passkeyRpId: 'localhost',
     passkeyRpName: 'Octipus',
     passkeyOrigin: 'http://localhost:3000',
+    executionEnvironments: [],
     shellSandbox: 'off',
     shellSshAgent: false,
     companionMaintenance: { enabled: false, userId: null, roots: [], hostServices: false, sshAgent: false, allowActivation: false, interruptionPolicy: 'wait' },
@@ -74,7 +76,7 @@ export const defaultConfig: Partial<Config> = {
     defaultTimeout: 3_600_000,
     maxIterations: 0,
     contextWindowSize: 32000,
-    maxTokenBudget: 100000,
+    maxTokenBudget: TOKEN_BUDGET_DEFAULTS.general,
     streaming: true,
     promptDumps: true,
     cliShellGuard: true,
@@ -82,7 +84,7 @@ export const defaultConfig: Partial<Config> = {
     promptTier: 'auto',
     liteMaxIterations: 8,
     smallModelMaxParams: 10_000_000_000,
-    liteModelMaxParams: 24_000_000_000,
+    liteModelMaxParams: 30_000_000_000,
     smallModelMaxTools: 7,
     /**
      * Advertise a core tool set plus `list_tools`/`describe_tool` instead of
@@ -97,7 +99,7 @@ export const defaultConfig: Partial<Config> = {
     /** Root-turn timeout for unattended hook-triggered runs (10 h). */
     hookTurnTimeoutMs: 36_000_000,
     /** Token pool for one pipeline run, summed over node visits. 0 = off. */
-    pipelineTokenBudget: 2_000_000,
+    pipelineTokenBudget: TOKEN_BUDGET_DEFAULTS.pipeline,
   },
   multiuser: {
     // Octipus is always multi-user — there is no single-user mode and no
@@ -142,6 +144,11 @@ export const defaultConfig: Partial<Config> = {
     revokedKeys: [],
     requireSignature: false,
     registries: [],
+    hostModelDailyTokens: TOKEN_BUDGET_DEFAULTS.pluginDaily,
+    hostAgentRunTokens: TOKEN_BUDGET_DEFAULTS.pluginRun,
+    calendarProtectionLevel: 3,
+    marketplace: true,
+    sandbox: 'required',
   },
   protection: {
     remoteAtLevel3: false,
@@ -190,9 +197,9 @@ export const defaultConfig: Partial<Config> = {
     worktreeIsolation: false,
     worktreeLinkNodeModules: true,
     levelDefaults: {
-      root: { tokens: 200_000, wallMs: 36_000_000, fanOut: 6, maxPendingDetached: 6 },
-      agent: { tokens: 80_000, wallMs: 3_600_000, fanOut: 4, maxPendingDetached: 3 },
-      subagent: { tokens: 30_000, wallMs: 3_600_000, fanOut: 0, maxPendingDetached: 0 },
+      root: { tokens: TOKEN_BUDGET_DEFAULTS.root, wallMs: 36_000_000, fanOut: 6, maxPendingDetached: 6 },
+      agent: { tokens: TOKEN_BUDGET_DEFAULTS.agent, wallMs: 3_600_000, fanOut: 4, maxPendingDetached: 3 },
+      subagent: { tokens: TOKEN_BUDGET_DEFAULTS.subagent, wallMs: 3_600_000, fanOut: 0, maxPendingDetached: 0 },
     },
   },
 };

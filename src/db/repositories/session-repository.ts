@@ -188,6 +188,12 @@ export class SessionRepository {
     return result[0];
   }
 
+  /** Server-owned execution context; excluded from every personal chat path. */
+  async createAutomation(data: Omit<NewSession, 'kind' | 'roomVisibility'>): Promise<Session> {
+    const [row] = await this.db.insert(sessions).values({ ...data, kind: 'automation', roomVisibility: null }).returning();
+    return row;
+  }
+
   async update(id: string, data: Partial<NewSession>): Promise<Session | null> {
     // A read-spread-write of `context` carries the mapped-in snapshot back: it
     // goes to its column, not into `context` again. Written rather than dropped,

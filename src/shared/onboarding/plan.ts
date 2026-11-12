@@ -335,20 +335,10 @@ function devSteps(plan: Plan, a: Answers, s: OnboardingState): void {
 }
 
 function trackerSteps(plan: Plan, a: Answers, s: OnboardingState): void {
+  // `github` needs no step of its own: the GitHub tool uses the gh sign-in or
+  // the token from the development section. An answer saved before Jira and
+  // Linear were removed (`jira`, `linear`) plans nothing.
   const tracker = str(a, 'tools.tracker');
-  const connector = tracker === 'jira' ? 'atlassian' : tracker === 'linear' ? 'linear' : '';
-  if (connector && s.connectors.find((c) => c.id === connector)?.connected) {
-    plan.done(`connect:${connector}`, `${tracker === 'jira' ? 'Jira' : 'Linear'} is already connected`);
-  } else if (connector) {
-    plan.add({
-      id: `connect:${connector}`,
-      kind: 'connect',
-      title: tracker === 'jira' ? 'Connect Jira and Confluence' : 'Connect Linear',
-      detail: 'Sign in in the window that opens; agents then read and update your tickets as you.',
-      start: { method: 'POST', path: `/connectors/${connector}/authorize` },
-      doneWhen: { connector },
-    });
-  }
   const url = str(a, 'tools.mcpUrl');
   const name = str(a, 'tools.mcpName') || 'tracker';
   if (tracker === 'mcp' && s.isAdmin && s.mcpServers.includes(name)) plan.done(`mcp:${name}`, `The MCP server "${name}" already exists`);

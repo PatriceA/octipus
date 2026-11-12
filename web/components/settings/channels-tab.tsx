@@ -87,7 +87,7 @@ export function ChannelsTab() {
           <button
             onClick={handleLink}
             disabled={linking || linkCode.length !== 6}
-            className="px-4 py-2 bg-primary text-[#0e0e0e] cursor-pointer rounded-lg hover:bg-primary-container disabled:opacity-50 flex items-center gap-2"
+            className="px-4 py-2 bg-primary text-on-primary cursor-pointer rounded-lg hover:bg-primary-dim disabled:opacity-50 flex items-center gap-2"
           >
             {linking ? (
               <Loader2 className="w-4 h-4 animate-spin" />

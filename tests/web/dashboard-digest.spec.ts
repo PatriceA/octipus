@@ -19,14 +19,15 @@ const digest = {
   empty: false,
 };
 
-test.describe('dashboard — while you were away', () => {
+test.describe('Activity — optional visit summary', () => {
   test.beforeEach(async ({ authenticatedPage: page }) => {
     await stubAllDefaults(page);
   });
 
   test('lists what needs the user first and links each item', async ({ authenticatedPage: page }) => {
     await page.route('**/api/digest/away**', (route) => json(route, 200, digest));
-    await page.goto('/');
+    await page.goto('/notifications');
+    await page.getByRole('button', { name: 'Show visit summary', exact: true }).click();
     const card = page.getByTestId('away-digest');
     await expect(card.getByText('Delete branch')).toBeVisible();
     await expect(card.getByText('Bug Fix')).toBeVisible();
@@ -52,19 +53,22 @@ test.describe('dashboard — while you were away', () => {
       expect(ageMs).toBeLessThan(60_000);
       return json(route, 200, { ...digest, since, agents: { completed: [], failed: [] }, pipelines: [], approvals: [], jobs: [], tasks: [], unreadNotifications: 0, empty: true });
     });
-    await page.goto('/');
+    await page.goto('/notifications');
+    await page.getByRole('button', { name: 'Show visit summary', exact: true }).click();
     const card = page.getByTestId('away-digest');
     await card.getByRole('button', { name: /caught up/ }).click();
     await expect(card.getByText(/nothing happened/)).toBeVisible();
     expect(calls).toBeGreaterThanOrEqual(2);
     // The window start is remembered across reloads.
     await page.reload();
+    await page.getByRole('button', { name: 'Show visit summary', exact: true }).click();
     await expect(page.getByTestId('away-digest').getByText(/nothing happened/)).toBeVisible();
   });
 
   test('renders nothing when the digest cannot be fetched', async ({ authenticatedPage: page }) => {
     await page.route('**/api/digest/away**', (route) => json(route, 500, { error: 'boom' }));
-    await page.goto('/');
+    await page.goto('/notifications');
+    await page.getByRole('button', { name: 'Show visit summary', exact: true }).click();
     await page.waitForLoadState('networkidle');
     await expect(page.getByTestId('away-digest')).toHaveCount(0);
   });
@@ -74,7 +78,8 @@ test.describe('dashboard — while you were away', () => {
     let failPoll = false;
     await page.route('**/api/digest/away**', (route) =>
       failPoll ? json(route, 500, { error: 'server failure' }) : json(route, 200, digest));
-    await page.goto('/');
+    await page.goto('/notifications');
+    await page.getByRole('button', { name: 'Show visit summary', exact: true }).click();
     // Workspace initialization changes the query key and can fetch twice.
     // Both initial requests must succeed before testing a failed refresh.
     await page.waitForLoadState('networkidle');

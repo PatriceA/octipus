@@ -353,7 +353,7 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
                           : 'border-outline-variant/40 bg-transparent'
                       )}
                     >
-                      {initGit && <Check className="w-3 h-3 text-[#0e0e0e]" />}
+                      {initGit && <Check className="w-3 h-3 text-on-primary" />}
                     </div>
                     <GitBranch className="w-3.5 h-3.5 text-on-surface-variant" />
                     <span className="text-xs text-on-surface-variant">Initialize Git</span>
@@ -374,7 +374,7 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
                     <button
                       onClick={handleCreateRepo}
                       disabled={!newRepoName.trim() || creating}
-                      className="px-3 py-1.5 text-xs font-medium bg-primary text-[#0e0e0e] rounded-md hover:bg-primary-container disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
+                      className="px-3 py-1.5 text-xs font-medium bg-primary text-on-primary rounded-md hover:bg-primary-dim disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
                     >
                       {creating && <Loader2 className="w-3 h-3 animate-spin" />}
                       Create
@@ -404,7 +404,7 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
           <button
             onClick={handleCreate}
             disabled={devMode && !projectPath}
-            className="px-5 py-2 text-sm font-medium bg-primary text-[#0e0e0e] rounded-lg hover:bg-primary-container disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            className="px-5 py-2 text-sm font-medium bg-primary text-on-primary rounded-lg hover:bg-primary-dim disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
           >
             Create Session
           </button>

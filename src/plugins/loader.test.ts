@@ -1,18 +1,18 @@
 import { describe, expect, test } from 'vitest';
 
-// Note: loadPlugins reads from the filesystem (extensions/ directory).
+// Note: loadPlugins reads from the filesystem (~/.octipus/legacy-plugins; see legacy-dir.test.ts).
 // These unit tests verify manifest validation logic and plugin structure.
 
 describe('Plugin Loader (Unit)', () => {
   describe('loadPlugins returns empty array when no plugins', () => {
-    test('returns empty array when extensions/ directory is missing', () => {
+    test('returns empty array when the legacy plugin directory is missing', () => {
       // Simulate the behavior: readdir throws => return []
       const result: unknown[] = [];
       expect(result).toBeInstanceOf(Array);
       expect(result.length).toBe(0);
     });
 
-    test('returns empty array when extensions/ has no subdirectories', () => {
+    test('returns empty array when the legacy plugin directory has no subdirectories', () => {
       // Simulate: readdir returns empty => return []
       const entries: string[] = [];
       const plugins: unknown[] = [];
@@ -293,7 +293,7 @@ describe('Plugin Loader (Unit)', () => {
           name: 'test-plugin',
           tools: {},
         },
-        directory: '/extensions/test-plugin',
+        directory: '/home/u/.octipus/legacy-plugins/test-plugin',
       };
 
       expect(loadedPlugin.manifest).toBeDefined();

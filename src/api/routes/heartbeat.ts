@@ -1,10 +1,12 @@
+import { activateHeartbeatService } from '@/api/heartbeat-settings';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
 import { detectProvider } from '@/core/email/providers';
 import { recentEmailOutcomes } from '@/core/email/watch';
 import { findStandingNote, getHeartbeatPrefs, setHeartbeatPrefs } from '@/core/heartbeat';
-import { isAuthenticated } from '@/security/principal';
+import { API_SCOPES } from '@/security/scopes';
+import { isAuthenticated, requireScope } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
 
 /**
@@ -44,8 +46,11 @@ export const heartbeatRoutes = new Elysia({ prefix: '/heartbeat' })
 
   .put('/me', async ({ user, principal, body, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    if (!requireScope(principal, API_SCOPES.WRITE)) { set.status = 403; return { error: 'Write scope required to change heartbeat settings' }; }
     try {
-      return await setHeartbeatPrefs(user.id, body);
+      const prefs = await setHeartbeatPrefs(user.id, body);
+      if (body.enabled === true) await activateHeartbeatService(user, principal);
+      return prefs;
     } catch (err) {
       if (err instanceof RangeError) { set.status = 400; return { error: err.message }; }
       apiLogger.error({ err, userId: user.id }, 'heartbeat: preferences update failed');

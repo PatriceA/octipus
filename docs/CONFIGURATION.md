@@ -72,7 +72,7 @@ WHATSAPP_VERIFY_TOKEN=                 # Webhook verify token
 WHATSAPP_APP_SECRET=                   # Meta App Secret
 
 # ─── Agent Limits ────────────────────────────────────────────
-AGENT_MAX_TOKEN_BUDGET=100000         # Per-agent token limit (0 = unlimited)
+AGENT_MAX_TOKEN_BUDGET=10000000         # Default daily/user, worker and session cap (0 = unlimited)
 AGENT_DEFAULT_TIMEOUT=900000          # Per-agent timeout in ms (default: 15min)
 AGENT_MAX_ITERATIONS=50               # Max iterations per agent loop
 
@@ -166,7 +166,7 @@ Bind models to topics via the web UI (**Settings → Models → Edit → Topics*
 
 Swarm level budgets are configurable under `swarm.levelDefaults.root`, `.agent`, and `.subagent` (`tokens`, `wallMs`, `fanOut`, `maxPendingDetached`). `getLevelDefault` in `src/core/swarm/types.ts` reads them, falling back to `LEVEL_DEFAULT`. These are execution bounds, not exact billing limits. `swarm.contractRetries` defaults to `1` (range 0–5) for retryable failed scorer gates.
 
-In **Settings → Configuration → Swarm**, `root.tokens` is the root turn's initial shared pool (`swarm.levelDefaults.root.tokens`, default 200,000). It is separate from **Agent → maxTokenBudget** (`agent.maxTokenBudget`), which bounds the worker and is also the default session budget. Raising the general agent budget does not raise the root swarm pool. New root turns snapshot their configured tokens, wall-clock and fan-out limits; their stored token cap is what the swarm tree displays. Existing tree rows retain their recorded caps. The spawn budget calculation can adopt a higher live parent pool for subsequent delegation without rewriting historical tree rows.
+In **Settings → Configuration → Swarm**, `root.tokens` is the root turn's initial shared pool (`swarm.levelDefaults.root.tokens`, default 2,000,000). It is separate from **Agent → maxTokenBudget** (`agent.maxTokenBudget`), which bounds the worker and is also the default session budget. Raising the general agent budget does not raise the root swarm pool. New root turns snapshot their configured tokens, wall-clock and fan-out limits; their stored token cap is what the swarm tree displays. Existing tree rows retain their recorded caps. The spawn budget calculation can adopt a higher live parent pool for subsequent delegation without rewriting historical tree rows.
 
 
 `swarm.worktreeIsolation` (default `false`, env `SWARM_WORKTREE_ISOLATION`) gives each coding-role child running on a CLI adapter (Claude Code, Codex, or any other CLI model) its own git worktree under `~/.octipus/worktrees/<id>` on a branch `octipus/<id>`. It applies only to dev-mode sessions whose project directory is itself a git repository root (never the per-user sandbox), and only when that project has no uncommitted tracked changes at spawn time: a worktree starts at `HEAD` and would not see them, and its merge would be skipped anyway, so such a child runs on the shared tree. Retries of the same child reuse its worktree. On completion the framework commits any uncommitted work on that branch and reports `{branch, headSha, diffStat, filesChanged, merge}` on the child's receipt. It merges the branch into the project's current branch (`git merge --no-ff`) only when the child finished `ok` from an attempt that ran in the worktree (not a native backup-model attempt, `skipped_other_attempt`), and the project is on a branch, has no uncommitted tracked changes or merge in progress (`skipped_dirty`), and still contains the commit the worktree started from (`skipped_moved`). A conflict is aborted and the branch kept. Unmerged branches are never deleted, and a worktree whose `HEAD` is on no branch (a detached commit) is removed only after that commit is kept by fast-forwarding `octipus/<id>` or by a `octipus/<id>-detached` ref. Every server-side git call runs with repository hooks and fsmonitor disabled. Agents spawned by a worktree child (and their own children) inherit its worktree instead of creating another: a CLI descendant runs there, a native descendant's file and shell tools resolve against it (its `projectPath`), and their evidence gates measure it; their work is captured by the worktree child's own commit and merge. A fresh worktree has no dependencies installed, so when the repo root has `node_modules`, the worktree's `node_modules` is a single symlink to it, and `/node_modules` is added once, with a comment, to the repository's `.git/info/exclude` (git keeps that file in the shared git directory, so the line also applies to the main tree, where it only affects an untracked root `node_modules`). That `node_modules` is shared, not isolated: an install or delete inside a worktree changes the project's real dependencies. `swarm.worktreeLinkNodeModules` (default `true`, env `SWARM_WORKTREE_LINK_NODE_MODULES`) turns the symlink off, leaving worktrees without `node_modules`. While the flag is on, the orphan reaper removes an abandoned worktree only when it is clean and its `HEAD` and branch are merged into the project, and reports the rest; a worktree whose owning process is still alive (`<id>.pid`) is left alone. If a worktree cannot be created, the child runs on the shared tree as before.
@@ -238,6 +238,7 @@ See [BACKUP.md](BACKUP.md).
 |---|---|---|
 | `modules.enabled` | `[]` | The modules that are on, set in Settings → Modules or by the onboarding. Empty: the core only. Installs from before modules start with every module on. Env: `MODULES_ENABLED` (comma-separated), read only while nothing is stored: an upgraded install, or one where a module was switched, keeps the stored list, and the upgrade that declares a new module stores a list too. Use Settings → Modules rather than the env var. Changed through `/api/modules` only, not the generic settings routes. |
 | `protection.remoteAtLevel3` | `false` | Let conversations holding level 3 content (personal data) use remote models, pseudonymized ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md)). Off: level 3 stays on local models, like level 4. Env: `PROTECTION_REMOTE_AT_LEVEL3`. |
+| `plugins.calendarProtectionLevel` | `3` | The protection level (1-4) plugin packages see the connected calendars' events at (host scopes `calendar:read` and `calendar:write`): events carry no level of their own. A plugin reads them only if it may see this level, and writes to them only from a call that holds nothing above it ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#mail-and-calendar)). Settings → System → Advanced configuration → Security. |
 
 See [MODULES.md](MODULES.md).
 
@@ -368,3 +369,38 @@ retain their existing launch behavior.
 Supervisor status separates the checkout's `checkoutCommit` from the verified
 artifact's `commit`, `artifactSha256` and `buildDirty`. An unverified or legacy
 artifact reports an unknown commit rather than borrowing the checkout's SHA.
+
+
+### Default token budgets
+
+A new installation starts with **10,000,000 tokens per user per UTC day**.
+This is Octipus's own usage quota, separate from a model provider's allowance.
+The daily quota uses billable-token accounting (fresh input, paid cache writes
+and output; cache reads excluded). Sessions also have a cumulative token cap;
+that session counter includes cached context and is a different limit.
+
+| Budget | Default | Setting |
+| --- | ---: | --- |
+| Daily user cap and default worker/session cap | 10,000,000 | `agent.maxTokenBudget` |
+| Shared root turn, including delegation | 2,000,000 | `swarm.levelDefaults.root.tokens` |
+| Agent / subagent | 800,000 / 300,000 | `swarm.levelDefaults.agent.tokens` / `swarm.levelDefaults.subagent.tokens` |
+| Whole pipeline run | 10,000,000 | `agent.pipelineTokenBudget` |
+| Plugin models and background runs, per user/day | 10,000,000 | `plugins.hostModelDailyTokens` |
+| One plugin background run | 1,000,000 | `plugins.hostAgentRunTokens` |
+
+Admins change installation defaults in **Settings → System → Advanced
+configuration**, under Agent, Swarm or Security. Per-user quota overrides are
+in **Settings → System → Administration → Quotas & budgets** (`/admin/quotas`).
+Per-user overrides accept positive values; resetting an override inherits the
+default. Global `agent.maxTokenBudget: 0` means unlimited. Plugin budget zero
+means **disabled**, not unlimited.
+
+Explicit database settings, environment values, per-user overrides and saved
+session/goal/pipeline budgets are preserved on upgrade. Reset a saved setting
+only when you intend to inherit the new default. Existing workers may keep
+their spawn-time caps. Starting a new chat does not reset daily usage.
+
+Concurrency, API rate limits, model context/output limits and security
+boundaries have not been increased by this budget change. Companion already
+starts with a 10,000,000-token daily budget and a 1,000,000-token background-turn
+budget.

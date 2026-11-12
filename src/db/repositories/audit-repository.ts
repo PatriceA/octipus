@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import { type AuditDetails, type AuditLogEntry, type auditActionEnum, auditLog, type NewAuditLogEntry } from '../schema/audit';
 
@@ -38,6 +38,23 @@ export class AuditRepository {
       .select()
       .from(auditLog)
       .where(and(eq(auditLog.resourceType, resourceType), eq(auditLog.resourceId, resourceId)))
+      .orderBy(desc(auditLog.createdAt));
+  }
+
+  /**
+   * The `installed`/`upgraded` rows of the named plugin packages, newest
+   * first (who installed each package's current version, and how).
+   */
+  async findPluginInstalls(names: readonly string[]): Promise<Array<{ name: string | null; details: AuditDetails | null; createdAt: Date }>> {
+    if (names.length === 0) return [];
+    return this.db
+      .select({ name: auditLog.resourceId, details: auditLog.details, createdAt: auditLog.createdAt })
+      .from(auditLog)
+      .where(and(
+        eq(auditLog.resourceType, 'plugin_package'),
+        inArray(auditLog.resourceId, [...names]),
+        sql`${auditLog.details}->>'op' in ('installed', 'upgraded')`,
+      ))
       .orderBy(desc(auditLog.createdAt));
   }
 

@@ -976,9 +976,10 @@ export class Vault {
    *      and `(allowedTools, allowedAgents)` allowing this caller.
    *   2. system-scoped row with the same `name` and allowlist passing.
    *
-   * Never a `workspace` or `space` row: a space connector's secret is used
-   * by connector code only (coworking §9.5), so `{{secret:NAME}}` cannot
-   * route it into a shell command or an HTTP request.
+   * Never a `workspace` or `space` row: a space's secret (its GitHub token)
+   * is used by the GitHub tool and the space tool home only (coworking
+   * §9.5), so `{{secret:NAME}}` cannot route it into a shell command or an
+   * HTTP request.
    *
    * Returns `null` if neither resolves OR if the matching row's
    * allowlist excludes the calling tool/agent. The allowlist check is

@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-633 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
+686 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -143,6 +143,10 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/chat/approvals/pending` | `src/api/routes/chat.ts` |
 | POST | `/api/chat/approve` | `src/api/routes/chat.ts` |
 | GET | `/api/chat/commands` | `src/api/routes/chat.ts` |
+| DELETE | `/api/code-index/cocoindex` | `src/api/routes/code-index.ts` |
+| GET | `/api/code-index/cocoindex` | `src/api/routes/code-index.ts` |
+| POST | `/api/code-index/cocoindex/:side/embeddings` | `src/api/routes/code-index.ts` |
+| POST | `/api/code-index/cocoindex/install` | `src/api/routes/code-index.ts` |
 | GET | `/api/companion/goals` | `src/api/routes/companion.ts` |
 | POST | `/api/companion/goals` | `src/api/routes/companion.ts` |
 | GET | `/api/companion/goals/:id` | `src/api/routes/companion.ts` |
@@ -158,14 +162,6 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/companion/goals/:id/sessions/:sessionId` | `src/api/routes/companion.ts` |
 | GET | `/api/companion/settings` | `src/api/routes/companion.ts` |
 | PUT | `/api/companion/settings` | `src/api/routes/companion.ts` |
-| GET | `/api/connectors` | `src/api/routes/connectors.ts` |
-| DELETE | `/api/connectors/:id` | `src/api/routes/connectors.ts` |
-| POST | `/api/connectors/:id/authorize` | `src/api/routes/connectors.ts` |
-| GET | `/api/connectors/:id/callback` | `src/api/routes/connectors.ts` |
-| DELETE | `/api/connectors/cocoindex` | `src/api/routes/connectors.ts` |
-| GET | `/api/connectors/cocoindex` | `src/api/routes/connectors.ts` |
-| POST | `/api/connectors/cocoindex/:side/embeddings` | `src/api/routes/connectors.ts` |
-| POST | `/api/connectors/cocoindex/install` | `src/api/routes/connectors.ts` |
 | GET | `/api/contacts` | `src/api/routes/cases.ts` |
 | POST | `/api/contacts` | `src/api/routes/cases.ts` |
 | DELETE | `/api/contacts/:id` | `src/api/routes/cases.ts` |
@@ -410,19 +406,71 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/pipelines/templates/:id/export` | `src/api/routes/pipelines.ts` |
 | POST | `/api/pipelines/templates/import` | `src/api/routes/pipelines.ts` |
 | GET | `/api/pipelines/types` | `src/api/routes/pipelines.ts` |
+| POST | `/api/plugin-host/agent/runs` | `src/api/routes/plugin-host.ts` |
+| DELETE | `/api/plugin-host/agent/runs/:id` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/agent/runs/:id` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/calendar/events` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/calendar/events` | `src/api/routes/plugin-host.ts` |
+| PUT | `/api/plugin-host/calendar/events/:id` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/documents` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/documents/:id` | `src/api/routes/plugin-host.ts` |
+| PUT | `/api/plugin-host/documents/:id` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/mail/accounts` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/mail/drafts` | `src/api/routes/plugin-host.ts` |
+| PUT | `/api/plugin-host/mail/drafts/:id` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/mail/drafts/:id/send` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/mail/messages` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/mail/messages/:id` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/mail/send` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/model/complete` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/notes` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/notes` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/notify` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/store` | `src/api/routes/plugin-host.ts` |
+| DELETE | `/api/plugin-host/store/*` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/store/*` | `src/api/routes/plugin-host.ts` |
+| PUT | `/api/plugin-host/store/*` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/tasks` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/tasks` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/web/read` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/whoami` | `src/api/routes/plugin-host.ts` |
 | GET | `/api/plugin-packages` | `src/api/routes/plugin-packages.ts` |
 | POST | `/api/plugin-packages` | `src/api/routes/plugin-packages.ts` |
 | DELETE | `/api/plugin-packages/:name` | `src/api/routes/plugin-packages.ts` |
 | PATCH | `/api/plugin-packages/:name` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/:name/consent` | `src/api/routes/plugin-packages.ts` |
+| POST | `/api/plugin-packages/:name/consent` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/:name/runs` | `src/api/routes/plugin-packages.ts` |
+| DELETE | `/api/plugin-packages/:name/runs/:id` | `src/api/routes/plugin-packages.ts` |
 | PUT | `/api/plugin-packages/:name/secrets/:key` | `src/api/routes/plugin-packages.ts` |
+| DELETE | `/api/plugin-packages/:name/store/me` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/:name/usage` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/:name/usage/me` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/bundled` | `src/api/routes/plugin-packages.ts` |
+| POST | `/api/plugin-packages/install` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/marketplace` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/marketplace/asset` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/my-usage` | `src/api/routes/plugin-packages.ts` |
+| DELETE | `/api/plugin-packages/pins` | `src/api/routes/plugin-packages.ts` |
+| POST | `/api/plugin-packages/preview` | `src/api/routes/plugin-packages.ts` |
 | GET | `/api/plugin-packages/registry` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/revocations` | `src/api/routes/plugin-packages.ts` |
+| DELETE | `/api/plugin-packages/revocations/:id` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/sandbox` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/updates` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-ui` | `src/api/routes/plugin-ui.ts` |
+| GET | `/api/plugin-ui/:name/*` | `src/api/routes/plugin-ui.ts` |
 | GET | `/api/plugins` | `src/api/routes/plugins.ts` |
 | GET | `/api/plugins/:name` | `src/api/routes/plugins.ts` |
+| POST | `/api/plugins/:name/call/:tool` | `src/api/routes/plugin-ui.ts` |
+| GET | `/api/plugins/:name/dashboards/:id` | `src/api/routes/plugin-ui.ts` |
+| POST | `/api/plugins/:name/dashboards/:id/widgets/:widget` | `src/api/routes/plugin-ui.ts` |
 | POST | `/api/plugins/:name/reload` | `src/api/routes/plugins.ts` |
+| GET | `/api/plugins/:name/store` | `src/api/routes/plugin-ui.ts` |
+| DELETE | `/api/plugins/:name/store/*` | `src/api/routes/plugin-ui.ts` |
+| GET | `/api/plugins/:name/store/*` | `src/api/routes/plugin-ui.ts` |
+| PUT | `/api/plugins/:name/store/*` | `src/api/routes/plugin-ui.ts` |
 | PUT | `/api/protection/:entity/:id` | `src/api/routes/protection.ts` |
-| POST | `/api/reader` | `src/api/routes/reader.ts` |
-| POST | `/api/reader/action` | `src/api/routes/reader.ts` |
-| POST | `/api/reader/tasks` | `src/api/routes/reader.ts` |
 | GET | `/api/record-types` | `src/api/routes/records.ts` |
 | POST | `/api/record-types` | `src/api/routes/records.ts` |
 | DELETE | `/api/record-types/:id` | `src/api/routes/records.ts` |
@@ -463,8 +511,6 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/remote-spaces/:id/tasks/:taskId` | `src/api/routes/remote-spaces.ts` |
 | POST | `/api/remote-spaces/:id/tasks/:taskId/:op` | `src/api/routes/remote-spaces.ts` |
 | POST | `/api/remote-spaces/join` | `src/api/routes/remote-spaces.ts` |
-| POST | `/api/research` | `src/api/routes/research.ts` |
-| GET | `/api/research/:jobId` | `src/api/routes/research.ts` |
 | GET | `/api/roles` | `src/api/routes/roles.ts` |
 | POST | `/api/roles` | `src/api/routes/roles.ts` |
 | DELETE | `/api/roles/:role` | `src/api/routes/roles.ts` |
@@ -496,6 +542,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/sessions/:id/changes/diff` | `src/api/routes/sessions.ts` |
 | POST | `/api/sessions/:id/complete` | `src/api/routes/sessions.ts` |
 | GET | `/api/sessions/:id/context` | `src/api/routes/sessions.ts` |
+| GET | `/api/sessions/:id/execution-environment` | `src/api/routes/sessions.ts` |
+| PUT | `/api/sessions/:id/execution-environment` | `src/api/routes/sessions.ts` |
 | GET | `/api/sessions/:id/files` | `src/api/routes/sessions.ts` |
 | PUT | `/api/sessions/:id/files` | `src/api/routes/sessions.ts` |
 | GET | `/api/sessions/:id/inline-ui/:blockId` | `src/api/routes/inline-ui.ts` |
@@ -508,6 +556,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/sessions/:id/monitors/events` | `src/api/routes/sessions.ts` |
 | GET | `/api/sessions/:id/plan` | `src/api/routes/sessions.ts` |
 | POST | `/api/sessions/:id/plan/feedback` | `src/api/routes/sessions.ts` |
+| GET | `/api/sessions/desk` | `src/api/routes/sessions.ts` |
 | GET | `/api/sessions/stats/active` | `src/api/routes/sessions.ts` |
 | GET | `/api/settings` | `src/api/routes/settings.ts` |
 | GET | `/api/settings/:key` | `src/api/routes/settings.ts` |
@@ -522,6 +571,10 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/settings/companion-maintenance` | `src/api/routes/settings.ts` |
 | PUT | `/api/settings/companion-maintenance` | `src/api/routes/settings.ts` |
 | POST | `/api/settings/companion-maintenance/test` | `src/api/routes/settings.ts` |
+| GET | `/api/settings/execution-environments` | `src/api/routes/settings.ts` |
+| DELETE | `/api/settings/execution-environments/:id` | `src/api/routes/settings.ts` |
+| PUT | `/api/settings/execution-environments/:id` | `src/api/routes/settings.ts` |
+| POST | `/api/settings/execution-environments/:id/test` | `src/api/routes/settings.ts` |
 | GET | `/api/settings/registry` | `src/api/routes/settings.ts` |
 | POST | `/api/settings/setup-complete` | `src/api/routes/settings.ts` |
 | GET | `/api/settings/setup-status` | `src/api/routes/settings.ts` |
@@ -554,13 +607,13 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/spaces/:id/archive` | `src/api/routes/spaces.ts` |
 | GET | `/api/spaces/:id/budget` | `src/api/routes/spaces.ts` |
 | PUT | `/api/spaces/:id/budget` | `src/api/routes/spaces.ts` |
-| GET | `/api/spaces/:id/connectors` | `src/api/routes/spaces.ts` |
-| DELETE | `/api/spaces/:id/connectors/:connectorId` | `src/api/routes/spaces.ts` |
-| POST | `/api/spaces/:id/connectors/:connectorId` | `src/api/routes/spaces.ts` |
 | DELETE | `/api/spaces/:id/file-leases` | `src/api/routes/spaces.ts` |
 | GET | `/api/spaces/:id/file-leases` | `src/api/routes/spaces.ts` |
 | POST | `/api/spaces/:id/file-leases` | `src/api/routes/spaces.ts` |
 | PUT | `/api/spaces/:id/funding` | `src/api/routes/spaces.ts` |
+| DELETE | `/api/spaces/:id/github` | `src/api/routes/spaces.ts` |
+| GET | `/api/spaces/:id/github` | `src/api/routes/spaces.ts` |
+| PUT | `/api/spaces/:id/github` | `src/api/routes/spaces.ts` |
 | GET | `/api/spaces/:id/invites` | `src/api/routes/spaces.ts` |
 | POST | `/api/spaces/:id/invites` | `src/api/routes/spaces.ts` |
 | DELETE | `/api/spaces/:id/invites/:inviteId` | `src/api/routes/spaces.ts` |
@@ -655,34 +708,33 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `channels` | 1 |
 | `(root)` | `config` | 4 |
 | `(root)` | `core` | 35 |
-| `(root)` | `db` | 12 |
+| `(root)` | `db` | 11 |
 | `(root)` | `extensions` | 2 |
 | `(root)` | `hooks` | 3 |
 | `(root)` | `mcp` | 1 |
 | `(root)` | `models` | 2 |
 | `(root)` | `modules` | 1 |
-| `(root)` | `plugins` | 1 |
+| `(root)` | `plugins` | 5 |
 | `(root)` | `security` | 5 |
 | `(root)` | `skills` | 1 |
 | `(root)` | `tools` | 4 |
 | `(root)` | `utils` | 1 |
 | `api` | `capabilities` | 1 |
 | `api` | `channels` | 22 |
-| `api` | `config` | 26 |
-| `api` | `connectors` | 3 |
-| `api` | `core` | 181 |
-| `api` | `db` | 123 |
+| `api` | `config` | 29 |
+| `api` | `core` | 193 |
+| `api` | `db` | 139 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
-| `api` | `mcp` | 4 |
+| `api` | `mcp` | 5 |
 | `api` | `models` | 39 |
-| `api` | `plugins` | 3 |
-| `api` | `security` | 156 |
+| `api` | `plugins` | 49 |
+| `api` | `security` | 177 |
 | `api` | `services` | 5 |
-| `api` | `shared` | 21 |
+| `api` | `shared` | 25 |
 | `api` | `skills` | 6 |
-| `api` | `tools` | 5 |
-| `api` | `utils` | 75 |
+| `api` | `tools` | 6 |
+| `api` | `utils` | 77 |
 | `api` | `voice` | 23 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
@@ -702,41 +754,35 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `config` | `db` | 3 |
 | `config` | `models` | 1 |
 | `config` | `security` | 3 |
-| `config` | `shared` | 1 |
+| `config` | `shared` | 6 |
 | `config` | `utils` | 5 |
 | `config` | `voice` | 1 |
-| `connectors` | `config` | 2 |
-| `connectors` | `core` | 1 |
-| `connectors` | `mcp` | 2 |
-| `connectors` | `models` | 2 |
-| `connectors` | `security` | 6 |
-| `connectors` | `shared` | 1 |
-| `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 2 |
 | `core` | `channels` | 14 |
-| `core` | `config` | 67 |
-| `core` | `connectors` | 4 |
-| `core` | `db` | 477 |
+| `core` | `config` | 70 |
+| `core` | `db` | 483 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
-| `core` | `mcp` | 10 |
-| `core` | `models` | 134 |
+| `core` | `mcp` | 11 |
+| `core` | `models` | 137 |
 | `core` | `modules` | 2 |
-| `core` | `security` | 210 |
+| `core` | `plugins` | 8 |
+| `core` | `security` | 228 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
-| `core` | `shared` | 61 |
+| `core` | `shared` | 65 |
 | `core` | `skills` | 11 |
-| `core` | `tools` | 29 |
-| `core` | `utils` | 231 |
+| `core` | `tools` | 34 |
+| `core` | `utils` | 230 |
 | `core` | `voice` | 1 |
 | `db` | `config` | 4 |
-| `db` | `core` | 24 |
+| `db` | `core` | 22 |
 | `db` | `models` | 1 |
+| `db` | `plugins` | 1 |
 | `db` | `security` | 27 |
 | `db` | `services` | 1 |
-| `db` | `shared` | 9 |
-| `db` | `utils` | 22 |
+| `db` | `shared` | 10 |
+| `db` | `utils` | 20 |
 | `eval` | `config` | 3 |
 | `eval` | `core` | 6 |
 | `eval` | `db` | 8 |
@@ -752,17 +798,16 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `extensions` | `utils` | 5 |
 | `hooks` | `channels` | 4 |
 | `hooks` | `config` | 2 |
-| `hooks` | `core` | 21 |
+| `hooks` | `core` | 24 |
 | `hooks` | `db` | 16 |
 | `hooks` | `security` | 3 |
 | `hooks` | `shared` | 1 |
 | `hooks` | `tools` | 1 |
 | `hooks` | `utils` | 8 |
 | `mcp` | `config` | 2 |
-| `mcp` | `connectors` | 1 |
-| `mcp` | `core` | 4 |
-| `mcp` | `security` | 8 |
-| `mcp` | `shared` | 3 |
+| `mcp` | `core` | 5 |
+| `mcp` | `security` | 9 |
+| `mcp` | `shared` | 4 |
 | `mcp` | `utils` | 5 |
 | `models` | `config` | 10 |
 | `models` | `core` | 37 |
@@ -771,22 +816,23 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `models` | `services` | 1 |
 | `models` | `shared` | 4 |
 | `models` | `utils` | 43 |
-| `plugins` | `config` | 2 |
-| `plugins` | `core` | 3 |
-| `plugins` | `db` | 5 |
-| `plugins` | `mcp` | 1 |
-| `plugins` | `security` | 3 |
-| `plugins` | `shared` | 5 |
+| `plugins` | `config` | 12 |
+| `plugins` | `core` | 52 |
+| `plugins` | `db` | 63 |
+| `plugins` | `extensions` | 2 |
+| `plugins` | `mcp` | 7 |
+| `plugins` | `models` | 2 |
+| `plugins` | `security` | 20 |
+| `plugins` | `shared` | 35 |
 | `plugins` | `tools` | 1 |
-| `plugins` | `utils` | 7 |
+| `plugins` | `utils` | 37 |
 | `security` | `api` | 1 |
-| `security` | `config` | 17 |
-| `security` | `connectors` | 3 |
-| `security` | `core` | 37 |
-| `security` | `db` | 85 |
+| `security` | `config` | 20 |
+| `security` | `core` | 39 |
+| `security` | `db` | 87 |
 | `security` | `mcp` | 2 |
-| `security` | `shared` | 5 |
-| `security` | `tools` | 4 |
+| `security` | `shared` | 8 |
+| `security` | `tools` | 7 |
 | `security` | `utils` | 34 |
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
@@ -811,19 +857,18 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `test-helpers` | `security` | 2 |
 | `tools` | `api` | 2 |
 | `tools` | `channels` | 2 |
-| `tools` | `config` | 3 |
-| `tools` | `connectors` | 2 |
-| `tools` | `core` | 125 |
+| `tools` | `config` | 4 |
+| `tools` | `core` | 131 |
 | `tools` | `db` | 42 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 8 |
-| `tools` | `plugins` | 1 |
-| `tools` | `security` | 58 |
+| `tools` | `plugins` | 6 |
+| `tools` | `security` | 79 |
 | `tools` | `services` | 1 |
 | `tools` | `shared` | 8 |
 | `tools` | `skills` | 5 |
-| `tools` | `utils` | 39 |
+| `tools` | `utils` | 42 |
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 3 |
 | `tui-editor` | `mcp` | 2 |
@@ -860,14 +905,12 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - config <-> models
 - config <-> security
 - config <-> voice
-- connectors <-> core
-- connectors <-> mcp
-- connectors <-> security
 - core <-> db
 - core <-> extensions
 - core <-> hooks
 - core <-> mcp
 - core <-> models
+- core <-> plugins
 - core <-> security
 - core <-> services
 - core <-> skills
@@ -875,6 +918,7 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - core <-> utils
 - core <-> voice
 - db <-> models
+- db <-> plugins
 - db <-> security
 - db <-> services
 - hooks <-> tools
@@ -964,4 +1008,4 @@ The contract promises these and no code emits them. Each is either a type to ret
 - `task.changed` — subscribed by `src/core/monitors/service.ts`
 - `test.event` — subscribed by `src/core/monitors/service.ts`
 
-1 publish/subscribe site(s) use a non-literal event type and are counted here rather than dropped.
+2 publish/subscribe site(s) use a non-literal event type and are counted here rather than dropped.

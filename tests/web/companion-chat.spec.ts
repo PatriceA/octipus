@@ -151,3 +151,30 @@ for (const emptyDestination of [false, true]) test(`workspace change to ${emptyD
   await expect(page.getByTestId('current-session-title')).toHaveText(expectedTitle);
   await expect(page.getByRole('region', { name: 'Companion chat identity' })).toHaveCount(0);
 });
+
+for (const theme of ['light', 'dark']) test(`Sessions use the shared Companion identity in ${theme} appearance`, async ({ authenticatedPage: page }) => {
+  await page.addInitScript(theme => localStorage.setItem('octipus-theme', theme), theme);
+  await setup(page);
+  await page.goto('/chat?session=sess-1');
+  const entry = page.getByRole('button', { name: 'Open Companion chat', exact: true });
+  await expect(entry).toBeVisible();
+  const colors = await page.evaluate(() => {
+    const style = getComputedStyle(document.documentElement);
+    return { container: style.getPropertyValue('--color-secondary-container').trim(), secondary: style.getPropertyValue('--color-secondary').trim() };
+  });
+  const toRgb = async (color: string) => page.evaluate(color => { const probe = document.createElement('span'); probe.style.color = color; document.body.append(probe); const result = getComputedStyle(probe).color; probe.remove(); return result; }, color);
+  await expect(entry).toHaveCSS('background-color', await toRgb(colors.container));
+  await expect(entry.locator('span').first()).toHaveCSS('color', await toRgb(colors.secondary));
+  await expect(entry).toHaveCSS('font-family', await page.locator('.session-chat-header').evaluate(element => getComputedStyle(element).fontFamily));
+  const shortcut = page.getByRole('button', { name: 'Companion', exact: true });
+  await expect(shortcut).toHaveCSS('color', await toRgb(colors.secondary));
+  await shortcut.click();
+  const identity = page.getByRole('region', { name: 'Companion chat identity' });
+  await expect(identity).toBeVisible();
+  await expect(entry).toHaveAttribute('aria-current', 'page');
+  await expect(identity).toHaveCSS('background-color', await toRgb(colors.container));
+  await page.screenshot({ path: `/tmp/octipus-session-companion-${theme}.png`, fullPage: true });
+  const { default: AxeBuilder } = await import('@axe-core/playwright');
+  const audit = await new AxeBuilder({ page }).include('.companion-chat-entry').include('[aria-label="Companion chat identity"]').withRules(['color-contrast']).analyze();
+  expect(audit.violations, JSON.stringify(audit.violations.map(v => v.nodes))).toEqual([]);
+});

@@ -28,6 +28,7 @@ export async function stubHealth(page: Page): Promise<void> {
 }
 
 export async function stubSessions(page: Page): Promise<void> {
+  await page.route('**/api/sessions/*/execution-environment', route => json(route, 200, { environment: { backend: 'legacy' }, selectedEnvironmentId: null, available: [] }));
   await page.route('**/api/sessions/*/plan', route => json(route, 200, { revision: 0, current: null, previous: [], planMode: false }));
   // List sessions
   await page.route('**/api/sessions', (route) => {
@@ -77,6 +78,7 @@ export async function stubSessions(page: Page): Promise<void> {
       context: {},
     });
   });
+  await page.route('**/api/sessions/desk', route => json(route, 200, { observedAt: new Date().toISOString(), sessions: [], total: 0, warnings: [] }));
 }
 
 export async function stubModels(page: Page): Promise<void> {
@@ -504,6 +506,8 @@ export async function stubWorkspaces(page: Page): Promise<void> {
 }
 
 export async function stubAllDefaults(page: Page): Promise<void> {
+  await page.route('**/api/heartbeat/me', route => json(route, 200, { enabled: false, intervalMinutes: null, watchEmail: false, watchEmailSince: null,
+    server: { enabled: true, intervalMinutes: 60, quietHoursStart: 22, quietHoursEnd: 7, quietHoursTimezone: 'UTC', maxRunsPerDay: 24, probeEmail: true }, mailbox: null, standingInstructions: false, recentEmail: [] }));
   await stubWorkspaces(page);
   await stubHealth(page);
   await stubSessions(page);
@@ -512,6 +516,11 @@ export async function stubAllDefaults(page: Page): Promise<void> {
   await stubExperts(page);
   await stubMcp(page);
   await stubKnowledge(page);
+  // The optional code index card on the Knowledge page: not installed.
+  await page.route('**/api/code-index/cocoindex', (route) => json(route, 200, {
+    id: 'cocoindex-code', installed: false, configured: false, workspacePath: null, status: 'not_installed',
+    embedding: { provider: 'sentence-transformers', model: 'Snowflake/snowflake-arctic-embed-xs', local: true },
+  }));
   await stubSkills(page);
   await stubPipelines(page);
   await stubSwarm(page);

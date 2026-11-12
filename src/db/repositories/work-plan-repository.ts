@@ -17,7 +17,7 @@ export const workPlanRepository = {
   async save(sessionId: string, userId: string, expected: number, state: WorkPlanState): Promise<void> {
     assertNoCredentialTemplates(state);
     await getDb().transaction(async tx => {
-      const [old] = await tx.select({ metadata: sessions.metadata, workspaceId: sessions.workspaceId }).from(sessions)
+      const [old] = await tx.select({ metadata: sessions.metadata, workspaceId: sessions.workspaceId, context: sessions.context }).from(sessions)
         .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId))).for('update');
       if (!old) throw new Error('Session not found');
       const before = old.metadata?.workPlan === undefined ? emptyWorkPlan() : workPlanStateSchema.parse(old.metadata.workPlan);
@@ -27,7 +27,8 @@ export const workPlanRepository = {
         updatedAt: new Date(),
       }).where(eq(sessions.id, sessionId));
       const trigger = planLearningTrigger(before, state);
-      if (trigger) await tx.insert(backgroundJobs).values({
+      // A one-shot session is never reviewed automatically (src/core/learning/queue.ts).
+      if (trigger && !old.context?.oneShot) await tx.insert(backgroundJobs).values({
         kind: 'learning', userId, workspaceId: old.workspaceId,
         title: trigger.title, payload: { sessionId, ...trigger, through: new Date().toISOString() },
       });

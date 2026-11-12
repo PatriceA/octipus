@@ -1,7 +1,13 @@
+import { getExecutionSignal } from '@/core/execution-scope';
+import { environmentCredentialOptions } from '@/security/environment-credentials';
+import { environmentToolHome } from '@/security/environment-identity';
+import { executionEnvironmentFor } from '@/security/execution-environments';
+import { environmentShellOptions, shellOperationsFor, quoteRuntimeArg, resolveEnvironmentCwd } from '@/security/environment-runtime';
+import { LocalShellOperations } from '@/tools/shell/local-operations';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawn } from 'child_process';
 import { buildChildEnv } from '@/security/child-env';
-import { openSpaceToolHome, type SpaceToolHome, withToolHome } from '@/security/space-tool-env';
+import { HOST_IDENTITY_ENV, openSpaceToolHome, type SpaceToolHome, withToolHome } from '@/security/space-tool-env';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { BaseTool, createParameterSchema, type ToolExecutionOptions } from '../base-tool';
 import { tokenizeSafe } from '../shell/policy';
@@ -31,6 +37,7 @@ export class GitTool extends BaseTool {
 
   getManifest(): ToolManifest {
     return {
+      execution: { kind: 'environment', program: 'git' },
       id: this.id,
       name: this.name,
       version: this.version,
@@ -312,6 +319,20 @@ export class GitTool extends BaseTool {
   }
 
   private async git(args: string[], cwd: string): Promise<string> {
+    const caller = this.caller.getStore();
+    if (caller && executionEnvironmentFor(caller)) {
+      const home = environmentToolHome(caller);
+      try {
+        const directory = resolveEnvironmentCwd(cwd, caller)!;
+        const command = ['git', ...(home?.gitArgs ?? []), ...args].map(quoteRuntimeArg).join(' ');
+        const credentials = await environmentCredentialOptions(caller, { ...environmentShellOptions(caller), timeout: 120000, signal: getExecutionSignal(caller), env: home?.env, ...(home ? { unsetEnv: HOST_IDENTITY_ENV } : {}), extraReadWrite: [...(environmentShellOptions(caller).extraReadWrite ?? []), ...(home ? [home.dir] : [])] });
+        let result;
+        try { result = credentials.mask(await shellOperationsFor(caller, new LocalShellOperations()).exec(command, directory, credentials.options)); }
+        catch (error) { throw credentials.maskError(error); }
+        if (result.exitCode !== 0 || result.killed) throw new Error(result.stderr || 'Git did not complete');
+        return result.stdout.trim();
+      } finally { home?.dispose(); }
+    }
     const plan = await this.spawnPlan(args);
     return new Promise((resolve, reject) => {
       const child = spawn('git', plan.args, { cwd, env: plan.env });

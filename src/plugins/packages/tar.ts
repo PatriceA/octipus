@@ -16,11 +16,14 @@
  */
 import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
-import { gunzipSync } from 'node:zlib';
+import { promisify } from 'node:util';
+import { gunzip } from 'node:zlib';
 import { PLUGIN_MANIFEST_FILE } from '@/shared/plugin-package';
 import { MAX_PACKAGE_BYTES, MAX_PACKAGE_FILES } from './tree';
 
 const BLOCK = 512;
+/** Off the event loop (the zlib thread pool), with the same output cap. */
+const gunzipAsync = promisify(gunzip);
 
 export class TarError extends Error {
   constructor(message: string) {
@@ -176,7 +179,7 @@ export async function extractTarGz(gz: Buffer, dest: string, limits: TarLimits =
   const maxTar = limits.maxBytes + (limits.maxFiles * 2 + 64) * BLOCK;
   let tar: Buffer;
   try {
-    tar = gunzipSync(gz, { maxOutputLength: maxTar });
+    tar = await gunzipAsync(gz, { maxOutputLength: maxTar });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ERR_BUFFER_TOO_LARGE' || err instanceof RangeError) {
       throw new TarError(`The archive unpacks to more than ${Math.round(limits.maxBytes / 1024 / 1024)} MB`);

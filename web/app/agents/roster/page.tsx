@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
@@ -25,25 +25,24 @@ function displayName(r: RosterRole): string {
 }
 
 /** What the card says the agent is doing right now. */
-function state(r: RosterRole): { text: string; tone: string } {
+function state(r: RosterRole, serverEnabled: boolean): { text: string; tone: string } {
   if (r.liveRuns) return { text: `working · ${r.liveRuns} run${r.liveRuns === 1 ? '' : 's'}`, tone: 'text-tertiary' };
+  if (r.heartbeat.enabled && !serverEnabled) return { text: 'heartbeat on · server paused', tone: 'text-warning' };
+  if (r.heartbeat.enabled && r.heartbeat.lastCheck?.reason === 'quiet_hours') return { text: 'idle · last check: quiet hours', tone: 'text-on-surface' };
   if (r.heartbeat.enabled) return { text: r.heartbeat.nextCheckAt ? `idle · next check ${hhmm(r.heartbeat.nextCheckAt)}` : 'idle · heartbeat on', tone: 'text-on-surface' };
   if (r.root) return { text: 'answers you in chat', tone: 'text-on-surface' };
   return { text: 'starts when delegated to', tone: 'text-on-surface-variant' };
 }
 
 function lastCheckText(c: NonNullable<RosterRole['heartbeat']['lastCheck']>): string {
-  if (c.ran) return `${hhmm(c.at)} · started a turn`;
+  if (c.ran) return `${hhmm(c.at)} · handled pending work`;
   const label = c.reason && c.reason in HEARTBEAT_SKIP_LABEL ? HEARTBEAT_SKIP_LABEL[c.reason as HeartbeatSkipReasonName] : (c.reason ?? 'skipped');
   return `${hhmm(c.at)} · skipped: ${label.toLowerCase()}`;
 }
 
 export default function RosterPage() {
   const workspaceId = useWorkspaceId();
-  const queryClient = useQueryClient();
   const [selected, setSelected] = useState<string | null>(null);
-  const [toggleError, setToggleError] = useState('');
-  const [saving, setSaving] = useState(false);
   const { data, isError, isFetching, errorUpdatedAt, dataUpdatedAt, refetch } = useQuery({
     queryKey: ['agent-roster', workspaceId],
     queryFn: async () => {
@@ -56,16 +55,6 @@ export default function RosterPage() {
   const unavailable = isError || errorUpdatedAt > dataUpdatedAt;
   const roles = data?.roles ?? [];
   const current = roles.find((r) => r.role === selected) ?? roles[0];
-
-  async function setHeartbeat(role: string, enabled: boolean) {
-    setSaving(true); setToggleError('');
-    try {
-      await api.put('/tasks/role-agents', { role, enabled });
-      await queryClient.invalidateQueries({ queryKey: ['agent-roster'] });
-    } catch (e) {
-      setToggleError(e instanceof Error ? e.message : 'The heartbeat could not be changed');
-    } finally { setSaving(false); }
-  }
 
   return (
     <div className="space-y-6">
@@ -80,14 +69,14 @@ export default function RosterPage() {
       </div>}
       {!data && !unavailable && <p className="text-sm text-on-surface-variant">Loading…</p>}
       {data && (!data.heartbeatEnabled || !data.boardWritesAllowed) && <div role="note" className="space-y-1 rounded-lg border border-warning/50 bg-warning-container/40 p-3 text-sm">
-        {!data.heartbeatEnabled && <p>The heartbeat is switched off on this server: no role agent wakes on its own until an admin turns it on.</p>}
+        {!data.heartbeatEnabled && <p>The heartbeat is switched off on this server: no role agent wakes on its own until an admin turns it on. <Link href="/settings?tab=heartbeat" className="text-primary underline">Open heartbeat settings</Link>.</p>}
         {!data.boardWritesAllowed && <p>Role agents cannot update to-dos until you allow <code className="font-mono text-xs">tasks/write</code> in <Link href="/permissions" className="text-primary underline">permissions</Link>; their heartbeat skips until then.</p>}
       </div>}
 
       {data && roles.length > 0 && current && <div className="flex flex-wrap items-start gap-6">
         <ul className="grid min-w-0 flex-[3_1_520px] gap-3 [grid-template-columns:repeat(auto-fill,minmax(250px,1fr))]">
           {roles.map((r) => {
-            const s = state(r);
+            const s = state(r, data.heartbeatEnabled);
             const on = r.role === current.role;
             return <li key={r.role}><button type="button" aria-pressed={on} onClick={() => setSelected(r.role)}
               className={cn('flex h-full w-full flex-col gap-2.5 rounded-lg border p-4 text-left', on ? 'border-primary bg-primary-container/50' : 'border-outline-variant/60 bg-surface-container hover:border-outline')}>
@@ -100,7 +89,7 @@ export default function RosterPage() {
               </span>
               {r.description && <span className="line-clamp-2 text-xs text-on-surface-variant">{r.description}</span>}
               <span className="mt-auto flex flex-wrap gap-1.5 text-[11px]">
-                {r.heartbeat.enabled && <span className="rounded-xs border border-tertiary/50 px-1.5 text-tertiary">Heartbeat</span>}
+                {r.heartbeat.enabled && <span className="rounded-xs border border-tertiary/50 px-1.5 text-tertiary">Background checks</span>}
                 {r.tasks.active > 0 && <span className="rounded-xs border border-outline-variant px-1.5 text-on-surface-variant">{r.tasks.active} to-do{r.tasks.active === 1 ? '' : 's'}</span>}
                 {r.runsToday > 0 && <span className="rounded-xs border border-outline-variant px-1.5 text-on-surface-variant">{r.runsToday} run{r.runsToday === 1 ? '' : 's'} today</span>}
                 {!r.known && <span className="rounded-xs border border-warning/50 px-1.5 text-warning">not in the registry</span>}
@@ -123,22 +112,19 @@ export default function RosterPage() {
             <h3 className="text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant">Starts when</h3>
             <ul className="space-y-2 text-sm">
               <li className="rounded-lg border border-outline-variant/60 bg-surface-container p-3">{current.root ? 'You send a message, in the web app, terminal or a linked channel.' : 'Octipus or another agent delegates a task to it (spawn_child), or a pipeline stage runs it.'}</li>
-              {!current.root && <li className="space-y-2 rounded-lg border border-outline-variant/60 bg-surface-container p-3">
+              <li className="space-y-2 rounded-lg border border-outline-variant/60 bg-surface-container p-3">
                 <div className="flex items-center justify-between gap-3">
-                  <span className="font-medium">Heartbeat: works its to-dos on its own</span>
-                  <label className="inline-flex items-center gap-2 text-xs">
-                    <input type="checkbox" role="switch" checked={current.heartbeat.enabled} disabled={saving || (!current.known && !current.heartbeat.enabled)}
-                      onChange={(e) => void setHeartbeat(current.role, e.target.checked)} className="h-4 w-4 accent-[var(--color-primary)]" />
-                    {current.heartbeat.enabled ? 'On' : 'Off'}
-                  </label>
+                  <span className="font-medium">{current.root ? 'Personal heartbeat: background checks' : 'Heartbeat: works its to-dos on its own'}</span>
+                  <span className="text-xs">{current.heartbeat.enabled && data.heartbeatEnabled ? 'On' : current.heartbeat.enabled ? 'Paused on server' : 'Off'}</span>
                 </div>
+                {current.root && <p className="text-xs text-on-surface-variant">Uses the same personal heartbeat as Settings. It checks periodically and records new findings as notifications; workers start only for assigned task work.</p>}
                 {current.heartbeat.enabled && <p className="text-xs text-on-surface-variant">
                   {current.heartbeat.intervalMinutes ? `Checks every ${current.heartbeat.intervalMinutes} min` : 'Checks at the configured interval'}
                   {current.heartbeat.nextCheckAt && <> · next {hhmm(current.heartbeat.nextCheckAt)}</>}
                 </p>}
                 {current.heartbeat.lastCheck && <p className="text-xs">Last check {lastCheckText(current.heartbeat.lastCheck)} · <Link href="/agents/triggers" className="text-primary underline">why</Link></p>}
-                {toggleError && <p role="alert" className="text-xs text-error">{toggleError}</p>}
-              </li>}
+                <Link href="/settings?tab=heartbeat" className="text-xs text-primary underline">Manage heartbeat in Settings</Link>
+              </li>
             </ul>
           </section>
 

@@ -35,7 +35,7 @@ export default function AdminAuditPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="section-label">audit log</h2>
+        <h2 className="section-label">Audit log</h2>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
