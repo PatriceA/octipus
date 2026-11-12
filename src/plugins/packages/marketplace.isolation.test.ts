@@ -169,14 +169,18 @@ afterAll(async () => {
 });
 
 describe('configured or not', () => {
-  test('with the built-in placeholder roots the marketplace is not configured, and nothing is fetched', async () => {
+  test('the default marketplace fetches its keys and refuses an untrusted root', async () => {
     const { getConfig } = await import('@/config');
     getConfig().plugins.marketplace = true;
+    publishKeys(1, [keyA]);
+    const officialKeysUrl = 'https://plugins.octipus.cc/keys.json';
+    served.files.set(officialKeysUrl, served.files.get(`${ORIGIN}/keys.json`)!);
+    served.files.set(`${officialKeysUrl}.sig`, served.files.get(`${ORIGIN}/keys.json.sig`)!);
     const { marketplaceListing } = await import('./marketplace');
     const listing = await marketplaceListing();
-    expect(listing).toMatchObject({ state: 'unconfigured', message: 'The Octipus marketplace is not configured in this build', plugins: [] });
-    await expect(install()).rejects.toThrow('The Octipus marketplace is not configured in this build');
-    expect(served.fetched).toEqual([]);
+    expect(listing).toMatchObject({ state: 'error', plugins: [] });
+    expect(served.fetched).toContain(officialKeysUrl);
+    expect(served.fetched).not.toContain('https://plugins.octipus.cc/index.json');
   });
 
   test('plugins.marketplace: false turns it off: never fetched, never trusted', async () => {

@@ -9,22 +9,10 @@
  * leaked one revoked, without a new Octipus release
  * (./marketplace-keys-file.ts).
  *
- * ┌─ PLACEHOLDERS ─────────────────────────────────────────────────────────┐
- * │ Both root keys below are placeholders: no key pair has been made for   │
- * │ this build. While either is a placeholder, the built-in marketplace is │
- * │ OFF: never fetched, never trusted, nothing installs from it, and the   │
- * │ admin listing says "The Octipus marketplace is not configured in this  │
- * │ build". A placeholder can never verify anything (marketplace.test.ts). │
- * │                                                                        │
- * │ To configure it, on an offline machine (never here, never in CI):      │
- * │   octi plugin keygen octipus-root --passphrase-file -                  │
- * │   octi plugin keygen octipus-root-backup --passphrase-file -           │
- * │ then paste the contents of `octipus-root.pub` into `root.publicKey`    │
- * │ and of `octipus-root-backup.pub` into `rootBackup.publicKey` (the      │
- * │ whole PEM, with its BEGIN/END lines), and set `placeholder: false` on  │
- * │ both. Only the PUBLIC halves ever go here. Keep both private keys      │
- * │ offline; they only sign keys.json (octi plugin sign-keys).             │
- * └────────────────────────────────────────────────────────────────────────┘
+ * Official builds ship the two public trust anchors below. New installations
+ * can verify the official marketplace without generating or configuring keys.
+ * Only PUBLIC keys belong here. Private roots stay with the publisher and
+ * sign keys.json; they are never needed by an Octipus installation.
  *
  * A host can point at another marketplace, or other root keys, for testing
  * or self-hosting: `plugins.marketplace: { url, rootKeys: { root, rootBackup } }`.
@@ -46,6 +34,12 @@ export type MarketplaceKeySlot =
  * `root` (a lost or leaked root); `root` may never revoke `rootBackup`.
  */
 export const MARKETPLACE_ROOT_KEYS: { readonly root: MarketplaceKeySlot; readonly rootBackup: MarketplaceKeySlot } = Object.freeze({
-  root: Object.freeze({ placeholder: true, publicKey: null, note: 'PLACEHOLDER: paste the contents of octipus-root.pub (octi plugin keygen) here' } as const),
-  rootBackup: Object.freeze({ placeholder: true, publicKey: null, note: 'PLACEHOLDER: paste the contents of octipus-root-backup.pub (octi plugin keygen) here' } as const),
+  root: Object.freeze({ placeholder: false, publicKey: `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAMxrCbKOaW2S7N2vmOMQbk607b5hX1rFWVbwkTq+ua/8=
+-----END PUBLIC KEY-----
+` } as const),
+  rootBackup: Object.freeze({ placeholder: false, publicKey: `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAdVsJCRh8prqQwi4B2eZj1x9YvTr53TUqFD1Yrk1iZiY=
+-----END PUBLIC KEY-----
+` } as const),
 });

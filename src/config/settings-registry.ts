@@ -436,7 +436,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'agent.liteMaxIterations',
     category: 'agent',
     valueType: 'number',
-    defaultValue: 8,
+    defaultValue: 20,
     description: 'Iteration cap for the lite root loop (full mode uses agent.maxIterations)',
     isSecret: false,
     envVar: 'AGENT_LITE_MAX_ITERATIONS',

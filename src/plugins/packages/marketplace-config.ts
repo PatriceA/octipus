@@ -4,8 +4,8 @@
  * network side so the signature checks of installed packages
  * (./service.ts) can read it without importing a fetcher.
  *
- * Fails closed: the built-in root keys are placeholders until a build ships
- * real ones (./marketplace-keys.ts), and while either is a placeholder, or a
+ * Official builds ship public root keys (./marketplace-keys.ts). Custom builds
+ * fail closed while either root is a placeholder, or a
  * key cannot be read, the marketplace is `unconfigured`: never fetched,
  * never trusted, nothing installs from it.
  */
