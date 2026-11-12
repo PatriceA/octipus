@@ -720,7 +720,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 1 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 29 |
-| `api` | `core` | 192 |
+| `api` | `core` | 193 |
 | `api` | `db` | 139 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
@@ -757,12 +757,12 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `config` | `voice` | 1 |
 | `core` | `capabilities` | 2 |
 | `core` | `channels` | 14 |
-| `core` | `config` | 69 |
+| `core` | `config` | 70 |
 | `core` | `db` | 483 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 11 |
-| `core` | `models` | 134 |
+| `core` | `models` | 137 |
 | `core` | `modules` | 2 |
 | `core` | `plugins` | 8 |
 | `core` | `security` | 228 |
