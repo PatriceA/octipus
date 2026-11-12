@@ -3,6 +3,7 @@ import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getAllCommands } from '@/core/commands';
 import { getAgentService } from '@/core/agent';
+import { getAgentManager } from '@/core/agent-manager';
 import { scopedRepos } from '@/db/repositories/scoped';
 import { checkProjectPath, devModeAllowed } from '@/security/devmode';
 import { isAuthenticated, requireScope } from '@/security/principal';
@@ -119,7 +120,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
   // Send a chat message through the root agent
   .post(
     '/',
-    async ({ user, principal, body, set }) => {
+    async ({ user, principal, body, set, request }) => {
       if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
@@ -196,6 +197,23 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
             return null;
           })
         : null;
+      // A one-shot caller that hangs up (a script's timeout, Ctrl-C) will never
+      // read the answer, so the run stops instead of holding the model — on a
+      // local single-slot model it would otherwise block the next caller.
+      // Only for one-shot sessions: an interactive client on a flaky link must
+      // not lose a run to a dropped connection.
+      let answered = false;
+      const stopIfAbandoned = () => {
+        if (answered || !body.oneShot || body.sessionId) return;
+        apiLogger.info({ sessionId }, 'one-shot caller disconnected; stopping its run');
+        getAgentManager().stopSession(sessionId as string, user.id);
+      };
+      request?.signal?.addEventListener('abort', stopIfAbandoned, { once: true });
+      // Hung up before the listener existed: nothing has started, so start nothing.
+      if (request?.signal?.aborted && body.oneShot && !body.sessionId) {
+        set.status = 499;
+        return { error: 'Client closed request' };
+      }
       try {
         const renders = body.renders?.filter((r: string) => r === 'inline_ui');
         const result = await rootAgent.handleMessage(
@@ -210,6 +228,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           undefined,
           renders?.length ? { renders } : undefined,
         );
+        answered = true;
 
         return {
           // History has already retained the complete reply. At the transport
