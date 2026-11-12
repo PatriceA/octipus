@@ -47,7 +47,7 @@ export const planPatchSchema = z.object({
 }).strict().refine(v => new Set(v.stepUpdates.map(s => s.id)).size === v.stepUpdates.length, 'Step IDs must be unique');
 
 export function expandWorkPlanPatch(state: WorkPlanState, patch: z.infer<typeof planPatchSchema>): PlanUpdate {
-  if (patch.revision !== state.revision) throw new Error('Plan changed. Read the current plan and retry.');
+  if (patch.revision !== state.revision) throw new Error(`Plan changed: the current revision is ${state.revision}. Resend with revision ${state.revision}.`);
   const plan = state.current;
   if (!plan) throw new Error('Publish a full plan before patching steps.');
   for (const update of patch.stepUpdates) {
@@ -105,7 +105,7 @@ export const emptyWorkPlan = (): WorkPlanState => ({ revision: 0, current: null,
 
 /** Apply an explicit agent revision, preserving completed work and feedback. */
 export function reviseWorkPlan(state: WorkPlanState, input: PlanUpdate): WorkPlanState {
-  if (input.revision !== state.revision) throw new Error('Plan changed. Read the current plan and retry.');
+  if (input.revision !== state.revision) throw new Error(`Plan changed: the current revision is ${state.revision}. Resend with revision ${state.revision}.`);
   const old = input.newPlan ? null : state.current;
   if (input.newPlan && state.current?.feedback.some(f => f.status === 'pending')) {
     throw new Error('Handle pending feedback before starting a new plan.');

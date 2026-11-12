@@ -299,7 +299,7 @@ export const agentConfigSchema = z.object({
    * relay; the lite root now does the work itself, and 3 iterations is not
    * enough to read a file, search, and answer.
    */
-  liteMaxIterations: z.number().min(1).max(25).default(8),
+  liteMaxIterations: z.number().min(1).max(25).default(20),
   /** The "small model" threshold: trimmed prompts and tool sets below this. */
   smallModelMaxParams: z.number().default(10_000_000_000),
   /** auto: models with fewer params than this run in the lite tier. */

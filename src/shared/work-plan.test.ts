@@ -32,7 +32,7 @@ describe('visible work plans', () => {
     const initial = input(); initial.steps[0].status = 'done';
     const state = reviseWorkPlan(emptyWorkPlan(), initial);
     const patch = { revision: 1, summary: 'Progress', stepUpdates: [{ id: 'inspect', status: 'working' }] };
-    expect(() => expandWorkPlanPatch(state, planPatchSchema.parse({ ...patch, revision: 0 }))).toThrow('Plan changed');
+    expect(() => expandWorkPlanPatch(state, planPatchSchema.parse({ ...patch, revision: 0 }))).toThrow('current revision is 1. Resend with revision 1');
     expect(() => expandWorkPlanPatch(state, planPatchSchema.parse({ ...patch, stepUpdates: [{ id: 'missing' }] }))).toThrow('Unknown plan step');
     expect(planPatchSchema.safeParse({ ...patch, stepUpdates: [patch.stepUpdates[0], patch.stepUpdates[0]] }).success).toBe(false);
     expect(planPatchSchema.safeParse({ ...patch, steps: initial.steps }).success).toBe(false);

@@ -75,7 +75,7 @@ Register a second model (e.g. `nomic-embed-text`) and bind it to the
 |---|---|---|---|
 | `agent.promptTier` | `AGENT_PROMPT_TIER` | `auto` | `auto` derives the prompt tier from model size; pin to `lite` to force the small-model path. |
 | `agent.smallModelMaxParams` | `AGENT_SMALL_MODEL_MAX_PARAMS` | `10e9` | The "small model" threshold: below it prompts and tool sets are trimmed everywhere. Named for the router mode it used to select, which no longer exists. |
-| `agent.liteMaxIterations` | `AGENT_LITE_MAX_ITERATIONS` | `8` | Hard iteration cap for a lite-tier root agent — the bound that keeps a 9B model's loop from wandering. |
+| `agent.liteMaxIterations` | `AGENT_LITE_MAX_ITERATIONS` | `20` | Hard iteration cap for a lite-tier root agent. 8 cut a 26B model off mid-fix (read, test, edit, re-test needs ~10); plan-only turns do not count, up to 3. |
 | `agent.smallModelMaxTools` | `AGENT_SMALL_MODEL_MAX_TOOLS` | `7` | Max tools handed to a small-tier worker — fewer tools, more reliable tool calls. |
 
 ## How Octipus adapts to a small model

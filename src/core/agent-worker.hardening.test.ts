@@ -218,6 +218,24 @@ describe('AgentWorker child-aware timeout (2.2) + graceful exit (3.5)', () => {
     expect((worker as unknown as { completionReason: string }).completionReason).toBe('iteration_limit');
   });
 
+  test('plan-only turns do not spend the iteration cap, at most 3 of them', async () => {
+    const worker = new AgentWorker(mkCtx({ id: 'plan-free-1' }), cfg({ maxIterations: 4 }));
+    const priv = worker as unknown as {
+      getCompletion: () => Promise<CompletionResult>;
+      toolExecutor: { handleToolCalls: (tc: unknown) => Promise<unknown[]> };
+    };
+    let calls = 0;
+    priv.getCompletion = async () => {
+      calls++;
+      return { ...completion(''), toolCalls: [{ id: `p-${calls}`, name: 'update_work_plan', arguments: { revision: calls, summary: `s${calls}` } }], finishReason: 'tool_calls' };
+    };
+    priv.toolExecutor.handleToolCalls = async () => [];
+    await worker.run('Fix the ledger.');
+    // 4 counted + 3 free plan turns, then the one no-tools summary turn.
+    expect(calls).toBe(8);
+    expect((worker as unknown as { completionReason: string }).completionReason).toBe('iteration_limit');
+  });
+
   test('budget completion emits and persists the reason independent of summary wording', async () => {
     const update = vi.spyOn(agentRepository, 'updateStatus').mockResolvedValue(undefined);
     const audit = vi.spyOn(auditRepository, 'logAgentCompleted').mockResolvedValue(undefined as never);

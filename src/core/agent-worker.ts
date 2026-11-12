@@ -252,6 +252,7 @@ export class AgentWorker extends BaseAgentWorker {
   private lengthRetryBoost: number = 0;
   /** Tool-call loop/spam detection (same-args + same-name state machines). */
   private loopDetector = new ToolLoopDetector();
+  private freePlanTurns = 0;
   /** Consecutive rounds in which every tool call failed (see FailureStreakDetector). */
   private failureStreak = new FailureStreakDetector();
   /** Seeded in `run()` from the brief; absent until then. */
@@ -1616,6 +1617,13 @@ export class AgentWorker extends BaseAgentWorker {
         // run, not the model's mistyped name.
         this.toolExecutor.normalizeToolCallNames(completion.toolCalls);
         const toolNames = completion.toolCalls.map(tc => tc.name);
+        // A plan-only turn is bookkeeping, not work: it must not spend the
+        // iteration cap (a lite run of 8 lost up to 4 to it). Bounded so a model
+        // stuck re-publishing its plan still reaches the cap.
+        if (this.freePlanTurns < 3 && toolNames.every(n => n === 'update_work_plan' || n === 'get_work_plan')) {
+          this.freePlanTurns++;
+          this.config.maxIterations += 1;
+        }
 
         // Capability floor signal (Phase 2.1): the model emitted tool calls
         // natively — the good sample that heals a prior shim streak.

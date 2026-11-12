@@ -82,7 +82,7 @@ export const defaultConfig: Partial<Config> = {
     cliShellGuard: true,
     flowGuard: 'ask',
     promptTier: 'auto',
-    liteMaxIterations: 8,
+    liteMaxIterations: 20,
     smallModelMaxParams: 10_000_000_000,
     liteModelMaxParams: 30_000_000_000,
     smallModelMaxTools: 7,
