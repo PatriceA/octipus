@@ -11,7 +11,9 @@ import { presenceAfterClose } from '@/core/rooms/presence';
 import { getCommandRegistry } from './commands';
 import { handleRoomFrame, isRoomFrame } from './room-handlers';
 import type { GatewayHub } from './hub';
-import { cancelQueuedTurns, isSessionTurnCancelled, isSessionTurnRunning, queuedTurnCount } from '@/core/session-turn-lock';
+import {
+  cancelQueuedTurns, isSessionTurnCancelled, isSessionTurnRunning, queuedTurnCount, reserveSessionTurn, type SessionTurnReservation,
+} from '@/core/session-turn-lock';
 import type { ClientMessage, ConnectionContext, PendingApproval, PendingPermission, PermissionPendingMessage, SendMode, SendOutcome } from './protocol';
 
 /**
@@ -26,13 +28,6 @@ import type { ClientMessage, ConnectionContext, PendingApproval, PendingPermissi
  * react. The injected message is persisted so the transcript stays complete
  * (the steering queue itself does not persist).
  */
-type SteerableWorker = {
-  steer: (m: { role: 'user'; content: string; timestamp: Date }) => void | boolean;
-  canAcceptSteering?: () => boolean;
-  /** Will guidance reach the running turn (not only a later tool response or the next turn)? Absent: yes. */
-  acceptsMidTurnSteering?: () => boolean;
-};
-
 /** Why a message was not steered; `running` when a turn is running all the same. */
 export type SteerAttempt = { steered: true } | { steered: false; running: boolean; reason: string };
 
@@ -106,21 +101,17 @@ export async function trySteerRunningRootAgent(sessionId: string, content: strin
  * modes' `chat.delivery` answer. Nothing is stored unless it steered.
  */
 export async function steerRunningRootAgent(sessionId: string, content: string, inlineUi?: InlineUiTurnNotes): Promise<SteerAttempt> {
-  const { getAgentManager } = await import('@/core/agent-manager');
-  const running = getAgentManager().getBySession(sessionId)
-    .filter((a) => a.getStatus() === 'running' && a.getContext().root === true && !a.getContext().metadata?.companionBriefing);
-  const refuse = (reason: string): SteerAttempt => ({ steered: false, running: running.length > 0, reason });
+  // The same rule AgentService.steer applies (a running root that takes
+  // input mid-turn; never a room turn or a buffered CLI), with its reason.
+  const { findSteeringTarget } = await import('@/core/agent/steering-target');
+  const found = findSteeringTarget(sessionId);
   // Slash commands must reach the command registry, never become model guidance.
-  if (content.trimStart().startsWith('/') || isSessionControlMessage(content)) return refuse('A command is never steered into a running turn.');
-  const target = running.find((a): a is typeof a & SteerableWorker => typeof (a as Partial<SteerableWorker>).steer === 'function');
-  if (!target) return refuse(running.length ? 'The running agent cannot take guidance.' : 'No turn is running in this session.');
-  if (target.canAcceptSteering?.() === false) return refuse('The running turn is finishing and takes no more guidance.');
-  // A buffered CLI (Vibe, Antigravity) would hold the guidance until a later
-  // tool response or report it unhandled at the end: not a live steer.
-  if (target.acceptsMidTurnSteering?.() === false) return refuse('The running agent cannot take input mid-turn.');
-  // A room turn is never steered: a member's post is stored once by the
-  // room, and a running room turn belongs to its requester alone (§6.3).
-  if (target.getContext().metadata?.room) return refuse('A room turn is never steered.');
+  if (content.trimStart().startsWith('/') || isSessionControlMessage(content)) {
+    return { steered: false, running: found.root !== null || found.running, reason: 'A command is never steered into a running turn.' };
+  }
+  if (!found.root) return { steered: false, running: found.running, reason: found.reason };
+  const target = found.root;
+  const refuse = (reason: string): SteerAttempt => ({ steered: false, running: true, reason });
 
   // Guard the injected content exactly as handleMessage guards a normal turn —
   // a steer must not be a hole around the input guard. On block, refuse so
@@ -159,16 +150,25 @@ export async function steerRunningRootAgent(sessionId: string, content: string, 
 }
 
 /**
- * Stop the session's running turn for a `restart` send, the way `/stop` does
- * (every agent of the session; each ends at its next boundary). The queued
- * turns stay. Returns whether a root turn was running.
+ * Stop the session's running turn for a `restart` send, as `/stop` does: the
+ * Companion owner stop is recorded and the agents end at their next boundary.
+ * Only the caller's own turn is stopped, and only the caller's agents — in a
+ * group session the running turn may be another member's (`not_yours`). The
+ * queued turns stay.
  */
-async function interruptRunningTurn(sessionId: string, userId: string): Promise<boolean> {
+async function interruptRunningTurn(sessionId: string, userId: string): Promise<'stopped' | 'idle' | 'not_yours'> {
   const { getAgentManager } = await import('@/core/agent-manager');
   const mgr = getAgentManager();
-  const running = mgr.getBySession(sessionId).some((a) => a.getStatus() === 'running' && a.getContext().root === true);
-  if (running) mgr.stopSession(sessionId, userId);
-  return running;
+  const agents = mgr.getBySession(sessionId);
+  const root = agents.find((a) => a.getStatus() === 'running' && a.getContext().root === true);
+  if (!root) return 'idle';
+  if (root.getContext().userId !== userId) return 'not_yours';
+  try { await (await import('@/core/companion/user-control')).recordCompanionOwnerStop(sessionId, userId); }
+  catch (error) { coreLogger.error({ error, sessionId }, 'Could not persist Companion owner stop'); }
+  for (const agent of agents) {
+    if (agent.getContext().userId === userId) mgr.stop(agent.getContext().id, { actorUserId: userId });
+  }
+  return 'stopped';
 }
 
 /**
@@ -473,27 +473,42 @@ async function handleChatSend(
       message.content += '\n\n' + uploaded.map(file => `Attached file: ${file.path}`).join('\n');
     }
 
-    // `restart`: stop the running turn and go ahead of the queued ones. A
-    // command is never a restart (`/stop` and friends act at once anyway).
-    const front = mode === 'restart' && !message.content.trimStart().startsWith('/');
-    const restarted = front && await interruptRunningTurn(message.sessionId, userId);
-    if (restarted) deliver('restarted');
+    // `restart`: take the front place in the session's queue first, then stop
+    // the running turn — so the turn it frees can only pass to this message,
+    // never to one queued before it. A command is never a restart (`/stop` and
+    // friends act at once anyway).
+    let reservation: SessionTurnReservation | undefined;
+    let interrupted: Awaited<ReturnType<typeof interruptRunningTurn>> | undefined;
+    let busyBeforeRestart = false;
+    if (mode === 'restart' && !message.content.trimStart().startsWith('/')) {
+      busyBeforeRestart = isSessionTurnRunning(message.sessionId);
+      reservation = reserveSessionTurn(message.sessionId, { front: true, owner: userId });
+      try { interrupted = await interruptRunningTurn(message.sessionId, userId); }
+      catch (err) { reservation.release(); throw err; }
+      // Another member's turn is not ours to stop or to jump: queue normally.
+      if (interrupted === 'not_yours') { reservation.release(); reservation = undefined; }
+    }
+    if (interrupted === 'stopped') deliver('restarted');
     else {
       const running = isSessionTurnRunning(message.sessionId) ? 1 : 0;
-      const ahead = isSessionControlMessage(message.content) ? 0 : front ? running : running + queuedTurnCount(message.sessionId);
+      const ahead = isSessionControlMessage(message.content) ? 0
+        // Holding the free lock already, or first behind the running turn.
+        : reservation ? (busyBeforeRestart ? 1 : 0)
+          : running + queuedTurnCount(message.sessionId);
       const reason = mode !== 'restart' ? queuedBecause
-        : !front ? 'A command is never a restart.'
-          : running ? 'The running turn had no agent to stop yet; this message runs next.' : 'No turn was running to restart.';
+        : interrupted === undefined ? 'A command is never a restart.'
+          : interrupted === 'not_yours' ? 'The running turn is another member\'s; this message waits its turn.'
+            : ahead ? 'The running turn had no agent to stop yet; this message runs next.' : 'No turn was running to restart.';
       deliver('queued', { ahead, ...(reason ? { reason } : {}) });
     }
 
     // Route through root agent
-    const turnInlineUi = { renders: message.renders, notes: inlineUiNotes.notes, provenanceId: inlineUiNotes.provenanceId };
-    const result = front
-      ? await rootAgent.handleMessage(message.sessionId, userId, message.content, context.clientType, message.fileRefs, message.outputMode,
-        undefined, undefined, undefined, turnInlineUi, { queueFront: true })
-      : await rootAgent.handleMessage(message.sessionId, userId, message.content, context.clientType, message.fileRefs, message.outputMode,
-        undefined, undefined, undefined, turnInlineUi);
+    const result = await rootAgent.handleMessage(
+      message.sessionId, userId, message.content, context.clientType, message.fileRefs, message.outputMode,
+      undefined, undefined, undefined,
+      { renders: message.renders, notes: inlineUiNotes.notes, provenanceId: inlineUiNotes.provenanceId },
+      reservation ? { queueReservation: reservation } : undefined,
+    );
 
     // Send response back through gateway
     hub.publishEvent({
@@ -829,9 +844,13 @@ async function handleAgentStop(
       try { await (await import('@/core/companion/user-control')).recordCompanionOwnerStop(agent.getContext().sessionId, context.userId); }
       catch (error) { coreLogger.error({ error, sessionId: agent.getContext().sessionId }, 'Could not persist Companion owner stop'); }
     }
-    // Stopping a turn's root also drops the turns queued behind it, as `/stop`
-    // does: first, so none of them starts in the gap the stopped turn leaves.
-    const droppedQueued = agent.getContext().root ? cancelQueuedTurns(agent.getContext().sessionId) : 0;
+    // Stopping the session's running turn (its running root) also drops the
+    // caller's messages queued behind it, as `/stop` does — first, so none of
+    // them starts in the gap the stopped turn leaves. A finished root, or a
+    // child, leaves the queue alone; other members' messages always stay.
+    const { sessionId: agentSession, root } = agent.getContext();
+    const stopsRunningTurn = root === true && agent.getStatus() === 'running' && isSessionTurnRunning(agentSession);
+    const droppedQueued = stopsRunningTurn ? cancelQueuedTurns(agentSession, { owner: context.userId }) : 0;
     agentManager.stop(message.agentId, { actorUserId: context.userId });
 
     hub.publishEvent({

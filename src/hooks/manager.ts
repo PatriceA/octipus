@@ -239,13 +239,14 @@ export class HookManager extends EventEmitter {
       // Refused before any work started (capacity / quota): hand the
       // reservation back, so a retry of the same event is not then skipped
       // by the cooldown or maxExecutions this run never used.
-      if (result.notStarted && reservedAt) await this.unreserveRun(hook, reservedAt, previousLastExecutedAt);
+      // A run a user's /stop dropped from the session queue never started either.
+      if ((result.notStarted || result.droppedByStop) && reservedAt) await this.unreserveRun(hook, reservedAt, previousLastExecutedAt);
 
       // Log execution
       await this.logExecution({
         hookId: hook.id,
         source: manualTest ? 'manual_test' : 'hook',
-        status: result.success ? 'success' : 'error',
+        status: result.success ? 'success' : result.droppedByStop ? 'skipped' : 'error',
         triggerType: event.type,
         actionType: hook.action,
         result: result.data as Record<string, unknown> | undefined,

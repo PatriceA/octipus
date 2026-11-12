@@ -21,7 +21,7 @@ test.each([undefined, 2] as const)('gateway forwards persisted refs and attachme
   const files = mock.store.mock.calls[0][1] as File[];
   expect(Buffer.from(await files[0].arrayBuffer()).toString()).toBe('image');
   expect(mock.handle).toHaveBeenCalledWith(sid, 'user', expect.stringContaining('Describe [image1]'), 'tui', [{ path: '.octipus/attachments/id/paste.png', ...(protectionLevel !== undefined ? { protectionLevel } : {}) }], undefined,
-    undefined, undefined, undefined, { renders: undefined, notes: [], provenanceId: undefined });
+    undefined, undefined, undefined, { renders: undefined, notes: [], provenanceId: undefined }, undefined);
   expect(mock.handle.mock.calls[0][2]).toContain('Attached file: .octipus/attachments/id/paste.png');
   // Nothing was running: the only answer is that it runs as its own turn now.
   expect(send).toHaveBeenCalledExactlyOnceWith('connection', { type: 'chat.delivery', sessionId: sid, mode: 'auto', outcome: 'queued', ahead: 0 });

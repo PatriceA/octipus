@@ -495,9 +495,11 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       // (e.g. stopping the root agent should also stop child CLI workers)
       try { await (await import('@/core/companion/user-control')).recordCompanionOwnerStop(context.sessionId, user.id); }
       catch (err) { apiLogger.error({ err, sessionId: context.sessionId }, 'Could not persist Companion owner stop'); }
-      // Stopping the turn's root drops the messages queued behind it, as /stop does.
-      const droppedQueued = context.root
-        ? (await import('@/core/session-turn-lock')).cancelQueuedTurns(context.sessionId)
+      // Stopping the session's running turn drops the caller's messages queued
+      // behind it, as /stop does; a finished root or a child leaves the queue.
+      const lock = await import('@/core/session-turn-lock');
+      const droppedQueued = context.root && agent.getStatus() === 'running' && lock.isSessionTurnRunning(context.sessionId)
+        ? lock.cancelQueuedTurns(context.sessionId, { owner: user.id })
         : 0;
       const stopped = agentManager.stopSession(context.sessionId, user.id);
 

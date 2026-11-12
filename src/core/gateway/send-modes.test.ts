@@ -75,6 +75,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mock.workers = [];
   mock.handle.mockImplementation(async () => ({ response: 'ok' }));
+  mock.stop.mockImplementation(() => true);
 });
 afterEach(() => { mock.workers = []; });
 
@@ -136,23 +137,57 @@ describe('chat.send modes', () => {
     expect(mock.handle).not.toHaveBeenCalled();
   });
 
-  test('restart stops the running turn and runs the message ahead of the queued ones', async () => {
+  test('restart takes the front place before it stops the turn, so a turn queued earlier cannot run first', async () => {
     const { steer, worker } = rootWorker();
     mock.workers = [worker];
+    const order: string[] = [];
+    // The running turn holds the lock; turn B is already queued behind it.
+    let releaseRunning!: () => void;
+    const running = withSessionTurn(sid, () => new Promise<void>(resolve => { releaseRunning = resolve; }), { owner: 'user' });
+    const queuedB = withSessionTurn(sid, async () => { order.push('B'); }, { owner: 'user' });
+    // Stopping the root ends the running turn at once (before the handler
+    // reaches handleMessage), and handleMessage awaits before its lock call.
+    mock.stop.mockImplementation(() => { releaseRunning(); return true; });
+    mock.handle.mockImplementation(async (...args: unknown[]) => {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      const internal = args[10] as { queueReservation?: import('@/core/session-turn-lock').SessionTurnReservation } | undefined;
+      await withSessionTurn(sid, async () => { order.push('R'); }, internal?.queueReservation ? { reservation: internal.queueReservation } : {});
+      return { response: 'ok' };
+    });
     const gw = wire();
     await gw.run({ type: 'chat.send', sessionId: sid, content: 'start over with X', mode: 'restart' });
+    await Promise.all([running, queuedB]);
     expect(steer).not.toHaveBeenCalled();
-    expect(mock.stopSession).toHaveBeenCalledWith(sid, 'user');
+    expect(mock.stop).toHaveBeenCalledWith('root-1', { actorUserId: 'user' });
     expect(gw.deliveries()).toEqual([{ type: 'chat.delivery', sessionId: sid, mode: 'restart', outcome: 'restarted' }]);
-    expect(mock.handle).toHaveBeenCalledOnce();
-    expect(mock.handle.mock.calls[0][10]).toEqual({ queueFront: true });
+    expect(order).toEqual(['R', 'B']);
+  });
+
+  test('restart never stops or jumps another member\'s running turn', async () => {
+    const { worker } = rootWorker();
+    mock.workers = [{ ...worker, getContext: () => ({ id: 'root-2', root: true, userId: 'bob', sessionId: sid, metadata: {} }) }];
+    const release = holdTurn();
+    const gw = wire();
+    const sent = gw.run({ type: 'chat.send', sessionId: sid, content: 'start over', mode: 'restart' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await release();
+    await sent;
+    expect(mock.stop).not.toHaveBeenCalled();
+    expect(gw.deliveries()).toEqual([{
+      type: 'chat.delivery', sessionId: sid, mode: 'restart', outcome: 'queued', ahead: 1, reason: 'The running turn is another member\'s; this message waits its turn.',
+    }]);
+    expect(mock.handle.mock.calls[0][10]).toBeUndefined();
   });
 
   test('restart with nothing running is a normal turn, and says so', async () => {
     const gw = wire();
     await gw.run({ type: 'chat.send', sessionId: sid, content: 'start over', mode: 'restart' });
-    expect(mock.stopSession).not.toHaveBeenCalled();
+    expect(mock.stop).not.toHaveBeenCalled();
     expect(gw.deliveries()).toEqual([{ type: 'chat.delivery', sessionId: sid, mode: 'restart', outcome: 'queued', ahead: 0, reason: 'No turn was running to restart.' }]);
+    // The handler never consumed the reservation (mocked): the lock is free again.
+    const { isSessionTurnRunning } = await import('@/core/session-turn-lock');
+    (mock.handle.mock.calls[0][10] as { queueReservation: { release(): void } }).queueReservation.release();
+    expect(isSessionTurnRunning(sid)).toBe(false);
   });
 
   test('a queued send dropped by /stop ends with CHAT_CANCELLED and a cancelled chat.error', async () => {
@@ -178,29 +213,34 @@ describe('chat.steer modes', () => {
 });
 
 describe('agent.stop', () => {
-  test('stopping a root drops the turns queued behind it and reports how many', async () => {
+  test('stopping the running root drops the caller\'s turns queued behind it, not other members\'', async () => {
     const { worker } = rootWorker();
     mock.get.mockReturnValue(worker);
     const release = holdTurn();
-    const queued = withSessionTurn(sid, async () => 'ran').catch((err: Error) => err.name);
+    const mine = withSessionTurn(sid, async () => 'ran', { owner: 'user' }).catch((err: Error) => err.name);
+    const theirs = withSessionTurn(sid, async () => 'ran', { owner: 'bob' });
     await Promise.resolve();
     const gw = wire();
     await gw.run({ type: 'agent.stop', agentId: 'root-1' });
-    expect(await queued).toBe('SessionTurnCancelledError');
+    expect(await mine).toBe('SessionTurnCancelledError');
     expect(mock.stop).toHaveBeenCalledWith('root-1', { actorUserId: 'user' });
     expect(gw.publish).toHaveBeenCalledWith(expect.objectContaining({
       type: 'agent.stopped', payload: { agentId: 'root-1', stoppedBy: 'user', droppedQueued: 1 },
     }));
     await release();
+    expect(await theirs).toBe('ran');
   });
 
-  test('stopping a child leaves the queue alone', async () => {
-    mock.get.mockReturnValue({ getContext: () => ({ id: 'child-1', root: false, userId: 'user', sessionId: sid }) });
+  test('a finished root, or a child, leaves the queue alone', async () => {
     const release = holdTurn();
-    const queued = withSessionTurn(sid, async () => 'ran');
+    const queued = withSessionTurn(sid, async () => 'ran', { owner: 'user' });
     const gw = wire();
+    mock.get.mockReturnValue({ getContext: () => ({ id: 'child-1', root: false, userId: 'user', sessionId: sid }), getStatus: () => 'running' });
     await gw.run({ type: 'agent.stop', agentId: 'child-1' });
     expect(gw.publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'agent.stopped', payload: { agentId: 'child-1', stoppedBy: 'user' } }));
+    mock.get.mockReturnValue({ getContext: () => ({ id: 'old-root', root: true, userId: 'user', sessionId: sid }), getStatus: () => 'completed' });
+    await gw.run({ type: 'agent.stop', agentId: 'old-root' });
+    expect(gw.publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'agent.stopped', payload: { agentId: 'old-root', stoppedBy: 'user' } }));
     await release();
     expect(await queued).toBe('ran');
   });

@@ -207,7 +207,7 @@ describe('executeSpawnAgent: direct spawn', () => {
 });
 
 describe('executeSpawnAgent: orchestrated', () => {
-  test('a turn /stop dropped from the session queue reports notRun instead of failing', async () => {
+  test('a turn /stop dropped from the session queue reports droppedByStop instead of failing', async () => {
     const { SessionTurnCancelledError } = await import('@/core/session-turn-lock');
     orchestrated.handleMessage = async () => { throw new SessionTurnCancelledError('hook-sess'); };
     try {
@@ -216,7 +216,8 @@ describe('executeSpawnAgent: orchestrated', () => {
         actionConfig: { orchestrated: true, agentPrompt: 'triage' },
       } as Partial<Hook>), ctx());
       expect(r.success).toBe(false);
-      expect(r.data).toMatchObject({ notRun: true, cancelled: true });
+      expect(r).toMatchObject({ droppedByStop: true });
+      expect(r.notStarted).toBeUndefined(); // a user's stop is never retried as a refusal
       expect(r.error).toContain('/stop');
     } finally {
       orchestrated.handleMessage = undefined;

@@ -25,9 +25,13 @@ vi.mock('@/core/agent-manager', () => ({
 }));
 // The direct spawn's run waits its turn in the session: observe which session.
 const turns = vi.hoisted(() => ({ sessions: [] as string[] }));
-vi.mock('@/core/session-turn-lock', () => ({
+vi.mock('@/core/session-turn-lock', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/core/session-turn-lock')>(),
   withSessionTurn: async (sessionId: string) => { turns.sessions.push(sessionId); return undefined; },
 }));
+// An orchestrated run's root turn: a test makes a user's /stop drop it.
+const rootTurn = vi.hoisted(() => ({ handleMessage: async (): Promise<unknown> => ({ response: 'ok' }) }));
+vi.mock('@/core/agent', () => ({ getAgentService: () => ({ handleMessage: () => rootTurn.handleMessage() }) }));
 
 const userId = '11111111-1111-4111-8111-111111111111';
 const hookId = '44444444-4444-4444-8444-444444444444';
@@ -60,11 +64,11 @@ afterAll(async () => {
   await closeDb();
 });
 
-async function insertHook({ cooldownMs = 0, maxExecutions = 0, executionCount = 0, lastExecutedAt = 'NULL' } = {}) {
+async function insertHook({ cooldownMs = 0, maxExecutions = 0, executionCount = 0, lastExecutedAt = 'NULL', orchestrated = false } = {}) {
   await executeRaw(
     `INSERT INTO hooks (id, user_id, name, trigger, trigger_config, action, action_config, cooldown_ms, max_executions, execution_count, last_executed_at)
      VALUES ('${hookId}', '${userId}', 'Issue triage', 'webhook', '{"webhookPath":"gh"}'::jsonb, 'spawn_agent',
-             '{"agentPrompt":"triage","orchestrated":false}'::jsonb, ${cooldownMs}, ${maxExecutions}, ${executionCount}, ${lastExecutedAt})`,
+             '{"agentPrompt":"triage","orchestrated":${orchestrated}}'::jsonb, ${cooldownMs}, ${maxExecutions}, ${executionCount}, ${lastExecutedAt})`,
   );
 }
 
@@ -130,6 +134,21 @@ describe('a run refused before it started', () => {
     await delivery.claimDelivery(hookId, 'd-2');
     await delivery.fireWebhookHook(run('d-2'));
     expect(await delivery.claimDelivery(hookId, 'd-2')).not.toBeNull();
+  });
+
+  test('an orchestrated run a user /stop dropped: released, reservation handed back, logged as skipped', async () => {
+    await insertHook({ cooldownMs: 600_000, maxExecutions: 5, orchestrated: true });
+    const { SessionTurnCancelledError } = await import('@/core/session-turn-lock');
+    rootTurn.handleMessage = async () => { throw new SessionTurnCancelledError('s'); };
+    try {
+      expect(await delivery.claimDelivery(hookId, 'd-stop')).not.toBeNull();
+      await delivery.fireWebhookHook(run('d-stop'));
+      expect(await delivery.claimDelivery(hookId, 'd-stop')).not.toBeNull();
+      expect(await hookRow()).toMatchObject({ execution_count: 0, last_executed_at: null });
+      expect((await executions()).map((e) => [e.status, e.error])).toEqual([['skipped', 'Dropped by /stop before it ran']]);
+    } finally {
+      rootTurn.handleMessage = async () => ({ response: 'ok' });
+    }
   });
 
   test('any other spawn failure still completes the delivery', async () => {

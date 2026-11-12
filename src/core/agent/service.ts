@@ -1,6 +1,7 @@
 import { sessionTokenBudget, sessionBudgetMessage } from './session-budget';
 import { isSessionControlMessage } from '@/core/session-controls';
-import { withSessionTurn } from '@/core/session-turn-lock';
+import { isSessionTurnCancelled, type SessionTurnReservation, withSessionTurn } from '@/core/session-turn-lock';
+import { findSteeringTarget } from './steering-target';
 import { sessionGeneration } from '@/db/schema/sessions';
 import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
@@ -250,11 +251,18 @@ export class AgentService {
     inlineUi?: { renders?: readonly string[]; notes?: readonly string[]; provenanceId?: string },
     internal?: {
       companionObservation?:boolean; companionBriefingModel?:string; companionBriefing?:boolean;companionBriefingBudget?:number;
-      /** A `restart` send: wait ahead of every turn already queued in the session (session-turn-lock). */
-      queueFront?: boolean;
+      /**
+       * A place in the session's queue the caller took before calling (a
+       * `restart` send takes the front place before it stops the running
+       * turn). Consumed by this turn, or released if it returns without one.
+       */
+      queueReservation?: SessionTurnReservation;
     },
   ): Promise<TurnResult> {
     const turnTrigger = trigger ?? triggerForChannel(channel, !!groupTurn);
+    const reservation = internal?.queueReservation;
+    let handedOver = false;
+    try {
     // Controls must reach a running turn; queuing /stop behind it defeats cancellation.
     // Background wake-ups always take the normal queue and cannot invoke this path.
     if (!beforeStart) {
@@ -278,6 +286,7 @@ export class AgentService {
         }
       }
     }
+    handedOver = true;
     return withSessionTurn(sessionId, async () => {
       const refreshedMessage = await beforeStart?.();
       if (typeof refreshedMessage === 'string') message = refreshedMessage;
@@ -297,7 +306,12 @@ export class AgentService {
         () => withProviderUsageContext({ userId }, () =>
           this.handleMessageInner(sessionId, userId, message, channel, attachedFiles, forcedOutputMode, false, groupTurn, turnTrigger)),
       );
-    }, { front: internal?.queueFront === true });
+    // A monitor or companion wake-up is redelivered by its own service: `/stop`
+    // drops only messages (a user's, a hook run's), and only the stopper's.
+    }, reservation ? { reservation } : { owner: userId, kind: turnTrigger === 'monitor' ? 'background' : 'message' });
+    } finally {
+      if (!handedOver) reservation?.release();
+    }
   }
 
   /** The user's single pending approval is still `id`, waiting in `sessionId` (read now, synchronously). */
@@ -418,6 +432,8 @@ export class AgentService {
     if (!posted || posted.sessionId !== roomId) throw new RoomTurnDropped('The post is gone');
     signal.throwIfAborted();
     try {
+      // The room queue is this lock's only waiter here and owns cancelling
+      // (rooms/queue.ts): `background`, so a session-lock cancel never drops it.
       await withSessionTurn(roomId, async () => {
         signal.throwIfAborted();
         const session = await sessionRepository.findById(roomId);
@@ -434,9 +450,10 @@ export class AgentService {
           }),
         );
         if (result.outcome === 'failed' && !result.metadata?.limit) throw new RoomTurnFailed(result.response);
-      });
+      }, { owner: requesterId, kind: 'background' });
     } catch (err) {
       if (signal.aborted || err instanceof RoomTurnDropped) throw err;
+      if (isSessionTurnCancelled(err)) throw new RoomTurnDropped('Dropped by /stop before it ran');
       // The room reads only that the turn failed (`room.turn`); the requester gets why.
       const detail = err instanceof RoomTurnFailed ? err.message : `I encountered an error processing your message: ${(err as Error).message}`;
       await this.notifyRoomRequester(roomId, requesterId, detail);
@@ -1510,30 +1527,22 @@ export class AgentService {
 
   // ── Steering ────────────────────────────────────────────────────
 
+  /** Does a running root of this session take steering now (session-steering rule, steering-target.ts)? */
   canSteer(sessionId: string): boolean {
-    return getAgentManager().getBySession(sessionId).some(agent => agent.getStatus() === 'running'
-      && agent.getContext().root === true && !agent.getContext().metadata?.room && !agent.getContext().metadata?.companionBriefing && 'steer' in agent
-      && (!('canAcceptSteering' in agent) || (agent as { canAcceptSteering(): boolean }).canAcceptSteering()));
+    return findSteeringTarget(sessionId).root !== null;
   }
 
   /**
-   * Inject a steering message into the active agent for a session.
-   * Returns true if an active running agent was found and steered.
+   * Inject a steering message into the session's running root, when it takes
+   * steering now (steering-target.ts). Returns true if it was steered.
    */
   steer(sessionId: string, message: import('@/core/types').AgentMessage): boolean {
-    const agentManager = getAgentManager();
-    const sessionAgents = agentManager.getBySession(sessionId);
-    const running = sessionAgents.find(a => a.getStatus() === 'running' && a.getContext().root === true && !a.getContext().metadata?.room && !a.getContext().metadata?.companionBriefing);
-    if (!running) return false;
-
     // Only the root receives session steering and decides whether a child needs it.
     // Workers wake collection and deliver at their next supported input boundary.
-    if ('steer' in running && typeof running.steer === 'function') {
-      if (running.steer(message) === false) return false;
-      coreLogger.info({ sessionId, agentId: running.getContext().id }, 'Steering message queued for root');
-      return true;
-    }
-    return false;
+    const { root } = findSteeringTarget(sessionId);
+    if (!root || root.steer(message) === false) return false;
+    coreLogger.info({ sessionId, agentId: root.getContext().id }, 'Steering message queued for root');
+    return true;
   }
 
   // ── Utility delegation ───────────────────────────────────────────

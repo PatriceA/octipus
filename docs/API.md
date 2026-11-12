@@ -847,7 +847,7 @@ closed (codes 4001 and 4004) and must re-authenticate.
 | `unsubscribe` | Remove event patterns and/or resources |
 | `permission.respond` | Approve/deny permission request |
 | `approval.respond` | Approve/deny pipeline approval |
-| `agent.stop` | Stop one of the connection's own user's running agents (an admin included; another user's agent is `AGENT_NOT_FOUND`). Stopping a turn's root drops the messages queued behind it (`agent.stopped` payload `droppedQueued`) |
+| `agent.stop` | Stop one of the connection's own user's running agents (an admin included; another user's agent is `AGENT_NOT_FOUND`). Stopping the session's running root drops your messages queued behind it (`agent.stopped` payload `droppedQueued`) |
 | `voice.set` | `{ sessionId, on }` — voice mode for one of your sessions on this connection: lifecycle narration arrives as `voice.speak` events; cleared when the connection closes. Another user's session is `SESSION_NOT_FOUND` |
 | `replay` | `{ sessionId, afterEventId? }` — the buffered events of one of your existing sessions after `afterEventId`. Another user's or an unknown session is `SESSION_NOT_FOUND` |
 | `ping` | Heartbeat |

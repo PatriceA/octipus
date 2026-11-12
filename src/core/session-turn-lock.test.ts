@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { cancelQueuedTurns, isSessionTurnCancelled, isSessionTurnRunning, queuedTurnCount, SessionTurnCancelledError, withSessionTurn } from './session-turn-lock';
+import { cancelQueuedTurns, isSessionTurnCancelled, isSessionTurnRunning, queuedTurnCount, reserveSessionTurn, SessionTurnCancelledError, withSessionTurn } from './session-turn-lock';
 
 function gate(): { open: () => void; wait: Promise<void> } {
   let open!: () => void;
@@ -83,4 +83,70 @@ test('isSessionTurnCancelled only matches the lock error', () => {
   expect(isSessionTurnCancelled(new Error('Dropped by /stop before it ran'))).toBe(false);
   expect(isSessionTurnCancelled({ code: 'SESSION_TURN_CANCELLED' })).toBe(true);
   expect(isSessionTurnCancelled(null)).toBe(false);
+});
+
+test('front waiters keep their own arrival order (FIFO among restarts)', async () => {
+  const order: string[] = [];
+  const running = gate();
+  const first = withSessionTurn('f2', async () => { await running.wait; });
+  const queued = withSessionTurn('f2', async () => { order.push('queued'); });
+  const r1 = withSessionTurn('f2', async () => { order.push('restart-1'); }, { front: true });
+  const r2 = withSessionTurn('f2', async () => { order.push('restart-2'); }, { front: true });
+  running.open();
+  await Promise.all([first, queued, r1, r2]);
+  expect(order).toEqual(['restart-1', 'restart-2', 'queued']);
+});
+
+test('a cancel by owner drops only that user\'s messages, never background wake-ups', async () => {
+  const running = gate();
+  const first = withSessionTurn('o1', async () => { await running.wait; });
+  const ran: string[] = [];
+  const turn = (name: string, options: Parameters<typeof withSessionTurn>[2]) =>
+    withSessionTurn('o1', async () => { ran.push(name); }, options).catch(err => { if (!isSessionTurnCancelled(err)) throw err; });
+  const turns = [
+    turn('alice-1', { owner: 'alice' }),
+    turn('bob-1', { owner: 'bob' }),
+    turn('alice-wake', { owner: 'alice', kind: 'background' }),
+    turn('alice-2', { owner: 'alice' }),
+  ];
+  await Promise.resolve();
+  expect(cancelQueuedTurns('o1', { owner: 'alice' })).toBe(2);
+  expect(queuedTurnCount('o1')).toBe(2);
+  running.open();
+  await Promise.all([first, ...turns]);
+  expect(ran).toEqual(['bob-1', 'alice-wake']);
+});
+
+test('a reservation holds its place before its run is known, and can be given up', async () => {
+  const order: string[] = [];
+  const running = gate();
+  const first = withSessionTurn('r1', async () => { order.push('running'); await running.wait; });
+  const queued = withSessionTurn('r1', async () => { order.push('queued'); });
+  // Taken synchronously, ahead of the queued turn, before the turn's work exists.
+  const reservation = reserveSessionTurn('r1', { front: true });
+  expect(queuedTurnCount('r1')).toBe(2);
+  running.open();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(order).toEqual(['running']); // the freed lock passed to the reservation
+  const restarted = withSessionTurn('r1', async () => { order.push('restart'); }, { reservation });
+  await Promise.all([first, queued, restarted]);
+  expect(order).toEqual(['running', 'restart', 'queued']);
+
+  // Given up while waiting: the queue moves on without it.
+  const hold = gate();
+  const busy = withSessionTurn('r2', async () => { await hold.wait; });
+  const abandoned = reserveSessionTurn('r2');
+  const after = withSessionTurn('r2', async () => { order.push('after'); });
+  abandoned.release();
+  abandoned.release(); // idempotent
+  hold.open();
+  await Promise.all([busy, after]);
+  expect(order.at(-1)).toBe('after');
+  expect(isSessionTurnRunning('r2')).toBe(false);
+
+  // Given up while holding the free lock: released.
+  const held = reserveSessionTurn('r3');
+  expect(isSessionTurnRunning('r3')).toBe(true);
+  held.release();
+  expect(isSessionTurnRunning('r3')).toBe(false);
 });

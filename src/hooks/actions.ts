@@ -30,6 +30,13 @@ export interface ActionResult {
    * maxExecutions reservation is handed back (manager.ts).
    */
   notStarted?: boolean;
+  /**
+   * The run waited behind the session's running turn and a user's `/stop`
+   * dropped it (session-turn-lock): nothing ran. Like `notStarted`, the
+   * reservation is handed back and a webhook delivery is released, but it is
+   * logged as skipped and never retried on its own (the user stopped it).
+   */
+  droppedByStop?: boolean;
 }
 
 /**
@@ -560,10 +567,10 @@ async function executeSpawnAgent(
       // A closing event ends its thread even when its turn fails.
       await closeThreadIfEnded(thread, hook);
       // `/stop` dropped the run while it waited behind the session's running
-      // turn: nothing ran (`notRun`; a webhook delivery is released for retry).
+      // turn: nothing ran (`droppedByStop`).
       if (isSessionTurnCancelled(err)) {
         coreLogger.info({ hookId: hook?.id, sessionId }, 'Queued hook turn dropped by stop');
-        return { success: false, error: err.message, data: { notRun: true, cancelled: true, ...threadData(thread) } };
+        return { success: false, error: err.message, droppedByStop: true, data: { droppedByStop: true, ...threadData(thread) } };
       }
       throw err;
     } finally {
@@ -634,7 +641,7 @@ async function executeSpawnAgent(
   // queued worker does not count as running until its turn starts.
   if (message) {
     const { withSessionTurn } = await import('@/core/session-turn-lock');
-    withSessionTurn(sessionId, () => withAgentUsage(userId, scope, () => agent.run(message))).then(async (result) => {
+    withSessionTurn(sessionId, () => withAgentUsage(userId, scope, () => agent.run(message)), { owner: userId }).then(async (result) => {
       if (config.notifyOwner && userId && result) {
         try {
           await notifyOwnerWithResult(userId, result);

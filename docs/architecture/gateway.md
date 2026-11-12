@@ -103,7 +103,7 @@ lockouts and the audit log use the same rule (`src/security/client-ip.ts`).
 | `unsubscribe` | Remove event patterns and/or resources |
 | `permission.respond` | Approve/deny a permission request |
 | `approval.respond` | Approve/deny a pipeline approval (the requester only) |
-| `agent.stop` | Stop one of your own running agents; stopping a turn's root also drops the turns queued behind it (`agent.stopped` carries `droppedQueued`) |
+| `agent.stop` | Stop one of your own running agents; stopping the session's running root also drops your messages queued behind it (`agent.stopped` carries `droppedQueued`) |
 | `voice.set` | `{ sessionId, on }` — put one of your sessions into (or out of) voice mode for this connection: the propose-then-confirm gate applies, and its lifecycle is narrated to this connection as `voice.speak`. `on:false` counts only for the session this connection turned on; the session leaves voice mode when no connection of the user holds it there any more (also on close) |
 | `replay` | `{ sessionId, afterEventId? }` — the events of one of your own sessions after `afterEventId`, for a reconnecting client (answered with `replay`; without `afterEventId` the answer is `gap: true` with no events) |
 | `ping` | Heartbeat |
@@ -123,7 +123,7 @@ A session runs one turn at a time (`session-turn-lock.ts`). `mode` on
 | `auto` (default) | Steer it when its root takes input mid-turn and the message is plain text (no files, not a command); else queue | Normal turn |
 | `queue` | Queue: its own turn after the running one and the turns already waiting | Normal turn |
 | `steer` | Steer it; refused when its root cannot take input mid-turn | Refused |
-| `restart` | Stop the session's agents as `/stop` does (each ends at its next boundary) and run this message next, ahead of the turns already waiting | Normal turn |
+| `restart` | Take the front place in the queue, then stop your running turn as `/stop` does (each of your agents ends at its next boundary): this message runs next, ahead of the turns already waiting (restarts in their own order). Another member's running turn is neither stopped nor jumped: the message queues | Normal turn |
 
 The sender gets `chat.delivery` as soon as the server has decided:
 `{ sessionId, mode, outcome, ahead?, reason? }` with `outcome` one of
@@ -135,16 +135,25 @@ with `injected: true`.
 A buffered CLI root (`bufferOutput`: Mistral Vibe, Antigravity) reads guidance
 only with a later Octipus tool response and otherwise reports it unhandled at
 the end of its turn, so it does not take input mid-turn: `auto` queues the
-message as the next turn, `steer` is refused. The gateway asks the worker
-(`acceptsMidTurnSteering()`; a native worker takes it while running).
+message as the next turn, `steer` is refused. The worker says so
+(`acceptsMidTurnSteering()`; a native worker takes it while running), and one
+rule (`core/agent/steering-target.ts`) picks the target for the gateway and for
+`AgentService.steer` (monitor and companion wake-ups), so a wake-up is not
+steered into a buffered root either.
 
-`/stop` (chat command and the gateway `/abort` aliases), `agent.stop` on a
-root and `POST /api/agents/:id/stop` drop the turns waiting behind the running
-one; the reply says how many (`Stopped 1 running agent; 2 queued messages
-dropped.`). A dropped `chat.send` ends with `error` `CHAT_CANCELLED` and a
-`chat.error` whose payload has `cancelled: true`; it was never stored. A
-channel message gets a "Not run" reply; an orchestrated hook run reports
-`notRun`, and its webhook delivery is released so a redelivery can run it.
+`/stop` (chat command and the gateway `/abort` aliases), `agent.stop` on the
+session's running root and `POST /api/agents/:id/stop` on it drop the caller's
+own messages waiting behind the running turn (and the caller's hook runs);
+the reply says how many (`Stopped 1 running agent; 2 queued messages
+dropped.`). Other members' messages in a group session stay queued, and so do
+monitor and companion wake-ups, which their own services deliver. A dropped
+`chat.send` ends with `error` `CHAT_CANCELLED` and a `chat.error` whose
+payload has `cancelled: true`; it was never stored. `POST /api/chat` answers
+409 `{ error, cancelled: true }`, `/v1/chat/completions` 409 with code
+`turn_cancelled`; a channel message gets a "Not run" reply. An orchestrated
+hook run reports `droppedByStop`: it is logged as skipped, its cooldown and
+max-executions reservation is handed back, its webhook delivery is released so
+a redelivery can run it, and it is not retried on its own.
 
 ### Gateway → Client
 

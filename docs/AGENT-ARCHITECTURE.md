@@ -298,7 +298,7 @@ running root takes input mid-turn, else queue), `queue`, `steer` (refused when
 nothing running takes it) or `restart` (stop the running turn, run this message
 next, ahead of the queued turns). A buffered CLI root (Vibe, Antigravity)
 cannot take input mid-turn, so `auto` queues for it. `/stop` and `agent.stop` on
-a root drop the turns queued behind the running one. See
+the running root drop the caller's messages queued behind the running turn. See
 [architecture/gateway.md](architecture/gateway.md#send-modes).
 
 ### When to Use

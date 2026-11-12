@@ -2,11 +2,18 @@
  * One turn at a time per session. All entry points into AgentService share
  * this queue, including monitor wake-ups and hook runs.
  *
- * Waiters run in arrival order, except a `front` waiter (a `restart` send,
- * docs/plans/orchestration-gaps-2026-11.md §3), which goes ahead of every
- * waiter already queued. `cancelQueuedTurns` drops every waiter (not the
- * running turn): each one rejects with `SessionTurnCancelledError` and its
- * `run` never starts.
+ * Waiters run in arrival order, except `front` waiters (a `restart` send,
+ * docs/plans/orchestration-gaps-2026-11.md §3), which go ahead of every
+ * ordinary waiter, in their own arrival order. A caller that must hold its
+ * place before doing something else (a restart stops the running turn only
+ * once its place is taken) reserves it with `reserveSessionTurn` and hands
+ * the reservation to `withSessionTurn`.
+ *
+ * `cancelQueuedTurns` drops waiters (never the running turn): each rejects
+ * with `SessionTurnCancelledError` and its `run` never starts. Only
+ * `message` waiters are dropped — a user's message or a hook run — and, given
+ * an owner, only that user's. `background` waiters (monitor and companion
+ * wake-ups, room turns) stay: they have their own delivery and cancel paths.
  */
 
 /** A queued turn was dropped before it ran (`/stop`, `agent.stop` on a root). */
@@ -23,36 +30,91 @@ export function isSessionTurnCancelled(err: unknown): err is SessionTurnCancelle
     || (typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'SESSION_TURN_CANCELLED');
 }
 
-interface Waiter { start: () => void; cancel: (err: Error) => void }
+/** `message`: a user's message or a hook run (`/stop` drops it); `background`: a durable wake-up or room turn (never dropped here). */
+export type SessionTurnKind = 'message' | 'background';
+
+interface Waiter { start: () => void; cancel: (err: Error) => void; front: boolean; owner?: string; kind: SessionTurnKind }
 interface Lane { running: boolean; waiters: Waiter[] }
 
 const lanes = new Map<string, Lane>();
 
 export interface SessionTurnOptions {
-  /** Run before every turn already waiting (still after the running one). */
+  /** Run before every ordinary turn already waiting (after earlier front turns, and the running one). */
   front?: boolean;
+  /** The user the turn is for: a cancel by owner drops only their turns. */
+  owner?: string;
+  /** Default `message`. */
+  kind?: SessionTurnKind;
 }
 
-export async function withSessionTurn<T>(sessionId: string, run: () => Promise<T>, options: SessionTurnOptions = {}): Promise<T> {
+/** A place in a session's queue, held from `reserveSessionTurn` until `release`. */
+export interface SessionTurnReservation {
+  readonly sessionId: string;
+  /** Resolves when the turn may run; rejects with `SessionTurnCancelledError` if dropped first. */
+  readonly ready: Promise<void>;
+  /** Give the place up: the lock if held, the waiting slot otherwise. Idempotent. */
+  release(): void;
+}
+
+/** Take a place in the session's queue now, synchronously. */
+export function reserveSessionTurn(sessionId: string, options: SessionTurnOptions = {}): SessionTurnReservation {
   let lane = lanes.get(sessionId);
   if (!lane) { lane = { running: false, waiters: [] }; lanes.set(sessionId, lane); }
-  if (lane.running || lane.waiters.length) {
-    const waiting = lane;
-    // The releasing turn hands `running` straight to this waiter, so nothing
-    // arriving in between can slip ahead of it.
-    await new Promise<void>((start, cancel) => {
-      const waiter = { start, cancel };
-      if (options.front) waiting.waiters.unshift(waiter); else waiting.waiters.push(waiter);
-    });
-  } else {
+  let state: 'waiting' | 'running' | 'done';
+  let ready: Promise<void>;
+  let waiter: Waiter | undefined;
+  if (!lane.running && !lane.waiters.length) {
     lane.running = true;
-    await Promise.resolve();
+    state = 'running';
+    ready = Promise.resolve();
+  } else {
+    state = 'waiting';
+    const waiting = lane;
+    ready = new Promise<void>((resolve, reject) => {
+      // The releasing turn hands `running` straight to this waiter, so nothing
+      // arriving in between can slip ahead of it.
+      waiter = {
+        start: () => { state = 'running'; resolve(); },
+        cancel: (err) => { state = 'done'; reject(err); },
+        front: options.front === true,
+        ...(options.owner ? { owner: options.owner } : {}),
+        kind: options.kind ?? 'message',
+      };
+      if (waiter.front) {
+        const at = waiting.waiters.findIndex(w => !w.front);
+        waiting.waiters.splice(at === -1 ? waiting.waiters.length : at, 0, waiter);
+      } else waiting.waiters.push(waiter);
+    });
+    // A dropped reservation nobody awaits yet must not be an unhandled rejection.
+    ready.catch(() => {});
   }
-  try { return await run(); }
-  finally { release(sessionId); }
+  return {
+    sessionId,
+    ready,
+    release: () => {
+      if (state === 'running') { state = 'done'; releaseLane(sessionId); return; }
+      if (state !== 'waiting') return;
+      state = 'done';
+      const current = lanes.get(sessionId);
+      const index = current && waiter ? current.waiters.indexOf(waiter) : -1;
+      if (current && index !== -1) current.waiters.splice(index, 1);
+    },
+  };
 }
 
-function release(sessionId: string): void {
+export async function withSessionTurn<T>(
+  sessionId: string,
+  run: () => Promise<T>,
+  options: SessionTurnOptions & { reservation?: SessionTurnReservation } = {},
+): Promise<T> {
+  const reservation = options.reservation ?? reserveSessionTurn(sessionId, options);
+  try { await reservation.ready; }
+  catch (err) { reservation.release(); throw err; }
+  try { return await run(); }
+  finally { reservation.release(); }
+}
+
+function releaseLane(sessionId: string): void {
   const lane = lanes.get(sessionId);
   if (!lane) return;
   const next = lane.waiters.shift();
@@ -62,16 +124,18 @@ function release(sessionId: string): void {
 }
 
 /**
- * Drop every turn waiting behind the running one. Returns how many were
- * dropped; each rejects with `SessionTurnCancelledError`. The running turn is
- * untouched (stop its agents for that).
+ * Drop the `message` turns waiting behind the running one — given `owner`,
+ * only that user's. Returns how many were dropped; each rejects with
+ * `SessionTurnCancelledError`. The running turn is untouched (stop its agents
+ * for that).
  */
-export function cancelQueuedTurns(sessionId: string, reason?: string): number {
+export function cancelQueuedTurns(sessionId: string, options: { owner?: string; reason?: string } = {}): number {
   const lane = lanes.get(sessionId);
   if (!lane?.waiters.length) return 0;
-  const dropped = lane.waiters.splice(0);
-  for (const waiter of dropped) waiter.cancel(new SessionTurnCancelledError(sessionId, reason));
-  if (!lane.running) lanes.delete(sessionId);
+  const dropped = lane.waiters.filter(w => w.kind === 'message' && (!options.owner || w.owner === options.owner));
+  if (!dropped.length) return 0;
+  lane.waiters = lane.waiters.filter(w => !dropped.includes(w));
+  for (const waiter of dropped) waiter.cancel(new SessionTurnCancelledError(sessionId, options.reason));
   return dropped.length;
 }
 

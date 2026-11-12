@@ -15,6 +15,7 @@ import { apiLogger } from '@/utils/logger';
 import { stripSpeechSources } from '@/voice/speech-sources';
 import { inlineUiFallbackText, inlineUiSpeechText } from '@/shared/inline-ui/fence';
 import { messageRepository } from '@/db/repositories/message-repository';
+import { isSessionTurnCancelled } from '@/core/session-turn-lock';
 
 /**
  * The specialist roles this turn actually delegated to.
@@ -274,6 +275,13 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           metadata: result.metadata,
         };
       } catch (error) {
+        // A user's /stop dropped this message while it waited behind the
+        // session's running turn: it never ran and was never stored.
+        if (isSessionTurnCancelled(error)) {
+          apiLogger.info({ sessionId }, 'Queued chat request dropped by stop');
+          set.status = 409;
+          return { error: error.message, cancelled: true, sessionId };
+        }
         apiLogger.error({ error, sessionId }, 'Chat request failed');
         return {
           error: 'Failed to process message',
