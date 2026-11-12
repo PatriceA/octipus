@@ -10,7 +10,7 @@
     "act": { "effect": "write", "description": "Changes something (never a widget's tool)" }
   },
   "network": ["billing.example.com"],
-  "host": ["store:read"],
+  "host": ["notes:read", "store:read"],
   "store": {},
   "maxProtection": 1,
   "dashboards": [

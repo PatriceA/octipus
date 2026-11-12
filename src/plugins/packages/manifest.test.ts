@@ -33,6 +33,10 @@ describe('plugin manifest', () => {
     expect(problems(twice).some((p) => p.includes('widget "a" twice'))).toBe(true);
     expect(problems(dash('echo', { dashboards: [{ id: 'm', title: 'M', widgets: [{ id: 'a', type: 'html', title: 'A', tool: 'echo' }] }] })).some((p) => p.includes('widget type'))).toBe(true);
     expect(problems(dash('echo', { dashboards: [{ id: 'm', title: 'M', widgets: [{ id: 'a', type: 'stat', title: 'A', tool: 'echo', refreshSeconds: 5 }] }] })).some((p) => p.includes('refreshSeconds'))).toBe(true);
+    // The consent shows the input as JSON: what it shows is what is sent.
+    for (const input of [{ q: 'open\u202Eclosed' }, { 'q\u200B': 'x' }, { nested: ['a\u0007'] }]) {
+      expect(problems(dash('echo', { dashboards: [{ id: 'm', title: 'M', widgets: [{ id: 'a', type: 'stat', title: 'A', tool: 'echo', input }] }] })).some((p) => p.includes('invisible')), JSON.stringify(input)).toBe(true);
+    }
   });
 
   test('mail:send needs an external tool to be handed to', () => {

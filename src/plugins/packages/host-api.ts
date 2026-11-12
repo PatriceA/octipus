@@ -336,7 +336,11 @@ export async function issueHostCallMeta(
   if (hostCallKind(context) === null || isPluginRunSession(context.sessionId)) return null;
   const effect = Object.hasOwn(binding.tools, toolName) ? binding.tools[toolName] : undefined;
   if (!effect) return null;
-  const candidates = grantableScopes(binding.hostScopes, binding.hostScopes, effect);
+  // A dashboard shows the package's own outside data, never combined with the
+  // user's Octipus data (docs/PLUGIN-PACKAGES.md#dashboards): its widget's call
+  // may read the package's own store and nothing else.
+  const dashboard = hostCallKind(context) === 'dashboard';
+  const candidates = grantableScopes(binding.hostScopes, binding.hostScopes, effect).filter((s) => !dashboard || s === 'store:read');
   const scopes = await userHeldScopes(context.userId, candidates, { sessionId: context.sessionId, workspaceId: context.workspaceId ?? null });
   if (scopes.length === 0) return null;
   const ttl = Math.min(server.requestTimeoutMs ?? MAX_TOKEN_TTL_MS, MAX_TOKEN_TTL_MS);

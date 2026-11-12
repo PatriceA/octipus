@@ -324,7 +324,7 @@ export const pluginCallRoutes = new Elysia({ prefix: '/plugins' })
     try {
       const result = await getMCPBridge().callTool(serverId, widget.tool, args, context, { server_id: serverId, tool_name: widget.tool, arguments: args });
       const { widgetData } = await import('@/plugins/packages/dashboard-data');
-      const out = widgetData(result, widget.type, found.manifest.network ?? []);
+      const out = await widgetData(result, widget.type, found.manifest.network ?? []);
       if (!out.ok) {
         set.status = 422;
         return { error: out.error, code: 'widget_invalid' };

@@ -33,6 +33,12 @@ const ADMIN = { id: '11111111-1111-4111-8111-111111111111', username: 'admin', i
 const MEMBER = { id: '22222222-2222-4222-8222-222222222222', username: 'member', isAdmin: false };
 const fixture = vi.hoisted(() => ({ user: null as null | { id: string; username: string; isAdmin: boolean } }));
 
+// The fixture's link host, as a public name (no DNS in tests).
+vi.mock('node:dns/promises', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:dns/promises')>()),
+  lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+}));
+
 vi.mock('@/api/context', async () => {
   const { principalFromUser } = await import('@/security/principal');
   return {
@@ -75,7 +81,7 @@ beforeAll(async () => {
   app = new App({ prefix: '/api' }).use(pluginUiRoutes).use(pluginCallRoutes);
   const svc = await import('./service');
   await svc.installFromDirectory(FIXTURE_DIR, ADMIN.id);
-  await svc.configure(NAME, { approveHostScopes: ['store:read'], enabled: true }, ADMIN.id);
+  await svc.configure(NAME, { approveHostScopes: ['notes:read', 'store:read'], enabled: true }, ADMIN.id);
 });
 
 afterAll(async () => {
@@ -131,8 +137,9 @@ describe('dashboards', () => {
     }
   });
 
-  test('a widget\'s call is the signed-in user\'s, with a host token as a page\'s call', async () => {
+  test('a widget\'s call is the signed-in user\'s, with a host token for its own store only', async () => {
     fixture.user = MEMBER;
+    // The package holds notes:read too: a dashboard never combines the user's Octipus data.
     expect((await widget('token')).body.data.text).toBe('token for store:read');
   });
 

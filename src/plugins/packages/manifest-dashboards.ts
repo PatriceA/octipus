@@ -9,6 +9,7 @@
  * and nothing from the browser reaches the tool.
  */
 import { z } from 'zod';
+import { CONTROL_RE, INVISIBLE_RE } from './listing-text';
 import {
   PLUGIN_WIDGET_MAX_REFRESH_SECONDS,
   PLUGIN_WIDGET_MIN_REFRESH_SECONDS,
@@ -24,6 +25,19 @@ export const MAX_WIDGETS = 24;
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const ICON_RE = /^[a-z][a-z0-9-]{0,39}$/;
 
+/**
+ * Whether every key and string of `value` is free of control and invisible
+ * characters: the consent shows a widget's input as JSON, which escapes
+ * neither bidi nor zero-width characters, so it must read as it is sent.
+ */
+export function inputTextClean(value: unknown, depth = 0): boolean {
+  if (depth > 20) return false;
+  if (typeof value === 'string') return !CONTROL_RE.test(value) && !INVISIBLE_RE.test(value);
+  if (Array.isArray(value)) return value.every((v) => inputTextClean(v, depth + 1));
+  if (value && typeof value === 'object') return Object.entries(value).every(([k, v]) => inputTextClean(k, depth + 1) && inputTextClean(v, depth + 1));
+  return true;
+}
+
 function jsonSize(value: unknown): number {
   try {
     return JSON.stringify(value)?.length ?? 0;
@@ -37,7 +51,10 @@ const widgetSchema = z.object({
   type: z.enum(PLUGIN_WIDGET_TYPES, { error: () => `dashboards: a widget type is one of ${PLUGIN_WIDGET_TYPES.join(', ')}` }),
   title: z.string().trim().min(1).max(80),
   tool: z.string().min(1).max(64),
-  input: z.record(z.string().max(100), z.unknown()).refine((v) => jsonSize(v) <= 4000, 'dashboards: a widget\'s input is at most 4000 characters of JSON').optional(),
+  input: z.record(z.string().max(100), z.unknown())
+    .refine((v) => jsonSize(v) <= 4000, 'dashboards: a widget\'s input is at most 4000 characters of JSON')
+    .refine((v) => inputTextClean(v), 'dashboards: a widget\'s input has no control or invisible characters')
+    .optional(),
   refreshSeconds: z.number().int()
     .min(PLUGIN_WIDGET_MIN_REFRESH_SECONDS, `dashboards: refreshSeconds is at least ${PLUGIN_WIDGET_MIN_REFRESH_SECONDS}`)
     .max(PLUGIN_WIDGET_MAX_REFRESH_SECONDS, `dashboards: refreshSeconds is at most ${PLUGIN_WIDGET_MAX_REFRESH_SECONDS}`)

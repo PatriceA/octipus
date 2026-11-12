@@ -80,7 +80,7 @@ export const CALENDAR_NOTE = 'The calendars connected in Settings → Integratio
   + 'Events carry no protection level of their own: they count as the level an admin sets (plugins.calendarProtectionLevel, default 3). '
   + 'calendar:write adds events and changes only the ones this plugin added.';
 export const DASHBOARD_NOTE = 'Octipus draws a dashboard itself: no code of the plugin runs in the browser. Each widget shows what one of the plugin\'s read tools '
-  + 'returns, called as the user who opens it, with the arguments listed here; text is shown as text, and a link only to a host the plugin declares.';
+  + 'returns, called as the user who opens it, with the arguments listed here and no access to the user\'s Octipus data; text is shown as text, and a link only to a public host the plugin declares.';
 export const STORE_NOTE = 'Octipus keeps this data for each user apart: the plugin only ever reaches the data of the user it acts for, never another user\'s. '
   + 'Each user can delete theirs in Settings → My plugin usage; uninstalling the plugin deletes everyone\'s.';
 export const IN_PROCESS_NOTE = 'Runs in the server process: no sandbox, so it has the server\'s network, files and data.';

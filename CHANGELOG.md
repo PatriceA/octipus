@@ -657,7 +657,11 @@ labels reflect blast radius, not contract guarantees.
   widget's shape. Text is drawn as text, and links go only to the package's
   declared hosts. The permissions summary lists them (`dashboards`, after
   `ui`; an older listing reads as none), the install consent asks for each
-  one, and a new dashboard or a re-fed widget widens an upgrade.
+  one, and a new dashboard or a re-fed widget widens an upgrade. A widget's
+  call carries `store:read` only, never the user's Octipus data; a link to
+  a private or local address is refused; a widget's input may not hide
+  characters from the consent. The sidebar takes a plugin's icon only from
+  its own icon map (a page icon named `constructor` crashed the app shell).
 
 - **Mail and calendar for plugin packages**
   (docs/PLUGIN-PACKAGES.md#mail-and-calendar). New host scopes:

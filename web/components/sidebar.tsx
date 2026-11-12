@@ -125,6 +125,11 @@ const PLUGIN_ICONS: Record<string, typeof LayoutDashboard> = {
   puzzle: Puzzle, sparkles: Sparkles, telescope: Telescope, users: Users, wrench: Wrench, zap: Zap,
 };
 
+/** A plugin's icon by name: only the map's own entries (a name such as "constructor" is not one), else `fallback`. */
+function pluginIcon(name: string | null | undefined, fallback: typeof LayoutDashboard): typeof LayoutDashboard {
+  return name && Object.hasOwn(PLUGIN_ICONS, name) ? PLUGIN_ICONS[name] : fallback;
+}
+
 export function Sidebar() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -148,8 +153,8 @@ export function Sidebar() {
   // And their dashboards (docs/PLUGIN-PACKAGES.md#dashboards), in the same group.
   const pluginDashboards = usePluginDashboards(!!user);
   const pluginItems = [
-    ...(pluginDashboards.data ?? []).map((d) => ({ name: d.title, href: pluginDashboardHref(d), icon: PLUGIN_ICONS[d.icon ?? ''] ?? LayoutDashboard })),
-    ...(pluginPages.data ?? []).map((p) => ({ name: p.title, href: pluginPageHref(p), icon: PLUGIN_ICONS[p.icon ?? ''] ?? Puzzle })),
+    ...(pluginDashboards.data ?? []).map((d) => ({ name: d.title, href: pluginDashboardHref(d), icon: pluginIcon(d.icon, LayoutDashboard) })),
+    ...(pluginPages.data ?? []).map((p) => ({ name: p.title, href: pluginPageHref(p), icon: pluginIcon(p.icon, Puzzle) })),
   ];
   const pluginGroup: NavGroup | null = pluginItems.length > 0 ? { label: 'Plugins', items: pluginItems } : null;
   const groups = [...navGroups.filter(group => group.label !== 'Settings'), ...(pluginGroup ? [pluginGroup] : [])].map(g => ({ ...g, items: g.items.filter(item => (!item.adminOnly || user?.isAdmin) && !offPage(item.href)) })).map(group => {

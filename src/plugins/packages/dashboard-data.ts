@@ -10,12 +10,19 @@
  * - **Text is text.** The web app draws every string as text: no HTML, no
  *   Markdown, no images.
  * - **Links leave the house.** A widget's link is https only, to a host the
- *   package declares in `network` (`hostAllowed`): a package with network is
- *   at protection level 1 already, so a link adds no way out; a package
- *   without network gets none, or a click could carry what it read away.
+ *   package declares in `network` (`hostAllowed`), so it adds no destination
+ *   the package's sandbox cannot already reach; a package without network
+ *   gets none, or a click could carry what it read away. And never to a
+ *   private address (an IP literal, a local name, or a name that resolves to
+ *   a private, loopback or metadata address), which the egress proxy
+ *   refuses the sandbox too: a click comes from the user's browser, inside
+ *   their network and with their cookies.
  */
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import { z } from 'zod';
 import { hostAllowed } from '@/security/egress-proxy';
+import { isPrivateIP } from '@/utils/sanitize';
 import type { PluginWidgetData, PluginWidgetType } from '@/shared/plugin-package';
 
 /** The most JSON one widget's data may weigh (characters). */
@@ -84,6 +91,43 @@ export function linkAllowed(url: string, network: readonly string[]): boolean {
   return hostAllowed(network, u.hostname, u.port ? Number(u.port) : 443);
 }
 
+/** Names that never belong to a public host. */
+const LOCAL_NAME_RE = /(^|\.)(localhost|local|internal|intranet|lan|home|corp|home\.arpa)$/i;
+
+export type ResolveHost = (host: string) => Promise<string[]>;
+const resolveHost: ResolveHost = async (host) => (await lookup(host, { all: true })).map((a) => a.address);
+
+/** Recent answers, so a dashboard's refreshes do not resolve each link again. */
+const publicCache = new Map<string, { at: number; public: boolean }>();
+const PUBLIC_TTL_MS = 5 * 60_000;
+
+/**
+ * Whether a link's host is public: not an IP literal, not a single-label or
+ * local name, and resolving to public addresses only (a name that does not
+ * resolve is not).
+ */
+export async function linkHostPublic(host: string, resolve: ResolveHost = resolveHost, now = Date.now()): Promise<boolean> {
+  const h = host.toLowerCase().replace(/\.$/, '');
+  if (isIP(h.replace(/^\[|\]$/g, '')) !== 0 || !h.includes('.') || LOCAL_NAME_RE.test(h)) return false;
+  const hit = publicCache.get(h);
+  if (hit && now - hit.at < PUBLIC_TTL_MS) return hit.public;
+  let ok: boolean;
+  try {
+    const addresses = await resolve(h);
+    ok = addresses.length > 0 && addresses.every((a) => !isPrivateIP(a));
+  } catch {
+    ok = false;
+  }
+  if (publicCache.size > 1000) publicCache.clear();
+  publicCache.set(h, { at: now, public: ok });
+  return ok;
+}
+
+/** Test-only. */
+export function _resetLinkCache(): void {
+  publicCache.clear();
+}
+
 /** Every link of `data`, wherever its type puts them. */
 function linksOf(data: PluginWidgetData): string[] {
   if (data.type === 'list') return data.items.flatMap((i) => (i.link ? [i.link.url] : []));
@@ -96,7 +140,7 @@ function linksOf(data: PluginWidgetData): string[] {
  * `network`; or why it cannot be drawn (said to the viewer, never more than
  * the tool itself said).
  */
-export function widgetData(result: unknown, type: PluginWidgetType, network: readonly string[]): WidgetDataOutcome {
+export async function widgetData(result: unknown, type: PluginWidgetType, network: readonly string[], resolve?: ResolveHost): Promise<WidgetDataOutcome> {
   const payload = payloadOf(result);
   if ('error' in payload) return { ok: false, error: payload.error };
   let size: number;
@@ -120,8 +164,11 @@ export function widgetData(result: unknown, type: PluginWidgetType, network: rea
     return { ok: false, error: `The data does not fit a ${type} widget: ${issue ? `${issue.path.join('.') || '(root)'}: ${issue.message}` : 'invalid'}` };
   }
   const data = { type, ...(parsed.data as object) } as PluginWidgetData;
-  const bad = linksOf(data).find((u) => !linkAllowed(u, network));
-  if (bad !== undefined) return { ok: false, error: 'A link goes to a host the plugin does not declare (links are https, to its network hosts only)' };
+  const links = linksOf(data);
+  if (links.some((u) => !linkAllowed(u, network))) return { ok: false, error: 'A link goes to a host the plugin does not declare (links are https, to its network hosts only)' };
+  for (const host of new Set(links.map((u) => new URL(u).hostname))) {
+    if (!(await linkHostPublic(host, resolve))) return { ok: false, error: 'A link goes to a private or local address (links go to public hosts only)' };
+  }
   if (data.type === 'chart') {
     const keys = new Set([data.x, ...data.series.map((s) => s.key)]);
     if (keys.size !== data.series.length + 1) return { ok: false, error: 'The chart\'s x and series keys are not distinct' };

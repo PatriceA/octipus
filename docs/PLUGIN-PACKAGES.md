@@ -1706,8 +1706,9 @@ the package's `read` tools returns.
   dashboard**, with the `input` the manifest fixes: nothing from the browser
   reaches the tool. It must be one of the package's own declared `read`
   tools (a dashboard reads whenever it is shown); the call gets a host token
-  as a page's call does, so it may use `store:read` and the package's other
-  read scopes. It answers JSON, as structured content or the text of a text
+  for **`store:read` only** (if the package holds it), never its other
+  scopes: a dashboard shows the package's own data, not the user's Octipus
+  data. It answers JSON, as structured content or the text of a text
   block, in its widget's shape:
 
   | Type | Shape |
@@ -1724,9 +1725,13 @@ the package's `read` tools returns.
 - **Text is text.** Octipus draws every string as text: no HTML, no
   Markdown, no images.
 - **Links** (`{ url, label? }` on a list item or a table row) are https only,
-  to a host the package declares in `network`. A package with network is at
-  protection level 1 already, so a link adds no way out; a package without
-  network gets no links, or a click could carry what it read away.
+  to a host the package declares in `network`, so they add no destination
+  its sandbox cannot already reach; a package without network gets no
+  links, or a click could carry what it read away. Never to a private
+  address: an IP literal, a local name (`localhost`, `*.local`,
+  `*.internal`, a single label) or a name resolving to a private, loopback
+  or metadata address is refused, as the egress proxy refuses it to the
+  sandbox (a click comes from the user's browser, inside their network).
 - **Slow APIs:** answer the widget from a cache rather than the API on every
   view, e.g. in the package's data directory (`OCTIPUS_PLUGIN_DATA_DIR`, for
   outside data that is the same for every user), refreshed by a
@@ -1745,7 +1750,8 @@ package, one a second after that. A user whose rules ask before the
 widget's tool runs sees the widget refused (`409`): a dashboard cannot ask.
 
 Dashboards show the package's own outside data; they do not combine it
-with the user's Octipus data (mail, calendar, notes) in one view.
+with the user's Octipus data (mail, calendar, notes): a widget's call holds
+no scope that reads it.
 
 ## Host API
 
