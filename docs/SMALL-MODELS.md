@@ -86,10 +86,10 @@ how many tools it carries. (Before Phase 9 of the rebuild plan there was a third
 tier, `router`, which replaced the loop with a keyword table and dispatched one
 specialist. It is gone: a small model now runs the loop like everything else.)
 
-- `lite` (< 24B): trimmed prompt, tool list capped to `smallModelMaxTools`, and
+- `lite` (< 30B): trimmed prompt, tool list capped to `smallModelMaxTools`, and
   a hard iteration cap (`liteMaxIterations`). One delegation per request, no
   parallel swarms or pipelines.
-- `full` (≥ 24B): the whole prompt and toolset, parallel swarms and pipelines.
+- `full` (≥ 30B): the whole prompt and toolset, parallel swarms and pipelines.
 
 **Workers** — when the bound model is small-tier, each worker automatically:
 

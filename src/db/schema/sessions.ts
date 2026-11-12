@@ -213,6 +213,13 @@ export interface SessionContext {
    * a later turn, and changing the flag does not approve or start the plan.
    */
   planMode?: boolean;
+  /**
+   * The caller will not come back to this session (`oneShot` on POST /chat, like
+   * hermes's `--oneshot`). No automatic learning review: nobody follows up, and
+   * on a local model the review would hold the GPU for the caller's next turn.
+   * A manual check (POST /sessions/:id/learning) still runs.
+   */
+  oneShot?: boolean;
   // Development Mode
   devMode?: boolean;
   projectPath?: string;

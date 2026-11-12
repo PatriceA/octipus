@@ -166,6 +166,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           channelId: `chat-${generateId().slice(0, 8)}`,
           title: message.slice(0, 100),
           context: {
+            oneShot: body.oneShot || undefined,
             devMode: allowDev ? body.devMode : undefined,
             projectPath: allowDev ? body.projectPath : undefined,
             projectName: allowDev && body.projectPath ? body.projectPath.split('/').pop() : undefined,
@@ -251,6 +252,8 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
         /** Report which tools this turn ran (the eval's `uses_tool`). Off by default, like `routedRoles`. */
         toolsUsed: t.Optional(t.Boolean()),
         channel: t.Optional(t.String()),
+        /** The caller sends this one turn and does not come back: no automatic learning review. */
+        oneShot: t.Optional(t.Boolean()),
         devMode: t.Optional(t.Boolean()),
         projectPath: t.Optional(t.String()),
         // Edit-and-continue: session files to inline (current version) into

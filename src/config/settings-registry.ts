@@ -456,7 +456,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     key: 'agent.liteModelMaxParams',
     category: 'agent',
     valueType: 'number',
-    defaultValue: 24_000_000_000,
+    defaultValue: 30_000_000_000,
     description: 'auto mode: models with fewer params than this run in the lite tier',
     isSecret: false,
     envVar: 'AGENT_LITE_MAX_PARAMS',

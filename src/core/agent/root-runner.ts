@@ -477,7 +477,7 @@ export async function runRootAgent(
   }
   // The small-model answer to "what runs the loop now": the same loop, a reduced
   // tool set, and a hard iteration cap (below). Gated on `isSmallModel` — the
-  // SMALL tier — and not on `isLite`, which is the 24B prompt tier: every worker
+  // SMALL tier — and not on `isLite`, which is the 30B prompt tier: every worker
   // caps on the small tier, and gating the root differently would take eight
   // tool groups off a 14B root while an identically-bound worker on the same
   // model kept all fifteen.

@@ -84,7 +84,7 @@ export const defaultConfig: Partial<Config> = {
     promptTier: 'auto',
     liteMaxIterations: 8,
     smallModelMaxParams: 10_000_000_000,
-    liteModelMaxParams: 24_000_000_000,
+    liteModelMaxParams: 30_000_000_000,
     smallModelMaxTools: 7,
     /**
      * Advertise a core tool set plus `list_tools`/`describe_tool` instead of

@@ -208,7 +208,7 @@ it('gateway commands show the same plan and persist terminal feedback', async ()
 
 
 describe('durable learning checks', () => {
-  it('queues execution milestones atomically, coalesces final completion, and scopes receipts', async () => {
+  it('queues plan completion atomically, counts tool calls across turns, and scopes receipts', async () => {
     const { executeRaw } = await import('@/db/postgres');
     const learnSid = randomUUID();
     await executeRaw(`INSERT INTO sessions (id, user_id, channel_type, channel_id) VALUES ('${learnSid}', '${alice}', 'webchat', 'learn')`);
@@ -220,11 +220,11 @@ describe('durable learning checks', () => {
     const view = async (owner = alice) => app.handle(new Request(`http://localhost/api/sessions/${learnSid}/learning`, { headers: { 'x-test-user': owner } }));
     expect((await (await view()).json()).checks).toHaveLength(0);
     await tool.execute({ revision: 1, summary: 'Diagnosed', stepUpdates: [{ id: 'a', status: 'done', evidence: 'Reproduced failure' }] }, context);
-    expect((await (await view()).json()).checks).toHaveLength(1);
+    expect((await (await view()).json()).checks).toHaveLength(0); // a finished step is not a milestone
     await expect(tool.execute({ revision: 1, summary: 'Stale', stepUpdates: [{ id: 'b', status: 'done' }] }, context)).rejects.toThrow();
-    expect((await (await view()).json()).checks).toHaveLength(1);
+    expect((await (await view()).json()).checks).toHaveLength(0);
     await tool.execute({ revision: 2, summary: 'Verified', stepUpdates: [{ id: 'b', status: 'done', evidence: 'Tests pass' }] }, context);
-    expect((await (await view()).json()).checks).toHaveLength(2);
+    expect((await (await view()).json()).checks).toHaveLength(1);
     const receipt = await tool.execute({ revision: 3, summary: 'Independent review complete', stepUpdates: [{ id: 'b', evidence: 'Review passed' }] }, context);
     expect(receipt).toMatchObject({ changedSteps: [{ id: 'b', status: 'done' }] });
     expect((await workPlanRepository.read(learnSid, alice)).current!.steps.find(step => step.id === 'b')!.evidence).toBe('Tests pass\n\nReview passed');
@@ -232,12 +232,12 @@ describe('durable learning checks', () => {
     expect((await view(bob)).status).toBe(404);
     const { backgroundJobRepository } = await import('@/db/repositories/background-job-repository');
     const jobs = (await backgroundJobRepository.recentForUser(alice)).filter(j => j.payload.sessionId === learnSid);
-    expect(jobs.map(j => j.payload.trigger)).toEqual(['plan_completed', 'steps_completed']);
+    expect(jobs.map(j => j.payload.trigger)).toEqual(['plan_completed']);
     expect(jobs.every(j => j.status === 'queued')).toBe(true);
     const manual = (owner = alice) => app.handle(new Request(`http://localhost/api/sessions/${learnSid}/learning`, { method: 'POST', headers: { 'x-test-user': owner } }));
     expect((await manual(bob)).status).toBe(404);
     expect((await manual()).status).toBe(202);
-    expect((await (await view()).json()).checks).toHaveLength(2); // Reuses pending work instead of charging twice.
+    expect((await (await view()).json()).checks).toHaveLength(1); // Reuses pending work instead of charging twice.
     const { gatherEvidence } = await import('@/core/learning/evidence');
     const { agentEventRepository } = await import('@/db/repositories/agent-event-repository');
     await agentEventRepository.create({ sessionId: learnSid, agentId: 'test', userId: alice, type: 'action', data: { type: 'cli_tool_result', output: 'Observed failure then correction' } });
@@ -246,13 +246,13 @@ describe('durable learning checks', () => {
     expect(evidence.some(row => row.kind === 'execution' && row.text.includes('Observed failure'))).toBe(true);
     expect(evidence.some(row => row.text.includes('Foreign evidence'))).toBe(false);
     const { enqueueTurnLearning } = await import('@/core/learning/queue');
-    await enqueueTurnLearning(learnSid, alice, 'turn-after-step', new Date(0));
-    expect((await (await view()).json()).checks).toHaveLength(2);
-    for (let i = 0; i < 6; i++) await agentEventRepository.create({ sessionId: learnSid, agentId: 'test', userId: alice,
+    await enqueueTurnLearning(learnSid, alice, 'turn-after-step');
+    expect((await (await view()).json()).checks).toHaveLength(1); // one tool call since the last review
+    for (let i = 0; i < 10; i++) await agentEventRepository.create({ sessionId: learnSid, agentId: 'test', userId: alice,
       type: 'action', data: { type: 'cli_tool_result', output: `Verified additional work ${i}` } });
-    await enqueueTurnLearning(learnSid, alice, 'turn-after-step', new Date(0));
-    expect((await (await view()).json()).checks).toHaveLength(3);
-    await enqueueTurnLearning(learnSid, alice, 'turn-after-step', new Date(0));
-    expect((await (await view()).json()).checks).toHaveLength(3);
+    await enqueueTurnLearning(learnSid, alice, 'turn-after-step');
+    expect((await (await view()).json()).checks).toHaveLength(2); // the counter reached reviewEveryToolCalls
+    await enqueueTurnLearning(learnSid, alice, 'turn-after-step');
+    expect((await (await view()).json()).checks).toHaveLength(2);
   });
 });

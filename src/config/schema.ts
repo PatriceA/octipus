@@ -287,8 +287,8 @@ export const agentConfigSchema = z.object({
    * Root-agent prompt tier. 'auto' (default) re-derives it every turn from the
    * current default model's parameter count, so swapping to a smaller model
    * changes the tier with no restart:
-   *   - lite: trimmed prompt, capped tool set and iterations (< ~24B)
-   *   - full: the whole prompt and toolset, swarms and pipelines (>= ~24B)
+   *   - lite: trimmed prompt, capped tool set and iterations (< ~30B)
+   *   - full: the whole prompt and toolset, swarms and pipelines (>= ~30B)
    * Setting an explicit value pins that tier regardless of model size. The
    * `router` value was deleted with the routing hop (rebuild plan, Phase 9).
    */
@@ -303,7 +303,7 @@ export const agentConfigSchema = z.object({
   /** The "small model" threshold: trimmed prompts and tool sets below this. */
   smallModelMaxParams: z.number().default(10_000_000_000),
   /** auto: models with fewer params than this run in the lite tier. */
-  liteModelMaxParams: z.number().default(24_000_000_000),
+  liteModelMaxParams: z.number().default(30_000_000_000),
   /**
    * Max tools handed to a worker whose bound model is in the small tier. Small
    * local models lose track of large tool surfaces and emit malformed
@@ -857,6 +857,21 @@ export const configSchema = z.object({
      *   for any memories already in the table.
      */
     extractionCadence: z.enum(['per_turn', 'on_compaction', 'off']).default('per_turn'),
+  }).prefault({}),
+  /** Automatic learning review (src/core/learning). A manual check ignores both. */
+  learning: z.object({
+    /**
+     * Tool calls a session accumulates between automatic reviews. Counted
+     * across turns from the last review, so ten one-call turns earn one review
+     * and a long turn does not earn one per turn.
+     */
+    reviewEveryToolCalls: z.number().int().min(1).default(10),
+    /**
+     * With the background model on a local provider, a review starts only once
+     * that provider has been idle this long, so it never takes the GPU from a
+     * user's turn. Remote providers review at once.
+     */
+    localIdleMs: z.number().int().min(0).default(60_000),
   }).prefault({}),
   /**
    * Context hooks (docs/CONTEXT-HOOKS.md): knowledge-base recall, a notes

@@ -147,7 +147,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       promptTier: (env('AGENT_PROMPT_TIER', 'ORCHESTRATOR_MODE') as 'auto' | 'full' | 'lite') || 'auto',
       liteMaxIterations: parseInt(env('AGENT_LITE_MAX_ITERATIONS', 'ORCHESTRATOR_LITE_MAX_ITERATIONS') || '8', 10),
       smallModelMaxParams: parseInt(env('AGENT_SMALL_MODEL_MAX_PARAMS', 'ORCHESTRATOR_ROUTER_MAX_PARAMS') || '10000000000', 10),
-      liteModelMaxParams: parseInt(env('AGENT_LITE_MAX_PARAMS', 'ORCHESTRATOR_LITE_MAX_PARAMS') || '24000000000', 10),
+      liteModelMaxParams: parseInt(env('AGENT_LITE_MAX_PARAMS', 'ORCHESTRATOR_LITE_MAX_PARAMS') || '30000000000', 10),
       smallModelMaxTools: parseInt(env('AGENT_SMALL_MODEL_MAX_TOOLS', 'ORCHESTRATOR_SMALL_MODEL_MAX_TOOLS') || '7', 10),
       pipelineTokenBudget: parseInt(process.env.PIPELINE_TOKEN_BUDGET || String(TOKEN_BUDGET_DEFAULTS.pipeline), 10),
       lazyToolDiscovery: env('AGENT_LAZY_TOOLS', 'ORCHESTRATOR_LAZY_TOOLS') !== 'false',

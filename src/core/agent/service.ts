@@ -1177,10 +1177,10 @@ export class AgentService {
       void finishContextTurn(contextHooks.turn, { agentId, response: finalResponse, outcome });
       // Group threads, rooms and space sessions are never learned from (the
       // processor refuses them too).
-      if (outcome === 'success' && agentId && !memoryOff && !syntheticCoordination) {
+      if (outcome === 'success' && agentId && !memoryOff && !syntheticCoordination && !session.context?.oneShot) {
         try {
           const { enqueueTurnLearning } = await import('@/core/learning/queue');
-          await enqueueTurnLearning(resolvedSessionId, userId, agentId, new Date(startTime));
+          await enqueueTurnLearning(resolvedSessionId, userId, agentId);
         } catch (err) { coreLogger.error({ err, sessionId: resolvedSessionId }, 'Could not enqueue learning check'); }
       }
       recordRootRun(channel, classification?.type, outcome === 'success' ? 'success' : 'error');
