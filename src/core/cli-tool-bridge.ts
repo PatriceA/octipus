@@ -100,6 +100,7 @@ export async function startCliToolBridge(options: {
     let expired = false;
     const unqueued = (name: string) => options.unqueued?.has(name) || ['get_pipeline_status', 'monitor__list', 'monitor__create', 'answer_pipeline_approval'].includes(name);
     let started = false;
+    let joined = false;
     let settled = false;
     let toolName: string | undefined;
     const onClose = () => {
@@ -167,7 +168,13 @@ export async function startCliToolBridge(options: {
           expired = true;
           bounded();
           if (started && !settled && !unqueued(input.name)) options.abandoned?.(input.name);
-          expire(new BridgeError(`Tool ${input.name} timed out after ${ms}ms. ${started ? 'Execution may have started; inspect its outcome before retrying.' : 'The queued call was not executed.'}`));
+          // A retry that joined an earlier keyed call never starts itself, but
+          // the earlier call may well have run: only an unjoined, unstarted
+          // call is known not to have executed.
+          const outcome = started || joined
+            ? 'Execution may have started; inspect its outcome before retrying.'
+            : 'The queued call was not executed.';
+          expire(new BridgeError(`Tool ${input.name} timed out after ${ms}ms. ${outcome}`));
         }, ms);
       };
       const run = async () => {
@@ -227,6 +234,7 @@ export async function startCliToolBridge(options: {
       // A joining retry has no queue wait of its own; it is bounded by the execution clock armed below.
       const ahead = unqueued(input.name) ? Promise.resolve() : earlier ? new Promise<void>(() => {}) : queueBounded;
       if (earlier) {
+        joined = true;
         // Wait on the first call within this request's own deadline.
         arm(executionBudget);
         operation = earlier.operation.then(
