@@ -106,7 +106,7 @@ describe('artifact versions through the REST API', () => {
     expect(csp).toMatch(/; sandbox allow-scripts$/);
     const html = await res.text();
     expect(html).not.toMatch(/<script src="[^"]*bundle.js/);
-    const script = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1];
+    const script = /<script>([\s\S]*?)<\/script\s*>/i.exec(html)?.[1];
     expect(script).toBeTruthy();
     const { createHash } = await import('node:crypto');
     expect(csp).toContain(`'sha256-${createHash('sha256').update(script!).digest('base64')}'`);

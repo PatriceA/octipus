@@ -75,7 +75,7 @@ import {
   UV_INSTALL_HINT,
   type FasterWhisperModel,
 } from '@/voice/provision';
-import { type ChildProcessHandle, spawnProcess } from '@/utils/proc';
+import { type ChildProcessHandle, spawnProcess, windowsCmdShim } from '@/utils/proc';
 
 // ── Args ───────────────────────────────────────────────────────────
 
@@ -875,9 +875,9 @@ function startWeb(): void {
   const win = process.platform === 'win32';
   const launcher = resolve(win ? 'bin/octi.cmd' : 'bin/octi');
   process.stdout.write('Starting backend + web UI…\n');
-  const result = win
-    ? spawnSync('cmd.exe', ['/c', launcher, 'start', 'web'], { stdio: 'inherit' })
-    : spawnSync('bash', [launcher, 'start', 'web'], { stdio: 'inherit' });
+  // cmd.exe re-parses the line: windowsCmdShim quotes the launcher path.
+  const run = win ? windowsCmdShim([launcher, 'start', 'web']) : { argv: ['bash', launcher, 'start', 'web'], shell: false };
+  const result = spawnSync(run.argv[0], run.argv.slice(1), { stdio: 'inherit', shell: run.shell });
   if (result.status !== 0) process.stdout.write(`\x1b[33m! Start failed — run \`octi start web\` and check \`octi logs\`.\x1b[0m\n`);
 }
 

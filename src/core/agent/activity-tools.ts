@@ -44,7 +44,7 @@ export async function readAgentActivity(args: Record<string, unknown>, context: 
       if (typeof args.dispatchId === 'string') conditions.push(sql`${agents.metadata}->>'delegationDispatchId' = ${args.dispatchId}`);
       if (typeof args.agentId === 'string') {
         if (!/^[a-zA-Z0-9_-]{8,64}$/.test(args.agentId)) return { error: 'Use a full agent id or a prefix of at least 8 characters' };
-        conditions.push(like(agents.id, `${args.agentId.replace(/[_%]/g, '\\$&')}%`));
+        conditions.push(like(agents.id, `${args.agentId.replace(/[\\_%]/g, '\\$&')}%`));
       }
       const authorized: Array<typeof agents.$inferSelect> = [];
       const access = new Map<string, boolean>();

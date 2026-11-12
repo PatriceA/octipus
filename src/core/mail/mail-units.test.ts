@@ -3,7 +3,7 @@ import type { MailMessage } from '@/db/schema/mail';
 import { startFakePop3 } from './fixtures/fake-pop3';
 import { MailInputError, parseRecipients, replyDraft, replySubject } from './drafts';
 import { assertHostAllowed, MailHostError, resolveMailHost } from './hosts';
-import { parseRawMessage, storable } from './parse';
+import { htmlToText, parseRawMessage, storable } from './parse';
 import { Pop3Client, Pop3Error } from './pop3';
 
 const lookupTo = (...addresses: string[]) => (async () => addresses.map((address) => ({ address, family: address.includes(':') ? 6 : 4 }))) as never;
@@ -98,6 +98,10 @@ describe('mail parsing', () => {
     expect(parsed.html).toContain('Team');
     expect(parsed.html).not.toMatch(/script|alert/);
     expect(parsed.attachments).toEqual([{ filename: 'rechnung.pdf', contentType: 'application/pdf', size: 13 }]);
+  });
+
+  test('HTML to text decodes each entity once: an escaped entity stays an entity', () => {
+    expect(htmlToText('<p>a &amp;lt;b&amp;gt; &lt;c&gt; &amp; d</p>')).toBe('a &lt;b&gt; <c> & d');
   });
 
   test('NUL bytes and lone surrogates are stripped from everything stored', async () => {

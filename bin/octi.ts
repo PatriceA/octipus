@@ -28,6 +28,7 @@ import { spawn } from 'child_process';
 import { existsSync, readFileSync, realpathSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
+import { windowsCmdShim } from '../src/utils/proc';
 
 const HELP = `Octipus — one nervous system, many arms.
 
@@ -128,18 +129,30 @@ async function delegateBash(args: string[]): Promise<never> {
     process.exit(2);
   }
   const projectDir = dirname(dirname(binOcti));
-  // Windows has no bash on PATH by default; the batch launcher is the peer.
-  const code = process.platform === 'win32'
-    ? await runInherit('cmd.exe', ['/c', `${binOcti}.cmd`, ...args], projectDir)
-    : await runInherit('bash', [binOcti, ...args], projectDir);
+  // Windows has no bash on PATH by default; the batch launcher is the peer. It
+  // runs through cmd.exe, which re-parses the line: windowsCmdShim quotes every
+  // argument (the checkout path included) and refuses what quotes cannot hold.
+  let code: number;
+  if (process.platform === 'win32') {
+    let run: { argv: string[]; shell: boolean };
+    try {
+      run = windowsCmdShim([`${binOcti}.cmd`, ...args]);
+    } catch (err) {
+      process.stderr.write(`octi: ${(err as Error).message}\n`);
+      process.exit(2);
+    }
+    code = await runInherit(run.argv[0], run.argv.slice(1), projectDir, run.shell);
+  } else {
+    code = await runInherit('bash', [binOcti, ...args], projectDir);
+  }
   process.exit(code);
 }
 
 /** Spawn with the parent's stdio and resolve with the exit code. */
-function runInherit(command: string, args: string[], cwd: string): Promise<number> {
+function runInherit(command: string, args: string[], cwd: string, shell = false): Promise<number> {
   return new Promise((resolve) => {
-    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell); this launcher only ever spawns `bash` on the repo's own bin/octi with the user's own CLI argv
-    const child = spawn(command, args, { stdio: 'inherit', cwd });
+    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn; a shell only for the repo's own bin/octi.cmd, every argument quoted by windowsCmdShim
+    const child = spawn(command, args, { stdio: 'inherit', cwd, shell });
     child.on('close', (code, signal) => resolve(code ?? (signal ? 128 : 1)));
     child.on('error', () => resolve(127));
   });

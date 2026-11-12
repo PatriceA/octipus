@@ -154,23 +154,25 @@ export class WhisperEngine extends EventEmitter implements STTEngine {
    * Transcribe audio file or buffer
    */
   async transcribe(audio: Buffer | string): Promise<TranscriptionResult> {
+    // A buffer (a channel attachment, an upload) goes to a temp file of our
+    // own naming: its bytes never become part of a path or an argument.
+    if (typeof audio !== 'string') return this.transcribeBuffer(audio);
+    // Absolute, always. This path becomes an ARGUMENT to ffmpeg and to
+    // whisper, and a relative one beginning with `-` would be read as an
+    // option by both. Callers that pass a path built it themselves.
+    return this.transcribeFile(isAbsolute(audio) ? audio : resolve(audio), false);
+  }
+
+  /** Transcribe audio bytes, through a temp file of our own naming. */
+  async transcribeBuffer(audio: Buffer): Promise<TranscriptionResult> {
+    const tempPath = tmpPath('-src');
+    await writeFileAt(tempPath, audio);
+    return this.transcribeFile(tempPath, true);
+  }
+
+  /** Transcribe the file at `sourcePath` (absolute); removed after when `tempSource`. */
+  private async transcribeFile(sourcePath: string, tempSource: boolean): Promise<TranscriptionResult> {
     const startTime = Date.now();
-
-    // If buffer, write to temp file
-    let sourcePath: string;
-    let tempSource = false;
-
-    if (Buffer.isBuffer(audio)) {
-      sourcePath = tmpPath('-src');
-      await writeFileAt(sourcePath, audio);
-      tempSource = true;
-    } else {
-      // Absolute, always. This path becomes an ARGUMENT to ffmpeg and to
-      // whisper, and a relative one beginning with `-` would be read as an
-      // option by both. Callers pass a buffer (the channel attachment path) or
-      // a path they built; neither needs it to stay relative.
-      sourcePath = isAbsolute(audio) ? audio : resolve(audio);
-    }
 
     // audioPath/jsonPath are set inside the try so a conversion failure still
     // hits the finally that cleans up the source temp file.
@@ -874,7 +876,7 @@ export async function transcribeAudioBuffer(audio: Buffer, format = 'ogg'): Prom
   if (await fileAt(modelPath).exists()) {
     try {
       const engine = new WhisperEngine(modelPath, { language });
-      return (await engine.transcribe(audio)).text;
+      return (await engine.transcribeBuffer(audio)).text;
     } catch (err) {
       // Model file is present but the runtime failed (e.g. missing ffmpeg or the
       // binary was removed). Fall through to a cloud engine if one is configured
