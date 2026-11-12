@@ -1677,6 +1677,82 @@ no declared `maxProtection` counts as leaving the house (1), like one with
 trust with that data. (Serving pages from a separate origin is not
 implemented: the sandbox already gives them an opaque origin.)
 
+## Dashboards
+
+A package can add dashboards: overviews of the outside data it reaches
+(an API, a database, a service), drawn by Octipus itself with its own
+components, so Octipus stays the one place to see what you need day to
+day without building a separate app. **No code of the package runs in the
+browser**: a dashboard is a declaration, and each widget shows what one of
+the package's `read` tools returns.
+
+```json
+"network": ["api.billing.example.com"],
+"dashboards": [{
+  "id": "billing", "title": "Billing", "icon": "layout-dashboard",
+  "widgets": [
+    { "id": "open", "type": "stat", "title": "Open invoices", "tool": "totals", "input": { "status": "open" } },
+    { "id": "late", "type": "table", "title": "Overdue", "tool": "invoices", "input": { "overdue": true }, "width": 2, "refreshSeconds": 300 },
+    { "id": "trend", "type": "chart", "title": "Paid per month", "tool": "paid_by_month" }
+  ]
+}]
+```
+
+- **Widgets:** `stat`, `list`, `table`, `chart` (bar, line, area, pie) and
+  `text`; `width` 1-3 columns of a three-column grid; `refreshSeconds`
+  (60-86400) refreshes it while it is shown, otherwise on open and on demand.
+  At most 10 dashboards of 24 widgets each.
+- **Data:** the widget's tool is called **as the user who opens the
+  dashboard**, with the `input` the manifest fixes: nothing from the browser
+  reaches the tool. It must be one of the package's own declared `read`
+  tools (a dashboard reads whenever it is shown); the call gets a host token
+  for **`store:read` only** (if the package holds it), never its other
+  scopes: a dashboard shows the package's own data, not the user's Octipus
+  data. It answers JSON, as structured content or the text of a text
+  block, in its widget's shape:
+
+  | Type | Shape |
+  |---|---|
+  | `stat` | `{ value, label?, unit?, delta?, tone?, caption? }` |
+  | `list` | `{ items: [{ title, subtitle?, value?, tone?, link? }] }` (at most 100) |
+  | `table` | `{ columns: [{ key, label, align? }], rows: [{ values, tone?, link? }] }` (20 columns, 500 rows) |
+  | `chart` | `{ kind: "bar"\|"line"\|"area"\|"pie", x, series: [{ key, label }], points: [{ … }] }` (8 series, 500 points) |
+  | `text` | `{ text }` (20,000 characters) |
+
+  Each may add `updatedAt` (an ISO time); `tone` is `good`, `warn`, `bad` or
+  `neutral`. The answer is checked against the widget's type (src/plugins/packages/dashboard-data.ts),
+  at most 256 KB of JSON; anything else is shown as the widget's error.
+- **Text is text.** Octipus draws every string as text: no HTML, no
+  Markdown, no images.
+- **Links** (`{ url, label? }` on a list item or a table row) are https only,
+  to a host the package declares in `network`, so they add no destination
+  its sandbox cannot already reach; a package without network gets no
+  links, or a click could carry what it read away. Never to a private
+  address: an IP literal, a local name (`localhost`, `*.local`,
+  `*.internal`, a single label) or a name resolving to a private, loopback
+  or metadata address is refused, as the egress proxy refuses it to the
+  sandbox (a click comes from the user's browser, inside their network).
+- **Slow APIs:** answer the widget from a cache rather than the API on every
+  view, e.g. in the package's data directory (`OCTIPUS_PLUGIN_DATA_DIR`, for
+  outside data that is the same for every user), refreshed by a
+  [schedule](#schedules) or when stale.
+
+Each dashboard is an item of the install consent: *Adds the dashboard
+"Billing"*, listing every widget's tool and input. A new dashboard, or a
+widget fed by another tool or input, is a widening an upgrade asks about
+again. The dashboards of the enabled packages show in the sidebar's Plugins
+group (`GET /api/plugin-ui` lists them); `GET
+/api/plugins/<name>/dashboards/<id>` gives a dashboard's layout (never its
+tools or input) and `POST
+/api/plugins/<name>/dashboards/<id>/widgets/<widget>` a widget's data, for
+signed-in users of this site, at most 48 requests in a burst per user and
+package, one a second after that. A user whose rules ask before the
+widget's tool runs sees the widget refused (`409`): a dashboard cannot ask.
+
+Dashboards show the package's own outside data; they do not combine it
+with the user's Octipus data (mail, calendar, notes): a widget's call holds
+no scope that reads it.
+
 ## Host API
 
 A package can act in Octipus for the user who called it — read their notes,

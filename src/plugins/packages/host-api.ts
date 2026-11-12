@@ -283,13 +283,15 @@ export function hostApiTarget(): { host: string; port: number } {
 }
 
 /** The calls that may carry a host API token: each one started by the user it acts for. */
-export type HostCallKind = 'agent' | 'command' | 'page';
+export type HostCallKind = 'agent' | 'command' | 'page' | 'dashboard';
 
 /**
  * What started a call, when it is one a user started themselves, or null:
  *
  * - `page`: the page bridge, a signed-in user on the package's page
  *   (`metadata.source = 'plugin-page'`);
+ * - `dashboard`: a widget of the package's dashboard a signed-in user opened
+ *   (`plugin-dashboard`, a read tool only);
  * - `command`: a slash command the user typed (`plugin-contribution`, kind `command`);
  * - `agent`: a tool call of the user's own agent in their session
  *   (`trigger = 'user'`, a session, no `metadata.source` of a known
@@ -303,6 +305,8 @@ export type HostCallKind = 'agent' | 'command' | 'page';
 export function hostCallKind(context: Pick<AgentContext, 'trigger' | 'sessionId' | 'metadata'>): HostCallKind | null {
   const source = context.metadata?.source;
   if (source === 'plugin-page') return 'page';
+  // A dashboard the signed-in user opened: its widget's read tool, as that user.
+  if (source === 'plugin-dashboard') return 'dashboard';
   if (source === 'plugin-contribution') return context.metadata?.contribution === 'command' ? 'command' : null;
   if (source !== undefined && UNATTENDED_SOURCES.has(String(source))) return null;
   return context.trigger === 'user' && !!context.sessionId ? 'agent' : null;
@@ -332,7 +336,11 @@ export async function issueHostCallMeta(
   if (hostCallKind(context) === null || isPluginRunSession(context.sessionId)) return null;
   const effect = Object.hasOwn(binding.tools, toolName) ? binding.tools[toolName] : undefined;
   if (!effect) return null;
-  const candidates = grantableScopes(binding.hostScopes, binding.hostScopes, effect);
+  // A dashboard shows the package's own outside data, never combined with the
+  // user's Octipus data (docs/PLUGIN-PACKAGES.md#dashboards): its widget's call
+  // may read the package's own store and nothing else.
+  const dashboard = hostCallKind(context) === 'dashboard';
+  const candidates = grantableScopes(binding.hostScopes, binding.hostScopes, effect).filter((s) => !dashboard || s === 'store:read');
   const scopes = await userHeldScopes(context.userId, candidates, { sessionId: context.sessionId, workspaceId: context.workspaceId ?? null });
   if (scopes.length === 0) return null;
   const ttl = Math.min(server.requestTimeoutMs ?? MAX_TOKEN_TTL_MS, MAX_TOKEN_TTL_MS);

@@ -71,6 +71,8 @@ export function permissionsAskSummary(p: PluginPermissionsSummary): string[] {
   if (c.prompt) out.push(`Adds text to ${c.prompt.roles ? 'some agents\' instructions' : 'every agent\'s instructions'}`);
   if (c.context) out.push(`Adds context to ${c.context.roles ? 'some agents\' turns' : 'every agent turn'}`);
   if (p.pages.length > 0) out.push(`Adds ${plural(p.pages.length, 'page', 'pages')}: ${p.pages.map((x) => x.title).join(', ')}`);
+  const dashboards = p.dashboards ?? [];
+  if (dashboards.length > 0) out.push(`Adds ${plural(dashboards.length, 'dashboard', 'dashboards')}: ${dashboards.map((x) => x.title).join(', ')}`);
   if (p.trustedInput) out.push('Asks to run its model calls on CLI lanes (needs a separate approval)');
   out.push(`Sees data up to protection level ${p.maxProtection}`);
   return out;
@@ -221,6 +223,30 @@ function diffContributions(before: PluginPermissionsSummary, after: PluginPermis
   if (before.ui && after.ui && (before.ui.dir !== after.ui.dir || before.ui.sha256 !== after.ui.sha256)) {
     add('pages', 'changed', `page files (${after.ui.dir}/)`, true);
   }
+
+  // Dashboards: a new one, a widget fed by another tool or input, widens (it runs
+  // when shown). A summary from before dashboards reads as none.
+  const wasD = new Map((before.dashboards ?? []).map((d) => [d.id, d]));
+  const nowD = new Map((after.dashboards ?? []).map((d) => [d.id, d]));
+  for (const [id, d] of nowD) {
+    const old = wasD.get(id);
+    if (!old) {
+      add('dashboards', 'added', `dashboard ${id} ("${d.title}"): ${d.widgets.map((w) => w.tool).join(', ')}`, true);
+      continue;
+    }
+    const oldW = new Map(old.widgets.map((w) => [w.id, w]));
+    for (const w of d.widgets) {
+      const ow = oldW.get(w.id);
+      if (!ow) add('dashboards', 'added', `dashboard ${id}: widget ${w.id} → ${w.tool}`, true);
+      else if (ow.tool !== w.tool || json(ow.input) !== json(w.input)) {
+        add('dashboards', 'changed', `dashboard ${id}: widget ${w.id} ${ow.tool} ${json(ow.input)} → ${w.tool} ${json(w.input)}`, true);
+      } else if (ow.type !== w.type || ow.title !== w.title) add('dashboards', 'changed', `dashboard ${id}: widget ${w.id} ("${w.title}", ${w.type})`, false);
+    }
+    const nowIds = new Set(d.widgets.map((w) => w.id));
+    for (const w of old.widgets) if (!nowIds.has(w.id)) add('dashboards', 'removed', `dashboard ${id}: widget ${w.id} → ${w.tool}`, false);
+    if (old.title !== d.title) add('dashboards', 'changed', `dashboard ${id}: "${old.title}" → "${d.title}"`, false);
+  }
+  for (const [id, d] of wasD) if (!nowD.has(id)) add('dashboards', 'removed', `dashboard ${id} ("${d.title}")`, false);
 }
 
 /** Lower case without diacritics, for search (`Café` matches `cafe`). */

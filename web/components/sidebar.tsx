@@ -44,7 +44,7 @@ import { usePathname } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { usePageOn } from '@/lib/modules';
-import { pluginPageHref, usePluginPages } from '@/lib/plugin-pages';
+import { pluginDashboardHref, pluginPageHref, usePluginDashboards, usePluginPages } from '@/lib/plugin-pages';
 import { useRooms } from '@/lib/rooms';
 import { useSidebarStore } from '@/lib/sidebar-store';
 import { cn } from '@/lib/utils';
@@ -125,6 +125,11 @@ const PLUGIN_ICONS: Record<string, typeof LayoutDashboard> = {
   puzzle: Puzzle, sparkles: Sparkles, telescope: Telescope, users: Users, wrench: Wrench, zap: Zap,
 };
 
+/** A plugin's icon by name: only the map's own entries (a name such as "constructor" is not one), else `fallback`. */
+function pluginIcon(name: string | null | undefined, fallback: typeof LayoutDashboard): typeof LayoutDashboard {
+  return name && Object.hasOwn(PLUGIN_ICONS, name) ? PLUGIN_ICONS[name] : fallback;
+}
+
 export function Sidebar() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -145,9 +150,13 @@ export function Sidebar() {
   const offPage = (href: string) => !pageOn(href);
   // Pages of the enabled plugin packages (docs/PLUGIN-PACKAGES.md#pages), as their own group.
   const pluginPages = usePluginPages(!!user);
-  const pluginGroup: NavGroup | null = (pluginPages.data ?? []).length > 0
-    ? { label: 'Plugins', items: (pluginPages.data ?? []).map((p) => ({ name: p.title, href: pluginPageHref(p), icon: PLUGIN_ICONS[p.icon ?? ''] ?? Puzzle })) }
-    : null;
+  // And their dashboards (docs/PLUGIN-PACKAGES.md#dashboards), in the same group.
+  const pluginDashboards = usePluginDashboards(!!user);
+  const pluginItems = [
+    ...(pluginDashboards.data ?? []).map((d) => ({ name: d.title, href: pluginDashboardHref(d), icon: pluginIcon(d.icon, LayoutDashboard) })),
+    ...(pluginPages.data ?? []).map((p) => ({ name: p.title, href: pluginPageHref(p), icon: pluginIcon(p.icon, Puzzle) })),
+  ];
+  const pluginGroup: NavGroup | null = pluginItems.length > 0 ? { label: 'Plugins', items: pluginItems } : null;
   const groups = [...navGroups.filter(group => group.label !== 'Settings'), ...(pluginGroup ? [pluginGroup] : [])].map(g => ({ ...g, items: g.items.filter(item => (!item.adminOnly || user?.isAdmin) && !offPage(item.href)) })).map(group => {
     if (group.label === 'Automation' && pulse) {
       return { ...group, items: group.items.map((item) => item.href === '/agents' ? { ...item, pulse } : item) };

@@ -11,6 +11,7 @@ import { refineRuntime, runtimeFields } from './manifest-runtime';
 import { contributionFields, contributionProblems } from './manifest-contributions';
 import { MODEL_FIELDS, modelProblems } from './manifest-model';
 import { STORE_FIELDS, storeProblems } from './manifest-store';
+import { DASHBOARD_FIELDS, dashboardProblems } from './manifest-dashboards';
 import { UI_HOST_FIELDS } from './manifest-ui-host';
 import {
   PLUGIN_PACKAGE_API_VERSION,
@@ -70,16 +71,18 @@ export const manifestSchema = z.object({
   ...UI_HOST_FIELDS,
   ...MODEL_FIELDS,
   ...STORE_FIELDS,
+  ...DASHBOARD_FIELDS,
 }).strict().superRefine((m, ctx) => {
   refineRuntime(m, ctx);
   // Pages call the plugin's own sandboxed tools, and the host API token rides
   // those tool calls: both need the package runtime.
-  if (m.runtime === 'in-process' && (m.ui || m.host?.length)) {
-    ctx.addIssue({ code: 'custom', message: 'ui and host apply to the package runtime only; an in-process plugin has no sandboxed tools to serve them' });
+  if (m.runtime === 'in-process' && (m.ui || m.host?.length || m.dashboards?.length)) {
+    ctx.addIssue({ code: 'custom', message: 'ui, host and dashboards apply to the package runtime only; an in-process plugin has no sandboxed tools to serve them' });
   }
   for (const message of contributionProblems(m)) ctx.addIssue({ code: 'custom', message });
   for (const message of modelProblems(m)) ctx.addIssue({ code: 'custom', message });
   for (const message of storeProblems(m)) ctx.addIssue({ code: 'custom', message });
+  for (const message of dashboardProblems(m)) ctx.addIssue({ code: 'custom', message });
   // mail:send is handed to external tools only (each call is asked about): without one it could never be used.
   if (m.host?.includes('mail:send') && !Object.values(m.tools ?? {}).some((t) => t.effect === 'external')) {
     ctx.addIssue({ code: 'custom', message: 'host: mail:send is handed only to external tools; declare the tool that sends with "effect": "external"' });

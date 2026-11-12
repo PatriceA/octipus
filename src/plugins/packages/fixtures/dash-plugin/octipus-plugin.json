@@ -1,0 +1,34 @@
+{
+  "name": "dash-plugin",
+  "version": "1.0.0",
+  "apiVersion": "1.0.0",
+  "title": "Dashboards (test fixture)",
+  "description": "A plugin package for the tests of dashboards: one read tool that answers each widget's fixed input.",
+  "server": { "command": "node", "args": ["server.mjs"] },
+  "tools": {
+    "widget": { "effect": "read", "description": "The data of one widget, by its fixed input" },
+    "act": { "effect": "write", "description": "Changes something (never a widget's tool)" }
+  },
+  "network": ["billing.example.com"],
+  "host": ["notes:read", "store:read"],
+  "store": {},
+  "maxProtection": 1,
+  "dashboards": [
+    {
+      "id": "overview",
+      "title": "Billing overview",
+      "icon": "layout-dashboard",
+      "widgets": [
+        { "id": "open", "type": "stat", "title": "Open invoices", "tool": "widget", "input": { "kind": "stat" } },
+        { "id": "invoices", "type": "table", "title": "Invoices", "tool": "widget", "input": { "kind": "table" }, "width": 2, "refreshSeconds": 300 },
+        { "id": "trend", "type": "chart", "title": "Trend", "tool": "widget", "input": { "kind": "chart" } },
+        { "id": "leak", "type": "list", "title": "Undeclared link", "tool": "widget", "input": { "kind": "badlink" } },
+        { "id": "broken", "type": "text", "title": "Not JSON", "tool": "widget", "input": { "kind": "notjson" } },
+        { "id": "mismatch", "type": "stat", "title": "Wrong type", "tool": "widget", "input": { "kind": "list" } },
+        { "id": "failing", "type": "text", "title": "Failing tool", "tool": "widget", "input": { "kind": "fail" } },
+        { "id": "markup", "type": "text", "title": "Markup is text", "tool": "widget", "input": { "kind": "markup" } },
+        { "id": "token", "type": "text", "title": "Host token", "tool": "widget", "input": { "kind": "token" } }
+      ]
+    }
+  ]
+}
