@@ -87,6 +87,6 @@ test.describe('notifications inbox', () => {
   test('sidebar links to the inbox', async ({ authenticatedPage: page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await Promise.all([page.waitForURL(/\/notifications/), page.getByRole('link', { name: /inbox/i }).first().click()]);
+    await Promise.all([page.waitForURL(/\/notifications/), page.getByRole('link', { name: 'Activity', exact: true }).first().click()]);
   });
 });

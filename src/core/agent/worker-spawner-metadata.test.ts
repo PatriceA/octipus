@@ -103,3 +103,10 @@ it('source refs survive every delegation depth without creating pipeline or host
  expect(child).toEqual({companionSourceFiles:refs,pipelineId:'run',nodeKey:'review'});
  expect(stageChildMetadata(child)).toEqual(child);
 });
+
+it('environment selection survives children and retries without inheriting stage-only grants', () => {
+  const parent = { executionEnvironmentId: 'trusted-computer', pipelineId: 'run', nodeKey: 'review', resumeKey: 'attempt-1', hostServices: true };
+  expect(pipelineMetadata(parent)).toMatchObject({ executionEnvironmentId: 'trusted-computer', resumeKey: 'attempt-1' });
+  expect(stageChildMetadata(parent)).toEqual({ executionEnvironmentId: 'trusted-computer', pipelineId: 'run', nodeKey: 'review' });
+  expect(stageChildMetadata(stageChildMetadata(parent))).toEqual(stageChildMetadata(parent));
+});

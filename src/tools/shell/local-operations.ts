@@ -4,7 +4,7 @@ import { shellSshAgent } from '@/security/shell-ssh-agent';
 import { runtimePath, packageStorePath } from '@/security/runtime-path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { markToolNotExecuted, ToolNotExecutedError } from '@/core/tool-execution-error';
-import { buildChildEnv, isSensitiveEnvName } from '@/security/child-env';
+import { buildChildEnv, buildHostChildEnv, isSensitiveEnvName } from '@/security/child-env';
 import { coreLogger } from '@/utils/logger';
 import { killProcessTree, posixShellArgv, whichSync, windowsCmdShim } from '@/utils/proc';
 import { resolve } from 'node:path';
@@ -84,7 +84,7 @@ export function resolveAllowNetwork(options: { unsafe?: boolean; allowNetwork?: 
 
 /** A command's environment: the inherited one without `unsetEnv`, `env` laid over it. */
 function childEnv(options: { env?: Record<string, string> } & ShellEnvOptions): Record<string, string> {
-  const env = buildChildEnv();
+  const env = options.inheritHostIdentity ? buildHostChildEnv() : buildChildEnv();
   env.npm_config_store_dir ??= packageStorePath();
   for (const k of options.unsetEnv ?? []) delete env[k];
   const result = { ...env, ...options.env };
@@ -185,7 +185,7 @@ export class LocalShellOperations implements ShellOperations {
     let sshAgent: ReturnType<typeof sshAgentFor>;
     try {
       sshAgent = sshAgentFor(options);
-      wrap = wrapCommand(baseArgv, { sshAgent, workspaceRoot: cwd, allowNetwork: resolveAllowNetwork(options), allowHostUsb: options.allowHostUsb, path: options.env?.PATH, extraReadWrite: options.extraReadWrite, extraReadOnly: options.extraReadOnly });
+      wrap = wrapCommand(baseArgv, { sshAgent, mode: options.sandboxMode, workspaceRoot: cwd, allowNetwork: resolveAllowNetwork(options), allowHostUsb: options.allowHostUsb, path: options.env?.PATH, extraReadWrite: options.extraReadWrite, extraReadOnly: options.extraReadOnly });
     } catch (error) {
       throw new ToolNotExecutedError('shell', error instanceof Error ? error.message : String(error), { cause: error });
     }
@@ -234,6 +234,10 @@ export class LocalShellOperations implements ShellOperations {
         return;
       }
 
+      if (options.input !== undefined) {
+        child.stdin.on('error', error => coreLogger.debug({ error }, 'Runtime stdin closed before all input was consumed'));
+        child.stdin.end(options.input);
+      }
       const untrack = trackGroup(child.pid);
       let stdout = '';
       let stderr = '';
@@ -342,6 +346,7 @@ export class LocalShellOperations implements ShellOperations {
     const wrap = wrapCommand(baseArgv, {
       sshAgent, path: options.env?.PATH,
       workspaceRoot: cwd,
+      mode: options.sandboxMode,
       allowNetwork: resolveAllowNetwork(options),
       allowHostUsb: options.allowHostUsb,
       extraReadWrite: options.extraReadWrite,
@@ -360,7 +365,7 @@ export class LocalShellOperations implements ShellOperations {
       shell: run.shell,
       windowsHide: true,
       detached: true,
-      stdio: 'ignore',
+      stdio: options.input !== undefined ? ['pipe', 'ignore', 'ignore'] : 'ignore',
     });
     // NOT tracked by `trackGroup`, unlike `exec`. Outliving this process is the
     // whole point here — the caller asked for a background process (a dev
@@ -370,6 +375,7 @@ export class LocalShellOperations implements ShellOperations {
     //
     // Detached process is fire-and-forget; release the sandbox handle once the
     // child has exited so we don't leak any wrapper state.
+    if (options.input !== undefined && child.stdin) { child.stdin.on('error', error => coreLogger.debug({ error }, 'Background transport stdin closed')); child.stdin.end(options.input); }
     child.on('close', done);
     child.on('error', done);
     child.unref();

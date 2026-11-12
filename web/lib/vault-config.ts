@@ -32,6 +32,7 @@ export interface Credential {
   tags: string[];
   accessCount: string;
   allowedSkills: string[];
+  allowedTools?: string[];
   allowedAgents: string[];
   isActive: boolean;
   createdAt: string;

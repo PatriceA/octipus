@@ -94,6 +94,25 @@ afterAll(async () => {
 });
 
 describe('signed plugin packages', () => {
+  test('a listing file (marketplace.json) is not signed and not installed: editing it changes nothing a host checks', async () => {
+    const svc = await import('./service');
+    const { hashPackageContent } = await import('./integrity');
+    await policy({ trusted: [{ name: 'Acme', publicKey: acme.publicKeyPem }] });
+    const dir = mkdtempSync(join(tmpdir(), 'octipus-signed-pkg-'));
+    cpSync(FIXTURE_DIR, dir, { recursive: true });
+    writeFileSync(join(dir, 'marketplace.json'), JSON.stringify({ title: 'Echo', tags: ['a'] }));
+    const { contentHash } = await signPackage(dir, acme.privateKeyPem);
+    // A listing edit after signing: the source hash, and so the signature, still hold.
+    writeFileSync(join(dir, 'marketplace.json'), JSON.stringify({ title: 'Echo, renamed', tags: ['b'] }));
+    expect(await hashPackageContent(dir, { name: NAME, version: '1.0.0' }, { source: true })).toBe(contentHash);
+
+    const row = await svc.installFromDirectory(dir, admin);
+    expect([row.signedBy, row.contentHash]).toEqual(['Acme', contentHash]);
+    expect(existsSync(join(svc.packageDir(NAME), 'marketplace.json'))).toBe(false);
+    // The installed directory hashes, without the source option, to what was signed.
+    expect(await hashPackageContent(svc.packageDir(NAME), { name: NAME, version: '1.0.0' })).toBe(contentHash);
+  });
+
   test('without requireSignature: signed by a trusted key records the publisher; unsigned or unknown installs as unsigned', async () => {
     const svc = await import('./service');
     await policy({ trusted: [{ name: 'Acme', publicKey: acme.publicKeyPem }] });

@@ -1,29 +1,17 @@
 'use client';
-
-import {
-  Bell,
-  Boxes,
-  Cpu,
-  Globe,
-  HeartPulse,
-  Key,
-  MessageSquare,
-  Mail,
-  Phone,
-  Plug,
-  Settings,
-  Shield,
-  Sliders,
-  Smartphone,
-} from 'lucide-react';
-import { useSearchParams } from 'next/navigation';
+import { ArrowLeft, ArrowRight, Cpu, Link2, Search, Settings, Shield, Sparkles, User } from 'lucide-react';
+import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
-import { useModuleOn } from '@/lib/modules';
+import { useModules, usePageOn } from '@/lib/modules';
+import { useAuth } from '@/lib/auth-context';
 import { PageHeader } from '@/components/ui/page-header';
 import { ApiTokensTab } from '@/components/settings/api-tokens-tab';
+import { EnvironmentsTab } from '@/components/settings/environments-tab';
 import { CliToolsTab } from '@/components/settings/cli-tools-tab';
 import { ChannelsTab } from '@/components/settings/channels-tab';
 import { ConfigurationTab } from '@/components/settings/configuration-tab';
+import { AppearanceTab } from '@/components/settings/appearance-tab';
 import { GeneralTab } from '@/components/settings/general-tab';
 import { HeartbeatTab } from '@/components/settings/heartbeat-tab';
 import { IntegrationsTab } from '@/components/settings/integrations-tab';
@@ -35,84 +23,38 @@ import { NotificationsTab } from '@/components/settings/notifications-tab';
 import { RemoteSpacesTab } from '@/components/settings/remote-spaces-tab';
 import { SecurityTab } from '@/components/settings/security-tab';
 import { VoiceTab } from '@/components/settings/voice-tab';
+import { PluginUsageTab } from '@/components/settings/plugin-usage-tab';
+import { settingsGroups } from '@/components/settings/settings-map';
+import { BudgetsCard } from '@/components/dashboard/budgets-card';
+import { UsageSummary } from '@/components/dashboard/usage-summary';
+import { UsageChart } from '@/components/dashboard/usage-chart';
+import { FeatureStatus } from '@/components/dashboard/feature-status';
 
+const icons = { user: User, spark: Sparkles, cpu: Cpu, connect: Link2, shield: Shield, settings: Settings };
 export default function SettingsPage() {
-  // `?tab=modules` opens a tab directly (the "this module is off" page links there).
-  const [activeTab, setActiveTab] = useState(useSearchParams().get('tab') ?? 'general');
-
-  // Tabs of a module that is off are left out (docs/MODULES.md).
-  const channelsOn = useModuleOn('channels');
-  const voiceOn = useModuleOn('voice');
-  const mailOn = useModuleOn('mail');
-  const tabs = [
-    { id: 'general', label: 'General', icon: Settings },
-    { id: 'modules', label: 'Modules', icon: Boxes },
-    { id: 'configuration', label: 'Configuration', icon: Sliders },
-    { id: 'cli-tools', label: 'CLI tools', icon: Sliders },
-    { id: 'integrations', label: 'Integrations', icon: Plug },
-    ...(mailOn ? [{ id: 'mailboxes', label: 'Mailboxes', icon: Mail }] : []),
-    ...(channelsOn ? [{ id: 'channels', label: 'Channels', icon: MessageSquare }] : []),
-    { id: 'security', label: 'Security', icon: Shield },
-    { id: 'api-tokens', label: 'API Tokens', icon: Key },
-    { id: 'my-models', label: 'My models', icon: Cpu },
-    { id: 'remote-spaces', label: 'Spaces on other installs', icon: Globe },
-    ...(voiceOn ? [{ id: 'voice', label: 'Voice & Calls', icon: Phone }] : []),
-    { id: 'notifications', label: 'Notifications', icon: Bell },
-    { id: 'heartbeat', label: 'Heartbeat', icon: HeartPulse },
-    { id: 'mobile', label: 'Mobile App', icon: Smartphone },
-  ];
-
-  return (
-    <div className="space-y-6 max-w-5xl">
-      <PageHeader
-        title="settings"
-        description="system configuration — workspace paths, model routing, channel integrations, security, and notifications."
-      />
-
-      {/* Rail + panel. The rail keeps its own border so the two columns read as
-          separate surfaces; without it the tab list floated in the page and the
-          panel had no edge to sit against. */}
-      <div className="flex flex-col md:flex-row gap-4 md:gap-6 items-stretch">
-        <nav
-          aria-label="Settings sections"
-          className="md:w-52 shrink-0 flex md:flex-col gap-0.5 overflow-x-auto md:overflow-visible md:border-r md:border-outline-variant md:pr-4"
-        >
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              aria-current={activeTab === tab.id ? 'page' : undefined}
-              onClick={() => setActiveTab(tab.id)}
-              className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm whitespace-nowrap transition-colors focus-visible:outline-2 focus-visible:outline-primary ${
-                activeTab === tab.id
-                  ? 'bg-primary/10 text-primary'
-                  : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
-              }`}
-            >
-              <tab.icon className="w-4 h-4 shrink-0" />
-              {tab.label}
-            </button>
-          ))}
-        </nav>
-
-        <div className="flex-1 min-w-0 bg-surface-container border border-outline-variant rounded-md p-6">
-          {activeTab === 'general' && <GeneralTab />}
-          {activeTab === 'modules' && <ModulesTab />}
-          {activeTab === 'configuration' && <ConfigurationTab />}
-          {activeTab === 'cli-tools' && <CliToolsTab />}
-          {activeTab === 'integrations' && <IntegrationsTab />}
-          {activeTab === 'mailboxes' && mailOn && <MailboxManager />}
-          {activeTab === 'channels' && channelsOn && <ChannelsTab />}
-          {activeTab === 'security' && <SecurityTab />}
-          {activeTab === 'api-tokens' && <ApiTokensTab />}
-          {activeTab === 'my-models' && <MyModelsTab />}
-          {activeTab === 'remote-spaces' && <RemoteSpacesTab />}
-          {activeTab === 'voice' && voiceOn && <VoiceTab />}
-          {activeTab === 'notifications' && <NotificationsTab />}
-          {activeTab === 'heartbeat' && <HeartbeatTab />}
-          {activeTab === 'mobile' && <MobileTab />}
-        </div>
-      </div>
-    </div>
-  );
+  const tab = useSearchParams().get('tab');
+  const router = useRouter();
+  const { user } = useAuth();
+  const modules = useModules();
+  const pageOn = usePageOn();
+  const [search, setSearch] = useState('');
+  const permitted = settingsGroups.map(group => ({ ...group, entries: group.entries.filter(entry => (!entry.admin || user?.isAdmin) && (!entry.module || modules.data?.enabled.includes(entry.module)) && (!entry.href || pageOn(entry.href))) }));
+  const entry = permitted.flatMap(group => group.entries).find(item => item.tab === tab);
+  const group = permitted.find(group => group.entries.includes(entry!));
+  const terms = search.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const groups = permitted.map(group => ({ ...group, entries: group.entries.filter(entry => { const words = `${group.name} ${entry.title} ${entry.keywords}`.toLowerCase().split(/[^a-z0-9]+/); return terms.every(term => words.some(word => word.startsWith(term))); }) })).filter(group => group.entries.length);
+  const panels: Record<string, React.ReactNode> = {
+    appearance: <AppearanceTab />, general: <GeneralTab />, modules: <ModulesTab />, configuration: <ConfigurationTab />, environments: <EnvironmentsTab />,
+    integrations: <IntegrationsTab />, folders: <IntegrationsTab foldersOnly />, 'cli-tools': <CliToolsTab />,
+    mailboxes: <MailboxManager />, channels: <ChannelsTab />, security: <SecurityTab />, 'api-tokens': <ApiTokensTab />,
+    'my-models': <MyModelsTab />, 'remote-spaces': <RemoteSpacesTab />, voice: <VoiceTab />, notifications: <NotificationsTab />,
+    heartbeat: <HeartbeatTab />, mobile: <MobileTab />, 'plugin-usage': <PluginUsageTab />, usage: <div className="space-y-5"><UsageSummary /><BudgetsCard /><UsageChart /></div>,
+    health: <div className="space-y-5"><GeneralTab section="health" /><FeatureStatus /></div>,
+  };
+  return <div className="settings-workspace">
+    <PageHeader title="Settings" description={tab ? group?.name : 'Your workspace, your companion, and the access behind the work.'} />
+    {tab ? <><nav className="settings-breadcrumb" aria-label="Settings location"><button onClick={() => { setSearch(''); router.push('/settings'); }}><ArrowLeft size={14} />All settings</button><span>/</span><span>{entry?.title ?? (tab === 'cli-tools' ? 'CLI tools' : 'Unavailable section')}</span></nav>
+      <div className="settings-detail" key={tab}>{entry || tab === 'cli-tools' ? panels[tab] : <p>This section is unavailable or you do not have access. <Link href="/settings">Browse available settings.</Link></p>}</div></>
+      : <><label className="settings-search"><Search size={18} aria-hidden /><span className="sr-only">Find a setting</span><input type="search" placeholder="Find a setting — heartbeat, email, gh…" value={search} onChange={event => setSearch(event.target.value)} /></label><div className="settings-groups">{groups.map(group => { const Icon = icons[group.icon as keyof typeof icons]; return <section key={group.name} className="settings-group"><Icon size={20} aria-hidden /><h2>{group.name}</h2><p>{group.description}</p>{group.entries.map(item => item.tab ? <button key={item.title} onClick={() => router.push(`/settings?tab=${item.tab}`)}>{item.title}<ArrowRight size={13} aria-hidden /></button> : <Link key={item.title} href={item.href!}>{item.title}<ArrowRight size={13} aria-hidden /></Link>)}</section>; })}</div>{!groups.length && <p className="desk-empty">No settings match. Try “access”, “models”, or “notifications”.</p>}</>}
+  </div>;
 }

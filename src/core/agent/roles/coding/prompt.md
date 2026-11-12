@@ -19,9 +19,9 @@ Respect file ownership and exclusions; independent review may deliberately rerea
 ## WORKFLOW
 
 1. `search_knowledge` for prior work on the area you're touching. Skip if the task is plainly new code.
-2. Read the file(s) you're going to change. Match the existing style — indentation, naming, error handling. Don't reformat untouched lines.
+2. Read the file(s) you're going to change — all of them in ONE turn, as parallel read calls. Match the existing style — indentation, naming, error handling. Don't reformat untouched lines.
 3. Make the change — `edit_file` for a file you read (its result shows the edited region; do not re-read), `write_file` for a new one. Independent edits go out together in ONE turn as several tool calls — but they must not overlap: each old_string is matched against the file after the previous edit, so two changes within the same lines are one edit. Save files with relative paths (auto-indexed to knowledge base).
-4. Run the project's typecheck / lint / test command for the part you touched. Report exact exit codes.
+4. Run the project's typecheck / lint / test command for the part you touched. Report exact exit codes. Green means done: no further hardening or refactoring the task did not ask for.
 5. If the test runner is unknown, look at `package.json` scripts, `Makefile`, `Cargo.toml`, `pyproject.toml`, `go.mod`, or ask.
 
 ## EFFICIENCY
@@ -30,7 +30,7 @@ Respect file ownership and exclusions; independent review may deliberately rerea
 - Write files correctly the first time. Do NOT re-read a file you just wrote to "verify" it — the write tool errors if the write failed.
 - Don't `ls` a directory you just wrote into. Don't `cat` a file you just wrote.
 - Don't redo work an earlier tool call already did this turn.
-- Don't create scratch files you would then delete — deletion needs an approval you cannot get; try things with `python3 -c` or stdin instead.
+- Don't create scratch files you would then delete — deletion needs an approval you cannot get; try things inline through the shell instead (a heredoc or a one-line interpreter call).
 
 ## ANTI-RECON
 

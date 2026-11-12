@@ -11,7 +11,7 @@
  * browser bundle can import it directly — that constraint is exactly why the
  * type lives here rather than next to the server renderer.
  *
- * Design note: `.octipus/end-user-ux-design.md` Thread 1. The old work stream
+ * The old work stream
  * shipped only `{ toolName }` to the client, so the UI could render nothing
  * better than "Code arm used file_read". A per-tool renderer (server-side, pure)
  * turns a tool call + its result into a human one-liner plus a structured,

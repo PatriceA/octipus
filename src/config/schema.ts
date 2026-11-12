@@ -1,4 +1,7 @@
+import { TOKEN_BUDGET_DEFAULTS } from '@/shared/token-budget-defaults';
+import { executionEnvironmentsSchema } from '@/shared/execution-environment';
 import { companionMaintenanceSchema } from '@/shared/companion-maintenance';
+import { createPublicKey } from 'node:crypto';
 import { isIP } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -94,10 +97,12 @@ export const securityConfigSchema = z.object({
    *     runner is found. Operational deployments use this once
    *     they've installed a runner.
    *
-   * Windows has no runner, so there `auto` reduces to `off`. On macOS,
+   * Windows agent shells have no runner (`auto` reduces to `off`); the
+   * native AppContainer helper is for plugin packages only. On macOS,
    * `auto` uses sandbox-exec only for plugin package servers; shell
    * commands use it only under `required`.
    */
+  executionEnvironments: executionEnvironmentsSchema.default([]),
   shellSandbox: z.enum(['off', 'auto', 'required']).default('off'),
   /** Expose only the host SSH agent socket and known_hosts to personal shell runs. */
   shellSshAgent: z.boolean().default(false),
@@ -265,7 +270,7 @@ export const agentConfigSchema = z.object({
   defaultTimeout: z.number().min(0).default(3_600_000), // 1 hour
   maxIterations: z.number().min(0).default(0), // 0 = unlimited (turn timeout + token budget still bound a run)
   contextWindowSize: z.number().min(1000).default(32000),
-  maxTokenBudget: z.number().min(0).default(100000), // 0 = unlimited
+  maxTokenBudget: z.number().min(0).default(TOKEN_BUDGET_DEFAULTS.general), // 0 = unlimited
   /** Stream the root agent's text to chat clients as it is produced. Off = whole reply at the end. */
   streaming: z.boolean().default(true),
   /** Write each agent run's full prompt to ~/.octipus/prompts (0600, swept after 7 days). */
@@ -282,8 +287,8 @@ export const agentConfigSchema = z.object({
    * Root-agent prompt tier. 'auto' (default) re-derives it every turn from the
    * current default model's parameter count, so swapping to a smaller model
    * changes the tier with no restart:
-   *   - lite: trimmed prompt, capped tool set and iterations (< ~24B)
-   *   - full: the whole prompt and toolset, swarms and pipelines (>= ~24B)
+   *   - lite: trimmed prompt, capped tool set and iterations (< ~30B)
+   *   - full: the whole prompt and toolset, swarms and pipelines (>= ~30B)
    * Setting an explicit value pins that tier regardless of model size. The
    * `router` value was deleted with the routing hop (rebuild plan, Phase 9).
    */
@@ -298,7 +303,7 @@ export const agentConfigSchema = z.object({
   /** The "small model" threshold: trimmed prompts and tool sets below this. */
   smallModelMaxParams: z.number().default(10_000_000_000),
   /** auto: models with fewer params than this run in the lite tier. */
-  liteModelMaxParams: z.number().default(24_000_000_000),
+  liteModelMaxParams: z.number().default(30_000_000_000),
   /**
    * Max tools handed to a worker whose bound model is in the small tier. Small
    * local models lose track of large tool surfaces and emit malformed
@@ -328,7 +333,7 @@ export const agentConfigSchema = z.object({
    * does not depend on knowing it. Generous by design — it exists to stop a
    * non-converging run, not to shape a converging one.
    */
-  pipelineTokenBudget: z.number().min(0).default(2_000_000),
+  pipelineTokenBudget: z.number().min(0).default(TOKEN_BUDGET_DEFAULTS.pipeline),
   // Soft cap on full tool-result messages kept in context before the OLDEST
   // ones are truncated (recent kept full). Left optional with NO default so
   // omitting it preserves today's behaviour (DEFAULT_TOOL_OUTPUT_SOFT_CAP);
@@ -406,7 +411,7 @@ export const compactionConfigSchema = z.object({
 });
 
 // Swarm (agent delegation tree) configuration schema.
-// See `.octipus/swarm-design.md`. Phase 3 adds per-user fan-out caps +
+// See docs/AGENT-ARCHITECTURE.md. Phase 3 adds per-user fan-out caps +
 // orphan reaper cadence; both have safe defaults so existing deployments
 // don't need to set anything.
 const swarmLevelSchema = z.object({
@@ -452,9 +457,9 @@ export const swarmConfigSchema = z.object({
    */
   worktreeLinkNodeModules: z.boolean().default(true),
   levelDefaults: z.object({
-    root: swarmLevelSchema.default({ tokens: 200_000, wallMs: 36_000_000, fanOut: 6, maxPendingDetached: 6 }),
-    agent: swarmLevelSchema.default({ tokens: 80_000, wallMs: 3_600_000, fanOut: 4, maxPendingDetached: 3 }),
-    subagent: swarmLevelSchema.default({ tokens: 30_000, wallMs: 3_600_000, fanOut: 0, maxPendingDetached: 0 }),
+    root: swarmLevelSchema.default({ tokens: TOKEN_BUDGET_DEFAULTS.root, wallMs: 36_000_000, fanOut: 6, maxPendingDetached: 6 }),
+    agent: swarmLevelSchema.default({ tokens: TOKEN_BUDGET_DEFAULTS.agent, wallMs: 3_600_000, fanOut: 4, maxPendingDetached: 3 }),
+    subagent: swarmLevelSchema.default({ tokens: TOKEN_BUDGET_DEFAULTS.subagent, wallMs: 3_600_000, fanOut: 0, maxPendingDetached: 0 }),
   }).prefault({}),
 });
 
@@ -778,6 +783,46 @@ export function normalizeRetiredConfigValues<T>(merged: T): T {
 }
 
 // Full configuration schema
+/**
+ * An Ed25519 public key as PEM (SPKI), what `octi plugin keygen` writes to
+ * `<name>.pub`: refused at config load when it is not one, so a typo never
+ * leaves the marketplace trusting nothing (or something else) in silence.
+ */
+const ed25519PublicKeyPem = z.string().min(1).max(2000).refine((pem) => {
+  const text = pem.trim();
+  if (!text.startsWith('-----BEGIN PUBLIC KEY-----') || !text.endsWith('-----END PUBLIC KEY-----')) return false;
+  try {
+    return createPublicKey(text).asymmetricKeyType === 'ed25519';
+  } catch {
+    return false;
+  }
+}, 'an Ed25519 public key in PEM (the contents of the .pub file octi plugin keygen writes)');
+
+/**
+ * `plugins.marketplace` (docs/PLUGIN-PACKAGES.md#marketplace): `true` (the
+ * default) uses the built-in Octipus marketplace, `false` turns it off
+ * entirely; an object overrides its index URL and/or its two keys, for
+ * testing or self-hosting. Root keys given here count as configured.
+ */
+export const marketplaceConfigSchema = z.union([
+  z.boolean(),
+  z.object({
+    enabled: z.boolean().default(true),
+    /** The signed index (https; its signature is `<url>.sig`). */
+    url: z.string().url().max(2000)
+      .refine((v) => v.startsWith('https://'), 'the marketplace is reached over https')
+      .refine((v) => !v.includes('#') && !/^https:\/\/[^/]*@/.test(v), 'no fragment and no credentials in the marketplace URL')
+      .optional(),
+    /**
+     * The marketplace's ROOT keys: they sign only `<origin>/keys.json`, which
+     * lists the signing keys. `rootBackup` (kept offline) may revoke `root`.
+     */
+    rootKeys: z.object({ root: ed25519PublicKeyPem, rootBackup: ed25519PublicKeyPem.optional() }).strict()
+      .refine((k) => k.rootBackup === undefined || k.rootBackup.trim() !== k.root.trim(), 'the backup root key must differ from the root key')
+      .optional(),
+  }).strict(),
+]);
+
 export const configSchema = z.object({
   storageMode: storageModeSchema,
   database: databaseConfigSchema,
@@ -813,6 +858,21 @@ export const configSchema = z.object({
      */
     extractionCadence: z.enum(['per_turn', 'on_compaction', 'off']).default('per_turn'),
   }).prefault({}),
+  /** Automatic learning review (src/core/learning). A manual check ignores both. */
+  learning: z.object({
+    /**
+     * Tool calls a session accumulates between automatic reviews. Counted
+     * across turns from the last review, so ten one-call turns earn one review
+     * and a long turn does not earn one per turn.
+     */
+    reviewEveryToolCalls: z.number().int().min(1).default(10),
+    /**
+     * With the background model on a local provider, a review starts only once
+     * that provider has been idle this long, so it never takes the GPU from a
+     * user's turn. Remote providers review at once.
+     */
+    localIdleMs: z.number().int().min(0).default(60_000),
+  }).prefault({}),
   /**
    * Context hooks (docs/CONTEXT-HOOKS.md): knowledge-base recall, a notes
    * index and pinned notes put in front of every agent before it starts.
@@ -824,11 +884,12 @@ export const configSchema = z.object({
     maxTokens: z.number().int().min(100).max(8000).default(2000),
   }).prefault({}),
   /**
-   * In-process extensions (`.octipus/extensions`, src/extensions). Every
-   * extension may observe gateway events and add commands; only a TRUSTED one
-   * may hook the agent loop (`octi.hook`: rewrite the system prompt, rewrite
-   * or refuse tool calls, see results, gate spawns), because a project's
-   * `.octipus/extensions` arrives with whatever repository was cloned.
+   * In-process extensions (`~/.octipus/extensions`, src/extensions; a
+   * project's `<cwd>/.octipus/extensions` is not loaded). Every extension may
+   * observe gateway events and add commands; only a TRUSTED one may hook the
+   * agent loop (`octi.hook`: rewrite the system prompt, rewrite or refuse tool
+   * calls, see results, gate spawns), because being installed in that
+   * directory is not the operator's consent to steer every agent.
    * Absolute paths of an extension's entry file or its directory; compared by
    * real path, so a same-named extension elsewhere is not trusted.
    * Env: OCTIPUS_TRUSTED_EXTENSIONS (comma-separated).
@@ -870,11 +931,59 @@ export const configSchema = z.object({
     /** Key ids (`ed25519:<64 hex>`, as `octi plugin keygen` prints) that trust nothing, whether listed above or not. */
     revokedKeys: z.array(z.string().regex(/^ed25519:[0-9a-f]{64}$/, 'a key id, ed25519:<64 hex>')).default([]),
     requireSignature: z.boolean().default(false),
-    /** Package indexes to browse (https only): `{ packages: [{ name, version, description, url, sha256 }] }`. */
+    /**
+     * Package indexes to browse (https only): `{ packages: [{ name, version, description, url, sha256 }] }`.
+     * With `publisher` (a name in `trustedPublishers`), the index is listed only
+     * when `<url>.sig` verifies with a trusted, unrevoked, unexpired key of that
+     * publisher (docs/PLUGIN-PACKAGES.md#signed-registry-indexes).
+     */
     registries: z.array(z.object({
-      name: z.string().min(1).max(100),
+      /** Unique; `marketplace` is reserved for the built-in Octipus marketplace. */
+      name: z.string().min(1).max(100).refine((v) => v.trim().toLowerCase() !== 'marketplace', '"marketplace" is reserved for the built-in Octipus marketplace; name the registry otherwise'),
       url: z.string().url().max(2000).refine((v) => v.startsWith('https://'), 'a registry is reached over https'),
-    })).default([]),
+      publisher: z.string().min(1).max(100).optional(),
+    })).default([]).superRefine((list, ctx) => {
+      const seen = new Set<string>();
+      list.forEach((r, i) => {
+        if (seen.has(r.name)) ctx.addIssue({ code: 'custom', path: [i, 'name'], message: `the registry name "${r.name}" is used twice; registry names are unique` });
+        seen.add(r.name);
+      });
+    }),
+    /**
+     * Tokens (input + output) one user's plugin `model:complete` calls may use
+     * per UTC day, all packages together; 0 turns those calls off.
+     */
+    hostModelDailyTokens: z.number().int().min(0).max(100_000_000).default(TOKEN_BUDGET_DEFAULTS.pluginDaily),
+    /**
+     * Tokens one plugin background run (`agent:run`) may use, its worker's own
+     * budget; its tokens also count in `hostModelDailyTokens`. 0 turns those runs off.
+     */
+    hostAgentRunTokens: z.number().int().min(0).max(10_000_000).default(TOKEN_BUDGET_DEFAULTS.pluginRun),
+    /**
+     * The protection level (1-4) plugin packages see the connected calendars'
+     * events at (host scopes calendar:read and calendar:write,
+     * docs/PLUGIN-PACKAGES.md#mail-and-calendar): events carry no level of
+     * their own. Default 3 (confidential: they name people).
+     */
+    calendarProtectionLevel: z.number().int().min(1).max(4).default(3),
+    /**
+     * The built-in Octipus marketplace (docs/PLUGIN-PACKAGES.md#marketplace):
+     * `true` (default), `false` (off entirely: never fetched, never trusted),
+     * or `{ enabled?, url?, rootKeys?: { root, rootBackup? } }` to point it at
+     * another index or root keys. Without root keys in the build or here it stays off.
+     */
+    marketplace: marketplaceConfigSchema.default(true),
+    /**
+     * The sandbox of plugin package servers (docs/PLUGIN-PACKAGES.md#the-sandbox),
+     * apart from `security.shellSandbox` (agent shells). `required` (default):
+     * a `package` plugin never starts without a working runner (bwrap or
+     * firejail on Linux, sandbox-exec on macOS); without one, starting,
+     * enabling and consenting are refused. `off`: a plugin NOT from the
+     * marketplace runs unsandboxed, as the server's user (Windows, which has
+     * no runner). A marketplace plugin always needs a runner, whatever this says.
+     * Env: PLUGINS_SANDBOX.
+     */
+    sandbox: z.enum(['required', 'off']).default('required'),
   }).prefault({}),
   oauth: oauthConfigSchema,
   rateLimit: rateLimitConfigSchema,

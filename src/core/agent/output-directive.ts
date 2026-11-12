@@ -1,5 +1,5 @@
 /**
- * Chat/work split (`.octipus/end-user-ux-design.md` Thread 3): the system-prompt
+ * Chat/work split: the system-prompt
  * fragment that tells the agent whether the turn's deliverable belongs inline in
  * the chat reply or in an editable file the user opens in the Files tab.
  *

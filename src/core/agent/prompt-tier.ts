@@ -3,7 +3,7 @@ import { coreLogger } from '@/utils/logger';
 
 /**
  * Root-agent PROMPT tiers. See `agentConfigSchema.promptTier`.
- *   - lite: shrunken prompt, capped tool set and iterations (< ~24B)
+ *   - lite: shrunken prompt, capped tool set and iterations (< ~30B)
  *   - full: the whole prompt, the whole toolset, swarms and pipelines
  *
  * A tier is a prompt size, NOT a control-flow branch. The `router` mode — a

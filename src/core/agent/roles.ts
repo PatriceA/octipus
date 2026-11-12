@@ -15,6 +15,7 @@ import { getMCPBridge } from '@/mcp/bridge';
 import { getToolRegistry } from '@/tools/registry';
 import { logger } from '@/utils/logger';
 import { loadRoles } from './roles/index';
+import { withoutRetiredToolIds } from './retired-tools';
 import type { AgentRole, RoleConfig } from './types';
 
 export const ROLE_CONFIGS: Record<AgentRole, RoleConfig> = loadRoles();
@@ -117,35 +118,6 @@ export function stripSecurityPreamble(prompt: string | undefined): string {
  * we don't gate (null sentinel from getAvailableSync).
  */
 /**
- * Prefix marking a role toolId as a connector binding (e.g.
- * `connector:atlassian`). A colon is used (not `connector_`) so the binding id
- * can never collide with the real connector meta-tool names
- * `connector_list_tools` / `connector_call_tool`. Connector tools are gated
- * per-role through this convention so connectors stop bypassing role gating
- * (see worker-spawner).
- */
-export const CONNECTOR_TOOL_PREFIX = 'connector:';
-
-/**
- * Connector ids a role is explicitly bound to (the `connector:<id>` entries in
- * its toolIds, with the prefix stripped). Empty array ⇒ the role binds no
- * specific connectors → today's behaviour (all of the user's active connectors)
- * is preserved by the caller. This keeps the migration backward-compatible:
- * gating only kicks in once a role binds at least one connector.
- *
- * Reads ROLE_CONFIGS directly (not getRoleConfig) — avoids the per-call
- * SECURITY_PREAMBLE allocation on the spawn hot path, and an unknown role
- * resolves to `[]` (all connectors) rather than silently inheriting general's
- * connector bindings.
- */
-export function getBoundConnectorIds(role: AgentRole): string[] {
-  const toolIds = ROLE_CONFIGS[role]?.toolIds ?? [];
-  return toolIds
-    .filter((id) => id.startsWith(CONNECTOR_TOOL_PREFIX))
-    .map((id) => id.slice(CONNECTOR_TOOL_PREFIX.length));
-}
-
-/**
  * Update a role's toolIds in the in-memory ROLE_CONFIGS cache. Called after a
  * DB write (PATCH /roles/:role) so a freshly spawned worker sees the new
  * toolset immediately — getToolsForRole reads ROLE_CONFIGS synchronously, so
@@ -207,27 +179,25 @@ export function removeRoleInMemory(role: AgentRole): void {
  * cold `getAvailableSync()`: before discovery has run there is nothing to check
  * against, and refusing every write would be worse than allowing a typo.
  *
- * Connector bindings are resolved per user at spawn time and MCP is bridged
- * rather than registered, so neither appears in the manifests.
+ * MCP is bridged rather than registered, so it does not appear in the
+ * manifests.
  */
 export function unknownToolIds(toolIds: string[]): string[] {
   const known = new Set(getToolRegistry().getManifests().map((m) => m.id));
   if (known.size === 0) return [];
-  return toolIds.filter(
-    (id) => !known.has(id) && id !== 'mcp' && !id.startsWith(CONNECTOR_TOOL_PREFIX),
-  );
+  return toolIds.filter((id) => !known.has(id) && id !== 'mcp');
 }
 
 export function getToolsForRole(role: AgentRole): ToolHandler[] {
   const config = getRoleConfig(role);
-  // Connector bindings are resolved per-user at spawn time (worker-spawner),
-  // not here — drop them so they aren't looked up in the builtin/MCP registry.
-  const nonConnectorIds = config.toolIds.filter((id) => !id.startsWith(CONNECTOR_TOOL_PREFIX));
-  if (nonConnectorIds.length === 0) return [];
+  // A removed tool or connector binding (`connector:<id>`) still named by a
+  // role is dropped, not looked up in the builtin/MCP registry.
+  const liveIds = withoutRetiredToolIds(config.toolIds);
+  if (liveIds.length === 0) return [];
 
   const capSnapshot = getCapabilityService().getAvailableSync();
   const requestedIds = capSnapshot
-    ? nonConnectorIds.filter((id) => {
+    ? liveIds.filter((id) => {
         if (capSnapshot.has(id)) return true;
         logger.warn(
           { role, toolId: id },
@@ -235,7 +205,7 @@ export function getToolsForRole(role: AgentRole): ToolHandler[] {
         );
         return false;
       })
-    : nonConnectorIds;
+    : liveIds;
 
   const builtinIds = requestedIds.filter((id) => id !== 'mcp');
   const wantsMcp = requestedIds.includes('mcp');

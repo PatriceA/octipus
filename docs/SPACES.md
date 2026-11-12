@@ -11,7 +11,7 @@ This page describes what is built. The full design is
 > **Status (coworking S0–S6 built, S7 contract).** Spaces, members, roles,
 > invites, archive and purge; rooms and space memory; live documents and
 > file leases; own models; funding, sponsored agents, budgets, the team
-> surface, group channels bound to a space and space connectors; guests and
+> surface, group channels bound to a space and the space's GitHub token; guests and
 > registration modes are all built, with their routes and web screens.
 > Spaces across installs (S7) is built too: hosting members of other
 > installs and joining spaces hosted elsewhere (see "Across installs").
@@ -282,7 +282,7 @@ layer (`spaceRepos`) and every surface beside it:
 | Notes | the notes whose slug is, or lies under, a folder (slugs keep `/`: `client/brief` is in `client`; the folder is compared in its slug form, so `Client Docs` matches `client-docs/…`), with their live documents, revisions, links between such notes and edit proposals |
 | Tasks | the tasks raised from one of their rooms (`source_ref.sessionId`), and commenting on them |
 | Knowledge | the chunks of those notes and files |
-| Documents, artifacts, space memory, space connectors and secrets | nothing: they have no room and no path |
+| Documents, artifacts, space memory, the space's GitHub token and secrets | nothing: they have no room and no path |
 | Private chats, agents, pipelines | none: a guest asks Octipus in their rooms only |
 | The space itself (`GET /api/spaces/<id>`, the space list) | its name and settings; `memberCount` counts the members they see, `createdBy` and `sponsorUserId` are named only when among them, no sponsor models |
 | Activity (`GET /api/spaces/<id>/activity`) | the rows about their rooms only (room created, renamed, mode changes); the actor is named only when they see that member, a room's member list is cut to those members, an impersonating admin is never named; nothing else (members, invites, funding) |
@@ -458,7 +458,7 @@ the sessions routes). That conversation:
 - holds only `remote_space_read`, `remote_space_post`,
   `remote_space_propose_note`, `remote_space_task_op` and web search — no
   page fetch (it would send to an address the space's text chose), mail,
-  calendar, notes, memory, files, shell, connectors, delegation or memory
+  calendar, notes, memory, files, shell, plugins, delegation or memory
   tools; a CLI agent model (which brings its own tools) is refused. The
   tools check their arguments (UUID ids, a path that stays inside the
   space's files, a known task op) before anything is sent, and their
@@ -666,9 +666,8 @@ A member's private chat in a space runs the agent in the space.
   recipes, memory, profile and skill tools such as `update_skill`,
   `sync_vault`, `index_file`/`index_directory`, meeting notes, MCP server
   administration, skill distillation) and every write through the member's
-  personal connections (OAuth connectors and `connector_call_tool`, their MCP
-  servers, their real browser through `browser-ext`, the named connector
-  tools) are not offered and are refused; the prompt says why. Reads through
+  personal connections (their mail and calendar, their MCP servers, their
+  real browser through `browser-ext`) are not offered and are refused; the prompt says why. Reads through
   those connections run and mark the session `private` (I6). A coding agent's
   configuration under the space's files (`.claude/`, `.codex/`, `.gemini/`,
   `.agents/`, `.vibe/`, `.mcp.json`) is never written, by the file tools or a
@@ -1217,37 +1216,37 @@ one conversation.
   off while it has no sponsor; their probe is install work attributed to
   the space, gated by the space budget, as a room's.
 
-## Space connectors
+## The space's GitHub token
 
-Connections of the space itself, used by its agent for every member who may
-run it (Space settings → Connectors). Owners connect and disconnect; every
-member sees which are connected.
+The space's own GitHub connection, used by its agent for every member who
+may run it (Space settings → GitHub): a token an owner pastes (a
+fine-grained token limited to the team's repositories). Owners add and
+remove it; every member sees whether there is one. The GitHub tool uses it
+in the space's sessions.
 
-- **GitHub**: a token an owner pastes (a fine-grained token limited to the
-  team's repositories). The GitHub tool uses it in the space's sessions.
-- **Atlassian, Linear**: OAuth, each with its own connect, callback and
-  refresh flow storing the tokens under the space. The callback must come
-  from the browser that started the connect (an HttpOnly `SameSite=Lax`
-  cookie whose hash the OAuth state keeps), so an authorization link handed
-  to someone else cannot connect their account to the space; the same holds
-  for personal connectors and Google / Microsoft sign-in.
+It is a space secret (vault scope `space`, keyed by the space, named
+`connector_github_access_token` as it was when the space had connectors;
+the owner who stored it is its author). It is read only by the GitHub tool
+and the space's tool home, through the space access layer after a
+membership check — never through `{{secret:NAME}}`, and it never exempts a
+call from the flow guard. Inside a space the agent uses the space's token,
+never the member's personal GitHub. The GitHub tool is a space tool there:
+its writes follow the member's role (editors and owners, after the usual
+approval) and its reads do not mark the session as holding private data. A
+new token replaces the stored secret and a removal deletes it: no
+superseded ciphertext is kept.
 
-The credentials are space secrets (vault scope `space`, keyed by the space;
-the owner who stored one is its author). They are read only by connector
-code, through the space access layer after a membership check — never
-through `{{secret:NAME}}`, and they never exempt a call from the flow guard.
-Inside a space the agent uses the space's connectors, never the member's
-personal ones. They are space tools there: their writes follow the
-member's role (editors and owners, after the usual approval) and their
-reads do not mark the session as holding private data. A reconnect
-replaces the stored secret and a disconnect deletes it: no superseded
-ciphertext is kept.
+The space OAuth connectors that used to sit beside it were removed with the
+built-in connector framework (plugins bring their own tools, network hosts
+and secrets). A space that connected one before the upgrade still holds its
+`connector_<id>_*` rows; nothing reads them, and they go with the space
+when it is purged.
 
 **The host's GitHub identity is never used in a space.** Every run of the
 shell, the Git tool, the GitHub tool and CLI agents in a space gets a tool
 home of its own: a fresh temporary directory (0700) that `HOME`,
 `XDG_CONFIG_HOME`, `GH_CONFIG_DIR` and git's global config point at, removed
-when the run ends. It holds only what the space's GitHub connector
+when the run ends. It holds only what the space's GitHub token
 provides, for a member whose role may have the agent write: a `gh` login
 and a git credential helper for github.com with the space's token, plus the
 member's name as commit author. The host's identity variables are removed
@@ -1257,7 +1256,7 @@ never prompts, every credential helper the host or the repository
 configured is reset (`credential.helper=`), and SSH remotes are reached
 without the host's keys or agent. Nothing in the home outlives the run, so
 one member's run cannot plant a login, hook or alias another member's run
-picks up. A space without a GitHub connector has no GitHub access from the
+picks up. A space without a GitHub token has no GitHub access from the
 GitHub tool. CLI agents keep their own vendor login (`CLAUDE_CONFIG_DIR`,
 `CODEX_HOME` stay where they were); a vendor CLI that keeps its login only
 under `HOME` must use a token-based login to run in a space.

@@ -163,7 +163,7 @@ export function ApiTokensTab() {
             type="button"
             onClick={() => issueMutation.mutate()}
             disabled={!name.trim() || issueMutation.isPending}
-            className="px-4 py-2 bg-primary text-[#0e0e0e] rounded-lg text-sm font-medium hover:bg-primary-container disabled:opacity-50 cursor-pointer"
+            className="px-4 py-2 bg-primary text-on-primary rounded-lg text-sm font-medium hover:bg-primary-dim disabled:opacity-50 cursor-pointer"
           >
             {issueMutation.isPending ? 'Generating…' : 'Generate token'}
           </button>
@@ -293,7 +293,7 @@ export function ApiTokensTab() {
                   className={`px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-1.5 cursor-pointer ${
                     copied
                       ? 'bg-tertiary text-on-tertiary'
-                      : 'bg-primary text-[#0e0e0e] hover:bg-primary-container'
+                      : 'bg-primary text-on-primary hover:bg-primary-dim'
                   }`}
                 >
                   {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}

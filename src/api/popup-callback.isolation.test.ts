@@ -46,12 +46,18 @@ function expectContained(res: Response, html: string): void {
 }
 
 describe('OAuth popup callback pages', () => {
-  test('a connector callback with a script in ?error= keeps it in the string, under its own nonce policy', async () => {
-    const res = await app.handle(new Request(`http://localhost/api/connectors/github/callback?error=${encodeURIComponent(BREAKOUT)}`));
+  test('a mailbox provider callback with a script in ?error= keeps it in the string, under its own nonce policy', async () => {
+    const res = await app.handle(new Request(`http://localhost/api/auth/oauth/microsoft/callback?error=${encodeURIComponent(BREAKOUT)}`));
     expect(res.headers.get('content-type')).toContain('text/html');
     const html = await res.text();
     expectContained(res, html);
-    expect(html).toContain('connector:error');
+    expect(html).toContain('oauth_callback');
+  });
+
+  test('the removed connector callback is no longer a public page', async () => {
+    const res = await app.handle(new Request(`http://localhost/api/connectors/github/callback?error=${encodeURIComponent(BREAKOUT)}`));
+    expect(res.status).toBe(401);
+    expect(await res.text()).not.toContain('<script');
   });
 
   test('a sign-in provider callback with a script in error_description does the same', async () => {

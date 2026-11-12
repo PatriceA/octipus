@@ -47,6 +47,17 @@ services:
       #   On Linux/macOS:           /var/run/docker.sock:/var/run/docker.sock
       #   On Windows (Docker Desktop): //var/run/docker.sock:/var/run/docker.sock
       # - /var/run/docker.sock:/var/run/docker.sock
+    # Plugin sandbox (docs/PLUGIN-PACKAGES.md#the-sandbox): plugin packages run
+    # in bubblewrap (installed in the image), which needs to create user
+    # namespaces. Docker's default seccomp and AppArmor profiles refuse that,
+    # and then no plugin starts (the startup log and Admin → Plugin packages
+    # say "plugin sandbox: unavailable"). Check with:
+    #   docker compose exec octipus bwrap --ro-bind / / true
+    # If it fails, allow it — this relaxes the container's own syscall filter,
+    # so weigh it against running plugins at all:
+    # security_opt:
+    #   - seccomp=unconfined
+    #   - apparmor=unconfined
     depends_on:
       octipus-db:
         condition: service_healthy

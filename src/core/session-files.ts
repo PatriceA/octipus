@@ -1,7 +1,6 @@
 import { assertNoCredentialTemplates } from '@/security/credential-boundary';
 /**
- * Session-scoped file access for the in-chat file view —
- * `.octipus/end-user-ux-design.md` Thread 2.
+ * Session-scoped file access for the in-chat file view.
  *
  * Thin, testable layer over `WorkspaceFS`: the API routes
  * (`GET/PUT /api/sessions/:id/files`) call these functions with a per-user
@@ -36,8 +35,7 @@ export const MAX_ATTACHED_FILE_CONTEXT_BYTES = 64 * 1024;
 
 /**
  * A reference to a session-scoped file the user attached to a chat turn so the
- * agent operates on the *current* contents — `.octipus/end-user-ux-design.md`
- * Thread 2 edit-and-continue — rather than a stale copy pasted into the
+ * agent operates on the *current* contents (edit-and-continue) rather than a stale copy pasted into the
  * transcript. `version` is the version the UI last saw; a mismatch means the
  * file changed out-of-band, which we surface to the agent rather than hide.
  */
@@ -262,6 +260,7 @@ export async function buildAttachedFilesContext(
   fs: WorkspaceFS,
   refs: AttachedFileRef[],
   describeImage?: (dataUrl: string, mimeType: string, path: string) => Promise<string>,
+  readFileForContext?: (path: string) => Promise<ReadFileResult>,
 ): Promise<string> {
   if (refs.length === 0) return '';
   const blocks: string[] = [];
@@ -269,7 +268,7 @@ export async function buildAttachedFilesContext(
     const name = fileDisplayName(ref.path);
     let res: ReadFileResult;
     try {
-      res = await readSessionFile(fs, ref.path);
+      res = await (readFileForContext ? readFileForContext(ref.path) : readSessionFile(fs, ref.path));
     } catch (err) {
       const reason = err instanceof SessionFileError ? err.message : (err as Error).message;
       blocks.push(`--- ${name} (could not be read: ${reason}) ---`);

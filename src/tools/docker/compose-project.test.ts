@@ -104,3 +104,20 @@ test('a build context outside the repository and a service-scoped down never rea
   await expect(tool.composeProject({ cwd, project: 'demo', operation: 'up', build: true }, context)).rejects.toThrow('inside the approved repository');
   expect(calls).toHaveLength(0);
 });
+
+test('one account grant adopts matching existing projects and supports ordinary builds/env files without per-command configuration', async () => {
+  const { getConfig } = await import('@/config');
+  const { workstationAutomationPreset } = await import('@/shared/execution-environment');
+  const old = getConfig().security.executionEnvironments;
+  const { cwd, tool, run, calls, context } = fixture();
+  const owner = '11111111-1111-4111-8111-111111111111';
+  getConfig().security.executionEnvironments = [{ ...workstationAutomationPreset(owner, 'compose-account', [cwd]), isDefault: true }];
+  writeFileSync(join(cwd, 'compose.yaml'), 'services:\n  app:\n    build: .\n    env_file: .env');
+  run.mockImplementation(async args => { calls.push(args); return { stdout: args.includes('inspect') ? cwd : args[2] === 'ps' ? 'existing' : '', stderr: '', exitCode: 0 }; });
+  try {
+    const result = await tool.composeProject({ cwd, project: 'demo', operation: 'up', build: true, services: ['app'] }, { ...context, userId: owner, metadata: { executionEnvironmentId: 'compose-account' } });
+    expect(result).toMatchObject({ executed: true, exitCode: 0, authority: 'account' });
+    expect(calls.some(args => args.includes('--build') && args.includes('--wait') && args.includes(join(cwd, 'compose.yaml')))).toBe(true);
+    expect(calls.some(args => args.includes('config'))).toBe(false);
+  } finally { getConfig().security.executionEnvironments = old; }
+});

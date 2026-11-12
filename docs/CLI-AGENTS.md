@@ -407,8 +407,8 @@ entry name/tool access rather than guessing names or trying repeated logins.
 
 Each managed CLI run receives a private loopback bridge, authenticated with a
 random capability that ends with the run. The bridge exposes that worker's
-registered Octipus tools, including its role-specific tools, skill loaders,
-connectors and applicable plan/delegation tools. Calls run through the native
+registered Octipus tools, including its role-specific tools, skill loaders
+and applicable plan/delegation tools. Calls run through the native
 `ToolExecutor` with the original agent, user, session and workspace. The bridge
 never accepts an identity or session override from tool arguments and does not
 use the standalone MCP server's bootstrap admin token.
@@ -629,6 +629,40 @@ an operator-configured fallback and can have different billing.
 Build the bridge with `npm run build --prefix mcp-server` along with the backend.
 Missing compiled bridge files fail at startup of the run. Capability details are
 shown in the model settings and `/work-plan` for a CLI root.
+
+## One-shot completions (lanes)
+
+A CLI model bound to a lane also answers one-shot completions (a summary, mail
+triage, a plugin's `model:complete`). These always run in the CLI's
+tool-less mode: prompt on stdin, no native tools, no MCP servers, no user or
+project settings, an install row's in an empty directory (a personal row's in
+its owner's own one), never the workspace root. Their callers feed in fetched
+pages, mail and plugin-written prompts, so a CLI that cannot run without its
+own tools (Antigravity, Vibe, Codex) answers no completion: the call fails
+with "it has no mode without its own tools". Use such a CLI as an agent model
+(`/model`, a role or pipeline stage) and bind an API model or Claude Code to
+the lanes.
+
+The one exception is a plugin's `model:complete` call, by explicit approval
+only: its package declares `model.trustedInput` (its prompts carry no
+outside data) and an admin approved `model:cli-tools`
+([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#model-calls-on-cli-lanes)). Such a
+call still runs tool-less on a CLI that can; on Antigravity, Vibe or Codex
+it runs with the CLI's normal arguments, in a fresh empty directory, and is
+audited with `cliTools: true`. The prompt (system text included, line breaks
+and all) goes on stdin, never into the command line, which still refuses any
+argument with a line break:
+
+| CLI | How the prompt arrives | Source |
+|---|---|---|
+| Codex | `codex exec … -` reads it from stdin | codex CLI |
+| Mistral Vibe | `vibe -p --output json …`: a bare `-p` reads the prompt from stdin | Vibe README ("With `-p` and no text, the prompt is read from stdin") |
+| Antigravity | `agy --input-format stream-json --output-format stream-json`: one line `{"event":"user","message":{"content":"…"}}` on stdin; the answer is the `result` event's `response`, with token usage. `--print` takes the prompt only as its value and ignores stdin, so it is not used for these calls. | [Antigravity headless mode](https://antigravity.google/docs/cli/headless) |
+
+Agent runs are unchanged: Antigravity still gets `--print <prompt>` as one
+argument (no shell on Windows), Vibe its prompt inline or on stdin on
+Windows. Every other plugin call is refused on a CLI
+lane (`409 cli_model`), and every core completion keeps the rule above.
 
 ## Session reuse
 
@@ -853,7 +887,7 @@ only exercised by the opt-in live test and can drift with vendor releases. An
 opt-in test (`OCTIPUS_LIVE_CLI=claude-code`, `codex`, `vibe` or `antigravity` with Vitest's
 `src/core/cli-agent-bridge.test.ts`) exercises a configured real CLI login against
 isolated sample tools and an in-memory plan repository. It does not contact
-personal connectors or modify project files, but consumes vendor usage.
+personal accounts or modify project files, but consumes vendor usage.
 
 Approximately 90% coverage of useful everyday workflows is the implementation
 target, not a measured compatibility percentage or a promise of feature parity.

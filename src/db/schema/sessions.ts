@@ -115,6 +115,8 @@ export interface CompactionState {
 }
 
 export interface SessionContext {
+  /** Owner-selected execution profile; validated again at every tool call. */
+  executionEnvironmentId?: string;
   /** Dedicated controller session. Its model has only the scoped Companion toolbox. */
   companionSupervisor?: { modelName: string };
   /** Explicit persistent model binding for a Companion-created project session. */
@@ -211,6 +213,13 @@ export interface SessionContext {
    * a later turn, and changing the flag does not approve or start the plan.
    */
   planMode?: boolean;
+  /**
+   * The caller will not come back to this session (`oneShot` on POST /chat, like
+   * hermes's `--oneshot`). No automatic learning review: nobody follows up, and
+   * on a local model the review would hold the GPU for the caller's next turn.
+   * A manual check (POST /sessions/:id/learning) still runs.
+   */
+  oneShot?: boolean;
   // Development Mode
   devMode?: boolean;
   projectPath?: string;
@@ -218,7 +227,7 @@ export interface SessionContext {
   /**
    * Multi-repo binding — the registry ids (`workspace_repos.id`) this session
    * works across, when bound to a suite rather than a single `projectPath`.
-   * See `.octipus/multi-repo-design.md`.
+   * See docs/MULTI-REPO.md.
    */
   repoIds?: string[];
   /**
@@ -235,7 +244,7 @@ export interface SessionContext {
   }>;
 }
 
-export type SessionKind = 'chat' | 'room';
+export type SessionKind = 'chat' | 'room' | 'automation';
 export type RoomVisibility = 'space' | 'private';
 
 export type Session = typeof sessions.$inferSelect;

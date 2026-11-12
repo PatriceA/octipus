@@ -215,7 +215,7 @@ export const GLOBAL_EVENT_TYPES = {
   audit:
     'Connection-manager audit signals. Pre-auth ones (rejected or failed connections) have no user yet. Internal bus only, never sent to a client.',
   'extension.notify':
-    'Host extensions are files the operator installs (~/.octipus/extensions, <cwd>/.octipus/extensions); there is no installing user. Internal bus only (other extensions), never sent to a client.',
+    'Host extensions are files the operator installs (~/.octipus/extensions); there is no installing user. Internal bus only (other extensions), never sent to a client.',
   'artifact.data_updated':
     'Belongs to an artifact, not a user: sent to the resource artifact:<id> only, to connections that passed the artifact access check.',
   'artifact.version_updated':
@@ -281,8 +281,8 @@ export const AuthMessageSchema = z.object({
 
 /**
  * A reference to a session-scoped workspace file the user attached to a turn,
- * so the agent operates on the file's current contents (edit-and-continue,
- * `.octipus/end-user-ux-design.md` Thread 2) instead of a copy pasted into the
+ * so the agent operates on the file's current contents (edit-and-continue)
+ * instead of a copy pasted into the
  * transcript. `version` is the version the UI last saw — a mismatch is surfaced
  * to the agent, not silently ignored.
  */

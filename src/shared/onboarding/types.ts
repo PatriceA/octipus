@@ -36,7 +36,6 @@ export interface OnboardingState {
   mailbox: 'google' | 'microsoft' | null;
   /** The install has an OAuth client for these (needed before anyone can connect a mailbox). */
   oauthClients: { google: boolean; microsoft: boolean };
-  connectors: Array<{ id: string; name: string; connected: boolean }>;
   channels: {
     /** Bots the server runs (a token is configured). */
     configured: string[];
@@ -149,4 +148,4 @@ export type PlanStep =
   | (StepBase & { kind: 'done' });
 
 /** How the guide tells a connect step finished: a re-read of the state. */
-export type ConnectCheck = { mailbox: true } | { connector: string };
+export type ConnectCheck = { mailbox: true };

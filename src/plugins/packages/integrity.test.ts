@@ -104,6 +104,21 @@ describe('hashPackageContent', () => {
     expect(lines[3]).toMatch(/^file [0-9a-f]{64} "a\\nfile x"$/);
     expect(lines[4]).toMatch(/^file [0-9a-f]{64} "b"$/);
   });
+
+  test('a source hash leaves the root listing file (marketplace.json) out; an installed directory counts it', async () => {
+    const base = await hashPackageContent(pkg(FILES), ID);
+    const listed = pkg([...FILES, ['marketplace.json', '{"title":"Demo"}']]);
+    expect(await hashPackageContent(listed, ID, { source: true })).toBe(base);
+    writeFileSync(join(listed, 'marketplace.json'), '{"title":"Demo, renamed"}');
+    expect(await hashPackageContent(listed, ID, { source: true })).toBe(base);
+    expect(await hashPackageContent(listed, ID)).not.toBe(base);
+    // Only the root file is listing metadata, and only a regular file.
+    expect(await hashPackageContent(pkg([...FILES, ['lib/marketplace.json', '{}']]), ID, { source: true })).not.toBe(base);
+    const asDir = pkg(FILES);
+    mkdirSync(join(asDir, 'marketplace.json', 'x'), { recursive: true });
+    writeFileSync(join(asDir, 'marketplace.json', 'x', 'y.js'), 'y');
+    expect(await hashPackageContent(asDir, ID, { source: true })).not.toBe(base);
+  });
 });
 
 describe('verifyPackageContent', () => {

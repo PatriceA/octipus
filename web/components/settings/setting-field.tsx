@@ -342,7 +342,7 @@ export function SecretsRedirectBanner() {
   return (
     <Link
       href="/secrets"
-      className="flex items-center gap-2 p-3 text-sm bg-amber-900/20 border border-amber-800/30 rounded-lg hover:bg-amber-900/30 transition-colors"
+      className="flex items-center gap-2 p-3 text-sm bg-warning-container border border-warning/30 rounded-lg hover:bg-warning-container/80 transition-colors"
     >
       <KeyRound className="w-4 h-4 text-warning shrink-0" />
       <span className="text-warning">

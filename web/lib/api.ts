@@ -258,8 +258,9 @@ class ApiClient {
     return this.request<T>('PATCH', path, body);
   }
 
-  delete<T>(path: string): Promise<T> {
-    return this.request<T>('DELETE', path);
+  /** `body`: for the few DELETE routes that take one (a reason for the audit log). */
+  delete<T>(path: string, body?: unknown): Promise<T> {
+    return this.request<T>('DELETE', path, body);
   }
 
   /**

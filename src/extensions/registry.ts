@@ -9,7 +9,8 @@ import type { LoadedExtension } from './types';
  */
 export class ExtensionRegistry {
   private loaded: Map<string, LoadedExtension> = new Map();
-  private eventBus: GatewayEventBus;
+  /** The bus extensions subscribe on; also the one in-process plugins get (src/plugins/packages/in-process.ts). */
+  readonly eventBus: GatewayEventBus;
 
   constructor(eventBus: GatewayEventBus) {
     this.eventBus = eventBus;
@@ -26,6 +27,7 @@ export class ExtensionRegistry {
       return;
     }
 
+    warnUnpinnedOnce(entries.map((e) => e.name));
     let count = 0;
     for (const entry of entries) {
       if (this.loaded.has(entry.name)) continue;
@@ -73,7 +75,26 @@ export class ExtensionRegistry {
   }
 }
 
+let warnedUnpinned = false;
+
+/**
+ * Extensions found in the discovery directories run whatever is on disk at
+ * load: no content hash, signature or approval. Said once per process.
+ */
+function warnUnpinnedOnce(names: string[]): void {
+  if (warnedUnpinned) return;
+  warnedUnpinned = true;
+  coreLogger.warn({ extensions: names },
+    'Extensions loaded from ~/.octipus/extensions are not pinned (no content hash, signature or approval); '
+    + 'for anything but development, install them as in-process plugins (docs/PLUGIN-PACKAGES.md#runtimes)');
+}
+
 let instance: ExtensionRegistry | null = null;
+
+/** The registry when the extension system has started, else null (no event bus yet). */
+export function peekExtensionRegistry(): ExtensionRegistry | null {
+  return instance;
+}
 
 export function getExtensionRegistry(eventBus?: GatewayEventBus): ExtensionRegistry {
   if (!instance) {

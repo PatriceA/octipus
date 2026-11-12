@@ -13,14 +13,14 @@ test.describe('smoke — page load + nav', () => {
   test('nav link: chat', async ({ authenticatedPage: page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await Promise.all([page.waitForURL(/\/chat/), page.getByRole('link', { name: /chat/i }).first().click()]);
+    await Promise.all([page.waitForURL(/\/chat/), page.getByRole('link', { name: 'Sessions', exact: true }).first().click()]);
   });
 
   test('nav link: models', async ({ authenticatedPage: page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.locator('aside summary').filter({ hasText: /^Connections$/ }).click();
-    await Promise.all([page.waitForURL(/\/models/), page.getByRole('link', { name: /models/i }).first().click()]);
+    await page.getByRole('link', { name: 'Settings', exact: true }).click();
+    await Promise.all([page.waitForURL(/\/models/), page.getByRole('link', { name: 'Models & providers', exact: true }).click()]);
   });
 
   test('nav link: knowledge', async ({ authenticatedPage: page }) => {
@@ -36,14 +36,13 @@ test.describe('smoke — page load + nav', () => {
   test('nav link: skills', async ({ authenticatedPage: page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.locator('aside summary').filter({ hasText: /^Settings$/ }).click();
+    await page.getByRole('link', { name: 'Settings', exact: true }).click();
     await Promise.all([page.waitForURL(/\/skills/), page.getByRole('link', { name: /^skills/i }).first().click()]);
   });
 
   test('nav link: settings', async ({ authenticatedPage: page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.locator('aside summary').filter({ hasText: /^Settings$/ }).click();
     await Promise.all([
       page.waitForURL(/\/settings/),
       page.getByRole('link', { name: /settings/i }).first().click(),

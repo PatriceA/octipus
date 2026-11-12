@@ -1,3 +1,5 @@
+import { getSettingsService } from '@/config/settings-service';
+import { executionEnvironmentFor, executionEnvironmentDescription } from '@/security/execution-environments';
 import { getConfig } from '@/config';
 import { withoutOffModules } from '@/core/modules/prompt';
 import { bindStagedRootPrompt, promptPart, stageAgentPrompt } from './agent/prompt-composition';
@@ -193,6 +195,14 @@ export class AgentManager {
    * Spawn a new agent
    */
   async spawn(options: SpawnOptions): Promise<AnyAgentWorker> {
+    if (getConfig().security.executionEnvironments?.length || options.contextMetadata?.executionEnvironmentId) {
+      const { withEnvironmentSessionLock } = await import('@/security/environment-session');
+      return withEnvironmentSessionLock(options.sessionId, () => this.spawnInEnvironment(options));
+    }
+    return this.spawnInEnvironment(options);
+  }
+
+  private async spawnInEnvironment(options: SpawnOptions): Promise<AnyAgentWorker> {
     // Check concurrency limit
     const runningAgents = Array.from(this.agents.values()).filter(
       (a) => a.getStatus() === 'running'
@@ -315,6 +325,13 @@ export class AgentManager {
       metadata: options.contextMetadata,
     });
 
+    const environment = executionEnvironmentFor(context);
+    if (environment) {
+      context.metadata.executionEnvironmentId = environment.id;
+      context.metadata.projectPath ??= environment.roots[0];
+      await (await import('@/security/environment-session')).bindDefaultEnvironment(context, environment.id);
+    }
+
     // The window belongs to the MODEL, not to the install. `agent.contextWindowSize`
     // is one number for every agent (32k by default), and every compaction
     // threshold is a fraction of it: on a model with a 1M window the aggressive
@@ -336,6 +353,10 @@ export class AgentManager {
     // CLI models in a space (§5.6, D14): only an install CLI model marked
     // `sharedUse`, only an adapter that declares a space mode, and never for
     // a commenter's turn (commenters use API models only).
+    if (isCLI && environment && (environment.backend !== 'host' || !environment.hostIdentity)) {
+      throw new Error('This environment requires an API or local model. CLI-backed models include native host tools and are supported only in a trusted This computer environment with host account access. Choose a compatible model or environment in Settings.');
+    }
+    const environmentSection = environment ? `EXECUTION ENVIRONMENT: ${JSON.stringify(executionEnvironmentDescription(context))}\nUse the selected environment for project commands, files and Git. API integrations use their configured service targets. If an integration does not support an operation, an authorized registered shell/Git operation in this environment is a valid route. An explicit denial still applies. Historical refusals describe the old attempt; re-read the current environment policy before deciding what is blocked.` : undefined;
     if (isCLI && space) {
       if (!can(space.role, 'run_agent_write')) {
         throw new SpaceError('forbidden_role', `Your role (${space.role}) runs the agent in this space with API models only; ${routedModel} is a CLI model`);
@@ -475,7 +496,8 @@ export class AgentManager {
       worker.seedConversation(options.fork);
     } else {
       const mcpSection = mcpServersSectionFor(options.tools, workerConfig.codemode === true);
-      const filteredPrompt = options.systemPrompt === undefined ? undefined : withoutOffModules(options.systemPrompt);
+      const filteredPrompt = options.systemPrompt === undefined && !environmentSection ? undefined
+        : withoutOffModules([options.systemPrompt, environmentSection].filter(Boolean).join('\n\n'));
       const systemPrompt = mcpSection ? withStaticSection(filteredPrompt ?? '', mcpSection) : filteredPrompt;
       // The root runner staged its prompt by category; apply the same rewrite,
       // add what is appended here, and hand it to this agent (Context inspector).
@@ -494,6 +516,7 @@ export class AgentManager {
           rewrite: withoutOffModules,
           add: [
             ...(mcpSection ? [promptPart('static', 'tools', 'MCP servers', `\n\n${mcpSection}`)] : []),
+            ...(environmentSection ? [promptPart('volatile', 'workspace', 'Execution environment', `\n\n${environmentSection}`)] : []),
             ...(selectedSkills ? [promptPart('static', 'skills', 'Selected skills', selectedSkills)] : []),
           ],
         });
@@ -856,6 +879,8 @@ export class AgentManager {
   /**
    * Get running agents count
    */
+  agentsForEnvironmentRecheck(): AnyAgentWorker[] { return [...this.agents.values()].filter(worker => worker.getStatus() === 'running'); }
+
   getRunningCount(): number {
     return Array.from(this.agents.values()).filter(
       (a) => a.getStatus() === 'running'
@@ -942,6 +967,23 @@ let managerInstance: AgentManager | null = null;
 export function getAgentManager(): AgentManager {
   if (!managerInstance) {
     managerInstance = new AgentManager();
+    const owner = managerInstance;
+    getSettingsService().onChange((key, value, oldValue) => {
+      if (key !== 'security.executionEnvironments') return;
+      const current = Array.isArray(value) ? value : [];
+      const previous = Array.isArray(oldValue) ? oldValue : [];
+      for (const worker of owner.agentsForEnvironmentRecheck()) {
+        const id = worker.getContext().metadata.executionEnvironmentId;
+        if (typeof id !== 'string') {
+          // A new default/project match must not move an already running legacy worker mid-call.
+          if (executionEnvironmentFor(worker.getContext())) owner.stop(worker.getContext().id, { cascade: true, actorUserId: worker.getContext().userId });
+          continue;
+        }
+        const next = current.find(entry => entry.id === id);
+        const prior = previous.find(entry => entry.id === id);
+        if (!next?.enabled || JSON.stringify(next) !== JSON.stringify(prior)) owner.stop(worker.getContext().id, { cascade: true, actorUserId: worker.getContext().userId });
+      }
+    });
   }
   return managerInstance;
 }

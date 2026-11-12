@@ -82,7 +82,7 @@ export function limitRefusalOf(err: unknown): { text: string; refusal: LimitRefu
     const r = err.reason;
     const resets = r.resetsAt ? ` It resets ${utc(r.resetsAt)}.` : '';
     const text = `Agents are paused: ${spendScopeLabel(r)} of ${usd(r.limitUsd)}/${r.period} is reached `
-      + `(${usd(r.spentUsd)} spent this ${r.period}).${resets} Ask an admin to raise the limit.`;
+      + `(${usd(r.spentUsd)} spent this ${r.period}).${resets} Ask an admin to open Settings → System → Administration → Quotas & budgets (/admin/quotas) to raise the limit or clear the pause.`;
     return { text, refusal: { code: 'SPEND_BUDGET_EXCEEDED', reason: r } };
   }
   if (isQuotaError(err)) {

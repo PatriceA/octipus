@@ -297,40 +297,10 @@ const API_CHECKS: Array<{
 ];
 
 /**
- * Reader and Deep Research are API features with no chat entry point, so they
- * are driven directly. Both are cheap on purpose: the reader action runs on
- * supplied text (no network), and research runs at `quick` depth.
+ * Flows driven directly through the API. (Deep research is the research
+ * plugin's now, plugins/research: it is not benched here.)
  */
 const FLOWS: Array<{ id: string; group: string; what: string; run: () => Promise<boolean> }> = [
-  {
-    id: 'reader-fetch',
-    group: 'reader',
-    what: 'fetches a URL and returns extracted article text',
-    run: async () => {
-      const res = await api('/api/reader', { method: 'POST', body: { url: 'https://example.com/' } });
-      const doc = res.body as { title?: string; textContent?: string };
-      return res.status === 200 && (doc.textContent?.length ?? 0) > 50 && !!doc.title;
-    },
-  },
-  {
-    id: 'reader-action',
-    group: 'reader',
-    what: 'summarizes supplied text through the reader topic model',
-    run: async () => {
-      const res = await api('/api/reader/action', {
-        method: 'POST',
-        body: {
-          action: 'summarize',
-          text:
-            'Octipus is a self-hosted AI assistant. It stores everything in Postgres with pgvector, ' +
-            'routes each request to a model bound to a topic lane, and runs tools in a sandbox. ' +
-            'Users reach it through a web app, a terminal UI, and chat channels.',
-        },
-      });
-      const out = res.body as { output?: string; error?: string };
-      return res.status === 200 && (out.output?.length ?? 0) > 40;
-    },
-  },
   {
     id: 'memory-roundtrip',
     group: 'memory',
@@ -364,35 +334,6 @@ const FLOWS: Array<{ id: string; group: string; what: string; run: () => Promise
           body: { message: 'What is my rack UPS called? Answer with the name only.', channel: 'api' },
         });
         if (String((asked.body as { response?: string }).response ?? '').includes(MARK)) return true;
-      }
-      return false;
-    },
-  },
-  {
-    id: 'research-quick',
-    group: 'research',
-    what: 'runs a bounded research job to a finished report',
-    run: async () => {
-      const started = await api('/api/research', {
-        method: 'POST',
-        body: { question: 'What is pgvector and what is it used for?', depth: 'quick' },
-      });
-      const jobId = (started.body as { jobId?: string }).jobId;
-      if (!jobId) return false;
-      const deadline = Date.now() + 300_000;
-      while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 5000));
-        const poll = await api(`/api/research/${jobId}`);
-        const job = poll.body as {
-          status?: string;
-          report?: { sections?: unknown[]; sources?: unknown[] };
-        };
-        // A report with no sources is a model answering from memory, which is
-        // the one thing Deep Research exists not to do.
-        if (job.status === 'done') {
-          return (job.report?.sections?.length ?? 0) > 0 && (job.report?.sources?.length ?? 0) > 0;
-        }
-        if (job.status === 'error' || job.status === 'failed') return false;
       }
       return false;
     },

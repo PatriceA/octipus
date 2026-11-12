@@ -2,28 +2,27 @@
  * What an agent may call inside a space (docs/plans/coworking-spec.md §5.6).
  *
  * - `COMMENTER_TOOLS` — the explicit per-tool list a commenter's (or guest's)
- *   turn may run: read and search tools, `*_read` connector actions (as the
- *   flow guard classifies them), and task comments. Not `isReadOnlyAction`:
+ *   turn may run: read and search tools, `*_read` actions of the mail and
+ *   calendar containers (as the flow guard classifies them), and task
+ *   comments. Not `isReadOnlyAction`:
  *   a tool is allowed for commenters because it is named here.
  * - Writes are allowed only through containers known to act on the space
  *   (`SPACE_TOOL_IDS`, an allowlist). Personal-only tools — scheduling,
  *   monitors, pipelines and recipes, memory, profile and skill tools,
  *   `sync_vault`, `index_file` / `index_directory`, meeting notes, MCP
  *   server administration, skill distillation, and every write through the
- *   requester's personal connections (OAuth connectors, their MCP servers,
- *   their real browser) — act on the requester's own account and
+ *   requester's personal connections (their mailbox and calendar, their MCP
+ *   servers, their real browser) — act on the requester's own account and
  *   automation, so a space session neither gets them offered
  *   (`withoutPersonalOnlyTools`) nor runs them (`personalOnlyReason`, in
  *   `routeApprovalFor`). The agent is told why (`spaceSessionNotice`).
  * - Reads through those personal connections are allowed and mark the
  *   session `private` (`personalSourceRead`), so the I6 rule asks before
  *   their data is written into the space.
- * - The space's own connectors (§9.5) are not personal: in a space session
- *   the GitHub tool, the Atlassian tool and `connector_*` act only through
- *   the space's connection (`connectorOwnerOf`, the GitHub tool's space
- *   token), never the member's, so they are space tools
- *   (`SPACE_CONNECTOR_TOOL_IDS`) — their writes follow the member's role and
- *   their reads do not mark the session private.
+ * - The space's own GitHub (§9.5) is not personal: in a space session the
+ *   GitHub tool acts only through the space's token, never the member's, so
+ *   it is a space tool (`SPACE_CONNECTION_TOOL_IDS`) — its writes follow the
+ *   member's role and its reads do not mark the session private.
  * - `isReadCall` — the calls that read; every other call in a space session
  *   counts as a write for the I6 rule.
  * - `isAgentConfigPath` — a coding agent's configuration under the space's
@@ -40,7 +39,7 @@ export interface SpaceToolCall {
   action: string;
   /** The bare tool name within its container (`read_note`), when the path knows it. */
   toolName?: string;
-  /** The call's arguments, when the path has them (target paths, `connector_call_tool`'s remote tool). */
+  /** The call's arguments, when the path has them (target paths). */
   args?: Record<string, unknown>;
 }
 
@@ -63,7 +62,7 @@ export const COMMENTER_TOOLS: ReadonlySet<string> = new Set([
   // turn's reply, which a commenter's turn may give.
 ]);
 
-/** Connector containers whose `*_read` actions count as reads (flow-guard.ts `classifyFlow`). */
+/** Containers whose `*_read` actions count as reads (flow-guard.ts `classifyFlow`). */
 const READ_SUFFIX_TOOL_IDS = new Set(['google-workspace', 'microsoft365']);
 
 /** Whether a commenter's (or guest's) turn may run this call. */
@@ -78,8 +77,8 @@ const READ_ACTIONS = new Set(['read', 'list', 'search', 'fetch', 'inspect', 'rea
 const CLI_READERS = new Set(['Read', 'Grep', 'Glob', 'NotebookRead', 'LS']);
 /** MCP tool names that only read (the flow guard's `MCP_READ_VERB_RE`). */
 const MCP_READ_VERB_RE = /^(get|list|search|read|fetch|query|find|describe|lookup|view|show|count|retrieve)(_|-|[A-Z]|$)/;
-/** Remote tool names of a connector that only read. */
-const CONNECTOR_READ_NAME_RE = /^(get|list|search|read|view|fetch|query|find|lookup|show|count|retrieve)(_|$)|_(list|search|read|view|get|info|history|labels|folders|diff|checks|log|lists|tasks|events)$/;
+/** Tool names of a source container (GitHub, mail, chat) that only read. */
+const SOURCE_READ_NAME_RE = /^(get|list|search|read|view|fetch|query|find|lookup|show|count|retrieve)(_|$)|_(list|search|read|view|get|info|history|labels|folders|diff|checks|log|lists|tasks|events)$/;
 /** Actions of a personal-source container that only read, beyond the shared read verbs. */
 const SOURCE_READ_ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
   // Not `cookies` (credential material) nor `tabs` (acts on the real browser).
@@ -98,43 +97,34 @@ export function isReadCall(call: SpaceToolCall): boolean {
     const tool = call.action.includes('.') ? call.action.split('.').pop() as string : call.action;
     return tool === 'mcp_list_tools' || MCP_READ_VERB_RE.test(tool);
   }
-  if (call.toolId === 'connector') {
-    // `connector_call_tool` names the remote tool in its arguments; remote
-    // names are MCP tool names (`searchJiraIssuesUsingJql`, `get_page`).
-    if (call.toolName === 'connector_list_tools') return true;
-    const remote = call.args?.tool_name;
-    return call.toolName === 'connector_call_tool' && typeof remote === 'string'
-      && (MCP_READ_VERB_RE.test(remote) || CONNECTOR_READ_NAME_RE.test(remote));
-  }
   if (SOURCE_READ_ACTIONS[call.toolId]?.has(call.action)) return true;
   if (READ_ACTIONS.has(call.action) || call.action.endsWith('_read')) return true;
-  if ((PERSONAL_SOURCE_TOOL_IDS.has(call.toolId) || SPACE_CONNECTOR_TOOL_IDS.has(call.toolId))
-    && call.action === call.toolName && CONNECTOR_READ_NAME_RE.test(call.action)) return true;
+  if ((PERSONAL_SOURCE_TOOL_IDS.has(call.toolId) || SPACE_CONNECTION_TOOL_IDS.has(call.toolId))
+    && call.action === call.toolName && SOURCE_READ_NAME_RE.test(call.action)) return true;
   return commenterMayRun(call) && call.toolName !== 'add_task_comment';
 }
 
 /**
- * Connector containers that, in a space session, act only through the
- * space's own connection (§9.5): the GitHub tool (the space's token, or a
- * refusal), the Atlassian tool and `connector_*` (`connectorOwnerOf`). They
+ * Containers that, in a space session, act only through the space's own
+ * connection (§9.5): the GitHub tool (the space's token, or a refusal). They
  * are space tools there.
  */
-export const SPACE_CONNECTOR_TOOL_IDS: ReadonlySet<string> = new Set(['github', 'atlassian', 'connector']);
+export const SPACE_CONNECTION_TOOL_IDS: ReadonlySet<string> = new Set(['github']);
 
 /**
  * Containers known to act only on the space when they write: its content
  * (notes, tasks, documents, knowledge, artifacts, files), a sandbox, or the
  * host tools a space session runs in the space's file root. In a space
  * session a write through any other container is personal-only — an
- * allowlist, so a container added later (a plugin, a new connector) is
+ * allowlist, so a container added later (a plugin, a new integration) is
  * refused until it is listed here. `action_recovery` is the replay review.
  */
 const SPACE_TOOL_IDS = new Set([
   'notes', 'tasks', 'cases', 'records', 'mail', 'protection', 'documents', 'knowledge', 'artifacts', 'artifacts_toolbox', 'task_state', 'plan',
   'filesystem', 'shell', 'git', 'docker', 'browser', 'websearch', 'visual', 'repo_registry',
   'skill_runtime', 'test_container', 'action_recovery',
-  // The space's own connectors (`SPACE_CONNECTOR_TOOL_IDS`).
-  ...SPACE_CONNECTOR_TOOL_IDS,
+  // The space's own GitHub (`SPACE_CONNECTION_TOOL_IDS`).
+  ...SPACE_CONNECTION_TOOL_IDS,
   // `remember_for_space` (routed as `space_memory.write`): the space's own memory.
   'space_memory',
 ]);
@@ -160,7 +150,7 @@ const PERSONAL_ONLY_TOOL_NAMES = new Set([
  * session `private`; their writes are personal-only.
  */
 const PERSONAL_SOURCE_TOOL_IDS = new Set([
-  'google-workspace', 'microsoft365', 'messaging', 'gitlab', 'email-processor', 'voice',
+  'google-workspace', 'microsoft365', 'messaging', 'email-processor', 'voice',
   'mcp', 'browser-ext', 'data',
 ]);
 
@@ -239,7 +229,7 @@ export function withoutPersonalOnlyTools(handlers: ToolHandler[]): ToolHandler[]
     const toolId = h.toolId ?? 'agent';
     const toolName = h.name.includes('__') ? h.name.slice(h.name.indexOf('__') + 2) : h.name;
     if (toolId === 'agent') return !PERSONAL_ONLY_TOOL_NAMES.has(h.name);
-    if (typeof h.permissionAction === 'function' || (toolId === 'connector' && toolName === 'connector_call_tool')) {
+    if (typeof h.permissionAction === 'function') {
       return !PERSONAL_ONLY_TOOL_IDS.has(toolId);
     }
     // A handler that declares itself read-only is offered as a read.
@@ -262,9 +252,9 @@ export function spaceSessionNotice(spaceName: string, role: SpaceRole, mayWrite:
     + (mayWrite ? '' : 'The user\'s role can only read and comment here: do not try to create or change anything except task comments. ')
     + (role === 'guest' ? 'As a guest the user reaches only some rooms and folders of the space; tools answer within that scope, so what they do not return may still exist. ' : '')
     + 'Scheduling, monitors, pipelines and recipes, memory, profile and skill tools, vault sync, indexing and writes through '
-    + 'the user\'s personal connections (mail, calendar, chat, GitLab, MCP servers, their browser) are not '
-    + 'available in a space, because they act on the user\'s personal account and automation. GitHub, Atlassian and the '
-    + 'other connectors act here through the space\'s own connections, which a space owner connects. Coding agent configuration '
+    + 'the user\'s personal connections (mail, calendar, chat, MCP servers, their browser) are not '
+    + 'available in a space, because they act on the user\'s personal account and automation. GitHub acts '
+    + 'here through the space\'s own token, which a space owner adds. Coding agent configuration '
     + '(.claude, .codex, .gemini, .agents, .mcp.json) cannot be written here. The user\'s personal memories are not loaded here. '
     + 'Writing data read from the user\'s personal sources into the space needs their approval.';
 }

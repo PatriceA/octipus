@@ -97,14 +97,14 @@ multi-user platform; OpenClaw's is better for a personal assistant.
 | Tool area | OpenClaw | Octipus | Notes |
 |---|---|---|---|
 | Shell/exec (sandboxed) | Yes (Docker/SSH sandbox, exec approvals) | Yes (local/SSH/Docker, permission ALLOW/ASK/DENY) | |
-| Files, git | Yes | Yes | Octipus adds GitHub *and* GitLab tools, repo registry |
+| Files, git | Yes | Yes | Octipus adds a GitHub tool and a repo registry |
 | Browser automation | Yes (CDP control) | Yes (Playwright) | |
 | Browser extension (user's real browser) | Yes | Yes | |
 | Web search | Yes (8+ backends: brave, exa, tavily, perplexity, searxng…) | Yes (websearch group) | OpenClaw broader backend choice |
 | MCP client | Yes | Yes | Both with lifecycle mgmt; Octipus adds MCP circuit breaker |
 | MCP server (expose itself) | Yes | Yes | |
 | Knowledge/RAG tools | Partial (plugin memory backends) | Yes (hybrid BM25+vector, indexer, retention) | Octipus built-in |
-| Office suites (M365, Google Workspace) | Partial (skills, gmail-ops hooks) | Yes (dedicated tool groups + OAuth connectors) | |
+| Office suites (M365, Google Workspace) | Partial (skills, gmail-ops hooks) | Yes (dedicated tool groups + OAuth sign-in) | |
 | Media generation (image/music/video) | Yes (fal, comfy, runway…) | No | |
 | Media understanding (audio/vision pipelines) | Yes | Partial (visual screenshots, Whisper STT) | |
 | Canvas / visual workspace | Yes (Canvas + A2UI on nodes) | Partial (interactive answers inside replies in the web chat and rooms; Live Artifacts BETA, hosted app artifacts) | Different shape, similar intent |

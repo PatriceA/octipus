@@ -23,7 +23,7 @@ export const HEARTBEAT_SKIP_LABEL: Record<HeartbeatSkipReasonName, string> = {
 
 export interface TriggerEvent {
   at: string;
-  /** `ran` started a turn; `skipped` a heartbeat check that did not; `failed` an execution that errored. */
+  /** `ran` handled findings or dispatched work; `skipped` a heartbeat check that did not; `failed` an execution that errored. */
   kind: 'ran' | 'skipped' | 'failed';
   /** Heartbeat skip reason, or the execution's error. */
   reason: string | null;

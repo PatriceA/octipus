@@ -4,6 +4,36 @@ import { expect, test } from './fixtures/auth';
 import { stubGateway } from './fixtures/gateway';
 
 test.describe('chat page', () => {
+  test('model inspector follows actual runs when switching sessions, not the global default', async ({ authenticatedPage: page }) => {
+    await page.route('**/api/models', route => json(route, 200, { models: [{ name: 'cli/claude', isDefault: true }] }));
+    await page.route('**/api/agents?sessionId=**', route => {
+      const sid = new URL(route.request().url()).searchParams.get('sessionId');
+      const common = { sessionId: sid, iteration: 1 };
+      return json(route, 200, { agents: sid === 'sess-1' ? [
+        { ...common, id: 'old-coordinator', role: 'general', root: true, model: 'cli/claude', status: 'completed', createdAt: '2026-11-12T10:00:00Z' },
+        { ...common, id: 'project-worker', role: 'coding', model: 'cli/codex', status: 'completed', createdAt: '2026-11-12T10:01:00Z' },
+      ] : [
+        { ...common, id: 'current-coordinator', role: 'general', root: true, model: 'deepseek/project-model', status: 'running', createdAt: '2026-11-12T10:00:00Z' },
+        { ...common, id: 'finished-worker', role: 'review', model: 'older-review-model', status: 'completed', createdAt: '2026-11-12T10:01:00Z' },
+      ] });
+    });
+    await page.goto('/chat');
+    await selectChatSession(page, 'sess-1');
+    await expect(page.getByTestId('session-run-model')).toHaveText('cli/codex');
+    await selectChatSession(page, 'sess-2');
+    await expect(page.getByTestId('session-run-model')).toHaveText('deepseek/project-model');
+    await expect(page.getByText('current run model', { exact: true })).toBeVisible();
+    await selectChatSession(page, 'sess-1');
+    await expect(page.getByTestId('session-run-model')).toHaveText('cli/codex');
+  });
+
+  test('a session with no runs does not invent a model from the registry', async ({ authenticatedPage: page }) => {
+    await page.goto('/chat');
+    await selectChatSession(page, 'sess-1');
+    await expect(page.getByTestId('session-run-model')).toHaveText('No model recorded yet');
+    await expect(page.getByText('Models are chosen from topic and session settings when work starts.')).toBeVisible();
+  });
+
   test.beforeEach(async ({ authenticatedPage: page }) => {
     await page.route('**/api/chat/send**', (route) =>
       json(route, 200, {

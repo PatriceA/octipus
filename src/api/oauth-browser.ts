@@ -4,9 +4,8 @@
  * The OAuth state is server-side and single use, so it cannot be forged —
  * but the callback used to trust whichever browser completed the consent. A
  * user could start a connect, send the provider's authorization URL to
- * someone else, and that person's account would be stored as the user's (or,
- * for a space connector, as the space's, used by every member: a login CSRF
- * with shared reach).
+ * someone else, and that person's account would be stored as the user's (a
+ * login CSRF).
  *
  * So `authorize` hands the browser a random nonce in an HttpOnly,
  * `SameSite=Lax` cookie (Lax: the provider's redirect back is a top-level

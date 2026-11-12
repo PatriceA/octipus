@@ -55,6 +55,16 @@ export interface CompletionOptions {
    */
   historyCache?: boolean;
   agentId?: string;
+  /**
+   * CLI models only: a one-shot completion may run a CLI that has no
+   * tool-less mode with its normal arguments (its own tools on), in an empty
+   * directory. Set only by a plugin's `model:complete` call whose package
+   * declares `model.trustedInput` and whose `model:cli-tools` an admin
+   * approved (src/plugins/packages/host-model.ts); honoured only with a
+   * `plugin:<name>` requestType. Every other completion stays tool-less and
+   * is refused on such a CLI.
+   */
+  allowCliTools?: boolean;
   requestType?: string;
   accountingMetadata?: Record<string, unknown>;
   /**

@@ -1,7 +1,7 @@
 /**
  * Swarm Phase 2 — error taxonomy.
  *
- * First-class error classes staked by `.octipus/swarm-design.md` §Failure Modes.
+ * First-class error classes for the swarm's failure modes.
  * Each maps to a `FailoverReason` via `classifyError()` — see `mapSwarmError()`.
  *
  * These errors flow from `AgentWorker.run()` (budget/timeout pre-check) and
@@ -25,7 +25,8 @@ export class BudgetExceededError extends ClassifiedError {
     super({
       reason: FailoverReason.BUDGET_EXCEEDED,
       recovery: RecoveryAction.ABORT,
-      message: opts.projected===undefined ? `Token budget exceeded for ${opts.agentId} (${opts.used}/${opts.cap})` : `Next model call would exceed the token budget for ${opts.agentId}: ${opts.used} spent, ${opts.projected} projected, limit ${opts.cap}` ,
+      message: (opts.projected===undefined ? `Token budget exceeded for ${opts.agentId} (${opts.used}/${opts.cap})` : `Next model call would exceed the token budget for ${opts.agentId}: ${opts.used} spent, ${opts.projected} projected, limit ${opts.cap}`)
+        + '. This is a run or shared-turn budget, separate from the daily cap. An admin can change agent.maxTokenBudget in Settings → System → Advanced configuration → Agent and swarm.levelDefaults.*.tokens in Advanced configuration → Swarm. An explicit session, goal or pipeline cap may be lower; raise that cap before resuming. Saved worker caps may require a new turn or worker to use updated defaults.',
       metadata: { agentId: opts.agentId, used: opts.used, cap: opts.cap, ...(opts.projected===undefined?{}:{projected:opts.projected}) },
       cause: opts.cause,
     });

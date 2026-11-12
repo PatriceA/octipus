@@ -31,7 +31,7 @@ process.env.JWT_SECRET ??= `test-jwt-${rand(24)}`;
 process.env.SESSION_SECRET ??= `test-session-${rand(24)}`;
 process.env.LOG_LEVEL ??= 'error';
 
-const userId = '33333333-3333-3333-3333-333333333333';
+const userId = '33333333-3333-4333-8333-333333333333';
 
 /** One call the stubbed worker received. */
 interface WorkerCall {
@@ -1607,4 +1607,30 @@ test('a stage stopped by content policy gets a policy retry reason, never probe 
   expect(qa[1].input).toContain('blocked by Octipus policy: Blocked command detected: shutdown');
   expect(qa[1].input).not.toContain('A failed probe of your own');
   expect(qa[1].input).not.toContain('ran 0 commands');
+});
+
+test('revoking environment autonomy during a gate lookup cannot leave a durable approval', async () => {
+  const { getConfig } = await import('@/config');
+  const { workstationAutomationPreset } = await import('@/shared/execution-environment');
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  replies = { QA: [QA_PASS] };
+  const { pipelineId } = await run('gate revocation fixture');
+  const pipeline = (await pipelineRepository.findById(pipelineId))!;
+  const node = (await pipelineRepository.getNodes(pipelineId))[0];
+  const old = getConfig().security.executionEnvironments;
+  const profile = { ...workstationAutomationPreset(userId, 'gate-autonomy', [process.cwd()]), isDefault: true };
+  getConfig().security.executionEnvironments = [profile];
+  const find = sessionRepository.findById.bind(sessionRepository);
+  const lookup = vi.spyOn(sessionRepository, 'findById').mockImplementationOnce(async id => {
+    const session = await find(id);
+    getConfig().security.executionEnvironments[0].pipelineAutonomy = false;
+    return session;
+  });
+  try {
+    const context = { userId, sessionId, metadata: {}, trigger: 'user', attended: false } as AgentContext;
+    const gate = manager as unknown as { autoApproveNode(p: typeof pipeline, n: typeof node, what: string, caller: AgentContext): Promise<boolean> };
+    expect(await gate.autoApproveNode(pipeline, node, 'revoked gate', context)).toBe(false);
+    expect((await pipelineRepository.getNodes(pipelineId))[0].status).toBe(node.status);
+  } finally { lookup.mockRestore(); getConfig().security.executionEnvironments = old; }
 });

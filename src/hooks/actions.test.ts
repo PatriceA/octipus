@@ -5,19 +5,22 @@ import { executeAction, resolveHookSessionId } from './actions';
 import type { TriggerContext } from './triggers';
 
 // The role-heartbeat path: the worker spawn is observed, never run.
-const spawned = vi.hoisted(() => ({ calls: [] as Array<{ role: string; task: string; input: string; context: Record<string, unknown>; overrides: Record<string, unknown> }> }));
+const spawned = vi.hoisted(() => ({ abortOnSpawn: undefined as AbortController | undefined, calls: [] as Array<{ role: string; task: string; input: string; context: Record<string, unknown>; overrides: Record<string, unknown> }> }));
 vi.mock('@/core/agent', () => ({
   getAgentService: () => ({
     spawnWorker: async (role: string, task: string, input: string, context: Record<string, unknown>, overrides: Record<string, unknown>) => {
       spawned.calls.push({ role, task, input, context, overrides });
+      if (typeof overrides.onWorkerSpawned === 'function') overrides.onWorkerSpawned('heartbeat-worker');
+      spawned.abortOnSpawn?.abort(new Error('Heartbeat lease lost'));
       return 'worked the board';
     },
   }),
 }));
 // The direct (non-orchestrated) spawn: the options are observed, nothing runs.
-const direct = vi.hoisted(() => ({ spawns: [] as Array<Record<string, unknown>> }));
+const direct = vi.hoisted(() => ({ stops: [] as Array<{ id: string; options: unknown }>, spawns: [] as Array<Record<string, unknown>> }));
 vi.mock('@/core/agent-manager', () => ({
   getAgentManager: () => ({
+    stop: (id: string, options: unknown) => { direct.stops.push({ id, options }); return true; },
     spawn: async (options: Record<string, unknown>) => {
       direct.spawns.push(options);
       return { run: async () => '', getContext: () => ({ id: 'agent-1' }) };
@@ -27,7 +30,7 @@ vi.mock('@/core/agent-manager', () => ({
 vi.mock('@/core/agent/roles', () => ({ ROLE_CONFIGS: { coding: {}, general: {} } }));
 vi.mock('@/security/orgs', () => ({ getOrgWorkspaceManager: () => ({ ensureDefaultWorkspace: async () => ({ id: 'ws-1' }) }) }));
 // The hook session does not exist yet: the heartbeat runs in the default workspace.
-vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { findById: async () => null } }));
+vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { findById: async () => null, createAutomation: async (row: Record<string, unknown>) => row } }));
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -137,4 +140,32 @@ describe('executeSpawnAgent: direct spawn', () => {
     expect(direct.spawns).toHaveLength(1);
     expect(direct.spawns[0]).toMatchObject({ sessionId: 'hook-sess', workspaceId: 'ws-1' });
   });
+});
+
+describe('personal heartbeat cannot become a chat turn', () => {
+  test('refuses plain heartbeat even with orchestrated=true and a forged gate flag', async () => {
+    const before = direct.spawns.length;
+    const h = hook({ trigger: 'heartbeat', triggerConfig: {}, action: 'spawn_agent', actionConfig: { orchestrated: true } });
+    const c = ctx({ message: { content: 'Heartbeat check-in' }, heartbeatGatePassed: true } as never);
+    markHeartbeatGatePassed(c);
+    const result = await executeAction(h, c);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not as chat or General turns');
+    expect(spawned.calls).toHaveLength(0);
+    expect(direct.spawns).toHaveLength(before);
+  });
+});
+
+test('losing a heartbeat lease cancels the worker and its descendants', async () => {
+  const controller = new AbortController();
+  const c = ctx({ message: { content: 'Actual assigned work' } } as never);
+  markHeartbeatGatePassed(c, undefined, undefined, controller.signal);
+  spawned.abortOnSpawn = controller;
+  direct.stops.length = 0;
+  try {
+    const h = { ...hook({ trigger: 'heartbeat', action: 'spawn_agent', actionConfig: {}, sessionId: 'hook-sess' }), triggerConfig: { role: 'coding' } } as Hook;
+    const result = await executeAction(h, c);
+    expect(result).toMatchObject({ success: false, error: 'Heartbeat lease lost' });
+    expect(direct.stops).toEqual([{ id: 'heartbeat-worker', options: { cascade: true } }]);
+  } finally { spawned.abortOnSpawn = undefined; }
 });

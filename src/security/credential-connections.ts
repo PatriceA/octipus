@@ -35,7 +35,7 @@ export const connectionProfileSchema = z.object({
   stdio: z.array(z.object({ serverId: z.string(), command: z.string(), args: z.array(z.string()), envName: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), cwd: z.string(), env: z.record(z.string(), z.string()).default({}) }).strict()).default([]),
 }).strict();
 export type ConnectionProfile = z.infer<typeof connectionProfileSchema>;
-export interface ConnectionPrincipal { userId: string; workspaceId?: string | null; agentId?: string; space?: unknown }
+export interface ConnectionPrincipal { userId: string; workspaceId?: string | null; agentId?: string; space?: unknown; trigger?: import('@/core/types').AgentTrigger; metadata?: Record<string, unknown> | null }
 
 /** Operator-owned configuration, never read from the agent-writable workspace. No secret values. */
 export async function readConnectionProfiles(): Promise<ConnectionProfile[]> {

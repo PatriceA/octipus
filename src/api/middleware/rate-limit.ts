@@ -58,7 +58,7 @@ export function isPublicFormPath(path: string): boolean {
 // allowance. The route gets a fixed bounded bucket even before authentication;
 // authorization still runs normally and rejects invalid credentials.
 export function apiRateWorkload(path: string, method: string): 'api' | 'indexing' {
-  return method === 'POST' && /^\/api\/connectors\/cocoindex\/(document|query)\/embeddings$/.test(path) ? 'indexing' : 'api';
+  return method === 'POST' && /^\/api\/code-index\/cocoindex\/(document|query)\/embeddings$/.test(path) ? 'indexing' : 'api';
 }
 
 const USER_QUOTA_WINDOW_SECS = 60;
@@ -223,7 +223,7 @@ export const rateLimitMiddleware = new Elysia({ name: 'rate-limit' }).onBeforeHa
         set.status = 429;
         set.headers['Retry-After'] = String(result.retryAfter);
         return {
-          error: 'API request quota exceeded. Try again shortly.',
+          error: `API request quota reached (${max} requests per minute). Retry in ${result.retryAfter} seconds. An admin can change your per-user limit in Settings → System → Administration → Quotas & budgets (/admin/quotas), or the installation default api.rateLimitMax in Settings → System → Advanced configuration → API.`,
           retryAfter: result.retryAfter,
           quota: { kind: 'apiCallsPerMinute', max },
         };

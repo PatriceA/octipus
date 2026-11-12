@@ -10,8 +10,7 @@ import {
   releaseLease,
   renewLease,
 } from '@/core/docs/file-leases';
-import { connectSpaceConnector, disconnectSpaceConnector, listSpaceConnectors } from '@/core/spaces/connectors';
-import { bindBrowser } from '@/api/oauth-browser';
+import { getSpaceGithub, removeSpaceGithubToken, setSpaceGithubToken } from '@/core/spaces/github-token';
 import { publicLinkBase } from '@/core/public-url';
 import { acceptInvite, createInvite, listInvites, previewInvite, revokeInvite } from '@/core/spaces/invites';
 import { setSpaceFunding } from '@/core/spaces/funding';
@@ -345,30 +344,23 @@ export const spaceRoutes = new Elysia({ prefix: '/spaces' })
     detail: { tags: ['spaces'] },
   })
 
-  // ── Space connectors (§9.5) ─────────────────────────────────────────
-  // Every member sees which are connected; owners connect (an OAuth popup,
-  // or a pasted GitHub token) and disconnect. Values never leave the server.
+  // ── The space's GitHub token (§9.5) ─────────────────────────────────
+  // Every member sees whether there is one; owners paste and remove it.
+  // The value never leaves the server.
 
-  .get('/:id/connectors', (ctx) => handle(ctx, async (actor) => ({ connectors: await listSpaceConnectors(actor, ctx.params.id) })), {
+  .get('/:id/github', (ctx) => handle(ctx, (actor) => getSpaceGithub(actor, ctx.params.id)), {
     params: t.Object({ id: t.String() }),
     detail: { tags: ['spaces'] },
   })
 
-  // An OAuth connect is bound to this browser (a cookie the callback checks).
-  .post('/:id/connectors/:connectorId', (ctx) => handle(ctx, async (actor) => {
-    const browser = bindBrowser(ctx.request);
-    const result = await connectSpaceConnector(actor, ctx.params.id, ctx.params.connectorId, { token: ctx.body?.token, browserBinding: browser.binding });
-    if ('url' in result) ctx.set.headers['Set-Cookie'] = browser.setCookie;
-    return result;
-  }), {
-    params: t.Object({ id: t.String(), connectorId: t.String({ minLength: 1, maxLength: 64 }) }),
-    body: t.Optional(t.Object({ token: t.Optional(t.String({ minLength: 1, maxLength: 400 })) }, { additionalProperties: false })),
+  .put('/:id/github', (ctx) => handle(ctx, (actor) => setSpaceGithubToken(actor, ctx.params.id, ctx.body.token)), {
+    params: t.Object({ id: t.String() }),
+    body: t.Object({ token: t.String({ minLength: 1, maxLength: 400 }) }, { additionalProperties: false }),
     detail: { tags: ['spaces'] },
   })
 
-  .delete('/:id/connectors/:connectorId', (ctx) => handle(ctx, (actor) =>
-    disconnectSpaceConnector(actor, ctx.params.id, ctx.params.connectorId)), {
-    params: t.Object({ id: t.String(), connectorId: t.String({ minLength: 1, maxLength: 64 }) }),
+  .delete('/:id/github', (ctx) => handle(ctx, (actor) => removeSpaceGithubToken(actor, ctx.params.id)), {
+    params: t.Object({ id: t.String() }),
     detail: { tags: ['spaces'] },
   })
 

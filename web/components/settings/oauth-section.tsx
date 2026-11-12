@@ -150,7 +150,7 @@ function OAuthProviderCard({
           <button
             onClick={handleConnect}
             disabled={connecting}
-            className="px-3 py-1.5 text-xs bg-primary text-[#0e0e0e] cursor-pointer rounded-lg hover:bg-primary-container disabled:opacity-50 flex items-center gap-1"
+            className="px-3 py-1.5 text-xs bg-primary text-on-primary cursor-pointer rounded-lg hover:bg-primary-dim disabled:opacity-50 flex items-center gap-1"
           >
             {connecting ? (
               <Loader2 className="w-3 h-3 animate-spin" />

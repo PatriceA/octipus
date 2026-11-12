@@ -25,6 +25,7 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
 
 /** `file` → why its comparison is not an "act in this session" check. */
 const ALLOWED: Record<string, string> = {
+  'core/workspace-desk.ts': 'Owner-only home projection rejects admin-wide cross-session references; shared scopes return empty before these narrowing checks.',
   // The helper itself: a personal chat is its owner's.
   'core/rooms/access.ts': 'the helper',
   // The one scope resolver: a room returns before it (resolveRoomScope).

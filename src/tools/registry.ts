@@ -1,3 +1,4 @@
+import { configuredExecutionEnvironments } from '@/security/execution-environments';
 import type { ToolHandler } from '@/core/agent-worker';
 import type { ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
@@ -166,7 +167,7 @@ export class ToolRegistry {
       if (tool && this.initialized.has(toolId)) {
         // Use cached availability — only skip if the cache entry is fresh AND unavailable
         const cached = this.availabilityCache.get(toolId);
-        if (cached && !cached.result.available && Date.now() - cached.checkedAt < ToolRegistry.AVAILABILITY_TTL) {
+        if (cached && !cached.result.available && Date.now() - cached.checkedAt < ToolRegistry.AVAILABILITY_TTL && !(tool.getManifest().execution?.kind === 'environment' && configuredExecutionEnvironments().some(profile => profile.enabled))) {
           toolLogger.info({ toolId, cacheAge: Date.now() - cached.checkedAt, reason: cached.result.reason }, 'Skipping unavailable tool for agent');
           continue;
         }

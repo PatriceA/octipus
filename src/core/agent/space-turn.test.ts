@@ -17,8 +17,8 @@
  *   - personal memories are not loaded in a space turn (children included,
  *     run through `spawnWorker`), and the requester's profile stays out;
  *   - personal-only tools (global ones such as `update_skill` included) are
- *     neither offered nor run; writes through personal connections (OAuth
- *     connectors, MCP servers, the real browser) are refused, their reads
+ *     neither offered nor run; writes through personal connections (mail
+ *     and calendar, MCP servers, the real browser) are refused, their reads
  *     mark the session private; a coding agent's configuration (`.claude/`)
  *     is never written in a space;
  *   - I6: after a private read, a write into the space asks — the flow
@@ -200,7 +200,7 @@ beforeAll(async () => {
     await getPermissionManager().setPermission(id, 'mcp', '*', 'ALLOW');
   }
   // What the editor's stored permissions allow, so a refusal below is the space's, not the policy's.
-  for (const [tool, action] of [['filesystem', 'write'], ['filesystem', 'read'], ['connector', 'connector_call_tool'],
+  for (const [tool, action] of [['filesystem', 'write'], ['filesystem', 'read'],
     ['cli-native:Write', 'Write'], ['artifacts', 'write'], ['artifacts', 'read']] as const) {
     await getPermissionManager().setPermission(editorId, tool, action, 'ALLOW');
   }
@@ -661,13 +661,12 @@ describe('personal connections and agent configuration in a space', () => {
     const ctx = await spaceContext(editorId, sessionId, 'editor', { attended: true });
     const decide = (toolId: string, action: string, toolName?: string, args?: Record<string, unknown>) =>
       routeApprovalFor(ctx, { toolId, action, toolName, args }, { level: 'ALLOW' });
-    // (The space's own connectors — GitHub, Atlassian, `connector_*` — are
-    // not personal in a space: space-connectors.isolation.test.ts.)
+    // (The space's own GitHub is not personal in a space:
+    // space-github.isolation.test.ts.)
     const writes: Array<[string, string, string, Record<string, unknown>?]> = [
       ['browser-ext', 'navigate', 'navigate'],
       ['browser-ext', 'cookies', 'cookies'],
       ['mcp', 'tracker.create_issue', 'tracker.create_issue'],
-      ['gitlab', 'write', 'create_issue'],
       ['google-workspace', 'email_send', 'email_send'],
     ];
     for (const [toolId, action, toolName, args] of writes) {
@@ -699,13 +698,12 @@ describe('personal connections and agent configuration in a space', () => {
     const h = (name: string, toolId: string | undefined, extra: Partial<import('@/core/agent-base').ToolHandler> = {}) =>
       ({ name, toolId, description: '', parameters: { type: 'object' }, execute: async () => null, ...extra });
     const offered = withoutPersonalOnlyTools([
-      h('connector_list_tools', 'connector', { replaySafety: 'read_only' }), h('connector_call_tool', 'connector'),
       h('mcp_call_tool', 'mcp', { permissionAction: (a) => `${a.server_id}.${a.tool_name}` }), h('mcp_list_tools', 'mcp', { replaySafety: 'read_only' }),
       h('browser-ext__navigate', 'browser-ext', { permissionAction: 'navigate' }), h('browser-ext__extract', 'browser-ext', { permissionAction: 'extract' }),
       h('mcp_admin__register_mcp_server', 'mcp_admin', { permissionAction: 'configure' }), h('skill-distill__distill_skill', 'skill-distill', { permissionAction: 'distill' }),
       h('update_skill', undefined), h('spawn_child', undefined), h('acme_plugin__publish', 'acme_plugin'),
     ]).map((t) => t.name);
-    expect(offered.sort()).toEqual(['browser-ext__extract', 'connector_call_tool', 'connector_list_tools', 'mcp_call_tool', 'mcp_list_tools', 'spawn_child']);
+    expect(offered.sort()).toEqual(['browser-ext__extract', 'mcp_call_tool', 'mcp_list_tools', 'spawn_child']);
   });
 
   test("a coding agent's configuration is never written in a space: file tools and native CLI writes", async () => {
@@ -770,7 +768,7 @@ describe('I6 from a real read, on the tool-executor and CLI relay paths', () => 
       expect(remote).toHaveBeenCalledTimes(1);
 
       // Tool executor: the space write now needs a human, and this run cannot ask one.
-      const [note] = await exec.handleToolCalls([{ id: 'c3', name: 'notes__write_note', arguments: { title: 'Jira summary' } }]);
+      const [note] = await exec.handleToolCalls([{ id: 'c3', name: 'notes__write_note', arguments: { title: 'Tracker summary' } }]);
       expect(String(note.content)).toMatch(/Approval required: notes\.write_note writes data from your personal sources \(mcp:tracker\.search_issues\) into Launch room/);
       // CLI relay: the native write is refused with the same reason.
       expect((await cli(sessionId)).response.response).toMatchObject({ behavior: 'deny', message: expect.stringMatching(/writes data from your personal sources/) });

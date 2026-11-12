@@ -46,7 +46,7 @@ describe('limitRefusalOf', () => {
   test('spend budget: names the budget, limit, spend and reset time', () => {
     const r = limitRefusalOf(new SpendBudgetExceededError(reason))!;
     expect(r.text).toBe('Agents are paused: the daily spend budget for the "coder" role of $10.00/day is reached '
-      + '($12.35 spent this day). It resets 2026-09-29 00:00 UTC. Ask an admin to raise the limit.');
+      + '($12.35 spent this day). It resets 2026-09-29 00:00 UTC. Ask an admin to open Settings → System → Administration → Quotas & budgets (/admin/quotas) to raise the limit or clear the pause.');
     expect(r.refusal).toEqual({ code: 'SPEND_BUDGET_EXCEEDED', reason });
   });
 

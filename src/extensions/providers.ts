@@ -15,7 +15,7 @@
  * every request), no redirects followed, and the key only as the name of a
  * system vault secret in the extension's own namespace (`ext.<extension>.<name>`)
  * — never a raw key, an `env:` reference, another secret of the install
- * (a provider key, a connector token), or an auth header.
+ * (a provider key, a plugin secret), or an auth header.
  */
 import { randomUUID } from 'node:crypto';
 import type { ModelConfigEntry, CustomProviderConfig, ModelMetadata } from '@/db/schema/models';
@@ -128,7 +128,7 @@ export function buildExtensionProviderRows(extension: string, def: ExtensionProv
   const raw = def as unknown as Record<string, unknown>;
   if ('apiKey' in raw || 'key' in raw || 'token' in raw) fail(extension, 'a raw key is not accepted; store it in the vault and name it in apiKeySecret');
   // Only the extension's own namespace: naming any system secret would let it
-  // send the install's provider keys or connector tokens to its endpoint, past
+  // send the install's provider keys or plugin secrets to its endpoint, past
   // the secret's allowedTools / allowedAgents (getByName does not check them).
   const secret = def.apiKeySecret;
   const prefix = extensionSecretPrefix(extension);

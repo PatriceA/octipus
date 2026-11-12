@@ -1,7 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest';
 const token = vi.hoisted(() => vi.fn());
 vi.mock('@/security/oauth', () => ({ getOAuthManager: () => ({ getValidToken: token }) }));
-import { calendarWriteBody, writeCalendarEvent } from './manage';
+import { calendarEventAttendees, calendarWriteBody, writeCalendarEvent } from './manage';
 const input = { title: 'Review', start: '2026-11-04T09:00:00+01:00', end: '2026-11-04T10:00:00+01:00', allDay: false, location: '' };
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 test('timed events use absolute times and edits leave description and attendees untouched', () => {
@@ -20,6 +20,26 @@ test.each([
   { ...input, allDay: true, start: '2026-02-30', end: '2026-03-04' },
 ])('bad event ranges fail before a token lookup', async value => {
   await expect(writeCalendarEvent('alice', 'google', value)).rejects.toThrow(); expect(token).not.toHaveBeenCalled();
+});
+test('an event\'s attendees are counted with the caller\'s token, its id one path segment', async () => {
+  token.mockResolvedValue('caller-secret');
+  const request = vi.fn(async () => new Response('{"attendees":[{"email":"a@x.de"},{"email":"b@x.de"}]}'));
+  vi.stubGlobal('fetch', request);
+  expect(await calendarEventAttendees('alice', 'google', 'evt/1')).toBe(2);
+  expect(request).toHaveBeenCalledWith('https://www.googleapis.com/calendar/v3/calendars/primary/events/evt%2F1?fields=attendees', expect.objectContaining({ headers: { Authorization: 'Bearer caller-secret' } }));
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{}')));
+  expect(await calendarEventAttendees('alice', 'microsoft', 'evt')).toBe(0);
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 404 })));
+  await expect(calendarEventAttendees('alice', 'google', 'evt')).rejects.toThrow('HTTP 404');
+});
+test('a write answers the event id the provider names', async () => {
+  token.mockResolvedValue('caller-secret');
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{"id":"evt-42","summary":"Review"}')));
+  expect(await writeCalendarEvent('alice', 'google', input)).toEqual({ id: 'evt-42' });
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('not json')));
+  expect(await writeCalendarEvent('alice', 'google', input, 'known')).toEqual({ id: 'known' });
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 403 })));
+  await expect(writeCalendarEvent('alice', 'google', input)).rejects.toThrow('HTTP 403');
 });
 test('provider writes use only the caller token and encode event IDs as one segment', async () => {
   token.mockResolvedValue('caller-secret'); const request = vi.fn(async () => new Response('{}')); vi.stubGlobal('fetch', request);

@@ -230,7 +230,9 @@ symbol index); no import-graph edges between files.
    connector OAuth path — dynamic client registration, token storage, refresh
    and the HTTP routes were all written around the literal string
    `atlassian` in seven places. They are now definition-driven, so a third
-   connector is a definition file and one line.
+   connector is a definition file and one line. *Later removed:* the
+   Atlassian tool and both connector definitions are gone (see the
+   CHANGELOG); the definition-driven connector framework stays.
 
 4. **Channel read.** `messaging.channel_history` and `channel_search`, behind
    a new `read` permission (ALLOW). Slack reads history, threads and replies

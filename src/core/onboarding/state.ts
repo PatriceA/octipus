@@ -108,17 +108,6 @@ async function workspaces(userId: string): Promise<OnboardingState['workspaces']
   ];
 }
 
-async function connectors(userId: string): Promise<OnboardingState['connectors']> {
-  const { ALL_CONNECTORS } = await import('@/connectors');
-  const { connectorVaultKeys } = await import('@/security/oauth');
-  const { getVault } = await import('@/security/vault');
-  return Promise.all(ALL_CONNECTORS.map(async (c) => ({
-    id: c.id,
-    name: c.name,
-    connected: Boolean(await getVault().getByName(userId, connectorVaultKeys(c.id).accessToken).catch(() => null)),
-  })));
-}
-
 async function oauthClients(): Promise<OnboardingState['oauthClients']> {
   const { OAUTH_VAULT_NAMES } = await import('@/security/oauth');
   const { getVault } = await import('@/security/vault');
@@ -158,7 +147,7 @@ export async function readOnboardingState(userId: string, isAdmin: boolean): Pro
   const config = getConfig();
   const ollamaUrl = config.ollama?.url || 'http://localhost:11434';
   const [
-    setupComplete, models, tools, ollama, spaces, mailbox, clients, connected, chats, prefs, tasksWrite, messagingSend,
+    setupComplete, models, tools, ollama, spaces, mailbox, clients, chats, prefs, tasksWrite, messagingSend,
     standing, roleAgents, templates, mcpServers, progress,
   ] = await Promise.all([
     soft('setup', false, async () => Boolean(await getSettingsService().get('_system.setupComplete'))),
@@ -170,7 +159,6 @@ export async function readOnboardingState(userId: string, isAdmin: boolean): Pro
     soft('workspaces', [], () => workspaces(userId)),
     soft('mailbox', null, async () => (await import('@/core/email/providers')).detectProvider(userId)),
     soft('oauth', { google: false, microsoft: false }, oauthClients),
-    soft('connectors', [], () => connectors(userId)),
     soft('channels', { configured: [], linked: [] }, () => channels(userId)),
     soft('heartbeat', null, () => getHeartbeatPrefs(userId)),
     soft('permissions', 'ASK', () => level(userId, 'tasks', 'write')),
@@ -191,7 +179,6 @@ export async function readOnboardingState(userId: string, isAdmin: boolean): Pro
     workspaces: spaces,
     mailbox,
     oauthClients: clients,
-    connectors: connected,
     channels: chats,
     heartbeat: {
       serverEnabled: Boolean(config.heartbeat?.enabled),

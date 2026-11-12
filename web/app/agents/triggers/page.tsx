@@ -37,8 +37,8 @@ function hhmm(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function reasonText(e: TriggerEvent): string {
-  if (e.kind === 'ran') return e.readyTasks ? `Started a turn for ${e.readyTasks} ready to-do${e.readyTasks === 1 ? '' : 's'}` : 'Started a turn';
+function reasonText(e: TriggerEvent, heartbeat = false): string {
+  if (e.kind === 'ran') return heartbeat ? e.readyTasks ? `Found ${e.readyTasks} ready to-do${e.readyTasks === 1 ? '' : 's'}` : 'Processed new findings' : 'Ran';
   if (e.kind === 'failed') return e.reason ? `Failed: ${e.reason}` : 'Failed';
   const label = e.reason && e.reason in HEARTBEAT_SKIP_LABEL ? HEARTBEAT_SKIP_LABEL[e.reason as HeartbeatSkipReasonName] : (e.reason ?? 'Skipped');
   return e.reason === 'tasks_permission_required' && e.readyTasks ? `${label} (${e.readyTasks} ready)` : label;
@@ -73,7 +73,7 @@ export default function TriggersPage() {
     <div className="space-y-6">
       <PageHeader
         title="Triggers"
-        description="Everything that starts an agent without you typing: heartbeats, schedules, webhooks, event hooks, session monitors and Companion goals. Each shows what it did today, and a heartbeat says why it did not run."
+        description="Background checks and work that starts without you typing: heartbeats, schedules, webhooks, event hooks, session monitors and Companion goals. Each shows what it did today, and a heartbeat says why it did not run."
         actions={<Link href="/hooks" className="rounded-lg border border-outline-variant px-3 py-2 text-sm hover:bg-surface-container">Edit in Hooks & schedules</Link>}
       />
       {unavailable && <div role="status" className="flex items-center gap-2 text-sm text-warning">
@@ -113,7 +113,7 @@ export default function TriggersPage() {
                 {explained.events.slice(-8).reverse().map((e) => <li key={e.at + e.kind} className="flex gap-3 px-4 py-2.5 text-sm">
                   <span className="w-20 shrink-0 whitespace-nowrap font-mono text-xs text-on-surface-variant">{hhmm(e.at)}</span>
                   <span className={cn('h-5 shrink-0 whitespace-nowrap rounded-xs border px-1.5 text-[11px] font-semibold', e.kind === 'ran' ? 'border-primary/50 text-primary' : e.kind === 'failed' ? 'border-error/50 text-error' : 'border-outline-variant text-on-surface-variant')}>{e.kind}</span>
-                  <span className="min-w-0">{reasonText(e)}</span>
+                  <span className="min-w-0">{reasonText(e, true)}</span>
                 </li>)}
               </ol>}
           </section>
@@ -163,7 +163,7 @@ function Funnel({ funnel }: { funnel: TriggersResponse['funnel'] }) {
     <p className="text-xs text-on-surface-variant">The gate runs its cheapest checks first; only a check that finds work starts a model call.</p>
     <div className="flex items-center gap-3 text-sm font-semibold"><span className="w-60 shrink-0">Checks</span>{bar(funnel.checks, 'bg-outline-variant')}<span className="w-10 text-right font-mono">{funnel.checks}</span></div>
     {rows.map((r) => <div key={r} className="flex items-center gap-3 text-sm text-on-surface-variant"><span className="w-60 shrink-0">− {HEARTBEAT_SKIP_LABEL[r]}</span>{bar(funnel.skipped[r] ?? 0, r === 'in_flight' || r === 'tasks_permission_required' ? 'bg-warning' : 'bg-outline')}<span className="w-10 text-right font-mono">{funnel.skipped[r]}</span></div>)}
-    <div className="flex items-center gap-3 text-sm font-semibold text-primary"><span className="w-60 shrink-0">= Started a turn</span>{bar(funnel.ran, 'bg-primary')}<span className="w-10 text-right font-mono">{funnel.ran}</span></div>
+    <div className="flex items-center gap-3 text-sm font-semibold text-primary"><span className="w-60 shrink-0">= Handled pending work</span>{bar(funnel.ran, 'bg-primary')}<span className="w-10 text-right font-mono">{funnel.ran}</span></div>
     <p className="border-t border-outline-variant/40 pt-2 text-xs text-on-surface-variant">{skippedTotal} skipped check{skippedTotal === 1 ? '' : 's'} used no model tokens.</p>
   </div>;
 }
@@ -182,7 +182,7 @@ function Timeline({ data }: { data: TriggersResponse }) {
     <div className="flex flex-wrap items-baseline justify-between gap-2">
       <h2 id="day-h" className="text-base font-semibold">Today</h2>
       <div className="flex flex-wrap gap-4 text-[11px] text-on-surface-variant">
-        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-primary" />started an agent</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-primary" />handled pending work</span>
         <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-error" />failed</span>
         <span className="inline-flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full border border-on-surface-variant" />checked, skipped</span>
         <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full border border-dashed border-on-surface" />next</span>
@@ -202,7 +202,7 @@ function Timeline({ data }: { data: TriggersResponse }) {
           <div className="relative h-6 flex-1" role="img" aria-label={`${t.name}: ${t.events.filter((e) => e.kind === 'ran').length} ran, ${t.events.filter((e) => e.kind === 'skipped').length} skipped, ${t.events.filter((e) => e.kind === 'failed').length} failed today`}>
             <span className="absolute inset-x-0 top-3 h-px bg-outline-variant" />
             <span className="absolute -top-0.5 bottom-[-2px] w-px bg-primary" style={{ left: `${nowPos}%` }} />
-            {t.events.map((e) => <span key={e.at + e.kind} title={`${hhmm(e.at)} · ${reasonText(e)}`} className={cn('absolute', marker[e.kind])} style={{ left: `${pos(e.at)}%` }} />)}
+            {t.events.map((e) => <span key={e.at + e.kind} title={`${hhmm(e.at)} · ${reasonText(e, t.kind === 'heartbeat')}`} className={cn('absolute', marker[e.kind])} style={{ left: `${pos(e.at)}%` }} />)}
             {t.enabled && t.nextRunAt && pos(t.nextRunAt) < 100 && <span title={`next ${hhmm(t.nextRunAt)}`} className="absolute top-1.5 -ml-1.5 h-3 w-3 rounded-full border border-dashed border-on-surface" style={{ left: `${pos(t.nextRunAt)}%` }} />}
           </div>
         </div>)}

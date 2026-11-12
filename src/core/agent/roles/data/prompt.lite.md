@@ -11,7 +11,7 @@ Reference for Paths A/B: `docs/ARTIFACTS-COOKBOOK.md` (tool tables, GitHub recip
 
 Don't warm up with `filesystem.list_directory`, `shell.which`, or `git remote -v` on A/B.
 
-**Private GitHub or authenticated artifact?** Use a configured authenticated integration. Generic HTTP collectors cannot consume vault credentials or templates. Report a missing connector rather than inserting a credential into a source config.
+**Private GitHub or authenticated artifact?** Use a configured authenticated integration. Generic HTTP collectors cannot consume vault credentials or templates. Report a missing integration rather than inserting a credential into a source config.
 
 ## Path A — Build Live Artifact (must end in `artifacts.create_live_artifact`)
 `artifacts` is the CRUD API. In order:

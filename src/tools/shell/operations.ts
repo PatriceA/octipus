@@ -41,6 +41,12 @@ export interface ShellOperations {
 
 /** How a run's environment and sandbox differ from the default (a space run's tool home, coworking §9.5). */
 export interface ShellEnvOptions {
+  /** Owner-resolved environment, not a model-supplied option. */
+  sandboxMode?: import('@/security/shell-sandbox').SandboxMode;
+  inheritHostIdentity?: boolean;
+  environmentId?: string;
+  /** Trusted transport input; avoids putting remote file contents in argv. */
+  input?: string;
   /** Server-side host-services capability; not an agent-supplied tool argument. */
   allowHostUsb?: boolean;
   /** Approved directories for cwd, including a normalized leading `cd`. */

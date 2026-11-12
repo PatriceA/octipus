@@ -1,0 +1,27 @@
+{
+  "name": "host-plugin",
+  "version": "1.0.0",
+  "apiVersion": "1.0.0",
+  "title": "Host API (test fixture)",
+  "description": "A plugin package for the tests of pages and the host API: calls back into the host with its per-call token.",
+  "server": { "command": "node", "args": ["server.mjs"] },
+  "tools": {
+    "whoami": { "effect": "read", "description": "What the call's host token may do" },
+    "list_notes": { "effect": "read", "description": "List the user's notes through the host API" },
+    "read_doc": { "effect": "read", "description": "Read one document through the host API" },
+    "write_from_read": { "effect": "read", "description": "Try to create a note from a read tool" },
+    "probe": { "effect": "read", "description": "Send one raw request through the egress proxy" },
+    "leak_token": { "effect": "read", "description": "Return the call's token (to test it dies with the call)" },
+    "make_note": { "effect": "write", "description": "Create a note through the host API" },
+    "make_task": { "effect": "write", "description": "Create a task through the host API" },
+    "notify_me": { "effect": "write", "description": "Notify the user through the host API" },
+    "send_letter": { "effect": "external", "description": "Pretend to send a letter" }
+  },
+  "host": ["notes:read", "notes:write", "tasks:write", "documents:read", "notify"],
+  "maxProtection": 2,
+  "ui": {
+    "pages": [
+      { "path": "dashboard", "title": "Host dashboard", "icon": "layout-dashboard", "entry": "index.html" }
+    ]
+  }
+}

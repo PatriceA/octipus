@@ -12,7 +12,7 @@ The design and its reasons are in [plans/modules.md](plans/modules.md).
 
 Chat, sessions, agents, roles, pipelines, hooks and schedules; tasks and
 notifications; notes, documents, knowledge and memory; models, topics, MCP
-servers, connectors and plugin packages; the vault, permissions, users and
+servers and plugin packages; the vault, permissions, users and
 spaces; settings, skills, the tools page and evaluations; backups.
 
 ## The modules
@@ -23,14 +23,31 @@ spaces; settings, skills, the tools page and evaluations; backups.
 | `mail` | Mailboxes over IMAP / POP3 and sending over SMTP ([MAIL.md](MAIL.md)) |
 | `scan-folders` | Folders whose new files are filed into the documents ([SCAN-FOLDERS.md](SCAN-FOLDERS.md)) |
 | `protection` | Protection levels 1-4 ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md)) |
-| `research` | Research jobs: a question researched in the background, the report saved to the documents |
-| `reader` | The reader: a page in a clean view, turned into notes and tasks |
 | `inbox` | The Gmail / Outlook inbox of a connected account: triage, drafts, tasks from mail, the email processor tool and the heartbeat's inbox watch |
 | `artifacts` | Live artifacts: hosted dashboards, tables, feeds and pages, their refreshes, and saving a chat answer as one ([ARTIFACTS.md](ARTIFACTS.md)) |
 | `people` | Profiles of people, pets and organisations, the profiles tool, and the profile context agents get (the persona stays core) |
 | `voice` | Speech in the chat and the mobile app, the voice sockets, and phone calls ([VOICE.md](VOICE.md)) |
 | `channels` | Telegram, Slack, Teams and WhatsApp, group channels, linking a chat, and the messaging tool ([CHANNELS.md](CHANNELS.md)); the in-app chat and notifications stay core |
 | `recall` | Context hooks: knowledge passages and the notes index handed to agents as they start ([CONTEXT-HOOKS.md](CONTEXT-HOOKS.md)) |
+
+## Modules that move to plugins
+
+A module can move out of the core into a plugin package
+([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md), plan:
+[plans/plugins-everything.md](plans/plugins-everything.md)).
+
+| Module | Now | Removed in |
+|---|---|---|
+| `reader` | The example plugin `plugins/reader` ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#bundled-plugins)): the *Reader* page under Plugins, and the agent tools `read_url`, `reader_action`, `save_note`, `create_tasks`. An admin installs it under Admin → Plugin packages → Bundled. It is an example, not a product feature: no use case brings it. | 0.6 |
+| `research` | The example plugin `plugins/research` ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#bundled-plugins)): the *Research* page under Plugins, and the agent tools `start_research`, `research_status`, `save_report`. A question is researched in the background by the host's own research agent, as the user (host scope `agent:run`), and the report saved to the documents when the user asks (`documents:write`). An admin installs it under Admin → Plugin packages → Bundled. It is an example, not a product feature: no use case brings it. | 0.6 |
+
+The core modules, their routes (`/api/reader`, `/api/research`) and their
+pages (`/reader`, `/research`) are gone. An install whose `modules.enabled`
+still lists `reader` or `research` (migration 0152 put them there) keeps the
+ids; they are ignored, like any id this build does not declare. Tasks the
+core modules made keep their `source` (`reader`, `research`), and research
+runs they left in `background_jobs` (`kind: research`) still show in the
+away digest until the retention removes them; their reports are documents.
 
 ## What "off" means
 
@@ -65,7 +82,7 @@ effect at once, without a restart.
 - Turning a module off deletes nothing. Its data stays, and turning it on
   again brings everything back as it was.
 
-A job already running when its module is switched off (a research run) finishes; nothing new starts. An install from before modules starts with every module on. A new install
+A job already running when its module is switched off finishes; nothing new starts. An install from before modules starts with every module on. A new install
 starts with the core only, until the onboarding or an admin turns modules on.
 
 `GET /api/modules` reports every module and whether it is on.

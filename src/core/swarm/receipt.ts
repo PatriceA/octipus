@@ -2,8 +2,7 @@
  * Swarm receipts — a deterministic, framework-built audit of what a child
  * swarm node's tool calls *actually did*.
  *
- * Inspired by CodeWhale's "receipt" concept (see
- * `.octipus/codewhale-borrowed-ideas.md`): a receipt is assembled from real
+ * Inspired by CodeWhale's "receipt" concept: a receipt is assembled from real
  * execution records (the `ToolExecutor`'s side-effect counters), NEVER from
  * the child model's prose summary. This is house-rule #1 (fail loud) turned
  * into an artifact — a parent can detect "child claims success but wrote no

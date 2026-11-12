@@ -1,135 +1,26 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, type Mock, vi } from 'vitest';
-import * as embeddings from '@/core/rag/embeddings';
-import type { EmbeddingService, SearchResult } from '@/core/rag/embeddings';
-import './docs'; // self-registers the /docs command
+import { afterEach, expect, test, vi } from 'vitest';
+import { productDocs } from '@/core/product-docs';
+import './docs';
 import { getCommand } from './registry';
-
-/**
- * Tests for the `/docs` command. The command resolves the embedding service via
- * `getEmbeddingService()` and calls `searchGlobalDocs`, which hard-scopes the
- * query to the GLOBAL product-docs corpus IN SQL (`user_id IS NULL AND
- * metadata->>'source' = 'octipus-docs'`). That cross-tenant exclusion is proven
- * end-to-end against a real PGlite DB in `embeddings-scope.test.ts`; here we
- * assert the command delegates to that scoped method (with a sane limit) and
- * renders whatever it returns rather than re-filtering in JS.
- *
- * We own the service at the `getEmbeddingService` layer (a spyOn RESTORED in
- * afterAll) rather than via a prototype spy, so the command gets exactly the
- * service this test injects.
- */
-
-let docsSpy: Mock<EmbeddingService['searchGlobalDocs']>;
-let getServiceSpy: Mock<typeof embeddings.getEmbeddingService>;
-
-beforeAll(() => {
-  docsSpy = vi.fn(async () => [] as SearchResult[]);
-  getServiceSpy = vi.spyOn(embeddings, 'getEmbeddingService').mockReturnValue({
-    searchGlobalDocs: docsSpy,
-  } as unknown as EmbeddingService);
+afterEach(() => vi.restoreAllMocks());
+const ctx = (args: string) => ({ args, userId: 'user', sessionId: 'session' });
+test('empty /docs explains usage without loading the manual', async () => {
+  const search = vi.spyOn(productDocs, 'search');
+  expect((await getCommand('docs')!.execute(ctx(' '))).response).toContain('Usage');
+  expect(search).not.toHaveBeenCalled();
 });
-afterAll(() => getServiceSpy.mockRestore());
-
-function ctx(args: string) {
-  return { sessionId: 'sess-1', userId: 'user-1', args };
-}
-
-function hit(over: Partial<SearchResult>): SearchResult {
-  return {
-    id: 'id',
-    content: 'content',
-    abstract: null,
-    purpose: 'document',
-    sourceId: '/app/docs/X.md',
-    similarity: 0.5,
-    metadata: { source: 'octipus-docs' },
-    ...over,
-  };
-}
-
-beforeEach(() => {
-  docsSpy.mockReset();
-  docsSpy.mockResolvedValue([]);
-  // Re-assert the injection each test so tests stay order-independent.
-  getServiceSpy.mockReturnValue({ searchGlobalDocs: docsSpy } as unknown as EmbeddingService);
+test('/docs formats local sources and line numbers without a knowledge service', async () => {
+  const search = vi.spyOn(productDocs, 'search').mockResolvedValue([{ file: 'CHANNELS.md', title: 'Channels', heading: 'Telegram', line: 42, excerpt: 'Create a bot with BotFather.' }]);
+  const result = await getCommand('docs')!.execute(ctx('Telegram setup'));
+  expect(search).toHaveBeenCalledWith('Telegram setup', 8);
+  expect(result.response).toContain('docs/CHANNELS.md:42');
+  expect(result.response).toContain('BotFather');
 });
-afterEach(() => docsSpy.mockReset());
-
-describe('/docs command', () => {
-  test('is registered and listed', () => {
-    const cmd = getCommand('docs');
-    expect(cmd).toBeDefined();
-    expect(cmd!.description.toLowerCase()).toContain('documentation');
-  });
-
-  test('prompts for usage when called with no query (no search)', async () => {
-    const cmd = getCommand('docs')!;
-    const res = await cmd.execute(ctx('   '));
-    expect(res.response).toContain('Usage');
-    expect(docsSpy).not.toHaveBeenCalled();
-  });
-
-  test('searches the GLOBAL docs corpus and formats the hits', async () => {
-    docsSpy.mockResolvedValue([
-      hit({
-        sourceId: '/app/docs/CHANNELS.md',
-        abstract: 'Set up Telegram by creating a bot with BotFather.',
-        sectionPath: ['Channels', 'Telegram'],
-        metadata: { source: 'octipus-docs', filePath: '/app/docs/CHANNELS.md' },
-      }),
-    ]);
-
-    const cmd = getCommand('docs')!;
-    const res = await cmd.execute(ctx('how do I set up telegram'));
-
-    expect(docsSpy).toHaveBeenCalledTimes(1);
-    // Delegates to the SQL-scoped method with a sane limit (no over-fetch×3).
-    const [calledQuery, calledLimit] = docsSpy.mock.calls[0];
-    expect(calledQuery).toBe('how do I set up telegram');
-    expect(calledLimit).toBe(8);
-
-    expect(res.response).toContain('Channels › Telegram');
-    expect(res.response).toContain('BotFather');
-    expect(res.response).toContain('CHANNELS.md');
-  });
-
-  test('trusts the SQL scope — renders whatever searchGlobalDocs returns without re-filtering', async () => {
-    // searchGlobalDocs already excludes private + non-docs rows in SQL (proven
-    // in embeddings-scope.test.ts). The command must NOT re-filter on
-    // metadata.source: anything the scoped method returns is, by construction,
-    // a global octipus-docs row and should render.
-    docsSpy.mockResolvedValue([
-      hit({
-        sourceId: '/app/docs/PROVIDERS.md',
-        abstract: 'Add a model provider in the Models page.',
-        metadata: { source: 'octipus-docs', filePath: '/app/docs/PROVIDERS.md' },
-      }),
-    ]);
-    const cmd = getCommand('docs')!;
-    const res = await cmd.execute(ctx('add a model provider'));
-    expect(res.response).toContain('PROVIDERS.md');
-    expect(res.response).toContain('model provider');
-  });
-
-  test('does not over-fetch then post-filter: passes RESULT_LIMIT straight through', async () => {
-    docsSpy.mockResolvedValue([]);
-    const cmd = getCommand('docs')!;
-    await cmd.execute(ctx('anything'));
-    // The old impl asked for RESULT_LIMIT*3 (=24) then sliced; the scoped impl
-    // asks for exactly RESULT_LIMIT because the SQL already filters the corpus.
-    expect(docsSpy.mock.calls[0][1]).toBe(8);
-  });
-
-  test('reports no-match when the scoped search returns nothing', async () => {
-    docsSpy.mockResolvedValue([]);
-    const cmd = getCommand('docs')!;
-    const res = await cmd.execute(ctx('quantum teleportation'));
-    expect(res.response.toLowerCase()).toContain('no product documentation matches');
-  });
-
-  test('falls back gracefully when the KB throws', async () => {
-    docsSpy.mockRejectedValue(new Error('KB not ready'));
-    const cmd = getCommand('docs')!;
-    const res = await cmd.execute(ctx('anything'));
-    expect(res.response.toLowerCase()).toContain('unavailable');
-  });
+test('no match suggests keywords rather than waiting for embedding', async () => {
+  vi.spyOn(productDocs, 'search').mockResolvedValue([]);
+  expect((await getCommand('docs')!.execute(ctx('unknown'))).response).toContain('specific feature or setting names');
+});
+test('missing docs explains the install prerequisite', async () => {
+  vi.spyOn(productDocs, 'search').mockRejectedValue(new Error('missing'));
+  expect((await getCommand('docs')!.execute(ctx('setup'))).response).toContain('no embedding model is needed');
 });

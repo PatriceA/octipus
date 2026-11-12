@@ -18,7 +18,7 @@ describe('classifyFlow', () => {
     [{ toolId: 'github', action: 'read' }, { taints: ['suspicious'] }],
     [{ toolId: 'git', action: 'push' }, { taints: [], egress: 'write' }],
     [{ toolId: 'git', action: 'read' }, { taints: [] }],
-    [{ toolId: 'mcp', action: 'linear.list_issues' }, { taints: ['suspicious'] }],
+    [{ toolId: 'mcp', action: 'tracker.list_issues' }, { taints: ['suspicious'] }],
     [{ toolId: 'mcp', action: 'slack.post_message' }, { taints: ['suspicious'], egress: 'write' }],
     [{ toolId: 'mcp', action: 'mcp_list_tools' }, { taints: [] }],
     [{ toolId: 'filesystem', action: 'read', args: { path: '/app/.env' } }, { taints: ['secret'] }],

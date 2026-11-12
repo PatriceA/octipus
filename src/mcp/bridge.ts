@@ -11,11 +11,13 @@ import type { RoutedScriptTool } from '@/core/agent-base';
 import type { ToolHandler } from '@/core/agent-worker';
 import type { AgentContext, MCPServer, MCPTool } from '@/core/types';
 import { exposureConfigError, type McpExposure, type McpExposureConfig, resolveToolExposure } from '@/shared/mcp-exposure';
+import { COCOINDEX_MANAGED_ENV } from '@/shared/cocoindex';
 import { coreLogger } from '@/utils/logger';
 import { getMcpCircuitBreaker } from './circuit-breaker';
 import { mcpToolKey, mcpToolNames } from './exposure';
+import { pluginServerListing, pluginToolCatalog } from './plugin-catalog';
 import { configuredExposures, renderServersSection, type ServerListing } from './servers-section';
-import { type MCPCapabilities, MCPMethods, type MCPPrompt, MCPProtocol, type MCPResource, type MCPToolDefinition } from './protocol';
+import { MCP_PROTOCOL_VERSION, type MCPCapabilities, MCPMethods, type MCPPrompt, MCPProtocol, type MCPResource, type MCPToolDefinition } from './protocol';
 import type { MCPTransport } from './transports/interface';
 import { SSETransport } from './transports/sse';
 import { StdioTransport } from './transports/stdio';
@@ -24,6 +26,10 @@ import { fileAt, writeFileAt } from '@/utils/fs-file';
 import { mcpResultLimit } from '@/core/tool-output-spill';
 import { applyServerEdit, configView, mergeServerConfigs } from './config-store';
 import type { PluginToolEffect } from '@/shared/plugin-package';
+
+/** What a call to a plugin server carries in `_meta`, issued per call and released when it returns. */
+export type PluginCallMeta = (server: MCPServer, toolName: string, context: AgentContext) =>
+  Promise<{ meta: Record<string, unknown>; release: () => void } | null>;
 
 /** The id prefix of a plugin package's MCP server: `plugin-<package name>`. */
 export const PLUGIN_SERVER_PREFIX = 'plugin-';
@@ -98,6 +104,12 @@ export class MCPBridge extends EventEmitter {
    * null. Set by the plugin service (`setPluginStartGuard`).
    */
   private pluginStartGuard: ((server: MCPServer) => Promise<string | null>) | null = null;
+  /**
+   * The `_meta` of a call to a plugin server (its host API token,
+   * docs/PLUGIN-PACKAGES.md#host-api) and how to release it once the call
+   * returns, or null. Set by the plugin service (`setPluginCallMeta`).
+   */
+  private pluginCallMeta: PluginCallMeta | null = null;
   /** The plugin sync in flight; the next one waits for it. */
   private pluginSync: Promise<void> = Promise.resolve();
   // Auto-reconnect state for unexpected transport closes (server crash / OS kill).
@@ -301,8 +313,8 @@ export class MCPBridge extends EventEmitter {
     };
 
     try {
-      if (server.id === 'cocoindex-code' && server.env?.OCTIPUS_MANAGED_CONNECTOR === 'cocoindex-code' && server.env?.OCTIPUS_COCOINDEX_EMBEDDING_SOURCE === 'octipus') {
-        const { getCocoIndexService } = await import('@/connectors/cocoindex');
+      if (server.id === 'cocoindex-code' && server.env?.[COCOINDEX_MANAGED_ENV] === 'cocoindex-code' && server.env?.OCTIPUS_COCOINDEX_EMBEDDING_SOURCE === 'octipus') {
+        const { getCocoIndexService } = await import('@/core/code-index/cocoindex');
         await getCocoIndexService().refreshAuthentication(server);
       }
       // Wire transport messages to protocol
@@ -359,7 +371,7 @@ export class MCPBridge extends EventEmitter {
 
       // Initialize the connection
       const initResult = await protocol.sendRequest(send, MCPMethods.Initialize, {
-        protocolVersion: '2024-11-05',
+        protocolVersion: MCP_PROTOCOL_VERSION,
         capabilities: {
           tools: {},
           resources: {},
@@ -372,7 +384,10 @@ export class MCPBridge extends EventEmitter {
       }) as { capabilities: MCPCapabilities; instructions?: unknown };
 
       connection.capabilities = initResult.capabilities || {};
-      if (typeof initResult.instructions === 'string') connection.instructions = initResult.instructions;
+      // A plugin server's own words never reach a model (src/mcp/plugin-catalog.ts):
+      // no instructions, resources or prompts; its tools are the manifest's.
+      if (server.plugin) connection.capabilities = { ...(connection.capabilities.tools ? { tools: connection.capabilities.tools } : {}) };
+      else if (typeof initResult.instructions === 'string') connection.instructions = initResult.instructions;
 
       // Send initialized notification
       protocol.sendNotification(send, MCPMethods.Initialized);
@@ -382,7 +397,7 @@ export class MCPBridge extends EventEmitter {
       // only the first page silently hides the rest (a 55-tool server showed
       // up as 26). Follow the cursor to the end.
       if (connection.capabilities.tools) {
-        connection.tools = await drainPages<MCPToolDefinition>(send, protocol, MCPMethods.ListTools, 'tools');
+        connection.tools = catalogOf(server, await drainPages<MCPToolDefinition>(send, protocol, MCPMethods.ListTools, 'tools'));
       }
 
       // Fetch available resources
@@ -411,7 +426,9 @@ export class MCPBridge extends EventEmitter {
         if (message.id !== undefined) return;
         const refresh = async () => {
           if (connection.status !== 'connected') return;
-          if (message.method === MCPMethods.ToolListChanged) connection.tools = await drainPages<MCPToolDefinition>(send, protocol, MCPMethods.ListTools, 'tools');
+          if (message.method === MCPMethods.ToolListChanged) connection.tools = catalogOf(server, await drainPages<MCPToolDefinition>(send, protocol, MCPMethods.ListTools, 'tools'));
+          // A plugin server lists no prompts or resources, whatever it announces later.
+          if (server.plugin) return;
           if (message.method === MCPMethods.PromptListChanged) connection.prompts = await drainPages<MCPPrompt>(send, protocol, MCPMethods.ListPrompts, 'prompts');
           if (message.method === 'notifications/resources/list_changed') {
             connection.resources = await drainPages<MCPResource>(send, protocol, MCPMethods.ListResources, 'resources');
@@ -506,6 +523,11 @@ export class MCPBridge extends EventEmitter {
   /** Set the check run before every start of a plugin server (see `pluginStartGuard`). */
   setPluginStartGuard(guard: ((server: MCPServer) => Promise<string | null>) | null): void {
     this.pluginStartGuard = guard;
+  }
+
+  /** Set what a call to a plugin server carries in `_meta` (see `pluginCallMeta`). */
+  setPluginCallMeta(issuer: PluginCallMeta | null): void {
+    this.pluginCallMeta = issuer;
   }
 
   /** Why a plugin server is not connected, or null. */
@@ -770,10 +792,19 @@ export class MCPBridge extends EventEmitter {
       if (signal) connection.transport.send(message, signal); else connection.transport.send(message);
     };
 
+    // A plugin package's host API token for this call only (docs/PLUGIN-PACKAGES.md#host-api).
+    // A failure to issue one sends the call without it (the package gets no host access), never fails it.
+    const extra = connection.server.plugin && this.pluginCallMeta
+      ? await this.pluginCallMeta(connection.server, toolName, context).catch((err: unknown) => {
+        coreLogger.error({ err, serverId, toolName }, 'Plugin host API token could not be issued; calling without it');
+        return null;
+      })
+      : null;
     try {
       const result = await connection.protocol.sendRequest(send, MCPMethods.CallTool, {
         name: toolName,
         arguments: args,
+        ...(extra ? { _meta: extra.meta } : {}),
       });
       breaker.recordSuccess(serverId);
       // Only an operator-trusted server may attest that dispatch had no effect.
@@ -792,6 +823,8 @@ export class MCPBridge extends EventEmitter {
     } catch (err) {
       breaker.recordFailure(serverId);
       throw err;
+    } finally {
+      extra?.release();
     }
   }
 
@@ -915,7 +948,8 @@ export class MCPBridge extends EventEmitter {
   serversSection(opts: { codemode: boolean }): string | undefined {
     const listings: ServerListing[] = [...this.serverConfigs, ...this.pluginServers]
       .filter((server) => server.isEnabled && !server.credentialConnection)
-      .map((server) => ({ id: server.id, description: server.description, exposures: configuredExposures(server) }));
+      // A plugin server is listed by a line the host writes: no text of the package's but its consented title.
+      .map((server) => ({ id: server.id, description: server.plugin ? pluginServerListing(server.plugin, server.name) : server.description, exposures: configuredExposures(server) }));
     return renderServersSection(listings, opts);
   }
 
@@ -1385,6 +1419,11 @@ export class MCPBridge extends EventEmitter {
         wrap: (args: Record<string, unknown>) => ({ server_id: connection.id, tool_name: tool.name, arguments: args }),
       }));
   }
+}
+
+/** The tools a server's `tools/list` answer stands for: a plugin server's intersected with its manifest (src/mcp/plugin-catalog.ts). */
+function catalogOf(server: MCPServer, tools: MCPToolDefinition[]): MCPToolDefinition[] {
+  return server.plugin ? pluginToolCatalog(server.plugin, tools) : tools;
 }
 
 // Singleton instance

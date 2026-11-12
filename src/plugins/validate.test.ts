@@ -1,6 +1,6 @@
 /**
- * Plugin validation kit tests (WS3) — validatePlugin over the real example
- * plugin and synthetic broken fixtures.
+ * Plugin validation kit tests (WS3) — validatePlugin over the legacy plugin
+ * fixture (tests/fixtures/legacy-plugin) and synthetic broken fixtures.
  */
 import { afterAll, describe, expect, test } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -34,8 +34,8 @@ const goodManifest = {
 };
 
 describe('validatePlugin — happy path', () => {
-  test('the repo example plugin validates clean', async () => {
-    const report = await validatePlugin(resolve('extensions/example-plugin'));
+  test('the legacy plugin fixture validates clean', async () => {
+    const report = await validatePlugin(resolve('tests/fixtures/legacy-plugin'));
     expect(report.ok).toBe(true);
     expect(report.errors).toEqual([]);
     expect(report.passed).toEqual(expect.arrayContaining([expect.stringContaining('manifest schema valid')]));

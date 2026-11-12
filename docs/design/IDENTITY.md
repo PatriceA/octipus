@@ -57,19 +57,19 @@ ocean blue `#82b5df` belong to the same companion family.
 
 Manrope is the website's humanist sans. Use generous spacing, readable copy,
 soft corners, and fine borders. Put actual work in recognizable conversation
-and output surfaces. Prefer a simple SVG octopus to a sculptural or 3D mascot.
-The product mark uses a still sea-glass Pebble; personal companions can vary.
+and output surfaces. Use the approved natural Blender portraits for personal companions. Keep the minimal mobile app mark as the product logo.
+The product mark is the white line octopus on deep ink; personal companions can vary.
 
 ## Motion
 
-Idle looks around with visible glances and small arm movements. Working moves
-arms in sequence and shifts attention. Completion gets a short bounce, then
-settles. Motion conveys curiosity and activity, not confidence or correctness.
+Natural portraits stay still. Working and listening may show a gentle activity
+ring. Status comes from labels and execution records, not facial expressions.
+Compact vector status icons can still use their small pose animations.
 
 Use the same forms and animation vocabulary in app and website. Large website
 previews make the character readable. A global homepage pause control and system
-reduced-motion preference stop decorative animation. The large idle preview can gently follow a mouse pointer; keep that behavior
-away from status avatars and reading surfaces. A quiet desktop depth rail shows
+reduced-motion preference stop decorative animation. Portrait previews do not
+track the pointer or animate their anatomy. A quiet desktop depth rail shows
 actual reading progress and provides section shortcuts.
 
 The room demonstration plays a finite, labeled script once on entering view.
@@ -98,3 +98,19 @@ current deployment. `src/components/Companion.astro`, `src/data/companion-forms.
 and `src/assets/companion.css` mirror the app's SVG geometry and motion. When the
 app's companion design changes, update these together. Public docs remain synced
 through the repository's website-docs sync script.
+
+## Natural companion artwork (November 2026)
+
+Web and mobile use the same fifteen bundled Blender portraits: Dumbo, Reef and
+Inky, each in the five existing account colors. Stable saved IDs remain pebble,
+ribbon and ink, so existing preferences and room attribution need no migration.
+The web picker is under Persona; the phone picker is in Settings. Phone avatars
+share one account-scoped appearance, refreshed at sign-in and foreground return.
+Saving on either client uses the existing persona appearance API. Previewing a
+look does not save it. Status labels remain independent of the static portrait;
+active work may show a gentle ring that respects reduced motion. Small browser
+and desktop status glyphs retain the compact vector silhouettes.
+
+Source generation scripts and reproduction instructions are in
+[companions/README.md](companions/README.md). Editable Blender scenes and GLBs
+are available from https://octipus.cc/design-examples/companions/.
