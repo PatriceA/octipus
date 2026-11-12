@@ -51,6 +51,31 @@ path (one leading `/`, no `//`, no backslash, no whitespace or control
 characters). Anything else is refused with 400; a valid one is echoed back as
 `returnTo` in the response (`/` when none was sent).
 
+## Idempotency keys
+
+`POST /api/chat`, `POST /api/agents`, `POST /api/sessions`,
+`POST /api/pipelines`, `POST /api/hooks` and
+`POST /api/tools/:toolId/tools/:toolName/execute` accept an
+`Idempotency-Key` header (or `X-Idempotency-Key`, at most 255 characters).
+Keys are per user and per endpoint. Without the header nothing changes.
+
+- First request: runs. A success (status below 400, no `error` field, and for
+  tool execution no `result.error` / `result.success: false`) is kept for 24 h;
+  a failure frees the key so a retry runs again.
+- Retry after it finished: the stored status and body, with
+  `Idempotent-Replayed: true` (a chat answer over 16k characters is replayed
+  cut, naming the session that holds it). A chat retry does not add the message again or
+  start a second turn.
+- Retry while it still runs: waits for it up to ~20 s, then answers
+  `409 { code: "idempotency_in_progress", status: "in_progress", sessionId? }`
+  with `Retry-After: 5`. Retry with the same key later for the result.
+- Same key, different request body: `422 { code: "idempotency_key_reused" }`
+  (for sessions, `channelId` is ignored when comparing).
+
+The claim lives in the shared kv store (the same mechanism as webhook delivery
+ids, in-process only while the store is down) and is renewed while the work
+runs; a crashed run frees its key after 15 minutes.
+
 ## Agents
 
 | Method | Endpoint | Description |
@@ -814,15 +839,15 @@ closed (codes 4001 and 4004) and must re-authenticate.
 | Type | Description |
 |------|-------------|
 | `auth` | Authentication handshake |
-| `chat.send` | Send chat message (requires `sessionId`, `content`; optional `workspaceId` — one of yours — for a session the server has not seen yet, `fileRefs`, `outputMode`, `attachments`). A message sent while a turn of that session runs steers it (`chat.message` with `injected: true`) |
-| `chat.steer` | Inject a message into the running turn of one of your sessions (a normal `chat.send` when none runs) |
+| `chat.send` | Send chat message (requires `sessionId`, `content`; optional `workspaceId` — one of yours — for a session the server has not seen yet, `fileRefs`, `outputMode`, `attachments`, `mode`). `mode`: `auto` (default — a text message sent while a turn of that session runs steers it, `chat.message` with `injected: true`, when the running agent takes input mid-turn; otherwise it queues), `queue`, `steer` (refused when nothing running takes it) or `restart` (stop the running turn, run this next). Answered with `chat.delivery` `{ outcome: steered \| queued \| restarted \| refused, ahead?, reason? }` |
+| `chat.steer` | Inject a message into the running turn of one of your sessions (with `mode` `auto`, a normal `chat.send` when nothing running takes it; `mode: 'steer'` refuses instead) |
 | `chat.interject` | A side question answered alongside a running turn |
 | `command` | Execute gateway command (`name`, optional `args`) |
 | `subscribe` | `patterns`: event-type patterns over the connection's own events (e.g., `["agent.*"]`); `resources`: resources to receive events of (e.g., `["artifact:<id>"]`), each access-checked and answered with `subscribed` or a `FORBIDDEN` error |
 | `unsubscribe` | Remove event patterns and/or resources |
 | `permission.respond` | Approve/deny permission request |
 | `approval.respond` | Approve/deny pipeline approval |
-| `agent.stop` | Stop one of the connection's own user's running agents (an admin included; another user's agent is `AGENT_NOT_FOUND`) |
+| `agent.stop` | Stop one of the connection's own user's running agents (an admin included; another user's agent is `AGENT_NOT_FOUND`). Stopping the session's running root drops your messages queued behind it (`agent.stopped` payload `droppedQueued`) |
 | `voice.set` | `{ sessionId, on }` — voice mode for one of your sessions on this connection: lifecycle narration arrives as `voice.speak` events; cleared when the connection closes. Another user's session is `SESSION_NOT_FOUND` |
 | `replay` | `{ sessionId, afterEventId? }` — the buffered events of one of your existing sessions after `afterEventId`. Another user's or an unknown session is `SESSION_NOT_FOUND` |
 | `ping` | Heartbeat |
@@ -840,6 +865,7 @@ closed (codes 4001 and 4004) and must re-authenticate.
 | `pong` | Heartbeat response with server time |
 | `permission.pending` | `{ requests, approvals }`: your open permission requests and root-agent approvals, after every `subscribe` with patterns (events raised while it is read follow it) and after a `permission.respond` that found the request already answered |
 | `replay` | `{ sessionId, events, gap }`: answer to `replay`; `gap` means the events cannot bridge what was missed — reload from REST |
+| `chat.delivery` | `{ sessionId, mode, outcome, ahead?, reason? }`: what became of a `chat.send` / `chat.steer` — `steered`, `queued` (`ahead` turns first), `restarted` or `refused`. A queued message `/stop` drops ends with `error` `CHAT_CANCELLED` and a `chat.error` with `cancelled: true` |
 
 Events of note for clients (`event.type`): `chat.response`, `chat.delta`,
 `chat.error` (a failed turn, to every connection of the user),

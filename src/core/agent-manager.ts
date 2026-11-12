@@ -1,6 +1,7 @@
 import { getSettingsService } from '@/config/settings-service';
 import { executionEnvironmentFor, executionEnvironmentDescription } from '@/security/execution-environments';
 import { getConfig } from '@/config';
+import { ConcurrencyLimitError } from '@/core/errors/concurrency-limit';
 import { withoutOffModules } from '@/core/modules/prompt';
 import { bindStagedRootPrompt, promptPart, stageAgentPrompt } from './agent/prompt-composition';
 import { splitSharedPrefix } from './agent/prompt-builder';
@@ -210,7 +211,7 @@ export class AgentManager {
 
     const maxConcurrent = getConfig().agent.maxConcurrentAgents;
     if (runningAgents.length >= maxConcurrent) {
-      throw new Error(`Maximum concurrent agents (${maxConcurrent}) reached`);
+      throw new ConcurrencyLimitError(maxConcurrent);
     }
 
     // Per-user concurrency quota for real users (system jobs rely on the
@@ -608,6 +609,19 @@ export class AgentManager {
    */
   get(agentId: string): AnyAgentWorker | undefined {
     return this.agents.get(agentId);
+  }
+
+  /** Whether `agentId` was spawned, at any depth, under `ancestorId` (in-memory spawn edges). */
+  isDescendant(agentId: string, ancestorId: string): boolean {
+    const seen = new Set<string>();
+    const queue = [ancestorId];
+    while (queue.length) {
+      for (const child of this.childrenByParent.get(queue.shift()!) ?? []) {
+        if (child === agentId) return true;
+        if (!seen.has(child)) { seen.add(child); queue.push(child); }
+      }
+    }
+    return false;
   }
 
   /**

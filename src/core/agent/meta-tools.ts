@@ -8,6 +8,7 @@ import { stripPipelineControlBlocks } from './handoff';
 import type { AgentWorker, ToolHandler } from '@/core/agent-worker';
 import { createSteerChildTool } from '@/core/swarm/steer-tool';
 import { createCollectChildrenTool } from '@/core/swarm/collect-tool';
+import { createListLanesTool } from '@/core/swarm/lanes-tool';
 import { createLateBoundSpawnChildHooks, createSpawnChildTool } from '@/core/swarm/swarm-tool';
 import {
   type AgentNode,
@@ -15,6 +16,9 @@ import {
   type PendingChild,
 } from '@/core/swarm/types';
 import { coreLogger } from '@/utils/logger';
+import { canonical, runIdempotent } from '@/core/idempotency';
+import type { AgentContext } from '@/core/types';
+import { sha256 } from '@/utils/crypto';
 import type { AgentService } from './service';
 import { createWorkPlanTools, submitWorkPlan } from './work-plan-tools';
 
@@ -93,6 +97,10 @@ export function createMetaTools(
   // `spawn_child` is NOT gated — multiple swarm calls per turn are explicitly
   // allowed (swarm-design.md §Spawn Mechanics).
   let pipelineCreated = false;
+  /** The pipeline created this turn under a `clientRequestId`, replayed to a retry with that key. */
+  let created: { key: string; result: Promise<unknown> } | undefined;
+  const isCreatedPipeline = (value: unknown): value is { id: string; status?: string } =>
+    !!value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string';
 
   const PIPELINE_ALREADY_CREATED_MSG =
     'A pipeline has already been created for this request. ' +
@@ -147,6 +155,103 @@ export function createMetaTools(
       // No refs (legacy unit-test call-sites): await-only single spawn.
       tools.push(createSpawnChildTool(options.parentNode, undefined, undefined, lite ? { lite: true } : undefined));
     }
+    // Read-only lane bindings + health, beside the tool that uses them.
+    // `discoverOnly`; dropped in lite mode by the filter below.
+    tools.push(createListLanesTool());
+  }
+
+  /** One create_pipeline call; `requestKey` keeps its outcome across turns. */
+  async function createPipelineOnce(args: Record<string, unknown>, context: AgentContext, requestKey: string | undefined): Promise<unknown> {
+    // Validate template exists before creating pipeline
+    const templateName = args.templateName as string;
+    const { listAvailableTemplates } = await import('./templates');
+    const userId = context.userId;
+    const templates = await listAvailableTemplates(userId);
+    const templateNames = templates.map(t => t.name);
+    const match = templates.find(t =>
+      t.name.toLowerCase() === templateName.toLowerCase() || t.id === templateName
+    );
+    if (!match) {
+      return `Template "${templateName}" not found. Available templates: ${templateNames.join(', ') || 'none'}. ` +
+        (templateNames.length === 0
+          ? 'No templates exist. Use spawn_child for any delegation needs, or ask the user to create a pipeline template.'
+          : 'Use one of the listed templates, or use spawn_child for simpler tasks.');
+    }
+
+    const startPipeline = async (): Promise<unknown> => {
+      pipelineCreated = true;
+      try {
+        return await new Promise((resolve, reject) => {
+          const completion = rootAgent.createAndRunPipeline(
+            args.title as string,
+            match.name,
+            args.description as string,
+            context,
+            {
+              onCreated: id => {
+                trackPipeline(id, completion, args.description as string);
+                resolve({ id, status: 'running', message: 'Pipeline started. Use get_pipeline_status to monitor or collect_children to await its outcome; do not claim completion until it finishes.' });
+              },
+              permissionProfile: args.permissionProfile,
+              maxRetries: args.maxRetries as number | undefined,
+              params: (args.params as Record<string, unknown> | undefined) ?? undefined,
+            },
+          );
+          void completion.then(resolve, error => {
+            coreLogger.error({ error }, 'Pipeline execution failed');
+            reject(error);
+          });
+        });
+      } catch (err) {
+        // The pipeline never actually started (e.g. param-validation failure)
+        // — release the one-shot gate so the model can retry with fixed params
+        // in the same turn. Surface the reason.
+        pipelineCreated = false;
+        // …and LOG it. Returning the reason only to the model made this
+        // failure invisible: a run died here, the model then emitted three
+        // thinking-only turns and gave up, and the operator saw "I was unable
+        // to generate a response" with not one line in the log saying a
+        // pipeline had failed to start. The model's transcript is not an
+        // operator-visible surface.
+        coreLogger.error(
+          { err: (err as Error).message, template: match.name, params: args.params },
+          'create_pipeline failed to start the pipeline',
+        );
+        return `Pipeline could not start: ${(err as Error).message}`;
+      }
+    };
+
+    if (requestKey) {
+      // Across turns the per-turn gate is gone; the retry key carries it:
+      // one pipeline per (user, key) for 24 h.
+      const outcome = await runIdempotent<unknown>({
+        userId,
+        scope: 'tool.create_pipeline',
+        key: requestKey,
+        fingerprint: sha256(canonical([match.name, args.title ?? null, args.description ?? null, args.params ?? null])),
+        run: () => startPipeline(),
+        keep: isCreatedPipeline,
+      });
+      if (outcome.kind === 'mismatch') {
+        return `clientRequestId "${requestKey}" was already used for a different create_pipeline request. Use a new clientRequestId for new work.`;
+      }
+      if (outcome.kind === 'in_progress') {
+        return `A create_pipeline call with clientRequestId "${requestKey}" is still starting. Do not create another; check list/get_pipeline_status shortly.`;
+      }
+      if (outcome.kind === 'replayed' && isCreatedPipeline(outcome.value)) {
+        pipelineCreated = true;
+        const pipeline = await pipelineRepository.findById(outcome.value.id).catch(() => null);
+        const result = {
+          ...outcome.value,
+          status: pipeline?.status ?? outcome.value.status,
+          replayed: true,
+          message: `Pipeline ${outcome.value.id} was already created for this clientRequestId; it was not started again. Use get_pipeline_status to monitor it.`,
+        };
+        return result;
+      }
+      return outcome.value;
+    }
+    return startPipeline();
   }
 
   tools.push(
@@ -189,68 +294,30 @@ export function createMetaTools(
               'Recipe parameter values (for parameterized templates), as a key→value object. ' +
               'Call list_recipes to see a template’s parameters. Omit for unparameterized templates.',
           },
+          clientRequestId: {
+            type: 'string',
+            description:
+              'Optional retry key. Pass a fresh unique value; when retrying this same request after a timeout or lost ' +
+              'response (in this turn or a later one), pass the SAME value: the pipeline it already created is returned ' +
+              'instead of starting a second one.',
+          },
         },
         required: ['title', 'templateName', 'description'],
       },
       execute: async (args, context) => {
+        const requestKey = typeof args.clientRequestId === 'string' && args.clientRequestId.trim()
+          ? args.clientRequestId.trim() : undefined;
+        // The same key again this turn joins that call, finished or still starting.
+        if (requestKey && created?.key === requestKey) return created.result;
         if (pipelineCreated) throw new Error(PIPELINE_ALREADY_CREATED_MSG);
-
-        // Validate template exists before creating pipeline
-        const templateName = args.templateName as string;
-        const { listAvailableTemplates } = await import('./templates');
-        const userId = context.userId;
-        const templates = await listAvailableTemplates(userId);
-        const templateNames = templates.map(t => t.name);
-        const match = templates.find(t =>
-          t.name.toLowerCase() === templateName.toLowerCase() || t.id === templateName
-        );
-        if (!match) {
-          return `Template "${templateName}" not found. Available templates: ${templateNames.join(', ') || 'none'}. ` +
-            (templateNames.length === 0
-              ? 'No templates exist. Use spawn_child for any delegation needs, or ask the user to create a pipeline template.'
-              : 'Use one of the listed templates, or use spawn_child for simpler tasks.');
+        const attempt = createPipelineOnce(args, context, requestKey);
+        if (requestKey && !created) {
+          const entry = { key: requestKey, result: attempt };
+          created = entry;
+          const drop = () => { if (created === entry) created = undefined; };
+          attempt.then(value => { if (!isCreatedPipeline(value)) drop(); }, drop);
         }
-
-        pipelineCreated = true;
-        try {
-          return await new Promise((resolve, reject) => {
-            const completion = rootAgent.createAndRunPipeline(
-              args.title as string,
-              match.name,
-              args.description as string,
-              context,
-              {
-                onCreated: id => {
-                  trackPipeline(id, completion, args.description as string);
-                  resolve({ id, status: 'running', message: 'Pipeline started. Use get_pipeline_status to monitor or collect_children to await its outcome; do not claim completion until it finishes.' });
-                },
-                permissionProfile: args.permissionProfile,
-                maxRetries: args.maxRetries as number | undefined,
-                params: (args.params as Record<string, unknown> | undefined) ?? undefined,
-              },
-            );
-            void completion.then(resolve, error => {
-              coreLogger.error({ error }, 'Pipeline execution failed');
-              reject(error);
-            });
-          });
-        } catch (err) {
-          // The pipeline never actually started (e.g. param-validation failure)
-          // — release the one-shot gate so the model can retry with fixed params
-          // in the same turn. Surface the reason.
-          pipelineCreated = false;
-          // …and LOG it. Returning the reason only to the model made this
-          // failure invisible: a run died here, the model then emitted three
-          // thinking-only turns and gave up, and the operator saw "I was unable
-          // to generate a response" with not one line in the log saying a
-          // pipeline had failed to start. The model's transcript is not an
-          // operator-visible surface.
-          coreLogger.error(
-            { err: (err as Error).message, template: match.name, params: args.params },
-            'create_pipeline failed to start the pipeline',
-          );
-          return `Pipeline could not start: ${(err as Error).message}`;
-        }
+        return attempt;
       },
     },
     {

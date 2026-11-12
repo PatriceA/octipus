@@ -4,7 +4,22 @@ import type { AgentWorker } from '@/core/agent-worker';
 import { swarmNodeRepository } from './node-repository';
 import { formatReceiptBlock } from './receipt';
 import { getLevelDefault } from './types';
-import type { AgentNode, ChildResult } from './types';
+import type { AgentNode, ChildResult, ChildUserRequest } from './types';
+import { escapeHtml } from '@/shared/html';
+
+/**
+ * A child blocked on the user. Says plainly that the user, not the parent,
+ * answers: a parent told only "waiting" tends to retry, duplicate the child,
+ * or try to approve on the user's behalf.
+ */
+function formatUserRequests(requests: ChildUserRequest[]): string {
+  const elements = requests.map((r) =>
+    `\n  <${r.kind === 'question' ? 'pendingQuestion' : 'pendingApproval'} id="${escapeHtml(r.id)}" kind="${r.kind}" summary="${escapeHtml(r.summary)}" />`);
+  return elements.join('') +
+    '\n  <notes>WAITING ON THE USER — this child asked the user in this session and is blocked until they answer. ' +
+    'It was NOT cancelled. You cannot answer this request for them; do not retry or duplicate the child. ' +
+    'Continue other work. A later collect_children waits for the child (it returns early only if another request opens).</notes>';
+}
 
 /**
  * `collect_children` — agent-depth (1) tool for picking up the results of
@@ -82,7 +97,10 @@ export function createCollectChildrenTool(
         ? (remaining > 0 ? Math.min(explicit, remaining) : explicit)
         : Math.max(15_000, remaining > 0 ? Math.min(remaining, target) : target);
 
-      const results = await worker.collectAllDetached(timeoutMs);
+      // A child that opens an approval or question ends the wait early, so
+      // the parent learns it is blocked on the user instead of sitting out
+      // the whole window (the finalize auto-collect does not wake this way).
+      const results = await worker.collectAllDetached(timeoutMs, { wakeOnUserRequest: true });
 
       // Mark the DB rows as collected so the orphan reaper doesn't flag them.
       for (const result of results) {
@@ -110,16 +128,23 @@ export function formatCollectedResults(results: ChildResult[]): string {
     // reads status="timeout" as failure and answers by spawning duplicate retry
     // children. A child that exhausted its OWN wall budget is terminal and keeps
     // its own notes, so gate on the collect-timeout signature specifically.
-    const stillRunning = r.status === 'timeout' && /collect_children (?:timeout|interrupted)/i.test(r.notes ?? '');
+    const stillRunning = r.status === 'timeout' && /collect_children (?:timeout|interrupted|paused)/i.test(r.notes ?? '');
+    const waiting = stillRunning && !!r.userRequests?.length;
     // Render it as status="running" (not "timeout") so a weak model doesn't
     // misparse the top-level attribute as failure before it reaches the notes.
-    const displayStatus = stillRunning ? 'running' : r.status;
+    const displayStatus = waiting ? 'waiting' : stillRunning ? 'running' : r.status;
     const meta =
       `nodeId="${r.nodeId}" status="${displayStatus}" ` +
       `tokens="${r.usedTokens}" durationMs="${r.durationMs}"`;
     const interrupted = /collect_children interrupted/i.test(r.notes ?? '');
-    const notes = interrupted
-      ? '\n  <notes>STILL RUNNING — collection was interrupted by new user guidance. The child was not cancelled or automatically steered. Review the guidance; use steer_child only if this child needs to change course, or handle the change after collecting its result.</notes>'
+    const guidanceNote = '\n  <notes>STILL RUNNING — collection was interrupted by new user guidance. The child was not cancelled or automatically steered. Review the guidance; use steer_child only if this child needs to change course, or handle the change after collecting its result.</notes>';
+    // Guidance first: the user's new instruction outranks the child's wait.
+    const notes = waiting
+      ? `${interrupted ? guidanceNote : ''}${formatUserRequests(r.userRequests!)}`
+      : interrupted
+      ? guidanceNote
+      : /collect_children paused/i.test(r.notes ?? '')
+      ? '\n  <notes>STILL RUNNING — collection returned early because another child is waiting on the user. This one was NOT cancelled and is still working. Call collect_children again to keep waiting for it.</notes>'
       : stillRunning
       ? '\n  <notes>STILL RUNNING — did not finish within the wait window; it was NOT cancelled and is still working. Do NOT spawn a retry or duplicate child. Call collect_children again to keep waiting for it.</notes>'
       : r.notes ? `\n  <notes>${r.notes}</notes>` : '';

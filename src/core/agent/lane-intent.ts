@@ -27,7 +27,8 @@ import type { MessageClassification } from './types';
 /** Text lanes a request can be routed to. */
 export type Lane = 'build' | 'verify' | 'everyday' | 'research';
 
-const LANES: readonly string[] = ['build', 'verify', 'everyday', 'research'];
+/** Every text lane, in display order — also listed by `list_lanes` (swarm/lanes-tool.ts). */
+export const LANES: readonly string[] = ['build', 'verify', 'everyday', 'research'];
 
 /**
  * The confidence at which the classifier's category is worth acting on.

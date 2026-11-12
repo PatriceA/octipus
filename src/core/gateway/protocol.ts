@@ -308,6 +308,22 @@ export const InlineUiSendSchema = z.object({
   provenance: z.object({ inlineUiId: z.string().uuid() }).optional(),
 });
 
+/**
+ * How a `chat.send` / `chat.steer` reaches a session whose turn may be running
+ * (docs/plans/orchestration-gaps-2026-11.md §3). The server answers every send
+ * with `chat.delivery`, naming what it did.
+ *
+ * - `auto` (default): steer the running root when it takes guidance mid-turn
+ *   and the message is plain text; otherwise queue it as the next turn.
+ * - `queue`: always its own turn, after the running one and those queued.
+ * - `steer`: only into the running turn; refused when nothing running takes it.
+ * - `restart`: stop the running turn and run this message next, ahead of the
+ *   turns already queued.
+ */
+export const SEND_MODES = ['auto', 'queue', 'steer', 'restart'] as const;
+export type SendMode = (typeof SEND_MODES)[number];
+export const SendModeSchema = z.enum(SEND_MODES);
+
 export const ChatSendSchema = z.object({
   type: z.literal('chat.send'),
   sessionId: z.string().uuid(),
@@ -341,6 +357,8 @@ export const ChatSendSchema = z.object({
   renders: z.array(z.enum(['inline_ui'])).max(4).optional(),
   /** Interactive answers: what happened to them in this client since the last message (G3), and where this message came from. */
   inlineUi: InlineUiSendSchema.optional(),
+  /** What to do when a turn is running (`SEND_MODES`); `auto` when omitted. */
+  mode: SendModeSchema.optional(),
 });
 
 export const CommandSchema = z.object({
@@ -423,13 +441,16 @@ export const ChatInterjectSchema = z.object({
  *
  * Distinct from `chat.interject` (a parallel side-question that does NOT touch
  * the running turn): a steer enters the live root agent's context at the next
- * iteration boundary via its steering queue. If no root agent is currently
- * running for the session, the handler treats it like a normal `chat.send`.
+ * iteration boundary via its steering queue. With `mode` omitted (`auto`), a
+ * session with no running root that takes guidance mid-turn gets the message
+ * as a normal `chat.send` (queued); `mode: 'steer'` refuses instead. It is a
+ * text-only `chat.send` with the same `mode`; the answer is `chat.delivery`.
  */
 export const ChatSteerSchema = z.object({
   type: z.literal('chat.steer'),
   sessionId: z.string().uuid(),
   content: z.string().min(1).max(20_000),
+  mode: SendModeSchema.optional(),
 });
 
 export const PingSchema = z.object({
@@ -725,6 +746,32 @@ export interface RoomCatchupMessage {
   hasMore: boolean;
 }
 
+/**
+ * What became of a `chat.send` / `chat.steer`, sent to the sending connection
+ * as soon as the server has decided (before a queued turn runs):
+ *
+ * - `steered`: injected into the running turn (also published as an
+ *   `injected` `chat.message`);
+ * - `queued`: runs as its own turn; `ahead` turns (running or waiting) go
+ *   first, 0 = it starts now;
+ * - `restarted`: the running turn was stopped and this message runs next;
+ * - `refused`: nothing was delivered or stored, `reason` says why.
+ *
+ * A queued turn that `/stop` later drops ends with a `chat.error` whose
+ * payload has `cancelled: true`.
+ */
+export type SendOutcome = 'steered' | 'queued' | 'restarted' | 'refused';
+export interface ChatDeliveryMessage {
+  type: 'chat.delivery';
+  sessionId: string;
+  mode: SendMode;
+  outcome: SendOutcome;
+  /** Set for `queued`: turns that run before this one (0 = starts now). */
+  ahead?: number;
+  /** Why a `refused` was refused, or why `auto`/`restart` queued instead. */
+  reason?: string;
+}
+
 /** Answer to a `room.post`: stored (and queued when addressed). */
 export interface RoomPostedMessage {
   type: 'room.posted';
@@ -881,6 +928,7 @@ export type GatewayMessage =
   | ReplayMessage
   | RoomCatchupMessage
   | RoomPostedMessage
+  | ChatDeliveryMessage
   | DocSyncMessage
   | DocUpdateMessage
   | DocAwarenessMessage

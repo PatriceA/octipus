@@ -62,6 +62,7 @@
  * (F-D11): its messages, tool actions, run events and approvals, all
  * deleted with the session.
  */
+import { isSessionTurnCancelled } from '@/core/session-turn-lock';
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { ToolHandler } from '@/core/agent-base';
@@ -681,7 +682,11 @@ export function agentConnEvent(hostInstanceId: string, conn: string, as: string,
   listener.seen.add(mention.key);
   if (listener.seen.size > SEEN_PER_LISTENER) listener.seen.delete(listener.seen.values().next().value as string);
   void answerAddressed(conn, listener, as, mention)
-    .catch((err: unknown) => log.error({ err, sessionId: listener.sessionId }, 'Addressed turn failed'));
+    .catch((err: unknown) => {
+      // The listener's own /stop dropped the turn while it waited: not a failure.
+      if (isSessionTurnCancelled(err)) log.info({ sessionId: listener.sessionId }, 'Addressed turn dropped by stop before it ran');
+      else log.error({ err, sessionId: listener.sessionId }, 'Addressed turn failed');
+    });
 }
 
 /** The turn's message: fixed text. The mention itself is in the fenced room context (`remoteRoomTurnContext`). */

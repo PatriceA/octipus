@@ -1,5 +1,7 @@
 import { executionEnvironmentFor, pathInEnvironment } from '@/security/execution-environments';
-import { runDelegationAttempt, type DelegationAttempt } from './attempt-history';
+import { recordSkippedAttempt, runDelegationAttempt, type DelegationAttempt } from './attempt-history';
+import { routeAroundUnavailable, routeMismatchMessage } from './lane-availability';
+import { isConcurrencyLimitError } from '@/core/errors/concurrency-limit';
 import { getConfig } from '@/config';
 import type { AnyAgentWorker } from '@/core/agent-manager';
 import { getAgentManager } from '@/core/agent-manager';
@@ -656,9 +658,27 @@ export class SwarmSpawner {
     // post-spawn). The swarm tools close over that node by reference so the
     // placeholder id is mutated to the real one before any tool can fire.
 
+    // A fork (swarm/fork.ts) keeps everything above — validation, budget,
+    // role bookkeeping, worktree — and swaps what the model sees for the
+    // parent's own: its conversation, handlers, advertisement and model. A
+    // parent that cannot be forked (a vendor CLI) gets an ordinary child.
+    // Never for a child meant to be independent of its parent (`forkAllowed`).
+    // Decided before model resolution: only a real fork skips the lane's
+    // availability check — a fork that falls back to an ordinary child runs on
+    // the lane model and is checked like one.
+    const independent = !forkAllowed({ role: childRole, topic: params.topic, maintenanceReview });
+    const fork = params.fork && !independent ? internal.forkSeed ?? this.forkSeedOf(parentContext) : undefined;
+    if (params.fork && !fork) {
+      coreLogger.info({ parentAgentId: parentContext.id, childRole, independent }, 'spawn_child fork: not forkable here; starting an ordinary child');
+    }
+    const allowBackup = !maintenanceReview && params.routePolicy?.allowBackup !== false;
+
     // ── Model resolution: the lane is authoritative ──
+    // Includes the pre-spawn availability check (lane-availability.ts): a
+    // child whose model's breaker is open or whose CLI is not installed starts
+    // on the lane backup, or is refused below with the reason.
     const childInSpace = !!parentContext.space;
-    const { model: childModel, modelName: childModelName, lane: childLane, systemPrompt, stablePrompt, skillContext, isSmall } = await releaseOnThrow(() =>
+    const { model: childModel, modelName: childModelName, lane: childLane, systemPrompt, stablePrompt, skillContext, isSmall, routed, fallbackReason, unavailable } = await releaseOnThrow(() =>
       this.resolveChildModel(
         parent.model,
         childRole,
@@ -670,12 +690,24 @@ export class SwarmSpawner {
         childInSpace,
         parentContext.space?.role,
         parentContext.sponsor,
+        { allowBackup, skip: !!fork },
       ));
 
     if (maintenanceReview && isCLIProvider((await resolveModel({userId:parentContext.userId,name:childModelName}))?.provider ?? '')) return denyAndRelease(this.denialResult(parent, 'Maintenance reviewers require a scoped API or local model.'));
-    if (params.routePolicy?.primaryModel && ![childModel, childModelName].includes(params.routePolicy.primaryModel)) {
-      graph.releaseFingerprint(briefHash);
-      return this.denialResult(parent, 'Requested primaryModel does not match the configured topic route. No child was started; change the topic binding or request its configured model.');
+    if (params.routePolicy?.primaryModel && ![routed.modelId, routed.name].includes(params.routePolicy.primaryModel)) {
+      // A planned child is checked against the executor it runs on; name the
+      // lane's primary beside it so the message cannot pass one off as the other.
+      const primary = routed.viaExecutor
+        ? await resolveModel({ userId: parentContext.userId, topic: childLane, inSpace: childInSpace, spaceRole: parentContext.space?.role, sponsor: parentContext.sponsor }).catch(() => null)
+        : null;
+      return denyAndRelease(this.denialResult(parent, routeMismatchMessage({
+        requested: params.routePolicy.primaryModel, lane: childLane, resolved: routed,
+        ...(routed.viaExecutor ? { executorOf: { primary } } : {}),
+      })));
+    }
+    if (unavailable) {
+      coreLogger.warn({ parentNodeId: parent.id, lane: childLane, model: routed.modelId, reason: unavailable }, 'Swarm spawn refused — lane model unavailable');
+      return denyAndRelease(this.denialResult(parent, `${unavailable}. No child was started; ask the user to fix or rebind the lane.`));
     }
 
     // Small-tier child: cap the tool surface, mirroring the worker path. Role
@@ -904,15 +936,13 @@ export class SwarmSpawner {
     // in total, however many had finished.
     parent.budget.fanOut.used++;
 
-    // A fork (swarm/fork.ts) keeps everything above — validation, budget,
-    // role bookkeeping, worktree — and swaps what the model sees for the
-    // parent's own: its conversation, handlers, advertisement and model. A
-    // parent that cannot be forked (a vendor CLI) gets an ordinary child.
-    // Never for a child meant to be independent of its parent (`forkAllowed`).
-    const independent = !forkAllowed({ role: childRole, topic: params.topic, maintenanceReview });
-    const fork = params.fork && !independent ? internal.forkSeed ?? this.forkSeedOf(parentContext) : undefined;
-    if (params.fork && !fork) {
-      coreLogger.info({ parentAgentId: parentContext.id, childRole, independent }, 'spawn_child fork: not forkable here; starting an ordinary child');
+    const dispatchId = internal.dispatchId ?? randomUUID();
+    const attempts: DelegationAttempt[] = [];
+    // The routed model never ran: record it as not started, so the backup
+    // attempt carries the reason as its `fallbackReason` like any other fallback.
+    if (fallbackReason) {
+      await recordSkippedAttempt(attempts, { dispatchId, requestedModel: routed.modelId, selectedModel: routed.modelId,
+        selectedModelName: routed.name, route: 'primary', reason: fallbackReason }, parentContext);
     }
 
     const result = await releaseOnThrow(() => this.runChildWithRetry({
@@ -923,6 +953,7 @@ export class SwarmSpawner {
       childRole,
       childModel: fork?.model ?? childModel,
       childModelName: fork?.modelName ?? childModelName,
+      ...(fallbackReason ? { route: 'backup' as const } : {}),
       childLane,
       childTools: fork?.tools ?? childTools,
       childToolAdvertisement: fork ? fork.toolAdvertisement : childToolAdvertisement,
@@ -944,10 +975,10 @@ export class SwarmSpawner {
       childIsSmall: isSmall,
       resumeKey,
       onWorkerStarted: internal.onWorkerStarted,
-      dispatchId: internal.dispatchId ?? randomUUID(),
-      allowBackup: !maintenanceReview && params.routePolicy?.allowBackup !== false,
-      requestedModel: childModel,
-      attempts: [],
+      dispatchId,
+      allowBackup,
+      requestedModel: routed.modelId,
+      attempts,
     })).finally(() => {
       parent.budget.fanOut.used = Math.max(0, parent.budget.fanOut.used - 1);
     });
@@ -1768,8 +1799,7 @@ export class SwarmSpawner {
         },
       });
     } catch (err) {
-      const msg = (err as Error).message || '';
-      const isCap = /Maximum concurrent agents/i.test(msg);
+      const isCap = isConcurrencyLimitError(err);
       coreLogger.error({ err, parentNodeId: opts.parent.id }, 'AgentManager.spawn failed in SwarmSpawner');
       return {
         nodeId: '',
@@ -1779,7 +1809,7 @@ export class SwarmSpawner {
         usedTokens: 0,
         durationMs: Date.now() - startTime,
         spawnedChildren: [],
-        notes: msg,
+        notes: (err as Error).message || '',
       };
     }
 
@@ -2324,7 +2354,22 @@ export class SwarmSpawner {
     spaceRole?: SpaceRole,
     /** The parent is sponsored: the sponsor's models replace the requester's (§9.1). */
     sponsor: import('@/core/types').AgentSponsor | null = null,
-  ): Promise<{ model: string; modelName: string; lane: string; systemPrompt?: string; stablePrompt?: string; skillContext: string; isSmall: boolean }> {
+    /**
+     * Pre-spawn availability (lane-availability.ts). Run here, before the
+     * tier, prompt and capability decisions below, so a child moved to the
+     * lane's backup gets all of them for the backup. `skip` for a fork, which
+     * runs on the parent's model.
+     */
+    preSpawn: { allowBackup: boolean; skip: boolean } = { allowBackup: true, skip: true },
+  ): Promise<{
+    model: string; modelName: string; lane: string; systemPrompt?: string; stablePrompt?: string; skillContext: string; isSmall: boolean;
+    /** What the lane resolved to before any backup substitution — the route a `primaryModel` is checked against. */
+    routed: { modelId: string; name: string; viaExecutor: boolean };
+    /** Set when the routed model was unavailable and the child moved to the lane backup. */
+    fallbackReason?: string;
+    /** Set when the routed model is unavailable and no backup may be used: refuse the spawn. */
+    unavailable?: string;
+  }> {
     const registry = getModelRegistry();
 
     // No expert lookup: the row it read carried a model, a lane, a prompt and a
@@ -2429,6 +2474,8 @@ export class SwarmSpawner {
     const lane = laneRequested || childRole;
     let candidate: string | undefined;
     let candidateName = '';
+    let candidateProvider: string | null | undefined;
+    let viaExecutor = false;
     // One lookup for the whole routing block — getTopicConfig is an in-memory
     // cache, but the branches below reference the executor binding repeatedly
     // and must all agree on the same value.
@@ -2453,6 +2500,8 @@ export class SwarmSpawner {
         }
         candidate = execModel.modelId;
         candidateName = execModel.name;
+        candidateProvider = execModel.provider;
+        viaExecutor = true;
         coreLogger.info(
           { lane, childRole, executorModel: candidate },
           'Planned child routed to the lane executorModel (cheap executor path)',
@@ -2475,12 +2524,35 @@ export class SwarmSpawner {
       const topicModel = await resolveModel({ userId, topic: lane, inSpace, spaceRole, sponsor });
       candidate = topicModel?.modelId;
       candidateName = topicModel?.name ?? '';
+      candidateProvider = topicModel?.provider;
     }
     if (!candidate) {
       throw new Error(
         `No model bound to the '${lane}' lane, which is where a '${childRole}' child runs. ` +
           'Bind one on the Topics page.',
       );
+    }
+
+    const routed = { modelId: candidate, name: candidateName, viaExecutor };
+    let fallbackReason: string | undefined;
+    let unavailable: string | undefined;
+    if (!preSpawn.skip) {
+      const decision = await routeAroundUnavailable({
+        lane,
+        primary: { modelId: candidate, name: candidateName, provider: candidateProvider },
+        allowBackup: preSpawn.allowBackup,
+        // The install lane's backup — personal bindings have none (spec §8.2).
+        resolveBackup: () => resolveModel({ userId, topic: lane, backup: true, inSpace, spaceRole, sponsor }),
+      });
+      if (decision.route === 'deny') {
+        unavailable = decision.reason;
+      } else if (decision.route === 'backup') {
+        coreLogger.warn({ lane, childRole, from: candidate, to: decision.modelId, reason: decision.reason },
+          'Lane model unavailable before spawn — the child starts on the lane backup');
+        candidate = decision.modelId;
+        candidateName = decision.modelName;
+        fallbackReason = decision.reason;
+      }
     }
 
     // NO tier clamp. Topic bindings (and the user's explicit expert
@@ -2567,7 +2639,8 @@ export class SwarmSpawner {
       systemPrompt = `${systemPrompt}\n\n${skillFragments.join('\n\n')}`.trim();
     }
 
-    return { model: candidate, modelName: candidateName, lane, systemPrompt, stablePrompt, skillContext: skillFragments.join('\n\n'), isSmall };
+    return { model: candidate, modelName: candidateName, lane, systemPrompt, stablePrompt, skillContext: skillFragments.join('\n\n'), isSmall,
+      routed, ...(fallbackReason ? { fallbackReason } : {}), ...(unavailable ? { unavailable } : {}) };
   }
 
   private emitNodeSpawned(parent: AgentNode, payload: Record<string, unknown>): void {

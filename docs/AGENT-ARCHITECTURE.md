@@ -161,6 +161,10 @@ Parent abort propagates to children via an `AbortSignal` chain rooted on the Roo
 
 `child.allowedToolIds = parent.allowedToolIds ∩ requiredToolIds`. The root Root agent's `allowedToolIds` is the **union** of all role `toolIds` — so children inherit their role's full toolbox via intersection rather than an empty set. Children that need a tool the parent lacks escalate via `request_user_approval`.
 
+### Child Approvals and Questions
+
+A child's approval request (and a CLI child's question) goes to the user in the root session, like any agent's. Its parent is told as well. The `DetachedChildManager` listens to the permission manager's request and resolution events for its pending children's agent ids and their descendants (`AgentManager.isDescendant`). Pipeline handles carry no agent id and are not matched. An open request ends a `collect_children` wait early: that child comes back `status="waiting"` with a `pendingApproval` / `pendingQuestion` element, and its siblings come back as still running. A parent doing other work gets one notice, kept apart from steering (`takeNotices()`): a native parent receives it as system context before its next model call, a CLI parent on its next tool response's run context. It is dropped if the request is answered before delivery. The finalize auto-collect is not woken. The parent cannot answer the request; it collects again later.
+
 ### Observability
 
 Gateway events (`src/core/gateway/protocol.ts`): `swarm.node_spawned`, `swarm.node_completed`, `swarm.budget_warning`, `swarm.call_graph_cycle_blocked`. The authoritative list, with each type's publishers and subscribers, is generated: [architecture catalog](architecture/generated/CATALOG.md). UI subscribes with the `swarm.*` pattern and renders a live tree per session. The replay buffer keeps swarm events for reconnection; `/api/swarm/nodes?rootSessionId=…` is the REST fallback for tree rehydration after the buffer ages out.
@@ -282,10 +286,20 @@ Steering messages allow users to inject corrections or guidance into a running a
 
 ### How It Works
 
-1. Client sends `{ type: 'steer', sessionId, content }` over the WebSocket gateway
-2. The message is queued on the session
+1. Client sends `{ type: 'chat.steer', sessionId, content }` (or a text-only `chat.send`) over the WebSocket gateway
+2. The message is queued on the running root agent's steering queue, and stored in the transcript
 3. After the current tool call completes, the queue is drained
 4. Steering content is appended to the conversation as a user turn before the next LLM call (the end of the history, so the cached prefix is untouched)
+
+The server answers every send with `chat.delivery` naming what it did:
+`steered`, `queued` (its own turn, after `ahead` others), `restarted` or
+`refused`. A `mode` on the frame chooses: `auto` (default: steer when the
+running root takes input mid-turn, else queue), `queue`, `steer` (refused when
+nothing running takes it) or `restart` (stop the running turn, run this message
+next, ahead of the queued turns). A buffered CLI root (Vibe, Antigravity)
+cannot take input mid-turn, so `auto` queues for it. `/stop` and `agent.stop` on
+the running root drop the caller's messages queued behind the running turn. See
+[architecture/gateway.md](architecture/gateway.md#send-modes).
 
 ### When to Use
 

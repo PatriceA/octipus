@@ -42,8 +42,16 @@ export function createSteerChildTool(workerRef: { current: AgentWorker | null })
       if (!child || child.getContext().userId !== owner.userId || child.getContext().sessionId !== owner.sessionId || child.getStatus() !== 'running') {
         return refuse('child is no longer running or unavailable. Collect its result and decide on a follow-up.');
       }
-      child.steer({ role: 'user', content: args.message, timestamp: new Date() });
-      return 'Guidance queued for the selected child. Delivery occurs at its next supported input boundary; this is not confirmation that it has applied the change.';
+      // A CLI child reports false once it stops accepting guidance (its turn is
+      // ending or the vendor cannot take more input): nothing was delivered.
+      if (child.steer({ role: 'user', content: args.message, timestamp: new Date() }) === false) {
+        return refuse('child is finishing and no longer accepts guidance. This call did not deliver it. Collect its result and handle the change yourself or delegate a follow-up.');
+      }
+      // A buffered CLI child (Vibe, Antigravity) takes guidance only with its
+      // next Octipus tool response; without one its result reports it unhandled.
+      const buffered = (child as { acceptsMidTurnSteering?: () => boolean }).acceptsMidTurnSteering?.() === false;
+      return 'Guidance queued for the selected child. Delivery occurs at its next supported input boundary; this is not confirmation that it has applied the change.'
+        + (buffered ? ' This child cannot take input mid-turn: it sees the guidance only with its next Octipus tool response, and its result says if the guidance remained unhandled.' : '');
     },
   };
 }

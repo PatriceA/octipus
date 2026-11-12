@@ -5,6 +5,7 @@ import type { AgentContext } from '@/core/types';
 import { type AgentScope, resolveAgentScope, withAgentUsage } from '@/core/agent/context';
 import { SpaceError, spaceErrorStatus } from '@/security/space-access';
 import { apiContext } from '@/api/context';
+import { idempotent } from '@/api/idempotency';
 import { getAgentManager } from '@/core/agent-manager';
 import { getRouter } from '@/core/router';
 import { isRegisteredModel, resolveModel } from '@/models/resolve-model';
@@ -325,7 +326,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
   // Spawn a new agent
   .post(
     '/',
-    async ({ user, principal, body, set }) => {
+    idempotent('agents.spawn', async ({ user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
@@ -406,7 +407,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       } catch (error) {
         return { error: (error as Error).message };
       }
-    },
+    }),
     {
       body: t.Object({
         sessionId: t.String(),
@@ -494,9 +495,15 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       // (e.g. stopping the root agent should also stop child CLI workers)
       try { await (await import('@/core/companion/user-control')).recordCompanionOwnerStop(context.sessionId, user.id); }
       catch (err) { apiLogger.error({ err, sessionId: context.sessionId }, 'Could not persist Companion owner stop'); }
+      // Stopping the session's running turn drops the caller's messages queued
+      // behind it, as /stop does; a finished root or a child leaves the queue.
+      const lock = await import('@/core/session-turn-lock');
+      const droppedQueued = context.root && agent.getStatus() === 'running' && lock.isSessionTurnRunning(context.sessionId)
+        ? lock.cancelQueuedTurns(context.sessionId, { owner: user.id })
+        : 0;
       const stopped = agentManager.stopSession(context.sessionId, user.id);
 
-      return { stopped: stopped > 0 };
+      return { stopped: stopped > 0, ...(droppedQueued ? { droppedQueued } : {}) };
     },
     {
       params: t.Object({

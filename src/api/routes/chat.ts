@@ -1,6 +1,7 @@
 import { isModuleOn } from '@/core/modules/registry';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
+import { idempotencyTrack, idempotent } from '@/api/idempotency';
 import { getAllCommands } from '@/core/commands';
 import { getAgentService } from '@/core/agent';
 import { getAgentManager } from '@/core/agent-manager';
@@ -14,6 +15,7 @@ import { apiLogger } from '@/utils/logger';
 import { stripSpeechSources } from '@/voice/speech-sources';
 import { inlineUiFallbackText, inlineUiSpeechText } from '@/shared/inline-ui/fence';
 import { messageRepository } from '@/db/repositories/message-repository';
+import { isSessionTurnCancelled } from '@/core/session-turn-lock';
 
 /**
  * The specialist roles this turn actually delegated to.
@@ -73,6 +75,24 @@ async function toolsUsedForTurn(sessionId: string, since: Date): Promise<string[
   }
 }
 
+/** Longest answer kept for an `Idempotency-Key` replay; the session holds the full text. */
+const REPLAY_RESPONSE_CHARS = 16_000;
+
+/**
+ * The reply kept for 24 h under an `Idempotency-Key` (the MCP server keys
+ * every chat call): a long answer is cut, pointing at the session that holds
+ * it, so the kv store does not carry every full answer for a day.
+ */
+function compactChatReply(body: unknown): unknown {
+  const reply = body as { response?: unknown; sessionId?: string } | null;
+  if (!reply || typeof reply.response !== 'string' || reply.response.length <= REPLAY_RESPONSE_CHARS) return body;
+  return {
+    ...reply,
+    response: `${reply.response.slice(0, REPLAY_RESPONSE_CHARS)}\n\n[Answer truncated in this replay; the full text is in session ${reply.sessionId}.]`,
+    truncated: true,
+  };
+}
+
 /**
  * Chat — Phase 1a multi-user conversion.
  *
@@ -120,7 +140,10 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
   // Send a chat message through the root agent
   .post(
     '/',
-    async ({ user, principal, body, set, request }) => {
+    // `Idempotency-Key`: a retried call (the MCP server's 25 s client timeout)
+    // returns this turn's answer, or 409 with its sessionId while it still
+    // runs, instead of adding the message again and starting a second turn.
+    idempotent('chat', async ({ user, principal, body, set, request }) => {
       if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
@@ -174,6 +197,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           },
         });
         sessionId = session.id;
+        await idempotencyTrack(request)?.setMeta({ sessionId });
       } else {
         // Verify session ownership through the scoped repo.
         // A room is never a personal chat, its creator's included (§6.2).
@@ -182,6 +206,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           set.status = 404;
           return { error: 'Session not found' };
         }
+        await idempotencyTrack(request)?.setMeta({ sessionId });
       }
 
       const rootAgent = getAgentService();
@@ -250,13 +275,20 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           metadata: result.metadata,
         };
       } catch (error) {
+        // A user's /stop dropped this message while it waited behind the
+        // session's running turn: it never ran and was never stored.
+        if (isSessionTurnCancelled(error)) {
+          apiLogger.info({ sessionId }, 'Queued chat request dropped by stop');
+          set.status = 409;
+          return { error: error.message, cancelled: true, sessionId };
+        }
         apiLogger.error({ error, sessionId }, 'Chat request failed');
         return {
           error: 'Failed to process message',
           details: (error as Error).message,
         };
       }
-    },
+    }, { stored: compactChatReply }),
     {
       body: t.Object({
         message: t.String({ minLength: 1 }),

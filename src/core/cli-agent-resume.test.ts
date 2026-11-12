@@ -839,6 +839,18 @@ describe('cache-preserving resume of root conversations', () => {
     expect(second.lastPrompt).not.toContain('Root rules.');
   });
 
+  it('names request_user_approval only to a CLI that has it', async () => {
+    const systemOf = () => { const args = lastClaudeArgs(); return args[args.indexOf('--append-system-prompt') + 1]; };
+    // A child: no root-only tool, so it is told where its decisions go instead.
+    await makeClaudeWorker({ sessionId: 'ask-child' }).run('work');
+    expect(systemOf()).not.toContain('request_user_approval');
+    expect(systemOf()).toContain('put to the user automatically');
+    const root = makeClaudeWorker({ sessionId: 'ask-root' });
+    root.worker.registerTool({ name: 'request_user_approval', description: 'ask', parameters: { type: 'object', properties: {} }, execute: async () => '' });
+    await root.run('work');
+    expect(systemOf()).toContain('Use request_user_approval when a user decision is required');
+  });
+
   it('keeps the vendor conversation across a plan-mode toggle and passes the mode on the resumed run', async () => {
     // A root's tools as root-runner hands them over; plan mode strips the
     // file-changing ones, and the fingerprint must not see that either.

@@ -12,6 +12,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Hook } from '@/db/schema/hooks';
 import { getStorageProvider } from '@/db/storage';
+import { ExpiringLru } from '@/db/storage/expiring-lru';
 import { sha256 } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
 import type { TriggerContext, TriggerEvent } from './triggers';
@@ -91,27 +92,15 @@ export function getDeliveryId(headers: Headers): string | null {
 // in-process LRU is consulted only when the store errors, as a best-effort
 // fallback (dedupe then only holds within this process).
 
-/** key -> expiry (epoch ms). Map insertion order is LRU order. */
-const fallback = new Map<string, number>();
+/** Delivery ids seen while the store errors (value unused; presence is the claim). */
+const fallback = new ExpiringLru<true>(LRU_MAX_ENTRIES);
 
 function fallbackHas(key: string): boolean {
-  const expiresAt = fallback.get(key);
-  if (expiresAt === undefined) return false;
-  if (expiresAt <= Date.now()) {
-    fallback.delete(key);
-    return false;
-  }
-  return true;
+  return fallback.has(key);
 }
 
 function fallbackSet(key: string, ttlSeconds: number): void {
-  fallback.delete(key);
-  fallback.set(key, Date.now() + ttlSeconds * 1000);
-  while (fallback.size > LRU_MAX_ENTRIES) {
-    const oldest = fallback.keys().next().value;
-    if (oldest === undefined) break;
-    fallback.delete(oldest);
-  }
+  fallback.set(key, true, ttlSeconds);
 }
 
 /** Hashed so an arbitrarily long / odd sender id can't blow up the key. */
@@ -161,8 +150,9 @@ export async function completeDelivery(hookId: string, deliveryId: string): Prom
 
 /**
  * Free a claimed delivery. Only for a run where no action started (the hook
- * was skipped, or triggerHook failed before executing), so a redelivery can
- * try again.
+ * was skipped, triggerHook failed before executing, or the action was refused
+ * at capacity / quota before any agent existed), so a redelivery can try
+ * again.
  */
 export async function releaseDelivery(hookId: string, deliveryId: string): Promise<void> {
   const key = dedupeKey(hookId, deliveryId);
@@ -598,8 +588,10 @@ export interface WebhookRun {
 /**
  * Fire one verified hook for a webhook delivery; meant to run inside
  * the run queue (see {@link webhookRunJob}). Settles the delivery claim:
- *  - nothing ran (the hook was skipped by its gates, or triggerHook failed
- *    before executing the action) -> release, so a redelivery can retry;
+ *  - nothing ran (the hook was skipped by its gates, triggerHook failed
+ *    before executing the action, or every run was refused before it started
+ *    any work: `notStarted`, a spawn at the agent cap or over a quota)
+ *    -> release, so a redelivery can retry;
  *  - an action ran, successfully or not -> done, so a redelivery is dropped
  *    (its side effects may already have happened).
  * Every failure lands in hook_executions: runHook logs action failures
@@ -634,6 +626,24 @@ export async function fireWebhookHook(run: WebhookRun): Promise<void> {
     // Skipped (conditions, cooldown, maxExecutions, disabled): nothing ran.
     if (deliveryId) await releaseDelivery(hook.id, deliveryId);
     apiLogger.info({ hookId: hook.id, deliveryId }, 'Webhook hook skipped');
+    return;
+  }
+  // A run `/stop` dropped from the session's queue before it started
+  // (`droppedByStop`, hooks/actions.ts): nothing ran, so a redelivery may retry.
+  if (results.every((r) => r.result?.droppedByStop === true)) {
+    if (deliveryId) await releaseDelivery(hook.id, deliveryId);
+    apiLogger.info({ hookId: hook.id, deliveryId }, 'Webhook hook run dropped by stop before it ran');
+    return;
+  }
+
+  if (results.every((r) => r.result?.notStarted === true)) {
+    // Refused at capacity / quota before any agent existed: nothing of the
+    // event was handled. Release, so the sender's redelivery can retry.
+    if (deliveryId) await releaseDelivery(hook.id, deliveryId);
+    apiLogger.warn(
+      { hookId: hook.id, hookName: hook.name, deliveryId, error: results[0]?.result?.error },
+      'Webhook hook not started (capacity or quota); delivery released for retry',
+    );
     return;
   }
 

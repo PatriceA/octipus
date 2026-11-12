@@ -289,6 +289,45 @@ export async function claimDueHook(hook: Hook, nextRunAt: Date | null, oneShot: 
   return claimed !== undefined;
 }
 
+/** How long a refused one-shot keeps being retried after its scheduled time. */
+export const ONE_SHOT_RETRY_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * A scheduled run refused before it started any work (the agent cap, a quota
+ * or a paused spend budget: `notStarted`). The error is recorded on the hook
+ * rather than cleared. A recurring hook simply runs at its next time. A
+ * one-shot was already disabled by {@link claimDueHook}, so it is re-enabled
+ * with a retry time that backs off with the time since it was due (1 minute
+ * up to 1 hour), for up to {@link ONE_SHOT_RETRY_WINDOW_MS}; after that it
+ * stays disabled with the error. Only a row this tick left as it was (still
+ * disabled, no next run) is re-enabled, so an edit or delete meanwhile wins.
+ */
+export async function retryNotStartedHook(
+  hook: Hook,
+  oneShot: boolean,
+  scheduledAt: string | undefined,
+  error: string,
+  now = new Date(),
+): Promise<Date | null> {
+  const due = scheduledAt ? new Date(scheduledAt).getTime() : now.getTime();
+  const late = Math.max(0, now.getTime() - (Number.isFinite(due) ? due : now.getTime()));
+  const retryAt = oneShot && late < ONE_SHOT_RETRY_WINDOW_MS
+    ? new Date(now.getTime() + Math.min(Math.max(late, 60_000), 60 * 60_000))
+    : null;
+  const lastError = retryAt
+    ? `Not started: ${error}. Retrying at ${retryAt.toISOString()}.`
+    : `Not started: ${error}`;
+  if (retryAt) {
+    await getDb().update(hooks)
+      .set({ isEnabled: true, nextRunAt: retryAt, lastError, updatedAt: now })
+      .where(and(eq(hooks.id, hook.id), eq(hooks.isEnabled, false), isNull(hooks.nextRunAt)));
+  } else {
+    await getDb().update(hooks).set({ lastError, updatedAt: now }).where(eq(hooks.id, hook.id));
+  }
+  coreLogger.warn({ hookId: hook.id, name: hook.name, error, retryAt }, 'Scheduled hook refused before it started');
+  return retryAt;
+}
+
 /**
  * The sweeps of modules (docs/MODULES.md), each only while its module is on.
  * Not awaited, like the reminders: a slow mail server never holds up
@@ -431,7 +470,13 @@ async function processCronTick(): Promise<void> {
           { schedule: { cronExpression, scheduledTime: now, hookName: hook.name } },
           // The row this tick claimed (a one-shot is already disabled in the DB).
           { claimedRow: hook },
-        ).then(() => {
+        ).then(async (results) => {
+          const refused = results.length > 0 && results.every((r) => r.result?.notStarted === true);
+          if (refused) {
+            await retryNotStartedHook(hook, isDatetimeTask, scheduledAt, results[0]?.result?.error ?? 'Refused before it started')
+              .catch((err: unknown) => coreLogger.error({ err }, 'background task failed in cron-runner'));
+            return;
+          }
           db.update(hooks)
             .set({ lastError: null, updatedAt: new Date() })
             .where(eq(hooks.id, hook.id))

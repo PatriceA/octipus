@@ -4,6 +4,7 @@ import { buildAgentContext, fundingFor, withAgentUsage } from '@/core/agent/cont
 import { isToolOn } from '@/core/modules/registry';
 import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
+import { idempotent } from '@/api/idempotency';
 import { ROLE_CONFIGS } from '@/core/agent/roles';
 import { getExtensionRegistry } from '@/extensions/registry';
 import { getMCPBridge } from '@/mcp/bridge';
@@ -315,7 +316,7 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
   // bridge's direct-tool calls need an admin token (mcp-server/README.md).
   .post(
     '/:toolId/tools/:toolName/execute',
-    async ({ user, principal, params, body, set }) => {
+    idempotent('tools.execute', async ({ user, principal, params, body, set }) => {
       if (!user) {
         set.status = 401;
         return { error: 'Authentication required' };
@@ -362,7 +363,7 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
         return { error: `Tool execution failed: ${(err as Error).message}`,
           code: err instanceof ApprovalBlockedError ? err.code : 'tool_execution_failed' };
       }
-    },
+    }),
     {
       params: t.Object({ toolId: t.String(), toolName: t.String() }),
       body: t.Object({

@@ -14,11 +14,29 @@ import { summarizeWebhookPayload } from './webhook-summary';
 import { beginReadOnlyTurn, endReadOnlyTurn } from '@/security/read-only-turn';
 import { fence, isWebhookPath, UNTRUSTED_WEBHOOK_NOTE, WEBHOOK_EVENT_TAG, WEBHOOK_VALUE_TAG } from './untrusted';
 import { canActInSession } from '@/core/rooms/access';
+import { limitKindOf } from '@/core/errors/limit-refusal';
+import { isConcurrencyLimitError } from '@/core/errors/concurrency-limit';
+import { isSessionTurnCancelled } from '@/core/session-turn-lock';
 
 export interface ActionResult {
   success: boolean;
   data?: unknown;
   error?: string;
+  /**
+   * The action was refused before any work started (no agent existed: the
+   * concurrent-agent cap, a user quota or a paused spend budget). A webhook
+   * delivery whose every run is notStarted releases its claim so a sender
+   * redelivery can retry (webhook-delivery.ts), and the run's cooldown /
+   * maxExecutions reservation is handed back (manager.ts).
+   */
+  notStarted?: boolean;
+  /**
+   * The run waited behind the session's running turn and a user's `/stop`
+   * dropped it (session-turn-lock): nothing ran. Like `notStarted`, the
+   * reservation is handed back and a webhook delivery is released, but it is
+   * logged as skipped and never retried on its own (the user stopped it).
+   */
+  droppedByStop?: boolean;
 }
 
 /**
@@ -330,12 +348,51 @@ export async function resolveOwnedHookSessionId(
   return { sessionId: crypto.randomUUID(), minted: false };
 }
 
-/** Persist a freshly-minted session id back to the hook so later runs reuse it. */
-async function persistHookSessionId(hookId: string, sessionId: string): Promise<void> {
+/**
+ * Persist a freshly-minted session id back to the hook so later runs reuse
+ * it, and return the id this run should use, or null when the hook no longer
+ * exists. hooks.session_id references sessions, so `createSession` makes the
+ * row first (the id is freshly minted, so it never exists yet). The write
+ * only fills an empty column: when two first deliveries race, each mints an
+ * id, the first write wins, and the loser drops the session it created and
+ * uses the winner's id, so both runs share one session.
+ */
+export async function persistHookSessionId(
+  hookId: string,
+  sessionId: string,
+  createSession: () => Promise<unknown>,
+): Promise<string | null> {
   const { getDb } = await import('@/db/postgres');
   const { hooks: hooksTable } = await import('@/db/schema/hooks');
-  const { eq } = await import('drizzle-orm');
-  await getDb().update(hooksTable).set({ sessionId }).where(eq(hooksTable.id, hookId));
+  const { and, eq, isNull } = await import('drizzle-orm');
+  const db = getDb();
+  const stored = async () =>
+    (await db.select({ sessionId: hooksTable.sessionId }).from(hooksTable).where(eq(hooksTable.id, hookId)).limit(1))[0];
+  const before = await stored();
+  if (!before) return null;
+  if (before.sessionId) return before.sessionId;
+
+  await createSession();
+  const saved = await db
+    .update(hooksTable)
+    .set({ sessionId })
+    .where(and(eq(hooksTable.id, hookId), isNull(hooksTable.sessionId)))
+    .returning({ sessionId: hooksTable.sessionId });
+  if (saved.length > 0) return sessionId;
+
+  // Lost the race, or the hook was deleted meanwhile: the new session is unused.
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  await sessionRepository.delete(sessionId).catch((err: unknown) =>
+    coreLogger.warn({ err, hookId, sessionId }, 'Could not drop the session of a lost hook session mint'));
+  return (await stored())?.sessionId ?? null;
+}
+
+/**
+ * A spawn refused before any agent existed: the global concurrent-agent cap,
+ * a user quota or a paused spend budget. Nothing ran, so retrying is safe.
+ */
+export function isCapacityRefusal(err: unknown): boolean {
+  return limitKindOf(err) !== null || isConcurrencyLimitError(err);
 }
 
 async function executeSpawnAgent(
@@ -379,23 +436,38 @@ async function executeSpawnAgent(
   // scheduled/webhook hook appends to one session instead of spawning a new
   // one every run. A freshly minted id is persisted back to the hook row.
   // Only sessions the hook owner owns are accepted (resolveOwnedHookSessionId).
-  const { sessionId, minted } = thread?.sessionId
+  const resolved = thread?.sessionId
     ? { sessionId: thread.sessionId, minted: false }
     : hook
     ? await resolveOwnedHookSessionId(context, hook)
     : resolveHookSessionId(context, hook);
+  let sessionId = resolved.sessionId;
   const userId = hook?.userId || context.message?.userId || context.agent?.userId || 'system';
-  if(hook?.trigger==='heartbeat'){
-    const source=(await import('@/core/heartbeat')).heartbeatTaskSource(context);
-    if(source)await (await import('@/core/tasks/provenance')).persistHeartbeatTaskProvenance(userId,sessionId,source);
-  }
-  if (minted && hook) {
-    hook.sessionId = sessionId; // keep this run consistent with what we persist
+  if (resolved.minted && hook) {
+    // A heartbeat hook runs in an automation session, as runRoleHeartbeat
+    // creates it; any other hook in the 'hook' session its orchestrated turn
+    // would create.
+    const minted = sessionId;
+    const createSession = heartbeatRole
+      ? async () => (await import('@/db/repositories/session-repository')).sessionRepository.createAutomation({
+          id: minted, userId, channelType: 'heartbeat', channelId: userId, title: `${heartbeatRole} task worker`,
+        })
+      : async () => (await import('@/core/agent/session-resolver')).resolveSession(minted, userId, 'hook');
+    let kept: string | null = minted;
     try {
-      await persistHookSessionId(hook.id, sessionId);
+      // A concurrent first run may have saved its own id first: use that one.
+      kept = await persistHookSessionId(hook.id, minted, createSession);
     } catch (err) {
       coreLogger.error({ err, hookId: hook.id }, 'Failed to persist reusable hook sessionId; this run still proceeds');
     }
+    if (kept === null) return { success: false, error: `Hook ${hook.id} was deleted before its first run started` };
+    sessionId = kept;
+    hook.sessionId = sessionId; // keep this run consistent with what is stored
+  }
+  // Provenance goes on the session this run actually uses (after the mint).
+  if(hook?.trigger==='heartbeat'){
+    const source=(await import('@/core/heartbeat')).heartbeatTaskSource(context);
+    if(source)await (await import('@/core/tasks/provenance')).persistHeartbeatTaskProvenance(userId,sessionId,source);
   }
   // Use the hook owner's userId so notifications and permissions resolve correctly
 
@@ -494,6 +566,12 @@ async function executeSpawnAgent(
     } catch (err) {
       // A closing event ends its thread even when its turn fails.
       await closeThreadIfEnded(thread, hook);
+      // `/stop` dropped the run while it waited behind the session's running
+      // turn: nothing ran (`droppedByStop`).
+      if (isSessionTurnCancelled(err)) {
+        coreLogger.info({ hookId: hook?.id, sessionId }, 'Queued hook turn dropped by stop');
+        return { success: false, error: err.message, droppedByStop: true, data: { droppedByStop: true, ...threadData(thread) } };
+      }
       throw err;
     } finally {
       if (marked) endReadOnlyTurn(sessionId);
@@ -542,13 +620,28 @@ async function executeSpawnAgent(
       timeout: hookTimeout,
     });
   } catch (err) {
+    if (isCapacityRefusal(err)) {
+      // No agent exists, so nothing of this event was handled: report it as
+      // not started (a webhook delivery is then released for a redelivery to
+      // retry). A closing event still ends its thread: senders rarely
+      // redeliver, and a retry that does simply opens a fresh thread.
+      coreLogger.warn({ hookId: hook?.id, sessionId, err: (err as Error).message }, 'Hook spawn refused before any agent started');
+      await closeThreadIfEnded(thread, hook);
+      return { success: false, error: (err as Error).message, notStarted: true };
+    }
     await closeThreadIfEnded(thread, hook);
     throw err;
   }
 
-  // Run the agent and optionally notify owner with the result
+  // Run the agent and optionally notify owner with the result. The run waits
+  // its turn in the session like every other entry point (session-turn-lock),
+  // so a burst of deliveries to one hook session runs one after another
+  // instead of as parallel agents writing into the same transcript. The spawn
+  // above stays immediate: a capacity error still fails this action, and a
+  // queued worker does not count as running until its turn starts.
   if (message) {
-    withAgentUsage(userId, scope, () => agent.run(message)).then(async (result) => {
+    const { withSessionTurn } = await import('@/core/session-turn-lock');
+    withSessionTurn(sessionId, () => withAgentUsage(userId, scope, () => agent.run(message)), { owner: userId }).then(async (result) => {
       if (config.notifyOwner && userId && result) {
         try {
           await notifyOwnerWithResult(userId, result);
@@ -557,7 +650,13 @@ async function executeSpawnAgent(
         }
       }
     }).catch((error) => {
-      coreLogger.error({ error, agentId: agent.getContext().id }, 'Spawned agent failed');
+      if (!isSessionTurnCancelled(error)) {
+        coreLogger.error({ error, agentId: agent.getContext().id }, 'Spawned agent failed');
+        return;
+      }
+      // `/stop` dropped the run before it started: the spawned agent never ran.
+      coreLogger.info({ agentId: agent.getContext().id, sessionId }, 'Queued hook agent run dropped by stop');
+      agentManager.stop(agent.getContext().id);
     });
   }
 

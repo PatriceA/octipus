@@ -7,6 +7,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { OctiClient } from '../client.js';
+import { clientRequestIdSchema, retryKey, retryNotice } from './retry-key.js';
 
 export function registerRecurringTaskTools(server: McpServer, client: OctiClient): void {
   // ─── List hooks ───
@@ -51,8 +52,10 @@ For notify actions, set notifyOwner: true in action_config to notify the user on
       action_config: z.string().describe('JSON string of action config (e.g., {"notifyOwner": true, "notifyMessage": "Hello"})'),
       description: z.string().optional().describe('Hook description'),
       is_enabled: z.boolean().optional().describe('Enable immediately (default: true)'),
+      clientRequestId: clientRequestIdSchema,
     },
-    async ({ name, trigger, trigger_config, action, action_config, description, is_enabled }) => {
+    async ({ name, trigger, trigger_config, action, action_config, description, is_enabled, clientRequestId }) => {
+      const key = retryKey(clientRequestId);
       try {
         const hook = await client.createHook({
           name,
@@ -62,7 +65,7 @@ For notify actions, set notifyOwner: true in action_config to notify the user on
           action,
           actionConfig: JSON.parse(action_config),
           isEnabled: is_enabled ?? true,
-        });
+        }, key);
         const nextRun = (hook as any).nextRunAt;
         return {
           content: [{
@@ -71,6 +74,8 @@ For notify actions, set notifyOwner: true in action_config to notify the user on
           }],
         };
       } catch (error) {
+        const notice = retryNotice(error, 'octipus_create_recurring_task', key);
+        if (notice) return { content: [{ type: 'text' as const, text: notice }], isError: true };
         return { content: [{ type: 'text' as const, text: `Failed: ${(error as Error).message}` }], isError: true };
       }
     },

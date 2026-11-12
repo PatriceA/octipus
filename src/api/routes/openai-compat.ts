@@ -1,4 +1,5 @@
 import { budgetErrorBody } from '@/api/budget-error';
+import { isSessionTurnCancelled } from '@/core/session-turn-lock';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { SSE_HEADERS, chunkText, sseData, sseDone } from '@/api/sse';
@@ -273,6 +274,13 @@ export const openaiCompatRoutes = new Elysia()
       } catch (err) {
         const budget = budgetErrorBody(err);
         if (budget) { set.status = 429; return oaiError(budget.error, 'rate_limit_exceeded', budget.code); }
+        // A user's /stop dropped this agent-mode request while it waited
+        // behind the session's running turn: nothing ran. A conflict, not a fault.
+        if (isSessionTurnCancelled(err)) {
+          apiLogger.info({ model }, '/v1/chat/completions request dropped by stop');
+          set.status = 409;
+          return oaiError(err.message, 'invalid_request_error', 'turn_cancelled');
+        }
         const message = (err as Error).message || 'Internal error';
         // Unknown model / provider-resolution failures → 400 model_not_found;
         // everything else → 500 server_error.

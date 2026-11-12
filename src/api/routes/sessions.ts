@@ -14,6 +14,7 @@ import { addPlanFeedback } from '@/shared/work-plan';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
+import { idempotent } from '@/api/idempotency';
 import { readSessionFile, SessionFileError, writeSessionFile } from '@/core/session-files';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { canActInSession } from '@/core/rooms/access';
@@ -266,7 +267,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   // Create new session
   .post(
     '/',
-    async ({ user, principal, body, set }) => {
+    idempotent('sessions.create', async ({ user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) {
         set.status = 401;
         return { error: 'Not authenticated' };
@@ -317,7 +318,10 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       });
 
       return session;
-    },
+    }, {
+      // `channelId` is often minted per call (`mcp-<time>`); a retry is the same session request without it.
+      fingerprint: ({ body }) => ({ ...body, channelId: undefined }),
+    }),
     {
       body: t.Object({
         channelType: t.Optional(t.String()),

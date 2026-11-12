@@ -95,6 +95,29 @@ export interface MemoryRow {
   updatedAt?: string;
 }
 
+/** A non-2xx answer from the backend, with its status and (JSON) body. */
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly body: unknown) { super(message); }
+}
+
+/** The client gives up on a request after this long; the server may still be working on it. */
+export const REQUEST_TIMEOUT_MS = 25_000;
+
+/** True when the request was cut off by the client timeout (the server may still be running it). */
+export function isClientTimeout(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
+}
+
+/**
+ * The `Idempotency-Key` header for a call that creates work (docs/API.md): a
+ * retry with the same key gets the first call's result instead of a second
+ * copy of the work. `suffix` keys a helper request the call makes first (the
+ * session a spawned agent runs in), so it is not duplicated either.
+ */
+function idempotencyHeaders(key: string | undefined, suffix?: string): Record<string, string> {
+  return key ? { 'Idempotency-Key': suffix ? `${key}:${suffix}` : key } : {};
+}
+
 export class OctiClient {
   private readonly auth = new AuthSession();
 
@@ -110,7 +133,7 @@ export class OctiClient {
     let authHeaders = await this.auth.getHeaders(this.baseUrl);
     const send = (headers: Record<string, string>) => fetch(url, {
       ...options,
-      signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(25_000)]) : AbortSignal.timeout(25_000),
+      signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: { 'Content-Type': 'application/json', ...headers, ...options.headers },
     });
     let res = await send(authHeaders);
@@ -129,7 +152,9 @@ export class OctiClient {
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new Error(`API ${options.method || 'GET'} ${path} failed: ${res.status} ${body}`);
+      let parsed: unknown = body;
+      try { parsed = JSON.parse(body); } catch { /* not JSON */ }
+      throw new ApiError(`API ${options.method || 'GET'} ${path} failed: ${res.status} ${body}`, res.status, parsed);
     }
 
     return res.json() as Promise<T>;
@@ -145,11 +170,12 @@ export class OctiClient {
 
   // ─── Chat ───
 
-  async chat(message: string, sessionId?: string): Promise<ChatResponse> {
+  async chat(message: string, sessionId?: string, clientRequestId?: string): Promise<ChatResponse> {
     // No `expertId`: the expert layer is gone. A request is routed to a model
     // lane by what it asks for, and a specialist is a ROLE the agent spawns.
     return this.request<ChatResponse>('/api/chat', {
       method: 'POST',
+      headers: idempotencyHeaders(clientRequestId),
       body: JSON.stringify({
         message,
         sessionId,
@@ -158,9 +184,10 @@ export class OctiClient {
     });
   }
 
-  async createSession(opts: { channelType?: string; title?: string; context?: Record<string, unknown> }): Promise<{ id: string }> {
+  async createSession(opts: { channelType?: string; title?: string; context?: Record<string, unknown>; clientRequestId?: string }): Promise<{ id: string }> {
     return this.request<{ id: string }>('/api/sessions', {
       method: 'POST',
+      headers: idempotencyHeaders(opts.clientRequestId, 'session'),
       body: JSON.stringify({
         channelType: opts.channelType || 'mcp',
         channelId: `mcp-${Date.now().toString(36)}`,
@@ -187,14 +214,15 @@ export class OctiClient {
     return res.agents || [];
   }
 
-  async spawnAgent(message: string, model?: string, topic?: string): Promise<Agent> {
+  async spawnAgent(message: string, model?: string, topic?: string, clientRequestId?: string): Promise<Agent> {
     // POST /api/agents requires a sessionId (body schema: `sessionId: t.String()`).
     // Without one the spawn 422s ("Invalid request data"), which made
     // `octipus_spawn_agent` fail unconditionally. Create a session first so the
     // spawned agent has a home for its messages/events, then spawn into it.
-    const session = await this.createSession({ channelType: 'mcp', title: 'MCP agent' });
+    const session = await this.createSession({ channelType: 'mcp', title: 'MCP agent', clientRequestId });
     return this.request<Agent>('/api/agents', {
       method: 'POST',
+      headers: idempotencyHeaders(clientRequestId),
       body: JSON.stringify({ sessionId: session.id, message, model, topic }),
     });
   }
@@ -269,8 +297,8 @@ export class OctiClient {
     return res.tools || [];
   }
 
-  async executeTool(toolId: string, toolName: string, args: Record<string, unknown>): Promise<unknown> {
-    return this.runTool(toolId, toolName, args);
+  async executeTool(toolId: string, toolName: string, args: Record<string, unknown>, clientRequestId?: string): Promise<unknown> {
+    return this.runTool(toolId, toolName, args, clientRequestId);
   }
 
   /**
@@ -283,11 +311,12 @@ export class OctiClient {
    * knowledge base with 1600 indexed chunks, and `octipus_read_knowledge`
    * rendered "undefined". Unwrap in one place; the helpers just name the tool.
    */
-  private async runTool<T>(toolId: string, toolName: string, args: Record<string, unknown>): Promise<T> {
+  private async runTool<T>(toolId: string, toolName: string, args: Record<string, unknown>, clientRequestId?: string): Promise<T> {
     const res = await this.request<{ result?: T; error?: string }>(
       `/api/tools/${toolId}/tools/${toolName}/execute`,
       {
         method: 'POST',
+        headers: idempotencyHeaders(clientRequestId),
         body: JSON.stringify({ args }),
       },
     );
@@ -365,9 +394,10 @@ export class OctiClient {
     trigger: string; triggerConfig: Record<string, unknown>;
     action: string; actionConfig: Record<string, unknown>;
     isEnabled?: boolean; cooldownMs?: number; maxExecutions?: number;
-  }): Promise<Record<string, unknown>> {
+  }, clientRequestId?: string): Promise<Record<string, unknown>> {
     return this.request('/api/hooks', {
       method: 'POST',
+      headers: idempotencyHeaders(clientRequestId),
       body: JSON.stringify(params),
     });
   }
@@ -465,9 +495,10 @@ export class OctiClient {
     return this.request('/api/pipelines/templates');
   }
 
-  async createPipeline(templateName: string, description: string): Promise<any> {
+  async createPipeline(templateName: string, description: string, clientRequestId?: string): Promise<any> {
     return this.request('/api/pipelines', {
       method: 'POST',
+      headers: idempotencyHeaders(clientRequestId),
       body: JSON.stringify({ templateName, description }),
     });
   }

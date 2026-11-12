@@ -30,6 +30,42 @@ import { foldCacheCounters } from './usage';
 const MAX_CONCURRENT_CLI = Math.max(1, Number(process.env.OCTIPUS_CLI_MAX_CONCURRENT ?? 2));
 /** How long a CLI binary's presence (`which`/`where`) is trusted. */
 export const CLI_BINARY_CHECK_TTL_MS = 10 * 60_000;
+
+/** Each tool's binary presence and when it was looked up — one cache per process. */
+const toolAvailability = new Map<string, { ok: boolean; at: number }>();
+
+/** An uncached lookup of `tool`'s executable (configured path, else PATH). */
+export function cliToolInstalled(tool: Pick<CLIToolConfig, 'binaryPath'>): boolean {
+  try {
+    configuredCliBinary(tool.binaryPath);
+    return true;
+  } catch {
+    // Recoverable: binary not found → tool simply marked unavailable
+    return false;
+  }
+}
+
+/**
+ * Whether `tool`'s binary is installed, looked up at most once per
+ * `CLI_BINARY_CHECK_TTL_MS`: health checks ask on a timer, the swarm asks
+ * before every CLI child (`swarm/lane-availability.ts`), and an install or
+ * uninstall is rare enough to be seen within that window.
+ */
+export async function cliToolAvailable(
+  tool: Pick<CLIToolConfig, 'name' | 'binaryPath'>,
+  check: () => boolean | Promise<boolean> = () => cliToolInstalled(tool),
+): Promise<boolean> {
+  const known = toolAvailability.get(tool.name);
+  if (known && Date.now() - known.at < CLI_BINARY_CHECK_TTL_MS) return known.ok;
+  const ok = await check();
+  toolAvailability.set(tool.name, { ok, at: Date.now() });
+  return ok;
+}
+
+/** Test seam: forget every cached binary lookup. */
+export function __resetCliToolAvailabilityForTests(): void {
+  toolAvailability.clear();
+}
 let activeCliRuns = 0;
 const cliWaiters: Array<() => void> = [];
 
@@ -686,10 +722,6 @@ export class CLIProvider implements ModelProvider {
   readonly name = 'cli';
   readonly type = 'cli' as const;
 
-  private toolAvailability = new Map<string, boolean>();
-  /** When each tool's binary was last looked up (`which`/`where`). */
-  private toolCheckedAt = new Map<string, number>();
-
   supportsModel(modelName: string): boolean {
     return CLI_TOOLS.some(tool =>
       tool.modelPatterns.some(p => modelName === p || modelName.startsWith(p + '/'))
@@ -953,29 +985,13 @@ export class CLIProvider implements ModelProvider {
     return parts.join('\n\n');
   }
 
-  /**
-   * Whether `tool`'s binary is installed, looked up at most once per
-   * `CLI_BINARY_CHECK_TTL_MS`: health checks ask on a timer, and an install
-   * or uninstall is rare enough to be seen within that window.
-   */
+  /** Whether `tool`'s binary is installed — the shared cached check (`cliToolAvailable`). */
   private async toolAvailable(tool: CLIToolConfig): Promise<boolean> {
-    const known = this.toolAvailability.get(tool.name);
-    const at = this.toolCheckedAt.get(tool.name);
-    if (known !== undefined && at !== undefined && Date.now() - at < CLI_BINARY_CHECK_TTL_MS) return known;
-    const ok = await this.checkToolAvailable(tool);
-    this.toolAvailability.set(tool.name, ok);
-    this.toolCheckedAt.set(tool.name, Date.now());
-    return ok;
+    return cliToolAvailable(tool, () => this.checkToolAvailable(tool));
   }
 
   private async checkToolAvailable(tool: CLIToolConfig): Promise<boolean> {
-    try {
-      configuredCliBinary(tool.binaryPath);
-      return true;
-    } catch {
-      // Recoverable: binary not found → tool simply marked unavailable
-      return false;
-    }
+    return cliToolInstalled(tool);
   }
 }
 

@@ -273,6 +273,9 @@ export class AgentWorker extends BaseAgentWorker {
    */
   private toolBailoutRetries: number = 0;
 
+  /** The native loop drains steering at its next model call while it runs (gateway send modes). */
+  acceptsMidTurnSteering(): boolean { return this.getStatus() === 'running'; }
+
   /** Inject a message into the agent's context mid-run. */
   steer(message: AgentMessage): void {
     this.steeringQueue.push(message);
@@ -327,8 +330,8 @@ export class AgentWorker extends BaseAgentWorker {
   }
 
   /** Collect every still-pending detached child. Used by collect_children and auto-collect. */
-  async collectAllDetached(timeoutMs: number): Promise<ChildResult[]> {
-    return this.detached.collectAll(timeoutMs);
+  async collectAllDetached(timeoutMs: number, opts?: { wakeOnUserRequest?: boolean }): Promise<ChildResult[]> {
+    return this.detached.collectAll(timeoutMs, opts);
   }
 
   /**
@@ -2986,8 +2989,13 @@ export class AgentWorker extends BaseAgentWorker {
     }
   }
 
-  /** Drain the steering queue into the message context. */
+  /**
+   * Drain the steering queue into the message context. Child-waiting notices
+   * ride along at the same points, as system context, but they are not
+   * steering: they never trigger a replan, add iterations or wake a collect.
+   */
   private drainSteeringQueue(): void {
+    for (const content of this.detached.takeNotices()) this.messages.push({ role: 'system', content, timestamp: new Date() });
     if (this.steeringQueue.length > 0) {
       const guidance = this.steeringQueue.splice(0);
       this.messages.push(...guidance);

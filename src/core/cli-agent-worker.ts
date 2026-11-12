@@ -194,6 +194,13 @@ export class CLIAgentWorker extends BaseAgentWorker {
   }
   private pendingGuidanceCount(): number { return this.steeringQueue.length + this.pendingCodexGuidance.size; }
   canAcceptSteering(): boolean { return this.acceptingSteering && !this.aborted; }
+  /**
+   * Will guidance sent now reach THIS turn? A buffered CLI (bufferOutput:
+   * Vibe, Antigravity) reads it only with a later Octipus tool response and
+   * otherwise reports it unhandled at the end, so a user message is better
+   * queued as the next turn (gateway send modes).
+   */
+  acceptsMidTurnSteering(): boolean { return this.canAcceptSteering() && getCLIToolConfig(this.context.model)?.bufferOutput !== true; }
   private liveGuidance = new Map<string, AgentMessage[]>();
   /**
    * Unacknowledged live guidance an Octipus tool response has already gone
@@ -238,7 +245,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
   pendingDetachedCount(): number { return this.detached.count(); }
   listPendingDetached(): PendingChild[] { return this.detached.list(); }
   collectDetached(childId: string, timeoutMs: number): Promise<ChildResult | null> { return this.detached.collect(childId, timeoutMs); }
-  collectAllDetached(timeoutMs: number): Promise<ChildResult[]> { return this.detached.collectAll(timeoutMs); }
+  collectAllDetached(timeoutMs: number, opts?: { wakeOnUserRequest?: boolean }): Promise<ChildResult[]> { return this.detached.collectAll(timeoutMs, opts); }
 
   /** User guidance stays with this worker; only its explicit tool call steers a child. */
   steer(message: AgentMessage): boolean {
@@ -411,6 +418,10 @@ When a task matches one of these skills, load it with get_skill before starting 
         note: executionEnvironmentFor(this.context) ? 'Registered shell commands follow executionEnvironment above. Host runs use the OS account; sandbox runs require isolation; SSH runs use the remote machine. API connections have separate service targets.' : 'Registered shell commands use the Octipus sandbox. Without approved hostServices a missing Docker socket describes that sandbox, not the host. Native vendor CLI Bash may have different host access. A root context does not inherit child pipeline approval; inspect that pipeline status for its scope.' },
       workPlan: formatWorkPlanContext(state), guidance: guidance.map(m => m.content),
       ...(this.isCodex() ? { guidanceItems: [...this.pendingCodexGuidance].map(([id, message]) => ({ id, content: message.content })) } : {}),
+      // Child-waiting notices go out passively here, on the next Octipus tool
+      // response, not as steering: they must not interrupt the CLI's turn or
+      // read as user text, and stay withdrawable until this point.
+      ...((notices => notices.length ? { childNotices: notices } : {})(this.detached.takeNotices())),
       ...(this.detached.count() > 0 ? {
         detachedChildren: this.detached.list().map(pc => ({ childId: pc.childId, topic: pc.topic, runningMs: Date.now() - pc.startedAt })),
         detachedChildrenNote: 'Call collect_children before your final answer to receive their results; otherwise the run collects them for you.',
@@ -757,9 +768,15 @@ When a task matches one of these skills, load it with get_skill before starting 
       if (!this.systemMessages.some(message => message.includes(VAULT_USAGE_GUIDANCE))) {
         this.addSystemMessage(VAULT_USAGE_GUIDANCE);
       }
+      // request_user_approval is a root tool: a child told to call it looked
+      // for a tool it does not have. Its own tool approvals reach the user
+      // anyway (and its parent learns it is waiting), so say that instead.
+      const userDecisionGuidance = this.toolExecutor.getTools().has('request_user_approval')
+        ? 'Use request_user_approval when a user decision is required'
+        : 'Tool calls that need approval are put to the user automatically; any other decision you need from the user, state it in your final answer';
       this.addSystemMessage(`You are connected to your Octipus run through the octipus MCP server. Its tools are your actual registered Octipus tools, including skills, plans and delegation when allowed. Use these tools for Octipus work.
 ` +
-        `Communication: work quietly. Public intermediate text from the root agent is shown in the user's chat. Write only when there is a meaningful finding, blocker or change of direction; skip routine narration, heartbeats and tool-by-tool summaries. Do not repeat the same update in text and send_status_update. Use request_user_approval when a user decision is required, and give a concise final answer when finished.
+        `Communication: work quietly. Public intermediate text from the root agent is shown in the user's chat. Write only when there is a meaningful finding, blocker or change of direction; skip routine narration, heartbeats and tool-by-tool summaries. Do not repeat the same update in text and send_status_update. ${userDecisionGuidance}, and give a concise final answer when finished.
 ` +
         `Tool selection: use available dedicated tools before shell equivalents. For reading, searching and editing files, use your CLI's native file tools or the corresponding Octipus tools; do not substitute shell commands or Python scripts when a suitable tool is available. Use the shell for builds, tests, git and system commands that need it. Explicit user instructions take precedence.
 ` +

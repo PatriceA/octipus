@@ -245,4 +245,52 @@ describe('collect_children', () => {
     ]);
     expect(out).not.toContain('<receipt');
   });
+
+  test('formatCollectedResults: a child blocked on the user is "waiting", with its request and no authority to answer', () => {
+    const base = { kind: 'subagent' as const, status: 'timeout' as const, output: null, usedTokens: 0, durationMs: 5, spawnedChildren: [] };
+    const out = formatCollectedResults([
+      { ...base, nodeId: 'n1', notes: 'collect_children paused: a child is waiting on the user; this one is still running.',
+        userRequests: [{ id: 'req-1', kind: 'approval', summary: 'shell: echo "a<b"' }] },
+      { ...base, nodeId: 'n2', notes: 'collect_children timeout after 10ms',
+        userRequests: [{ id: 'q-1', kind: 'question', summary: 'Which database?' }] },
+      { ...base, nodeId: 'n3', notes: 'collect_children paused: a child is waiting on the user; this one is still running.' },
+    ]);
+    expect(out).toContain('nodeId="n1" status="waiting"');
+    expect(out).toContain('<pendingApproval id="req-1" kind="approval" summary="shell: echo &quot;a&lt;b&quot;" />');
+    expect(out).toContain('nodeId="n2" status="waiting"');
+    expect(out).toContain('<pendingQuestion id="q-1" kind="question" summary="Which database?" />');
+    expect(out).toContain('You cannot answer this request for them');
+    expect(out).toContain('It was NOT cancelled');
+    expect(out).toContain('A later collect_children waits for the child');
+    // The sibling it woke is still running, not failed or waiting.
+    expect(out).toContain('nodeId="n3" status="running"');
+    expect(out).toContain('another child is waiting on the user');
+  });
+
+  test('formatCollectedResults: user guidance that interrupted the collect is kept, ahead of the wait', () => {
+    const out = formatCollectedResults([
+      { nodeId: 'n1', kind: 'subagent', status: 'timeout', output: null, usedTokens: 0, durationMs: 5, spawnedChildren: [],
+        notes: 'collect_children interrupted by new guidance; child is still running.',
+        userRequests: [{ id: 'req-1', kind: 'approval', summary: 'shell: make' }] },
+    ]);
+    expect(out).toContain('status="waiting"');
+    const guidance = out.indexOf('interrupted by new user guidance');
+    expect(guidance).toBeGreaterThan(-1);
+    expect(guidance).toBeLessThan(out.indexOf('<pendingApproval'));
+  });
+
+  test('collect_children asks to be woken when a child opens a request to the user', async () => {
+    let seen: unknown;
+    const worker = {
+      listPendingDetached: () => [{ childId: 'c1', startedAt: Date.now(), taskBrief: 't', topic: 'research', promise: Promise.resolve({} as ChildResult) }],
+      async collectAllDetached(_timeoutMs: number, opts?: unknown): Promise<ChildResult[]> { seen = opts; return []; },
+    } as unknown as AgentWorker;
+    const parent = makeAgentParent();
+    await createCollectChildrenTool(parent, { current: worker }).execute({}, { space: null, trigger: 'user', funding: 'own',
+      id: 'ctx', sessionId: parent.rootSessionId, userId: 'u', model: '',
+      topic: '', role: 'research', status: 'running',
+      createdAt: new Date(), updatedAt: new Date(), metadata: {},
+    });
+    expect(seen).toEqual({ wakeOnUserRequest: true });
+  });
 });

@@ -5,6 +5,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { OctiClient } from '../client.js';
+import { clientRequestIdSchema, retryKey, retryNotice } from './retry-key.js';
 
 export function registerPipelineTools(server: McpServer, client: OctiClient): void {
   server.tool(
@@ -37,10 +38,12 @@ export function registerPipelineTools(server: McpServer, client: OctiClient): vo
     {
       templateName: z.string().describe('Name of the pipeline template to use'),
       description: z.string().describe('Description of the pipeline purpose'),
+      clientRequestId: clientRequestIdSchema,
     },
-    async ({ templateName, description }) => {
+    async ({ templateName, description, clientRequestId }) => {
+      const key = retryKey(clientRequestId);
       try {
-        const result = await client.createPipeline(templateName, description);
+        const result = await client.createPipeline(templateName, description, key);
         return {
           content: [
             {
@@ -50,6 +53,8 @@ export function registerPipelineTools(server: McpServer, client: OctiClient): vo
           ],
         };
       } catch (error) {
+        const notice = retryNotice(error, 'octipus_create_pipeline', key);
+        if (notice) return { content: [{ type: 'text' as const, text: notice }], isError: true };
         return {
           content: [{ type: 'text' as const, text: `Failed to create pipeline: ${(error as Error).message}` }],
           isError: true,

@@ -27,6 +27,14 @@ export interface RunHookOptions {
    * lastExecutedAt untouched), and is logged with source 'manual_test'.
    */
   manualTest?: boolean;
+  /**
+   * Record a cooldown or maxExecutions skip as a hook_executions row with
+   * status 'skipped', so a dropped event is visible. Set for one targeted
+   * hook ({@link HookManager.triggerHook}: webhook, cron, heartbeat), not for
+   * the event fan-out of {@link HookManager.trigger}, where every message
+   * would write a row for every hook in cooldown.
+   */
+  logSkips?: boolean;
 }
 
 export interface TriggerHookOptions extends RunHookOptions {
@@ -119,7 +127,7 @@ export class HookManager extends EventEmitter {
     }
     // Every agent this hook starts records it (Mission control's "Started by").
     const source = options.manualTest ? 'manual' : hook.trigger === 'heartbeat' ? 'heartbeat' : hook.trigger === 'webhook' ? 'webhook' : 'schedule';
-    const result = await withAgentOrigin({ source, hookId: hook.id, hookName: hook.name }, () => this.runHook(hook!, event, context, options));
+    const result = await withAgentOrigin({ source, hookId: hook.id, hookName: hook.name }, () => this.runHook(hook!, event, context, { logSkips: true, ...options }));
     return result ? [result] : [];
   }
 
@@ -131,9 +139,23 @@ export class HookManager extends EventEmitter {
     hook: Hook,
     event: TriggerEvent,
     context: TriggerContext,
-    { manualTest = false }: RunHookOptions = {},
+    { manualTest = false, logSkips = false }: RunHookOptions = {},
   ): Promise<HookExecutionResult | null> {
     const startTime = Date.now();
+    const skipped = async (reason: string, detail: Record<string, unknown> = {}): Promise<null> => {
+      // One row per webhook delivery (each is an event that was dropped). A
+      // schedule or heartbeat tick repeats the same skip every interval, so
+      // it is logged only when the hook's latest row is not already that skip.
+      if (logSkips && event.type !== 'webhook' && (await this.lastSkipReason(hook.id)) === reason) return null;
+      if (logSkips) {
+        await this.logExecution({
+          hookId: hook.id, source: 'hook', status: 'skipped', triggerType: event.type, actionType: hook.action,
+          error: reason, result: { skipped: reason, ...detail }, durationMs: Date.now() - startTime,
+          triggerContext: this.sanitizeContext(context),
+        });
+      }
+      return null;
+    };
 
     // Tenancy guard: a context that names a user only ever runs that user's hooks.
     const contextUserIds = [context.message?.userId, context.agent?.userId].filter(Boolean);
@@ -175,14 +197,14 @@ export class HookManager extends EventEmitter {
       const elapsed = Date.now() - new Date(hook.lastExecutedAt).getTime();
       if (elapsed < hook.cooldownMs) {
         coreLogger.debug({ hookId: hook.id, cooldownRemaining: hook.cooldownMs - elapsed }, 'Hook in cooldown');
-        return null;
+        return skipped('cooldown', { cooldownRemainingMs: hook.cooldownMs - elapsed });
       }
     }
 
     // Check max executions
     if (!manualTest && hook.maxExecutions && hook.executionCount >= hook.maxExecutions) {
       coreLogger.debug({ hookId: hook.id }, 'Hook max executions reached');
-      return null;
+      return skipped('max_executions', { executionCount: hook.executionCount, maxExecutions: hook.maxExecutions });
     }
 
     // A deactivated owner's hooks never fire — scheduled, heartbeat, webhook
@@ -202,9 +224,11 @@ export class HookManager extends EventEmitter {
     // maxExecutions still allow it, so concurrent triggers (two webhook
     // deliveries, two API processes) can't both get past the checks above.
     // A manual test is not a real run and reserves nothing.
-    if (!manualTest && !(await this.reserveRun(hook))) {
+    const previousLastExecutedAt = hook.lastExecutedAt;
+    const reservedAt = manualTest ? null : await this.reserveRun(hook);
+    if (!manualTest && !reservedAt) {
       coreLogger.debug({ hookId: hook.id }, 'Hook run not reserved (cooldown or max executions)');
-      return null;
+      return skipped('not_reserved');
     }
 
     // Execute the action
@@ -212,11 +236,17 @@ export class HookManager extends EventEmitter {
       const result = await executeAction(hook, context);
       const executionTime = Date.now() - startTime;
 
+      // Refused before any work started (capacity / quota): hand the
+      // reservation back, so a retry of the same event is not then skipped
+      // by the cooldown or maxExecutions this run never used.
+      // A run a user's /stop dropped from the session queue never started either.
+      if ((result.notStarted || result.droppedByStop) && reservedAt) await this.unreserveRun(hook, reservedAt, previousLastExecutedAt);
+
       // Log execution
       await this.logExecution({
         hookId: hook.id,
         source: manualTest ? 'manual_test' : 'hook',
-        status: result.success ? 'success' : 'error',
+        status: result.success ? 'success' : result.droppedByStop ? 'skipped' : 'error',
         triggerType: event.type,
         actionType: hook.action,
         result: result.data as Record<string, unknown> | undefined,
@@ -350,11 +380,12 @@ export class HookManager extends EventEmitter {
    * Atomically claim one run of `hook`: bump executionCount and stamp
    * lastExecutedAt, but only if the row still passes maxExecutions and
    * cooldown (evaluated by the database, so two concurrent callers can't both
-   * pass). Returns false when another run got there first. Semantics match
+   * pass). Returns this run's lastExecutedAt stamp, or null when another run
+   * got there first. Semantics match
    * the in-memory checks in runHook: a null or 0 maxExecutions / cooldownMs
    * means unlimited / none.
    */
-  private async reserveRun(hook: Hook): Promise<boolean> {
+  private async reserveRun(hook: Hook): Promise<Date | null> {
     const rows = await this.db
       .update(hooks)
       .set({
@@ -371,9 +402,50 @@ export class HookManager extends EventEmitter {
       )
       .returning({ executionCount: hooks.executionCount, lastExecutedAt: hooks.lastExecutedAt });
     const row = rows[0];
-    if (!row) return false;
-    this.mirrorCounters(hook, row.executionCount, row.lastExecutedAt ?? new Date());
-    return true;
+    if (!row) return null;
+    const stamp = row.lastExecutedAt ?? new Date();
+    this.mirrorCounters(hook, row.executionCount, stamp);
+    return stamp;
+  }
+
+  /** The reason of the hook's latest execution row when it is a skip, else null. */
+  private async lastSkipReason(hookId: string): Promise<string | null> {
+    try {
+      const [last] = await this.db
+        .select({ status: hookExecutions.status, error: hookExecutions.error })
+        .from(hookExecutions)
+        .where(eq(hookExecutions.hookId, hookId))
+        .orderBy(desc(hookExecutions.createdAt))
+        .limit(1);
+      return last?.status === 'skipped' ? last.error : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Undo {@link reserveRun} for a run that never started. The execution count
+   * is always given back. lastExecutedAt is rewound to its value before this
+   * run only while it still holds this run's own stamp (`reservedAt`, from
+   * reserveRun, not the shared hook object), so a run reserved since keeps
+   * its cooldown.
+   */
+  private async unreserveRun(hook: Hook, reservedAt: Date, previous: Date | null): Promise<void> {
+    try {
+      const rows = await this.db
+        .update(hooks)
+        .set({
+          executionCount: sql`GREATEST(${hooks.executionCount} - 1, 0)`,
+          // The column keeps microseconds, the Date read back only milliseconds.
+          lastExecutedAt: sql`CASE WHEN date_trunc('milliseconds', ${hooks.lastExecutedAt}) = ${reservedAt.toISOString()}::timestamptz
+                               THEN ${previous ? new Date(previous).toISOString() : null}::timestamptz ELSE ${hooks.lastExecutedAt} END`,
+        })
+        .where(eq(hooks.id, hook.id))
+        .returning({ executionCount: hooks.executionCount, lastExecutedAt: hooks.lastExecutedAt });
+      if (rows[0]) this.mirrorCounters(hook, rows[0].executionCount, rows[0].lastExecutedAt);
+    } catch (err) {
+      coreLogger.warn({ err, hookId: hook.id }, 'Could not hand back the run reservation of a hook run that never started');
+    }
   }
 
   /**
@@ -381,7 +453,7 @@ export class HookManager extends EventEmitter {
    * cached copy, so the in-memory cooldown / maxExecutions checks hold
    * between cache reloads.
    */
-  private mirrorCounters(hook: Hook, executionCount: number, lastExecutedAt: Date): void {
+  private mirrorCounters(hook: Hook, executionCount: number, lastExecutedAt: Date | null): void {
     hook.executionCount = executionCount;
     hook.lastExecutedAt = lastExecutedAt;
     const cached = (this.hookCache.get(hook.trigger) || []).find((h) => h.id === hook.id);

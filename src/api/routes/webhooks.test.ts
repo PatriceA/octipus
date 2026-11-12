@@ -54,6 +54,8 @@ vi.mock('@/hooks/actions', async (importOriginal) => ({
     bodies.push(context.webhook?.body);
     if (cfg.throw === true) throw new Error('kaboom');
     if (cfg.fail === true) return { success: false, error: 'boom' };
+    // A run the session's /stop dropped before it started (hooks/actions.ts).
+    if (cfg.droppedByStop === true) return { success: false, error: 'Dropped by /stop before it ran', droppedByStop: true };
     return { success: true, data: { ran: hook.name } };
   }),
 }));
@@ -154,6 +156,7 @@ beforeAll(async () => {
        ${wh('b-slow', 'bslow', 'spawn_agent', { block: true }, '', userB)},
        ${wh('failing', 'failing', 'notify', { fail: true })},
        ${wh('throwing', 'throwing', 'notify', { throw: true })},
+       ${wh('dropped', 'dropped', 'spawn_agent', { droppedByStop: true })},
        ${wh('incoming', null, 'notify', {})},
        ${wh('incoming-slow', null, 'spawn_agent', { block: true })}`,
   );
@@ -667,6 +670,15 @@ describe('POST /api/webhooks/:path — idempotency', () => {
     await drain();
     expect(executed).toEqual(['failing']);
     expect(await executionErrors(ids.failing)).toEqual(['boom']);
+  });
+
+  test('a run /stop dropped from the session queue is not run: released for a redelivery', async () => {
+    const id = `d-${rand(8)}`;
+    expect((await deliver('dropped', '{}', { 'x-github-delivery': id })).status).toBe(202);
+    await drain();
+    expect((await deliver('dropped', '{}', { 'x-github-delivery': id })).status).toBe(202);
+    await drain();
+    expect(executed).toEqual(['dropped', 'dropped']);
   });
 
   test('an action that throws is done too (no listener-less error event rejects the run)', async () => {
