@@ -88,7 +88,8 @@ test.skipIf(process.platform !== 'win32')('job kills descendants on forced termi
   async function start(name: string, authority: string) {
     const path = join(data, `${name}.txt`);
     const code = `const {spawn}=require('node:child_process'),fs=require('node:fs');
-      const pulse=()=>fs.writeFileSync(${JSON.stringify(path)},String(Date.now()));
+      // Append so a concurrent observer never sees a truncate-before-write gap.
+      const pulse=()=>fs.appendFileSync(${JSON.stringify(path)},String(Date.now()));
       pulse();setInterval(pulse,50);
       const report=(extra)=>console.log(JSON.stringify({pid:process.pid,...extra}));
       try {
