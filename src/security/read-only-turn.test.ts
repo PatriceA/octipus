@@ -31,7 +31,7 @@ describe('readOnlyRefusal', () => {
     beginReadOnlyTurn(S);
     for (const call of [
       { toolId: 'filesystem', action: 'read' }, { toolId: 'filesystem', action: 'list' },
-      { toolId: 'git', action: 'read' }, { toolId: 'github', action: 'read' }, { toolId: 'gitlab', action: 'read' },
+      { toolId: 'git', action: 'read' }, { toolId: 'github', action: 'read' },
       { toolId: 'knowledge', action: 'search' }, { toolId: 'agent', action: 'list_skills', readOnlyHandler: true },
       { toolId: 'cli-native:Grep', action: 'Grep' },
     ]) expect(readOnlyRefusal(S, U, call), JSON.stringify(call)).toBeUndefined();

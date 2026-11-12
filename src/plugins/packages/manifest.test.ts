@@ -18,8 +18,32 @@ function problems(value: unknown): string[] {
 describe('plugin manifest', () => {
   test('the fixture fits the contract', () => {
     const m = parseManifest(FIXTURE);
-    expect(m.tools.send_letter.effect).toBe('external');
+    expect(m.tools?.send_letter.effect).toBe('external');
     expect(m.settings?.[0].key).toBe('region');
+  });
+
+  test('dashboards: unique ids, declared read tools only, the package runtime', () => {
+    const dash = (tool: string, extra: Record<string, unknown> = {}) => ({
+      ...FIXTURE, dashboards: [{ id: 'main', title: 'Main', widgets: [{ id: 'a', type: 'stat', title: 'A', tool }] }], ...extra,
+    });
+    expect(parseManifest(dash('echo')).dashboards?.[0].widgets[0].tool).toBe('echo');
+    expect(problems(dash('send_letter')).some((p) => p.includes('a external tool; a widget\'s tool is a read tool'))).toBe(true);
+    expect(problems(dash('nope')).some((p) => p.includes('not declared'))).toBe(true);
+    const twice = { ...FIXTURE, dashboards: [{ id: 'm', title: 'M', widgets: [{ id: 'a', type: 'stat', title: 'A', tool: 'echo' }, { id: 'a', type: 'text', title: 'B', tool: 'echo' }] }] };
+    expect(problems(twice).some((p) => p.includes('widget "a" twice'))).toBe(true);
+    expect(problems(dash('echo', { dashboards: [{ id: 'm', title: 'M', widgets: [{ id: 'a', type: 'html', title: 'A', tool: 'echo' }] }] })).some((p) => p.includes('widget type'))).toBe(true);
+    expect(problems(dash('echo', { dashboards: [{ id: 'm', title: 'M', widgets: [{ id: 'a', type: 'stat', title: 'A', tool: 'echo', refreshSeconds: 5 }] }] })).some((p) => p.includes('refreshSeconds'))).toBe(true);
+    // The consent shows the input as JSON: what it shows is what is sent.
+    for (const input of [{ q: 'open\u202Eclosed' }, { 'q\u200B': 'x' }, { nested: ['a\u0007'] }]) {
+      expect(problems(dash('echo', { dashboards: [{ id: 'm', title: 'M', widgets: [{ id: 'a', type: 'stat', title: 'A', tool: 'echo', input }] }] })).some((p) => p.includes('invisible')), JSON.stringify(input)).toBe(true);
+    }
+  });
+
+  test('mail:send needs an external tool to be handed to', () => {
+    const tools = (effect: string) => ({ ...FIXTURE, host: ['mail:read', 'mail:send'], tools: { send_it: { description: 'Sends', effect } } });
+    expect(problems(tools('write')).some((p) => p.includes('mail:send is handed only to external tools'))).toBe(true);
+    expect(() => parseManifest(tools('external'))).not.toThrow();
+    expect(parseManifest({ ...FIXTURE, host: ['mail:read', 'mail:draft', 'calendar:read', 'calendar:write'] }).host).toHaveLength(4);
   });
 
   test('every problem is reported at once', () => {
@@ -52,5 +76,45 @@ describe('plugin manifest', () => {
   test('the server may not be started from the signature file', () => {
     expect(problems({ ...FIXTURE, server: { command: 'node', args: ['octipus-plugin.sig'] } })).toEqual([expect.stringMatching(/may not name octipus-plugin\.sig/)]);
     expect(problems({ ...FIXTURE, server: { command: './OCTIPUS-PLUGIN.SIG' } })).toEqual([expect.stringMatching(/may not name/)]);
+  });
+
+  describe('runtime', () => {
+    const IN_PROCESS = {
+      name: 'auditlog', version: '1.0.0', apiVersion: '1.0.0', title: 'Audit log', description: 'Hooks every tool call',
+      runtime: 'in-process', entry: 'index.mjs',
+    };
+
+    test('package is the default; in-process needs an entry and no server or tools', () => {
+      expect(parseManifest(FIXTURE).runtime).toBeUndefined();
+      expect(parseManifest({ ...FIXTURE, runtime: 'package' }).runtime).toBe('package');
+      const m = parseManifest(IN_PROCESS);
+      expect([m.runtime, m.entry, m.server, m.tools]).toEqual(['in-process', 'index.mjs', undefined, undefined]);
+      expect(parseManifest({ ...IN_PROCESS, entry: 'dist/plugin.mjs' }).entry).toBe('dist/plugin.mjs');
+      expect(problems({ ...IN_PROCESS, runtime: 'wasm' }).length).toBeGreaterThan(0);
+    });
+
+    test('a package still needs server and tools, and takes no entry', () => {
+      const { server: _s, tools: _t, ...bare } = FIXTURE;
+      const found = problems(bare);
+      expect(found).toEqual(expect.arrayContaining([expect.stringMatching(/^server: required/), expect.stringMatching(/^tools: required/)]));
+      expect(problems({ ...FIXTURE, entry: 'index.mjs' })).toEqual([expect.stringMatching(/^entry: only for runtime "in-process"/)]);
+    });
+
+    test('in-process refuses what only a sandbox or a server would give, every problem at once', () => {
+      const found = problems({
+        ...IN_PROCESS, entry: undefined, server: FIXTURE.server, tools: FIXTURE.tools, network: ['api.example.com'], maxProtection: 2,
+        settings: FIXTURE.settings, secrets: FIXTURE.secrets,
+      });
+      for (const field of ['entry', 'server', 'tools', 'network', 'maxProtection', 'settings', 'secrets']) {
+        expect(found.some((p) => p.startsWith(`${field}:`)), field).toBe(true);
+      }
+    });
+
+    test('the entry is a relative module path inside the package, and the name has no -', () => {
+      for (const entry of ['/etc/passwd.js', 'index.ts', 'dist/plugin.cjs', '../x.ts', 'a/../../x.ts', './index.ts', 'index.json', 'octipus-plugin.sig', 'a\\b.ts', '']) {
+        expect(problems({ ...IN_PROCESS, entry }).some((p) => p.startsWith('entry:')), entry).toBe(true);
+      }
+      expect(problems({ ...IN_PROCESS, name: 'audit-log' })).toEqual([expect.stringMatching(/^name: an in-process plugin's name/)]);
+    });
   });
 });

@@ -62,7 +62,7 @@ test('saving a new token offers the API setup step immediately', async ({ authen
   await page.getByLabel('Value',{exact:true}).fill('SYNTHETIC_SECRET_VALUE');
   await expect(page.getByLabel(/Set up API access after saving/)).toBeChecked();
   await page.getByRole('button',{name:'Save secret & set up API'}).click();
-  await expect(page.getByRole('heading',{name:'connect api',exact:true})).toBeVisible();
+  await expect(page.getByRole('heading',{name:/^Connect API$/i,exact:true})).toBeVisible();
   await expect(page.getByLabel('Server origin',{exact:true})).toBeVisible();
   expect(secretPayload).toMatchObject({name:'NEW_API_TOKEN',value:'SYNTHETIC_SECRET_VALUE'});
   await expect(page.getByLabel('Value',{exact:true})).toHaveCount(0);

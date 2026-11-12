@@ -80,7 +80,7 @@ export default function AdminUsersPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="section-label">users</h2>
+        <h2 className="section-label">Users</h2>
         <button
           type="button"
           onClick={() => { setShowCreate(true); setError(null); }}

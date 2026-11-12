@@ -2394,10 +2394,12 @@ models"); the multi-user invariants it keeps:
 - **Room modes** reuse the group channels' gate; the probe is install work,
   the answering turn a `listen` turn run as the member who asked.
 
-## 32. Group-channel bridge and space connectors (coworking S5, §9.4–§9.5)
+## 32. Group-channel bridge and the space's GitHub token (coworking S5, §9.4–§9.5)
 
 Details: [docs/SPACES.md](../SPACES.md), "Group channels bound to a space"
-and "Space connectors" (migration `0133_space_bridge_connectors`).
+and "The space's GitHub token" (migration `0133_space_bridge_connectors`,
+named when the token was one of the space's connectors, a framework since
+removed).
 
 - **Binding needs both owners.** Only a member who owns both the group channel
   and the space can bind them, with an explicit acknowledgement that everyone
@@ -2408,7 +2410,8 @@ and "Space connectors" (migration `0133_space_bridge_connectors`).
   funding. Linked people outside the space get a private hint and no turn;
   unlinked people's posts are only fenced transcript context.
 - **Space secrets are their own vault scope** (`space`, keyed by the space
-  through `dekForRow`), read only by connector code after a membership
+  through `dekForRow`), read only by the GitHub tool and the space's tool
+  home after a membership
   check, never through `{{secret:}}`, and never exempt from the flow guard.
 - **No host identity in a space.** Each run of the shell, the Git and GitHub
   tools and CLI agents in a space gets a fresh temporary tool home (0700),

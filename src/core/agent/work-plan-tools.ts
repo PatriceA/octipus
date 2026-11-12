@@ -50,16 +50,16 @@ export async function submitWorkPlan(
 export function createWorkPlanTools(): ToolHandler[] {
   return [{
     name: 'get_work_plan',
-    description: 'Read the visible session plan, revision, and user feedback before revising it.',
+    description: 'Read the full session plan: step evidence, details and feedback history. The revision and pending feedback are already in the visible work plan; read this only when you need more.',
     parameters: { type: 'object', properties: {} },
     execute: async (_args, context) => workPlanRepository.read(context.sessionId, context.userId),
   }, {
     name: 'update_work_plan',
-    description: 'Publish and track a user-visible work plan. Read the current revision first. Use kind=proposal when the user asks you to make, write, or revise a plan without implementing it, as well as whenever plan mode is on. A proposal contains the actual FUTURE IMPLEMENTATION steps, all pending, plus the complete markdown artifact in details. Exploring, designing, and writing the proposal are planning notes, not checklist steps. Use kind=execution when tracking work that is really being performed; done means implementation was completed, not that planning or research was completed and not that it was independently verified. Update execution steps at meaningful milestones and handle pending user feedback explicitly. Use newPlan for a new request; preserve completed steps when revising existing work. This does not approve actions or leave plan mode. exit_plan_mode replaces details with the final submitted markdown.',
+    description: 'Publish and track a user-visible work plan. Send it in the same turn as real work, never as a round of its own. Use kind=proposal when the user asks you to make, write, or revise a plan without implementing it, as well as whenever plan mode is on. A proposal contains the actual FUTURE IMPLEMENTATION steps, all pending, plus the complete markdown artifact in details. Exploring, designing, and writing the proposal are planning notes, not checklist steps. Use kind=execution when tracking work that is really being performed; done means implementation was completed, not that planning or research was completed and not that it was independently verified. Update execution steps at meaningful milestones and handle pending user feedback explicitly. Use newPlan for a new request; preserve completed steps when revising existing work. This does not approve actions or leave plan mode. exit_plan_mode replaces details with the final submitted markdown.',
     parameters: {
       type: 'object',
       properties: {
-        revision: { type: 'integer', description: 'Current state revision from get_work_plan.' },
+        revision: { type: 'integer', description: 'Current revision, as shown in the visible work plan; 0 when no plan is shown.' },
         newPlan: { type: 'boolean', description: 'Start a different request, archiving the previous plan.' },
         kind: {
           type: 'string',

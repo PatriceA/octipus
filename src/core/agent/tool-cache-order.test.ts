@@ -1,6 +1,6 @@
 /**
  * C3 for the tool block: two users of one install, with different per-user
- * and runtime tools (connectors, direct MCP tools, extension tools, the
+ * and runtime tools (plugin tools, direct MCP tools, extension tools, the
  * inline-UI tool) and
  * different sticky lazy groups, send the same bytes up to and including the
  * tools breakpoint, because those tools come after the ones the install
@@ -12,14 +12,9 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import * as config from '@/config';
 import type { ToolAdvertisement, ToolHandler } from '@/core/agent-base';
-import { AgentWorker } from '@/core/agent-worker';
-import type { AgentContext, AgentMessage } from '@/core/types';
+import type { AgentMessage } from '@/core/types';
 import type { CompletionOptions } from '@/models/litellm-client';
-import { AnthropicProvider } from '@/models/providers/anthropic-provider';
-
-const h = (name: string, toolId?: string): ToolHandler => ({
-  name, toolId, description: `${name} does its thing`, parameters: { type: 'object', properties: { q: { type: 'string' } } }, execute: async () => null,
-});
+import { countBreakpoints, fixtureHandler as h, nativeRequestBody, workerRequestTools } from './root-request-fixture';
 
 /** The install's built-ins, in the order the root registers them. */
 const builtins = [
@@ -40,7 +35,7 @@ const mcpMeta = ['mcp_list_resources', 'mcp_read_resource', 'mcp_get_prompt', 'm
  * then MCP (where `getToolsForRole` appends it: the bridge's direct tools,
  * which differ here as servers change, then its meta-tools, which every user
  * of the install gets), the inline-UI tool, the
- * discovery and meta-tools, the self-report tool; connectors and extension
+ * discovery and meta-tools, the self-report tool; plugin and extension
  * tools where a worker gets them (after the role's tools).
  */
 function registered(user: 'alice' | 'bob'): ToolHandler[] {
@@ -50,7 +45,7 @@ function registered(user: 'alice' | 'bob'): ToolHandler[] {
     ...(alice ? [h('mcp__crm__lookup', 'mcp'), h('mcp__plugin_weather__forecast', 'mcp')] : []),
     ...mcpMeta,
     ...(alice ? [h('ext_quotes__get', 'ext_quotes')] : [h('ext_tides__get', 'ext_tides')]),
-    ...(alice ? [h('gmail_search', 'connector')] : [h('slack_post', 'connector'), h('slack_read', 'connector')]),
+    ...(alice ? [h('gmail_search', 'plugin-gmail')] : [h('slack_post', 'plugin-slack'), h('slack_read', 'plugin-slack')]),
     ...(alice ? [h('inline_ui_ask', 'inline-ui')] : []),
     ...discovery,
     ...meta,
@@ -58,17 +53,8 @@ function registered(user: 'alice' | 'bob'): ToolHandler[] {
   ];
 }
 
-const ctx = (userId: string): AgentContext => ({
-  id: `w-${userId}`, sessionId: '00000000-0000-0000-0000-000000000000', userId, topic: 't', model: 'claude-opus-5-5',
-  role: 'general', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {}, space: null, trigger: 'user', funding: 'own',
-});
-
-type Probe = { requestTools(m: { provider?: string; modelId: string }): { declarableTools: NonNullable<CompletionOptions['tools']>; sharedToolCount: number; deferredTools?: string[] } };
-
 function request(user: 'alice' | 'bob', advertisement: ToolAdvertisement, model = { provider: 'anthropic', modelId: 'claude-opus-5-5' }) {
-  const w = new AgentWorker(ctx(user), { maxIterations: 1, contextWindowSize: 100_000, timeout: 60_000, maxTokenBudget: 0, toolOutputSoftCap: 1000, toolAdvertisement: advertisement });
-  w.registerTools(registered(user));
-  return (w as unknown as Probe).requestTools(model);
+  return workerRequestTools(user, registered(user), advertisement, model);
 }
 
 const messages: AgentMessage[] = [
@@ -80,11 +66,11 @@ const messages: AgentMessage[] = [
 ];
 
 function nativeBody(r: ReturnType<typeof request>): Record<string, unknown> {
-  return (new AnthropicProvider() as unknown as { buildNativeBody(o: CompletionOptions, s: boolean): Record<string, unknown> }).buildNativeBody({
+  return nativeRequestBody({
     model: 'claude-opus-5-5', messages: messages as CompletionOptions['messages'], tools: r.declarableTools,
     ...(r.deferredTools ? { deferredTools: r.deferredTools } : {}), sharedToolCount: r.sharedToolCount,
     cacheScope: 'root:g1', cachePacing: 'human',
-  }, false);
+  });
 }
 
 type Tool = { name: string; cache_control?: unknown; defer_loading?: boolean };
@@ -97,7 +83,6 @@ function upToBreakpoint(body: Record<string, unknown>): string {
   // comparison is of what the API renders before the breakpoint.
   return JSON.stringify(tools.slice(0, at + 1).filter((t) => !t.defer_loading));
 }
-const countBreakpoints = (body: unknown) => JSON.stringify(body).split('"cache_control"').length - 1;
 const toolName = (t: NonNullable<CompletionOptions['tools']>[number]) => (t.type === 'function' ? t.function.name : t.type);
 
 const lazy = (groupOrder: string[]): ToolAdvertisement => ({

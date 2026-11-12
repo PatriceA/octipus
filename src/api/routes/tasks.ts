@@ -1,3 +1,4 @@
+import { activateHeartbeatService } from '@/api/heartbeat-settings';
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
 import { disableRoleHeartbeatHook, ensureRoleHeartbeatHook } from '@/core/heartbeat';
@@ -13,7 +14,8 @@ import { parseTaskDate, resolveUserTimezone } from '@/core/tasks/timezone';
 import { queryRaw } from '@/db/postgres';
 import { contentRepos } from '@/db/repositories/content';
 import type { NewTask } from '@/db/schema/tasks';
-import { isAuthenticated, type Principal } from '@/security/principal';
+import { API_SCOPES } from '@/security/scopes';
+import { isAuthenticated, requireScope, type Principal } from '@/security/principal';
 import { SpaceError } from '@/security/space-access';
 import { apiLogger } from '@/utils/logger';
 
@@ -180,6 +182,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
+      if (!requireScope(principal, API_SCOPES.WRITE)) { set.status = 403; return { error: 'Write scope required to change role heartbeat settings' }; }
       const invalid = await roleAgentToggleError(body.role, body.enabled);
       if (invalid) {
         set.status = 400;
@@ -206,6 +209,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           const hookId = await ensureRoleHeartbeatHook(user.id, body.role);
           // The hook row is read fresh when it fires, so no cache to reload.
           if (template !== undefined) await setRolePipelineTemplate(user.id, body.role, template?.id ?? null);
+          await activateHeartbeatService(user, principal);
           return { role: body.role, enabled: true, hookId, ...(template !== undefined ? { pipelineTemplate: template?.id ?? null } : {}) };
         }
         await disableRoleHeartbeatHook(user.id, body.role);

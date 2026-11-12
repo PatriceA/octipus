@@ -1,4 +1,3 @@
-export { AtlassianTool, atlassianTool } from './atlassian';
 export { BaseTool, createParameterSchema, type ToolAvailability, type ToolContext, type ToolExecutionOptions } from './base-tool';
 export { BrowserTool, browserTool } from './browser';
 export { BrowserExtTool, browserExtTool } from './browser-ext';
@@ -12,7 +11,6 @@ export { EmailProcessorTool, emailProcessorTool } from './email-processor';
 export { FilesystemTool, filesystemTool } from './filesystem';
 export { GitTool, gitTool } from './git';
 export { GitHubTool, githubTool } from './github';
-export { GitLabTool, gitlabTool } from './gitlab';
 export { GoogleWorkspaceTool, googleWorkspaceTool } from './google-workspace';
 export { KnowledgeTool, knowledgeTool } from './knowledge';
 export { MessagingTool, messagingTool } from './messaging';
@@ -36,8 +34,8 @@ import { getToolRegistry } from './registry';
 /**
  * Register all built-in tools and plugins.
  *
- * The built-ins come from the static map in `discovery.ts`. Plugins live in
- * `extensions/` and are loaded by `loadPlugins()`.
+ * The built-ins come from the static map in `discovery.ts`. Legacy plugins
+ * live in `~/.octipus/legacy-plugins/` and are loaded by `loadPlugins()`.
  */
 export async function registerBuiltinTools(): Promise<void> {
   const registry = getToolRegistry();
@@ -64,7 +62,7 @@ export async function registerBuiltinTools(): Promise<void> {
   }
   toolLogger.info({ count: discovered.length }, 'Built-in tools registered (auto-discovered)');
 
-  // Load plugins from extensions/ directory
+  // Load legacy plugins from ~/.octipus/legacy-plugins/
   const plugins = await loadPlugins();
   for (const plugin of plugins) {
     try {

@@ -1,4 +1,5 @@
 import { readdir } from 'fs/promises';
+import { homedir } from 'os';
 import { importModuleAt } from '@/utils/import-module';
 import { join, resolve } from 'path';
 import { checkApiVersion, manifestTools, validateManifest as validateManifestContract } from '@octipus/plugin-sdk';
@@ -12,10 +13,50 @@ const pluginLogger = createChildLogger({ component: 'plugin' });
 const loadedPlugins: Map<string, LoadedPlugin> = new Map();
 
 /**
- * Resolve the root extensions/ directory (project root)
+ * Where legacy plugins are loaded from: `~/.octipus/legacy-plugins/`, next to
+ * the in-process extensions (`~/.octipus/extensions/`) and outside any Octipus
+ * checkout or install. A plugin someone makes stays on their machine; the
+ * loader never reads plugins from the server's working directory.
  */
-function getExtensionsDir(): string {
-  return resolve(process.cwd(), 'extensions');
+export function legacyPluginsDir(home: string = homedir()): string {
+  return join(home, '.octipus', 'legacy-plugins');
+}
+
+/** Where legacy plugins used to load from, until they moved out of the checkout. */
+const FORMER_DIR = 'extensions';
+
+/** Warned once per process about plugins left in `<cwd>/extensions`. */
+let formerDirWarned = false;
+
+/**
+ * `<cwd>/extensions` is no longer read. If it still holds plugin directories
+ * (each with a `plugin.json`), say once which ones and where they go now.
+ */
+async function warnFormerDir(cwd: string, dir: string): Promise<void> {
+  if (formerDirWarned) return;
+  const former = resolve(cwd, FORMER_DIR);
+  if (resolve(former) === resolve(dir)) return;
+  let names: string[];
+  try {
+    names = (await readdir(former, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return;
+  }
+  const left: string[] = [];
+  for (const name of names) {
+    if (await fileAt(join(former, name, 'plugin.json')).exists()) left.push(name);
+  }
+  if (left.length === 0) return;
+  formerDirWarned = true;
+  pluginLogger.warn(
+    { dir: former, plugins: left, newDir: dir },
+    `Legacy plugins in ${former} are no longer loaded (${left.join(', ')}): plugins do not load from the Octipus checkout or the server's working directory. Move each one to ${dir}, or convert it to a plugin package with \`octi plugin convert ${join(former, '<name>')}\` (docs/PLUGINS.md#converting-to-a-plugin-package)`,
+  );
+}
+
+/** Test hook: forget that the `<cwd>/extensions` warning was given. */
+export function resetFormerDirWarningForTests(): void {
+  formerDirWarned = false;
 }
 
 /**
@@ -114,26 +155,33 @@ async function loadPlugin(dir: string, opts: { fresh?: boolean } = {}): Promise<
   return { manifest, module, directory: dir };
 }
 
-/**
- * Scan the extensions/ directory and load all valid plugins.
- * Returns the list of successfully loaded plugins.
- */
-export async function loadPlugins(): Promise<LoadedPlugin[]> {
-  const extensionsDir = getExtensionsDir();
+export interface LoadPluginsOptions {
+  /** The directory to load from (default `~/.octipus/legacy-plugins`). */
+  dir?: string;
+  /** The working directory checked for plugins left in `<cwd>/extensions` (default `process.cwd()`). */
+  cwd?: string;
+}
 
-  // Check if extensions/ directory exists
+/**
+ * Scan the legacy plugin directory (`~/.octipus/legacy-plugins`) and load
+ * all valid plugins. Returns the list of successfully loaded plugins.
+ */
+export async function loadPlugins(opts: LoadPluginsOptions = {}): Promise<LoadedPlugin[]> {
+  const extensionsDir = resolve(opts.dir ?? legacyPluginsDir());
+  await warnFormerDir(opts.cwd ?? process.cwd(), extensionsDir);
+
   let entries: string[];
   try {
     entries = (await readdir(extensionsDir, { withFileTypes: true }))
       .filter((e) => e.isDirectory())
       .map((e) => e.name);
   } catch {
-    pluginLogger.debug('No extensions/ directory found, skipping plugin loading');
+    pluginLogger.debug({ dir: extensionsDir }, 'No legacy plugin directory found, skipping plugin loading');
     return [];
   }
 
   if (entries.length === 0) {
-    pluginLogger.debug('No plugin directories found in extensions/');
+    pluginLogger.debug({ dir: extensionsDir }, 'No plugin directories found in the legacy plugin directory');
     return [];
   }
 

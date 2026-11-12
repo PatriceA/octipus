@@ -1,3 +1,10 @@
+import { getExecutionSignal } from '@/core/execution-scope';
+import { executionEnvironmentFor } from '@/security/execution-environments';
+import { environmentCredentialOptions } from '@/security/environment-credentials';
+import { environmentShellOptions, shellOperationsFor, quoteRuntimeArg } from '@/security/environment-runtime';
+import { LocalShellOperations } from '@/tools/shell/local-operations';
+import { HOST_IDENTITY_ENV } from '@/security/space-tool-env';
+import { environmentToolHome } from '@/security/environment-identity';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { type RunGhOptions, runGh } from '@/utils/gh';
@@ -163,6 +170,7 @@ export class GitHubTool extends BaseTool {
 
   getManifest(): ToolManifest {
     return {
+      execution: { kind: 'environment', program: 'gh' },
       id: this.id,
       name: this.name,
       version: this.version,
@@ -204,13 +212,24 @@ export class GitHubTool extends BaseTool {
    */
   private async runGhForCall(args: string[], opts: Omit<RunGhOptions, 'token' | 'toolHome'> = {}): Promise<string> {
     const context = this.caller.getStore();
-    if (!context?.space) return runGh(args, opts);
+    if (!context?.space) {
+      const environment = context ? executionEnvironmentFor(context) : undefined;
+      if (!environment || !context) return runGh(args, opts);
+      const home = environmentToolHome(context);
+      const credentials = await environmentCredentialOptions(context, { ...environmentShellOptions(context), timeout: opts.timeoutMs ?? 120000, signal: getExecutionSignal(context),
+        env: home?.env, ...(home ? { unsetEnv: HOST_IDENTITY_ENV } : {}), extraReadWrite: [...environment.roots, ...(home ? [home.dir] : [])] });
+      try {
+        const result = credentials.mask(await shellOperationsFor(context, new LocalShellOperations()).exec(['gh', ...args].map(quoteRuntimeArg).join(' '), environment.roots[0], credentials.options));
+        if (result.killed || (result.exitCode !== 0 && !opts.acceptExitCodes?.includes(result.exitCode ?? -1))) throw new Error(result.stderr || 'GitHub CLI did not complete');
+        return result.stdout;
+      } catch (error) { throw credentials.maskError(error); }
+    }
     const [{ agentPrincipal }, { spaceGithubToken }, { openSpaceToolHome }] = await Promise.all([
-      import('@/security/principal'), import('@/core/spaces/connectors'), import('@/security/space-tool-env'),
+      import('@/security/principal'), import('@/core/spaces/github-token'), import('@/security/space-tool-env'),
     ]);
     const token = await spaceGithubToken(agentPrincipal(context));
     if (!token) {
-      throw new Error('This space has no GitHub connection. A space owner can connect one under the space\'s settings → Connectors; '
+      throw new Error('This space has no GitHub connection. A space owner can add one under the space\'s settings → GitHub; '
         + 'the host\'s GitHub login is never used in a space.');
     }
     const toolHome = await openSpaceToolHome({ ...context, space: context.space });

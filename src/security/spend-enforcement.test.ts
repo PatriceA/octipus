@@ -211,13 +211,19 @@ describe('gate: dollar spend budget', () => {
     expect(row?.metadata).not.toHaveProperty('failureReason');
   });
 
-  test('heartbeat skips its tick while paused', async () => {
+  test('role task work pauses with spend while model-free personal checks remain available', async () => {
     const { evaluateHeartbeatGate } = await import('@/core/heartbeat');
-    const hook = { userId: aliceId, triggerConfig: {} } as unknown as import('@/db/schema/hooks').Hook;
+    const hook = { id: '11111111-aaaa-4000-8000-000000000001', userId: aliceId, trigger: 'heartbeat', triggerConfig: { role: 'coding' } } as unknown as import('@/db/schema/hooks').Hook;
     const r = await evaluateHeartbeatGate(hook, {
       enabled: true, intervalMinutes: 60, quietHoursStart: 22, quietHoursEnd: 7, quietHoursTimezone: 'UTC',
       maxRunsPerDay: 24, probeGithub: false, probeCalendar: false, calendarLookaheadMinutes: 60, probeEmail: false,
     }, new Date(new Date().setUTCHours(12, 0, 0, 0)));
     expect(r.decision).toEqual({ run: false, reason: 'spend_budget' });
+    const personal = await evaluateHeartbeatGate({ ...hook, triggerConfig: {} }, {
+      enabled: true, intervalMinutes: 60, quietHoursStart: 22, quietHoursEnd: 7, quietHoursTimezone: 'UTC',
+      maxRunsPerDay: 24, probeGithub: false, probeCalendar: false, calendarLookaheadMinutes: 60, probeEmail: false,
+    }, new Date(new Date().setUTCHours(12, 0, 0, 0)));
+    expect(personal.decision.run).toBe(true);
+    expect(personal.taskDispatch).toBeUndefined();
   });
 });

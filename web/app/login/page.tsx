@@ -171,12 +171,12 @@ export default function LoginPage() {
   };
 
   const inputClass =
-    'w-full px-3 py-2 bg-surface-container-low border border-outline-variant/60 rounded-lg text-[13px] text-on-surface placeholder-on-surface-variant/70 focus:outline-none focus:border-primary transition-colors';
+    'w-full px-3 py-2 bg-surface-container-low border border-outline-variant/60 rounded-lg text-[13px] text-on-surface placeholder-on-surface-variant focus:outline-none focus:border-primary transition-colors';
   const labelClass = 'block text-[10px] uppercase tracking-wider text-on-surface-variant mb-1';
 
   return (
     <div className="relative min-h-screen bg-background flex items-center justify-center p-4 font-sans overflow-hidden">
-      {/* CRT backdrop layers — dotted neural grid under a scanline wash. */}
+      {/* Keep authentication on the same readable surfaces as the workspace. */}
       <div className="relative w-full max-w-md animate-enter">
         <div className="mb-7 text-center">
           <img src="/companion-mark.svg" alt="" width={72} height={72} className="mx-auto mb-3" />
@@ -198,7 +198,7 @@ export default function LoginPage() {
                 value={totpCode}
                 onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 placeholder="000000"
-                className="w-full px-3 py-3 text-center text-2xl tracking-[0.5em] bg-surface-container-low border border-outline-variant/60 rounded-lg text-on-surface placeholder-on-surface-variant/70 focus:outline-none focus:border-primary"
+                className="w-full px-3 py-3 text-center text-2xl tracking-[0.5em] bg-surface-container-low border border-outline-variant/60 rounded-lg text-on-surface placeholder-on-surface-variant focus:outline-none focus:border-primary"
                 autoFocus
                 required
               />
@@ -310,7 +310,7 @@ export default function LoginPage() {
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
                     aria-label={showPassword ? 'Hide password' : 'Show password'}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-outline-variant hover:text-on-surface"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-on-surface"
                   >
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
@@ -356,7 +356,7 @@ export default function LoginPage() {
           </div>
         )}
 
-        <p className="text-center text-[11px] text-outline mt-5">
+        <p className="text-center text-[11px] text-on-surface-variant mt-5">
           octipus · self-hosted · multi-provider
         </p>
       </div>

@@ -7,7 +7,195 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Changed
+
+- Plugin-store values have an explicit 128-container nesting limit, returning
+  `400 invalid_value` consistently on supported Node runtimes before database work.
+
+- Product help now searches the bundled manual locally on demand, without startup or scheduled documentation embeddings.
+
+- **Useful token budgets from the first run.** The default per-user daily
+  cap is now 10,000,000 tokens. Shared root turns start with 2,000,000,
+  agents/subagents with 800,000/300,000, pipelines with 10,000,000, and
+  plugin models/background runs with 10,000,000 per day and 1,000,000 per
+  run. Explicit admin, user and saved-run limits remain in place.
+- **Actionable budget refusals.** Chat and API errors name the applicable
+  limit, daily reset and settings page; typed quota/spend refusals remain
+  HTTP 429 rather than generic server errors. Explicit session zero budgets
+  correctly mean unlimited. See [configuration](docs/CONFIGURATION.md#default-token-budgets).
+
 ### Security
+
+- **The plugin store holds the four boundaries (security review of the
+  store, before release).** Protection levels are enforced at runtime on the
+  store as everywhere else:
+  - A host API call now works at the calling session's protection level too:
+    a tool in a level-2 conversation stores its entries at 2 and may not write
+    notes or tasks (`403 read_level`), and `documents:write` stores at no
+    lower. Before, a store write took only what the package itself had read,
+    so a level-2 conversation could be laundered to level 1 through the store.
+  - An entry above the package's `maxProtection` answers a get, a write, a
+    compare-and-set and a delete as a missing key (`404`, no version, no
+    level); a list no longer counts them (`withheld` is gone) and a quota
+    refusal no longer says what is used. A write, a version conflict and a
+    delete raise the caller to the entry's level, and an overwrite never
+    lowers it. When `maxProtection` drops (an upgrade, an egress scope
+    approved), the entries above it are deleted in the same transaction
+    (audited with counts).
+  - An upgrade to another signer or source deletes the store by default;
+    keeping it is the optional, unticked consent item
+    `change:store-handover` (*"Hands the stored data of N users (X MB) to the
+    new publisher"*), `keepStoreData` in the API and `--keep-store-data` in
+    the CLI, audited. An upgrade that drops `store` deletes the entries.
+  - A plugin's pages, sidebar entries and page store are served only while
+    the package may start (not revoked, its content approved: the check
+    before every start, cached 30 seconds and forgotten on any approval,
+    install or revocation).
+  - The quota charges 128 bytes per entry and counts the value as the
+    database serialises it; at most 10,000 entries per user and package
+    (`413 too_many_entries`); a running total per package, user and
+    workspace replaces a sum on every write. Page writes share the tools'
+    store write limit. Aggregated store audit counts are written on a timer
+    and at shutdown instead of being dropped.
+  - The store is per user and per workspace: what is kept in a space is read
+    there only, and leaving the space deletes it. "Delete my data" takes an
+    optional workspace. Migration `0182_plugin_store` (not released yet) is
+    changed in place.
+- **Native Windows plugin sandbox.** Marketplace and local package plugins
+  can run in a less-privileged AppContainer through `octipus-sandbox.exe`,
+  with a kill-on-close Job object (2 GiB, 32 processes). Package files are
+  read-only; dedicated data and scratch are writable. A private named-pipe
+  broker enforces declared hosts without an internet capability or loopback
+  exemption. Node proxy adaptation supports existing proxy-aware packages.
+  Exact release installs obtain the tested binary; source Windows installs
+  and updates build it with Rust and Visual Studio C++ Build Tools. See
+  [Windows sandbox](docs/WINDOWS-SANDBOX.md) for persistent folder permissions,
+  runtime limits and Windows CI evidence.
+
+- **Plugin sandbox is a boundary of its own, required by default (final
+  security review).** Package plugins were sandboxed only under
+  `security.shellSandbox`, which defaults to off: an unwrapped plugin could
+  read `DATABASE_URL` and `MASTER_KEY` from `/proc/<ppid>/environ`. New
+  setting **`plugins.sandbox: required | off`** (default `required`, env
+  `PLUGINS_SANDBOX`): a package plugin never starts without a working runner
+  (bwrap or firejail on Linux, sandbox-exec on macOS), and starting, enabling
+  and consenting are refused with what to install. `off` applies only to
+  plugins not from the marketplace; a marketplace plugin always needs a
+  runner. **Upgrade note:** on a host without a runner, enabled plugins stop
+  until one is installed (or, for local plugins only, `plugins.sandbox: off`).
+  **Windows** uses the native AppContainer helper described above. The
+  Docker image installs bubblewrap (`docker-compose.yml` documents the
+  seccomp/AppArmor options bwrap may need); a startup log line and the admin
+  page say *plugin sandbox: active runner X / unavailable*. Declarations, the
+  network status and the marketplace card say "NOT sandboxed on this host" /
+  "Network not enforced on this host" where that is so.
+- **No terminal for sandboxed commands (TIOCSTI).** bwrap runs with
+  `--new-session`, package servers are spawned in their own session and
+  stopped by process group, and the Seatbelt profile allows nothing on
+  `/dev/tty`. firejail adds `--caps.drop=all --nonewprivs`, and `--private`
+  when nothing under `$HOME` is whitelisted.
+- **Pages are egress:** a package with pages sees data up to level 1 whatever
+  its `maxProtection` says (also in `octi plugin permissions` and the index).
+- **A plugin's own text never reaches a model:** the system prompt lists a
+  plugin server by a host-written line, tool descriptions are the manifest's
+  (consented), undeclared tools are dropped, free text is removed from input
+  schemas, and a `tools/list_changed` cannot swap any of it.
+- **Expiry:** `keys.json` must carry `expires`, at most 90 days after
+  `generatedAt`; the marketplace index at most 45 days (recommended 60 and 30).
+- **Plugin routes check API token scopes** (`api:admin` for every change,
+  `api:read` for reads; user routes `api:read`/`api:write`) and refuse a
+  cookie-signed change from another origin (a sibling subdomain included).
+- **Protection-level laundering:** what a package read is kept per package and
+  user across calls; notes and tasks are refused after a read above level 1,
+  documents are written at no lower level; reset on disable, upgrade, uninstall.
+- **Key revocations signed by a root revoked since lapse** (`signerRevoked`)
+  unless a trusted root lists them again.
+- **Permissions summary:** `secrets` and `settings` (names, sorted, after
+  `network`) and a command's `input`; the diff lists every tool effect change
+  (down to read widens, external → write narrows), a new secret widens, and a
+  wildcard host over a short domain gets a guidance warning.
+
+- **Plugin marketplace hardening (independent review).** Marketplace trust
+  stays inside the marketplace: `keys.json` may revoke only keys it endorses
+  or ever endorsed (and roots), and its key revocations and the index's
+  package revocations apply only to packages installed from the marketplace,
+  installs from it and its index; never to `trustedPublishers`, directory,
+  URL or bundled installs or other registries. A marketplace package starts
+  only with a valid signature by a key `keys.json` endorses now, whatever
+  `requireSignature` says (a key simply dropped from `keys.json` stops its
+  packages). A package revocation from a signing key revoked since is
+  flagged `signerRevoked` and not enforced until a trusted key lists it
+  again; listing pins record their signer and a revoked signer's pins are
+  dropped. An entry that replaces a pinned version is refused alone
+  ("replaced: refused"), the rest of the index kept; `DELETE
+  /api/plugin-packages/pins` resets one pin (audited, with a reason). Every
+  instance applies the revocations in force (index read, cron tick), and a
+  loaded in-process plugin is unloaded when its start check refuses it now.
+  One `plugin_revoked` notification per index. A root key's revocation can no
+  longer be cleared. `keys.json` and index v2 take an optional `expires`
+  (refused after it); a banner and a `plugin_marketplace_stale` notification
+  when the last accepted one is older than 7 days. Control, bidi and
+  invisible characters are removed from v1 descriptions and echoed names, and
+  refused in more forms (U+00AD, U+115F, U+180E, U+2060–U+2064, U+3164, tag
+  characters). The asset proxy re-checks that an image is listed before
+  serving it from cache and coalesces concurrent fetches; the marketplace's
+  tarballs stay on its origin through redirects. `plugins.registries` refuses
+  the name `marketplace` and duplicate names. **Migration** 0180 adds
+  `plugin_marketplace_keys.endorsed_key_ids` and `plugin_listing_pins.signed_by`.
+- **`octi plugin`:** `sign-keys` checks the keys file as a host reads it
+  before signing; `keygen` warns loudly about an unencrypted key; new
+  `verify-keys <keys.json> --root-pub <file>... --json` and `unpack
+  <tarball> --out <dir> --json` (the install's strict tar reader).
+
+- **One install consent per item, bound to the content.** A plugin is
+  previewed first (`POST /api/plugin-packages/preview`: downloaded and
+  verified with the install's own checks, staged outside the store, nothing
+  installed) and installed only with every declaration agreed to (`POST
+  /api/plugin-packages/install { previewId, contentHash, accepted, enable? }`):
+  the staged copy must still hash to the content hash shown and declare the
+  same items, and the installed version must be the one compared against. The
+  approvals (content, contributions, host scopes, in-process,
+  `model:cli-tools`) are recorded with the row in one transaction and audited
+  as one `consent` row. Previews are per admin, single-use and expire after
+  15 minutes. An upgrade carries unchanged items it had agreed to and asks
+  for what is new or changed; another source, signer, an older version or a
+  newer Octipus needed are items to agree to, not refusals. Installed
+  packages (an agent's) are agreed to and enabled with `GET`/`POST
+  /api/plugin-packages/:name/consent`. `octi plugin install` and `upgrade`
+  ask per item at a terminal or take `--accept all|<ids>`, and refuse
+  otherwise. The web app uses this everywhere it installs, upgrades or
+  enables; the separate approval endpoints keep working.
+- **Plugin permissions name what contributions and pages are bound to
+  (M3).** `computePermissions` (`octi plugin permissions --json`, index v2
+  `permissions`) now lists commands with their tool, schedules with cron,
+  tool and input, events with their tool, the prompt with the sha256 of its
+  bytes and its roles, the context tool and roles, pages with path, title and
+  entry, and `ui: { dir, sha256 }` of the page tree, so a schedule switched
+  to another tool, a cron change, new prompt text or a replaced page is a
+  change (and widens) in the update diff and the consent. **Breaking for
+  registries:** an index must list the new shape (the host's deep-equality
+  check refuses the old one).
+
+- **The plugin marketplace, host side.** A built-in registry for
+  `https://plugins.octipus.cc/index.json`, anchored by two root public keys
+  that ship as placeholders: until a build carries real ones the marketplace
+  is off (never fetched, never trusted) and Admin says it is not configured.
+  Root keys sign only `keys.json`, which endorses the signing keys (rotation
+  and revocation without a release; the backup root may revoke the root,
+  never the reverse). An install from a registry recomputes the permissions
+  from the downloaded manifest and refuses any difference from the listing,
+  checks the content hash, and records provenance (`origin`). A published
+  version's content hash is pinned; `generatedAt` and the keys file version
+  only move forward. Package and key revocations from the marketplace are
+  stored, sticky, refused at install and at every start, and notified to
+  admins. Listing images are proxied (PNG, JPEG, WebP, GIF by their bytes;
+  no SVG; `nosniff`, `default-src 'none'`). New: `plugins.marketplace`
+  (`true` / `false` / `{ url, rootKeys }`), `GET /api/plugin-packages/marketplace`,
+  `/marketplace/asset`, `/updates`, `/revocations`, `/:name/usage`,
+  `/:name/usage/me`, `DELETE /:name/runs/:id`, `DELETE
+  /api/plugin-host/agent/runs/:id`, a daily update check, and `octi plugin
+  marketplace`, `updates`, `install <name>`, `sign-keys`. Migration 0179.
+  An upgrade from another source needs `allowSourceChange`.
 
 - **OAuth popup callback pages no longer reflect script.** The connector
   callback put `?error=` into an inline `<script>` with `JSON.stringify` under
@@ -136,6 +324,103 @@ labels reflect blast radius, not contract guarantees.
   (`src/api/admin-guard.ts`); non-admins get a reduced view where the web
   needs one. Skill import/export and skill-topic assignments no longer
   reach other users' skills.
+
+### Removed
+
+- **The built-in OAuth connector framework is gone; plugins cover the need.**
+  With Atlassian, Linear and GitLab removed it had nothing left to connect, and
+  a [plugin package](docs/PLUGIN-PACKAGES.md) brings its own tools, network
+  hosts and secrets. Removed: `src/connectors/` (the empty connector list, the
+  registry, definitions, `OAuthHTTPTransport`), the `connector_list_tools` /
+  `connector_call_tool` agent tools and their injection into workers and swarm
+  children, `connector:<id>` role bindings, the `/api/connectors` routes with
+  their OAuth authorize, callback and disconnect flows, the connector parts of
+  `src/security/oauth.ts` (dynamic client registration, connector token
+  storage and refresh, space OAuth state), the space OAuth connectors
+  (`/api/spaces/:id/connectors…`), the Connectors tab of the MCP page and the
+  onboarding state's connector list. **Kept:** the space's GitHub token, now
+  its own section of Space settings (*GitHub*) and API
+  (`GET`/`PUT`/`DELETE /api/spaces/:id/github`, same stored secret); the
+  Google and Microsoft 365 mailbox OAuth, its browser binding and popup page;
+  generic authenticated connections; MCP servers; plugins. **CocoIndex Code
+  moved** to the Knowledge page (*Code index*), its code to
+  `src/core/code-index/` and its API to `/api/code-index/cocoindex`; a managed
+  daemon set up against `/api/connectors/cocoindex` is pointed at the new
+  embedding path on its next connect, and its stored MCP server entry and
+  index metadata keep their names. Existing installs need no migration:
+  `connector:<id>` bindings, the `connector` container and `connector_*` ids
+  are dropped from stored role tool lists when they are read (the seeder also
+  drops them from unedited system rows), so a role that names one loads,
+  spawns and saves; stored connector tokens (`connector_<id>_*`, personal or a
+  space's) are never read, the personal ones stay listed and deletable on the
+  Secrets page and a space's go with the space when it is purged; permission
+  rules naming `connector` stay until deleted on the permissions page.
+
+- **The Atlassian (Jira/Confluence), Linear and GitLab integrations are gone,
+  with no plugin replacement.** Removed: the Atlassian and Linear connector
+  definitions and logos, the `atlassian` tool (`atlassian_sites`, `jira_*`,
+  `confluence_*`) and the capability table it resolved remote tools with, the
+  `gitlab` tool (glab CLI) and its card under Settings → Accounts & services,
+  the deprecated `*Atlassian*` OAuth helpers and vault-key constants, the
+  Jira and Linear choices in the onboarding tracker question (now GitHub
+  Issues, an MCP server for admins, or none), and `atlassian` from the `pm`
+  role, whose prompt now works from the task list, the knowledge base and
+  GitHub. GitHub is unchanged. The OAuth connector framework, left with no
+  connector built in, was removed next (above). Existing installs need no migration: a saved `connector:atlassian`
+  or `connector:linear` binding, stored connector tokens (personal or a
+  space's) and a saved `tools.tracker` answer of `jira` or `linear` are
+  ignored; `atlassian` and `gitlab` are dropped from stored role tool lists
+  when they are read (the seeder also drops them from unedited system rows),
+  so editing a role that still names them saves. Permission rules and vault
+  entries that name them stay until deleted on the permissions and secrets
+  pages.
+
+- **The `.octipus/` design notes are gone from the repository.** The 19 notes
+  (swarm, multi-repo, UX, audits, archived plans) are removed and `.octipus/` is
+  git-ignored: it is the Octipus runtime folder (project skills, attachments,
+  extensions). Code comments and docs that pointed at the notes now point at the
+  maintained docs (`docs/AGENT-ARCHITECTURE.md`, `docs/MULTI-REPO.md`) or say
+  nothing. The notes stay in git history.
+
+- **The core Reader is gone; Reader is the example plugin.** The `reader`
+  module, `POST /api/reader` (and `/action`, `/tasks`) and the `/reader` page
+  are removed. Reading a page is the example plugin `plugins/reader`: install
+  it under Admin → Plugin packages → Bundled or with
+  `octi plugin install-bundled reader`. A stored `reader` in
+  `modules.enabled` is ignored; tasks it made keep `source: reader`.
+  Onboarding no longer mentions it. The `replacedBy` field of
+  `GET /api/modules` is removed with it.
+- **The core research module is gone; Research is the second example
+  plugin.** The `research` module, `POST /api/research` and
+  `GET /api/research/:jobId`, the `/research` page and its sidebar and work
+  navigation entries, `src/core/research/`, the follow-up *Review research*
+  to-do, the standalone MCP server's `octipus_start_research` and
+  `octipus_get_research_report` and the feature bench's research flow are
+  removed. Researching a question in the background is the example plugin
+  `plugins/research`: install it under Admin → Plugin packages → Bundled or
+  with `octi plugin install-bundled research`, and approve `agent:run` and
+  `documents:write`. A stored `research` in `modules.enabled` is ignored;
+  tasks it made keep `source: research`, and its finished runs still show in
+  the away digest until retention. The research onboarding use case now
+  brings recall and live artifacts, and `product` live artifacts and people.
+- **Only the plugins Octipus ships are bundled.** A directory under
+  `<install>/plugins` other than the example plugin is no longer listed or
+  installable as bundled, and an install refuses a plugin store inside that
+  directory: local plugins stay outside the install and the repository
+  (docs/PLUGIN-PACKAGES.md#where-plugins-live).
+- **No plugin loads from the Octipus checkout or the working directory.**
+  Legacy `plugin.json` plugins load from `~/.octipus/legacy-plugins/`
+  instead of `<cwd>/extensions/`; plugins left there are not loaded and the
+  server logs one warning naming them (move them, or convert them with
+  `octi plugin convert`). In-process extensions load only from
+  `~/.octipus/extensions/`: a project's `<cwd>/.octipus/extensions/` is no
+  longer discovered (one warning names what it skips). `extensions/example-plugin`
+  and `extensions/.gitkeep` are removed (the example plugin is
+  `plugins/reader`); the converter and validator tests use
+  `tests/fixtures/legacy-plugin`, and the "Plugin contract" CI job validates
+  and converts that fixture instead of scanning `extensions/*`. `.gitignore`
+  ignores `/extensions/` and `.octipus/extensions/`. Agents are no longer told
+  to create plugins in `<checkout>/extensions/`.
 
 ### Fixed
 
@@ -363,6 +648,134 @@ labels reflect blast radius, not contract guarantees.
 
 ### Added
 
+- **Dashboards for plugin packages** (docs/PLUGIN-PACKAGES.md#dashboards).
+  A package declares `dashboards`, each with widgets (`stat`, `list`,
+  `table`, `chart`, `text`). Octipus draws them with its own components,
+  with no plugin code in the browser, in the sidebar's Plugins group. Each
+  widget shows what one of the package's own `read` tools returns, called
+  as the viewer with the input the manifest fixes, and checked against the
+  widget's shape. Text is drawn as text, and links go only to the package's
+  declared hosts. The permissions summary lists them (`dashboards`, after
+  `ui`; an older listing reads as none), the install consent asks for each
+  one, and a new dashboard or a re-fed widget widens an upgrade. A widget's
+  call carries `store:read` only, never the user's Octipus data; a link to
+  a private or local address is refused; a widget's input may not hide
+  characters from the consent. The sidebar takes a plugin's icon only from
+  its own icon map (a page icon named `constructor` crashed the app shell).
+
+- **Mail and calendar for plugin packages**
+  (docs/PLUGIN-PACKAGES.md#mail-and-calendar). New host scopes:
+  - `mail:read`: the user's Mail module mailboxes, each message at its own
+    protection level (those above the package's `maxProtection` left out in
+    the query), and the connected Gmail or Microsoft 365 inbox, which counts
+    as level 4.
+  - `mail:draft`: drafts as the user, never sent, marked with the package and
+    tool (`mail_messages.plugin_source`); a package changes only its own.
+  - `mail:send`: for `external` tools only; it counts as egress, so the
+    package sees level 1 at most and a call holding more may not send.
+  - `calendar:read` and `calendar:write`: the connected Google and Microsoft
+    365 calendars at the level an admin sets (`plugins.calendarProtectionLevel`,
+    default 3); a package changes only the events it created.
+
+  Personal accounts (the inbox, the calendars) are reached from the personal
+  workspace only, and the user's permission rules on each source's own tool
+  apply. Migration `0183_plugin_mail_calendar` adds `plugin_items`, what a
+  package created; an uninstall or a change of signer or source deletes its
+  rows. `writeCalendarEvent` now returns the provider's event id.
+
+  Before release, a security review tightened it: one approved call sends one
+  message, and a package at most 20 an hour per user; a send is bound to the
+  exact draft checked; replying needs `mail:read` and keeps the original's
+  recipients; a Mail module message above `maxProtection` answers `404` (its
+  level unsaid); a package's event is not changed once the user invited
+  someone to it (`409 has_attendees`).
+
+- **A per-user store for plugin packages** (docs/PLUGIN-PACKAGES.md#store).
+  A package declares `store: { quotaBytes }` (default 5 MB, at most 20 MB per
+  user) with the host scopes `store:read` and/or `store:write`, and keeps
+  small JSON values per key through `/api/plugin-host/store` (get, list, put
+  with compare-and-set, delete) or, from its pages, over the bridge
+  (`{ octipus: 'store', op: 'store.get' | 'store.set' | 'store.delete' |
+  'store.list' }`, `/api/plugins/:name/store/…`). The host keeps the entries
+  apart for each user and each workspace, on the user and workspace of the
+  call's token or the signed-in page: there is no shared store and no way to
+  name another user, and what is kept in a shared space is read in that
+  space only. The quota (128 bytes per entry plus its key and value as the
+  database keeps it; at most 10,000 entries per user) is checked atomically
+  with each write against a running total; a read tool gets `store:read`
+  only; an entry records the call's level (the calling session's included)
+  and reading it raises the call to it, so a notes or tasks write after it is
+  refused. Writes are audited in aggregate. The consent shows *"Keeps up to 5 MB of its own data per
+  user"*; the permissions summary carries `store: { quotaBytes } | null`
+  after `settings` (index v2 too; a new store or a larger quota widens).
+  Settings → My plugin usage shows each plugin's size for you with **Delete
+  my data**; admins see the total and per-user size; uninstalling deletes
+  every user's data, deleting a user deletes theirs, leaving a space deletes
+  theirs of that space. New migration
+  `0182_plugin_store`, a `with-store` template, and the contract and the
+  authoring skill tell agents to keep per-user data there.
+  **`OCTIPUS_PLUGIN_DATA_DIR` is shared by all users of an install**: it must
+  never hold user data.
+
+- **Marketplace, Updates and Installed tabs** in Admin → Plugins (Browse
+  redirects to Marketplace): instant search folding case and accents,
+  categories, sorting, cards with what each asks for, download counts and
+  install/update/incompatible/revoked badges, a detail with the README
+  rendered safely, the updates with their permissions diff and the
+  revocations (cleared with a reason), and per package its origin, revocation
+  banner, 30-day usage and running background runs with Cancel
+  (`GET /api/plugin-packages/:name/runs?status=running`). Users get Settings
+  → My plugin usage (`GET /api/plugin-packages/my-usage`).
+
+- **Offline plugin tooling for publishing: `octi plugin hash`, `pack`,
+  `permissions`, `verify`, `verify-index`, and package `validate`.** None
+  needs a running server, and each runs the host's own code, so a
+  marketplace's CI and its publishing machine compute the same content hash,
+  tarball, permissions summary and signatures as an install does. `pack`
+  writes a reproducible `.tar.gz` (sorted entries under `<name>-<version>/`,
+  ustar, mtime 0, owner 0, modes 0644/0755, a fixed gzip header): the same
+  files give the same bytes, and the tarball installs through the
+  remote-install reader to the same content hash. `permissions` prints what a
+  manifest asks for (host scopes, network hosts, tool effects, contributions,
+  pages, `model.trustedInput`, the effective `maxProtection`); `verify` and
+  `verify-index` check a package's or an index's signature against given
+  public keys (`verify-index` passes when any one of several keys verifies).
+  `validate` now checks a plugin package (`octipus-plugin.json`) the way
+  `plugin_validate` does; a legacy plugin is checked as before. Each takes
+  `--json`, which prints one JSON document on stdout and every diagnostic on
+  stderr (docs/PLUGIN-PACKAGES.md#packing-and-publishing).
+- **Passphrase-encrypted signing keys.** `octi plugin keygen --passphrase-file
+  <path|->` writes the private key as encrypted PKCS#8 (AES-256-CBC); `sign`
+  and `sign-index` take the same flag, or ask at a terminal without echo, and
+  are refused with no terminal. Unencrypted keys keep working.
+- **A package's `marketplace.json` is listing metadata, not content.** The
+  content hash of a package's source (`hash`, `pack`, `sign`, `validate`)
+  leaves a root `marketplace.json` out, `pack` never packs it, and install
+  leaves it out of the installed copy, so editing a listing never changes what
+  was signed. In an installed directory a `marketplace.json` that appears later
+  counts like any other file.
+- **Plugin host API: `documents:write` and `agent:run`.** `documents:write`
+  creates a text document for the calling user in the call's workspace (a
+  space's role rules apply), recording the package and tool in
+  `metadata.sourceRef`, at least at the level of what the call read, and
+  updates only documents the same package created. `agent:run` starts a
+  background run of the host's own agent as the user (`POST
+  /api/plugin-host/agent/runs`, a role, its tools narrowed to search, fetch
+  and read) and answers its id at once; a later call reads its status and
+  result. No token outlives its call: the run is unattended under the user's
+  rules, spend budgets and protection routing, bounded per package and user
+  (3 in a burst, 6 an hour, 2 at once), by `plugins.hostAgentRunTokens` (new,
+  default 150,000 tokens a run, 0 turns runs off) and the daily plugin
+  allowance (which now counts run tokens), and stopped after 20 minutes or
+  when the package is disabled, upgraded or its approval changes. Only a
+  write tool starts a run; personal workspaces only. Both need an admin's
+  approval; the admin page says what they do (docs/PLUGIN-PACKAGES.md#host-api).
+- **Research, the second example plugin** (`plugins/research`): a question
+  researched in the background by the host's research agent, its cited report
+  shown on the plugin's page and saved to Documents when the user asks
+  (docs/PLUGIN-PACKAGES.md#bundled-plugins, plugins/README.md).
+- **`/plugins/<name>` opens a plugin's first page**, and a plugin's finished
+  background run in the away digest links there.
 - **Run outcome and evidence.** The run view shows how a run ended, the files
   its tools recorded writing, the files its answer says it saved — *missing*
   until a recorded write matches — and the verification checks that judged it.
@@ -729,6 +1142,13 @@ labels reflect blast radius, not contract guarantees.
 
 ### Changed
 
+- **Plugin model calls on Antigravity and Vibe take multi-line prompts.** An
+  approved `model:cli-tools` call hands the prompt to them on stdin instead of
+  the command line: Vibe with a bare `-p`, Antigravity as a stream-json user
+  event (`--input-format stream-json --output-format stream-json`, which also
+  reports token usage). A prompt with a line break, which every prompt with a
+  system text has, was refused on both. The command-line guard against line
+  breaks is unchanged; agent runs are unchanged.
 - **The flow guard lets an agent message its own user after reading mail.**
   `send_to_user` to the session's own user is delivered only to that user's
   verified chats, so it is no longer escalated to an approval after the

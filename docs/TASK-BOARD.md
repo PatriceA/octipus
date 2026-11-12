@@ -178,7 +178,7 @@ Task mutations write an audit row with action `task_mutated` (migration
 |---|---|---|
 | `/api/tasks` routes (create, update, complete, delete) | `user`; `onBehalfOf` names the owner when an admin acts on someone else's task | null |
 | `tasks` tool: `create_task`, `add_tasks`, `update_task`, `complete_task` | `agent`, identified by the spawned agent's id | root session id |
-| Source ingestion (email, reader, research) | `system` | null |
+| Source ingestion (email, research) | `system` | null |
 | A task taken on in a group channel | `system` (`channel`) on create; `agent` when `complete_taken_task` closes it | the thread session |
 
 An update that changes nothing, and `complete_task` on a task already done,

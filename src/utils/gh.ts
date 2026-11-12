@@ -6,7 +6,7 @@
  * without one (an interactive turn can wait), a background probe cannot.
  *
  * Inside a space (coworking §9.5) the caller passes the run's `toolHome` (a
- * fresh directory holding only the space connector's login) and the space's
+ * fresh directory holding only the space's GitHub login) and the space's
  * own `token`: the host's gh login, GH tokens, SSH agent and git helpers are
  * then never used.
  */

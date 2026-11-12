@@ -17,31 +17,8 @@ import { getDb } from '@/db/postgres';
 import { hooks } from '@/db/schema/hooks';
 import { tasks } from '@/db/schema/tasks';
 
-export interface RoleAgentRow {
-  role: string;
-  /** Open or in-progress tasks assigned to the role. */
-  activeTasks: number;
-  totalTasks: number;
-  /** Any of the user's heartbeat hooks for this role is enabled. */
-  enabled: boolean;
-  /** The hook that runs (the enabled one, else the oldest), or null when none exists. */
-  hookId: string | null;
-  /** The role is in the registry (an unknown one cannot be turned on). */
-  known: boolean;
-  /**
-   * The pipeline template (id) the role's agent runs each task through, or
-   * null when it works tasks itself (core/tasks/role-pipelines.ts).
-   */
-  pipelineTemplate: string | null;
-}
-
-export interface RoleAgentsView {
-  roles: RoleAgentRow[];
-  /** tasks/write is ALLOW for the user; without it a role turn cannot touch the board. */
-  boardWritesAllowed: boolean;
-  /** The server's heartbeat master switch (`heartbeat.enabled`); off, no role agent runs. */
-  heartbeatEnabled: boolean;
-}
+import type { RoleAgentRow, RoleAgentsView } from '@/shared/heartbeat';
+export type { RoleAgentRow, RoleAgentsView } from '@/shared/heartbeat';
 
 /** Role task counts for one user, grouped in SQL. */
 async function roleTaskCounts(userId: string): Promise<{ role: string; total: number; active: number }[]> {
@@ -67,17 +44,18 @@ async function roleHooks(userId: string) {
 }
 
 export async function listRoleAgents(userId: string): Promise<RoleAgentsView> {
-  const [counts, hookRows, allowed, { ROLE_CONFIGS }] = await Promise.all([
+  const [counts, hookRows, allowed, { ROLE_CONFIGS }, personal] = await Promise.all([
     roleTaskCounts(userId),
     roleHooks(userId),
     boardWritesAllowed(userId),
     import('@/core/agent/roles'),
+    getDb().select({ enabled: hooks.isEnabled }).from(hooks).where(and(eq(hooks.userId, userId), eq(hooks.trigger, 'heartbeat'), sql`${hooks.triggerConfig}->>'role' IS NULL`)),
   ]);
   const rows = new Map<string, RoleAgentRow>();
   const row = (role: string): RoleAgentRow => {
     let r = rows.get(role);
     if (!r) {
-      r = { role, activeTasks: 0, totalTasks: 0, enabled: false, hookId: null, known: Object.hasOwn(ROLE_CONFIGS, role), pipelineTemplate: null };
+      r = { role, activeTasks: 0, totalTasks: 0, enabled: false, inherited: false, hookId: null, known: Object.hasOwn(ROLE_CONFIGS, role), pipelineTemplate: null };
       rows.set(role, r);
     }
     return r;
@@ -94,6 +72,12 @@ export async function listRoleAgents(userId: string): Promise<RoleAgentsView> {
       r.pipelineTemplate = typeof template === 'string' && template ? template : null;
     }
     r.enabled ||= hook.isEnabled;
+  }
+  for (const r of rows.values()) {
+    if (!r.hookId && r.known) {
+      r.inherited = true;
+      r.enabled = personal.some((h) => h.enabled);
+    }
   }
   return {
     roles: [...rows.values()].sort((a, b) => a.role.localeCompare(b.role)),

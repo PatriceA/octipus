@@ -1,3 +1,4 @@
+import { sessionTokenBudget, sessionBudgetMessage } from './session-budget';
 import { isSessionControlMessage } from '@/core/session-controls';
 import { withSessionTurn } from '@/core/session-turn-lock';
 import { sessionGeneration } from '@/db/schema/sessions';
@@ -8,6 +9,7 @@ import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from
 import { refreshSessionLevel } from '@/core/protection/session-level';
 import { prepareAttachmentProtection } from '@/core/protection/attachments';
 import { finishContextTurn, runContextHooks } from '@/core/context-hooks';
+import { runPluginContexts } from '@/plugins/packages/contributions/context';
 import { clearFlowLabel, getFlowLabel, markNotSharedAudience, markSharedAudience, observeFlow } from '@/security/flow-guard';
 import { bareReply, type GroupTurn, groupTurnContext } from '@/core/channels/group-context';
 import { generateRunId, runWithContext, getRunContext } from '@/core/run-context';
@@ -717,12 +719,12 @@ export class AgentService {
       // impossible there; each requester's own spend budgets and quotas
       // apply, and the room's history is bounded by its compaction window.
       const config = getConfig();
-      const tokenBudget = (session?.context as Record<string, unknown>)?.tokenBudget as number || config.agent.maxTokenBudget;
+      const { cap: tokenBudget, explicit: explicitBudget } = sessionTokenBudget(session?.context, config.agent.maxTokenBudget);
       const sessionTokens = session?.tokenCount || 0;
       if (tokenBudget > 0 && !isRoom) {
         if (sessionTokens >= tokenBudget) {
           return {
-            response: `Session token budget (${tokenBudget.toLocaleString()}) exhausted. Start a new session to continue.`,
+            response: sessionBudgetMessage(sessionTokens, tokenBudget, explicitBudget),
             sessionId: resolvedSessionId,
             classification: { type: 'casual', confidence: 1 },
           };
@@ -971,6 +973,11 @@ export class AgentService {
           event: 'turn_start', userId, workspaceId, sessionId: resolvedSessionId,
           space: scope.space, query: message, role: 'general', channel,
         });
+      // Turn context of plugin packages (docs/PLUGIN-PACKAGES.md#context): the
+      // same audience rule, never in a space; it never throws either.
+      const pluginContextRun = sharedAudience || audience.contentStorageOff
+        ? Promise.resolve({ text: '', labelledBlocks: [] })
+        : runPluginContexts({ userId, sessionId: resolvedSessionId, role: 'general', query: message, scope });
 
       // Memory-redesign Phase D — best-effort long-term memory
       // injection. Auto-no-ops when the memories table is empty or
@@ -1005,9 +1012,10 @@ export class AgentService {
       }
 
       const contextHooks = await contextHooksRun;
+      const pluginContext = await pluginContextRun;
       // The root runner adds attachments after selecting the model, so CLI
       // turns can receive original images without an OCR round trip.
-      const turnContext = memoryBlock + contextHooks.text + spaceContext;
+      const turnContext = memoryBlock + contextHooks.text + pluginContext.text + spaceContext;
       const memoryCadence = getConfig().memory?.extractionCadence ?? 'per_turn';
       const fireMemoryUpdate = () => {
         // Cadence gate. `off` short-circuits before any work; the
@@ -1081,6 +1089,7 @@ export class AgentService {
           turnContextParts: [
             { label: 'Long-term memory', text: memoryBlock },
             ...contextHooks.labelledBlocks,
+            ...pluginContext.labelledBlocks,
             { label: 'Shared space context', text: spaceContext },
             { label: 'Group conversation', text: groupContextBlock },
           ],
@@ -1168,10 +1177,10 @@ export class AgentService {
       void finishContextTurn(contextHooks.turn, { agentId, response: finalResponse, outcome });
       // Group threads, rooms and space sessions are never learned from (the
       // processor refuses them too).
-      if (outcome === 'success' && agentId && !memoryOff && !syntheticCoordination) {
+      if (outcome === 'success' && agentId && !memoryOff && !syntheticCoordination && !session.context?.oneShot) {
         try {
           const { enqueueTurnLearning } = await import('@/core/learning/queue');
-          await enqueueTurnLearning(resolvedSessionId, userId, agentId, new Date(startTime));
+          await enqueueTurnLearning(resolvedSessionId, userId, agentId);
         } catch (err) { coreLogger.error({ err, sessionId: resolvedSessionId }, 'Could not enqueue learning check'); }
       }
       recordRootRun(channel, classification?.type, outcome === 'success' ? 'success' : 'error');
@@ -1379,6 +1388,8 @@ export class AgentService {
       toolIds?: string[];
       /** Runtime-granted tool ids, on top of the role's set. See spawnWorker. */
       extraToolIds?: string[];
+      /** `toolIds` is the whole set: nothing is appended after it. See spawnWorker. */
+      exactTools?: boolean;
       /** Declared purpose, checked against the resolved toolset. See spawnWorker. */
       purpose?: import('./role-contract').DeclaredPurpose;
       /** Per-visit token cap for this worker. See spawnWorker. */

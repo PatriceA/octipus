@@ -243,7 +243,7 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
   test('the inline editor sets, changes and clears the assignee; create can assign a role', async ({ authenticatedPage: page }) => {
     await page.goto('/tasks');
     const milk = page.getByTestId('task-row').filter({ hasText: 'Buy milk' });
-    await milk.getByRole('button', { name: 'edit' }).click();
+    await milk.getByRole('button', { name: 'fields', exact: true }).click();
     await milk.getByLabel('Assignee kind').selectOption('role');
     await expect.poll(() => calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([{ assigneeKind: 'role', assigneeRef: 'pm' }]);
     await milk.getByLabel('Assignee role').selectOption('research');
@@ -330,8 +330,8 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     await expect(milk.getByTestId('task-comments')).toContainText('no comments yet');
   });
 
-  test('the role agents panel toggles a role agent and flags the missing board permission', async ({ authenticatedPage: page }) => {
-    await page.goto('/tasks');
+  test('heartbeat Settings toggles a role agent and flags the missing board permission', async ({ authenticatedPage: page }) => {
+    await page.goto('/settings?tab=heartbeat');
     const panel = page.getByTestId('role-agents');
     await expect(panel).toContainText('0 of 2 on');
     await expect(panel).toContainText('needs board permission');
@@ -360,7 +360,7 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     Object.assign(roleAgents.roles[0], { enabled: true, pipelineTemplate: null });
     await page.route('**/api/pipelines/templates', (route) =>
       json(route, 200, { templates: [{ id: 'tpl-feature', name: 'Feature Development' }] }));
-    await page.goto('/tasks');
+    await page.goto('/settings?tab=heartbeat');
     const panel = page.getByTestId('role-agents');
     await panel.getByRole('button', { name: /Role agents/ }).click();
     const how = panel.getByLabel('How the pm agent works its tasks');
@@ -374,6 +374,26 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     await expect(panel.getByLabel('How the qa agent works its tasks')).toHaveCount(0);
   });
 
+  test('a member can revoke a saved role heartbeat while server checks are paused', async ({ authenticatedPage: page }) => {
+    roleAgents.heartbeatEnabled = false; Object.assign(roleAgents.roles[0], { enabled: true });
+    await page.route('**/api/auth/me', route => json(route, 200, { id: 'e2e-user-id', username: 'member', isAdmin: false }));
+    await page.goto('/settings?tab=heartbeat');
+    const panel = page.getByTestId('role-agents');
+    await panel.getByRole('button', { name: /Role agents/ }).click();
+    await expect(panel.getByRole('switch', { name: 'pm agent' })).toBeDisabled();
+    await panel.getByRole('button', { name: 'Turn off saved heartbeat for pm' }).click();
+    await expect.poll(() => calls.filter(c => c.method === 'PUT').at(-1)).toEqual({ method: 'PUT', path: '/role-agents', body: { role: 'pm', enabled: false } });
+  });
+
+  test('the task board reports role heartbeats and links to Settings without configuration controls', async ({ authenticatedPage: page }) => {
+    await page.goto('/tasks');
+    const panel = page.getByTestId('role-agents');
+    await panel.getByRole('button', { name: /Role agents/ }).click();
+    await expect(panel.getByRole('switch')).toHaveCount(0);
+    await expect(panel.getByRole('combobox')).toHaveCount(0);
+    await expect(panel.getByRole('link', { name: 'Manage heartbeat in Settings' })).toHaveAttribute('href', '/settings?tab=heartbeat');
+  });
+
   test('the panel says it spans workspaces, and says so when the server heartbeat is off', async ({ authenticatedPage: page }) => {
     roleAgents.heartbeatEnabled = false;
     await page.goto('/tasks');
@@ -383,7 +403,7 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     await panel.getByRole('button', { name: /Role agents/ }).click();
     const off = panel.getByTestId('role-agents-heartbeat-off');
     await expect(off).toContainText("Heartbeat is disabled on this server; role agents won't run");
-    await expect(off.getByRole('link', { name: 'settings page' })).toHaveAttribute('href', '/settings');
+    await expect(off.getByRole('link', { name: 'settings page' })).toHaveAttribute('href', '/settings?tab=heartbeat');
   });
 
   test('leases are judged on the server clock, not the browser clock', async ({ authenticatedPage: page }) => {
@@ -413,7 +433,7 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     const filter = page.getByTestId('assignee-filter');
     await filter.selectOption('role:qa');
     const row = page.getByTestId('task-row').filter({ hasText: 'Write the tests' });
-    await row.getByRole('button', { name: 'edit' }).click();
+    await row.getByRole('button', { name: 'fields', exact: true }).click();
     await row.getByLabel('Assignee role').selectOption('research');
     await expect(page.getByTestId('task-row')).toHaveCount(0);
     await expect(filter).toHaveValue('role:qa');
@@ -475,7 +495,7 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     await page.clock.install();
     await page.goto('/tasks');
     const deploy = page.getByTestId('task-row').filter({ hasText: 'Deploy it' });
-    await deploy.getByRole('button', { name: 'edit' }).click();
+    await deploy.getByRole('button', { name: 'fields', exact: true }).click();
     await expect(deploy.getByLabel('Agent node')).toHaveValue('node-7');
 
     // An agent reassigns it; the next poll brings the change into the open editor.

@@ -73,9 +73,18 @@ export function Markdown({
   onTag,
   onOpenFile,
   untrusted = false,
+  listing,
 }: {
   content: string;
   className?: string;
+  /**
+   * A marketplace listing's README or CHANGELOG (hostile text): no raw HTML
+   * (never rendered here anyway), links only when https (opened in a new tab
+   * without opener or referrer, else shown as text), and an image only when
+   * `image(src)` maps it to a URL the host returned for a listed asset (its
+   * proxy URL); any other image is shown as its label.
+   */
+  listing?: { image: (src: string) => string | null };
   /** Text from another install: no image loads, nothing links into this install. */
   untrusted?: boolean;
   /** When set, `[[wikilinks]]` render as clickable links that open a note by slug. */
@@ -189,6 +198,16 @@ export function Markdown({
                 </button>
               );
             }
+            if (listing) {
+              let https = false;
+              try {
+                https = !!href && new URL(href).protocol === 'https:';
+              } catch {
+                https = false;
+              }
+              if (!https) return <span>{children}</span>;
+              return <a href={href} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" className="text-primary underline hover:opacity-80">{children}</a>;
+            }
             const filePath = localFileLink(href, here());
             if (untrusted && (filePath || !href || pointsHere(href, here()))) return <span>{children}</span>;
             if (filePath && onOpenFile) return <button type="button" onClick={() => onOpenFile(filePath)} className="text-primary underline hover:opacity-80" title={`Open ${filePath}`}>{children}</button>;
@@ -205,6 +224,11 @@ export function Markdown({
           },
           img({ src, alt, title }) {
             if (typeof src !== 'string' || !src) return null;
+            if (listing) {
+              const proxied = listing.image(src);
+              if (!proxied) return <span className="text-on-surface-variant">[image{alt ? `: ${alt}` : ''}]</span>;
+              return <AuthedImage src={proxied} alt={alt} title={title} />;
+            }
             if (untrusted) {
               const { label, href } = remoteImage(src, alt, here());
               if (!href) return <span className="text-on-surface-variant">{label}</span>;
@@ -222,7 +246,7 @@ export function Markdown({
           ol({ children }) {
             return <ol className="list-decimal pl-5 space-y-0.5">{children}</ol>;
           },
-  }), [onWikilink, onTag, onOpenFile, untrusted]);
+  }), [onWikilink, onTag, onOpenFile, untrusted, listing]);
   return (
     <div className={cn('space-y-2 text-sm leading-relaxed', className)}>
       <ReactMarkdown

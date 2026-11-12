@@ -350,7 +350,15 @@ async function executeSpawnAgent(
   let heartbeatRole: string | null = null;
   if (hook?.trigger === 'heartbeat') {
     const heartbeat = await import('@/core/heartbeat');
-    heartbeatRole = heartbeat.heartbeatRole(hook);
+    const dispatch = heartbeat.heartbeatTaskDispatch(context);
+    heartbeatRole = dispatch?.role ?? heartbeat.heartbeatRole(hook);
+    if (!heartbeatRole) return { success: false, error: 'Personal heartbeat checks run in the background, not as chat or General turns' };
+    if (dispatch && heartbeat.heartbeatRole(hook)) return { success: false, error: 'Heartbeat role configuration changed before dispatch' };
+    if (dispatch && heartbeat.heartbeatGatePassed(context)) {
+      const { runHeartbeatTask } = await import('@/core/tasks/heartbeat-dispatch');
+      return runHeartbeatTask(hook, dispatch, (sessionId, message, signal) =>
+        runRoleHeartbeat(dispatch.role, {}, sessionId, hook.userId, '', message, signal), heartbeat.heartbeatTurnSignal(context));
+    }
     if (heartbeatRole && !heartbeat.heartbeatGatePassed(context)) {
       return { success: false, error: 'A role heartbeat runs only from the heartbeat schedule, after its gate' };
     }
@@ -463,9 +471,9 @@ async function executeSpawnAgent(
     const templateRef = (hook?.triggerConfig as { pipelineTemplate?: unknown } | undefined)?.pipelineTemplate;
     if (hook && typeof templateRef === 'string' && templateRef.trim()) {
       const { runRoleTaskPipeline } = await import('@/core/tasks/role-pipelines');
-      return runRoleTaskPipeline({ hookId: hook.id, role: heartbeatRole, templateRef, sessionId, userId });
+      return runRoleTaskPipeline({ hookId: hook.id, role: heartbeatRole, templateRef, sessionId, userId, signal: (await import('@/core/heartbeat')).heartbeatTurnSignal(context) });
     }
-    return runRoleHeartbeat(heartbeatRole, config, sessionId, userId, prompt, message);
+    return runRoleHeartbeat(heartbeatRole, config, sessionId, userId, prompt, message, (await import('@/core/heartbeat')).heartbeatTurnSignal(context));
   }
 
   // If orchestrated, route through the root agent instead of bare spawn
@@ -620,7 +628,7 @@ async function closeThreadIfEnded(thread: ThreadResolution | null, hook?: Hook):
 /**
  * Run a role heartbeat's turn as a worker of that role, through the same
  * `spawnWorker` pipeline stages use: the role's prompt (lite on a small
- * model), critical rules, persona, skills, connector tools and plan-mode
+ * model), critical rules, persona, skills and plan-mode
  * stripping all apply, the run is unattended (`attended: false`: nothing is
  * asked, an ASK is refused), and `tasks` is granted on top of the role's
  * tools because the turn exists to work the board.
@@ -642,6 +650,7 @@ async function runRoleHeartbeat(
   userId: string,
   prompt: string,
   message: string,
+  signal?: AbortSignal,
 ): Promise<ActionResult> {
   const { ROLE_CONFIGS } = await import('@/core/agent/roles');
   if (!Object.hasOwn(ROLE_CONFIGS, role)) return { success: false, error: `Unknown role "${role}" on heartbeat hook` };
@@ -649,7 +658,7 @@ async function runRoleHeartbeat(
   // none or does not exist yet), owned by the user; never unscoped.
   const { sessionRepository } = await import('@/db/repositories/session-repository');
   const { buildAgentContext, resolveAgentScope, withAgentUsage } = await import('@/core/agent/context');
-  const session = await sessionRepository.findById(sessionId);
+  const session = await sessionRepository.findById(sessionId) ?? await sessionRepository.createAutomation({ id: sessionId, userId, channelType: 'heartbeat', channelId: userId, title: `${role} task worker` });
   const scope = await resolveAgentScope({ session, userId, trigger: 'schedule' });
   const parent = buildAgentContext({
     id: `heartbeat:${role}:${sessionId}`,
@@ -665,10 +674,19 @@ async function runRoleHeartbeat(
   });
   const { getAgentService } = await import('@/core/agent');
   const task = [prompt, message].filter(Boolean).join('\n\n');
-  const result = await withAgentUsage(userId, scope, () => getAgentService().spawnWorker(role, task, '', parent, {
+  signal?.throwIfAborted();
+  let workerId: string | undefined;
+  const stop = () => { if (workerId) getAgentManager().stop(workerId, { cascade: true }); };
+  signal?.addEventListener('abort', stop, { once: true });
+  let result: unknown;
+  try {
+    result = await withAgentUsage(userId, scope, () => getAgentService().spawnWorker(role, task, '', parent, {
+    ...(signal ? { onWorkerSpawned: (id: string) => { workerId = id; if (signal.aborted) stop(); } } : {}),
     extraToolIds: ['tasks'],
     ...(config.agentModel ? { model: config.agentModel } : {}),
   }));
+  } finally { signal?.removeEventListener('abort', stop); }
+  signal?.throwIfAborted();
   if (result && typeof result === 'object' && 'error' in result) {
     return { success: false, error: String((result as { error: unknown }).error) };
   }

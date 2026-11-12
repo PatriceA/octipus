@@ -295,7 +295,7 @@ export async function findViewableArtifactBySlug(userId: string, slug: string): 
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Secrets (space connectors, §9.5)
+// Secrets (the space's own credentials, §9.5)
 // ─────────────────────────────────────────────────────────────────────
 
 /** A space secret without its value. */
@@ -315,13 +315,13 @@ export interface SpaceSecretView {
  * goes through a member's space context, read for this request.
  *
  * - `list` (names only): any member who may read the space, but a guest.
- * - `read`: the space's connector code acting for a member who may run the
+ * - `read`: the space's GitHub code acting for a member who may run the
  *   agent outside the rooms of a guest scope (`assertSpaceCan` refuses a
  *   guest's `run_agent` here) (token getters, `runGh` with `opts.token`). A space secret never
  *   reaches `{{secret:}}` injection, which reads `user` and `system` rows
  *   only, so a turn cannot route one into a shell or an HTTP call.
  * - `write` / `remove`: owners (`manage_space`), audited with the space.
- * - `refresh`: a connector's token refresh, by any member who may run the
+ * - `refresh`: a token's refresh, by any member who may run the
  *   agent, of a row that already exists.
  */
 export class SpaceSecretStore {
@@ -340,7 +340,7 @@ export class SpaceSecretStore {
 
   async list(): Promise<SpaceSecretView[]> {
     assertSpaceCan(this.space, 'read');
-    // Space connectors and their credentials are never in a guest's scope (S6).
+    // The space's credentials are never in a guest's scope (S6).
     if (this.space.guest) return [];
     return this.db
       .select({ name: vault.name, credentialType: vault.credentialType, storedBy: vault.userId, createdAt: vault.createdAt, updatedAt: vault.updatedAt })
@@ -349,7 +349,7 @@ export class SpaceSecretStore {
       .orderBy(vault.name);
   }
 
-  /** The value of `name`, or null. For connector code only (see the class comment). */
+  /** The value of `name`, or null. For the space's GitHub code only (see the class comment). */
   async read(name: string): Promise<string | null> {
     assertSpaceCan(this.space, 'run_agent');
     const [row] = await this.db.select().from(vault).where(and(...this.live(name))).orderBy(desc(vault.updatedAt)).limit(1);
@@ -380,12 +380,12 @@ export class SpaceSecretStore {
     const key = { scope: 'space' as const, userId: this.space.userId, workspaceId: this.space.workspaceId };
     await this.db.transaction(async (tx) => {
       await tx.delete(vault).where(and(...this.everyRow(name)));
-      await tx.insert(vault).values({ ...key, name, credentialType, ...encryptForRow(key, value), tags: ['space-connector'] });
+      await tx.insert(vault).values({ ...key, name, credentialType, ...encryptForRow(key, value), tags: ['space-secret'] });
     });
   }
 
   /**
-   * A connector's refreshed token: rewrites the live row of `name` in place
+   * A refreshed token: rewrites the live row of `name` in place
    * (its author stays). False when there is none — a refresh never creates a
    * secret the owners did not store.
    */
@@ -469,7 +469,7 @@ export interface SpaceRepos {
   noteScope: NoteScope;
   links: LinkStore;
   artifacts: ArtifactStore;
-  /** The space's connector credentials (§9.5). */
+  /** The space's own credentials: its GitHub token (§9.5). */
   secrets: SpaceSecretStore;
   knowledge: KnowledgeScope;
   knowledgeOwner: KnowledgeOwner;

@@ -4,7 +4,8 @@ import { describeCliCapabilities } from '@/shared/cli-capabilities';
 import { cliCredentialOwnerFor, cliEnvFor, cliWorkDirFor } from '@/core/cli-child-env';
 import { discoverCodexMcpServers, getClaudeSpaceSettingsPath, getEmptyMcpConfigPath, getEmptyVibeHome } from '@/core/cli-adapters';
 import { spawn } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
 import { delimiter, extname, join } from 'path';
 import { getConfig } from '@/config';
 import { classifyError } from '@/core/errors/classification';
@@ -114,6 +115,20 @@ export interface CLIToolConfig {
    * personal row's one-shot completions, so such a row binds no lane.
    */
   toolLessArgs?: () => string[];
+  /**
+   * For a CLI whose `buildArgs` carries the prompt in argv (agy, vibe): how an
+   * approved plugin completion with the CLI's own tools (`allowCliTools`)
+   * hands it the prompt on stdin instead, so a multi-line prompt never meets
+   * argv (execCli refuses an argument with a line break). `args` is the full
+   * argv, with no prompt in it; `encode` turns the prompt into what is written
+   * to stdin (default: the prompt itself); `parseOutput` reads this mode's
+   * stdout (default: the tool's `parseOutput`). The agent path is unaffected.
+   */
+  cliToolsStdin?: {
+    args: () => string[];
+    encode?: (prompt: string) => string;
+    parseOutput?: (stdout: string, startTime: number) => CompletionResult;
+  };
   /** Parse JSON output into CompletionResult */
   parseOutput: (stdout: string, startTime: number) => CompletionResult;
   /** Detect quota exhaustion from stderr/stdout */
@@ -180,6 +195,40 @@ const claudeCodeConfig: CLIToolConfig = {
   },
 };
 
+/**
+ * agy `--output-format stream-json`: NDJSON events, `init`, `step_update`s,
+ * then a `result` per turn: `{"event":"result","result":{"status",
+ * "response","usage":{input_tokens,output_tokens,total_tokens,…},"error"?}}`
+ * (https://antigravity.google/docs/cli/headless). The answer is the last
+ * result's `response`; a result with status ERROR, or no result at all, fails.
+ */
+export function parseAgyStreamJson(stdout: string, startTime: number): CompletionResult {
+  let last: { status?: string; response?: unknown; error?: unknown; usage?: Record<string, unknown> } | undefined;
+  for (const line of stdout.split('\n')) {
+    const text = line.trim();
+    if (!text) continue;
+    try {
+      const event = JSON.parse(text) as { event?: string; result?: typeof last };
+      if (event?.event === 'result' && event.result && typeof event.result === 'object') last = event.result;
+    } catch { /* not an event line */ }
+  }
+  if (!last) throw new Error('agy (stream-json) produced no result event');
+  if (String(last.status ?? '').toUpperCase() === 'ERROR') {
+    throw new Error(`agy reported an error: ${typeof last.error === 'string' ? last.error : 'unknown error'}`);
+  }
+  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  const usage = last.usage && typeof last.usage === 'object' ? last.usage : undefined;
+  const inputTokens = num(usage?.input_tokens);
+  const outputTokens = num(usage?.output_tokens);
+  return {
+    content: typeof last.response === 'string' ? last.response.trim() : '',
+    finishReason: 'stop',
+    usage: { inputTokens, outputTokens, totalTokens: num(usage?.total_tokens) || inputTokens + outputTokens, available: !!usage },
+    model: 'cli/antigravity',
+    latencyMs: Date.now() - startTime,
+  };
+}
+
 // ---- Antigravity CLI (agy) ----
 // Replaces the Gemini CLI: Google's `gemini` agentic CLI is superseded by
 // Antigravity (`agy`), which shares the same ~/.gemini config dir and Gemini
@@ -193,6 +242,17 @@ const antigravityConfig: CLIToolConfig = {
   modelPatterns: ['cli/antigravity', 'cli/agy', 'cli/gemini', 'cli/gemini-cli'],
   binaryPath: 'agy',
   buildArgs: (prompt: string) => ['--dangerously-skip-permissions', '--print', prompt],
+  // `--print` takes the prompt as its value and ignores stdin. The documented
+  // stdin channel is streaming input (https://antigravity.google/docs/cli/headless):
+  // `--input-format stream-json` (which requires `--output-format stream-json`)
+  // reads one JSON object per line, `{"event":"user","message":{"content":…}}`,
+  // and the process exits once stdin is closed and the turn completes. JSON
+  // escapes the line breaks, so the prompt travels as one line on stdin.
+  cliToolsStdin: {
+    args: () => ['--dangerously-skip-permissions', '--input-format', 'stream-json', '--output-format', 'stream-json'],
+    encode: (prompt: string) => `${JSON.stringify({ event: 'user', message: { content: prompt } })}\n`,
+    parseOutput: (stdout: string, startTime: number) => parseAgyStreamJson(stdout, startTime),
+  },
   // agy --print returns plain text (no structured envelope). bufferOutput=true
   // routes the whole stdout buffer here at process close.
   parseOutput: (stdout: string, startTime: number): CompletionResult => ({
@@ -342,6 +402,12 @@ const vibeCliConfig: CLIToolConfig = {
   // tool calls without blocking. Model is selected via vibe's own config
   // (active_model), not a flag — see modelFlag below.
   buildArgs: (prompt: string) => ['-p', prompt, '--output', 'json', '--trust', '--auto-approve'],
+  // "With `-p` and no text, the prompt is read from stdin" (vibe README,
+  // github.com/mistralai/mistral-vibe; the agent path relies on the same on
+  // Windows). Same arguments, same JSON output, the prompt on stdin.
+  cliToolsStdin: {
+    args: () => ['-p', '--output', 'json', '--trust', '--auto-approve'],
+  },
   // Plain text completion, zero tools needed. vibe has no --mcp-config flag,
   // so isolation is an ephemeral VIBE_HOME with `mcp_servers = []` instead
   // (see getEmptyVibeHome) — the same lever the agent path uses to register
@@ -408,7 +474,29 @@ const vibeCliConfig: CLIToolConfig = {
   },
 };
 
-/** Workspace root for one-shot CLI completions (falls back to cwd). */
+/**
+ * The working directory of an install row's one-shot completion: empty, so a
+ * tool-less CLI picks up no project file (CLAUDE.md, AGENTS.md) of the workspace.
+ */
+function emptyCompletionDir(): string {
+  const dir = join(tmpdir(), 'octipus-cli', 'completion-cwd');
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/**
+ * The working directory of a completion that runs with the CLI's own tools
+ * (`allowCliTools`): a fresh empty directory of its own, removed afterwards,
+ * so nothing one call writes there is seen by another (another user's).
+ */
+function freshCompletionDir(): { dir: string; remove: () => void } {
+  const parent = join(tmpdir(), 'octipus-cli');
+  mkdirSync(parent, { recursive: true });
+  const dir = mkdtempSync(join(parent, 'completion-tools-'));
+  return { dir, remove: () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } } };
+}
+
+/** Workspace root for CLI runs other than one-shot completions (falls back to cwd). */
 function resolveWorkspaceRoot(): string {
   try {
     return getConfig().workspace.rootPath || process.cwd();
@@ -513,6 +601,9 @@ function makeAnthropicCompatCliConfig(spec: AnthropicCompatCliSpec): CLIToolConf
     adapter: 'Claude Code',
     buildArgs: () => ['-p', '--output-format', 'json', '--strict-mcp-config', '--mcp-config', getEmptyMcpConfigPath()],
     promptVia: 'stdin',
+    // The same `claude` binary: the same tool-less one-shot mode as Claude Code.
+    toolLessArgs: () => ['-p', '--output-format', 'json', '--strict-mcp-config', '--mcp-config', getEmptyMcpConfigPath(),
+      '--tools=', '--setting-sources=', '--settings', getClaudeSpaceSettingsPath(false)],
     parseOutput: parseClaudeStyleOutput(spec.modelLabel),
     buildEnv: async () => {
       const token = await resolveCliVendorKey(spec.keyEnv, spec.keyVault);
@@ -645,11 +736,23 @@ export class CLIProvider implements ModelProvider {
     const { assertRowServesCall } = await import('./instrumented');
     await assertRowServesCall(row, options);
     const credentialOwner = await cliCredentialOwnerFor(row, requesterId);
-    // A personal row's one-shot runs tool-less, in the owner's own directory
-    // (§8.4): its callers summarize external mail and fetched pages, and a
-    // CLI with native tools in the shared root would read every user's data.
-    if (credentialOwner && !tool.toolLessArgs) {
-      throw classifyError(new Error(`${tool.name} cannot answer one-shot completions on a personal model: it has no mode without its own tools. Use it as an agent model (/model) instead of binding it to a lane.`), 'cli');
+    // Every one-shot completion runs tool-less (§8.4), a personal row's in its
+    // owner's own directory and an install row's in an empty one: its callers
+    // summarize external mail, fetched pages and plugin-supplied prompts, and a
+    // CLI with native tools (agy --dangerously-skip-permissions, vibe
+    // --auto-approve, codex exec) would act on the host with the server's
+    // rights. A CLI with no tool-less mode answers no completion; it runs only
+    // as an agent model (the CLI agent worker, with its own isolation).
+    //
+    // The one exception is `allowCliTools`, set only by a plugin's
+    // model:complete call that an admin approved for CLI lanes (the package
+    // declares model.trustedInput, docs/PLUGIN-PACKAGES.md#model-calls-on-cli-lanes),
+    // and honoured only with that call's `plugin:<name>` request type: a CLI
+    // with a tool-less mode still uses it (tools are never needed), one without
+    // runs with its normal arguments in a fresh empty directory.
+    const cliTools = options.allowCliTools === true && options.requestType?.startsWith('plugin:') === true;
+    if (!tool.toolLessArgs && !cliTools) {
+      throw classifyError(new Error(`${tool.name} cannot answer one-shot completions: it has no mode without its own tools. Use it as an agent model (/model) instead of binding it to a lane.`), 'cli');
     }
     const quotaKey = cliQuotaKey(tool.quotaProvider, credentialOwner);
 
@@ -662,19 +765,49 @@ export class CLIProvider implements ModelProvider {
 
     // Build prompt from messages (combine system + user messages)
     const prompt = this.buildPrompt(options);
-    // In stdin mode the prompt must not reach argv at all — the builders take
-    // an empty string and place `-` (or nothing) instead.
-    const viaStdin = credentialOwner ? true : tool.promptVia === 'stdin';
-    const argvPrompt = viaStdin ? '' : prompt;
-    const cwd = credentialOwner ? cliWorkDirFor(credentialOwner.userId) : resolveWorkspaceRoot();
     // Same allowlisted child env as the agent worker — never the server's
     // full environment (DB credentials, every provider key). The model row's
     // `cliAgent.inheritApiKeys` opts a key-mode CLI back into its own key,
     // exactly as it does for managed runs.
     const inheritApiKeys = row?.metadata?.cliAgent?.inheritApiKeys === true;
     const childEnv = cliEnvFor(credentialOwner, tool, tool.buildEnv ? await tool.buildEnv() : undefined, inheritApiKeys);
-    const args = credentialOwner && tool.toolLessArgs ? tool.toolLessArgs()
-      : tool.buildArgsAsync ? await tool.buildArgsAsync(argvPrompt, cwd, childEnv) : tool.buildArgs(argvPrompt);
+    // Every completion hands the prompt over on stdin: the prompt itself, or
+    // the CLI's encoding of it (`cliToolsStdin.encode`).
+    let stdinText = prompt;
+    let parse = tool.parseOutput;
+    let cwd: string;
+    let args: string[];
+    let cleanup: (() => void) | null = null;
+    if (tool.toolLessArgs) {
+      // The tool-less mode reads the prompt from stdin: it never reaches argv.
+      cwd = credentialOwner ? cliWorkDirFor(credentialOwner.userId) : emptyCompletionDir();
+      args = tool.toolLessArgs();
+    } else {
+      // allowCliTools (checked above): the CLI's normal arguments, never the
+      // workspace root or the owner's directory, and the prompt never in
+      // argv. A stdin tool's builders take an empty string and place `-` (or
+      // nothing) instead (codex); a CLI whose normal arguments carry the
+      // prompt (agy, vibe) switches to its stdin channel (`cliToolsStdin`).
+      // execCli still refuses any argument with a line break.
+      const fresh = freshCompletionDir();
+      cleanup = fresh.remove;
+      cwd = fresh.dir;
+      try {
+        if (tool.promptVia === 'stdin') {
+          args = tool.buildArgsAsync ? await tool.buildArgsAsync('', cwd, childEnv) : tool.buildArgs('');
+        } else if (tool.cliToolsStdin) {
+          args = tool.cliToolsStdin.args();
+          stdinText = tool.cliToolsStdin.encode ? tool.cliToolsStdin.encode(prompt) : prompt;
+          parse = tool.cliToolsStdin.parseOutput ?? parse;
+        } else {
+          throw new Error(`${tool.name} takes its prompt only as a command-line argument, so it cannot receive this prompt safely; bind another CLI or an API model to the lane.`);
+        }
+      } catch (err) {
+        cleanup();
+        throw classifyError(err as Error, 'cli');
+      }
+      modelLogger.info({ tool: tool.name, model: options.model, requestType: options.requestType }, 'CLI completion with the CLI\'s own tools (an approved plugin call)');
+    }
     const startTime = Date.now();
 
     modelLogger.debug({ tool: tool.name, model: options.model }, 'Executing CLI tool');
@@ -683,11 +816,11 @@ export class CLIProvider implements ModelProvider {
       const release = await acquireCliSlot();
       let stdout: string;
       try {
-        stdout = await this.execCli(tool.binaryPath, args, { env: childEnv, cwd, ...(viaStdin ? { stdin: prompt } : {}) });
+        stdout = await this.execCli(tool.binaryPath, args, { env: childEnv, cwd, stdin: stdinText });
       } finally {
         release();
       }
-      const result = tool.parseOutput(stdout, startTime);
+      const result = parse(stdout, startTime);
 
       // Track usage
       await quotaTracker.trackUsage(quotaKey, {
@@ -713,6 +846,8 @@ export class CLIProvider implements ModelProvider {
       }
 
       throw classifyError(error, 'cli');
+    } finally {
+      cleanup?.();
     }
   }
 

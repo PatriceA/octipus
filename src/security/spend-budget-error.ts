@@ -38,6 +38,6 @@ export class SpendBudgetExceededError extends Error {
     const scope = r.scopeKind === 'user' ? 'user' : `${r.scopeKind} ${r.scopeRef}`;
     return `Spend budget exceeded for ${scope} (per ${r.period}): $${r.spentUsd.toFixed(2)}/$${r.limitUsd.toFixed(2)}. `
       + `Agents are paused until the period rolls over${r.resetsAt ? ` (${r.resetsAt})` : ''}. `
-      + 'Raise the limit or clear the pause at /api/admin/spend-budgets.';
+      + 'Ask an admin to raise the limit or clear the pause in Settings → System → Administration → Quotas & budgets (/admin/quotas; API: /api/admin/spend-budgets).';
   }
 }

@@ -61,7 +61,7 @@ there.
 Change nothing. No writing or editing files, no creating or deleting them, no
 commits, no formatters or code generation that rewrites tracked files, no
 installs, no configuration changes. The file-writing tools and the built-in
-git, GitHub and GitLab writes refuse every call this turn; the shell and MCP
+git and GitHub writes refuse every call this turn; the shell and MCP
 servers' tools do not, so a redirect (\`>\`, \`tee\`), an \`-i\` flag, a commit
 from the shell or an MCP server's write would still work. Do not use them.
 That restraint is the mode.

@@ -1,5 +1,5 @@
 import { Elysia, t } from '@/api/http';
-import { adminDenied } from '@/api/admin-guard';
+import { pluginAdminDenied } from '@/api/plugin-route-guard';
 import { apiContext } from '@/api/context';
 import { manifestTools } from '@octipus/plugin-sdk';
 import { getLoadedPlugin, getLoadedPlugins, PluginReloadError, PluginTool, reloadPlugin } from '@/plugins';
@@ -11,8 +11,8 @@ export const pluginRoutes = new Elysia({ prefix: '/plugins' })
   // List all loaded plugins
   .get(
     '/',
-    async ({ user, principal, set }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, set }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'read');
       if (denied) return denied;
 
       const plugins = getLoadedPlugins();
@@ -38,8 +38,8 @@ export const pluginRoutes = new Elysia({ prefix: '/plugins' })
   // Get a specific plugin's details
   .get(
     '/:name',
-    async ({ user, principal, set, params }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, set, params }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'read');
       if (denied) return denied;
 
       const plugin = getLoadedPlugin(params.name);
@@ -70,8 +70,8 @@ export const pluginRoutes = new Elysia({ prefix: '/plugins' })
   // Reload a specific plugin (for development)
   .post(
     '/:name/reload',
-    async ({ user, principal, set, params }) => {
-      const denied = adminDenied({ set, user, principal });
+    async ({ request, user, principal, set, params }) => {
+      const denied = pluginAdminDenied({ set, user, principal, request }, 'admin');
       if (denied) return denied;
 
       const registry = getToolRegistry();

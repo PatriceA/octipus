@@ -7,7 +7,7 @@ import { deriveParamCount, paramCountToTier, resolvePromptTier } from './prompt-
 
 const THRESHOLDS = {
   smallModelMaxParams: 10_000_000_000,
-  liteModelMaxParams: 24_000_000_000,
+  liteModelMaxParams: 30_000_000_000,
 };
 
 describe('deriveParamCount', () => {
@@ -48,7 +48,9 @@ describe('paramCountToTier', () => {
     [10_000_000_000, 'lite'],
     [14_000_000_000, 'lite'],
     [23_999_999_999, 'lite'],
-    [24_000_000_000, 'full'],
+    [27_000_000_000, 'lite'],          // a 27b dense local model
+    [29_999_999_999, 'lite'],
+    [30_000_000_000, 'full'],
     [32_000_000_000, 'full'],
     [70_000_000_000, 'full'],
   ] as const)('%d params → %s', (params, mode) => {

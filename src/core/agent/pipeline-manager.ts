@@ -1,3 +1,4 @@
+import { hasPipelineAutonomy, executionEnvironmentFor } from '@/security/execution-environments';
 import type { PipelineReplayReceipt, PipelineReplayScope } from '@/shared/pipeline-replay';
 import { withAgentOrigin } from '@/core/agent-origin';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
@@ -301,8 +302,8 @@ export function pipelineGateCommands(
  * says so (`autoApproveUnattended`) AND nobody can be asked: an attended run
  * always asks.
  */
-export function approvesUnattended(context: Pick<AgentContext, 'attended' | 'metadata'>, stage: { autoApproveUnattended?: boolean } | undefined): boolean {
-  return context.metadata?.approvedRunGates === true || stage?.autoApproveUnattended === true && context.attended === false;
+export function approvesUnattended(context: Pick<AgentContext, 'attended' | 'metadata'> & Partial<Pick<AgentContext, 'userId' | 'workspaceId' | 'space' | 'trigger'>>, stage: { autoApproveUnattended?: boolean } | undefined): boolean {
+  return !!context.userId && hasPipelineAutonomy({ ...context, userId: context.userId }) || context.metadata?.approvedRunGates === true || stage?.autoApproveUnattended === true && context.attended === false;
 }
 
 /** The approval ran out (timed out, expired) rather than being answered no. */
@@ -361,7 +362,7 @@ export async function runStageVerifyCommand(
     const { sessionRepository } = await import('@/db/repositories/session-repository');
     const session = await sessionRepository.findById(ctx.sessionId);
     if (!session) throw new Error(`session ${ctx.sessionId} not found`);
-    const sessionCtx = session.context as { devMode?: boolean; projectPath?: string } | undefined;
+    const sessionCtx = session.context as { devMode?: boolean; projectPath?: string; executionEnvironmentId?: string } | undefined;
     // The command runs where the stage's agents work: the session's
     // workspace (loaded into the file-root map by `turnWorkspaceId`), or
     // its dev-mode project — never a project in a space, whose agents work
@@ -389,8 +390,9 @@ export async function runStageVerifyCommand(
         workspaceId: ctx.workspaceId ?? workspaceId,
         space: ctx.space ?? null,
         projectPath: !inSpace && sessionCtx?.devMode === true ? sessionCtx.projectPath : undefined,
+        executionEnvironmentId: sessionCtx?.executionEnvironmentId,
         hostServices: ctx.hostServices,
-        workspaceRoot: WorkspaceFS.forSession({ ...session, workspaceId }, { space: ctx.space ?? null }).root,
+        workspaceRoot: sessionCtx?.executionEnvironmentId ? undefined : WorkspaceFS.forSession({ ...session, workspaceId }, { space: ctx.space ?? null }).root,
       },
     );
     const failure = outcome.failures[0];
@@ -570,8 +572,12 @@ export function noteReviewModel(
  * back, and saying otherwise sends a person to the wrong place. Undefined
  * outside git.
  */
-async function workspaceHead(root: string | null): Promise<string | undefined> {
+async function workspaceHead(root: string | null, context?: AgentContext): Promise<string | undefined> {
   if (!root) return undefined;
+  if (context && executionEnvironmentFor(context)?.backend === 'ssh') {
+    const head = await (await import('@/tools/filesystem/environment-operations')).remoteFilesystemOperation('git_head', {}, context);
+    return typeof head === 'string' ? head : undefined;
+  }
   const res = await runGit(root, ['rev-parse', '--short', 'HEAD']);
   const head = res.ok ? res.stdout.trim() : '';
   if (!head) return undefined;
@@ -661,7 +667,8 @@ export function poolExhaustedSummary(pool: number, spent: number, nextNodeName: 
   if (pool <= 0 || spent < pool) return null;
   return (
     `Pipeline exhausted its ${pool.toLocaleString()}-token pool (${spent.toLocaleString()} spent) ` +
-    `before "${nextNodeName}".`
+    `before "${nextNodeName}". Raise tokenBudget on resume_pipeline to continue. This is this run's saved pool, separate from the daily cap. ` +
+    'An admin can change the default agent.pipelineTokenBudget in Settings → System → Advanced configuration → Agent; changing the default does not replace a saved run budget.'
   );
 }
 
@@ -1103,7 +1110,7 @@ export class PipelineManager {
       this.signals.set(pipeline.id, parent ? AbortSignal.any([controller.signal, parent]) : controller.signal);
     }
     options?.onCreated?.(pipeline.id);
-    if (requestedProfile) {
+    if (requestedProfile && !hasPipelineAutonomy(context)) {
       const [entry] = await pipelineRepository.getNodes(pipeline.id);
       if (!entry) throw new Error('Pipeline has no entry stage for permission approval');
       const inherited = companionDelegation && JSON.stringify(companionDelegation.profile) === JSON.stringify(requestedProfile);
@@ -1119,12 +1126,18 @@ export class PipelineManager {
         await this.updatePipeline(pipeline.id, { status: 'paused', summary: 'Run permission profile was not approved; no stage has run.' });
         return { pipelineId: pipeline.id, result: 'Permission profile not approved.' };
       }
-      pipeline.metadata = { ...pipeline.metadata, ...(inherited ? { companionGoalId: companionDelegation.goalId } : {}), permissionProfile: { profile: requestedProfile, repoPath: requestedProfile.repoPath, approvedBy: userId, approvedAt: new Date().toISOString() } };
+      pipeline.metadata = { ...pipeline.metadata, ...(inherited && companionDelegation ? { companionGoalId: companionDelegation.goalId } : {}), permissionProfile: { profile: requestedProfile, repoPath: requestedProfile.repoPath, approvedBy: userId, approvedAt: new Date().toISOString() } };
       await this.updatePipeline(pipeline.id, { status: 'running', metadata: pipeline.metadata });
       context = { ...context, attended: requestedProfile.overnight ? false : context.attended,
         metadata: { ...context.metadata, approvedRunGates: requestedProfile.autoApproveGates, overnightRun: requestedProfile.overnight } };
     }
 
+    if (hasPipelineAutonomy(context)) {
+      const environment = executionEnvironmentFor(context)!;
+      recordRunEvent({ runId: sessionId, subject: 'pipeline', subjectId: pipeline.id, event: 'result',
+        payload: { source: 'execution-environment', environmentId: environment.id, revision: environment.revision, approvedBy: userId } });
+      context = { ...context, attended: false };
+    }
     return this.runGraph({
       pipeline,
       graph,
@@ -1523,6 +1536,7 @@ export class PipelineManager {
         const decision = await this.approveStepNode({
           pipeline, node, handoffChain, previousOutput, context, title, gates,
           autoApprove: approvesUnattended(context, built[gnode.templateIndex]),
+          independentAutoApprove: built[gnode.templateIndex]?.autoApproveUnattended === true && context.attended === false,
         });
         if (decision === 'stop') {
           return { pipelineId: pipeline.id, result: `Pipeline stopped at "${node.name}".` };
@@ -1592,6 +1606,7 @@ export class PipelineManager {
           maxItems,
           // The plan's sign-off is the first body step's (see the head's `requiresApproval`).
           autoApprove: approvesUnattended(context, body[0] ? built[body[0].templateIndex] : undefined),
+          independentAutoApprove: !!body[0] && built[body[0].templateIndex]?.autoApproveUnattended === true && context.attended === false,
         });
         if (stepResult.stopped) return stepResult.stopped;
         currentItem = stepResult.item;
@@ -1874,7 +1889,7 @@ export class PipelineManager {
           // the gate let stand is an attempt worth remembering.
           if (qaResult && !qaResult.auditGateFailed) {
             const ledger = qaAttempts.get(cursor) ?? [];
-            ledger.push(attemptFromVerdict(qaResult, itemAcceptance, ledger.length + 1, await workspaceHead(workspaceRoot)));
+            ledger.push(attemptFromVerdict(qaResult, itemAcceptance, ledger.length + 1, await workspaceHead(workspaceRoot, context)));
             qaAttempts.set(cursor, ledger);
           }
           if (!qaResult || qaResult.passed) {
@@ -2289,7 +2304,7 @@ export class PipelineManager {
       root: true,
       model: '',
       status: 'running',
-      metadata: { pipelineId, resumed: true, replayScope, approvedContinuationAttemptId: !opts.freshAttempt && checkpoint.seq === (await pipelineRepository.getCheckpoints(pipelineId, 1))[0]?.seq ? resumeState.attemptId : undefined, overnightRun: (pipeline.metadata?.permissionProfile as { profile?: { overnight?: boolean } } | undefined)?.profile?.overnight === true, approvedRunReplay: (pipeline.metadata?.permissionProfile as { profile?: { allowCheckpointReplay?: boolean } } | undefined)?.profile?.allowCheckpointReplay === true, approvedRunGates: (pipeline.metadata?.permissionProfile as { profile?: { autoApproveGates?: boolean } } | undefined)?.profile?.autoApproveGates === true },
+      metadata: { ...((originSession?.context as { executionEnvironmentId?: string } | null)?.executionEnvironmentId ? { executionEnvironmentId: (originSession!.context as { executionEnvironmentId: string }).executionEnvironmentId } : {}), ...((originSession?.context as { projectPath?: string } | null)?.projectPath ? { projectPath: (originSession!.context as { projectPath: string }).projectPath } : {}), pipelineId, resumed: true, replayScope, approvedContinuationAttemptId: !opts.freshAttempt && checkpoint.seq === (await pipelineRepository.getCheckpoints(pipelineId, 1))[0]?.seq ? resumeState.attemptId : undefined, overnightRun: (pipeline.metadata?.permissionProfile as { profile?: { overnight?: boolean } } | undefined)?.profile?.overnight === true, approvedRunReplay: (pipeline.metadata?.permissionProfile as { profile?: { allowCheckpointReplay?: boolean } } | undefined)?.profile?.allowCheckpointReplay === true, approvedRunGates: (pipeline.metadata?.permissionProfile as { profile?: { autoApproveGates?: boolean } } | undefined)?.profile?.autoApproveGates === true },
     });
     return withAgentUsage(pipeline.userId, scope, () => this.resumeWalk(pipeline, pipelineId, opts, checkpoint, resumeState, context));
   }
@@ -2511,6 +2526,7 @@ export class PipelineManager {
     before?: WorkspaceSnapshot | null;
     /** Root the stage's worker writes to, re-walked here for the "after" side. */
     workspaceRoot?: string | null;
+    context?: AgentContext;
   }): Promise<void> {
     const declared: StageDeclaration = {
       producesArtifacts: args.declared?.producesArtifacts,
@@ -2525,7 +2541,7 @@ export class PipelineManager {
     // The "after" side of the snapshot. Taken here rather than at the call site
     // so it is impossible to gate on a stale reading: this runs immediately
     // before the decision that uses it.
-    const after = args.before && args.workspaceRoot ? await snapshotWorkspace(args.workspaceRoot) : null;
+    const after = args.before && args.workspaceRoot ? await snapshotWorkspace(args.workspaceRoot, { context: args.context }) : null;
     // The declaration decides how the diff is SCORED, not what the walk records:
     // a snapshot that hides files can never be re-scored, and two snapshots taken
     // under different rules cannot be compared at all.
@@ -2620,10 +2636,12 @@ export class PipelineManager {
    * Resolved once per pipeline run: it cannot change mid-run, and the session
    * lookup is a DB round-trip we do not need per stage.
    */
-  private async resolveWorkspaceRoot(sessionId: string, context: Pick<AgentContext, 'space'>): Promise<string | null> {
+  private async resolveWorkspaceRoot(sessionId: string, context: AgentContext): Promise<string | null> {
     try {
       const session = await sessionRepository.findById(sessionId);
       if (!session) return null;
+      const environment = executionEnvironmentFor({ ...context, metadata: (session.context ?? {}) as Record<string, unknown> });
+      if (environment?.backend === 'ssh') return (session.context as { projectPath?: string } | null)?.projectPath ?? environment.roots[0];
       return WorkspaceFS.forSession(session, { space: context.space ?? null }).root;
     } catch (err) {
       coreLogger.warn({ err: (err as Error).message, sessionId }, 'Could not resolve workspace root for the evidence gate');
@@ -2640,11 +2658,12 @@ export class PipelineManager {
   private async snapshotStage(
     declared: StageDeclaration | undefined,
     workspaceRoot: string | null,
+    context: AgentContext,
   ): Promise<WorkspaceSnapshot | null> {
     // Both declarations need the filesystem: one to prove work happened, the
     // other to prove it did not.
     if (!workspaceRoot || !(declared?.producesArtifacts || declared?.readOnly)) return null;
-    return snapshotWorkspace(workspaceRoot);
+    return snapshotWorkspace(workspaceRoot, { context });
   }
 
   /**
@@ -3093,7 +3112,7 @@ export class PipelineManager {
           metadata: { pipelineId: pipeline.id, stageId: node.id, pipelineEvent: 'qa_same_model' },
         }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
       }
-      const before = await this.snapshotStage(declared, workspaceRoot);
+      const before = await this.snapshotStage(declared, workspaceRoot, context);
 
       let counters: SideEffectCounters | null = null;
       const result = await rootAgent.spawnWorker(
@@ -3254,6 +3273,7 @@ export class PipelineManager {
         declared,
         before,
         workspaceRoot,
+        context,
         counters,
       });
 
@@ -3587,6 +3607,7 @@ export class PipelineManager {
     maxItems: number | null;
     /** Sign the plan off without asking: nobody is watching and the step allows it. */
     autoApprove?: boolean;
+    independentAutoApprove?: boolean;
   }): Promise<{
     outcome: NodeOutcome;
     item: PlanItemRow | null;
@@ -3620,7 +3641,7 @@ export class PipelineManager {
       const current = await this.getPipeline(pipeline.id);
       const budget = pipelineBudget(current ?? pipeline, await pipelineRepository.getNodes(pipeline.id), items, getConfig().agent.pipelineTokenBudget);
       if (budget.exhausted) {
-        const summary = `Pipeline token pool exhausted (${budget.spent}/${budget.pool}) after finishing the current item. Raise tokenBudget on resume_pipeline to continue with the remaining items.`;
+        const summary = `Pipeline token pool exhausted (${budget.spent}/${budget.pool}) after finishing the current item. Raise tokenBudget on resume_pipeline to continue with the remaining items. This is the saved pipeline run pool, separate from your daily cap. An admin can change the default agent.pipelineTokenBudget in Settings → System → Advanced configuration → Agent; changing a default does not replace this run's saved budget.`;
         await this.updatePipeline(pipeline.id, { status: 'paused', summary, metadata: { ...current?.metadata, budgetWarning: budget } });
         return { outcome: 'loop_done', item: null, stopped: { pipelineId: pipeline.id, result: summary } };
       }
@@ -3660,8 +3681,7 @@ export class PipelineManager {
     // Nobody is watching and the template allows it: the plan is approved
     // without a prompt (recorded as automatic), and the loop starts.
     if (node.requiresApproval && node.visits === 1 && autoApprove) {
-      await this.autoApproveNode(pipeline, node, `the plan (${items.length} item${items.length === 1 ? '' : 's'})`);
-      return this.nextPlanItem(pipeline, node);
+      if (await this.autoApproveNode(pipeline, node, `the plan (${items.length} item${items.length === 1 ? '' : 's'})`, context, args.independentAutoApprove)) return this.nextPlanItem(pipeline, node);
     }
 
     // First visit and the plan needs sign-off: show the whole list, once.
@@ -3938,19 +3958,24 @@ export class PipelineManager {
    * it never reads as a person's yes. The gate commands are NOT approved with
    * it: an approval a person gave covers them (`approveGates`), this does not.
    */
-  private async autoApproveNode(pipeline: Pipeline, node: PipelineNodeRow, what: string): Promise<void> {
+  private async autoApproveNode(pipeline: Pipeline, node: PipelineNodeRow, what: string, context: AgentContext, independentStageGrant = false): Promise<boolean> {
     const at = new Date();
-    recordRunEvent({ runId: pipeline.sessionId, subject: 'pipeline_node', subjectId: node.nodeKey, event: 'result',
-      payload: { pipelineId: pipeline.id, kind: 'gate_approval', response: null, decidedBy: null, decidedAt: at.toISOString(), decision: 'auto_approved' } });
+    const session = await sessionRepository.findById(pipeline.sessionId);
+    const caller = { ...context, userId: pipeline.userId, workspaceId: pipeline.workspaceId, metadata: (session?.context ?? {}) as Record<string, unknown> };
     const current = await this.getPipeline(pipeline.id);
+    const environment = hasPipelineAutonomy(caller) ? executionEnvironmentFor(caller) : undefined;
     const profile = current?.metadata?.permissionProfile as { approvedBy?: string; profile?: { autoApproveGates?: boolean } } | undefined;
     const granted = profile?.approvedBy === pipeline.userId && profile.profile?.autoApproveGates;
-    await this.updateNode(node.id, { status: 'approved', approvedAt: at, ...(granted ? { approvedBy: profile.approvedBy } : {}) });
-    await this.updatePipeline(pipeline.id, { status: 'running', summary: granted ? `Approved under this run’s permission profile: ${what}.` : `Approved automatically: ${what} (no one was watching this run).` });
+    if (!environment && !granted && !independentStageGrant) return false;
+    const source = environment ? `environment ${environment.name} (${environment.id}, revision ${environment.revision})` : undefined;
+    recordRunEvent({ runId: pipeline.sessionId, subject: 'pipeline_node', subjectId: node.nodeKey, event: 'result',
+      payload: { pipelineId: pipeline.id, kind: 'gate_approval', response: null, decidedBy: null, decidedAt: at.toISOString(), decision: 'auto_approved', ...(environment ? { environmentId: environment.id, environmentRevision: environment.revision, approvedBy: pipeline.userId } : {}) } });
+    await this.updateNode(node.id, { status: 'approved', approvedAt: at, ...(environment ? { approvedBy: pipeline.userId } : granted ? { approvedBy: profile.approvedBy } : {}) });
+    await this.updatePipeline(pipeline.id, { status: 'running', summary: source ? `Approved under ${source}: ${what}.` : granted ? `Approved under this run’s permission profile: ${what}.` : `Approved automatically: ${what} (no one was watching this run).` });
     messageRepository.create({
       sessionId: pipeline.sessionId,
       role: 'system',
-      content: granted ? `Approved ${what} under the permission profile approved by ${profile.approvedBy}. Commands remain limited to that profile.`
+      content: source ? `Approved ${what} automatically under the owner’s saved ${source} policy. Tool execution still checks the current environment and explicit denials.` : granted ? `Approved ${what} under the permission profile approved by ${profile.approvedBy}. Commands remain limited to that profile.`
         : `Approved ${what} automatically: no one was watching this run, and the step is set to approve itself then. Gate commands still ask for their own permission.`,
       metadata: { pipelineId: pipeline.id, stageId: node.id, pipelineEvent: 'auto_approved' },
     }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
@@ -3961,6 +3986,7 @@ export class PipelineManager {
       data: { event: 'auto_approved', pipelineId: pipeline.id, stageId: node.id, name: node.name },
       timestamp: at,
     });
+    return true;
   }
 
   private async requestPipelineApproval(
@@ -3997,13 +4023,13 @@ export class PipelineManager {
     gates: PipelineGate[];
     /** Approve without asking: nobody is watching and the step allows it. */
     autoApprove?: boolean;
+    independentAutoApprove?: boolean;
   }): Promise<'go' | 'skip' | 'stop'> {
     const { pipeline, node, handoffChain, previousOutput, context, title, gates } = args;
     const rootAgent = getAgentService();
 
     if (args.autoApprove) {
-      await this.autoApproveNode(pipeline, node, `"${node.name}"`);
-      return 'go';
+      if (await this.autoApproveNode(pipeline, node, `"${node.name}"`, context, args.independentAutoApprove)) return 'go';
     }
 
     await this.updateNode(node.id, { status: 'awaiting_approval' });

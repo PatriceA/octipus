@@ -28,6 +28,7 @@ test('preview keeps the current branch and dirty source checkout untouched; real
   expect(preview.status).toBe(0);
   expect(preview.stdout).toContain('git pull --ff-only');
   expect(preview.stdout).toContain('Preview only');
+  expect(preview.stdout.includes('build:sandbox:windows')).toBe(process.platform === 'win32');
   expect(git('status', '--porcelain')).toBe(before);
   const update = run();
   expect(update.status).toBe(1);

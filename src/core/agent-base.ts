@@ -84,6 +84,7 @@ export interface AgentWorkerConfig {
 }
 
 export interface ToolHandler {
+  execution?: import('@/core/types').ToolManifest['execution'];
   /** Runtime execution budget for transports whose timeout is not a model argument. */
   executionTimeoutMs?: number | ((args: Record<string, unknown>) => number);
   name: string;

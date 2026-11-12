@@ -21,8 +21,7 @@ const maxWidthMap = {
 };
 
 /**
- * Terminal-UI modal — backdrop, framed surface, `> title` titlebar.
- * Square corners, single-line dim border, JetBrains Mono throughout.
+ * Shared workspace dialog surface with readable typography and restrained chrome.
  */
 export function Modal({ open, onClose, children, className, title, maxWidth = 'md' }: ModalProps) {
   useEffect(() => {
@@ -38,11 +37,11 @@ export function Modal({ open, onClose, children, className, title, maxWidth = 'm
 
   return (
     <Portal>
-    <div className="fixed inset-0 z-50 flex items-center justify-center font-mono">
+    <div className="fixed inset-0 z-50 flex items-center justify-center font-sans">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
       <div
         className={cn(
-          'relative w-full mx-4 bg-surface-container border border-outline-variant rounded-xs shadow-2xl',
+          'relative w-full mx-4 bg-surface-container border border-outline-variant rounded-xl shadow-2xl',
           'animate-enter',
           maxWidthMap[maxWidth],
           className,
@@ -51,8 +50,7 @@ export function Modal({ open, onClose, children, className, title, maxWidth = 'm
         {title && (
           <div className="flex items-center justify-between px-3 py-2 border-b border-outline-variant/60 bg-surface-container-low">
             <h3 className="text-[13px] text-on-surface flex items-center gap-1.5">
-              <span aria-hidden className="text-primary font-bold">&gt;</span>
-              {title.toLowerCase()}
+              {title}
             </h3>
             <button
               onClick={onClose}

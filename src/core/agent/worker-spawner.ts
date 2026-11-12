@@ -1,3 +1,5 @@
+import { executionEnvironmentFor } from '@/security/execution-environments';
+import { pluginPromptSections } from '@/plugins/packages/contributions/prompt';
 import { createStageDelegation } from './stage-delegation';
 import { WorkerInterruptedError, type Interruption } from '@/core/interruption';
 import { getExecutionSignal } from '@/core/execution-scope';
@@ -41,7 +43,7 @@ import { estimateToolSchemaTokens, logPromptComposition } from './prompt-budget'
 import { FILE_CHANGES_REFUSED_KEY } from '@/core/tool-executor';
 import { asTrailingBlock, PromptBuilder } from './prompt-builder';
 import { type DeclaredPurpose, toolsetGaps } from './role-contract';
-import { formatCriticalRules, getBoundConnectorIds, getRoleConfig, getToolsForRole } from './roles';
+import { formatCriticalRules, getRoleConfig, getToolsForRole } from './roles';
 import type { TurnEvent } from './service';
 import { applyToolCap, isSmallModel } from './small-model';
 import { selectCoreToolIds } from './tool-intent';
@@ -104,11 +106,11 @@ export function pipelineMetadata(metadata: Record<string, unknown> | undefined, 
   // writes too, which the file-writer strip cannot see.
   if (opts.planMode) return { ...pipelineMetadata(metadata), [FILE_CHANGES_REFUSED_KEY]: 'plan_mode' };
   if (!metadata) return undefined;
-  const { pipelineId, nodeKey, hostServices, resumeKey, attemptId } = metadata as Record<string, unknown>;
+  const { pipelineId, nodeKey, hostServices, resumeKey, attemptId, executionEnvironmentId } = metadata as Record<string, unknown>;
   const sourceFiles=Array.isArray(metadata.companionSourceFiles)?metadata.companionSourceFiles.slice(0,20).filter((file):file is import('@/core/session-files').AttachedFileRef=>!!file&&typeof file==='object'&&typeof (file as {path?:unknown}).path==='string').map(({path,version,protectionLevel})=>({path,version,protectionLevel})):[];
-  if (pipelineId === undefined && nodeKey === undefined && !sourceFiles.length) return undefined;
+  if (pipelineId === undefined && nodeKey === undefined && !sourceFiles.length && executionEnvironmentId === undefined) return undefined;
   const hasPipelineScope=pipelineId!==undefined||nodeKey!==undefined;
-  return { ...(sourceFiles.length?{companionSourceFiles:sourceFiles}:{}), ...(pipelineId !== undefined && { pipelineId }), ...(nodeKey !== undefined && { nodeKey }), ...(hasPipelineScope && hostServices === true && { hostServices }),
+  return { ...(typeof executionEnvironmentId === 'string' ? { executionEnvironmentId } : {}), ...(sourceFiles.length?{companionSourceFiles:sourceFiles}:{}), ...(pipelineId !== undefined && { pipelineId }), ...(nodeKey !== undefined && { nodeKey }), ...(hasPipelineScope && hostServices === true && { hostServices }),
     // The stage attempt's vendor CLI conversation (`cli-agent-worker`) and the
     // attempt its approvals were granted to (`approved-calls.ts`). Not passed
     // on to a stage's own children (`stageChildMetadata`).
@@ -293,6 +295,13 @@ export async function spawnWorker(
      */
     extraToolIds?: string[];
     /**
+     * `toolIds` is the whole tool set: nothing is appended after the narrowing
+     * (no test-container tools). For work started by a
+     * plugin (`agent:run`), whose tool list the host fixes and an admin
+     * approved; a role's extras must not widen it.
+     */
+    exactTools?: boolean;
+    /**
      * What the caller says this work IS (a pipeline stage's `producesArtifacts`
      * / `runsCommands` declaration). Checked against the tools the worker is
      * actually about to get, and the spawn is REFUSED when they cannot honor
@@ -356,24 +365,8 @@ export async function spawnWorker(
     }
   }
 
-  if (isRealUserId(context.userId)) {
-    try {
-      const { connectorOwnerOf, getConnectorRegistry } = await import('@/connectors');
-      // Role↔connector binding: if the role binds specific connectors
-      // (`connector:<id>` in its toolIds), expose only those; otherwise expose
-      // all of the user's active connectors (backward-compatible default).
-      // In a space, the space's connectors instead of the member's (§9.5).
-      const boundConnectorIds = getBoundConnectorIds(agentRole);
-      const allowed = boundConnectorIds.length > 0 ? new Set(boundConnectorIds) : undefined;
-      const connectorHandlers = await getConnectorRegistry().getUserToolHandlers(connectorOwnerOf(context), allowed);
-      roleTools.push(...connectorHandlers);
-    } catch (err) {
-      coreLogger.warn({ err, userId: context.userId }, 'Failed to load connector tool handlers');
-    }
-  }
-
   // Plan mode is inherited, and applied HERE — after the stage's declared
-  // toolIds, after `extraToolIds` grants, after connector handlers — because
+  // toolIds and after `extraToolIds` grants — because
   // this is the first point the set is final. Applied at the top instead, it
   // was undone one block later: a runtime grant of `filesystem` re-adds
   // `write_file`, and a planning turn duly edited the file it had been asked
@@ -391,7 +384,7 @@ export async function spawnWorker(
       const before = roleTools.length;
       roleTools = stripMutatingTools(roleTools);
       // And the executor's plan-mode rule for what the strip cannot see:
-      // repository writes (git, GitHub, GitLab). On the WORKER's metadata:
+      // repository writes (git, GitHub). On the WORKER's metadata:
       // `context` is the caller's.
       planModeWorker = true;
       coreLogger.info(
@@ -547,7 +540,7 @@ export async function spawnWorker(
 
   // Small-tier worker: cap the tool surface. Role tool lists are
   // priority-ordered so the core tools survive; the long tail (and MCP
-  // meta-tools / connector handlers appended above) is dropped. Skipped for
+  // meta-tools appended above) is dropped. Skipped for
   // larger models, which keep the full surface. Keyed off `finalIsSmall` (the
   // model that actually runs), not the topic model — an expert modelPreference
   // or override otherwise capped a big model to 7 tools, or handed a small one
@@ -559,7 +552,7 @@ export async function spawnWorker(
   // Framework capability: a bounded test environment for QA/review, without
   // granting Docker administration. Advertise it in pipeline worker prompts
   // as well as registering it globally; count it in the execution contract.
-  if (['qa', 'review'].includes(agentRole)) {
+  if (['qa', 'review'].includes(agentRole) && !overrides?.exactTools) {
     const { buildTestContainerHandlers } = await import('@/tools/test-container');
     roleTools.push(...buildTestContainerHandlers());
   }
@@ -662,8 +655,9 @@ export async function spawnWorker(
   // room or group session (D10, I7): the same audience the root turn reads.
   const audience = await sessionAudience(session);
   // No dev-mode project root in a space: its workers work in the space's files.
-  const isDevMode = !context.space && sessionCtx?.devMode === true && !!sessionCtx.projectPath;
-  const devProjectPath = isDevMode ? sessionCtx!.projectPath! : undefined;
+  const environment = executionEnvironmentFor(context);
+  const isDevMode = !context.space && (!!environment || sessionCtx?.devMode === true) && !!(sessionCtx?.projectPath ?? environment?.roots[0]);
+  const devProjectPath = isDevMode ? (context.metadata.projectPath as string | undefined) ?? sessionCtx?.projectPath ?? environment?.roots[0] : undefined;
 
   // Inject the curated AGENTS.md guide and maintenance instruction.
   // AGENTS.md (https://agents.md) is the universal project guide other agent
@@ -679,7 +673,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   staticParts.push(AGENTS_MD_INSTRUCTION);
   if (devProjectPath) {
     context.metadata.projectPath = devProjectPath;
-    const agentsGuide = await loadAgentsMd(devProjectPath);
+    const agentsGuide = environment?.backend === 'ssh' ? null : await loadAgentsMd(devProjectPath);
     if (agentsGuide) {
       const projectName = sessionCtx?.projectName || devProjectPath.split(/[/\\]/).pop() || 'project';
       // Bound this per-section injection in TOKENS (Phase 5 item 2). Budget ≈
@@ -692,7 +686,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
 
   // Inject git status/diff for code-aware roles (gives agents awareness of pending changes)
   const GIT_AWARE_ROLES = new Set(['coding', 'review', 'devops', 'security', 'qa']);
-  if (GIT_AWARE_ROLES.has(agentRole)) {
+  if (GIT_AWARE_ROLES.has(agentRole) && environment?.backend !== 'ssh') {
     const git = await gitContextSection(devProjectPath || getConfig().workspace?.rootPath || process.cwd());
     if (git) volatileParts.push(git);
   }
@@ -786,7 +780,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     if (devProjectPath !== octiRoot) {
       workspaceHint += `\nOCTIPUS PROJECT: ${octiRoot}`;
     }
-    workspaceHint += `\nPLUGIN DIRECTORY: ${octiRoot}/extensions/ — ALL plugins MUST be created here, nowhere else.`;
+    workspaceHint += `\nPLUGINS: a plugin you write is a plugin package in your workspace (e.g. my-plugins/<name>/, docs/PLUGIN-PACKAGES.md), never inside the Octipus project at ${octiRoot}.`;
     if (/\s/.test(octiRoot) || /\s/.test(devProjectPath)) {
       workspaceHint += `\nIMPORTANT: Paths contain spaces — ALWAYS wrap them in double quotes in shell commands (e.g. \`chmod +x "${devProjectPath}/file.sh"\`). Unquoted, the shell splits on spaces and the command fails.`;
     }
@@ -811,7 +805,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     if (workspaceRoot !== octiRoot) {
       workspaceHint += `\nOCTIPUS PROJECT: ${octiRoot}`;
     }
-    workspaceHint += `\nPLUGIN DIRECTORY: ${octiRoot}/extensions/ — ALL plugins MUST be created here, nowhere else.`;
+    workspaceHint += `\nPLUGINS: a plugin you write is a plugin package in your workspace (e.g. my-plugins/<name>/, docs/PLUGIN-PACKAGES.md), never inside the Octipus project at ${octiRoot}.`;
     if (/\s/.test(workspaceRoot) || /\s/.test(octiRoot)) {
       workspaceHint += `\nIMPORTANT: Paths contain spaces — ALWAYS wrap them in double quotes in shell commands (e.g. \`chmod +x "${workspaceRoot}/project/file.sh"\`). Unquoted, the shell splits on spaces and the command fails.`;
     }
@@ -856,6 +850,16 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     if (hooks.text) volatileParts.push(hooks.text);
     contextTurn = hooks.turn;
   }
+  // Turn context of plugin packages (docs/PLUGIN-PACKAGES.md#context), against the same brief and audience rule.
+  if (isRealUserId(context.userId) && !audience.shared && !audience.contentStorageOff) {
+    const { runPluginContexts } = await import('@/plugins/packages/contributions/context');
+    const { inheritScope } = await import('./context');
+    const plugins = await runPluginContexts({
+      userId: context.userId, sessionId: context.sessionId, role: agentRole,
+      query: input ? `${task}\n${input}` : task, scope: inheritScope(context),
+    });
+    if (plugins.text) volatileParts.push(plugins.text);
+  }
 
   // Workers must return results to the root agent, not message the user directly (STATIC)
   staticParts.push(`\n\nIMPORTANT: You are a worker agent. Return your findings and results as plain text in your final response — the rootAgent handles all user communication. Just do your task and respond with the result.\nDo NOT use messaging tools (send_to_user, send_channel_message) to contact the user. <!-- module:channels -->`);
@@ -864,13 +868,17 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   // failed probe" reported a stop as its work (#16).
   staticParts.push(`\n\nVISIBLE PLAN: get_work_plan/update_work_plan belong to the root coordinator. Record decisions and verification evidence in your handoff and contract; the pipeline synchronizes its items to the visible plan. Do not call unavailable visible-plan tools. Reuse toolchain versions and availability checks recorded by earlier stages of this run unless code or dependencies changed, or the earlier evidence failed.\n\nRECOVERING FROM YOUR OWN PROBES: a guessed path that does not exist, a helper binary that is not installed, or an exploratory command that exits non-zero is something to recover from — list or search for the real path, use an available alternative, re-run — and keep working. Report something as unavailable only when what the task needs truly is; never invent the result of a call that failed.`);
 
-  // Knowledge-tool roles: point them at the auto-indexed product docs so
+  // Knowledge-tool roles: point them at on-demand local product help so
   // "how do I set up / configure / connect X" questions are answered from
   // the shipped manual instead of a guess. Small models get the leaner
   // surface (they tend to misfire on extra tool guidance).
   if (!finalIsSmall && roleTools.some((t) => t.toolId === 'knowledge')) {
-    staticParts.push(`\n\nPRODUCT DOCS: Octipus's own product documentation (setup, channels, model providers, configuration) is indexed in the knowledge base (source "octipus-docs"). For any "how do I set up / configure / connect / enable X" question about Octipus itself, call search_knowledge FIRST and answer from the retrieved docs — cite the source file — rather than guessing.`);
+    staticParts.push(`\n\nPRODUCT DOCS: Octipus's bundled manual is available locally without embeddings or a model. For questions about setting up, configuring or using Octipus, call search_product_docs, then read_product_doc for the relevant file and lines. Answer from those sources and cite the file; search_knowledge is for the user's knowledge, not product help.`);
   }
+
+  // Prompt sections of enabled plugin packages for this role
+  // (docs/PLUGIN-PACKAGES.md#prompt-sections): static, the same for every user.
+  for (const section of pluginPromptSections(agentRole)) staticParts.push(section.text);
 
   // CLI workers advertise their actual run-scoped handlers at launch. Do not
   // promise the standalone admin MCP catalog or invented octipus_* aliases.
@@ -961,7 +969,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   }
 
   // Lazy tool discovery (docs/plans/lazy-tool-discovery.md). Decided here, after
-  // roleTools is fully assembled (connector handlers + spawn_child injected
+  // roleTools is fully assembled (spawn_child injected
   // above), where model + size are known — agent-worker never re-derives it.
   // The per-request tool-schema payload only hurts local Ollama (each request
   // re-prefills the schemas on the iGPU; no cross-request server-side prompt
@@ -1190,7 +1198,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     // that is not in the workspace created the file and worked on that instead,
     // and the QA stage downstream certified the fabrication (see
     // `core/premise.ts`). Cheap, stated as fact, never blocking.
-    const premise = premiseNoteFor(baseMessage, premiseRoots(context, isDevMode ? devProjectPath : undefined));
+    const premise = environment?.backend === 'ssh' ? undefined : premiseNoteFor(baseMessage, premiseRoots(context, isDevMode ? devProjectPath : undefined));
     const workerMessage = premise ? `${baseMessage}\n\n${premise}` : baseMessage;
 
     const onPartial = overrides?.onPartialOutput;

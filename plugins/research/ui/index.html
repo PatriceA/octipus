@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Research</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <!-- No form element: a sandboxed frame without allow-forms never submits one (and its CSP has form-action 'none'). -->
+  <h1>Research</h1>
+  <p class="hint" id="hint">Ask a question. Octipus's research agent searches the web and your knowledge in the background and writes a cited report, which you can save to your documents.</p>
+  <label for="question" class="label">Question</label>
+  <textarea id="question" rows="3" maxlength="2000" placeholder="What changed in the EU AI Act this year?"></textarea>
+  <div class="bar">
+    <label for="depth" class="label inline">Depth</label>
+    <select id="depth">
+      <option value="quick">Quick</option>
+      <option value="standard" selected>Standard</option>
+      <option value="deep">Deep</option>
+    </select>
+    <button id="start" type="button">research</button>
+  </div>
+  <p id="status" role="status" aria-live="polite"></p>
+  <div id="error" role="alert" hidden></div>
+
+  <section id="result" class="panel" hidden>
+    <div class="row head">
+      <h2 id="result-title"></h2>
+      <button type="button" id="save">Save to documents</button>
+    </div>
+    <p id="saved" class="saved" hidden></p>
+    <article id="report" class="report"></article>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

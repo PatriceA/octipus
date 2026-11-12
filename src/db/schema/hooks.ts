@@ -116,7 +116,7 @@ export interface TriggerConfig {
    * Pruned to what the latest probe still sees, so a cleared item re-fires
    * if it comes back.
    */
-  heartbeatSeen?: { prs?: string[]; events?: string[] };
+  heartbeatSeen?: { prs?: string[]; events?: string[]; notifications?: string[]; notificationCursor?: { at: string; id: string }; tasks?: string[]; emails?: string[] };
   /**
    * For heartbeat — a role heartbeat (work board): the hook is that role's
    * agent for its owner. Its probe is the ready tasks assigned to the role

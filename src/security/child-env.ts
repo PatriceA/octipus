@@ -1,3 +1,4 @@
+import { SETTINGS_REGISTRY } from '@/config/settings-registry';
 /**
  * The environment handed to a spawned process.
  *
@@ -72,7 +73,7 @@ export function buildChildEnv(
  * still gets: enough to find binaries, a home and a locale. Nothing else of
  * the host's environment crosses, credential-looking or not.
  */
-const MINIMAL_ENV_NAMES = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TEMP', 'TMP', 'SystemRoot', 'ComSpec', 'PATHEXT', 'WINDIR'];
+export const MINIMAL_ENV_NAMES = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'TEMP', 'TMP', 'SystemRoot', 'ComSpec', 'PATHEXT', 'WINDIR', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'ALLUSERSPROFILE', 'ProgramData'];
 
 /** The environment of an isolated child: the minimal host variables plus exactly `extra`. */
 export function buildIsolatedChildEnv(extra?: Record<string, string>): Record<string, string> {
@@ -82,4 +83,10 @@ export function buildIsolatedChildEnv(extra?: Record<string, string>): Record<st
     if (v !== undefined) out[name] = v;
   }
   return { ...out, ...extra };
+}
+
+/** Trusted personal host mode keeps ordinary CLI credentials, but never Octipus server/provider secrets. */
+export function buildHostChildEnv(): Record<string, string> {
+  const blocked = new Set([...SENSITIVE_ENV_EXACT, ...SETTINGS_REGISTRY.filter(entry => entry.isSecret && entry.envVar && !['GH_TOKEN', 'GITHUB_TOKEN'].includes(entry.envVar)).map(entry => entry.envVar!)]);
+  return Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && !blocked.has(entry[0]) && !/^(?:OPENAI|ANTHROPIC|OPENROUTER|DEEPSEEK|LITELLM|GEMINI|GOOGLE_AI|MISTRAL|GROQ|XAI|AZURE_OPENAI)_.*(?:KEY|TOKEN|SECRET)$/.test(entry[0]) && !/^(?:OCTIPUS_.*(?:TOKEN|KEY|SECRET|PASSWORD)|BOOTSTRAP_API_KEY)$/.test(entry[0])));
 }

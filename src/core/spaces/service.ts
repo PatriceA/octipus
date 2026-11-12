@@ -18,6 +18,7 @@ import { and, count, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm'
 import { getConfig } from '@/config';
 import { federationHosts } from '@/core/federation/mode';
 import { getDb, queryRaw } from '@/db/postgres';
+import { pluginStoreRepository } from '@/db/repositories/plugin-store-repository';
 import { isUuid } from '@/db/repositories/scoped';
 import { type AuditDetails, auditLog } from '@/db/schema/audit';
 import { federationInstances } from '@/db/schema/federation';
@@ -734,6 +735,8 @@ export async function removeMember(actor: SpaceActor, workspaceId: string, targe
     await tx
       .delete(workspaceMembers)
       .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, targetUserId)));
+    // What plugins kept for them in this space is theirs in this space only (docs/PLUGIN-PACKAGES.md#store).
+    await pluginStoreRepository.deleteUserInWorkspace(targetUserId, workspaceId, tx);
     await revokeInvitesBy(tx, actor, workspaceId, targetUserId);
     await writeSpaceAudit(tx, {
       ...auditActor(actor),
@@ -778,6 +781,8 @@ export async function leaveSpace(
     await tx
       .delete(workspaceMembers)
       .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, actor.userId)));
+    // What plugins kept for them in this space is theirs in this space only (docs/PLUGIN-PACKAGES.md#store).
+    await pluginStoreRepository.deleteUserInWorkspace(actor.userId, workspaceId, tx);
     await revokeInvitesBy(tx, actor, workspaceId, actor.userId);
     await writeSpaceAudit(tx, {
       ...auditActor(opts.removedBy ?? actor),

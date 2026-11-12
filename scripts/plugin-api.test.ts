@@ -3,9 +3,33 @@
  * a fake backend: the token rides as a bearer, approve sends the hash it was
  * given or the one confirmed at a terminal, and refuses to guess otherwise.
  */
+import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
+import { StringDecoder } from 'node:string_decoder';
 import { describe, expect, test } from 'vitest';
-import type { PluginPackageView } from '@/shared/plugin-package';
-import { approveCommand, backendBase, listCommand, type PluginApiIo } from './plugin-api';
+import { MAX_PLUGIN_SECRET_LENGTH, type PluginPackageView } from '@/shared/plugin-package';
+import {
+  approveCommand,
+  approveCliToolsCommand,
+  approveContributionsCommand,
+  approveInProcessCommand,
+  bundledCommand,
+  installBundledCommand,
+  backendBase,
+  type HiddenInput,
+  installCommand,
+  listCommand,
+  marketplaceCommand,
+  parseSettingPairs,
+  type PluginApiIo,
+  readAllText,
+  readHiddenLine,
+  secretCommand,
+  secretCommandFromArgs,
+  setCommand,
+  uninstallCommand,
+  updatesCommand,
+} from './plugin-api';
 
 const RECORDED = `sha256:${'a'.repeat(64)}`;
 const ACTUAL = `sha256:${'b'.repeat(64)}`;
@@ -17,7 +41,10 @@ function view(over: Partial<PluginPackageView> = {}): PluginPackageView {
     network: { state: 'refused', detail: 'Not started' }, connected: false,
     contentHash: RECORDED, actualHash: ACTUAL, signedBy: null,
     signature: { status: 'invalid', keyId: null, publisher: null, detail: 'does not match' },
-    installedBy: null, installedAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-01T00:00:00Z',
+    runtime: 'package', inProcess: null,
+    contributions: { hash: null, approvedHash: null, approved: false, commands: [], schedules: [], events: [], prompt: null, context: null, problems: [] },
+    approvedHostScopes: null, modelCliTools: null, authoredBy: null, installedBy: null, installedAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-01T00:00:00Z',
+    origin: null, revocation: null, declarations: [],
     ...over,
   };
 }
@@ -30,7 +57,15 @@ interface Harness {
   asked: string[];
 }
 
-function harness(opts: { packages?: PluginPackageView[]; patch?: (body: { approveContent: string }) => [number, unknown]; interactive?: boolean; answer?: string; token?: string } = {}): Harness {
+function harness(opts: {
+  packages?: PluginPackageView[];
+  patch?: (body: { approveContent?: string; settings?: Record<string, unknown> }) => [number, unknown];
+  respond?: (method: string, body: unknown) => [number, unknown] | undefined;
+  interactive?: boolean;
+  answer?: string;
+  token?: string;
+  secret?: string | Error;
+} = {}): Harness {
   const h: Harness = { out: [], err: [], requests: [], asked: [], io: undefined as unknown as PluginApiIo };
   h.io = {
     env: { API_PORT: '4999', ...(opts.token ? { OCTIPUS_API_TOKEN: opts.token } : {}) },
@@ -38,9 +73,16 @@ function harness(opts: { packages?: PluginPackageView[]; patch?: (body: { approv
     out: (t) => h.out.push(t),
     err: (t) => h.err.push(t),
     ask: async (q) => { h.asked.push(q); return opts.answer ?? ''; },
+    readSecret: async (q) => {
+      h.asked.push(q);
+      if (opts.secret instanceof Error) throw opts.secret;
+      return opts.secret ?? '';
+    },
     fetch: (async (url: string, init: RequestInit) => {
       const body = init.body ? JSON.parse(init.body as string) : undefined;
       h.requests.push({ method: init.method ?? 'GET', url, headers: init.headers as Record<string, string>, body });
+      const custom = opts.respond?.(init.method ?? 'GET', body);
+      if (custom) return new Response(JSON.stringify(custom[1]), { status: custom[0] });
       if (init.method === 'PATCH') {
         const [status, data] = opts.patch?.(body) ?? [200, view({ contentHash: body.approveContent, actualHash: null, problem: null })];
         return new Response(JSON.stringify(data), { status });
@@ -134,6 +176,513 @@ describe('octi plugin approve', () => {
     expect(await approveCommand(harness().io, 'datev', undefined)).toBe(1);
     const bad = harness();
     expect(await approveCommand(bad.io, 'finapi', 'abc')).toBe(2);
+    expect(bad.requests).toEqual([]);
+  });
+});
+
+describe('octi plugin approve-in-process', () => {
+  const inProcessView = (over: Partial<PluginPackageView> = {}) => view({
+    name: 'auditlog', runtime: 'in-process', problem: null, actualHash: null, enabled: false,
+    inProcess: { approved: false, approvedHash: null, approvedBy: null, approvedAt: null, loaded: false },
+    ...over,
+  });
+  const approvedView = (body: { approveInProcess?: string }): [number, unknown] => [200, inProcessView({
+    inProcess: { approved: true, approvedHash: body.approveInProcess ?? null, approvedBy: 'u', approvedAt: '2026-11-10T00:00:00Z', loaded: false },
+  })];
+
+  test('list shows the runtime and the missing approval with the command to give it', async () => {
+    const h = harness({ packages: [inProcessView()] });
+    expect(await listCommand(h.io)).toBe(0);
+    const text = h.out.join('');
+    expect(text).toContain('runtime:   in-process');
+    expect(text).toContain(`octi plugin approve-in-process auditlog --hash ${RECORDED}`);
+  });
+
+  test('with --hash: sends exactly that hash as approveInProcess', async () => {
+    const h = harness({ respond: (method, body) => (method === 'PATCH' ? approvedView(body as { approveInProcess?: string }) : undefined) });
+    expect(await approveInProcessCommand(h.io, 'auditlog', RECORDED)).toBe(0);
+    expect(h.requests).toEqual([expect.objectContaining({ method: 'PATCH', url: 'http://localhost:4999/api/plugin-packages/auditlog', body: { approveInProcess: RECORDED } })]);
+    expect(h.out.join('')).toContain(`Approved auditlog to run in the server process, for ${RECORDED}. Enable it to load it.`);
+  });
+
+  test('without --hash: asks at a terminal for the approved content hash; refuses to guess elsewhere', async () => {
+    const yes = harness({ packages: [inProcessView()], interactive: true, answer: 'y', respond: (method, body) => (method === 'PATCH' ? approvedView(body as { approveInProcess?: string }) : undefined) });
+    expect(await approveInProcessCommand(yes.io, 'auditlog', undefined)).toBe(0);
+    expect(yes.asked[0]).toContain(RECORDED);
+    expect(yes.asked[0]).toContain('full authority');
+    expect(yes.requests.at(-1)?.body).toEqual({ approveInProcess: RECORDED });
+
+    const no = harness({ packages: [inProcessView()], interactive: true, answer: 'n' });
+    expect(await approveInProcessCommand(no.io, 'auditlog', undefined)).toBe(1);
+    expect(no.requests.filter((r) => r.method === 'PATCH')).toEqual([]);
+
+    const away = harness({ packages: [inProcessView()] });
+    expect(await approveInProcessCommand(away.io, 'auditlog', undefined)).toBe(2);
+    expect(away.err.join('')).toContain(`octi plugin approve-in-process auditlog --hash ${RECORDED}`);
+  });
+
+  test('a package, changed content or a bad hash are refused before anything is sent', async () => {
+    const pkgHarness = harness({ packages: [view({ name: 'finapi', runtime: 'package' })] });
+    expect(await approveInProcessCommand(pkgHarness.io, 'finapi', undefined)).toBe(1);
+    expect(pkgHarness.err.join('')).toMatch(/sandboxed package/);
+
+    const changed = harness({ packages: [inProcessView({ actualHash: ACTUAL })] });
+    expect(await approveInProcessCommand(changed.io, 'auditlog', undefined)).toBe(1);
+    expect(changed.err.join('')).toContain('octi plugin approve auditlog first');
+
+    const bad = harness();
+    expect(await approveInProcessCommand(bad.io, 'auditlog', 'sha256:nope')).toBe(2);
+    expect(bad.requests).toEqual([]);
+  });
+});
+
+describe('octi plugin uninstall', () => {
+  test('with --yes: sends DELETE without asking', async () => {
+    const h = harness({ token: 'tok', respond: (m) => (m === 'DELETE' ? [200, { uninstalled: true }] : undefined) });
+    expect(await uninstallCommand(h.io, 'finapi', true)).toBe(0);
+    expect(h.requests).toEqual([{ method: 'DELETE', url: 'http://localhost:4999/api/plugin-packages/finapi', headers: { authorization: 'Bearer tok' }, body: undefined }]);
+    expect(h.asked).toEqual([]);
+    expect(h.out.join('')).toContain('Uninstalled finapi.');
+  });
+
+  test('at a terminal it asks, and only yes deletes; elsewhere it refuses without --yes', async () => {
+    const yes = harness({ interactive: true, answer: 'yes', respond: (m) => (m === 'DELETE' ? [200, { uninstalled: true }] : undefined) });
+    expect(await uninstallCommand(yes.io, 'finapi', false)).toBe(0);
+    expect(yes.asked).toEqual([expect.stringContaining('Uninstall finapi?')]);
+    expect(yes.requests.map((r) => r.method)).toEqual(['DELETE']);
+
+    const no = harness({ interactive: true, answer: 'n' });
+    expect(await uninstallCommand(no.io, 'finapi', false)).toBe(1);
+    expect(no.requests).toEqual([]);
+
+    const batch = harness({ interactive: false });
+    expect(await uninstallCommand(batch.io, 'finapi', false)).toBe(2);
+    expect(batch.requests).toEqual([]);
+    expect(batch.asked).toEqual([]);
+    expect(batch.err.join('')).toContain('octi plugin uninstall finapi --yes');
+  });
+
+  test('an unknown package (404) fails with the backend message; a malformed name is not sent', async () => {
+    const h = harness({ respond: () => [404, { error: 'No plugin package named datev' }] });
+    expect(await uninstallCommand(h.io, 'datev', true)).toBe(1);
+    expect(h.err.join('')).toContain('No plugin package named datev');
+    const bad = harness();
+    expect(await uninstallCommand(bad.io, '../users', true)).toBe(2);
+    expect(bad.requests).toEqual([]);
+  });
+});
+
+describe('octi plugin set', () => {
+  test('sends key=value pairs as settings (key= clears), and shows what is saved', async () => {
+    const h = harness({ patch: () => [200, view({ actualHash: null, problem: null, settings: { region: 'eu', limit: 5 } })] });
+    expect(await setCommand(h.io, 'finapi', ['region=eu', 'limit=5', 'note=', 'url=https://x.example/?a=b'])).toBe(0);
+    expect(h.requests).toEqual([expect.objectContaining({ method: 'PATCH', url: 'http://localhost:4999/api/plugin-packages/finapi', body: { settings: { region: 'eu', limit: '5', note: null, url: 'https://x.example/?a=b' } } })]);
+    expect(h.out.join('')).toContain('Saved the settings of finapi: region=eu limit=5.');
+  });
+
+  test('a refusal shows every problem; malformed pairs are not sent', async () => {
+    const h = harness({ patch: () => [400, { error: 'The settings do not fit the package', problems: ['Limit: must be a number', 'Unknown field "nope"'] }] });
+    expect(await setCommand(h.io, 'finapi', ['limit=x', 'nope=1'])).toBe(1);
+    expect(h.err.join('')).toMatch(/do not fit[\s\S]*Limit: must be a number[\s\S]*Unknown field "nope"/);
+    for (const pairs of [[], ['region'], ['=eu'], ['Region=eu'], ['a=1', 'a=2']]) {
+      const bad = harness();
+      expect(await setCommand(bad.io, 'finapi', pairs), JSON.stringify(pairs)).toBe(2);
+      expect(bad.requests).toEqual([]);
+    }
+    expect(parseSettingPairs(['a=x=y'])).toEqual({ a: 'x=y' });
+    // Only exactly `key=` clears; spaces alone are refused, not read as a clear.
+    expect(parseSettingPairs(['a=', 'b= x '])).toEqual({ a: null, b: ' x ' });
+    expect(() => parseSettingPairs(['a=   '])).toThrow(/only spaces.*`a=` to clear/);
+    const spaces = harness();
+    expect(await setCommand(spaces.io, 'finapi', ['region=  '])).toBe(2);
+    expect(spaces.requests).toEqual([]);
+  });
+});
+
+describe('octi plugin secret', () => {
+  test('reads the value from the prompt or stdin (one trailing newline dropped) and PUTs it; it is never printed', async () => {
+    const h = harness({ secret: 's3cr3t value\n', respond: (m) => (m === 'PUT' ? [200, { saved: true }] : undefined) });
+    expect(await secretCommand(h.io, 'finapi', 'FINAPI_TOKEN', false)).toBe(0);
+    expect(h.requests).toEqual([expect.objectContaining({ method: 'PUT', url: 'http://localhost:4999/api/plugin-packages/finapi/secrets/FINAPI_TOKEN', body: { value: 's3cr3t value' } })]);
+    expect(h.asked).toEqual([expect.stringContaining('not shown')]);
+    expect([...h.out, ...h.err].join('')).not.toContain('s3cr3t');
+    expect(h.out.join('')).toContain('Saved FINAPI_TOKEN of finapi.');
+  });
+
+  test('--clear sends null without reading; an empty value is refused', async () => {
+    const clear = harness({ respond: (m) => (m === 'PUT' ? [200, { saved: true }] : undefined) });
+    expect(await secretCommand(clear.io, 'finapi', 'FINAPI_TOKEN', true)).toBe(0);
+    expect(clear.requests.map((r) => r.body)).toEqual([{ value: null }]);
+    expect(clear.asked).toEqual([]);
+
+    const empty = harness({ secret: '\n' });
+    expect(await secretCommand(empty.io, 'finapi', 'FINAPI_TOKEN', false)).toBe(2);
+    expect(empty.requests).toEqual([]);
+    expect(empty.err.join('')).toContain('--clear');
+
+    const cancelled = harness({ secret: new Error('cancelled') });
+    expect(await secretCommand(cancelled.io, 'finapi', 'FINAPI_TOKEN', false)).toBe(1);
+    expect(cancelled.requests).toEqual([]);
+  });
+
+  test('a refusal (undeclared key, required while enabled) is shown; a malformed key is not sent', async () => {
+    const h = harness({ secret: 'x', respond: () => [400, { error: 'finapi declares no secret NOPE' }] });
+    expect(await secretCommand(h.io, 'finapi', 'NOPE', false)).toBe(1);
+    expect(h.err.join('')).toContain('declares no secret NOPE');
+    const bad = harness({ secret: 'x' });
+    expect(await secretCommand(bad.io, 'finapi', 'a/b', false)).toBe(2);
+    expect(bad.requests).toEqual([]);
+  });
+});
+
+describe('octi plugin secret: arguments, the hidden prompt, stdin and the length limit', () => {
+  test('a value typed on the command line is refused without being echoed', async () => {
+    for (const argv of [['finapi', 'KEY', '-s3cret'], ['finapi', 'KEY', '--s3cret=x'], ['finapi', 'KEY', 's3cret'], ['finapi', 'KEY', '--', '-s3cret'], ['finapi']]) {
+      const h = harness({ secret: 'never read' });
+      expect(await secretCommandFromArgs(h.io, argv), argv.join(' ')).toBe(2);
+      const text = [...h.out, ...h.err].join('');
+      expect(text, argv.join(' ')).toContain('never from the command line');
+      expect(text, argv.join(' ')).not.toContain('3cret');
+      expect(h.requests).toEqual([]);
+      expect(h.asked).toEqual([]);
+    }
+    const ok = harness({ secret: 'v', respond: (m) => (m === 'PUT' ? [200, { saved: true }] : undefined) });
+    expect(await secretCommandFromArgs(ok.io, ['finapi', 'KEY'])).toBe(0);
+    expect(ok.requests.map((r) => r.body)).toEqual([{ value: 'v' }]);
+    const clear = harness({ respond: (m) => (m === 'PUT' ? [200, { saved: true }] : undefined) });
+    expect(await secretCommandFromArgs(clear.io, ['finapi', 'KEY', '--clear'])).toBe(0);
+    expect(clear.requests.map((r) => r.body)).toEqual([{ value: null }]);
+  });
+
+  test('a value longer than the route accepts is refused with the limit, before any request', async () => {
+    const h = harness({ secret: `${'x'.repeat(MAX_PLUGIN_SECRET_LENGTH + 1)}\n` });
+    expect(await secretCommand(h.io, 'finapi', 'KEY', false)).toBe(2);
+    expect(h.err.join('')).toContain(`${MAX_PLUGIN_SECRET_LENGTH + 1} characters; a plugin secret holds at most ${MAX_PLUGIN_SECRET_LENGTH}`);
+    expect(h.requests).toEqual([]);
+    const max = harness({ secret: 'x'.repeat(MAX_PLUGIN_SECRET_LENGTH), respond: (m) => (m === 'PUT' ? [200, { saved: true }] : undefined) });
+    expect(await secretCommand(max.io, 'finapi', 'KEY', false)).toBe(0);
+  });
+
+  test('stdin is read whole as UTF-8, and refused once it is longer than a secret can be', async () => {
+    const euro = Buffer.from('p€ss\n');
+    // A character split across chunks stays whole.
+    expect(await readAllText(Readable.from([euro.subarray(0, 2), euro.subarray(2)]))).toBe('p€ss\n');
+    await expect(readAllText(Readable.from([Buffer.alloc(43, 'x')]), 10)).rejects.toThrow(/longer than 10 characters/);
+  });
+
+  /** A fake raw-mode terminal: records the mode calls; `type` sends chunks as the terminal would. */
+  function fakeTty(): HiddenInput & { type: (chunk: string | Buffer) => void; calls: string[] } {
+    const emitter = new EventEmitter();
+    let encoding: BufferEncoding | null = null;
+    let decoder: StringDecoder | undefined;
+    const calls: string[] = [];
+    return {
+      calls,
+      setRawMode: (raw: boolean) => { calls.push(`raw:${raw}`); },
+      setEncoding: (e: BufferEncoding) => { encoding = e; calls.push(`encoding:${e}`); },
+      resume: () => { calls.push('resume'); },
+      pause: () => { calls.push('pause'); },
+      on: (event, listener) => emitter.on(event, listener),
+      off: (event, listener) => emitter.off(event, listener),
+      // With an encoding set, a stream decodes with a StringDecoder, holding back a partial character.
+      type: (chunk) => {
+        if (typeof chunk === 'string' || encoding === null) {
+          emitter.emit('data', chunk);
+          return;
+        }
+        decoder ??= new StringDecoder(encoding);
+        const text = decoder.write(chunk);
+        if (text) emitter.emit('data', text);
+      },
+    };
+  }
+
+  test('the hidden prompt sets UTF-8 and raw mode, never echoes, and drops escape sequences and control characters', async () => {
+    const tty = fakeTty();
+    const written: string[] = [];
+    const line = readHiddenLine(tty, (t) => written.push(t), 'Value: ');
+    tty.type('ab');
+    tty.type('\u001b[D\u001b[1;5C'); // arrow keys
+    tty.type('\u001b[200~c\u001b[201~'); // a bracketed paste keeps its text, not its markers
+    tty.type('\u0001\u0007\t\u0015'); // Ctrl-A, bell, tab, Ctrl-U
+    tty.type('\u001bx'); // Alt+x
+    tty.type('dX\u007f'); // Backspace removes X
+    const euro = Buffer.from('€');
+    tty.type(euro.subarray(0, 1));
+    tty.type(euro.subarray(1));
+    tty.type('\u001bOP'); // F1
+    tty.type('\r');
+    expect(await line).toBe('abcd€');
+    expect(written).toEqual(['Value: ', '\n']);
+    expect(tty.calls).toEqual(['encoding:utf8', 'raw:true', 'resume', 'raw:false', 'pause']);
+  });
+
+  test('Enter right after a lone Esc still ends the line; Ctrl-C cancels; Ctrl-D ends', async () => {
+    const esc = fakeTty();
+    const a = readHiddenLine(esc, () => {}, '');
+    esc.type('k\u001b\r');
+    expect(await a).toBe('k');
+    const cancel = fakeTty();
+    const b = readHiddenLine(cancel, () => {}, '');
+    cancel.type('abc\u0003');
+    await expect(b).rejects.toThrow('cancelled');
+    const eof = fakeTty();
+    const c = readHiddenLine(eof, () => {}, '');
+    eof.type('xy\u0004');
+    expect(await c).toBe('xy');
+  });
+
+  test('the hidden prompt keeps at most one character over the limit, so a long value is refused', async () => {
+    const tty = fakeTty();
+    const line = readHiddenLine(tty, () => {}, '', 3);
+    tty.type('abcdefg\r');
+    expect(await line).toBe('abcd');
+  });
+});
+
+describe('octi plugin approve-contributions', () => {
+  const CONTRIB = `sha256:${'c'.repeat(64)}`;
+  const contributed = (over: Partial<PluginPackageView['contributions']> = {}) => view({
+    name: 'greeter', problem: null, actualHash: null, enabled: false,
+    contributions: {
+      hash: CONTRIB, approvedHash: null, approved: false,
+      commands: [{ name: 'greet', tool: 'hello', effect: 'read', description: 'Say hello', bound: false }],
+      schedules: [{ id: 'tick', cron: '0 * * * *', tool: 'record', effect: 'write', bound: false, lastRun: null }],
+      events: [{ on: 'chat.response', tool: 'hello', effect: 'read', bound: false, lastRun: null }],
+      prompt: { file: 'prompt.md', roles: null, text: 'Always greet loudly.\nSecond line.', bound: false, chars: null },
+      context: { tool: 'ctx', effect: 'read', roles: null, bound: false, lastRun: null },
+      problems: [],
+      ...over,
+    },
+  });
+
+  test('without --hash: shows everything it adds, the whole prompt text, and asks at a terminal; refuses elsewhere', async () => {
+    const yes = harness({ packages: [contributed()], interactive: true, answer: 'y', respond: (method) => (method === 'PATCH' ? [200, contributed({ approvedHash: CONTRIB, approved: true })] : undefined) });
+    expect(await approveContributionsCommand(yes.io, 'greeter', undefined)).toBe(0);
+    const shown = yes.out.join('');
+    expect(shown).toContain('/greet → hello (read)');
+    expect(shown).toContain('"0 * * * *" (UTC) → record (write), as the installing admin');
+    expect(shown).toContain('chat.response → hello (read)');
+    expect(shown).toContain('every turn of EVERY user');
+    expect(shown).toContain('    | Always greet loudly.\n    | Second line.');
+    expect(yes.requests.at(-1)?.body).toEqual({ approveContributions: CONTRIB });
+
+    const away = harness({ packages: [contributed()] });
+    expect(await approveContributionsCommand(away.io, 'greeter', undefined)).toBe(2);
+    expect(away.err.join('')).toContain(`octi plugin approve-contributions greeter --hash ${CONTRIB}`);
+    expect(away.requests.filter((r) => r.method === 'PATCH')).toEqual([]);
+  });
+
+  test('with --hash: sends it; a refusal names the hash to review', async () => {
+    const ok = harness({ respond: (method) => (method === 'PATCH' ? [200, contributed({ approvedHash: CONTRIB, approved: true })] : undefined) });
+    expect(await approveContributionsCommand(ok.io, 'greeter', CONTRIB)).toBe(0);
+    expect(ok.requests).toEqual([expect.objectContaining({ method: 'PATCH', body: { approveContributions: CONTRIB } })]);
+    const refused = harness({ respond: (method) => (method === 'PATCH' ? [409, { error: 'changed', contributionsHash: CONTRIB }] : undefined) });
+    expect(await approveContributionsCommand(refused.io, 'greeter', `sha256:${'d'.repeat(64)}`)).toBe(1);
+    expect(refused.err.join('')).toContain(`--hash ${CONTRIB}`);
+    expect(await approveContributionsCommand(harness().io, 'greeter', 'sha256:nope')).toBe(2);
+  });
+});
+
+describe('octi plugin approve-cli-tools', () => {
+  const REASON = 'Prompts are fixed templates.';
+  const trusted = (over: Partial<NonNullable<PluginPackageView['modelCliTools']>> = {}, scopes: PluginPackageView['approvedHostScopes'] = ['model:complete']) => view({
+    name: 'digest', problem: null, actualHash: null, approvedHostScopes: scopes,
+    modelCliTools: { reason: REASON, approved: false, active: false, sourcesWarning: 'It also reads from the host scopes notes:read: approve only if you trust what they return, since it can reach its prompts.', ...over },
+  });
+
+  test('list shows the flag and how to approve it', async () => {
+    const h = harness({ packages: [trusted()] });
+    expect(await listCommand(h.io)).toBe(0);
+    expect(h.out.join('')).toContain(`model:     trustedInput ("${REASON}"); not approved, its model calls stay off CLI lanes (review: octi plugin approve-cli-tools digest)`);
+  });
+
+  test('shows the warning, the reason and the sources, asks at a terminal, and sends the approved scopes plus model:cli-tools', async () => {
+    const yes = harness({ packages: [trusted()], interactive: true, answer: 'y', respond: (method) => (method === 'PATCH' ? [200, trusted({ approved: true, active: true }, ['model:complete', 'model:cli-tools'])] : undefined) });
+    expect(await approveCliToolsCommand(yes.io, 'digest')).toBe(0);
+    const shown = yes.out.join('');
+    expect(shown).toContain(REASON);
+    expect(shown).toContain('CLI agents with their own tools (shell, files) as the Octipus server user; only approve if its prompts never carry outside data');
+    expect(shown).toContain('notes:read');
+    expect(yes.asked).toEqual(['Approve model:cli-tools for digest? [y/N] ']);
+    expect(yes.requests.at(-1)).toMatchObject({ method: 'PATCH', url: 'http://localhost:4999/api/plugin-packages/digest', body: { approveHostScopes: ['model:complete', 'model:cli-tools'] } });
+    expect(shown).toContain('its model calls may run on CLI lanes');
+
+    const no = harness({ packages: [trusted()], interactive: true, answer: 'n' });
+    expect(await approveCliToolsCommand(no.io, 'digest')).toBe(1);
+    expect(no.requests.filter((r) => r.method === 'PATCH')).toEqual([]);
+
+    const away = harness({ packages: [trusted()] });
+    expect(await approveCliToolsCommand(away.io, 'digest')).toBe(2);
+    expect(away.err.join('')).toContain('octi plugin approve-cli-tools digest --yes');
+    expect(away.requests.filter((r) => r.method === 'PATCH')).toEqual([]);
+
+    const forced = harness({ packages: [trusted({}, null)], respond: (method) => (method === 'PATCH' ? [200, trusted({ approved: true }, ['model:cli-tools'])] : undefined) });
+    expect(await approveCliToolsCommand(forced.io, 'digest', { yes: true })).toBe(0);
+    expect(forced.requests.at(-1)?.body).toEqual({ approveHostScopes: ['model:cli-tools'] });
+    expect(forced.out.join('')).toContain('takes effect once model:complete is approved');
+  });
+
+  test('--revoke sends the approved scopes without it; a package without the flag has nothing to approve', async () => {
+    const h = harness({ packages: [trusted({ approved: true, active: true }, ['model:complete', 'model:cli-tools'])] });
+    expect(await approveCliToolsCommand(h.io, 'digest', { revoke: true })).toBe(0);
+    expect(h.requests.at(-1)?.body).toEqual({ approveHostScopes: ['model:complete'] });
+    const none = harness({ packages: [view({ name: 'plain' })] });
+    expect(await approveCliToolsCommand(none.io, 'plain', { yes: true })).toBe(1);
+    expect(none.err.join('')).toContain('does not declare model.trustedInput');
+  });
+});
+
+describe('octi plugin bundled / install-bundled', () => {
+  test('lists the bundled plugins and installs one, disabled, through the backend', async () => {
+    const listed = harness({ token: 'tok', respond: (m) => (m === 'GET' ? [200, [
+      { name: 'reader', version: '1.0.0', title: 'Reader', description: 'Clean reading', host: ['web:read'], network: [], installed: null },
+    ]] : undefined) });
+    expect(await bundledCommand(listed.io)).toBe(0);
+    expect(listed.requests[0].url).toBe('http://localhost:4999/api/plugin-packages/bundled');
+    expect(listed.out.join('')).toContain('reader 1.0.0  not installed');
+    expect(listed.out.join('')).toContain('host scopes: web:read');
+
+    const h = harness({ token: 'tok', respond: (m) => (m === 'POST' ? [200, { name: 'reader', version: '1.0.0', contentHash: RECORDED }] : undefined) });
+    expect(await installBundledCommand(h.io, 'reader', true)).toBe(0);
+    expect(h.requests).toEqual([{ method: 'POST', url: 'http://localhost:4999/api/plugin-packages/', headers: { authorization: 'Bearer tok', 'content-type': 'application/json' }, body: { bundled: 'reader', upgrade: true } }]);
+    expect(h.out.join('')).toContain(`Installed reader 1.0.0 (disabled), content ${RECORDED}`);
+  });
+
+  test('a name that is no package name is not sent; a refusal is shown', async () => {
+    const h = harness({ token: 'tok' });
+    expect(await installBundledCommand(h.io, '../x', false)).toBe(2);
+    expect(h.requests).toEqual([]);
+    const refused = harness({ token: 'tok', respond: () => [404, { error: 'No bundled plugin named "nope"' }] });
+    expect(await installBundledCommand(refused.io, 'nope', false)).toBe(1);
+    expect(refused.err.join('')).toContain('No bundled plugin named');
+  });
+});
+
+describe('octi plugin marketplace, updates and install', () => {
+  const card = {
+    registry: 'marketplace', name: 'weekly', title: 'Weekly review', summary: 'Looks back on the week', description: '', category: 'productivity', tags: [],
+    author: null, homepage: null, license: 'MIT', publisher: 'Octipus', icon: null, screenshots: [], readme: null, changelog: null, latest: '1.1.0',
+    versions: [], permissions: null, askSummary: ['Reads your tasks', 'No network access'], declarations: [], warnings: [{ code: 'deprecated', message: 'Deprecated: use x' }],
+    compatibility: { ok: true, reason: null }, installedVersion: null, installedOrigin: null, updateAvailable: null, revoked: null, deprecated: null, downloads: 7,
+  };
+
+  test('marketplace: query and category are sent; each plugin says what it asks for and how to install it', async () => {
+    const h = harness({ respond: () => [200, { state: 'ready', message: null, generatedAt: null, plugins: [card], categories: [], errors: [] }] });
+    expect(await marketplaceCommand(h.io, 'café', 'productivity')).toBe(0);
+    expect(h.requests[0].url).toBe('http://localhost:4999/api/plugin-packages/marketplace?q=caf%C3%A9&category=productivity');
+    const text = h.out.join('');
+    expect(text).toContain('weekly 1.1.0  Weekly review');
+    expect(text).toContain('install with: octi plugin install weekly');
+    expect(text).toContain('asks for: Reads your tasks; No network access');
+    expect(text).toContain('7 downloads');
+    expect(text).toContain('note: Deprecated: use x');
+  });
+
+  test('marketplace: a stale marketplace and an entry refused as replaced are printed, without control characters', async () => {
+    const h = harness({ respond: () => [200, { state: 'ready', message: null, generatedAt: null, plugins: [card], categories: [],
+      errors: [{ registry: 'marketplace', error: 'weekly 1.0.0: replaced: refused\u001b[2K' }],
+      stale: [{ file: 'index', generatedAt: '2026-11-01T00:00:00Z', message: 'The last marketplace index accepted here was generated 9 days ago.' }] }] });
+    expect(await marketplaceCommand(h.io, undefined, undefined)).toBe(0);
+    const text = h.out.join('');
+    expect(text).toContain('warning: The last marketplace index accepted here was generated 9 days ago.');
+    expect(text).toContain('registry marketplace: weekly 1.0.0: replaced: refused[2K');
+    expect(text).not.toContain('\u001b');
+  });
+
+  test('marketplace: an unconfigured build says so', async () => {
+    const h = harness({ respond: () => [200, { state: 'unconfigured', message: 'The Octipus marketplace is not configured in this build', generatedAt: null, plugins: [], categories: [], errors: [] }] });
+    expect(await marketplaceCommand(h.io, undefined, undefined)).toBe(0);
+    expect(h.out.join('')).toContain('The Octipus marketplace is not configured in this build');
+  });
+
+  test('updates: lists each with its permissions diff', async () => {
+    const h = harness({ respond: () => [200, [{ name: 'weekly', installed: '1.0.0', latest: '1.1.0', registry: 'marketplace', warnings: [],
+      diff: { widened: true, changes: [{ kind: 'host', change: 'added', text: 'host API scope notes:write', widens: true }] } }]] });
+    expect(await updatesCommand(h.io)).toBe(0);
+    expect(h.out.join('')).toContain('weekly 1.0.0 → 1.1.0');
+    expect(h.out.join('')).toContain('+ added host API scope notes:write');
+  });
+
+  const PREVIEW = {
+    previewId: '33333333-3333-4333-8333-333333333333', name: 'weekly', version: '1.1.0', title: 'Weekly‮ review', contentHash: `sha256:${'c'.repeat(64)}`,
+    signedBy: 'Octipus', origin: { source: 'marketplace', registry: 'Octipus' }, guidance: [{ code: 'g', message: 'Mind\u0007 this' }],
+    diff: { widened: true, changes: [{ kind: 'host', change: 'added', text: 'host API scope notes:write', widens: true }] }, upgradeFrom: '1.0.0', expiresAt: '2026-11-10T10:00:00Z',
+    declarations: [
+      { id: 'runtime', kind: 'runtime', label: 'Runs as a separate, sandboxed program', detail: 'runtime: package', carried: true, status: 'unchanged' },
+      { id: 'host:notes:write', kind: 'host', label: 'Writes notes', detail: 'notes:write', carried: false, status: 'new' },
+      { id: 'schedule:nightly', kind: 'schedule', label: 'Runs on a schedule (nightly)', detail: '15 2 * * * UTC → sync', carried: false, status: 'changed', guidance: 'Runs unattended' },
+    ],
+  };
+  const installed = { name: 'weekly', version: '1.1.0', contentHash: PREVIEW.contentHash, enabled: false, enableProblem: null, warnings: [] };
+  const consentHarness = (interactive: boolean, answer = 'y') => harness({
+    interactive, answer,
+    respond: (method, body) => (method === 'POST' && (body as { previewId?: string }).previewId ? [200, installed] : method === 'POST' ? [200, PREVIEW] : undefined),
+  });
+
+  test('install: previews, prints every declaration (server text cleaned), and installs with --accept all, bound to the content hash', async () => {
+    const h = consentHarness(false);
+    expect(await installCommand(h.io, 'weekly', { accept: 'all' })).toBe(0);
+    expect(h.requests.map((r) => [r.method, r.url.replace('http://localhost:4999/api/plugin-packages', '')])).toEqual([['POST', '/preview'], ['POST', '/install']]);
+    expect(h.requests[0].body).toEqual({ registry: 'marketplace', name: 'weekly' });
+    expect(h.requests[1].body).toEqual({ previewId: PREVIEW.previewId, contentHash: PREVIEW.contentHash, accepted: ['host:notes:write', 'schedule:nightly'] });
+    const text = h.out.join('');
+    expect(text).toContain('[x] runtime  Runs as a separate, sandboxed program  (unchanged, agreed before)');
+    expect(text).toContain('[ ] host:notes:write  Writes notes  (NEW)');
+    expect(text).toContain('[ ] schedule:nightly  Runs on a schedule (nightly)  (CHANGED)');
+    expect(text).toContain('+ added host API scope notes:write');
+    expect(text).toContain('Weekly review');
+    expect(text).toContain('note: Mind this');
+    expect(text).not.toMatch(/[\u0007‮]/);
+    expect(text).toContain('Installed weekly 1.1.0 (disabled)');
+  });
+
+  test('install: --accept naming ids must cover every item; --allow-* agree to a change item', async () => {
+    const short = consentHarness(false);
+    expect(await installCommand(short.io, 'weekly', { accept: 'host:notes:write' })).toBe(2);
+    expect(short.err.join('')).toContain('does not agree to schedule:nightly');
+    expect(short.requests).toHaveLength(1);
+    const named = consentHarness(false);
+    expect(await installCommand(named.io, 'weekly', { accept: 'host:notes:write,schedule:nightly', allowSourceChange: true, enable: true })).toBe(0);
+    expect(named.requests[1].body).toMatchObject({ accepted: ['host:notes:write', 'schedule:nightly', 'change:source'], enable: true });
+  });
+
+  test('install: handing the stored data to a new publisher is optional, never in --accept all, and kept only with --keep-store-data', async () => {
+    const handover = { id: 'change:store-handover', kind: 'change', label: 'Hands the stored data of 3 users (1.5 MB) to the new publisher', detail: 'change:store-handover: keep what the package stored', carried: false, status: 'new', optional: true };
+    const withHandover = (interactive: boolean) => harness({
+      interactive, answer: 'y',
+      respond: (method, body) => (method === 'POST' && (body as { previewId?: string }).previewId ? [200, installed] : method === 'POST' ? [200, { ...PREVIEW, declarations: [...PREVIEW.declarations, handover] }] : undefined),
+    });
+    const all = withHandover(false);
+    expect(await installCommand(all.io, 'weekly', { accept: 'all', upgrade: true })).toBe(0);
+    expect(all.requests[1].body).toMatchObject({ accepted: ['host:notes:write', 'schedule:nightly'] });
+    expect(all.out.join('')).toContain('[ ] change:store-handover  Hands the stored data of 3 users (1.5 MB) to the new publisher  (OPTIONAL, not done unless chosen)');
+    expect(all.out.join('')).toContain('not chosen: Hands the stored data of 3 users (1.5 MB) to the new publisher (the stored data is deleted at install; --keep-store-data keeps it)');
+    const keep = withHandover(false);
+    expect(await installCommand(keep.io, 'weekly', { accept: 'all', upgrade: true, keepStoreData: true })).toBe(0);
+    expect(keep.requests[1].body).toMatchObject({ accepted: ['host:notes:write', 'schedule:nightly', 'change:store-handover'] });
+    // At a terminal: asked after the required items, No by default.
+    const no = withHandover(true);
+    no.io.ask = async (q) => { no.asked.push(q); return q.startsWith('Optional:') ? '' : 'y'; };
+    expect(await installCommand(no.io, 'weekly', { upgrade: true })).toBe(0);
+    expect(no.asked.at(-1)).toBe('Optional: Hands the stored data of 3 users (1.5 MB) to the new publisher (change:store-handover)? [y/N] ');
+    expect(no.requests[1].body).toMatchObject({ accepted: ['host:notes:write', 'schedule:nightly'] });
+  });
+
+  test('install: without a terminal and without --accept it refuses with the list; at a terminal it asks per item', async () => {
+    const batch = consentHarness(false);
+    expect(await installCommand(batch.io, 'weekly', { upgrade: true })).toBe(2);
+    expect(batch.err.join('')).toContain('--accept host:notes:write,schedule:nightly');
+    expect(batch.requests).toHaveLength(1);
+    const yes = consentHarness(true, 'y');
+    expect(await installCommand(yes.io, 'weekly')).toBe(0);
+    expect(yes.asked).toEqual(['Agree: Writes notes (host:notes:write)? [y/N] ', 'Agree: Runs on a schedule (nightly) (schedule:nightly)? [y/N] ']);
+    const no = consentHarness(true, 'n');
+    expect(await installCommand(no.io, 'weekly')).toBe(1);
+    expect(no.requests).toHaveLength(1);
+    expect(no.out.join('')).toContain('Not installed.');
+    const bad = harness();
+    expect(await installCommand(bad.io, '../etc')).toBe(2);
     expect(bad.requests).toEqual([]);
   });
 });

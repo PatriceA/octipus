@@ -361,7 +361,7 @@ describe('launching a sandboxed server', () => {
     expect(launch.proxy).toBeNull();
     expect(launch.env).toBe(env);
     expect(launch.argv).toEqual(['bwrap', '--unshare-net', '--', 'node', 'server.mjs']);
-    expect(wrapCommand).toHaveBeenCalledWith(['node', 'server.mjs'], { workspaceRoot: '/pkg', allowSeatbelt: true, allowNetwork: false, path: '/usr/bin', extraReadOnly: ownNodeBinary() });
+    expect(wrapCommand).toHaveBeenCalledWith(['node', 'server.mjs'], { mode: 'off', workspaceRoot: '/pkg', allowSeatbelt: true, allowNetwork: false, path: '/usr/bin', extraReadOnly: ownNodeBinary() });
   });
 });
 
@@ -378,6 +378,8 @@ describe('the server a package runs as', () => {
     const { serverFor } = await import('./service');
     const server = await serverFor(row(base) as never);
     expect(server.sandbox).toEqual({
+      // plugins.sandbox (required by default), never security.shellSandbox.
+      mode: 'required',
       root: '/srv/octipus/plugin-packages/demo-pkg', readOnlyRoot: true, writable: ['/srv/octipus/plugin-data/demo-pkg'], allowNetwork: false,
     });
     expect(server.env?.OCTIPUS_PLUGIN_DATA_DIR).toBe('/srv/octipus/plugin-data/demo-pkg');
@@ -395,19 +397,24 @@ describe('the server a package runs as', () => {
 
   test('the status tells an operator whether network is enforced', async () => {
     const { networkStatus } = await import('./service');
+    type Runner = 'bwrap' | 'firejail' | 'sandbox-exec' | null;
+    const host = (runner: Runner, setting: 'required' | 'off' = 'required') => ({ setting, runner, unavailable: runner ? null : 'no sandbox runner found' });
     const m = { ...base, network: ['api.example.com'] };
-    expect(networkStatus(m, 'bwrap').state).toBe('restricted');
-    expect(networkStatus(base, 'firejail').state).toBe('offline');
+    expect(networkStatus(m, null, host('bwrap')).state).toBe('restricted');
+    expect(networkStatus(base, null, host('firejail')).state).toBe('offline');
     // macOS: Seatbelt holds the line the same way.
-    expect(networkStatus(m, 'sandbox-exec').state).toBe('restricted');
-    expect(networkStatus(base, 'sandbox-exec').state).toBe('offline');
-    const advisory = networkStatus(m, null, 'auto');
+    expect(networkStatus(m, null, host('sandbox-exec')).state).toBe('restricted');
+    expect(networkStatus(base, null, host('sandbox-exec')).state).toBe('offline');
+    // plugins.sandbox off (a local package): unwrapped, and said so.
+    const advisory = networkStatus(m, null, host(null, 'off'));
     expect(advisory.state).toBe('not_enforced');
-    expect(advisory.detail).toMatch(/Network not enforced on this platform/);
-    expect(networkStatus(base, null, 'off').state).toBe('not_enforced');
-    // `required` with no runner: the server is not started at all.
-    for (const manifest of [m, base]) expect(networkStatus(manifest, null, 'required').state).toBe('refused');
-    expect(networkStatus(m, 'bwrap', 'required').state).toBe('restricted');
+    expect(advisory.detail).toMatch(/Network not enforced on this host/);
+    expect(networkStatus(base, null, host('bwrap', 'off')).state).toBe('not_enforced');
+    // required with no runner: the server is not started at all.
+    for (const manifest of [m, base]) expect(networkStatus(manifest, null, host(null)).state).toBe('refused');
+    // A marketplace package needs a runner whatever plugins.sandbox says.
+    expect(networkStatus(m, { source: 'marketplace' }, host(null, 'off')).state).toBe('refused');
+    expect(networkStatus(m, { source: 'marketplace' }, host('bwrap', 'off')).state).toBe('restricted');
   });
 
   test('manifest hosts may carry a port; a bad one is refused', async () => {

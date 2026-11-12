@@ -48,7 +48,7 @@ export default function AdminGroupChannelsPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="section-label">group channels</h2>
+        <h2 className="section-label">Group channels</h2>
         <p className="mt-1 text-xs text-on-surface-variant">
           Shared chats where Octipus answers members who mention it. Each turn runs as the member who asked.
           Revoking makes the bot go quiet in that channel. A spend budget caps what a channel costs, whoever asks.

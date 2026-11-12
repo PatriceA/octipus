@@ -1,3 +1,4 @@
+import type { AgentSpace, AgentTrigger } from '@/core/types';
 import type { ApprovalFlowConsent } from '@/shared/pipeline-approval';
 import { getFlowLabel } from './flow-guard';
 /**
@@ -117,6 +118,7 @@ export function withApprovedCalls(metadata: Record<string, unknown> | null | und
 }
 
 export interface ApprovedCallCaller {
+  attended?: boolean; root?: boolean; space?: AgentSpace | null; trigger?: AgentTrigger;
   userId: string;
   sessionId?: string;
   workspaceId?: string | null;
@@ -156,6 +158,13 @@ export async function isApprovedCall(caller: ApprovedCallCaller, call: SpaceTool
  * names this exact call for this stage attempt.
  */
 export async function askStillAuthorized(source: string, caller: ApprovedCallCaller, call: SpaceToolCall, currentSource?: string): Promise<boolean> {
+  if (source.startsWith('execution-environment:')) {
+    const { applyFlowGuard } = await import('./flow-guard');
+    const { getConfig } = await import('@/config');
+    const guarded = applyFlowGuard(getConfig().agent?.flowGuard, caller.sessionId, call, { level: 'ASK', allowed: false, requiresApproval: true, source: currentSource });
+    const decision = await (await import('./approval-route')).routeApprovalFor(caller, call, guarded);
+    return decision.route === 'execute' && decision.source === source;
+  }
   if (source === 'companion-activation') return (await import('@/core/companion/permissions')).companionActivationAllowed(caller, call);
   if (source === 'companion-coordination') return currentSource !== 'flow-guard' && (await import('@/core/companion/permissions')).companionCoordinationAllowed(caller, call);
   if (source === 'companion-goal') {

@@ -157,3 +157,16 @@ Prioritize reliable everyday workflows over catalog size.
 
 Principles can change when implementation evidence supports a better approach.
 Record the reason, current behavior, and migration implications together.
+
+## Resolve execution location and authority together
+
+Project tools share an owner-selected execution environment: machine, account,
+folders, credential bindings and interactive/background policy. A connection's
+API authentication does not imply a CLI login. Host mode explicitly trusts the OS
+account; sandbox mode requires isolation; SSH mode uses the remote account.
+
+Resolve this server-side at each call, pin session/child inheritance, and fail
+clearly on revocation or an incompatible model/runtime. Persistent broad grants
+replace command-by-command approvals when the owner chooses them; explicit DENY
+and shared-space boundaries remain authoritative. Background ASK belongs in the
+owner inbox. See [Environments and access](docs/EXECUTION_ENVIRONMENTS.md).

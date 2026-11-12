@@ -48,6 +48,8 @@ export interface ChildProcessHandle<_In = unknown, _Out = unknown, _Err = unknow
   readonly exitCode: number | null;
   readonly stdout: ReadableStream<Uint8Array> | null;
   readonly stderr: ReadableStream<Uint8Array> | null;
+  /** Failure to launch the executable (not a non-zero exit from a running process). */
+  readonly spawnError?: NodeJS.ErrnoException | null;
   readonly stdin: WritableStream<Uint8Array> | null;
   kill(signal?: NodeJS.Signals | number): void;
 }
@@ -145,6 +147,7 @@ export function spawnProcess(config: SpawnConfig): ChildProcessHandle {
   });
 
   let settled: number | null = null;
+  let spawnError: NodeJS.ErrnoException | null = null;
   const exited = new Promise<number>((resolve) => {
     child.on('close', (code, signal) => {
       // A signalled process has no exit code; report the conventional 128+n so
@@ -152,7 +155,8 @@ export function spawnProcess(config: SpawnConfig): ChildProcessHandle {
       settled = code ?? (signal ? 128 : 1);
       resolve(settled);
     });
-    child.on('error', () => {
+    child.on('error', (err) => {
+      spawnError = err;
       settled = 1;
       resolve(1);
     });
@@ -162,6 +166,7 @@ export function spawnProcess(config: SpawnConfig): ChildProcessHandle {
     get pid() { return child.pid; },
     exited,
     get exitCode() { return settled; },
+    get spawnError() { return spawnError; },
     stdout: child.stdout ? (Readable.toWeb(child.stdout) as unknown as ReadableStream<Uint8Array>) : null,
     stderr: child.stderr ? (Readable.toWeb(child.stderr) as unknown as ReadableStream<Uint8Array>) : null,
     stdin: child.stdin ? (Writable.toWeb(child.stdin) as unknown as WritableStream<Uint8Array>) : null,
@@ -183,7 +188,10 @@ export async function runCommand(config: SpawnConfig): Promise<CommandResult> {
     readAll(proc.stderr),
     proc.exited,
   ]);
-  return { exitCode, stdout, stderr };
+  // Launch errors have no child stderr. Keep their cause visible without
+  // printing arguments, which may carry credentials or other private data.
+  const launchError = proc.spawnError;
+  return { exitCode, stdout, stderr: stderr || (launchError ? `${config.command} could not start (${launchError.code ?? 'process launch failed'})` : '') };
 }
 
 /**

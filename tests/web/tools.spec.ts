@@ -7,9 +7,9 @@ test.describe('tools page', () => {
     await authenticatedPage.route('**/api/tools**', (route) =>
       json(route, 200, {
         tools: [
-          { name: 'Bash', description: 'Run shell commands', enabled: true },
-          { name: 'Read', description: 'Read files', enabled: true },
-          { name: 'Grep', description: 'Search code', enabled: true },
+          { id: 'shell', version: '1', isInitialized: true, permissions: [], tools: [], name: 'Bash', description: 'Run shell commands', enabled: true },
+          { id: 'fs-read', version: '1', isInitialized: true, permissions: [], tools: [], name: 'Read', description: 'Read files', enabled: true },
+          { id: 'fs-search', version: '1', isInitialized: true, permissions: [], tools: [], name: 'Grep', description: 'Search code', enabled: true },
         ],
       }),
     );

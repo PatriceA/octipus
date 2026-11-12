@@ -1,13 +1,12 @@
 /**
- * Tasks created FROM another surface — a Reader action-item list, an email the
- * user wants to act on, a finished Deep Research report. The `tasks` schema
+ * Tasks created FROM another surface — an email the
+ * user wants to act on. The `tasks` schema
  * has carried `source` / `sourceRef` provenance since it landed, but nothing
  * produced rows with `source !== 'user' | 'agent'`: the enum existed, the
  * producers did not. This module is the one place those producers go
  * through, so provenance is stamped consistently and the UI can link back.
  *
- * Pure builders (`readerItemsToTasks`, `emailToTask`, `researchFollowUpTask`)
- * are separated from the one DB write (`createTasksFromSource`) so the shape
+ * Pure builders (`emailToTask`) are separated from the one DB write (`createTasksFromSource`) so the shape
  * of what lands on the to-do list is unit-testable without a database.
  */
 import { createHash } from 'node:crypto';
@@ -16,7 +15,13 @@ import { scopedRepos } from '@/db/repositories/scoped';
 import type { Task, TaskSourceRef } from '@/db/schema/tasks';
 import type { Principal } from '@/security/principal';
 
-/** `channel`: taken on in a group channel (src/core/channels/taken-tasks.ts). */
+/**
+ * `channel`: taken on in a group channel (src/core/channels/taken-tasks.ts).
+ * `reader`: kept for existing tasks made by the removed core reader; the
+ * Reader example plugin writes `agent` with a `sourceRef`.
+ * `research`: kept for existing tasks made by the removed core research module
+ * (its "Review research: …" follow-ups); the Research example plugin makes none.
+ */
 export type TaskSource = 'user' | 'agent' | 'reader' | 'research' | 'email' | 'channel';
 
 export interface SourcedTaskInput {
@@ -36,29 +41,6 @@ const NOTES_MAX = 4000;
 export function normalizeTaskTitle(raw: string): string {
   const t = raw.replace(/\s+/g, ' ').trim();
   return t.length > TITLE_MAX ? `${t.slice(0, TITLE_MAX - 1)}…` : t;
-}
-
-/** Reader `action_items` → one task per bullet, linked back to the article. */
-export function readerItemsToTasks(
-  items: string[],
-  origin: { url?: string; title?: string },
-): SourcedTaskInput[] {
-  const seen = new Set<string>();
-  const out: SourcedTaskInput[] = [];
-  for (const raw of items) {
-    const title = normalizeTaskTitle(raw);
-    if (!title) continue;
-    const key = title.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({
-      title,
-      notes: origin.url ? `From: ${origin.title ? `${origin.title} — ` : ''}${origin.url}` : null,
-      category: 'Reading',
-      sourceRef: { url: origin.url, label: origin.title },
-    });
-  }
-  return out;
 }
 
 /** The subset of an email the task builder needs (provider-agnostic). */
@@ -89,27 +71,6 @@ export function emailToTask(message: EmailForTask): SourcedTaskInput {
     priority,
     category: 'Email',
     sourceRef: { messageId: message.id, label: subject },
-  };
-}
-
-/**
- * A finished research report → one "review the findings" task pointing at the
- * saved document. One task per run: the report is the deliverable, the task
- * is the reminder that it exists and needs a decision.
- */
-export function researchFollowUpTask(
-  report: { question: string; sources: ReadonlyArray<unknown> },
-  documentId: string | null | undefined,
-): SourcedTaskInput {
-  const question = normalizeTaskTitle(report.question);
-  return {
-    title: normalizeTaskTitle(`Review research: ${question}`),
-    notes: `Deep Research finished with ${report.sources.length} source${report.sources.length === 1 ? '' : 's'}.${
-      documentId ? ' The cited report is saved under Documents (category Research).' : ''
-    }`,
-    priority: 1,
-    category: 'Research',
-    sourceRef: { documentId: documentId ?? undefined, label: question },
   };
 }
 

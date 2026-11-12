@@ -1,5 +1,5 @@
 import type { McpExposureConfig } from './mcp-exposure';
-import type { PluginToolEffect } from './plugin-package';
+import type { PluginHostScope, PluginToolEffect } from './plugin-package';
 
 /**
  * The plugin package a server runs (docs/PLUGIN-PACKAGES.md). Set only on the
@@ -12,11 +12,29 @@ export interface PluginBinding {
   /** What each declared tool does; an undeclared tool is hidden and refused. */
   tools: Record<string, PluginToolEffect>;
   /**
+   * The description of each declared tool the model is given: the manifest's,
+   * which the admin agreed to, else the tool name and effect. Never the
+   * running server's own text (src/mcp/plugin-catalog.ts).
+   */
+  descriptions?: Record<string, string>;
+  /**
    * The highest protection level of the conversation its tools may be called
    * from (docs/PROTECTION-LEVELS.md, C6d): the manifest's `maxProtection`,
    * else 1 for a package with network access and 4 for one without.
    */
   maxProtection: 1 | 2 | 3 | 4;
+  /**
+   * The host API scopes it may be handed (docs/PLUGIN-PACKAGES.md#host-api):
+   * those the manifest declares and an admin approved. Each call gets a token
+   * for these, narrowed to the tool's effect and the calling user.
+   */
+  hostScopes?: PluginHostScope[];
+  /**
+   * Its `model:complete` calls may run on a CLI lane (a model with its own
+   * tools): the manifest declares `model.trustedInput` and an admin approved
+   * `model:cli-tools` (docs/PLUGIN-PACKAGES.md#model-calls-on-cli-lanes).
+   */
+  modelCliTools?: true;
 }
 
 export interface MCPServer extends McpExposureConfig {
@@ -62,10 +80,14 @@ export interface MCPServer extends McpExposureConfig {
    * Run a stdio server in the shell sandbox with `root` as its only writable
    * directory, or with `readOnlyRoot` read-only and `writable` as the
    * writable ones. `egress` limits its network to those hosts through a proxy
-   * (src/security/egress-proxy.ts), its socket under `runDir`.
+   * (src/security/egress-proxy.ts), its socket under `runDir`; with
+   * `hostApi`, the proxy also forwards `http://octipus-host.internal/api/plugin-host/…`
+   * to the host's own API at that address (docs/PLUGIN-PACKAGES.md#host-api).
    */
   sandbox?: {
+    /** Overrides `security.shellSandbox` for this server (a plugin package's: `plugins.sandbox`). */
+    mode?: 'required' | 'off';
     root: string; allowNetwork: boolean; readOnlyRoot?: boolean; writable?: string[];
-    egress?: { label: string; hosts: string[]; runDir?: string };
+    egress?: { label: string; hosts: string[]; runDir?: string; hostApi?: { host: string; port: number } };
   };
 }

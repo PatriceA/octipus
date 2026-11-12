@@ -4,7 +4,7 @@ import { workspaces } from './organizations';
 /**
  * Repo registry — the first-class repository entity for multi-repo work.
  *
- * See `.octipus/multi-repo-design.md`. Octipus is otherwise architected
+ * See docs/MULTI-REPO.md. Octipus is otherwise architected
  * around a single working root per session (`SessionContext.projectPath`).
  * In a suite of interconnected products + libraries, agents need a *map of
  * the suite*: which repos exist, what each is for, and how they depend on

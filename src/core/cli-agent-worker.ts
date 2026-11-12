@@ -1,3 +1,6 @@
+import { environmentCredentialOptions } from '@/security/environment-credentials';
+import { nativeCliEnvironment } from '@/security/environment-identity';
+import { executionEnvironmentDescription, executionEnvironmentFor } from '@/security/execution-environments';
 import { takeWarmSignal } from './swarm/leader-first';
 import { runPermissionProfile } from '@/security/pipeline-permissions';
 import { personalBuildCaches } from '@/security/build-caches';
@@ -399,11 +402,13 @@ When a task matches one of these skills, load it with get_skill before starting 
         } : { commandListRequired: true, commands: permissionRun.profile.commands.map(redactedCommand), note: 'This is a legacy command-scoped profile. Use the listed commands for remote verification; transport/output-only verification variants retain the same fixed target. Other commands still need consent.' }) } } : {}),
       agentId: this.context.id, sessionId: this.context.sessionId,
       workspaceId: this.context.workspaceId, planMode: this.connection?.planMode ?? false,
-      shellCapabilities: { hostServices: this.context.metadata?.hostServices === true,
-        androidDevices: 'Installed Android SDK tools are mounted read-only. For device tests, registered shell calls need network:true to reach the host ADB server on localhost:5037; approved hostServices grants this automatically and also exposes USB devices. Check adb devices -l in the testing runtime before declaring a device unavailable. USB access retains host OS permissions; a phone may still need authorization on its screen. Child agents do not inherit hostServices.',
+      executionEnvironment: executionEnvironmentDescription(this.context),
+      approvalSurface: { attended: this.context.attended === true, background: this.context.attended !== true, ownerInbox: executionEnvironmentFor(this.context)?.background === 'ask', note: 'The current environment policy is authoritative. An earlier no-approval-channel refusal does not describe a newly configured environment.' },
+      shellCapabilities: { hostServices: executionEnvironmentFor(this.context)?.hostServices ?? this.context.metadata?.hostServices === true,
+        androidDevices: executionEnvironmentFor(this.context) ? 'Device checks run on the selected machine/account. Trusted host mode sees that account’s host ADB server and devices; isolated mode needs its network/host-services grant. Check adb devices -l there before claiming a phone is unavailable. Profile grants follow children.' : 'Installed Android SDK tools are mounted read-only. For device tests, registered shell calls need network:true to reach the host ADB server on localhost:5037; approved hostServices grants this automatically and also exposes USB devices. Check adb devices -l in the testing runtime before declaring a device unavailable. USB access retains host OS permissions; a phone may still need authorization on its screen. Child agents do not inherit hostServices.',
         browserCache: 'Shared host browser runtimes are mounted read-only independently of hostServices; compatible revisions must already be installed.',
         docker: 'Use permitted dedicated docker tools for host containers; compose_project provides repository-scoped local lifecycle when available. Remote stacks require approved SSH shell commands.',
-        note: 'Registered shell commands use the Octipus sandbox. Without approved hostServices a missing Docker socket describes that sandbox, not the host. Native vendor CLI Bash may have different host access. A root context does not inherit child pipeline approval; inspect that pipeline status for its scope.' },
+        note: executionEnvironmentFor(this.context) ? 'Registered shell commands follow executionEnvironment above. Host runs use the OS account; sandbox runs require isolation; SSH runs use the remote machine. API connections have separate service targets.' : 'Registered shell commands use the Octipus sandbox. Without approved hostServices a missing Docker socket describes that sandbox, not the host. Native vendor CLI Bash may have different host access. A root context does not inherit child pipeline approval; inspect that pipeline status for its scope.' },
       workPlan: formatWorkPlanContext(state), guidance: guidance.map(m => m.content),
       ...(this.isCodex() ? { guidanceItems: [...this.pendingCodexGuidance].map(([id, message]) => ({ id, content: message.content })) } : {}),
       ...(this.detached.count() > 0 ? {
@@ -1543,16 +1548,13 @@ When a task matches one of these skills, load it with get_skill before starting 
     // .ps1 to dodge cmd.exe argv re-tokenization), we MUST NOT double-wrap or
     // Node's shell:true escaping mangles the prompt all over again.
     const useShellForSpawn = useShell !== false && process.platform === 'win32';
-    return new Promise<string>((resolve, reject) => {
-      // Minimal env allowlist (C6): a CLI child running with bypassed
-      // permissions must NOT inherit the server's DB creds and all API keys.
-      // Pass only PATH/HOME/locale/TERM, the CLI's own auth var, and toolEnv.
-      const baseEnv = cliEnvFor(this.credentialOwner, toolConfig, { ...toolEnv,
+    const baseEnv = cliEnvFor(this.credentialOwner, toolConfig, { ...toolEnv,
         ...(this.connection ? { OCTIPUS_AGENT_URL: this.connection.url, OCTIPUS_AGENT_KEY: this.connection.key } : {}),
       }, settings.inheritApiKeys === true);
-      // In a space the CLI's tools never find the host's logins (§9.5).
-      const env = toolHome ? cliSpaceEnv(baseEnv, toolHome) : baseEnv;
-
+    const initialEnv = toolHome ? cliSpaceEnv(baseEnv, toolHome) : nativeCliEnvironment(this.context, baseEnv);
+    const runtimeCredentials = await environmentCredentialOptions(this.context, { env: initialEnv }).catch((error: unknown) => { cleanupContextFiles(); throw error; });
+    const env = runtimeCredentials.options.env;
+    return new Promise<string>((resolve, reject) => {
       if (this.aborted) { cleanupContextFiles(); reject(new Error('Agent was aborted before CLI spawn')); return; }
       try { assertWindowsCmdLineFits(binary, args, process.platform, useShellForSpawn); } catch (err) { cleanupContextFiles(); reject(err); return; }
       this.processExited = false;
@@ -1656,7 +1658,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         for (const line of lines) {
           if (!line.trim() || this.aborted) continue;
           try {
-            const event = JSON.parse(line);
+            const event = runtimeCredentials.mask(JSON.parse(line));
             if (built.keepStdinOpen && event.type === 'control_response' && this.steeringInterrupt && event.response?.request_id === this.steeringInterrupt.requestId) {
               if (event.response.subtype !== 'success') {
                 const failed = this.failUnacknowledgedCancellation('interrupt was rejected');
@@ -1759,7 +1761,7 @@ When a task matches one of these skills, load it with get_skill before starting 
               this.partialOutput = accumulatedText.slice(-20_000);
             }
           } catch {
-            agentLogger.debug({ line: line.slice(0, 200) }, 'Non-JSON CLI output');
+            agentLogger.debug({ line: runtimeCredentials.mask(line).slice(0, 200) }, 'Non-JSON CLI output');
             // JSONL discipline (low): a version banner or non-JSON preamble
             // used to silently degrade to "(no response)". After N consecutive
             // non-JSON lines, surface one visible warning event.
@@ -1768,7 +1770,7 @@ When a task matches one of these skills, load it with get_skill before starting 
               this.emit('observation', {
                 type: 'warning',
                 message: `CLI ${toolConfig.name} is emitting non-JSON output; results may be incomplete`,
-                sample: line.slice(0, 200),
+                sample: runtimeCredentials.mask(line).slice(0, 200),
               });
             }
           }
@@ -1781,6 +1783,8 @@ When a task matches one of these skills, load it with get_skill before starting 
       });
 
       proc.on('close', async (code, signal) => {
+        stderr = runtimeCredentials.mask(stderr);
+        rawStdout = runtimeCredentials.mask(rawStdout);
         if (this.executionDiagnostics) Object.assign(this.executionDiagnostics, { exitCode: code, signal });
         this.acceptsLiveGuidance = false;
         this.failUnacknowledgedCancellation('CLI exited before acknowledging the interrupt');
@@ -1827,7 +1831,7 @@ When a task matches one of these skills, load it with get_skill before starting 
           } else if (lineBuffer.trim()) {
             // Process remaining streamed line buffer
             try {
-              const event = JSON.parse(lineBuffer);
+              const event = runtimeCredentials.mask(JSON.parse(lineBuffer));
               const result = parser.parse(event, adapterKey);
               if (result) {
                 if (result.replace) accumulatedText = result.text;
@@ -1835,7 +1839,7 @@ When a task matches one of these skills, load it with get_skill before starting 
               }
             } catch {
               if (!accumulatedText && lineBuffer.trim()) {
-                accumulatedText = lineBuffer.trim();
+                accumulatedText = runtimeCredentials.mask(lineBuffer.trim());
               }
             }
           }
@@ -2008,7 +2012,7 @@ When a task matches one of these skills, load it with get_skill before starting 
             generation: this.generation, ownerAgentId: this.context.id, acknowledged: this.userCursor ?? previouslyAcknowledged,
             modelName: this.accountingModelName, credentialOwner: credentialOwnerId,
           });
-          resolve(accumulatedText || '(no response)');
+          resolve(runtimeCredentials.mask(accumulatedText) || '(no response)');
         } catch (err) {
           reject(err instanceof Error ? err : new Error(String(err)));
         }

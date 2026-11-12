@@ -19,50 +19,22 @@ vi.mock('@/core/personas/resolver', () => ({
 }));
 
 import type { CompletionOptions } from '@/models/litellm-client';
-import { AnthropicProvider } from '@/models/providers/anthropic-provider';
 import { applyAnthropicCacheControl } from '@/models/providers/prompt-cache';
 import type { AgentMessage } from '@/core/types';
 import { estimateTokens } from '@/utils/token-count';
 import { _resetPersonaHookForTesting, installPersonaHook } from '@/core/personas/persona-hook';
-import { type BuildSystemPromptOptions, getAgentHooks } from './hooks';
-import { asTrailingBlock, PromptBuilder, splitSharedPrefix } from './prompt-builder';
-import { getRoleConfig, SECURITY_PREAMBLE } from './roles';
-import { buildDelegationPolicy, splitHookedRolePrompt } from './root-runner';
-import { ROOT_ROLE } from './types';
+import { getAgentHooks } from './hooks';
+import { type PromptBuilder, splitSharedPrefix } from './prompt-builder';
+import { SECURITY_PREAMBLE } from './roles';
+import { splitHookedRolePrompt } from './root-runner';
+import { assembleRootPrompt, countBreakpoints, FIXTURE_TURN_DATE as DATE, nativeRequestBody, rootSystemMessages } from './root-request-fixture';
 import delegationPrompt from './delegation-prompt.md';
 
-const DATE = '\n\nCURRENT DATE & TIME: Sun, 08 Nov 2026 12:00:00 GMT';
-
-/** The root runner's assembly, in its order, for one user's turn. */
-async function rootPrompt(userId: string, workspace: string, isLite = false): Promise<PromptBuilder> {
-  const config = getRoleConfig(ROOT_ROLE);
-  const base = isLite ? (config.liteSystemPromptTemplate ?? config.systemPromptTemplate) : config.systemPromptTemplate;
-  const hookInput: BuildSystemPromptOptions = { role: ROOT_ROLE, root: true, userId, sessionId: `s-${userId}`, workspaceId: null, systemPrompt: base };
-  const ctx = await getAgentHooks().fire('before-agent-start', hookInput);
-  const split = splitHookedRolePrompt(base, ctx.systemPrompt);
-  if (!split) throw new Error('persona hook output not recognised');
-  const prompt = new PromptBuilder()
-    .add('install', 'role-prompt', split.install)
-    .add('install', 'delegation-policy', buildDelegationPolicy(isLite));
-  if (!isLite) prompt.add('install', 'delegation-mechanics', `\n\n${delegationPrompt}`);
-  return prompt
-    .add('user', 'persona', asTrailingBlock(split.user))
-    .add('session', 'workspace-listing', `\nWORKSPACE: Root is ${workspace}`, { drifts: true })
-    .add('turn', 'turn-context', DATE);
-}
+/** The root runner's assembly, in its order, for one user's turn (`root-request-fixture`). */
+const rootPrompt = (userId: string, workspace: string, isLite = false): Promise<PromptBuilder> => assembleRootPrompt({ userId, workspace, isLite });
 
 /** What the agent manager hands the worker: the install tier flagged, then the rest. */
-function systemMessages(prompt: PromptBuilder): AgentMessage[] {
-  const built = prompt.build();
-  const split = splitSharedPrefix(built, prompt.installPrefix());
-  if (!split) throw new Error('no install split');
-  // The worker moves the turn tier into the user message (addSystemMessage).
-  const rest = split.rest.slice(0, split.rest.indexOf(DATE));
-  return [
-    { role: 'system', content: split.shared, cacheBreak: true, timestamp: new Date() },
-    { role: 'system', content: rest, timestamp: new Date() },
-  ];
-}
+const systemMessages = (prompt: PromptBuilder): AgentMessage[] => rootSystemMessages(prompt).messages;
 
 const tools: CompletionOptions['tools'] = [
   { type: 'function', function: { name: 'read_file', description: 'Read a file', parameters: { type: 'object', properties: { path: { type: 'string' } } } } },
@@ -70,7 +42,7 @@ const tools: CompletionOptions['tools'] = [
 ];
 
 const nativeBody = (messages: AgentMessage[]) =>
-  (new AnthropicProvider() as unknown as { buildNativeBody(o: CompletionOptions, s: boolean): Record<string, unknown> }).buildNativeBody({
+  nativeRequestBody({
     model: 'claude-sonnet-4-6',
     messages: [
       ...messages,
@@ -81,9 +53,7 @@ const nativeBody = (messages: AgentMessage[]) =>
     tools,
     cacheScope: 'root:g1',
     cachePacing: 'human',
-  }, false);
-
-const countBreakpoints = (body: unknown) => JSON.stringify(body).split('"cache_control"').length - 1;
+  });
 
 describe('install tier (C3)', () => {
   beforeEach(() => {

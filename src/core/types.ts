@@ -400,6 +400,8 @@ export interface Hook {
 
 // Tool Types
 export interface ToolManifest {
+  /** Declares execution location separately from tool permission and availability. */
+  execution?: { kind: 'environment' | 'host' | 'connection'; program?: string };
   id: string;
   name: string;
   version: string;
