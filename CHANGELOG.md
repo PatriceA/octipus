@@ -422,6 +422,32 @@ labels reflect blast radius, not contract guarantees.
   ignores `/extensions/` and `.octipus/extensions/`. Agents are no longer told
   to create plugins in `<checkout>/extensions/`.
 
+### Added
+
+- **Parents hear when a child waits on the user.** A detached child's open
+  approval or question now ends the parent's `collect_children` wait early and
+  is reported as `status="waiting"` with a `pendingApproval` / `pendingQuestion`
+  element; a parent that is not collecting gets one notice (withdrawn if the
+  user answers first). Grandchildren are attributed to their depth-1 ancestor.
+  CLI children are only told to use `request_user_approval` when they have it.
+- **Retry keys.** `Idempotency-Key` on `POST /api/chat`, `/api/agents`,
+  `/api/sessions`, `/api/pipelines`, `/api/hooks` and tool execution; a
+  `clientRequestId` on the MCP server's create tools, on `create_pipeline`,
+  and on every mutating tool over the CLI bridge. A retry returns the original
+  outcome or joins the call still running instead of doing the work twice.
+  See [API](docs/API.md#idempotency-keys) and [MCP server](docs/MCP-SERVER.md).
+- **Send modes.** `chat.send` / `chat.steer` take `mode: auto | queue | steer |
+  restart`, and the server answers with `chat.delivery` saying what happened
+  (`steered`, `queued`, `restarted`, `refused`). `auto` keeps today's
+  behaviour, except that a buffered CLI root now reports and does `queued`.
+  `/stop`, `/abort`, `agent.stop` and the REST stop drop the caller's own
+  queued messages and say how many.
+- **Lane availability before delegation.** A spawn whose lane model's CLI is
+  not installed, or whose provider circuit is open, moves to the lane's backup
+  or is refused with the reason, instead of spending a run, a retry and a
+  backup attempt. The `primaryModel` mismatch denial names the bound model, and
+  a read-only `list_lanes` tool shows each lane's bindings and availability.
+
 ### Fixed
 
 - **A burst of webhook deliveries no longer runs parallel agents in one
@@ -433,6 +459,12 @@ labels reflect blast radius, not contract guarantees.
 - **`steer_child` no longer reports guidance it did not deliver.** A CLI child
   that has stopped accepting guidance refused it, but the tool still answered
   "Guidance queued". It now tells the parent nothing was delivered.
+- **Webhook events are no longer lost at capacity.** A `spawn_agent` delivery
+  refused at the agent cap or a quota releases its delivery claim and hands
+  back its cooldown / `maxExecutions` reservation, so a redelivery runs; a
+  refused scheduled one-shot is retried with backoff for up to 24 h. Cooldown
+  and `maxExecutions` skips are logged as `skipped` executions, and two
+  concurrent first runs of a hook now share one session.
 
 - **A burst of remote-space frames no longer closes the federation link.** The
   host closes a link that sends more than 60 frames in a second (4429), and the

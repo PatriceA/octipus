@@ -132,6 +132,14 @@ Not a model picker. Lanes stay bound by the admin.
   (docs/WEBHOOKS.md). Multi-replica deployments need a shared lock before
   ordering can be promised there.
 
+## Status
+
+All five sections are implemented on branch `ccr-24ad81d5-4cu34d`, each with
+a review pass and fixes. Known limits kept on purpose: pipeline stages are not
+matched to a parent's pending children (§1); the CLI bridge's retry cache is
+per run, only `create_pipeline` keys survive into a new run (§2); there is no
+shared multi-replica session lock (§5).
+
 ## Order
 
 1. Child questions and approvals (1), as it affects every swarm run with ASK
