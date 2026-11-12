@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { Hook } from '@/core/types';
 import { markHeartbeatGatePassed } from '@/core/heartbeat';
-import { executeAction, resolveHookSessionId } from './actions';
+import { executeAction, isCapacityRefusal, resolveHookSessionId } from './actions';
 import type { TriggerContext } from './triggers';
 
 // The role-heartbeat path: the worker spawn is observed, never run.
@@ -17,11 +17,12 @@ vi.mock('@/core/agent', () => ({
   }),
 }));
 // The direct (non-orchestrated) spawn: the options are observed, nothing runs.
-const direct = vi.hoisted(() => ({ stops: [] as Array<{ id: string; options: unknown }>, spawns: [] as Array<Record<string, unknown>>, runImpl: undefined as undefined | (() => Promise<string>) }));
+const direct = vi.hoisted(() => ({ stops: [] as Array<{ id: string; options: unknown }>, spawns: [] as Array<Record<string, unknown>>, runImpl: undefined as undefined | (() => Promise<string>), spawnError: undefined as Error | undefined }));
 vi.mock('@/core/agent-manager', () => ({
   getAgentManager: () => ({
     stop: (id: string, options: unknown) => { direct.stops.push({ id, options }); return true; },
     spawn: async (options: Record<string, unknown>) => {
+      if (direct.spawnError) throw direct.spawnError;
       direct.spawns.push(options);
       return { run: () => (direct.runImpl ? direct.runImpl() : Promise.resolve('')), getContext: () => ({ id: 'agent-1' }) };
     },
@@ -175,6 +176,44 @@ describe('executeSpawnAgent: direct spawn', () => {
     } finally {
       direct.runImpl = undefined;
     }
+  });
+});
+
+describe('executeSpawnAgent: refused before any agent started', () => {
+  const fire = () => executeAction(hook({
+    userId: '77777777-7777-4777-8777-777777777777', trigger: 'webhook', action: 'spawn_agent', sessionId: 'hook-sess',
+    actionConfig: { orchestrated: false, agentPrompt: 'triage' },
+  } as Partial<Hook>), ctx());
+
+  test('the agent cap or a quota is reported as notStarted', async () => {
+    const { QuotaExceededError } = await import('@/security/quota-error');
+    for (const err of [
+      new Error('Maximum concurrent agents (3) reached'),
+      new QuotaExceededError({ kind: 'concurrentAgents', current: 2, max: 2, userId: 'u' }),
+    ]) {
+      direct.spawnError = err;
+      try {
+        expect(await fire()).toEqual({ success: false, error: err.message, notStarted: true });
+      } finally {
+        direct.spawnError = undefined;
+      }
+    }
+  });
+
+  test('any other spawn failure is a plain failure (the action ran)', async () => {
+    direct.spawnError = new Error('model provider unreachable');
+    try {
+      const r = await fire();
+      expect(r).toEqual({ success: false, error: 'model provider unreachable' });
+    } finally {
+      direct.spawnError = undefined;
+    }
+  });
+
+  test('isCapacityRefusal', () => {
+    expect(isCapacityRefusal(new Error('Maximum concurrent agents (10) reached'))).toBe(true);
+    expect(isCapacityRefusal(new Error('boom'))).toBe(false);
+    expect(isCapacityRefusal('Maximum concurrent agents (10) reached')).toBe(false);
   });
 });
 

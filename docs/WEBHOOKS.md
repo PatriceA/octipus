@@ -46,6 +46,7 @@ If the sender includes a delivery id, it is remembered per hook, and a repeat is
 - While the delivery is queued or running, the claim is marked `in_progress` with a 15-minute window. If the process dies, a redelivery can run again after that.
 - Once an action has run, successfully or not, the claim lasts 24 hours. A redelivery, including GitHub's manual **Redeliver**, is dropped then, because the action's side effects may already have happened. To re-run it, send the delivery without its id, or use **Hooks → Test**.
 - If no action ran (conditions didn't match, cooldown, `maxExecutions` reached, or an error before the action), the claim is released, so a redelivery can try again.
+- If the action was refused before it started any work, the claim is released too. This covers a `spawn_agent` hook with `orchestrated: false` whose spawn is refused because the server is at its concurrent-agent limit (`maxConcurrentAgents`), the owner is over a quota, or the owner's spend budget is paused. No agent existed, so the run's cooldown and `maxExecutions` reservation is also handed back, and the failure is logged as an `error` row. GitHub, GitLab and Gitea don't redeliver on their own, so the event runs only if it is redelivered from the provider's delivery log or by a sender that retries. An orchestrated hook refused this way is answered in its session (the refusal is stored there), so its delivery counts as done.
 - Claims live in the shared key-value store, so dedupe works across API processes. If the store is unreachable, dedupe falls back to a per-process cache.
 
 ### Run queue and limits
@@ -71,7 +72,11 @@ In both cases the delivery id is not left claimed, so redelivering it from the p
 
 A queued delivery keeps its claim `in_progress`, so a redelivery while it waits is a duplicate. Every 5 minutes the server renews the claims of all queued deliveries, and it renews once more when a run starts, so a long queue can't let a claim lapse. A renewal only extends this delivery's own claim. If the claim was taken over in the meantime (another process ran the delivery and marked it `done`, or a redelivery claimed it after a crash), the queued run is dropped without running, and the other claim is left untouched.
 
-Cooldown and `maxExecutions` are enforced when a run starts: the run is reserved in the database first, so concurrent deliveries can't slip past them. The limits are per API process.
+Cooldown and `maxExecutions` are enforced when a run starts: the run is reserved in the database first, so concurrent deliveries can't slip past them, in one process or several. A delivery skipped by either is logged in the hook's execution log as a `skipped` row, with `cooldown`, `max_executions` or `not_reserved` (a concurrent delivery took the last run) as its reason, one row per delivery.
+
+**Per process.** The run queue and its limits above, the per-session turn order (a burst of runs in one session waits its turn), and `onlyOnChange` merge windows are held in each API process's memory. With several API replicas behind a load balancer, each replica keeps its own queue and limits, two deliveries to one hook session on different replicas can run at the same time, and their order is not guaranteed. Delivery ids, cooldown and `maxExecutions` are shared (key-value store and database). Run a single API process if webhook ordering matters; a shared lock across replicas is not implemented.
+
+**First run of a hook.** A hook with no session yet creates one on its first run and stores it on the hook, so later runs append to it. If two first deliveries race, the first stored session wins and the other run uses it too.
 
 **Shutdown.** Queued runs that haven't started are dropped and their delivery ids released, so they run only if they are redelivered, manually or by a sender that retries. Running actions get up to 1 second to finish. New deliveries during shutdown get `503`, including one that was mid-way through being accepted when shutdown began.
 

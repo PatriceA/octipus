@@ -161,8 +161,9 @@ export async function completeDelivery(hookId: string, deliveryId: string): Prom
 
 /**
  * Free a claimed delivery. Only for a run where no action started (the hook
- * was skipped, or triggerHook failed before executing), so a redelivery can
- * try again.
+ * was skipped, triggerHook failed before executing, or the action was refused
+ * at capacity / quota before any agent existed), so a redelivery can try
+ * again.
  */
 export async function releaseDelivery(hookId: string, deliveryId: string): Promise<void> {
   const key = dedupeKey(hookId, deliveryId);
@@ -598,8 +599,10 @@ export interface WebhookRun {
 /**
  * Fire one verified hook for a webhook delivery; meant to run inside
  * the run queue (see {@link webhookRunJob}). Settles the delivery claim:
- *  - nothing ran (the hook was skipped by its gates, or triggerHook failed
- *    before executing the action) -> release, so a redelivery can retry;
+ *  - nothing ran (the hook was skipped by its gates, triggerHook failed
+ *    before executing the action, or every run was refused before it started
+ *    any work: `notStarted`, a spawn at the agent cap or over a quota)
+ *    -> release, so a redelivery can retry;
  *  - an action ran, successfully or not -> done, so a redelivery is dropped
  *    (its side effects may already have happened).
  * Every failure lands in hook_executions: runHook logs action failures
@@ -634,6 +637,17 @@ export async function fireWebhookHook(run: WebhookRun): Promise<void> {
     // Skipped (conditions, cooldown, maxExecutions, disabled): nothing ran.
     if (deliveryId) await releaseDelivery(hook.id, deliveryId);
     apiLogger.info({ hookId: hook.id, deliveryId }, 'Webhook hook skipped');
+    return;
+  }
+
+  if (results.every((r) => r.result?.notStarted === true)) {
+    // Refused at capacity / quota before any agent existed: nothing of the
+    // event was handled. Release, so the sender's redelivery can retry.
+    if (deliveryId) await releaseDelivery(hook.id, deliveryId);
+    apiLogger.warn(
+      { hookId: hook.id, hookName: hook.name, deliveryId, error: results[0]?.result?.error },
+      'Webhook hook not started (capacity or quota); delivery released for retry',
+    );
     return;
   }
 
