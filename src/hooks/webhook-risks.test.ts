@@ -8,12 +8,16 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TriggerEvent } from './triggers';
+import { ConcurrencyLimitError } from '@/core/errors/concurrency-limit';
 
-const spawner = vi.hoisted(() => ({ error: null as Error | null, spawns: 0 }));
+const spawner = vi.hoisted(() => ({ error: null as Error | null, spawns: 0, beforeThrow: null as null | (() => Promise<void>) }));
 vi.mock('@/core/agent-manager', () => ({
   getAgentManager: () => ({
     spawn: async () => {
-      if (spawner.error) throw spawner.error;
+      if (spawner.error) {
+        await spawner.beforeThrow?.();
+        throw spawner.error;
+      }
       spawner.spawns += 1;
       return { run: async () => '', getContext: () => ({ id: 'agent-1' }) };
     },
@@ -66,6 +70,7 @@ async function insertHook({ cooldownMs = 0, maxExecutions = 0, executionCount = 
 
 beforeEach(async () => {
   spawner.error = null;
+  spawner.beforeThrow = null;
   spawner.spawns = 0;
   turns.sessions = [];
   delivery._resetDeliveryCache();
@@ -74,6 +79,7 @@ beforeEach(async () => {
 
 const event: TriggerEvent = { type: 'webhook', data: {}, timestamp: new Date() };
 const context = { webhook: { path: 'gh', method: 'POST', headers: {}, body: { action: 'opened' } } };
+const createAs = (id: string) => async () => (await import('@/core/agent/session-resolver')).resolveSession(id, userId, 'hook');
 const run = (deliveryId: string) => ({
   hook: { id: hookId, name: 'Issue triage', action: 'spawn_agent' as const },
   event, context, deliveryId, failureContext: {},
@@ -86,7 +92,7 @@ const executions = () => rows<{ status: string; error: string | null; result: Re
 describe('a run refused before it started', () => {
   test('at the agent cap: the delivery is released, the reservation handed back, the failure logged', async () => {
     await insertHook({ cooldownMs: 600_000, maxExecutions: 5 });
-    spawner.error = new Error('Maximum concurrent agents (3) reached');
+    spawner.error = new ConcurrencyLimitError(3);
     expect(await delivery.claimDelivery(hookId, 'd-1')).not.toBeNull();
 
     await delivery.fireWebhookHook(run('d-1'));
@@ -102,6 +108,19 @@ describe('a run refused before it started', () => {
     expect(spawner.spawns).toBe(1);
     expect(await delivery.claimDelivery(hookId, 'd-1')).toBeNull(); // done
     expect((await hookRow()).execution_count).toBe(1);
+  });
+
+  test('a reservation that landed meanwhile keeps its stamp; the refused run still gives its count back', async () => {
+    await insertHook({ cooldownMs: 600_000, maxExecutions: 5 });
+    spawner.error = new ConcurrencyLimitError(3);
+    // Another process reserves its own run while this one is being refused.
+    spawner.beforeThrow = async () => {
+      await executeRaw(`UPDATE hooks SET execution_count = execution_count + 1, last_executed_at = now() + interval '1 second' WHERE id = '${hookId}'`);
+    };
+    await manager.triggerHook(hookId, event, context);
+    const row = await hookRow();
+    expect(row.execution_count).toBe(1);
+    expect(row.last_executed_at).not.toBeNull();
   });
 
   test('over a user quota: also released', async () => {
@@ -144,14 +163,64 @@ describe('skips are recorded', () => {
   });
 });
 
+describe('repeated skips of a schedule', () => {
+  test('a schedule tick past maxExecutions logs its skip once, not every tick', async () => {
+    await insertHook({ maxExecutions: 1, executionCount: 1 });
+    await executeRaw(`UPDATE hooks SET trigger = 'schedule', trigger_config = '{"cronExpression":"* * * * *"}'::jsonb WHERE id = '${hookId}'`);
+    const tick: TriggerEvent = { type: 'schedule', data: { hookId }, timestamp: new Date() };
+    for (let i = 0; i < 3; i++) await manager.triggerHook(hookId, tick, {});
+    expect((await executions()).map((e) => e.error)).toEqual(['max_executions']);
+  });
+
+  test('each webhook delivery skipped still gets its own row', async () => {
+    await insertHook({ maxExecutions: 1, executionCount: 1 });
+    for (let i = 0; i < 2; i++) await manager.triggerHook(hookId, event, context);
+    expect(await executions()).toHaveLength(2);
+  });
+});
+
+describe('a scheduled one-shot refused before it started', () => {
+  const insertOneShot = async (scheduledAt: Date) => {
+    await executeRaw(
+      `INSERT INTO hooks (id, user_id, name, trigger, trigger_config, action, action_config, is_enabled, next_run_at, max_executions)
+       VALUES ('${hookId}', '${userId}', 'Reminder', 'schedule', '{"scheduledAt":"${scheduledAt.toISOString()}"}'::jsonb, 'spawn_agent',
+               '{"agentPrompt":"remind","orchestrated":false}'::jsonb, false, NULL, 1)`,
+    );
+    return (await rows<import('@/db/schema/hooks').Hook>(`SELECT id, name FROM hooks WHERE id = '${hookId}'`))[0];
+  };
+  const state = async () => (await rows<{ is_enabled: boolean; next_run_at: Date | null; last_error: string | null }>(
+    `SELECT is_enabled, next_run_at, last_error FROM hooks WHERE id = '${hookId}'`))[0];
+
+  test('is re-enabled with a backed-off retry and the error recorded', async () => {
+    const now = new Date();
+    const hook = await insertOneShot(new Date(now.getTime() - 10 * 60_000));
+    const { retryNotStartedHook } = await import('@/core/cron-runner');
+    const retryAt = await retryNotStartedHook(hook, true, new Date(now.getTime() - 10 * 60_000).toISOString(), 'Maximum concurrent agents (3) reached', now);
+    expect(retryAt!.getTime() - now.getTime()).toBe(10 * 60_000);
+    const s = await state();
+    expect(s.is_enabled).toBe(true);
+    expect(new Date(s.next_run_at!).getTime()).toBe(retryAt!.getTime());
+    expect(s.last_error).toMatch(/^Not started: Maximum concurrent agents \(3\) reached\. Retrying at/);
+  });
+
+  test('gives up after the retry window, leaving the error visible', async () => {
+    const now = new Date();
+    const due = new Date(now.getTime() - 25 * 60 * 60_000);
+    const hook = await insertOneShot(due);
+    const { retryNotStartedHook } = await import('@/core/cron-runner');
+    expect(await retryNotStartedHook(hook, true, due.toISOString(), 'over quota', now)).toBeNull();
+    expect(await state()).toMatchObject({ is_enabled: false, next_run_at: null, last_error: 'Not started: over quota' });
+  });
+});
+
 describe('the first-run session mint', () => {
   test('two racing first runs keep one saved id; the loser uses it and drops its own session', async () => {
     await insertHook();
     const a = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     const b = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const [first, second] = await Promise.all([
-      actions.persistHookSessionId(hookId, a, userId),
-      actions.persistHookSessionId(hookId, b, userId),
+      actions.persistHookSessionId(hookId, a, createAs(a)),
+      actions.persistHookSessionId(hookId, b, createAs(b)),
     ]);
     const stored = (await hookRow()).session_id;
     expect([a, b]).toContain(stored);
@@ -164,9 +233,23 @@ describe('the first-run session mint', () => {
   test('a later run reuses the stored id without creating a session', async () => {
     await insertHook();
     const a = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
-    expect(await actions.persistHookSessionId(hookId, a, userId)).toBe(a);
-    expect(await actions.persistHookSessionId(hookId, 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', userId)).toBe(a);
+    expect(await actions.persistHookSessionId(hookId, a, createAs(a))).toBe(a);
+    const d = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    expect(await actions.persistHookSessionId(hookId, d, createAs(d))).toBe(a);
     expect(await rows(`SELECT id FROM sessions WHERE id = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'`)).toHaveLength(0);
+  });
+
+  test('a hook deleted before its first run: null, and no session is left behind', async () => {
+    await insertHook();
+    const e = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+    const created = createAs(e);
+    const result = await actions.persistHookSessionId(hookId, e, async () => {
+      await created();
+      await executeRaw(`DELETE FROM hooks WHERE id = '${hookId}'`);
+    });
+    expect(result).toBeNull();
+    expect(await rows(`SELECT id FROM sessions WHERE id = '${e}'`)).toHaveLength(0);
+    expect(await actions.persistHookSessionId(hookId, e, createAs(e))).toBeNull();
   });
 
   test('concurrent first deliveries run in one session', async () => {

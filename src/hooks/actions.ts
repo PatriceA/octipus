@@ -15,6 +15,7 @@ import { beginReadOnlyTurn, endReadOnlyTurn } from '@/security/read-only-turn';
 import { fence, isWebhookPath, UNTRUSTED_WEBHOOK_NOTE, WEBHOOK_EVENT_TAG, WEBHOOK_VALUE_TAG } from './untrusted';
 import { canActInSession } from '@/core/rooms/access';
 import { limitKindOf } from '@/core/errors/limit-refusal';
+import { isConcurrencyLimitError } from '@/core/errors/concurrency-limit';
 
 export interface ActionResult {
   success: boolean;
@@ -341,32 +342,29 @@ export async function resolveOwnedHookSessionId(
 
 /**
  * Persist a freshly-minted session id back to the hook so later runs reuse
- * it, and return the id this run should use. hooks.session_id references
- * sessions, so with `userId` the session row is created first (as the
- * orchestrated path's own turn would, on the 'hook' channel). The write only
- * fills an empty column: when two first deliveries race, each mints an id,
- * the first write wins, and the loser drops the session it created and uses
- * the winner's id, so both runs share one session.
+ * it, and return the id this run should use, or null when the hook no longer
+ * exists. hooks.session_id references sessions, so `createSession` makes the
+ * row first (the id is freshly minted, so it never exists yet). The write
+ * only fills an empty column: when two first deliveries race, each mints an
+ * id, the first write wins, and the loser drops the session it created and
+ * uses the winner's id, so both runs share one session.
  */
-export async function persistHookSessionId(hookId: string, sessionId: string, userId?: string): Promise<string> {
+export async function persistHookSessionId(
+  hookId: string,
+  sessionId: string,
+  createSession: () => Promise<unknown>,
+): Promise<string | null> {
   const { getDb } = await import('@/db/postgres');
   const { hooks: hooksTable } = await import('@/db/schema/hooks');
   const { and, eq, isNull } = await import('drizzle-orm');
   const db = getDb();
   const stored = async () =>
-    (await db.select({ sessionId: hooksTable.sessionId }).from(hooksTable).where(eq(hooksTable.id, hookId)).limit(1))[0]?.sessionId ?? null;
-  const already = await stored();
-  if (already) return already;
+    (await db.select({ sessionId: hooksTable.sessionId }).from(hooksTable).where(eq(hooksTable.id, hookId)).limit(1))[0];
+  const before = await stored();
+  if (!before) return null;
+  if (before.sessionId) return before.sessionId;
 
-  let created = false;
-  if (userId) {
-    const { sessionRepository } = await import('@/db/repositories/session-repository');
-    if (!(await sessionRepository.findById(sessionId))) {
-      const { resolveSession } = await import('@/core/agent/session-resolver');
-      await resolveSession(sessionId, userId, 'hook');
-      created = true;
-    }
-  }
+  await createSession();
   const saved = await db
     .update(hooksTable)
     .set({ sessionId })
@@ -374,12 +372,11 @@ export async function persistHookSessionId(hookId: string, sessionId: string, us
     .returning({ sessionId: hooksTable.sessionId });
   if (saved.length > 0) return sessionId;
 
-  if (created) {
-    const { sessionRepository } = await import('@/db/repositories/session-repository');
-    await sessionRepository.delete(sessionId).catch((err: unknown) =>
-      coreLogger.warn({ err, hookId, sessionId }, 'Could not drop the session of a lost hook session mint'));
-  }
-  return (await stored()) ?? sessionId;
+  // Lost the race, or the hook was deleted meanwhile: the new session is unused.
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  await sessionRepository.delete(sessionId).catch((err: unknown) =>
+    coreLogger.warn({ err, hookId, sessionId }, 'Could not drop the session of a lost hook session mint'));
+  return (await stored())?.sessionId ?? null;
 }
 
 /**
@@ -387,8 +384,7 @@ export async function persistHookSessionId(hookId: string, sessionId: string, us
  * a user quota or a paused spend budget. Nothing ran, so retrying is safe.
  */
 export function isCapacityRefusal(err: unknown): boolean {
-  if (limitKindOf(err) !== null) return true;
-  return err instanceof Error && /^Maximum concurrent agents \(\d+\) reached$/.test(err.message);
+  return limitKindOf(err) !== null || isConcurrencyLimitError(err);
 }
 
 async function executeSpawnAgent(
@@ -439,20 +435,31 @@ async function executeSpawnAgent(
     : resolveHookSessionId(context, hook);
   let sessionId = resolved.sessionId;
   const userId = hook?.userId || context.message?.userId || context.agent?.userId || 'system';
-  if(hook?.trigger==='heartbeat'){
-    const source=(await import('@/core/heartbeat')).heartbeatTaskSource(context);
-    if(source)await (await import('@/core/tasks/provenance')).persistHeartbeatTaskProvenance(userId,sessionId,source);
-  }
   if (resolved.minted && hook) {
+    // A heartbeat hook runs in an automation session, as runRoleHeartbeat
+    // creates it; any other hook in the 'hook' session its orchestrated turn
+    // would create.
+    const minted = sessionId;
+    const createSession = heartbeatRole
+      ? async () => (await import('@/db/repositories/session-repository')).sessionRepository.createAutomation({
+          id: minted, userId, channelType: 'heartbeat', channelId: userId, title: `${heartbeatRole} task worker`,
+        })
+      : async () => (await import('@/core/agent/session-resolver')).resolveSession(minted, userId, 'hook');
+    let kept: string | null = minted;
     try {
       // A concurrent first run may have saved its own id first: use that one.
-      // A heartbeat hook's session is an automation session its own path
-      // creates (provenance above, runRoleHeartbeat), so none is made here.
-      sessionId = await persistHookSessionId(hook.id, sessionId, hook.trigger === 'heartbeat' ? undefined : userId);
+      kept = await persistHookSessionId(hook.id, minted, createSession);
     } catch (err) {
       coreLogger.error({ err, hookId: hook.id }, 'Failed to persist reusable hook sessionId; this run still proceeds');
     }
+    if (kept === null) return { success: false, error: `Hook ${hook.id} was deleted before its first run started` };
+    sessionId = kept;
     hook.sessionId = sessionId; // keep this run consistent with what is stored
+  }
+  // Provenance goes on the session this run actually uses (after the mint).
+  if(hook?.trigger==='heartbeat'){
+    const source=(await import('@/core/heartbeat')).heartbeatTaskSource(context);
+    if(source)await (await import('@/core/tasks/provenance')).persistHeartbeatTaskProvenance(userId,sessionId,source);
   }
   // Use the hook owner's userId so notifications and permissions resolve correctly
 
@@ -602,8 +609,10 @@ async function executeSpawnAgent(
     if (isCapacityRefusal(err)) {
       // No agent exists, so nothing of this event was handled: report it as
       // not started (a webhook delivery is then released for a redelivery to
-      // retry). The thread stays open: the retry closes it if it should.
+      // retry). A closing event still ends its thread: senders rarely
+      // redeliver, and a retry that does simply opens a fresh thread.
       coreLogger.warn({ hookId: hook?.id, sessionId, err: (err as Error).message }, 'Hook spawn refused before any agent started');
+      await closeThreadIfEnded(thread, hook);
       return { success: false, error: (err as Error).message, notStarted: true };
     }
     await closeThreadIfEnded(thread, hook);

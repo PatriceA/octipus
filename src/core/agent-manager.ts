@@ -1,6 +1,7 @@
 import { getSettingsService } from '@/config/settings-service';
 import { executionEnvironmentFor, executionEnvironmentDescription } from '@/security/execution-environments';
 import { getConfig } from '@/config';
+import { ConcurrencyLimitError } from '@/core/errors/concurrency-limit';
 import { withoutOffModules } from '@/core/modules/prompt';
 import { bindStagedRootPrompt, promptPart, stageAgentPrompt } from './agent/prompt-composition';
 import { splitSharedPrefix } from './agent/prompt-builder';
@@ -210,7 +211,7 @@ export class AgentManager {
 
     const maxConcurrent = getConfig().agent.maxConcurrentAgents;
     if (runningAgents.length >= maxConcurrent) {
-      throw new Error(`Maximum concurrent agents (${maxConcurrent}) reached`);
+      throw new ConcurrencyLimitError(maxConcurrent);
     }
 
     // Per-user concurrency quota for real users (system jobs rely on the

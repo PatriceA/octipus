@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { Hook } from '@/core/types';
 import { markHeartbeatGatePassed } from '@/core/heartbeat';
 import { executeAction, isCapacityRefusal, resolveHookSessionId } from './actions';
+import { ConcurrencyLimitError } from '@/core/errors/concurrency-limit';
 import type { TriggerContext } from './triggers';
 
 // The role-heartbeat path: the worker spawn is observed, never run.
@@ -188,7 +189,7 @@ describe('executeSpawnAgent: refused before any agent started', () => {
   test('the agent cap or a quota is reported as notStarted', async () => {
     const { QuotaExceededError } = await import('@/security/quota-error');
     for (const err of [
-      new Error('Maximum concurrent agents (3) reached'),
+      new ConcurrencyLimitError(3),
       new QuotaExceededError({ kind: 'concurrentAgents', current: 2, max: 2, userId: 'u' }),
     ]) {
       direct.spawnError = err;
@@ -211,9 +212,11 @@ describe('executeSpawnAgent: refused before any agent started', () => {
   });
 
   test('isCapacityRefusal', () => {
-    expect(isCapacityRefusal(new Error('Maximum concurrent agents (10) reached'))).toBe(true);
+    expect(isCapacityRefusal(new ConcurrencyLimitError(10))).toBe(true);
+    expect(isCapacityRefusal(Object.assign(new Error('x'), { name: 'ConcurrencyLimitError' }))).toBe(true);
+    // Only the typed error counts, not a lookalike message.
+    expect(isCapacityRefusal(new Error('Maximum concurrent agents (10) reached'))).toBe(false);
     expect(isCapacityRefusal(new Error('boom'))).toBe(false);
-    expect(isCapacityRefusal('Maximum concurrent agents (10) reached')).toBe(false);
   });
 });
 
