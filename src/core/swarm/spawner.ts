@@ -1,5 +1,6 @@
 import { executionEnvironmentFor, pathInEnvironment } from '@/security/execution-environments';
-import { runDelegationAttempt, type DelegationAttempt } from './attempt-history';
+import { recordSkippedAttempt, runDelegationAttempt, type DelegationAttempt } from './attempt-history';
+import { routeAroundUnavailable, routeMismatchMessage } from './lane-availability';
 import { getConfig } from '@/config';
 import type { AnyAgentWorker } from '@/core/agent-manager';
 import { getAgentManager } from '@/core/agent-manager';
@@ -674,8 +675,32 @@ export class SwarmSpawner {
 
     if (maintenanceReview && isCLIProvider((await resolveModel({userId:parentContext.userId,name:childModelName}))?.provider ?? '')) return denyAndRelease(this.denialResult(parent, 'Maintenance reviewers require a scoped API or local model.'));
     if (params.routePolicy?.primaryModel && ![childModel, childModelName].includes(params.routePolicy.primaryModel)) {
-      graph.releaseFingerprint(briefHash);
-      return this.denialResult(parent, 'Requested primaryModel does not match the configured topic route. No child was started; change the topic binding or request its configured model.');
+      return denyAndRelease(this.denialResult(parent, routeMismatchMessage(params.routePolicy.primaryModel, childLane, childModel, childModelName)));
+    }
+
+    // ── Pre-spawn availability (lane-availability.ts) ──
+    // A child on a model whose breaker is open or whose CLI is not installed
+    // would spend a run, a retry and a backup attempt discovering it. Go to the
+    // lane's own backup now, or refuse with the reason. A fork runs on the
+    // parent's model, which is evidently up.
+    let preSpawnBackup: { modelId: string; modelName: string; reason: string } | null = null;
+    if (!params.fork) {
+      const boundRow = await getModelRegistry().getModel(childModelName).catch(() => null);
+      const preSpawn = await routeAroundUnavailable({
+        lane: childLane,
+        primary: { modelId: childModel, name: childModelName, provider: boundRow?.provider },
+        allowBackup: !maintenanceReview && params.routePolicy?.allowBackup !== false,
+        resolveBackup: () => resolveModel({ userId: parentContext.userId, topic: childLane, backup: true,
+          inSpace: childInSpace, spaceRole: parentContext.space?.role, sponsor: parentContext.sponsor }),
+      });
+      if (preSpawn.route === 'deny') {
+        coreLogger.warn({ parentNodeId: parent.id, lane: childLane, model: childModel, reason: preSpawn.reason }, 'Swarm spawn refused — lane model unavailable');
+        return denyAndRelease(this.denialResult(parent, `${preSpawn.reason}. No child was started; ask the user to fix or rebind the lane.`));
+      }
+      if (preSpawn.route === 'backup') {
+        coreLogger.warn({ parentNodeId: parent.id, lane: childLane, from: childModel, to: preSpawn.modelId, reason: preSpawn.reason }, 'Lane model unavailable before spawn — starting the child on the lane backup');
+        preSpawnBackup = preSpawn;
+      }
     }
 
     // Small-tier child: cap the tool surface, mirroring the worker path. Role
@@ -915,14 +940,24 @@ export class SwarmSpawner {
       coreLogger.info({ parentAgentId: parentContext.id, childRole, independent }, 'spawn_child fork: not forkable here; starting an ordinary child');
     }
 
+    const dispatchId = internal.dispatchId ?? randomUUID();
+    const attempts: DelegationAttempt[] = [];
+    // The primary never ran: record it as not started, so the backup attempt
+    // carries the reason as its `fallbackReason` like any other fallback.
+    if (preSpawnBackup && !fork) {
+      recordSkippedAttempt(attempts, { dispatchId, requestedModel: childModel, selectedModel: childModel,
+        selectedModelName: childModelName, route: 'primary', reason: preSpawnBackup.reason });
+    }
+
     const result = await releaseOnThrow(() => this.runChildWithRetry({
       parent,
       parentContext,
       childDepth,
       childKind,
       childRole,
-      childModel: fork?.model ?? childModel,
-      childModelName: fork?.modelName ?? childModelName,
+      childModel: fork?.model ?? preSpawnBackup?.modelId ?? childModel,
+      childModelName: fork?.modelName ?? preSpawnBackup?.modelName ?? childModelName,
+      ...(preSpawnBackup && !fork ? { route: 'backup' as const } : {}),
       childLane,
       childTools: fork?.tools ?? childTools,
       childToolAdvertisement: fork ? fork.toolAdvertisement : childToolAdvertisement,
@@ -944,10 +979,10 @@ export class SwarmSpawner {
       childIsSmall: isSmall,
       resumeKey,
       onWorkerStarted: internal.onWorkerStarted,
-      dispatchId: internal.dispatchId ?? randomUUID(),
+      dispatchId,
       allowBackup: !maintenanceReview && params.routePolicy?.allowBackup !== false,
       requestedModel: childModel,
-      attempts: [],
+      attempts,
     })).finally(() => {
       parent.budget.fanOut.used = Math.max(0, parent.budget.fanOut.used - 1);
     });

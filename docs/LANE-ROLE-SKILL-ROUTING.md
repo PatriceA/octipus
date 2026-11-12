@@ -88,6 +88,15 @@ stays a label for the topic path and does not steer the model. `background` is
 deliberately not routable; it is the lane for memory extraction and
 summarisation, not somewhere a parent may send work.
 
+The parent sees lanes but does not pick models. `list_lanes` (read-only,
+discover-only, registered beside `spawn_child`) shows each lane's primary,
+backup and executor binding and whether each is usable now. A
+`routePolicy.primaryModel` that does not match the binding is refused with the
+model the lane IS bound to, so the agent can repeat it, drop the field, or ask
+the user to rebind. Before a child starts, its model is checked
+(`swarm/lane-availability.ts`): see the pre-spawn check in
+[MODEL-ROUTING.md](MODEL-ROUTING.md#backup-failure-fallback-semantics).
+
 There used to be an EXPERT layer here: a `presets` row carrying a role, a lane,
 a prompt, a model preference and a set of rules, selectable with `/expert` and
 passable as `spawn_child(expertId:)`. It was retired on 2026-09-18 — the model

@@ -142,9 +142,27 @@ child/worker ends in a provider or tool error after in-node retries:
 - Worker path: transient-error retry → topic backup; a CLI-provider failure
   can additionally fall back to the default model (`worker-spawner.ts`).
 
-The backup is **not** a cost tier and is never selected proactively. Circuit
-breaker and health checks (`models/circuit-breaker.ts`, `health-checker.ts`)
-gate provider availability but do not pick fallbacks.
+The backup is **not** a cost tier and is never selected for cost or quality.
+Circuit breaker and health checks (`models/circuit-breaker.ts`,
+`health-checker.ts`) gate provider availability.
+
+Swarm pre-spawn check (`swarm/lane-availability.ts`): before a child starts,
+its resolved model is checked with signals already in memory — its provider's
+circuit breaker (same key the provider router trips) and, for a CLI model,
+whether the executable is on PATH (cached 60 s; no process is spawned, and
+CLI login state is not checked because nothing caches it). If the model is
+unavailable:
+
+- a backup is bound, differs from it, is itself available, and
+  `routePolicy.allowBackup` is not false → the child starts on the backup. The
+  primary is recorded in the delegation history as a `not_started` attempt, so
+  the backup attempt's `fallbackReason` names the cause.
+- otherwise → `denied` without starting a child, e.g. `lane 'build' model X
+  unavailable: circuit breaker for 'openai' open since …; no backup bound`. The
+  brief's fingerprint is released, so the same spawn can be retried.
+
+A fork (which runs on the parent's model) skips the check. Anything the check
+cannot judge counts as available.
 
 ## Observability
 

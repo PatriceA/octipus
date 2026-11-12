@@ -1,5 +1,6 @@
 import { instrumentProvider } from './instrumented';
 import { getExtensionRoute, isExtensionModelName } from '../extension-models';
+import { cliRateLimitKey } from '../cli-rate-limit-key';
 import { getConfig } from '@/config';
 import { coreLogger, modelLogger } from '@/utils/logger';
 import { classifyError, ClassifiedError, FailoverReason } from '@/core/errors/classification';
@@ -60,17 +61,7 @@ export function resolveRateLimitKey(provider: ModelProvider, model: string, mode
     const route = getExtensionRoute(extName);
     if (route) return route.providerKey;
   }
-  if (provider.type === 'cli') {
-    const lower = model.toLowerCase();
-    if (lower.includes('claude')) return 'cli-claude';
-    // Antigravity (agy) reuses the Gemini rate bucket — same Google backend.
-    if (lower.includes('gemini') || lower.includes('antigravity') || lower.includes('agy')) return 'cli-gemini';
-    if (lower.includes('codex')) return 'cli-codex';
-    if (lower.includes('vibe')) return 'cli-vibe';
-    if (lower.includes('glm') || lower.includes('zai')) return 'cli-glm';
-    if (lower.includes('kimi') || lower.includes('moonshot')) return 'cli-kimi';
-    return 'cli-claude'; // default CLI
-  }
+  if (provider.type === 'cli') return cliRateLimitKey(model);
   return provider.name;
 }
 

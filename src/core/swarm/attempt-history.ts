@@ -111,6 +111,25 @@ export async function runDelegationAttempt<T>(
   }
 }
 
+/**
+ * An attempt that was never started because the pre-spawn check found its
+ * model unavailable (`lane-availability.ts`). In-memory only — there is no
+ * agent row to persist it to — but it rides in the same history the parent
+ * reads, so the backup attempt that follows carries it as its `fallbackReason`
+ * exactly as a backup after a failed run does.
+ */
+export function recordSkippedAttempt(
+  history: DelegationAttempt[],
+  input: Pick<DelegationAttempt, 'dispatchId' | 'requestedModel' | 'selectedModel' | 'selectedModelName' | 'route'> & { reason: string },
+): void {
+  const now = new Date().toISOString();
+  const { reason, ...fields } = input;
+  history.push({
+    ...fields, executionId: randomUUID(), sequence: history.length + 1, agentId: '', uiAgentId: '',
+    accountIdentity: 'not_reported', startedAt: now, endedAt: now, status: 'not_started', error: reason,
+  });
+}
+
 export function formatAttemptHistory(result: { dispatchId?: string; attempts?: DelegationAttempt[]; appliedRoutePolicy?: unknown }): string {
   return result.attempts?.length ? `\n<delegationHistory>${JSON.stringify({ dispatchId: result.dispatchId, appliedRoutePolicy: result.appliedRoutePolicy, attempts: result.attempts })}</delegationHistory>` : '';
 }

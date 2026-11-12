@@ -8,6 +8,7 @@ import { stripPipelineControlBlocks } from './handoff';
 import type { AgentWorker, ToolHandler } from '@/core/agent-worker';
 import { createSteerChildTool } from '@/core/swarm/steer-tool';
 import { createCollectChildrenTool } from '@/core/swarm/collect-tool';
+import { createListLanesTool } from '@/core/swarm/lanes-tool';
 import { createLateBoundSpawnChildHooks, createSpawnChildTool } from '@/core/swarm/swarm-tool';
 import {
   type AgentNode,
@@ -153,6 +154,9 @@ export function createMetaTools(
       // No refs (legacy unit-test call-sites): await-only single spawn.
       tools.push(createSpawnChildTool(options.parentNode, undefined, undefined, lite ? { lite: true } : undefined));
     }
+    // Read-only lane bindings + health, beside the tool that uses them.
+    // `discoverOnly`; dropped in lite mode by the filter below.
+    tools.push(createListLanesTool());
   }
 
   tools.push(
