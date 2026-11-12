@@ -17,7 +17,6 @@ import { IndexFormatError, indexPermissionsSchema, parseIndexDocument } from './
 import { computePermissions } from './permissions';
 import { sniffImage } from './marketplace-assets';
 import { keysFileUrl, MARKETPLACE_UNCONFIGURED_MESSAGE, marketplaceSettings } from './marketplace-config';
-import { MARKETPLACE_ROOT_KEYS } from './marketplace-keys';
 import { KeysFileError, parseKeysFile, rootRevocationProblem, signingPublishers } from './marketplace-keys-file';
 import { compatibility } from './marketplace';
 import { generateSigningKey, keyFingerprint, parsePublicKey, serializeSignature, signMarketplaceKeys, signRegistryIndex, verifyMarketplaceKeys, verifyRegistryIndex } from './signature';
@@ -49,13 +48,30 @@ function entry(over: Record<string, unknown> = {}): Record<string, unknown> {
 
 const index = (packages: unknown[], over: Record<string, unknown> = {}) => ({ schema: 2, generatedAt: '2026-11-10T12:00:00Z', publisher: 'Octipus', packages, revoked: [], ...over });
 
+const PLACEHOLDER_ROOTS = {
+  root: { placeholder: true, publicKey: null, note: 'test placeholder' },
+  rootBackup: { placeholder: true, publicKey: null, note: 'test placeholder' },
+} as const;
+
+describe('built-in marketplace trust', () => {
+  test('fresh installations use two distinct official public roots without configuration', () => {
+    for (const value of [true, undefined, {}]) {
+      const settings = marketplaceSettings(value);
+      expect(settings).toMatchObject({ state: 'ready', keySource: 'built-in', url: 'https://plugins.octipus.cc/index.json' });
+      if (settings.state !== 'ready') throw new Error('Official marketplace must be configured');
+      expect(settings.roots.map((r) => r.keyId)).toEqual([
+        'ed25519:e632dee8e8cd09be53459cdbed897b38e10830fe44d6ef6467a89c5139fbc0da',
+        'ed25519:07b744f7d004c0f27c8fd6045ee7f1883dbf6fbb9169f76aebf10828a69a7fe6',
+      ]);
+      expect(new Set(settings.roots.map((r) => r.keyId)).size).toBe(2);
+    }
+  });
+});
+
 describe('placeholder root keys fail closed', () => {
-  test('the built-in root keys are placeholders, and the marketplace is not configured', () => {
-    expect(MARKETPLACE_ROOT_KEYS.root).toMatchObject({ placeholder: true, publicKey: null });
-    expect(MARKETPLACE_ROOT_KEYS.rootBackup).toMatchObject({ placeholder: true, publicKey: null });
-    expect(marketplaceSettings(true)).toMatchObject({ state: 'unconfigured', reason: expect.stringMatching(/placeholder/) });
-    expect(marketplaceSettings(undefined)).toMatchObject({ state: 'unconfigured' });
-    expect(marketplaceSettings({ url: 'https://mp.example.com/index.json' })).toMatchObject({ state: 'unconfigured' });
+  test('custom builds with placeholder roots remain unconfigured', () => {
+    expect(marketplaceSettings(true, PLACEHOLDER_ROOTS)).toMatchObject({ state: 'unconfigured', reason: expect.stringMatching(/placeholder/) });
+    expect(marketplaceSettings({ url: 'https://mp.example.com/index.json' }, PLACEHOLDER_ROOTS)).toMatchObject({ state: 'unconfigured' });
     expect(MARKETPLACE_UNCONFIGURED_MESSAGE).toBe('The Octipus marketplace is not configured in this build');
   });
 
@@ -64,14 +80,14 @@ describe('placeholder root keys fail closed', () => {
     const tampered = { root: { placeholder: true, publicKey: real.publicKeyPem, note: '' }, rootBackup: { placeholder: true, publicKey: real.publicKeyPem, note: '' } };
     expect(marketplaceSettings(true, tampered as never)).toMatchObject({ state: 'unconfigured' });
     // One real root and one placeholder: still not configured.
-    expect(marketplaceSettings(true, { root: { placeholder: false, publicKey: real.publicKeyPem }, rootBackup: MARKETPLACE_ROOT_KEYS.rootBackup })).toMatchObject({ state: 'unconfigured' });
+    expect(marketplaceSettings(true, { root: { placeholder: false, publicKey: real.publicKeyPem }, rootBackup: PLACEHOLDER_ROOTS.rootBackup })).toMatchObject({ state: 'unconfigured' });
   });
 
   test('with placeholder roots, nothing verifies: no keys file, no index', () => {
     const attacker = generateSigningKey();
     const bytes = Buffer.from('{"schema":1}');
     const sig = serializeSignature(signMarketplaceKeys(bytes, attacker.privateKeyPem));
-    const settings = marketplaceSettings(true);
+    const settings = marketplaceSettings(true, PLACEHOLDER_ROOTS);
     expect(settings.state).toBe('unconfigured');
     const roots = settings.state === 'ready' ? settings.roots.map((r) => ({ name: 'root', publicKey: r.publicKey })) : [];
     expect(roots).toEqual([]);

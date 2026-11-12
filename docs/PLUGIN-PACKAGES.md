@@ -929,7 +929,7 @@ file that cannot be read, verified or parsed counts for nothing.
 
 | Threat | What the host does |
 | --- | --- |
-| No keys in this build | The root keys in `src/plugins/packages/marketplace-keys.ts` are placeholders until a release ships real ones. While either is, the marketplace is off: never fetched, never trusted, nothing installs; the listing says *"The Octipus marketplace is not configured in this build"*. A placeholder never verifies anything. |
+| Missing keys in a custom build | Official builds ship both public root keys in `src/plugins/packages/marketplace-keys.ts`. If a custom build replaces either with a placeholder, the marketplace is off: never fetched, never trusted, nothing installs; the listing says *"The Octipus marketplace is not configured in this build"*. A placeholder never verifies anything. |
 | A forged index or package | The index must be signed by a signing key the root-signed `keys.json` endorses now; a package from the marketplace must carry a valid signature by one of those keys, and only those (a key in `trustedPublishers` does not count for the marketplace, and the marketplace's keys count for nothing else). An installed marketplace package starts only while that holds, whatever `requireSignature` says: a signature that is unknown (its key dropped from `keys.json`, or a stored `keys.json` that no longer verifies), expired, revoked, invalid or missing stops it. |
 | Marketplace trust leaking out | `keys.json` may revoke only a key it endorses or ever endorsed (`plugin_marketplace_keys.endorsed_key_ids`), or a root; any other revocation in it is ignored (logged). Its key revocations, and the index's package revocations, apply to marketplace trust only: packages installed from the marketplace, installs from it and its index. Never to `trustedPublishers`, a directory, URL or bundled install, or another registry (the admin's own `plugins.revokedKeys` reaches everything). |
 | A listing that understates | The host recomputes the permissions from the downloaded manifest (`computePermissions`) and refuses any difference from the listing's, with an audit row (`listing_mismatch`); the same for `contentHash`, name and version. |
@@ -1016,7 +1016,12 @@ warn their admins); every `revoked` package entry listed again in each index
 lists it); each `keys.json` listing every revoked key (a key it never endorsed
 cannot be revoked by it).
 
-**Configuring a build.** Make the two root keys offline (`octi plugin keygen
+**Official installations.** The official marketplace URL and both public root
+keys ship with Octipus. With the default `plugins.marketplace: true`, no key
+generation, account or manual trust configuration is needed to browse it.
+Private signing keys are needed only by the publisher.
+
+**Configuring a custom build.** Make the two root keys offline (`octi plugin keygen
 octipus-root`, `octi plugin keygen octipus-root-backup`), paste the two `.pub`
 files into `MARKETPLACE_ROOT_KEYS` and set `placeholder: false`. Never put a
 private key in the repository, CI or the web server.
