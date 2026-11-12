@@ -453,6 +453,17 @@ User steering targets the session's running root. It interrupts a pending
 automatically steering any child. The root decides whether to use `steer_child`
 on one of its own pending children or handle the change after collecting.
 
+A child's tool approvals and Claude questions go to the user in the root session,
+as for any agent. Its parent is told too. A `collect_children` wait returns early
+with that child as `status="waiting"` and a `pendingApproval` or `pendingQuestion`
+element (request id, kind, summary). The other children are reported as still
+running, and none is cancelled. A parent that is not collecting gets one short
+notice through its steering path, withdrawn if the request is answered before
+delivery. Automatic collection at finalize is not woken. Neither path lets the
+parent answer the request. A CLI child is told to use `request_user_approval` only
+when that tool is in its tool set. Otherwise it is told that approvals reach the
+user automatically, and to state any other decision it needs in its final answer.
+
 Claude-based adapters wake the current turn through the streaming `interrupt`
 control request, then submit guidance as a new user message through stream-json
 stdin. If a tool is running, Octipus waits for its result (all results for a

@@ -233,12 +233,20 @@ export class CLIAgentWorker extends BaseAgentWorker {
    * own credit is a no-op here — crediting both would count the wait twice.
    */
   private detached = new DetachedChildManager(this.context.id, () => this.config.timeout, () => {},
-    () => this.steeringQueue.length > 0 || [...this.liveGuidance.keys()].some(id => !this.liveGuidancePassed.has(id)));
+    () => this.steeringQueue.length > 0 || [...this.liveGuidance.keys()].some(id => !this.liveGuidancePassed.has(id)),
+    { notify: content => {
+      // A child waiting on the user: one notice through the normal steering
+      // path. Withdrawable only while still queued; once written to the CLI's
+      // input stream it is delivered.
+      const message: AgentMessage = { role: 'system', content, timestamp: new Date() };
+      if (!this.steer(message)) return;
+      return () => { const at = this.steeringQueue.indexOf(message); if (at >= 0) this.steeringQueue.splice(at, 1); };
+    } });
   registerPendingChild(pc: PendingChild): void { this.detached.registerPendingChild(pc); }
   pendingDetachedCount(): number { return this.detached.count(); }
   listPendingDetached(): PendingChild[] { return this.detached.list(); }
   collectDetached(childId: string, timeoutMs: number): Promise<ChildResult | null> { return this.detached.collect(childId, timeoutMs); }
-  collectAllDetached(timeoutMs: number): Promise<ChildResult[]> { return this.detached.collectAll(timeoutMs); }
+  collectAllDetached(timeoutMs: number, opts?: { wakeOnUserRequest?: boolean }): Promise<ChildResult[]> { return this.detached.collectAll(timeoutMs, opts); }
 
   /** User guidance stays with this worker; only its explicit tool call steers a child. */
   steer(message: AgentMessage): boolean {
@@ -757,9 +765,15 @@ When a task matches one of these skills, load it with get_skill before starting 
       if (!this.systemMessages.some(message => message.includes(VAULT_USAGE_GUIDANCE))) {
         this.addSystemMessage(VAULT_USAGE_GUIDANCE);
       }
+      // request_user_approval is a root tool: a child told to call it looked
+      // for a tool it does not have. Its own tool approvals reach the user
+      // anyway (and its parent learns it is waiting), so say that instead.
+      const userDecisionGuidance = this.toolExecutor.getTools().has('request_user_approval')
+        ? 'Use request_user_approval when a user decision is required'
+        : 'Tool calls that need approval are put to the user automatically; any other decision you need from the user, state it in your final answer';
       this.addSystemMessage(`You are connected to your Octipus run through the octipus MCP server. Its tools are your actual registered Octipus tools, including skills, plans and delegation when allowed. Use these tools for Octipus work.
 ` +
-        `Communication: work quietly. Public intermediate text from the root agent is shown in the user's chat. Write only when there is a meaningful finding, blocker or change of direction; skip routine narration, heartbeats and tool-by-tool summaries. Do not repeat the same update in text and send_status_update. Use request_user_approval when a user decision is required, and give a concise final answer when finished.
+        `Communication: work quietly. Public intermediate text from the root agent is shown in the user's chat. Write only when there is a meaningful finding, blocker or change of direction; skip routine narration, heartbeats and tool-by-tool summaries. Do not repeat the same update in text and send_status_update. ${userDecisionGuidance}, and give a concise final answer when finished.
 ` +
         `Tool selection: use available dedicated tools before shell equivalents. For reading, searching and editing files, use your CLI's native file tools or the corresponding Octipus tools; do not substitute shell commands or Python scripts when a suitable tool is available. Use the shell for builds, tests, git and system commands that need it. Explicit user instructions take precedence.
 ` +

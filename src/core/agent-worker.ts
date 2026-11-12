@@ -307,7 +307,22 @@ export class AgentWorker extends BaseAgentWorker {
     () => this.config.timeout,
     (ms) => this.addPausedMs(ms),
     () => this.steeringQueue.length > 0,
+    { notify: (content) => this.queueNotice(content) },
   );
+
+  /**
+   * Steer an internal notice (a child waiting on the user) and return a
+   * withdraw that drops it if still undelivered, so the model never reads
+   * about a wait that has already ended.
+   */
+  private queueNotice(content: string): () => void {
+    const message: AgentMessage = { role: 'system', content, timestamp: new Date() };
+    this.steer(message);
+    return () => {
+      const at = this.steeringQueue.indexOf(message);
+      if (at >= 0) this.steeringQueue.splice(at, 1);
+    };
+  }
 
   registerPendingChild(pc: PendingChild): void {
     this.detached.registerPendingChild(pc);
@@ -327,8 +342,8 @@ export class AgentWorker extends BaseAgentWorker {
   }
 
   /** Collect every still-pending detached child. Used by collect_children and auto-collect. */
-  async collectAllDetached(timeoutMs: number): Promise<ChildResult[]> {
-    return this.detached.collectAll(timeoutMs);
+  async collectAllDetached(timeoutMs: number, opts?: { wakeOnUserRequest?: boolean }): Promise<ChildResult[]> {
+    return this.detached.collectAll(timeoutMs, opts);
   }
 
   /**

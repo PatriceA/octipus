@@ -237,6 +237,12 @@ export interface ChildResult {
    */
   discardedTokens?: number;
   /**
+   * Requests this still-running child has open with the user (an approval or
+   * a CLI question), copied from its pending entry when a collect returns
+   * before the child settled. Never persisted: only `collect_children` reads it.
+   */
+  userRequests?: ChildUserRequest[];
+  /**
    * Set when the child ran in its own git worktree (`swarm.worktreeIsolation`):
    * the branch it produced, its head and diff stat, and whether it was merged
    * back. Also copied onto `receipt.worktree` so both result formatters show it.
@@ -342,4 +348,18 @@ export interface PendingChild {
   topic: string;
   subtopic?: string;
   promise: Promise<ChildResult>;
+  /**
+   * Approvals / CLI questions the child's current attempt has open with the
+   * user. Children run in the root session, so the user is asked there; this
+   * is only how the parent learns the child is blocked on them.
+   */
+  userRequests?: ChildUserRequest[];
+}
+
+/** A child's open request to the user, as the parent sees it. */
+export interface ChildUserRequest {
+  id: string;
+  kind: 'approval' | 'question';
+  /** One short line: the tool and its main argument, or the question. */
+  summary: string;
 }
