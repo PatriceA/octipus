@@ -273,6 +273,9 @@ export class AgentWorker extends BaseAgentWorker {
    */
   private toolBailoutRetries: number = 0;
 
+  /** The native loop drains steering at its next model call while it runs (gateway send modes). */
+  acceptsMidTurnSteering(): boolean { return this.getStatus() === 'running'; }
+
   /** Inject a message into the agent's context mid-run. */
   steer(message: AgentMessage): void {
     this.steeringQueue.push(message);

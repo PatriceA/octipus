@@ -16,6 +16,7 @@ import { fence, isWebhookPath, UNTRUSTED_WEBHOOK_NOTE, WEBHOOK_EVENT_TAG, WEBHOO
 import { canActInSession } from '@/core/rooms/access';
 import { limitKindOf } from '@/core/errors/limit-refusal';
 import { isConcurrencyLimitError } from '@/core/errors/concurrency-limit';
+import { isSessionTurnCancelled } from '@/core/session-turn-lock';
 
 export interface ActionResult {
   success: boolean;
@@ -558,6 +559,12 @@ async function executeSpawnAgent(
     } catch (err) {
       // A closing event ends its thread even when its turn fails.
       await closeThreadIfEnded(thread, hook);
+      // `/stop` dropped the run while it waited behind the session's running
+      // turn: nothing ran (`notRun`; a webhook delivery is released for retry).
+      if (isSessionTurnCancelled(err)) {
+        coreLogger.info({ hookId: hook?.id, sessionId }, 'Queued hook turn dropped by stop');
+        return { success: false, error: err.message, data: { notRun: true, cancelled: true, ...threadData(thread) } };
+      }
       throw err;
     } finally {
       if (marked) endReadOnlyTurn(sessionId);
@@ -636,7 +643,13 @@ async function executeSpawnAgent(
         }
       }
     }).catch((error) => {
-      coreLogger.error({ error, agentId: agent.getContext().id }, 'Spawned agent failed');
+      if (!isSessionTurnCancelled(error)) {
+        coreLogger.error({ error, agentId: agent.getContext().id }, 'Spawned agent failed');
+        return;
+      }
+      // `/stop` dropped the run before it started: the spawned agent never ran.
+      coreLogger.info({ agentId: agent.getContext().id, sessionId }, 'Queued hook agent run dropped by stop');
+      agentManager.stop(agent.getContext().id);
     });
   }
 

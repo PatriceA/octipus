@@ -639,6 +639,13 @@ export async function fireWebhookHook(run: WebhookRun): Promise<void> {
     apiLogger.info({ hookId: hook.id, deliveryId }, 'Webhook hook skipped');
     return;
   }
+  // A run `/stop` dropped from the session's queue before it started
+  // (`notRun`, hooks/actions.ts): nothing ran, so a redelivery may retry.
+  if (results.every((r) => (r.result?.data as { notRun?: boolean } | undefined)?.notRun === true)) {
+    if (deliveryId) await releaseDelivery(hook.id, deliveryId);
+    apiLogger.info({ hookId: hook.id, deliveryId }, 'Webhook hook run dropped by stop before it ran');
+    return;
+  }
 
   if (results.every((r) => r.result?.notStarted === true)) {
     // Refused at capacity / quota before any agent existed: nothing of the

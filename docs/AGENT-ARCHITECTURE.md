@@ -286,10 +286,20 @@ Steering messages allow users to inject corrections or guidance into a running a
 
 ### How It Works
 
-1. Client sends `{ type: 'steer', sessionId, content }` over the WebSocket gateway
-2. The message is queued on the session
+1. Client sends `{ type: 'chat.steer', sessionId, content }` (or a text-only `chat.send`) over the WebSocket gateway
+2. The message is queued on the running root agent's steering queue, and stored in the transcript
 3. After the current tool call completes, the queue is drained
 4. Steering content is appended to the conversation as a user turn before the next LLM call (the end of the history, so the cached prefix is untouched)
+
+The server answers every send with `chat.delivery` naming what it did:
+`steered`, `queued` (its own turn, after `ahead` others), `restarted` or
+`refused`. A `mode` on the frame chooses: `auto` (default: steer when the
+running root takes input mid-turn, else queue), `queue`, `steer` (refused when
+nothing running takes it) or `restart` (stop the running turn, run this message
+next, ahead of the queued turns). A buffered CLI root (Vibe, Antigravity)
+cannot take input mid-turn, so `auto` queues for it. `/stop` and `agent.stop` on
+a root drop the turns queued behind the running one. See
+[architecture/gateway.md](architecture/gateway.md#send-modes).
 
 ### When to Use
 

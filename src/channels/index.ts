@@ -13,6 +13,7 @@ export { WhatsAppChannel, whatsappChannel } from './whatsapp';
 import { getConfig } from '@/config';
 import { sharedRefusalText } from '@/core/errors/limit-refusal';
 import { recordChannelMessage } from '@/core/telemetry';
+import { isSessionTurnCancelled } from '@/core/session-turn-lock';
 import type { AgentEvent } from '@/core/agent-base';
 import type { Attachment, ChannelType, UnifiedMessage } from '@/core/types';
 import type { GroupChannel } from '@/db/schema/group-channels';
@@ -1180,16 +1181,31 @@ export async function initializeChannels(): Promise<void> {
         }
         : undefined;
 
-      const result = await rootAgent.handleMessage(
-        resolvedSessionId,
-        message.userId,
-        messageContent,
-        message.channelType,
-        [],
-        undefined,
-        undefined,
-        groupTurn,
-      );
+      let result: Awaited<ReturnType<typeof rootAgent.handleMessage>>;
+      try {
+        result = await rootAgent.handleMessage(
+          resolvedSessionId,
+          message.userId,
+          messageContent,
+          message.channelType,
+          [],
+          undefined,
+          undefined,
+          groupTurn,
+        );
+      } catch (error) {
+        // `/stop` dropped this message while it waited behind the running
+        // turn: it never ran. Say so instead of reporting an error.
+        if (!isSessionTurnCancelled(error)) throw error;
+        if (unsubscribe) unsubscribe(); if (unsubAgentEvents) unsubAgentEvents(); stopTypingAndStall();
+        channelLogger.info({ channelType: message.channelType, sessionId: resolvedSessionId }, 'Queued channel message dropped by stop');
+        await umi.send(message.channelType, message.channelId, {
+          content: 'Not run: /stop dropped this message while it waited for the previous one.',
+          replyTo: platformMessageId,
+          threadId: replyThread,
+        });
+        return;
+      }
 
       // Unsubscribe from events
       if (unsubscribe) unsubscribe(); if (unsubAgentEvents) unsubAgentEvents(); stopTypingAndStall();

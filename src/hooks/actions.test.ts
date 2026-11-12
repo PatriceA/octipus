@@ -7,8 +7,11 @@ import type { TriggerContext } from './triggers';
 
 // The role-heartbeat path: the worker spawn is observed, never run.
 const spawned = vi.hoisted(() => ({ abortOnSpawn: undefined as AbortController | undefined, calls: [] as Array<{ role: string; task: string; input: string; context: Record<string, unknown>; overrides: Record<string, unknown> }> }));
+// The orchestrated path's root turn; a test sets what it does.
+const orchestrated = vi.hoisted(() => ({ handleMessage: undefined as undefined | (() => Promise<unknown>) }));
 vi.mock('@/core/agent', () => ({
   getAgentService: () => ({
+    handleMessage: () => orchestrated.handleMessage!(),
     spawnWorker: async (role: string, task: string, input: string, context: Record<string, unknown>, overrides: Record<string, unknown>) => {
       spawned.calls.push({ role, task, input, context, overrides });
       if (typeof overrides.onWorkerSpawned === 'function') overrides.onWorkerSpawned('heartbeat-worker');
@@ -176,6 +179,47 @@ describe('executeSpawnAgent: direct spawn', () => {
       expect(maxInFlight).toBe(1);
     } finally {
       direct.runImpl = undefined;
+    }
+  });
+
+  test('a queued run that /stop drops never runs, and its spawned agent is stopped', async () => {
+    const { cancelQueuedTurns, withSessionTurn } = await import('@/core/session-turn-lock');
+    let releaseTurn!: () => void;
+    const busy = withSessionTurn('hook-sess-stop', () => new Promise<void>(resolve => { releaseTurn = resolve; }));
+    const ran = vi.fn(async () => '');
+    direct.runImpl = ran;
+    direct.stops.length = 0;
+    try {
+      const r = await executeAction(hook({
+        userId: '77777777-7777-4777-8777-777777777777', trigger: 'webhook', action: 'spawn_agent', sessionId: 'hook-sess-stop',
+        actionConfig: { orchestrated: false, agentPrompt: 'triage' },
+      } as Partial<Hook>), ctx());
+      expect(r.success).toBe(true);
+      expect(cancelQueuedTurns('hook-sess-stop')).toBe(1);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(direct.stops.map(s => s.id)).toEqual(['agent-1']);
+      releaseTurn(); await busy;
+      expect(ran).not.toHaveBeenCalled();
+    } finally {
+      direct.runImpl = undefined;
+    }
+  });
+});
+
+describe('executeSpawnAgent: orchestrated', () => {
+  test('a turn /stop dropped from the session queue reports notRun instead of failing', async () => {
+    const { SessionTurnCancelledError } = await import('@/core/session-turn-lock');
+    orchestrated.handleMessage = async () => { throw new SessionTurnCancelledError('hook-sess'); };
+    try {
+      const r = await executeAction(hook({
+        userId: '77777777-7777-4777-8777-777777777777', trigger: 'webhook', action: 'spawn_agent', sessionId: 'hook-sess',
+        actionConfig: { orchestrated: true, agentPrompt: 'triage' },
+      } as Partial<Hook>), ctx());
+      expect(r.success).toBe(false);
+      expect(r.data).toMatchObject({ notRun: true, cancelled: true });
+      expect(r.error).toContain('/stop');
+    } finally {
+      orchestrated.handleMessage = undefined;
     }
   });
 });

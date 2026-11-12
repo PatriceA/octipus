@@ -248,7 +248,11 @@ export class AgentService {
      * renders, and model-facing notes already checked against the session.
      */
     inlineUi?: { renders?: readonly string[]; notes?: readonly string[]; provenanceId?: string },
-    internal?: { companionObservation?:boolean; companionBriefingModel?:string; companionBriefing?:boolean;companionBriefingBudget?:number },
+    internal?: {
+      companionObservation?:boolean; companionBriefingModel?:string; companionBriefing?:boolean;companionBriefingBudget?:number;
+      /** A `restart` send: wait ahead of every turn already queued in the session (session-turn-lock). */
+      queueFront?: boolean;
+    },
   ): Promise<TurnResult> {
     const turnTrigger = trigger ?? triggerForChannel(channel, !!groupTurn);
     // Controls must reach a running turn; queuing /stop behind it defeats cancellation.
@@ -293,7 +297,7 @@ export class AgentService {
         () => withProviderUsageContext({ userId }, () =>
           this.handleMessageInner(sessionId, userId, message, channel, attachedFiles, forcedOutputMode, false, groupTurn, turnTrigger)),
       );
-    });
+    }, { front: internal?.queueFront === true });
   }
 
   /** The user's single pending approval is still `id`, waiting in `sessionId` (read now, synchronously). */

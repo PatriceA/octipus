@@ -95,15 +95,15 @@ lockouts and the audit log use the same rule (`src/security/client-ip.ts`).
 | Message Type | Description |
 |---|---|
 | `auth` | Authentication handshake (must be first message) |
-| `chat.send` | Send a chat message to the root agent |
+| `chat.send` | Send a chat message to the root agent; optional `mode` (see [Send modes](#send-modes)) |
 | `chat.interject` | Side-channel question sent while root agent is running (non-blocking) |
-| `chat.steer` | Inject a message into the running root agent turn to change course mid-flight |
+| `chat.steer` | Inject a message into the running root agent turn to change course mid-flight; a text-only `chat.send` with the same `mode` |
 | `command` | Execute a gateway command (e.g., `/persona`, `/status`) |
 | `subscribe` | Subscribe to event patterns over your own events (e.g., `agent.*`) and/or `resources` (e.g., `artifact:<id>`), each access-checked |
 | `unsubscribe` | Remove event patterns and/or resources |
 | `permission.respond` | Approve/deny a permission request |
 | `approval.respond` | Approve/deny a pipeline approval (the requester only) |
-| `agent.stop` | Stop one of your own running agents |
+| `agent.stop` | Stop one of your own running agents; stopping a turn's root also drops the turns queued behind it (`agent.stopped` carries `droppedQueued`) |
 | `voice.set` | `{ sessionId, on }` — put one of your sessions into (or out of) voice mode for this connection: the propose-then-confirm gate applies, and its lifecycle is narrated to this connection as `voice.speak`. `on:false` counts only for the session this connection turned on; the session leaves voice mode when no connection of the user holds it there any more (also on close) |
 | `replay` | `{ sessionId, afterEventId? }` — the events of one of your own sessions after `afterEventId`, for a reconnecting client (answered with `replay`; without `afterEventId` the answer is `gap: true` with no events) |
 | `ping` | Heartbeat |
@@ -112,6 +112,39 @@ lockouts and the audit log use the same rule (`src/security/client-ip.ts`).
 server has not seen yet is created there. Without it, the connection's
 workspace (`?workspace=`, else your default) is used; an existing session
 keeps its own.
+
+### Send modes
+
+A session runs one turn at a time (`session-turn-lock.ts`). `mode` on
+`chat.send` and `chat.steer` says what to do when a turn is running:
+
+| `mode` | Running turn | Nothing running |
+|---|---|---|
+| `auto` (default) | Steer it when its root takes input mid-turn and the message is plain text (no files, not a command); else queue | Normal turn |
+| `queue` | Queue: its own turn after the running one and the turns already waiting | Normal turn |
+| `steer` | Steer it; refused when its root cannot take input mid-turn | Refused |
+| `restart` | Stop the session's agents as `/stop` does (each ends at its next boundary) and run this message next, ahead of the turns already waiting | Normal turn |
+
+The sender gets `chat.delivery` as soon as the server has decided:
+`{ sessionId, mode, outcome, ahead?, reason? }` with `outcome` one of
+`steered`, `queued` (`ahead` turns run first; 0 = starts now), `restarted` or
+`refused` (nothing stored; `reason` says why). `reason` on a `queued` says why
+`auto` did not steer. A steered message is also published as `chat.message`
+with `injected: true`.
+
+A buffered CLI root (`bufferOutput`: Mistral Vibe, Antigravity) reads guidance
+only with a later Octipus tool response and otherwise reports it unhandled at
+the end of its turn, so it does not take input mid-turn: `auto` queues the
+message as the next turn, `steer` is refused. The gateway asks the worker
+(`acceptsMidTurnSteering()`; a native worker takes it while running).
+
+`/stop` (chat command and the gateway `/abort` aliases), `agent.stop` on a
+root and `POST /api/agents/:id/stop` drop the turns waiting behind the running
+one; the reply says how many (`Stopped 1 running agent; 2 queued messages
+dropped.`). A dropped `chat.send` ends with `error` `CHAT_CANCELLED` and a
+`chat.error` whose payload has `cancelled: true`; it was never stored. A
+channel message gets a "Not run" reply; an orchestrated hook run reports
+`notRun`, and its webhook delivery is released so a redelivery can run it.
 
 ### Gateway → Client
 
@@ -127,6 +160,7 @@ keeps its own.
 | `events_dropped` | Notification that events were dropped from the replay buffer |
 | `permission.pending` | `{ requests, approvals }` — your open permission requests and root-agent approvals. Sent after every `subscribe` with patterns, and again after a `permission.respond` that found the request already answered. Authoritative: the client replaces its list |
 | `replay` | `{ sessionId, events, gap }` — answer to `replay`; `gap: true` when `afterEventId` is missing or no longer buffered and the client must reload from REST |
+| `chat.delivery` | `{ sessionId, mode, outcome, ahead?, reason? }` — what became of a `chat.send` / `chat.steer` ([Send modes](#send-modes)) |
 
 ### Pending snapshot
 

@@ -11,7 +11,7 @@ Chat commands are slash commands you can use in any channel (WebChat, Telegram, 
 | `/help` | Show available commands |
 | `/docs <query>` | Search the product documentation (setup, channels, providers, configuration) — returns matching sections directly, no LLM call |
 | `/status` | Check session status, running agents |
-| `/stop` | Stop all running agents in the session |
+| `/stop` | Stop all running agents in the session and drop the messages queued behind them (the reply says how many) |
 | `/clear` | Clear conversation context and start fresh |
 | `/model [name]` | Switch to a specific model for the session |
 | `/models` | List available models |

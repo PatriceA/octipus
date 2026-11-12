@@ -11,7 +11,8 @@ import { presenceAfterClose } from '@/core/rooms/presence';
 import { getCommandRegistry } from './commands';
 import { handleRoomFrame, isRoomFrame } from './room-handlers';
 import type { GatewayHub } from './hub';
-import type { ClientMessage, ConnectionContext, PendingApproval, PendingPermission, PermissionPendingMessage } from './protocol';
+import { cancelQueuedTurns, isSessionTurnCancelled, isSessionTurnRunning, queuedTurnCount } from '@/core/session-turn-lock';
+import type { ClientMessage, ConnectionContext, PendingApproval, PendingPermission, PermissionPendingMessage, SendMode, SendOutcome } from './protocol';
 
 /**
  * Inject a user message into a running root agent turn for this session, if
@@ -25,7 +26,15 @@ import type { ClientMessage, ConnectionContext, PendingApproval, PendingPermissi
  * react. The injected message is persisted so the transcript stays complete
  * (the steering queue itself does not persist).
  */
-type SteerableWorker = { steer: (m: { role: 'user'; content: string; timestamp: Date }) => void | boolean; canAcceptSteering?: () => boolean };
+type SteerableWorker = {
+  steer: (m: { role: 'user'; content: string; timestamp: Date }) => void | boolean;
+  canAcceptSteering?: () => boolean;
+  /** Will guidance reach the running turn (not only a later tool response or the next turn)? Absent: yes. */
+  acceptsMidTurnSteering?: () => boolean;
+};
+
+/** Why a message was not steered; `running` when a turn is running all the same. */
+export type SteerAttempt = { steered: true } | { steered: false; running: boolean; reason: string };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -87,39 +96,52 @@ export async function readPendingSnapshot(userId: string): Promise<Omit<Permissi
   return { requests, approvals };
 }
 
-/** Exported for unit tests. */
+/** Exported for unit tests. True when a live root agent absorbed the message. */
 export async function trySteerRunningRootAgent(sessionId: string, content: string, inlineUi?: InlineUiTurnNotes): Promise<boolean> {
-  // Slash commands must reach the command registry, never become model guidance.
-  if (content.trimStart().startsWith('/') || isSessionControlMessage(content)) return false;
+  return (await steerRunningRootAgent(sessionId, content, inlineUi)).steered;
+}
+
+/**
+ * `trySteerRunningRootAgent` with the reason it did not steer, for the send
+ * modes' `chat.delivery` answer. Nothing is stored unless it steered.
+ */
+export async function steerRunningRootAgent(sessionId: string, content: string, inlineUi?: InlineUiTurnNotes): Promise<SteerAttempt> {
   const { getAgentManager } = await import('@/core/agent-manager');
-  const mgr = getAgentManager();
-  const target = mgr
-    .getBySession(sessionId)
-    .filter((a) => a.getStatus() === 'running' && a.getContext().root === true && !a.getContext().metadata?.companionBriefing)
-    .find((a): a is typeof a & SteerableWorker => typeof (a as Partial<SteerableWorker>).steer === 'function');
-  if (!target || target.canAcceptSteering?.() === false) return false;
+  const running = getAgentManager().getBySession(sessionId)
+    .filter((a) => a.getStatus() === 'running' && a.getContext().root === true && !a.getContext().metadata?.companionBriefing);
+  const refuse = (reason: string): SteerAttempt => ({ steered: false, running: running.length > 0, reason });
+  // Slash commands must reach the command registry, never become model guidance.
+  if (content.trimStart().startsWith('/') || isSessionControlMessage(content)) return refuse('A command is never steered into a running turn.');
+  const target = running.find((a): a is typeof a & SteerableWorker => typeof (a as Partial<SteerableWorker>).steer === 'function');
+  if (!target) return refuse(running.length ? 'The running agent cannot take guidance.' : 'No turn is running in this session.');
+  if (target.canAcceptSteering?.() === false) return refuse('The running turn is finishing and takes no more guidance.');
+  // A buffered CLI (Vibe, Antigravity) would hold the guidance until a later
+  // tool response or report it unhandled at the end: not a live steer.
+  if (target.acceptsMidTurnSteering?.() === false) return refuse('The running agent cannot take input mid-turn.');
   // A room turn is never steered: a member's post is stored once by the
   // room, and a running room turn belongs to its requester alone (§6.3).
-  if (target.getContext().metadata?.room) return false;
+  if (target.getContext().metadata?.room) return refuse('A room turn is never steered.');
 
   // Guard the injected content exactly as handleMessage guards a normal turn —
-  // a steer must not be a hole around the input guard. On block, return false so
+  // a steer must not be a hole around the input guard. On block, refuse so
   // the caller falls through to the normal path, which surfaces the block.
   const { guardInput } = await import('@/core/agent/input-guard');
   if (guardInput(content).action === 'block') {
     coreLogger.warn({ sessionId }, 'Input guard blocked a steering message — routing through normal path');
-    return false;
+    return refuse('The input guard blocked this message.');
   }
 
   // Interactive-answer notes (reports, provenance) ride ahead of the steer
   // for the model, and on the row as its prompt context, like a normal turn.
   const notes = inlineUi?.notes.join('\n') ?? '';
-  if (target.steer({ role: 'user', content: notes ? `${notes}\n\n${content}` : content, timestamp: new Date() }) === false) return false;
+  if (target.steer({ role: 'user', content: notes ? `${notes}\n\n${content}` : content, timestamp: new Date() }) === false) {
+    return refuse('The running turn is finishing and takes no more guidance.');
+  }
 
   // Race guard: if the root agent finished between the status check and the
   // steer, its steering queue will never drain. Don't persist an orphaned user
   // message — fall back to a normal turn (the dead queue copy is harmless).
-  if (target.getStatus() !== 'running') return false;
+  if (target.getStatus() !== 'running') return { steered: false, running: false, reason: 'The running turn ended before the message arrived.' };
 
   try {
     const { messageRepository } = await import('@/db/repositories/message-repository');
@@ -133,7 +155,20 @@ export async function trySteerRunningRootAgent(sessionId: string, content: strin
   } catch (err) {
     coreLogger.error({ err, sessionId }, 'failed to persist steered user message');
   }
-  return true;
+  return { steered: true };
+}
+
+/**
+ * Stop the session's running turn for a `restart` send, the way `/stop` does
+ * (every agent of the session; each ends at its next boundary). The queued
+ * turns stay. Returns whether a root turn was running.
+ */
+async function interruptRunningTurn(sessionId: string, userId: string): Promise<boolean> {
+  const { getAgentManager } = await import('@/core/agent-manager');
+  const mgr = getAgentManager();
+  const running = mgr.getBySession(sessionId).some((a) => a.getStatus() === 'running' && a.getContext().root === true);
+  if (running) mgr.stopSession(sessionId, userId);
+  return running;
 }
 
 /**
@@ -307,23 +342,40 @@ async function handleChatSend(
     context.sessionId = message.sessionId;
 
     const userId = context.userId;
+    const mode: SendMode = message.mode ?? 'auto';
+    const deliver = (outcome: SendOutcome, extra: { ahead?: number; reason?: string } = {}) =>
+      hub.connectionManager.sendToConnection(connectionId, { type: 'chat.delivery', sessionId: message.sessionId, mode, outcome, ...extra });
 
     // If a root agent turn is already running for this session, steer it
-    // with this message instead of spawning a concurrent turn. Keeps one live
-    // root agent per session; the user can redirect work mid-flight.
+    // with this message instead of spawning a concurrent turn (`auto`,
+    // `steer`). Keeps one live root agent per session; the user can redirect
+    // work mid-flight. A root that cannot take input mid-turn (a buffered
+    // CLI) gets the message as its next turn instead.
     const inlineUiNotes = await resolveInlineUiTurnNotes(message.sessionId, message.inlineUi);
-    if (!message.attachments?.length && !message.fileRefs?.length && await trySteerRunningRootAgent(message.sessionId, message.content, inlineUiNotes)) {
-      hub.publishEvent({
-        type: 'chat.message',
-        source: `steer:${connectionId}`,
-        userId,
-        sessionId: message.sessionId,
-        payload: {
-          role: 'user', content: message.content, injected: true,
-          ...(inlineUiNotes.provenanceId ? { inlineUiProvenance: { id: inlineUiNotes.provenanceId } } : {}),
-        },
-      });
-      return;
+    let queuedBecause: string | undefined;
+    if (mode === 'auto' || mode === 'steer') {
+      const steer: SteerAttempt = message.attachments?.length || message.fileRefs?.length
+        ? { steered: false, running: isSessionTurnRunning(message.sessionId), reason: 'A message with files is never steered; it runs as its own turn.' }
+        : await steerRunningRootAgent(message.sessionId, message.content, inlineUiNotes);
+      if (steer.steered) {
+        hub.publishEvent({
+          type: 'chat.message',
+          source: `steer:${connectionId}`,
+          userId,
+          sessionId: message.sessionId,
+          payload: {
+            role: 'user', content: message.content, injected: true,
+            ...(inlineUiNotes.provenanceId ? { inlineUiProvenance: { id: inlineUiNotes.provenanceId } } : {}),
+          },
+        });
+        deliver('steered');
+        return;
+      }
+      if (mode === 'steer') {
+        deliver('refused', { reason: steer.reason });
+        return;
+      }
+      if (steer.running) queuedBecause = steer.reason;
     }
 
     // A new session is created in the send's workspace: the one the message
@@ -421,19 +473,27 @@ async function handleChatSend(
       message.content += '\n\n' + uploaded.map(file => `Attached file: ${file.path}`).join('\n');
     }
 
+    // `restart`: stop the running turn and go ahead of the queued ones. A
+    // command is never a restart (`/stop` and friends act at once anyway).
+    const front = mode === 'restart' && !message.content.trimStart().startsWith('/');
+    const restarted = front && await interruptRunningTurn(message.sessionId, userId);
+    if (restarted) deliver('restarted');
+    else {
+      const running = isSessionTurnRunning(message.sessionId) ? 1 : 0;
+      const ahead = isSessionControlMessage(message.content) ? 0 : front ? running : running + queuedTurnCount(message.sessionId);
+      const reason = mode !== 'restart' ? queuedBecause
+        : !front ? 'A command is never a restart.'
+          : running ? 'The running turn had no agent to stop yet; this message runs next.' : 'No turn was running to restart.';
+      deliver('queued', { ahead, ...(reason ? { reason } : {}) });
+    }
+
     // Route through root agent
-    const result = await rootAgent.handleMessage(
-      message.sessionId,
-      userId,
-      message.content,
-      context.clientType,
-      message.fileRefs,
-      message.outputMode,
-      undefined,
-      undefined,
-      undefined,
-      { renders: message.renders, notes: inlineUiNotes.notes, provenanceId: inlineUiNotes.provenanceId },
-    );
+    const turnInlineUi = { renders: message.renders, notes: inlineUiNotes.notes, provenanceId: inlineUiNotes.provenanceId };
+    const result = front
+      ? await rootAgent.handleMessage(message.sessionId, userId, message.content, context.clientType, message.fileRefs, message.outputMode,
+        undefined, undefined, undefined, turnInlineUi, { queueFront: true })
+      : await rootAgent.handleMessage(message.sessionId, userId, message.content, context.clientType, message.fileRefs, message.outputMode,
+        undefined, undefined, undefined, turnInlineUi);
 
     // Send response back through gateway
     hub.publishEvent({
@@ -446,10 +506,14 @@ async function handleChatSend(
 
     await publishSessionStats(hub, context.userId, message.sessionId);
   } catch (err) {
-    coreLogger.error({ err, connectionId, userId: context.userId }, 'Chat send error');
+    // `/stop` dropped this message while it waited behind the running turn:
+    // it never ran and was never stored.
+    const cancelled = isSessionTurnCancelled(err);
+    if (cancelled) coreLogger.info({ connectionId, sessionId: message.sessionId }, 'Queued chat message dropped by stop');
+    else coreLogger.error({ err, connectionId, userId: context.userId }, 'Chat send error');
     hub.connectionManager.sendToConnection(connectionId, {
       type: 'error',
-      code: 'CHAT_ERROR',
+      code: cancelled ? 'CHAT_CANCELLED' : 'CHAT_ERROR',
       message: (err as Error).message,
     });
     // Every tab of the user showing this session stops waiting on the turn.
@@ -458,7 +522,7 @@ async function handleChatSend(
       source: 'rootAgent',
       userId: context.userId,
       sessionId: message.sessionId,
-      payload: { error: (err as Error).message },
+      payload: { error: (err as Error).message, ...(cancelled ? { cancelled: true } : {}) },
     });
   }
 }
@@ -721,9 +785,10 @@ async function handleApprovalRespond(
 }
 
 /**
- * Explicit mid-run steer. Injects into the running root agent turn; if none
- * is running for the session, falls back to treating it as a normal chat.send
- * so a steer is always safe to fire.
+ * Explicit mid-run steer: a text-only `chat.send` with the frame's `mode`.
+ * With `auto` (the default) a session where nothing running takes guidance
+ * gets it as a normal turn, so a steer is always safe to fire; `steer`
+ * refuses instead. The answer is `chat.delivery`.
  */
 async function handleChatSteer(
   hub: GatewayHub,
@@ -731,40 +796,12 @@ async function handleChatSteer(
   context: ConnectionContext,
   message: Extract<ClientMessage, { type: 'chat.steer' }>,
 ): Promise<void> {
-  try {
-    const refused = await sessionAccessError(message.sessionId, context);
-    if (refused) {
-      hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'SESSION_NOT_FOUND', message: refused });
-      return;
-    }
-    context.sessionId = message.sessionId;
-    const userId = context.userId;
-
-    if (await trySteerRunningRootAgent(message.sessionId, message.content)) {
-      hub.publishEvent({
-        type: 'chat.message',
-        source: `steer:${connectionId}`,
-        userId,
-        sessionId: message.sessionId,
-        payload: { role: 'user', content: message.content, injected: true },
-      });
-      return;
-    }
-
-    // Nothing running — behave like a normal send.
-    await handleChatSend(hub, connectionId, context, {
-      type: 'chat.send',
-      sessionId: message.sessionId,
-      content: message.content,
-    });
-  } catch (err) {
-    coreLogger.error({ err, sessionId: message.sessionId }, 'chat.steer failed');
-    hub.connectionManager.sendToConnection(connectionId, {
-      type: 'error',
-      code: 'STEER_ERROR',
-      message: (err as Error).message,
-    });
-  }
+  await handleChatSend(hub, connectionId, context, {
+    type: 'chat.send',
+    sessionId: message.sessionId,
+    content: message.content,
+    ...(message.mode ? { mode: message.mode } : {}),
+  });
 }
 
 async function handleAgentStop(
@@ -792,13 +829,16 @@ async function handleAgentStop(
       try { await (await import('@/core/companion/user-control')).recordCompanionOwnerStop(agent.getContext().sessionId, context.userId); }
       catch (error) { coreLogger.error({ error, sessionId: agent.getContext().sessionId }, 'Could not persist Companion owner stop'); }
     }
+    // Stopping a turn's root also drops the turns queued behind it, as `/stop`
+    // does: first, so none of them starts in the gap the stopped turn leaves.
+    const droppedQueued = agent.getContext().root ? cancelQueuedTurns(agent.getContext().sessionId) : 0;
     agentManager.stop(message.agentId, { actorUserId: context.userId });
 
     hub.publishEvent({
       type: 'agent.stopped',
       source: `user:${context.userId}`,
       userId: context.userId,
-      payload: { agentId: message.agentId, stoppedBy: context.userId },
+      payload: { agentId: message.agentId, stoppedBy: context.userId, ...(droppedQueued ? { droppedQueued } : {}) },
     });
   } catch (err) {
     coreLogger.error({ err, connectionId, agentId: message.agentId }, 'Agent stop error');

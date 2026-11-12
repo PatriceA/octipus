@@ -253,12 +253,20 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
         const { getAgentManager } = await import('@/core/agent-manager');
         const agentManager = getAgentManager();
         // The caller's own agents, never every user's on the install.
-        const running = agentManager.getByUser(ctx.userId).filter(a => a.getStatus() === 'running').length;
-        if (running === 0) {
-          return { text: 'No running agents to stop.' };
+        const runningAgents = agentManager.getByUser(ctx.userId).filter(a => a.getStatus() === 'running');
+        // Messages queued behind a stopped turn are dropped with it (the
+        // sessions whose root runs, and the connection's own session).
+        const { cancelQueuedTurns } = await import('@/core/session-turn-lock');
+        const sessions = new Set(runningAgents.filter(a => a.getContext().root === true).map(a => a.getContext().sessionId));
+        if (ctx.sessionId) sessions.add(ctx.sessionId);
+        let dropped = 0;
+        for (const sessionId of sessions) dropped += cancelQueuedTurns(sessionId);
+        const droppedText = dropped ? `; ${dropped} queued message${dropped > 1 ? 's' : ''} dropped` : '';
+        if (runningAgents.length === 0) {
+          return { text: dropped ? `No running agents to stop${droppedText}.` : 'No running agents to stop.' };
         }
         const stopped = agentManager.stopUser(ctx.userId, ctx.userId);
-        return { text: `Stopped ${stopped} running agent(s).` };
+        return { text: `Stopped ${stopped} running agent(s)${droppedText}.` };
       } catch (err) {
         coreLogger.error({ err, userId: ctx.userId }, 'abort command failed');
         return { text: `Error stopping agents: ${(err as Error).message}` };

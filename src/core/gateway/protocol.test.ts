@@ -63,6 +63,14 @@ describe('Protocol', () => {
       expect(result.ok).toBe(true);
     });
 
+    test.each(['chat.send', 'chat.steer'])('%s takes a send mode and rejects an unknown one', type => {
+      const frame = (mode: string) => JSON.stringify({ type, sessionId: '550e8400-e29b-41d4-a716-446655440000', content: 'next', mode });
+      for (const mode of ['auto', 'queue', 'steer', 'restart']) {
+        expect(parseClientMessage(frame(mode))).toMatchObject({ ok: true, message: { mode } });
+      }
+      expect(parseClientMessage(frame('interrupt'))).toMatchObject({ ok: false });
+    });
+
     test('rejects chat.steer with empty content', () => {
       const result = parseClientMessage(JSON.stringify({
         type: 'chat.steer',

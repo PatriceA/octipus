@@ -194,6 +194,13 @@ export class CLIAgentWorker extends BaseAgentWorker {
   }
   private pendingGuidanceCount(): number { return this.steeringQueue.length + this.pendingCodexGuidance.size; }
   canAcceptSteering(): boolean { return this.acceptingSteering && !this.aborted; }
+  /**
+   * Will guidance sent now reach THIS turn? A buffered CLI (bufferOutput:
+   * Vibe, Antigravity) reads it only with a later Octipus tool response and
+   * otherwise reports it unhandled at the end, so a user message is better
+   * queued as the next turn (gateway send modes).
+   */
+  acceptsMidTurnSteering(): boolean { return this.canAcceptSteering() && getCLIToolConfig(this.context.model)?.bufferOutput !== true; }
   private liveGuidance = new Map<string, AgentMessage[]>();
   /**
    * Unacknowledged live guidance an Octipus tool response has already gone

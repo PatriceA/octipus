@@ -124,3 +124,16 @@ it('does not report guidance as queued when the child refuses it', async () => {
   expect(output).toContain('did not deliver');
   expect(output).not.toContain('Guidance queued');
 });
+
+it('tells the parent when a buffered CLI child sees guidance only at its next tool response', async () => {
+  const steer = vi.fn(() => true);
+  state.get.mockReset();
+  state.get.mockReturnValue({ getContext: () => ({ userId: 'u', sessionId: 's' }), getStatus: () => 'running', steer, acceptsMidTurnSteering: () => false });
+  const parent = {
+    listPendingDetached: () => [{ childId: 'h1', agentId: 'vibe-child' }],
+    getContext: () => ({ userId: 'u', sessionId: 's' }),
+  } as unknown as AgentWorker;
+  const output = await createSteerChildTool({ current: parent }).execute({ childId: 'h1', message: 'change' }, {} as never);
+  expect(output).toContain('Guidance queued');
+  expect(output).toContain('cannot take input mid-turn');
+});
