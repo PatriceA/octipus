@@ -52,7 +52,8 @@ session (`octipus_get_messages`).
 
 Inside a CLI agent run, every Octipus tool that changes something also takes an
 optional `clientRequestId`: a retried call whose first response was lost gets
-that response instead of running again (kept for the run). `create_pipeline`
+that response instead of running again (kept for the run; the same key with
+different arguments is refused with `CLIENT_REQUEST_ID_REUSED`). `create_pipeline`
 keeps its key for 24 h, so a retry on a later turn returns the existing
 pipeline.
 

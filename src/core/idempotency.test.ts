@@ -6,7 +6,8 @@
  */
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from 'vitest';
 import { closeStorage, getStorageProvider, initializeStorage } from '@/db/storage';
-import { _resetIdempotency, runIdempotent } from './idempotency';
+import { sha256 } from '@/utils/crypto';
+import { _resetIdempotency, canonical, runIdempotent } from './idempotency';
 
 beforeAll(() => { initializeStorage({ mode: 'embedded' }); });
 afterAll(async () => { await closeStorage(); });
@@ -87,4 +88,60 @@ test('with the shared store down, dedupe still holds within the process', async 
   } finally {
     for (const spy of spies) spy.mockRestore();
   }
+});
+
+const rowKey = (key: string) => `idempotency:s:u:${sha256(key)}`;
+
+test('a renewal in flight when the key is released cannot bring the claim back', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  const provider = getStorageProvider();
+  const renew = provider.setRawIfAbsentOrEqual.bind(provider);
+  let landRenewal!: () => void;
+  const spy = vi.spyOn(provider, 'setRawIfAbsentOrEqual').mockImplementation(async (k, v, ttl) => {
+    await new Promise<void>(r => { landRenewal = r; });
+    return renew(k, v, ttl);
+  });
+  try {
+    const key = fresh();
+    let finishRun!: () => void;
+    const outcome = runIdempotent({ userId: 'u', scope: 's', key, keep: () => false,
+      run: () => new Promise<string>(r => { finishRun = () => r('nothing created'); }) });
+    await vi.waitFor(() => expect(finishRun).toBeTypeOf('function'));
+    vi.advanceTimersByTime(5 * 60_000);
+    expect(spy).toHaveBeenCalledOnce();
+    finishRun();
+    await new Promise(r => setTimeout(r, 10));
+    landRenewal();
+    await outcome;
+    expect(await provider.getRaw(rowKey(key))).toBeNull();
+  } finally {
+    spy.mockRestore();
+    vi.useRealTimers();
+  }
+});
+
+test('a key found free after the join deadline is claimed, not reported in progress', async () => {
+  const provider = getStorageProvider();
+  const claim = vi.spyOn(provider, 'setRawIfAbsent').mockResolvedValueOnce(false);
+  try {
+    const run = vi.fn(async () => 'ran');
+    expect(await runIdempotent({ userId: 'u', scope: 's', key: fresh(), run, joinWaitMs: 0 })).toEqual({ kind: 'fresh', value: 'ran' });
+  } finally {
+    claim.mockRestore();
+  }
+});
+
+test('meta is dropped once the outcome is stored; `stored` decides what a replay gets', async () => {
+  const key = fresh();
+  const run = async (track: { setMeta(m: Record<string, unknown>): Promise<void> }) => {
+    await track.setMeta({ sessionId: 's' });
+    return 'a long answer';
+  };
+  expect(await runIdempotent({ userId: 'u', scope: 's', key, run, stored: v => v.slice(0, 6) })).toEqual({ kind: 'fresh', value: 'a long answer' });
+  expect(await getStorageProvider().getRaw(`${rowKey(key)}:meta`)).toBeNull();
+  expect(await runIdempotent({ userId: 'u', scope: 's', key, run })).toEqual({ kind: 'replayed', value: 'a long' });
+});
+
+test('canonical JSON ignores key order and undefined fields', () => {
+  expect(canonical({ b: [1, { y: 2, x: 1 }], a: undefined, c: 'x' })).toBe(canonical({ c: 'x', b: [1, { x: 1, y: 2 }] }));
 });

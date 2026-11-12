@@ -52,6 +52,25 @@ test('a retry past the join wait gets 409 with what the running request recorded
   expect((await first).status).toBe(201);
 });
 
+test('a tool failure inside a 200 `{ result }` envelope is not kept', async () => {
+  const runs = vi.fn()
+    .mockResolvedValueOnce({ result: { error: 'Calendar unavailable' } })
+    .mockResolvedValueOnce({ result: { success: false } })
+    .mockResolvedValueOnce({ result: { id: 'task-1' } });
+  const tools = new Elysia()
+    .derive(() => ({ user: { id: 'u1' } }))
+    .post('/exec', idempotent('exec', async () => runs()));
+  const exec = () => tools.handle(new Request('http://test/exec', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'tool-k' }, body: '{}',
+  }));
+  await exec();
+  await exec();
+  expect(await (await exec()).json()).toEqual({ result: { id: 'task-1' } });
+  const replay = await exec();
+  expect(replay.headers.get('idempotent-replayed')).toBe('true');
+  expect(runs).toHaveBeenCalledTimes(3);
+});
+
 test('an overlong key is refused; no key or no user runs the handler as before', async () => {
   expect((await post({ n: 2 }, 'x'.repeat(300))).status).toBe(400);
   created.mockClear();

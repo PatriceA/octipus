@@ -66,6 +66,16 @@ test('the same key for another message is refused; no key runs every time', asyn
   expect(f.handle).toHaveBeenCalledTimes(3);
 });
 
+test('a long answer is kept cut for a replay, pointing at its session', async () => {
+  f.handle.mockReset();
+  f.handle.mockImplementation(async (sessionId: string) => ({ response: 'x'.repeat(20_000), sessionId }));
+  expect((await (await post({ message: 'essay', sessionId: 'existing' }, 'retry-long')).json()).response).toHaveLength(20_000);
+  const replay = await (await post({ message: 'essay', sessionId: 'existing' }, 'retry-long')).json();
+  expect(replay.truncated).toBe(true);
+  expect(replay.response).toContain('full text is in session existing');
+  expect(f.handle).toHaveBeenCalledOnce();
+});
+
 test('a failed turn frees the key, so the retry runs', async () => {
   f.handle.mockReset();
   f.handle.mockRejectedValueOnce(new Error('model down'));

@@ -324,4 +324,21 @@ describe('create_pipeline clientRequestId (retry key)', () => {
     expect(await turn().execute({ ...args, description: 'Something else' }, context)).toContain('already used for a different');
     expect(createAndRunPipeline).toHaveBeenCalledOnce();
   });
+
+  it('two calls with one key in the same turn start one pipeline; params key order does not matter', async () => {
+    const { initializeStorage } = await import('@/db/storage');
+    initializeStorage({ mode: 'embedded' });
+    const createAndRunPipeline = vi.fn(async (_title, _template, _description, _context, options) => {
+      await new Promise(r => setTimeout(r, 20)); options.onCreated('pipeline-c'); return new Promise(() => {});
+    });
+    const args = { title: 'Build', templateName: 'Build', description: 'Implement', params: { a: 1, b: 2 }, clientRequestId: 'req-concurrent' };
+    const tool = createMetaTools({ createAndRunPipeline } as never).find(t => t.name === 'create_pipeline')!;
+    const [a, b] = await Promise.all([tool.execute(args, context), tool.execute(args, context)]);
+    expect(a).toMatchObject({ id: 'pipeline-c' });
+    expect(b).toMatchObject({ id: 'pipeline-c' });
+    fixture.find.mockResolvedValue({ id: 'pipeline-c', status: 'running' });
+    const later = createMetaTools({ createAndRunPipeline } as never).find(t => t.name === 'create_pipeline')!;
+    expect(await later.execute({ ...args, params: { b: 2, a: 1 } }, context)).toMatchObject({ id: 'pipeline-c', replayed: true });
+    expect(createAndRunPipeline).toHaveBeenCalledOnce();
+  });
 });

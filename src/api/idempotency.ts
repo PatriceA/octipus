@@ -18,6 +18,7 @@
  */
 import type { Ctx } from '@/api/http';
 import {
+  canonical,
   DEFAULT_JOIN_WAIT_MS,
   type IdempotencyTrack,
   MAX_IDEMPOTENCY_KEY_LENGTH,
@@ -46,21 +47,18 @@ export function idempotencyTrack(request: Request | undefined): IdempotencyTrack
   return request ? tracks.get(request) : undefined;
 }
 
-/** Key order must not change the fingerprint. */
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (value !== null && typeof value === 'object') {
-    return `{${Object.keys(value).sort()
-      .filter(key => (value as Record<string, unknown>)[key] !== undefined)
-      .map(key => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`).join(',')}}`;
-  }
-  return JSON.stringify(value) ?? 'null';
+/** A body that reports a failure, at the top level or in a tool's `result` envelope. */
+function reportsFailure(body: unknown): boolean {
+  if (!body || typeof body !== 'object') return false;
+  const record = body as Record<string, unknown>;
+  return 'error' in record || record.success === false;
 }
 
 function succeeded(status: number, body: unknown): boolean {
   if (status >= 400) return false;
   if (body instanceof Response || body instanceof ReadableStream) return false;
-  return !(body && typeof body === 'object' && 'error' in body);
+  // POST /tools/…/execute answers 200 `{ result }` even when the tool failed.
+  return !reportsFailure(body) && !reportsFailure((body as { result?: unknown } | null)?.result);
 }
 
 interface StoredResponse { status: number; body: unknown }
@@ -68,6 +66,8 @@ interface StoredResponse { status: number; body: unknown }
 export interface IdempotentRouteOptions {
   /** What identifies the request; default `{ params, body }`. */
   fingerprint?: (ctx: Ctx) => unknown;
+  /** The body to keep for a replay, when the full one is larger than a retry needs. */
+  stored?: (body: unknown) => unknown;
   joinWaitMs?: number;
 }
 
@@ -99,6 +99,7 @@ export function idempotent(
         return { status: typeof ctx.set.status === 'number' ? ctx.set.status : 200, body };
       },
       keep: (r) => succeeded(r.status, r.body),
+      stored: options.stored ? (r) => ({ status: r.status, body: options.stored!(r.body) }) : undefined,
     });
     switch (outcome.kind) {
       case 'fresh':

@@ -59,10 +59,12 @@ characters). Anything else is refused with 400; a valid one is echoed back as
 `Idempotency-Key` header (or `X-Idempotency-Key`, at most 255 characters).
 Keys are per user and per endpoint. Without the header nothing changes.
 
-- First request: runs. A success (status below 400, no `error` field) is kept
-  for 24 h; a failure frees the key so a retry runs again.
+- First request: runs. A success (status below 400, no `error` field, and for
+  tool execution no `result.error` / `result.success: false`) is kept for 24 h;
+  a failure frees the key so a retry runs again.
 - Retry after it finished: the stored status and body, with
-  `Idempotent-Replayed: true`. A chat retry does not add the message again or
+  `Idempotent-Replayed: true` (a chat answer over 16k characters is replayed
+  cut, naming the session that holds it). A chat retry does not add the message again or
   start a second turn.
 - Retry while it still runs: waits for it up to ~20 s, then answers
   `409 { code: "idempotency_in_progress", status: "in_progress", sessionId? }`

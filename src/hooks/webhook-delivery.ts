@@ -12,6 +12,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Hook } from '@/db/schema/hooks';
 import { getStorageProvider } from '@/db/storage';
+import { ExpiringLru } from '@/db/storage/expiring-lru';
 import { sha256 } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
 import type { TriggerContext, TriggerEvent } from './triggers';
@@ -91,27 +92,15 @@ export function getDeliveryId(headers: Headers): string | null {
 // in-process LRU is consulted only when the store errors, as a best-effort
 // fallback (dedupe then only holds within this process).
 
-/** key -> expiry (epoch ms). Map insertion order is LRU order. */
-const fallback = new Map<string, number>();
+/** Delivery ids seen while the store errors (value unused; presence is the claim). */
+const fallback = new ExpiringLru<true>(LRU_MAX_ENTRIES);
 
 function fallbackHas(key: string): boolean {
-  const expiresAt = fallback.get(key);
-  if (expiresAt === undefined) return false;
-  if (expiresAt <= Date.now()) {
-    fallback.delete(key);
-    return false;
-  }
-  return true;
+  return fallback.has(key);
 }
 
 function fallbackSet(key: string, ttlSeconds: number): void {
-  fallback.delete(key);
-  fallback.set(key, Date.now() + ttlSeconds * 1000);
-  while (fallback.size > LRU_MAX_ENTRIES) {
-    const oldest = fallback.keys().next().value;
-    if (oldest === undefined) break;
-    fallback.delete(oldest);
-  }
+  fallback.set(key, true, ttlSeconds);
 }
 
 /** Hashed so an arbitrarily long / odd sender id can't blow up the key. */

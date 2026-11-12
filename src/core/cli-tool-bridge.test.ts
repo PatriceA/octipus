@@ -393,6 +393,54 @@ describe('clientRequestId retry key', () => {
     expect(execute).toHaveBeenCalledTimes(2);
   });
 
+  it('an empty key is no key, and a key reused with other arguments is refused', async () => {
+    const execute = vi.fn(async (_name: string, args: Record<string, unknown>) => ({ content: [{ type: 'text' as const, text: JSON.stringify(args) }] }));
+    const bridge = await startCliToolBridge({ active: () => true,
+      tools: () => [{ name: 'create_task', description: '', parameters: { type: 'object' }, execute: async () => null }], execute });
+    bridges.push(bridge);
+    await keyedCall(bridge.url, bridge.key, 'create_task', { title: 'a', clientRequestId: '  ' });
+    await keyedCall(bridge.url, bridge.key, 'create_task', { title: 'b', clientRequestId: '' });
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute.mock.calls[0][1]).toEqual({ title: 'a' });
+    await keyedCall(bridge.url, bridge.key, 'create_task', { title: 'a', priority: 1, clientRequestId: 'k' });
+    // Same arguments in another key order: the same call.
+    const same = await keyedCall(bridge.url, bridge.key, 'create_task', { priority: 1, title: 'a', clientRequestId: ' k ' });
+    expect((await same.json()).content[0].text).toContain('not run again');
+    const other = await keyedCall(bridge.url, bridge.key, 'create_task', { title: 'c', clientRequestId: 'k' });
+    expect(other.status).toBe(400);
+    expect(await other.json()).toMatchObject({ code: 'CLIENT_REQUEST_ID_REUSED', executed: false });
+    expect(execute).toHaveBeenCalledTimes(3);
+  });
+
+  it('a retry joining a queued call that is dropped before it runs executes the call itself', async () => {
+    let release!: () => void;
+    const blocker = new Promise<void>(resolve => { release = resolve; });
+    const execute = vi.fn(async (name: string) => {
+      if (name === 'slow') await blocker;
+      return { content: [{ type: 'text' as const, text: `${name} done` }] };
+    });
+    const bridge = await startCliToolBridge({ active: () => true,
+      tools: () => ['slow', 'create_task'].map(name => ({ name, description: '', parameters: { type: 'object' }, execute: async () => null })), execute });
+    bridges.push(bridge);
+    const slow = call(bridge.url, bridge.key, 'slow');
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+    // Queued behind `slow`; its caller leaves before it runs.
+    const ac = new AbortController();
+    const first = keyedCall(bridge.url, bridge.key, 'create_task', { clientRequestId: 'q' }, ac.signal).catch(() => null);
+    await new Promise(r => setTimeout(r, 30));
+    const retry = keyedCall(bridge.url, bridge.key, 'create_task', { clientRequestId: 'q' });
+    await new Promise(r => setTimeout(r, 30));
+    ac.abort();
+    await first;
+    await new Promise(r => setTimeout(r, 30));
+    release();
+    await slow;
+    const response = await retry;
+    expect(response.status).toBe(200);
+    expect((await response.json()).content.at(-1).text).toBe('create_task done');
+    expect(execute.mock.calls.filter(([name]) => name === 'create_task')).toHaveLength(1);
+  });
+
   it('a failed call is not kept, so its retry runs', async () => {
     const execute = vi.fn()
       .mockResolvedValueOnce({ isError: true, content: [{ type: 'text', text: 'boom' }] })

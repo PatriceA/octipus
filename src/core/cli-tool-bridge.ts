@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { z } from 'zod';
 import { agentLogger } from '@/utils/logger';
 import type { ToolHandler } from './agent-base';
+import { canonical } from './idempotency';
 
 /**
  * A refusal the calling CLI agent is meant to read and act on ("that tool is
@@ -89,7 +90,7 @@ export async function startCliToolBridge(options: {
   // Settles when the call ahead settles or passes its own deadline; a queued call's wait clock starts there.
   let queueBounded = Promise.resolve();
   // Calls made with a retry key, by tool and key: a retry is answered from here.
-  const keyed = new Map<string, Promise<BridgeResult>>();
+  const keyed = new Map<string, { operation: Promise<BridgeResult>; fingerprint: string; started: () => boolean }>();
   const server = createServer(async (req, res) => {
     const reply = (status: number, value: unknown) => {
       res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -193,31 +194,55 @@ export async function startCliToolBridge(options: {
       // calls if ToolExecutor's counters/final-flag are ever made concurrency-safe.
       let operation: Promise<BridgeResult>;
       const handler = options.tools().find(t => t.name === input.name);
-      const requestKey = typeof input.arguments[RETRY_KEY] === 'string' && handler && retryable(handler) && !unqueued(input.name)
-        ? `${input.name}\u0000${input.arguments[RETRY_KEY]}` : undefined;
+      const rawKey = input.arguments[RETRY_KEY];
+      const clientRequestId = typeof rawKey === 'string' ? rawKey.trim() : '';
       // The tool's own schema may take the key (create_pipeline keeps it across turns); otherwise it is the bridge's alone.
-      if (requestKey && !(handler?.parameters as { properties?: Record<string, unknown> }).properties?.[RETRY_KEY]) {
+      if (rawKey !== undefined && handler && !(handler.parameters as { properties?: Record<string, unknown> })?.properties?.[RETRY_KEY]) {
         delete input.arguments[RETRY_KEY];
       }
+      // An empty key is no key: distinct calls must not share one.
+      const requestKey = clientRequestId && handler && retryable(handler) && !unqueued(input.name)
+        ? `${input.name}\u0000${clientRequestId}` : undefined;
+      const fingerprint = requestKey
+        ? canonical(Object.fromEntries(Object.entries(input.arguments).filter(([name]) => name !== RETRY_KEY))) : '';
       const earlier = requestKey ? keyed.get(requestKey) : undefined;
-      const ahead = unqueued(input.name) || earlier ? Promise.resolve() : queueBounded;
-      if (earlier) {
-        // This request runs nothing; it waits on the first call within its own deadline.
-        started = true; settled = true;
-        arm(executionBudget);
-        operation = earlier.then(result => ({ ...result, content: [{ type: 'text' as const, text: REPLAY_NOTE }, ...result.content] }));
-      } else if (unqueued(input.name)) operation = run();
-      else {
+      if (earlier && earlier.fingerprint !== fingerprint) {
+        throw new BridgeError(`clientRequestId "${clientRequestId}" was already used for a different ${input.name} call in this run. Use a new clientRequestId for new work.`,
+          'CLIENT_REQUEST_ID_REUSED', false);
+      }
+      const enqueue = () => {
         queueBounded = mine;
-        operation = queue.then(run); queue = operation.then(() => undefined, () => undefined);
-      }
-      if (requestKey && !earlier) {
-        keyed.set(requestKey, operation);
+        const queued = queue.then(run); queue = queued.then(() => undefined, () => undefined);
+        return queued;
+      };
+      const remember = (call: Promise<BridgeResult>) => {
+        if (!requestKey) return;
+        const entry = { operation: call, fingerprint, started: () => started };
+        keyed.set(requestKey, entry);
         // A call that did not run, or failed, may be retried for real.
-        const forget = () => { if (keyed.get(requestKey) === operation) keyed.delete(requestKey); };
-        operation.then(result => { if (result.isError) forget(); }, forget);
+        const forget = () => { if (keyed.get(requestKey) === entry) keyed.delete(requestKey); };
+        call.then(result => { if (result.isError) forget(); }, forget);
         while (keyed.size > RETRY_KEYS_KEPT) keyed.delete(keyed.keys().next().value as string);
-      }
+      };
+      // A joining retry has no queue wait of its own; it is bounded by the execution clock armed below.
+      const ahead = unqueued(input.name) ? Promise.resolve() : earlier ? new Promise<void>(() => {}) : queueBounded;
+      if (earlier) {
+        // Wait on the first call within this request's own deadline.
+        arm(executionBudget);
+        operation = earlier.operation.then(
+          result => ({ ...result, content: [{ type: 'text' as const, text: REPLAY_NOTE }, ...result.content] }),
+          err => {
+            // The first call was dropped before it ran (its caller left while
+            // it queued): nothing happened, so this request runs it itself
+            // rather than inheriting that cancellation.
+            if (earlier.started() || expired || res.destroyed) throw err;
+            const own = enqueue();
+            remember(own);
+            return own;
+          });
+      } else if (unqueued(input.name)) operation = run();
+      else operation = enqueue();
+      if (requestKey && !earlier) remember(operation);
       void ahead.then(() => { if (!started && !expired) arm(base); });
       operation.then(bounded, bounded);
       let result: BridgeResult;

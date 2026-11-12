@@ -74,6 +74,24 @@ async function toolsUsedForTurn(sessionId: string, since: Date): Promise<string[
   }
 }
 
+/** Longest answer kept for an `Idempotency-Key` replay; the session holds the full text. */
+const REPLAY_RESPONSE_CHARS = 16_000;
+
+/**
+ * The reply kept for 24 h under an `Idempotency-Key` (the MCP server keys
+ * every chat call): a long answer is cut, pointing at the session that holds
+ * it, so the kv store does not carry every full answer for a day.
+ */
+function compactChatReply(body: unknown): unknown {
+  const reply = body as { response?: unknown; sessionId?: string } | null;
+  if (!reply || typeof reply.response !== 'string' || reply.response.length <= REPLAY_RESPONSE_CHARS) return body;
+  return {
+    ...reply,
+    response: `${reply.response.slice(0, REPLAY_RESPONSE_CHARS)}\n\n[Answer truncated in this replay; the full text is in session ${reply.sessionId}.]`,
+    truncated: true,
+  };
+}
+
 /**
  * Chat — Phase 1a multi-user conversion.
  *
@@ -262,7 +280,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           details: (error as Error).message,
         };
       }
-    }),
+    }, { stored: compactChatReply }),
     {
       body: t.Object({
         message: t.String({ minLength: 1 }),

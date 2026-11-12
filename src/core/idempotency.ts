@@ -22,6 +22,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { getStorageProvider } from '@/db/storage';
+import { ExpiringLru } from '@/db/storage/expiring-lru';
 import { DELIVERY_DONE_TTL_SECONDS, DELIVERY_IN_PROGRESS_TTL_SECONDS } from '@/hooks/webhook-delivery';
 import { sha256 } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
@@ -65,6 +66,19 @@ export interface RunIdempotentOptions<T> {
   run: (track: IdempotencyTrack) => Promise<T>;
   /** False releases the key instead of storing the outcome (nothing was created). Default: keep. */
   keep?: (value: T) => boolean;
+  /** What to store for a replay, when the full value is larger than a retry needs. Default: the value. */
+  stored?: (value: T) => T;
+}
+
+/** JSON with object keys sorted, so key order never changes a fingerprint. */
+export function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.keys(value).sort()
+      .filter(key => (value as Record<string, unknown>)[key] !== undefined)
+      .map(key => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
 }
 
 interface Pending { s: 'p'; t: string; f?: string }
@@ -76,24 +90,9 @@ type Stored = Pending | Done;
 // The shared kv store is the authority whenever it is reachable; the local
 // map is used only while it errors (dedupe then holds within this process).
 
-const fallback = new Map<string, { value: string; expiresAt: number }>();
-
-function fallbackGet(key: string): string | null {
-  const entry = fallback.get(key);
-  if (!entry) return null;
-  if (entry.expiresAt <= Date.now()) { fallback.delete(key); return null; }
-  return entry.value;
-}
-
-function fallbackSet(key: string, value: string, ttlSeconds: number): void {
-  fallback.delete(key);
-  fallback.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
-  while (fallback.size > FALLBACK_MAX_ENTRIES) {
-    const oldest = fallback.keys().next().value;
-    if (oldest === undefined) break;
-    fallback.delete(oldest);
-  }
-}
+const fallback = new ExpiringLru<string>(FALLBACK_MAX_ENTRIES);
+const fallbackGet = (key: string): string | null => fallback.get(key) ?? null;
+const fallbackSet = (key: string, value: string, ttl: number): void => fallback.set(key, value, ttl);
 
 function warn(err: unknown, op: string): void {
   apiLogger.warn({ err, op }, 'Idempotency store unavailable; using in-process dedupe only');
@@ -164,6 +163,7 @@ export async function runIdempotent<T>(options: RunIdempotentOptions<T>): Promis
   const k = storeKey(userId, scope, key);
   const metaKey = `${k}:meta`;
   const deadline = Date.now() + (options.joinWaitMs ?? DEFAULT_JOIN_WAIT_MS);
+  let freeRetries = 0;
 
   for (;;) {
     const claim = JSON.stringify({ s: 'p', t: randomUUID(), f: fingerprint } satisfies Pending);
@@ -173,8 +173,10 @@ export async function runIdempotent<T>(options: RunIdempotentOptions<T>): Promis
     const raw = await kv.get(k);
     const stored = parse(raw);
     if (raw === null) {
-      // Released or lapsed between the claim attempt and the read: claim again.
-      if (Date.now() < deadline) continue;
+      // Released or lapsed between the claim attempt and the read: the key is
+      // free, so claim again even past the deadline (bounded, in case a store
+      // keeps refusing a claim on a key it reports absent).
+      if (Date.now() < deadline || ++freeRetries <= 3) continue;
     } else if (stored) {
       // A row that does not parse is not ours to overwrite; it is treated as running.
       if ((stored.f ?? null) !== (fingerprint ?? null)) return { kind: 'mismatch' };
@@ -202,35 +204,50 @@ function parseMeta(raw: string | null): Record<string, unknown> {
 }
 
 async function execute<T>(options: RunIdempotentOptions<T>, k: string, metaKey: string, claim: string): Promise<T> {
+  // The renewal rewrites the claim when the row is absent too (the store has
+  // no compare-only write), so it must never run once the outcome is being
+  // written: `finished` stops new renewals and the one in flight is awaited
+  // first, or a release could be undone by a late renewal.
   let renewing = true;
+  let finished = false;
+  let renewal: Promise<unknown> = Promise.resolve();
   const timer = setInterval(() => {
-    if (!renewing) return;
-    void kv.renew(k, claim, IDEMPOTENCY_IN_PROGRESS_TTL_SECONDS).then(ok => {
+    if (!renewing || finished) return;
+    renewal = kv.renew(k, claim, IDEMPOTENCY_IN_PROGRESS_TTL_SECONDS).then(ok => {
       if (!ok) renewing = false;
     });
   }, REFRESH_INTERVAL_MS);
   timer.unref?.();
+  const finish = async () => {
+    finished = true;
+    clearInterval(timer);
+    await renewal;
+  };
   const track: IdempotencyTrack = {
     setMeta: meta => kv.set(metaKey, JSON.stringify(meta), IDEMPOTENCY_DONE_TTL_SECONDS),
   };
   const work = (async () => {
     try {
-      const value = await options.run(track);
+      let value: T;
+      try {
+        value = await options.run(track);
+      } finally {
+        await finish();
+      }
       if (options.keep ? options.keep(value) : true) {
-        const done: Done = { s: 'd', f: options.fingerprint, v: value };
+        const done: Done = { s: 'd', f: options.fingerprint, v: options.stored ? options.stored(value) : value };
         await kv.set(k, JSON.stringify(done), IDEMPOTENCY_DONE_TTL_SECONDS);
       } else {
         await kv.del(k);
-        await kv.del(metaKey);
       }
       return value;
     } catch (err) {
       // Nothing to replay: free the key so a retry can try again.
       await kv.del(k);
-      await kv.del(metaKey);
       throw err;
     } finally {
-      clearInterval(timer);
+      // Meta only answers a retry while the call runs; the outcome replaces it.
+      await kv.del(metaKey);
       inflight.delete(k);
     }
   })();
