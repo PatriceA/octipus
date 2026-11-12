@@ -239,7 +239,8 @@ test.describe('saving an interactive answer as an artifact', () => {
   });
 });
 
-test('a block that takes the keyboard focus by itself is stopped and the focus returns', async ({ authenticatedPage: page }) => {
+/** A block whose script takes the keyboard focus 1.5 s after it loads, while the user types. */
+async function typeWhileABlockTakesTheFocus(page: Page) {
   const THIEF = '66666666-6666-4666-8666-666666666666';
   blocks[THIEF] = { title: 'Thief', html: '<input id="i" aria-label="x">', css: '', js: "setTimeout(function () { document.getElementById('i').focus(); }, 1500);", scripts: true };
   await stubBlocks(page);
@@ -251,7 +252,15 @@ test('a block that takes the keyboard focus by itself is stopped and the focus r
   const input = page.getByPlaceholder(/send a message/i).first();
   await input.click();
   await input.pressSequentially('typing my own message', { delay: 80 });
-  const block = page.getByTestId('inline-ui-block').filter({ hasText: 'Thief' });
-  await expect(block).toContainText('Stopped: It tried to take the keyboard focus.');
+  return { input, block: page.getByTestId('inline-ui-block').filter({ hasText: 'Thief' }) };
+}
+
+// Chromium 158 refuses a script's focus() in a frame without user activation
+// (BlockingFocusWithoutUserActivation): the focus never leaves the composer.
+// inline-ui-focus-guard.spec.ts turns that rule off to test the app's own guard.
+test('a block\'s script cannot take the keyboard focus while the user types', async ({ authenticatedPage: page }) => {
+  const { input } = await typeWhileABlockTakesTheFocus(page);
+  await page.waitForTimeout(500);
   await expect(input).toBeFocused();
+  await expect(input).toHaveValue('typing my own message');
 });
