@@ -388,7 +388,7 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
           const engine = await getLocalWhisper();
           if (engine) {
             const audioBuffer = Buffer.from(audio, 'base64');
-            const result = await engine.transcribe(audioBuffer);
+            const result = await engine.transcribeBuffer(audioBuffer);
             return { text: result.text, model: 'whisper-cpp', language: result.language, duration: result.duration };
           }
           // Fall through to OpenAI if local not configured and model was 'local'
