@@ -283,13 +283,15 @@ export function hostApiTarget(): { host: string; port: number } {
 }
 
 /** The calls that may carry a host API token: each one started by the user it acts for. */
-export type HostCallKind = 'agent' | 'command' | 'page';
+export type HostCallKind = 'agent' | 'command' | 'page' | 'dashboard';
 
 /**
  * What started a call, when it is one a user started themselves, or null:
  *
  * - `page`: the page bridge, a signed-in user on the package's page
  *   (`metadata.source = 'plugin-page'`);
+ * - `dashboard`: a widget of the package's dashboard a signed-in user opened
+ *   (`plugin-dashboard`, a read tool only);
  * - `command`: a slash command the user typed (`plugin-contribution`, kind `command`);
  * - `agent`: a tool call of the user's own agent in their session
  *   (`trigger = 'user'`, a session, no `metadata.source` of a known
@@ -303,6 +305,8 @@ export type HostCallKind = 'agent' | 'command' | 'page';
 export function hostCallKind(context: Pick<AgentContext, 'trigger' | 'sessionId' | 'metadata'>): HostCallKind | null {
   const source = context.metadata?.source;
   if (source === 'plugin-page') return 'page';
+  // A dashboard the signed-in user opened: its widget's read tool, as that user.
+  if (source === 'plugin-dashboard') return 'dashboard';
   if (source === 'plugin-contribution') return context.metadata?.contribution === 'command' ? 'command' : null;
   if (source !== undefined && UNATTENDED_SOURCES.has(String(source))) return null;
   return context.trigger === 'user' && !!context.sessionId ? 'agent' : null;

@@ -95,6 +95,14 @@ export function computePermissions(manifest: PluginManifest, files: PermissionFi
     },
     pages,
     ui: pages.length > 0 ? { dir: uiDirOf(manifest.ui), sha256: files.uiSha256 } : null,
+    dashboards: (manifest.dashboards ?? [])
+      .map((d) => ({
+        id: d.id,
+        title: d.title,
+        // In their declared order: the order they are drawn in.
+        widgets: d.widgets.map((w) => ({ id: w.id, type: w.type, title: w.title, tool: w.tool, ...(w.input !== undefined ? { input: w.input } : {}) })),
+      }))
+      .sort((a, b) => byCodeUnit(a.id, b.id)),
     trustedInput: manifest.model?.trustedInput === true,
     maxProtection: defaultMaxProtection(manifest),
   };

@@ -65,6 +65,7 @@ const PermissionsPage = lazy(() => import('./app/permissions/page'));
 const PersonaPage = lazy(() => import('./app/persona/page'));
 const PipelinesPage = lazy(() => import('./app/pipelines/page'));
 const PluginPage = lazy(() => import('./app/plugins/page'));
+const PluginDashboardPage = lazy(() => import('./app/dashboards/page'));
 const ProfilesPage = lazy(() => import('./app/profiles/page'));
 const RoomsPage = lazy(() => import('./app/rooms/page'));
 const RunsViewPage = lazy(() => import('./app/runs/view/page'));
@@ -173,6 +174,7 @@ const router = createBrowserRouter([
       { path: 'persona', element: <PersonaPage /> },
       { path: 'pipelines', element: <PipelinesPage /> },
       { path: 'plugins/:name/*', element: <PluginPage /> },
+      { path: 'dashboards/:name/:id', element: <PluginDashboardPage /> },
       { path: 'profiles', element: <ProfilesPage /> },
       { path: 'rooms', element: <RoomsPage /> },
       { path: 'runs/view', element: <RunsViewPage /> },

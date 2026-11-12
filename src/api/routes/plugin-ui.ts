@@ -36,7 +36,7 @@ import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { pluginPackages } from '@/db/schema/plugin-packages';
 import { getMCPBridge, PLUGIN_SERVER_PREFIX } from '@/mcp/bridge';
-import { fetchDestAllowed, isSecureOrigin, listEnabledPages, pluginUiCsp, pluginUiHeaders, readUiFile, uiBaseUrl } from '@/plugins/packages/ui';
+import { dashboardView, enabledDashboard, fetchDestAllowed, isSecureOrigin, listEnabledDashboards, listEnabledPages, pluginUiCsp, pluginUiHeaders, readUiFile, uiBaseUrl } from '@/plugins/packages/ui';
 import { ApprovalBlockedError, withDispatchAuthorization } from '@/security/dispatch-authorization';
 import { crossSiteDenied } from '@/api/plugin-route-guard';
 import { isAuthenticated, requireScope } from '@/security/principal';
@@ -134,7 +134,7 @@ export const pluginUiRoutes = new Elysia({ prefix: '/plugin-ui' })
       set.status = 401;
       return { error: 'Authentication required' };
     }
-    return { pages: await listEnabledPages() };
+    return { pages: await listEnabledPages(), dashboards: await listEnabledDashboards() };
   }, { detail: { tags: ['plugin-packages'] } })
 
   .get('/:name/*', async (ctx) => {
@@ -254,6 +254,98 @@ export const pluginCallRoutes = new Elysia({ prefix: '/plugins' })
       args: t.Optional(t.Record(t.String(), t.Any())),
       confirm: t.Optional(t.Boolean()),
     }),
+    detail: { tags: ['plugin-packages'] },
+  })
+
+  // ── Dashboards (docs/PLUGIN-PACKAGES.md#dashboards): drawn by the app, each
+  // widget fed by one of the package's read tools, called as the signed-in user
+  // with the arguments its manifest fixes. Nothing from the browser reaches the tool.
+
+  // A dashboard's layout: its widgets, never their tools or input.
+  .get('/:name/dashboards/:id', async ({ user, principal, params, set }) => {
+    if (!user || !isAuthenticated(principal)) {
+      set.status = 401;
+      return { error: 'Authentication required' };
+    }
+    const found = await enabledDashboard(params.name, params.id);
+    if (!found) {
+      set.status = 404;
+      return { error: 'No such dashboard', code: 'not_found' };
+    }
+    return dashboardView(params.name, found.manifest, found.dashboard);
+  }, {
+    params: t.Object({ name: t.String({ maxLength: 50 }), id: t.String({ maxLength: 40 }) }),
+    detail: { tags: ['plugin-packages'] },
+  })
+
+  // One widget's data: its tool's answer, checked against the widget's type (src/plugins/packages/dashboard-data.ts).
+  .post('/:name/dashboards/:id/widgets/:widget', async ({ request, user, principal, params, set }) => {
+    if (!user || !isAuthenticated(principal)) {
+      set.status = 401;
+      return { error: 'Authentication required' };
+    }
+    const crossSite = crossSiteDenied({ set, request });
+    if (crossSite) return crossSite;
+    if (!requireScope(principal, API_SCOPES.READ)) {
+      set.status = 403;
+      return { error: `This API token lacks the ${API_SCOPES.READ} scope`, code: 'scope' };
+    }
+    // A dashboard of 24 widgets loads at once; refreshes come slower.
+    const limited = checkRateLimit(`plugin-dashboard:${user.id}:${params.name}`, { capacity: 48, refillPerSecond: 1 });
+    if (!limited.allowed) {
+      set.status = 429;
+      set.headers['retry-after'] = String(limited.retryAfterSeconds ?? 1);
+      return { error: 'Too many widget requests; wait a moment', code: 'rate_limited' };
+    }
+    const found = await enabledDashboard(params.name, params.id);
+    const widget = found?.dashboard.widgets.find((w) => w.id === params.widget);
+    // The manifest was checked at install: the tool is the package's own, and a read tool.
+    const decl = widget && Object.hasOwn(found?.manifest.tools ?? {}, widget.tool) ? found?.manifest.tools?.[widget.tool] : undefined;
+    if (!found || !widget || decl?.effect !== 'read') {
+      set.status = 404;
+      return { error: 'No such widget', code: 'not_found' };
+    }
+    const serverId = `${PLUGIN_SERVER_PREFIX}${params.name}`;
+    const scope = { workspaceId: principal.workspaceId ?? null, space: null, trigger: 'user' as const, funding: fundingFor('user', null) };
+    const context = buildAgentContext({
+      id: `plugin-dashboard-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      sessionId: '',
+      userId: user.id,
+      scope,
+      topic: 'plugin-dashboard',
+      model: 'plugin-dashboard',
+      role: 'general',
+      // Nobody to ask: a rule that asks about this read tool refuses the widget instead.
+      attended: false,
+      status: 'running',
+      metadata: { source: 'plugin-dashboard', plugin: params.name, dashboard: params.id, widget: params.widget },
+    });
+    const args = widget.input ?? {};
+    try {
+      const result = await getMCPBridge().callTool(serverId, widget.tool, args, context, { server_id: serverId, tool_name: widget.tool, arguments: args });
+      const { widgetData } = await import('@/plugins/packages/dashboard-data');
+      const out = widgetData(result, widget.type, found.manifest.network ?? []);
+      if (!out.ok) {
+        set.status = 422;
+        return { error: out.error, code: 'widget_invalid' };
+      }
+      return { data: out.data, at: new Date().toISOString() };
+    } catch (err) {
+      if (err instanceof ApprovalBlockedError) {
+        set.status = 409;
+        return { error: `Your permission rules ask before ${widget.tool} runs; a dashboard cannot ask`, code: 'approval_required' };
+      }
+      const message = (err as Error).message ?? String(err);
+      if (/Permission denied|not granted|revoked/i.test(message)) {
+        set.status = 403;
+        return { error: message, code: 'denied' };
+      }
+      apiLogger.warn({ err, plugin: params.name, tool: widget.tool }, 'plugin dashboard widget failed');
+      set.status = 502;
+      return { error: `The widget's tool failed: ${message}`, code: 'call_failed' };
+    }
+  }, {
+    params: t.Object({ name: t.String({ maxLength: 50 }), id: t.String({ maxLength: 40 }), widget: t.String({ maxLength: 40 }) }),
     detail: { tags: ['plugin-packages'] },
   })
 

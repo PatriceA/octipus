@@ -33,7 +33,7 @@ import { HOST_SCOPE_WORDS, storeWords } from './plugin-permissions';
 
 export type PluginDeclarationKind =
   | 'runtime' | 'in-process' | 'network' | 'host' | 'tool' | 'command' | 'schedule' | 'event' | 'prompt' | 'context'
-  | 'page' | 'secret' | 'setting' | 'store' | 'model-cli-tools' | 'protection' | 'change';
+  | 'page' | 'dashboard' | 'secret' | 'setting' | 'store' | 'model-cli-tools' | 'protection' | 'change';
 
 export interface PluginDeclarationItem {
   /** Stable for the same package: `host:notes:read`, `tool:save_note`, … */
@@ -79,6 +79,8 @@ export const MAIL_SEND_NOTE = 'mail:send sends mail as the user to any address, 
 export const CALENDAR_NOTE = 'The calendars connected in Settings → Integrations (Google, Microsoft 365), in the personal workspace only. '
   + 'Events carry no protection level of their own: they count as the level an admin sets (plugins.calendarProtectionLevel, default 3). '
   + 'calendar:write adds events and changes only the ones this plugin added.';
+export const DASHBOARD_NOTE = 'Octipus draws a dashboard itself: no code of the plugin runs in the browser. Each widget shows what one of the plugin\'s read tools '
+  + 'returns, called as the user who opens it, with the arguments listed here; text is shown as text, and a link only to a host the plugin declares.';
 export const STORE_NOTE = 'Octipus keeps this data for each user apart: the plugin only ever reaches the data of the user it acts for, never another user\'s. '
   + 'Each user can delete theirs in Settings → My plugin usage; uninstalling the plugin deletes everyone\'s.';
 export const IN_PROCESS_NOTE = 'Runs in the server process: no sandbox, so it has the server\'s network, files and data.';
@@ -236,6 +238,13 @@ export function declarationItems(
     });
   }
   if (p.ui) items.push({ id: 'ui', kind: 'page', label: 'Serves its page files', detail: `${p.ui.dir}/${p.ui.sha256 ? `, sha256 ${p.ui.sha256}` : ''}` });
+  for (const d of p.dashboards ?? []) {
+    items.push({
+      id: `dashboard:${d.id}`, kind: 'dashboard', label: `Adds the dashboard "${d.title}"`,
+      detail: d.widgets.map((w) => `${w.title} (${w.type}) ← ${w.tool}${w.input !== undefined ? ` ${JSON.stringify(w.input)}` : ''}`).join('; '),
+      guidance: DASHBOARD_NOTE,
+    });
+  }
   // Names from the summary (a listing carries them); the manifest's labels and required flags when at hand.
   if (p.secrets.length > 0) {
     const of = new Map((manifest?.secrets ?? []).map((s) => [s.key, s]));

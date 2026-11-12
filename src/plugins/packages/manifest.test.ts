@@ -22,6 +22,19 @@ describe('plugin manifest', () => {
     expect(m.settings?.[0].key).toBe('region');
   });
 
+  test('dashboards: unique ids, declared read tools only, the package runtime', () => {
+    const dash = (tool: string, extra: Record<string, unknown> = {}) => ({
+      ...FIXTURE, dashboards: [{ id: 'main', title: 'Main', widgets: [{ id: 'a', type: 'stat', title: 'A', tool }] }], ...extra,
+    });
+    expect(parseManifest(dash('echo')).dashboards?.[0].widgets[0].tool).toBe('echo');
+    expect(problems(dash('send_letter')).some((p) => p.includes('a external tool; a widget\'s tool is a read tool'))).toBe(true);
+    expect(problems(dash('nope')).some((p) => p.includes('not declared'))).toBe(true);
+    const twice = { ...FIXTURE, dashboards: [{ id: 'm', title: 'M', widgets: [{ id: 'a', type: 'stat', title: 'A', tool: 'echo' }, { id: 'a', type: 'text', title: 'B', tool: 'echo' }] }] };
+    expect(problems(twice).some((p) => p.includes('widget "a" twice'))).toBe(true);
+    expect(problems(dash('echo', { dashboards: [{ id: 'm', title: 'M', widgets: [{ id: 'a', type: 'html', title: 'A', tool: 'echo' }] }] })).some((p) => p.includes('widget type'))).toBe(true);
+    expect(problems(dash('echo', { dashboards: [{ id: 'm', title: 'M', widgets: [{ id: 'a', type: 'stat', title: 'A', tool: 'echo', refreshSeconds: 5 }] }] })).some((p) => p.includes('refreshSeconds'))).toBe(true);
+  });
+
   test('mail:send needs an external tool to be handed to', () => {
     const tools = (effect: string) => ({ ...FIXTURE, host: ['mail:read', 'mail:send'], tools: { send_it: { description: 'Sends', effect } } });
     expect(problems(tools('write')).some((p) => p.includes('mail:send is handed only to external tools'))).toBe(true);
