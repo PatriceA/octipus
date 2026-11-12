@@ -100,6 +100,14 @@ This is what makes "build your own view" possible.
 
 ### 2. Host-rendered dashboards
 
+**Status: built for the plugin's own outside data** (2026-11-12); see
+[Dashboards](../PLUGIN-PACKAGES.md#dashboards). Decided: dashboards bring
+outside data (APIs, services) into Octipus as the place to see it day to
+day; they do **not** combine it with the user's Octipus data. So widgets
+are fed by the plugin's own `read` tools only (`stat`, `list`, `table`,
+`chart`, `text`), with no host-query widgets and no compute step over host
+data. The sketch below, with `query` widgets over host scopes, is not planned.
+
 **The problem:** a page is the plugin's own HTML and JS, so it can leak what it shows by navigating to another site. The CSP can't block a frame navigating itself. So a page only ever sees level-1 data, which rules out a mail dashboard.
 
 **The idea:** a new `dashboards` contribution. The plugin **declares** a dashboard and the **host renders it**, with no plugin JavaScript involved:
@@ -211,7 +219,7 @@ Node can't create AppContainers itself, so the helper is native, e.g. Rust or C#
 |---|---|---|
 | 1 | Store (4), **built** | Small; unblocks page state and real plugin data |
 | 2 | Read and write scopes (1), mail and calendar first, **mail and calendar built** | The base for "build your own view" |
-| 3 | Host-rendered dashboards (2) | The safe way to show sensitive data |
+| 3 | Host-rendered dashboards (2), **built for outside data** | One place for the data people need day to day |
 | 4 | Credential injection (6) | Plugins build on accounts users already connected |
 | 5 | Tool allowlist (5) | Lets plugins compose with MCP servers |
 | 6 | Inbound hooks (7) | Integrations that react to the outside world |
@@ -221,7 +229,7 @@ The Windows runner (8) is built: an AppContainer runner, merged separately.
 
 ## Decisions
 
-1. **Dashboards and pages side by side.** Host-rendered dashboards for sensitive views; pages for custom UI, capped at level 1 as today.
+1. **Dashboards and pages side by side.** Host-rendered dashboards for the plugin's outside data, never combined with Octipus data; pages for custom UI, capped at level 1 as today.
 2. **The store is per user only.** There is no store shared across users.
 3. **Mail and calendar write scopes come in the first round**, together with the read scopes.
 4. **A sandboxed provider serves only lanes an admin binds to it**, never the root agent.

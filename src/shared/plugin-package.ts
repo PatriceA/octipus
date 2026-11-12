@@ -96,7 +96,85 @@ export interface PluginManifest extends PluginManifestContributions {
    * `store:read` and/or `store:write`.
    */
   store?: PluginStoreDecl;
+  /**
+   * Dashboards the host draws with its own components (docs/PLUGIN-PACKAGES.md#dashboards):
+   * each widget's data is what one of the package's `read` tools returns.
+   */
+  dashboards?: PluginDashboardDecl[];
 }
+
+// ── Dashboards (docs/PLUGIN-PACKAGES.md#dashboards) ─────────────────────────
+
+/** The widgets the host draws. Nothing of the package runs in the browser. */
+export const PLUGIN_WIDGET_TYPES = ['stat', 'list', 'table', 'chart', 'text'] as const;
+export type PluginWidgetType = (typeof PLUGIN_WIDGET_TYPES)[number];
+
+/** How often a widget may refresh while it is shown, at least and at most (seconds). */
+export const PLUGIN_WIDGET_MIN_REFRESH_SECONDS = 60;
+export const PLUGIN_WIDGET_MAX_REFRESH_SECONDS = 86_400;
+
+/** One widget: its data is what `tool` (a `read` tool of the package) returns for `input`. */
+export interface PluginWidgetDecl {
+  /** Unique in its dashboard: lower-case letters, digits and `-`. */
+  id: string;
+  type: PluginWidgetType;
+  title: string;
+  tool: string;
+  /** The tool's arguments, fixed in the manifest (nothing from the browser reaches the tool). */
+  input?: Record<string, unknown>;
+  /** Refresh while shown, every so many seconds (60 to 86400); none: on open and on demand only. */
+  refreshSeconds?: number;
+  /** Columns it spans in a three-column grid; 1 by default. */
+  width?: 1 | 2 | 3;
+}
+
+export interface PluginDashboardDecl {
+  /** Unique in the package: lower-case letters, digits and `-`. */
+  id: string;
+  title: string;
+  /** A lucide icon name for the sidebar. */
+  icon?: string;
+  widgets: PluginWidgetDecl[];
+}
+
+/** A dashboard of an enabled package, as the sidebar lists it (`GET /api/plugin-ui`). */
+export interface PluginDashboardLink {
+  plugin: string;
+  pluginTitle: string;
+  id: string;
+  title: string;
+  icon: string | null;
+}
+
+/** A dashboard as the app draws it (`GET /api/plugins/:name/dashboards/:id`): its widgets, without their tools or input. */
+export interface PluginDashboardView extends PluginDashboardLink {
+  widgets: Array<{ id: string; type: PluginWidgetType; title: string; width: 1 | 2 | 3; refreshSeconds: number | null }>;
+}
+
+export type PluginWidgetTone = 'good' | 'warn' | 'bad' | 'neutral';
+
+/** A link in a widget: https, to a host the package declares in `network`. */
+export interface PluginWidgetLink { url: string; label?: string }
+
+/** A table cell or chart value. */
+export type PluginWidgetValue = string | number | boolean | null;
+
+/**
+ * What a widget's tool returns (as JSON text or structured content), checked
+ * by the host against its widget type before anything is drawn
+ * (src/plugins/packages/dashboard-data.ts). Text is drawn as text.
+ */
+export type PluginWidgetData =
+  | { type: 'stat'; value: number | string; label?: string; unit?: string; delta?: number; tone?: PluginWidgetTone; caption?: string; updatedAt?: string }
+  | { type: 'list'; items: Array<{ title: string; subtitle?: string; value?: string; tone?: PluginWidgetTone; link?: PluginWidgetLink }>; updatedAt?: string }
+  | {
+    type: 'table';
+    columns: Array<{ key: string; label: string; align?: 'left' | 'right' }>;
+    rows: Array<{ values: Record<string, PluginWidgetValue>; tone?: PluginWidgetTone; link?: PluginWidgetLink }>;
+    updatedAt?: string;
+  }
+  | { type: 'chart'; kind: 'bar' | 'line' | 'area' | 'pie'; x: string; series: Array<{ key: string; label: string }>; points: Array<Record<string, PluginWidgetValue>>; updatedAt?: string }
+  | { type: 'text'; text: string; updatedAt?: string };
 
 /** An installed package as the API returns it. */
 /**
@@ -720,8 +798,20 @@ export interface PluginPermissionsSummary {
   pages: Array<{ path: string; title: string; entry: string }>;
   /** The directory its pages are served from and the hash of that tree (`uiTreeHash`); null without pages. */
   ui: { dir: string; sha256: string | null } | null;
+  /**
+   * Its dashboards, sorted by id; each widget (in its declared order) with the
+   * tool and input its data comes from (`input` only when the manifest gives one).
+   */
+  dashboards: PluginPermissionsDashboard[];
   trustedInput: boolean;
   maxProtection: 1 | 2 | 3 | 4;
+}
+
+/** A dashboard in a permissions summary. */
+export interface PluginPermissionsDashboard {
+  id: string;
+  title: string;
+  widgets: Array<{ id: string; type: PluginWidgetType; title: string; tool: string; input?: Record<string, unknown> }>;
 }
 
 /**
@@ -742,7 +832,7 @@ export interface PluginPermissionsContributions {
 
 /** One change between two permission summaries (`PluginUpdateView.diff`). */
 export interface PluginPermissionChange {
-  kind: 'runtime' | 'apiVersion' | 'host' | 'network' | 'secrets' | 'settings' | 'store' | 'tool' | 'contribution' | 'pages' | 'trustedInput' | 'maxProtection';
+  kind: 'runtime' | 'apiVersion' | 'host' | 'network' | 'secrets' | 'settings' | 'store' | 'tool' | 'contribution' | 'pages' | 'dashboards' | 'trustedInput' | 'maxProtection';
   change: 'added' | 'removed' | 'wider' | 'narrower' | 'changed';
   /** In words, e.g. "host API scope notes:write". */
   text: string;

@@ -30,7 +30,7 @@ import { eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { pluginPackages } from '@/db/schema/plugin-packages';
 import { getMCPBridge, PLUGIN_SERVER_PREFIX } from '@/mcp/bridge';
-import type { PluginPageLink } from '@/shared/plugin-package';
+import type { PluginDashboardDecl, PluginDashboardLink, PluginDashboardView, PluginManifest, PluginPageLink } from '@/shared/plugin-package';
 import { publicLinkBase } from '@/core/public-url';
 import { isTrustedProxy } from '@/security/client-ip';
 import { coreLogger } from '@/utils/logger';
@@ -242,6 +242,41 @@ export async function listEnabledPages(): Promise<PluginPageLink[]> {
     }
   }
   return out;
+}
+
+/** Whether an enabled package's row may serve what it declares now: its files unchanged, and runnable here. */
+async function servable(row: { name: string; contentHash: string | null }): Promise<boolean> {
+  if (row.contentHash === null) return false;
+  if (getMCPBridge().pluginProblem(`${PLUGIN_SERVER_PREFIX}${row.name}`) === CONTENT_MISMATCH_PROBLEM) return false;
+  return (await packageRunProblem(row.name)) === null;
+}
+
+/** The dashboards of the enabled packages (docs/PLUGIN-PACKAGES.md#dashboards), for the sidebar. */
+export async function listEnabledDashboards(): Promise<PluginDashboardLink[]> {
+  const rows = await getDb().select().from(pluginPackages).where(eq(pluginPackages.enabled, true)).orderBy(pluginPackages.name);
+  const out: PluginDashboardLink[] = [];
+  for (const row of rows) {
+    if (!row.manifest.dashboards?.length || !(await servable(row))) continue;
+    for (const d of row.manifest.dashboards) out.push({ plugin: row.name, pluginTitle: row.manifest.title, id: d.id, title: d.title, icon: d.icon ?? null });
+  }
+  return out;
+}
+
+/** One dashboard of an enabled, servable package, with its manifest; null for anything else. */
+export async function enabledDashboard(name: string, id: string): Promise<{ manifest: PluginManifest; dashboard: PluginDashboardDecl } | null> {
+  const [row] = await getDb().select().from(pluginPackages).where(eq(pluginPackages.name, name)).limit(1);
+  if (!row?.enabled) return null;
+  const dashboard = row.manifest.dashboards?.find((d) => d.id === id);
+  if (!dashboard || !(await servable(row))) return null;
+  return { manifest: row.manifest, dashboard };
+}
+
+/** A dashboard as the app draws it: its widgets' layout, never their tools or input. */
+export function dashboardView(name: string, manifest: PluginManifest, d: PluginDashboardDecl): PluginDashboardView {
+  return {
+    plugin: name, pluginTitle: manifest.title, id: d.id, title: d.title, icon: d.icon ?? null,
+    widgets: d.widgets.map((w) => ({ id: w.id, type: w.type, title: w.title, width: w.width ?? 1, refreshSeconds: w.refreshSeconds ?? null })),
+  };
 }
 
 export type UiFileResult =

@@ -23,9 +23,10 @@
  *   index, since skipping one would silently un-revoke it.
  */
 import { z } from 'zod';
-import { PLUGIN_RUNTIMES, PLUGIN_STORE_MAX_QUOTA_BYTES, PLUGIN_STORE_MIN_QUOTA_BYTES, PLUGIN_TOOL_EFFECTS, type PluginPermissionsSummary } from '@/shared/plugin-package';
+import { PLUGIN_RUNTIMES, PLUGIN_STORE_MAX_QUOTA_BYTES, PLUGIN_STORE_MIN_QUOTA_BYTES, PLUGIN_TOOL_EFFECTS, PLUGIN_WIDGET_TYPES, type PluginPermissionsSummary } from '@/shared/plugin-package';
 import { isoTime, line, markdown, safeText } from './listing-text';
 import { manifestSchema } from './manifest';
+import { inputTextClean } from './manifest-dashboards';
 import { normalizeSha256, parseRegistryIndex } from './remote';
 import { lifetimeProblem } from './marketplace-keys-format';
 import { isKeyId } from './signature';
@@ -89,6 +90,15 @@ export const indexPermissionsSchema = z.object({
   }).strict(),
   pages: z.array(z.object({ path: line(200), title: line(100), entry: line(300) }).strict()).max(100),
   ui: z.object({ dir: line(300), sha256: sha256Hex.nullable() }).strict().nullable(),
+  // A listing from before dashboards reads as none (the host recomputes and compares them).
+  dashboards: z.array(z.object({
+    id: line(40), title: line(60),
+    widgets: z.array(z.object({
+      id: line(40), type: z.enum(PLUGIN_WIDGET_TYPES), title: line(80), tool: line(64),
+      input: z.record(z.string().max(100), z.unknown()).refine((v) => jsonSize(v) <= 4000, 'input is at most 4000 characters of JSON')
+        .refine((v) => inputTextClean(v), 'input has no control or invisible characters').optional(),
+    }).strict()).max(24),
+  }).strict()).max(10).default([]),
   trustedInput: z.boolean(),
   maxProtection: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
 }).strict().refine((p) => sortedUnique(p.host) && sortedUnique(p.network) && sortedUnique(p.secrets) && sortedUnique(p.settings),

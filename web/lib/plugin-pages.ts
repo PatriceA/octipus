@@ -25,21 +25,47 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { PluginPageLink } from '../../src/shared/plugin-package';
+import type { PluginDashboardLink, PluginPageLink } from '../../src/shared/plugin-package';
 
-export type { PluginPageLink } from '../../src/shared/plugin-package';
+export type { PluginDashboardLink, PluginPageLink } from '../../src/shared/plugin-package';
 
+/** The pages and dashboards of the enabled packages: one query (`GET /api/plugin-ui`). */
 export const PLUGIN_PAGES_KEY = ['plugin-pages'] as const;
+
+interface PluginUi { pages: PluginPageLink[]; dashboards: PluginDashboardLink[] }
+
+const fetchPluginUi = async (): Promise<PluginUi> => {
+  const answer = await api.get<Partial<PluginUi>>('/plugin-ui');
+  return { pages: answer.pages ?? [], dashboards: answer.dashboards ?? [] };
+};
 
 /** The pages of the enabled packages; refreshed every minute and on focus. */
 export function usePluginPages(enabled = true) {
   return useQuery({
     queryKey: PLUGIN_PAGES_KEY,
     enabled,
-    queryFn: async () => (await api.get<{ pages: PluginPageLink[] }>('/plugin-ui')).pages ?? [],
+    queryFn: fetchPluginUi,
+    select: (ui: PluginUi) => ui.pages,
     refetchInterval: 60_000,
     retry: false,
   });
+}
+
+/** The dashboards of the enabled packages (docs/PLUGIN-PACKAGES.md#dashboards); the same query as the pages. */
+export function usePluginDashboards(enabled = true) {
+  return useQuery({
+    queryKey: PLUGIN_PAGES_KEY,
+    enabled,
+    queryFn: fetchPluginUi,
+    select: (ui: PluginUi) => ui.dashboards,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+}
+
+/** The app route of a dashboard. */
+export function pluginDashboardHref(d: Pick<PluginDashboardLink, 'plugin' | 'id'>): string {
+  return `/dashboards/${encodeURIComponent(d.plugin)}/${encodeURIComponent(d.id)}`;
 }
 
 /** The app route of a page. */
