@@ -424,6 +424,16 @@ labels reflect blast radius, not contract guarantees.
 
 ### Fixed
 
+- **A burst of webhook deliveries no longer runs parallel agents in one
+  session.** A `spawn_agent` hook with `orchestrated: false` started a new
+  agent for every delivery at once, all writing into the hook's one session.
+  Each run now waits its turn in the session, like orchestrated hooks and chat
+  turns do. The spawn itself is still immediate, so a capacity error still
+  fails the hook run.
+- **`steer_child` no longer reports guidance it did not deliver.** A CLI child
+  that has stopped accepting guidance refused it, but the tool still answered
+  "Guidance queued". It now tells the parent nothing was delivered.
+
 - **A burst of remote-space frames no longer closes the federation link.** The
   host closes a link that sends more than 60 frames in a second (4429), and the
   visiting install never paced what it sent on the link every one of its

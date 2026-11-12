@@ -546,9 +546,15 @@ async function executeSpawnAgent(
     throw err;
   }
 
-  // Run the agent and optionally notify owner with the result
+  // Run the agent and optionally notify owner with the result. The run waits
+  // its turn in the session like every other entry point (session-turn-lock),
+  // so a burst of deliveries to one hook session runs one after another
+  // instead of as parallel agents writing into the same transcript. The spawn
+  // above stays immediate: a capacity error still fails this action, and a
+  // queued worker does not count as running until its turn starts.
   if (message) {
-    withAgentUsage(userId, scope, () => agent.run(message)).then(async (result) => {
+    const { withSessionTurn } = await import('@/core/session-turn-lock');
+    withSessionTurn(sessionId, () => withAgentUsage(userId, scope, () => agent.run(message))).then(async (result) => {
       if (config.notifyOwner && userId && result) {
         try {
           await notifyOwnerWithResult(userId, result);

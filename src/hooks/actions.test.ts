@@ -17,13 +17,13 @@ vi.mock('@/core/agent', () => ({
   }),
 }));
 // The direct (non-orchestrated) spawn: the options are observed, nothing runs.
-const direct = vi.hoisted(() => ({ stops: [] as Array<{ id: string; options: unknown }>, spawns: [] as Array<Record<string, unknown>> }));
+const direct = vi.hoisted(() => ({ stops: [] as Array<{ id: string; options: unknown }>, spawns: [] as Array<Record<string, unknown>>, runImpl: undefined as undefined | (() => Promise<string>) }));
 vi.mock('@/core/agent-manager', () => ({
   getAgentManager: () => ({
     stop: (id: string, options: unknown) => { direct.stops.push({ id, options }); return true; },
     spawn: async (options: Record<string, unknown>) => {
       direct.spawns.push(options);
-      return { run: async () => '', getContext: () => ({ id: 'agent-1' }) };
+      return { run: () => (direct.runImpl ? direct.runImpl() : Promise.resolve('')), getContext: () => ({ id: 'agent-1' }) };
     },
   }),
 }));
@@ -139,6 +139,42 @@ describe('executeSpawnAgent: direct spawn', () => {
     expect(r.success).toBe(true);
     expect(direct.spawns).toHaveLength(1);
     expect(direct.spawns[0]).toMatchObject({ sessionId: 'hook-sess', workspaceId: 'ws-1' });
+  });
+
+  test('runs a burst of deliveries to one hook session one after another, not in parallel', async () => {
+    const { withSessionTurn } = await import('@/core/session-turn-lock');
+    // A turn already running in the session (the user's, or an earlier delivery).
+    let releaseTurn!: () => void;
+    const busy = withSessionTurn('hook-sess', () => new Promise<void>(resolve => { releaseTurn = resolve; }));
+    const order: string[] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const finishers: Array<() => void> = [];
+    direct.runImpl = async () => {
+      inFlight += 1; maxInFlight = Math.max(maxInFlight, inFlight); order.push('start');
+      await new Promise<void>(resolve => finishers.push(resolve));
+      inFlight -= 1; order.push('end');
+      return '';
+    };
+    try {
+      const fire = () => executeAction(hook({
+        userId: '77777777-7777-4777-8777-777777777777', trigger: 'webhook', action: 'spawn_agent', sessionId: 'hook-sess',
+        actionConfig: { orchestrated: false, agentPrompt: 'triage' },
+      } as Partial<Hook>), ctx());
+      const results = await Promise.all([fire(), fire()]);
+      expect(results.every(r => r.success)).toBe(true);
+      const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+      await settle();
+      expect(order).toEqual([]); // both wait behind the running turn
+      releaseTurn(); await busy; await settle();
+      expect(order).toEqual(['start']);
+      finishers.shift()!(); await settle(); await settle();
+      expect(order).toEqual(['start', 'end', 'start']);
+      finishers.shift()!(); await settle();
+      expect(maxInFlight).toBe(1);
+    } finally {
+      direct.runImpl = undefined;
+    }
   });
 });
 

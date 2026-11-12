@@ -42,7 +42,11 @@ export function createSteerChildTool(workerRef: { current: AgentWorker | null })
       if (!child || child.getContext().userId !== owner.userId || child.getContext().sessionId !== owner.sessionId || child.getStatus() !== 'running') {
         return refuse('child is no longer running or unavailable. Collect its result and decide on a follow-up.');
       }
-      child.steer({ role: 'user', content: args.message, timestamp: new Date() });
+      // A CLI child reports false once it stops accepting guidance (its turn is
+      // ending or the vendor cannot take more input): nothing was delivered.
+      if (child.steer({ role: 'user', content: args.message, timestamp: new Date() }) === false) {
+        return refuse('child is finishing and no longer accepts guidance. This call did not deliver it. Collect its result and handle the change yourself or delegate a follow-up.');
+      }
       return 'Guidance queued for the selected child. Delivery occurs at its next supported input boundary; this is not confirmation that it has applied the change.';
     },
   };
