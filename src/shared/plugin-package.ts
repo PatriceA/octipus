@@ -475,6 +475,8 @@ export const PLUGIN_STORE_MAX_QUOTA_BYTES = 20 * 1024 * 1024;
 export const PLUGIN_STORE_MIN_QUOTA_BYTES = 1024;
 /** The largest value, as JSON (UTF-8 bytes): 64 KB. */
 export const PLUGIN_STORE_MAX_VALUE_BYTES = 64 * 1024;
+/** At most 128 nested object/array containers, independent of the JS engine's stack. */
+export const PLUGIN_STORE_MAX_VALUE_DEPTH = 128;
 /** A key: letters, digits and `._:/-`, 1 to 200 characters. */
 export const PLUGIN_STORE_KEY_RE = /^[A-Za-z0-9._:/-]{1,200}$/;
 /** The most keys one list answers. */

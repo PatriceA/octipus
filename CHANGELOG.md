@@ -9,6 +9,9 @@ labels reflect blast radius, not contract guarantees.
 
 ### Changed
 
+- Plugin-store values have an explicit 128-container nesting limit, returning
+  `400 invalid_value` consistently on supported Node runtimes before database work.
+
 - Product help now searches the bundled manual locally on demand, without startup or scheduled documentation embeddings.
 
 - **Useful token budgets from the first run.** The default per-user daily
