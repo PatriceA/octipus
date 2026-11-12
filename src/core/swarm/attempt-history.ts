@@ -118,16 +118,24 @@ export async function runDelegationAttempt<T>(
  * reads, so the backup attempt that follows carries it as its `fallbackReason`
  * exactly as a backup after a failed run does.
  */
-export function recordSkippedAttempt(
+export async function recordSkippedAttempt(
   history: DelegationAttempt[],
   input: Pick<DelegationAttempt, 'dispatchId' | 'requestedModel' | 'selectedModel' | 'selectedModelName' | 'route'> & { reason: string },
-): void {
+  owner: { userId: string; workspaceId?: string | null },
+): Promise<void> {
   const now = new Date().toISOString();
   const { reason, ...fields } = input;
-  history.push({
+  // Same treatment as a failed attempt's error: command redaction, the length
+  // cap, then the owner's vault values scrubbed (withheld if that fails).
+  const attempt: DelegationAttempt = {
     ...fields, executionId: randomUUID(), sequence: history.length + 1, agentId: '', uiAgentId: '',
-    accountIdentity: 'not_reported', startedAt: now, endedAt: now, status: 'not_started', error: reason,
-  });
+    accountIdentity: 'not_reported', startedAt: now, endedAt: now, status: 'not_started',
+    error: redactedCommand(reason).slice(0, 16_000),
+  };
+  const safe = await redactAgentDiagnostics(owner.userId, owner.workspaceId ?? null, { attempt })
+    .then((r) => (r as { attempt: DelegationAttempt }).attempt)
+    .catch(() => ({ ...attempt, error: 'Failure details withheld: credential redaction unavailable' }));
+  history.push(safe);
 }
 
 export function formatAttemptHistory(result: { dispatchId?: string; attempts?: DelegationAttempt[]; appliedRoutePolicy?: unknown }): string {

@@ -146,23 +146,36 @@ The backup is **not** a cost tier and is never selected for cost or quality.
 Circuit breaker and health checks (`models/circuit-breaker.ts`,
 `health-checker.ts`) gate provider availability.
 
-Swarm pre-spawn check (`swarm/lane-availability.ts`): before a child starts,
-its resolved model is checked with signals already in memory — its provider's
-circuit breaker (same key the provider router trips) and, for a CLI model,
-whether the executable is on PATH (cached 60 s; no process is spawned, and
-CLI login state is not checked because nothing caches it). If the model is
-unavailable:
+Swarm pre-spawn check (`swarm/lane-availability.ts`): while the child's
+model is resolved — before its tier, prompt and tool surface are chosen — the
+model is checked with signals already in memory:
+
+- a direct provider's circuit breaker (the provider name, or an extension
+  row's own key). The router trips it on transport failures to that provider;
+  a child's own calls neither consult nor feed it, so it is a health signal
+  from other traffic.
+- not the `litellm` breaker (only the router's LiteLLM fallback trips it) and
+  not the `cli-*` breakers (the CLI agent worker never touches them).
+- for a CLI model, whether its executable is installed — the CLI provider's
+  cached lookup (`cliToolAvailable`); no process is spawned. CLI login state is
+  not checked: nothing caches it.
+
+If the model is unavailable:
 
 - a backup is bound, differs from it, is itself available, and
-  `routePolicy.allowBackup` is not false → the child starts on the backup. The
-  primary is recorded in the delegation history as a `not_started` attempt, so
-  the backup attempt's `fallbackReason` names the cause.
+  `routePolicy.allowBackup` is not false → the child is resolved on the backup
+  (tier, lite prompt, tool cap and context gate all for the backup). The routed
+  model is recorded in the delegation history as a `not_started` attempt
+  (redacted like any attempt error), so the backup attempt's `fallbackReason`
+  names the cause. A `routePolicy.primaryModel` is still checked against the
+  routed model.
 - otherwise → `denied` without starting a child, e.g. `lane 'build' model X
   unavailable: circuit breaker for 'openai' open since …; no backup bound`. The
   brief's fingerprint is released, so the same spawn can be retried.
 
-A fork (which runs on the parent's model) skips the check. Anything the check
-cannot judge counts as available.
+Only a real fork (which runs on the parent's model) skips the check; a fork
+that falls back to an ordinary child is checked. Anything the check cannot
+judge counts as available.
 
 ## Observability
 
