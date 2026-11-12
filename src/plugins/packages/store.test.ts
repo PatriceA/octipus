@@ -12,6 +12,7 @@ import {
   PLUGIN_HOST_WRITE_SCOPES,
   PLUGIN_STORE_DEFAULT_QUOTA_BYTES,
   PLUGIN_STORE_MAX_QUOTA_BYTES,
+  PLUGIN_STORE_MAX_VALUE_DEPTH,
   pluginStoreQuota,
 } from '@/shared/plugin-package';
 import { diffPermissions, permissionsAskSummary } from '@/shared/plugin-permissions';
@@ -165,6 +166,26 @@ describe('keys and values', () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
     expect(encodeStoreValue(cyclic)).toMatchObject({ status: 400, code: 'invalid_value' });
+  });
+
+  test('nesting has an explicit boundary on every engine, for objects and arrays', () => {
+    const nested = (depth: number) => {
+      let json = '0';
+      for (let i = 0; i < depth; i++) json = i % 2 ? `{"child":${json}}` : `[${json}]`;
+      return json;
+    };
+    const allowed = nested(PLUGIN_STORE_MAX_VALUE_DEPTH);
+    expect(encodeStoreValue(JSON.parse(allowed))).toEqual({ json: allowed });
+    for (const depth of [PLUGIN_STORE_MAX_VALUE_DEPTH + 1, 5000]) {
+      expect(encodeStoreValue(JSON.parse(nested(depth)))).toEqual({ status: 400, code: 'invalid_value', error: 'The value is too deeply nested' });
+    }
+  });
+
+  test('depth counts serialized containers, not punctuation or escaped quotes in strings', () => {
+    const value = { text: '[{"quoted": "\\\\\\\""}]'.repeat(300), child: [{ ok: true }] };
+    expect(encodeStoreValue(value)).toEqual({ json: JSON.stringify(value) });
+    const projected = { toJSON: () => '[]{}'.repeat(300) };
+    expect(encodeStoreValue(projected)).toEqual({ json: JSON.stringify(projected) });
   });
 
   test('sizes read in words', () => {

@@ -2156,7 +2156,8 @@ it.
   forwards no `%`.
 - A value is any JSON of at most 64 KB as UTF-8, both as sent and as the
   database keeps it (`413 too_large`; `400 invalid_value` for no value, a NUL
-  character, or a value too deeply nested).
+  character, or more than 128 nested object/array containers). Nesting is checked
+  explicitly, independently of the JavaScript engine's serialization stack.
 - The quota counts, for each entry, **128 bytes of overhead**, its key, and
   its value as the database serialises it (`octet_length(value::text)`: a
   number such as `1e300` counts as its 301 digits), for the user and the

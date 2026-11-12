@@ -26,7 +26,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, onTestFinished, test
 import type { RunningServer } from '@/api/http';
 import type { AgentContext } from '@/core/types';
 import type { MCPServer } from '@/shared/mcp-server';
-import type { PluginHostScope } from '@/shared/plugin-package';
+import { PLUGIN_STORE_MAX_VALUE_DEPTH, type PluginHostScope } from '@/shared/plugin-package';
 import { generateSigningKey, signPackage } from './signature';
 
 const rand = (n: number) => randomBytes(n).toString('hex');
@@ -604,10 +604,13 @@ describe('review: the quota counts what is kept', () => {
 
   test('a value nested too deeply says so', async () => {
     fixture.user = ALICE;
-    const raw = `{"value":${'['.repeat(5000)}${']'.repeat(5000)}}`;
-    const res = await app.handle(new Request('http://localhost/api/plugins/notebook/store/deep', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: raw }));
-    expect(res.status).toBe(400);
-    expect(await res.json()).toMatchObject({ code: 'invalid_value', error: 'The value is too deeply nested' });
+    for (const depth of [PLUGIN_STORE_MAX_VALUE_DEPTH + 1, 5000]) {
+      const raw = `{"value":${'['.repeat(depth)}${']'.repeat(depth)}}`;
+      const res = await app.handle(new Request('http://localhost/api/plugins/notebook/store/deep', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: raw }));
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: 'invalid_value', error: 'The value is too deeply nested' });
+    }
+    expect(await rows(`package_name = 'notebook' AND key = 'deep'`)).toHaveLength(0);
   });
 });
 

@@ -36,6 +36,7 @@ import {
   PLUGIN_STORE_KEY_RE,
   PLUGIN_STORE_MAX_LIST,
   PLUGIN_STORE_MAX_VALUE_BYTES,
+  PLUGIN_STORE_MAX_VALUE_DEPTH,
   type PluginStoreKeyView,
   pluginStoreQuota,
 } from '@/shared/plugin-package';
@@ -65,11 +66,26 @@ export function encodeStoreValue(value: unknown): { json: string } | { status: n
   try {
     json = JSON.stringify(value);
   } catch (err) {
-    // Parsed JSON can only fail here by nesting deeper than the stack goes.
+    // Older engines can exhaust their stack before serialization completes.
     if (err instanceof RangeError) return { status: 400, code: 'invalid_value', error: 'The value is too deeply nested' };
     json = undefined;
   }
   if (json === undefined) return { status: 400, code: 'invalid_value', error: 'The value is not JSON' };
+  // Newer engines serialize iteratively, so stack overflow is not a depth
+  // limit. Count the actual JSON's containers, ignoring punctuation in strings
+  // (including escaped quotes), before passing it to the database.
+  let depth = 0;
+  let inString = false;
+  for (let i = 0; i < json.length; i++) {
+    const ch = json[i];
+    if (inString) {
+      if (ch === '\\') i++;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') inString = true;
+    else if (ch === '[' || ch === '{') {
+      if (++depth > PLUGIN_STORE_MAX_VALUE_DEPTH) return { status: 400, code: 'invalid_value', error: 'The value is too deeply nested' };
+    } else if (ch === ']' || ch === '}') depth--;
+  }
   // Postgres jsonb has no NUL character.
   if (json.includes('\\u0000')) return { status: 400, code: 'invalid_value', error: 'The value may not contain a NUL character' };
   if (Buffer.byteLength(json, 'utf8') > PLUGIN_STORE_MAX_VALUE_BYTES) return tooLarge();
