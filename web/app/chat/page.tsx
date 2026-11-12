@@ -214,8 +214,6 @@ export default function ChatPage() {
   // feature disables itself when neither is present.
   const [voiceAvailable, setVoiceAvailable] = useState<boolean | null>(null);
   const [voiceUnavailableReason, setVoiceUnavailableReason] = useState<string | null>(null);
-  const [models, setModels] = useState<Array<{ name: string; isDefault: boolean }>>([]);
-  const [selectedModel, setSelectedModel] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   /** Root reply text streamed so far for one session/iteration; superseded by chat_response. */
   const [streaming, setStreaming] = useState<{ sessionId: string; iteration: number; text: string } | null>(null);
@@ -662,20 +660,6 @@ export default function ChatPage() {
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWorkspace?.id, mounted]);
-
-  // Load models
-  const loadModels = useCallback(async () => {
-    try {
-      const data = await api.get<{ models: Array<{ name: string; isDefault: boolean }> }>('/models');
-      if (data?.models) {
-        setModels(data.models);
-        const defaultModel = data.models.find(m => m.isDefault);
-        if (defaultModel && !selectedModel) setSelectedModel(defaultModel.name);
-      }
-    } catch {}
-  }, [selectedModel]);
-
-  useEffect(() => { loadModels(); }, [loadModels]);
 
   // Poll the open session's history only when the gateway can't deliver it:
   // the connection is down, or the session belongs to an external channel
@@ -2284,9 +2268,6 @@ export default function ChatPage() {
             sessionFiles={activeState?.fileChanges}
             onOpenFile={setOpenFilePath}
             connectionStatus={connectionStatus}
-            selectedModel={selectedModel}
-            models={models}
-            onModelChange={setSelectedModel}
             swarmSessionId={activeSessionId}
             swarmEvents={swarmEvents}
             swarmDurationMs={swarmDurationMs}

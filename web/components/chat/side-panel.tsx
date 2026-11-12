@@ -61,9 +61,6 @@ interface SidePanelProps {
   /** Open a file in the in-chat file view (Thread 2). */
   onOpenFile?: (path: string) => void;
   connectionStatus: 'connected' | 'disconnected' | 'connecting';
-  selectedModel: string;
-  models: Array<{ name: string; isDefault: boolean }>;
-  onModelChange: (model: string) => void;
   /** Swarm tree lives under Session Stats as the third section. */
   swarmSessionId: string | null;
   /** Append-only queue of swarm events. SwarmTree tracks its own consumed
@@ -143,9 +140,6 @@ export default function SidePanel({
   sessionFiles,
   onOpenFile,
   connectionStatus,
-  selectedModel,
-  models,
-  onModelChange,
   swarmSessionId,
   swarmEvents,
   swarmDurationMs = 0,
@@ -178,6 +172,12 @@ export default function SidePanel({
   // Standalone agents (not in any team)
   const _standaloneAgents = sortedAgents.filter((a) => !teamMemberIds.has(a.id));
 
+  // Only observed runs of the open session can describe its model. The global
+  // registry default is unrelated to topic/session assignments and run history.
+  const latestModelAgent = Array.from(trackedAgents.values())
+    .filter(agent => !!agent.model?.trim())
+    .sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || b.startTime - a.startTime)[0];
+
   const isUnlimited = maxTokenBudget === 0;
   const tokenPercent = isUnlimited ? 0 : Math.min((totalTokens / maxTokenBudget) * 100, 100);
 
@@ -204,11 +204,16 @@ export default function SidePanel({
 
           <div>
             <label className="mb-1 block text-[10px] uppercase tracking-wider text-outline-variant">
-              default model
+              {latestModelAgent?.status === 'running' ? 'current run model' : 'latest run model'}
             </label>
-            <div className="w-full rounded-xs border border-outline-variant/60 bg-surface-container px-2 py-1 text-[12px] text-on-surface truncate">
-              {selectedModel || 'no model configured'}
+            <div data-testid="session-run-model" className="w-full rounded-xs border border-outline-variant/60 bg-surface-container px-2 py-1 text-[12px] text-on-surface truncate">
+              {latestModelAgent?.model || 'No model recorded yet'}
             </div>
+            <p className="mt-1 text-[11px] text-on-surface-variant">
+              {latestModelAgent
+                ? `${latestModelAgent.root || latestModelAgent.role === 'rootAgent' ? 'Coordinator' : latestModelAgent.role} · from this session's run history`
+                : 'Models are chosen from topic and session settings when work starts.'}
+            </p>
           </div>
 
         </div>
