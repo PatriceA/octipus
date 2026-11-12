@@ -208,6 +208,17 @@ it('gateway commands show the same plan and persist terminal feedback', async ()
 
 
 describe('durable learning checks', () => {
+  it('never queues an automatic check for a one-shot session', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    const sid = randomUUID();
+    await executeRaw(`INSERT INTO sessions (id, user_id, channel_type, channel_id, context) VALUES ('${sid}', '${alice}', 'api', 'one-shot', '{"oneShot": true}')`);
+    const tool = createWorkPlanTools().find(t => t.name === 'update_work_plan')!;
+    await tool.execute({ revision: 0, title: 'Build', goal: 'Build it', summary: 'Done', steps: [
+      { id: 'a', title: 'Build', status: 'done', evidence: 'Tests pass' },
+    ] }, { sessionId: sid, userId: alice } as AgentContext);
+    const res = await app.handle(new Request(`http://localhost/api/sessions/${sid}/learning`, { headers: { 'x-test-user': alice } }));
+    expect((await res.json()).checks).toHaveLength(0);
+  });
   it('queues plan completion atomically, counts tool calls across turns, and scopes receipts', async () => {
     const { executeRaw } = await import('@/db/postgres');
     const learnSid = randomUUID();
