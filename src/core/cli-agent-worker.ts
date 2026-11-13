@@ -1,3 +1,4 @@
+import { grokToolIsolationError } from './grok-cli-runtime';
 import { environmentCredentialOptions } from '@/security/environment-credentials';
 import { nativeCliEnvironment } from '@/security/environment-identity';
 import { executionEnvironmentDescription, executionEnvironmentFor } from '@/security/execution-environments';
@@ -1366,7 +1367,7 @@ When a task matches one of these skills, load it with get_skill before starting 
       const configIndex = args.indexOf('--mcp-config');
       // Windows writes the system prompt to a temp file (command-line length cap).
       const sysFileIndex = args.indexOf('--append-system-prompt-file');
-      const paths = [built.env?.VIBE_HOME, ...(this.connection && configIndex >= 0 ? [args[configIndex + 1]] : []), ...(sysFileIndex >= 0 ? [args[sysFileIndex + 1]] : [])];
+      const paths = [...(built.cleanupPaths ?? []), built.env?.VIBE_HOME, ...(this.connection && configIndex >= 0 ? [args[configIndex + 1]] : []), ...(sysFileIndex >= 0 ? [args[sysFileIndex + 1]] : [])];
       for (const path of paths) if (path) {
         try { rmSync(path, { recursive: true, force: true }); }
         catch (err) { agentLogger.warn({ err, path }, 'CLI temporary configuration cleanup failed'); }
@@ -1403,12 +1404,12 @@ When a task matches one of these skills, load it with get_skill before starting 
       (type, data) => {
         const stats = (data as { stats?: { inputTokens?: number; outputTokens?: number; totalTokens?: number; cacheRead?: number; cacheCreation?: number } }).stats;
         if (type === 'thought' && stats?.totalTokens != null) {
-          const claude = toolConfig.modelProvider === 'anthropic' || toolConfig.modelProvider === 'zai' || toolConfig.modelProvider === 'moonshot';
-          const input = (stats.inputTokens ?? 0) + (claude ? (stats.cacheRead ?? 0) + (stats.cacheCreation ?? 0) : 0);
-          invocationUsage = { inputTokens: (claude ? 0 : invocationUsage.inputTokens) + input,
-            outputTokens: (claude ? 0 : invocationUsage.outputTokens) + (stats.outputTokens ?? 0),
-            totalTokens: (claude ? 0 : invocationUsage.totalTokens) + stats.totalTokens,
-            cacheReadTokens: (claude ? 0 : invocationUsage.cacheReadTokens ?? 0) + (stats.cacheRead ?? 0),
+          const messagesUsage = toolConfig.modelProvider === 'anthropic' || toolConfig.modelProvider === 'zai' || toolConfig.modelProvider === 'moonshot' || toolConfig.modelProvider === 'grok';
+          const input = (stats.inputTokens ?? 0) + (messagesUsage ? (stats.cacheRead ?? 0) + (stats.cacheCreation ?? 0) : 0);
+          invocationUsage = { inputTokens: (messagesUsage ? 0 : invocationUsage.inputTokens) + input,
+            outputTokens: (messagesUsage ? 0 : invocationUsage.outputTokens) + (stats.outputTokens ?? 0),
+            totalTokens: (messagesUsage ? 0 : invocationUsage.totalTokens) + stats.totalTokens,
+            cacheReadTokens: (messagesUsage ? 0 : invocationUsage.cacheReadTokens ?? 0) + (stats.cacheRead ?? 0),
             cacheCreationTokens: stats.cacheCreation, available: stats.totalTokens > 0 };
         }
         // Native tool uses feed the flow label (security/flow-guard.ts); bridged
@@ -1594,7 +1595,7 @@ When a task matches one of these skills, load it with get_skill before starting 
       // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- binary from the configured CLI tool, args built by its adapter; shell only on Windows with every value quoted (windowsShellQuote); the flagged `opts` carries two booleans that pick resume mode and cold-history length
       const proc = spawn(shellQuote(binary), useShellForSpawn ? args.map(quoteArg) : args, {
         env,
-        cwd: workspaceCwd,
+        cwd: built.cwd ?? workspaceCwd,
         stdio: ['pipe', 'pipe', 'pipe'],
         // No spawn-option `timeout` — the single timeout source is the
         // hardTimeout below, which stamps abortReason='timeout' so a timeout
@@ -1676,6 +1677,14 @@ When a task matches one of these skills, load it with get_skill before starting 
           if (!line.trim() || this.aborted) continue;
           try {
             const event = runtimeCredentials.mask(JSON.parse(line));
+            if (toolConfig.octipusToolsOnly && event.type === 'system' && event.subtype === 'init') {
+              const isolationError = grokToolIsolationError(event);
+              if (isolationError) {
+                this.runError = isolationError;
+                this.stop();
+                continue;
+              }
+            }
             if (built.keepStdinOpen && event.type === 'control_response' && this.steeringInterrupt && event.response?.request_id === this.steeringInterrupt.requestId) {
               if (event.response.subtype !== 'success') {
                 const failed = this.failUnacknowledgedCancellation('interrupt was rejected');

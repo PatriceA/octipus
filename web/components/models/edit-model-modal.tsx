@@ -8,10 +8,11 @@ import { api } from '@/lib/api';
 import { Portal } from '@/components/ui/portal';
 import type { CLITool, Model } from '@/lib/types/models';
 
-type CliKind = 'claude' | 'antigravity' | 'codex' | 'vibe' | 'glm' | 'kimi' | null;
+type CliKind = 'claude' | 'antigravity' | 'codex' | 'vibe' | 'glm' | 'kimi' | 'grok' | null;
 
 function fallbackCliKind(modelId: string): CliKind {
   const id = modelId.toLowerCase();
+  if (id.startsWith('cli/grok')) return 'grok';
   if (id.includes('claude')) return 'claude';
   if (id.includes('antigravity') || id.includes('agy') || id.includes('gemini')) return 'antigravity';
   if (id.includes('codex')) return 'codex';
@@ -33,6 +34,7 @@ function cliKindForTool(tool: CLITool | undefined, modelId: string): CliKind {
     case 'mistral': return 'vibe';
     case 'zai': return 'glm';
     case 'moonshot': return 'kimi';
+    case 'grok': return 'grok';
     default: return fallbackCliKind(modelId);
   }
 }
@@ -210,7 +212,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
           delete cliAgentConfig.inheritApiKeys;
           cliAgentConfig.inheritApiKeys = formData.cliInheritApiKeys;
         }
-        if (formData.cliPermissionMode) cliAgentConfig.permissionMode = formData.cliPermissionMode;
+        if (cliKind !== 'grok' && formData.cliPermissionMode) cliAgentConfig.permissionMode = formData.cliPermissionMode;
         if (supportsModelOverride) {
           delete cliAgentConfig.model;
           if (formData.cliModel.trim()) cliAgentConfig.model = formData.cliModel.trim();
@@ -563,7 +565,9 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 </p>
               )}
 
-              <div>
+              {cliKind === 'grok' ? <p className="text-sm text-on-surface-variant">
+                Grok Build uses this session’s Octipus tools and approvals. Access is managed in Environments &amp; Access.
+              </p> : <div>
                 <label className="block text-sm font-medium text-on-surface-variant mb-1">Permission Mode</label>
                 <select
                   value={formData.cliPermissionMode}
@@ -584,7 +588,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 <p className="text-xs text-on-surface-variant mt-1">
                   Octipus translates this level to the CLI&apos;s native permission controls.
                 </p>
-              </div>
+              </div>}
 
               {supportsApiKeyInheritance ? (
                 <label className="flex items-start gap-2 cursor-pointer">

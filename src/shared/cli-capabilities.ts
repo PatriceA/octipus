@@ -1,3 +1,6 @@
+/** Vendor identity used by CLI model discovery and credential scoping. */
+export type CliModelProvider = 'anthropic' | 'google' | 'openai' | 'mistral' | 'zai' | 'moonshot' | 'grok';
+
 /**
  * Product-facing CLI adapter limits, shared by backend, web and TUI.
  * Pure: no node imports, so the web bundle can use it.
@@ -5,6 +8,8 @@
 export interface CliCapabilitySource {
   /** Whole result arrives at process exit (no streamed events). */
   bufferOutput?: boolean;
+  /** Every action goes through the session's Octipus tools. */
+  octipusToolsOnly?: boolean;
   /** How the CLI reaches its Octipus tools; defaults to a per-run MCP config. */
   toolBridge?: 'mcp' | 'terminal';
 }
@@ -15,7 +20,8 @@ export function describeCliCapabilities(tool: CliCapabilitySource): string {
     `${buffered ? 'activity reported at completion' : 'streamed activity'}. ` +
     'Guidance arrives with the next Octipus tool response. ' +
     (buffered ? 'Late guidance is reported with the result and needs another message. ' : 'Late guidance can use a bounded follow-up turn. ') +
-    'Octipus tool approvals use this session; vendor-native controls vary.';
+    (tool.octipusToolsOnly ? 'All actions use this session’s Octipus permissions; vendor-native tools are disabled.'
+      : 'Octipus tool approvals use this session; vendor-native controls vary.');
 }
 
 /** Additive flags a managed (bridge-scoped) run accepts per adapter. Keyed by adapter identity, not model name. */
@@ -26,6 +32,7 @@ export const SCOPED_EXTRA_ARGS: Record<string, { flags: readonly string[]; value
   },
   'Codex CLI': { flags: ['--strict-config'], values: { '--color': ['auto', 'always', 'never'] } },
   'Mistral Vibe': { flags: [], values: {} },
+  'Grok Build': { flags: [], values: {} },
   Antigravity: { flags: ['--disable-slash-commands'], values: { '--effort': ['low', 'medium', 'high'] } },
 };
 
@@ -46,6 +53,7 @@ export const SCOPED_EXTRA_ARGS: Record<string, { flags: readonly string[]; value
 export const CLI_RESUME: Record<string, { style: 'caller-minted' | 'captured'; flag: string }> = {
   'Claude Code': { style: 'caller-minted', flag: '--resume' },
   'Codex CLI': { style: 'captured', flag: 'resume' },
+  'Grok Build': { style: 'caller-minted', flag: '--resume' },
 };
 
 export function canResume(adapterKey: string): boolean {

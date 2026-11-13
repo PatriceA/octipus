@@ -25,13 +25,14 @@ export function configuredCliBinary(binary: string): string {
   const config = getConfig().cliModels;
   const configured = binary === 'claude' ? config.claudeCode.binaryPath
     : binary === 'codex' ? config.codexCli.binaryPath
-      : binary === 'agy' ? config.antigravityCli.binaryPath : binary;
+      : binary === 'agy' ? config.antigravityCli.binaryPath
+        : binary === 'grok' ? config.grokBuild.binaryPath : binary;
   return resolveExecutable(configured, config.path || process.env.PATH);
 }
 
 export function cliExecutableHealth() {
   const config = getConfig().cliModels;
-  return Object.entries({ claude: config.claudeCode, codex: config.codexCli, agy: config.antigravityCli })
+  return Object.entries({ claude: config.claudeCode, codex: config.codexCli, agy: config.antigravityCli, grok: config.grokBuild })
     .map(([name, tool]) => {
       try { return { name, status: 'healthy', path: resolveExecutable(tool.binaryPath, config.path || process.env.PATH) }; }
       catch (error) { return { name, status: 'unhealthy', message: error instanceof Error ? error.message : String(error) }; }

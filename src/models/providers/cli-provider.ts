@@ -1,6 +1,6 @@
 import { isProviderQuotaMessage } from '@/core/errors/provider-recovery';
 import { configuredCliBinary } from '@/core/cli-executable';
-import { describeCliCapabilities } from '@/shared/cli-capabilities';
+import { describeCliCapabilities, type CliModelProvider } from '@/shared/cli-capabilities';
 import { cliCredentialOwnerFor, cliEnvFor, cliWorkDirFor } from '@/core/cli-child-env';
 import { discoverCodexMcpServers, getClaudeSpaceSettingsPath, getEmptyMcpConfigPath, getEmptyVibeHome } from '@/core/cli-adapters';
 import { spawn } from 'child_process';
@@ -174,7 +174,7 @@ export interface CLIToolConfig {
   /** Vendor-managed billing/usage pointers (surfaced in UI) */
   billingInfo: CLIBillingInfo;
   /** Direct provider whose model catalog drives the picker for this CLI */
-  modelProvider: 'anthropic' | 'google' | 'openai' | 'mistral' | 'zai' | 'moonshot';
+  modelProvider: CliModelProvider;
   /** Flag the CLI uses to select a model (`--model`, `-m`) — for docs only */
   modelFlag: string;
   /**
@@ -193,6 +193,8 @@ export interface CLIToolConfig {
   bufferOutput?: boolean;
   /** How a managed run hands the CLI its Octipus tools. Default: per-run MCP config. */
   toolBridge?: 'mcp' | 'terminal';
+  /** Disable all vendor-native action tools in managed runs. */
+  octipusToolsOnly?: boolean;
 }
 
 // ---- Claude Code CLI ----
@@ -710,9 +712,33 @@ const kimiCliConfig: CLIToolConfig = makeAnthropicCompatCliConfig({
 });
 
 /** All registered CLI tool configs */
-export const CLI_TOOLS: CLIToolConfig[] = [claudeCodeConfig, antigravityConfig, codexCliConfig, vibeCliConfig, glmCliConfig, kimiCliConfig];
+// Grok Build runs as a managed agent, using the workstation's existing login.
+// It has no stdin tool-less completion contract, so it is not a completion lane.
+const grokBuildConfig: CLIToolConfig = {
+  name: 'Grok Build',
+  octipusToolsOnly: true,
+  modelPatterns: ['cli/grok-build', 'cli/grok'],
+  binaryPath: 'grok',
+  buildArgs: () => { throw new Error('Use Grok Build as an agent model, with the scoped Octipus bridge'); },
+  parseOutput: parseClaudeStyleOutput('cli/grok-build'),
+  isQuotaError: output => /rate.?limit|quota|too many requests|usage limit/i.test(output),
+  quotaProvider: 'grok-build',
+  modelProvider: 'grok',
+  modelFlag: '--model',
+  billingInfo: {
+    vendor: 'xAI',
+    planNote: 'Existing Grok Build login, or an explicitly enabled XAI_API_KEY',
+    billingMode: 'mixed',
+    pricingDocUrl: 'https://x.ai/grok',
+    modelsDocUrl: 'https://docs.x.ai/build/cli/reference',
+    modelFlagDocUrl: 'https://docs.x.ai/build/cli/headless-scripting',
+    warning: 'Run grok login as the Octipus OS account. Managed runs use Octipus tools, not vendor-native tools or workstation MCP servers. Agent use only; billing and model availability are controlled by xAI.',
+  },
+};
 
-export { antigravityConfig, claudeCodeConfig, codexCliConfig, glmCliConfig, kimiCliConfig, vibeCliConfig };
+export const CLI_TOOLS: CLIToolConfig[] = [claudeCodeConfig, antigravityConfig, codexCliConfig, vibeCliConfig, glmCliConfig, kimiCliConfig, grokBuildConfig];
+
+export { antigravityConfig, claudeCodeConfig, codexCliConfig, glmCliConfig, kimiCliConfig, vibeCliConfig, grokBuildConfig };
 
 /**
  * CLI Provider — wraps subscription-based CLI tools (Claude Code, Antigravity, Codex, Mistral Vibe)
@@ -941,7 +967,7 @@ export class CLIProvider implements ModelProvider {
     name: string;
     available: boolean;
     modelPatterns: string[];
-    modelProvider: 'anthropic' | 'google' | 'openai' | 'mistral' | 'zai' | 'moonshot';
+    modelProvider: CliModelProvider;
     modelFlag: string;
     billingInfo: CLIBillingInfo;
     adapter: string;
