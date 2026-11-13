@@ -143,6 +143,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         defaultMaxTokens: t.Optional(t.Number({ minimum: 1 })),
         contextWindow: t.Optional(t.Number()),
         supportsVision: t.Optional(t.Boolean()),
+        supportsAudioInput: t.Optional(t.Boolean()),
         supportsTools: t.Optional(t.Boolean()),
         supportsStreaming: t.Optional(t.Boolean()),
         // topics/topicRoles intentionally omitted — binding is owned by the Topics page.
@@ -185,6 +186,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         priority: t.Optional(t.Number()),
         supportsTools: t.Optional(t.Boolean()),
         supportsVision: t.Optional(t.Boolean()),
+        supportsAudioInput: t.Optional(t.Boolean()),
         supportsStreaming: t.Optional(t.Boolean()),
         costPerInputToken: t.Optional(t.Number()),
         costPerOutputToken: t.Optional(t.Number()),

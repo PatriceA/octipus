@@ -220,6 +220,13 @@ async function main() {
     void runKBSelfCheck({ embedTimeoutMs: BOOT_KB_EMBED_TIMEOUT_MS })
       .catch((err) => logger.error({ err }, 'KB self-check threw unexpectedly — KB endpoints will 503 until /knowledge/readiness passes'));
 
+    // What each registered model can read (images, audio): detected once per
+    // row, in the background. An install from before detection has Ollama
+    // vision models marked as text-only; this fixes that without a click.
+    void import('@/models/capability-detect')
+      .then(({ detectCapabilitiesForUndetectedRows }) => detectCapabilitiesForUndetectedRows())
+      .catch((err) => logger.warn({ err }, 'Model capability detection failed; rows keep their current flags'));
+
     // Probe optional capabilities (Playwright, MCP, docker, …) and persist
     // their state to the `capabilities` table so the root agent can
     // gate agent dispatch on tool availability. Non-fatal — if probing

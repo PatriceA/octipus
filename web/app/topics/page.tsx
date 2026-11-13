@@ -14,7 +14,9 @@ interface TopicRow {
   value: string;
   label: string;
   description: string;
-  kind: 'text' | 'background' | 'vision' | 'ocr' | 'embedding' | 'decision';
+  kind: 'text' | 'background' | 'vision' | 'ocr' | 'embedding' | 'decision' | 'image_generation' | 'transcription' | 'speech';
+  /** Media lanes: what actually does the work (may be another lane or the default model); null = off. */
+  effectiveModel?: string | null;
   primaryModel: string | null;
   backupModel: string | null;
   executorModel: string | null;
@@ -34,6 +36,9 @@ const KIND_LABELS: Record<TopicRow['kind'], string> = {
   ocr: 'ocr',
   embedding: 'embedding',
   decision: 'decision',
+  image_generation: 'image generation',
+  transcription: 'speech to text',
+  speech: 'text to speech',
 };
 
 function numOrNull(v: string): number | null {
@@ -133,6 +138,13 @@ function TopicCard({
             </span>
           </div>
           <p className="text-xs text-on-surface-variant mt-0.5">{topic.description}</p>
+          {topic.effectiveModel !== undefined && (
+            <p className="text-xs mt-1" data-testid={`effective-${topic.value}`}>
+              {topic.effectiveModel
+                ? <span className="text-tertiary">Served by {topic.effectiveModel}</span>
+                : <span className="text-on-surface-variant">Off — nothing here does this yet</span>}
+            </p>
+          )}
         </div>
         {canEdit && (
           <button
@@ -319,7 +331,7 @@ export default function TopicsPage() {
       <PageHeader
         title="topics"
         badge={<Tags className="w-5 h-5 text-on-surface-variant" />}
-        description="A topic binds a kind of work to a model, and every role listed under it runs on that binding. Start with one text model everywhere; override a lane when it needs a different one. Embedding, OCR and vision need compatible models."
+        description="A topic binds a kind of work to a model, and every role listed under it runs on that binding. Start with one text model everywhere; override a lane when it needs a different one. Only a chat model is required: every other lane is optional, and while one is unbound its feature is off and hidden, not broken."
       />
 
       <RootModelNote />

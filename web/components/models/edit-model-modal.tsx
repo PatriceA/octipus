@@ -82,6 +82,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
     defaultMaxTokens: model.defaultMaxTokens ?? Math.min(4096, model.maxTokens),
     priority: model.priority,
     supportsVision: model.supportsVision,
+    supportsAudioInput: model.supportsAudioInput ?? false,
     supportsTools: model.supportsTools,
     supportsStreaming: model.supportsStreaming,
     disableThinking: model.metadata?.extraBody?.think === false,
@@ -167,6 +168,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
         defaultMaxTokens: formData.defaultMaxTokens,
         priority: formData.priority,
         supportsVision: formData.supportsVision,
+        supportsAudioInput: formData.supportsAudioInput,
         supportsTools: formData.supportsTools,
         supportsStreaming: formData.supportsStreaming,
         costPerInputToken: formData.costPerInputToken,
@@ -392,7 +394,16 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 onChange={(e) => setFormData({ ...formData, supportsVision: e.target.checked })}
                 className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary"
               />
-              <span className="text-sm text-on-surface-variant">Vision</span>
+              <span className="text-sm text-on-surface-variant" title="The model reads images itself; they are sent to it directly instead of through the Vision lane">Reads images</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={formData.supportsAudioInput}
+                onChange={(e) => setFormData({ ...formData, supportsAudioInput: e.target.checked })}
+                className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary"
+              />
+              <span className="text-sm text-on-surface-variant" title="The model accepts audio as input (Gemini, gpt-4o-audio, Voxtral, Qwen-Omni). Speech to text is the Transcription lane, not this">Hears audio</span>
             </label>
             <label className="flex items-center gap-2 cursor-pointer">
               <input

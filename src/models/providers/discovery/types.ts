@@ -31,6 +31,8 @@ export interface CanonicalModel {
   /** Cost per 1M output tokens, if vendor exposes it. */
   costPerOutputToken?: number;
   supportsVision?: boolean;
+  /** Accepts audio as chat input. */
+  supportsAudioInput?: boolean;
   supportsTools?: boolean;
   /** Vendor flags this as preview/experimental. */
   isPreview?: boolean;

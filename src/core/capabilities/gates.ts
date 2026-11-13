@@ -164,24 +164,18 @@ const embeddingResolver: CapabilityResolver = async () => {
   return explicitlyBound(row, 'embedding') ? { on: true } : { on: false, reason: `needs ${CAPABILITY_INFO.embedding.needs}` };
 };
 
-const seeResolver: CapabilityResolver = async () => {
-  const reg = await registry();
-  const vision = await reg.getModelForTopic('vision');
-  if (explicitlyBound(vision, 'vision')) return { on: true };
-  const fallback = await reg.getDefaultModel();
-  if (fallback?.supportsVision) return { on: true };
-  return { on: false, reason: `needs ${CAPABILITY_INFO.see.needs}` };
-};
+/** A media capability is configured when the media resolver finds someone to do it (src/models/media-resolver.ts). */
+function mediaResolver(need: 'see' | 'ocr' | 'draw'): CapabilityResolver {
+  return async () => {
+    const { resolveMedia } = await import('@/models/media-resolver');
+    const resolution = await resolveMedia(need);
+    return resolution.mode === 'none' ? { on: false, reason: resolution.reason } : { on: true };
+  };
+}
 
-const ocrResolver: CapabilityResolver = async () => {
-  const reg = await registry();
-  const ocr = await reg.getModelForTopic('ocr');
-  if (explicitlyBound(ocr, 'ocr')) return { on: true };
-  const see = await (resolvers.see)();
-  return see.on ? { on: true } : { on: false, reason: `needs ${CAPABILITY_INFO.ocr.needs}` };
-};
-
-const drawResolver: CapabilityResolver = async () => ({ on: false, reason: `needs ${CAPABILITY_INFO.draw.needs}` });
+const seeResolver = mediaResolver('see');
+const ocrResolver = mediaResolver('ocr');
+const drawResolver = mediaResolver('draw');
 
 async function voiceAvailability() {
   const { getConfig } = await import('@/config');

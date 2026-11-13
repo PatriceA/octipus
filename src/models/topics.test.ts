@@ -22,7 +22,7 @@ describe('canonical topic registry', () => {
     for (const t of TOPICS) {
       expect(t.label.length).toBeGreaterThan(0);
       expect(t.description.length).toBeGreaterThan(0);
-      expect(['text', 'background', 'vision', 'ocr', 'embedding', 'decision']).toContain(t.kind);
+      expect(['text', 'background', 'vision', 'ocr', 'embedding', 'decision', 'image_generation', 'transcription', 'speech']).toContain(t.kind);
     }
   });
 

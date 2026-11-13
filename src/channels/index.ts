@@ -110,15 +110,13 @@ async function analyzeImageAttachments(
   if (images.length === 0) return null;
 
   try {
-    const { getModelRegistry } = await import('@/models/model-registry');
+    const { resolveMedia } = await import('@/models/media-resolver');
     const { getLiteLLMClient } = await import('@/models/litellm-client');
-    const registry = getModelRegistry();
-    const visionModel = await registry.getModelForTopic('vision');
-
-    if (!visionModel) {
-      channelLogger.warn('No vision model registered (topic: vision). Cannot analyze image attachments.');
-      return null;
-    }
+    const resolution = await resolveMedia('see');
+    // Nobody can read images: the caller tells the agent so (not configured
+    // is off, not a warning — docs/MODULES.md → Capability gates).
+    if (resolution.mode === 'none') return null;
+    const visionModel = resolution.row;
 
     const client = getLiteLLMClient();
     const results: string[] = [];

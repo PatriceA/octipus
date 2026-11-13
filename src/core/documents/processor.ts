@@ -1,4 +1,5 @@
-import { capabilityConfigured } from '@/core/capabilities/gates';
+import { CapabilityNotConfiguredError, capabilityConfigured } from '@/core/capabilities/gates';
+import { boundTo, resolvedRow, resolveMedia } from '@/models/media-resolver';
 import { recordSkipped } from '@/core/rag/index-backlog';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
 import { existsSync } from 'fs';
@@ -270,6 +271,13 @@ export class DocumentProcessor {
 
       this.logger.info({ documentId, category, textLength: extractedText.length }, 'Document processed successfully');
     } catch (err) {
+      if (err instanceof CapabilityNotConfiguredError) {
+        // A scan or image with no OCR/vision model: kept, and marked with
+        // what it needs — not an error of the pipeline.
+        this.logger.info({ documentId, capability: err.capability }, 'Document stored; text not extracted (not configured)');
+        await documentRepository.updateStatus(documentId, 'failed', err.message);
+        return;
+      }
       this.logger.error({ err, documentId }, 'Document processing failed');
       await documentRepository.updateStatus(documentId, 'failed', String(err));
     }
@@ -357,8 +365,9 @@ export class DocumentProcessor {
     const parts: string[] = [];
     let ocrYieldedText = false;
 
-    // 1. Try OCR (text extraction) with 'ocr' topic model
-    const ocrModel = await registry.getModelForTopic('ocr');
+    // 1. Try OCR (text extraction) with the model bound to the OCR lane
+    const ocrBound = await registry.getModelForTopic('ocr');
+    const ocrModel = boundTo(ocrBound, 'ocr') ? ocrBound : null;
     if (ocrModel) {
       try {
         this.logger.info({ model: ocrModel.modelId, filePath }, 'OCR text extraction');
@@ -382,9 +391,10 @@ export class DocumentProcessor {
       }
     }
 
-    // 2. Vision analysis (image description) with 'vision' topic model.
+    // 2. Vision analysis (image description): the Vision lane, or the default
+    // model when it reads images (src/models/media-resolver.ts).
     // Skip when OCR already produced substantive text — running both doubles cost for documents.
-    const visionModel = await registry.getModelForTopic('vision');
+    const visionModel = resolvedRow(await resolveMedia('see'));
     if (visionModel && !ocrYieldedText) {
       try {
         this.logger.info({ model: visionModel.modelId, filePath }, 'Vision image analysis');
@@ -446,7 +456,9 @@ export class DocumentProcessor {
         return data.response || '';
       }
 
-      throw new Error('No vision or OCR model configured. Assign a model with the "ocr" or "vision" topic in the Models page.');
+      // Not configured is not a failure of this document (docs/MODULES.md →
+      // Capability gates): it says what is missing.
+      throw new CapabilityNotConfiguredError('ocr');
     }
 
     return parts.join('\n\n');
@@ -514,17 +526,11 @@ export class DocumentProcessor {
     }
 
     // 3. Image-based PDF — render each page to PNG via pdftoppm, send to vision model
-    const registry = getModelRegistry();
-    const ocrModel = await registry.getModelForTopic('ocr');
-    const visionModel = !ocrModel ? await registry.getModelForTopic('vision') : null;
-    const model = ocrModel || visionModel;
-
-    if (!model) {
-      throw new Error(
-        'Scanned/image-only PDF detected, but no OCR/vision model is configured. ' +
-          'Assign a model to topic "ocr" or "vision" on the Models page.',
-      );
-    }
+    // The OCR lane, then the Vision lane, then the default model if it reads images.
+    const resolution = await resolveMedia('ocr');
+    if (resolution.mode === 'none') throw new CapabilityNotConfiguredError('ocr');
+    const model = resolution.row;
+    const ocrModel = resolution.mode === 'lane' && resolution.lane === 'ocr' ? model : null;
 
     if (!(await hasPdftoppm())) {
       throw new Error(
