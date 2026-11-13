@@ -961,6 +961,9 @@ export class DocumentProcessor {
     // filed; only its chunks wait. Nothing is chunked — it is recorded and
     // indexed by the catch-up once a model is configured.
     if (!(await capabilityConfigured('embedding'))) {
+      // A re-processed document loses its earlier chunks now (deleting needs no
+      // model), so a keyword search never serves its old text.
+      await getEmbeddingService().deleteBySource({ ownerUserId: owner.userId, workspaceId: owner.workspaceId }, purpose ?? 'document', `doc:${documentId}`);
       await recordSkipped({
         kind: 'document', sourceId: documentId, ownerUserId: owner.userId, workspaceId: owner.workspaceId,
         purpose: purpose ?? 'document', metadata: { filePath: filename },

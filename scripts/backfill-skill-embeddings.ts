@@ -128,7 +128,7 @@ async function main() {
         succeeded++;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        if (message.includes('No model mapped to topic "embedding"')) {
+        if (message.includes('No model mapped to topic "embedding"') || (err as { code?: string }).code === 'capability_not_configured') {
           coreLogger.error(
             { err, component: 'backfill-skills' },
             'Skill embedding backfill aborted: no embedding model configured. ' +

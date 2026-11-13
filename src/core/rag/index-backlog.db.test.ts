@@ -133,4 +133,17 @@ describe('index backlog', () => {
     expect(await rows()).toHaveLength(0);
     vi.restoreAllMocks();
   });
+
+  test('a document whose processing failed is dropped, not retried', async () => {
+    const { recordSkipped, runIndexBacklog } = await import('./index-backlog');
+    const { setCapabilitiesForTest } = await import('@/core/capabilities/gates');
+    const { queryRaw } = await import('@/db/postgres');
+    const docId = randomUUID();
+    await queryRaw(`INSERT INTO documents (id, user_id, filename, original_name, mime_type, size, status, storage_path)
+      VALUES ('${docId}', '${userId}', 'g.pdf', 'Broken.pdf', 'application/pdf', 1, 'failed', '/tmp/g.pdf')`);
+    await recordSkipped({ kind: 'document', sourceId: docId, ownerUserId: userId });
+    setCapabilitiesForTest({ embedding: true });
+    expect(await runIndexBacklog()).toEqual({ indexed: 0, dropped: 1, failed: 0 });
+    expect(await rows()).toHaveLength(0);
+  });
 });

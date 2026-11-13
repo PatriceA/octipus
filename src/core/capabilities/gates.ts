@@ -45,7 +45,8 @@ function unknownSnapshot(): CapabilitySnapshot {
  * module on (src/test-setup.ts): the suites of a gated tool run against it
  * configured, and the tests of "off" set the snapshot themselves.
  */
-const ALL_ON_FOR_TESTS = process.env.OCTIPUS_CAPABILITIES_ALL_ON === '1';
+// Honoured in the test lane only: a stray variable must never freeze a real install's gates on.
+const ALL_ON_FOR_TESTS = process.env.OCTIPUS_CAPABILITIES_ALL_ON === '1' && (process.env.NODE_ENV === 'test' || !!process.env.VITEST);
 
 function initialSnapshot(): CapabilitySnapshot {
   if (!ALL_ON_FOR_TESTS) return unknownSnapshot();
@@ -106,7 +107,9 @@ export function assertCapability(cap: Capability): void {
  * of "not checked yet = off".
  */
 export async function ensureCapabilitiesKnown(): Promise<CapabilitySnapshot> {
-  if (computedAt === 0) await refreshCapabilities();
+  // A snapshot computed while a resolver could not answer (a script that
+  // checked before its database was up) is computed again on the next call.
+  if (computedAt === 0 || lastRefreshHadErrors) await refreshCapabilities();
   return snapshot;
 }
 
@@ -220,6 +223,8 @@ export function setCapabilityResolver(cap: Capability, resolver: CapabilityResol
 }
 
 let inFlight: Promise<CapabilitySnapshot> | null = null;
+/** The last refresh had a resolver that threw (its capability reads off "could not be checked"). */
+let lastRefreshHadErrors = false;
 let again = false;
 
 /**
@@ -246,6 +251,7 @@ export function refreshCapabilities(): Promise<CapabilitySnapshot> {
         }
       }));
       result = Object.fromEntries(entries) as CapabilitySnapshot;
+      lastRefreshHadErrors = entries.some(([, state]) => state.reason?.startsWith('could not be checked') === true);
       applySnapshot(result);
     } while (again);
     return result;

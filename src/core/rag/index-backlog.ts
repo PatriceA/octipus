@@ -79,6 +79,8 @@ const indexers: Record<BacklogKind, BacklogIndexer> = {
     if (!doc) return false;
     // Recorded while the pipeline was still running: its text is stored at the
     // end of processing. Not yet is a retry, not a drop.
+    // A document whose processing failed has no text to index: dropped.
+    if (doc.status === 'failed') return false;
     if (doc.status !== 'completed' && !doc.ocrText?.trim()) throw new Error('document not processed yet');
     if (!doc.ocrText?.trim()) return false;
     const { getEmbeddingService } = await import('./embeddings');

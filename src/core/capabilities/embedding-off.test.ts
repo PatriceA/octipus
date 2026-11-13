@@ -66,12 +66,14 @@ describe('embedding not configured', () => {
   test('document pipeline: recorded for catch-up, nothing chunked, the document is not failed', async () => {
     const { getEmbeddingService } = await import('@/core/rag/embeddings');
     const indexText = vi.spyOn(getEmbeddingService(), 'indexText');
+    const deleteBySource = vi.spyOn(getEmbeddingService(), 'deleteBySource').mockResolvedValue(0 as never);
     const { DocumentProcessor } = await import('@/core/documents/processor');
     const processor = new DocumentProcessor() as unknown as {
       indexDocument(owner: { userId: string; workspaceId: string | null }, id: string, text: string, filename: string, category: string, purpose?: 'image_description'): Promise<void>;
     };
     await expect(processor.indexDocument({ userId: OWNER.ownerUserId, workspaceId: null }, 'doc-1', 'text', 'a.pdf', 'misc', 'image_description')).resolves.toBeUndefined();
     expect(indexText).not.toHaveBeenCalled();
+    expect(deleteBySource).toHaveBeenCalledWith({ ownerUserId: OWNER.ownerUserId, workspaceId: null }, 'image_description', 'doc:doc-1');
     expect(spies.recordSkipped).toHaveBeenCalledWith({
       kind: 'document', sourceId: 'doc-1', ownerUserId: OWNER.ownerUserId, workspaceId: null,
       purpose: 'image_description', metadata: { filePath: 'a.pdf' },
