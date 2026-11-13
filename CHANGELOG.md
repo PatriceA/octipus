@@ -7,6 +7,79 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+## v0.7.0 — Your agent workspace (2026-11-13)
+
+### Highlights
+
+- **A clearer workspace.** Project Desk puts current work, its state and the
+  next action first. Navigation is collapsible, Settings is searchable and
+  grouped by purpose, and the web UI supports light and dark appearances.
+- **Optional Companion supervision.** A dedicated Companion chat can coordinate
+  existing sessions, follow projects, keep ideas in to-dos and respond to
+  problems. Its model and budget are separate from the sessions it supervises.
+- **Signed plugin packages and marketplace.** Plugins install with an explicit
+  permission review, verified content and signatures, and sandboxed execution.
+  Official marketplace public trust anchors ship with Octipus; users do not
+  generate publisher keys. Packages can add tools, pages, dashboards and
+  background work, with declared host capabilities and scoped persistent data.
+  Marketplace packages are published separately from Octipus itself.
+- **Native Windows plugin sandbox.** The release includes the AppContainer/Job
+  object helper and checksum for supported Windows installations. Linux and
+  macOS retain their platform sandbox runners.
+- **Environments & Access.** Configure where work runs and what it may use:
+  installed workstation programs and sign-ins, isolated runtimes, remote hosts,
+  project folders and unattended work. Explicit denials and configured limits
+  remain effective.
+- **More reliable long-running work.** Pipeline approvals, recovery, child
+  authority and model budgets retain their scope. Chat and MCP retries use
+  idempotency keys, queued steering survives CLI turns, and cancelled work
+  stops deliberately rather than silently starting again.
+- **Simpler first-run setup.** Start with one model and a chat before adding
+  optional mail, project or background features. Onboarding is centered and
+  themed, validates model details, checks connections before assignment, and
+  reports partial failures and save errors with a way to retry.
+- **Usable starting budgets.** The default per-user daily allowance is
+  10,000,000 tokens. Root, worker, pipeline and plugin budgets have more room
+  for useful work; explicit administrator limits remain in place. Refusals
+  identify the applicable limit and where to change it.
+- **Less setup overhead.** Product help searches the bundled manual locally
+  when requested rather than embedding all documentation during startup.
+  Backup diagnostics, session model reporting, mailbox/calendar pages and
+  task editing have also been improved.
+
+### Security and compatibility
+
+- Plugin content, declarations, protection levels, scopes and revocations are
+  checked at installation and use. Per-user plugin store data stays scoped to
+  the owner and workspace; runtime files use a shared package data directory.
+  Publisher/source changes require a data-handover decision for store data.
+- Saved credentials remain in the vault. Trusted API connections keep their
+  origin, path and method boundaries; explicitly pinned server certificates
+  are checked before credentials are sent.
+- Node.js 24.22.1+ or 26.12.1+, with npm and Git, remains required for a source
+  installation. The installer and launcher manage application dependencies;
+  external programs and model accounts have their own prerequisites.
+
+### Upgrading from 0.6.0
+
+1. Create and verify a database/files backup and retain the existing master
+   key and bootstrap configuration. Replacing the master key can make saved
+   credentials unreadable.
+2. Update using the normal installer/launcher. Database migrations run on
+   startup; keep the configured database and workspace files in place.
+3. Review Environments & Access and any changed plugin declarations. A new
+   content approval or broader permission is an explicit operator decision.
+
+The release workflow attaches the standalone MCP archive and Windows sandbox
+helper/checksum. It also publishes the MCP npm package when npm publishing is
+configured. Desktop and mobile app-store publishing are separate distribution
+steps.
+
+## Development history for 0.7.0
+
+The detailed notes below preserve the implementation and operator history.
+The curated release notes above are used for the GitHub release.
+
 ### Changed
 
 - Plugin-store values have an explicit 128-container nesting limit, returning
