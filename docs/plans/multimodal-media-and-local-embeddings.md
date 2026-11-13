@@ -72,8 +72,23 @@
 ### What "off" means, per capability
 
 **Embedding off**
+- **No chunking, anywhere.** Chunks exist only to be embedded, so without an embedding model nothing reads a file for indexing, nothing chunks, nothing calls the embedding service, and nothing generates chunk abstracts (`generateAbstracts`, background LLM spend). The check is made **before** any file read or chunking, at each entry point, so no work is done and then thrown away:
+
+  | Entry point | Today without embedding | After |
+  |---|---|---|
+  | `EmbeddingService.indexText` / `indexStructured` (`core/rag/embeddings.ts`) | chunks the text (flat or `chunkMarkdown`), then every chunk fails to embed and is logged | first line: capability check → returns `{ skipped: 'no_embedding' }`. This is the backstop for any caller missed below |
+  | `FileIndexer.indexFile` / `indexDirectory` (`core/rag/indexer.ts`) | reads each file, then chunks | checks before reading or globbing |
+  | Filesystem tool post-write auto-index (`tools/filesystem/index.ts:196`) | every agent file write fires an index attempt | not scheduled at all |
+  | Document pipeline (`core/documents/processor.ts:958`) | chunk + embed step fails | step skipped; document marked `indexState: 'skipped_no_embedding'` |
+  | Notes re-index (`core/knowledge/notes.ts:277`) | chunks the note on every save, fails "loudly" | not attempted; note marked not indexed |
+  | Repo registry (`core/repos/registry-service.ts:189`) | chunks repo text | skipped, marked |
+  | Plugin host documents (`plugins/packages/host-documents.ts:83`) | chunks | skipped, marked |
+  | Knowledge routes `/api/knowledge/index*` | chunks then fails | 409 `capability_not_configured` before reading anything |
+
+  A unit test per entry point asserts that with embedding off, the file reader, `chunkText`, `chunkMarkdown`, `embedBatch` and the summarizer are **never called** (spies), and nothing is logged above debug.
+- **Catching up later:** items skipped this way carry `indexState: 'skipped_no_embedding'`. When an embedding model is bound, one background job chunks and embeds exactly those items (documents, notes, repos). It never touches already-embedded rows, and it is the only time skipped content is chunked.
 - Knowledge tool: `index_file`, `index_directory`, `search_knowledge`, `link_knowledge` suggestions, `verify_knowledge`, `traverse_knowledge` and `get_backlinks` are hidden. `search_product_docs` / `read_product_doc` stay (keyword search, no model). `knowledge_stats`, `read_knowledge` and `cleanup_knowledge` are shown only if the knowledge base still has rows from an earlier configuration.
-- Document pipeline: extraction, summary and categorisation still run (they don't need vectors). The indexing step is skipped and the document is marked "not indexed: no embedding model" instead of failing chunk by chunk (today every chunk errors). When an embedding model is added later, a one-time **"index what was skipped"** job embeds those documents. It only fills in documents that were never indexed and never replaces existing vectors.
+- Document pipeline: extraction, the document summary and categorisation still run (they work on the whole text, not on chunks). Only the chunk/embed step is skipped (table above).
 - Memory: extraction, judge and the recall context hook are off. The Memories page is hidden unless rows exist (then read-only + delete).
 - Context hooks: the knowledge-recall kind is off; notes index and pinned notes stay (no vectors needed).
 - Skill selection and `list_tools` ranking: keep their existing keyword/stale fallbacks, without per-call error logs.
@@ -582,7 +597,7 @@ No embedding migration: track B never changes an existing binding.
 
 | Phase | Content | Done when |
 |---|---|---|
-| **PG Capability gates** | §0b: gates + snapshot + events, per-function `requires`, unknown ⇒ hidden, `cap:` prompt markers, job/route/UI/health gating, embedding-off cleanup (documents marked "not indexed", "index what was skipped" job, no error spam) | all-off install test and toggle test (§0b) green |
+| **PG Capability gates** | §0b: gates + snapshot + events, per-function `requires`, unknown ⇒ hidden, `cap:` prompt markers, job/route/UI/health gating, embedding-off: no chunking at any entry point (spy tests per entry point), `indexState` marking, catch-up job on first binding, no error spam | all-off install test and toggle test (§0b) green |
 | **P0 Spikes** (S1–S5 below) | throwaway scripts in `scripts/spikes/`, results appended to this doc | every spike has a recorded answer; any changed decision is edited into §0 |
 | **P1 Capabilities + lanes + resolver** | A1, A2, A3, health list fix, Topics page group (read-only effective view) | resolver table tests; Ollama `/api/show` discovery test; `/health` shows effective media models |
 | **P2 Native images in the loop** | A4 (message model, normaliser, all formatters, retention, persistence), A5 image rows, `vision` tool, MCP/browser screenshots as `MediaRef` | formatter unit tests per provider; conformance probe; the "photo → what's on it?" e2e × 3 variants |
