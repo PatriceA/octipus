@@ -94,6 +94,11 @@ export async function compactCliConversation(session: Session, instructions: str
       // Put quoted names inside a TOML table, as the agent launcher does.
       const args = ['app-server', '-c', `mcp_servers={${servers.map(server => `${JSON.stringify(server.name)}={enabled=false}`).join(',')}}`];
       usage = await compactCodexThread(tool.binaryPath, args, { cwd, env, threadId: record.id });
+    } else if (adapter === 'Muse Code') {
+      // Verified on muse 1.4.18: `muse exec` sends "/compact" to the model as
+      // plain text, and its session protocol's `session/compact` (muse serve)
+      // refuses an exec session with `compaction_unavailable`.
+      throw new Error('Muse Code compacts its own context automatically during a run; it offers no manual compaction to Octipus. The existing session was retained.');
     } else {
       throw new Error(`Native compaction is not supported for ${adapter}; the existing session was retained.`);
     }

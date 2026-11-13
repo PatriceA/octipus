@@ -15,7 +15,7 @@
  * user event (`--input-format stream-json`). argv never carries it, and the
  * line-break guard on argv still applies.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, test, vi } from 'vitest';
 
 vi.mock('../model-registry', () => ({ getModelRegistry: () => ({ getModel: async () => null, getModelByModelId: async () => null }) }));
@@ -29,9 +29,12 @@ vi.mock('@/core/cli-child-env', async (importOriginal) => ({
   cliCredentialOwnerFor: async () => null,
 }));
 
+const museHome = vi.hoisted(() => ({ prepared: [] as Array<{ workspace: string; tools: readonly string[] }>, disposed: [] as string[] }));
 vi.mock('@/core/cli-adapters', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/core/cli-adapters')>(),
   discoverCodexMcpServers: async () => [{ name: 'octipus' }],
+  prepareMuseHome: async (opts: { workspace: string; tools: readonly string[] }) => { museHome.prepared.push(opts); return '/tmp/octipus-cli/muse-home-test'; },
+  disposeMuseHome: (home: string) => { museHome.disposed.push(home); },
 }));
 
 const { CLIProvider, execCli, parseAgyStreamJson } = await import('./cli-provider');
@@ -47,10 +50,14 @@ const messages = [{ role: 'user' as const, content: 'Summarize <article_content>
 
 function stubbed() {
   const provider = new CLIProvider();
-  const spawns: Array<{ binary: string; args: string[]; cwd?: string; stdin?: string; cwdExisted?: boolean }> = [];
+  const spawns: Array<{ binary: string; args: string[]; cwd?: string; stdin?: string; cwdExisted?: boolean; env?: Record<string, string>; promptFile?: string }> = [];
   // biome-ignore lint/suspicious/noExplicitAny: stub the process boundary
-  (provider as any).execCli = async (binary: string, args: string[], opts: { cwd?: string; stdin?: string }) => {
-    spawns.push({ binary, args, cwd: opts.cwd, stdin: opts.stdin, cwdExisted: opts.cwd ? existsSync(opts.cwd) : undefined });
+  (provider as any).execCli = async (binary: string, args: string[], opts: { cwd?: string; stdin?: string; env?: Record<string, string> }) => {
+    const promptAt = args.indexOf('--prompt-file');
+    spawns.push({ binary, args, cwd: opts.cwd, stdin: opts.stdin, cwdExisted: opts.cwd ? existsSync(opts.cwd) : undefined, env: opts.env,
+      promptFile: promptAt >= 0 ? readFileSync(args[promptAt + 1], 'utf8') : undefined });
+    if (binary === 'muse') return [{ payload_type: 'run.usage', payload: { models: [{ input_tokens: 9, cached_tokens: 0, output_tokens: 2 }] } },
+      { payload_type: 'run.terminal.completed', payload: { terminal: 'completed', text: 'muse answer' } }].map(e => JSON.stringify(e)).join('\n');
     if (binary === 'agy') return AGY_STREAM;
     if (binary === 'vibe') return JSON.stringify([{ role: 'user', content: 'q' }, { role: 'assistant', content: 'vibe answer' }]);
     return JSON.stringify({ result: 'ok', usage: { input_tokens: 1, output_tokens: 1 } });
@@ -76,6 +83,27 @@ describe('one-shot CLI completions on an install row', () => {
     expect(spawn.args.join(' ')).not.toContain('rm -rf');
     expect(spawn.stdin).toContain('rm -rf');
     expect(spawn.cwd).toMatch(/octipus-cli[\\/]completion-cwd$/);
+  });
+});
+
+describe('one-shot Muse Code completions', () => {
+  test('run with no tools in a config home of their own, the prompt in a private file of a fresh directory, all removed afterwards', async () => {
+    const { provider, spawns } = stubbed();
+    const result = await provider.complete({ model: 'cli/muse', messages });
+    expect(result.content).toBe('muse answer');
+    expect(spawns).toHaveLength(1);
+    const [spawn] = spawns;
+    expect(spawn.binary).toBe('muse');
+    expect(spawn.args).toEqual(expect.arrayContaining(['exec', '--json', '--no-session-log', '--disable-reminders', '--no-foreign-personal-context']));
+    expect(spawn.args.join(' ')).not.toContain('rm -rf');
+    expect(spawn.stdin).toBe('');
+    expect(spawn.promptFile).toContain('rm -rf');
+    expect(spawn.env?.XDG_CONFIG_HOME).toBe('/tmp/octipus-cli/muse-home-test');
+    // No tools at all: no bridge server, nothing trusted (prepareMuseHome with an empty tool list).
+    expect(museHome.prepared.at(-1)).toMatchObject({ workspace: spawn.cwd, tools: [] });
+    expect(museHome.disposed.at(-1)).toBe('/tmp/octipus-cli/muse-home-test');
+    expect(spawn.cwd).toMatch(/octipus-cli[\\/]completion-tools-[^\\/]+$/);
+    expect(existsSync(spawn.cwd as string)).toBe(false);
   });
 });
 

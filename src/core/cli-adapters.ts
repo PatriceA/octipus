@@ -1,19 +1,20 @@
 import { redactedCommand } from '@/utils/command-log';
 import { execFile } from 'node:child_process';
 import { createHash, randomBytes } from 'crypto';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
 import { homedir, tmpdir, } from 'os';
 import { dirname, isAbsolute, join, resolve } from 'path';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import type { CLIAgentConfig } from '@/db/schema/models';
 import { computeLineDiff } from '@/shared/diff';
-import { validateScopedExtraArgs } from '@/shared/cli-capabilities';
+import { CLI_SPACE_REFUSALS, validateCliPermissionMode, validateScopedExtraArgs } from '@/shared/cli-capabilities';
 import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
 import { foldCacheCounters } from '@/models/providers/usage';
 import { coreLogger } from '@/utils/logger';
 import type { AgentEvent } from './agent-base';
 import { emptyCounters, type SideEffectCounters } from './swarm/receipt';
 import { SHELL_GUARD_TOOL_MATCHER, getShellGuardScriptPath, shellGuardHookCommand } from './cli-shell-guard';
+import { configuredCliBinary } from './cli-executable';
 
 const IS_WIN = process.platform === 'win32';
 const CLI_BRIDGE_TOOL_TIMEOUT_SECONDS = 7200;
@@ -51,6 +52,8 @@ export interface CliRunConnection {
   writableRuntimePaths?: string[];
   /** Codex only: effective MCP servers from `discoverCodexMcpServers`, disabled for the run. */
   codexMcpServers?: Array<{ name: string }>;
+  /** Muse only: the run's `prepareMuseHome` config home and `museWorkspaceFor` root. */
+  muse?: { home: string; workspace: string };
   /** Install the network-shell guard hook (`agent.cliShellGuard`). */
   shellGuard?: boolean;
   /**
@@ -80,9 +83,9 @@ export interface CliRunConnection {
  * - Codex: the `read-only` sandbox; its writes happen only through Octipus tools.
  * - Antigravity: `--mode plan`; likewise.
  * - Mistral Vibe (default `auto-approve`): none yet.
- * - Muse Code: none. The bridge needs `--trust-workspace`, which also loads
- *   the workspace's own rules, skills and `.mcp.json` servers, and `-c`
- *   cannot disable a user-configured MCP server (verified on 1.4.18).
+ * - Muse Code: none. Its tools are already Octipus's only (`prepareMuseHome`),
+ *   but its login and session logs live in the server account's muse
+ *   directories, shared by every member (`CLI_SPACE_REFUSALS`).
  */
 export const CLI_SPACE_MODES: Readonly<Record<string, string | null>> = {
   'Claude Code': 'permission mode default with the stdio permission tool',
@@ -96,7 +99,7 @@ export const CLI_SPACE_MODES: Readonly<Record<string, string | null>> = {
 export function assertCliSpaceMode(adapter: string): string {
   const mode = CLI_SPACE_MODES[adapter];
   if (!mode) {
-    throw new Error(`${adapter} cannot run in a shared space: it has no mode in which its own tools stay behind Octipus's permission checks. Pick an API model or a CLI model that has one.`);
+    throw new Error(`${adapter} cannot run in a shared space: ${CLI_SPACE_REFUSALS[adapter] ?? 'it has no mode in which its own tools stay behind Octipus\'s permission checks'}. Pick an API model or another CLI model.`);
   }
   return mode;
 }
@@ -109,7 +112,7 @@ export function assertCliSpaceMode(adapter: string): string {
 export function assertCliPersonalMode(adapter: string): string {
   const mode = CLI_SPACE_MODES[adapter];
   if (!mode) {
-    throw new Error(`${adapter} cannot run on a personal model: it has no mode in which its own tools stay behind Octipus's permission checks.`);
+    throw new Error(`${adapter} cannot run on a personal model: ${CLI_SPACE_REFUSALS[adapter] ?? 'it has no mode in which its own tools stay behind Octipus\'s permission checks'}.`);
   }
   return mode;
 }
@@ -222,7 +225,7 @@ export function sweepStaleFiles(dir: string, prefix: string, maxAgeMs: number): 
       if (!name.startsWith(prefix)) continue;
       const full = join(dir, name);
       try {
-        if (statSync(full).mtimeMs < cutoff) unlinkSync(full);
+        if (statSync(full).mtimeMs < cutoff) rmSync(full, { recursive: true, force: true });
       } catch { /* raced with another sweep */ }
     }
   } catch (err) {
@@ -582,12 +585,138 @@ export function resolveVibeMode(mode?: string): string {
   throw new Error(`Unsupported Mistral Vibe permission mode: ${mode}`);
 }
 
-/** Shared levels → muse safety flags. Approval and the sandbox are on by default ('workspace'). */
-export function resolveMuseSafetyArgs(mode?: string): string[] {
-  if (!mode || ['workspace', 'auto', 'accept-edits', 'auto_edit'].includes(mode)) return [];
-  if (['safe', 'plan', 'read-only'].includes(mode)) return ['--disable-write', '--disable-shell'];
-  if (mode === 'full' || mode === 'yolo') return ['--disable-approval', '--disable-sandbox'];
-  throw new Error(`Unsupported Muse Code permission mode: ${mode}`);
+/** Octipus's MCP server in a muse run. The run's settings hold no other server, so no per-run namespace is needed. */
+const MUSE_BRIDGE_SERVER = 'octipus';
+
+/** The name muse gives a bridge tool (`mcp__<server>__<tool>`), which `run.toolset` lists. */
+export function museBridgeToolName(name: string): string {
+  return `mcp__${MUSE_BRIDGE_SERVER}__${name}`;
+}
+
+/**
+ * muse's workspace root for runs on `workingDirectory`: an empty directory,
+ * trusted only in the run's own settings. muse loads MCP servers only in a
+ * trusted workspace, and a trusted workspace also loads its rules
+ * (`AGENTS.md`), skills and `.mcp.json` servers — verified on 1.4.18, a
+ * workspace `.mcp.json` server is spawned — so the trusted root holds
+ * nothing. Octipus's tools act in the real workspace, and Octipus injects its
+ * AGENTS.md itself. Stable per workspace: a resumed session keeps its root.
+ */
+export function museWorkspaceFor(workingDirectory: string): string {
+  const dir = join(tmpdir(), 'octipus-cli', 'muse-ws', createHash('sha256').update(workingDirectory).digest('hex').slice(0, 16));
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
+}
+
+/** The muse config directory a child with `env` reads (`$XDG_CONFIG_HOME/muse`). */
+function museConfigDir(env: Record<string, string | undefined>): string {
+  return join(env.XDG_CONFIG_HOME || join(env.HOME || homedir(), '.config'), 'muse');
+}
+
+/**
+ * A per-run `XDG_CONFIG_HOME` for muse whose only tools are the run's Octipus
+ * bridge. muse reads its whole user configuration from there, so the user's
+ * own MCP servers, rules and settings stay out; `-c` could not do this (it may
+ * add an MCP server but never disable a configured one). The settings file:
+ *
+ * - `run.toolset`: exactly the bridge's tools. Without a listed name a tool is
+ *   not offered, so every native tool (shell, file writes, web, memory,
+ *   request_user_input, subagents, workflows, cron) is gone; an empty list
+ *   leaves none at all (verified live). A listed name muse does not see fails
+ *   the run ("unknown tool names") — fail loud if the bridge did not load.
+ * - native subagents and cross-session messaging off; no foreign personal
+ *   rules or skills (`~/.claude`, `~/.codex`, `~/.agents`); every other skill
+ *   (bundled, user, plugin) switched off by path, as `muse skills disable`
+ *   writes it, so no skill catalog reaches the prompt either.
+ * - the user's default `model` / `provider` / reasoning efforts (not secret).
+ *
+ * The login is linked, never copied or read: `auth.json` points at the
+ * user's own. `trust.json` trusts only the empty `workspace`. With no `tools`
+ * (a tool-less one-shot completion) there is no bridge server and nothing is
+ * trusted. Remove with {@link disposeMuseHome}.
+ */
+export async function prepareMuseHome(opts: { workspace: string; tools: readonly string[]; env: Record<string, string | undefined> }): Promise<string> {
+  const real = museConfigDir(opts.env);
+  mkdirSync(join(tmpdir(), 'octipus-cli'), { recursive: true });
+  sweepStaleFiles(join(tmpdir(), 'octipus-cli'), 'muse-home-', 24 * 3600_000); // left by a crashed server
+  const home = mkdtempSync(join(tmpdir(), 'octipus-cli', 'muse-home-'));
+  const dir = join(home, 'muse');
+  try {
+    mkdirSync(dir, { mode: 0o700 });
+    if (existsSync(join(real, 'auth.json'))) symlinkSync(join(real, 'auth.json'), join(dir, 'auth.json'));
+    const userPath = join(real, 'settings.json');
+    const user = existsSync(userPath) ? JSON.parse(readFileSync(userPath, 'utf8')) as Record<string, unknown> : {};
+    const settings: Record<string, unknown> = {
+      schema_version: 1,
+      ...Object.fromEntries(['provider', 'model', 'model_reasoning_efforts'].filter(key => user[key] !== undefined).map(key => [key, user[key]])),
+      run: { toolset: opts.tools.map(museBridgeToolName), subagent_delegation_mode: 'off' },
+      context: { foreign_personal_rules: false, foreign_personal_skills: false },
+      local_session_messaging: { enabled: false },
+    };
+    if (opts.tools.length) {
+      // Secret leaves stay whole-value `${VAR}` references: the worker sets both.
+      settings.mcpServers = { [MUSE_BRIDGE_SERVER]: { command: process.execPath, args: [resolveCliMcpEntry()], required: true,
+        env: { OCTIPUS_AGENT_URL: '${OCTIPUS_AGENT_URL}', OCTIPUS_AGENT_KEY: '${OCTIPUS_AGENT_KEY}' }, tool_timeout_sec: CLI_BRIDGE_TOOL_TIMEOUT_SECONDS } };
+      writeFileSync(join(dir, 'trust.json'), JSON.stringify({ schema_version: 1, projects: { [opts.workspace]: { decision: 'trusted' } } }), { mode: 0o600 });
+    }
+    const write = () => writeFileSync(join(dir, 'settings.json'), JSON.stringify(settings, null, 2), { mode: 0o600 });
+    write();
+    const listing = await new Promise<string>((resolve, reject) => {
+      execFile(configuredCliBinary('muse'), ['skills', 'list', '--json', '--workspace', opts.workspace], {
+        cwd: opts.workspace, env: { ...opts.env, XDG_CONFIG_HOME: home } as NodeJS.ProcessEnv, encoding: 'utf8', timeout: 15_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true,
+      }, (err, out) => err ? reject(new Error(`Cannot list Muse Code skills (muse skills list --json): ${err.message}`)) : resolve(String(out)));
+    });
+    const skills = (JSON.parse(listing) as { skills?: Array<{ scope?: unknown; path?: unknown; activation?: unknown }> }).skills;
+    if (!Array.isArray(skills)) throw new Error('Invalid Muse Code skills listing');
+    const activation: Record<string, Record<string, string>> = {};
+    for (const skill of skills) {
+      if (typeof skill.scope !== 'string' || typeof skill.path !== 'string' || skill.activation === 'off') continue;
+      (activation[skill.scope] ??= {})[skill.path] = 'off';
+    }
+    if (Object.keys(activation).length) {
+      settings.skills = { activation };
+      write();
+    }
+    return home;
+  } catch (err) {
+    disposeMuseHome(home);
+    throw err;
+  }
+}
+
+/**
+ * Remove a {@link prepareMuseHome} directory. Should muse ever replace the
+ * linked `auth.json` with a file of its own (a token refresh written by
+ * rename), that file is the current login: it is moved back over the user's,
+ * never deleted, read or left behind.
+ */
+export function disposeMuseHome(home: string, env: Record<string, string | undefined> = process.env): void {
+  const auth = join(home, 'muse', 'auth.json');
+  try {
+    if (existsSync(auth) && !lstatSync(auth).isSymbolicLink()) {
+      renameSync(auth, join(museConfigDir(env), 'auth.json'));
+      coreLogger.warn({ home }, 'Muse Code rewrote its login during a run; moved it back to the user configuration');
+    }
+  } catch (err) {
+    coreLogger.error({ err, home }, 'Muse Code login written during a run could not be moved back');
+  }
+  rmSync(home, { recursive: true, force: true });
+}
+
+/**
+ * Whether muse holds a session log for `id`. muse continues a session given
+ * the same `--session-id`, but under an id it does not know it silently
+ * starts a new one — so a resume is checked first. Layout (muse's own
+ * session-identity note): `${XDG_DATA_HOME:-$HOME/.local/share}/muse/sessions/YYYY/MM/DD/<id>/session.jsonl`.
+ */
+export function museSessionLogExists(id: string, env: Record<string, string | undefined>): boolean {
+  const root = join(env.XDG_DATA_HOME || join(env.HOME || homedir(), '.local', 'share'), 'muse', 'sessions');
+  // Only the numeric date levels: the sessions root also holds lock files and view caches.
+  const list = (dir: string) => existsSync(dir) ? readdirSync(dir).filter(name => /^\d+$/.test(name)) : [];
+  for (const year of list(root)) for (const month of list(join(root, year))) for (const day of list(join(root, year, month))) {
+    if (existsSync(join(root, year, month, day, id, 'session.jsonl'))) return true;
+  }
+  return false;
 }
 
 /**
@@ -644,7 +773,7 @@ export class CLIArgumentBuilder {
       case 'Mistral Vibe':
         return this.buildVibeArgs(prompt, settings, maxTokenBudget, connection);
       case 'Muse Code':
-        return this.buildMuseArgs(prompt, settings, systemPrompt, connection);
+        return this.buildMuseArgs(prompt, settings, systemPrompt, connection, resume);
       default:
         throw new Error(`Unknown CLI tool: ${toolName}`);
     }
@@ -714,32 +843,35 @@ export class CLIArgumentBuilder {
     settings: CLIAgentConfig,
     systemPrompt?: string | null,
     connection?: CliRunConnection,
-  ): { binary: string; args: string[] } {
-    // Headless JSONL; no session transcript on disk (no resume support, as codex --ephemeral).
-    // Native subagents off: delegation goes through Octipus spawn_child only.
-    const args = ['exec', '--json', '--no-session-log', '--disable-request-user-input', '-c', 'run.subagent_delegation_mode="off"'];
-    args.push(...(connection?.planMode ? resolveMuseSafetyArgs('plan') : resolveMuseSafetyArgs(settings.permissionMode)));
-    if (settings.model) args.push('--model', settings.model);
-    if (Number.isFinite(connection?.maxIterations)) args.push('--max-model-steps', String(connection!.maxIterations));
-    if (connection) {
-      // muse loads MCP servers only in a trusted workspace. `-c` may add a
-      // server but never override or disable a configured one (refused), so a
-      // per-run name avoids a clash and the user's own servers stay loaded.
-      // Secret leaves must be whole-value `${VAR}`: the worker sets both vars.
-      // ponytail: muse's default MCP tool timeout (300s) applies; `-c` refuses tool_timeout_sec.
-      const namespace = `octipus_run_${createHash('sha256').update(connection.conversationId ?? connection.url).digest('hex').slice(0, 16)}`;
-      const server = { command: process.execPath, args: [resolveCliMcpEntry()], env: { OCTIPUS_AGENT_URL: '${OCTIPUS_AGENT_URL}', OCTIPUS_AGENT_KEY: '${OCTIPUS_AGENT_KEY}' } };
-      args.push('--trust-workspace', '-c', `mcpServers.${namespace}=${JSON.stringify(server)}`);
-    }
-    for (const image of connection?.images ?? []) args.push('--image', image.path);
+    resume?: { id: string; isFirstRun: boolean },
+  ): { binary: string; args: string[]; env: Record<string, string> } {
+    // A muse run's only tools are its Octipus bridge (`prepareMuseHome`); without one it has nothing to work with.
+    if (!connection?.muse) throw new Error('Muse Code runs only with the Octipus tool bridge, which did not start');
+    validateCliPermissionMode('Muse Code', settings.permissionMode);
+    // No reminder agents (background model calls), no request_user_input, no
+    // foreign rules or skills, no muse approval prompts or LLM approval judge:
+    // Octipus authorizes every bridge call itself.
+    const args = ['exec', '--json', '--disable-reminders', '--disable-request-user-input', '--no-foreign-personal-context',
+      '--disable-approval', '--approval-judge', 'off', '--workspace', connection.muse.workspace];
+    // Caller-minted session (CLI_RESUME): the same id on every run continues it.
+    // A run that is never resumed writes no session log (as codex --ephemeral).
+    args.push(...(resume ? ['--session-id', resume.id] : ['--no-session-log']));
+    // Model override: env var > settings > the user's muse default (carried into the run's settings).
+    const model = process.env.MUSE_MODEL || settings.model;
+    if (model) args.push('--model', model);
+    if (Number.isFinite(connection.maxIterations)) args.push('--max-model-steps', String(connection.maxIterations));
+    for (const image of connection.images ?? []) args.push('--image', image.path);
     if (settings.extraArgs?.length) args.push(...settings.extraArgs);
     // muse reads no prompt from stdin and argv caps one argument at 128 KiB
     // (Linux) and mangles it under cmd.exe: always a 0600 prompt file, removed
     // by the worker's launch cleanup.
-    const combined = [systemPrompt, prompt].filter(Boolean).join('\n\n---\n\n');
+    const placement = connection.workingDirectory
+      ? `Muse Code's own workspace root is an empty placeholder. This run's files are in ${connection.workingDirectory}; reach them only through the Octipus tools.`
+      : '';
+    const combined = [systemPrompt, placement, prompt].filter(Boolean).join('\n\n---\n\n');
     sweepStaleFiles(join(tmpdir(), 'octipus-cli'), 'muse-prompt-', 24 * 3600_000); // left by a crashed server
     args.push('--prompt-file', this.writeTempFile('muse-prompt-', combined));
-    return { binary: 'muse', args };
+    return { binary: 'muse', args, env: { XDG_CONFIG_HOME: connection.muse.home } };
   }
 
   private buildClaudeArgs(
@@ -1091,6 +1223,12 @@ export interface CLIParserCallbacks {
   /** Claude's `system/init`: the vendor has opened (or reopened) the session. */
   onSessionInit?: () => void;
   /**
+   * The vendor's subscription allowance as of this run (muse `run.usage`
+   * `allowance`): the highest used share of its windows, and when the
+   * fullest one resets.
+   */
+  onAllowance?: (allowance: { usedPercent: number; resetsAt?: Date }) => void;
+  /**
    * The vendor answered this run's prompt (a Claude `assistant` message, a
    * Codex `item.*` event). A vendor writes the prompt into its conversation
    * before it starts answering, so from here on a resume holds this turn.
@@ -1296,19 +1434,28 @@ export class CLIOutputParser {
   private museTurn?: { id: string; text: string };
   /** Started muse tool tasks without a result, task id → tool name, in start order. */
   private museOpenTools = new Map<string, string>();
+  private museReplied = false;
 
   private parseMuseEvent(event: Record<string, unknown>): { text: string; replace?: boolean } | null {
     // `muse exec --json` envelope: { payload_type, payload }. Read here:
+    //   run.lifecycle.started            the session is open and holds this run's prompt
     //   task.lifecycle.proposed { event: { task_id, task_kind: "model.<p>.response" | "tool.<name>" } }
     //   task.lifecycle.rejected { event: { task_id, reason } }
     //   run.output.delta { text }        streamed assistant text of the current response
-    //   tool.result { call_id, correlation_facts: { tool_name, outcome }, text, edit_facts?: { path, tool_name } }
-    //   run.usage { models: [{ input_tokens, cached_tokens, output_tokens }] }   once, at run end
+    //   tool.result { call_id, correlation_facts: { tool_name, outcome }, text }
+    //   run.usage { models: [{ input_tokens, cached_tokens, output_tokens }], allowance }   once, at run end
     //   run.terminal.<state> { terminal, text, reason }
+    // A muse run has no native tools (`prepareMuseHome`): every tool is an Octipus bridge tool.
     const type = event.payload_type as string | undefined;
     const payload = (event.payload ?? {}) as Record<string, unknown>;
     const lifecycle = payload.event as Record<string, unknown> | undefined;
     const taskId = typeof lifecycle?.task_id === 'string' ? lifecycle.task_id : '';
+    const replied = () => { if (!this.museReplied) { this.museReplied = true; this.callbacks.onVendorReply?.(); } };
+
+    if (type === 'run.lifecycle.started') {
+      this.callbacks.onSessionInit?.();
+      return null;
+    }
 
     if (type === 'task.lifecycle.proposed' && typeof lifecycle?.task_kind === 'string') {
       const kind = lifecycle.task_kind;
@@ -1316,11 +1463,12 @@ export class CLIOutputParser {
         this.callbacks.onTurn();
         this.museTurn = { id: taskId, text: '' };
       } else if (kind.startsWith('tool.')) {
+        replied();
         const toolName = kind.slice('tool.'.length);
         this.flushCommentary();
         this.callbacks.onToolCall?.();
         this.museOpenTools.set(taskId, toolName);
-        this.emit('action', { type: 'cli_tool_use', id: taskId || undefined, toolName, ...(toolName === 'bash' ? { commandExecution: true } : {}) });
+        this.emit('action', { type: 'cli_tool_use', id: taskId || undefined, toolName });
       }
       return null;
     }
@@ -1333,6 +1481,7 @@ export class CLIOutputParser {
     }
 
     if (type === 'run.output.delta' && typeof payload.text === 'string') {
+      replied();
       const turn = this.museTurn ??= { id: 'muse-turn', text: '' };
       const first = !turn.text;
       turn.text += payload.text;
@@ -1346,9 +1495,10 @@ export class CLIOutputParser {
       // A result carries the model's call id, its start the task id: pair it
       // with the oldest open start of the same tool so the UI row flips.
       const started = [...this.museOpenTools].find(([, name]) => name === toolName)?.[0];
+      // A call muse refused (an unknown tool name: the model guessed at a
+      // native tool the run does not have) was closed by its rejection.
+      if (started === undefined && !facts) return null;
       if (started !== undefined) this.museOpenTools.delete(started);
-      const edit = payload.edit_facts as Record<string, unknown> | undefined;
-      if (typeof edit?.path === 'string') this.emitFileChange({ action: edit.tool_name === 'write_file' ? 'write' : 'edit', path: edit.path });
       this.emit('action', {
         type: 'cli_tool_result',
         id: started || (typeof payload.call_id === 'string' ? payload.call_id : undefined),
@@ -1360,6 +1510,8 @@ export class CLIOutputParser {
     }
 
     if (type === 'run.usage') {
+      const allowance = museAllowance(payload.allowance);
+      if (allowance) this.callbacks.onAllowance?.(allowance);
       const usage = museUsage(payload.models);
       if (!usage) return null;
       const totalTokens = usage.inputTokens + usage.outputTokens;
@@ -1990,6 +2142,22 @@ export function museUsage(models: unknown): { inputTokens: number; outputTokens:
   const sum = (key: string) => models.reduce((n: number, m) => n + (typeof m?.[key] === 'number' ? m[key] as number : 0), 0);
   const folded = foldCacheCounters({ input_tokens: sum('input_tokens'), input_tokens_details: { cached_tokens: sum('cached_tokens') } });
   return { inputTokens: folded.inputTokens, outputTokens: sum('output_tokens'), cacheReadTokens: folded.cacheReadTokens ?? 0 };
+}
+
+/**
+ * The allowance of a muse `run.usage` payload: `{ window, weekly }`, each
+ * `{ used_percent, resets_at_ms }`. Reports the fuller window (the one that
+ * blocks first) and its reset; null when the payload carries none (API-key
+ * runs, the echo provider).
+ */
+export function museAllowance(allowance: unknown): { usedPercent: number; resetsAt?: Date } | null {
+  if (!allowance || typeof allowance !== 'object') return null;
+  const periods = ['window', 'weekly'].map(key => (allowance as Record<string, unknown>)[key])
+    .filter((p): p is { used_percent: number; resets_at_ms?: unknown } => !!p && typeof (p as { used_percent?: unknown }).used_percent === 'number');
+  if (!periods.length) return null;
+  // The fuller window blocks first; at a tie, the later reset is when work can resume.
+  const fullest = periods.reduce((a, b) => b.used_percent > a.used_percent || (b.used_percent === a.used_percent && Number(b.resets_at_ms ?? 0) > Number(a.resets_at_ms ?? 0)) ? b : a);
+  return { usedPercent: fullest.used_percent, ...(typeof fullest.resets_at_ms === 'number' ? { resetsAt: new Date(fullest.resets_at_ms) } : {}) };
 }
 
 /** Display name for a codex mcp_tool_call item: "server.tool". */

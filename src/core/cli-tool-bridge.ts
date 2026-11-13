@@ -78,6 +78,8 @@ export async function startCliToolBridge(options: {
   /** Called after a response is flushed, including a terminal approval refusal. */
   delivered?: () => void;
 }): Promise<{ url: string; key: string; close: () => Promise<void>;
+  /** The names `GET /tools` lists right now. */
+  toolNames: () => string[];
   setApprovalWaiting: (waiting: boolean) => void; endApprovalWait: (reason: string) => boolean }> {
   const key = randomBytes(32).toString('hex');
   let closed = false;
@@ -91,6 +93,15 @@ export async function startCliToolBridge(options: {
   let queueBounded = Promise.resolve();
   // Calls made with a retry key, by tool and key: a retry is answered from here.
   const keyed = new Map<string, { operation: Promise<BridgeResult>; fingerprint: string; started: () => boolean }>();
+  const isUnqueued = (name: string) => options.unqueued?.has(name) || ['get_pipeline_status', 'monitor__list', 'monitor__create', 'answer_pipeline_approval'].includes(name);
+  const listTools = () => {
+    const tools = (options.advertisedTools?.() ?? options.tools()).map(t => ({ name: t.name, description: t.description,
+      inputSchema: isUnqueued(t.name) ? t.parameters : advertisedSchema(t) }));
+    if (options.advertisedTools && options.tools().length) tools.push({ name: 'call_discovered_tool',
+      description: 'Call an Octipus tool discovered through list_tools/describe_tool using its exact name and arguments.',
+      inputSchema: { type: 'object', properties: { name: { type: 'string' }, arguments: { type: 'object' } }, required: ['name'] } });
+    return tools;
+  };
   const server = createServer(async (req, res) => {
     const reply = (status: number, value: unknown) => {
       res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -98,13 +109,12 @@ export async function startCliToolBridge(options: {
     };
     const socket = req.socket;
     let expired = false;
-    const unqueued = (name: string) => options.unqueued?.has(name) || ['get_pipeline_status', 'monitor__list', 'monitor__create', 'answer_pipeline_approval'].includes(name);
     let started = false;
     let joined = false;
     let settled = false;
     let toolName: string | undefined;
     const onClose = () => {
-      if (!res.writableEnded && started && !settled && toolName && !unqueued(toolName)) options.abandoned?.(toolName);
+      if (!res.writableEnded && started && !settled && toolName && !isUnqueued(toolName)) options.abandoned?.(toolName);
     };
     res.on('close', onClose);
     try {
@@ -115,12 +125,7 @@ export async function startCliToolBridge(options: {
     }
     if (closed || !options.active()) { reply(410, { error: 'Agent run is no longer active' }); return; }
       if (req.method === 'GET' && req.url === '/tools') {
-        const tools = (options.advertisedTools?.() ?? options.tools()).map(t => ({ name: t.name, description: t.description,
-          inputSchema: unqueued(t.name) ? t.parameters : advertisedSchema(t) }));
-        if (options.advertisedTools && options.tools().length) tools.push({ name: 'call_discovered_tool',
-          description: 'Call an Octipus tool discovered through list_tools/describe_tool using its exact name and arguments.',
-          inputSchema: { type: 'object', properties: { name: { type: 'string' }, arguments: { type: 'object' } }, required: ['name'] } });
-        reply(200, { tools });
+        reply(200, { tools: listTools() });
         return;
       }
       if (req.method !== 'POST' || req.url !== '/call') { reply(404, { error: 'Not found' }); return; }
@@ -167,7 +172,7 @@ export async function startCliToolBridge(options: {
         deadline = setTimeout(() => {
           expired = true;
           bounded();
-          if (started && !settled && !unqueued(input.name)) options.abandoned?.(input.name);
+          if (started && !settled && !isUnqueued(input.name)) options.abandoned?.(input.name);
           // A retry that joined an earlier keyed call never starts itself, but
           // the earlier call may well have run: only an unjoined, unstarted
           // call is known not to have executed.
@@ -190,7 +195,7 @@ export async function startCliToolBridge(options: {
           throw new BridgeError('Tool is not registered in this agent authorized tool set. Call list_tools; this does not establish whether the tool exists elsewhere in Octipus.', 'TOOL_NOT_REGISTERED_FOR_AGENT', false);
         }
         started = true;
-        if (!unqueued(input.name)) approvalCall = approval;
+        if (!isUnqueued(input.name)) approvalCall = approval;
         if (options.longWait?.has(input.name)) clearTimeout(deadline);
         else arm(executionBudget);
         try { return await options.execute(input.name, input.arguments); }
@@ -208,7 +213,7 @@ export async function startCliToolBridge(options: {
         delete input.arguments[RETRY_KEY];
       }
       // An empty key is no key: distinct calls must not share one.
-      const requestKey = clientRequestId && handler && retryable(handler) && !unqueued(input.name)
+      const requestKey = clientRequestId && handler && retryable(handler) && !isUnqueued(input.name)
         ? `${input.name}\u0000${clientRequestId}` : undefined;
       const fingerprint = requestKey
         ? canonical(Object.fromEntries(Object.entries(input.arguments).filter(([name]) => name !== RETRY_KEY))) : '';
@@ -232,7 +237,7 @@ export async function startCliToolBridge(options: {
         while (keyed.size > RETRY_KEYS_KEPT) keyed.delete(keyed.keys().next().value as string);
       };
       // A joining retry has no queue wait of its own; it is bounded by the execution clock armed below.
-      const ahead = unqueued(input.name) ? Promise.resolve() : earlier ? new Promise<void>(() => {}) : queueBounded;
+      const ahead = isUnqueued(input.name) ? Promise.resolve() : earlier ? new Promise<void>(() => {}) : queueBounded;
       if (earlier) {
         joined = true;
         // Wait on the first call within this request's own deadline.
@@ -248,7 +253,7 @@ export async function startCliToolBridge(options: {
             remember(own);
             return own;
           });
-      } else if (unqueued(input.name)) operation = run();
+      } else if (isUnqueued(input.name)) operation = run();
       else operation = enqueue();
       if (requestKey && !earlier) remember(operation);
       void ahead.then(() => { if (!started && !expired) arm(base); });
@@ -285,6 +290,7 @@ export async function startCliToolBridge(options: {
   if (!address || typeof address === 'string') throw new Error('Agent bridge has no TCP address');
   return {
     url: `http://127.0.0.1:${address.port}`, key,
+    toolNames: () => listTools().map(tool => tool.name),
     setApprovalWaiting: waiting => approvalCall?.change(waiting),
     endApprovalWait: reason => {
       if (!approvalCall?.waiting) return false;

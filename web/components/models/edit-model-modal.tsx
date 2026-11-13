@@ -120,6 +120,8 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
   const supportsClaudeStyleLimits = cliKind === 'claude' || cliKind === 'vibe' || cliKind === 'glm' || cliKind === 'kimi';
   const supportsModelOverride = cliKind !== 'vibe';
   const supportsApiKeyInheritance = cliKind !== 'glm' && cliKind !== 'kimi';
+  // Muse Code runs with Octipus tools only: no vendor permission mode to translate.
+  const supportsPermissionMode = cliKind !== 'muse';
   const preservedNativePermission = formData.cliPermissionMode && !SHARED_PERMISSION_MODES.has(formData.cliPermissionMode)
     ? formData.cliPermissionMode
     : null;
@@ -212,7 +214,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
           delete cliAgentConfig.inheritApiKeys;
           cliAgentConfig.inheritApiKeys = formData.cliInheritApiKeys;
         }
-        if (formData.cliPermissionMode) cliAgentConfig.permissionMode = formData.cliPermissionMode;
+        if (formData.cliPermissionMode && supportsPermissionMode) cliAgentConfig.permissionMode = formData.cliPermissionMode;
         if (supportsModelOverride) {
           delete cliAgentConfig.model;
           if (formData.cliModel.trim()) cliAgentConfig.model = formData.cliModel.trim();
@@ -565,7 +567,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 </p>
               )}
 
-              <div>
+              {supportsPermissionMode ? <div>
                 <label className="block text-sm font-medium text-on-surface-variant mb-1">Permission Mode</label>
                 <select
                   value={formData.cliPermissionMode}
@@ -586,7 +588,11 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 <p className="text-xs text-on-surface-variant mt-1">
                   Octipus translates this level to the CLI&apos;s native permission controls.
                 </p>
-              </div>
+              </div> : (
+                <p className="text-xs text-on-surface-variant">
+                  Muse Code has no tools of its own here: every tool call is an Octipus tool, decided by Octipus&apos;s permission rules.
+                </p>
+              )}
 
               {supportsApiKeyInheritance ? (
                 <label className="flex items-start gap-2 cursor-pointer">

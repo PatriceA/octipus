@@ -48,6 +48,14 @@ test('Claude compact runs on the model the conversation runs on', async () => {
   [, args] = mock.exec.mock.calls[1];
   expect(args).not.toContain('--model');
 });
+test('Muse Code says why it has no manual compaction, and keeps its session', async () => {
+  const state = session();
+  state.context!.cliSessions = { 'Muse Code': { ...record } };
+  mock.tool.mockReturnValue({ name: 'Muse Code', binaryPath: 'muse', modelProvider: 'meta' });
+  await expect(compactCliConversation(state, '', 'user')).rejects.toThrow('compacts its own context automatically');
+  expect(state.context!.cliSessions!['Muse Code'].id).toBe(record.id);
+  expect(mock.exec).not.toHaveBeenCalled();
+});
 test('ordinary CLI text or success without compaction is not accepted', async () => {
   mock.exec.mockResolvedValue(JSON.stringify({ type: 'result', result: 'Done', session_id: record.id }));
   await expect(compactCliConversation(session(), '', 'user')).rejects.toThrow('did not confirm');

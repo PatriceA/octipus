@@ -11,8 +11,8 @@ import { join } from 'path';
  *
  * One matcher, one hook script, per-vendor wiring in cli-adapters:
  * Claude `--settings`, Codex `-c hooks.PreToolUse`, Antigravity `--add-dir`
- * with `.agents/hooks.json`. Mistral Vibe has no hook mechanism and Muse Code's
- * is not wired (no per-run `-c` hook verified); prompt only.
+ * with `.agents/hooks.json`. Mistral Vibe has no hook mechanism; prompt only.
+ * Muse Code needs none: it has no shell of its own, only Octipus's shell tool.
  */
 
 /** Tool names the Claude/Codex hook matches; agy's shell tool is `run_command`. */

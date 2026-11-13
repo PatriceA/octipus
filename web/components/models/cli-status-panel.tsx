@@ -3,7 +3,7 @@
 import { ExternalLink, Info, Plus, Terminal } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
-import type { CLITool, Model } from '@/lib/types/models';
+import { PROVIDER_DEFAULTS, type CLITool, type Model } from '@/lib/types/models';
 
 export interface CLIStatusPanelProps {
   tools: CLITool[];
@@ -59,6 +59,8 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
         supportsVision: false,
         supportsTools: false,
         supportsStreaming: false,
+        // Muse Code: the model catalog's limits; images reach it via --image (verified).
+        ...(tool.modelProvider === 'meta' ? { contextWindow: PROVIDER_DEFAULTS.meta.contextWindow, maxTokens: PROVIDER_DEFAULTS.meta.maxTokens, supportsVision: true } : {}),
         topics: ['coding', 'review'],
         priority: 80,
         costPerInputToken: 0,

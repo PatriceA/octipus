@@ -37,7 +37,7 @@ import { agentLogger } from '@/utils/logger';
 import { killProcessTree } from '@/utils/proc';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
-import { CLIArgumentBuilder, CLIOutputParser, isCodexHookTrustWarning, discoverCodexMcpServers, resolveCliMcpEntry, stableFirst, type CliRunConnection } from './cli-adapters';
+import { CLIArgumentBuilder, CLIOutputParser, isCodexHookTrustWarning, discoverCodexMcpServers, disposeMuseHome, museSessionLogExists, museWorkspaceFor, prepareMuseHome, resolveCliMcpEntry, stableFirst, type CliRunConnection } from './cli-adapters';
 import { writePromptDump } from './prompt-dumps';
 import { childCliSessionKey, claimCliSession, cliSessionHolder, dropCliSession, fingerprintRun, loadCliSession, ownedResumeKey, releaseCliSessions, rootCliSessionKey, saveCliSession } from './cli-session-store';
 import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
@@ -94,7 +94,7 @@ export function isBorrowedProjectDir(
 }
 
 /**
- * CLIAgentWorker — spawns a CLI binary (Claude Code, Antigravity, Codex, Mistral Vibe)
+ * CLIAgentWorker — spawns a CLI binary (Claude Code, Antigravity, Codex, Mistral Vibe, Muse Code)
  * as an autonomous sub-agent.
  */
 /** Skill index per (user, role, CLI family): assignments change rarely, and the lookup must not delay a spawn. */
@@ -1278,7 +1278,8 @@ When a task matches one of these skills, load it with get_skill before starting 
     // What the vendor conversation held before this run, if it is resumed.
     let previouslyAcknowledged: { id: string; createdAt: string } | undefined;
     if (reuseSessions) {
-      const model = (adapterKey === 'Claude Code' ? process.env.CLAUDE_MODEL : adapterKey === 'Codex CLI' ? process.env.CODEX_MODEL : undefined) || settings.model;
+      const model = (adapterKey === 'Claude Code' ? process.env.CLAUDE_MODEL : adapterKey === 'Codex CLI' ? process.env.CODEX_MODEL
+        : adapterKey === 'Muse Code' ? process.env.MUSE_MODEL : undefined) || settings.model;
       // Permission and plan mode are not fingerprinted: every invocation passes
       // them again, a resumed one too (Claude `--permission-mode`, Codex
       // `-c sandbox_mode`), and the plan directive rides in the volatile tail.
@@ -1310,6 +1311,12 @@ When a task matches one of these skills, load it with get_skill before starting 
           .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
         const legacyFingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, legacyTools, credentialOwnerId ?? null]), instructions });
         existing = await loadCliSession(this.context.sessionId, storeKey!, legacyFingerprint);
+      }
+      // muse continues any id it is given, and a lost one as a NEW empty
+      // session without a word: resume only a session log it still holds.
+      if (existing && adapterKey === 'Muse Code' && !museSessionLogExists(existing.id, cliEnvFor(this.credentialOwner, toolConfig))) {
+        agentLogger.warn({ agentId: this.context.id, id: existing.id }, 'Muse Code session log is gone — starting cold');
+        existing = null;
       }
       // A root record without a cursor was never shown to hold the
       // conversation: a first run that died after the vendor named its thread
@@ -1360,9 +1367,23 @@ When a task matches one of these skills, load it with get_skill before starting 
     // Discovery reads the config.toml the run will read: the owner's CODEX_HOME for a personal row.
     const codexMcpServers = this.connection && adapterKey === 'Codex CLI' ? await discoverCodexMcpServers(workspaceCwd, cliEnvFor(this.credentialOwner, toolConfig)) : undefined;
     const buildCaches = this.context.space ? undefined : personalBuildCaches();
-    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedSystem ?? systemParts, resumedSystem ? resumedSystem.join('\n\n') : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, images, workingDirectory: workspaceCwd, writableRuntimePaths: buildCaches?.paths, codexMcpServers, shellGuard: getConfig().agent?.cliShellGuard !== false, maxIterations: Math.max(1, this.config.maxIterations - this.iteration), space: !!this.context.space, personal: !!this.credentialOwner } : undefined, resume);
+    // Muse: a per-run config whose only tools are this bridge's (`prepareMuseHome`).
+    const museEnv = adapterKey === 'Muse Code' ? cliEnvFor(this.credentialOwner, toolConfig) : undefined;
+    let muse: CliRunConnection['muse'];
+    if (this.connection && this.bridge && museEnv) {
+      const workspace = museWorkspaceFor(workspaceCwd);
+      muse = { workspace, home: await prepareMuseHome({ workspace, tools: this.bridge.toolNames(), env: museEnv }) };
+    }
+    let built: ReturnType<CLIArgumentBuilder['build']>;
+    try {
+      built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedSystem ?? systemParts, resumedSystem ? resumedSystem.join('\n\n') : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, images, workingDirectory: workspaceCwd, writableRuntimePaths: buildCaches?.paths, codexMcpServers, muse, shellGuard: getConfig().agent?.cliShellGuard !== false, maxIterations: Math.max(1, this.config.maxIterations - this.iteration), space: !!this.context.space, personal: !!this.credentialOwner } : undefined, resume);
+    } catch (err) {
+      if (muse) disposeMuseHome(muse.home, museEnv);
+      throw err;
+    }
     const { args, stdinPrompt, useShell } = built;
     this.launchCleanup = () => {
+      if (muse) disposeMuseHome(muse.home, museEnv);
       const configIndex = args.indexOf('--mcp-config');
       // Windows writes the system prompt to a temp file (command-line length cap); muse always its prompt.
       const sysFileIndex = args.indexOf('--append-system-prompt-file');
@@ -1384,6 +1405,7 @@ When a task matches one of these skills, load it with get_skill before starting 
     const invocationStartIteration = this.iteration;
     let invocationUsage: import('@/models/litellm-client').CompletionResult['usage'] = { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false };
     let capturedVendorId: string | undefined;
+    let vendorAllowance: { usedPercent: number; resetsAt?: Date } | undefined;
     let vendorSessionStarted = false;
     let vendorReplied = false;
     // This run's writes of its vendor session record, in order. The close
@@ -1469,6 +1491,7 @@ When a task matches one of these skills, load it with get_skill before starting 
           }
         },
         onSessionInit: () => { vendorSessionStarted = true; },
+        onAllowance: (allowance) => { vendorAllowance = allowance; },
         onRunError: (reason) => {
           // Record the first CLI-reported failure; the close handler rejects
           // with it so the run surfaces as failed, not (no response) success.
@@ -1570,6 +1593,9 @@ When a task matches one of these skills, load it with get_skill before starting 
         ...(this.connection ? { OCTIPUS_AGENT_URL: this.connection.url, OCTIPUS_AGENT_KEY: this.connection.key } : {}),
       }, settings.inheritApiKeys === true);
     const initialEnv = toolHome ? cliSpaceEnv(baseEnv, toolHome) : nativeCliEnvironment(this.context, baseEnv);
+    // muse's config directory stays the run's own, whatever the execution
+    // environment does with XDG_CONFIG_HOME: muse has no native tool that would use it.
+    if (muse) initialEnv.XDG_CONFIG_HOME = muse.home;
     const runtimeCredentials = await environmentCredentialOptions(this.context, { env: initialEnv }).catch((error: unknown) => { cleanupContextFiles(); throw error; });
     const env = runtimeCredentials.options.env;
     return new Promise<string>((resolve, reject) => {
@@ -1888,6 +1914,10 @@ When a task matches one of these skills, load it with get_skill before starting 
             this.billableTokensUsed += billableTokens(invocationUsage);
           }
           await recordProviderUsage({ model: this.context.model, modelConfigName: this.accountingModelName, messages: [], ...usageContextOf(this.context), requestType: 'cli' }, 'cli', { model: this.context.model, usage: invocationUsage }, code !== 0 || this.aborted || !!this.runError);
+          // The vendor said its subscription allowance is spent (muse): the next
+          // run would fail, so the quota is marked now, until the reported reset.
+          const allowanceSpent = !!vendorAllowance && vendorAllowance.usedPercent >= 100;
+          if (allowanceSpent) await quotaTracker.markExhausted(quotaKey, vendorAllowance!.resetsAt);
           // Every write below follows the run's early writes, never races them.
           await sessionWrites;
 
@@ -1944,10 +1974,10 @@ When a task matches one of these skills, load it with get_skill before starting 
             this.runError = safe.runError;
           }
           const failed = code !== 0 || !!signal || !!this.runError;
-          if (failed && toolConfig.isQuotaError(`${stderr}\n${this.runError ?? ''}`)) {
+          if (failed && (allowanceSpent || toolConfig.isQuotaError(`${stderr}\n${this.runError ?? ''}`))) {
             const quotaMessage = `${stderr}\n${this.runError ?? ''}`;
-            const resetsAt = providerResetAt(quotaMessage);
-            await quotaTracker.markExhausted(quotaKey, resetsAt);
+            const resetsAt = (allowanceSpent ? vendorAllowance!.resetsAt : undefined) ?? providerResetAt(quotaMessage);
+            if (!allowanceSpent) await quotaTracker.markExhausted(quotaKey, resetsAt);
             reject(Object.assign(new ClassifiedError({ reason: FailoverReason.QUOTA_EXHAUSTED, recovery: RecoveryAction.FALLBACK_PROVIDER,
               providerHint: toolConfig.quotaProvider, message: `Quota exhausted for ${toolConfig.name}: ${quotaMessage}`, metadata: { resetsAt: resetsAt?.toISOString() } }), { cliDiagnostics: { exitCode: code, signal, stderr, credentialSource: credentialOwnerId ? 'personal_cli' : 'operator_cli', credentialOwnerId: credentialOwnerId ?? null, quotaProvider: toolConfig.quotaProvider } }));
             return;

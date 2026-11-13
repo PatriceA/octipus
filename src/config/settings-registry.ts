@@ -62,6 +62,8 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'OCTIPUS_CODEX_BINARY', description: 'Codex executable name or absolute path. Validated at startup.' },
   { key: 'cliModels.antigravityCli.binaryPath', category: 'agent', valueType: 'string', defaultValue: 'agy', isSecret: false,
     envVar: 'OCTIPUS_ANTIGRAVITY_BINARY', description: 'Antigravity executable name or absolute path. Validated at startup.' },
+  { key: 'cliModels.museCli.binaryPath', category: 'agent', valueType: 'string', defaultValue: 'muse', isSecret: false,
+    envVar: 'OCTIPUS_MUSE_BINARY', description: 'Muse Code executable name or absolute path. Validated at startup.' },
 
   // ── LiteLLM ──
   {

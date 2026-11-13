@@ -5,17 +5,31 @@
 export interface CliCapabilitySource {
   /** Whole result arrives at process exit (no streamed events). */
   bufferOutput?: boolean;
-  /** How the CLI reaches its Octipus tools; defaults to a per-run MCP config. */
-  toolBridge?: 'mcp' | 'terminal';
+  /** How the CLI reaches its Octipus tools; defaults to a per-run MCP config. `mcp-only`: the run has no vendor-native tools at all. */
+  toolBridge?: 'mcp' | 'mcp-only' | 'terminal';
+  name?: string;
+  adapter?: string;
 }
+
+/**
+ * Why an adapter is refused in shared spaces and on personal models (its
+ * `CLI_SPACE_MODES` entry is null). Shown by the model pickers and returned
+ * by every refusal, so the user learns the reason instead of a bare failure.
+ */
+export const CLI_SPACE_REFUSALS: Readonly<Record<string, string>> = {
+  'Mistral Vibe': 'it has no mode in which its own tools stay behind Octipus\'s permission checks',
+  'Muse Code': 'it keeps one login and its session logs in the server account\'s ~/.config/muse and ~/.local/share/muse, which Octipus cannot yet separate per member or per credential',
+};
 
 export function describeCliCapabilities(tool: CliCapabilitySource): string {
   const buffered = tool.bufferOutput === true;
-  return `${tool.toolBridge === 'terminal' ? 'Octipus tools via terminal bridge' : 'Octipus tools via scoped MCP'} · visible plans and feedback · ` +
+  const refusal = CLI_SPACE_REFUSALS[tool.adapter ?? tool.name ?? ''];
+  return `${tool.toolBridge === 'terminal' ? 'Octipus tools via terminal bridge' : tool.toolBridge === 'mcp-only' ? 'Octipus tools only, via scoped MCP (no vendor-native tools)' : 'Octipus tools via scoped MCP'} · visible plans and feedback · ` +
     `${buffered ? 'activity reported at completion' : 'streamed activity'}. ` +
     'Guidance arrives with the next Octipus tool response. ' +
     (buffered ? 'Late guidance is reported with the result and needs another message. ' : 'Late guidance can use a bounded follow-up turn. ') +
-    'Octipus tool approvals use this session; vendor-native controls vary.';
+    (tool.toolBridge === 'mcp-only' ? 'Every tool call uses Octipus approvals.' : 'Octipus tool approvals use this session; vendor-native controls vary.') +
+    (refusal ? ` Not available in shared spaces or on personal models: ${refusal}.` : '');
 }
 
 /** Additive flags a managed (bridge-scoped) run accepts per adapter. Keyed by adapter identity, not model name. */
@@ -26,7 +40,7 @@ export const SCOPED_EXTRA_ARGS: Record<string, { flags: readonly string[]; value
   },
   'Codex CLI': { flags: ['--strict-config'], values: { '--color': ['auto', 'always', 'never'] } },
   'Mistral Vibe': { flags: [], values: {} },
-  'Muse Code': { flags: ['--disable-web-tools'], values: { '--reasoning-effort': ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] } },
+  'Muse Code': { flags: [], values: { '--reasoning-effort': ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] } },
   Antigravity: { flags: ['--disable-slash-commands'], values: { '--effort': ['low', 'medium', 'high'] } },
 };
 
@@ -42,13 +56,28 @@ export const SCOPED_EXTRA_ARGS: Record<string, { flags: readonly string[]; value
  * conversation id at all, and handing it a stale id starts a fresh
  * conversation SILENTLY, which is worse than not reusing. Vibe is absent
  * because its resume depends on `log_interactions` staying enabled in the
- * user's own config, which we do not control. Muse Code is absent: it runs
- * with `--no-session-log`, so there is no transcript to resume.
+ * user's own config, which we do not control. Muse Code is caller-minted
+ * like Claude, with one flag for both runs (`--session-id <uuid>`); muse
+ * starts a NEW session under an id it does not know without saying so, so
+ * the worker checks the session log exists before it resumes
+ * (`museSessionLogExists`).
  */
 export const CLI_RESUME: Record<string, { style: 'caller-minted' | 'captured'; flag: string }> = {
   'Claude Code': { style: 'caller-minted', flag: '--resume' },
   'Codex CLI': { style: 'captured', flag: 'resume' },
+  'Muse Code': { style: 'caller-minted', flag: '--session-id' },
 };
+
+/**
+ * Adapters whose run has no vendor-native tools: their only tools are the
+ * run's Octipus bridge, so a permission mode has nothing to act on — the
+ * Octipus permission rules decide every call. Setting one is refused.
+ */
+export function validateCliPermissionMode(adapter: string, mode: string | undefined): void {
+  if (mode && adapter === 'Muse Code') {
+    throw new Error('Muse Code runs with Octipus tools only, so a CLI permission mode does not apply: Octipus\'s tool permissions decide every call. Clear the permission mode on this model.');
+  }
+}
 
 export function canResume(adapterKey: string): boolean {
   return adapterKey in CLI_RESUME;

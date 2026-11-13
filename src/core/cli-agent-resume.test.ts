@@ -32,6 +32,7 @@ import type { SessionContext } from '@/db/schema/sessions';
 const fixture = vi.hoisted(() => ({
   script: '',
   codexScript: '',
+  museScript: '',
   dir: '',
   cliAgent: {} as { model?: string; permissionMode?: string },
   spawnCount: 0,
@@ -48,10 +49,11 @@ function mockChildProcess(actual: typeof import('child_process')) {
     // real codex install.
     execFile: (cmd: string, args: string[], opts: unknown, cb: (err: Error | null, out: string) => void) => {
       if (cmd === 'codex' && args[0] === 'mcp') { cb(null, '[]'); return; }
+      if (cmd === 'muse' && args[0] === 'skills') { cb(null, JSON.stringify({ skills: [{ scope: 'bundled', path: 'bundled://muse-core/skills/git/SKILL.md', activation: 'on' }] })); return; }
       return actual.execFile(cmd, args, opts as object, cb as (...a: unknown[]) => void);
     },
     spawn: (binary: string, args: string[], opts: object) => {
-      const script = binary === 'claude' || binary === 'agy' ? fixture.script : binary === 'codex' ? fixture.codexScript : null;
+      const script = binary === 'claude' || binary === 'agy' ? fixture.script : binary === 'codex' ? fixture.codexScript : binary === 'muse' ? fixture.museScript : null;
       if (!script) throw new Error(`Unexpected CLI invocation: ${binary}`);
       fixture.spawnCount++;
       const shell = (opts as { shell?: boolean }).shell === true;
@@ -171,7 +173,7 @@ function makeWorker(model: string, opts: { sessionId: string; model?: string; pe
       await worker.loadHistory();
       return worker.run(message);
     },
-    get fingerprint() { return fixture.sessions.get(opts.sessionId)?.context.cliSessions?.[model.includes('codex') ? 'Codex CLI' : 'Claude Code']?.fingerprint ?? ''; },
+    get fingerprint() { return fixture.sessions.get(opts.sessionId)?.context.cliSessions?.[model.includes('codex') ? 'Codex CLI' : model.includes('muse') ? 'Muse Code' : 'Claude Code']?.fingerprint ?? ''; },
     // What actually reached the vendor CLI over stdin (claude, with an
     // active bridge, always sends the prompt as a stream-json 'user' message).
     get lastPrompt(): string {
@@ -190,6 +192,36 @@ beforeEach(() => {
   fixture.dir = mkdtempSync(join(tmpdir(), 'octipus-cli-resume-'));
   fixture.script = join(fixture.dir, 'fake-claude.mjs');
   fixture.codexScript = join(fixture.dir, 'fake-codex.mjs');
+  fixture.museScript = join(fixture.dir, 'fake-muse.mjs');
+  // muse: dumps what it was launched with, keeps a session log per --session-id
+  // under $HOME/.local/share (the test points HOME at the fixture), answers
+  // with the id, and reports the allowance an 'allowance-marker' names.
+  writeFileSync(fixture.museScript, `
+    import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+    import { join } from 'node:path';
+    const args = process.argv.slice(2);
+    const at = flag => args.indexOf(flag) >= 0 ? args[args.indexOf(flag) + 1] : null;
+    const home = process.env.XDG_CONFIG_HOME;
+    writeFileSync(join(process.cwd(), 'muse-last.json'), JSON.stringify({ args, home,
+      settings: JSON.parse(readFileSync(join(home, 'muse', 'settings.json'), 'utf8')),
+      trust: JSON.parse(readFileSync(join(home, 'muse', 'trust.json'), 'utf8')),
+      prompt: readFileSync(at('--prompt-file'), 'utf8'), bridge: !!process.env.OCTIPUS_AGENT_URL && !!process.env.OCTIPUS_AGENT_KEY }));
+    const id = at('--session-id');
+    if (id) {
+      const dir = join(process.env.HOME, '.local', 'share', 'muse', 'sessions', '2026', '11', '13', id);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'session.jsonl'), '');
+    }
+    const out = e => console.log(JSON.stringify(e));
+    out({ payload_type: 'run.lifecycle.started', payload: { kind: 'run_started' } });
+    out({ payload_type: 'task.lifecycle.proposed', payload: { event: { kind: 'proposed', task_id: 'm1', task_kind: 'model.meta.response' } } });
+    out({ payload_type: 'run.output.delta', payload: { text: 'answer for ' + id } });
+    const marker = join(process.cwd(), 'allowance-marker');
+    const used = existsSync(marker) ? Number(readFileSync(marker, 'utf8')) : 5;
+    out({ payload_type: 'run.usage', payload: { allowance: { window: { used_percent: used, resets_at_ms: 1794599619000 }, weekly: { used_percent: 1, resets_at_ms: 1794787200000 } },
+      models: [{ input_tokens: 10, cached_tokens: 4, output_tokens: 2 }] } });
+    out({ payload_type: 'run.terminal.completed', payload: { terminal: 'completed', text: 'answer for ' + id } });
+  `);
   fixture.sessions = new Map();
   fixture.spawnCount = 0;
   fixture.quotaExhausted = false;
@@ -752,6 +784,57 @@ describe('native background work lost at CLI exit', () => {
     const { answer, warnings } = await runWithMarker('done');
     expect(warnings).toEqual([]);
     expect(answer).not.toContain('background task');
+  });
+});
+
+describe('Muse Code runs', () => {
+  beforeEach(() => { vi.stubEnv('HOME', fixture.dir); });
+  afterEach(() => { vi.unstubAllEnvs(); });
+  const last = () => JSON.parse(readFileSync(join(fixture.dir, 'muse-last.json'), 'utf8')) as {
+    args: string[]; home: string; settings: Record<string, any>; trust: { projects: Record<string, unknown> }; prompt: string; bridge: boolean };
+  const flag = (args: string[], name: string) => args[args.indexOf(name) + 1];
+
+  it('runs with the bridge as its only tools in a per-run config home, removed afterwards', async () => {
+    const answer = await makeWorker('cli/muse', { sessionId: 'muse-tools' }).run('first');
+    const launch = last();
+    expect(launch.bridge).toBe(true);
+    const toolset = launch.settings.run.toolset as string[];
+    expect(toolset.length).toBeGreaterThan(0);
+    expect(toolset.every(name => name.startsWith('mcp__octipus__'))).toBe(true);
+    expect(toolset).toContain('mcp__octipus__get_cli_run_context');
+    expect(Object.keys(launch.settings.mcpServers)).toEqual(['octipus']);
+    expect(launch.settings.skills.activation.bundled).toEqual({ 'bundled://muse-core/skills/git/SKILL.md': 'off' });
+    expect(Object.keys(launch.trust.projects)).toEqual([flag(launch.args, '--workspace')]);
+    expect(flag(launch.args, '--workspace')).not.toBe(fixture.dir);
+    expect(launch.prompt).toContain(`This run's files are in ${fixture.dir}`);
+    expect((await import('node:fs')).existsSync(launch.home)).toBe(false);
+    expect(answer).toContain(flag(launch.args, '--session-id'));
+  });
+
+  it('continues its session with the same id, and starts cold once the session log is gone', async () => {
+    const first = makeWorker('cli/muse', { sessionId: 'muse-resume' });
+    await first.run('first');
+    const id = flag(last().args, '--session-id');
+    expect(await loadCliSession('muse-resume', 'Muse Code', first.fingerprint)).toMatchObject({ id });
+    await makeWorker('cli/muse', { sessionId: 'muse-resume' }).run('second');
+    expect(flag(last().args, '--session-id')).toBe(id);
+    rmSync(join(fixture.dir, '.local', 'share', 'muse', 'sessions'), { recursive: true, force: true });
+    const third = makeWorker('cli/muse', { sessionId: 'muse-resume' });
+    await third.run('third');
+    const fresh = flag(last().args, '--session-id');
+    expect(fresh).not.toBe(id);
+    expect(await loadCliSession('muse-resume', 'Muse Code', third.fingerprint)).toMatchObject({ id: fresh });
+  });
+
+  it('marks the subscription quota exhausted when the vendor reports a spent allowance', async () => {
+    writeFileSync(join(fixture.dir, 'allowance-marker'), '100');
+    await makeWorker('cli/muse', { sessionId: 'muse-quota' }).run('work');
+    expect(fixture.quotaExhausted).toBe(true);
+  });
+
+  it('refuses a permission mode before launching', async () => {
+    await expect(makeWorker('cli/muse', { sessionId: 'muse-perm', permissionMode: 'safe' }).run('work')).rejects.toThrow(/permission mode does not apply/);
+    expect(fixture.spawnCount).toBe(0);
   });
 });
 

@@ -2,9 +2,9 @@ import { isProviderQuotaMessage } from '@/core/errors/provider-recovery';
 import { configuredCliBinary } from '@/core/cli-executable';
 import { describeCliCapabilities } from '@/shared/cli-capabilities';
 import { cliCredentialOwnerFor, cliEnvFor, cliWorkDirFor } from '@/core/cli-child-env';
-import { discoverCodexMcpServers, getClaudeSpaceSettingsPath, getEmptyMcpConfigPath, getEmptyVibeHome, museUsage } from '@/core/cli-adapters';
+import { discoverCodexMcpServers, disposeMuseHome, getClaudeSpaceSettingsPath, getEmptyMcpConfigPath, getEmptyVibeHome, museUsage, prepareMuseHome } from '@/core/cli-adapters';
 import { spawn } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { delimiter, extname, join } from 'path';
 import { getConfig } from '@/config';
@@ -133,7 +133,7 @@ export interface CLIToolConfig {
    * prompt placeholder in argv. 'argv' (the default) is only safe for a
    * single-line prompt, and execCli rejects a multi-line one outright.
    */
-  promptVia?: 'argv' | 'stdin';
+  promptVia?: 'argv' | 'stdin' | 'file';
   /**
    * Async isolation-aware variant of `buildArgs`, for a tool whose isolation
    * needs a subprocess call before argv is known (codex: discover the host's
@@ -148,9 +148,17 @@ export interface CLIToolConfig {
    * settings (prompt on stdin). A personal row's one-shot completions run
    * only this way (coworking spec §8.4): their callers feed in external mail,
    * fetched pages and other people's words. A tool without it cannot serve a
-   * personal row's one-shot completions, so such a row binds no lane.
+   * personal row's one-shot completions, so such a row binds no lane. With
+   * `promptVia: 'file'` (a CLI with no stdin prompt channel) it gets the path
+   * of a 0600 prompt file instead.
    */
-  toolLessArgs?: () => string[];
+  toolLessArgs?: (promptFile?: string) => string[];
+  /**
+   * Per-call configuration the tool-less mode needs on top of its argv (muse:
+   * an `XDG_CONFIG_HOME` with no tools, MCP servers, hooks or user settings),
+   * disposed after the call.
+   */
+  toolLessHome?: (cwd: string, env: Record<string, string>) => Promise<{ env: Record<string, string>; dispose: () => void }>;
   /**
    * For a CLI whose `buildArgs` carries the prompt in argv (agy, vibe): how an
    * approved plugin completion with the CLI's own tools (`allowCliTools`)
@@ -192,7 +200,7 @@ export interface CLIToolConfig {
    */
   bufferOutput?: boolean;
   /** How a managed run hands the CLI its Octipus tools. Default: per-run MCP config. */
-  toolBridge?: 'mcp' | 'terminal';
+  toolBridge?: 'mcp' | 'mcp-only' | 'terminal';
 }
 
 // ---- Claude Code CLI ----
@@ -544,29 +552,43 @@ export function parseMuseJsonl(stdout: string, startTime: number): CompletionRes
 }
 
 // ---- Muse Code (Meta) ----
-// `muse exec --json` streams JSONL; parsed live by CLIOutputParser (agent
-// path). No one-shot completion mode: muse has no stdin prompt channel and no
-// verified tool-less mode, so like codex it answers only as an agent model.
+// `muse exec --json` streams JSONL; the agent path parses it live
+// (CLIOutputParser) with the Octipus bridge as its only tools
+// (`prepareMuseHome`). muse reads no prompt from stdin (`--prompt-file
+// /dev/stdin` is refused: "not a regular file"), so a one-shot completion
+// hands it a 0600 prompt file; `run.toolset: []` leaves it no tool at all
+// (verified live: "No tools are available").
 const museCliConfig: CLIToolConfig = {
   name: 'Muse Code',
   modelPatterns: ['cli/muse'],
   binaryPath: 'muse',
-  // Never reached (no toolLessArgs/cliToolsStdin; argv prompt is refused there).
-  buildArgs: (prompt: string) => ['exec', '--json', '--no-session-log', prompt],
+  // Never reached: completions use the tool-less mode below, agents the arg builder.
+  buildArgs: () => { throw new Error('Muse Code takes its prompt only from a file'); },
+  promptVia: 'file',
+  toolLessArgs: (promptFile?: string) => {
+    if (!promptFile) throw new Error('Muse Code needs a prompt file');
+    return ['exec', '--json', '--no-session-log', '--disable-reminders', '--disable-request-user-input', '--no-foreign-personal-context', '--prompt-file', promptFile];
+  },
+  toolLessHome: async (cwd, env) => {
+    const home = await prepareMuseHome({ workspace: cwd, tools: [], env });
+    return { env: { XDG_CONFIG_HOME: home }, dispose: () => disposeMuseHome(home, env) };
+  },
   parseOutput: parseMuseJsonl,
   isQuotaError: (output: string) =>
-    isProviderQuotaMessage(output) || /rate.?limit|quota|allowance|exceeded|limit reached/i.test(output),
-  quotaProvider: 'muse',
+    isProviderQuotaMessage(output) || /rate.?limit|quota|allowance|exceeded|limit reached|usage limit/i.test(output),
+  // The CLI status panel finds a tool's quota under its kebab-cased name.
+  quotaProvider: 'muse-code',
   modelProvider: 'meta',
   modelFlag: '--model',
+  toolBridge: 'mcp-only',
   billingInfo: {
     vendor: 'Meta',
-    planNote: 'Meta account subscription via `muse login`, or a metered META_API_KEY (takes priority over the login)',
+    planNote: 'Muse Code subscription via `muse login` (Meta account), or a metered META_API_KEY, which takes priority over the login',
     billingMode: 'mixed',
-    pricingDocUrl: 'https://developers.meta.com/',
-    modelsDocUrl: 'https://developers.meta.com/',
-    modelFlagDocUrl: 'https://developers.meta.com/',
-    warning: 'muse manages its own login and default model in ~/.config/muse. Octipus passes META_API_KEY only when "Pass server API keys" is on; subscription allowance vs. metered API is vendor-controlled.',
+    pricingDocUrl: 'https://accountscenter.meta.com/muse_code/',
+    modelsDocUrl: 'https://dev.meta.ai',
+    modelFlagDocUrl: 'https://dev.meta.ai',
+    warning: 'muse keeps one login per OS account in ~/.config/muse: on a multi-user install every user\'s runs use that login. Octipus passes META_API_KEY only when "Pass server API keys" is on; subscription allowance vs. metered API is vendor-controlled.',
   },
 };
 
@@ -870,7 +892,27 @@ export class CLIProvider implements ModelProvider {
     let cwd: string;
     let args: string[];
     let cleanup: (() => void) | null = null;
-    if (tool.toolLessArgs) {
+    if (tool.toolLessArgs && tool.promptVia === 'file') {
+      // No stdin prompt channel: a 0600 prompt file in a fresh directory of
+      // the call's own, removed with it; never argv.
+      const fresh = freshCompletionDir();
+      cleanup = fresh.remove;
+      cwd = fresh.dir;
+      try {
+        const promptFile = join(cwd, 'prompt.txt');
+        writeFileSync(promptFile, prompt, { mode: 0o600 });
+        if (tool.toolLessHome) {
+          const home = await tool.toolLessHome(cwd, childEnv);
+          Object.assign(childEnv, home.env);
+          cleanup = () => { home.dispose(); fresh.remove(); };
+        }
+        args = tool.toolLessArgs(promptFile);
+        stdinText = '';
+      } catch (err) {
+        cleanup();
+        throw classifyError(err as Error, 'cli');
+      }
+    } else if (tool.toolLessArgs) {
       // The tool-less mode reads the prompt from stdin: it never reaches argv.
       cwd = credentialOwner ? cliWorkDirFor(credentialOwner.userId) : emptyCompletionDir();
       args = tool.toolLessArgs();
