@@ -1,7 +1,7 @@
 import { redactedCommand } from '@/utils/command-log';
 import { execFile } from 'node:child_process';
-import { createHash, randomBytes } from 'crypto';
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
+import { createHash, randomBytes, randomUUID } from 'crypto';
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
 import { homedir, tmpdir, } from 'os';
 import { dirname, isAbsolute, join, resolve } from 'path';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
@@ -638,10 +638,11 @@ function museConfigDir(env: Record<string, string | undefined>): string {
 export async function prepareMuseHome(opts: { workspace: string; tools: readonly string[]; env: Record<string, string | undefined> }): Promise<string> {
   const real = museConfigDir(opts.env);
   mkdirSync(join(tmpdir(), 'octipus-cli'), { recursive: true });
-  sweepStaleFiles(join(tmpdir(), 'octipus-cli'), 'muse-home-', 24 * 3600_000); // left by a crashed server
+  sweepStaleMuseHomes(opts.env);
   const home = mkdtempSync(join(tmpdir(), 'octipus-cli', 'muse-home-'));
   const dir = join(home, 'muse');
   try {
+    writeFileSync(join(home, MUSE_AUTH_BASE), museAuthStamp(join(real, 'auth.json')), { mode: 0o600 });
     mkdirSync(dir, { mode: 0o700 });
     if (existsSync(join(real, 'auth.json'))) symlinkSync(join(real, 'auth.json'), join(dir, 'auth.json'));
     const userPath = join(real, 'settings.json');
@@ -694,13 +695,52 @@ export function disposeMuseHome(home: string, env: Record<string, string | undef
   const auth = join(home, 'muse', 'auth.json');
   try {
     if (existsSync(auth) && !lstatSync(auth).isSymbolicLink()) {
-      renameSync(auth, join(museConfigDir(env), 'auth.json'));
-      coreLogger.warn({ home }, 'Muse Code rewrote its login during a run; moved it back to the user configuration');
+      const realAuth = join(museConfigDir(env), 'auth.json');
+      if (!(statSync(auth).size > 0)) {
+        coreLogger.warn({ home }, 'Muse Code left an empty login file; the user login is kept');
+      } else if (museAuthStamp(realAuth) !== readFileSync(join(home, MUSE_AUTH_BASE), 'utf8')) {
+        // Another run or the user's own muse wrote the login since this run
+        // started: theirs is at least as new. Keep it, drop this copy.
+        coreLogger.warn({ home }, 'Muse Code login changed elsewhere during a run; kept the newer one');
+      } else {
+        // Copy next to the target, then rename: /tmp and $HOME are often
+        // different filesystems (EXDEV), and the rename keeps it atomic.
+        mkdirSync(dirname(realAuth), { recursive: true, mode: 0o700 });
+        const staged = `${realAuth}.octipus-${process.pid}-${randomUUID()}`;
+        copyFileSync(auth, staged);
+        chmodSync(staged, 0o600);
+        renameSync(staged, realAuth);
+        coreLogger.warn({ home }, 'Muse Code rewrote its login during a run; moved it back to the user configuration');
+      }
     }
   } catch (err) {
-    coreLogger.error({ err, home }, 'Muse Code login written during a run could not be moved back');
+    // Keep the directory: it may hold the only copy of a refreshed login.
+    coreLogger.error({ err, home }, 'Muse Code login written during a run could not be moved back; its run directory is kept');
+    return;
   }
   rmSync(home, { recursive: true, force: true });
+}
+
+/** The user's login as `prepareMuseHome` saw it (mtime and size, never its contents). */
+const MUSE_AUTH_BASE = 'auth-base';
+function museAuthStamp(path: string): string {
+  if (!existsSync(path)) return 'none';
+  const s = statSync(path);
+  return `${s.mtimeMs} ${s.size}`;
+}
+
+/** Dispose `muse-home-*` dirs older than a day (a crashed server), login move-back included. */
+function sweepStaleMuseHomes(env: Record<string, string | undefined>): void {
+  const root = join(tmpdir(), 'octipus-cli');
+  const cutoff = Date.now() - 24 * 3600_000;
+  try {
+    for (const name of readdirSync(root)) {
+      const home = join(root, name);
+      if (name.startsWith('muse-home-') && statSync(home).mtimeMs < cutoff) disposeMuseHome(home, env);
+    }
+  } catch (err) {
+    coreLogger.debug({ err }, 'Muse Code home sweep failed');
+  }
 }
 
 /**

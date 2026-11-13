@@ -261,7 +261,46 @@ describe.skipIf(process.platform === 'win32')('prepareMuseHome / disposeMuseHome
     writeFileSync(join(configHome, 'muse', 'auth.json'), 'refreshed', { mode: 0o600 });
     disposeMuseHome(configHome, { HOME: home });
     expect(readFileSync(join(home, '.config', 'muse', 'auth.json'), 'utf8')).toBe('refreshed');
+    expect(statSync(join(home, '.config', 'muse', 'auth.json')).mode & 0o777).toBe(0o600);
     expect(existsSync(configHome)).toBe(false);
+  });
+
+  it('never moves a login back over a newer one, an empty one never, and a failed move keeps the run dir', async () => {
+    const home = temp('muse-user-');
+    const realDir = join(home, '.config', 'muse');
+    mkdirSync(realDir, { recursive: true });
+    writeFileSync(join(realDir, 'auth.json'), 'old', { mode: 0o600 });
+    fakeMuse([]);
+    const refresh = (configHome: string, text: string) => {
+      rmSync(join(configHome, 'muse', 'auth.json'));
+      writeFileSync(join(configHome, 'muse', 'auth.json'), text, { mode: 0o600 });
+    };
+
+    // The user's own muse (or another run) refreshed meanwhile: theirs wins.
+    const a = await prepareMuseHome({ workspace: temp('ws-'), tools: [], env: { HOME: home, PATH: process.env.PATH } });
+    refresh(a, 'from-run');
+    writeFileSync(join(realDir, 'auth.json'), 'newer-elsewhere!');
+    disposeMuseHome(a, { HOME: home });
+    expect(readFileSync(join(realDir, 'auth.json'), 'utf8')).toBe('newer-elsewhere!');
+    expect(existsSync(a)).toBe(false);
+
+    // An empty file is never installed.
+    const b = await prepareMuseHome({ workspace: temp('ws-'), tools: [], env: { HOME: home, PATH: process.env.PATH } });
+    refresh(b, '');
+    disposeMuseHome(b, { HOME: home });
+    expect(readFileSync(join(realDir, 'auth.json'), 'utf8')).toBe('newer-elsewhere!');
+
+    // The move-back fails (config dir not writable): the run dir, holding the only refreshed copy, stays.
+    const c = await prepareMuseHome({ workspace: temp('ws-'), tools: [], env: { HOME: home, PATH: process.env.PATH } });
+    refresh(c, 'only-copy');
+    chmodSync(realDir, 0o500);
+    try {
+      disposeMuseHome(c, { HOME: home });
+    } finally {
+      chmodSync(realDir, 0o700);
+    }
+    expect(readFileSync(join(c, 'muse', 'auth.json'), 'utf8')).toBe('only-copy');
+    dirs.push(c);
   });
 
   it('fails loud and leaves nothing behind when muse cannot list its skills', async () => {
