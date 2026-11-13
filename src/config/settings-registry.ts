@@ -725,6 +725,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     vaultName: 'moonshot_api_key',
     envVar: 'MOONSHOT_API_KEY',
   },
+  {
+    key: 'meta.apiKey',
+    category: 'providers',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'Meta (Muse) API key (pay-as-you-go; a Muse Code subscription key is refused outside Muse Code)',
+    isSecret: true,
+    vaultName: 'meta_api_key',
+    envVar: 'META_API_KEY',
+  },
 
   // ── Workspace ──
   {

@@ -44,7 +44,7 @@ Usage:
   npx tsx src/models/testing/run.ts [options]
 
 Options:
-  --provider=<name>    Filter models by provider (ollama, openai, anthropic, gemini, deepseek, mistral, zai, moonshot)
+  --provider=<name>    Filter models by provider (ollama, openai, anthropic, gemini, deepseek, mistral, zai, moonshot, meta)
   --test=<names>       Comma-separated test names to run (default: all)
   --model=<modelId>    Test a specific model by modelId
   --timeout=<ms>       Per-test timeout in milliseconds (default: 30000)
@@ -133,6 +133,14 @@ function detectProviderAvailability(): ProviderAvailability[] {
     name: 'moonshot',
     available: hasMoonshot,
     reason: hasMoonshot ? undefined : 'MOONSHOT_API_KEY not set',
+  });
+
+  // Meta (Muse)
+  const hasMeta = !!process.env.META_API_KEY;
+  checks.push({
+    name: 'meta',
+    available: hasMeta,
+    reason: hasMeta ? undefined : 'META_API_KEY not set',
   });
 
   // LiteLLM — always available if proxy is running

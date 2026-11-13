@@ -29,6 +29,7 @@ export type ProviderId =
   | 'mistral'
   | 'zai'
   | 'moonshot'
+  | 'meta'
   | 'cli';
 
 export interface ProviderDef {
@@ -224,6 +225,23 @@ export const PROVIDERS: ProviderDef[] = [
       if (!apiKey) return null;
       const data = await httpJson<{ data?: Array<{ id: string }> }>(
         'https://api.moonshot.ai/v1/models',
+        { headers: { Authorization: `Bearer ${apiKey}` } },
+      );
+      return data?.data?.map((m) => m.id) ?? null;
+    },
+  },
+  {
+    id: 'meta',
+    label: 'Meta (Muse)',
+    description: 'Meta Muse models (muse-spark, muse-wonder, …). OpenAI-compatible. Requires a pay-as-you-go API key.',
+    defaultModel: 'muse-spark-1.3',
+    kind: 'manual',
+    requiresApiKey: true,
+    vaultKey: 'meta_api_key',
+    listModels: async ({ apiKey }) => {
+      if (!apiKey) return null;
+      const data = await httpJson<{ data?: Array<{ id: string }> }>(
+        `${process.env.META_BASE_URL || 'https://api.meta.ai/v1'}/models`,
         { headers: { Authorization: `Bearer ${apiKey}` } },
       );
       return data?.data?.map((m) => m.id) ?? null;

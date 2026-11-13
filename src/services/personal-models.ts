@@ -38,7 +38,7 @@ import { validateExternalUrl } from '@/utils/sanitize';
 
 /** Providers a personal row may use: each honours a per-request key (§8.3). */
 export const PERSONAL_MODEL_PROVIDERS = [
-  'anthropic', 'openai', 'deepseek', 'gemini', 'grok', 'mistral', 'moonshot', 'openrouter', 'zai',
+  'anthropic', 'openai', 'deepseek', 'gemini', 'grok', 'meta', 'mistral', 'moonshot', 'openrouter', 'zai',
   'custom-openai', 'custom-anthropic', 'custom-gemini', 'cli',
 ] as const;
 export type PersonalModelProvider = (typeof PERSONAL_MODEL_PROVIDERS)[number];

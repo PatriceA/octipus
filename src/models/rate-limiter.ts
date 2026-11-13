@@ -88,6 +88,7 @@ const PROVIDER_DEFAULTS: Record<string, RateLimitConfig> = {
   mistral: { maxConcurrency: 5, rpm: 300, tpm: 100000, minDelay: 0, adaptive: true },
   zai: { maxConcurrency: 5, rpm: 200, tpm: 100000, minDelay: 0, adaptive: true },
   moonshot: { maxConcurrency: 5, rpm: 200, tpm: 100000, minDelay: 0, adaptive: true },
+  meta: { maxConcurrency: 5, rpm: 200, tpm: 100000, minDelay: 0, adaptive: true },
   litellm: { maxConcurrency: 20, rpm: 0, tpm: 0, minDelay: 0, adaptive: true },
   'cli-claude': { maxConcurrency: 1, rpm: 10, tpm: 0, minDelay: 2000, adaptive: false },
   'cli-gemini': { maxConcurrency: 1, rpm: 10, tpm: 0, minDelay: 2000, adaptive: false },

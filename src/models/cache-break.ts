@@ -38,7 +38,7 @@ export type CacheBreakCause = 'model_changed' | 'tools_changed' | 'system_change
  * Providers that report cache reads on every response, so an absent count
  * means zero read back (`normalizeUsage` omits a zero).
  */
-const REPORTS_CACHE_READS = new Set(['anthropic', 'custom-anthropic', 'openai', 'deepseek', 'gemini', 'openrouter', 'grok', 'moonshot', 'zai', 'mistral']);
+const REPORTS_CACHE_READS = new Set(['anthropic', 'custom-anthropic', 'openai', 'deepseek', 'gemini', 'openrouter', 'grok', 'moonshot', 'zai', 'mistral', 'meta']);
 
 /** Below this a provider may not cache at all (minimum cacheable prefix). */
 const MIN_PREFIX_TOKENS = 2048;

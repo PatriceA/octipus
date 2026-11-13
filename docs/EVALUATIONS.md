@@ -359,6 +359,7 @@ Provider tests run only when the corresponding key is set:
 | `DEEPSEEK_API_KEY` | deepseek |
 | `ZAI_API_KEY` | zai (GLM) |
 | `MOONSHOT_API_KEY` | moonshot (Kimi) |
+| `META_API_KEY` | meta (Muse) |
 | `VOYAGE_API_KEY` | voyage (embeddings) |
 
 Ollama and LiteLLM are always attempted. The `cli` provider is excluded from conformance runs.

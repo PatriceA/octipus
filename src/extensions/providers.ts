@@ -50,7 +50,7 @@ const DEFAULT_AUTH: Record<ExtensionProviderKind, CustomProviderConfig['auth']> 
  */
 const RESERVED_PROVIDER_IDS = new Set([
   'cli', 'ollama', 'litellm', 'openrouter', 'openai', 'anthropic', 'gemini', 'grok', 'vertex', 'deepseek',
-  'mistral', 'zai', 'moonshot', 'voyage', 'typesafe', 'custom-openai', 'custom-anthropic', 'custom-gemini',
+  'mistral', 'zai', 'moonshot', 'meta', 'voyage', 'typesafe', 'custom-openai', 'custom-anthropic', 'custom-gemini',
 ]);
 
 /** Headers an extension may not set: credentials go through `apiKeySecret`, transport headers are the client's. */

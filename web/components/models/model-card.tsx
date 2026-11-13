@@ -38,6 +38,7 @@ function ProviderBadge({ provider }: { provider: string }) {
     deepseek: 'bg-tertiary/10 text-tertiary',
     zai: 'bg-secondary/10 text-secondary',
     moonshot: 'bg-secondary/10 text-secondary',
+    meta: 'bg-secondary/10 text-secondary',
     cli: 'bg-accent/10 text-accent',
     openrouter: 'bg-primary/10 text-primary',
     custom: 'bg-surface-container-high text-on-surface-variant',

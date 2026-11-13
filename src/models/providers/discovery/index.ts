@@ -6,6 +6,7 @@ import { curate } from './curation';
 import { DeepSeekDiscovery } from './deepseek';
 import { GeminiDiscovery } from './gemini';
 import { GrokDiscovery } from './grok';
+import { MetaDiscovery } from './meta';
 import { MistralDiscovery } from './mistral';
 import { MoonshotDiscovery } from './moonshot';
 import { OllamaDiscovery } from './ollama';
@@ -28,6 +29,7 @@ const CLIENTS: Record<string, ProviderDiscovery> = {
   mistral: new MistralDiscovery(),
   zai: new ZaiDiscovery(),
   moonshot: new MoonshotDiscovery(),
+  meta: new MetaDiscovery(),
   openrouter: new OpenRouterDiscovery(),
   ollama: new OllamaDiscovery(),
 };
@@ -79,6 +81,7 @@ async function resolveCreds(provider: string, userId?: string): Promise<Discover
     mistral: 'MISTRAL_API_KEY',
     zai: 'ZAI_API_KEY',
     moonshot: 'MOONSHOT_API_KEY',
+    meta: 'META_API_KEY',
     openrouter: 'OPENROUTER_API_KEY',
   };
   const vaultKeyMap: Record<string, string> = {
@@ -91,6 +94,7 @@ async function resolveCreds(provider: string, userId?: string): Promise<Discover
     mistral: 'mistral_api_key',
     zai: 'zai_api_key',
     moonshot: 'moonshot_api_key',
+    meta: 'meta_api_key',
     openrouter: 'openrouter_api_key',
   };
   // Base-URL overrides so discovery hits the SAME host the provider uses
@@ -99,6 +103,7 @@ async function resolveCreds(provider: string, userId?: string): Promise<Discover
   const endpoint =
     provider === 'zai' ? process.env.ZAI_BASE_URL :
     provider === 'moonshot' ? process.env.MOONSHOT_BASE_URL :
+    provider === 'meta' ? process.env.META_BASE_URL :
     undefined;
 
   // Ollama is endpoint-only; pull from config.
