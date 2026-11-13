@@ -29,7 +29,84 @@
 | D7 | **Media the agent produces is delivered automatically.** A generated image or speech file is attached to the reply on web, TUI and every channel, without the model having to "send" it. | Hermes `_AUTO_APPEND_MEDIA_TOOL_NAMES`. Today only Telegram can send bytes, and only for voice replies. |
 | D8 | **Voice notes are always transcribed on the way in** (the transcript is the message). The original audio file stays attached, so the agent can re-transcribe it with options, and a model that accepts audio can get it natively (opt-in). | A transcript is what history, search, channel display and text-only models need. Native audio is a bonus for tone or non-speech audio, not the baseline. |
 | D9 | **Local embedding engine = llama.cpp `llama-server` sidecar** (pinned release, about 12–24 MB per platform, SHA-256 verified) **+ `embeddinggemma-2` GGUF Q8_0 (about 310 MB, 768 dims, Apache-2.0, 100+ languages)**. **Optional:** offered (not forced) by the full wizard and the web onboarding, skippable, and addable any time later from the Topics page or `octi capabilities install local-embedding`. | Smallest download, covers all platforms including Intel Mac and Windows-arm, adds nothing to `node_modules`, and exposes OpenAI-compatible `/v1/embeddings`, so it plugs into the existing embed path. transformers.js would add about 450–500 MB of `node_modules` for everyone and has no Intel-Mac ORT build (see B1). |
+| D11 | **Everything beyond one chat model is optional** (§0b). Embedding, vision, OCR, image generation, transcription and speech can each be unconfigured. Octipus then runs with that capability **off**: its tools aren't shown to agents, its prompt text is left out, its pages, buttons and background jobs are hidden or idle, and the API answers with a clear "not configured" reason. | One gate, reused everywhere, like modules (`docs/MODULES.md`) already do for "switched off". Today embedding is marked `required` and degrades noisily, and vision/OCR tools stay visible while broken. |
 | D10 | **The local engine never replaces an existing embedding binding.** Installing it binds the `embedding` lane only when that lane is unbound. With a model already bound, it registers the row unbound and says so. No re-embed job is part of this plan. | Existing installs keep the embedding they have (including yours). Switching later stays the documented manual procedure in `docs/RAG.md` → Vector indexing. |
+
+---
+
+## 0b. Optional by default: capability gates
+
+**The only thing Octipus needs is one chat model.** Everything in this plan, plus the existing embedding features, follows one rule:
+
+> Not configured ⇒ **off**: nothing shown to agents, nothing advertised in prompts, nothing running in the background, UI hidden. Using it directly (an old link, an API call, a stale tool call) gets a clear "not configured on this install, here's where to set it up" answer, never a crash, never a silent no-op, and never an error logged on every message.
+
+### The gate
+
+`src/core/capabilities/gates.ts` (new). It works like the module registry and sits next to it, so a feature is on only when **its module is on AND its capability is configured**.
+
+| Capability | Configured when | Source |
+|---|---|---|
+| `embedding` | a model is bound to `embedding` and its provider is reachable (for the local engine: installed + probe ok) | registry |
+| `see` | for an agent: its own row `supportsVision`, **or** `resolveMedia('see')` finds a lane/default model that sees | A3 resolver |
+| `ocr` | `resolveMedia('ocr')` ≠ none | A3 |
+| `draw` | `image_generation` bound | A3 |
+| `hear` | `transcription` resolves (A7.3) | A3 |
+| `speak` | `speech` resolves | A3 |
+
+- **Snapshot:** computed once and cached. It is recomputed on any model-row or topic-binding change: `ModelRegistry` already clears its cache on writes, and that point emits a `capabilities.changed` event. Install/remove jobs and provider key changes also trigger it. Every consumer reads the snapshot, so turning a capability on or off takes effect without a restart.
+- **Agent-dependent capabilities** (`see`): the snapshot holds the install-level answer. Tool filtering evaluates it against the spawning agent's row (B below).
+
+### Where the gate applies (the same surfaces modules already cover)
+
+| Surface | Mechanism | Change needed |
+|---|---|---|
+| **Tools** | `ToolRegistry.getToolHandlersForTools` already skips unavailable tools | (1) **Per-function gating:** `registerTool(..., { requires: ['embedding'] })`, so one tool can hide some functions and keep others (knowledge keeps `search_product_docs`). (2) **Unknown ⇒ hidden:** today a tool with no fresh availability entry is *included*; gated tools are evaluated from the snapshot instead, so there's no stale "maybe". (3) `degraded` no longer means "show it anyway" for gated functions. (4) Filtering takes the agent context for `see`. (5) Lazy discovery (`list_tools`, `describe_tool`, `tool-search`) and `codemode` use the same filtered set. (6) A call to a hidden function (stale transcript, CLI bridge) is refused with `capabilityOffMessage(cap)`, mirroring `toolOffMessage`. |
+| **Prompts** | `withoutOffModules` strips `<!-- module:x -->` text | Same parser, new marker `<!-- cap:embedding -->`, `<!-- cap:!see -->` and so on. Root, role and lite prompts and the delegation prompt are audited and marked: knowledge base, memory, recall, images, voice, image generation. |
+| **Background jobs** | `isJobOn` | `isJobOn` also checks the job's `requires`. Without `embedding`: auto-indexer, scan-folders indexing, memory extraction + judge (**no background LLM spend**), skill-embedding refill and vector-index maintenance don't run. They log one info line at boot ("off: no embedding model"), not an error per item. |
+| **API routes** | `isPathOn` → 404 for off modules | Gated routes answer **409 `capability_not_configured`** with `{ capability, setupHint }`. Examples: `/api/voice/transcribe` without `hear`, `/api/code-index/*` without `embedding`. |
+| **Web UI** | `web/lib/modules.ts` hides pages/nav until `/api/modules` answers | `/api/modules` also returns the capability snapshot. `useFeature('embedding')` hides nav entries, buttons and composer controls. A page opened by direct URL shows an "Off — needs an embedding model · Set up" card. |
+| **TUI / mobile** | — | Read the same snapshot (mic, `/voice` commands, image hints). |
+| **Health / doctor** | `/health` features | **No capability is `required`** except a chat model. `embedding` changes from `required: true` to optional. A missing optional capability is reported as "off", not "degraded", and doesn't lower the overall status. `octi doctor` lists them as info. |
+| **Onboarding / setup** | `shared/onboarding` | Use cases that need a capability say so ("needs an embedding model") and offer to add one; skipping is always possible. |
+
+### What "off" means, per capability
+
+**Embedding off**
+- Knowledge tool: `index_file`, `index_directory`, `search_knowledge`, `link_knowledge` suggestions, `verify_knowledge`, `traverse_knowledge` and `get_backlinks` are hidden. `search_product_docs` / `read_product_doc` stay (keyword search, no model). `knowledge_stats`, `read_knowledge` and `cleanup_knowledge` are shown only if the knowledge base still has rows from an earlier configuration.
+- Document pipeline: extraction, summary and categorisation still run (they don't need vectors). The indexing step is skipped and the document is marked "not indexed: no embedding model" instead of failing chunk by chunk (today every chunk errors). When an embedding model is added later, a one-time **"index what was skipped"** job embeds those documents. It only fills in documents that were never indexed and never replaces existing vectors.
+- Memory: extraction, judge and the recall context hook are off. The Memories page is hidden unless rows exist (then read-only + delete).
+- Context hooks: the knowledge-recall kind is off; notes index and pinned notes stay (no vectors needed).
+- Skill selection and `list_tools` ranking: keep their existing keyword/stale fallbacks, without per-call error logs.
+- Code index (cocoindex): the "embed through Octipus" option is hidden. cocoindex's own built-in local model option stays if installed.
+
+**Vision off** (`see` and `ocr` both none)
+- `vision` and `visual` tools are hidden. Browser screenshot functions return a file path only.
+- Inbound images are **not** hidden (the user sent them). The agent gets `[Image attached: <path>. No model on this install can read images.]` so it answers honestly. Channels behave the same, and the composer shows a small hint.
+- Documents: text PDFs/Office are extracted as now. Scanned PDFs and images are stored and marked "needs an OCR or vision model".
+- `see` on but `ocr` off is impossible by construction (`ocr` falls back to vision); `ocr` on with `see` off is possible (an OCR-only model): documents get OCR, `view_image` stays hidden.
+
+**Audio off**
+- `hear` off:
+  - The `transcribe_audio` function is hidden.
+  - The mic button is hidden (web, TUI, mobile), and wake word and the live voice socket are off.
+  - A channel voice note gets one reply: "Voice messages aren't set up here, please type" (today's module-off message, reused).
+  - Audio uploads are stored as files, and the agent is told no transcription is configured.
+- `speak` off:
+  - `speak` is hidden and voice replies are off.
+  - Telephony falls back to the provider's own `<Gather>`/`<Say>` mode. The media-stream mode needs both `hear` and `speak`, and its setting is hidden without them.
+- Each direction is independent (voice in with text out works).
+
+**Image generation off:** `generate_image` hidden, prompt lines removed, onboarding question offered but skippable.
+
+### Tests for the gate itself
+- **All-off install test** (extends `core/modules/all-off.test.ts`): one chat model, nothing else. It checks that:
+  - the root's tool list contains no gated function
+  - the prompt contains no gated text
+  - no gated job runs
+  - `/health` is fully green
+  - an image, a voice note and a PDF sent to the chat each get the honest answer above
+  - nothing is logged at error level during a 20-turn session
+- **Toggle test:** bind, then unbind each capability and assert tools, prompt, jobs and the UI snapshot follow without a restart.
 
 Explicit non-goals: video understanding or generation, music generation, realtime
 speech-to-speech (has its own plan: `voice-realtime-speech-to-speech.md`), and
@@ -92,7 +169,7 @@ The adapters themselves are fine: subprocess management, realtime sockets, resam
 - `Attachment {type,url?,data?,mimeType}` exists on `ChannelResponse`. Telegram sends bytes. **Slack, WhatsApp and Teams only send `url` attachments**, so the bytes the agent produced cannot be delivered there.
 
 ### Embeddings
-- The `embedding` lane is `required: true` in `/health`, and is used by RAG, memory, the memory judge, skills, context hooks and the code index (`core/code-index/cocoindex-embedding.ts` proxies cocoindex through Octipus's lane).
+- The `embedding` lane is `required: true` in `/health`, but nothing is gated on it: without it the knowledge tools stay visible (`checkAvailability` returns `available: true, degraded: true`), indexing fails chunk by chunk (`embeddings.embedding` is `NOT NULL`), and the agent is still offered `index_file` / `search_knowledge`. Tool filtering in `ToolRegistry.getToolHandlersForTools` only skips a tool with a *fresh, unavailable* cache entry, so a not-yet-checked tool is shown. It is used by RAG, memory, the memory judge, skills, context hooks and the code index (`core/code-index/cocoindex-embedding.ts` proxies cocoindex through Octipus's lane).
 - New installs get an embedding model only if they use Ollama (hwfit catalog: `embeddinggemma:300m`, `qwen3-embedding:0.6b`) or pick it in the web onboarding (`models.embedding = ollama | openai`). **The installer (`setup-wizard.ts`) never sets one.** So an Anthropic-only quick install has RAG, memory and recall off.
 - Changing model needs rows cleared and the column unpinned by hand (`db/vector-indexes.ts` header, `scripts/check-embedding-drift.ts`).
 - Precedents to reuse: `voice/whisper.ts` (per-platform binary under `<install root>/models/…`, probe-by-running) and `voice/provision.ts` (Kokoro and faster-whisper downloads with progress).
@@ -140,7 +217,7 @@ The adapters themselves are fine: subprocess management, realtime sockets, resam
 | `image_generation` (new) | `image_generation` | no | none → `imagegen` tool hidden | `generate_image` |
 | `transcription` (new) | `transcription` | no | none → voice input off with a reason. Existing installs get a binding from the migration (§A7.4), so nothing that works today stops working | all seven STT/TTS call sites in §1, `transcribe_audio` |
 | `speech` (new) | `speech` | no | none → `speak` hidden, voice replies off | voice replies, `/api/voice/speak`, phone media stream, TUI, `speak` |
-| `embedding` | `embedding` | **yes** | none → RAG/memory off (unchanged; track B is an optional way to fill it) | unchanged |
+| `embedding` | `embedding` | **no** (was `required`) | none → embedding features off as defined in §0b | unchanged |
 | `decision` | `decision` | no | unchanged | unchanged |
 
 Labels and help text on the Topics page: *Vision — "Only needed if the model doing the work can't read images, or you want a cheaper one for documents."* The page shows **what actually serves it** ("Served by qwen3.8 (main model reads images)").
@@ -211,7 +288,7 @@ Every provider declares `toolResultImages: 'in-tool-result' | 'follow-up-user' |
 
 ### A6. Tools
 
-New `BaseTool`s in `src/tools/media/` with three tool ids (so role allowlists stay minimal). Each has `checkAvailability()` driven by the resolver, so the model only sees what works (hermes `check_fn`).
+New `BaseTool`s in `src/tools/media/` with three tool ids (so role allowlists stay minimal). Each function declares its gate (`requires: ['see']`, `['ocr']`, `['draw']`, `['hear']`, `['speak']`; §0b), so an agent only ever sees a function that will work, as with hermes `check_fn`. There is no separate availability logic per tool.
 
 **`vision`** (available when the agent can see natively **or** some lane can):
 - `view_image({ source, question?, region? })` — `source` = workspace path, attachment path, `http(s)` URL (fetched through `core/web-read/fetch.ts`, which has the SSRF guard; size cap 20 MB), or a media id. `region` = crop in original pixels before downscaling.
@@ -505,6 +582,7 @@ No embedding migration: track B never changes an existing binding.
 
 | Phase | Content | Done when |
 |---|---|---|
+| **PG Capability gates** | §0b: gates + snapshot + events, per-function `requires`, unknown ⇒ hidden, `cap:` prompt markers, job/route/UI/health gating, embedding-off cleanup (documents marked "not indexed", "index what was skipped" job, no error spam) | all-off install test and toggle test (§0b) green |
 | **P0 Spikes** (S1–S5 below) | throwaway scripts in `scripts/spikes/`, results appended to this doc | every spike has a recorded answer; any changed decision is edited into §0 |
 | **P1 Capabilities + lanes + resolver** | A1, A2, A3, health list fix, Topics page group (read-only effective view) | resolver table tests; Ollama `/api/show` discovery test; `/health` shows effective media models |
 | **P2 Native images in the loop** | A4 (message model, normaliser, all formatters, retention, persistence), A5 image rows, `vision` tool, MCP/browser screenshots as `MediaRef` | formatter unit tests per provider; conformance probe; the "photo → what's on it?" e2e × 3 variants |
@@ -515,14 +593,14 @@ No embedding migration: track B never changes an existing binding.
 | **B1 Engine manager** | B3 (manifest, download/verify/extract/probe, supervisor) | install/probe tests with a fake asset server; supervisor restart/idle tests |
 | **B2 Provider + offers** | B4, B5 all rows | quick install downloads nothing (`scripts/install.test.mjs`); wizard skip default; install on an install with a bound embedding leaves the binding untouched (database test); Docker smoke test with the option chosen boots, downloads, embeds |
 
-Recommended order: **P0 → P1 → P3a → P2 → P3b → P4 → P5**, with track **B1 → B2** in parallel whenever convenient (it is independent and optional). P3a is early because every later audio feature builds on the single resolver.
+Recommended order: **PG → P0 → P1 → P3a → P2 → P3b → P4 → P5**, with track **B1 → B2** in parallel whenever convenient (it is independent and optional). PG comes first: it makes today's install fully optional on its own, and every later phase plugs its tools, prompt text, jobs and UI into the gate instead of inventing its own availability checks. P3a is early because every later audio feature builds on the single resolver.
 
 ## 5. Docs to write or update
 
 New `docs/MEDIA.md` (lanes, tools, inbound/outbound tables, per-channel support, troubleshooting) and `docs/LOCAL-EMBEDDINGS.md`. Update:
 - `VOICE.md` (engines are model rows on the `transcription`/`speech` lanes; alias table for old engine names), `MODEL-ROUTING.md`, `LANE-ROLE-SKILL-ROUTING.md`, `TOOL-ROUTING.md`, `CHANNELS.md` (Slack `files:write`, WhatsApp media, Teams public URL)
 - `RAG.md` (optional local engine, binding rule), `INSTALLATION.md`, `DOCKER.md`, `CONFIGURATION.md` (`media.*`, `localEngine.*`, env vars), `OLLAMA.md` (vision detection), `SMALL-MODELS.md` (describe mode), `SPEND-BUDGETS.md`, `PROTECTION-LEVELS.md`, `MODULES.md`
-- `README.md` capability lines, the generated `CATALOG.md`
+- `README.md` ("needs one chat model; everything else optional"), `MODULES.md` (capability gates next to modules, the `cap:` prompt marker), the generated `CATALOG.md`
 
 ## 6. Spikes (answer before building on them)
 
