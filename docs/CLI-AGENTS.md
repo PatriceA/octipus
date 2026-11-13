@@ -15,11 +15,11 @@ At startup, Octipus reads the user's login PATH and checks configured CLI
 executables. Standard `~/.local/bin` and `~/.npm-global/bin` installations are
 included. Set `cliModels.path` in Settings to use an explicit PATH instead;
 restart after changing it. The executable settings are
-`cliModels.claudeCode.binaryPath`, `cliModels.codexCli.binaryPath`, and
-`cliModels.antigravityCli.binaryPath`. Each accepts a command name or absolute
-path. Their first-boot environment equivalents are `OCTIPUS_CLI_PATH`,
-`OCTIPUS_CLAUDE_BINARY`, `OCTIPUS_CODEX_BINARY`, and
-`OCTIPUS_ANTIGRAVITY_BINARY`. Authenticated detailed health reports executable
+`cliModels.claudeCode.binaryPath`, `cliModels.codexCli.binaryPath`,
+`cliModels.antigravityCli.binaryPath` and `cliModels.museCli.binaryPath`. Each
+accepts a command name or absolute path. Their first-boot environment
+equivalents are `OCTIPUS_CLI_PATH`, `OCTIPUS_CLAUDE_BINARY`,
+`OCTIPUS_CODEX_BINARY`, `OCTIPUS_ANTIGRAVITY_BINARY` and `OCTIPUS_MUSE_BINARY`. Authenticated detailed health reports executable
 paths or the PATH searched when resolution fails.
 
 `create_pipeline` returns a handle after saving the graph and initial checkpoint.
@@ -414,8 +414,9 @@ never accepts an identity or session override from tool arguments and does not
 use the standalone MCP server's bootstrap admin token.
 
 Claude Code (including the GLM/Kimi variants), Codex and Vibe receive a per-run
-MCP configuration. Antigravity can reach the same bridge through a supplied
-terminal helper. The helper supports listing tools and calling a named tool with
+MCP configuration. Muse Code receives one too, and nothing else: its bridge is
+its only tool source (see [Muse Code](#muse-code)). Antigravity can reach the
+same bridge through a supplied terminal helper. The helper supports listing tools and calling a named tool with
 JSON arguments; credentials are inherited privately through the environment.
 
 A CLI agent rarely calls `search_knowledge` on its own: it has its own file
@@ -435,7 +436,78 @@ into an OS-isolated tenant: vendor-native tools, host files, account credentials
 hooks and local configuration remain subject to the vendor's runtime and
 sandbox. Use a trusted local execution account. Claude, Codex and Vibe isolate
 their configured MCP list for the run; Antigravity's host integrations are not
-isolated by its terminal-helper connection.
+isolated by its terminal-helper connection. Muse Code is the exception to the
+vendor-native caveat: it runs with no native tools at all.
+
+## Muse Code
+
+Meta's Muse Code CLI (`muse`, model id `cli/muse`) runs as a CLI agent like
+Claude Code and Codex, with one difference: **its only tools are the run's
+Octipus tools**. Every file read or write, shell command, web read and
+delegation goes through the Octipus bridge and its permission rules.
+
+**Setup.** Install `muse` and run `muse login` once as the account the Octipus
+server runs under (a device code you approve in the browser). Alternatively set
+a metered `META_API_KEY` and turn on "Pass server API keys" on the model row;
+the key takes priority over the login. Register the model from Models → Detected
+CLI Tools; its limits come from muse's model catalog (1,007,997-token context,
+128,000 output tokens) and images reach it with `--image` (verified).
+
+**Billing.** Mixed: a Muse Code subscription allowance through the login
+(`https://accountscenter.meta.com/muse_code/`), or metered API use with
+`META_API_KEY`. A subscription key used against the direct Meta API is refused
+(`client_attestation_denied`); use it through `cli/muse` instead.
+
+**How a run is isolated.** muse reads its whole user configuration from
+`$XDG_CONFIG_HOME/muse`, so each run gets a private one
+(`prepareMuseHome` in `src/core/cli-adapters.ts`), removed afterwards:
+
+- `run.toolset` lists exactly the bridge's tools (`mcp__octipus__<tool>`). A
+  tool not listed is not offered, so every native tool is gone: shell, file
+  writes, web search and fetch, memory, `request_user_input`, subagents,
+  workflows and scheduled tasks. A model that guesses at one anyway gets
+  "unknown tool" back from muse.
+- The user's own MCP servers, hooks and settings stay out; only their default
+  model and reasoning efforts carry over. Foreign rules and skills
+  (`~/.claude`, `~/.codex`, `~/.agents`) are off, every bundled, user and
+  plugin skill is switched off by path, native subagents and cross-session
+  messaging are off, and `--disable-reminders` stops muse's background
+  reminder agents.
+- muse loads MCP servers only in a trusted workspace, and a trusted workspace
+  also loads its own `AGENTS.md`, skills and `.mcp.json` servers. So muse's
+  workspace (`--workspace`) is an empty directory per Octipus workspace,
+  trusted only in the run's own `trust.json`; the files the run works on are
+  reached through the Octipus tools, and Octipus injects the project's
+  `AGENTS.md` itself. The prompt tells the model where its files are.
+- The login is linked, never copied or read: the run's `auth.json` is a
+  symbolic link to the user's. Should muse ever rewrite it during a run, the
+  new file is moved back over the user's when the run ends.
+- muse's own approval prompts and LLM approval judge are off: Octipus
+  authorizes every call. Plan mode and the read-only modes work through the
+  tools Octipus offers, so they are real read-only runs. A model row's CLI
+  permission mode has nothing to act on and is refused, both when the model is
+  saved and at spawn.
+
+**Limits.**
+
+- Usage arrives once, at the end of a run (`run.usage`), never per model call
+  (`muse exec --json` emits no token counts before it; checked on 1.4.18). The
+  token-budget kill therefore applies after the run; within it,
+  `--max-model-steps` (the run's remaining iterations) is the cap.
+- Its subscription allowance (`run.usage.allowance`: the five-hour window and
+  the week, each with a used percentage and reset time) feeds the quota
+  tracker: at 100 % the provider is marked exhausted until the reported reset.
+- No manual `/compact`: muse compacts its own context automatically during a
+  run; `muse exec` sends `/compact` to the model as text, and its session
+  protocol refuses an exec session (`compaction_unavailable`). Octipus says so
+  and keeps the session.
+- Not in shared spaces and not on personal models: muse keeps one login and
+  its session logs in the server account's `~/.config/muse` and
+  `~/.local/share/muse`, which Octipus cannot yet separate per member or per
+  credential. The model settings, the API and the personal-model form say so.
+- On a multi-user install every user's Muse Code runs use that one login, as
+  with Vibe.
+
 
 ## Plans, feedback and delegation
 
@@ -519,6 +591,7 @@ Octipus's bridge are not members of Octipus's managed child tree.
 | Claude Code / GLM / Kimi | Scoped MCP | `plan` | Structured stream | Claude permission control requests enter Octipus approvals |
 | Codex CLI | Scoped MCP | `read-only` sandbox | Structured stream | Vendor's noninteractive sandbox policy; no interactive relay |
 | Mistral Vibe | Scoped MCP | `plan` agent | Buffered | Vendor agent mode; no interactive relay |
+| Muse Code | Scoped MCP, its only tools | Octipus withholds write tools | Structured stream | None needed: no native tools; every call is an Octipus tool call |
 | Antigravity | Terminal bridge | `plan` mode | Buffered text | Vendor mode; no interactive relay |
 
 All **Octipus tool** calls use Octipus permissions. Attended sessions can approve
@@ -590,11 +663,12 @@ Managed runs reject extra arguments that could override permission, MCP, input,
 output, directory or budget settings, both when the model is saved and at spawn. The supported additive flags are Claude's
 `--no-session-persistence`, `--no-chrome`, `--disable-slash-commands` and
 `--effort`; Codex's `--strict-config` and `--color`; and Antigravity's
-`--disable-slash-commands` and `--effort`. Vibe has no additive flags currently.
+`--disable-slash-commands` and `--effort`; and Muse Code's `--reasoning-effort`.
+Vibe has no additive flags currently.
 Use the dedicated model settings for model choice and permissions.
 
 The run's active-work timeout excludes Octipus approval and delegation waits.
-Claude, Codex and Vibe's bridge tool requests have a separate two-hour vendor
+Claude, Codex, Vibe and Muse Code's bridge tool requests have a separate two-hour vendor
 wall-clock timeout, including those waits; exceptionally long calls can still
 exceed that transport limit.
 Reported usage is accumulated, with duplicate Claude message fragments deduped.
@@ -625,7 +699,9 @@ file tools and native writes never write a coding agent's configuration
 (`.claude/`, `.codex/`, `.gemini/`, `.agents/`, `.vibe/`, `.mcp.json`) in a
 space. Codex runs in the
 `read-only` sandbox; Antigravity in `--mode plan`. Mistral Vibe declares no
-such mode and is refused in spaces. A commenter's turn uses API models only.
+such mode and is refused in spaces; Muse Code is refused too, for its shared
+login and session store ([Muse Code](#muse-code)). Either refusal names its
+reason. A commenter's turn uses API models only.
 See [SPACES.md](SPACES.md).
 
 ## Authentication and fallback
@@ -656,8 +732,9 @@ its owner's own one), never the workspace root. Their callers feed in fetched
 pages, mail and plugin-written prompts, so a CLI that cannot run without its
 own tools (Antigravity, Vibe, Codex) answers no completion: the call fails
 with "it has no mode without its own tools". Use such a CLI as an agent model
-(`/model`, a role or pipeline stage) and bind an API model or Claude Code to
-the lanes.
+(`/model`, a role or pipeline stage) and bind an API model, Claude Code or
+Muse Code to the lanes. Muse Code reads no prompt from stdin, so its prompt
+goes in a private file instead (table below).
 
 The one exception is a plugin's `model:complete` call, by explicit approval
 only: its package declares `model.trustedInput` (its prompts carry no
@@ -673,6 +750,7 @@ argument with a line break:
 |---|---|---|
 | Codex | `codex exec … -` reads it from stdin | codex CLI |
 | Mistral Vibe | `vibe -p --output json …`: a bare `-p` reads the prompt from stdin | Vibe README ("With `-p` and no text, the prompt is read from stdin") |
+| Muse Code | Always tool-less (`run.toolset: []` in a config home of its own, no MCP server, nothing trusted). muse reads no prompt from stdin (`--prompt-file /dev/stdin` is refused as not a regular file), so the prompt goes in a 0600 file in a fresh directory, removed afterwards | muse 1.4.18, verified live: "unknown tool … Session tool ids: (none)" |
 | Antigravity | `agy --input-format stream-json --output-format stream-json`: one line `{"event":"user","message":{"content":"…"}}` on stdin; the answer is the `result` event's `response`, with token usage. `--print` takes the prompt only as its value and ignores stdin, so it is not used for these calls. | [Antigravity headless mode](https://antigravity.google/docs/cli/headless) |
 
 Agent runs are unchanged: Antigravity still gets `--print <prompt>` as one
@@ -687,10 +765,17 @@ adapters that support it), so the vendor continues the conversation it
 already holds instead of Octipus re-sending the whole conversation as a new
 prompt each time.
 
-Only Claude Code and Codex CLI support this. Claude's id is minted by
+Claude Code, Codex CLI and Muse Code support this. Claude's id is minted by
 Octipus itself and passed on the first run (`--session-id`), so there is
 never a run with no id to resume later; Codex assigns its own id, which
-Octipus captures from `thread.started`. Antigravity and Mistral Vibe do not
+Octipus captures from `thread.started`. Muse Code's is minted too, and passed
+as the same `--session-id` on every run. muse starts a new, empty session
+under an id it does not know without saying so, so Octipus first checks that
+muse still holds the session log
+(`${XDG_DATA_HOME:-~/.local/share}/muse/sessions/YYYY/MM/DD/<id>/session.jsonl`)
+and starts cold otherwise. A run that is never resumed passes
+`--no-session-log`, as Codex passes `--ephemeral`; session logs of resumable
+runs stay in the vendor's directory, as Claude's and Codex's do. Antigravity and Mistral Vibe do not
 participate, for different reasons:
 
 - **Antigravity**: the installed build's print mode emits no conversation id
@@ -737,6 +822,8 @@ per-run.
 When the latest root agent saved a resumable CLI session, `/compact` runs that
 provider's native compaction on its exact vendor session ID. The confirmation
 names that provider. Automatic Octipus summarization leaves that session alone.
+Muse Code has no manual compaction to offer (it compacts its own context
+during a run); `/compact` says so and keeps the session.
 Selection follows the latest root agent, rather than the timestamps of older
 saved provider sessions. Child agents are excluded.
 
