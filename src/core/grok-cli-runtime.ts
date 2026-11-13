@@ -60,7 +60,7 @@ export function prepareGrokRuntime(options: {
     const session = options.resume ?? { id: randomUUID(), isFirstRun: true };
     args.push(session.isFirstRun ? '--session-id' : '--resume', session.id);
     return { binary: 'grok', args, cwd, useShell: false, env: {
-      HOME: temporary, USERPROFILE: temporary, GROK_HOME: home, GROK_AUTH_PATH: authPath, GROK_LOGIN_ENV: '0', GROK_MANAGED_MCPS_ENABLED: '0', GROK_MANAGED_MCP_GATEWAY_TOOLS_ENABLED: '0',
+      HOME: temporary, USERPROFILE: temporary, XDG_CONFIG_HOME: join(temporary, '.config'), GROK_HOME: home, GROK_AUTH_PATH: authPath, GROK_LOGIN_ENV: '0', GROK_MANAGED_MCPS_ENABLED: '0', GROK_MANAGED_MCP_GATEWAY_TOOLS_ENABLED: '0',
     }, cleanupPaths: [temporary] };
   } catch (error) {
     rmSync(temporary, { recursive: true, force: true });

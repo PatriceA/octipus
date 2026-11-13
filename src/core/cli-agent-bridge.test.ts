@@ -254,18 +254,49 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('a run in a space passes the space mod
   expect(usage).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: spaceId, funding: 'own', requestType: 'cli' }), 'cli', expect.anything(), expect.anything());
 });
 
-it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('Grok stops before tool execution when the CLI ignores tool isolation', async () => {
-  writeFileSync(fixture.script, `
-    console.log(JSON.stringify({type:'system',subtype:'init',tools:['run_terminal_command'],mcp_servers:[]}));
-    setTimeout(() => process.exit(0), 10000);
-  `);
+it.skipIf(!!process.env.OCTIPUS_LIVE_CLI).each([
+  { name: 'newline-delimited forbidden init', script: `console.log(JSON.stringify({type:'system',subtype:'init',tools:['run_terminal_command'],mcp_servers:[]})); setTimeout(() => process.exit(0),10000);` },
+  { name: 'forbidden init at EOF without newline', script: `process.stdout.write(JSON.stringify({type:'system',subtype:'init',tools:['run_terminal_command'],mcp_servers:[]}));` },
+  { name: 'assistant and result without init', script: `console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'Unverified'}]}})); console.log(JSON.stringify({type:'result',subtype:'success',result:'Unverified'}));` },
+  { name: 'result at EOF without init', script: `process.stdout.write(JSON.stringify({type:'result',subtype:'success',result:'Unverified'}));` },
+  { name: 'empty output', script: '' },
+])('Grok rejects unverified tool isolation: $name', async ({ script }) => {
+  writeFileSync(fixture.script, script);
   const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own', id: 'grok-guard',
     sessionId: 's', userId: 'u', model: 'cli/grok-build', role: 'general', topic: '', status: 'idle',
     createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
   worker.registerTool({ name: 'sample_context', description: 'Test context', parameters: { type: 'object' }, execute: fixture.execute });
-  await expect(worker.run('Read the test context')).rejects.toThrow('did not honour scoped tool isolation');
+  await expect(worker.run('Read the test context')).rejects.toThrow('scoped tool isolation');
   expect(fixture.execute).not.toHaveBeenCalled();
+});
+
+it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('Grok retains its isolated config home under the workstation host identity profile', async () => {
+  const { getConfig } = await import('@/config');
+  const { workstationAutomationPreset } = await import('@/shared/execution-environment');
+  const { homedir } = await import('node:os');
+  const userId = '11111111-1111-4111-8111-111111111111';
+  fixture.sessionOwner = userId;
+  const original = getConfig().security.executionEnvironments;
+  const originalOverlay = process.env.GROK_CONFIG;
+  process.env.GROK_CONFIG = '{"features":{"host_overlay_fixture":true}}';
+  getConfig().security.executionEnvironments = [{ ...workstationAutomationPreset(userId, 'test', [fixture.dir]), isDefault: true }];
+  writeFileSync(fixture.script, `
+    if (process.env.GROK_CONFIG) throw new Error('Workstation vendor overlay leaked');
+    if (process.env.HOME === ${JSON.stringify(homedir())} || process.env.USERPROFILE !== process.env.HOME || !process.env.GROK_HOME.startsWith(process.env.HOME) || !process.env.XDG_CONFIG_HOME.startsWith(process.env.HOME)) throw new Error('Managed vendor home was overwritten');
+    console.log(JSON.stringify({type:'system',subtype:'init',tools:['search_tool','use_tool'],mcp_servers:[{name:'octipus',status:'pending'}]}));
+    process.stdout.write(JSON.stringify({type:'result',subtype:'success',result:'Isolated home preserved',num_turns:1}));
+  `);
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own', id: 'grok-host',
+    sessionId: 's', userId, model: 'cli/grok-build', role: 'general', topic: '', status: 'idle',
+    createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+    { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
+  try { await expect(worker.run('Report readiness')).resolves.toBe('Isolated home preserved'); }
+  finally {
+    getConfig().security.executionEnvironments = original;
+    if (originalOverlay === undefined) delete process.env.GROK_CONFIG;
+    else process.env.GROK_CONFIG = originalOverlay;
+  }
 });
 
 function sampleWorker(): CLIAgentWorker {

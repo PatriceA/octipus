@@ -1569,9 +1569,17 @@ When a task matches one of these skills, load it with get_skill before starting 
     const baseEnv = cliEnvFor(this.credentialOwner, toolConfig, { ...toolEnv,
         ...(this.connection ? { OCTIPUS_AGENT_URL: this.connection.url, OCTIPUS_AGENT_KEY: this.connection.key } : {}),
       }, settings.inheritApiKeys === true);
-    const initialEnv = toolHome ? cliSpaceEnv(baseEnv, toolHome) : nativeCliEnvironment(this.context, baseEnv);
+    // Bridge-only vendors need their own login, not the workstation's native
+    // tool configuration. Project tools receive that identity through Octipus.
+    const initialEnv = toolHome ? cliSpaceEnv(baseEnv, toolHome)
+      : toolConfig.octipusToolsOnly ? baseEnv : nativeCliEnvironment(this.context, baseEnv);
     const runtimeCredentials = await environmentCredentialOptions(this.context, { env: initialEnv }).catch((error: unknown) => { cleanupContextFiles(); throw error; });
-    const env = runtimeCredentials.options.env;
+    // Workstation identity and credential shaping must not replace an adapter's
+    // isolated configuration home. Project tools still use the chosen environment
+    // through the bridge; the vendor process reads only its managed configuration.
+    const env = toolConfig.octipusToolsOnly
+      ? { ...runtimeCredentials.options.env, ...built.env }
+      : runtimeCredentials.options.env;
     return new Promise<string>((resolve, reject) => {
       if (this.aborted) { cleanupContextFiles(); reject(new Error('Agent was aborted before CLI spawn')); return; }
       try { assertWindowsCmdLineFits(binary, args, process.platform, useShellForSpawn); } catch (err) { cleanupContextFiles(); reject(err); return; }
@@ -1662,6 +1670,21 @@ When a task matches one of these skills, load it with get_skill before starting 
       // one blob at process close, not incremental stream-json events. For those
       // we collect raw stdout and run parseOutput on the full buffer in `close`.
       let rawStdout = '';
+      let isolationVerified = !toolConfig.octipusToolsOnly;
+      // Both newline-delimited events and the final EOF record pass here.
+      const verifyIsolation = (event: Record<string, unknown>): boolean => {
+        if (!toolConfig.octipusToolsOnly) return true;
+        const init = event.type === 'system' && event.subtype === 'init';
+        const reason = init ? grokToolIsolationError(event)
+          : !isolationVerified ? 'Grok Build did not provide verified scoped tool isolation before output.' : undefined;
+        if (reason) {
+          this.runError = reason;
+          this.stop();
+          return false;
+        }
+        if (init) isolationVerified = true;
+        return true;
+      };
 
       proc.stdout.on('data', (chunk: Buffer) => {
         if (this.aborted) return; // Stop processing events after abort
@@ -1677,14 +1700,7 @@ When a task matches one of these skills, load it with get_skill before starting 
           if (!line.trim() || this.aborted) continue;
           try {
             const event = runtimeCredentials.mask(JSON.parse(line));
-            if (toolConfig.octipusToolsOnly && event.type === 'system' && event.subtype === 'init') {
-              const isolationError = grokToolIsolationError(event);
-              if (isolationError) {
-                this.runError = isolationError;
-                this.stop();
-                continue;
-              }
-            }
+            if (!verifyIsolation(event)) continue;
             if (built.keepStdinOpen && event.type === 'control_response' && this.steeringInterrupt && event.response?.request_id === this.steeringInterrupt.requestId) {
               if (event.response.subtype !== 'success') {
                 const failed = this.failUnacknowledgedCancellation('interrupt was rejected');
@@ -1858,7 +1874,7 @@ When a task matches one of these skills, load it with get_skill before starting 
             // Process remaining streamed line buffer
             try {
               const event = runtimeCredentials.mask(JSON.parse(lineBuffer));
-              const result = parser.parse(event, adapterKey);
+              const result = verifyIsolation(event) ? parser.parse(event, adapterKey) : null;
               if (result) {
                 if (result.replace) accumulatedText = result.text;
                 else accumulatedText += result.text;
@@ -1868,6 +1884,10 @@ When a task matches one of these skills, load it with get_skill before starting 
                 accumulatedText = runtimeCredentials.mask(lineBuffer.trim());
               }
             }
+          }
+
+          if (!isolationVerified && !this.runError) {
+            this.runError = 'Grok Build did not provide verified scoped tool isolation before completion.';
           }
 
           // Background work the CLI started and never reported finished died
