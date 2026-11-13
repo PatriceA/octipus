@@ -66,7 +66,9 @@ jobs:
       id-token: write # npm publish --provenance (OIDC attestation)
     name: Release ${{ inputs.tag || github.ref_name }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The full test gate takes about 16 minutes on hosted runners.
+    # Allow browser setup, the full gate and publishing the same room as main CI.
+    timeout-minutes: 60
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
@@ -102,6 +104,14 @@ jobs:
       - name: Test the package being published
         run: npm test
         working-directory: mcp-server
+      # Match main CI's browser prerequisite; page extraction tests launch
+      # Playwright's pinned Chromium. Keep the release browser uncached.
+      - name: Prepare Ubuntu package sources
+        uses: ./.github/actions/ubuntu-apt
+
+      - name: Install browser for page extraction tests
+        run: npx playwright install --with-deps chromium
+
       - name: Test
         run: npm run test
         env:
