@@ -3,9 +3,11 @@
 > **Status: proposed (2026-11-13).** Two independent tracks:
 > **A** makes images and audio first-class for every agent (native image input
 > when the model can see, tools when it can't, plus image generation,
-> transcription and speech as lanes and tools). **B** gives every new install a
-> small local embedding model on a small downloaded engine, so knowledge, memory
-> and search work with no key and no manual setup.
+> transcription and speech as lanes and tools), and moves STT/TTS out of their
+> separate `voice.*` settings and adapters into the model registry. **B** offers
+> new installs an **optional** small local embedding model on a small downloaded
+> engine. It can be skipped at install and added later; existing installs and
+> existing embedding bindings are never touched.
 >
 > Sources: a code read of Octipus `main` at `94876bb`; NousResearch/hermes-agent
 > at `04903d96` (2026-11-13); cocoindex-io/cocoindex-code at `5676897a`
@@ -22,12 +24,12 @@
 | D2 | **Tool when it can't.** A model that can't see gets the image *path* plus a `view_image` tool that calls the vision lane with *its own question*. The model decides whether it needs to look. | Exactly what was asked: "the general model should decide". It's also what hermes does (`vision_analyze`). |
 | D3 | **`view_image` exists for every model.** For a seeing model it loads the pixels into context (that's how it "looks at" a generated image, a screenshot, or a file it found). For a blind model it asks the vision lane. | One verb for "look at this", whatever model is underneath. Hermes does the same (native fast path inside `vision_analyze`). |
 | D4 | **`vision` lane becomes optional** ("fallback for models that can't see"). **`ocr` stays as an optional specialist lane** for the document pipeline, falling back to `vision`, then to the default model if that model can see. | Specialist OCR models (DeepSeek-OCR, GLM-OCR, mistral-ocr) are better and cheaper than general VLMs on dense pages, tables and scanned PDFs at volume. General VLMs are better at describing photos and screenshots. **For your setup:** DeepSeek-OCR → `ocr`, leave `vision` unbound, and Qwen3.8 sees chat images itself. |
-| D5 | **Three new lanes:** `image_generation`, `transcription`, `speech`. **Audio becomes a lane**, so `voice.sttProvider` / `voice.ttsProvider` stop being the source of truth. A migration turns them into model rows and bindings. | "One source of truth" (DESIGN.md). Today, voice is configured outside the model registry, so no agent tool and no budget can see it. |
+| D5 | **Three new lanes:** `image_generation`, `transcription`, `speech`. **STT/TTS move into the model registry** (§A7): the `voice.*` engine settings are migrated into model rows and lane bindings, and the engine adapters become provider implementations behind one resolver. | Today there are **seven separate places that pick an STT/TTS engine, each in its own order**, with hardcoded model ids, global keys only, no cost accounting and no protection-level check (§1 Audio). One source of truth (DESIGN.md) fixes all of that at once and makes audio usable by agents. |
 | D6 | **Three new tool groups:** `vision` (`view_image`, `read_document_text`), `imagegen` (`generate_image`), `audio` (`transcribe_audio`, `speak`). Availability depends on what's bound, so an agent only sees a tool that will actually work. | Hermes `check_fn` pattern, which maps onto `BaseTool.checkAvailability()`. |
 | D7 | **Media the agent produces is delivered automatically.** A generated image or speech file is attached to the reply on web, TUI and every channel, without the model having to "send" it. | Hermes `_AUTO_APPEND_MEDIA_TOOL_NAMES`. Today only Telegram can send bytes, and only for voice replies. |
 | D8 | **Voice notes are always transcribed on the way in** (the transcript is the message). The original audio file stays attached, so the agent can re-transcribe it with options, and a model that accepts audio can get it natively (opt-in). | A transcript is what history, search, channel display and text-only models need. Native audio is a bonus for tone or non-speech audio, not the baseline. |
-| D9 | **Local embedding engine = llama.cpp `llama-server` sidecar** (pinned release, about 12–24 MB per platform, SHA-256 verified) **+ `embeddinggemma-2` GGUF Q8_0 (about 310 MB, 768 dims, Apache-2.0, 100+ languages)**. It's offered by default in every installer path. | Smallest download, covers all platforms including Intel Mac and Windows-arm, adds nothing to `node_modules`, and exposes OpenAI-compatible `/v1/embeddings`, so it plugs into the existing embed path. transformers.js would add about 450–500 MB of `node_modules` for everyone and has no Intel-Mac ORT build (see B1). |
-| D10 | **Switching embedding model gets a real re-embed job**, not "clear the rows by hand". | Without it, the local engine is useless to any existing install that already has vectors. |
+| D9 | **Local embedding engine = llama.cpp `llama-server` sidecar** (pinned release, about 12–24 MB per platform, SHA-256 verified) **+ `embeddinggemma-2` GGUF Q8_0 (about 310 MB, 768 dims, Apache-2.0, 100+ languages)**. **Optional:** offered (not forced) by the full wizard and the web onboarding, skippable, and addable any time later from the Topics page or `octi capabilities install local-embedding`. | Smallest download, covers all platforms including Intel Mac and Windows-arm, adds nothing to `node_modules`, and exposes OpenAI-compatible `/v1/embeddings`, so it plugs into the existing embed path. transformers.js would add about 450–500 MB of `node_modules` for everyone and has no Intel-Mac ORT build (see B1). |
+| D10 | **The local engine never replaces an existing embedding binding.** Installing it binds the `embedding` lane only when that lane is unbound. With a model already bound, it registers the row unbound and says so. No re-embed job is part of this plan. | Existing installs keep the embedding they have (including yours). Switching later stays the documented manual procedure in `docs/RAG.md` → Vector indexing. |
 
 Explicit non-goals: video understanding or generation, music generation, realtime
 speech-to-speech (has its own plan: `voice-realtime-speech-to-speech.md`), and
@@ -48,10 +50,43 @@ instance ships here.
 - **Document pipeline:** `core/documents/processor.ts`. Images and PDFs use `ocr` → falls back to `vision`, with native OCR for Mistral. This fallback chain already exists and is kept.
 - **Web UI:** the work-stream already has an `{kind:'image'}` result row (`message-timeline.tsx:478`). User and assistant bubbles render no attachments.
 
-### Audio
-- STT/TTS engines live in `src/voice/` (whisper.cpp, faster-whisper, Mistral Voxtral, OpenAI; Kokoro, Piper, Mistral, OpenAI), and are configured in `config.voice.*`, **outside the model registry**. They have no topic, no cost accounting, and no tool. The `voice` tool is telephony only.
-- Channel voice notes are transcribed inline (`transcribeChannelAudio`, fixed order local → Mistral → OpenAI). A voice reply goes back **only on Telegram** ("ponytail" comment, `channels/index.ts:228`).
+### Audio: where STT/TTS are configured and chosen today
+
+STT/TTS are **not** in the model registry. They are configured as settings (`config/settings-registry.ts:789–840`: `voice.sttProvider`, `voice.fasterWhisperModel`, `voice.whisperModelPath`, `voice.ttsProvider`, `voice.piperModelPath`, `voice.language`) and run by special adapter classes in `src/voice/`:
+
+| Adapter (`src/voice/`) | Kind | Transport | Model id comes from |
+|---|---|---|---|
+| `WhisperEngine` | STT | whisper.cpp CLI subprocess | `voice.whisperModelPath` or `models/whisper/ggml-base.bin` |
+| `FasterWhisperEngine` | STT | Python (uv) subprocess | `voice.fasterWhisperModel` |
+| `MistralSTTEngine` | STT | HTTP / realtime | **hardcoded** `voxtral-mini-latest` (`stt.ts:461`) |
+| `OpenAIRealtimeSTTEngine` | STT | realtime websocket | **hardcoded** `gpt-realtime-whisper` (`stt.ts:732`) |
+| `KokoroEngine`, `PiperEngine` | TTS | CLI subprocess | voice name / `voice.piperModelPath` |
+| `MistralTTSEngine` | TTS | HTTP | **hardcoded** `voxtral-mini-tts-2603` (`tts.ts:202`) |
+| `OpenAITTSEngine` | TTS | HTTP | hardcoded default |
+
+**Seven call sites each pick an engine their own way:**
+
+| Call site | How it chooses |
+|---|---|
+| `voice/stt.ts transcribeAudioBuffer` (channel voice notes) | whisper.cpp → Mistral → OpenAI. **Ignores `voice.sttProvider`** and never uses faster-whisper |
+| `api/voice-ws.ts resolveEngine` (live mic in web/app) | `?engine=` param, else `voice.sttProvider`. `auto` = **Mistral → OpenAI → whisper (cloud first)**, the opposite of channels |
+| `api/routes/voice.ts /transcribe` | a client-sent `model` string (`local`, `whisper-1`, `voxtral-*`). The OpenAI path reads **only `process.env.OPENAI_API_KEY`**, not the vault |
+| `api/routes/voice.ts /speak` | `voice.ttsProvider` |
+| `channels/index.ts synthesizeVoiceReply` | `voice.ttsProvider`, Telegram only |
+| `api/voice-media-ws.ts` (phone media stream) | **hardcoded** `WhisperEngine` for STT and `MistralTTSEngine` with voice `en_paul_neutral` for TTS, whatever is configured |
+| `tui-pi/app.ts` | `voice.ttsProvider` |
+
+Consequences:
+- The same install can transcribe a Telegram voice note locally and the web mic in the cloud.
+- **Model ids are hardcoded**, which breaks house rule 2.
+- Keys are only the global provider keys; a model row's `apiKeyRef` / `endpoint` can't be used.
+- **No `recordProviderUsage`**: STT/TTS spend never reaches cost logs or spend budgets.
+- **No `assertMayLeave`**: protection level 3–4 audio can go to a cloud engine.
+- No agent tool can reach any of it; the `voice` tool is telephony only.
+- A voice reply goes back **only on Telegram** ("ponytail" comment, `channels/index.ts:228`).
 - **Web chat accepts `audio/*` uploads** (`prompt-input.tsx:90`), but `buildAttachedFilesContext` treats them as `binary` → "open it in the file view". **That's a dead end.**
+
+The adapters themselves are fine: subprocess management, realtime sockets, resampling and WAV handling are real work and stay. What moves is **configuration and selection**.
 
 ### Outbound media
 - `Attachment {type,url?,data?,mimeType}` exists on `ChannelResponse`. Telegram sends bytes. **Slack, WhatsApp and Teams only send `url` attachments**, so the bytes the agent produced cannot be delivered there.
@@ -103,9 +138,9 @@ instance ships here.
 | `vision` | `vision` | no | the default model if `supportsVision`, else "nobody can see" | `view_image` for blind models, document pipeline image *descriptions*, `visual__analyze_page`, channel/TUI fallback |
 | `ocr` | `ocr` | no | `vision` → default model if it sees | document pipeline text extraction, `read_document_text` |
 | `image_generation` (new) | `image_generation` | no | none → `imagegen` tool hidden | `generate_image` |
-| `transcription` (new) | `transcription` | no | the existing auto order (local whisper → Mistral → OpenAI) **is migrated into a binding** (A7), so unbound really means "not configured" | voice notes, web voice input, `/voice` socket, `transcribe_audio` |
-| `speech` (new) | `speech` | no | none → `speak` hidden, voice replies off | voice replies, `/api/voice/speak`, `speak`, telephony TTS |
-| `embedding` | `embedding` | **yes** | none → RAG/memory off (track B makes this rare) | unchanged |
+| `transcription` (new) | `transcription` | no | none → voice input off with a reason. Existing installs get a binding from the migration (§A7.4), so nothing that works today stops working | all seven STT/TTS call sites in §1, `transcribe_audio` |
+| `speech` (new) | `speech` | no | none → `speak` hidden, voice replies off | voice replies, `/api/voice/speak`, phone media stream, TUI, `speak` |
+| `embedding` | `embedding` | **yes** | none → RAG/memory off (unchanged; track B is an optional way to fill it) | unchanged |
 | `decision` | `decision` | no | unchanged | unchanged |
 
 Labels and help text on the Topics page: *Vision — "Only needed if the model doing the work can't read images, or you want a cheaper one for documents."* The page shows **what actually serves it** ("Served by qwen3.8 (main model reads images)").
@@ -205,7 +240,11 @@ New `BaseTool`s in `src/tools/media/` with three tool ids (so role allowlists st
 
 **Modules:** new `src/modules/media.ts` ("Images and audio": tools `vision`, `imagegen`, `audio`; routes `/api/media`). With the module off, the inbound fallbacks behave as `describe`/transcript-only, and the tools are absent. `voice` keeps realtime and telephony; both modules use the same lane resolver.
 
-### A7. Provider surface and the audio lanes
+### A7. Moving STT/TTS into the model registry (and the provider surface for media)
+
+This is its own phase (P3a) and happens **before** any new audio feature. It is a behaviour-preserving move: same engines, same audio, but one source of truth.
+
+#### A7.1 Provider methods
 
 `ModelProvider` (`models/providers/interface.ts`) gets three optional methods, each wrapped by `instrumented.ts` for usage and cost:
 
@@ -227,15 +266,74 @@ Implementations:
 | **`local-audio` (new provider)** | — | `whisper.cpp:<model>`, `faster-whisper:<size>` (existing engines) | `kokoro:<voice>`, `piper:<voice>` (existing engines) |
 
 - `local-audio` is registered as **hosting local** in `resolveDataPolicy`, so protection levels 3–4 accept it.
-- **Voice settings migration** (data migration + settings registry):
-  1. Create rows for whatever `voice.sttProvider` / `voice.fasterWhisperModel` / `voice.ttsProvider` / `voice.piperModelPath` resolve to today (for `auto`, the first engine that is actually available, using the same probe `transcribeAudioBuffer` uses).
-  2. Bind them `primary` on `transcription` / `speech`.
-  3. Bind the next available cloud engine as `backup`.
-  4. Remove these keys from the settings registry; old rows in the settings DB are ignored with a one-time log line, in the existing `.catch` style.
-  5. Keep `voice.language`, `voice.ttsEnabled` (now "speak replies to voice messages"), `voice.wakeWord` and the voice name.
-- `voice/stt.ts transcribeAudioBuffer`, `/voice/transcribe`, `/api/voice/speak`, the realtime `/voice` socket, telephony TTS, `synthesizeVoiceReply` and the setup wizard's `pickVoice` all resolve through the lanes.
-- Realtime streaming engines stay engine classes, chosen from the bound row's provider and model; the lane only says *which* engine.
-- `voice/provision.ts` installs (Kokoro, faster-whisper) create and bind the row as their last step.
+
+#### A7.2 What happens to the adapters
+
+- The adapter classes move to `src/voice/engines/` unchanged in behaviour. They are no longer constructed by call sites; **only providers construct them**.
+- Every adapter takes its **model id, key and endpoint from the model row**, not from constants or global keys:
+  - `MistralSTTEngine(row.modelId, { apiKey: resolved from row.apiKeyRef → vault → env })`, and the same for the other cloud adapters.
+  - The hardcoded ids (`voxtral-mini-latest`, `gpt-realtime-whisper`, `voxtral-mini-tts-2603`, the OpenAI TTS default) move out of source into **curated discovery entries** (`discovery/curation.ts`) and the migration (A7.4). That fixes the house-rule-2 violation.
+- `local-audio` maps model ids to local adapters:
+
+  | modelId | Adapter | Row config |
+  |---|---|---|
+  | `whisper.cpp:<model>` | `WhisperEngine` | model file path in `metadata.modelPath` |
+  | `faster-whisper:<size>` | `FasterWhisperEngine` | — |
+  | `kokoro:<voice>` | `KokoroEngine` | — |
+  | `piper:<voice>` | `PiperEngine` | `.onnx` path in `metadata.modelPath` |
+
+  `local-audio` reuses the existing probes (`probeWhisper`, `kokoroModelsPresent`, the faster-whisper/uv check) as its health check, so an installed-but-broken engine fails loud with the same remedy text as today.
+- Row metadata describes what the engine can do, so callers stop special-casing provider names: `metadata.speech = { streaming: boolean, formats: ['wav'] | ['mp3','opus','wav'], voices?: string[] }`. This replaces `TTS_ENGINE_FORMAT` / `HOSTED_TTS` in `routes/voice.ts`.
+
+#### A7.3 One resolver, seven call sites
+
+`src/voice/resolve.ts` (new): `resolveSpeechEngine('stt' | 'tts', { mode: 'batch' | 'stream', sessionId?, userId?, override? })`.
+- It goes through the media resolver (A3): lane primary → backup.
+- It applies `assertMayLeave` and the `mayUseInstallModels` check (both currently missing or route-local).
+- It returns an adapter wrapped so usage is recorded.
+- A primary that fails at call time (key revoked, binary broken) falls to the backup **with a logged, surfaced reason**. This replaces the ad-hoc "local broke, try cloud" catch in `transcribeAudioBuffer`.
+
+| Call site | After the move |
+|---|---|
+| `transcribeAudioBuffer` (channels) | `resolveSpeechEngine('stt', {mode:'batch'})` |
+| `voice-ws.ts` live mic | `resolveSpeechEngine('stt', {mode:'stream'})`. `?engine=` is accepted as a **row name**; the old values `whisper`, `fasterwhisper`, `mistral`, `openai` and `auto` map through a small permanent alias table to "the row of that provider bound on `transcription`", so the mobile app and older web clients keep working |
+| `/voice/transcribe` | the same resolver. The `model` body field becomes an optional row name, with the old strings aliased. **The env-only OpenAI key goes away** (it uses the row's key) |
+| `/voice/speak` | `resolveSpeechEngine('tts')`. Format validation comes from `metadata.speech.formats` |
+| `synthesizeVoiceReply` | resolver; all channels (A8) |
+| `voice-media-ws.ts` (phone) | resolver for **both** directions. The hardcoded whisper + `en_paul_neutral` go away; the voice comes from the new `voice.ttsVoice` setting |
+| `tui-pi/app.ts` | resolver |
+
+#### A7.4 Settings and data migration
+
+1. A migration reads the effective values of `voice.sttProvider`, `voice.fasterWhisperModel`, `voice.whisperModelPath`, `voice.ttsProvider` and `voice.piperModelPath` and creates the matching rows:
+
+   | Old setting | New row |
+   |---|---|
+   | `fasterwhisper` + `small` | `local-audio` / `faster-whisper:small` |
+   | `whisper` | `local-audio` / `whisper.cpp:base` with `metadata.modelPath` |
+   | `mistral` | `mistral` / `voxtral-mini-latest` |
+   | `openai` | `openai` / `gpt-realtime-whisper` (stream) |
+   | `kokoro`, `piper`, `mistral`, `openai` TTS | the matching `local-audio` / cloud rows |
+
+2. **Primary binding:**
+   - an explicit setting → that row
+   - `auto` → the local engine if its probe passes, else the first cloud engine with a key
+
+   `auto` behaved differently on the mic socket (cloud first) and on channels (local first). The migration must pick one, and **local first** is chosen (private, free). The CHANGELOG says so, and the Topics page shows the result so it's one click to flip.
+3. **Backup binding:** the next working engine of the other kind (cloud if the primary is local, and the other way round). If there is none, no backup.
+4. **Settings registry:**
+   - Removed: `voice.sttProvider`, `voice.fasterWhisperModel`, `voice.whisperModelPath`, `voice.ttsProvider`, `voice.piperModelPath`. Their schema entries keep a `.catch` so an old settings row can't break config load, and a stale row is logged once.
+   - Added: `voice.ttsVoice`.
+   - Kept: `voice.language`, `voice.wakeWord`, `voice.ttsEnabled` (now labelled "Reply to voice messages with voice"), and all telephony keys.
+   - `legacy-loader.ts`, `runtime-loader.ts`, `defaults.ts` and `schema-introspect.ts` are updated to match.
+5. **Idempotent and re-runnable.** It never touches a lane that is already bound, so a second run or a manual binding wins.
+
+#### A7.5 Provisioning, status and UI after the move
+
+- `voice/provision.ts` (`installFasterWhisper`, `installKokoro`), `/voice/install` (whisper.cpp build) and `octi setup`'s `pickVoice`: each install ends by creating the `local-audio` row and binding it **only if the lane is unbound**. Otherwise it registers the row and offers "use it" in the UI.
+- `getVoiceAvailability` / `GET /voice/status`: report per direction the effective row, its provider, whether it streams, and the probe result, all from the resolver. The web chat's mic button and `useVoiceRealtime` read this instead of `voice.sttProvider`.
+- **Settings → Voice tab:** shows "Speech-to-text: *faster-whisper small (local)* · Text-to-speech: *Kokoro (local)* — change in Topics", plus language, voice, reply-with-voice, wake word, and the existing telephony section. The voice dropdown comes from `metadata.speech.voices`. There is no second engine picker anywhere.
+- **Models page:** Mistral/OpenAI discovery lists their audio models under the `transcription` / `speech` kinds (curated), so cloud audio models are added like any other model. `local-audio` rows appear once installed.
 
 ### A8. Outbound media delivery
 
@@ -275,7 +373,7 @@ Implementations:
 
 - **Topics page:** a "Media" group with the five media lanes, each showing *effective* resolution (A3), plus one-click "Install local voice" (existing provisioners) and "Install local embeddings" (B5).
 - **Models page:** capability toggles, pricing fields, the new conformance probes, and a recommended-for-hardware list that includes vision models with their `supportsVision` flag set.
-- **Settings → Voice:** becomes a view onto the `transcription` / `speech` bindings plus language, voice and reply behaviour. There is no second picker.
+- **Settings → Voice:** see A7.5.
 - **Web onboarding** (`shared/onboarding/use-cases.ts`): an "Images & audio" question set (generate images? → provider choice; voice? → local or cloud), using the existing `ensureModel` / `bind` plan steps.
 - **`octi setup`:** `pickVoice` binds lanes. New optional "Image generation" step (skippable; only offered for a provider whose key is already in the vault, e.g. OpenAI or Gemini). Non-interactive env vars: `OCTIPUS_SETUP_IMAGE_MODEL`, `OCTIPUS_SETUP_STT`, `OCTIPUS_SETUP_TTS`.
 
@@ -302,7 +400,9 @@ The same suite also covers: "Here's a photo (pasted). What's on it?" × {seeing 
 
 ---
 
-## Part B — Small local embedding engine for new installs
+## Part B — Optional small local embedding engine
+
+Scope: an **offer**, not a default. A new install can take it during setup, skip it, or add it any time later. An install that already has an embedding model (any provider) is unaffected unless its operator explicitly chooses to switch.
 
 ### B1. Engine choice: `llama-server` sidecar (recommended) vs transformers.js
 
@@ -340,13 +440,13 @@ The same suite also covers: "Here's a photo (pasted). What's on it?" × {seeing 
   4. **probe by running** `llama-server --version` (the whisper lesson: never trust a file that exists)
   5. download the GGUF and verify it
   6. start, health-check `/health`, embed `"hello world"`, check the dimension matches the manifest
-  7. create the model row and bind it (B4)
+  7. create the model row; bind it only if `embedding` is unbound (B4)
 
   Idempotent; concurrent calls share one job, as in `installWhisper`.
 - **Supervisor** (`engine-process.ts`):
   - spawn `llama-server -m <gguf> --embedding --pooling <manifest> --host 127.0.0.1 --port <free port> -c 8192 -b 2048 -ub 2048 --parallel 2 -t <physical cores/2>`
   - an API key is generated per start (`--api-key`) so other local users can't reach it
-  - **lazy start on first embed; started at boot in the background if bound**
+  - **lazy start on first embed; started at boot in the background only if its row is bound** (an installed-but-unbound engine never runs)
   - restart with backoff on crash
   - idle-stop after `localEngine.idleStopMinutes` (default 30; 0 = never)
   - stopped on shutdown (`bin/octi stop`, SIGTERM)
@@ -359,38 +459,30 @@ The same suite also covers: "Here's a photo (pasted). What's on it?" × {seeing 
 
 - New provider `local-engine` (`models/providers/local-engine-provider.ts`): `embed()` asks the supervisor for `{ port, apiKey }` (starting the engine if needed) and calls `/v1/embeddings`. It holds no stored endpoint, because the port is per-start.
 - Registered as **hosting local** in `resolveDataPolicy`, so protection levels 3–4 keep working, which is a real upgrade over a cloud embedding model.
-- **Row:** `{ name: 'local embeddinggemma-2', provider: 'local-engine', modelId: 'embeddinggemma-2:q8_0', metadata: { embedPrefixes, dims: 768, engine: { tag, modelSha } } }`, bound `primary` on `embedding`.
+- **Row:** `{ name: 'local embeddinggemma-2', provider: 'local-engine', modelId: 'embeddinggemma-2:q8_0', metadata: { embedPrefixes, dims: 768, engine: { tag, modelSha } } }`.
+- **Binding rule (D10):**
+  - `embedding` unbound → bind `primary`.
+  - Already bound → leave it. Register the row unbound and tell the user: "Installed. Your current embedding model stays in use. To switch, follow docs/RAG.md → Vector indexing (existing vectors must be rebuilt)."
+  - The API refuses to auto-bind over an existing binding. The user can still bind it manually on the Topics page, which shows the same warning when vectors exist.
 - Batching: the existing `EMBED_BATCH_SIZE` path; the engine's `--parallel 2` absorbs concurrent hooks and indexing.
 - **cocoindex-code:** nothing to change. Its managed daemon already embeds through Octipus's lane endpoint (`/api/code-index/cocoindex`), so the code index gets the local model for free and doesn't need its own 1 GB torch install. `COCOINDEX_DEFAULT_EMBEDDING_MODEL` (sentence-transformers) stays only as the explicit "inside cocoindex" option.
 
-### B5. Offered at install, everywhere
+### B5. Where it is offered (optional everywhere, nothing downloads without a yes)
 
 | Path | Behaviour |
 |---|---|
-| `install.sh --quick` / `install.ps1 -Quick` → `octi setup --quick` | One extra line in quick mode: "Download a small local search model (≈330 MB, runs on this machine, no key)? [Y/n]", **default Yes**. It runs in the background while the remaining steps continue and finishes before `octi start web`, or keeps going and reports in the Topics page. |
-| Full wizard | Step "Search & memory": **Local (recommended)** · Ollama (if detected; `embeddinggemma:300m`, existing catalog) · OpenAI `text-embedding-3-small` (if a key is set) · Skip. |
-| Non-interactive | `OCTIPUS_SETUP_EMBEDDING=local|ollama|openai|skip` (default `local` when interactive; in CI **`skip` unless set**, following the existing "never auto-download GBs in CI" rule in `maybeRecommendModel`). |
-| Docker | Engine downloaded on **first boot** into `/data/models` (the image stays slim). Optional build arg `OCTIPUS_BAKE_EMBEDDING=1` bakes engine + model into the image for offline/air-gapped use. `install-docker.sh` asks the same question. linux-x64 and arm64 assets on bookworm are checked in spike S1. |
-| Web onboarding | `models.embedding` gains `local` ("On this machine — recommended") as the first option; the plan step calls the install job with progress. |
-| Topics page / Models page | "Install local embeddings" button with a progress bar (install-events SSE, like hwfit). |
-| CLI | `octi capabilities install local-embedding [--model qwen3-embedding-0.6b] [--gpu vulkan]`, `octi capabilities remove local-embedding`. |
-| `octi doctor` / `/health` | Engine present, binary runs, model verified, process healthy, dimension matches the stored vectors. Each failure comes with its remedy. |
+| `install.sh --quick` / `install.ps1 -Quick` → `octi setup --quick` | **No question, no download** (quick mode stays five questions). It prints one tip line when no embedding model is bound: "Search & memory are off. Add a local model any time: Topics page → Install local embeddings, or `octi capabilities install local-embedding`." |
+| Full wizard | Optional step "Search & memory" (only shown when `embedding` is unbound): Local (≈330 MB, no key) · Ollama (if detected; `embeddinggemma:300m`, existing catalog) · OpenAI `text-embedding-3-small` (if a key is set) · **Skip — add later (default)**. |
+| Non-interactive | `OCTIPUS_SETUP_EMBEDDING=local|ollama|openai|skip`, **default `skip`**. |
+| Docker | Nothing downloaded unless chosen. `install-docker.sh` asks the same optional question. When chosen, files go into the `/data` volume on first boot. Optional build arg `OCTIPUS_BAKE_EMBEDDING=1` bakes engine + model into the image for offline/air-gapped use. |
+| Web onboarding | `models.embedding` gains `local` ("On this machine, no key") next to the existing Ollama/OpenAI options; `skip` stays the initial answer, as today. |
+| Later, any time | Topics page "Install local embeddings" button with a progress bar (install-events SSE, like hwfit). CLI: `octi capabilities install local-embedding [--model qwen3-embedding-0.6b] [--gpu vulkan]` and `octi capabilities remove local-embedding`. |
+| `octi doctor` / `/health` | Only when installed: engine present, binary runs, model verified, process healthy. Each failure comes with its remedy. Nothing is reported for installs that never added it. |
 
-### B6. Switching models: re-embed job (D10)
+### B6. Updates and uninstall
 
-- When the `embedding` primary changes and vectors exist, the UI and API **ask before re-embedding**: "N chunks, M memories, K skills will be re-embedded with <model> (~T min)".
-- Background job (`core/jobs`):
-  1. write new vectors into a shadow column/table per target (`embeddings`, `memories`, `skills.description_embedding`)
-  2. swap in one transaction
-  3. unpin and re-pin the dimension, and rebuild HNSW through `vector-indexes.ts`
-  4. update `embedding_version`
-- Search keeps using the old vectors until the swap, so there's no downtime. The job is resumable and cancellable, and its progress shows in Mission Control.
-- `scripts/check-embedding-drift.ts` stays as the CI guard.
-
-### B7. Updates and uninstall
-
-- `octi update` reads the new manifest. A new **engine** tag is downloaded beside the old one and switched after its probe passes, with no re-embed. A new **default model** is *not* applied automatically to existing installs (it would force a re-embed); the Topics page offers it.
-- `remove`: stops the engine, deletes the files, and unbinds. RAG then reports "no embedding model", the fail-loud house rule.
+- `octi update` reads the new manifest. A new **engine** tag is downloaded beside the old one and switched after its probe passes; vectors are unaffected because the model file doesn't change. A new default **model** in the manifest is only offered to installs that don't have one yet; it is never swapped under an existing binding.
+- `remove`: stops the engine and deletes the files. If its row was bound, it is unbound and RAG reports "no embedding model" (fail loud). If it wasn't bound, nothing else changes.
 - Offline: an install with the files present never touches the network. Air-gapped users use the bake arg or copy `models/` across.
 
 ---
@@ -399,10 +491,15 @@ The same suite also covers: "Here's a photo (pasted). What's on it?" × {seeing 
 
 1. `model_config.supports_audio_input` column (+ backfill from discovery on next refresh).
 2. Topic kinds/values `image_generation`, `transcription`, `speech` (code only; `topics_config` rows created lazily as today).
-3. Data migration: voice settings → `local-audio` / cloud rows + `transcription`/`speech` bindings (A7), idempotent, logged.
+3. Data migration: voice settings → `local-audio` / cloud rows + `transcription`/`speech` bindings (A7.4), idempotent, logged; settings keys removed from the registry with `.catch` for stale rows.
 4. `metadata.pricing` (JSON, no DDL) + `cost_log.request_type` new values (text column, no DDL).
-5. Re-embed job state table (`embedding_migrations`: id, from, to, target, cursor, status).
-6. `CHANGELOG.md` migration notes: voice settings moved to lanes; `vision` lane optional; channel images no longer auto-filed as documents (setting to restore).
+5. `CHANGELOG.md` migration notes:
+   - voice engines moved from Settings → Voice to the Topics page (with what the migration bound, and that `auto` now means local-first everywhere)
+   - `/voice/transcribe` `model` and the `?engine=` socket param are now row names, with the old values aliased
+   - the `vision` lane is optional
+   - channel images are no longer auto-filed as documents (with the setting to restore it)
+
+No embedding migration: track B never changes an existing binding.
 
 ## 4. Phases (each one is a PR that passes `typecheck`, `lint`, unit + database tests and `catalog:check`)
 
@@ -411,20 +508,20 @@ The same suite also covers: "Here's a photo (pasted). What's on it?" × {seeing 
 | **P0 Spikes** (S1–S5 below) | throwaway scripts in `scripts/spikes/`, results appended to this doc | every spike has a recorded answer; any changed decision is edited into §0 |
 | **P1 Capabilities + lanes + resolver** | A1, A2, A3, health list fix, Topics page group (read-only effective view) | resolver table tests; Ollama `/api/show` discovery test; `/health` shows effective media models |
 | **P2 Native images in the loop** | A4 (message model, normaliser, all formatters, retention, persistence), A5 image rows, `vision` tool, MCP/browser screenshots as `MediaRef` | formatter unit tests per provider; conformance probe; the "photo → what's on it?" e2e × 3 variants |
-| **P3 Audio lanes + tools** | A7 provider methods for STT/TTS, `local-audio` provider, voice migration, inbound audio rows (web audio upload no longer a dead end), `audio` tool | migration test on a settings snapshot; voice note e2e on Telegram stub; `/voice` socket regression suite green |
+| **P3a Move STT/TTS into the registry** (no new features) | A7.1 `transcribe`/`synthesizeSpeech` on mistral/openai/`local-audio`, A7.2 adapters take row config, A7.3 resolver + all seven call sites, A7.4 migration, A7.5 provisioning/status/Voice tab | migration test on settings snapshots for every old value (incl. `auto` with/without keys); every existing voice test green unchanged (`stt.test`, `voice-ws`, `mobile-voice`, telephony media-bridge); new tests: usage recorded for cloud STT/TTS, protection level 4 refuses cloud audio, the phone stream uses the bound engines |
+| **P3b Audio features** | inbound audio rows (web audio upload no longer a dead end), `audio` tool, native audio input (opt-in) | voice note e2e on Telegram stub; `transcribe_audio` on a 20-min file (chunking); `speak` e2e |
 | **P4 Image generation + outbound media** | `generateImage` implementations, `imagegen` tool, turn media collector, web rendering, all channel adapters with bytes, `send_*` attachments, voice replies on all channels | A12 e2e + web e2e; adapter unit tests with recorded API fixtures |
 | **P5 Cost, protection, UI, onboarding, docs** | A9, A10, A11, docs below | spend-budget test with an image call; protection-level-4 test refuses a cloud image model and accepts a local one |
 | **B1 Engine manager** | B3 (manifest, download/verify/extract/probe, supervisor) | install/probe tests with a fake asset server; supervisor restart/idle tests |
-| **B2 Provider + installers** | B4, B5 all rows | quick-install test in `scripts/install.test.mjs`; Docker smoke test boots, downloads, embeds |
-| **B3 Re-embed job** | B6 | database test: switch 384→768 dims with live search during the job |
+| **B2 Provider + offers** | B4, B5 all rows | quick install downloads nothing (`scripts/install.test.mjs`); wizard skip default; install on an install with a bound embedding leaves the binding untouched (database test); Docker smoke test with the option chosen boots, downloads, embeds |
 
-Track B is independent of A and can start right after P0 (S1). Recommended order: **P0 → B1 → B2 → P1 → P2 → P3 → P4 → P5 → B3**, because B gives every new user working memory and search immediately.
+Recommended order: **P0 → P1 → P3a → P2 → P3b → P4 → P5**, with track **B1 → B2** in parallel whenever convenient (it is independent and optional). P3a is early because every later audio feature builds on the single resolver.
 
 ## 5. Docs to write or update
 
 New `docs/MEDIA.md` (lanes, tools, inbound/outbound tables, per-channel support, troubleshooting) and `docs/LOCAL-EMBEDDINGS.md`. Update:
-- `VOICE.md` (lanes replace settings), `MODEL-ROUTING.md`, `LANE-ROLE-SKILL-ROUTING.md`, `TOOL-ROUTING.md`, `CHANNELS.md` (Slack `files:write`, WhatsApp media, Teams public URL)
-- `RAG.md` (local engine, re-embed), `INSTALLATION.md`, `DOCKER.md`, `CONFIGURATION.md` (`media.*`, `localEngine.*`, env vars), `OLLAMA.md` (vision detection), `SMALL-MODELS.md` (describe mode), `SPEND-BUDGETS.md`, `PROTECTION-LEVELS.md`, `MODULES.md`
+- `VOICE.md` (engines are model rows on the `transcription`/`speech` lanes; alias table for old engine names), `MODEL-ROUTING.md`, `LANE-ROLE-SKILL-ROUTING.md`, `TOOL-ROUTING.md`, `CHANNELS.md` (Slack `files:write`, WhatsApp media, Teams public URL)
+- `RAG.md` (optional local engine, binding rule), `INSTALLATION.md`, `DOCKER.md`, `CONFIGURATION.md` (`media.*`, `localEngine.*`, env vars), `OLLAMA.md` (vision detection), `SMALL-MODELS.md` (describe mode), `SPEND-BUDGETS.md`, `PROTECTION-LEVELS.md`, `MODULES.md`
 - `README.md` capability lines, the generated `CATALOG.md`
 
 ## 6. Spikes (answer before building on them)
@@ -445,6 +542,6 @@ New `docs/MEDIA.md` (lanes, tools, inbound/outbound tables, per-channel support,
 
 - **Provider quirks with images in history** (S3): mitigated by the per-provider mode plus the text fallback, never a hard failure.
 - **Token cost of re-sent images:** bounded by downscaling and the 3-turn replay window. The prompt-composition inspector shows image tokens as their own category.
-- **Voice migration picking a different engine than the user had:** the migration logs what it bound and the Topics page shows it; `auto` follows exactly the order the code uses today.
-- **Disk:** about 340 MB for the default local embedding. It's always asked, and quick mode says the size.
-- **Re-embed on large installs takes time:** shadow-swap keeps search working; it's resumable.
+- **Voice migration picking a different engine than the user had:** `auto` was inconsistent (mic cloud-first, channels local-first), so one of them changes. The migration logs what it bound, the CHANGELOG names it, and the Topics page shows it with a one-click switch. Explicit settings map 1:1.
+- **Clients sending old engine names** (mobile app, older web builds): a permanent alias table, covered by tests.
+- **Disk:** about 340 MB for the local embedding, only when the user chooses it.
