@@ -638,3 +638,30 @@ New `docs/MEDIA.md` (lanes, tools, inbound/outbound tables, per-channel support,
 - **Voice migration picking a different engine than the user had:** `auto` was inconsistent (mic cloud-first, channels local-first), so one of them changes. The migration logs what it bound, the CHANGELOG names it, and the Topics page shows it with a one-click switch. Explicit settings map 1:1.
 - **Clients sending old engine names** (mobile app, older web builds): a permanent alias table, covered by tests.
 - **Disk:** about 340 MB for the local embedding, only when the user chooses it.
+
+## 8. Spike results (P0, 2026-11-13, run in a cloud container)
+
+What the container could reach decided what could be measured. The decisions
+below are what was built; where a spike could not run, the code checks the
+open question at runtime and does not depend on the guess.
+
+- **S1 llama-server + embeddinggemma-2 — partly answered.**
+  - Model files pinned from the Hugging Face API (revision + LFS SHA-256):
+    - `ggml-org/embeddinggemma-2-GGUF` @ `6ea3e3a3…`, `embeddinggemma-2-Q8_0.gguf`, 309 855 456 bytes, sha256 `2188ac1d…09135`, Apache-2.0
+    - `ggml-org/embeddinggemma-300M-GGUF` @ `0f741b5a…`, `embeddinggemma-300M-Q8_0.gguf`, 333 590 944 bytes, sha256 `b5ce9d77…90d63`
+    - `Qwen/Qwen3-Embedding-0.6B-GGUF` @ `370f27d7…`, `Qwen3-Embedding-0.6B-Q8_0.gguf`, 639 150 592 bytes, sha256 `06507c7b…c439`, Apache-2.0
+  - llama.cpp latest tag at the time: `b12373`.
+  - **Not run here:** GitHub release downloads answer 403 through this container's proxy, and building or running fetched code was not permitted in the session. So vector dimension, pooling, throughput and platform runs are unmeasured.
+  - **Consequence for the build:** the installer itself checks what the spike would have. It runs `--version`, embeds a probe and compares the dimension with the manifest, and fails loud with the reason. Release-asset SHA-256s are taken from GitHub's release API (`assets[].digest`) and must match the download. `scripts/pin-local-engine.ts` writes them into the manifest so CI (and air-gapped installs) can pin them.
+- **S2 macOS Gatekeeper — not runnable here** (no Mac). The installer clears `com.apple.quarantine` after extraction on darwin, which is harmless if the attribute is absent.
+- **S3 image after tool result — answered from the providers' API references; to be confirmed by the runtime probe.**
+  - Anthropic accepts image blocks inside `tool_result`.
+  - OpenAI chat completions, Gemini (OpenAI-compatible and native), Ollama, OpenRouter and DeepSeek accept a `user` message after `tool` messages.
+  - Mistral documents that a `user` turn may not directly follow `tool`, so its default is `none` (text route).
+  - The `image-after-tool-result` conformance probe can overrule any default per model.
+- **S4 Ollama `/api/show` — answered from the API reference:** `capabilities` lists `completion`, `tools`, `vision`, `embedding`, `thinking`, `insert`. `audio` is mapped when present. Not exercised against a live Ollama here.
+- **S5 image generation shapes — answered from the API references; fixtures written from them.**
+  - OpenAI `/v1/images/generations`: `{ model, prompt, size, n }` → `data[].b64_json`. `/v1/images/edits` is multipart with `image[]`.
+  - Gemini `generateContent` with `responseModalities: ['TEXT','IMAGE']` → `inlineData`.
+  - OpenRouter chat completions with `modalities: ['image','text']` → `message.images[].image_url.url` (data URL).
+  - xAI `/v1/images/generations` is OpenAI-compatible (`response_format: 'b64_json'`).
