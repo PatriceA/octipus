@@ -6,6 +6,7 @@ WORKDIR /app
 # Install dependencies first (layer caching)
 COPY package.json package-lock.json ./
 COPY scripts/check-node.mjs scripts/check-node.mjs
+COPY scripts/patch-botbuilder-zod4.mjs scripts/patch-botbuilder-zod4.mjs
 RUN npm ci --include=dev
 
 # Copy source

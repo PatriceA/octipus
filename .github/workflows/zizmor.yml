@@ -1,13 +1,10 @@
 name: Zizmor
 
 on:
+  # This is a required status check, so every PR must produce a result.
   pull_request:
-    paths:
-      - '.github/workflows/**'
   push:
     branches: [main]
-    paths:
-      - '.github/workflows/**'
 
 concurrency:
   group: zizmor-${{ github.ref }}
