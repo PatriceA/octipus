@@ -193,8 +193,31 @@ the published MCP server.
 A release is a `v*` tag. `.github/workflows/release.yml` does the rest: it runs
 the gate (typecheck, lint, the backend suite, and the MCP server's own suite),
 creates the GitHub Release with notes pulled from `CHANGELOG.md`, attaches the
-packed `mcp-server` tarball, and publishes that package to npm when `NPM_TOKEN`
-is configured.
+packed `mcp-server` tarball, and publishes that package to npm through a
+trusted GitHub Actions publisher (OIDC). No npm write token is used.
+
+One-time npm setup for the package owner: open the **octipus-mcp-server**
+package's **Settings → Trusted publishing**, add **GitHub Actions**, and set:
+
+- Organization or user: `PatriceA`
+- Repository: `octipus`
+- Workflow filename: `release.yml` (no directory prefix)
+- Environment: leave empty (the release job uses no GitHub environment)
+- Allowed actions: enable direct `npm publish`
+
+Save the configuration and authenticate on npm if requested. The workflow uses
+GitHub-hosted runners, `id-token: write`, and the pinned Node version's compatible
+npm CLI (trusted publishing requires npm 11.5.1+). Package caches are disabled in
+release jobs. The former `NPM_TOKEN` secret is not consulted; its existence does
+not establish publishing access. After a successful OIDC publication, the owner
+can revoke an obsolete npm token and remove that GitHub secret.
+See [npm's trusted publishing guide](https://docs.npmjs.com/trusted-publishers/).
+
+A GitHub Release and npm publication are separate effects: verify that the whole
+workflow passes and the expected npm version is visible. If publication fails
+after the GitHub Release was created, repair the package's trusted publisher
+configuration, then recover using the existing tag as described below. Do not
+move or re-create an already published tag.
 
 Three things happen *before* the tag, in this order:
 
@@ -207,7 +230,7 @@ Three things happen *before* the tag, in this order:
 2. **Bump the version.** One command rewrites all six files that declare it:
 
    ```sh
-   npx tsx scripts/sync-version.ts v0.6.0
+   npx tsx scripts/sync-version.ts v0.7.0
    npm install --package-lock-only          # and the same in mcp-server/ and web/
    (cd web/src-tauri && cargo update -p octipus)
    ```
@@ -222,12 +245,12 @@ Three things happen *before* the tag, in this order:
 Then:
 
 ```sh
-git tag -a v0.6.0 -m "v0.6.0 — <title>"
-git push origin v0.6.0
+git tag -a v0.7.0 -m "v0.7.0 — <title>"
+git push origin v0.7.0
 ```
 
 To re-run a release for an existing tag without moving it — a workflow fix, a
-token that was missing the first time — use the `workflow_dispatch` input rather
+trusted publisher configuration that was missing the first time — use the `workflow_dispatch` input rather
 than deleting and re-pushing the tag.
 
 Two suites are **not** in `npm test` and are the ones that break after a

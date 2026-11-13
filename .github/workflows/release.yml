@@ -4,7 +4,7 @@ name: Release
 #   1. gate on the core CI checks (typecheck · lint · test),
 #   2. sync package versions to the tag,
 #   3. cut a GitHub Release with notes extracted from CHANGELOG.md,
-#   4. publish the mcp-server npm package (only when NPM_TOKEN is configured).
+#   4. publish the mcp-server npm package using npm trusted publishing (OIDC).
 #
 # CHANGELOG curation stays manual — this only reads it.
 
@@ -43,6 +43,8 @@ jobs:
           ref: refs/tags/${{ inputs.tag || github.ref_name }}
           persist-credentials: false
       - uses: ./.github/actions/node-setup
+        with:
+          cache: ''
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
       - run: npm run build:sandbox:windows
@@ -65,10 +67,7 @@ jobs:
     name: Release ${{ inputs.tag || github.ref_name }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Surface NPM_TOKEN presence as a plain env flag — `secrets.*` isn't usable
-    # directly in a step-level `if`, but env is.
     env:
-      HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v7
@@ -77,10 +76,11 @@ jobs:
           fetch-depth: 0 # full history so the tagged CHANGELOG is present
           persist-credentials: false
 
-      - name: Setup Node (+ npm cache, publish registry)
+      - name: Setup Node (trusted publishing, no package cache)
         uses: ./.github/actions/node-setup
         with:
           registry-url: 'https://registry.npmjs.org'
+          cache: ''
 
       - name: Install dependencies
         run: npm ci
@@ -175,15 +175,15 @@ jobs:
             native/bin/octipus-sandbox.exe
             native/bin/octipus-sandbox.exe.sha256
 
-      # ── Publish mcp-server to npm (skipped when NPM_TOKEN isn't set) ──
+      # ── Publish through the package's trusted GitHub Actions identity ──
       - name: Publish mcp-server to npm
-        if: ${{ env.HAS_NPM_TOKEN == 'true' }}
         working-directory: mcp-server
+        # npm's trusted publisher must allow direct npm publish for
+        # PatriceA/octipus/.github/workflows/release.yml (no environment).
+        # No long-lived token or interactive OTP is used. See CONTRIBUTING.md.
         # --provenance publishes a signed build-provenance attestation (via the
         # id-token permission above), so consumers can verify the package was
         # built by this repository's workflow. In manual recovery, the workflow
         # revision differs from the explicitly checked-out release tag; inspect
         # both revisions in the run rather than treating them as identical.
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
