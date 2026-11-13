@@ -7,6 +7,9 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- Add Grok Build as a CLI agent model, using an existing login, scoped Octipus
+  tools, resumable conversations, streamed activity and cache-aware token usage.
+
 ## v0.7.0 — Your agent workspace (2026-11-13)
 
 ### Highlights

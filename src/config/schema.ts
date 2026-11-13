@@ -355,6 +355,9 @@ export const cliModelsConfigSchema = z.object({
     binaryPath: z.string().default('agy'),
     timeout: z.number().min(0).default(300000),
   }).prefault({}),
+  grokBuild: z.object({
+    binaryPath: z.string().default('grok'),
+  }).prefault({}),
   codexCli: z.object({
     enabled: z.boolean().default(false),
     binaryPath: z.string().default('codex'),

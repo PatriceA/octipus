@@ -60,6 +60,8 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'OCTIPUS_CLAUDE_BINARY', description: 'Claude executable name or absolute path. Validated at startup.' },
   { key: 'cliModels.codexCli.binaryPath', category: 'agent', valueType: 'string', defaultValue: 'codex', isSecret: false,
     envVar: 'OCTIPUS_CODEX_BINARY', description: 'Codex executable name or absolute path. Validated at startup.' },
+  { key: 'cliModels.grokBuild.binaryPath', category: 'agent', valueType: 'string', defaultValue: 'grok', isSecret: false,
+    envVar: 'OCTIPUS_GROK_BINARY', description: 'Grok Build executable name or absolute path. Validated at startup.' },
   { key: 'cliModels.antigravityCli.binaryPath', category: 'agent', valueType: 'string', defaultValue: 'agy', isSecret: false,
     envVar: 'OCTIPUS_ANTIGRAVITY_BINARY', description: 'Antigravity executable name or absolute path. Validated at startup.' },
 
