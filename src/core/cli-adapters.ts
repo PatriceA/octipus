@@ -80,12 +80,16 @@ export interface CliRunConnection {
  * - Codex: the `read-only` sandbox; its writes happen only through Octipus tools.
  * - Antigravity: `--mode plan`; likewise.
  * - Mistral Vibe (default `auto-approve`): none yet.
+ * - Muse Code: none. The bridge needs `--trust-workspace`, which also loads
+ *   the workspace's own rules, skills and `.mcp.json` servers, and `-c`
+ *   cannot disable a user-configured MCP server (verified on 1.4.18).
  */
 export const CLI_SPACE_MODES: Readonly<Record<string, string | null>> = {
   'Claude Code': 'permission mode default with the stdio permission tool',
   'Codex CLI': 'read-only sandbox',
   Antigravity: 'plan mode',
   'Mistral Vibe': null,
+  'Muse Code': null,
 };
 
 /** Throws unless `adapter` declares a space mode. */
@@ -578,6 +582,14 @@ export function resolveVibeMode(mode?: string): string {
   throw new Error(`Unsupported Mistral Vibe permission mode: ${mode}`);
 }
 
+/** Shared levels → muse safety flags. Approval and the sandbox are on by default ('workspace'). */
+export function resolveMuseSafetyArgs(mode?: string): string[] {
+  if (!mode || ['workspace', 'auto', 'accept-edits', 'auto_edit'].includes(mode)) return [];
+  if (['safe', 'plan', 'read-only'].includes(mode)) return ['--disable-write', '--disable-shell'];
+  if (mode === 'full' || mode === 'yolo') return ['--disable-approval', '--disable-sandbox'];
+  throw new Error(`Unsupported Muse Code permission mode: ${mode}`);
+}
+
 /**
  * Builds CLI arguments for different agent tools (Claude Code, Antigravity, Codex, Mistral Vibe).
  *
@@ -614,7 +626,7 @@ export class CLIArgumentBuilder {
     connection?: CliRunConnection,
     resume?: { id: string; isFirstRun: boolean },
   ): { binary: string; args: string[]; stdinPrompt?: string; keepStdinOpen?: boolean; useShell?: boolean; env?: Record<string, string> } {
-    if (connection?.images?.length && toolName !== 'Claude Code' && toolName !== 'Codex CLI') {
+    if (connection?.images?.length && toolName !== 'Claude Code' && toolName !== 'Codex CLI' && toolName !== 'Muse Code') {
       prompt += '\n\nOriginal image attachments (inspect with your native image-reading tool):\n' + connection.images.map(image => JSON.stringify(image.path)).join('\n');
     }
     if (connection) validateScopedExtraArgs(toolName, settings.extraArgs ?? []);
@@ -631,6 +643,8 @@ export class CLIArgumentBuilder {
         return this.buildCodexArgs(prompt, systemPrompt, settings, connection, resume);
       case 'Mistral Vibe':
         return this.buildVibeArgs(prompt, settings, maxTokenBudget, connection);
+      case 'Muse Code':
+        return this.buildMuseArgs(prompt, settings, systemPrompt, connection);
       default:
         throw new Error(`Unknown CLI tool: ${toolName}`);
     }
@@ -693,6 +707,39 @@ export class CLIArgumentBuilder {
       stdinPrompt: IS_WIN ? prompt : undefined,
       env,
     };
+  }
+
+  private buildMuseArgs(
+    prompt: string,
+    settings: CLIAgentConfig,
+    systemPrompt?: string | null,
+    connection?: CliRunConnection,
+  ): { binary: string; args: string[] } {
+    // Headless JSONL; no session transcript on disk (no resume support, as codex --ephemeral).
+    // Native subagents off: delegation goes through Octipus spawn_child only.
+    const args = ['exec', '--json', '--no-session-log', '--disable-request-user-input', '-c', 'run.subagent_delegation_mode="off"'];
+    args.push(...(connection?.planMode ? resolveMuseSafetyArgs('plan') : resolveMuseSafetyArgs(settings.permissionMode)));
+    if (settings.model) args.push('--model', settings.model);
+    if (Number.isFinite(connection?.maxIterations)) args.push('--max-model-steps', String(connection!.maxIterations));
+    if (connection) {
+      // muse loads MCP servers only in a trusted workspace. `-c` may add a
+      // server but never override or disable a configured one (refused), so a
+      // per-run name avoids a clash and the user's own servers stay loaded.
+      // Secret leaves must be whole-value `${VAR}`: the worker sets both vars.
+      // ponytail: muse's default MCP tool timeout (300s) applies; `-c` refuses tool_timeout_sec.
+      const namespace = `octipus_run_${createHash('sha256').update(connection.conversationId ?? connection.url).digest('hex').slice(0, 16)}`;
+      const server = { command: process.execPath, args: [resolveCliMcpEntry()], env: { OCTIPUS_AGENT_URL: '${OCTIPUS_AGENT_URL}', OCTIPUS_AGENT_KEY: '${OCTIPUS_AGENT_KEY}' } };
+      args.push('--trust-workspace', '-c', `mcpServers.${namespace}=${JSON.stringify(server)}`);
+    }
+    for (const image of connection?.images ?? []) args.push('--image', image.path);
+    if (settings.extraArgs?.length) args.push(...settings.extraArgs);
+    // muse reads no prompt from stdin and argv caps one argument at 128 KiB
+    // (Linux) and mangles it under cmd.exe: always a 0600 prompt file, removed
+    // by the worker's launch cleanup.
+    const combined = [systemPrompt, prompt].filter(Boolean).join('\n\n---\n\n');
+    sweepStaleFiles(join(tmpdir(), 'octipus-cli'), 'muse-prompt-', 24 * 3600_000); // left by a crashed server
+    args.push('--prompt-file', this.writeTempFile('muse-prompt-', combined));
+    return { binary: 'muse', args };
   }
 
   private buildClaudeArgs(
@@ -883,7 +930,7 @@ export class CLIArgumentBuilder {
     const dir = join(tmpdir(), 'octipus-cli');
     mkdirSync(dir, { recursive: true });
     const filePath = join(dir, `${prefix}${randomBytes(6).toString('hex')}${ext}`);
-    writeFileSync(filePath, content, 'utf-8');
+    writeFileSync(filePath, content, { encoding: 'utf-8', mode: 0o600 });
     return filePath;
   }
 
@@ -1235,6 +1282,100 @@ export class CLIOutputParser {
     if (toolName === 'Codex CLI') {
       this.streamRecognized = true;
       return this.parseCodexEvent(event, type);
+    }
+
+    if (toolName === 'Muse Code') {
+      this.streamRecognized = true;
+      return this.parseMuseEvent(event);
+    }
+
+    return null;
+  }
+
+  /** The current muse model response (task id + text so far). */
+  private museTurn?: { id: string; text: string };
+  /** Started muse tool tasks without a result, task id → tool name, in start order. */
+  private museOpenTools = new Map<string, string>();
+
+  private parseMuseEvent(event: Record<string, unknown>): { text: string; replace?: boolean } | null {
+    // `muse exec --json` envelope: { payload_type, payload }. Read here:
+    //   task.lifecycle.proposed { event: { task_id, task_kind: "model.<p>.response" | "tool.<name>" } }
+    //   task.lifecycle.rejected { event: { task_id, reason } }
+    //   run.output.delta { text }        streamed assistant text of the current response
+    //   tool.result { call_id, correlation_facts: { tool_name, outcome }, text, edit_facts?: { path, tool_name } }
+    //   run.usage { models: [{ input_tokens, cached_tokens, output_tokens }] }   once, at run end
+    //   run.terminal.<state> { terminal, text, reason }
+    const type = event.payload_type as string | undefined;
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
+    const lifecycle = payload.event as Record<string, unknown> | undefined;
+    const taskId = typeof lifecycle?.task_id === 'string' ? lifecycle.task_id : '';
+
+    if (type === 'task.lifecycle.proposed' && typeof lifecycle?.task_kind === 'string') {
+      const kind = lifecycle.task_kind;
+      if (/^model\..+\.response$/.test(kind)) {
+        this.callbacks.onTurn();
+        this.museTurn = { id: taskId, text: '' };
+      } else if (kind.startsWith('tool.')) {
+        const toolName = kind.slice('tool.'.length);
+        this.flushCommentary();
+        this.callbacks.onToolCall?.();
+        this.museOpenTools.set(taskId, toolName);
+        this.emit('action', { type: 'cli_tool_use', id: taskId || undefined, toolName, ...(toolName === 'bash' ? { commandExecution: true } : {}) });
+      }
+      return null;
+    }
+
+    if (type === 'task.lifecycle.rejected' && this.museOpenTools.has(taskId)) {
+      const toolName = this.museOpenTools.get(taskId)!;
+      this.museOpenTools.delete(taskId);
+      this.emit('action', { type: 'cli_tool_result', id: taskId, toolName, output: String(lifecycle?.reason ?? 'rejected'), isError: true });
+      return null;
+    }
+
+    if (type === 'run.output.delta' && typeof payload.text === 'string') {
+      const turn = this.museTurn ??= { id: 'muse-turn', text: '' };
+      const first = !turn.text;
+      turn.text += payload.text;
+      this.rememberCommentary(turn.id, turn.text);
+      return { text: payload.text, replace: first };
+    }
+
+    if (type === 'tool.result') {
+      const facts = payload.correlation_facts as Record<string, unknown> | undefined;
+      const toolName = typeof facts?.tool_name === 'string' ? facts.tool_name : 'tool';
+      // A result carries the model's call id, its start the task id: pair it
+      // with the oldest open start of the same tool so the UI row flips.
+      const started = [...this.museOpenTools].find(([, name]) => name === toolName)?.[0];
+      if (started !== undefined) this.museOpenTools.delete(started);
+      const edit = payload.edit_facts as Record<string, unknown> | undefined;
+      if (typeof edit?.path === 'string') this.emitFileChange({ action: edit.tool_name === 'write_file' ? 'write' : 'edit', path: edit.path });
+      this.emit('action', {
+        type: 'cli_tool_result',
+        id: started || (typeof payload.call_id === 'string' ? payload.call_id : undefined),
+        toolName,
+        output: String(payload.text ?? '').slice(0, 2000),
+        isError: facts?.outcome !== 'success',
+      });
+      return null;
+    }
+
+    if (type === 'run.usage') {
+      const usage = museUsage(payload.models);
+      if (!usage) return null;
+      const totalTokens = usage.inputTokens + usage.outputTokens;
+      this.emit('thought', { status: 'completed', stats: { totalTokens, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cacheRead: usage.cacheReadTokens } });
+      this.reportedTokens += totalTokens;
+      this.callbacks.onTokenUsage?.({ input: usage.inputTokens, output: usage.outputTokens, total: totalTokens, cacheRead: usage.cacheReadTokens });
+      return null;
+    }
+
+    if (type?.startsWith('run.terminal.')) {
+      if (payload.terminal !== 'completed') {
+        const reason = `Muse Code run ${String(payload.terminal ?? 'failed')}: ${typeof payload.reason === 'string' ? payload.reason : 'unknown reason'}`;
+        this.emit('error', { error: reason });
+        this.callbacks.onRunError?.(reason);
+      }
+      return typeof payload.text === 'string' && payload.text ? { text: payload.text, replace: true } : null;
     }
 
     return null;
@@ -1838,6 +1979,17 @@ function claudeToolResultText(content: unknown): string {
       .join('');
   }
   return '';
+}
+
+/**
+ * Token totals of a muse `run.usage` payload's `models[]`. `cached_tokens` is
+ * a subset of `input_tokens` (Meta API, OpenAI shape — folded like codex).
+ */
+export function museUsage(models: unknown): { inputTokens: number; outputTokens: number; cacheReadTokens: number } | null {
+  if (!Array.isArray(models)) return null;
+  const sum = (key: string) => models.reduce((n: number, m) => n + (typeof m?.[key] === 'number' ? m[key] as number : 0), 0);
+  const folded = foldCacheCounters({ input_tokens: sum('input_tokens'), input_tokens_details: { cached_tokens: sum('cached_tokens') } });
+  return { inputTokens: folded.inputTokens, outputTokens: sum('output_tokens'), cacheReadTokens: folded.cacheReadTokens ?? 0 };
 }
 
 /** Display name for a codex mcp_tool_call item: "server.tool". */

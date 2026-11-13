@@ -2,7 +2,7 @@ import { isProviderQuotaMessage } from '@/core/errors/provider-recovery';
 import { configuredCliBinary } from '@/core/cli-executable';
 import { describeCliCapabilities } from '@/shared/cli-capabilities';
 import { cliCredentialOwnerFor, cliEnvFor, cliWorkDirFor } from '@/core/cli-child-env';
-import { discoverCodexMcpServers, getClaudeSpaceSettingsPath, getEmptyMcpConfigPath, getEmptyVibeHome } from '@/core/cli-adapters';
+import { discoverCodexMcpServers, getClaudeSpaceSettingsPath, getEmptyMcpConfigPath, getEmptyVibeHome, museUsage } from '@/core/cli-adapters';
 import { spawn } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
@@ -174,7 +174,7 @@ export interface CLIToolConfig {
   /** Vendor-managed billing/usage pointers (surfaced in UI) */
   billingInfo: CLIBillingInfo;
   /** Direct provider whose model catalog drives the picker for this CLI */
-  modelProvider: 'anthropic' | 'google' | 'openai' | 'mistral' | 'zai' | 'moonshot';
+  modelProvider: 'anthropic' | 'google' | 'openai' | 'mistral' | 'zai' | 'moonshot' | 'meta';
   /** Flag the CLI uses to select a model (`--model`, `-m`) — for docs only */
   modelFlag: string;
   /**
@@ -511,6 +511,66 @@ const vibeCliConfig: CLIToolConfig = {
 };
 
 /**
+ * `muse exec --json`: one envelope per line, `{payload_type, payload}`. The
+ * answer is the `run.terminal.*` payload's `text` (else the streamed
+ * `run.output.delta` text); usage is `run.usage.payload.models[]`
+ * (`museUsage`). A terminal other than `completed`, or none at all, fails.
+ */
+export function parseMuseJsonl(stdout: string, startTime: number): CompletionResult {
+  let deltas = '';
+  let terminal: { terminal?: string; text?: unknown; reason?: unknown } | undefined;
+  let models: unknown;
+  for (const line of stdout.split('\n')) {
+    let event: { payload_type?: string; payload?: Record<string, unknown> };
+    try { event = JSON.parse(line); } catch { continue; }
+    const payload = event?.payload;
+    if (!payload) continue;
+    if (event.payload_type === 'run.output.delta' && typeof payload.text === 'string') deltas += payload.text;
+    else if (event.payload_type === 'run.usage') models = payload.models;
+    else if (event.payload_type?.startsWith('run.terminal.')) terminal = payload;
+  }
+  if (!terminal) throw new Error('muse produced no terminal event');
+  if (terminal.terminal !== 'completed') throw new Error(`muse run ${terminal.terminal ?? 'failed'}: ${typeof terminal.reason === 'string' ? terminal.reason : 'unknown reason'}`);
+  const usage = museUsage(models);
+  const inputTokens = usage?.inputTokens ?? 0;
+  const outputTokens = usage?.outputTokens ?? 0;
+  return {
+    content: (typeof terminal.text === 'string' ? terminal.text : deltas).trim(),
+    finishReason: 'stop',
+    usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, available: !!usage, cacheReadTokens: usage?.cacheReadTokens ?? 0 },
+    model: 'cli/muse',
+    latencyMs: Date.now() - startTime,
+  };
+}
+
+// ---- Muse Code (Meta) ----
+// `muse exec --json` streams JSONL; parsed live by CLIOutputParser (agent
+// path). No one-shot completion mode: muse has no stdin prompt channel and no
+// verified tool-less mode, so like codex it answers only as an agent model.
+const museCliConfig: CLIToolConfig = {
+  name: 'Muse Code',
+  modelPatterns: ['cli/muse'],
+  binaryPath: 'muse',
+  // Never reached (no toolLessArgs/cliToolsStdin; argv prompt is refused there).
+  buildArgs: (prompt: string) => ['exec', '--json', '--no-session-log', prompt],
+  parseOutput: parseMuseJsonl,
+  isQuotaError: (output: string) =>
+    isProviderQuotaMessage(output) || /rate.?limit|quota|allowance|exceeded|limit reached/i.test(output),
+  quotaProvider: 'muse',
+  modelProvider: 'meta',
+  modelFlag: '--model',
+  billingInfo: {
+    vendor: 'Meta',
+    planNote: 'Meta account subscription via `muse login`, or a metered META_API_KEY (takes priority over the login)',
+    billingMode: 'mixed',
+    pricingDocUrl: 'https://developers.meta.com/',
+    modelsDocUrl: 'https://developers.meta.com/',
+    modelFlagDocUrl: 'https://developers.meta.com/',
+    warning: 'muse manages its own login and default model in ~/.config/muse. Octipus passes META_API_KEY only when "Pass server API keys" is on; subscription allowance vs. metered API is vendor-controlled.',
+  },
+};
+
+/**
  * The working directory of an install row's one-shot completion: empty, so a
  * tool-less CLI picks up no project file (CLAUDE.md, AGENTS.md) of the workspace.
  */
@@ -710,12 +770,12 @@ const kimiCliConfig: CLIToolConfig = makeAnthropicCompatCliConfig({
 });
 
 /** All registered CLI tool configs */
-export const CLI_TOOLS: CLIToolConfig[] = [claudeCodeConfig, antigravityConfig, codexCliConfig, vibeCliConfig, glmCliConfig, kimiCliConfig];
+export const CLI_TOOLS: CLIToolConfig[] = [claudeCodeConfig, antigravityConfig, codexCliConfig, vibeCliConfig, museCliConfig, glmCliConfig, kimiCliConfig];
 
-export { antigravityConfig, claudeCodeConfig, codexCliConfig, glmCliConfig, kimiCliConfig, vibeCliConfig };
+export { antigravityConfig, claudeCodeConfig, codexCliConfig, glmCliConfig, kimiCliConfig, museCliConfig, vibeCliConfig };
 
 /**
- * CLI Provider — wraps subscription-based CLI tools (Claude Code, Antigravity, Codex, Mistral Vibe)
+ * CLI Provider — wraps subscription-based CLI tools (Claude Code, Antigravity, Codex, Mistral Vibe, Muse Code)
  * as subprocess calls. Tracks quota and detects exhaustion.
  */
 export class CLIProvider implements ModelProvider {
@@ -941,7 +1001,7 @@ export class CLIProvider implements ModelProvider {
     name: string;
     available: boolean;
     modelPatterns: string[];
-    modelProvider: 'anthropic' | 'google' | 'openai' | 'mistral' | 'zai' | 'moonshot';
+    modelProvider: 'anthropic' | 'google' | 'openai' | 'mistral' | 'zai' | 'moonshot' | 'meta';
     modelFlag: string;
     billingInfo: CLIBillingInfo;
     adapter: string;

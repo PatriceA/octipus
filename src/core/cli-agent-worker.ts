@@ -143,7 +143,7 @@ export function boundColdHistory(parts: readonly string[], budgetChars: number):
 }
 
 /** Octipus tools reached over the run-local MCP bridge, as the vendor CLIs name them. */
-const CLI_BRIDGED_TOOL_RE = /^mcp__octipus__|^octipus[_.]|^octipus_run_[a-f0-9]+\./;
+const CLI_BRIDGED_TOOL_RE = /^mcp__octipus(?:_run_[a-f0-9]+)?__|^octipus[_.]|^octipus_run_[a-f0-9]+\./;
 
 export class CLIAgentWorker extends BaseAgentWorker {
   private systemMessages: string[] = [];
@@ -1364,9 +1364,10 @@ When a task matches one of these skills, load it with get_skill before starting 
     const { args, stdinPrompt, useShell } = built;
     this.launchCleanup = () => {
       const configIndex = args.indexOf('--mcp-config');
-      // Windows writes the system prompt to a temp file (command-line length cap).
+      // Windows writes the system prompt to a temp file (command-line length cap); muse always its prompt.
       const sysFileIndex = args.indexOf('--append-system-prompt-file');
-      const paths = [built.env?.VIBE_HOME, ...(this.connection && configIndex >= 0 ? [args[configIndex + 1]] : []), ...(sysFileIndex >= 0 ? [args[sysFileIndex + 1]] : [])];
+      const promptFileIndex = args.indexOf('--prompt-file');
+      const paths = [built.env?.VIBE_HOME, ...(this.connection && configIndex >= 0 ? [args[configIndex + 1]] : []), ...(sysFileIndex >= 0 ? [args[sysFileIndex + 1]] : []), ...(promptFileIndex >= 0 ? [args[promptFileIndex + 1]] : [])];
       for (const path of paths) if (path) {
         try { rmSync(path, { recursive: true, force: true }); }
         catch (err) { agentLogger.warn({ err, path }, 'CLI temporary configuration cleanup failed'); }

@@ -635,7 +635,7 @@ export class WorkspaceFS {
   /**
    * Refuse a write to `absolute` (a path `resolve` returned) when this is a
    * space's root and the path is, or lies under, a coding agent's
-   * configuration (`.claude/`, `.codex/`, `.gemini/`, `.agents/`, `.vibe/`,
+   * configuration (`.claude/`, `.codex/`, `.gemini/`, `.agents/`, `.vibe/`, `.muse/`,
    * `.mcp.json`): a CLI model run in the space would read it as its own
    * settings, hooks or MCP servers, in every member's runs (§5.6).
    */
