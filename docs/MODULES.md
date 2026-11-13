@@ -109,11 +109,11 @@ is configured (`src/core/capabilities/gates.ts`). While one is not:
 
 | Where | What happens |
 |---|---|
-| Agent tools | A function that needs it (`requires` on its registration) is in no agent's tool set, not listed by `list_tools`, not reachable from codemode. A running worker drops it on its next turn; a call that still names it is refused with what is missing (`capability_not_configured`). Configured again, it is offered again without a restart. |
+| Agent tools | A function that needs it (`requires` on its registration) is in no agent's tool set, not listed or described by `list_tools`/`describe_tool`, not reachable from codemode, and not offered by the MCP server (`mcp-server/`) to external agents. A running worker drops it on its next turn; a call that still names it is refused with what is missing (`capability_not_configured`). Configured again, it is offered again without a restart. |
 | Prompts | Text marked `<!-- cap:<id> -->` (or a block closed by `<!-- /cap -->`) is left out; `<!-- cap:!<id> -->` marks the text used instead. |
 | Background work | Nothing runs that would need it. Without an embedding model nothing is chunked or embedded — not even tried: no file is read for indexing, no memory is extracted (no background model call), the recall hook is skipped. |
 | API | Its routes answer 409 `capability_not_configured` with what is missing and where to set it up. |
-| Web | Its pages leave the sidebar; a bookmarked one says what is missing. Its controls are not shown (the microphone without speech to text). |
+| Web | Its pages leave the sidebar (Knowledge and Recall without an embedding model; Memory stays, since stored memories can still be read and deleted); a bookmarked one says what is missing. Its controls are not shown (the microphone without speech to text). |
 | Health | Reported as off, never as degraded or failed. Only a chat model is required. |
 | Channels | A voice note without speech to text gets one line asking to type; an image no model can read reaches the agent as "an image arrived that nobody here can read", so it says so instead of guessing. |
 
@@ -122,6 +122,10 @@ recorded in `index_backlog`. When an embedding model is bound, a catch-up job
 indexes exactly those items once and deletes each row it finishes; content
 that already has vectors is never re-embedded. A row that fails five times is
 kept with its error.
+
+A standalone process (a script, the eval CLI) that never initialised the
+gates computes the answer on first use rather than reading "not checked
+yet" as off.
 
 What is configured is decided once at boot, before anything is served, and
 recomputed whenever a model, a lane binding or a voice setting changes (and

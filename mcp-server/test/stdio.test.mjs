@@ -97,3 +97,31 @@ test('tools of a module that is off are hidden; those of one that is on are list
   assert.ok(!names.includes('octipus_start_research'), 'the core research module is gone (plugins/research)');
   assert.ok(names.includes('octipus_health'), 'core tools stay');
 });
+
+test('tools that need a capability that is not configured are hidden; configured ones are listed', { timeout: 10000 }, async t => {
+  const backend = createServer((req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(req.url === '/api/modules'
+      ? { modules: [], enabled: ['people'], capabilities: [{ id: 'embedding', on: false }] }
+      : {}));
+  });
+  await new Promise(resolve => backend.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => { backend.close(resolve); backend.closeAllConnections(); }));
+  const client = new Client({ name: 'capabilities-smoke', version: '1' });
+  t.after(() => client.close());
+  await client.connect(new StdioClientTransport({ command: process.execPath,
+    args: [fileURLToPath(new URL('../dist/index.js', import.meta.url))],
+    env: { OCTIPUS_URL: `http://127.0.0.1:${backend.address().port}`, OCTIPUS_API_KEY: 'k' }, stderr: 'pipe' }));
+  let names = [];
+  // Wait for the first sync (people turns on with it).
+  for (let i = 0; i < 50 && !names.includes('octipus_list_profiles'); i++) {
+    names = (await client.listTools()).tools.map(tool => tool.name);
+    if (!names.includes('octipus_list_profiles')) await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.ok(names.includes('octipus_list_profiles'), 'synced');
+  for (const gated of ['octipus_search_knowledge', 'octipus_read_knowledge', 'octipus_index_file', 'octipus_search_notes']) {
+    assert.ok(!names.includes(gated), `${gated} needs an embedding model`);
+  }
+  assert.ok(names.includes('octipus_write_note'), 'notes without search stay');
+  assert.ok(names.includes('octipus_list_memories'), 'memories can still be listed');
+});

@@ -59,7 +59,6 @@ export const CAPABILITY_INFO: Readonly<Record<Capability, CapabilityInfo>> = {
 export const CAPABILITY_PAGES: Readonly<Record<string, Capability>> = {
   '/knowledge': 'embedding',
   '/recall': 'embedding',
-  '/memory': 'embedding',
 };
 
 /** The capability the page at `pathname` needs, if any. */

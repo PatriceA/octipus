@@ -40,8 +40,10 @@ export function withoutOffModules(
     const [kind, rawId] = marker.split(':') as ['module' | 'cap', string];
     const negated = rawId.startsWith('!');
     const id = negated ? rawId.slice(1) : rawId;
-    // An unknown capability id is never "on": a typo hides its text instead of leaking it.
-    const value = kind === 'module' ? isOn(id) : isCapability(id) && capOn(id);
+    // A marker naming no known capability never holds, negated or not: a typo
+    // hides its text instead of leaking it.
+    if (kind === 'cap' && !isCapability(id)) return false;
+    const value = kind === 'module' ? isOn(id) : capOn(id as Capability);
     return negated ? !value : value;
   };
   const out: string[] = [];

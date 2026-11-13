@@ -10,7 +10,7 @@ import { assertNoteAccess, getNoteRepository, type NoteRepository, type NoteScop
 import { type Note, notes } from '@/db/schema/notes';
 import { eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { isCapabilityOn } from '@/core/capabilities/gates';
+import { capabilityConfigured } from '@/core/capabilities/gates';
 import { recordSkipped } from '@/core/rag/index-backlog';
 import { coreLogger } from '@/utils/logger';
 import { type EmbeddingService, getEmbeddingService, sha256Hex } from '@/core/rag/embeddings';
@@ -457,7 +457,11 @@ export class NoteService {
    * the catch-up that indexes it once a model is configured.
    */
   private async reindex(note: Note): Promise<boolean> {
-    if (!isCapabilityOn('embedding')) {
+    if (!(await capabilityConfigured('embedding'))) {
+      // The earlier body's chunks go now (deleting needs no model), so a
+      // keyword search never serves text the note no longer has.
+      await this.embeddings.deleteBySource(noteOwner(note), 'note', sourceIdFor(note.id))
+        .catch((err: unknown) => coreLogger.warn({ err, noteId: note.id }, 'Could not remove the earlier chunks of an edited note'));
       if (note.body.trim().length === 0) return true;
       await recordSkipped({ kind: 'note', sourceId: note.id, ownerUserId: note.userId, workspaceId: note.workspaceId ?? null })
         .catch((err: unknown) => coreLogger.warn({ err, noteId: note.id }, 'Could not record the note for catch-up indexing'));

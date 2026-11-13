@@ -1,5 +1,5 @@
 import { coreLogger } from '@/utils/logger';
-import { assertCapability } from '@/core/capabilities/gates';
+import { requireCapability } from '@/core/capabilities/gates';
 import { CodeFileNotIndexableError, isCodeFile } from './code-detection';
 import { getEmbeddingService } from './embeddings';
 import type { KnowledgeOwner } from './knowledge-scope';
@@ -30,7 +30,7 @@ export interface IndexGuard {
 export class FileIndexer {
   async indexFile(owner: KnowledgeOwner, filePath: string, purpose: 'document' = 'document', guard?: IndexGuard): Promise<number> {
     // Before the file is even read: without an embedding model there is nothing to index into.
-    assertCapability('embedding');
+    await requireCapability('embedding');
     if (guard?.isAllowed && !guard.isAllowed(filePath)) {
       throw new Error(`Path is outside the allowed workspace: ${filePath}`);
     }
@@ -59,7 +59,7 @@ export class FileIndexer {
   }
 
   async indexDirectory(owner: KnowledgeOwner, dirPath: string, patterns = ['**/*.md', '**/*.txt'], guard?: IndexGuard): Promise<IndexResult> {
-    assertCapability('embedding');
+    await requireCapability('embedding');
     const result: IndexResult = { filesIndexed: 0, chunksStored: 0, errors: [] };
 
     // Use glob to find matching files. `followSymlinks: false` stops the scan

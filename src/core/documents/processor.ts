@@ -1,4 +1,4 @@
-import { isCapabilityOn } from '@/core/capabilities/gates';
+import { capabilityConfigured } from '@/core/capabilities/gates';
 import { recordSkipped } from '@/core/rag/index-backlog';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
 import { existsSync } from 'fs';
@@ -960,7 +960,7 @@ export class DocumentProcessor {
     // No embedding model: the document is still extracted, summarised and
     // filed; only its chunks wait. Nothing is chunked — it is recorded and
     // indexed by the catch-up once a model is configured.
-    if (!isCapabilityOn('embedding')) {
+    if (!(await capabilityConfigured('embedding'))) {
       await recordSkipped({
         kind: 'document', sourceId: documentId, ownerUserId: owner.userId, workspaceId: owner.workspaceId,
         purpose: purpose ?? 'document', metadata: { filePath: filename },

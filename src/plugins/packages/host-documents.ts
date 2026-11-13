@@ -78,9 +78,16 @@ function documentDir(repos: ContentRepos, plugin: string): string {
 async function indexDocument(repos: ContentRepos, doc: DocumentRecord, text: string, replace = false): Promise<void> {
   try {
     // No embedding model: nothing is chunked; the catch-up indexes the document once one is configured.
-    const { isCapabilityOn } = await import('@/core/capabilities/gates');
+    const { capabilityConfigured } = await import('@/core/capabilities/gates');
+    const embeddingOn = await capabilityConfigured('embedding');
     const owner = repos.knowledgeOwner;
-    if (!isCapabilityOn('embedding') && 'ownerUserId' in owner) {
+    if (!embeddingOn && 'ownerUserId' in owner) {
+      // The passages of the earlier text go now (deleting needs no model), so
+      // nothing serves outdated content until the catch-up indexes the new one.
+      if (replace) {
+        const { getEmbeddingService } = await import('@/core/rag/embeddings');
+        await getEmbeddingService().deleteBySource(owner, 'document', `doc:${doc.id}`);
+      }
       const { recordSkipped } = await import('@/core/rag/index-backlog');
       await recordSkipped({
         kind: 'document', sourceId: doc.id, ownerUserId: owner.ownerUserId, workspaceId: owner.workspaceId,
@@ -88,7 +95,7 @@ async function indexDocument(repos: ContentRepos, doc: DocumentRecord, text: str
       });
       return;
     }
-    if (!isCapabilityOn('embedding')) return;
+    if (!embeddingOn) return;
     const { getEmbeddingService } = await import('@/core/rag/embeddings');
     // An update replaces the passages of the earlier text.
     if (replace) await getEmbeddingService().deleteBySource(repos.knowledgeOwner, 'document', `doc:${doc.id}`);

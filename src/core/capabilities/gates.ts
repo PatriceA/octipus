@@ -8,7 +8,8 @@
  *   - tools that need it are in no agent's tool set (`ToolHandler.requires`),
  *     and a stale call is refused with `capabilityOffMessage`;
  *   - prompt text marked `<!-- cap:<id> -->` is left out (core/modules/prompt);
- *   - background jobs that need it do not run (`isJobOn`);
+ *   - background work that needs it does not start (each such path checks
+ *     the capability before doing anything — see docs/MODULES.md);
  *   - routes that need it answer 409 `capability_not_configured`;
  *   - the web hides its pages and controls (`/api/modules` → `capabilities`).
  *
@@ -44,13 +45,21 @@ function unknownSnapshot(): CapabilitySnapshot {
  * module on (src/test-setup.ts): the suites of a gated tool run against it
  * configured, and the tests of "off" set the snapshot themselves.
  */
+const ALL_ON_FOR_TESTS = process.env.OCTIPUS_CAPABILITIES_ALL_ON === '1';
+
 function initialSnapshot(): CapabilitySnapshot {
-  if (process.env.OCTIPUS_CAPABILITIES_ALL_ON !== '1') return unknownSnapshot();
+  if (!ALL_ON_FOR_TESTS) return unknownSnapshot();
   return Object.fromEntries(CAPABILITIES.map((c) => [c, { on: true }])) as CapabilitySnapshot;
 }
 
 let snapshot: CapabilitySnapshot = initialSnapshot();
-let computedAt = 0;
+let computedAt = ALL_ON_FOR_TESTS ? Date.now() : 0;
+/**
+ * Tests: a snapshot set by the test is not replaced by a refresh that a model
+ * write elsewhere in the file happens to trigger. A test that resets the
+ * snapshot (and installs its own resolvers) refreshes for real again.
+ */
+let pinnedForTest = ALL_ON_FOR_TESTS;
 const listeners = new Set<(next: CapabilitySnapshot, previous: CapabilitySnapshot) => void>();
 
 /** Whether `cap` is configured. Synchronous; reads the snapshot. */
@@ -88,6 +97,29 @@ export class CapabilityNotConfiguredError extends Error {
 
 export function assertCapability(cap: Capability): void {
   if (!isCapabilityOn(cap)) throw new CapabilityNotConfiguredError(cap);
+}
+
+/**
+ * The snapshot, computed on first use when nothing computed it yet. The
+ * server computes it at boot; a standalone process (a script, the eval CLI)
+ * that never called `initCapabilityGates` gets the real answer here instead
+ * of "not checked yet = off".
+ */
+export async function ensureCapabilitiesKnown(): Promise<CapabilitySnapshot> {
+  if (computedAt === 0) await refreshCapabilities();
+  return snapshot;
+}
+
+/** `isCapabilityOn` for async code that may run outside the server. */
+export async function capabilityConfigured(cap: Capability): Promise<boolean> {
+  await ensureCapabilitiesKnown();
+  return isCapabilityOn(cap);
+}
+
+/** `assertCapability` for async code that may run outside the server. */
+export async function requireCapability(cap: Capability): Promise<void> {
+  await ensureCapabilitiesKnown();
+  assertCapability(cap);
 }
 
 /** The capabilities as `/api/modules` reports them. */
@@ -197,6 +229,7 @@ let again = false;
  * with the error as its reason (logged once per flip, not per check).
  */
 export function refreshCapabilities(): Promise<CapabilitySnapshot> {
+  if (pinnedForTest) return Promise.resolve(snapshot);
   if (inFlight) {
     again = true;
     return inFlight;
@@ -260,6 +293,8 @@ export function notifyCapabilitiesChanged(): void {
     void refreshCapabilities();
     pubsub?.publish(CHANNEL, { at: Date.now() }).catch((err: unknown) => coreLogger.warn({ err }, 'Could not publish a capability change'));
   }, 50);
+  // Never what keeps a process (a script that wrote a model) alive.
+  debounce.unref?.();
 }
 
 /** Settings whose change can flip a capability. */
@@ -302,6 +337,7 @@ export function stopCapabilityGates(): void {
 
 /** Tests: set capabilities directly (unlisted ones stay as they are). */
 export function setCapabilitiesForTest(states: Partial<Record<Capability, boolean>>): void {
+  pinnedForTest = true;
   const next = { ...snapshot } as Record<Capability, CapabilityState>;
   for (const [cap, on] of Object.entries(states) as [Capability, boolean][]) {
     next[cap] = on ? { on: true } : { on: false, reason: 'off in test' };
@@ -311,6 +347,7 @@ export function setCapabilitiesForTest(states: Partial<Record<Capability, boolea
 
 /** Tests: back to "not checked yet" (everything off). */
 export function resetCapabilitiesForTest(): void {
+  pinnedForTest = false;
   snapshot = unknownSnapshot();
   computedAt = 0;
 }

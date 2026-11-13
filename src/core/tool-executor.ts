@@ -444,7 +444,7 @@ export class ToolExecutor {
    */
   private resolveToolName(name: string): { canonical: string } | { didYouMean: string } | null {
     // Never a tool of a module that is off (docs/MODULES.md).
-    const names = [...this.tools].filter(([, tool]) => !tool.toolId || isToolOn(tool.toolId)).map(([registered]) => registered);
+    const names = [...this.tools].filter(([, tool]) => (!tool.toolId || isToolOn(tool.toolId)) && capabilitiesMet(tool.requires)).map(([registered]) => registered);
     // Stage 1: unambiguous bare sub-name → prefixed name.
     if (!name.includes('__')) {
       const suffix = `__${name}`;
@@ -765,7 +765,7 @@ export class ToolExecutor {
       // run started): the call is refused with the reason, never attempted.
       const missingCapability = firstOffCapability(tool.requires);
       if (missingCapability) {
-        this.counters.permissionDenials++;
+        // Not a permission denial: nothing was refused by policy, the install has no model for it.
         results.push({ toolCallId: toolCall.id, result: null, errorCode: 'capability_not_configured', error: capabilityOffMessage(missingCapability) });
         continue;
       }

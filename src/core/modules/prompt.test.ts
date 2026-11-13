@@ -70,6 +70,7 @@ describe('the prompt files', () => {
       'Look at images with view_image.',
       '<!-- /cap -->',
       '- typo marker <!-- cap:embeding -->',
+      '- negated typo marker <!-- cap:!embeding -->',
       'Done.',
     ].join('\n');
     const caps = (on: string[]) => (id: string) => on.includes(id);

@@ -76,7 +76,11 @@ const indexers: Record<BacklogKind, BacklogIndexer> = {
   async document(row) {
     const { documentRepository } = await import('@/db/repositories/document-repository');
     const doc = await documentRepository.findByIdSystem(row.sourceId);
-    if (!doc?.ocrText?.trim()) return false;
+    if (!doc) return false;
+    // Recorded while the pipeline was still running: its text is stored at the
+    // end of processing. Not yet is a retry, not a drop.
+    if (doc.status !== 'completed' && !doc.ocrText?.trim()) throw new Error('document not processed yet');
+    if (!doc.ocrText?.trim()) return false;
     const { getEmbeddingService } = await import('./embeddings');
     const service = getEmbeddingService();
     const owner = { ownerUserId: row.ownerUserId, workspaceId: row.workspaceId };
@@ -100,9 +104,16 @@ const indexers: Record<BacklogKind, BacklogIndexer> = {
   },
 };
 
+const realIndexers = { ...indexers };
+
 /** Tests: replace how a kind is indexed. */
 export function setBacklogIndexerForTest(kind: BacklogKind, indexer: BacklogIndexer): void {
   indexers[kind] = indexer;
+}
+
+/** Tests: back to the real indexers. */
+export function resetBacklogIndexersForTest(): void {
+  Object.assign(indexers, realIndexers);
 }
 
 let running: Promise<{ indexed: number; dropped: number; failed: number }> | null = null;
@@ -169,4 +180,9 @@ export function startIndexBacklogCatchUp(): void {
   onCapabilitiesChanged((next, previous) => {
     if (next.embedding.on && !previous.embedding.on) void kick();
   });
+  // Items recorded after a run (a document whose pipeline was still running
+  // when the model was bound) and items waiting for a retry: picked up every
+  // few minutes while a model is configured. A run with nothing to do is one query.
+  const timer = setInterval(() => { if (isCapabilityOn('embedding')) void kick(); }, 5 * 60_000);
+  timer.unref?.();
 }

@@ -50,6 +50,8 @@ describe('index backlog', () => {
     await queryRaw('DELETE FROM index_backlog');
     const { setCapabilitiesForTest } = await import('@/core/capabilities/gates');
     setCapabilitiesForTest({ embedding: false });
+    const { resetBacklogIndexersForTest } = await import('./index-backlog');
+    resetBacklogIndexersForTest();
   });
 
   test('recording the same item twice keeps one row with the latest purpose', async () => {
@@ -105,5 +107,30 @@ describe('index backlog', () => {
     for (let i = 0; i < MAX_BACKLOG_ATTEMPTS + 2; i++) await runIndexBacklog();
     expect(failing).toHaveBeenCalledTimes(MAX_BACKLOG_ATTEMPTS);
     expect((await rows())[0]).toMatchObject({ source_id: 'n-bad', attempts: MAX_BACKLOG_ATTEMPTS, last_error: 'still broken' });
+  });
+
+  test('the real document indexer: a document still processing is retried, not dropped; once done it is indexed from its stored text', async () => {
+    const { recordSkipped, runIndexBacklog } = await import('./index-backlog');
+    const { setCapabilitiesForTest } = await import('@/core/capabilities/gates');
+    const { getEmbeddingService } = await import('./embeddings');
+    const { queryRaw } = await import('@/db/postgres');
+    const docId = randomUUID();
+    await queryRaw(`INSERT INTO documents (id, user_id, filename, original_name, mime_type, size, status, storage_path)
+      VALUES ('${docId}', '${userId}', 'f.pdf', 'Scan.pdf', 'application/pdf', 1, 'processing', '/tmp/f.pdf')`);
+    await recordSkipped({ kind: 'document', sourceId: docId, ownerUserId: userId, purpose: 'document', metadata: { filePath: 'Scan.pdf' } });
+    const service = getEmbeddingService();
+    const indexText = vi.spyOn(service, 'indexText').mockResolvedValue(1);
+    vi.spyOn(service, 'deleteBySource').mockResolvedValue(0 as never);
+    setCapabilitiesForTest({ embedding: true });
+
+    expect(await runIndexBacklog()).toEqual({ indexed: 0, dropped: 0, failed: 1 });
+    expect((await rows())[0]).toMatchObject({ source_id: docId, attempts: 1, last_error: 'document not processed yet' });
+    expect(indexText).not.toHaveBeenCalled();
+
+    await queryRaw(`UPDATE documents SET status = 'completed', ocr_text = 'the scanned text' WHERE id = '${docId}'`);
+    expect(await runIndexBacklog()).toEqual({ indexed: 1, dropped: 0, failed: 0 });
+    expect(indexText).toHaveBeenCalledWith({ ownerUserId: userId, workspaceId: null }, 'document', `doc:${docId}`, 'the scanned text', { filePath: 'Scan.pdf' }, docId);
+    expect(await rows()).toHaveLength(0);
+    vi.restoreAllMocks();
   });
 });

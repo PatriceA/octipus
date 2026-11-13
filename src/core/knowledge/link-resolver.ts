@@ -1,3 +1,4 @@
+import { capabilityConfigured } from '@/core/capabilities/gates';
 import { getKnowledgeLinkRepository, type KnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
 import { getNoteRepository, type NoteRepository, type NoteScope, noteStoreFor } from '@/db/repositories/note-repository';
 import { type EmbeddingService, getEmbeddingService } from '@/core/rag/embeddings';
@@ -162,6 +163,9 @@ export class LinkResolverService {
       if (!byRef.has(link.ref)) byRef.set(link.ref, link.target);
     }
 
+    // Candidates come from the note embeddings: without an embedding model
+    // there are none to guess between, and no background model call is spent.
+    if (!(await capabilityConfigured('embedding'))) return [];
     const model = await getModelRegistry().getModelForTopic('background');
     if (!model) {
       coreLogger.debug(

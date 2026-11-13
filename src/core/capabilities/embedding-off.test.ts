@@ -80,12 +80,13 @@ describe('embedding not configured', () => {
 
   test('notes: a save records the note for catch-up instead of chunking it', async () => {
     const { NoteService } = await import('@/core/knowledge/notes');
-    const embeddings = { deleteBySource: vi.fn(), indexText: vi.fn(), countBySource: vi.fn() };
+    const embeddings = { deleteBySource: vi.fn(async () => 0), indexText: vi.fn(), countBySource: vi.fn() };
     const service = new NoteService(undefined, undefined, embeddings as never) as unknown as { reindex(note: unknown): Promise<boolean> };
     const note = { id: 'note-1', userId: OWNER.ownerUserId, workspaceId: null, title: 'T', body: 'body text' };
     await expect(service.reindex(note)).resolves.toBe(false);
     expect(embeddings.indexText).not.toHaveBeenCalled();
-    expect(embeddings.deleteBySource).not.toHaveBeenCalled();
+    // The earlier body's chunks are removed (no model needed), so nothing stale is served.
+    expect(embeddings.deleteBySource).toHaveBeenCalledWith(OWNER, 'note', 'note:note-1');
     expect(spies.recordSkipped).toHaveBeenCalledWith({ kind: 'note', sourceId: 'note-1', ownerUserId: OWNER.ownerUserId, workspaceId: null });
   });
 
@@ -151,5 +152,40 @@ describe('embedding not configured', () => {
     await tool.initialize();
     const handler = tool.getTool('search_knowledge');
     await expect(handler?.execute({ query: 'q' }, { userId: 'u', id: 'a' } as never)).resolves.toMatchObject({ error: expect.stringMatching(/not configured/) });
+  });
+});
+
+describe('embedding not configured — discovery and side paths', () => {
+  test('list_tools and describe_tool never show a function whose capability is off', async () => {
+    const { buildToolDiscoveryHandlers } = await import('@/tools/tool-discovery');
+    const gated = { name: 'knowledge__search_knowledge', description: 'kb', parameters: {}, toolId: 'knowledge', requires: ['embedding'] as const, execute: async () => null };
+    const plain = { name: 'notes__write_note', description: 'note', parameters: {}, toolId: 'notes', execute: async () => null };
+    const [list, describeTool] = buildToolDiscoveryHandlers([gated, plain]);
+    const listed = (await list.execute({}, {} as never)) as Array<{ name: string }>;
+    expect(listed.map((t) => t.name)).toEqual(['notes__write_note']);
+    await expect(describeTool.execute({ name: 'knowledge__search_knowledge' }, {} as never)).rejects.toThrow(/Unknown tool/);
+    setCapabilitiesForTest({ embedding: true });
+    expect(((await list.execute({}, {} as never)) as Array<{ name: string }>).map((t) => t.name)).toContain('knowledge__search_knowledge');
+  });
+
+  test('link suggestions and ghost-link resolution do not search (no model call either)', async () => {
+    const { SuggestionService } = await import('@/core/knowledge/suggestions');
+    const embeddings = { hybridSearch: vi.fn() };
+    const notes = { getById: vi.fn(async () => ({ id: 'n', title: 'T', body: 'b' })) };
+    const links = { getOutgoing: vi.fn(async () => []) };
+    const suggestions = new SuggestionService(notes as never, links as never, embeddings as never);
+    await expect(suggestions.suggestForNote({ kind: 'personal', userId: OWNER.ownerUserId, workspaceId: null } as never, 'n', 5)).resolves.toEqual([]);
+    expect(embeddings.hybridSearch).not.toHaveBeenCalled();
+  });
+
+  test('a script that never initialised the gates gets the real answer, computed on first use', async () => {
+    const gates = await import('./gates');
+    gates.resetCapabilitiesForTest();
+    for (const cap of ['see', 'ocr', 'draw', 'hear', 'speak'] as const) gates.setCapabilityResolver(cap, async () => ({ on: false }));
+    gates.setCapabilityResolver('embedding', async () => ({ on: true }));
+    expect(gates.isCapabilityOn('embedding')).toBe(false); // not checked yet
+    await expect(gates.capabilityConfigured('embedding')).resolves.toBe(true);
+    await expect(gates.requireCapability('embedding')).resolves.toBeUndefined();
+    setCapabilitiesForTest({ embedding: false });
   });
 });

@@ -81,20 +81,26 @@ function collect(server: McpServer, register: () => void): RegisteredTool[] {
  * server answers, every module tool stays hidden; when it cannot be read,
  * the last answer stands.
  */
-async function syncModules(client: OctiClient, byModule: Record<string, RegisteredTool[]>): Promise<void> {
-  let enabled: string[];
+async function syncModules(
+  client: OctiClient,
+  byModule: Record<string, RegisteredTool[]>,
+  byCapability: Record<string, RegisteredTool[]> = {},
+): Promise<void> {
+  let state: Awaited<ReturnType<OctiClient['getModulesState']>>;
   try {
-    enabled = await client.getEnabledModules();
+    state = await client.getModulesState();
   } catch {
     return;
   }
-  for (const [module, tools] of Object.entries(byModule)) {
-    const on = enabled.includes(module);
+  const set = (tools: RegisteredTool[], on: boolean) => {
     for (const tool of tools) {
       if (on && !tool.enabled) tool.enable();
       if (!on && tool.enabled) tool.disable();
     }
-  }
+  };
+  for (const [module, tools] of Object.entries(byModule)) set(tools, state.enabled.includes(module));
+  // Not configured is off too (docs/MODULES.md → Capability gates).
+  for (const [capability, tools] of Object.entries(byCapability)) set(tools, state.capabilities === null || state.capabilities[capability] === true);
 }
 
 export function createServer(octiUrl: string): McpServer {
@@ -125,7 +131,8 @@ export function createServer(octiUrl: string): McpServer {
   registerChatTools(server, client);
   registerToolModuleTools(server, client);
   registerRecurringTaskTools(server, client);
-  registerKnowledgeTools(server, client);
+  // The knowledge base needs an embedding model: hidden while none is configured.
+  const knowledgeTools = collect(server, () => registerKnowledgeTools(server, client));
   registerSkillTools(server, client);
   registerPluginTools(server, client);
   registerPipelineTools(server, client);
@@ -136,7 +143,7 @@ export function createServer(octiUrl: string): McpServer {
   registerAuditTools(server, client);
   // Newer end-user features — previously absent from the MCP surface.
   registerTasksTools(server, client);
-  registerNotesTools(server, client);
+  const notes = registerNotesTools(server, client);
   registerMemoryTools(server, client);
 
   // The groups of a module (docs/MODULES.md): hidden while it is off.
@@ -146,9 +153,12 @@ export function createServer(octiUrl: string): McpServer {
     artifacts: collect(server, () => registerArtifactTools(server, client)),
     inbox: collect(server, () => registerEmailTools(server, client)),
   };
-  for (const tool of Object.values(byModule).flat()) tool.disable();
-  void syncModules(client, byModule);
-  const timer = setInterval(() => void syncModules(client, byModule), MODULES_REFRESH_MS);
+  const byCapability: Record<string, RegisteredTool[]> = {
+    embedding: [...knowledgeTools, ...notes.needsEmbedding],
+  };
+  for (const tool of [...Object.values(byModule), ...Object.values(byCapability)].flat()) tool.disable();
+  void syncModules(client, byModule, byCapability);
+  const timer = setInterval(() => void syncModules(client, byModule, byCapability), MODULES_REFRESH_MS);
   timer.unref?.();
   // One server per HTTP session: the refresh ends with it.
   const onclose = server.server.onclose;

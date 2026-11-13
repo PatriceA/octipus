@@ -10,6 +10,7 @@
  * `minSimilarity`: how many answerable questions found their source, and how
  * many questions that should find nothing were given something anyway.
  */
+import { requireCapability } from '@/core/capabilities/gates';
 import { and, desc, eq, gte } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { type ContextTurnRow, contextTurns } from '@/db/schema/context-hooks';
@@ -180,6 +181,8 @@ export async function evaluateRecall(
   cases: RecallEvalCase[],
   overrides: Partial<Pick<RecallConfig, 'limit' | 'minSimilarity'>> = {},
 ): Promise<RecallEvalResult> {
+  // Recall searches the knowledge base: nothing to evaluate without an embedding model.
+  await requireCapability('embedding');
   const builtin = (await listContextHooks(userId)).find((h) => h.builtin === 'knowledge-recall');
   const config = KIND_CONFIG.recall.parse({ ...(builtin?.config ?? {}), ...overrides });
   const out: RecallEvalResult['cases'] = [];

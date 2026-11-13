@@ -1,3 +1,4 @@
+import { capabilityConfigured } from '@/core/capabilities/gates';
 import { getKnowledgeLinkRepository, type KnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
 import { getNoteRepository, type NoteRepository, type NoteScope, noteStoreFor } from '@/db/repositories/note-repository';
 import { noteKnowledgeScope } from '@/core/rag/knowledge-scope';
@@ -51,6 +52,8 @@ export class SuggestionService {
     const linkedIds = new Set(existing.filter((e) => e.toId).map((e) => e.toId as string));
     linkedIds.add(noteId); // never suggest self
 
+    // Suggestions are semantic: none without an embedding model (not an error).
+    if (!(await capabilityConfigured('embedding'))) return [];
     const query = `${note.title}\n${note.body}`.slice(0, 2000);
     let hits: Awaited<ReturnType<EmbeddingService['hybridSearch']>>;
     try {

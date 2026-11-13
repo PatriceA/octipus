@@ -8,7 +8,7 @@ import { agentPrincipal, type Principal } from '@/security/principal';
 import { can, SpaceError } from '@/security/space-access';
 import { isKnownSharedWorkspace, WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
-import { isCapabilityOn } from '@/core/capabilities/gates';
+import { capabilityConfigured } from '@/core/capabilities/gates';
 import { recordSkipped } from '@/core/rag/index-backlog';
 import { buildRepoEdges, findAmbiguousPackages, type RepoEdge, type RepoGraphNode } from './graph';
 import { findRepoRoots, scanRoots } from './scanner';
@@ -142,7 +142,7 @@ export async function scanUserRepos(owner: RepoOwner): Promise<WorkspaceRepo[]> 
  */
 export async function indexRepoKnowledge(repo: WorkspaceRepo, userId: string): Promise<void> {
   // No embedding model: nothing is read or chunked; the catch-up re-scans the repo once one is configured.
-  if (!isCapabilityOn('embedding')) {
+  if (!(await capabilityConfigured('embedding'))) {
     await recordSkipped({ kind: 'repo', sourceId: repo.id, ownerUserId: userId, workspaceId: repo.workspaceId ?? null });
     return;
   }

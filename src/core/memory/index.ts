@@ -10,7 +10,7 @@
  * injection).
  */
 
-import { isCapabilityOn } from '@/core/capabilities/gates';
+import { capabilityConfigured } from '@/core/capabilities/gates';
 import { extractFacts } from './extractor';
 import { judgeAndApply, type JudgeContext, type JudgeOutcome } from './judge';
 
@@ -34,7 +34,7 @@ export interface UpdateMemoriesInput extends JudgeContext {
 export async function updateMemoriesAfterTurn(input: UpdateMemoriesInput): Promise<JudgeOutcome[]> {
   // A memory row carries its embedding: without an embedding model nothing is
   // extracted, so no background model call is spent on facts that cannot be kept.
-  if (!isCapabilityOn('embedding')) return [];
+  if (!(await capabilityConfigured('embedding'))) return [];
   const candidates = await extractFacts({
     userMessage: input.userMessage,
     recentTurns: input.recentTurns,

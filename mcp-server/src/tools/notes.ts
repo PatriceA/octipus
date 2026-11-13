@@ -3,7 +3,7 @@
  * built-in `notes` tool (wikilinks + tags + hybrid search).
  */
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer, RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { OctiClient } from '../client.js';
 
@@ -14,7 +14,8 @@ function asError(error: unknown) {
   return { content: [{ type: 'text' as const, text: `Failed: ${(error as Error).message}` }], isError: true };
 }
 
-export function registerNotesTools(server: McpServer, client: OctiClient): void {
+/** Returns the tools that need an embedding model (hidden while it is not configured). */
+export function registerNotesTools(server: McpServer, client: OctiClient): { needsEmbedding: RegisteredTool[] } {
   server.tool(
     'octipus_write_note',
     'Create or update a markdown note. Use [[Wikilinks]] and #tags — both wire into the knowledge graph. Pass id to edit; omit it to create.',
@@ -68,7 +69,7 @@ export function registerNotesTools(server: McpServer, client: OctiClient): void 
     },
   );
 
-  server.tool(
+  const searchNotes = server.tool(
     'octipus_search_notes',
     'Hybrid search over note content.',
     {
@@ -99,4 +100,5 @@ export function registerNotesTools(server: McpServer, client: OctiClient): void 
       }
     },
   );
+  return { needsEmbedding: [searchNotes] };
 }
