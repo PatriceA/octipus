@@ -12,8 +12,9 @@
  *
  * One answer for every caller — the document pipeline, the tools, channels,
  * health and the capability gates — so they cannot disagree. Protection
- * levels apply here (`localRowInstead`), so no caller can forget them: a
- * conversation whose content must stay local gets a local model or `none`.
+ * levels apply here, so no caller can forget them: content that must stay
+ * local gets a local model or `none` (with or without a session: a pipeline's
+ * carried level counts too).
  */
 import type { ModelConfigEntry } from '@/db/schema/models';
 import { getModelRegistry } from './model-registry';
@@ -61,20 +62,29 @@ async function lane(name: string): Promise<ModelConfigEntry | null> {
 }
 
 /**
- * Keep a lane's row only if the conversation's protection level lets its
- * content go there; a local row is chosen instead where there is one.
+ * Keep a lane's row only if the content's protection level lets it go there
+ * (the session's level, or the level a pipeline carries without a session).
+ * Reading an image or a scan may switch to a local model that reads images.
+ * Drawing and speech never switch: a chat model is not a speech engine, so a
+ * remote one at level 3–4 is refused, not replaced.
  */
 async function protectedRow(row: ModelConfigEntry, need: MediaNeed, ctx: MediaContext): Promise<ModelConfigEntry | { refused: string }> {
-  if (!ctx.sessionId) return row;
-  const { localRowInstead, ProtectionRoutingError } = await import('@/core/protection/routing');
-  const { modelCandidates } = await import('@/core/agent/model-selector');
-  try {
-    const local = await localRowInstead(row, ctx.sessionId, need === 'see' || need === 'ocr' ? 'vision' : 'text', () => modelCandidates({ userId: ctx.userId ?? 'system' }));
-    return local ?? row;
-  } catch (err) {
-    if (err instanceof ProtectionRoutingError) return { refused: err.message };
-    throw err;
+  const routing = await import('@/core/protection/routing');
+  if (need === 'see' || need === 'ocr') {
+    const { modelCandidates } = await import('@/core/agent/model-selector');
+    try {
+      const local = await routing.localRowInstead(row, ctx.sessionId, 'vision', () => modelCandidates({ userId: ctx.userId ?? 'system' }));
+      return local ?? row;
+    } catch (err) {
+      if (err instanceof routing.ProtectionRoutingError) return { refused: err.message };
+      throw err;
+    }
   }
+  const level = await routing.localOnlyLevel(ctx.sessionId);
+  if (level !== undefined && !(await routing.runsLocally(row))) {
+    return { refused: `This content is at protection level ${level}, which stays on local models, and ${row.name} is not local. Bind a local engine to the ${NEED_LANE[need as 'draw' | 'hear' | 'speak']} lane.` };
+  }
+  return row;
 }
 
 async function served(row: ModelConfigEntry, laneName: MediaLane, need: MediaNeed, ctx: MediaContext): Promise<MediaResolution> {
@@ -94,8 +104,9 @@ export async function resolveMedia(need: MediaNeed, ctx: MediaContext = {}): Pro
     }
     const vision = await lane('vision');
     if (vision) return served(vision, 'vision', need, ctx);
+    // A CLI agent reads files itself, not image parts: never the fallback.
     const fallback = await getModelRegistry().getDefaultModel();
-    if (fallback?.supportsVision && fallback.id !== ctx.agentRow?.id) return served(fallback, 'default', need, ctx);
+    if (fallback?.supportsVision && fallback.provider !== 'cli' && fallback.id !== ctx.agentRow?.id) return served(fallback, 'default', need, ctx);
     return { mode: 'none', reason: NONE_REASON[need] };
   }
   const laneName = NEED_LANE[need];

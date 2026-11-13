@@ -227,6 +227,11 @@ export async function createPersonalModel(userId: string, input: CreatePersonalM
   if (CUSTOM_PROVIDERS.has(input.provider)) metadata.customProvider = { auth: { type: 'bearer' } };
 
   const apiKeyRef = await storeKey(userId, name, input.key);
+  // What the model reads (images, audio), as for an install row (capability-detect.ts).
+  const { detectInputs } = await import('@/models/capability-detect');
+  const { getConfig } = await import('@/config');
+  const detection = await detectInputs({ provider: input.provider, modelId: input.modelId, endpoint }, getConfig().ollama?.url);
+  if (detection) metadata.capabilitiesDetectedAt = new Date().toISOString();
   await registry.registerModel({
     name,
     provider: input.provider,
@@ -234,6 +239,8 @@ export async function createPersonalModel(userId: string, input: CreatePersonalM
     endpoint,
     apiKeyRef,
     ownerUserId: userId,
+    supportsVision: detection?.inputs.image === true,
+    supportsAudioInput: detection?.inputs.audio === true,
     metadata,
     ...(input.contextWindow !== undefined ? { contextWindow: input.contextWindow } : {}),
     ...(input.maxTokens !== undefined ? outputLimits(input.maxTokens, undefined) : {}),

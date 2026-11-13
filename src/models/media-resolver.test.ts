@@ -67,3 +67,24 @@ describe('resolveMedia', () => {
     }
   });
 });
+
+describe('resolveMedia — protection levels', () => {
+  test('speech and drawing are refused at a local-only level when the lane is remote, never swapped for a chat model', async () => {
+    vi.doMock('@/core/protection/routing', () => ({
+      localOnlyLevel: async () => 3,
+      runsLocally: async (r: { provider: string }) => r.provider === 'ollama',
+      localRowInstead: async () => { throw new Error('not for speech'); },
+      ProtectionRoutingError: class extends Error {},
+    }));
+    state.lanes.transcription = bound('openai-stt', 'transcription', { provider: 'openai' });
+    const result = await resolveMedia('hear', { sessionId: 's' });
+    expect(result.mode).toBe('none');
+    expect(result.mode === 'none' && result.reason).toMatch(/protection level 3/);
+    vi.doUnmock('@/core/protection/routing');
+  });
+
+  test('a CLI default model is never the image fallback', async () => {
+    state.def = row('claude-code', { supportsVision: true, provider: 'cli' });
+    expect((await resolveMedia('see')).mode).toBe('none');
+  });
+});

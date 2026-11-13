@@ -128,4 +128,14 @@ describe('health — public probes do not leak raw errors', () => {
     expect(JSON.stringify(r.body)).not.toContain('ECONNREFUSED');
     expect(fixture.warn).toHaveBeenCalledWith({ error: 'connect ECONNREFUSED 10.0.0.5:5432' }, `${svc} health check failed`);
   });
+
+  test('features: only chat is required; the current lanes are listed; an unconfigured media lane is optional and off', async () => {
+    fixture.user = ADMIN;
+    const r = await get('/health/features');
+    expect(r.status).toBe(200);
+    const byKey = Object.fromEntries((r.body.features as Array<{ key: string; required: boolean; configured: boolean }>).map((f) => [f.key, f]));
+    expect(Object.keys(byKey)).toEqual(['chat', 'build', 'everyday', 'verify', 'research', 'background', 'embedding', 'vision', 'ocr', 'image_generation', 'transcription', 'speech']);
+    expect(Object.values(byKey).filter((f) => f.required).map((f) => f.key)).toEqual(['chat']);
+    for (const key of ['embedding', 'vision', 'ocr', 'image_generation']) expect(byKey[key]).toMatchObject({ required: false, configured: false });
+  });
 });

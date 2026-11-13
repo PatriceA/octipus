@@ -233,9 +233,20 @@ export async function registerModel(body: Record<string, unknown>) {
     // only turns a flag on; the row is marked so a later correction stays.
     const { detectInputs, upgradeFlags } = await import('@/models/capability-detect');
     const { getConfig } = await import('@/config');
-    const detected = await detectInputs({ provider, modelId, endpoint: (body.endpoint as string | undefined) ?? null }, getConfig().ollama?.url);
+    // Ollama's own answer overrides the form's defaults; a documented family
+    // answer fills only a flag the request left unset (an explicit false stays).
+    const detection = await detectInputs({ provider, modelId, endpoint: (body.endpoint as string | undefined) ?? null }, getConfig().ollama?.url);
+    const explicitOk = provider === 'ollama';
+    const detected = detection && {
+      image: (explicitOk || body.supportsVision === undefined) && detection.inputs.image,
+      audio: (explicitOk || body.supportsAudioInput === undefined) && detection.inputs.audio,
+    };
     const flags = upgradeFlags({ supportsVision: body.supportsVision === true, supportsAudioInput: body.supportsAudioInput === true }, detected);
-    const metadata = { ...((createBody.metadata as Record<string, unknown> | undefined) ?? {}), capabilitiesDetectedAt: new Date().toISOString() };
+    const metadata = {
+      ...((createBody.metadata as Record<string, unknown> | undefined) ?? {}),
+      // Stamped only on an answer: an Ollama that could not be asked is asked again at boot.
+      ...(detection ? { capabilitiesDetectedAt: new Date().toISOString() } : {}),
+    };
     return await registry.registerModel({ ...createBody, ...flags, metadata } as NewModelConfigEntry);
   } catch (err) {
     const msg = (err as Error).message;

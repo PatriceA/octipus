@@ -394,7 +394,11 @@ export class DocumentProcessor {
     // 2. Vision analysis (image description): the Vision lane, or the default
     // model when it reads images (src/models/media-resolver.ts).
     // Skip when OCR already produced substantive text — running both doubles cost for documents.
-    const visionModel = resolvedRow(await resolveMedia('see'));
+    // A local OCR endpoint the operator configured (workspace.ocrEndpoint)
+    // stays ahead of the implicit default-model fallback, as before.
+    const seeResolution = await resolveMedia('see');
+    const endpointConfigured = !!(getConfig().workspace.ocrEndpoint && getConfig().workspace.ocrModel);
+    const visionModel = seeResolution.mode === 'lane' && seeResolution.lane === 'default' && endpointConfigured ? null : resolvedRow(seeResolution);
     if (visionModel && !ocrYieldedText) {
       try {
         this.logger.info({ model: visionModel.modelId, filePath }, 'Vision image analysis');

@@ -58,8 +58,14 @@ export const topicRoutes = new Elysia({ prefix: '/topics' })
         vision: 'see', ocr: 'ocr', image_generation: 'draw', transcription: 'hear', speech: 'speak',
       };
       const effectiveByTopic = new Map<string, string | null>();
+      const { isCapabilityOn } = await import('@/core/capabilities/gates');
       for (const [topic, need] of Object.entries(MEDIA_NEED)) {
         const resolution = await resolveMedia(need);
+        // Speech configured the older way (Settings → Voice) still works.
+        if (resolution.mode === 'none' && (need === 'hear' || need === 'speak') && isCapabilityOn(need)) {
+          effectiveByTopic.set(topic, 'voice settings');
+          continue;
+        }
         effectiveByTopic.set(topic, resolution.mode === 'none' ? null
           : resolution.mode === 'lane' && resolution.lane === 'default' ? `${resolution.row.name} (default model reads images)`
           : resolution.mode === 'lane' && resolution.lane !== topic ? `${resolution.row.name} (via ${resolution.lane})`
