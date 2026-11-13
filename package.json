@@ -57,6 +57,7 @@
     "lint": "biome lint",
     "lint:fix": "biome lint --write --unsafe",
     "preinstall": "node scripts/check-node.mjs",
+    "postinstall": "node scripts/patch-botbuilder-zod4.mjs",
     "audit:all": "node scripts/audit-all.mjs"
   },
   "dependencies": {
@@ -141,6 +142,7 @@
     "file-type": "^21.3.4",
     "follow-redirects": "^1.16.2",
     "qs": "6.16.1",
+    "zod": "$zod",
     "@esbuild-kit/core-utils": {
       "esbuild": "$esbuild"
     },
