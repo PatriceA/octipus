@@ -11,7 +11,11 @@ interface StepResult { status: StepStatus; message?: string }
 /** A route answering 200 with `{ error }` or `{ success: false }` did not do the thing either. */
 function failure(res: unknown): string | null {
   if (!res || typeof res !== 'object') return null;
-  const r = res as { error?: unknown; success?: unknown };
+  const r = res as { error?: unknown; success?: unknown; errors?: Record<string, unknown> };
+  if (r.errors && typeof r.errors === 'object') {
+    const messages = Object.values(r.errors).filter((value): value is string => typeof value === 'string' && value.length > 0);
+    if (messages.length) return messages.join('; ');
+  }
   if (typeof r.error === 'string' && r.error) return r.error;
   if (r.success === false) return 'The check did not pass';
   return null;

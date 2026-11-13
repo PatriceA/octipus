@@ -19,18 +19,18 @@ export function GuideCompanion({ state, line, name, appearance, heading }: {
 }) {
   return (
     <div className="flex items-start gap-3 sm:gap-4 min-w-0">
-      <div className="self-start rounded-2xl bg-companion-paper p-1.5 sm:p-2 shrink-0" data-testid="guide-companion" data-state={state}>
+      <div className="self-start rounded-2xl bg-secondary-container p-1.5 sm:p-2 shrink-0" data-testid="guide-companion" data-state={state}>
         <span className="sm:hidden"><CompanionAvatar size={56} state={state} animated appearance={appearance} /></span>
         <span className="hidden sm:block"><CompanionAvatar size={84} state={state} animated appearance={appearance} followPointer={state === 'idle'} /></span>
       </div>
       <div className="min-w-0 flex-1 pt-0.5">
-        <p className="text-xs text-primary">{name} · your companion</p>
+        <p className="text-xs font-medium text-secondary">{name} · your companion</p>
         <h2 className="text-lg font-semibold leading-snug">{heading}</h2>
         <p
           role="status"
           aria-live="polite"
           data-testid="guide-line"
-          className="mt-2 inline-block max-w-prose rounded-2xl rounded-tl-md border border-outline-variant/30 bg-surface-container px-3.5 py-2 text-sm text-on-surface shadow-xs"
+          className="mt-2 inline-block max-w-prose rounded-2xl rounded-tl-md border border-outline-variant bg-surface-container px-3.5 py-2 text-sm text-on-surface shadow-xs"
         >
           {line}
         </p>

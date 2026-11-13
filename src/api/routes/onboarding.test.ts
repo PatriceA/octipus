@@ -87,6 +87,19 @@ describe('GET /api/onboarding', () => {
     expect(Array.isArray(body.cliTools)).toBe(true);
   });
 
+  test('only admins receive the existing model connection for a live setup check', async () => {
+    const { getDb } = await import('@/db/postgres');
+    const { modelConfig } = await import('@/db/schema/models');
+    const { eq } = await import('drizzle-orm');
+    await getDb().insert(modelConfig).values({ name: 'onboarding-chat', provider: 'openai', modelId: 'test-model', endpoint: 'https://provider.example.com', apiKeyRef: 'stored-key-reference', topicRoles: { everyday: 'primary' } });
+    try {
+      expect((await send(adminApp, 'GET', '/api/onboarding')).body.models.connection).toEqual({ provider: 'openai', modelId: 'test-model', endpoint: 'https://provider.example.com', apiKeyRef: 'stored-key-reference' });
+      expect((await send(userApp, 'GET', '/api/onboarding')).body.models.connection).toBeUndefined();
+    } finally {
+      await getDb().delete(modelConfig).where(eq(modelConfig.name, 'onboarding-chat'));
+    }
+  });
+
   test('install-wide details are for admins only', async () => {
     const { body } = await send(userApp, 'GET', '/api/onboarding');
     expect(body.isAdmin).toBe(false);

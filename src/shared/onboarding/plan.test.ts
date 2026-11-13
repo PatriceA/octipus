@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { buildPlan, defaultModulesFor, MODULES_PICKED, requiredModulesFor, slugify, standingInstructions } from './plan';
-import { initialAnswers, sectionsFor, storableAnswers, visibleQuestions } from './use-cases';
+import { initialAnswers, modelSetupProblem, sectionsFor, storableAnswers, visibleQuestions } from './use-cases';
 import type { Answers, OnboardingState, PlanStep, UseCaseId } from './types';
 
 /** A fresh install as its admin sees it. */
@@ -45,12 +45,13 @@ describe('models', () => {
       'models.verify': true, 'models.verifyModelId': 'claude-opus-5-5',
     });
     expect(ids(steps).slice(0, 6)).toEqual([
-      'key:main', 'model:anthropic claude-sonnet-5-5', 'assign-all', 'test:main', 'model:anthropic claude-opus-5-5', 'bind:verify',
+      'key:main', 'model:anthropic claude-sonnet-5-5', 'test:main', 'assign-all', 'model:anthropic claude-opus-5-5', 'bind:verify',
     ]);
     expect(step(steps, 'key:main')).toMatchObject({ secret: true, call: { path: '/settings/batch', body: { settings: { 'anthropic.apiKey': 'sk-ant' } } } });
-    expect(step(steps, 'assign-all')).toMatchObject({ call: { body: { model: 'anthropic claude-sonnet-5-5' } }, dependsOn: ['model:anthropic claude-sonnet-5-5'] });
+    expect(step(steps, 'assign-all')).toMatchObject({ call: { body: { model: 'anthropic claude-sonnet-5-5' } }, dependsOn: ['test:main'] });
     expect(step(steps, 'bind:verify')).toMatchObject({ dependsOn: ['model:anthropic claude-opus-5-5', 'assign-all'] });
-    expect(step(steps, 'test:main')).toMatchObject({ optional: true });
+    expect(step(steps, 'test:main')).toMatchObject({ dependsOn: ['model:anthropic claude-sonnet-5-5', 'key:main'] });
+    expect(step(steps, 'setup-complete')?.dependsOn).toContain('test:main');
   });
 
   test('what exists is not added again but listed as already set up; "keep" changes nothing', () => {
@@ -341,5 +342,46 @@ describe('modules', () => {
 
   test('a server that reports no modules: no step', () => {
     expect(ids(plan(['company'], {}, fresh({ modules: undefined as never })))).not.toContain('modules');
+  });
+});
+
+describe('beginner readiness', () => {
+  test('missing API keys cannot produce a ready chat; existing encrypted keys count', () => {
+    const answers = initialAnswers([], fresh());
+    expect(modelSetupProblem(answers, fresh())).toMatch(/API key/);
+    expect(modelSetupProblem({ ...answers, 'models.key': 'test-key' }, fresh())).toBeNull();
+    expect(modelSetupProblem(answers, fresh({ models: { ...fresh().models, providersWithKey: ['anthropic'] } }))).toBeNull();
+    expect(initialAnswers(['research'], fresh())['models.embedding']).toBe('skip');
+  });
+
+  test('keeping a configured model still checks its connection without changing bindings', () => {
+    const state = fresh({ models: { ...fresh().models, textReady: true, connection: { provider: 'openai', modelId: 'existing' } } });
+    const steps = plan([], { 'models.source': 'keep' }, state);
+    expect(step(steps, 'test:main')).toMatchObject({ call: { path: '/models/test', body: { provider: 'openai', modelId: 'existing' } } });
+    expect(todo(steps)).not.toContain('assign-all');
+  });
+
+  test('keeping models still validates newly requested document search', () => {
+    const state = fresh({ models: { ...fresh().models, textReady: true } });
+    expect(modelSetupProblem({ 'models.source': 'keep', 'models.embedding': 'openai' }, state)).toMatch(/API key for document search/);
+  });
+
+  test('basic mode never acts on hidden saved answers', () => {
+    const answers: Answers = { _basicsOnly: true, 'models.source': 'cli', 'models.cliTool': 'cli/claude-code', 'areas.separate': true, 'areas.names': ['Hidden project'], 'areas.team': true, 'areas.spaceName': 'Hidden team', 'areas.logins': true, 'areas.loginNames': ['hidden-login'], 'chat.channel': 'telegram', 'chat.telegramToken': 'secret', [MODULES_PICKED]: ['business'] };
+    const steps = plan(['company'], answers);
+    expect(ids(steps)).toEqual(['model:Claude Code CLI', 'test:main', 'assign-all', 'setup-complete']);
+    expect(defaultModulesFor(['company'], answers, fresh())).toEqual([]);
+    expect(requiredModulesFor(['company'], answers)).toEqual([]);
+  });
+
+  test('unavailable CLIs and invalid Ollama addresses need a useful correction', () => {
+    expect(modelSetupProblem({ 'models.source': 'cli', 'models.cliTool': 'cli/codex' }, fresh())).toMatch(/Install and sign in/);
+    expect(modelSetupProblem({ 'models.source': 'ollama', 'models.ollamaModel': 'local', 'models.ollamaUrl': 'file:///tmp' }, fresh())).toMatch(/http/);
+  });
+
+  test('Ollama is tested at the selected server before binding it', () => {
+    const steps = plan([], { 'models.source': 'ollama', 'models.ollamaModel': 'local', 'models.ollamaUrl': 'http://server:11434' });
+    expect(step(steps, 'test:main')).toMatchObject({ call: { body: { provider: 'ollama', modelId: 'local', endpoint: 'http://server:11434' } } });
+    expect(step(steps, 'assign-all')?.dependsOn).toEqual(['test:main']);
   });
 });

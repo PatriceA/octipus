@@ -74,7 +74,11 @@ async function modelsState(isAdmin: boolean): Promise<OnboardingState['models']>
       if (vaultName && (await getVault().getSystemSecret(vaultName).catch(() => null))) providersWithKey.push(p.id);
     }
   }
+  const chat = isAdmin ? models.find((m) => m.name === byTopic.everyday && m.isEnabled !== false) : undefined;
   return {
+    ...(chat && ['cli', 'ollama', 'litellm', ...KEY_PROVIDERS.map((p) => p.id)].includes(chat.provider) ? {
+      connection: { provider: chat.provider, modelId: chat.modelId, ...(chat.endpoint ? { endpoint: chat.endpoint } : {}), ...(chat.apiKeyRef ? { apiKeyRef: chat.apiKeyRef } : {}) },
+    } : {}),
     textReady: TEXT_LANES.every((t) => byTopic[t]),
     embeddingReady: Boolean(byTopic.embedding),
     verifySeparate: Boolean(byTopic.verify && byTopic.build && byTopic.verify !== byTopic.build),

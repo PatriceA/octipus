@@ -163,7 +163,7 @@ const modelQuestions: Question[] = [
       { value: 'openai', label: 'Yes, with OpenAI (text-embedding-3-small)' },
       { value: 'skip', label: 'Not now' },
     ],
-    initial: (s, a) => (s.models.embeddingReady ? 'keep' : picked(a, 'research') ? 'ollama' : 'skip'),
+    initial: (s) => (s.models.embeddingReady ? 'keep' : 'skip'),
     alreadyDone: (s) => (s.models.embeddingReady ? 'Document search already has a model.' : null),
   },
   {
@@ -483,7 +483,8 @@ export function cliModelName(toolName: string): string {
 }
 
 /** The sections for the chosen use cases, in order. */
-export function sectionsFor(useCases: readonly UseCaseId[]): Section[] {
+export function sectionsFor(useCases: readonly UseCaseId[], basicsOnly = false): Section[] {
+  if (basicsOnly) return SECTIONS.filter((section) => section.id === 'models');
   return SECTIONS.filter((s) => s.useCases === 'all' || s.useCases.some((u) => useCases.includes(u)));
 }
 
@@ -505,7 +506,7 @@ export function visibleQuestions(section: Section, a: Answers, s: OnboardingStat
  */
 export function initialAnswers(useCases: readonly UseCaseId[], s: OnboardingState, saved: Answers = {}): Answers {
   const a: Answers = { ...saved, _useCases: [...useCases] };
-  for (const section of sectionsFor(useCases)) {
+  for (const section of sectionsFor(useCases, saved._basicsOnly === true)) {
     for (const q of section.questions) {
       if (a[q.id] !== undefined || !q.initial) continue;
       const v = q.initial(s, a);
@@ -519,4 +520,31 @@ export function initialAnswers(useCases: readonly UseCaseId[], s: OnboardingStat
 export function storableAnswers(a: Answers): Answers {
   const secret = new Set(SECTIONS.flatMap((s) => s.questions).filter((q) => q.kind === 'secret').map((q) => q.id));
   return Object.fromEntries(Object.entries(a).filter(([k]) => !secret.has(k)));
+}
+
+/** Required model details before the guide can offer a working chat. */
+export function modelSetupProblem(a: Answers, s: OnboardingState): string | null {
+  const text = (key: string) => typeof a[key] === 'string' ? (a[key] as string).trim() : '';
+  const source = text('models.source');
+  if (!s.isAdmin && s.models.textReady) return null;
+  if (!s.isAdmin) return 'Ask your administrator to connect an AI model before starting a chat.';
+  if (source === 'key') {
+    const provider = text('models.provider');
+    if (!KEY_PROVIDERS.some((p) => p.id === provider)) return 'Choose an AI provider.';
+    if (!text('models.key') && !s.models.providersWithKey.includes(provider)) return 'Add your provider’s API key. A chat subscription alone does not include an API key.';
+    if (!text('models.modelId')) return 'Enter a model name from your provider.';
+  } else if (source === 'cli') {
+    if (!s.cliTools.some((t) => t.available && t.modelId === text('models.cliTool'))) return 'Install and sign in to a coding CLI on the Octipus server, or choose an API key instead.';
+  } else if (source === 'ollama') {
+    if (!text('models.ollamaModel')) return 'Enter the name of a model you have downloaded in Ollama.';
+    try {
+      if (!['http:', 'https:'].includes(new URL(text('models.ollamaUrl')).protocol)) throw new Error('protocol');
+    } catch {
+      return 'Enter an Ollama address starting with http:// or https://. It must be reachable from the Octipus server.';
+    }
+  } else if (!(source === 'keep' && s.models.textReady)) return 'Choose how Octipus should connect to an AI model.';
+  if (source === 'key' && a['models.verify'] === true && !text('models.verifyModelId')) return 'Enter a second model for checking work, or choose No for now.';
+  if (text('models.embedding') === 'openai' && !text('models.embeddingKey') && !s.models.providersWithKey.includes('openai')
+    && !(source === 'key' && text('models.provider') === 'openai' && text('models.key'))) return 'Add an OpenAI API key for document search, or choose “Not now”.';
+  return null;
 }
