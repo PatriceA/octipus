@@ -8,7 +8,7 @@ import type { CompanionState } from '@/components/companion/companion-avatar';
 import { api } from '@/lib/api';
 import type { CompanionAppearance } from '../../../src/shared/companion';
 import { buildPlan, defaultModulesFor, MODULES_PICKED, requiredModulesFor } from '../../../src/shared/onboarding/plan';
-import { initialAnswers, sectionsFor, storableAnswers, USE_CASES, visibleQuestions } from '../../../src/shared/onboarding/use-cases';
+import { initialAnswers, KEY_PROVIDERS, modelSetupProblem, sectionsFor, storableAnswers, USE_CASES, visibleQuestions } from '../../../src/shared/onboarding/use-cases';
 import type { Answers, AnswerValue, OnboardingProgress, OnboardingState, PlanStep, Question, Section, UseCaseId } from '../../../src/shared/onboarding/types';
 import { GuideCompanion } from './guide-companion';
 import { PlanRunner, type StepStatus } from './plan-runner';
@@ -114,6 +114,8 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
     retry: false,
   });
   const name = persona?.name || 'Octipus';
+  const [notice, setNotice] = useState<string | null>(null);
+  const [formProblem, setFormProblem] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>('choose');
   const [sectionIndex, setSectionIndex] = useState(0);
   const [useCases, setUseCases] = useState<UseCaseId[]>([]);
@@ -132,6 +134,10 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
   const doneBefore = useRef<Set<string>>(new Set());
   /** The state the plan was last made against (a fresh read after "Try again"). */
   const planState = useRef<OnboardingState | null>(null);
+  // New choices need new receipts; generated accounts must never be created twice.
+  const invalidateReceipts = () => {
+    doneBefore.current = new Set([...doneBefore.current].filter((id) => id.startsWith('login:')));
+  };
 
   /** A short cheer (or wince), then back to what the phase shows. */
   const react = useCallback((mood: CompanionState) => {
@@ -154,12 +160,13 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
   useEffect(() => {
     if (!loaded.current || phase === 'choose') return;
     const t = setTimeout(() => {
-      void api.put('/onboarding/progress', { useCases, answers: storableAnswers(answers) }).catch(() => undefined);
+      void api.put('/onboarding/progress', { useCases, answers: storableAnswers(answers) }).then(() => setNotice(null)).catch((err: Error) => setNotice(`Your choices could not be saved: ${err.message}. Keep this page open and try again.`));
     }, 800);
     return () => clearTimeout(t);
   }, [answers, useCases, phase]);
 
-  const sections = useMemo(() => sectionsFor(useCases), [useCases]);
+  const basicsOnly = answers._basicsOnly === true;
+  const sections = useMemo(() => sectionsFor(useCases, basicsOnly), [useCases, basicsOnly]);
 
   const onStep = useCallback((step: PlanStep, status: StepStatus, done: number) => {
     if (status === 'running') setRunning({ title: step.title, waiting: false, done });
@@ -179,14 +186,17 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
     );
   }
   if (error) return variant === 'page' ? <p className="text-sm text-error">{(error as Error).message}</p> : null;
-  if (!state) return null;
+  if (!state) return variant === 'page' ? <p role="status" className="text-sm text-on-surface-variant">Checking what is already set up…</p> : null;
 
   const dismiss = async () => {
-    await api.put('/onboarding/progress', { dismissed: true }).catch(() => undefined);
-    await queryClient.invalidateQueries({ queryKey: ['onboarding'] });
+    try {
+      await api.put('/onboarding/progress', { dismissed: true });
+      await queryClient.invalidateQueries({ queryKey: ['onboarding'] });
+    } catch (err) { setNotice(`Could not put the guide away: ${(err as Error).message}`); }
   };
 
   const toggleUseCase = (id: UseCaseId) => {
+    invalidateReceipts();
     const on = useCases.includes(id);
     setEngaged(true);
     setUseCases((prev) => (on ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -195,16 +205,21 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
     if (!on) react('done');
   };
 
-  const start = () => {
+  const start = (basics = false) => {
+    invalidateReceipts();
     setEngaged(true);
-    setAnswers((prev) => ({ ...initialAnswers(useCases, state, prev) }));
+    setAnswers((prev) => ({ ...initialAnswers(basics ? [] : useCases, state, { ...prev, _basicsOnly: basics }) }));
+    if (basics) setUseCases([]);
+    setFormProblem(null);
     setSectionIndex(0);
     setPhase('questions');
   };
 
   const answer = (q: Question, v: AnswerValue | undefined) => {
     if (isAddition(q, answers[q.id], v)) react('done');
-    setAnswers((prev) => ({ ...prev, [q.id]: v }));
+    setFormProblem(null);
+    invalidateReceipts();
+    setAnswers((prev) => ({ ...prev, [q.id]: v, ...(q.id === 'models.provider' ? { 'models.key': '', 'models.modelId': KEY_PROVIDERS.find((p) => p.id === v)?.model ?? '', 'models.verifyModelId': '' } : {}) }));
   };
 
   const replan = (a: Answers, s: OnboardingState) => {
@@ -216,6 +231,7 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
 
   /** Tick or untick a module in the review; the plan follows. */
   const pickModule = (id: string, on: boolean) => {
+    invalidateReceipts();
     const current = Array.isArray(answers[MODULES_PICKED]) ? (answers[MODULES_PICKED] as string[]) : defaultModulesFor(useCases, answers, state);
     const next = { ...answers, [MODULES_PICKED]: on ? [...new Set([...current, id])] : current.filter((m) => m !== id) };
     setAnswers(next);
@@ -223,6 +239,9 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
   };
 
   const review = () => {
+    const problem = modelSetupProblem(answers, state);
+    if (problem) { setFormProblem(problem); setSectionIndex(0); return; }
+    setFormProblem(null);
     replan(answers, state);
     setPhase('review');
   };
@@ -233,7 +252,10 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
    * login), and doing it twice would make a second one.
    */
   const tryAgain = async () => {
-    const fresh = await queryClient.fetchQuery({ queryKey: ['onboarding'], queryFn: () => api.get<OnboardingState>('/onboarding') }).catch(() => state);
+    let fresh: OnboardingState;
+    try {
+      fresh = await queryClient.fetchQuery({ queryKey: ['onboarding'], queryFn: () => api.get<OnboardingState>('/onboarding') });
+    } catch (err) { setNotice(`Could not check the current setup: ${(err as Error).message}. Try again when the server is reachable.`); return; }
     for (const [id, r] of Object.entries(outcome)) if (r.status === 'done') doneBefore.current.add(id);
     replan(answers, { ...fresh, progress: fresh.progress ?? {} });
     setOutcome({});
@@ -247,12 +269,24 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
     react(Object.values(results).some((r) => r.status === 'failed') ? 'interrupted' : 'done');
     // Secrets are spent: clear them from the page.
     setAnswers((prev) => storableAnswers(prev));
-    await api.put('/onboarding/progress', { useCases, answers: storableAnswers(answers), completed: true }).catch(() => undefined);
+    const completed = Object.values(results).every((result) => result.status === 'done');
+    try {
+      await api.put('/onboarding/progress', { useCases, answers: storableAnswers(answers), completed });
+      setNotice(null);
+    } catch (err) { setNotice(`The setup results could not be saved: ${(err as Error).message}. Keep this page open and try again.`); }
     await queryClient.invalidateQueries();
   };
 
+  const retrySaving = async () => {
+    try {
+      await api.put('/onboarding/progress', { useCases, answers: storableAnswers(answers), ...(phase === 'done' ? { completed: Object.values(outcome).every((result) => result.status === 'done') } : {}) });
+      setNotice(null);
+      await queryClient.invalidateQueries({ queryKey: ['onboarding', 'progress'] });
+    } catch (err) { setNotice(`Your choices could not be saved: ${(err as Error).message}. Keep this page open and try again.`); }
+  };
+
   const shell = (mood: CompanionState, heading: string, line: string, children: React.ReactNode, progress?: { at: number; of: number; label: string }) => (
-    <section aria-label="Set up Octipus" data-testid="onboarding" className="rounded-2xl border border-primary/30 bg-surface-container-low p-5 sm:p-6 space-y-5">
+    <section aria-label="Set up Octipus" data-testid="onboarding" className="onboarding-guide rounded-xl border border-outline-variant bg-surface-container p-5 sm:p-8 space-y-6 font-sans">
       <header className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
           <GuideCompanion state={flash ?? mood} line={line} name={name} appearance={persona?.appearance} heading={heading} />
@@ -268,9 +302,11 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
           <div className="h-1.5 rounded-full bg-surface-container-high overflow-hidden">
             <div className="h-full rounded-full bg-primary transition-all duration-500" style={{ width: `${Math.round((progress.at / progress.of) * 100)}%` }} />
           </div>
-          <p className="text-[11px] text-on-surface-variant">{progress.label}</p>
+          <p className="text-xs text-on-surface-variant">{progress.label}</p>
         </div>
       )}
+      {notice && <p role="alert" className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm text-on-surface">{notice}{notice.includes('could not be saved') && <button type="button" onClick={() => void retrySaving()} className="ml-2 font-semibold underline">Retry saving</button>}</p>}
+      {formProblem && <p role="alert" className="rounded-lg border border-error/40 bg-error/10 p-3 text-sm text-error">{formProblem}</p>}
       {children}
     </section>
   );
@@ -285,6 +321,12 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
       state.progress.completedAt ? 'Shall we set up something else?' : "Let's set up Octipus together",
       line,
       <>
+        <div className="rounded-xl border border-secondary/30 bg-secondary-container/30 p-4 sm:p-5">
+          <p className="text-sm font-semibold text-on-surface">Start with the basics</p>
+          <p className="mt-1 text-sm text-on-surface-variant">You only need one AI model to chat and ask for help. Mail, project folders and background work can wait.</p>
+          <button type="button" onClick={() => start(true)} className="desk-companion-button mt-4">Start with the basics <ArrowRight className="h-4 w-4" /></button>
+        </div>
+        <div><h3 className="text-sm font-semibold text-on-surface">Or tailor Octipus to your work</h3><p className="mt-1 text-sm text-on-surface-variant">Optional. Pick what fits; you can add more later.</p></div>
         <div className="grid gap-3 sm:grid-cols-2">
           {USE_CASES.map((u) => {
             const on = useCases.includes(u.id);
@@ -310,7 +352,7 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
           })}
         </div>
         <div className="flex justify-end">
-          <button type="button" disabled={useCases.length === 0} onClick={start} className="inline-flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-on-primary disabled:opacity-40">
+          <button type="button" disabled={useCases.length === 0} onClick={() => start()} className="inline-flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-on-primary disabled:opacity-40">
             Continue <ArrowRight className="w-4 h-4" />
           </button>
         </div>
@@ -365,7 +407,7 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
           <button type="button" onClick={() => (i === 0 ? setPhase('choose') : setSectionIndex(i - 1))} className="inline-flex items-center gap-1.5 text-sm text-on-surface-variant hover:text-on-surface">
             <ArrowLeft className="w-4 h-4" /> Back
           </button>
-          <button type="button" onClick={() => (last ? review() : setSectionIndex(i + 1))} className="inline-flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-on-primary">
+          <button type="button" onClick={() => { const problem = section?.id === 'models' ? modelSetupProblem(answers, state) : null; if (problem) { setFormProblem(problem); return; } setFormProblem(null); if (last) review(); else setSectionIndex(i + 1); }} className="inline-flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-on-primary">
             {last ? 'See my plan' : 'Next'} <ArrowRight className="w-4 h-4" />
           </button>
         </div>
@@ -398,7 +440,7 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
             ))}
           </ol>
         )}
-        {state.isAdmin && (state.modules?.available?.length ?? 0) > 0 && (
+        {state.isAdmin && !basicsOnly && (state.modules?.available?.length ?? 0) > 0 && (
           <ModulePicker
             modules={state.modules.available ?? []}
             enabled={state.modules.enabled}
@@ -479,12 +521,15 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
           {revealed.map((s) => <p key={s.id} className="font-mono">{(s as { reveal?: string }).reveal}</p>)}
         </div>
       )}
+      <p className="text-sm text-on-surface-variant">Try asking: “Help me plan my week.” For files and installed programs, choose what Octipus may access in <Link href="/settings?tab=environments" className="text-primary underline">Environments &amp; Access</Link>. Your optional <Link href="/companion" className="text-secondary underline">Companion</Link> can coordinate projects once you choose its model. Background work and permissions stay in <Link href="/settings" className="text-primary underline">Settings</Link>.</p>
+      {answers['models.embedding'] === 'skip' && <p className="text-sm text-on-surface-variant">Document search is left off for now. Add a search model in <Link href="/models" className="text-primary underline">Models</Link> when you need it.</p>}
       <div className="flex flex-wrap gap-3 text-sm">
-        <Link href="/chat" className="rounded-full bg-primary px-4 py-2 font-semibold text-on-primary">Start working</Link>
+        <Link href="/chat" className="rounded-full bg-primary px-4 py-2 font-semibold text-on-primary">Try your first chat</Link>
+        {failed + later > 0 && <button type="button" onClick={() => { setFormProblem(null); setPhase('questions'); setSectionIndex(0); }} className="rounded-full border border-outline-variant px-4 py-2">Change answers</button>}
         {failed + later > 0 && (
           <button type="button" onClick={() => void tryAgain()} className="rounded-full border border-primary/50 px-4 py-2 text-on-surface">Finish the rest</button>
         )}
-        <button type="button" onClick={() => { setEngaged(true); setPhase('choose'); setPlan([]); setUseCases([]); doneBefore.current = new Set(); planState.current = null; }} className="rounded-full border border-outline-variant px-4 py-2">Set up something else</button>
+        <button type="button" onClick={() => { setEngaged(true); setPhase('choose'); setPlan([]); setUseCases([]); doneBefore.current = new Set(); planState.current = null; }} className="rounded-full border border-outline-variant px-4 py-2 text-on-surface">Set up something else</button>
         {variant === 'home' && <button type="button" onClick={dismiss} className="text-on-surface-variant underline">Close the guide</button>}
       </div>
     </>,

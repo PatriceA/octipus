@@ -7,9 +7,27 @@ case, shows you the list of changes it will make, then makes them.
 
 It also opens on its own page at `/onboarding`, for setting up more later.
 
+## The shortest path
+
+After installation, sign in at `http://localhost:3007` with the account you
+created in the terminal. Choose **Start with the basics** in the setup guide.
+It asks only about the AI model, checks the connection, and offers **Try your
+first chat**. If the terminal already configured the model, keep it: the guide
+checks the existing connection without changing its topic assignments.
+
+You do not need a mailbox, an embedding model, a project folder, a second AI
+model, background agents or Companion supervision to start chatting. Those
+can be added later in Settings or by running `/onboarding` again. API usage
+is billed by the provider; a consumer chat subscription alone is not an API
+key. A coding CLI instead needs its own installation and sign-in on the
+machine running Octipus.
+
+The dedicated guide is centered in the workspace and uses the same surfaces,
+typography and Companion accent as the rest of the app, including dark mode.
+
 ## What it asks
 
-**1. What will you use Octipus for?** Pick one or more:
+**1. Basics or a tailored setup.** Start with the basics, or pick one or more:
 
 | Use case | What it sets up |
 |---|---|
@@ -48,6 +66,14 @@ example, the inbox watch needs a connected mailbox, and an already connected
 mailbox counts.
 
 **4. Set it up.** The steps run one at a time:
+- An API/local model must pass its connection check before it is assigned to
+  all work. A CLI check confirms the executable is available; the first chat
+  also checks its authentication.
+- Partial setting-write errors count as failures even when the HTTP request
+  returned 200. Failed or skipped required steps prevent marking the install
+  complete; an incomplete run is not recorded as finished onboarding.
+- Save errors stay visible. A failed refresh does not retry against an old
+  snapshot.
 - A failed step stops only the steps that depend on it.
 - A step that needs you waits for you: a sign-in in a popup, a chat link code
   you type in, or something on another page. You can skip it.
@@ -124,3 +150,48 @@ Someone who is not an admin does not see the AI models section, and the guide
 plans no install-wide change for them. Where something only an admin can do
 is needed, such as turning on the server's heartbeat, the guide says so as a
 step to hand to the admin.
+
+## Setup journey and readiness boundaries
+
+The installer automatically installs Octipus's application dependencies.
+`octi start` also checks the lockfiles and installs changed application
+dependencies before rebuilding. It does not install Node or arbitrary host
+programs: those remain system prerequisites or optional capabilities.
+
+The entry paths share the same terminal wizard (`scripts/setup-wizard.ts`):
+Linux/macOS/WSL use `scripts/install.sh`, Windows uses `scripts/install.ps1`,
+and Docker uses remote setup against the container API. The quick installer
+builds the application and starts the web UI. The full wizard prints the
+start command; it does not leave the whole web stack running automatically.
+
+| Stage | What it does | What that proves |
+| --- | --- | --- |
+| Installer | Checks Git/Node/npm, installs dependencies, builds the application | The application can start on that machine; it does not install every optional program |
+| Terminal setup | Chooses storage, creates/reuses secrets, starts a temporary backend, registers/logs in the admin | A reachable backend and an administrator account |
+| Model setup | Stores the provider key in the vault, registers a model and assigns the text lanes | Configuration exists; the terminal wizard does not itself run a model completion |
+| Basic web guide | Reads existing setup, collects any missing model details, runs the model check, then binds a newly chosen model | An API/local model responds, or the selected CLI executable is present; tool use and CLI sign-in still need a real chat |
+| Tailored web guide | Reviews and applies optional modules, areas, tools, accounts and background settings | Only steps whose receipts succeeded; skipped sign-ins and failed steps stay outstanding |
+| First chat | User sends a request through the real agent | The chosen model and chat execution work together |
+
+The guide preserves existing model assignments when you choose “keep”. It
+does not automatically enable supervision, grant workstation-wide access,
+or start unattended work. Those choices belong in Settings → Companion &
+automation and Settings → Environments & Access. Document search is left
+off by default until someone chooses and configures an embedding model.
+
+Remaining limits for a completely beginner-friendly install:
+
+- The installer still requires Git and a supported Node/npm installation.
+  Missing prerequisites produce instructions, not automatic installation.
+- API providers require an account, credentials and any required billing.
+  Local models need Ollama and a downloaded model; the optional terminal
+  hardware recommendation can help, but the web guide does not download a
+  model just because its name was entered.
+- Model checks prove connectivity, not tool-calling quality or successful
+  completion of arbitrary work. Custom providers without standard connection
+  details and non-admin users need their administrator to verify the model.
+- Mail OAuth clients, remote services, phone/USB access and installed-program
+  credentials require their own configuration. Optional setup can be deferred;
+  it should not be mistaken for a finished integration.
+- Companion supervision is a separate optional configuration and model
+  binding. A working ordinary chat does not imply supervision is enabled.

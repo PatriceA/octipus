@@ -134,40 +134,43 @@ export async function testModelConnection(
     if (provider === 'ollama') {
       // For Ollama models proxied through LiteLLM, test via LiteLLM first
       const config = getConfig();
-      const { base: litellmBase, key: litellmKey } = litellmTarget(config);
-      try {
-        const litellmModels = await fetch(`${litellmBase}/v1/models`, {
-          headers: litellmKey ? { 'Authorization': `Bearer ${litellmKey}` } : {},
-          signal: AbortSignal.timeout(3000),
-        });
-        if (litellmModels.ok) {
-          const modelsData = await litellmModels.json();
-          const litellmModelIds = (modelsData.data || []).map((m: any) => m.id);
-          if (litellmModelIds.includes(modelId)) {
-            // Model is in LiteLLM — test via LiteLLM instead of Ollama directly
-            const testRes = await fetch(`${litellmBase}/v1/chat/completions`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                ...(litellmKey ? { 'Authorization': `Bearer ${litellmKey}` } : {}),
-              },
-              body: JSON.stringify({
-                model: modelId,
-                messages: [{ role: 'user', content: 'Say ok' }],
-                max_tokens: 5,
-              }),
-            });
-            if (!testRes.ok) {
-              const errData = await testRes.json().catch(() => ({}));
-              return { success: false, error: errData?.error?.message || `LiteLLM returned ${testRes.status}` };
+      // An explicit endpoint must be tested itself, never a different proxy.
+      if (!endpoint) {
+        const { base: litellmBase, key: litellmKey } = litellmTarget(config);
+        try {
+          const litellmModels = await fetch(`${litellmBase}/v1/models`, {
+            headers: litellmKey ? { 'Authorization': `Bearer ${litellmKey}` } : {},
+            signal: AbortSignal.timeout(3000),
+          });
+          if (litellmModels.ok) {
+            const modelsData = await litellmModels.json();
+            const litellmModelIds = (modelsData.data || []).map((m: any) => m.id);
+            if (litellmModelIds.includes(modelId)) {
+              // Model is in LiteLLM — test via LiteLLM instead of Ollama directly
+              const testRes = await fetch(`${litellmBase}/v1/chat/completions`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  ...(litellmKey ? { 'Authorization': `Bearer ${litellmKey}` } : {}),
+                },
+                body: JSON.stringify({
+                  model: modelId,
+                  messages: [{ role: 'user', content: 'Say ok' }],
+                  max_tokens: 5,
+                }),
+              });
+              if (!testRes.ok) {
+                const errData = await testRes.json().catch(() => ({}));
+                return { success: false, error: errData?.error?.message || `LiteLLM returned ${testRes.status}` };
+              }
+              const testData = await testRes.json();
+              const reply = testData.choices?.[0]?.message?.content || '';
+              return { success: true, message: `Model responded via LiteLLM: "${reply.slice(0, 100)}"` };
             }
-            const testData = await testRes.json();
-            const reply = testData.choices?.[0]?.message?.content || '';
-            return { success: true, message: `Model responded via LiteLLM: "${reply.slice(0, 100)}"` };
           }
+        } catch {
+          // LiteLLM unreachable, fall through to direct Ollama test
         }
-      } catch {
-        // LiteLLM unreachable, fall through to direct Ollama test
       }
 
       // Test Ollama directly — check if model exists. Fall back order:

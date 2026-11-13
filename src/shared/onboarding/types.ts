@@ -18,6 +18,8 @@ export interface OnboardingState {
   models: {
     /** Every text lane has a primary model. */
     textReady: boolean;
+    /** Admin-only connection details for checking the existing chat model; never a key value. */
+    connection?: { provider: string; modelId: string; endpoint?: string; apiKeyRef?: string };
     embeddingReady: boolean;
     /** `verify` is bound to a different model from `build`. */
     verifySeparate: boolean;

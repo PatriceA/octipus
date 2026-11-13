@@ -161,7 +161,7 @@ function modelSteps(plan: Plan, a: Answers, s: OnboardingState): void {
   const source = str(a, 'models.source');
   let main = '';
   let mainStep = '';
-  let tested: { provider: string; modelId: string } | null = null;
+  let tested: OnboardingState['models']['connection'] | null = source === 'keep' ? s.models.connection ?? null : null;
   let keyStep: string[] | undefined;
   if (source === 'key') {
     const provider = str(a, 'models.provider');
@@ -180,6 +180,7 @@ function modelSteps(plan: Plan, a: Answers, s: OnboardingState): void {
   } else if (source === 'cli') {
     const tool = s.cliTools.find((t) => t.modelId === str(a, 'models.cliTool'));
     if (!tool) return;
+    tested = { provider: 'cli', modelId: tool.modelId };
     main = cliModelName(tool.name);
     mainStep = ensureModel(plan, s, main, { provider: 'cli', modelId: tool.modelId }, `Add ${tool.name} as a model`);
   } else if (source === 'ollama') {
@@ -187,21 +188,23 @@ function modelSteps(plan: Plan, a: Answers, s: OnboardingState): void {
     const modelId = str(a, 'models.ollamaModel');
     if (!modelId) return;
     ollamaUrl(plan, s, url);
+    tested = { provider: 'ollama', modelId, endpoint: url };
     main = modelName('ollama', modelId);
     mainStep = ensureModel(plan, s, main, { provider: 'ollama', modelId, endpoint: url }, `Add the local model ${modelId}`);
   }
 
+  if (tested) {
+    plan.api('test:main', tested.provider === 'cli' ? 'Check that the coding CLI is available' : 'Check that the model answers', {
+      method: 'POST', path: '/models/test', body: tested,
+    }, { dependsOn: [...new Set([mainStep, ...(keyStep ?? [])].filter(Boolean))],
+      detail: tested.provider === 'cli' ? 'Checks the installed CLI. Your first chat also checks its sign-in.' : 'Sends a short test message. Provider usage charges may apply.' });
+  }
   if (source === 'keep' && s.models.textReady) plan.done('models:ready', 'Every kind of work already has a model');
   if (main && TEXT_LANES.every((t) => s.models.byTopic[t] === main)) plan.done('assign-all', `"${main}" is already used for all work`);
   else if (main) {
     plan.api('assign-all', 'Use it for all work', { method: 'POST', path: '/topics/assign-all', body: { model: main } }, {
-      dependsOn: mainStep ? [mainStep] : undefined,
+      dependsOn: tested ? ['test:main'] : mainStep ? [mainStep] : undefined,
       detail: 'Chat, coding, research, checking and background jobs. Give single jobs their own model later on the Topics page.',
-    });
-  }
-  if (tested) {
-    plan.api('test:main', 'Check that the model answers', { method: 'POST', path: '/models/test', body: tested }, {
-      dependsOn: mainStep ? [mainStep] : keyStep, optional: true,
     });
   }
 
@@ -513,12 +516,12 @@ function planAnswers(useCases: readonly UseCaseId[], answers: Answers): Answers 
 
 /** The modules the answers need: ticked in the guide's picker and not to be unticked. */
 export function requiredModulesFor(useCases: readonly UseCaseId[], answers: Answers): string[] {
-  return [...requiredModules(planAnswers(useCases, answers)).keys()];
+  return answers._basicsOnly === true ? [] : [...requiredModules(planAnswers(useCases, answers)).keys()];
 }
 
 /** The modules the guide's picker starts with for these use cases and answers. */
 export function defaultModulesFor(useCases: readonly UseCaseId[], answers: Answers, state: OnboardingState): string[] {
-  return defaultModules(planAnswers(useCases, answers), state);
+  return answers._basicsOnly === true ? [] : defaultModules(planAnswers(useCases, answers), state);
 }
 
 /**
@@ -528,10 +531,10 @@ export function defaultModulesFor(useCases: readonly UseCaseId[], answers: Answe
  */
 export function buildPlan(useCases: readonly UseCaseId[], answers: Answers, state: OnboardingState, opts: PlanOptions): PlanStep[] {
   const a = planAnswers(useCases, answers);
-  const asked = new Set(sectionsFor(useCases).map((s) => s.id));
+  const asked = new Set(sectionsFor(useCases, a._basicsOnly === true).map((s) => s.id));
   const plan = new Plan();
   // First: the later steps may use what a module brings.
-  moduleSteps(plan, a, state);
+  if (a._basicsOnly !== true) moduleSteps(plan, a, state);
   if (asked.has('models')) modelSteps(plan, a, state);
   if (asked.has('areas')) areaSteps(plan, a, state, opts);
   if (asked.has('chat')) chatSteps(plan, a, state);
@@ -541,7 +544,7 @@ export function buildPlan(useCases: readonly UseCaseId[], answers: Answers, stat
   if (asked.has('product')) productSteps(plan, a, state);
   if (picked(a, 'research') && asked.has('research')) researchSteps(plan, a, state);
   if (state.isAdmin && !state.setupComplete) {
-    plan.api('setup-complete', 'Mark the setup as done', { method: 'POST', path: '/settings/setup-complete' }, { optional: true });
+    plan.api('setup-complete', 'Mark the setup as done', { method: 'POST', path: '/settings/setup-complete' }, { dependsOn: plan.list().filter((step) => step.kind !== 'api' || !step.optional).map((step) => step.id) });
   }
   return plan.list();
 }
