@@ -185,14 +185,14 @@ export function personalSourceRead(call: SpaceToolCall): boolean {
 }
 
 /** Directory names and files that configure a coding agent run in their directory. */
-const AGENT_CONFIG_DIRS = new Set(['.claude', '.codex', '.gemini', '.agents', '.vibe']);
+const AGENT_CONFIG_DIRS = new Set(['.claude', '.codex', '.gemini', '.agents', '.vibe', '.muse']);
 const AGENT_CONFIG_FILES = new Set(['.mcp.json']);
 /** Argument names that carry a path a call writes to. */
 const PATH_ARGS = ['path', 'file_path', 'notebook_path', 'destination', 'source', 'target'];
 
 /**
  * Whether `path` is, or lies under, a coding agent's configuration:
- * `.claude/`, `.codex/`, `.gemini/`, `.agents/`, `.vibe/` or `.mcp.json`.
+ * `.claude/`, `.codex/`, `.gemini/`, `.agents/`, `.vibe/`, `.muse/` or `.mcp.json`.
  * A CLI model run in a space's file root would read those as its own
  * settings, hooks and MCP servers, so one member's agent writing there
  * would act in every other member's runs.

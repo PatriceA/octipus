@@ -35,6 +35,7 @@ export function buildChildEnv(tool: CLIToolConfig, toolEnv?: Record<string, stri
     openai: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
     google: ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS'],
     mistral: ['MISTRAL_API_KEY'],
+    meta: ['META_API_KEY'],
   };
   if (inheritApiKeys) for (const k of authByProvider[tool.modelProvider] || []) pass(k);
   if (tool.modelProvider === 'anthropic') pass('CLAUDE_CODE_OAUTH_TOKEN');
@@ -63,6 +64,7 @@ const SERVER_AUTH_VARS = [
   'OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_BASE_URL',
   'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS',
   'MISTRAL_API_KEY',
+  'META_API_KEY',
 ];
 
 /** Vendors a personal CLI row may use: the ones whose CLI reads one plain token variable. */

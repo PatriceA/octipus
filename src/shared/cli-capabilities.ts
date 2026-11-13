@@ -26,6 +26,7 @@ export const SCOPED_EXTRA_ARGS: Record<string, { flags: readonly string[]; value
   },
   'Codex CLI': { flags: ['--strict-config'], values: { '--color': ['auto', 'always', 'never'] } },
   'Mistral Vibe': { flags: [], values: {} },
+  'Muse Code': { flags: ['--disable-web-tools'], values: { '--reasoning-effort': ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] } },
   Antigravity: { flags: ['--disable-slash-commands'], values: { '--effort': ['low', 'medium', 'high'] } },
 };
 
@@ -41,7 +42,8 @@ export const SCOPED_EXTRA_ARGS: Record<string, { flags: readonly string[]; value
  * conversation id at all, and handing it a stale id starts a fresh
  * conversation SILENTLY, which is worse than not reusing. Vibe is absent
  * because its resume depends on `log_interactions` staying enabled in the
- * user's own config, which we do not control.
+ * user's own config, which we do not control. Muse Code is absent: it runs
+ * with `--no-session-log`, so there is no transcript to resume.
  */
 export const CLI_RESUME: Record<string, { style: 'caller-minted' | 'captured'; flag: string }> = {
   'Claude Code': { style: 'caller-minted', flag: '--resume' },

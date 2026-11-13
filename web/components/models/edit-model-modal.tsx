@@ -8,7 +8,7 @@ import { api } from '@/lib/api';
 import { Portal } from '@/components/ui/portal';
 import type { CLITool, Model } from '@/lib/types/models';
 
-type CliKind = 'claude' | 'antigravity' | 'codex' | 'vibe' | 'glm' | 'kimi' | null;
+type CliKind = 'claude' | 'antigravity' | 'codex' | 'vibe' | 'muse' | 'glm' | 'kimi' | null;
 
 function fallbackCliKind(modelId: string): CliKind {
   const id = modelId.toLowerCase();
@@ -16,6 +16,7 @@ function fallbackCliKind(modelId: string): CliKind {
   if (id.includes('antigravity') || id.includes('agy') || id.includes('gemini')) return 'antigravity';
   if (id.includes('codex')) return 'codex';
   if (id.includes('vibe')) return 'vibe';
+  if (id.includes('muse')) return 'muse';
   if (id.includes('glm') || id.includes('zai')) return 'glm';
   if (id.includes('kimi') || id.includes('moonshot')) return 'kimi';
   return null;
@@ -31,6 +32,7 @@ function cliKindForTool(tool: CLITool | undefined, modelId: string): CliKind {
     case 'google': return 'antigravity';
     case 'openai': return 'codex';
     case 'mistral': return 'vibe';
+    case 'meta': return 'muse';
     case 'zai': return 'glm';
     case 'moonshot': return 'kimi';
     default: return fallbackCliKind(modelId);

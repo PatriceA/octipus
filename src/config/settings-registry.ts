@@ -385,7 +385,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     valueType: 'boolean',
     defaultValue: true,
     description:
-      'Block network/API calls from managed CLI agents\' shells (curl, Invoke-RestMethod, python/node fetch one-liners, local MCP endpoints) with a per-launch pre-tool hook, so they use Octipus tools. A command carrying `# octipus-fallback: <reason>` passes. Claude Code, Codex and Antigravity; Mistral Vibe has no hooks.',
+      'Block network/API calls from managed CLI agents\' shells (curl, Invoke-RestMethod, python/node fetch one-liners, local MCP endpoints) with a per-launch pre-tool hook, so they use Octipus tools. A command carrying `# octipus-fallback: <reason>` passes. Claude Code, Codex and Antigravity; Mistral Vibe has no hooks and Muse Code hooks are not wired.',
     isSecret: false,
     envVar: 'AGENT_CLI_SHELL_GUARD',
   },
