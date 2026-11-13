@@ -315,7 +315,7 @@ export class NotesTool extends BaseTool {
           hint: 'sourceId is note:<noteId>. Use read_note to load the full note.',
         };
       },
-      { permissionAction: 'read' },
+      { permissionAction: 'read', requires: ['embedding'] },
     );
 
     this.registerTool(
@@ -419,7 +419,7 @@ export class NotesTool extends BaseTool {
         const suggestions = await getSuggestionService().suggestForNote(notesScope(context), args.note_id as string, (args.limit as number) || 5);
         return { suggestions, hint: suggestions.length === 0 ? 'No suggestions (either nothing related, or no embedding model configured).' : 'Accept a suggestion with knowledge.link_knowledge.' };
       },
-      { permissionAction: 'read' },
+      { permissionAction: 'read', requires: ['embedding'] },
     );
 
     this.registerTool(

@@ -873,7 +873,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   // the shipped manual instead of a guess. Small models get the leaner
   // surface (they tend to misfire on extra tool guidance).
   if (!finalIsSmall && roleTools.some((t) => t.toolId === 'knowledge')) {
-    staticParts.push(`\n\nPRODUCT DOCS: Octipus's bundled manual is available locally without embeddings or a model. For questions about setting up, configuring or using Octipus, call search_product_docs, then read_product_doc for the relevant file and lines. Answer from those sources and cite the file; search_knowledge is for the user's knowledge, not product help.`);
+    staticParts.push(`\n\nPRODUCT DOCS: Octipus's bundled manual is available locally without embeddings or a model. For questions about setting up, configuring or using Octipus, call search_product_docs, then read_product_doc for the relevant file and lines. Answer from those sources and cite the file.\nsearch_knowledge is for the user's knowledge, not product help. <!-- cap:embedding -->`);
   }
 
   // Prompt sections of enabled plugin packages for this role

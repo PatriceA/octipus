@@ -3,7 +3,8 @@
 import { Boxes } from 'lucide-react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
-import { isModulePage, offModuleFor, useModules } from '@/lib/modules';
+import { isModulePage, offCapabilityFor, offModuleFor, useModules } from '@/lib/modules';
+import { capabilityOfPage, capabilityOffText } from '../../src/shared/capabilities';
 
 /**
  * A page of a module that is off (docs/MODULES.md), reached by a bookmark or
@@ -15,12 +16,25 @@ export function ModuleGate({ pathname, children }: { pathname: string; children:
   const modules = useModules();
   // A module's page waits for what is on, so it never mounts (and calls its
   // API) while its module is off.
-  if (!modules.data && isModulePage(pathname)) {
+  if (!modules.data && (isModulePage(pathname) || capabilityOfPage(pathname))) {
     return modules.error
       ? <p role="alert" className="font-mono text-[12px] text-error">! {(modules.error as Error).message}</p>
       : null;
   }
   const off = offModuleFor(pathname, modules.data?.modules);
+  const offCapability = off ? undefined : offCapabilityFor(pathname, modules.data);
+  if (offCapability) {
+    // Not configured is not switched off: it says what model is missing.
+    return (
+      <div className="max-w-xl space-y-2 font-mono text-[13px]" data-testid="capability-off">
+        <h1 className="flex items-center gap-2 text-on-surface"><Boxes className="w-4 h-4 text-on-surface-variant" />Not configured</h1>
+        <p className="text-on-surface-variant">{capabilityOffText(offCapability.id)}</p>
+        {user?.isAdmin
+          ? <Link href={offCapability.setupHref} className="text-primary hover:underline">Set it up</Link>
+          : null}
+      </div>
+    );
+  }
   if (!off) return <>{children}</>;
   return (
     <div className="max-w-xl space-y-2 font-mono text-[13px]" data-testid="module-off">

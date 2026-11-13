@@ -31,4 +31,10 @@ export interface ModulesResponse {
   modules: ModuleView[];
   /** Ids of the modules that are on. */
   enabled: string[];
+  /**
+   * What this install has a model for (src/core/capabilities/gates.ts). A
+   * page or control that needs a capability that is off is hidden, as one
+   * of a module that is off.
+   */
+  capabilities: import('./capabilities').CapabilityView[];
 }

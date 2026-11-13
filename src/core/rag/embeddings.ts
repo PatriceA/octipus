@@ -6,6 +6,7 @@ import { cleanupAuditLog } from '@/db/schema/cleanup-log';
 import { ageInDaysSql, cosineSimilarity, type EmbeddingMetadata, embeddings, freshnessFactorSql } from '@/db/schema/embeddings';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { coreLogger } from '@/utils/logger';
+import { assertCapability } from '@/core/capabilities/gates';
 import { type KnowledgeOwner, type KnowledgeScope, ownerPredicate, PRODUCT_DOCS_SOURCE, scopePredicate } from './knowledge-scope';
 import { chunkMarkdown, looksLikeMarkdown, type StructuralChunk } from './markdown-chunker';
 import { type CleanupOptions, type CleanupResult, runCleanup } from './retention-service';
@@ -217,6 +218,9 @@ export class EmbeddingService {
   }
 
   async generateEmbedding(text: string, side: EmbedSide = 'document'): Promise<number[]> {
+    // Not configured: refused before anything is resolved or logged. Callers
+    // that degrade (ranking, dedup) check the capability first and never get here.
+    assertCapability('embedding');
     const client = getLiteLLMClient();
     let modelId: string;
     let modelConfigName: string | undefined;
@@ -261,6 +265,7 @@ export class EmbeddingService {
   async embedBatch(texts: string[], side: EmbedSide = 'document'): Promise<Array<number[] | Error>> {
     const out: Array<number[] | Error> = new Array(texts.length);
     if (texts.length === 0) return out;
+    assertCapability('embedding');
 
     const client = getLiteLLMClient();
     let modelId: string;
@@ -384,6 +389,11 @@ export class EmbeddingService {
     /** Source repo (`workspace_repos.id`) for multi-repo scoping. NULL = non-repo. */
     repoId?: string | null,
   ): Promise<number> {
+    // Without an embedding model nothing is chunked, not even tried
+    // (docs/MODULES.md → Capability gates). Every caller checks first and
+    // records the item for catch-up; this is the backstop for one that does
+    // not, and it fails before the content is split.
+    assertCapability('embedding');
     // Backstop for the file-extension guard in FileIndexer: the `code` purpose
     // only ever meant "a raw source file", and raw code is not indexed. Generated
     // code *summaries* use `knowledge_artifact`, not `code`. See code-detection.ts.

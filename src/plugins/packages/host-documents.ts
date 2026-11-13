@@ -77,6 +77,18 @@ function documentDir(repos: ContentRepos, plugin: string): string {
 
 async function indexDocument(repos: ContentRepos, doc: DocumentRecord, text: string, replace = false): Promise<void> {
   try {
+    // No embedding model: nothing is chunked; the catch-up indexes the document once one is configured.
+    const { isCapabilityOn } = await import('@/core/capabilities/gates');
+    const owner = repos.knowledgeOwner;
+    if (!isCapabilityOn('embedding') && 'ownerUserId' in owner) {
+      const { recordSkipped } = await import('@/core/rag/index-backlog');
+      await recordSkipped({
+        kind: 'document', sourceId: doc.id, ownerUserId: owner.ownerUserId, workspaceId: owner.workspaceId,
+        purpose: 'document', metadata: { filePath: doc.storagePath },
+      });
+      return;
+    }
+    if (!isCapabilityOn('embedding')) return;
     const { getEmbeddingService } = await import('@/core/rag/embeddings');
     // An update replaces the passages of the earlier text.
     if (replace) await getEmbeddingService().deleteBySource(repos.knowledgeOwner, 'document', `doc:${doc.id}`);

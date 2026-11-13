@@ -6,6 +6,8 @@
  * upload look successful while silently dropping content.
  */
 
+import { isCapabilityOn } from '@/core/capabilities/gates';
+import { capabilityOffText } from '@/shared/capabilities';
 import { createHash } from 'crypto';
 import { and, eq } from 'drizzle-orm';
 import { checkDbHealth, getDb } from '@/db/postgres';
@@ -15,6 +17,8 @@ import { getEmbeddingService } from './embeddings';
 
 export interface KBReadiness {
   ready: boolean;
+  /** False when no embedding model is configured: the knowledge base is off, not broken. */
+  configured?: boolean;
   reason?: string;
   checks: {
     db: { ok: boolean; detail?: string };
@@ -107,6 +111,25 @@ export function runKBSelfCheck(opts: KBSelfCheckOptions = {}): Promise<KBReadine
 }
 
 async function selfCheck(opts: KBSelfCheckOptions): Promise<KBReadiness> {
+  // Not configured is not a failure (docs/MODULES.md → Capability gates): the
+  // knowledge base is simply off, so there is nothing to probe and nothing to
+  // log at error level.
+  if (!isCapabilityOn('embedding')) {
+    const report: KBReadiness = {
+      ready: false,
+      configured: false,
+      reason: capabilityOffText('embedding'),
+      checks: {
+        db: { ok: true, detail: 'not checked: knowledge base off' },
+        embeddingModel: { ok: false, detail: 'not configured' },
+        vectorWrite: { ok: false, detail: 'skipped: knowledge base off' },
+      },
+      lastCheckedAt: new Date(),
+    };
+    cached = report;
+    logger.info('Knowledge base off: no embedding model configured');
+    return report;
+  }
   const checks: KBReadiness['checks'] = {
     db: { ok: false },
     embeddingModel: { ok: false },

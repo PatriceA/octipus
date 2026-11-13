@@ -13,6 +13,7 @@
  *
  * Never throws: an unavailable embedding model degrades to checks 1-2.
  */
+import { isCapabilityOn } from '@/core/capabilities/gates';
 import { and, desc, eq, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { getDb } from '@/db/postgres';
@@ -96,7 +97,8 @@ export async function findExisting(
     .limit(1) : [];
   if (named) return { kind: 'skill', id: named.id, name: named.name };
 
-  // 3. Semantically the same thing under another name.
+  // 3. Semantically the same thing under another name — needs an embedding model.
+  if (!isCapabilityOn('embedding')) return null;
   let embedding: number[];
   try {
     embedding = await getEmbeddingService().generateEmbedding(similarityText(distilled), 'document');

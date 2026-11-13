@@ -16,7 +16,7 @@ export async function buildRootAttachmentContext(
       return 'Original image supplied to the CLI. Inspect the image itself; if your adapter provides a file reference, use its native image-reading tool. Never interpret binary image bytes as text.';
     }
     const bound = await getModelRegistry().getModelForTopic('vision');
-    if (!bound) return 'No vision model is configured. Use an image-reading tool on the original file; do not claim to have seen it otherwise.';
+    if (!bound) return 'No model on this install can read images, so this image has not been seen. Say so; do not guess what it shows.';
     // The session includes the attachment's user-selected protection level.
     let vision: typeof bound;
     try {

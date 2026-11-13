@@ -59,4 +59,44 @@ describe('the prompt files', () => {
       expect(depth, `${file}: a module block is not closed`).toBe(0);
     }
   });
+
+  test('capability markers: text needing a capability goes while it is not configured', () => {
+    const text = [
+      'Tools:',
+      '- `knowledge` — the KB. <!-- cap:embedding -->',
+      '- Answer fast; search first. <!-- cap:embedding -->',
+      '- Answer fast. <!-- cap:!embedding -->',
+      '<!-- cap:see -->',
+      'Look at images with view_image.',
+      '<!-- /cap -->',
+      '- typo marker <!-- cap:embeding -->',
+      'Done.',
+    ].join('\n');
+    const caps = (on: string[]) => (id: string) => on.includes(id);
+    expect(withoutOffModules(text, on([]), caps([]))).toBe('Tools:\n- Answer fast.\nDone.');
+    expect(withoutOffModules(text, on([]), caps(['embedding', 'see']))).toBe(
+      'Tools:\n- `knowledge` — the KB.\n- Answer fast; search first.\nLook at images with view_image.\nDone.',
+    );
+  });
+
+  test('every capability marker in the prompt files names a known capability and closes its blocks', async () => {
+    const { CAPABILITIES } = await import('@/shared/capabilities');
+    const { readdirSync, readFileSync, statSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const known = new Set<string>(CAPABILITIES);
+    const files = (dir: string): string[] => readdirSync(dir).flatMap((name) => {
+      const path = join(dir, name);
+      return statSync(path).isDirectory() ? files(path) : path.endsWith('.md') ? [path] : [];
+    });
+    for (const file of files(join(process.cwd(), 'src/core/agent'))) {
+      let depth = 0;
+      for (const line of readFileSync(file, 'utf8').split('\n')) {
+        for (const [, id] of line.matchAll(/<!--\s*cap:!?([a-z0-9-]+)\s*-->/g)) expect(known.has(id), `${file}: ${id}`).toBe(true);
+        if (/^\s*<!--\s*cap:!?[a-z0-9-]+\s*-->\s*$/.test(line)) depth++;
+        if (/^\s*<!--\s*\/cap\s*-->\s*$/.test(line)) depth--;
+        expect(depth, file).toBeGreaterThanOrEqual(0);
+      }
+      expect(depth, `${file}: a capability block is not closed`).toBe(0);
+    }
+  });
 });

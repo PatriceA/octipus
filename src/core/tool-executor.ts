@@ -4,6 +4,7 @@ import { ToolNotExecutedError, ToolPolicyRefusalError, uncertainExecutionRecord 
 import { actionRecovery, isReadOnlyAction } from './action-recovery';
 import { withExecutionSignal } from './execution-scope';
 import { isToolOn, toolOffMessage } from '@/core/modules/registry';
+import { capabilitiesMet, capabilityOffMessage, firstOffCapability } from '@/core/capabilities/gates';
 import { isCancellationError } from '@/core/swarm/errors';
 import { type SideEffectCounters, emptyCounters } from '@/core/swarm/receipt';
 import { renderToolActivity } from '@/core/work-stream/renderers';
@@ -388,9 +389,10 @@ export class ToolExecutor {
    * declaration no longer offers them.
    */
   getTools(): Map<string, ToolHandler> {
-    const offModule = [...this.tools.values()].some((tool) => tool.toolId && !isToolOn(tool.toolId));
-    if (!this.blockedTools.size && !offModule) return this.tools;
-    return new Map([...this.tools].filter(([name, tool]) => !this.blockedTools.has(name) && (!tool.toolId || isToolOn(tool.toolId))));
+    const hidden = (tool: ToolHandler) => (tool.toolId !== undefined && !isToolOn(tool.toolId)) || !capabilitiesMet(tool.requires);
+    const anyHidden = [...this.tools.values()].some(hidden);
+    if (!this.blockedTools.size && !anyHidden) return this.tools;
+    return new Map([...this.tools].filter(([name, tool]) => !this.blockedTools.has(name) && !hidden(tool)));
   }
 
   /** Blocked after repeating the same failure; see `failStreaks`. */
@@ -757,6 +759,14 @@ export class ToolExecutor {
       if (off) {
         this.counters.permissionDenials++;
         results.push({ toolCallId: toolCall.id, result: null, errorCode: 'permission_denied', error: off });
+        continue;
+      }
+      // A capability that is not configured (or was unconfigured since the
+      // run started): the call is refused with the reason, never attempted.
+      const missingCapability = firstOffCapability(tool.requires);
+      if (missingCapability) {
+        this.counters.permissionDenials++;
+        results.push({ toolCallId: toolCall.id, result: null, errorCode: 'capability_not_configured', error: capabilityOffMessage(missingCapability) });
         continue;
       }
 

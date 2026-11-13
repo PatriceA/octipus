@@ -1,3 +1,4 @@
+import { notifyCapabilitiesChanged } from '@/core/capabilities/gates';
 import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { mayUseInstallModels } from '@/models/install-access';
@@ -501,6 +502,8 @@ export class ModelRegistry {
 
     if (result.length > 0) {
       modelLogger.info({ model: name }, 'Default model changed');
+      // Whether the default model reads images decides `see` (gates.ts).
+      notifyCapabilitiesChanged();
       await this.cacheDelete('model:default');
       return true;
     }
@@ -548,6 +551,9 @@ export class ModelRegistry {
    * to the old target for up to 5 min.
    */
   private async invalidateCache(name: string, modelId?: string | null): Promise<void> {
+    // A row or a binding changed: what the install has a model for may have
+    // too (src/core/capabilities/gates.ts). Debounced there.
+    notifyCapabilitiesChanged();
     await this.cacheDelete(`model:${name}`);
     if (modelId) await this.cacheDelete(`model:mid:${modelId}`);
     await this.cacheDelete('model:default');

@@ -2222,7 +2222,7 @@ export default function ChatPage() {
             disabled={showNewSessionDialog}
             placeholder={showNewSessionDialog ? 'Choose a session type first...' : isCompanionChat ? 'Plan work, check progress, or park an idea...' : activeSessionId ? 'Send a message or change direction...' : 'Create a session to start chatting'}
             voiceError={realtime.error || voiceUnavailableReason}
-            voiceAvailable={voiceAvailable !== false}
+            voiceAvailable={voiceAvailable === true}
             realtimeMode={realtimeMode}
             realtimeState={realtime.state}
             realtimePartial={realtime.partial}

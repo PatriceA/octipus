@@ -480,7 +480,9 @@ export async function stubProfiles(page: Page): Promise<void> {
 export async function stubModules(page: Page): Promise<void> {
   const { MODULES } = await import('../../../src/modules');
   const modules = MODULES.map((m) => ({ ...m, requiredBy: [], on: true }));
-  await page.route('**/api/modules', (route) => json(route, 200, { modules, enabled: modules.map((m) => m.id) }));
+  const { CAPABILITIES, CAPABILITY_INFO } = await import('../../../src/shared/capabilities');
+  const capabilities = CAPABILITIES.map((id) => ({ id, title: CAPABILITY_INFO[id].title, on: true, setupHref: CAPABILITY_INFO[id].setupHref }));
+  await page.route('**/api/modules', (route) => json(route, 200, { modules, enabled: modules.map((m) => m.id), capabilities }));
 }
 
 /**

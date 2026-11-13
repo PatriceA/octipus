@@ -48,6 +48,10 @@ process.env.LOG_LEVEL = process.env.LOG_LEVEL ?? 'error';
 // the suites of a module's routes and tools run against it switched on. The
 // tests of switching off set the module list themselves.
 process.env.MODULES_ENABLED = process.env.MODULES_ENABLED ?? MODULES.map((m) => m.id).join(',');
+// Every capability configured (src/core/capabilities/gates.ts), for the same
+// reason every module is on: suites of gated tools test them working. The
+// tests of "not configured" set the snapshot themselves.
+process.env.OCTIPUS_CAPABILITIES_ALL_ON = process.env.OCTIPUS_CAPABILITIES_ALL_ON ?? '1';
 // Plugin package fixtures run unwrapped, as on any host without a sandbox
 // runner (most CI runners): `plugins.sandbox` defaults to `required`, which
 // would refuse every fixture there. The sandbox's own suites set it (and the

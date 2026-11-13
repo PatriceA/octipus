@@ -1,3 +1,5 @@
+import { isCapabilityOn } from '@/core/capabilities/gates';
+import { type Capability, isCapability } from '@/shared/capabilities';
 import { isModuleOn } from './registry';
 
 /**
@@ -17,24 +19,42 @@ import { isModuleOn } from './registry';
  * `module:!<id>` marks the text used instead while the module is off.
  * The markers themselves never reach a model.
  */
-const LINE = /^(.*?)\s*<!--\s*module:(!?[a-z0-9-]+)\s*-->\s*$/;
-const OPEN = /^\s*<!--\s*module:(!?[a-z0-9-]+)\s*-->\s*$/;
-const CLOSE = /^\s*<!--\s*\/module\s*-->\s*$/;
+const MARK = '(?:module|cap):!?[a-z0-9-]+';
+const LINE = new RegExp(`^(.*?)\\s*<!--\\s*(${MARK})\\s*-->\\s*$`);
+const OPEN = new RegExp(`^\\s*<!--\\s*(${MARK})\\s*-->\\s*$`);
+const CLOSE = /^\s*<!--\s*\/(?:module|cap)\s*-->\s*$/;
 
-export function withoutOffModules(prompt: string, isOn: (id: string) => boolean = isModuleOn): string {
+/**
+ * Text that belongs to a module or needs a capability is left out while the
+ * module is off or the capability is not configured. Capability markers
+ * (`<!-- cap:embedding -->`, `<!-- cap:!see -->`, closed by `<!-- /cap -->`)
+ * work exactly like module markers (src/core/capabilities/gates.ts).
+ */
+export function withoutOffModules(
+  prompt: string,
+  isOn: (id: string) => boolean = isModuleOn,
+  capOn: (id: Capability) => boolean = isCapabilityOn,
+): string {
   if (!prompt.includes('<!--')) return prompt;
-  const on = (marker: string) => (marker.startsWith('!') ? !isOn(marker.slice(1)) : isOn(marker));
+  const holds = (marker: string): boolean => {
+    const [kind, rawId] = marker.split(':') as ['module' | 'cap', string];
+    const negated = rawId.startsWith('!');
+    const id = negated ? rawId.slice(1) : rawId;
+    // An unknown capability id is never "on": a typo hides its text instead of leaking it.
+    const value = kind === 'module' ? isOn(id) : isCapability(id) && capOn(id);
+    return negated ? !value : value;
+  };
   const out: string[] = [];
-  /** The modules of the blocks we are in; a block of an off module hides its lines. */
+  /** The markers of the blocks we are in; a block whose marker does not hold hides its lines. */
   const open: string[] = [];
   for (const line of prompt.split('\n')) {
     const opened = OPEN.exec(line);
     if (opened) { open.push(opened[1]); continue; }
     if (CLOSE.test(line)) { open.pop(); continue; }
-    if (open.some((id) => !on(id))) continue;
+    if (open.some((marker) => !holds(marker))) continue;
     const marked = LINE.exec(line);
     if (marked) {
-      if (on(marked[2])) out.push(marked[1]);
+      if (holds(marked[2])) out.push(marked[1]);
       continue;
     }
     out.push(line);

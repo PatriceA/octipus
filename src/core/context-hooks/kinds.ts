@@ -21,6 +21,7 @@ import { z } from 'zod';
 import type { EmbeddingPurpose, SearchResult } from '@/core/rag/embeddings';
 import { agentKnowledgeScope, PRODUCT_DOCS_SOURCE } from '@/core/rag/knowledge-scope';
 import { getDb } from '@/db/postgres';
+import { isCapabilityOn } from '@/core/capabilities/gates';
 import { notInSharedWorkspace } from '@/db/repositories/scoped';
 import { notes } from '@/db/schema/notes';
 import { estimateTokens } from '@/utils/token-count';
@@ -117,13 +118,7 @@ export async function recallHits(input: Pick<ContextHookInput, 'userId' | 'works
   // Access is counted only for the passages actually injected (runRecall), not
   // for the over-fetch dropped below, nor for an eval run.
   const scope = { allowedRepoIds: [], skipAccess: true };
-  // Without an embedding model, keyword search straight away: hybridSearch
-  // would fall back to it too, but log an error on every message first.
-  const { getModelRegistry } = await import('@/models/model-registry');
-  const embeds = Boolean(await getModelRegistry().getModelForTopic('embedding').catch(() => null));
-  const raw = embeds
-    ? await getEmbeddingService().hybridSearch(knowledge, query, config.limit * 4, undefined, 0.6, config.minSimilarity, scope)
-    : await getEmbeddingService().ftsSearch(knowledge, query, config.limit * 4, undefined, scope);
+  const raw = await getEmbeddingService().hybridSearch(knowledge, query, config.limit * 4, undefined, 0.6, config.minSimilarity, scope);
   const purposes = new Set<EmbeddingPurpose>(config.purposes);
   const seen = new Set<string>();
   const out: SearchResult[] = [];
@@ -140,6 +135,8 @@ export async function recallHits(input: Pick<ContextHookInput, 'userId' | 'works
 
 async function runRecall(input: ContextHookInput, raw: Record<string, unknown>): Promise<ContextHookResult> {
   const config = KIND_CONFIG.recall.parse(raw);
+  // Recall searches the knowledge base, which needs an embedding model.
+  if (!isCapabilityOn('embedding')) return skipped('no_embedding_model');
   if (contentWords(input.query) < 2) return skipped('short_message');
   const hits = await recallHits(input, config);
   if (hits.length === 0) return abstained('nothing_relevant');

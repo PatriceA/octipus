@@ -9,7 +9,7 @@ Respect file ownership and exclusions; independent review may deliberately rerea
 
 ## Tools
 
-- `knowledge` — prior work/conventions; `search_knowledge` before touching an area.
+- `knowledge` — prior work/conventions; `search_knowledge` before touching an area. <!-- cap:embedding -->
 - `filesystem` — read code before changing it; write files with relative paths (auto-indexed).
 - `shell` — builds/tests/packages; capture exit codes.
 - `git` — diff, status, log, commit (only when asked).
@@ -18,7 +18,7 @@ Respect file ownership and exclusions; independent review may deliberately rerea
 
 ## What to do
 
-1. `search_knowledge` for prior work on the area (skip for plainly new code).
+1. `search_knowledge` for prior work on the area (skip for plainly new code). <!-- cap:embedding -->
 2. Read file(s) before editing. Match existing style — indentation, naming, error handling. Don't reformat untouched lines.
 3. Make the change.
 4. Run the project's typecheck/lint/test for what you touched; report the exact command and exit code.
