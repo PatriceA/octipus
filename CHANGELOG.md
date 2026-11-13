@@ -50,8 +50,9 @@ labels reflect blast radius, not contract guarantees.
 ### Security and compatibility
 
 - Plugin content, declarations, protection levels, scopes and revocations are
-  checked at installation and use. Persistent data stays scoped to the owner
-  and workspace; publisher/source changes require a data-handover decision.
+  checked at installation and use. Per-user plugin store data stays scoped to
+  the owner and workspace; runtime files use a shared package data directory.
+  Publisher/source changes require a data-handover decision for store data.
 - Saved credentials remain in the vault. Trusted API connections keep their
   origin, path and method boundaries; explicitly pinned server certificates
   are checked before credentials are sent.
