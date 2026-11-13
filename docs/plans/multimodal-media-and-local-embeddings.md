@@ -294,7 +294,7 @@ Implementations:
 3. It calls `audio__speak(text)` → the `speech` lane (e.g. Kokoro, local) → an audio player in web, a voice note in Telegram, a file upload in Slack.
 
 This becomes:
-- an **e2e test** (`tests/e2e`, stub providers that return a fixed PNG with known text and a fixed WAV);
+- an **e2e test** (`scripts/e2e`, stub providers that return a fixed PNG with known text and a fixed WAV);
 - an **eval scenario** (`eval/`, real models, checks that the tool order and the spoken text match the generated text);
 - a **web e2e** test that asserts the image and audio player render.
 
