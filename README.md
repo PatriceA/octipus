@@ -8,7 +8,7 @@ A self-hosted AI workspace for projects, knowledge, and connected tools.
 
 [![Octipus on StartupScores](https://startupscores.com/badge/octipus.svg?style=shield&v=combo&theme=dark)](https://startupscores.com/open-source/octipus)
 
-> **v0.6.0 · alpha · building in public.** A working, opinionated platform — not a finished product. Breaking changes happen; migration notes ship with them. Treat it as a foundation to build on.
+> **Alpha · building in public.** A working, opinionated platform — not a finished product. Breaking changes happen; migration notes ship with them. Treat it as a foundation to build on.
 
 **Website:** [https://octipus.cc](https://octipus.cc)
 
@@ -94,47 +94,7 @@ Channels → Gateway (WebSocket, typed Zod protocol)
 
 Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md).
 
-## New in v0.6.0
-
-- **Shared task board** — assign work to people or roles, claim tasks with expiring leases, and keep progress in comment threads. Role agents can wake on the heartbeat and when dependencies finish.
-- **Dollar spend budgets** — configure daily or monthly caps per user, role, or workspace, with warnings and pauses visible in the dashboard and chat. Unknown provider costs are shown as unmeasured; limits are based on recorded spend.
-- **Stronger review** — give plan items acceptance criteria that QA must check with evidence. Review notices flag a shared implementation/review model, and retry escalation identifies the best earlier attempt.
-- **More reliable CLI work** — preserve sessions and image attachments, resume child work by task, optionally isolate coding children in Git worktrees, and retain mid-run guidance and progress messages.
-- **Skills and MCP** — pin skills, reload mounted skills, and update editable skills through agents or MCP with shared authorization. The npm bridge is now `octipus-mcp-server@0.6.0`.
-- **Flow guard** — qualifying outbound calls require approval after sensitive reads, on top of existing permissions. Coverage and limitations are documented in the release notes.
-
-**[Release notes and upgrade instructions](https://github.com/PatriceA/octipus/releases/tag/v0.6.0)** · [Task board](docs/TASK-BOARD.md) · [Spend budgets](docs/SPEND-BUDGETS.md) · [Flow guard](docs/FLOW-GUARD.md)
-
-## Earlier: key points covered in v0.5
-
-- **One model per kind of work** — a request is routed to a lane (`build`, `everyday`, `verify`, `research`, `background`) before the turn starts, and each lane binds its own model on the Topics page. `verify` exists to be a *different* model from the one that wrote the code. Retired topic names still resolve, so existing bindings keep working.
-- **Roles replace experts, and you can write your own** — the expert layer is gone; a role carries the tools, the permission boundary, the prompt and the standing rules. Roles are editable data now: add, edit or delete one from the Topics page and it is spawnable immediately, no restart.
-- **The tool list is chosen for the message, not the role** — the advertised core shrinks to what the turn actually needs (never grows, always fails open). The standing prompt fell from 20,951 tokens a call to 12,357, and the same work measures 15–31% cheaper per run than v0.4.
-- **Vendor CLI sessions survive the turn** — Claude Code and Codex runs resume across turns with only the new turn sent and Octipus's compaction piped through, both CLI paths isolated from the host's MCP config.
-- **Honest token accounting** — a billable-token figure that excludes cache reads, read by every cost gate and budget; cache counters recognised across Anthropic, OpenAI-compatible and LiteLLM; prompts splittable at a volatile marker so the static tier sits ahead of the cache breakpoint.
-- **Windows, desktop and phones** — a real Windows portability pass, a self-healing desktop preflight, and push notifications to paired phones for approvals and permission requests.
-
-## Earlier: key points covered in v0.4
-
-- **Install and setup** — `--quick` route (embedded storage, five prompts, ends with the web UI open), locked `npm ci` installs with every surface built before the first start, a Docker one-command installer, Node 24.22.1 floor, and a Windows installer with its own CI job. The wizard binds the chosen model to every text topic, verifies provider settings actually saved, and logs in on rerun instead of re-registering.
-- **Honest diagnostics** — `octi doctor` reads the checkout's `.env`, asks the running backend for provider status, and no longer reports a wrong API key as "not configured".
-- **Streaming and sessions** — root-agent replies stream token by token to the TUI and web; `/sessions`, `/resume`, `--session` and `/history` continue earlier conversations; the status bar carries the work plan, elapsed time and model.
-- **Terminal UI** — one shared event presenter for the chat shell and the editor, a decision queue that never drops an unanswered permission or approval prompt, row scrolling that holds your reading position while replies stream, editor drafts that survive a crash, and an unsaved-changes prompt. The e2e suite runs the shipped entry in a real PTY.
-- **One agent loop per turn** — the orchestrator hop is gone; the agent you talk to holds real tools, with the swarm limits below unchanged.
-
-## Earlier: key points covered in v0.2
-
-- **3-level Swarm** with `spawn_child` meta-tool — `await` and `detach` modes, `parallelGroup` fan-out, `collect_children` for explicit gather. Per-node token, wall-clock, and fan-out limits; cancellation propagation; fingerprint cycle protection; and escalation on a detected budget breach. Limits constrain Octipus execution but cannot guarantee exact provider billing or immediate cancellation of external work.
-- **Error classification** — single canonical taxonomy (`FailoverReason`, `RecoveryAction`, `ClassifiedError`). All model providers migrated off ad-hoc string matching.
-- **Anti-thrashing session compaction** — LLM summarization with stall detection, ≥15% savings gate, hard-ceiling safety valve.
-- **Trajectory records** — JSONL records of agent runs, daily rolling, with an environment opt-out. These records are inputs for offline evaluation or training workflows; they do not make the running system learn automatically.
-- **Skill auto-extension** — pattern fingerprinting → `skill_proposals` queue with curator lifecycle (usage tracking, archive after 90d); review UI surfaces high-frequency patterns; never auto-promotes.
-- **MCP circuit breaker** — closed/open/half-open with exponential backoff, admin reset, UI badge.
-- **Fail-loud routing** — strict `getModelForTopic()`, no silent fallbacks; unbound topics fail at spawn time with a clear error.
-- **Root agent persona** — per-user identity (name, tone, narration, free-form facts) layered between `SECURITY_PREAMBLE` and the role prompt via the `before-agent-start` hook; six presets ship under `personas/`. Default is *Octipus*, the dry octopus-machine.
-- **Root agent detach** — parent can detach children and use `collect_children` to await later; enables narration and user interaction while children run in parallel.
-- **Enrichment features** — Deep Research as an example plugin, `plugins/research` (a background run of the research agent, through the plugin host API's `agent:run`; the cited report saved to Documents with `documents:write`), To-Do list (recurring via scheduler), Email triage (batch classification), and hardware-aware onboarding (curated Ollama catalog plus registry data).
-- **Testing and evaluation** — unit, database integration, and browser suites, plus model evals and adversarial case generators. The red-team CI job is a dry-run without model calls; see [Testing](docs/TESTING.md) for what each suite verifies.
+Release history and upgrade notes: [Changelog](CHANGELOG.md) · [GitHub releases](https://github.com/PatriceA/octipus/releases).
 
 ## Technologies and ideas worth a look
 
