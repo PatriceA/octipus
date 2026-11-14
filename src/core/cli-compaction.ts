@@ -8,7 +8,9 @@ import { cliSessionKeyAdapter, isChildCliSessionKey } from './cli-session-store'
 import { cliCredentialOwnerFor, cliEnvFor } from './cli-child-env';
 import { sessionFsAccess, WorkspaceFS } from '@/security/workspace-fs';
 import { acquireCliSlot, execCli, windowsShellQuote, windowsShellQuoter } from '@/models/providers/cli-provider';
-import { discoverCodexMcpServers } from './cli-adapters';
+import { discoverCodexMcpServers, disposeMuseHome, mspLine, museWorkspaceFor, prepareMuseHome } from './cli-adapters';
+import { configuredCliBinary } from './cli-executable';
+import { v7 as uuidv7 } from 'uuid';
 import { killProcessTree } from '@/utils/proc';
 import { recordProviderUsage } from '@/models/providers/instrumented';
 import type { CompletionResult } from '@/models/litellm-client';
@@ -95,10 +97,17 @@ export async function compactCliConversation(session: Session, instructions: str
       const args = ['app-server', '-c', `mcp_servers={${servers.map(server => `${JSON.stringify(server.name)}={enabled=false}`).join(',')}}`];
       usage = await compactCodexThread(tool.binaryPath, args, { cwd, env, threadId: record.id });
     } else if (adapter === 'Muse Code') {
-      // Verified on muse 1.4.18: `muse exec` sends "/compact" to the model as
-      // plain text, and its session protocol's `session/compact` (muse serve)
-      // refuses an exec session with `compaction_unavailable`.
-      throw new Error('Muse Code compacts its own context automatically during a run; it offers no manual compaction to Octipus. The existing session was retained.');
+      if (instructions) throw new Error('Muse Code native compaction does not accept focus instructions; use /compact without arguments.');
+      // A config home with no tools: compaction calls none, and the session's
+      // bridge is gone with its run.
+      const home = await prepareMuseHome({ workspace: museWorkspaceFor(cwd), tools: [], env });
+      try {
+        const noop = await compactMuseSession(configuredCliBinary(tool.binaryPath), { cwd, env: { ...env, XDG_CONFIG_HOME: home }, sessionId: record.id });
+        completed = true;
+        if (noop) return `Muse Code had nothing to compact (${noop}). Continuing with the same CLI session.`;
+      } finally {
+        disposeMuseHome(home, env);
+      }
     } else {
       throw new Error(`Native compaction is not supported for ${adapter}; the existing session was retained.`);
     }
@@ -170,5 +179,74 @@ export function compactCodexThread(binary: string, args: string[], options: { cw
       }
     });
     send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'octipus_compact', version: '1.0.0' } } });
+  });
+}
+
+/**
+ * Compacts a muse session through its session protocol (`muse serve`):
+ * resume it, `session/compact`, and wait for the compaction item's outcome.
+ * Resolves with the reason when muse found nothing to compact. muse compacts
+ * only when it knows the model's context limit, which `muse serve` reads from
+ * the model catalog cached by `muse exec` or the interactive `muse` and never
+ * fetches itself; without one it refuses with `compaction_unavailable`.
+ */
+export function compactMuseSession(binary: string, options: { cwd: string; env: Record<string, string>; sessionId: string }): Promise<string | undefined> {
+  return new Promise((resolvePromise, reject) => {
+    const shell = process.platform === 'win32';
+    const args = ['serve', '--disable-request-user-input', '-c', 'run.reminder_roster=[]'];
+    const child = spawn(shell ? windowsShellQuote(binary) : binary, shell ? args.map(windowsShellQuoter(binary)) : args,
+      { cwd: options.cwd, env: options.env, shell, detached: !shell, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    let settled = false;
+    let buffer = '';
+    // Set once muse confirmed: serve is then let exit on its own (end of
+    // input flushes its session log), killed only if it lingers.
+    let confirmed: { noop?: string } | undefined;
+    const timer = setTimeout(() => finish(new Error('Muse Code compaction timed out; session retained.')), 300_000);
+    function confirm(noop?: string) {
+      confirmed = { noop };
+      child.stdin.end();
+      setTimeout(() => finish(undefined, noop), 10_000).unref();
+    }
+    function finish(error?: Error, noop?: string) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.stdin.end();
+      killProcessTree(child.pid, child);
+      if (error) reject(error); else resolvePromise(noop);
+    }
+    child.on('error', () => finish(new Error('Could not start Muse Code compaction.')));
+    child.stdin.on('error', () => finish(new Error('Muse Code compaction connection closed.')));
+    child.stderr.resume(); // never echo provider output or credentials
+    child.on('close', (code, signal) => finish(confirmed ? undefined : new Error(`Muse Code exited before confirming compaction (${signal ? `signal ${signal}` : `exit ${code ?? 'unknown'}`}); session retained.`), confirmed?.noop));
+    child.stdout.on('data', chunk => {
+      if (settled || confirmed) return;
+      buffer += chunk.toString();
+      if (buffer.length > 16 * 1024 * 1024) return finish(new Error('Muse Code compaction response exceeded its size limit.'));
+      let newline: number;
+      while ((newline = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
+        let message;
+        try { message = JSON.parse(line); } catch { continue; }
+        if (message.error) {
+          const reason = message.error.data?.reason ?? message.error.message;
+          return finish(new Error(reason === 'compaction_unavailable'
+            ? 'Muse Code cannot compact this session: it knows no context limit for its model. `muse serve` reads that from the model catalog `muse exec` or the interactive `muse` cache, and fetches none itself; run either once as this account. Session retained.'
+            : `Muse Code refused compaction (${String(reason)}); session retained.`));
+        }
+        if (message.method && message.id !== undefined) return finish(new Error(`Muse Code asked for ${message.method} during compaction; session retained.`));
+        if (message.id === 2) {
+          child.stdin.write(mspLine(3, 'session/compact', { commandId: uuidv7(), sessionId: options.sessionId }));
+        } else if (message.id === 3 && message.result?.status === 'noop') {
+          return confirm(String(message.result.reason ?? 'noop'));
+        } else if (message.method === 'item/completed' && message.params?.item?.kind === 'compaction' && message.params.sessionId === options.sessionId) {
+          const item = message.params.item;
+          if (item.outcome === 'compacted' || item.outcome === 'noop') return confirm(item.outcome === 'noop' ? String(item.reason ?? 'noop') : undefined);
+          return finish(new Error(`Muse Code compaction ${String(item.outcome)}${item.reason ? ` (${String(item.reason)})` : ''}; session retained.`));
+        }
+      }
+    });
+    child.stdin.write(mspLine(1, 'initialize', { clientInfo: { name: 'octipus_compact', version: '1.0.0' } }) + mspLine(undefined, 'initialized')
+      + mspLine(2, 'session/resume', { commandId: uuidv7(), sessionId: options.sessionId, excludeItems: true }));
   });
 }

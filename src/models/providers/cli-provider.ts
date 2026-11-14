@@ -552,9 +552,10 @@ export function parseMuseJsonl(stdout: string, startTime: number): CompletionRes
 }
 
 // ---- Muse Code (Meta) ----
-// `muse exec --json` streams JSONL; the agent path parses it live
-// (CLIOutputParser) with the Octipus bridge as its only tools
-// (`prepareMuseHome`). muse reads no prompt from stdin (`--prompt-file
+// Agent runs drive `muse serve` (its session protocol, parsed live by
+// CLIOutputParser) with the Octipus bridge as their only tools
+// (`prepareMuseHome`). One-shot completions use `muse exec --json`, which
+// reads no prompt from stdin (`--prompt-file
 // /dev/stdin` is refused: "not a regular file"), so a one-shot completion
 // hands it a 0600 prompt file; `run.toolset: []` leaves it no tool at all
 // (verified live: "No tools are available").

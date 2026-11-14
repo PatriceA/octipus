@@ -193,34 +193,57 @@ beforeEach(() => {
   fixture.script = join(fixture.dir, 'fake-claude.mjs');
   fixture.codexScript = join(fixture.dir, 'fake-codex.mjs');
   fixture.museScript = join(fixture.dir, 'fake-muse.mjs');
-  // muse: dumps what it was launched with, keeps a session log per --session-id
-  // under $HOME/.local/share (the test points HOME at the fixture), answers
-  // with the id, and reports the allowance an 'allowance-marker' names.
+  // muse serve: an MSP host on stdio. It keeps a session log per started
+  // session under $HOME/.local/share (the test points HOME at the fixture),
+  // refuses to resume one it does not hold, dumps what the turn was launched
+  // with, answers with the session id, and reports the allowance an
+  // 'allowance-marker' names. A 'budget-marker' makes the turn report usage
+  // and then never finish, so only a mid-run budget stop ends it.
   writeFileSync(fixture.museScript, `
     import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
     import { join } from 'node:path';
+    import { createInterface } from 'node:readline';
     const args = process.argv.slice(2);
-    const at = flag => args.indexOf(flag) >= 0 ? args[args.indexOf(flag) + 1] : null;
     const home = process.env.XDG_CONFIG_HOME;
-    writeFileSync(join(process.cwd(), 'muse-last.json'), JSON.stringify({ args, home,
-      settings: JSON.parse(readFileSync(join(home, 'muse', 'settings.json'), 'utf8')),
-      trust: JSON.parse(readFileSync(join(home, 'muse', 'trust.json'), 'utf8')),
-      prompt: readFileSync(at('--prompt-file'), 'utf8'), bridge: !!process.env.OCTIPUS_AGENT_URL && !!process.env.OCTIPUS_AGENT_KEY }));
-    const id = at('--session-id');
-    if (id) {
-      const dir = join(process.env.HOME, '.local', 'share', 'muse', 'sessions', '2026', '11', '13', id);
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, 'session.jsonl'), '');
-    }
-    const out = e => console.log(JSON.stringify(e));
-    out({ payload_type: 'run.lifecycle.started', payload: { kind: 'run_started' } });
-    out({ payload_type: 'task.lifecycle.proposed', payload: { event: { kind: 'proposed', task_id: 'm1', task_kind: 'model.meta.response' } } });
-    out({ payload_type: 'run.output.delta', payload: { text: 'answer for ' + id } });
-    const marker = join(process.cwd(), 'allowance-marker');
-    const used = existsSync(marker) ? Number(readFileSync(marker, 'utf8')) : 5;
-    out({ payload_type: 'run.usage', payload: { allowance: { window: { used_percent: used, resets_at_ms: 1794599619000 }, weekly: { used_percent: 1, resets_at_ms: 1794787200000 } },
-      models: [{ input_tokens: 10, cached_tokens: 4, output_tokens: 2 }] } });
-    out({ payload_type: 'run.terminal.completed', payload: { terminal: 'completed', text: 'answer for ' + id } });
+    const logDir = id => join(process.env.HOME, '.local', 'share', 'muse', 'sessions', '2026', '11', '13', id);
+    const out = e => console.log(JSON.stringify({ jsonrpc: '2.0', ...e }));
+    const note = (method, params = {}) => out({ method, params });
+    let opened;
+    createInterface({ input: process.stdin }).on('line', line => {
+      const m = JSON.parse(line);
+      if (m.method === 'initialize') return out({ id: m.id, result: {} });
+      if (m.method === 'session/start') {
+        if (!args.includes('--no-session-log')) { mkdirSync(logDir(m.params.sessionId), { recursive: true }); writeFileSync(join(logDir(m.params.sessionId), 'session.jsonl'), ''); }
+        opened = m; return out({ id: m.id, result: { session: { sessionId: m.params.sessionId } } });
+      }
+      if (m.method === 'session/resume') {
+        if (!existsSync(logDir(m.params.sessionId)) || existsSync(join(process.cwd(), 'refuse-resume')))
+          return out({ id: m.id, error: { code: -32020, data: { kind: 'sessionNotFound', retryable: false }, message: 'session ' + m.params.sessionId + ' not found' } });
+        opened = m; return out({ id: m.id, result: { session: { sessionId: m.params.sessionId } } });
+      }
+      if (m.method !== 'turn/start') return;
+      const id = m.params.sessionId;
+      writeFileSync(join(process.cwd(), 'muse-last.json'), JSON.stringify({ args, home, open: opened,
+        settings: JSON.parse(readFileSync(join(home, 'muse', 'settings.json'), 'utf8')),
+        trust: JSON.parse(readFileSync(join(home, 'muse', 'trust.json'), 'utf8')),
+        prompt: m.params.input[0].text, bridge: !!process.env.OCTIPUS_AGENT_URL && !!process.env.OCTIPUS_AGENT_KEY }));
+      out({ id: m.id, result: { status: 'accepted', turnId: m.params.commandId } });
+      note('turn/started');
+      note('turn/modelAttemptStarted');
+      note('session/tokenUsage', { usage: { inputTokens: 10, cachedTokens: 4, outputTokens: 2, reasoningTokens: 0 } });
+      if (existsSync(join(process.cwd(), 'budget-marker'))) {
+        writeFileSync(join(process.cwd(), 'budget-reported'), '');
+        for (let i = 0; i < 5; i++) note('session/tokenUsage', { usage: { inputTokens: 5000, cachedTokens: 0, outputTokens: 500, reasoningTokens: 0 } });
+        return; // never completes: the turn would run on
+      }
+      note('item/started', { item: { itemId: 'a1', kind: 'agentMessage', text: '' } });
+      note('item/delta', { itemId: 'a1', delta: 'answer for ' + id });
+      note('item/completed', { item: { itemId: 'a1', kind: 'agentMessage', status: 'completed', text: 'answer for ' + id } });
+      const marker = join(process.cwd(), 'allowance-marker');
+      const used = existsSync(marker) ? Number(readFileSync(marker, 'utf8')) : 5;
+      note('usage/changed', { window: { usedPercent: used, resetsAtMs: 1794599619000 }, weekly: { usedPercent: 1, resetsAtMs: 1794787200000 } });
+      note('turn/completed', { terminal: 'completed' });
+    }).on('close', () => process.exit(0));
   `);
   fixture.sessions = new Map();
   fixture.spawnCount = 0;
@@ -791,12 +814,13 @@ describe('Muse Code runs', () => {
   beforeEach(() => { vi.stubEnv('HOME', fixture.dir); });
   afterEach(() => { vi.unstubAllEnvs(); });
   const last = () => JSON.parse(readFileSync(join(fixture.dir, 'muse-last.json'), 'utf8')) as {
-    args: string[]; home: string; settings: Record<string, any>; trust: { projects: Record<string, unknown> }; prompt: string; bridge: boolean };
-  const flag = (args: string[], name: string) => args[args.indexOf(name) + 1];
+    args: string[]; home: string; open: { method: string; params: { sessionId: string; workspaceRoots?: string[] } };
+    settings: Record<string, any>; trust: { projects: Record<string, unknown> }; prompt: string; bridge: boolean };
 
-  it('runs with the bridge as its only tools in a per-run config home, removed afterwards', async () => {
+  it('runs muse serve with the bridge as its only tools in a per-run config home, removed afterwards', async () => {
     const answer = await makeWorker('cli/muse', { sessionId: 'muse-tools' }).run('first');
     const launch = last();
+    expect(launch.args.slice(0, 2)).toEqual(['serve', '--disable-request-user-input']);
     expect(launch.bridge).toBe(true);
     const toolset = launch.settings.run.toolset as string[];
     expect(toolset.length).toBeGreaterThan(0);
@@ -804,26 +828,44 @@ describe('Muse Code runs', () => {
     expect(toolset).toContain('mcp__octipus__get_cli_run_context');
     expect(Object.keys(launch.settings.mcpServers)).toEqual(['octipus']);
     expect(launch.settings.skills.activation.bundled).toEqual({ 'bundled://muse-core/skills/git/SKILL.md': 'off' });
-    expect(Object.keys(launch.trust.projects)).toEqual([flag(launch.args, '--workspace')]);
-    expect(flag(launch.args, '--workspace')).not.toBe(fixture.dir);
+    expect(launch.open.method).toBe('session/start');
+    expect(Object.keys(launch.trust.projects)).toEqual(launch.open.params.workspaceRoots);
+    expect(launch.open.params.workspaceRoots).not.toEqual([fixture.dir]);
     expect(launch.prompt).toContain(`This run's files are in ${fixture.dir}`);
     expect((await import('node:fs')).existsSync(launch.home)).toBe(false);
-    expect(answer).toContain(flag(launch.args, '--session-id'));
+    expect(answer).toContain(launch.open.params.sessionId);
   });
 
-  it('continues its session with the same id, and starts cold once the session log is gone', async () => {
+  it('starts its session under a minted id, resumes it, and starts cold once the session log is gone', async () => {
     const first = makeWorker('cli/muse', { sessionId: 'muse-resume' });
     await first.run('first');
-    const id = flag(last().args, '--session-id');
+    const id = last().open.params.sessionId;
     expect(await loadCliSession('muse-resume', 'Muse Code', first.fingerprint)).toMatchObject({ id });
     await makeWorker('cli/muse', { sessionId: 'muse-resume' }).run('second');
-    expect(flag(last().args, '--session-id')).toBe(id);
+    expect(last().open).toMatchObject({ method: 'session/resume', params: { sessionId: id } });
     rmSync(join(fixture.dir, '.local', 'share', 'muse', 'sessions'), { recursive: true, force: true });
     const third = makeWorker('cli/muse', { sessionId: 'muse-resume' });
     await third.run('third');
-    const fresh = flag(last().args, '--session-id');
-    expect(fresh).not.toBe(id);
-    expect(await loadCliSession('muse-resume', 'Muse Code', third.fingerprint)).toMatchObject({ id: fresh });
+    const fresh = last().open;
+    expect(fresh.method).toBe('session/start');
+    expect(fresh.params.sessionId).not.toBe(id);
+    expect(await loadCliSession('muse-resume', 'Muse Code', third.fingerprint)).toMatchObject({ id: fresh.params.sessionId });
+  });
+
+  it('starts cold when muse refuses to resume a session it still has a log for', async () => {
+    await makeWorker('cli/muse', { sessionId: 'muse-refused' }).run('first');
+    const id = last().open.params.sessionId;
+    writeFileSync(join(fixture.dir, 'refuse-resume'), '');
+    const answer = await makeWorker('cli/muse', { sessionId: 'muse-refused' }).run('second');
+    expect(last().open.method).toBe('session/start');
+    expect(last().open.params.sessionId).not.toBe(id);
+    expect(answer).toContain(last().open.params.sessionId);
+  });
+
+  it('stops a run mid-turn once per-call usage passes the token budget', async () => {
+    writeFileSync(join(fixture.dir, 'budget-marker'), '');
+    await expect(makeWorker('cli/muse', { sessionId: 'muse-budget', maxTokenBudget: 8000 }).run('work')).rejects.toThrow(/budget/i);
+    expect((await import('node:fs')).existsSync(join(fixture.dir, 'budget-reported'))).toBe(true);
   });
 
   it('marks the subscription quota exhausted when the vendor reports a spent allowance', async () => {

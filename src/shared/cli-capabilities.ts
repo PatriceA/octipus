@@ -57,15 +57,15 @@ export const SCOPED_EXTRA_ARGS: Record<string, { flags: readonly string[]; value
  * conversation SILENTLY, which is worse than not reusing. Vibe is absent
  * because its resume depends on `log_interactions` staying enabled in the
  * user's own config, which we do not control. Muse Code is caller-minted
- * like Claude, with one flag for both runs (`--session-id <uuid>`); muse
- * starts a NEW session under an id it does not know without saying so, so
- * the worker checks the session log exists before it resumes
- * (`museSessionLogExists`).
+ * like Claude (a UUIDv7): its session protocol starts the session under that
+ * id (`session/start`) and later runs `session/resume` it, which fails on an
+ * id muse no longer holds, so the worker checks the session log exists first
+ * (`museSessionLogExists`) and starts cold instead.
  */
 export const CLI_RESUME: Record<string, { style: 'caller-minted' | 'captured'; flag: string }> = {
   'Claude Code': { style: 'caller-minted', flag: '--resume' },
   'Codex CLI': { style: 'captured', flag: 'resume' },
-  'Muse Code': { style: 'caller-minted', flag: '--session-id' },
+  'Muse Code': { style: 'caller-minted', flag: 'session/resume' },
 };
 
 /**

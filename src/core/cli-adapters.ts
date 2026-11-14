@@ -5,6 +5,7 @@ import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync,
 import { homedir, tmpdir, } from 'os';
 import { dirname, isAbsolute, join, resolve } from 'path';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
+import { v7 as uuidv7 } from 'uuid';
 import type { CLIAgentConfig } from '@/db/schema/models';
 import { computeLineDiff } from '@/shared/diff';
 import { CLI_SPACE_REFUSALS, validateCliPermissionMode, validateScopedExtraArgs } from '@/shared/cli-capabilities';
@@ -593,6 +594,27 @@ export function museBridgeToolName(name: string): string {
   return `mcp__${MUSE_BRIDGE_SERVER}__${name}`;
 }
 
+/** JSON-RPC ids of a muse run's own requests (`buildMuseArgs`). */
+const MUSE_OPEN_ID = 2;
+const MUSE_TURN_ID = 3;
+
+/** One MSP (JSON-RPC 2.0) line; a notification without `id`. */
+export function mspLine(id: number | undefined, method: string, params?: unknown): string {
+  return JSON.stringify({ jsonrpc: '2.0', ...(id === undefined ? {} : { id }), method, ...(params === undefined ? {} : { params }) }) + '\n';
+}
+
+/**
+ * What the worker does with a `muse serve` run's stdin after `message`:
+ * write the turn once the session is open, end input (serve then exits)
+ * once the turn is over, a request failed, or muse asked something an
+ * Octipus run never answers (the parser reports the last two as failures).
+ */
+export function museProtocolStep(message: Record<string, unknown>, turn: string): { write?: string; end?: boolean } {
+  if (message.id === MUSE_OPEN_ID && message.result) return { write: turn };
+  if (message.error || message.method === 'turn/completed' || (message.method && message.id !== undefined)) return { end: true };
+  return {};
+}
+
 /**
  * muse's workspace root for runs on `workingDirectory`: an empty directory,
  * trusted only in the run's own settings. muse loads MCP servers only in a
@@ -794,7 +816,7 @@ export class CLIArgumentBuilder {
     agentId?: string,
     connection?: CliRunConnection,
     resume?: { id: string; isFirstRun: boolean },
-  ): { binary: string; args: string[]; stdinPrompt?: string; keepStdinOpen?: boolean; useShell?: boolean; env?: Record<string, string> } {
+  ): { binary: string; args: string[]; stdinPrompt?: string; keepStdinOpen?: boolean; museTurn?: string; useShell?: boolean; env?: Record<string, string> } {
     if (connection?.images?.length && toolName !== 'Claude Code' && toolName !== 'Codex CLI' && toolName !== 'Muse Code') {
       prompt += '\n\nOriginal image attachments (inspect with your native image-reading tool):\n' + connection.images.map(image => JSON.stringify(image.path)).join('\n');
     }
@@ -884,34 +906,41 @@ export class CLIArgumentBuilder {
     systemPrompt?: string | null,
     connection?: CliRunConnection,
     resume?: { id: string; isFirstRun: boolean },
-  ): { binary: string; args: string[]; env: Record<string, string> } {
+  ): { binary: string; args: string[]; env: Record<string, string>; stdinPrompt: string; museTurn: string } {
     // A muse run's only tools are its Octipus bridge (`prepareMuseHome`); without one it has nothing to work with.
     if (!connection?.muse) throw new Error('Muse Code runs only with the Octipus tool bridge, which did not start');
     validateCliPermissionMode('Muse Code', settings.permissionMode);
-    // No reminder agents (background model calls), no request_user_input, no
-    // foreign rules or skills, no muse approval prompts or LLM approval judge:
-    // Octipus authorizes every bridge call itself.
-    const args = ['exec', '--json', '--disable-reminders', '--disable-request-user-input', '--no-foreign-personal-context',
-      '--disable-approval', '--approval-judge', 'off', '--workspace', connection.muse.workspace];
-    // Caller-minted session (CLI_RESUME): the same id on every run continues it.
+    // `muse serve`: the Muse Session Protocol (MSP, JSON-RPC) over stdio, which
+    // reports token usage per model call (`muse exec` only once, at the end) and
+    // compacts on request (`compactMuseSession`). No request_user_input and no
+    // reminder agents (background model calls); `allowAll` below: no muse
+    // approval prompts or approval judge, Octipus authorizes every bridge call.
     // A run that is never resumed writes no session log (as codex --ephemeral).
-    args.push(...(resume ? ['--session-id', resume.id] : ['--no-session-log']));
+    const args = ['serve', '--disable-request-user-input', '-c', 'run.reminder_roster=[]', ...(resume ? [] : ['--no-session-log'])];
     // Model override: env var > settings > the user's muse default (carried into the run's settings).
     const model = process.env.MUSE_MODEL || settings.model;
-    if (model) args.push('--model', model);
-    if (Number.isFinite(connection.maxIterations)) args.push('--max-model-steps', String(connection.maxIterations));
-    for (const image of connection.images ?? []) args.push('--image', image.path);
-    if (settings.extraArgs?.length) args.push(...settings.extraArgs);
-    // muse reads no prompt from stdin and argv caps one argument at 128 KiB
-    // (Linux) and mangles it under cmd.exe: always a 0600 prompt file, removed
-    // by the worker's launch cleanup.
+    // `--reasoning-effort` is the one scoped extra arg; MSP takes it per turn.
+    const effortAt = settings.extraArgs?.indexOf('--reasoning-effort') ?? -1;
+    const effort = effortAt >= 0 ? settings.extraArgs![effortAt + 1] : undefined;
+    // Caller-minted session (CLI_RESUME), a UUIDv7 as MSP requires: the first
+    // run starts it under that id, later runs resume it (an unknown id fails
+    // with `sessionNotFound`, never silently starts over).
+    const sessionId = resume?.id || uuidv7();
+    const open = resume && !resume.isFirstRun
+      ? mspLine(MUSE_OPEN_ID, 'session/resume', { commandId: uuidv7(), sessionId, excludeItems: true, ...(model ? { modelId: model } : {}) })
+      : mspLine(MUSE_OPEN_ID, 'session/start', { commandId: uuidv7(), sessionId, workspaceRoots: [connection.muse.workspace], approvalMode: 'allowAll', ...(model ? { modelId: model } : {}) });
+    // The prompt travels on stdin inside the turn: never argv, no temp file.
     const placement = connection.workingDirectory
       ? `Muse Code's own workspace root is an empty placeholder. This run's files are in ${connection.workingDirectory}; reach them only through the Octipus tools.`
       : '';
-    const combined = [systemPrompt, placement, prompt].filter(Boolean).join('\n\n---\n\n');
-    sweepStaleFiles(join(tmpdir(), 'octipus-cli'), 'muse-prompt-', 24 * 3600_000); // left by a crashed server
-    args.push('--prompt-file', this.writeTempFile('muse-prompt-', combined));
-    return { binary: 'muse', args, env: { XDG_CONFIG_HOME: connection.muse.home } };
+    const text = [systemPrompt, placement, prompt].filter(Boolean).join('\n\n---\n\n');
+    const input = [{ type: 'text', text }, ...(connection.images ?? []).map(image => ({ type: 'image', base64Data: image.data, mediaType: image.mimeType }))];
+    return {
+      binary: 'muse', args, env: { XDG_CONFIG_HOME: connection.muse.home },
+      stdinPrompt: mspLine(1, 'initialize', { clientInfo: { name: 'octipus', version: '1' } }) + mspLine(undefined, 'initialized') + open,
+      // Sent once the session is open (`museProtocolStep`): MSP serves requests concurrently.
+      museTurn: mspLine(MUSE_TURN_ID, 'turn/start', { commandId: uuidv7(), sessionId, input, ...(effort ? { reasoningEffort: effort } : {}) }),
+    };
   }
 
   private buildClaudeArgs(
@@ -1263,9 +1292,9 @@ export interface CLIParserCallbacks {
   /** Claude's `system/init`: the vendor has opened (or reopened) the session. */
   onSessionInit?: () => void;
   /**
-   * The vendor's subscription allowance as of this run (muse `run.usage`
-   * `allowance`): the highest used share of its windows, and when the
-   * fullest one resets.
+   * The vendor's subscription allowance as of this run (muse `usage/changed`,
+   * or a quota-stopped turn at 100 %): the highest used share of its windows,
+   * and when the fullest one resets.
    */
   onAllowance?: (allowance: { usedPercent: number; resetsAt?: Date }) => void;
   /**
@@ -1470,107 +1499,101 @@ export class CLIOutputParser {
     return null;
   }
 
-  /** The current muse model response (task id + text so far). */
+  /** The current muse agent message (item id + text so far). */
   private museTurn?: { id: string; text: string };
-  /** Started muse tool tasks without a result, task id → tool name, in start order. */
-  private museOpenTools = new Map<string, string>();
+  /** Started muse tool calls without a result (item ids). */
+  private museOpenTools = new Set<string>();
   private museReplied = false;
 
   private parseMuseEvent(event: Record<string, unknown>): { text: string; replace?: boolean } | null {
-    // `muse exec --json` envelope: { payload_type, payload }. Read here:
-    //   run.lifecycle.started            the session is open and holds this run's prompt
-    //   task.lifecycle.proposed { event: { task_id, task_kind: "model.<p>.response" | "tool.<name>" } }
-    //   task.lifecycle.rejected { event: { task_id, reason } }
-    //   run.output.delta { text }        streamed assistant text of the current response
-    //   tool.result { call_id, correlation_facts: { tool_name, outcome }, text }
-    //   run.usage { models: [{ input_tokens, cached_tokens, output_tokens }], allowance }   once, at run end
-    //   run.terminal.<state> { terminal, text, reason }
+    // `muse serve` (MSP, JSON-RPC 2.0) messages read here:
+    //   error responses                       a refused initialize / session open / turn
+    //   turn/started                          the session holds this run's prompt
+    //   turn/modelAttemptStarted              one model call
+    //   item/started|completed { item: { itemId, kind: "toolCall", tool, status, visibleOutput, failureReason } }
+    //   item/started|completed { item: { itemId, kind: "agentMessage", text } }, item/delta { itemId, field?, delta }
+    //   session/tokenUsage { usage: { inputTokens, cachedTokens, outputTokens } }   per model call
+    //   usage/changed { window, weekly: { usedPercent, resetsAtMs } }
+    //   turn/completed { terminal, error?: { message, quota? }, reason? }
     // A muse run has no native tools (`prepareMuseHome`): every tool is an Octipus bridge tool.
-    const type = event.payload_type as string | undefined;
-    const payload = (event.payload ?? {}) as Record<string, unknown>;
-    const lifecycle = payload.event as Record<string, unknown> | undefined;
-    const taskId = typeof lifecycle?.task_id === 'string' ? lifecycle.task_id : '';
+    const fail = (reason: string) => { this.emit('error', { error: reason }); this.callbacks.onRunError?.(reason); };
     const replied = () => { if (!this.museReplied) { this.museReplied = true; this.callbacks.onVendorReply?.(); } };
-
-    if (type === 'run.lifecycle.started') {
-      this.callbacks.onSessionInit?.();
-      return null;
-    }
-
-    if (type === 'task.lifecycle.proposed' && typeof lifecycle?.task_kind === 'string') {
-      const kind = lifecycle.task_kind;
-      if (/^model\..+\.response$/.test(kind)) {
-        this.callbacks.onTurn();
-        this.museTurn = { id: taskId, text: '' };
-      } else if (kind.startsWith('tool.')) {
-        replied();
-        const toolName = kind.slice('tool.'.length);
-        this.flushCommentary();
-        this.callbacks.onToolCall?.();
-        this.museOpenTools.set(taskId, toolName);
-        this.emit('action', { type: 'cli_tool_use', id: taskId || undefined, toolName });
-      }
-      return null;
-    }
-
-    if (type === 'task.lifecycle.rejected' && this.museOpenTools.has(taskId)) {
-      const toolName = this.museOpenTools.get(taskId)!;
-      this.museOpenTools.delete(taskId);
-      this.emit('action', { type: 'cli_tool_result', id: taskId, toolName, output: String(lifecycle?.reason ?? 'rejected'), isError: true });
-      return null;
-    }
-
-    if (type === 'run.output.delta' && typeof payload.text === 'string') {
+    const error = event.error as { message?: unknown; data?: { kind?: unknown; reason?: unknown } } | undefined;
+    // The typed kind (`sessionNotFound` → the worker's cold retry) before the text.
+    if (error) { fail(`Muse Code refused the run (${String(error.data?.reason ?? error.data?.kind ?? 'error')}): ${String(error.message ?? 'unknown error')}`); return null; }
+    if (typeof event.method !== 'string') return null;
+    if (event.id !== undefined) { fail(`Muse Code asked for ${event.method}, which an Octipus run does not answer`); return null; }
+    const params = (event.params ?? {}) as Record<string, unknown>;
+    const item = (params.item ?? {}) as Record<string, unknown>;
+    const itemId = typeof item.itemId === 'string' ? item.itemId : '';
+    const startTool = () => {
       replied();
-      const turn = this.museTurn ??= { id: 'muse-turn', text: '' };
-      const first = !turn.text;
-      turn.text += payload.text;
-      this.rememberCommentary(turn.id, turn.text);
-      return { text: payload.text, replace: first };
-    }
+      this.flushCommentary();
+      this.callbacks.onToolCall?.();
+      this.museOpenTools.add(itemId);
+      this.emit('action', { type: 'cli_tool_use', id: itemId || undefined, toolName: String(item.tool ?? 'tool') });
+    };
 
-    if (type === 'tool.result') {
-      const facts = payload.correlation_facts as Record<string, unknown> | undefined;
-      const toolName = typeof facts?.tool_name === 'string' ? facts.tool_name : 'tool';
-      // A result carries the model's call id, its start the task id: pair it
-      // with the oldest open start of the same tool so the UI row flips.
-      const started = [...this.museOpenTools].find(([, name]) => name === toolName)?.[0];
-      // A call muse refused (an unknown tool name: the model guessed at a
-      // native tool the run does not have) was closed by its rejection.
-      if (started === undefined && !facts) return null;
-      if (started !== undefined) this.museOpenTools.delete(started);
-      this.emit('action', {
-        type: 'cli_tool_result',
-        id: started || (typeof payload.call_id === 'string' ? payload.call_id : undefined),
-        toolName,
-        output: String(payload.text ?? '').slice(0, 2000),
-        isError: facts?.outcome !== 'success',
-      });
-      return null;
-    }
-
-    if (type === 'run.usage') {
-      const allowance = museAllowance(payload.allowance);
-      if (allowance) this.callbacks.onAllowance?.(allowance);
-      const usage = museUsage(payload.models);
-      if (!usage) return null;
-      const totalTokens = usage.inputTokens + usage.outputTokens;
-      this.emit('thought', { status: 'completed', stats: { totalTokens, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cacheRead: usage.cacheReadTokens } });
-      this.reportedTokens += totalTokens;
-      this.callbacks.onTokenUsage?.({ input: usage.inputTokens, output: usage.outputTokens, total: totalTokens, cacheRead: usage.cacheReadTokens });
-      return null;
-    }
-
-    if (type?.startsWith('run.terminal.')) {
-      if (payload.terminal !== 'completed') {
-        const reason = `Muse Code run ${String(payload.terminal ?? 'failed')}: ${typeof payload.reason === 'string' ? payload.reason : 'unknown reason'}`;
-        this.emit('error', { error: reason });
-        this.callbacks.onRunError?.(reason);
+    switch (event.method) {
+      case 'turn/started':
+        this.callbacks.onSessionInit?.();
+        return null;
+      case 'turn/modelAttemptStarted':
+        this.callbacks.onTurn();
+        return null;
+      case 'item/started':
+        if (item.kind === 'toolCall') startTool();
+        else if (item.kind === 'agentMessage') this.museTurn = { id: itemId, text: '' };
+        return null;
+      case 'item/delta': {
+        const turn = this.museTurn;
+        if (!turn || params.itemId !== turn.id || (params.field ?? 'text') !== 'text' || typeof params.delta !== 'string') return null;
+        replied();
+        const first = !turn.text;
+        turn.text += params.delta;
+        this.rememberCommentary(turn.id, turn.text);
+        return { text: params.delta, replace: first };
       }
-      return typeof payload.text === 'string' && payload.text ? { text: payload.text, replace: true } : null;
+      case 'item/completed':
+        if (item.kind === 'toolCall') {
+          // A call muse refused before it ran (an unknown tool) completes without a start.
+          if (!this.museOpenTools.has(itemId)) startTool();
+          this.museOpenTools.delete(itemId);
+          this.emit('action', { type: 'cli_tool_result', id: itemId || undefined, toolName: String(item.tool ?? 'tool'),
+            output: String(item.visibleOutput ?? item.failureReason ?? item.status ?? '').slice(0, 2000), isError: item.status !== 'completed' });
+        } else if (item.kind === 'agentMessage' && typeof item.text === 'string' && item.text) {
+          replied();
+          this.museTurn = { id: itemId, text: item.text };
+          this.rememberCommentary(itemId, item.text);
+          return { text: item.text, replace: true };
+        }
+        return null;
+      case 'session/tokenUsage': {
+        const raw = params.usage as Record<string, unknown> | undefined;
+        const usage = museUsage(raw ? [{ input_tokens: raw.inputTokens, cached_tokens: raw.cachedTokens, output_tokens: raw.outputTokens }] : undefined);
+        if (!usage) return null;
+        const totalTokens = usage.inputTokens + usage.outputTokens;
+        this.emit('thought', { status: 'completed', stats: { totalTokens, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cacheRead: usage.cacheReadTokens } });
+        this.reportedTokens += totalTokens;
+        this.callbacks.onTokenUsage?.({ input: usage.inputTokens, output: usage.outputTokens, total: totalTokens, cacheRead: usage.cacheReadTokens });
+        return null;
+      }
+      case 'usage/changed': {
+        const allowance = museAllowance(params);
+        if (allowance) this.callbacks.onAllowance?.(allowance);
+        return null;
+      }
+      case 'turn/completed':
+        if (params.terminal !== 'completed') {
+          const turnError = params.error as { message?: unknown; quota?: { resetsAtMs?: unknown } } | undefined;
+          // A typed quota stop: the allowance is spent until the reported reset.
+          if (turnError?.quota) this.callbacks.onAllowance?.({ usedPercent: 100, ...(typeof turnError.quota.resetsAtMs === 'number' ? { resetsAt: new Date(turnError.quota.resetsAtMs) } : {}) });
+          fail(`Muse Code run ${String(params.terminal ?? 'failed')}: ${String(turnError?.message ?? params.reason ?? 'unknown reason')}`);
+        }
+        return null;
+      default:
+        return null;
     }
-
-    return null;
   }
 
   private parseClaudeEvent(event: Record<string, unknown>, type: string): { text: string; replace?: boolean } | null {
@@ -2185,19 +2208,21 @@ export function museUsage(models: unknown): { inputTokens: number; outputTokens:
 }
 
 /**
- * The allowance of a muse `run.usage` payload: `{ window, weekly }`, each
- * `{ used_percent, resets_at_ms }`. Reports the fuller window (the one that
+ * The allowance of a muse `run.usage` payload or MSP `usage/changed`:
+ * `{ window, weekly }`, each with a used percentage and reset. Reports the fuller window (the one that
  * blocks first) and its reset; null when the payload carries none (API-key
  * runs, the echo provider).
  */
 export function museAllowance(allowance: unknown): { usedPercent: number; resetsAt?: Date } | null {
   if (!allowance || typeof allowance !== 'object') return null;
-  const periods = ['window', 'weekly'].map(key => (allowance as Record<string, unknown>)[key])
-    .filter((p): p is { used_percent: number; resets_at_ms?: unknown } => !!p && typeof (p as { used_percent?: unknown }).used_percent === 'number');
+  // `muse exec` spells the members snake_case, MSP `usage/changed` camelCase.
+  const periods = ['window', 'weekly'].map(key => (allowance as Record<string, Record<string, unknown> | undefined>)[key])
+    .map(p => ({ used: p?.used_percent ?? p?.usedPercent, resets: p?.resets_at_ms ?? p?.resetsAtMs }))
+    .filter((p): p is { used: number; resets: unknown } => typeof p.used === 'number');
   if (!periods.length) return null;
   // The fuller window blocks first; at a tie, the later reset is when work can resume.
-  const fullest = periods.reduce((a, b) => b.used_percent > a.used_percent || (b.used_percent === a.used_percent && Number(b.resets_at_ms ?? 0) > Number(a.resets_at_ms ?? 0)) ? b : a);
-  return { usedPercent: fullest.used_percent, ...(typeof fullest.resets_at_ms === 'number' ? { resetsAt: new Date(fullest.resets_at_ms) } : {}) };
+  const fullest = periods.reduce((a, b) => b.used > a.used || (b.used === a.used && Number(b.resets ?? 0) > Number(a.resets ?? 0)) ? b : a);
+  return { usedPercent: fullest.used, ...(typeof fullest.resets === 'number' ? { resetsAt: new Date(fullest.resets) } : {}) };
 }
 
 /** Display name for a codex mcp_tool_call item: "server.tool". */

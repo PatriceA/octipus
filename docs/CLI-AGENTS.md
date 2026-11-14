@@ -451,7 +451,20 @@ server runs under (a device code you approve in the browser). Alternatively set
 a metered `META_API_KEY` and turn on "Pass server API keys" on the model row;
 the key takes priority over the login. Register the model from Models → Detected
 CLI Tools; its limits come from muse's model catalog (1,007,997-token context,
-128,000 output tokens) and images reach it with `--image` (verified).
+128,000 output tokens) and images reach it as image parts of the turn
+(verified).
+
+**How Octipus drives it.** An agent run is a `muse serve` process speaking
+muse's session protocol (MSP: JSON-RPC over stdio): `initialize`, then
+`session/start` (first run) or `session/resume`, then one `turn/start` whose
+input carries the prompt and images — on stdin, never argv, no temp file.
+Octipus sends the turn only once the session is open (MSP serves requests
+concurrently, so a pipelined turn races its session), and ends stdin when
+`turn/completed` arrives, after which serve exits. The stream is parsed live
+(`parseMuseEvent` in `src/core/cli-adapters.ts`): tool calls and the answer
+from `item/*`, token usage per model call from `session/tokenUsage`, the
+allowance from `usage/changed`. One-shot completions still use `muse exec`
+(table below).
 
 **Billing.** Mixed: a Muse Code subscription allowance through the login
 (`https://accountscenter.meta.com/muse_code/`), or metered API use with
@@ -471,36 +484,45 @@ CLI Tools; its limits come from muse's model catalog (1,007,997-token context,
   model and reasoning efforts carry over. Foreign rules and skills
   (`~/.claude`, `~/.codex`, `~/.agents`) are off, every bundled, user and
   plugin skill is switched off by path, native subagents and cross-session
-  messaging are off, and `--disable-reminders` stops muse's background
+  messaging are off, and `run.reminder_roster=[]` stops muse's background
   reminder agents.
 - muse loads MCP servers only in a trusted workspace, and a trusted workspace
   also loads its own `AGENTS.md`, skills and `.mcp.json` servers. So muse's
-  workspace (`--workspace`) is an empty directory per Octipus workspace,
+  workspace (`session/start`'s `workspaceRoots`) is an empty directory per Octipus workspace,
   trusted only in the run's own `trust.json`; the files the run works on are
   reached through the Octipus tools, and Octipus injects the project's
   `AGENTS.md` itself. The prompt tells the model where its files are.
 - The login is linked, never copied or read: the run's `auth.json` is a
   symbolic link to the user's. Should muse ever rewrite it during a run, the
   new file is moved back over the user's when the run ends.
-- muse's own approval prompts and LLM approval judge are off: Octipus
-  authorizes every call. Plan mode and the read-only modes work through the
+- muse's own approval prompts and LLM approval judge are off (the session's
+  approval mode is `allowAll`, and `request_user_input` is withheld): Octipus
+  authorizes every call. Should muse still send a request, the run fails
+  rather than wait for an answer that never comes. Plan mode and the read-only modes work through the
   tools Octipus offers, so they are real read-only runs. A model row's CLI
   permission mode has nothing to act on and is refused, both when the model is
   saved and at spawn.
 
 **Limits.**
 
-- Usage arrives once, at the end of a run (`run.usage`), never per model call
-  (`muse exec --json` emits no token counts before it; checked on 1.4.18). The
-  token-budget kill therefore applies after the run; within it,
-  `--max-model-steps` (the run's remaining iterations) is the cap.
-- Its subscription allowance (`run.usage.allowance`: the five-hour window and
-  the week, each with a used percentage and reset time) feeds the quota
-  tracker: at 100 % the provider is marked exhausted until the reported reset.
-- No manual `/compact`: muse compacts its own context automatically during a
-  run; `muse exec` sends `/compact` to the model as text, and its session
-  protocol refuses an exec session (`compaction_unavailable`). Octipus says so
-  and keeps the session.
+- Token usage arrives per model call (`session/tokenUsage`), so the
+  token-budget kill stops a run mid-turn (verified live on 1.4.20: a 16,000
+  billable-token budget killed a five-read run after its third model call).
+  MSP has no step cap; Octipus's own turn limit counts model calls
+  (`turn/modelAttemptStarted`) and stops the run past it.
+- Its subscription allowance (`usage/changed`: the five-hour window and the
+  week, each with a used percentage and reset time) feeds the quota tracker:
+  at 100 % the provider is marked exhausted until the reported reset, and a
+  turn muse stops for quota (`turn/completed` with `error.quota`) does the same.
+- `/compact` is muse's own compaction (`session/compact`, see
+  [Compaction](#compaction)). muse compacts — by hand or automatically — only
+  when it knows the model's context limit. `muse serve` reads that from the
+  model catalog that `muse exec` and the interactive `muse` cache under
+  `~/.local/share/muse/model-catalog`, and fetches none itself; without it,
+  `session/compact` answers `compaction_unavailable` (verified on 1.4.20: a
+  fresh data directory refuses, the same session with the cached catalog
+  compacts). Octipus's one-shot completions run `muse exec`, which refreshes
+  the cache; otherwise run `muse` once as the server account.
 - Not in shared spaces and not on personal models: muse keeps one login and
   its session logs in the server account's `~/.config/muse` and
   `~/.local/share/muse`, which Octipus cannot yet separate per member or per
@@ -768,13 +790,14 @@ prompt each time.
 Claude Code, Codex CLI and Muse Code support this. Claude's id is minted by
 Octipus itself and passed on the first run (`--session-id`), so there is
 never a run with no id to resume later; Codex assigns its own id, which
-Octipus captures from `thread.started`. Muse Code's is minted too, and passed
-as the same `--session-id` on every run. muse starts a new, empty session
-under an id it does not know without saying so, so Octipus first checks that
+Octipus captures from `thread.started`. Muse Code's is minted too (a UUIDv7,
+which its session protocol requires): the first run starts the session under
+it (`session/start`), later runs `session/resume` it. A resume of a session
+muse no longer holds fails (`sessionNotFound`), so Octipus first checks that
 muse still holds the session log
 (`${XDG_DATA_HOME:-~/.local/share}/muse/sessions/YYYY/MM/DD/<id>/session.jsonl`)
 and starts cold otherwise. A run that is never resumed passes
-`--no-session-log`, as Codex passes `--ephemeral`; session logs of resumable
+`--no-session-log` to `muse serve`, as Codex passes `--ephemeral`; session logs of resumable
 runs stay in the vendor's directory, as Claude's and Codex's do. Antigravity and Mistral Vibe do not
 participate, for different reasons:
 
@@ -822,8 +845,12 @@ per-run.
 When the latest root agent saved a resumable CLI session, `/compact` runs that
 provider's native compaction on its exact vendor session ID. The confirmation
 names that provider. Automatic Octipus summarization leaves that session alone.
-Muse Code has no manual compaction to offer (it compacts its own context
-during a run); `/compact` says so and keeps the session.
+For Muse Code that is `session/compact` over `muse serve` (`compactMuseSession`
+in `src/core/cli-compaction.ts`), in a config home of its own with no tools:
+resume the session, compact it, and wait for the compaction item's outcome,
+not the acknowledgement. Focus instructions are refused, as for Codex; "nothing
+to compact" is reported as such; a missing context limit is explained (see
+[Muse Code](#muse-code)).
 Selection follows the latest root agent, rather than the timestamps of older
 saved provider sessions. Child agents are excluded.
 
@@ -1023,7 +1050,8 @@ a missing host `/tmp` executable is not a reason to request elevated access.
 
 CLI chat turns skip auxiliary OCR. Claude receives original image bytes as
 base64 image blocks in its stream-JSON user message; Codex receives original
-workspace file paths through `--image`. Both transports include newly attached
+workspace file paths through `--image`; Muse Code receives base64 image parts
+in its MSP `turn/start` input. All three include newly attached
 images on resumed turns. Other adapters receive explicit original file references
 and instructions to inspect them with native image-reading tools.
 

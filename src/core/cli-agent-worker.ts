@@ -20,6 +20,7 @@ import { recordProviderUsage } from '@/models/providers/instrumented';
 import { billableTokens } from '@/models/billable-tokens';
 import { assertWindowsCmdLineFits, windowsShellQuote, windowsShellQuoter } from '@/models/providers/cli-provider';
 import { randomUUID } from 'crypto';
+import { v7 as uuidv7 } from 'uuid';
 import { type ChildProcess, spawn } from 'child_process';
 import { existsSync, mkdirSync, rmSync } from 'fs';
 import { resolve as resolvePath } from 'path';
@@ -37,7 +38,7 @@ import { agentLogger } from '@/utils/logger';
 import { killProcessTree } from '@/utils/proc';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
-import { CLIArgumentBuilder, CLIOutputParser, isCodexHookTrustWarning, discoverCodexMcpServers, disposeMuseHome, museSessionLogExists, museWorkspaceFor, prepareMuseHome, resolveCliMcpEntry, stableFirst, type CliRunConnection } from './cli-adapters';
+import { CLIArgumentBuilder, CLIOutputParser, isCodexHookTrustWarning, discoverCodexMcpServers, disposeMuseHome, museProtocolStep, museSessionLogExists, museWorkspaceFor, prepareMuseHome, resolveCliMcpEntry, stableFirst, type CliRunConnection } from './cli-adapters';
 import { writePromptDump } from './prompt-dumps';
 import { childCliSessionKey, claimCliSession, cliSessionHolder, dropCliSession, fingerprintRun, loadCliSession, ownedResumeKey, releaseCliSessions, rootCliSessionKey, saveCliSession } from './cli-session-store';
 import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
@@ -1312,8 +1313,8 @@ When a task matches one of these skills, load it with get_skill before starting 
         const legacyFingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, legacyTools, credentialOwnerId ?? null]), instructions });
         existing = await loadCliSession(this.context.sessionId, storeKey!, legacyFingerprint);
       }
-      // muse continues any id it is given, and a lost one as a NEW empty
-      // session without a word: resume only a session log it still holds.
+      // A muse session muse no longer holds would fail the resume
+      // (`sessionNotFound`): start cold instead.
       if (existing && adapterKey === 'Muse Code' && !museSessionLogExists(existing.id, cliEnvFor(this.credentialOwner, toolConfig))) {
         agentLogger.warn({ agentId: this.context.id, id: existing.id }, 'Muse Code session log is gone — starting cold');
         existing = null;
@@ -1335,7 +1336,8 @@ When a task matches one of these skills, load it with get_skill before starting 
       if (CLI_RESUME[adapterKey].style === 'caller-minted') {
         // The caller mints the id itself, so the first run declares it too —
         // no window in which a resumable run has no id.
-        resume = { id: existing?.id ?? randomUUID(), isFirstRun: !existing };
+        // UUIDv7: muse's session protocol takes no other; any UUID suits Claude.
+        resume = { id: existing?.id ?? uuidv7(), isFirstRun: !existing };
       } else {
         // Captured style: the id comes from the CLI's own output
         // (onVendorSession below). The first run still participates in
@@ -1385,10 +1387,9 @@ When a task matches one of these skills, load it with get_skill before starting 
     this.launchCleanup = () => {
       if (muse) disposeMuseHome(muse.home, museEnv);
       const configIndex = args.indexOf('--mcp-config');
-      // Windows writes the system prompt to a temp file (command-line length cap); muse always its prompt.
+      // Windows writes the system prompt to a temp file (command-line length cap).
       const sysFileIndex = args.indexOf('--append-system-prompt-file');
-      const promptFileIndex = args.indexOf('--prompt-file');
-      const paths = [built.env?.VIBE_HOME, ...(this.connection && configIndex >= 0 ? [args[configIndex + 1]] : []), ...(sysFileIndex >= 0 ? [args[sysFileIndex + 1]] : []), ...(promptFileIndex >= 0 ? [args[promptFileIndex + 1]] : [])];
+      const paths = [built.env?.VIBE_HOME, ...(this.connection && configIndex >= 0 ? [args[configIndex + 1]] : []), ...(sysFileIndex >= 0 ? [args[sysFileIndex + 1]] : [])];
       for (const path of paths) if (path) {
         try { rmSync(path, { recursive: true, force: true }); }
         catch (err) { agentLogger.warn({ err, path }, 'CLI temporary configuration cleanup failed'); }
@@ -1655,7 +1656,8 @@ When a task matches one of these skills, load it with get_skill before starting 
           }
         });
         if (stdinPrompt) proc.stdin.write(stdinPrompt);
-        if (!built.keepStdinOpen) proc.stdin.end();
+        // muse serve: input stays open until the turn ends (`museProtocolStep`).
+        if (!built.keepStdinOpen && !built.museTurn) proc.stdin.end();
       }
 
       this.process = proc;
@@ -1703,6 +1705,11 @@ When a task matches one of these skills, load it with get_skill before starting 
           if (!line.trim() || this.aborted) continue;
           try {
             const event = runtimeCredentials.mask(JSON.parse(line));
+            if (built.museTurn) {
+              const step = museProtocolStep(event, built.museTurn);
+              if (step.write && proc.stdin?.writable) proc.stdin.write(step.write);
+              if (step.end) proc.stdin?.end();
+            }
             if (built.keepStdinOpen && event.type === 'control_response' && this.steeringInterrupt && event.response?.request_id === this.steeringInterrupt.requestId) {
               if (event.response.subtype !== 'success') {
                 const failed = this.failUnacknowledgedCancellation('interrupt was rejected');
@@ -1997,7 +2004,7 @@ When a task matches one of these skills, load it with get_skill before starting 
           // later turn failed identically. Permanent, not a one-off. The vendor
           // says so on both channels, so match both.
           const deadSessionEvidence = `${stderr}\n${this.runError ?? ''}`;
-          if (!opts?.forceCold && resume && (this.runError || (code !== 0 && code !== null)) && /no conversation found|session not found/i.test(deadSessionEvidence)) {
+          if (!opts?.forceCold && resume && (this.runError || (code !== 0 && code !== null)) && /no conversation found|session not found|sessionNotFound/i.test(deadSessionEvidence)) {
             await dropCliSession(this.context.sessionId, storeKey!);
             agentLogger.warn({ agentId: this.context.id, adapterKey, id: resume.id }, 'Vendor CLI session is gone — retrying cold with the full prompt');
             // The dead attempt's error must not outlive it: `runError` is a
