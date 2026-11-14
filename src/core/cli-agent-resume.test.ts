@@ -222,6 +222,12 @@ beforeEach(() => {
         opened = m; return out({ id: m.id, result: { session: { sessionId: m.params.sessionId } } });
       }
       if (m.method !== 'turn/start') return;
+      // Live 1.4.20: a resumed session whose recorded workspace root is no
+      // longer the trusted one loads no MCP server, so the toolset names fail.
+      if (opened.method === 'session/resume' && existsSync(join(process.cwd(), 'moved-workspace'))) {
+        out({ id: m.id, result: { status: 'accepted', turnId: m.params.commandId } });
+        return note('turn/completed', { terminal: 'failed', error: { kind: 'invalidRunConfiguration', message: 'invalid run configuration: unknown tool names: mcp__octipus__read_file', retryable: false } });
+      }
       const id = m.params.sessionId;
       writeFileSync(join(process.cwd(), 'muse-last.json'), JSON.stringify({ args, home, open: opened,
         settings: JSON.parse(readFileSync(join(home, 'muse', 'settings.json'), 'utf8')),
@@ -857,6 +863,16 @@ describe('Muse Code runs', () => {
     const id = last().open.params.sessionId;
     writeFileSync(join(fixture.dir, 'refuse-resume'), '');
     const answer = await makeWorker('cli/muse', { sessionId: 'muse-refused' }).run('second');
+    expect(last().open.method).toBe('session/start');
+    expect(last().open.params.sessionId).not.toBe(id);
+    expect(answer).toContain(last().open.params.sessionId);
+  });
+
+  it('starts cold when a resumed session lost its workspace and with it the bridge tools', async () => {
+    await makeWorker('cli/muse', { sessionId: 'muse-moved' }).run('first');
+    const id = last().open.params.sessionId;
+    writeFileSync(join(fixture.dir, 'moved-workspace'), '');
+    const answer = await makeWorker('cli/muse', { sessionId: 'muse-moved' }).run('second');
     expect(last().open.method).toBe('session/start');
     expect(last().open.params.sessionId).not.toBe(id);
     expect(answer).toContain(last().open.params.sessionId);

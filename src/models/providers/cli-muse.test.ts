@@ -179,6 +179,9 @@ describe('CLIOutputParser (Muse Code, muse serve)', () => {
     // Live 1.4.20: a resume of an id the host does not hold.
     expect(run([{ id: 2, jsonrpc: '2.0', error: { code: -32020, data: { kind: 'sessionNotFound', retryable: false, sessionId: 'x' }, message: 'session x not found' } }]).callbacks.onRunError)
       .toHaveBeenCalledWith('Muse Code refused the run (sessionNotFound): session x not found');
+    // A reason beside the kind must not hide the kind the cold-resume retry matches.
+    expect(run([{ id: 2, jsonrpc: '2.0', error: { code: -32020, data: { kind: 'sessionNotFound', reason: 'evicted' }, message: 'gone' } }]).callbacks.onRunError)
+      .toHaveBeenCalledWith('Muse Code refused the run (sessionNotFound: evicted): gone');
     expect(run([{ id: 7, jsonrpc: '2.0', method: 'approval/request', params: {} }]).callbacks.onRunError)
       .toHaveBeenCalledWith('Muse Code asked for approval/request, which an Octipus run does not answer');
     const quota = run([msp('turn/completed', { terminal: 'failed', error: { kind: 'modelError', message: 'usage limit reached', retryable: false, quota: { limitKind: 'window', resetsAtMs: 1794691816000 } } })]);

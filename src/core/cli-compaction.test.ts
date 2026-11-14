@@ -79,7 +79,24 @@ test('Muse Code resumes the exact session, compacts it, and waits for the compac
   emit({ method: 'item/completed', params: { sessionId: 'sid', item: { kind: 'compaction', outcome: 'compacted', status: 'completed', strategyId: 'summary-preserved-suffix/v1', tokensBefore: 15384, tokensAfter: 18988, trigger: 'manual' } } });
   expect(await running).toBeUndefined();
   expect(mock.spawn.mock.calls[0][1]).toEqual(['serve', '--disable-request-user-input', '-c', 'run.reminder_roster=[]']);
-  expect(mock.kill).toHaveBeenCalled();
+  // serve exited on its own once its input ended: nothing to kill.
+  expect(mock.kill).not.toHaveBeenCalled();
+});
+test('Muse Code compaction settles only after serve exited, so its config home is never removed under it', async () => {
+  const serve = fakeServe();
+  serve.child.stdin.removeAllListeners('finish'); // a serve that lingers past its input
+  mock.kill.mockClear();
+  const running = compactMuseSession('muse', { cwd: '/p', env: {}, sessionId: 'sid' });
+  let settled = false;
+  running.catch(() => { settled = true; });
+  serve.emit({ id: 2, result: {} });
+  await vi.waitFor(() => expect(serve.sent.at(-1)?.method).toBe('session/compact'));
+  serve.emit({ id: 3, error: { code: -32030, data: { reason: 'boom' }, message: 'rejected' } });
+  await vi.waitFor(() => expect(mock.kill).toHaveBeenCalled());
+  await new Promise(resolve => setTimeout(resolve, 10));
+  expect(settled).toBe(false);
+  serve.child.emit('close', null, 'SIGKILL');
+  await expect(running).rejects.toThrow('Muse Code refused compaction (boom); session retained.');
 });
 test('Muse Code: nothing to compact is a noop; no context limit says why; a failed compaction keeps the session', async () => {
   let serve = fakeServe();

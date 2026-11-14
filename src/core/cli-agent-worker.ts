@@ -2003,8 +2003,12 @@ When a task matches one of these skills, load it with get_skill before starting 
           // recovery unreachable, the stale id was never dropped, and every
           // later turn failed identically. Permanent, not a one-off. The vendor
           // says so on both channels, so match both.
+          // Muse: a resumed session keeps the workspace root it was started
+          // with; once that is not the trusted placeholder any more (moved
+          // workspace, other temp dir) muse loads no MCP server and refuses
+          // the toolset — the session is as unusable as a missing one.
           const deadSessionEvidence = `${stderr}\n${this.runError ?? ''}`;
-          if (!opts?.forceCold && resume && (this.runError || (code !== 0 && code !== null)) && /no conversation found|session not found|sessionNotFound/i.test(deadSessionEvidence)) {
+          if (!opts?.forceCold && resume && (this.runError || (code !== 0 && code !== null)) && /no conversation found|session not found|sessionNotFound|invalid run configuration: unknown tool names/i.test(deadSessionEvidence)) {
             await dropCliSession(this.context.sessionId, storeKey!);
             agentLogger.warn({ agentId: this.context.id, adapterKey, id: resume.id }, 'Vendor CLI session is gone — retrying cold with the full prompt');
             // The dead attempt's error must not outlive it: `runError` is a

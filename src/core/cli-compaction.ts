@@ -207,18 +207,27 @@ export function compactMuseSession(binary: string, options: { cwd: string; env: 
       child.stdin.end();
       setTimeout(() => finish(undefined, noop), 10_000).unref();
     }
+    // Settles only once serve has exited: the caller then removes its config
+    // home, and a login muse is still renaming into it must not be lost.
+    let closed = false;
+    let outcome: (() => void) | undefined;
     function finish(error?: Error, noop?: string) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      outcome = () => error ? reject(error) : resolvePromise(noop);
+      if (closed) return outcome();
       child.stdin.end();
       killProcessTree(child.pid, child);
-      if (error) reject(error); else resolvePromise(noop);
     }
-    child.on('error', () => finish(new Error('Could not start Muse Code compaction.')));
+    child.on('error', () => { closed = true; finish(new Error('Could not start Muse Code compaction.')); outcome?.(); });
     child.stdin.on('error', () => finish(new Error('Muse Code compaction connection closed.')));
     child.stderr.resume(); // never echo provider output or credentials
-    child.on('close', (code, signal) => finish(confirmed ? undefined : new Error(`Muse Code exited before confirming compaction (${signal ? `signal ${signal}` : `exit ${code ?? 'unknown'}`}); session retained.`), confirmed?.noop));
+    child.on('close', (code, signal) => {
+      closed = true;
+      finish(confirmed ? undefined : new Error(`Muse Code exited before confirming compaction (${signal ? `signal ${signal}` : `exit ${code ?? 'unknown'}`}); session retained.`), confirmed?.noop);
+      outcome?.();
+    });
     child.stdout.on('data', chunk => {
       if (settled || confirmed) return;
       buffer += chunk.toString();

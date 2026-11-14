@@ -1520,7 +1520,7 @@ export class CLIOutputParser {
     const replied = () => { if (!this.museReplied) { this.museReplied = true; this.callbacks.onVendorReply?.(); } };
     const error = event.error as { message?: unknown; data?: { kind?: unknown; reason?: unknown } } | undefined;
     // The typed kind (`sessionNotFound` → the worker's cold retry) before the text.
-    if (error) { fail(`Muse Code refused the run (${String(error.data?.reason ?? error.data?.kind ?? 'error')}): ${String(error.message ?? 'unknown error')}`); return null; }
+    if (error) { fail(`Muse Code refused the run (${[error.data?.kind, error.data?.reason].filter(Boolean).map(String).join(': ') || 'error'}): ${String(error.message ?? 'unknown error')}`); return null; }
     if (typeof event.method !== 'string') return null;
     if (event.id !== undefined) { fail(`Muse Code asked for ${event.method}, which an Octipus run does not answer`); return null; }
     const params = (event.params ?? {}) as Record<string, unknown>;
