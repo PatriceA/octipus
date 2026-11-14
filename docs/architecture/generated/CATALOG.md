@@ -725,7 +725,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 22 |
 | `api` | `config` | 27 |
 | `api` | `core` | 202 |
-| `api` | `db` | 139 |
+| `api` | `db` | 141 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 5 |
@@ -750,7 +750,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `channels` | `security` | 23 |
 | `channels` | `shared` | 5 |
 | `channels` | `utils` | 24 |
-| `channels` | `voice` | 2 |
+| `channels` | `voice` | 3 |
 | `config` | `channels` | 2 |
 | `config` | `core` | 4 |
 | `config` | `db` | 3 |
@@ -762,7 +762,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `capabilities` | 2 |
 | `core` | `channels` | 14 |
 | `core` | `config` | 71 |
-| `core` | `db` | 492 |
+| `core` | `db` | 490 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 6 |
 | `core` | `mcp` | 11 |
@@ -886,12 +886,13 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `visual` | `models` | 1 |
 | `visual` | `utils` | 2 |
 | `voice` | `capabilities` | 1 |
-| `voice` | `config` | 4 |
+| `voice` | `config` | 5 |
 | `voice` | `core` | 4 |
-| `voice` | `db` | 3 |
+| `voice` | `db` | 2 |
 | `voice` | `models` | 14 |
-| `voice` | `security` | 2 |
-| `voice` | `utils` | 27 |
+| `voice` | `security` | 1 |
+| `voice` | `services` | 2 |
+| `voice` | `utils` | 29 |
 
 ### Mutual imports
 
