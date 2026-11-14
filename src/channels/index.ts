@@ -223,7 +223,10 @@ async function storeChannelImages(images: Attachment[], message: UnifiedMessage,
     }
     const fs = WorkspaceFS.forSessionAttachments(session, { space: null });
     const uploaded = await storeChatUploads(fs, files);
-    return uploaded.map((u) => ({ path: u.path }));
+    // A channel has no sensitivity picker: like the text it came with, the
+    // image carries no classification of its own (level 1 raises nothing);
+    // the conversation's level applies to everything the turn reads.
+    return uploaded.map((u) => ({ path: u.path, protectionLevel: 1 as const }));
   } catch (err) {
     channelLogger.warn({ err, channel: message.channelType }, 'Could not keep channel images with the conversation; describing them instead');
     return null;

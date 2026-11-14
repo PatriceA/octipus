@@ -819,7 +819,7 @@ export class MCPBridge extends EventEmitter {
           }
         }
       }
-      return await keepMcpImages(result, context);
+      return result;
     } catch (err) {
       breaker.recordFailure(serverId);
       throw err;
@@ -1210,9 +1210,8 @@ export class MCPBridge extends EventEmitter {
           executionTimeoutMs: () => bridge.requestBudget(serverId),
           recoverySafety: () => bridge.recoverySafety(serverId, tool.name),
           maxResultChars: (args) => bridge.maxResultChars(serverId, tool.name, args),
-          execute: async (args, context) => {
-            return bridge.callTool(serverId, tool.name, args, context);
-          },
+          // Agent-facing only: images become workspace files shown to the model.
+          execute: async (args, context) => keepMcpImages(await bridge.callTool(serverId, tool.name, args, context), context),
         });
       }
     }
@@ -1349,7 +1348,7 @@ export class MCPBridge extends EventEmitter {
           const toolName = args.tool_name as string;
           const toolArgs = (args.arguments as Record<string, unknown>) || {};
 
-          return bridge.callTool(serverId, toolName, toolArgs, context, args);
+          return keepMcpImages(await bridge.callTool(serverId, toolName, toolArgs, context, args), context);
         },
       },
     ];
@@ -1396,7 +1395,7 @@ export class MCPBridge extends EventEmitter {
           // unwraps a top-level `arguments` key, which for a tool whose own
           // schema has an `arguments` field would check the wrong object.
           execute: async (args: Record<string, unknown>, context: AgentContext) =>
-            this.callTool(serverId, tool.name, args, context, { server_id: serverId, tool_name: tool.name, arguments: args }),
+            keepMcpImages(await this.callTool(serverId, tool.name, args, context, { server_id: serverId, tool_name: tool.name, arguments: args }), context),
         } satisfies ToolHandler;
       });
   }
@@ -1442,7 +1441,8 @@ export function getMCPBridge(): MCPBridge {
  * instead of base64 (docs/MEDIA.md). An image that cannot be kept stays as it
  * was: the base64 is then stripped for a model that cannot see.
  */
-async function keepMcpImages(result: unknown, context: AgentContext): Promise<unknown> {
+/** Exported for tests. Agent tool wrappers only: pages, artifacts and collectors keep the base64. */
+export async function keepMcpImages(result: unknown, context: AgentContext): Promise<unknown> {
   if (!result || typeof result !== 'object' || !Array.isArray((result as { content?: unknown }).content)) return result;
   const parts = (result as { content: Array<Record<string, unknown>> }).content;
   if (!parts.some((p) => p?.type === 'image' && typeof p.data === 'string')) return result;

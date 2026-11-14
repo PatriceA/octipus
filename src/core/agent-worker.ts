@@ -29,7 +29,8 @@ import { billableTokens } from '@/models/billable-tokens';
 import { collectStream, type StreamProgress } from '@/models/stream-collect';
 import { getModelRegistry } from '@/models/model-registry';
 import { modelCandidates } from './agent/model-selector';
-import { localOnlyLevel, localRowInstead, ProtectionRoutingError, PSEUDONYMIZED } from './protection/routing';
+import { localOnlyLevel, localRowInstead, ProtectionRoutingError, PSEUDONYMIZED, rawMediaStaysLocal } from './protection/routing';
+import { WorkspaceFS } from '@/security/workspace-fs';
 import { type ToolShimSchema, proseShowsToolIntent, translateToToolCall } from '@/models/toolshim';
 import { applyTopicParamOverrides, getTopicConfig } from '@/models/topic-config';
 import { getConfig } from '@/config';
@@ -531,9 +532,15 @@ export class AgentWorker extends BaseAgentWorker {
     const IMAGE_TOKENS = 1_500; // rough fixed cost of one image to a vision model
     let chars = this.advertisedToolChars();
     let imageTokens = 0;
+    // Only the newest `replayRecentImages` media-bearing messages go out with
+    // their pixels (hydrateMedia); older ones are a line of text.
+    let replayLeft = Math.max(0, getConfig().media?.replayRecentImages ?? 3);
+    const replayed = new Set<AgentMessage>();
+    for (let i = this.messages.length - 1; i >= 0 && replayLeft > 0; i--) {
+      if (this.messages[i].media?.length) { replayed.add(this.messages[i]); replayLeft--; }
+    }
     for (const m of this.messages) {
-      // Media references go out as image parts (hydrateMedia): a fixed cost each.
-      imageTokens += ((m as { media?: unknown[] }).media?.length ?? 0) * IMAGE_TOKENS;
+      if (replayed.has(m)) imageTokens += (m.media?.length ?? 0) * IMAGE_TOKENS;
       const c = (m as { content?: unknown }).content;
       if (typeof c === 'string') {
         chars += c.length;
@@ -2734,6 +2741,11 @@ export class AgentWorker extends BaseAgentWorker {
    * runs on a local model, or the turn stops before anything leaves the
    * house (`ProtectionRoutingError`).
    */
+  /** The workspace whose media a request may read; none for an agent without one. */
+  private mediaWorkspace(): WorkspaceFS | null {
+    try { return WorkspaceFS.forAgent(this.context); } catch { return null; }
+  }
+
   private async followProtectionLevel(bound?: ModelConfigEntry | null): Promise<ModelConfigEntry | null | undefined> {
     // Nothing to look up while the session may use any model.
     if (await localOnlyLevel(this.context.sessionId, PSEUDONYMIZED) === undefined) return bound;
@@ -2769,7 +2781,9 @@ export class AgentWorker extends BaseAgentWorker {
     const litellmModel = model.modelId;
     // A model that is shown images after a tool result can look with
     // view_image whatever the install has bound (gates.ts).
-    this.toolExecutor.setOwnCapabilities({ see: seesToolImages(model, getConfig().media?.imageInput) });
+    this.toolExecutor.setOwnCapabilities({
+      see: seesToolImages(model, getConfig().media?.imageInput) && !(await rawMediaStaysLocal(this.context.sessionId, model)),
+    });
     const { declarableTools, sharedToolCount, deferredTools } = this.requestTools(model);
     const tools: ChatCompletionTool[] = this.toolExecutor.toolsDisabled ? [] : declarableTools;
 
@@ -2920,6 +2934,10 @@ export class AgentWorker extends BaseAgentWorker {
     // the newest few (docs/MEDIA.md); the stored conversation keeps references.
     if (hasMedia(completionOpts.messages)) {
       completionOpts.messages = await hydrateMedia(completionOpts.messages, {
+        fs: this.mediaWorkspace(),
+        // Pixels and recordings are not pseudonymized: content at a local-only
+        // level reaches only a local model as it is (strict threshold).
+        protectedContent: await rawMediaStaysLocal(this.context.sessionId, model),
         readsImages: model.supportsVision === true,
         hearsAudio: model.supportsAudioInput === true,
         replayRecent: getConfig().media?.replayRecentImages,
