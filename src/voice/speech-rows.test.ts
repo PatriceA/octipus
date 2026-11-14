@@ -18,7 +18,10 @@ vi.mock('@/models/model-registry', () => ({
   }),
 }));
 
-const { audioExtensionFor, speechDirectionOf, useSpeechEngine } = await import('./speech-rows');
+vi.mock('./whisper', () => ({ probeWhisper: async () => ({ binaryOk: true, modelOk: true }) }));
+vi.mock('@/utils/proc', async (orig) => ({ ...(await orig<typeof import('@/utils/proc')>()), whichSync: () => '/usr/bin/ffmpeg' }));
+
+const { audioExtensionFor, speechDirectionOf, speechRowAvailable, useSpeechEngine } = await import('./speech-rows');
 
 beforeEach(() => { state.rows = {}; });
 
@@ -67,5 +70,19 @@ describe('speech rows', () => {
     await useSpeechEngine('piper', 'tts', { modelPath: '/voices/a.onnx' });
     await useSpeechEngine('piper', 'tts', { modelPath: '/voices/b.onnx' });
     expect(state.rows['local piper'].metadata?.modelPath).toBe('/voices/b.onnx');
+  });
+});
+
+describe('availability', () => {
+  test('a whisper row whose own model file is gone says which file', async () => {
+    await expect(speechRowAvailable({ provider: 'local-audio', modelId: 'whisper.cpp:base', apiKeyRef: null, metadata: { modelPath: '/nowhere/ggml-large.bin' } } as never))
+      .resolves.toEqual({ ok: false, reason: 'The whisper model file /nowhere/ggml-large.bin is missing.' });
+  });
+
+  test('a row key is resolved like any custom key (env: names work); a missing one says so', async () => {
+    process.env.SPEECH_ROW_TEST_KEY = 'sk-test';
+    await expect(speechRowAvailable({ provider: 'openai', modelId: 'gpt-4o-mini-tts', apiKeyRef: 'env:SPEECH_ROW_TEST_KEY', metadata: {} } as never)).resolves.toEqual({ ok: true });
+    delete process.env.SPEECH_ROW_TEST_KEY;
+    await expect(speechRowAvailable({ provider: 'openai', modelId: 'gpt-4o-mini-tts', apiKeyRef: 'env:SPEECH_ROW_TEST_KEY', metadata: {} } as never)).resolves.toMatchObject({ ok: false, reason: expect.stringMatching(/not set/) });
   });
 });

@@ -11,14 +11,12 @@ const state = vi.hoisted(() => ({
   bound: {} as Record<string, string>,
   runs: new Set<string>(),
   store: new Map<string, string>(),
-  files: new Set<string>(),
 }));
 
 vi.mock('@/config', () => ({ getConfig: () => ({ voice: state.voice }) }));
 vi.mock('@/config/settings-service', () => ({
   getSettingsService: () => ({ get: async (k: string) => state.store.get(k) ?? null, set: async (k: string, v: string) => { state.store.set(k, v); } }),
 }));
-vi.mock('node:fs', async (orig) => ({ ...(await orig<typeof import('node:fs')>()), existsSync: (p: string) => state.files.has(p) }));
 vi.mock('@/models/model-registry', () => ({
   getModelRegistry: () => ({
     getModelForTopic: async (lane: string) => (state.bound[lane] ? state.rows[state.bound[lane]] : null),
@@ -45,7 +43,7 @@ const roles = (name: string) => state.rows[name]?.topicRoles;
 
 function beforeEachReset() {
   state.voice = { sttProvider: 'auto', fasterWhisperModel: 'small', ttsProvider: 'mistral' };
-  state.rows = {}; state.bound = {}; state.runs = new Set(); state.store = new Map(); state.files = new Set();
+  state.rows = {}; state.bound = {}; state.runs = new Set(); state.store = new Map();
 }
 beforeEach(beforeEachReset);
 
@@ -98,23 +96,15 @@ describe('moving voice settings onto the lanes', () => {
     expect(state.rows['local faster-whisper small']).toBeUndefined();
   });
 
-  test('a whisper model path is kept only when the operator set one and it is on disk', async () => {
+  test('a whisper model path is kept only when the operator set one (on disk or not: availability names a missing file)', async () => {
     state.runs = new Set(['whisper.cpp:base']);
     state.voice = { sttProvider: 'whisper', whisperModelPath: './models/whisper/ggml-base.bin' };
-    state.files = new Set(['./models/whisper/ggml-base.bin']);
     await migrateVoiceSettingsToLanes();
     expect(state.rows['local whisper.cpp base'].metadata?.modelPath).toBeUndefined();
 
     beforeEachReset();
     state.runs = new Set(['whisper.cpp:base']);
     state.voice = { sttProvider: 'whisper', whisperModelPath: '/data/ggml-large.bin' };
-    await migrateVoiceSettingsToLanes();
-    expect(state.rows['local whisper.cpp base'].metadata?.modelPath).toBeUndefined(); // not on disk
-
-    beforeEachReset();
-    state.runs = new Set(['whisper.cpp:base']);
-    state.voice = { sttProvider: 'whisper', whisperModelPath: '/data/ggml-large.bin' };
-    state.files = new Set(['/data/ggml-large.bin']);
     await migrateVoiceSettingsToLanes();
     expect(state.rows['local whisper.cpp base'].metadata?.modelPath).toBe('/data/ggml-large.bin');
   });

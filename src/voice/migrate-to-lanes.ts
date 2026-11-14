@@ -12,7 +12,6 @@
  * Never touches a lane that is already bound, and runs once (a stored marker):
  * a lane an operator unbinds on purpose stays unbound.
  */
-import { existsSync } from 'node:fs';
 import { getConfig } from '@/config';
 import { getSettingsService } from '@/config/settings-service';
 import type { ModelConfigEntry, NewModelConfigEntry } from '@/db/schema/models';
@@ -27,9 +26,13 @@ export const VOICE_LANES_MIGRATION_KEY = '_system.voiceLanesMigrated';
 /** The retired setting's default: a path the install never chose says nothing. */
 const DEFAULT_WHISPER_MODEL_PATH = './models/whisper/ggml-base.bin';
 
-/** A model path the operator set and that is on disk; otherwise the engine's own default. */
+/**
+ * A model path the operator set (not the setting's default) is kept, on disk
+ * or not: a volume mounted later still works, and a missing file is named by
+ * the row's availability instead of a quiet switch to the default model.
+ */
 function chosenModelPath(path: string | undefined, fallback?: string): Partial<NewModelConfigEntry> | undefined {
-  if (!path || path === fallback || !existsSync(path)) return undefined;
+  if (!path || path === fallback) return undefined;
   return { metadata: { modelPath: path } };
 }
 

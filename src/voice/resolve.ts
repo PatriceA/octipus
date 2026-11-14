@@ -73,7 +73,7 @@ export async function speechCandidates(direction: SpeechDirection, req: SpeechRe
     else if (!alias) {
       // A row by name: an install row that is a speech engine of this direction, bound or not.
       const named = await registry.getModel(req.override);
-      if (!named || named.ownerUserId || speechDirectionOf(named) !== direction) {
+      if (!named || named.ownerUserId || named.isEnabled === false || speechDirectionOf(named) !== direction) {
         throw new Error(`"${req.override}" is not a ${direction === 'stt' ? 'speech-to-text' : 'text-to-speech'} engine on this install.`);
       }
       rows = [named];
@@ -224,9 +224,12 @@ export async function synthesizeWithLane(text: string, req: SpeechRequest & { vo
   const { getConfig } = await import('@/config');
   const errors: string[] = [];
   for (const [index, row] of rows.entries()) {
-    // A voice id belongs to one engine: the request's or the configured voice
-    // goes to the first engine tried; a backup speaks in its own default.
-    const voice = index === 0 ? (req.voice || getConfig().voice.ttsVoice || undefined) : undefined;
+    // A voice id belongs to one engine. The caller's voice goes to the engine
+    // it asked for (the first tried); `voice.ttsVoice` is the voice of the
+    // lane's primary and goes to it alone. Any other engine speaks in its own default.
+    const voice = req.voice
+      ? (index === 0 ? req.voice : undefined)
+      : (row.topicRoles?.speech === 'primary' ? (getConfig().voice.ttsVoice || undefined) : undefined);
     const available = await speechRowAvailable(row);
     if (!available.ok) { errors.push(`${row.name}: ${available.reason}`); continue; }
     const formats = speechFormats(row);

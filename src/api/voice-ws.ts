@@ -50,13 +50,24 @@ function stateOf(ws: { data: unknown }): VoiceWsState {
  * that engine. An account that may not use the install's hosted keys gets a
  * local engine or none.
  */
-async function resolveEngine(engineParam: string | null, userId: string): Promise<{ engine: STTEngine; name: string; row: import('@/db/schema/models').ModelConfigEntry } | { error: string }> {
+async function resolveEngine(engineParam: string | null, userId: string, sessionParam: string | null): Promise<{ engine: STTEngine; name: string; row: import('@/db/schema/models').ModelConfigEntry } | { error: string }> {
   try {
     const { resolveSttEngine } = await import('@/voice/resolve');
     const { mayUseInstallModels } = await import('@/models/install-access');
+    // `?session=`: the conversation being dictated into; its protection level
+    // decides whether a cloud engine may hear it. Only one the caller may speak in.
+    let sessionId: string | undefined;
+    if (sessionParam) {
+      const { sessionRepository } = await import('@/db/repositories/session-repository');
+      const { canActInSession } = await import('@/core/rooms/access');
+      // i2: by id, used only when canActInSession says the caller may speak in it.
+      if (!(await canActInSession(await sessionRepository.findById(sessionParam), userId, 'voice'))) return { error: 'Session not found' };
+      sessionId = sessionParam;
+    }
     const { engine, name, row } = await resolveSttEngine({
       override: engineParam || null,
       userId,
+      sessionId,
       allowHosted: await mayUseInstallModels(userId),
     });
     return { engine, name, row };
@@ -92,7 +103,7 @@ export function setupVoiceWebSocket(app: Elysia): void {
         return;
       }
 
-      const resolved = await resolveEngine(url.searchParams.get('engine'), session.userId);
+      const resolved = await resolveEngine(url.searchParams.get('engine'), session.userId, url.searchParams.get('session'));
       if ('error' in resolved) {
         ws.send(JSON.stringify({ type: 'error', message: resolved.error }));
         ws.close(4002, 'No STT engine');

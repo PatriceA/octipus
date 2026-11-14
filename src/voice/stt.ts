@@ -91,6 +91,7 @@ async function toWhisperWav(sourcePath: string): Promise<string> {
   await proc.exited;
   if (proc.exitCode !== 0) {
     const stderr = await new Response(proc.stderr).text();
+    await rm(out, { force: true });
     throw new Error(`Audio conversion failed (ffmpeg exit ${proc.exitCode}): ${stderr.slice(-300)}`);
   }
   return out;
@@ -411,17 +412,17 @@ export class FasterWhisperEngine extends EventEmitter implements STTEngine {
     // The worker reads raw 16 kHz mono s16 PCM: a voice note (ogg/opus), a
     // browser recording (webm) or an m4a is transcoded first, exactly as for
     // whisper.cpp — passed through as is, its bytes would be read as samples.
-    let source = typeof audio === 'string' ? audio : null;
-    if (!source) {
-      source = tmpPath('-in');
-      await writeFileAt(source, audio as Buffer);
-    }
-    const wavPath = await toWhisperWav(source);
+    // A path is made absolute so ffmpeg never reads a `-`-prefixed name as an option.
+    const source = typeof audio === 'string' ? resolve(audio) : tmpPath('-in');
+    let wavPath: string | null = null;
     let raw: Buffer;
     try {
+      if (typeof audio !== 'string') await writeFileAt(source, audio);
+      wavPath = await toWhisperWav(source);
       raw = Buffer.from(await fileAt(wavPath).arrayBuffer());
     } finally {
-      if (wavPath !== source) await rm(wavPath, { force: true });
+      // The clip is someone's voice: never left behind, whatever failed.
+      if (wavPath && wavPath !== source) await rm(wavPath, { force: true });
       if (typeof audio !== 'string') await rm(source, { force: true });
     }
     const pcm = stripWavHeader(new Uint8Array(raw)); // 16 kHz mono s16 now

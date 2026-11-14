@@ -48,6 +48,8 @@ interface PromptInputProps {
   /** The composer handle (`insertDraft`). */
   composerRef?: Ref<PromptInputHandle>;
   disabled?: boolean;
+  /** The conversation dictated into: its protection level decides which engines may hear it. */
+  sessionId?: string | null;
   placeholder?: string;
   /** Reason voice is unavailable (no STT engine / no cloud key) — for the tooltip. */
   voiceError?: string | null;
@@ -115,6 +117,7 @@ export default function PromptInput({
   voiceError = null,
   voiceAvailable = true,
   composerRef,
+  sessionId = null,
 }: PromptInputProps) {
   const [text, setText] = useState('');
   // The interactive answer a suggestion in the draft came from; sent with the
@@ -436,7 +439,7 @@ export default function PromptInput({
             const res = await fetch('/api/voice/transcribe', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ audio: base64, format }),
+              body: JSON.stringify({ audio: base64, format, ...(sessionId ? { sessionId } : {}) }),
               credentials: 'include',
             });
             const data = await res.json();

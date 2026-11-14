@@ -6,6 +6,20 @@ import { getConfig } from '@/config';
 import { isAdmin } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
 
+/**
+ * The conversation speech is for, when the caller names one it may use:
+ * its protection level decides whether a cloud engine may hear or speak it
+ * (a spoken reply carries what the agent read). Unknown or not theirs → 404.
+ */
+async function speechSession(userId: string, sessionId: string | undefined): Promise<string | undefined | null> {
+  if (!sessionId) return undefined;
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const { canActInSession } = await import('@/core/rooms/access');
+  // i2: by id, and only used when canActInSession says the caller may speak in it.
+  const session = await sessionRepository.findById(sessionId);
+  return (await canActInSession(session, userId, 'voice')) ? sessionId : null;
+}
+
 /** Hosted TTS is metered per 1k characters — bound the request body. */
 const MAX_TTS_CHARS = 5000;
 
@@ -307,6 +321,8 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
 
       try {
         const { audio, format, model } = body;
+        const sessionId = await speechSession(user.id, body.sessionId);
+        if (sessionId === null) { set.status = 404; return { error: 'Session not found' }; }
         // The engine bound to the Transcription lane (primary, then backup);
         // `model` may name a row or an old engine name. Hosted engines spend
         // the install's keys: only local ones for an account the install's
@@ -314,6 +330,7 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
         const { transcribeWithLane } = await import('@/voice/resolve');
         const result = await transcribeWithLane(Buffer.from(audio, 'base64'), {
           userId: user.id,
+          sessionId,
           override: model || null,
           allowHosted: await mayUseInstallModels(user.id),
           format: format || 'webm',
@@ -333,6 +350,7 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
         audio: t.String({ description: 'Base64-encoded audio data' }),
         format: t.Optional(t.String({ description: 'Audio format (webm, ogg, mp3, wav)' })),
         model: t.Optional(t.String({ description: 'A Transcription-lane model row name, or an engine name ("local", "whisper", "fasterwhisper", "mistral"/"voxtral-*", "openai"/"whisper-1"); unset = the lane binding' })),
+        sessionId: t.Optional(t.String({ maxLength: 100, description: 'The conversation the audio belongs to (its protection level applies)' })),
       }),
       detail: { tags: ['voice'] },
     }
@@ -350,9 +368,12 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
         // The engine bound to the Speech lane (primary, then backup). The
         // requested format must be one the engine writes: the Content-Type
         // always describes the bytes returned.
+        const sessionId = await speechSession(user.id, body.sessionId);
+        if (sessionId === null) { set.status = 404; return { error: 'Session not found' }; }
         const { synthesizeWithLane } = await import('@/voice/resolve');
         const spoken = await synthesizeWithLane(body.text, {
           userId: user.id,
+          sessionId,
           voice: body.voice_id,
           format: body.format,
           strictFormat: !!body.format,
@@ -377,6 +398,7 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
         text: t.String({ minLength: 1, maxLength: MAX_TTS_CHARS }),
         voice_id: t.Optional(t.String({ description: 'Preset or custom voice id (provider-specific)' })),
         format: t.Optional(t.Union(TTS_FORMATS.map((f) => t.Literal(f)))),
+        sessionId: t.Optional(t.String({ maxLength: 100, description: 'The conversation the speech belongs to (its protection level applies)' })),
       }),
       detail: { tags: ['voice'] },
     }

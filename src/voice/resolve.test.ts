@@ -117,6 +117,18 @@ describe('speech resolution', () => {
     expect((await resolve.speechCandidates('tts', { override: 'local kokoro' })).map((r) => r.name)).toEqual(['local kokoro']);
   });
 
+  test('the configured voice is the lane primary\'s alone; a voice asked for goes to the engine asked for', async () => {
+    // The cloud primary filtered out (local only): Kokoro is tried first but is not the primary.
+    state.primary = row('mistral tts', 'mistral', 'voxtral-mini-tts-2603', 'speech');
+    state.backup = row('local kokoro', 'local-audio', 'kokoro:af_sarah', 'speech', 'backup');
+    await resolve.synthesizeWithLane('hi', { override: 'local' });
+    expect(state.voices).toEqual([undefined]);
+    state.voices = [];
+    await resolve.synthesizeWithLane('hi', { override: 'local', voice: 'af_bella' });
+    expect(state.voices).toEqual(['af_bella']);
+    state.voices = [];
+  });
+
   test('the configured voice goes to the primary; a backup speaks in its own voice', async () => {
     state.primary = row('mistral tts', 'mistral', 'voxtral-mini-tts-2603', 'speech');
     state.backup = row('local kokoro', 'local-audio', 'kokoro:af_sarah', 'speech', 'backup');

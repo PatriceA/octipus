@@ -168,6 +168,12 @@ export async function ttsEngineFor(row: ModelConfigEntry, opts: { voice?: string
   }
 }
 
+/** Local transcription converts recordings and voice notes with ffmpeg first. */
+async function ffmpegMissing(): Promise<string | null> {
+  const { whichSync } = await import('@/utils/proc');
+  return whichSync('ffmpeg') ? null : '`ffmpeg` is not installed; local transcription converts recordings with it. Install ffmpeg.';
+}
+
 /**
  * Can this row run here, now? Local engines are probed (binary runs, model
  * present); cloud engines need a key. The reason says what to do.
@@ -179,6 +185,8 @@ export async function speechRowAvailable(row: Pick<ModelConfigEntry, 'provider' 
       const { probeWhisper } = await import('./whisper');
       const probe = await probeWhisper();
       if (!probe.binaryOk) return { ok: false, reason: `${probe.binaryReason ?? 'Local whisper is not installed'}. Run \`octi setup\` or install it from the Topics page.` };
+      const noFfmpeg = await ffmpegMissing();
+      if (noFfmpeg) return { ok: false, reason: noFfmpeg };
       if (row.metadata?.modelPath) {
         const { fileAt } = await import('@/utils/fs-file');
         if (!(await fileAt(row.metadata.modelPath).exists())) return { ok: false, reason: `The whisper model file ${row.metadata.modelPath} is missing.` };
@@ -191,6 +199,10 @@ export async function speechRowAvailable(row: Pick<ModelConfigEntry, 'provider' 
     case 'kokoro': {
       const { hasUv, kokoroModelsPresent, UV_INSTALL_HINT } = await import('./provision');
       if (!hasUv()) return { ok: false, reason: `\`uv\` is not installed. ${UV_INSTALL_HINT}` };
+      if (kind === 'fasterwhisper') {
+        const noFfmpeg = await ffmpegMissing();
+        if (noFfmpeg) return { ok: false, reason: noFfmpeg };
+      }
       if (kind === 'kokoro' && !(await kokoroModelsPresent())) return { ok: false, reason: 'Kokoro model files are missing. Run `octi setup` to download them.' };
       return { ok: true };
     }
