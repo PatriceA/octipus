@@ -110,12 +110,13 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
   const [providerSettings, setProviderSettings] = useState(model.metadata?.providerSettings ?? {});
   const [pricing, setPricing] = useState(model.metadata?.pricing ?? {});
   const [error, setError] = useState('');
-  const [discoveredCliModels, setDiscoveredCliModels] = useState<DiscoveredModel[]>([]);
+  const [providerCliModels, setProviderCliModels] = useState<DiscoveredModel[]>([]);
   const [cliTools, setCliTools] = useState<CLITool[]>([]);
 
   const isCli = model.provider === 'cli';
   const isCustomProvider = model.provider.startsWith('custom-');
   const cliTool = isCli ? cliTools.find(tool => toolMatchesModel(tool, model.modelId)) : undefined;
+  const discoveredCliModels = cliTool?.models ?? providerCliModels;
   const cliKind: CliKind = isCli ? cliKindForTool(cliTool, model.modelId) : null;
   // The CLI registry calls this backend "google"; model discovery uses the setup-provider id "gemini".
   const cliProvider = cliTool?.modelProvider === 'google' ? 'gemini' : cliTool?.modelProvider;
@@ -141,7 +142,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
   }, [isCli]);
 
   useEffect(() => {
-    if (isCli && cliTool?.models) { setDiscoveredCliModels(cliTool.models); return; }
+    if (cliTool?.models) return;
     if (!isCli || !cliProvider || !supportsModelOverride) return;
     let cancelled = false;
     (async () => {
@@ -150,7 +151,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
           `/models/providers/${cliProvider}/available`
         );
         if (!cancelled && res?.configured && Array.isArray(res.models)) {
-          setDiscoveredCliModels(res.models);
+          setProviderCliModels(res.models);
         }
       } catch {
         // No API key configured for the underlying provider — picker stays as a free-text input.
