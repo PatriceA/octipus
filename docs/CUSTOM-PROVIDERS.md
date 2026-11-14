@@ -159,7 +159,92 @@ be set only for an endpoint at localhost, a private address or a
 `.local`/`.lan` host. Tick it only when the server runs the model itself, not
 when it is a proxy or gateway to a cloud service.
 
-For llama.cpp: start `llama-server` with `--jinja` for tool calls and
-`--mmproj <file>` for images (then tick **Reads images** on the model). One
-`llama-server` serves one model; run one per model, or put a switcher such as
-llama-swap in front.
+## Running your own models with llama.cpp
+
+Any GGUF model that [llama.cpp](https://github.com/ggml-org/llama.cpp) runs
+can be a normal Octipus model: chat, tool calls and, with a vision model,
+images. `llama-server` speaks the OpenAI wire format, so it is added as a
+**Custom (OpenAI-compatible)** model. With **Runs on this machine / network**
+ticked it counts as local, so conversations at protection levels 3–4 may use
+it.
+
+### 1. Install llama.cpp
+
+Any of:
+
+- a release build for your platform from the
+  [llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases);
+- a package manager, for example `brew install llama.cpp` on macOS;
+- the container image `ghcr.io/ggml-org/llama.cpp:server`.
+
+You need the `llama-server` binary.
+
+### 2. Start a model
+
+```bash
+llama-server -hf ggml-org/gemma-3-4b-it-GGUF \
+  --jinja -c 16384 --host 127.0.0.1 --port 8080
+```
+
+- `-hf <repo>` downloads the GGUF from Hugging Face on first start. Use
+  `-m /path/to/model.gguf` for a file you already have.
+- `--jinja` uses the model's own chat template. **It is required for tool
+  calls**: without it, agents cannot use tools.
+- `-c` sets the context size. Enter the same number as the model's
+  **Context window** in Octipus.
+- For images, the model needs its projector. `-hf` fetches it for repositories
+  that ship one; otherwise pass `--mmproj /path/to/mmproj.gguf`.
+- Octipus in Docker, or on another machine: listen on the network
+  (`--host 0.0.0.0`) and set a key with `--api-key <key>`.
+
+Check it answers: `curl http://localhost:8080/v1/models`.
+
+### 3. Add it in Octipus
+
+Models page → **Add model** → **Manual / Direct**:
+
+| Field | Value |
+|-------|-------|
+| Provider | **Custom (OpenAI-compatible)** |
+| Endpoint URL | `http://localhost:8080/v1`. From Docker: `http://host.docker.internal:8080/v1`. Another machine: its LAN address, e.g. `http://192.168.1.20:8080/v1`. |
+| Model ID | Press **Fetch models** and pick it, or type the name `/v1/models` lists. |
+| API Key Reference | Leave blank without `--api-key`. With one, save the key under Settings → Secrets and enter that name here (or `env:VAR_NAME`). |
+| Context window | The `-c` you started it with. |
+| Tools | On (needs `--jinja`). |
+| Reads images | On only for a vision model started with its projector. |
+| **Runs on this machine / network** | On, so protection levels 3–4 may use it. Offered only for a localhost, private-address or `.local`/`.lan`/`.internal` endpoint. |
+
+Press **Test**, then **Add**.
+
+### 4. Use it
+
+Bind it on the **Topics** page like any other model: as the primary or backup
+of a lane (Everyday, Build, Research, …), or for every text lane with **Assign
+all**. A local model is also what a conversation at protection level 3–4 falls
+back to when its bound model is remote.
+
+### Several models
+
+One `llama-server` serves one model. For more, start one server per model,
+each on its own port (`--port 8081`, `8082`, …), and add each as its own
+Octipus model. Or put a model switcher such as
+[llama-swap](https://github.com/mostlygeek/llama-swap) in front: one endpoint,
+which starts the model a request names.
+
+### What it does not cover
+
+- **Search and memory (embeddings).** The custom provider does not embed. Use
+  the optional local embedding engine Octipus installs itself
+  ([RAG.md → Local embeddings](RAG.md#local-embeddings)), or Ollama.
+- **Starting and stopping the server.** You run `llama-server` yourself, for
+  example as a system service. Octipus only manages the embedding engine.
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| Agents never call tools, or tool calls come back as plain text | Start `llama-server` with `--jinja`. |
+| "context length exceeded" or cut-off answers | Raise `-c`, and the model's **Context window** with it. |
+| Refused in a conversation at protection level 3–4 | Tick **Runs on this machine / network** on the model. |
+| Unreachable from Octipus in Docker | Use `host.docker.internal` (or the host's LAN address) and `--host 0.0.0.0`. |
+| HTTP 401 | The server has `--api-key`: put the same key in the model's API Key Reference. |

@@ -571,6 +571,9 @@ A new default model is never swapped under an existing binding.
 Only one install, update or removal runs at a time: a different request
 meanwhile is refused (HTTP 409), the same one joins it.
 
+To run chat models on llama.cpp yourself, see
+[CUSTOM-PROVIDERS.md → Running your own models with llama.cpp](CUSTOM-PROVIDERS.md#running-your-own-models-with-llamacpp).
+
 **Remove.** Stops the engine and deletes its files and rows. If the local
 model was bound, the lane is unbound and search reports that no embedding
 model is configured.
