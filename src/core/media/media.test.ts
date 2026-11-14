@@ -189,4 +189,32 @@ describe('cache prune', () => {
     await expect(stat(fresh)).resolves.toBeTruthy();
     await expect(stat(other)).resolves.toBeTruthy();
   });
+
+  test('a cache that is a link (to another tenant) is not followed', async () => {
+    const { symlink, utimes } = await import('node:fs/promises');
+    const { pruneMediaCaches } = await import('./cache-prune');
+    const victim = join(dir, 'elsewhere');
+    await mkdir(victim, { recursive: true });
+    const file = join(victim, `${'d'.repeat(64)}.png`);
+    await writeFile(file, 'x');
+    const long = new Date(Date.now() - 31 * 24 * 3600_000);
+    await utimes(file, long, long);
+    const media = join(dir, 'users', 'u2', 'workspaces', 'default', 'files', '.octipus', 'media');
+    await mkdir(media, { recursive: true });
+    await symlink(victim, join(media, 'cache'));
+    await expect(pruneMediaCaches(dir)).resolves.toBe(0);
+    await expect(stat(file)).resolves.toBeTruthy();
+  });
+
+  test('a copy a conversation replays is touched, so the prune keeps it', async () => {
+    const { utimes } = await import('node:fs/promises');
+    const cache = join(dir, '.octipus', 'media', 'cache');
+    await mkdir(cache, { recursive: true });
+    const copy = join(cache, `${'e'.repeat(64)}.png`);
+    await writeFile(copy, await png(2, 2));
+    const long = new Date(Date.now() - 31 * 24 * 3600_000);
+    await utimes(copy, long, long);
+    await hydrateMedia([{ role: 'user', content: 'x', timestamp: new Date(), media: [{ kind: 'image', path: copy, mimeType: 'image/png', source: 'user' }] }], { fs: WorkspaceFS.withRoot(dir), readsImages: true, hearsAudio: false });
+    expect((await stat(copy)).mtimeMs).toBeGreaterThan(Date.now() - 60_000);
+  });
 });

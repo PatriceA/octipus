@@ -5,8 +5,8 @@
  * images, speech) are files of the workspace and are never touched; a pruned
  * copy is made again the next time the image is looked at.
  */
-import { readdir, rm, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { lstat, readdir, realpath, rm } from 'node:fs/promises';
+import { join, sep } from 'node:path';
 
 export const MEDIA_CACHE_MAX_AGE_DAYS = 30;
 const MAX_REMOVED_PER_RUN = 5_000;
@@ -35,6 +35,16 @@ export async function pruneMediaCaches(dataRoot: string, now = new Date(), maxAg
   let removed = 0;
   for (const root of await workspaceRoots(dataRoot)) {
     const cache = join(root, '.octipus', 'media', 'cache');
+    // Every step a real directory (an agent may write links in a workspace),
+    // and the cache really inside its workspace.
+    let safe = true;
+    for (const step of [join(root, '.octipus'), join(root, '.octipus', 'media'), cache]) {
+      const info = await lstat(step).catch(() => null);
+      if (!info?.isDirectory() || info.isSymbolicLink()) { safe = false; break; }
+    }
+    if (!safe) continue;
+    const [realRoot, realCache] = await Promise.all([realpath(root).catch(() => ''), realpath(cache).catch(() => '')]);
+    if (!realRoot || !realCache.startsWith(realRoot + sep)) continue;
     let names: string[];
     try { names = await readdir(cache); } catch { continue; }
     for (const name of names) {
@@ -42,8 +52,8 @@ export async function pruneMediaCaches(dataRoot: string, now = new Date(), maxAg
       // Only the cache's own files: <sha256>.png / .jpg.
       if (!/^[0-9a-f]{64}\.(png|jpg)$/.test(name)) continue;
       const file = join(cache, name);
-      const info = await stat(file).catch(() => null);
-      if (info?.isFile() && info.mtimeMs < cutoff) {
+      const info = await lstat(file).catch(() => null);
+      if (info?.isFile() && !info.isSymbolicLink() && info.mtimeMs < cutoff) {
         await rm(file, { force: true });
         removed++;
       }

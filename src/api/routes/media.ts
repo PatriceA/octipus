@@ -118,6 +118,9 @@ export const mediaRoutes = new Elysia({ prefix: '/media' })
       const { join } = await import('node:path');
       const dir = await mkdtemp(join(tmpdir(), 'octipus-describe-'));
       try {
+        // The caller's spend budgets apply before anything is paid for.
+        const { checkSpend } = await import('@/security/spend-budgets');
+        await checkSpend({ userId: user.id, funding: 'own', spaceId: null });
         // The model-ready copy (PNG/JPEG, ≤ 2048 px): HEIC, TIFF … are not what providers take.
         const { normalizeImageBytes } = await import('@/core/media/normalize');
         const ref = await normalizeImageBytes(bytes, dir);

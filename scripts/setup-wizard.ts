@@ -691,6 +691,8 @@ async function pickImageGeneration(api: ApiClient, providerId: string | undefine
   if (NON_INTERACTIVE) {
     modelId = process.env.OCTIPUS_SETUP_IMAGE_MODEL?.trim() || undefined;
     if (!modelId) return;
+    // Only a provider that draws, with the key setup just stored.
+    if (!offer) { warn(`Image generation: ${providerId} has no image models here; skipped (bind one on the Topics page).`); return; }
   } else {
     if (!offer) return;
     const want = await selectStep<'y' | 'n'>(
@@ -707,12 +709,16 @@ async function pickImageGeneration(api: ApiClient, providerId: string | undefine
   }
   const name = `${providerId} ${modelId}`;
   try {
+    // A model already drawing keeps drawing, as the backup.
+    const topics = await api.get<{ topics?: Array<{ value: string; primaryModel?: string | null }> } | Array<{ value: string; primaryModel?: string | null }>>('/api/topics').catch(() => null);
+    const list = Array.isArray(topics) ? topics : topics?.topics ?? [];
+    const previous = list.find((t) => t.value === 'image_generation')?.primaryModel ?? null;
     try {
       await api.post('/api/models', { name, provider: providerId, modelId, supportsTools: false, supportsStreaming: false });
     } catch (err) {
       if (!(err instanceof ApiError && /already exists/i.test(err.serverMessage))) throw err;
     }
-    await api.put('/api/topics/image_generation/binding', { primaryModel: name });
+    await api.put('/api/topics/image_generation/binding', { primaryModel: name, ...(previous && previous !== name ? { backupModel: previous } : {}) });
     ok(`Image generation: "${name}" bound.`);
   } catch (err) {
     warn(`Image generation not set up: ${err instanceof ApiError ? err.serverMessage : (err as Error).message}`);
