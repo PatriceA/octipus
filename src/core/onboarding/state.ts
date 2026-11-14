@@ -146,6 +146,14 @@ function modulesState(): OnboardingState['modules'] {
   return { enabled: [...enabledModules()], byUseCase, available };
 }
 
+/** The local embedding engine's offer: a build for this host, and the default model. */
+async function localEmbedding(): Promise<OnboardingState['localEmbedding']> {
+  const { localEmbeddingModel, platformKey } = await import('@/capabilities/local-engine/manifest');
+  const model = localEmbeddingModel();
+  if (!model) return undefined;
+  return { supported: platformKey() !== null, label: model.label, sizeMb: Math.round(model.size / 1e6) };
+}
+
 /** The guide's view of the install, for `userId`. */
 export async function readOnboardingState(userId: string, isAdmin: boolean): Promise<OnboardingState> {
   const config = getConfig();
@@ -180,6 +188,7 @@ export async function readOnboardingState(userId: string, isAdmin: boolean): Pro
     models,
     cliTools: tools,
     ollama: { url: ollamaUrl, reachable: ollama },
+    ...(isAdmin ? { localEmbedding: await soft('localEmbedding', undefined, localEmbedding) } : {}),
     workspaces: spaces,
     mailbox,
     oauthClients: clients,

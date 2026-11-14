@@ -6,12 +6,42 @@
     "tag": "b12373",
     "binary": "llama-server",
     "assets": {
-      "linux-x64": { "pattern": "^llama-b\\d+-bin-ubuntu-x64\\.(zip|tar\\.gz)$", "sha256": null },
-      "linux-arm64": { "pattern": "^llama-b\\d+-bin-ubuntu-arm64\\.(zip|tar\\.gz)$", "sha256": null },
-      "darwin-arm64": { "pattern": "^llama-b\\d+-bin-macos-arm64\\.(zip|tar\\.gz)$", "sha256": null },
-      "darwin-x64": { "pattern": "^llama-b\\d+-bin-macos-x64\\.(zip|tar\\.gz)$", "sha256": null },
-      "win32-x64": { "pattern": "^llama-b\\d+-bin-win-cpu-x64\\.zip$", "sha256": null },
-      "win32-arm64": { "pattern": "^llama-b\\d+-bin-win-cpu-arm64\\.zip$", "sha256": null }
+      "linux-x64": {
+        "pattern": "^llama-b\\d+-bin-ubuntu-x64\\.(zip|tar\\.gz)$",
+        "sha256": null
+      },
+      "linux-arm64": {
+        "pattern": "^llama-b\\d+-bin-ubuntu-arm64\\.(zip|tar\\.gz)$",
+        "sha256": null
+      },
+      "darwin-arm64": {
+        "pattern": "^llama-b\\d+-bin-macos-arm64\\.(zip|tar\\.gz)$",
+        "sha256": null
+      },
+      "darwin-x64": {
+        "pattern": "^llama-b\\d+-bin-macos-x64\\.(zip|tar\\.gz)$",
+        "sha256": null
+      },
+      "win32-x64": {
+        "pattern": "^llama-b\\d+-bin-win-cpu-x64\\.zip$",
+        "sha256": null
+      },
+      "win32-arm64": {
+        "pattern": "^llama-b\\d+-bin-win-cpu-arm64\\.zip$",
+        "sha256": null
+      }
+    },
+    "gpu": {
+      "vulkan": {
+        "linux-x64": {
+          "pattern": "^llama-b\\d+-bin-ubuntu-vulkan-x64\\.(zip|tar\\.gz)$",
+          "sha256": null
+        },
+        "win32-x64": {
+          "pattern": "^llama-b\\d+-bin-win-vulkan-x64\\.zip$",
+          "sha256": null
+        }
+      }
     }
   },
   "defaultModel": "embeddinggemma-2",
@@ -27,7 +57,10 @@
       "dims": 768,
       "pooling": "mean",
       "contextLength": 8192,
-      "prefixes": { "query": "task: search result | query: ", "document": "title: none | text: " },
+      "prefixes": {
+        "query": "task: search result | query: ",
+        "document": "title: none | text: "
+      },
       "license": "Apache-2.0"
     },
     {
@@ -41,7 +74,10 @@
       "dims": 768,
       "pooling": "mean",
       "contextLength": 2048,
-      "prefixes": { "query": "task: search result | query: ", "document": "title: none | text: " },
+      "prefixes": {
+        "query": "task: search result | query: ",
+        "document": "title: none | text: "
+      },
       "license": "Gemma Terms of Use (https://ai.google.dev/gemma/terms)"
     },
     {
@@ -55,7 +91,10 @@
       "dims": 1024,
       "pooling": "last",
       "contextLength": 8192,
-      "prefixes": { "query": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ", "document": "" },
+      "prefixes": {
+        "query": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ",
+        "document": ""
+      },
       "license": "Apache-2.0"
     }
   ]

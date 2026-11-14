@@ -41,7 +41,7 @@ everyone; the others come with a use case:
 
 | Section | For | Questions |
 |---|---|---|
-| AI models | everyone (admins only) | API key, a coding CLI or Ollama; a second model that checks work; document search |
+| AI models | everyone (admins only) | API key, a coding CLI or Ollama; a second model that checks work; document search (on this server, Ollama or OpenAI; optional) |
 | Areas of work | everyone | separate areas (personal workspaces), a shared space for a team, one login per company with its own mailbox |
 | Your chat | everyone | Telegram (bot token and link code), Slack, Teams or WhatsApp |
 | Images & audio | everyone (admins only) | generate images (OpenAI or Gemini, bound to the Image generation lane); voice on this server (faster-whisper and Kokoro) or in the cloud (OpenAI or Mistral), bound to the Transcription and Speech lanes. Both start at "no": nothing is bound unless chosen. A provider without a stored key asks for one, or leaves a to-do |

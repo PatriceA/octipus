@@ -81,6 +81,20 @@ describe('models', () => {
     expect(step(steps, 'model:ollama nomic-embed-text')).toMatchObject({ call: { body: { endpoint: 'http://gpu:11434' } } });
   });
 
+  test('local search is offered where a build exists, and installs on the server', () => {
+    const local = { supported: true, label: 'EmbeddingGemma 2 (Q8_0)', sizeMb: 310 };
+    const question = sectionsFor(['research']).flatMap((sec) => sec.questions).find((q) => q.id === 'models.embedding')!;
+    const values = (st: OnboardingState) => (typeof question.options === 'function' ? question.options(st, {}) : question.options ?? []).map((o) => o.value);
+    expect(values(fresh({ localEmbedding: local }))).toContain('local');
+    expect(values(fresh({ localEmbedding: { ...local, supported: false } }))).not.toContain('local');
+    expect(values(fresh())).not.toContain('local');
+    // A model already set is kept: no local offer.
+    expect(values(fresh({ localEmbedding: local, models: { ...fresh().models, embeddingReady: true } }))).not.toContain('local');
+    const steps = plan(['research'], { 'models.source': 'keep', 'models.embedding': 'local' }, fresh({ localEmbedding: local }));
+    expect(step(steps, 'local-embedding')).toMatchObject({ kind: 'api', call: { method: 'POST', path: '/local-engine/install' } });
+    expect(ids(steps)).not.toContain('bind:embedding');
+  });
+
   test('someone who is not an admin is never planned an install-wide change', () => {
     const state = fresh({ isAdmin: false });
     expect(visibleQuestions(sectionsFor(['company'])[0], {}, state)).toEqual([]);

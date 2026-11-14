@@ -515,6 +515,58 @@ queries order by the bare distance (`embedding <=> $q` ascending) —
 `ORDER BY 1 - (embedding <=> $q) DESC` is the same order but cannot
 use the index.
 
+## Local embeddings
+
+An **optional** embedding model that runs on the Octipus server itself: no
+key, no cloud, content at protection levels 3–4 may be embedded. Nothing is
+downloaded unless an admin says yes; Octipus runs without any embedding model
+(search and memory recall are then off, and nothing is chunked).
+
+| Where | How |
+|-------|-----|
+| Topics page | Embedding lane → **Install local embeddings** (progress shown; Remove when installed) |
+| CLI | `octi capabilities install local-embedding [--model <id>] [--gpu vulkan]`, `octi capabilities remove local-embedding` |
+| `octi setup` | Optional "Search & memory" step, only while no embedding model is bound (default: skip). `--quick` never asks; it prints a tip. Non-interactive: `OCTIPUS_SETUP_EMBEDDING=local\|ollama\|openai` |
+| Web onboarding | "Search across your documents…" → **Yes, on this server** (only where a build exists) |
+| Docker | `scripts/install-docker.sh` asks; or build with `--build-arg OCTIPUS_BAKE_EMBEDDING=1` to put the files in the image (offline/air-gapped). Files live in the `octipus-models` volume (`/data/models`). |
+
+What it installs (`src/capabilities/local-engine/manifest.json`, pinned):
+
+- **Engine:** llama.cpp `llama-server`, one release tag, the build for this
+  platform (Linux x64/arm64, macOS arm64/x64, Windows x64/arm64; Metal on
+  Apple silicon). `--gpu vulkan` takes the Vulkan build where one exists
+  (Linux x64, Windows x64). The download must match its SHA-256 (from the
+  manifest, else GitHub's release digest), and the binary must run
+  (`--version`) before it is used.
+- **Model** (default `embeddinggemma-2`, Q8_0, about 310 MB, 768 dimensions,
+  100+ languages; also `embeddinggemma-300m` and `qwen3-embedding-0.6b`), at
+  a pinned Hugging Face revision, SHA-256 verified, with its query/document
+  prefixes set on the row (see Asymmetric retrieval prefixes).
+- Before the row is created, the engine is started and a probe text is
+  embedded; the vector's dimension must match the manifest.
+
+**Binding.** The model is bound to the embedding lane **only when the lane is
+unbound**. An embedding model already in use is never replaced: the local
+row is added unbound and the install says so. To switch, bind it on the
+Topics page and rebuild the vectors (Vector indexing, Embedding-drift check).
+
+**Running.** `llama-server` listens on 127.0.0.1, on a free port, with a new
+API key each start. It starts on the first embedding (and at boot only when
+its row is the bound embedding model), stops after
+`localEngine.idleStopMinutes` idle (default 30; 0 = never) and with Octipus,
+and restarts on demand after a crash (not after three crashes in five
+minutes). `/api/health` and `octi doctor` report it only when installed.
+
+**Updates.** A new engine tag in the manifest is fetched at boot beside the
+build in use and switched to after its probe passes; vectors are unaffected.
+A new default model is never swapped under an existing binding.
+`scripts/pin-local-engine.ts` re-pins the manifest (maintainers);
+`--check` runs weekly in CI to confirm every pinned URL still answers.
+
+**Remove.** Stops the engine and deletes its files and rows. If the local
+model was bound, the lane is unbound and search reports that no embedding
+model is configured.
+
 ## Dedup
 
 A unique index on `(purpose, source_id, content_sha256, user_id,
@@ -569,9 +621,10 @@ CREATE INDEX embeddings_repo_id_idx ON embeddings (repo_id);
 ## Setup requirements
 
 1. PostgreSQL with the `pgvector` extension installed.
-2. An embedding model registered in the model registry under topic
-   `embedding`. `ollama pull nomic-embed-text` then create the model
-   row from the Models page is the path of least resistance.
+2. Optional: an embedding model bound to topic `embedding`. The local
+   engine (Local embeddings above) needs no key; or `ollama pull
+   nomic-embed-text` and create the row on the Models page. Without one,
+   search and memory recall are off and nothing is chunked.
 3. `npm run db:migrate` to apply all migrations shipped with your checkout.
 4. Optionally bind a model to topic `memory_extraction` to enable
    the long-term memory pipeline (Phase D); the knowledge-base path

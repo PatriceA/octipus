@@ -145,6 +145,9 @@ async function main() {
         const { getModelRegistry } = await import('@/models/model-registry');
         const bound = await getModelRegistry().getModelForTopic('embedding');
         if (bound?.provider !== 'local-engine') return;
+        // An update brought a new engine tag: fetched beside the old build, switched after its probe.
+        const { upgradeLocalEngineIfNeeded } = await import('@/capabilities/local-engine/install');
+        await upgradeLocalEngineIfNeeded().catch((err: unknown) => logger.warn({ err }, 'Local embedding engine update failed; the installed build stays in use'));
         const { ensureLocalEngine } = await import('@/capabilities/local-engine/engine-process');
         await ensureLocalEngine(bound.modelId);
       })().catch((err: unknown) => logger.warn({ err }, 'Local embedding engine did not start at boot; it starts on the next embedding'));

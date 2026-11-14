@@ -592,7 +592,10 @@ export async function checkLocalEmbedding(): Promise<CheckResult | null> {
     const marker = (await readFile(join(modelDir(m), '.verified'), 'utf8').catch(() => '')).trim();
     if (!existsSync(modelFilePath(m)) || marker !== m.sha256) return { name, status: 'fail', detail: `${m.id}: the model file is missing or unverified`, critical: false, hint: remedy };
   }
-  return { name, status: 'ok', detail: `llama.cpp ${LOCAL_ENGINE_MANIFEST.engine.tag}; models: ${models.map((m) => m.id).join(', ') || 'none'}`, critical: false };
+  const { activeEngine } = await import('../src/capabilities/local-engine/paths');
+  const active = activeEngine();
+  const build = active ? `${active.tag}${active.variant === 'cpu' ? '' : ` (${active.variant})`}` : LOCAL_ENGINE_MANIFEST.engine.tag;
+  return { name, status: 'ok', detail: `llama.cpp ${build}; models: ${models.map((m) => m.id).join(', ') || 'none'}`, critical: false };
 }
 
 export async function runDoctor(projectDir: string): Promise<DoctorReport> {

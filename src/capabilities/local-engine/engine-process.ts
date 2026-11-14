@@ -10,12 +10,12 @@ import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { createServer } from 'node:net';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { getConfig } from '@/config';
 import { type ChildProcessHandle, spawnProcess } from '@/utils/proc';
 import { logger } from '@/utils/logger';
 import { LOCAL_ENGINE_MANIFEST, type LocalEmbeddingModel, localEmbeddingModel, platformKey } from './manifest';
-import { engineDir, modelFilePath } from './paths';
+import { activeEngine, engineDir, modelFilePath } from './paths';
 
 const log = logger.child({ component: 'local-engine' });
 const EXE = process.platform === 'win32' ? '.exe' : '';
@@ -32,9 +32,20 @@ let crashes: number[] = [];
 let stopping = false;
 let exitHookInstalled = false;
 
+/**
+ * The engine binary in use: the build recorded as active (an older tag keeps
+ * serving until a newer one has passed its probe), else the manifest's build.
+ */
 export function engineBinaryPath(): string | null {
   const key = platformKey();
-  return key ? join(engineDir(key), `${LOCAL_ENGINE_MANIFEST.engine.binary}${EXE}`) : null;
+  if (!key) return null;
+  const exe = `${LOCAL_ENGINE_MANIFEST.engine.binary}${EXE}`;
+  const active = activeEngine();
+  if (active) {
+    const bin = join(engineDir(key, active.tag, active.variant), exe);
+    if (existsSync(bin)) return bin;
+  }
+  return join(engineDir(key), exe);
 }
 
 export function isModelInstalled(model: LocalEmbeddingModel): boolean {
@@ -123,7 +134,7 @@ async function start(model: LocalEmbeddingModel): Promise<Running> {
       '-c', String(model.contextLength), '-b', '2048', '-ub', '2048', '--parallel', '2', '-t', String(threads), '--api-key', apiKey],
     stdout: 'pipe',
     stderr: 'pipe',
-    env: { ...process.env, LD_LIBRARY_PATH: [engineDir(platformKey()!), process.env.LD_LIBRARY_PATH].filter(Boolean).join(':') },
+    env: { ...process.env, LD_LIBRARY_PATH: [dirname(bin), process.env.LD_LIBRARY_PATH].filter(Boolean).join(':') },
   });
   void drainLines(proc.stdout, 'debug');
   void drainLines(proc.stderr, 'debug');

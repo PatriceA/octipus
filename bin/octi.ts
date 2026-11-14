@@ -198,7 +198,7 @@ async function runCapabilities(args: string[]): Promise<never> {
         'octi capabilities                  list installed/missing tools\n' +
         'octi capabilities install <id>     install a capability (e.g. browser, mcp)\n' +
         'octi capabilities install --all    install every missing capability with an installer\n' +
-        'octi capabilities install local-embedding [--model <id>]   download the optional local embedding engine (~330 MB)\n' +
+        'octi capabilities install local-embedding [--model <id>] [--gpu vulkan]   download the optional local embedding engine (~330 MB)\n' +
         'octi capabilities remove local-embedding                    stop it and delete its files\n',
       );
       process.exit(0);
@@ -233,7 +233,9 @@ async function runCapabilities(args: string[]): Promise<never> {
       }
       const modelIdx = args.indexOf('--model');
       const model = modelIdx >= 0 ? args[modelIdx + 1] : undefined;
-      const start = await fetch(`${base}/api/local-engine/install`, { method: 'POST', headers, body: JSON.stringify(model ? { model } : {}) });
+      const gpuIdx = args.indexOf('--gpu');
+      const gpu = gpuIdx >= 0 ? args[gpuIdx + 1] : undefined;
+      const start = await fetch(`${base}/api/local-engine/install`, { method: 'POST', headers, body: JSON.stringify({ ...(model ? { model } : {}), ...(gpu ? { gpu } : {}) }) });
       if (!start.ok) throw new Error(`HTTP ${start.status}: ${await start.text()}`);
       let last = '';
       for (;;) {

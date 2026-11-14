@@ -30,6 +30,7 @@
     "db:backfill-topic-roles": "tsx --import ./scripts/md-loader.mjs scripts/backfill-topic-roles.ts",
     "db:check-embedding-drift": "tsx --import ./scripts/md-loader.mjs scripts/check-embedding-drift.ts",
     "setup": "tsx --import ./scripts/md-loader.mjs scripts/setup-wizard.ts",
+    "local-engine:fetch": "tsx --import ./scripts/md-loader.mjs scripts/fetch-local-engine.ts",
     "backup": "tsx --import ./scripts/md-loader.mjs scripts/backup.ts",
     "test": "vitest run",
     "test:tui": "vitest run src/tui-pi src/tui-editor tests/tui",

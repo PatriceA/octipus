@@ -222,6 +222,12 @@ function modelSteps(plan: Plan, a: Answers, s: OnboardingState): void {
 
   const embedding = str(a, 'models.embedding');
   if (embedding === 'keep' && s.models.embeddingReady) plan.done('models:embedding', 'Document search already has a model');
+  if (embedding === 'local' && !s.models.embeddingReady) {
+    // A background download; the install binds the model only while the lane is still unbound.
+    plan.api('local-embedding', `Install ${s.localEmbedding?.label ?? 'the local embedding model'} on this server`, { method: 'POST', path: '/local-engine/install', body: {} }, {
+      detail: 'Downloads in the background; the Topics page shows the progress. Search turns on when it finishes.',
+    });
+  }
   if (embedding === 'ollama' || embedding === 'openai') {
     const m = EMBEDDING_MODELS[embedding];
     const url = str(a, 'models.ollamaUrl') || s.ollama.url;

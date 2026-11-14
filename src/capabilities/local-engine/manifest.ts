@@ -24,8 +24,16 @@ export interface LocalEmbeddingModel {
   license: string;
 }
 
+/** `cpu`: the default build (Metal on Apple silicon). `vulkan`: opt-in GPU build where one exists. */
+export type EngineVariant = 'cpu' | 'vulkan';
+
 export interface LocalEngineManifest {
-  engine: { name: string; repo: string; tag: string; binary: string; assets: Record<PlatformKey, EngineAsset> };
+  engine: {
+    name: string; repo: string; tag: string; binary: string;
+    assets: Record<PlatformKey, EngineAsset>;
+    /** Opt-in GPU builds (`octi capabilities install local-embedding --gpu vulkan`). */
+    gpu?: { vulkan?: Partial<Record<PlatformKey, EngineAsset>> };
+  };
   defaultModel: string;
   models: LocalEmbeddingModel[];
 }
@@ -42,6 +50,11 @@ export function localEmbeddingModel(id?: string): LocalEmbeddingModel | undefine
   return LOCAL_ENGINE_MANIFEST.models.find((m) => m.id === (id ?? LOCAL_ENGINE_MANIFEST.defaultModel));
 }
 
+/** The release asset for a platform and variant, or undefined where none is built. */
+export function engineAsset(key: PlatformKey, variant: EngineVariant = 'cpu', m: LocalEngineManifest = LOCAL_ENGINE_MANIFEST): EngineAsset | undefined {
+  return variant === 'cpu' ? m.engine.assets[key] : m.engine.gpu?.[variant]?.[key];
+}
+
 /** The model's download URL at its pinned revision (never `main`). */
 export function modelUrl(model: LocalEmbeddingModel): string {
   return `https://huggingface.co/${model.repo}/resolve/${model.revision}/${model.file}`;
@@ -51,7 +64,9 @@ export function modelUrl(model: LocalEmbeddingModel): string {
 export function manifestProblems(m: LocalEngineManifest = LOCAL_ENGINE_MANIFEST): string[] {
   const problems: string[] = [];
   if (!/^b\d+$/.test(m.engine.tag)) problems.push(`engine tag ${m.engine.tag} is not a llama.cpp build tag`);
-  for (const [key, asset] of Object.entries(m.engine.assets)) {
+  const gpu = Object.entries(m.engine.gpu?.vulkan ?? {}).map(([key, a]) => [`vulkan ${key}`, a] as const);
+  for (const [key, asset] of [...Object.entries(m.engine.assets), ...gpu]) {
+    if (!asset) continue;
     try { new RegExp(asset.pattern); } catch { problems.push(`${key}: pattern is not a regular expression`); }
     if (asset.sha256 !== null && !/^[0-9a-f]{64}$/.test(asset.sha256)) problems.push(`${key}: sha256 is not a SHA-256`);
   }

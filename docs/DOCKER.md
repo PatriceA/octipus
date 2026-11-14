@@ -49,6 +49,7 @@ docker compose --env-file .env.compose exec octipus npm run setup -- --remote ht
 | `octipus-documents` | `/data/documents` | Uploaded documents |
 | `octipus-extensions` | `/data/extensions` | Plugins and extensions |
 | `octipus-pgdata` | PostgreSQL data | Database persistence |
+| `octipus-models` | `/data/models` | Optional local embedding engine and model ([RAG.md → Local embeddings](RAG.md#local-embeddings)). Empty unless chosen; `--build-arg OCTIPUS_BAKE_EMBEDDING=1` puts them in the image (offline installs). `scripts/install-docker.sh` asks. |
 
 ## Installed CLI Tools
 

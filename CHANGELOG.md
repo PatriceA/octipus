@@ -7,6 +7,18 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Optional local embeddings.** Search across documents, notes and memories
+  without a key: llama.cpp and a small embedding model (EmbeddingGemma 2,
+  about 330 MB with the engine) installed on the server only when an admin
+  says yes — Topics page, `octi capabilities install local-embedding`, the
+  optional "Search & memory" step of `octi setup` (`OCTIPUS_SETUP_EMBEDDING`),
+  the web onboarding, or Docker (`install-docker.sh` asks; build arg
+  `OCTIPUS_BAKE_EMBEDDING=1`; new `octipus-models` volume). Downloads are
+  pinned and SHA-256 verified, the engine runs on 127.0.0.1 with a key per
+  start and stops when idle (`localEngine.idleStopMinutes`). An embedding
+  model already bound is never replaced. Nothing changes for installs that
+  do not add it ([RAG.md → Local embeddings](docs/RAG.md#local-embeddings)).
+
 - Add Grok Build as a CLI agent model, using an existing login, scoped Octipus
   tools, resumable conversations, streamed activity and cache-aware token usage.
 - **Everything beyond one chat model is optional.** Embedding, reading images,
