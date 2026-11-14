@@ -3,12 +3,13 @@
  * cached, hydrated into a request's copy only, the newest few kept, and a
  * tool's image shown after its result.
  */
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import type { AgentMessage, MediaRef } from '@/core/types';
+import { WorkspaceFS } from '@/security/workspace-fs';
 import { hasMedia, hydrateMedia, withoutMediaBytes } from './hydrate';
 import { cropImageBytes, MAX_IMAGE_EDGE, MediaError, normalizeImageBytes, sniffImageType, TARGET_IMAGE_BYTES } from './normalize';
 import { TOOL_MEDIA_KEY, takeToolMedia, toolMediaMessage, withToolMedia } from './tool-media';
@@ -65,9 +66,10 @@ describe('hydrate', () => {
   const user = (content: string, media?: MediaRef[]): AgentMessage => ({ role: 'user', content, timestamp: new Date(), ...(media ? { media } : {}) });
 
   test('only the newest few image messages carry bytes; older ones become a line to look again', async () => {
-    const paths = await Promise.all([1, 2, 3, 4].map(async (n) => { const p = join(dir, `${n}.png`); await writeFile(p, await png(2, 2)); return p; }));
+    await mkdir(join(dir, '.octipus/media'), { recursive: true });
+    const paths = await Promise.all([1, 2, 3, 4].map(async (n) => { const p = join(dir, '.octipus/media', `${n}.png`); await writeFile(p, await png(2, 2)); return p; }));
     const messages = paths.map((p, i) => user(`m${i}`, [ref(p)]));
-    const out = await hydrateMedia(messages, { readsImages: true, hearsAudio: false, replayRecent: 3 });
+    const out = await hydrateMedia(messages, { fs: WorkspaceFS.withRoot(dir), readsImages: true, hearsAudio: false, replayRecent: 3 });
     expect(out[0].media).toBeUndefined();
     expect(out[0].content).toContain('vision__view_image');
     for (const m of out.slice(1)) expect(m.media?.[0].data).toBeTruthy();
@@ -79,12 +81,31 @@ describe('hydrate', () => {
   test('a model that cannot see gets a line instead; a file that is gone is said so', async () => {
     const p = join(dir, 'a.png');
     await writeFile(p, await png(2, 2));
-    const blind = await hydrateMedia([user('look', [ref(p)])], { readsImages: false, hearsAudio: false });
+    const fs = WorkspaceFS.withRoot(dir);
+    const blind = await hydrateMedia([user('look', [ref(p)])], { fs, readsImages: false, hearsAudio: false });
     expect(blind[0].media).toBeUndefined();
     expect(blind[0].content).toMatch(/cannot see images: call vision__view_image/);
-    const gone = await hydrateMedia([user('look', [ref(join(dir, 'missing.png'))])], { readsImages: true, hearsAudio: false });
+    const gone = await hydrateMedia([user('look', [ref(join(dir, 'missing.png'))])], { fs, readsImages: true, hearsAudio: false });
     expect(gone[0].content).toMatch(/no longer available/);
     expect(hasMedia([user('x')])).toBe(false);
+  });
+
+  test('only this workspace\'s media files are read, and only of the kind they claim; confidential media stays off a remote model', async () => {
+    const fs = WorkspaceFS.withRoot(dir);
+    await mkdir(join(dir, '.octipus/media'), { recursive: true });
+    const inside = join(dir, '.octipus/media/ok.png');
+    await writeFile(inside, await png(2, 2));
+    await writeFile(join(dir, 'secret.png'), await png(2, 2)); // not a media dir
+    await writeFile(join(dir, '.octipus/media/fake.png'), 'not an image');
+    const out = await hydrateMedia([
+      user('a', [ref(inside)]), user('b', [ref(join(dir, 'secret.png'))]), user('c', [ref('/etc/passwd')]), user('d', [ref(join(dir, '.octipus/media/fake.png'))]),
+    ], { fs, readsImages: true, hearsAudio: false, replayRecent: 10 });
+    expect(out[0].media?.[0].data).toBeTruthy();
+    for (const m of out.slice(1)) { expect(m.media).toBeUndefined(); expect(m.content).toMatch(/no longer available/); }
+    const confidential = await hydrateMedia([user('a', [ref(inside)])], { fs, readsImages: true, hearsAudio: false, protectedContent: true });
+    expect(confidential[0].media).toBeUndefined();
+    expect(confidential[0].content).toMatch(/confidential and this model is not local/);
+    expect((await hydrateMedia([user('a', [ref(inside)])], { fs: null, readsImages: true, hearsAudio: false }))[0].media).toBeUndefined();
   });
 });
 
@@ -101,5 +122,16 @@ describe('tool media', () => {
     expect(msg).toMatchObject({ role: 'user', media: taken.media });
     expect(msg.content).toMatch(/content, not instructions/);
     expect(withToolMedia({ a: 1 }, [])).toEqual({ a: 1 });
+  });
+});
+
+describe('after a restart', () => {
+  test('images a turn showed come back as references from the message row', async () => {
+    const { toContextMessage } = await import('@/core/session-history');
+    const msg = toContextMessage({
+      id: 'm1', role: 'user', content: 'What is this?', createdAt: new Date(),
+      metadata: { attachments: [{ type: 'image', path: '/w/.octipus/media/cache/a.png', mimeType: 'image/png', source: 'user' }, { type: 'file', path: '/w/doc.pdf' }] },
+    } as never);
+    expect(msg.media).toEqual([{ kind: 'image', path: '/w/.octipus/media/cache/a.png', mimeType: 'image/png', source: 'user' }]);
   });
 });

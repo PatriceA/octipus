@@ -12,6 +12,8 @@
  */
 import { readFile } from 'node:fs/promises';
 import type { AgentMessage, MediaRef } from '@/core/types';
+import type { WorkspaceFS } from '@/security/workspace-fs';
+import { sniffImageType } from './normalize';
 
 export interface HydrateOptions {
   /** The model reads images (its row's `supportsVision`). */
@@ -20,13 +22,42 @@ export interface HydrateOptions {
   hearsAudio: boolean;
   /** How many of the newest media-bearing messages keep their bytes. */
   replayRecent?: number;
+  /**
+   * The agent's workspace. Only media inside its `.octipus/media` or
+   * `.octipus/attachments` is ever read (a reference names a path; a path
+   * from anywhere else — a tampered snapshot — is refused, not read).
+   */
+  fs: WorkspaceFS | null;
+  /** The conversation holds content that may not reach this (remote) model as it is. */
+  protectedContent?: boolean;
+}
+
+const MEDIA_DIRS = ['/.octipus/media/', '/.octipus/attachments/'];
+
+/** The bytes of `ref` when it is a media file of this workspace, of the kind it claims; else null. */
+async function readMedia(ref: MediaRef, fs: WorkspaceFS | null): Promise<Buffer | null> {
+  if (!fs) return null;
+  let path: string;
+  try { path = fs.resolve(ref.path); } catch { return null; }
+  const normalized = path.split('\\').join('/');
+  if (!MEDIA_DIRS.some((dir) => normalized.includes(dir))) return null;
+  const bytes = await readFile(path);
+  if (ref.kind === 'image') return sniffImageType(bytes) ? bytes : null;
+  const head = bytes.subarray(0, 4).toString('latin1');
+  const audio = head === 'RIFF' || head.startsWith('ID3') || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0);
+  return audio ? bytes : null;
 }
 
 export const DEFAULT_REPLAY_RECENT_IMAGES = 3;
 
-function note(ref: MediaRef, why: 'older' | 'unsupported' | 'missing'): string {
+function note(ref: MediaRef, why: 'older' | 'unsupported' | 'missing' | 'protected'): string {
   const what = ref.kind === 'image' ? 'Image' : 'Audio';
   if (why === 'missing') return `[${what} ${ref.path} is no longer available.]`;
+  if (why === 'protected') {
+    return ref.kind === 'image'
+      ? `[Image ${ref.path} is confidential and this model is not local: call vision__view_image to have a local model describe it.]`
+      : `[Audio ${ref.path} is confidential and this model is not local; its transcript is in the conversation.]`;
+  }
   if (why === 'unsupported') {
     return ref.kind === 'image'
       ? `[Image ${ref.path} is attached, but this model cannot see images: call vision__view_image to have it described.]`
@@ -62,9 +93,12 @@ export async function hydrateMedia(messages: AgentMessage[], opts: HydrateOption
     for (const ref of msg.media) {
       const supported = ref.kind === 'image' ? opts.readsImages : opts.hearsAudio;
       if (!supported) { notes.push(note(ref, 'unsupported')); continue; }
+      if (opts.protectedContent) { notes.push(note(ref, 'protected')); continue; }
       if (!recent) { notes.push(note(ref, 'older')); continue; }
       try {
-        keep.push({ ...ref, data: (await readFile(ref.path)).toString('base64') });
+        const bytes = await readMedia(ref, opts.fs);
+        if (bytes) keep.push({ ...ref, data: bytes.toString('base64') });
+        else notes.push(note(ref, 'missing'));
       } catch {
         notes.push(note(ref, 'missing'));
       }

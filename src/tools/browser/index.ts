@@ -251,7 +251,7 @@ export class BrowserTool extends BaseTool {
 
     this.registerTool(
       'screenshot',
-      'Take a screenshot of the page',
+      'Take a screenshot of the page. It is saved in the workspace (path returned); if you can see images it is shown to you, otherwise look at it with vision__view_image.',
       createParameterSchema({
         pageId: { type: 'string', description: 'Page ID', required: true },
         fullPage: { type: 'boolean', description: 'Capture full page', default: false },
@@ -268,11 +268,11 @@ export class BrowserTool extends BaseTool {
           screenshot = await page.screenshot({ fullPage: args.fullPage as boolean });
         }
 
-        return {
-          base64: screenshot.toString('base64'),
-          size: screenshot.length,
-          url: page.url(),
-        };
+        // Kept in the workspace and shown to a model that reads images; one
+        // that cannot gets the path (vision__view_image looks at it).
+        const { keepToolImage, withToolMedia } = await import('@/core/media/tool-media');
+        const kept = await keepToolImage(context, screenshot);
+        return withToolMedia({ path: kept.path, size: screenshot.length, url: page.url() }, [kept.media]);
       },
       { permissionAction: 'screenshot' }
     );

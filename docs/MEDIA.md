@@ -15,7 +15,11 @@ that it is off ([MODULES.md → Capability gates](MODULES.md#capability-gates)).
 One resolver decides (`src/models/media-resolver.ts`); the Topics page and
 Health show what actually serves each lane. Protection levels apply: content
 that stays local is only read by a local model (seeing and OCR switch to one;
-speech refuses a cloud engine and uses a local backup).
+speech refuses a cloud engine and uses a local backup). Pixels and recordings
+are never pseudonymized, so the strict threshold holds for them: at a
+local-only level a remote model gets a line instead of the image (it can ask
+`view_image`, which a local model answers), even where
+`protection.remoteAtLevel3` lets text go out.
 
 ## Does a model read images?
 
@@ -44,6 +48,10 @@ Images stay in the conversation: after a restart a follow-up ("what colour
 was the car?") still has them. Only the newest `media.replayRecentImages`
 (default 3) image-bearing messages are re-sent as pixels with each request;
 older ones become a line the model can look again from.
+
+Only media files of the agent's own workspace (`.octipus/media`,
+`.octipus/attachments`) are ever read into a request, and only when their
+bytes are the kind they claim.
 
 On a channel, an image sent alone reaches the agent as an image (with or
 without a caption). It is not filed in the document library unless

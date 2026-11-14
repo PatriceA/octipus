@@ -215,7 +215,10 @@ async function storeChannelImages(images: Attachment[], message: UnifiedMessage,
       files.push(new File([new Uint8Array(bytes)], name, { type: img.mimeType }));
     }
     const paths = await keepChannelFiles(files, message.userId, sessionId);
-    return paths ? paths.map((path) => ({ path })) : null;
+    // A channel has no sensitivity picker: like the text it came with, the
+    // image carries no classification of its own (level 1 raises nothing);
+    // the conversation's level applies to everything the turn reads.
+    return paths ? paths.map((path) => ({ path, protectionLevel: 1 as const })) : null;
   } catch (err) {
     channelLogger.warn({ err, channel: message.channelType }, 'Could not keep channel images with the conversation; describing them instead');
     return null;
