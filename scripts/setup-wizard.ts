@@ -734,7 +734,17 @@ async function pickImageGeneration(api: ApiClient, providerId: string | undefine
  * rebuild). The default is to skip: Octipus runs without one, and indexes
  * nothing until one is set. Non-interactive: OCTIPUS_SETUP_EMBEDDING.
  */
-async function pickEmbedding(api: ApiClient, providerId: string | undefined): Promise<void> {
+export interface EmbeddingStepOptions {
+  quick?: boolean;
+  nonInteractive?: boolean;
+  /** The question; defaults to the wizard's prompt (tests pass their own). */
+  select?: (title: string, items: Array<{ value: string; label: string; description?: string }>, defaultValue: string) => Promise<string>;
+}
+
+export async function pickEmbedding(api: Pick<ApiClient, 'get' | 'post' | 'put'>, providerId: string | undefined, opts: EmbeddingStepOptions = {}): Promise<void> {
+  const quick = opts.quick ?? QUICK;
+  const nonInteractive = opts.nonInteractive ?? NON_INTERACTIVE;
+  const select = opts.select ?? ((title, items, def) => selectStep<string>(null, title, items, def));
   type EngineState = { platform: string | null; embeddingBound: string | null; models: Array<{ id: string; label: string; sizeBytes: number; default: boolean }>; job?: { stage: string; percent: number; statusText: string; error?: string; note?: string } | null };
   // Fails closed: when the backend cannot say the lane is free, nothing is bound.
   const engine = await api.get<EngineState>('/api/local-engine').catch(() => null);
@@ -742,16 +752,15 @@ async function pickEmbedding(api: ApiClient, providerId: string | undefined): Pr
   if (!engine || !topics) { gray('Search & memory: skipped (could not check the embedding lane). Set it later on the Topics page.'); return; }
   const list = Array.isArray(topics) ? topics : topics?.topics ?? [];
   if (engine.embeddingBound || list.find((t) => t.value === 'embedding')?.primaryModel) return;
-  if (QUICK) { gray('Search & memory are off. Add a local model any time: Topics page → Install local embeddings, or `octi capabilities install local-embedding`.'); return; }
+  if (quick) { gray('Search & memory are off. Add a local model any time: Topics page → Install local embeddings, or `octi capabilities install local-embedding`.'); return; }
   const local = engine.platform ? engine.models.find((m) => m.default) : undefined;
   // Ollama is offered when the backend reaches it.
   const ollama = (await api.get<{ ollama?: { reachable?: boolean } }>('/api/onboarding').catch(() => null))?.ollama?.reachable === true;
   let choice: string;
-  if (NON_INTERACTIVE) {
+  if (nonInteractive) {
     choice = process.env.OCTIPUS_SETUP_EMBEDDING?.trim() || 'skip';
   } else {
-    choice = await selectStep<string>(
-      null,
+    choice = await select(
       'Search & memory — search across documents, notes and memories? (an embedding model)',
       [
         { value: 'skip', label: 'No — skip', description: 'Octipus runs without it; nothing is indexed. Add one later: octi capabilities install local-embedding.' },

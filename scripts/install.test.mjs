@@ -45,3 +45,37 @@ fi` : ''}
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 }
+
+// Quick install: five questions, nothing optional. In particular no local
+// embedding engine or model is downloaded (docs/RAG.md → Local embeddings):
+// the installer runs `octi setup --quick` with no embedding choice, makes no
+// download itself, and installs no capability.
+const hasScript = spawnSync('script', ['--version'], { encoding: 'utf8' }).status === 0;
+test('installer: --quick downloads nothing optional', { skip: !hasScript || process.platform !== 'linux' }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'octipus-install-test-'));
+  try {
+    const tools = join(dir, 'tools'); const app = join(dir, 'app'); const log = join(dir, 'calls');
+    mkdirSync(tools); mkdirSync(join(app, '.git'), { recursive: true });
+    for (const name of ['node', 'git', 'npm', 'curl', 'wget']) {
+      writeFileSync(join(tools, name), `#!/bin/bash
+printf '%s %s\\n' '${name}' "$*" >> "$CALL_LOG"
+${name === 'node' ? 'echo 26.12.1' : ''}
+${name === 'npm' ? `if [ "$*" = 'run build:cli' ]; then
+mkdir -p dist
+printf '#!/bin/bash\\nprintf "cli %%s embedding=%%s\\\\n" "$*" "$OCTIPUS_SETUP_EMBEDDING" >> "$CALL_LOG"\\n' > dist/octi
+chmod +x dist/octi
+fi` : ''}
+`, { mode: 0o755 });
+    }
+    const env = { ...process.env, PATH: `${tools}:${process.env.PATH}`, OCTIPUS_INSTALL_DIR: app, OCTIPUS_BIN_DIR: join(dir, 'bin'), CALL_LOG: log };
+    delete env.CI;
+    delete env.OCTIPUS_SETUP_EMBEDDING;
+    // A pseudo-terminal: quick setup is interactive (`script` gives it /dev/tty).
+    const result = spawnSync('script', ['-qec', `bash ${resolve('scripts/install.sh')} --quick`, '/dev/null'], { env, encoding: 'utf8' });
+    const calls = readFileSync(log, 'utf8');
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(calls, /^cli setup --quick embedding=$/m);
+    assert.doesNotMatch(calls, /^(curl|wget) /m);
+    assert.doesNotMatch(calls, /local-embedding|local-engine|capabilities install/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
