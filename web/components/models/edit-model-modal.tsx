@@ -8,7 +8,7 @@ import { api } from '@/lib/api';
 import { Portal } from '@/components/ui/portal';
 import type { CLITool, Model } from '@/lib/types/models';
 
-type CliKind = 'claude' | 'antigravity' | 'codex' | 'vibe' | 'glm' | 'kimi' | 'grok' | null;
+type CliKind = 'claude' | 'antigravity' | 'codex' | 'vibe' | 'muse' | 'glm' | 'kimi' | 'grok' | null;
 
 function fallbackCliKind(modelId: string): CliKind {
   const id = modelId.toLowerCase();
@@ -17,6 +17,7 @@ function fallbackCliKind(modelId: string): CliKind {
   if (id.includes('antigravity') || id.includes('agy') || id.includes('gemini')) return 'antigravity';
   if (id.includes('codex')) return 'codex';
   if (id.includes('vibe')) return 'vibe';
+  if (id.includes('muse')) return 'muse';
   if (id.includes('glm') || id.includes('zai')) return 'glm';
   if (id.includes('kimi') || id.includes('moonshot')) return 'kimi';
   return null;
@@ -32,6 +33,7 @@ function cliKindForTool(tool: CLITool | undefined, modelId: string): CliKind {
     case 'google': return 'antigravity';
     case 'openai': return 'codex';
     case 'mistral': return 'vibe';
+    case 'meta': return 'muse';
     case 'zai': return 'glm';
     case 'moonshot': return 'kimi';
     case 'grok': return 'grok';
@@ -124,6 +126,8 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
   const supportsClaudeStyleLimits = cliKind === 'claude' || cliKind === 'vibe' || cliKind === 'glm' || cliKind === 'kimi';
   const supportsModelOverride = cliKind !== 'vibe';
   const supportsApiKeyInheritance = cliKind !== 'glm' && cliKind !== 'kimi';
+  // Managed Muse, Grok and Antigravity runs use only Octipus tools and approvals.
+  const supportsPermissionMode = cliKind !== 'muse' && cliKind !== 'grok' && cliKind !== 'antigravity';
   const preservedNativePermission = formData.cliPermissionMode && !SHARED_PERMISSION_MODES.has(formData.cliPermissionMode)
     ? formData.cliPermissionMode
     : null;
@@ -218,7 +222,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
           delete cliAgentConfig.inheritApiKeys;
           cliAgentConfig.inheritApiKeys = formData.cliInheritApiKeys;
         }
-        if (cliKind !== 'grok' && cliKind !== 'antigravity' && formData.cliPermissionMode) cliAgentConfig.permissionMode = formData.cliPermissionMode;
+        if (formData.cliPermissionMode && supportsPermissionMode) cliAgentConfig.permissionMode = formData.cliPermissionMode;
         if (supportsModelOverride) {
           delete cliAgentConfig.model;
           if (formData.cliModel.trim()) cliAgentConfig.model = formData.cliModel.trim();
@@ -599,9 +603,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 </p>
               )}
 
-              {cliKind === 'grok' || cliKind === 'antigravity' ? <p className="text-sm text-on-surface-variant">
-                {cliKind === 'grok' ? 'Grok Build' : 'Antigravity'} uses this session’s Octipus tools and approvals. Access is managed in Environments &amp; Access.
-              </p> : <div>
+              {supportsPermissionMode ? <div>
                 <label className="block text-sm font-medium text-on-surface-variant mb-1">Permission Mode</label>
                 <select
                   value={formData.cliPermissionMode}
@@ -622,7 +624,15 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 <p className="text-xs text-on-surface-variant mt-1">
                   Octipus translates this level to the CLI&apos;s native permission controls.
                 </p>
-              </div>}
+              </div> : cliKind === 'grok' || cliKind === 'antigravity' ? (
+                <p className="text-sm text-on-surface-variant">
+                  {cliKind === 'grok' ? 'Grok Build' : 'Antigravity'} uses this session’s Octipus tools and approvals. Access is managed in Environments &amp; Access.
+                </p>
+              ) : (
+                <p className="text-xs text-on-surface-variant">
+                  Muse Code has no tools of its own here: every tool call is an Octipus tool, decided by Octipus&apos;s permission rules.
+                </p>
+              )}
 
               {supportsApiKeyInheritance ? (
                 <label className="flex items-start gap-2 cursor-pointer">

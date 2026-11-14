@@ -88,5 +88,5 @@ export function buildIsolatedChildEnv(extra?: Record<string, string>): Record<st
 /** Trusted personal host mode keeps ordinary CLI credentials, but never Octipus server/provider secrets. */
 export function buildHostChildEnv(): Record<string, string> {
   const blocked = new Set([...SENSITIVE_ENV_EXACT, ...SETTINGS_REGISTRY.filter(entry => entry.isSecret && entry.envVar && !['GH_TOKEN', 'GITHUB_TOKEN'].includes(entry.envVar)).map(entry => entry.envVar!)]);
-  return Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && !blocked.has(entry[0]) && !/^(?:OPENAI|ANTHROPIC|OPENROUTER|DEEPSEEK|LITELLM|GEMINI|GOOGLE_AI|MISTRAL|GROQ|XAI|AZURE_OPENAI)_.*(?:KEY|TOKEN|SECRET)$/.test(entry[0]) && !/^(?:OCTIPUS_.*(?:TOKEN|KEY|SECRET|PASSWORD)|BOOTSTRAP_API_KEY)$/.test(entry[0])));
+  return Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && !blocked.has(entry[0]) && !/^(?:OPENAI|ANTHROPIC|OPENROUTER|DEEPSEEK|LITELLM|GEMINI|GOOGLE_AI|MISTRAL|META|GROQ|XAI|AZURE_OPENAI)_.*(?:KEY|TOKEN|SECRET)$/.test(entry[0]) && !/^(?:OCTIPUS_.*(?:TOKEN|KEY|SECRET|PASSWORD)|BOOTSTRAP_API_KEY)$/.test(entry[0])));
 }

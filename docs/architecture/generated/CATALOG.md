@@ -820,12 +820,12 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `mcp` | `utils` | 5 |
 | `models` | `capabilities` | 2 |
 | `models` | `config` | 11 |
-| `models` | `core` | 49 |
+| `models` | `core` | 50 |
 | `models` | `db` | 14 |
-| `models` | `security` | 23 |
+| `models` | `security` | 24 |
 | `models` | `services` | 1 |
 | `models` | `shared` | 4 |
-| `models` | `utils` | 46 |
+| `models` | `utils` | 47 |
 | `plugins` | `config` | 12 |
 | `plugins` | `core` | 55 |
 | `plugins` | `db` | 63 |
@@ -851,7 +851,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `services` | `models` | 22 |
 | `services` | `security` | 4 |
 | `services` | `setup` | 1 |
-| `services` | `shared` | 2 |
+| `services` | `shared` | 3 |
 | `services` | `tools` | 3 |
 | `services` | `utils` | 6 |
 | `setup` | `utils` | 1 |

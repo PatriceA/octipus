@@ -27,6 +27,7 @@ import { auditRepository } from '@/db/repositories/audit-repository';
 import { getDb } from '@/db/postgres';
 import { DEFAULT_MAX_OUTPUT_TOKENS, type ModelConfigEntry, type ModelMetadata, modelConfig, userModelBindings } from '@/db/schema/models';
 import { CLI_SPACE_MODES } from '@/core/cli-adapters';
+import { CLI_SPACE_REFUSALS } from '@/shared/cli-capabilities';
 import { getCLIToolConfig } from '@/core/cli-agent-factory';
 import { PERSONAL_CLI_VENDORS } from '@/core/cli-child-env';
 import { getModelRegistry } from '@/models/model-registry';
@@ -38,7 +39,7 @@ import { validateExternalUrl } from '@/utils/sanitize';
 
 /** Providers a personal row may use: each honours a per-request key (§8.3). */
 export const PERSONAL_MODEL_PROVIDERS = [
-  'anthropic', 'openai', 'deepseek', 'gemini', 'grok', 'mistral', 'moonshot', 'openrouter', 'zai',
+  'anthropic', 'openai', 'deepseek', 'gemini', 'grok', 'meta', 'mistral', 'moonshot', 'openrouter', 'zai',
   'custom-openai', 'custom-anthropic', 'custom-gemini', 'cli',
 ] as const;
 export type PersonalModelProvider = (typeof PERSONAL_MODEL_PROVIDERS)[number];
@@ -125,11 +126,11 @@ function checkModelId(provider: string, modelId: string): void {
   if (provider === 'cli') {
     const tool = getCLIToolConfig(modelId);
     if (!tool) throw new PersonalModelError(400, `Unknown CLI model "${modelId}"`);
+    const refusal = CLI_SPACE_MODES[tool.adapter ?? tool.name] ? undefined
+      : CLI_SPACE_REFUSALS[tool.adapter ?? tool.name] ?? 'it has no mode in which its own tools stay behind Octipus\'s permission checks';
+    if (refusal) throw new PersonalModelError(400, `${tool.name} cannot run on a personal token: ${refusal}`);
     if (!PERSONAL_CLI_VENDORS.includes(tool.modelProvider)) {
       throw new PersonalModelError(400, `${tool.name} cannot run on a personal token`);
-    }
-    if (!CLI_SPACE_MODES[tool.adapter ?? tool.name]) {
-      throw new PersonalModelError(400, `${tool.name} cannot run on a personal token: it has no mode in which its own tools stay behind Octipus's permission checks`);
     }
   }
 }

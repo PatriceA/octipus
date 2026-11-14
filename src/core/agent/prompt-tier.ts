@@ -44,7 +44,7 @@ export interface ModeModelMeta {
  */
 const FRONTIER_CLOUD_PROVIDERS = new Set([
   'openai', 'anthropic', 'google', 'gemini', 'deepseek', 'openrouter',
-  'xai', 'grok', 'mistral', 'zai', 'moonshot', 'groq', 'cohere', 'perplexity', 'together',
+  'xai', 'grok', 'mistral', 'zai', 'moonshot', 'meta', 'groq', 'cohere', 'perplexity', 'together',
   'fireworks', 'cli',
 ]);
 

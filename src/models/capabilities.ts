@@ -111,6 +111,18 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
     embeddings: false,
     structuredOutput: true,
   },
+  meta: {
+    // Meta (Muse) — OpenAI-compatible chat with function calling. Vision is
+    // unverified, so it stays off; JSON mode is left to the conformance gate.
+    multiturn: true,
+    media: false,
+    audioInput: false,
+    tools: true,
+    streaming: true,
+    systemRole: true,
+    embeddings: false,
+    structuredOutput: true,
+  },
   openrouter: {
     // OpenRouter is a multi-provider proxy; capabilities depend on the
     // underlying model. Default to all true (similar to litellm).

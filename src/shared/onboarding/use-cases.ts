@@ -48,6 +48,7 @@ export const KEY_PROVIDERS: Array<{ id: string; label: string; model: string; hi
   { id: 'grok', label: 'xAI Grok', model: 'grok-4' },
   { id: 'zai', label: 'Z.AI (GLM)', model: 'glm-4.6' },
   { id: 'moonshot', label: 'Moonshot (Kimi)', model: 'kimi-k2-0711-preview' },
+  { id: 'meta', label: 'Meta (Muse)', model: 'muse-spark-1.3' },
 ];
 
 export const EMBEDDING_MODELS = {

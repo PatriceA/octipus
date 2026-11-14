@@ -24,7 +24,7 @@ import { isExtensionModel, isExtensionModelName, listExtensionModels } from '@/m
 import { getModelRegistry } from '@/models/model-registry';
 import { getProviderRouter } from '@/models/providers';
 import { getQuotaTracker } from '@/models/quota-tracker';
-import { validateScopedExtraArgs } from '@/shared/cli-capabilities';
+import { validateCliPermissionMode, validateScopedExtraArgs } from '@/shared/cli-capabilities';
 import { anthropicNativeMessagesEnabled, providerControls, validateProviderSettings } from '@/shared/provider-settings';
 import { coreLogger } from '@/utils/logger';
 import { uniqueViolation } from '@/db/unique-violation';
@@ -172,9 +172,11 @@ function validateCliMetadata(modelId: string, metadata: unknown): string | null 
   }
   const extraArgs = parsed.data?.cliAgent?.extraArgs;
   const cli = getCLIToolConfig(modelId);
-  if (cli && extraArgs) {
+  if (cli) {
     try {
-      validateScopedExtraArgs(cli.adapter ?? cli.name, extraArgs);
+      if (extraArgs) validateScopedExtraArgs(cli.adapter ?? cli.name, extraArgs);
+      const permissionMode = (parsed.data?.cliAgent as { permissionMode?: unknown } | undefined)?.permissionMode;
+      validateCliPermissionMode(cli.adapter ?? cli.name, typeof permissionMode === 'string' ? permissionMode : undefined);
     } catch (err) {
       return (err as Error).message;
     }

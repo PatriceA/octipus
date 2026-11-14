@@ -692,7 +692,9 @@ A member's private chat in a space runs the agent in the space.
   plus a locked `--settings` file: no allow rules, bypass disabled, the shell
   guard as the only hook),
   Codex the `read-only` sandbox, Antigravity `--mode plan`; Mistral Vibe has
-  none and is refused. Commenters' turns use API models only, and an install
+  none and is refused. Muse Code is refused as well: its tools are Octipus's
+  only, but its login and session logs live in the server account's muse
+  directories, shared by every member (docs/CLI-AGENTS.md#muse-code). Commenters' turns use API models only, and an install
   CLI model serves spaces only when marked `metadata.cliAgent.sharedUse: true`.
 - **Pipelines and artifacts.** A stage's verify command runs in the space's
   files under the space's role cap and I6; a pipeline resumes only while its

@@ -26,6 +26,7 @@ interface HealthStatusProps {
     mistral: ServiceHealth;
     zai: ServiceHealth;
     moonshot: ServiceHealth;
+    meta: ServiceHealth;
     voyage: ServiceHealth;
     openrouter: ServiceHealth;
     custom: ServiceHealth;
@@ -48,6 +49,7 @@ const SERVICE_CONFIG = [
   { key: 'mistral',    label: 'mistral',    icon: Wind },
   { key: 'zai',        label: 'z.ai',       icon: Sparkles },
   { key: 'moonshot',   label: 'moonshot',   icon: Sparkles },
+  { key: 'meta',       label: 'meta',       icon: Sparkles },
   { key: 'voyage',     label: 'voyage',     icon: Compass },
   { key: 'openrouter', label: 'openrouter', icon: Globe },
   { key: 'custom',     label: 'custom',     icon: Settings2 },

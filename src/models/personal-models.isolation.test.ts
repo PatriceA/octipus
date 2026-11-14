@@ -401,7 +401,7 @@ describe('keys resolve under the row owner (§8.3)', () => {
 
   test('every instrumented provider receives the owner\'s key for a personal row, and only for it', async () => {
     const { instrumentProvider } = await import('@/models/providers/instrumented');
-    const providers = ['anthropic', 'openai', 'deepseek', 'gemini', 'grok', 'mistral', 'moonshot', 'openrouter', 'zai', 'custom-openai', 'custom-anthropic', 'custom-gemini'];
+    const providers = ['anthropic', 'openai', 'deepseek', 'gemini', 'grok', 'meta', 'mistral', 'moonshot', 'openrouter', 'zai', 'custom-openai', 'custom-anthropic', 'custom-gemini'];
     for (const name of providers) {
       const seen: Array<string | undefined> = [];
       const provider = instrumentProvider({

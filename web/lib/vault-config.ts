@@ -57,6 +57,7 @@ export const PROVIDER_KEY_GROUPS: VaultKeyGroup[] = [
       { label: 'Mistral AI', vaultName: 'mistral_api_key', testProvider: 'mistral' },
       { label: 'Z.AI (GLM)', vaultName: 'zai_api_key', testProvider: 'zai', placeholder: '...' },
       { label: 'Moonshot (Kimi)', vaultName: 'moonshot_api_key', testProvider: 'moonshot', placeholder: 'sk-...' },
+      { label: 'Meta (Muse)', vaultName: 'meta_api_key', testProvider: 'meta' },
       { label: 'OpenRouter', vaultName: 'openrouter_api_key', testProvider: 'openrouter', placeholder: 'sk-or-...' },
       { label: 'Voyage AI (Embeddings)', vaultName: 'voyage_api_key', testProvider: 'voyage', placeholder: 'pa-...' },
       { label: 'TypeSafe Jev (direct)', vaultName: 'typesafe_api_key' },

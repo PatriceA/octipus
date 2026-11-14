@@ -116,6 +116,13 @@ describe('managed CLI model configuration validation', () => {
     });
   }
 
+  it('refuses a permission mode on a Muse Code row, which has no native tools for it to act on', async () => {
+    registry.getModel.mockResolvedValue(null);
+    const result = await registerModel({ name: 'muse', provider: 'cli', modelId: 'cli/muse', metadata: { cliAgent: { permissionMode: 'full' } } });
+    expect(result).toMatchObject({ error: expect.stringContaining('permission mode does not apply') });
+    expect(registry.registerModel).not.toHaveBeenCalled();
+  });
+
   it('validates retained arguments against the new adapter when changing model ID', async () => {
     registry.getModel.mockResolvedValue({
       ...createBody,

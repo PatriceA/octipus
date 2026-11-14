@@ -22,6 +22,7 @@ import { recordProviderUsage } from '@/models/providers/instrumented';
 import { billableTokens } from '@/models/billable-tokens';
 import { assertWindowsCmdLineFits, windowsShellQuote, windowsShellQuoter } from '@/models/providers/cli-provider';
 import { randomUUID } from 'crypto';
+import { v7 as uuidv7 } from 'uuid';
 import { type ChildProcess, spawn } from 'child_process';
 import { existsSync, mkdirSync, rmSync } from 'fs';
 import { resolve as resolvePath } from 'path';
@@ -39,7 +40,7 @@ import { agentLogger } from '@/utils/logger';
 import { killProcessTree } from '@/utils/proc';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
-import { CLIArgumentBuilder, CLIOutputParser, isCodexHookTrustWarning, discoverCodexMcpServers, resolveCliMcpEntry, stableFirst, type CliRunConnection } from './cli-adapters';
+import { CLIArgumentBuilder, CLIOutputParser, isCodexHookTrustWarning, discoverCodexMcpServers, disposeMuseHome, museProtocolStep, museSessionLogExists, museWorkspaceFor, prepareMuseHome, resolveCliMcpEntry, stableFirst, type CliRunConnection } from './cli-adapters';
 import { writePromptDump } from './prompt-dumps';
 import { childCliSessionKey, claimCliSession, cliSessionHolder, dropCliSession, fingerprintRun, loadCliSession, ownedResumeKey, releaseCliSessions, rootCliSessionKey, saveCliSession } from './cli-session-store';
 import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
@@ -96,7 +97,7 @@ export function isBorrowedProjectDir(
 }
 
 /**
- * CLIAgentWorker — spawns a CLI binary (Claude Code, Antigravity, Codex, Mistral Vibe)
+ * CLIAgentWorker — spawns a CLI binary (Claude Code, Antigravity, Codex, Mistral Vibe, Muse Code)
  * as an autonomous sub-agent.
  */
 /** Skill index per (user, role, CLI family): assignments change rarely, and the lookup must not delay a spawn. */
@@ -145,7 +146,7 @@ export function boundColdHistory(parts: readonly string[], budgetChars: number):
 }
 
 /** Octipus tools reached over the run-local MCP bridge, as the vendor CLIs name them. */
-const CLI_BRIDGED_TOOL_RE = /^mcp__octipus__|^octipus[_.]|^octipus_run_[a-f0-9]+\./;
+const CLI_BRIDGED_TOOL_RE = /^mcp__octipus(?:_run_[a-f0-9]+)?__|^octipus[_.]|^octipus_run_[a-f0-9]+\./;
 
 export class CLIAgentWorker extends BaseAgentWorker {
   private systemMessages: string[] = [];
@@ -1280,7 +1281,8 @@ When a task matches one of these skills, load it with get_skill before starting 
     // What the vendor conversation held before this run, if it is resumed.
     let previouslyAcknowledged: { id: string; createdAt: string } | undefined;
     if (reuseSessions) {
-      const model = (adapterKey === 'Claude Code' ? process.env.CLAUDE_MODEL : adapterKey === 'Codex CLI' ? process.env.CODEX_MODEL : adapterKey === 'Antigravity' ? process.env.ANTIGRAVITY_MODEL || process.env.GEMINI_MODEL : undefined) || settings.model;
+      const model = (adapterKey === 'Claude Code' ? process.env.CLAUDE_MODEL : adapterKey === 'Codex CLI' ? process.env.CODEX_MODEL
+        : adapterKey === 'Antigravity' ? process.env.ANTIGRAVITY_MODEL || process.env.GEMINI_MODEL : adapterKey === 'Muse Code' ? process.env.MUSE_MODEL : undefined) || settings.model;
       // Permission and plan mode are not fingerprinted: every invocation passes
       // them again, a resumed one too (Claude `--permission-mode`, Codex
       // `-c sandbox_mode`), and the plan directive rides in the volatile tail.
@@ -1313,6 +1315,12 @@ When a task matches one of these skills, load it with get_skill before starting 
         const legacyFingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, legacyTools, credentialOwnerId ?? null]), instructions });
         existing = await loadCliSession(this.context.sessionId, storeKey!, legacyFingerprint);
       }
+      // A muse session muse no longer holds would fail the resume
+      // (`sessionNotFound`): start cold instead.
+      if (existing && adapterKey === 'Muse Code' && !museSessionLogExists(existing.id, cliEnvFor(this.credentialOwner, toolConfig))) {
+        agentLogger.warn({ agentId: this.context.id, id: existing.id }, 'Muse Code session log is gone — starting cold');
+        existing = null;
+      }
       // A root record without a cursor was never shown to hold the
       // conversation: a first run that died after the vendor named its thread
       // and before it answered. Its thread may hold nothing, and a resume sends
@@ -1330,7 +1338,8 @@ When a task matches one of these skills, load it with get_skill before starting 
       if (CLI_RESUME[adapterKey].style === 'caller-minted') {
         // The caller mints the id itself, so the first run declares it too —
         // no window in which a resumable run has no id.
-        resume = { id: existing?.id ?? randomUUID(), isFirstRun: !existing };
+        // UUIDv7: muse's session protocol takes no other; any UUID suits Claude.
+        resume = { id: existing?.id ?? uuidv7(), isFirstRun: !existing };
       } else {
         // Captured style: the id comes from the CLI's own output
         // (onVendorSession below). The first run still participates in
@@ -1362,9 +1371,23 @@ When a task matches one of these skills, load it with get_skill before starting 
     // Discovery reads the config.toml the run will read: the owner's CODEX_HOME for a personal row.
     const codexMcpServers = this.connection && adapterKey === 'Codex CLI' ? await discoverCodexMcpServers(workspaceCwd, cliEnvFor(this.credentialOwner, toolConfig)) : undefined;
     const buildCaches = this.context.space ? undefined : personalBuildCaches();
-    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedSystem ?? systemParts, resumedSystem ? resumedSystem.join('\n\n') : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, images, workingDirectory: workspaceCwd, writableRuntimePaths: buildCaches?.paths, codexMcpServers, shellGuard: getConfig().agent?.cliShellGuard !== false, maxIterations: Math.max(1, this.config.maxIterations - this.iteration), space: !!this.context.space, personal: !!this.credentialOwner } : undefined, resume);
+    // Muse: a per-run config whose only tools are this bridge's (`prepareMuseHome`).
+    const museEnv = adapterKey === 'Muse Code' ? cliEnvFor(this.credentialOwner, toolConfig) : undefined;
+    let muse: CliRunConnection['muse'];
+    if (this.connection && this.bridge && museEnv) {
+      const workspace = museWorkspaceFor(workspaceCwd);
+      muse = { workspace, home: await prepareMuseHome({ workspace, tools: this.bridge.toolNames(), env: museEnv }) };
+    }
+    let built: ReturnType<CLIArgumentBuilder['build']>;
+    try {
+      built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedSystem ?? systemParts, resumedSystem ? resumedSystem.join('\n\n') : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, images, workingDirectory: workspaceCwd, writableRuntimePaths: buildCaches?.paths, codexMcpServers, muse, shellGuard: getConfig().agent?.cliShellGuard !== false, maxIterations: Math.max(1, this.config.maxIterations - this.iteration), space: !!this.context.space, personal: !!this.credentialOwner } : undefined, resume);
+    } catch (err) {
+      if (muse) disposeMuseHome(muse.home, museEnv);
+      throw err;
+    }
     const { args, stdinPrompt, useShell } = built;
     this.launchCleanup = () => {
+      if (muse) disposeMuseHome(muse.home, museEnv);
       const configIndex = args.indexOf('--mcp-config');
       // Windows writes the system prompt to a temp file (command-line length cap).
       const sysFileIndex = args.indexOf('--append-system-prompt-file');
@@ -1385,6 +1408,7 @@ When a task matches one of these skills, load it with get_skill before starting 
     const invocationStartIteration = this.iteration;
     let invocationUsage: import('@/models/litellm-client').CompletionResult['usage'] = { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false };
     let capturedVendorId: string | undefined;
+    let vendorAllowance: { usedPercent: number; resetsAt?: Date } | undefined;
     let vendorSessionStarted = false;
     let vendorReplied = false;
     // This run's writes of its vendor session record, in order. The close
@@ -1479,6 +1503,7 @@ When a task matches one of these skills, load it with get_skill before starting 
           }
         },
         onSessionInit: () => { vendorSessionStarted = true; },
+        onAllowance: (allowance) => { vendorAllowance = allowance; },
         onRunError: (reason) => {
           // Record the first CLI-reported failure; the close handler rejects
           // with it so the run surfaces as failed, not (no response) success.
@@ -1583,6 +1608,8 @@ When a task matches one of these skills, load it with get_skill before starting 
     // tool configuration. Project tools receive that identity through Octipus.
     const initialEnv = toolHome ? cliSpaceEnv(baseEnv, toolHome)
       : toolConfig.octipusToolsOnly ? baseEnv : nativeCliEnvironment(this.context, baseEnv);
+    // muse's config directory stays the run's own (`prepareMuseHome`).
+    if (muse) initialEnv.XDG_CONFIG_HOME = muse.home;
     const runtimeCredentials = await environmentCredentialOptions(this.context, { env: initialEnv }).catch((error: unknown) => { cleanupContextFiles(); throw error; });
     // Workstation identity and credential shaping must not replace an adapter's
     // isolated configuration home. Project tools still use the chosen environment
@@ -1647,7 +1674,8 @@ When a task matches one of these skills, load it with get_skill before starting 
           }
         });
         if (stdinPrompt) proc.stdin.write(stdinPrompt);
-        if (!built.keepStdinOpen) proc.stdin.end();
+        // muse serve: input stays open until the turn ends (`museProtocolStep`).
+        if (!built.keepStdinOpen && !built.museTurn) proc.stdin.end();
       }
 
       this.process = proc;
@@ -1680,7 +1708,10 @@ When a task matches one of these skills, load it with get_skill before starting 
       // one blob at process close, not incremental stream-json events. For those
       // we collect raw stdout and run parseOutput on the full buffer in `close`.
       let rawStdout = '';
-      let isolationVerified = !toolConfig.octipusToolsOnly;
+      // Muse Code's isolation is fixed before launch by its per-run config
+      // (`prepareMuseHome`'s `run.toolset`), which muse enforces; it reports
+      // none in-stream, so there is nothing to wait for.
+      let isolationVerified = !toolConfig.octipusToolsOnly || adapterKey === 'Muse Code';
       let agyResultReceived = false;
       // Both newline-delimited events and the final EOF record pass here.
       const verifyIsolation = (event: Record<string, unknown>): boolean => {
@@ -1727,6 +1758,11 @@ When a task matches one of these skills, load it with get_skill before starting 
           try {
             const event = runtimeCredentials.mask(JSON.parse(line));
             if (!verifyIsolation(event)) continue;
+            if (built.museTurn) {
+              const step = museProtocolStep(event, built.museTurn);
+              if (step.write && proc.stdin?.writable) proc.stdin.write(step.write);
+              if (step.end) proc.stdin?.end();
+            }
             if (built.keepStdinOpen && event.type === 'control_response' && this.steeringInterrupt && event.response?.request_id === this.steeringInterrupt.requestId) {
               if (event.response.subtype !== 'success') {
                 const failed = this.failUnacknowledgedCancellation('interrupt was rejected');
@@ -1946,6 +1982,10 @@ When a task matches one of these skills, load it with get_skill before starting 
             this.billableTokensUsed += billableTokens(invocationUsage);
           }
           await recordProviderUsage({ model: this.context.model, modelConfigName: this.accountingModelName, messages: [], ...usageContextOf(this.context), requestType: 'cli' }, 'cli', { model: this.context.model, usage: invocationUsage }, code !== 0 || this.aborted || !!this.runError);
+          // The vendor said its subscription allowance is spent (muse): the next
+          // run would fail, so the quota is marked now, until the reported reset.
+          const allowanceSpent = !!vendorAllowance && vendorAllowance.usedPercent >= 100;
+          if (allowanceSpent) await quotaTracker.markExhausted(quotaKey, vendorAllowance!.resetsAt);
           // Every write below follows the run's early writes, never races them.
           await sessionWrites;
 
@@ -2002,10 +2042,10 @@ When a task matches one of these skills, load it with get_skill before starting 
             this.runError = safe.runError;
           }
           const failed = code !== 0 || !!signal || !!this.runError;
-          if (failed && toolConfig.isQuotaError(`${stderr}\n${this.runError ?? ''}`)) {
+          if (failed && (allowanceSpent || toolConfig.isQuotaError(`${stderr}\n${this.runError ?? ''}`))) {
             const quotaMessage = `${stderr}\n${this.runError ?? ''}`;
-            const resetsAt = providerResetAt(quotaMessage);
-            await quotaTracker.markExhausted(quotaKey, resetsAt);
+            const resetsAt = (allowanceSpent ? vendorAllowance!.resetsAt : undefined) ?? providerResetAt(quotaMessage);
+            if (!allowanceSpent) await quotaTracker.markExhausted(quotaKey, resetsAt);
             reject(Object.assign(new ClassifiedError({ reason: FailoverReason.QUOTA_EXHAUSTED, recovery: RecoveryAction.FALLBACK_PROVIDER,
               providerHint: toolConfig.quotaProvider, message: `Quota exhausted for ${toolConfig.name}: ${quotaMessage}`, metadata: { resetsAt: resetsAt?.toISOString() } }), { cliDiagnostics: { exitCode: code, signal, stderr, credentialSource: credentialOwnerId ? 'personal_cli' : 'operator_cli', credentialOwnerId: credentialOwnerId ?? null, quotaProvider: toolConfig.quotaProvider } }));
             return;
@@ -2024,8 +2064,12 @@ When a task matches one of these skills, load it with get_skill before starting 
           // recovery unreachable, the stale id was never dropped, and every
           // later turn failed identically. Permanent, not a one-off. The vendor
           // says so on both channels, so match both.
+          // Muse: a resumed session keeps the workspace root it was started
+          // with; once that is not the trusted placeholder any more (moved
+          // workspace, other temp dir) muse loads no MCP server and refuses
+          // the toolset — the session is as unusable as a missing one.
           const deadSessionEvidence = `${stderr}\n${this.runError ?? ''}`;
-          if (!opts?.forceCold && resume && (this.runError || (code !== 0 && code !== null)) && /no conversation found|session not found/i.test(deadSessionEvidence)) {
+          if (!opts?.forceCold && resume && (this.runError || (code !== 0 && code !== null)) && /no conversation found|session not found|sessionNotFound|invalid run configuration: unknown tool names/i.test(deadSessionEvidence)) {
             await dropCliSession(this.context.sessionId, storeKey!);
             agentLogger.warn({ agentId: this.context.id, adapterKey, id: resume.id }, 'Vendor CLI session is gone — retrying cold with the full prompt');
             // The dead attempt's error must not outlive it: `runError` is a

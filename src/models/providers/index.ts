@@ -19,6 +19,7 @@ import { GrokProvider } from './grok-provider';
 import { VertexProvider } from './vertex-provider';
 import type { ModelProvider } from './interface';
 import { LiteLLMProvider } from './litellm-provider';
+import { MetaProvider } from './meta-provider';
 import { MistralProvider } from './mistral-provider';
 import { MoonshotProvider } from './moonshot-provider';
 import { OllamaProvider } from './ollama-provider';
@@ -41,6 +42,7 @@ export { GrokProvider } from './grok-provider';
 export { VertexProvider } from './vertex-provider';
 export type { ModelProvider, ProviderHealthStatus, ProviderType, QuotaStatus } from './interface';
 export { LiteLLMProvider } from './litellm-provider';
+export { MetaProvider } from './meta-provider';
 export { MistralProvider } from './mistral-provider';
 export { MoonshotProvider } from './moonshot-provider';
 export { OllamaProvider } from './ollama-provider';
@@ -69,6 +71,7 @@ export function resolveRateLimitKey(provider: ModelProvider, model: string, mode
     if (lower.includes('gemini') || lower.includes('antigravity') || lower.includes('agy')) return 'cli-gemini';
     if (lower.includes('codex')) return 'cli-codex';
     if (lower.includes('vibe')) return 'cli-vibe';
+    if (lower.includes('muse')) return 'cli-muse';
     if (lower.includes('glm') || lower.includes('zai')) return 'cli-glm';
     if (lower.includes('kimi') || lower.includes('moonshot')) return 'cli-kimi';
     return 'cli-claude'; // default CLI
@@ -119,7 +122,7 @@ function isRateLimitResponse(error: unknown): boolean {
  *
  * Now integrates per-provider rate limiting and circuit breaking.
  *
- * Priority: CLI → Ollama → OpenAI → Anthropic → Gemini → Grok → DeepSeek → Mistral → z.ai → Moonshot → OpenRouter → LiteLLM (catch-all)
+ * Priority: CLI → Ollama → OpenAI → Anthropic → Gemini → Grok → DeepSeek → Mistral → z.ai → Moonshot → Meta → OpenRouter → LiteLLM (catch-all)
  * LiteLLM is only registered if proxyUrl is configured.
  */
 export class ProviderRouter {
@@ -154,6 +157,7 @@ export class ProviderRouter {
     this.providers.push(new MistralProvider());
     this.providers.push(new ZaiProvider());
     this.providers.push(new MoonshotProvider());
+    this.providers.push(new MetaProvider());
     this.providers.push(new OpenRouterProvider());
     this.providers.push(new VoyageProvider()); // embeddings only
     this.providers.push(new LocalAudioProvider()); // local speech engines (Transcription / Speech lanes)

@@ -6,9 +6,9 @@ import { isProviderQuotaMessage } from '@/core/errors/provider-recovery';
 import { configuredCliBinary } from '@/core/cli-executable';
 import { describeCliCapabilities, type CliModelProvider, type CliModelOption } from '@/shared/cli-capabilities';
 import { cliCredentialOwnerFor, cliEnvFor, cliWorkDirFor } from '@/core/cli-child-env';
-import { discoverCodexMcpServers, getClaudeSpaceSettingsPath, getEmptyMcpConfigPath, getEmptyVibeHome } from '@/core/cli-adapters';
+import { discoverCodexMcpServers, disposeMuseHome, getClaudeSpaceSettingsPath, getEmptyMcpConfigPath, getEmptyVibeHome, museUsage, prepareMuseHome } from '@/core/cli-adapters';
 import { spawn } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { delimiter, extname, join } from 'path';
 import { getConfig } from '@/config';
@@ -137,7 +137,7 @@ export interface CLIToolConfig {
    * prompt placeholder in argv. 'argv' (the default) is only safe for a
    * single-line prompt, and execCli rejects a multi-line one outright.
    */
-  promptVia?: 'argv' | 'stdin';
+  promptVia?: 'argv' | 'stdin' | 'file';
   /**
    * Async isolation-aware variant of `buildArgs`, for a tool whose isolation
    * needs a subprocess call before argv is known (codex: discover the host's
@@ -152,9 +152,17 @@ export interface CLIToolConfig {
    * settings (prompt on stdin). A personal row's one-shot completions run
    * only this way (coworking spec §8.4): their callers feed in external mail,
    * fetched pages and other people's words. A tool without it cannot serve a
-   * personal row's one-shot completions, so such a row binds no lane.
+   * personal row's one-shot completions, so such a row binds no lane. With
+   * `promptVia: 'file'` (a CLI with no stdin prompt channel) it gets the path
+   * of a 0600 prompt file instead.
    */
-  toolLessArgs?: () => string[];
+  toolLessArgs?: (promptFile?: string) => string[];
+  /**
+   * Per-call configuration the tool-less mode needs on top of its argv (muse:
+   * an `XDG_CONFIG_HOME` with no tools, MCP servers, hooks or user settings),
+   * disposed after the call.
+   */
+  toolLessHome?: (cwd: string, env: Record<string, string>) => Promise<{ env: Record<string, string>; dispose: () => void }>;
   /** Per-invocation isolation for CLIs whose tool-less mode needs files and a private home. */
   prepareToolless?: (prompt: string, settings: CLIAgentConfig, personalHome?: string) => {
     args: string[]; cwd: string; env: Record<string, string>; stdin: string; cleanup: () => void;
@@ -506,6 +514,81 @@ const vibeCliConfig: CLIToolConfig = {
 };
 
 /**
+ * `muse exec --json`: one envelope per line, `{payload_type, payload}`. The
+ * answer is the `run.terminal.*` payload's `text` (else the streamed
+ * `run.output.delta` text); usage is `run.usage.payload.models[]`
+ * (`museUsage`). A terminal other than `completed`, or none at all, fails.
+ */
+export function parseMuseJsonl(stdout: string, startTime: number): CompletionResult {
+  let deltas = '';
+  let terminal: { terminal?: string; text?: unknown; reason?: unknown } | undefined;
+  let models: unknown;
+  for (const line of stdout.split('\n')) {
+    let event: { payload_type?: string; payload?: Record<string, unknown> };
+    try { event = JSON.parse(line); } catch { continue; }
+    const payload = event?.payload;
+    if (!payload) continue;
+    if (event.payload_type === 'run.output.delta' && typeof payload.text === 'string') deltas += payload.text;
+    else if (event.payload_type === 'run.usage') models = payload.models;
+    else if (event.payload_type?.startsWith('run.terminal.')) terminal = payload;
+  }
+  if (!terminal) throw new Error('muse produced no terminal event');
+  if (terminal.terminal !== 'completed') throw new Error(`muse run ${terminal.terminal ?? 'failed'}: ${typeof terminal.reason === 'string' ? terminal.reason : 'unknown reason'}`);
+  const usage = museUsage(models);
+  const inputTokens = usage?.inputTokens ?? 0;
+  const outputTokens = usage?.outputTokens ?? 0;
+  return {
+    content: (typeof terminal.text === 'string' ? terminal.text : deltas).trim(),
+    finishReason: 'stop',
+    usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, available: !!usage, cacheReadTokens: usage?.cacheReadTokens ?? 0 },
+    model: 'cli/muse',
+    latencyMs: Date.now() - startTime,
+  };
+}
+
+// ---- Muse Code (Meta) ----
+// Agent runs drive `muse serve` (its session protocol, parsed live by
+// CLIOutputParser) with the Octipus bridge as their only tools
+// (`prepareMuseHome`). One-shot completions use `muse exec --json`, which
+// reads no prompt from stdin (`--prompt-file
+// /dev/stdin` is refused: "not a regular file"), so a one-shot completion
+// hands it a 0600 prompt file; `run.toolset: []` leaves it no tool at all
+// (verified live: "No tools are available").
+const museCliConfig: CLIToolConfig = {
+  name: 'Muse Code',
+  modelPatterns: ['cli/muse'],
+  binaryPath: 'muse',
+  // Never reached: completions use the tool-less mode below, agents the arg builder.
+  buildArgs: () => { throw new Error('Muse Code takes its prompt only from a file'); },
+  promptVia: 'file',
+  toolLessArgs: (promptFile?: string) => {
+    if (!promptFile) throw new Error('Muse Code needs a prompt file');
+    return ['exec', '--json', '--no-session-log', '--disable-reminders', '--disable-request-user-input', '--no-foreign-personal-context', '--prompt-file', promptFile];
+  },
+  toolLessHome: async (cwd, env) => {
+    const home = await prepareMuseHome({ workspace: cwd, tools: [], env });
+    return { env: { XDG_CONFIG_HOME: home }, dispose: () => disposeMuseHome(home, env) };
+  },
+  parseOutput: parseMuseJsonl,
+  isQuotaError: (output: string) =>
+    isProviderQuotaMessage(output) || /rate.?limit|quota|allowance|exceeded|limit reached|usage limit/i.test(output),
+  // The CLI status panel finds a tool's quota under its kebab-cased name.
+  quotaProvider: 'muse-code',
+  modelProvider: 'meta',
+  modelFlag: '--model',
+  octipusToolsOnly: true,
+  billingInfo: {
+    vendor: 'Meta',
+    planNote: 'Muse Code subscription via `muse login` (Meta account), or a metered META_API_KEY, which takes priority over the login',
+    billingMode: 'mixed',
+    pricingDocUrl: 'https://accountscenter.meta.com/muse_code/',
+    modelsDocUrl: 'https://dev.meta.ai',
+    modelFlagDocUrl: 'https://dev.meta.ai',
+    warning: 'muse keeps one login per OS account in ~/.config/muse: on a multi-user install every user\'s runs use that login. Octipus passes META_API_KEY only when "Pass server API keys" is on; subscription allowance vs. metered API is vendor-controlled.',
+  },
+};
+
+/**
  * The working directory of an install row's one-shot completion: empty, so a
  * tool-less CLI picks up no project file (CLAUDE.md, AGENTS.md) of the workspace.
  */
@@ -729,12 +812,12 @@ const grokBuildConfig: CLIToolConfig = {
   },
 };
 
-export const CLI_TOOLS: CLIToolConfig[] = [claudeCodeConfig, antigravityConfig, codexCliConfig, vibeCliConfig, glmCliConfig, kimiCliConfig, grokBuildConfig];
+export const CLI_TOOLS: CLIToolConfig[] = [claudeCodeConfig, antigravityConfig, codexCliConfig, vibeCliConfig, museCliConfig, glmCliConfig, kimiCliConfig, grokBuildConfig];
 
-export { antigravityConfig, claudeCodeConfig, codexCliConfig, glmCliConfig, kimiCliConfig, vibeCliConfig, grokBuildConfig };
+export { antigravityConfig, claudeCodeConfig, codexCliConfig, glmCliConfig, kimiCliConfig, museCliConfig, vibeCliConfig, grokBuildConfig };
 
 /**
- * CLI Provider — wraps subscription-based CLI tools (Claude Code, Antigravity, Codex, Mistral Vibe)
+ * CLI Provider — wraps subscription-based CLI tools (Claude Code, Antigravity, Codex, Mistral Vibe, Muse Code)
  * as subprocess calls. Tracks quota and detects exhaustion.
  */
 export class CLIProvider implements ModelProvider {
@@ -834,6 +917,26 @@ export class CLIProvider implements ModelProvider {
       cwd = prepared.cwd; args = prepared.args; stdinText = prepared.stdin; cleanup = prepared.cleanup;
       parse = prepared.parseOutput ?? parse;
       Object.assign(childEnv, prepared.env);
+    } else if (tool.toolLessArgs && tool.promptVia === 'file') {
+      // No stdin prompt channel: a 0600 prompt file in a fresh directory of
+      // the call's own, removed with it; never argv.
+      const fresh = freshCompletionDir();
+      cleanup = fresh.remove;
+      cwd = fresh.dir;
+      try {
+        const promptFile = join(cwd, 'prompt.txt');
+        writeFileSync(promptFile, prompt, { mode: 0o600 });
+        if (tool.toolLessHome) {
+          const home = await tool.toolLessHome(cwd, childEnv);
+          Object.assign(childEnv, home.env);
+          cleanup = () => { home.dispose(); fresh.remove(); };
+        }
+        args = tool.toolLessArgs(promptFile);
+        stdinText = '';
+      } catch (err) {
+        cleanup();
+        throw classifyError(err as Error, 'cli');
+      }
     } else if (tool.toolLessArgs) {
       // The tool-less mode reads the prompt from stdin: it never reaches argv.
       cwd = credentialOwner ? cliWorkDirFor(credentialOwner.userId) : emptyCompletionDir();

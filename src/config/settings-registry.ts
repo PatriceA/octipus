@@ -69,6 +69,8 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'OCTIPUS_GROK_BINARY', description: 'Grok Build executable name or absolute path. Validated at startup.' },
   { key: 'cliModels.antigravityCli.binaryPath', category: 'agent', valueType: 'string', defaultValue: 'agy', isSecret: false,
     envVar: 'OCTIPUS_ANTIGRAVITY_BINARY', description: 'Antigravity executable name or absolute path. Validated at startup.' },
+  { key: 'cliModels.museCli.binaryPath', category: 'agent', valueType: 'string', defaultValue: 'muse', isSecret: false,
+    envVar: 'OCTIPUS_MUSE_BINARY', description: 'Muse Code executable name or absolute path. Validated at startup.' },
 
   // ── LiteLLM ──
   {
@@ -392,7 +394,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     valueType: 'boolean',
     defaultValue: true,
     description:
-      'Block network/API calls from managed CLI agents\' shells (curl, Invoke-RestMethod, python/node fetch one-liners, local MCP endpoints) with a per-launch pre-tool hook, so they use Octipus tools. A command carrying `# octipus-fallback: <reason>` passes. Claude Code, Codex and Antigravity; Mistral Vibe has no hooks.',
+      'Block network/API calls from managed CLI agents\' shells (curl, Invoke-RestMethod, python/node fetch one-liners, local MCP endpoints) with a per-launch pre-tool hook, so they use Octipus tools. A command carrying `# octipus-fallback: <reason>` passes. Claude Code, Codex and Antigravity; Mistral Vibe has no hooks and Muse Code hooks are not wired.',
     isSecret: false,
     envVar: 'AGENT_CLI_SHELL_GUARD',
   },
@@ -731,6 +733,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: true,
     vaultName: 'moonshot_api_key',
     envVar: 'MOONSHOT_API_KEY',
+  },
+  {
+    key: 'meta.apiKey',
+    category: 'providers',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'Meta (Muse) API key (pay-as-you-go; a Muse Code subscription key is refused outside Muse Code)',
+    isSecret: true,
+    vaultName: 'meta_api_key',
+    envVar: 'META_API_KEY',
   },
 
   // ── Workspace ──

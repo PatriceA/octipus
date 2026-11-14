@@ -175,6 +175,7 @@ export const PROVIDER_LABELS: Record<string, string> = {
   mistral: 'Mistral AI',
   zai: 'Z.AI (GLM)',
   moonshot: 'Moonshot (Kimi)',
+  meta: 'Meta (Muse)',
   openrouter: 'OpenRouter',
   voyage: 'Voyage AI (Embeddings)',
   typesafe: 'TypeSafe Jev (Decisions)',
@@ -196,6 +197,8 @@ export const PROVIDER_DEFAULTS: Record<string, { contextWindow: number; maxToken
   mistral: { contextWindow: 128000, maxTokens: 8192, supportsVision: true, supportsTools: true },
   zai: { contextWindow: 200000, maxTokens: 128000, supportsVision: false, supportsTools: true },
   moonshot: { contextWindow: 256000, maxTokens: 8192, supportsVision: false, supportsTools: true },
+  // Muse model catalog (muse 1.4.18): context_limit 1,007,997, output_limit 128,000 for every chat model.
+  meta: { contextWindow: 1007997, maxTokens: 128000, supportsVision: false, supportsTools: true },
   openrouter: { contextWindow: 128000, maxTokens: 16384, supportsVision: true, supportsTools: true },
   litellm: { contextWindow: 8192, maxTokens: 4096, supportsVision: false, supportsTools: true },
   'custom-openai': { contextWindow: 32000, maxTokens: 4096, supportsVision: false, supportsTools: true },

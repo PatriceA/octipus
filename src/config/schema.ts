@@ -372,6 +372,9 @@ export const cliModelsConfigSchema = z.object({
     binaryPath: z.string().default('codex'),
     timeout: z.number().min(0).default(300000),
   }).prefault({}),
+  museCli: z.object({
+    binaryPath: z.string().default('muse'),
+  }).prefault({}),
 });
 
 // Root agent configuration schema

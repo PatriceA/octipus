@@ -9,13 +9,14 @@ import { AnthropicProvider } from './anthropic-provider';
 import { DeepSeekProvider } from './deepseek-provider';
 import { GeminiProvider } from './gemini-provider';
 import { GrokProvider } from './grok-provider';
+import { MetaProvider } from './meta-provider';
 import { MistralProvider } from './mistral-provider';
 import { MoonshotProvider } from './moonshot-provider';
 import { OpenAIProvider } from './openai-provider';
 import { OpenRouterProvider } from './openrouter-provider';
 import { ZaiProvider } from './zai-provider';
 
-const ENV_KEYS = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'XAI_API_KEY', 'MISTRAL_API_KEY', 'MOONSHOT_API_KEY', 'OPENROUTER_API_KEY', 'ZAI_API_KEY'];
+const ENV_KEYS = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'XAI_API_KEY', 'MISTRAL_API_KEY', 'MOONSHOT_API_KEY', 'META_API_KEY', 'OPENROUTER_API_KEY', 'ZAI_API_KEY'];
 let saved: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -40,6 +41,7 @@ describe('per-request key beats the install key', () => {
     ['grok', () => new GrokProvider(), (p: ClientFactory, k: string) => p.createClient('grok-4', k)],
     ['mistral', () => new MistralProvider(), (p: ClientFactory, k: string) => p.createClient('mistral-large', k)],
     ['moonshot', () => new MoonshotProvider(), (p: ClientFactory, k: string) => p.createClient('kimi', k)],
+    ['meta', () => new MetaProvider(), (p: ClientFactory, k: string) => p.createClient('muse-spark-1.3', k)],
     ['zai', () => new ZaiProvider(), (p: ClientFactory, k: string) => p.createClient('glm', k)],
     ['openrouter', () => new OpenRouterProvider(), (p: ClientFactory, k: string) => p.createClient(k)],
   ])('%s', async (_name, make, create) => {
