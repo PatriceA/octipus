@@ -101,6 +101,7 @@ import { runRoutes } from './routes/runs';
 import { verificationRoutes } from './routes/verification';
 import { vaultRoutes } from './routes/vault';
 import { voiceRoutes } from './routes/voice';
+import { mediaRoutes } from './routes/media';
 import { mediaPublicRoutes } from './routes/media-public';
 import { webhookIncomingRoutes } from './routes/webhook-incoming';
 import { webhookRoutes } from './routes/webhooks';
@@ -490,6 +491,7 @@ export function createServer() {
         .use(roleRoutes)
         .use(topicRoutes)
         .use(voiceRoutes)
+        .use(mediaRoutes)
         .use(notificationRoutes)
         .use(spendBudgetRoutes)
         .use(permissionRequestRoutes)

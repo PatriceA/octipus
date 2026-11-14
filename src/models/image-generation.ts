@@ -24,6 +24,11 @@ export interface ImageGenerationContext {
   /** The space the call runs in (a sponsored call is checked against its budgets). */
   spaceId?: string | null;
   funding?: import('@/core/types').AgentFunding;
+  /**
+   * False: the caller's account may not spend the install's hosted keys
+   * (install-access.ts) — only a local row or one of its own draws.
+   */
+  allowHosted?: boolean;
   signal?: AbortSignal;
 }
 
@@ -121,7 +126,12 @@ export async function generateImageWithLane(
   const { getProviderRouter } = await import('./providers');
   const { resolveModelKey } = await import('./model-key');
   const errors: string[] = [];
+  let denied = 0;
   for (const row of rows) {
+    if (ctx.allowHosted === false && !row.ownerUserId) {
+      const { runsLocally } = await import('@/core/protection/routing');
+      if (!(await runsLocally(row))) { denied++; errors.push(`${row.name}: uses the install's keys`); continue; }
+    }
     const refused = await refusal(row, ctx);
     if (refused) { errors.push(`${row.name}: ${refused}`); continue; }
     const provider = getProviderRouter().getProviderByName(row.provider);
@@ -145,6 +155,10 @@ export async function generateImageWithLane(
       await recordUsage(row, ctx, 0, true);
       errors.push(`${row.name}: ${(err as Error).message}`);
     }
+  }
+  if (denied === rows.length) {
+    const { InstallModelsDeniedError } = await import('./install-access');
+    throw new InstallModelsDeniedError();
   }
   throw new Error(`No image generation model could draw this: ${errors.join('; ')}`);
 }

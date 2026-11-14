@@ -71,6 +71,20 @@ describe('the Image generation lane', () => {
     await expect(generateImageWithLane('a cat', {}, { sessionId: 's' })).rejects.toThrow(/protection level 4/);
   });
 
+  test('an account without the install models: only a local row or one of its own draws', async () => {
+    state.primary = row('cloud', 'openai', 'gpt-image-1');
+    state.backup = row('local sd', 'custom-openai', 'sdxl', 'backup');
+    state.providers.openai = { generateImage: vi.fn(async () => ({ images: [png] })) };
+    state.providers['custom-openai'] = { generateImage: async () => ({ images: [png] }) };
+    state.local = new Set(['local sd']);
+    await expect(generateImageWithLane('a cat', {}, { allowHosted: false })).resolves.toMatchObject({ model: 'local sd' });
+    expect(state.providers.openai.generateImage).not.toHaveBeenCalled();
+    state.backup = null;
+    await expect(generateImageWithLane('a cat', {}, { allowHosted: false })).rejects.toMatchObject({ name: 'InstallModelsDeniedError' });
+    state.primary = { ...row('mine', 'openai', 'gpt-image-1'), ownerUserId: 'u1' };
+    await expect(generateImageWithLane('a cat', {}, { allowHosted: false })).resolves.toMatchObject({ model: 'mine' });
+  });
+
   test('references: from the row, else from the model id', async () => {
     state.primary = row('gpt image', 'openai', 'gpt-image-1');
     await expect(imageGenerationTakesReferences()).resolves.toBe(true);
