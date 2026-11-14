@@ -125,7 +125,6 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
   const supportsClaudeStyleLimits = cliKind === 'claude' || cliKind === 'vibe' || cliKind === 'glm' || cliKind === 'kimi';
   const supportsModelOverride = cliKind !== 'vibe';
   const supportsApiKeyInheritance = cliKind !== 'glm' && cliKind !== 'kimi';
-  // Muse Code runs with Octipus tools only: no vendor permission mode to translate.
   // Muse Code and Grok Build have no tools of their own: Octipus decides every call.
   const supportsPermissionMode = cliKind !== 'muse' && cliKind !== 'grok';
   const preservedNativePermission = formData.cliPermissionMode && !SHARED_PERMISSION_MODES.has(formData.cliPermissionMode)
