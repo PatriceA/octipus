@@ -78,15 +78,6 @@ export async function loadRuntimeConfig(
     target[path[path.length - 1]] = value;
   }
 
-  // Derive voice enabled flags from paths
-  if (runtimePartial.voice) {
-    runtimePartial.voice.sttEnabled = !!runtimePartial.voice.whisperModelPath;
-    // Only piper needs a local model file; every other engine is remote/CLI.
-    runtimePartial.voice.ttsEnabled =
-      !!runtimePartial.voice.piperModelPath ||
-      (!!runtimePartial.voice.ttsProvider && runtimePartial.voice.ttsProvider !== 'piper');
-  }
-
   // Build final config: defaults → DB runtime values → bootstrap (DB/security/api.host/api.port)
   // Normalize the PARTIAL first: `defaultConfig` supplies every key the retired
   // namespace maps onto, so after the merge "the new key is unset" is never

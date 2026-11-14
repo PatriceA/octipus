@@ -228,6 +228,8 @@ export class SettingsService {
    */
   async set(key: string, value: unknown, userId?: string): Promise<void> {
     const def = getSettingDefinition(key);
+    // A retired setting is read once by its migration and never written again.
+    if (def?.retired) throw new Error(`${key} is retired: ${def.retired}`);
     if (def) {
       this.validateType(value, def.valueType);
       // Validate against the SAME boot schema (ranges, enums, …) so a value the

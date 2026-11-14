@@ -89,6 +89,8 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
     allowRetainedPersonalData: model.metadata?.allowRetainedPersonalData === true,
     // Stored as a raw count; the field edits in billions for readability.
     paramCountB: model.metadata?.paramCount ? String(model.metadata.paramCount / 1_000_000_000) : '',
+    // A local speech engine's model file (whisper.cpp ggml, Piper .onnx).
+    modelPath: (model.metadata as { modelPath?: string } | undefined)?.modelPath ?? '',
     costPerInputToken: model.costPerInputToken,
     costPerOutputToken: model.costPerOutputToken,
     // CLI agent settings
@@ -243,6 +245,12 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
         };
       }
 
+      if (model.provider === 'local-audio') {
+        const base = (payload.metadata as Record<string, unknown> | undefined) ?? { ...(model.metadata || {}) };
+        if (formData.modelPath.trim()) base.modelPath = formData.modelPath.trim();
+        else delete base.modelPath;
+        payload.metadata = base;
+      }
       // Parameter count drives root agent auto-mode selection. Apply it last
       // so none of the provider-specific metadata branches above clobber it,
       // and only send metadata when there's something to persist.
@@ -338,6 +346,19 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
               <p className="text-xs text-on-surface-variant mt-0.5">Bump higher if responses are getting truncated (e.g. thinking models burn tokens before replying).</p>
             </div>
           </div>
+
+          {model.provider === 'local-audio' && (
+            <div>
+              <label className="block text-sm font-medium text-on-surface-variant mb-1">Model file</label>
+              <input
+                type="text"
+                value={formData.modelPath}
+                onChange={(e) => setFormData({ ...formData, modelPath: e.target.value })}
+                placeholder="Empty = the installed default (whisper.cpp ggml or Piper .onnx path)"
+                className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface"
+              />
+            </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium text-on-surface-variant mb-1">Parameter Count (billions)</label>

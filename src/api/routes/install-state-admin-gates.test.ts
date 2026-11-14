@@ -86,11 +86,12 @@ vi.mock('@/core/gateway/hub', () => ({
   }),
 }));
 vi.mock('@/channels/interface', () => ({ getUMI: () => ({ getAllChannels: () => [] }) }));
+vi.mock('@/voice/resolve', () => ({
+  speechStatus: async (direction: 'stt' | 'tts') => (direction === 'stt'
+    ? { available: true, model: 'local whisper.cpp base', engine: 'whisper', local: true, reason: null }
+    : { available: false, model: null, engine: null, local: false, reason: 'none' }),
+}));
 vi.mock('@/voice/whisper', () => ({
-  getVoiceAvailability: () => ({
-    stt: { available: true, reason: null, local: true, external: false },
-    tts: { available: false, reason: 'none' },
-  }),
   installWhisper: (...args: unknown[]) => fixture.installWhisper(...args),
   ToolchainMissingError: class extends Error {},
   whisperModelPath: () => '/models/ggml.bin',
@@ -269,17 +270,15 @@ describe('install-state routes', () => {
 });
 
 describe('member-visible routes drop install details', () => {
-  test('GET /voice/status omits the TTS provider and whisper model path for a non-admin', async () => {
+  test('GET /voice/status omits which engines serve speech for a non-admin', async () => {
     const res = await call('GET', '/voice/status');
     expect(res.status).toBe(200);
     expect(res.body.sttAvailable).toBe(true);
-    expect(res.body).not.toHaveProperty('ttsProvider');
-    expect(res.body).not.toHaveProperty('whisperModelPath');
+    for (const key of ['ttsProvider', 'sttModel', 'ttsModel', 'sttEngine', 'ttsEngine']) expect(res.body).not.toHaveProperty(key);
 
     fixture.user = ADMIN;
     const admin = await call('GET', '/voice/status');
-    expect(admin.body).toHaveProperty('ttsProvider');
-    expect(admin.body).toHaveProperty('whisperModelPath');
+    expect(admin.body).toMatchObject({ sttModel: 'local whisper.cpp base', sttEngine: 'whisper', ttsModel: null });
   });
 
   test('GET /knowledge/readiness gives a non-admin only whether the KB works', async () => {

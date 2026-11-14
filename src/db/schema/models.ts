@@ -143,6 +143,18 @@ export interface ModelMetadata {
    * in the model editor afterwards are kept.
    */
   capabilitiesDetectedAt?: string;
+  /**
+   * A speech engine row (Transcription / Speech lanes, src/voice/speech-rows.ts):
+   * what it streams with, the voices it offers, the formats it writes.
+   */
+  speech?: {
+    /** The realtime model the live microphone streams to, when it differs from `modelId`. */
+    streamingModel?: string;
+    voices?: string[];
+    formats?: Array<'mp3' | 'wav' | 'opus' | 'ogg' | 'pcm' | 'flac'>;
+  };
+  /** A local engine's model file (whisper.cpp ggml, Piper .onnx). */
+  modelPath?: string;
   /** CLI sub-agent configuration (only for provider='cli') */
   cliAgent?: CLIAgentConfig;
   /** Custom provider configuration (only for provider='custom-openai', 'custom-anthropic', or 'custom-gemini') */

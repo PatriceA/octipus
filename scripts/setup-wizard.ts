@@ -644,12 +644,16 @@ async function pickCapabilities(ctx: WizardCtx | null, missing: string[]): Promi
   return picked;
 }
 
-/** Persist a voice setting through the authenticated (admin) settings API. */
-async function setVoiceSetting(api: ApiClient, key: string, value: string): Promise<void> {
+/**
+ * Make an engine the one its lane uses (docs/VOICE.md: speech engines are
+ * models on the Transcription and Speech lanes). The server registers the
+ * row and binds it primary; an engine already there stays as the backup.
+ */
+async function useVoiceEngine(api: ApiClient, direction: 'stt' | 'tts', engine: string, size?: string): Promise<void> {
   try {
-    await api.put(`/api/settings/${key}`, { value });
+    await api.post('/api/voice/engines/use', { direction, engine, makePrimary: true, ...(size ? { size } : {}) });
   } catch (err) {
-    process.stdout.write(`\x1b[33m! Could not save ${key}: ${(err as Error).message}\x1b[0m\n`);
+    process.stdout.write(`\x1b[33m! Could not bind the ${direction === 'stt' ? 'speech-to-text' : 'speech'} engine: ${(err as Error).message}\x1b[0m\n`);
   }
 }
 
@@ -673,10 +677,9 @@ async function pickVoice(api: ApiClient): Promise<void> {
     if (!hasUv()) { warn(`Voice: skipped local install — ${UV_INSTALL_HINT}`); return; }
     try {
       await installFasterWhisper('small', gray);
-      await setVoiceSetting(api, 'voice.sttProvider', 'fasterwhisper');
-      await setVoiceSetting(api, 'voice.fasterWhisperModel', 'small');
+      await useVoiceEngine(api, 'stt', 'fasterwhisper', 'small');
       await installKokoro(gray);
-      await setVoiceSetting(api, 'voice.ttsProvider', 'kokoro');
+      await useVoiceEngine(api, 'tts', 'kokoro');
       ok('Local voice installed (faster-whisper small + Kokoro).');
     } catch (err) { warn(`Voice install failed: ${(err as Error).message}`); }
     return;
@@ -717,8 +720,7 @@ async function pickVoice(api: ApiClient): Promise<void> {
       })),
       'small',
     );
-    await setVoiceSetting(api, 'voice.sttProvider', 'fasterwhisper');
-    await setVoiceSetting(api, 'voice.fasterWhisperModel', model);
+    await useVoiceEngine(api, 'stt', 'fasterwhisper', model);
     if (!hasUv()) {
       warn(`Selected faster-whisper "${model}", but \`uv\` is not installed. ${UV_INSTALL_HINT}`);
       gray('  The model will download automatically once `uv` is available.');
@@ -730,7 +732,7 @@ async function pickVoice(api: ApiClient): Promise<void> {
       } catch (err) { warn(`faster-whisper download failed: ${(err as Error).message}`); }
     }
   } else if (stt === 'mistral' || stt === 'openai') {
-    await setVoiceSetting(api, 'voice.sttProvider', stt);
+    await useVoiceEngine(api, 'stt', stt);
     ok(`Speech-to-text set to ${stt === 'mistral' ? 'Voxtral (Mistral)' : 'OpenAI'} (cloud).`);
     cloudKeyHint(stt === 'mistral' ? 'Mistral' : 'OpenAI');
   }
@@ -750,7 +752,7 @@ async function pickVoice(api: ApiClient): Promise<void> {
   );
 
   if (tts === 'kokoro') {
-    await setVoiceSetting(api, 'voice.ttsProvider', 'kokoro');
+    await useVoiceEngine(api, 'tts', 'kokoro');
     if (!hasUv()) {
       warn(`Selected Kokoro, but \`uv\` is not installed. ${UV_INSTALL_HINT}`);
     } else {
@@ -761,16 +763,16 @@ async function pickVoice(api: ApiClient): Promise<void> {
       } catch (err) { warn(`Kokoro download failed: ${(err as Error).message}`); }
     }
   } else if (tts === 'piper') {
-    await setVoiceSetting(api, 'voice.ttsProvider', 'piper');
+    await useVoiceEngine(api, 'tts', 'piper');
     ok('Spoken replies set to Piper.');
-    gray('  → Install the Piper binary + a .onnx voice, then set `voice.piperModelPath` in Settings → Voice.');
+    gray('  → Install the Piper binary + a .onnx voice, then set its path on the "local piper" model (Models page).');
   } else if (tts === 'mistral' || tts === 'openai') {
-    await setVoiceSetting(api, 'voice.ttsProvider', tts);
+    await useVoiceEngine(api, 'tts', tts);
     ok(`Spoken replies set to ${tts === 'mistral' ? 'Voxtral (Mistral)' : 'OpenAI'} (cloud).`);
     cloudKeyHint(tts === 'mistral' ? 'Mistral' : 'OpenAI');
   }
 
-  gray('Voice configured. Toggle it per chat with the mic / conversation buttons.');
+  gray('Voice configured (Topics page → Transcription / Speech). Toggle it per chat with the mic / conversation buttons.');
 }
 
 // ── Main ───────────────────────────────────────────────────────────

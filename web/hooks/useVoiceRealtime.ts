@@ -30,7 +30,7 @@ interface UseVoiceRealtimeArgs {
   enabled: boolean;
   /**
    * Force a transcription engine: 'whisper' (local), 'mistral' (Voxtral cloud),
-   * or 'openai'. Omit or 'auto' to let the server's `voice.sttProvider` setting
+   * or 'openai'. Omit or 'auto' to let the server's Transcription lane binding
    * decide.
    */
   engine?: 'auto' | 'whisper' | 'mistral' | 'openai';

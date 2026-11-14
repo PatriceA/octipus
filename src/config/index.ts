@@ -87,15 +87,6 @@ export function refreshConfigKey(key: string, value: unknown): void {
   if (leaf === '__proto__' || leaf === 'constructor' || leaf === 'prototype') return;
   target[leaf] = value;
 
-  // Handle derived fields
-  if (key === 'voice.whisperModelPath') {
-    cachedConfig.voice.sttEnabled = !!value;
-  } else if (key === 'voice.piperModelPath' || key === 'voice.ttsProvider') {
-    // Only piper needs a local model file; every other engine is remote/CLI.
-    cachedConfig.voice.ttsEnabled =
-      !!cachedConfig.voice.piperModelPath || cachedConfig.voice.ttsProvider !== 'piper';
-  }
-
   logger.debug({ key }, 'Config key refreshed');
 }
 

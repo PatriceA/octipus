@@ -215,7 +215,8 @@ async function transcribeChannelAudio(audioAttachments: Attachment[], message: U
       const buf = await downloadAttachment(att, message);
       if (!buf?.length) continue;
       const ext = (att.mimeType.split('/')[1] || 'ogg').split(';')[0];
-      const text = (await transcribeAudioBuffer(buf, ext)).trim();
+      // mpeg → mp3 for the name a cloud API reads the container from.
+      const text = (await transcribeAudioBuffer(buf, ext === 'mpeg' ? 'mp3' : ext, { userId: message.userId })).trim();
       if (text) parts.push(text);
     } catch (err) {
       channelLogger.error({ err, channel: message.channelType }, 'Voice note transcription failed');
@@ -226,26 +227,24 @@ async function transcribeChannelAudio(audioAttachments: Attachment[], message: U
 
 /**
  * Synthesize an assistant reply to a spoken clip so a voice note gets a voice
- * reply. Best-effort: gated on `voice.ttsEnabled`, and any synthesis failure is
+ * reply. Best-effort: gated on the `speak` capability, and any synthesis failure is
  * swallowed (undefined → the text reply still goes out on its own).
  * ponytail: Telegram-only for now; other channels' outbound audio senders take a
  * URL, not bytes. Cap the text so long/costly replies aren't fully synthesized.
  */
-async function synthesizeVoiceReply(text: string): Promise<Attachment[] | undefined> {
-  const config = getConfig();
-  if (!config.voice.ttsEnabled || !isCapabilityOn('speak')) return undefined;
+async function synthesizeVoiceReply(text: string, userId?: string, sessionId?: string): Promise<Attachment[] | undefined> {
+  // Spoken replies follow the Speech lane: configured = on (docs/VOICE.md).
+  if (!isCapabilityOn('speak')) return undefined;
   try {
-    const provider = config.voice.ttsProvider;
-    // Each engine's real output format (piper hardcodes wav; mistral/openai
-    // honour the request) — so the extension always matches the bytes.
-    const ext = ({ piper: 'wav', kokoro: 'wav', mistral: 'mp3', openai: 'mp3' } as Record<string, string>)[provider] || 'mp3';
-    const { createTTSEngine } = await import('@/voice/tts');
-    const engine = createTTSEngine(provider, undefined, { outputFormat: ext as 'wav' | 'mp3' });
-    const audio = await engine.synthesize(text.slice(0, 2000));
+    // The engine bound to the Speech lane (src/voice/resolve.ts); its own
+    // format, so the extension always matches the bytes.
+    const { synthesizeWithLane } = await import('@/voice/resolve');
+    const spoken = await synthesizeWithLane(text.slice(0, 2000), { userId, sessionId, format: 'mp3' });
+    const ext = spoken.format === 'opus' ? 'ogg' : spoken.format;
     return [{
       type: 'audio',
-      mimeType: ext === 'mp3' ? 'audio/mpeg' : `audio/${ext}`,
-      data: Buffer.from(audio),
+      mimeType: spoken.contentType,
+      data: spoken.audio,
       filename: `reply.${ext}`,
     }];
   } catch (err) {
@@ -1232,7 +1231,7 @@ export async function initializeChannels(): Promise<void> {
         // Voice-in on Telegram → speak the reply back (Telegram sends the audio
         // clip before the text). Best-effort; undefined leaves a text-only reply.
         const attachments = voiceIn && message.channelType === 'telegram'
-          ? await synthesizeVoiceReply(content)
+          ? await synthesizeVoiceReply(content, message.userId, resolvedSessionId)
           : undefined;
 
         await umi.send(message.channelType, message.channelId, {

@@ -118,6 +118,14 @@ async function main() {
     // Capability gates (docs/MODULES.md → Capability gates): decide what this
     // install has a model for BEFORE tools, prompts, jobs or routes are used,
     // so nothing unconfigured is ever offered. Kept current from here on.
+    // Speech engines moved from `voice.*` settings onto the Transcription and
+    // Speech lanes (docs/VOICE.md): once per install, before the gates read them.
+    try {
+      const { migrateVoiceSettingsToLanes } = await import('@/voice/migrate-to-lanes');
+      await migrateVoiceSettingsToLanes();
+    } catch (err) {
+      logger.error({ err }, 'Moving the voice engine settings onto the speech lanes failed; bind them on the Topics page');
+    }
     {
       const { initCapabilityGates, onCapabilitiesChanged } = await import('@/core/capabilities/gates');
       await initCapabilityGates();

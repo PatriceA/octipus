@@ -475,32 +475,40 @@ export class OctipusTuiApp {
   }
 
   /**
-   * Build the local voice engine on first use (keeps voice deps off the TUI
-   * startup path). Local whisper STT + configured TTS. Returns null — with a
-   * one-line reason — when local whisper isn't installed.
+   * Build the voice service on first use (keeps voice deps off the TUI
+   * startup path): local recording and playback, the server's speech lanes.
+   * Returns null — with a one-line reason — when the server has no
+   * speech-to-text configured.
    */
   private async ensureVoice(): Promise<VoiceService | null> {
     if (this.voice) return this.voice;
     if (this.voiceInit) return this.voiceInit;
     this.voiceInit = (async () => {
       try {
-        const { getConfig } = await import('@/config');
-        const { whisperModelPath, probeWhisper } = await import('@/voice/whisper');
-        const cfg = getConfig();
-        // Gate on the binary actually RUNNING, not just the model file existing —
-        // whisper.ts exists to catch "model present but binary dead (exit 127)",
-        // which would otherwise fail silently deep in transcribe.
-        const probe = await probeWhisper();
-        if (!probe.binaryOk || !probe.modelOk) {
-          this.pushMessage('system', `Voice unavailable: ${probe.binaryReason ?? 'local whisper model missing'}. Run \`octi setup\`.`);
+        // Recorded and played here; transcribed and spoken by the engines the
+        // install binds to the Transcription and Speech lanes (/api/voice).
+        const base = this.httpBase();
+        const token = readCliSession()?.token;
+        if (!base || !token) {
+          this.pushMessage('system', 'Voice needs a signed-in connection to the server.');
           return null;
         }
-        const modelPath = cfg.voice.whisperModelPath || whisperModelPath();
+        const target = { baseUrl: base, token };
+        const status = await fetch(`${base}/api/voice/status`, { headers: { Authorization: `Bearer ${token}` } })
+          .then((r) => r.json() as Promise<{ sttAvailable?: boolean; sttReason?: string | null; ttsAvailable?: boolean }>)
+          .catch(() => null);
+        if (!status?.sttAvailable) {
+          this.pushMessage('system', `Voice unavailable: ${status?.sttReason ?? 'the server could not be asked'}`);
+          return null;
+        }
         const { VoiceService } = await import('@/voice');
-        this.voice = await VoiceService.create({
-          stt: { type: 'whisper-cpp', model: modelPath, language: cfg.voice.language || 'en' },
-          tts: cfg.voice.ttsEnabled ? { type: cfg.voice.ttsProvider } : undefined,
-        });
+        const { SpeechToText } = await import('@/voice/stt');
+        const { TextToSpeech } = await import('@/voice/tts');
+        const { RemoteSTTEngine, RemoteTTSEngine } = await import('@/voice/remote-engines');
+        this.voice = new VoiceService(
+          new SpeechToText(new RemoteSTTEngine(target)),
+          status.ttsAvailable ? new TextToSpeech(new RemoteTTSEngine(target)) : undefined,
+        );
         return this.voice;
       } catch (err) {
         this.pushMessage('system', `Voice init failed: ${(err as Error).message}`);

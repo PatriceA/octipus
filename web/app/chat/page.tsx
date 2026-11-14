@@ -1904,7 +1904,7 @@ export default function ChatPage() {
   // — decoupled from turn timing, so no stale-reply reads.
   const realtime = useVoiceRealtime({
     enabled: realtimeMode,
-    // Engine is chosen by the `voice.sttProvider` setting (Settings → Voice);
+    // Engine is the model bound to the Transcription lane (Topics page);
     // omitting it here lets the backend honor that choice ('auto' by default).
     isTurnActive: isLoading,
     sendTranscript: (t) => { void sendMessage(t, undefined, { voice: true }); },

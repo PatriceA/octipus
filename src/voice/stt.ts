@@ -109,6 +109,12 @@ export interface STTOptions {
    * latency knob. Default 2 s.
    */
   streamWindowSeconds?: number;
+  /** Cloud engines: the key of the model row (its apiKeyRef); unset = the provider's install key. */
+  apiKey?: string;
+  /** OpenAI: the file-transcription model for `transcribe()` (the row's model id). */
+  batchModel?: string;
+  /** Mistral: the realtime model for `streamTranscribe()` (the row's `metadata.speech.streamingModel`). */
+  streamingModel?: string;
 }
 
 export interface TranscriptionResult {
@@ -658,6 +664,7 @@ export class MistralSTTEngine extends EventEmitter implements STTEngine {
   }
 
   private async apiKey(): Promise<string> {
+    if (this.options.apiKey) return this.options.apiKey;
     const { getMistralApiKey } = await import('../models/providers/mistral-provider');
     const key = await getMistralApiKey();
     if (!key) throw new Error('Mistral API key not available. Set MISTRAL_API_KEY or store it in the vault.');
@@ -710,7 +717,7 @@ export class MistralSTTEngine extends EventEmitter implements STTEngine {
 
     // Defaults are pcm_s16le @16kHz, so no session.update (onOpen) is needed.
     yield* streamRealtimeWs({
-      url: `wss://api.mistral.ai/v1/audio/transcriptions/realtime?model=${encodeURIComponent(MISTRAL_STT_REALTIME_MODEL)}`,
+      url: `wss://api.mistral.ai/v1/audio/transcriptions/realtime?model=${encodeURIComponent(this.options.streamingModel || MISTRAL_STT_REALTIME_MODEL)}`,
       headers: { Authorization: `Bearer ${await this.apiKey()}` },
       name: 'Mistral',
       appendMessage: (audio) => ({ type: 'input_audio.append', audio }),
@@ -772,6 +779,7 @@ export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
   }
 
   private async apiKey(): Promise<string> {
+    if (this.options.apiKey) return this.options.apiKey;
     const { getOpenAIApiKey } = await import('../models/providers/openai-provider');
     const key = await getOpenAIApiKey();
     if (!key) throw new Error('OpenAI API key not available. Set OPENAI_API_KEY or store it in the vault.');
@@ -785,7 +793,7 @@ export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
 
     const form = new FormData();
     // this.model is the realtime (streaming-only) model; batch needs a file model.
-    form.append('model', OPENAI_STT_BATCH_MODEL);
+    form.append('model', this.options.batchModel || OPENAI_STT_BATCH_MODEL);
     form.append('file', new Blob([new Uint8Array(buffer)]), fileName);
     if (this.options.language) form.append('language', this.options.language);
 
@@ -857,57 +865,15 @@ export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
 }
 
 /**
- * Transcribe an audio buffer with the best available engine, mirroring the
- * `/voice/transcribe` route's default order: local whisper.cpp (no API cost) →
- * Mistral Voxtral → OpenAI whisper-1. Throws if none is configured. Used by
- * channels voice-in so an inbound voice note reaches the root agent as text.
- *
- * `format` is only the file-extension hint for the OpenAI multipart upload;
- * local whisper and Mistral sniff the container themselves.
+ * Transcribe an audio buffer with the engine bound to the Transcription lane
+ * (src/voice/resolve.ts: primary, then backup). Used by channel voice-in so
+ * an inbound voice note reaches the root agent as text. `format` is the
+ * clip's container (ogg, mp3, wav…), which cloud APIs read from the name.
+ * Throws `capability_not_configured` when no engine is bound.
  */
-export async function transcribeAudioBuffer(audio: Buffer, format = 'ogg'): Promise<string> {
-  const { getConfig } = await import('../config');
-  const config = getConfig();
-  const language = config.voice.language || 'en';
-
-  // 1. Local whisper.cpp — the default. Same model-path resolution the route uses.
-  const { whisperModelPath } = await import('./whisper');
-  const modelPath = config.voice.whisperModelPath || whisperModelPath();
-  if (await fileAt(modelPath).exists()) {
-    try {
-      const engine = new WhisperEngine(modelPath, { language });
-      return (await engine.transcribeBuffer(audio)).text;
-    } catch (err) {
-      // Model file is present but the runtime failed (e.g. missing ffmpeg or the
-      // binary was removed). Fall through to a cloud engine if one is configured
-      // rather than dead-ending on a broken-but-present local install.
-      logger.warn({ err }, 'Local whisper failed; falling back to cloud STT if configured');
-    }
-  }
-
-  // 2. Mistral Voxtral, if a key is set.
-  const { getMistralApiKey } = await import('../models/providers/mistral-provider');
-  if (await getMistralApiKey()) {
-    return (await new MistralSTTEngine(undefined, { language }).transcribe(audio)).text;
-  }
-
-  // 3. OpenAI whisper-1, if a key is set (env or vault, same as everywhere else).
-  const { getOpenAIApiKey } = await import('../models/providers/openai-provider');
-  const openaiKey = await getOpenAIApiKey();
-  if (openaiKey) {
-    const form = new FormData();
-    form.append('file', new Blob([new Uint8Array(audio)]), `audio.${format}`);
-    form.append('model', 'whisper-1');
-    const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${openaiKey}` },
-      body: form,
-    });
-    if (!res.ok) throw new Error(`OpenAI transcription failed (${res.status})`);
-    return ((await res.json()) as { text?: string }).text || '';
-  }
-
-  throw new Error('No STT engine available: install local whisper (`octi setup`) or set a Mistral/OpenAI API key.');
+export async function transcribeAudioBuffer(audio: Buffer, format = 'ogg', req: import('./resolve').SpeechRequest = {}): Promise<string> {
+  const { transcribeWithLane } = await import('./resolve');
+  return (await transcribeWithLane(audio, { ...req, format })).text;
 }
 
 /**

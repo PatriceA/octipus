@@ -177,30 +177,21 @@ const seeResolver = mediaResolver('see');
 const ocrResolver = mediaResolver('ocr');
 const drawResolver = mediaResolver('draw');
 
-async function voiceAvailability() {
-  const { getConfig } = await import('@/config');
-  const { getVoiceAvailability } = await import('@/voice/whisper');
-  const { getMistralApiKey } = await import('@/models/providers/mistral-provider');
-  const { getOpenAIApiKey } = await import('@/models/providers/openai-provider');
-  const config = getConfig();
-  return getVoiceAvailability({
-    sttProvider: config.voice.sttProvider,
-    ttsProvider: config.voice.ttsProvider,
-    hasMistralKey: !!(await getMistralApiKey()),
-    hasOpenAIKey: !!(await getOpenAIApiKey()),
-    piperModelPath: config.voice.piperModelPath,
-  });
+/**
+ * Speech is configured when the model bound to its lane can run here now
+ * (src/voice/resolve.ts: primary, then backup; local engines probed, cloud
+ * engines need their key).
+ */
+function speechResolver(direction: 'stt' | 'tts'): CapabilityResolver {
+  return async () => {
+    const { speechStatus } = await import('@/voice/resolve');
+    const status = await speechStatus(direction);
+    return status.available ? { on: true } : { on: false, reason: status.reason ?? `needs ${CAPABILITY_INFO[direction === 'stt' ? 'hear' : 'speak'].needs}` };
+  };
 }
 
-const hearResolver: CapabilityResolver = async () => {
-  const v = await voiceAvailability();
-  return v.stt.available ? { on: true } : { on: false, reason: v.stt.reason ?? `needs ${CAPABILITY_INFO.hear.needs}` };
-};
-
-const speakResolver: CapabilityResolver = async () => {
-  const v = await voiceAvailability();
-  return v.tts.available ? { on: true } : { on: false, reason: v.tts.reason ?? `needs ${CAPABILITY_INFO.speak.needs}` };
-};
+const hearResolver = speechResolver('stt');
+const speakResolver = speechResolver('tts');
 
 const resolvers: Record<Capability, CapabilityResolver> = {
   embedding: embeddingResolver,
