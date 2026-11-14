@@ -52,6 +52,12 @@ async function readMedia(ref: MediaRef, fs: WorkspaceFS | null): Promise<Buffer 
   const { stat } = await import('node:fs/promises');
   if ((await stat(path)).size > MAX_HYDRATE_BYTES) return null;
   const bytes = await readFile(path);
+  // A cached copy a conversation still replays is in use: the daily prune keeps it.
+  if (isInside(join(root, '.octipus/media/cache'), path) || isInside(join(fs.root, '.octipus/media/cache'), path)) {
+    const { utimes } = await import('node:fs/promises');
+    const now = new Date();
+    await utimes(path, now, now).catch(() => {});
+  }
   if (ref.kind === 'image') return sniffImageType(bytes) ? bytes : null;
   const head = bytes.subarray(0, 4).toString('latin1');
   const audio = head === 'RIFF' || head.startsWith('ID3') || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0);

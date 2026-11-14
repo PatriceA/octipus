@@ -61,3 +61,20 @@ export async function probeDurationSeconds(path: string): Promise<number | null>
     return null;
   }
 }
+
+/** The length of a clip in memory, in seconds (a temp file for ffprobe), or null when unknown. */
+export async function probeBufferSeconds(audio: Buffer, format: string | undefined): Promise<number | null> {
+  const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'octipus-probe-'));
+  try {
+    const file = join(dir, `clip.${(format ?? 'bin').replace(/[^a-z0-9]/gi, '').slice(0, 8) || 'bin'}`);
+    await writeFile(file, audio);
+    return await probeDurationSeconds(file);
+  } catch {
+    return null;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}

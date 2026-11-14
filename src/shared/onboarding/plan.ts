@@ -269,7 +269,14 @@ function mediaSteps(plan: Plan, a: Answers, s: OnboardingState): void {
       const name = modelName(image.provider, image.modelId);
       // An image model is not a chat model: it calls no tools and streams nothing.
       const step = ensureModel(plan, s, name, { provider: image.provider, modelId: image.modelId, supportsTools: false, supportsStreaming: false }, `Add ${image.modelId} for drawing images`, deps.length ? deps : undefined);
-      bind(plan, s, 'image_generation', name, step, `Use ${image.modelId} to generate images`);
+      const previous = s.models.byTopic.image_generation;
+      if (previous && previous !== name) {
+        // A model already draws here: it stays, as the backup (nothing that worked stops working).
+        plan.api('bind:image_generation', `Use ${image.modelId} to generate images (${previous} stays as backup)`,
+          { method: 'PUT', path: '/topics/image_generation/binding', body: { primaryModel: name, backupModel: previous } }, { dependsOn: step ? [step] : undefined });
+      } else {
+        bind(plan, s, 'image_generation', name, step, `Use ${image.modelId} to generate images`);
+      }
     }
   }
 

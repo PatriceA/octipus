@@ -734,7 +734,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `mcp` | 5 |
 | `api` | `models` | 41 |
 | `api` | `plugins` | 49 |
-| `api` | `security` | 177 |
+| `api` | `security` | 178 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 28 |
 | `api` | `skills` | 6 |
@@ -890,7 +890,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `visual` | `utils` | 2 |
 | `voice` | `capabilities` | 1 |
 | `voice` | `config` | 5 |
-| `voice` | `core` | 4 |
+| `voice` | `core` | 5 |
 | `voice` | `db` | 2 |
 | `voice` | `models` | 14 |
 | `voice` | `security` | 1 |

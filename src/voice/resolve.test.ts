@@ -28,9 +28,11 @@ vi.mock('@/models/model-registry', () => ({
 vi.mock('@/models/providers/instrumented', () => ({ recordProviderUsage: state.usage }));
 vi.mock('@/core/protection/routing', () => {
   class ProtectionRoutingError extends Error {}
-  return { assertMayLeave: state.mayLeave, ProtectionRoutingError };
+  return { assertMayLeave: state.mayLeave, ProtectionRoutingError, runsLocally: async (r: { provider: string }) => r.provider === 'local-audio' };
 });
 vi.mock('@/config', () => ({ getConfig: () => ({ voice: { ttsVoice: 'configured-voice' } }) }));
+// The clip's length (ffprobe), never the engine's processing time.
+vi.mock('./ffmpeg', () => ({ probeBufferSeconds: async () => 42 }));
 vi.mock('./speech-rows', async (orig) => {
   const real = await orig<typeof import('./speech-rows')>();
   return {
@@ -76,7 +78,7 @@ describe('speech resolution', () => {
     state.available['local fw'] = true;
     state.transcribe['local fw'] = async () => { throw new Error('binary crashed'); };
     await expect(resolve.transcribeWithLane(Buffer.from('x'))).resolves.toMatchObject({ model: 'mistral stt' });
-    expect(state.usage).toHaveBeenCalledWith(expect.objectContaining({ requestType: 'transcription', modelConfigName: 'mistral stt', accountingMetadata: { seconds: 3 } }), 'mistral', expect.anything(), false);
+    expect(state.usage).toHaveBeenCalledWith(expect.objectContaining({ requestType: 'transcription', modelConfigName: 'mistral stt', accountingMetadata: { seconds: 42 } }), 'mistral', expect.anything(), false);
     expect(state.usage).toHaveBeenCalledWith(expect.objectContaining({ modelConfigName: 'local fw' }), 'local-audio', expect.anything(), true);
   });
 
@@ -165,5 +167,18 @@ describe('speech resolution', () => {
     await expect(resolve.synthesizeWithLane('hi', { format: 'mp3' })).resolves.toMatchObject({ format: 'wav', contentType: 'audio/wav', model: 'local kokoro' });
     await expect(resolve.synthesizeWithLane('hi', { format: 'mp3', strictFormat: true })).rejects.toThrow(/writes wav only/);
     expect(state.usage).toHaveBeenCalledWith(expect.objectContaining({ requestType: 'speech', accountingMetadata: { characters: 2 } }), 'local-audio', expect.anything(), false);
+  });
+});
+
+describe('speech cost', () => {
+  test('per minute of audio for transcription and per million characters for speech; local or free costs nothing; unknown is unknown', async () => {
+    const cloud = row('openai stt', 'openai', 'gpt-4o-transcribe', 'transcription');
+    await expect(resolve.speechCost(cloud, 'transcription', { seconds: 3600 })).resolves.toBeCloseTo(0.36);
+    await expect(resolve.speechCost(cloud, 'transcription', {})).resolves.toBeUndefined();
+    const priced = { ...row('mine', 'mistral', 'voxtral-mini-tts-2603', 'speech'), metadata: { pricing: { perMillionChars: 20 } } } as never;
+    await expect(resolve.speechCost(priced, 'speech', { characters: 500_000 })).resolves.toBeCloseTo(10);
+    await expect(resolve.speechCost(row('local fw', 'local-audio', 'faster-whisper:small', 'transcription'), 'transcription', { seconds: 60 })).resolves.toBe(0);
+    const free = { ...cloud, metadata: { pricing: { free: true } } } as never;
+    await expect(resolve.speechCost(free, 'transcription', { seconds: 60 })).resolves.toBe(0);
   });
 });
