@@ -249,6 +249,7 @@ export class BrowserExtTool extends BaseTool {
         const bytes = Buffer.from(result.image.replace(/^data:image\/\w+;base64,/, ''), 'base64');
         const { keepToolImage, withToolMedia } = await import('@/core/media/tool-media');
         const kept = await keepToolImage(context, bytes);
+        if (!kept) return { tabId: result.tabId, url: result.url, title: result.title, image: result.image };
         return withToolMedia({ tabId: result.tabId, url: result.url, title: result.title, path: kept.path }, [kept.media]);
       },
       { permissionAction: 'screenshot' },

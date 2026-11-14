@@ -1452,6 +1452,7 @@ export async function keepMcpImages(result: unknown, context: AgentContext): Pro
     if (part?.type !== 'image' || typeof part.data !== 'string') return part;
     try {
       const kept = await keepToolImage(context, Buffer.from(part.data, 'base64'));
+      if (!kept) return part;
       media.push(kept.media);
       return { type: 'image', path: kept.path, mimeType: part.mimeType };
     } catch (err) {

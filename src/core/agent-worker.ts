@@ -530,6 +530,7 @@ export class AgentWorker extends BaseAgentWorker {
 
   private estimateRequestTokens(): number {
     const IMAGE_TOKENS = 1_500; // rough fixed cost of one image to a vision model
+    const AUDIO_TOKENS = 10_000; // one native recording, at most ~5 minutes
     let chars = this.advertisedToolChars();
     let imageTokens = 0;
     // Only the newest `replayRecentImages` media-bearing messages go out with
@@ -540,7 +541,8 @@ export class AgentWorker extends BaseAgentWorker {
       if (this.messages[i].media?.length) { replayed.add(this.messages[i]); replayLeft--; }
     }
     for (const m of this.messages) {
-      if (replayed.has(m)) imageTokens += (m.media?.length ?? 0) * IMAGE_TOKENS;
+      // A recording (sent once, ≤ 10 MB) costs far more than an image: ~5 minutes of audio.
+      if (replayed.has(m)) for (const ref of m.media ?? []) imageTokens += ref.kind === 'audio' ? AUDIO_TOKENS : IMAGE_TOKENS;
       const c = (m as { content?: unknown }).content;
       if (typeof c === 'string') {
         chars += c.length;

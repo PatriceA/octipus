@@ -90,6 +90,14 @@ test('an attached recording is transcribed with the turn; a model that hears get
   expect(result.context).toMatch(/Transcript \(speech to text; may contain errors\)[\s\S]*buy milk/);
   expect(spy).toHaveBeenCalledWith(expect.any(Buffer), expect.objectContaining({ sessionId: 'sess', format: 'wav' }));
   expect(result.media).toEqual([]); // media.audioInput defaults to transcribe
+  const config = await import('@/config');
+  const real = config.getConfig();
+  const cfg = vi.spyOn(config, 'getConfig').mockReturnValue({ ...real, media: { ...real.media, audioInput: 'native' } });
+  const native = await buildRootAttachmentContext(WorkspaceFS.withRoot(root), [{ path: 'memo.wav' }], false, 'user', 'What did I say?', 'sess', undefined, hearing);
+  expect(native.media).toEqual([expect.objectContaining({ kind: 'audio', mimeType: 'audio/wav', source: 'user' })]);
+  const deaf = { ...(hearing as object), supportsAudioInput: false } as never;
+  expect((await buildRootAttachmentContext(WorkspaceFS.withRoot(root), [{ path: 'memo.wav' }], false, 'user', 'x', 'sess', undefined, deaf)).media).toEqual([]);
+  cfg.mockRestore();
   gates.setCapabilitiesForTest({ hear: false });
   const off = await buildRootAttachmentContext(WorkspaceFS.withRoot(root), [{ path: 'memo.wav' }], false, 'user', 'What did I say?', 'sess', undefined, hearing);
   expect(off.context).toMatch(/No speech-to-text engine is configured/);

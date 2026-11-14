@@ -29,6 +29,8 @@ export const AUDIO_EXT: Record<string, string> = {
   '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.ogg': 'audio/ogg', '.oga': 'audio/ogg',
   '.opus': 'audio/ogg', '.webm': 'audio/webm', '.flac': 'audio/flac', '.aac': 'audio/aac', '.amr': 'audio/amr',
 };
+/** What a model that hears audio gets as the recording itself (about five minutes of WAV). */
+export const MAX_NATIVE_AUDIO_BYTES = 10 * 1024 * 1024;
 /** What is transcribed with the turn; a longer recording is left to audio__transcribe_audio. */
 export const MAX_INLINE_AUDIO_BYTES = 25 * 1024 * 1024;
 
@@ -52,7 +54,11 @@ async function attachedAudio(fs: WorkspaceFS, path: string, userId: string, sess
   if (!info?.isFile()) return { block: `--- Audio attachment: ${path} (could not be read: not found) ---` };
   const header = `--- Audio attachment: ${abs} (${mimeType}) ---`;
   const { getConfig } = await import('@/config');
+  // Native audio: WAV/MP3 a provider takes, small enough to send, and not
+  // confidential content bound for a remote model (recordings are not pseudonymized).
+  const { rawMediaStaysLocal } = await import('@/core/protection/routing');
   const native = agentRow?.supportsAudioInput === true && getConfig().media?.audioInput === 'native' && /audio\/(wav|mpeg)/.test(mimeType)
+    && info.size <= MAX_NATIVE_AUDIO_BYTES && !(await rawMediaStaysLocal(sessionId, agentRow))
     ? { kind: 'audio' as const, path: abs, mimeType, source: 'user' as const }
     : undefined;
   const { isCapabilityOn } = await import('@/core/capabilities/gates');
@@ -95,7 +101,11 @@ export async function buildRootAttachmentContext(
   }
   refs = refs.filter((r) => !audioMimeOf(r.path));
   const { getConfig } = await import('@/config');
-  const mode = imageInputMode(agentRow, getConfig().media?.imageInput);
+  // Confidential content bound for a remote model: pixels are not
+  // pseudonymized, so the model gets the path and a local model looks.
+  const { rawMediaStaysLocal } = await import('@/core/protection/routing');
+  const imageMode = imageInputMode(agentRow, getConfig().media?.imageInput);
+  const mode = imageMode === 'native' && await rawMediaStaysLocal(sessionId, agentRow) ? 'tool' : imageMode;
   const context = await buildAttachedFilesContext(fs, refs, async (dataUrl, mimeType, path) => {
     if (cli) {
       imagePaths.push(path);

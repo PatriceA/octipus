@@ -769,7 +769,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `models` | 146 |
 | `core` | `modules` | 2 |
 | `core` | `plugins` | 8 |
-| `core` | `security` | 231 |
+| `core` | `security` | 232 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
 | `core` | `shared` | 70 |
@@ -870,9 +870,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `services` | 1 |
 | `tools` | `shared` | 8 |
 | `tools` | `skills` | 5 |
-| `tools` | `utils` | 43 |
+| `tools` | `utils` | 42 |
 | `tools` | `visual` | 2 |
-| `tools` | `voice` | 5 |
+| `tools` | `voice` | 7 |
 | `tui-editor` | `mcp` | 2 |
 | `tui-editor` | `shared` | 1 |
 | `tui-editor` | `tui-pi` | 29 |
@@ -892,7 +892,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `voice` | `models` | 14 |
 | `voice` | `security` | 1 |
 | `voice` | `services` | 2 |
-| `voice` | `utils` | 29 |
+| `voice` | `utils` | 30 |
 
 ### Mutual imports
 

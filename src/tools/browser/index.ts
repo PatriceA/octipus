@@ -272,6 +272,7 @@ export class BrowserTool extends BaseTool {
         // that cannot gets the path (vision__view_image looks at it).
         const { keepToolImage, withToolMedia } = await import('@/core/media/tool-media');
         const kept = await keepToolImage(context, screenshot);
+        if (!kept) return { base64: screenshot.toString('base64'), size: screenshot.length, url: page.url() };
         return withToolMedia({ path: kept.path, size: screenshot.length, url: page.url() }, [kept.media]);
       },
       { permissionAction: 'screenshot' }

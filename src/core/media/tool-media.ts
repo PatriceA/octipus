@@ -40,13 +40,18 @@ export function toolMediaMessage(media: MediaRef[]): { role: 'user'; content: st
  * images sees it after the result, one that cannot gets the path and
  * view_image. Never base64 in the result text.
  */
-export async function keepToolImage(context: import('@/core/types').AgentContext, bytes: Buffer, kind: 'screenshots' | 'generated' = 'screenshots'): Promise<{ path: string; media: MediaRef }> {
+export async function keepToolImage(context: import('@/core/types').AgentContext, bytes: Buffer, kind: 'screenshots' | 'generated' = 'screenshots'): Promise<{ path: string; media: MediaRef } | null> {
   const { randomUUID } = await import('node:crypto');
   const { mkdir, writeFile } = await import('node:fs/promises');
   const { dirname } = await import('node:path');
   const { WorkspaceFS } = await import('@/security/workspace-fs');
   const { MEDIA_CACHE_DIR, normalizeImageBytes, sniffImageType } = await import('./normalize');
-  const fs = WorkspaceFS.forAgent(context);
+  // In a space the workspace is every member's: a member's screenshot (their
+  // own browser, a private session) is not filed there. Without a workspace
+  // there is nowhere to keep it. The caller then returns it as before.
+  if (context.space) return null;
+  let fs: import('@/security/workspace-fs').WorkspaceFS;
+  try { fs = WorkspaceFS.forAgent(context); } catch { return null; }
   fs.ensureRootSync();
   const ext = sniffImageType(bytes) === 'image/jpeg' ? 'jpg' : 'png';
   const path = `.octipus/media/${kind}/${randomUUID()}.${ext}`;

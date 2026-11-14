@@ -125,6 +125,31 @@ describe('tool media', () => {
   });
 });
 
+describe('audio and size', () => {
+  test('a recording is sent once (with the newest media); a file over the size cap is never inlined', async () => {
+    const { WorkspaceFS } = await import('@/security/workspace-fs');
+    const fs = WorkspaceFS.withRoot(dir);
+    await mkdir(join(dir, '.octipus/attachments'), { recursive: true });
+    const wav = join(dir, '.octipus/attachments/memo.wav');
+    await writeFile(wav, Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(100)]));
+    const audio: MediaRef = { kind: 'audio', path: wav, mimeType: 'audio/wav', source: 'user' };
+    const img = join(dir, '.octipus/attachments/a.png');
+    await writeFile(img, await png(2, 2));
+    const msgs: AgentMessage[] = [
+      { role: 'user', content: 'listen', timestamp: new Date(), media: [audio] },
+      { role: 'user', content: 'look', timestamp: new Date(), media: [{ kind: 'image', path: img, mimeType: 'image/png', source: 'user' }] },
+    ];
+    const out = await hydrateMedia(msgs, { fs, readsImages: true, hearsAudio: true });
+    expect(out[0].media).toBeUndefined();
+    expect(out[1].media?.[0].data).toBeTruthy();
+    expect((await hydrateMedia([msgs[0]], { fs, readsImages: true, hearsAudio: true }))[0].media?.[0].data).toBeTruthy();
+    const { MAX_HYDRATE_BYTES } = await import('./hydrate');
+    const big = join(dir, '.octipus/attachments/big.wav');
+    await writeFile(big, Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(MAX_HYDRATE_BYTES)]));
+    expect((await hydrateMedia([{ role: 'user', content: 'x', timestamp: new Date(), media: [{ ...audio, path: big }] }], { fs, readsImages: true, hearsAudio: true }))[0].media).toBeUndefined();
+  });
+});
+
 describe('after a restart', () => {
   test('images a turn showed come back as references from the message row', async () => {
     const { toContextMessage } = await import('@/core/session-history');

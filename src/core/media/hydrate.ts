@@ -32,15 +32,25 @@ export interface HydrateOptions {
   protectedContent?: boolean;
 }
 
-const MEDIA_DIRS = ['/.octipus/media/', '/.octipus/attachments/'];
+const MEDIA_DIRS = ['.octipus/media', '.octipus/attachments'];
+/** A file larger than this is never inlined into a request (images are ~300 KB, native audio ≤ 10 MB). */
+export const MAX_HYDRATE_BYTES = 10 * 1024 * 1024;
 
 /** The bytes of `ref` when it is a media file of this workspace, of the kind it claims; else null. */
 async function readMedia(ref: MediaRef, fs: WorkspaceFS | null): Promise<Buffer | null> {
   if (!fs) return null;
   let path: string;
   try { path = fs.resolve(ref.path); } catch { return null; }
-  const normalized = path.split('\\').join('/');
-  if (!MEDIA_DIRS.some((dir) => normalized.includes(dir))) return null;
+  // Inside this workspace's own media folders — not an extra allowed path
+  // (a shared temp dir, a dev project) that happens to have one.
+  const { realpathSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { isInside } = await import('@/security/workspace-fs');
+  let root: string;
+  try { root = realpathSync(fs.root); } catch { root = fs.root; }
+  if (!MEDIA_DIRS.some((dir) => isInside(join(root, dir), path) || isInside(join(fs.root, dir), path))) return null;
+  const { stat } = await import('node:fs/promises');
+  if ((await stat(path)).size > MAX_HYDRATE_BYTES) return null;
   const bytes = await readFile(path);
   if (ref.kind === 'image') return sniffImageType(bytes) ? bytes : null;
   const head = bytes.subarray(0, 4).toString('latin1');
@@ -95,6 +105,9 @@ export async function hydrateMedia(messages: AgentMessage[], opts: HydrateOption
       if (!supported) { notes.push(note(ref, 'unsupported')); continue; }
       if (opts.protectedContent) { notes.push(note(ref, 'protected')); continue; }
       if (!recent) { notes.push(note(ref, 'older')); continue; }
+      // A recording is sent once (its own turn, while it is the newest media):
+      // re-sending minutes of audio with every request costs per audio token.
+      if (ref.kind === 'audio' && kept > 0) { notes.push(note(ref, 'older')); continue; }
       try {
         const bytes = await readMedia(ref, opts.fs);
         if (bytes) keep.push({ ...ref, data: bytes.toString('base64') });

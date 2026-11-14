@@ -6,6 +6,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { logger } from '../utils/logger';
 import { FrameAccumulator, StreamingResampler } from './audio-codec';
 import { resolveWhisperBinary, whisperSpawnEnv } from './whisper';
+import { safeInput } from './ffmpeg';
 import { fileAt, writeFileAt } from '@/utils/fs-file';
 
 /** A unique temp path in the OS temp dir (cross-platform; collision-free). */
@@ -80,7 +81,8 @@ async function toWhisperWav(sourcePath: string): Promise<string> {
   try {
     proc = spawn({
       command: 'ffmpeg',
-      args: ['-nostdin', '-y', '-i', sourcePath, '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', '-f', 'wav', out],
+      // Only a local audio/video container is read (voice/ffmpeg.ts): never a playlist that names other files.
+      args: ['-nostdin', '-y', ...safeInput(sourcePath), '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', '-f', 'wav', out],
       stdout: 'pipe',
       stderr: 'pipe',
     });

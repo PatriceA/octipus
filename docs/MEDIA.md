@@ -64,8 +64,9 @@ AAC, AMR) is transcribed with the turn by the Transcription lane, within the
 session's protection level; the model gets the transcript and the file's
 path. A recording over 25 MB is left for `audio__transcribe_audio`. With
 `media.audioInput = native`, a model that hears audio (*Hears audio*) also
-gets the recording itself (WAV or MP3). Without a transcription engine the
-model is told the recording was not transcribed.
+gets the recording itself (WAV or MP3, at most 10 MB, sent with its own turn
+only; never confidential content to a remote model). Without a transcription
+engine the model is told the recording was not transcribed.
 
 Channel voice notes are transcribed the same way and kept with the
 conversation (`.octipus/attachments/…`), so the agent can transcribe,
@@ -94,18 +95,22 @@ communication, design, coding, review, qa):
 **`audio`** (general — core —, research, writing, communication):
 
 - `transcribe_audio({ source, language?, timestamps? })` — a recording in the
-  workspace through the Transcription lane. Over 20 MB it is cut with ffmpeg
-  into ten-minute parts, transcribed in order and stitched (segment times
-  shifted). Offered when a transcription engine is bound.
+  workspace through the Transcription lane. Over 20 MB, or a video, it is
+  converted with ffmpeg into ten-minute 16 kHz parts, transcribed in order
+  and stitched (segment times shifted); at most four hours per call. Only
+  real audio/video containers are opened (never a playlist naming other
+  files). Offered when a transcription engine is bound.
 - `speak({ text, voice?, output_path? })` — the Speech lane reads up to 5000
   characters; the audio is saved in the workspace (default
-  `.octipus/media/speech/<id>.mp3`) and its path returned. Offered when a
-  speech engine is bound.
+  `.octipus/media/speech/<id>.mp3`; an `output_path` must be a new file and,
+  in a space, not a coding agent's configuration) and its path returned.
+  Offered when a speech engine is bound.
 
 Screenshots (`browser__screenshot`, `browser-ext__screenshot`) and images an
 MCP server returns are saved in the workspace (`.octipus/media/…`) and shown
 the same way: pixels for a model that is shown images, the path for one that
-is not. Base64 never goes into the conversation.
+is not. Base64 never goes into the conversation. In a space a member's
+screenshot is not filed in the shared workspace: it is returned as before.
 
 Text inside images, audio and documents is content, not instructions: the
 prompts say so and every description is marked as model output.
