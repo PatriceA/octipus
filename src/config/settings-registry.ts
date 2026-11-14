@@ -43,6 +43,11 @@ export interface SettingDefinition {
    * instead of silently reverting to the default on the runtime path.
    */
   legacyEnvVars?: string[];
+  /**
+   * Replaced by something else: still loaded (a one-time migration reads the
+   * stored value) but not shown or writable. The text says where it went.
+   */
+  retired?: string;
 }
 
 /**
@@ -792,6 +797,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     defaultValue: './models/whisper/ggml-base.bin',
     description: 'Path to Whisper STT model (ggml format)',
     isSecret: false,
+    retired: 'Speech engines are models on the Transcription and Speech lanes (Topics page); docs/VOICE.md',
     envVar: 'WHISPER_MODEL_PATH',
   },
   {
@@ -801,6 +807,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     defaultValue: '',
     description: 'Path to Piper TTS model',
     isSecret: false,
+    retired: 'Speech engines are models on the Transcription and Speech lanes (Topics page); docs/VOICE.md',
     envVar: 'PIPER_MODEL_PATH',
   },
   {
@@ -810,6 +817,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     defaultValue: 'auto',
     description: 'Which engine transcribes your speech in realtime voice chat',
     isSecret: false,
+    retired: 'Speech engines are models on the Transcription and Speech lanes (Topics page); docs/VOICE.md',
   },
   {
     key: 'voice.fasterWhisperModel',
@@ -818,6 +826,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     defaultValue: 'small',
     description: 'Model for the local faster-whisper STT engine (tiny/base/small/medium/large)',
     isSecret: false,
+    retired: 'Speech engines are models on the Transcription and Speech lanes (Topics page); docs/VOICE.md',
   },
   {
     key: 'voice.ttsProvider',
@@ -825,6 +834,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     valueType: 'string',
     defaultValue: 'mistral',
     description: 'Which engine speaks replies aloud',
+    isSecret: false,
+    retired: 'Speech engines are models on the Transcription and Speech lanes (Topics page); docs/VOICE.md',
+  },
+  {
+    key: 'voice.ttsVoice',
+    category: 'voice',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'Voice for spoken replies and phone calls (one the bound speech engine offers; empty = its default)',
     isSecret: false,
   },
   {
@@ -1725,7 +1743,8 @@ export function getSettingDefinition(key: string): SettingDefinition | undefined
 
 /** Get all setting definitions for a category */
 export function getSettingsByCategory(category: string): SettingDefinition[] {
-  return SETTINGS_REGISTRY.filter(d => d.category === category);
+  // A retired setting is not shown or editable (it moved; `retired` says where).
+  return SETTINGS_REGISTRY.filter(d => d.category === category && !d.retired);
 }
 
 /** Get all unique categories */

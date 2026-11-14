@@ -9,6 +9,30 @@ labels reflect blast radius, not contract guarantees.
 
 - Add Grok Build as a CLI agent model, using an existing login, scoped Octipus
   tools, resumable conversations, streamed activity and cache-aware token usage.
+- **Everything beyond one chat model is optional.** Embedding, reading images,
+  OCR, image generation, speech to text and text to speech: not configured
+  means off — no tools offered to agents, no prompt text, no background work,
+  hidden pages and controls ([MODULES.md → Capability gates](docs/MODULES.md#capability-gates)).
+  Embedding is no longer reported as required. Without an embedding model
+  nothing is chunked or embedded; content saved meanwhile is indexed once a
+  model is bound (migration 0184).
+- **New lanes:** Image generation, Transcription, Speech. Vision and OCR are
+  optional: a model that reads images gets them itself; OCR falls back to
+  Vision, then to a default model that reads images. Model rows gain
+  *Hears audio* (migration 0185); what a model reads is detected (Ollama
+  `/api/show`, a per-family table), once for existing rows at boot.
+- **Migration — voice engines moved to the lanes.** `voice.sttProvider`,
+  `voice.fasterWhisperModel`, `voice.whisperModelPath`, `voice.ttsProvider`
+  and `voice.piperModelPath` are retired. On the first boot they become
+  model rows bound to the Transcription and Speech lanes: an explicit choice
+  is kept; `auto` now means **local first** everywhere (the microphone used to
+  try the cloud first); the next engine of the other kind that can run becomes
+  the backup. Check the Topics page after upgrading. `?engine=` on `/voice`
+  and `model` on `/api/voice/transcribe` still accept the old engine names.
+  `/api/voice/transcribe` no longer reads only `OPENAI_API_KEY` from the
+  environment, phone calls use the bound engines instead of a fixed whisper
+  and Voxtral voice (`voice.ttsVoice` picks the voice), the TUI transcribes and
+  speaks through the server, and speech calls are recorded in usage/spend.
 
 ## v0.7.0 — Your agent workspace (2026-11-13)
 

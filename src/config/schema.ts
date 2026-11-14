@@ -210,6 +210,13 @@ export const whatsappConfigSchema = z.object({
 });
 
 // Voice configuration schema
+/**
+ * `sttProvider`, `fasterWhisperModel`, `whisperModelPath`, `ttsProvider` and
+ * `piperModelPath` are RETIRED: speech engines are model rows on the
+ * Transcription and Speech lanes (src/voice/resolve.ts). They are still parsed
+ * so the one-time migration (src/voice/migrate-to-lanes.ts) can read what an
+ * install had; nothing else reads them.
+ */
 export const voiceConfigSchema = z.object({
   sttEnabled: z.boolean().default(false),
   ttsEnabled: z.boolean().default(false),
@@ -241,6 +248,8 @@ export const voiceConfigSchema = z.object({
   ttsProvider: z.enum(['mistral', 'openai', 'kokoro', 'piper']).default('mistral').catch('mistral'),
   whisperModelPath: z.string().optional(),
   piperModelPath: z.string().optional(),
+  /** Voice for spoken replies and calls; empty = the bound speech engine's default. */
+  ttsVoice: z.string().optional(),
   wakeWord: z.string().optional(),
   language: z.string().default('en'),
 });

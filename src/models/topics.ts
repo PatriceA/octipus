@@ -23,7 +23,7 @@
  *   - `decision` — System One models (typed questions → probabilities, no text);
  *                 optional, see docs/plans/decision-models.md.
  */
-export type TopicKind = 'text' | 'background' | 'vision' | 'ocr' | 'embedding' | 'decision';
+export type TopicKind = 'text' | 'background' | 'vision' | 'ocr' | 'embedding' | 'decision' | 'image_generation' | 'transcription' | 'speech';
 
 export interface TopicDef {
   value: string;
@@ -63,10 +63,13 @@ export const TOPICS: readonly TopicDef[] = [
     description: 'Automated background tasks: memory extraction, knowledge-base review, LLM-as-judge evaluation, chunk summarization, tool-call translation (toolshim). Bind a cheap/local model. Unbound = these features stay off.',
     kind: 'background',
   },
-  // non-text model classes
-  { value: 'ocr', label: 'OCR', description: 'Text extraction from images and scanned documents', kind: 'ocr' },
-  { value: 'vision', label: 'Vision', description: 'Image understanding, description, and analysis', kind: 'vision' },
-  { value: 'embedding', label: 'Embedding', description: 'Vector embeddings', kind: 'embedding' },
+  // non-text model classes — every one optional (docs/MODULES.md → Capability gates)
+  { value: 'vision', label: 'Vision', description: 'Only needed when the model doing the work cannot read images itself, or for a cheaper model to describe images in documents. A model that reads images (supports vision) gets them directly; one that cannot calls view_image, which asks this lane. Unbound: the default model, if it reads images; otherwise nothing here can read images.', kind: 'vision' },
+  { value: 'ocr', label: 'OCR', description: 'Text extraction from scanned PDFs and images in the document pipeline and read_document_text. A specialist OCR model (DeepSeek-OCR, GLM-OCR, mistral-ocr) is better and cheaper on dense pages than a general vision model. Unbound: the Vision lane, then the default model if it reads images.', kind: 'ocr' },
+  { value: 'image_generation', label: 'Image generation', description: 'Creates and edits images (generate_image). Unbound: image generation is off and the tool is not offered.', kind: 'image_generation' },
+  { value: 'transcription', label: 'Transcription', description: 'Speech to text: voice notes, the microphone, phone calls and transcribe_audio. A local engine (whisper.cpp, faster-whisper) or a cloud model. Unbound: voice input is off.', kind: 'transcription' },
+  { value: 'speech', label: 'Speech', description: 'Text to speech: spoken replies, phone calls and speak. A local engine (Kokoro, Piper) or a cloud model. Unbound: spoken output is off.', kind: 'speech' },
+  { value: 'embedding', label: 'Embedding', description: 'Vector embeddings for the knowledge base, notes search and memory. Unbound: those features are off (not broken), and content saved meanwhile is indexed once a model is bound.', kind: 'embedding' },
   { value: 'decision', label: 'Decision', description: 'Optional System One model (e.g. TypeSafe Jev): fixed call sites ask typed questions and get calibrated probabilities instead of an LLM call. Unbound = those sites keep using their LLM path. Personal data only reaches a remote model with zero data retention or your explicit opt-in.', kind: 'decision' },
 ] as const;
 
@@ -147,7 +150,7 @@ export function canServeText(row: {
   topicRoles?: Record<string, unknown> | null;
 }): boolean {
   // Discovery can overstate tool support (notably for Ollama OCR models).
-  if (/ocr|embed/i.test(row.modelId)) return false;
+  if (/ocr|embed|whisper|tts\b|-tts|kokoro|piper|transcribe/i.test(row.modelId)) return false;
   const topics = [...(row.topics ?? []), ...Object.keys(row.topicRoles ?? {})];
   return topics.length === 0 || topics.some((topic) => {
     const kind = TOPICS.find((t) => t.value === canonicalTopic(topic))?.kind;
@@ -157,6 +160,11 @@ export function canServeText(row: {
 
 /** All topic values. */
 export const ALL_TOPIC_VALUES: readonly string[] = TOPICS.map((t) => t.value);
+
+/** The model classes that are not chat: a chat model bound to one produces nothing useful. */
+export const MEDIA_TOPIC_VALUES: readonly string[] = TOPICS
+  .filter((t) => t.kind !== 'text' && t.kind !== 'background' && t.kind !== 'decision')
+  .map((t) => t.value);
 
 /**
  * Text topics a single general chat model can serve (text + background kinds —

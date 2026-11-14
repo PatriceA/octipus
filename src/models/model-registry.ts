@@ -8,7 +8,7 @@ import { type ModelConfigEntry, modelConfig, type NewModelConfigEntry, userModel
 import { getCapabilitiesForModel, type ModelCapabilities } from '@/models/capabilities';
 import { EXTENSION_MODEL_PREFIX, getExtensionModel, isExtensionModelName, listExtensionModels } from '@/models/extension-models';
 import { SINGLE_MODEL_CHAT_TOPICS } from '@/models/single-model-binding';
-import { canonicalTopic } from '@/models/topics';
+import { canonicalTopic, MEDIA_TOPIC_VALUES } from '@/models/topics';
 import { getUserOrgIds } from '@/services/org-membership';
 import { modelLogger } from '@/utils/logger';
 
@@ -559,7 +559,7 @@ export class ModelRegistry {
     // / evaluation) plus the non-text model classes, so adding a topic in one
     // place keeps invalidation correct — previously this hardcoded list silently
     // omitted knowledge_review and evaluation, leaking their stale bindings.
-    const topics = [...SINGLE_MODEL_CHAT_TOPICS, 'embedding', 'ocr', 'vision', 'decision'];
+    const topics = [...SINGLE_MODEL_CHAT_TOPICS, ...MEDIA_TOPIC_VALUES, 'decision'];
     for (const topic of topics) {
       await this.cacheDelete(`model:topic:${topic}`);
       await this.cacheDelete(`model:topic:backup:${topic}`);

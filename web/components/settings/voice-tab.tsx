@@ -51,6 +51,13 @@ export function VoiceTab() {
     queryFn: () => api.get<{ credentials: Array<{ name: string }> }>('/vault'),
   });
 
+  // What serves speech now: the models bound to the Transcription and Speech
+  // lanes (docs/VOICE.md). They are chosen on the Topics page, not here.
+  const { data: voiceStatus } = useQuery({
+    queryKey: ['voice-status'],
+    queryFn: () => api.get<{ sttAvailable: boolean; sttReason: string | null; sttModel?: string | null; ttsAvailable: boolean; ttsReason: string | null; ttsModel?: string | null }>('/voice/status'),
+  });
+
   const voiceSettings = settingsData?.settings?.voice || [];
   const currentProvider = voiceSettings.find(s => s.key === 'voice.telephonyProvider')?.value as string || 'disabled';
   const publicUrl = voiceSettings.find(s => s.key === 'voice.publicUrl')?.value as string || '';
@@ -86,6 +93,29 @@ export function VoiceTab() {
         <p className="text-sm text-on-surface-variant">
           Configure telephony providers for making and receiving phone calls.
         </p>
+      </div>
+
+      {/* Speech engines (lanes) */}
+      <div className="bg-surface-container rounded-xl p-4 space-y-2" data-testid="voice-engines">
+        <h3 className="text-sm font-semibold text-on-surface">Speech engines</h3>
+        {([
+          ['Speech to text', voiceStatus?.sttAvailable, voiceStatus?.sttModel, voiceStatus?.sttReason],
+          ['Text to speech', voiceStatus?.ttsAvailable, voiceStatus?.ttsModel, voiceStatus?.ttsReason],
+        ] as const).map(([label, available, model, reason]) => (
+          <div key={label} className="flex items-center justify-between text-sm gap-3">
+            <span className="text-on-surface-variant">{label}</span>
+            {available ? (
+              <span className="flex items-center gap-1 text-tertiary text-xs"><CheckCircle className="w-3 h-3" /> {model ?? 'configured'}</span>
+            ) : (
+              <span className="flex items-center gap-1 text-on-surface-variant text-xs" title={reason ?? undefined}><XCircle className="w-3 h-3" /> off</span>
+            )}
+          </div>
+        ))}
+        {isAdmin && (
+          <p className="text-xs text-on-surface-variant">
+            Engines are models on the Transcription and Speech lanes: change them on the <a href="/topics" className="text-primary hover:underline">Topics page</a>.
+          </p>
+        )}
       </div>
 
       {/* Provider Settings */}

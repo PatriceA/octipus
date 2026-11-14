@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-686 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
+687 mounted routes across 84 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -676,6 +676,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/vault/:id/rotate` | `src/api/routes/vault.ts` |
 | GET | `/api/verification/:sessionId` | `src/api/routes/verification.ts` |
 | GET | `/api/voice/calls` | `src/api/routes/voice.ts` |
+| POST | `/api/voice/engines/use` | `src/api/routes/voice.ts` |
 | POST | `/api/voice/install` | `src/api/routes/voice.ts` |
 | POST | `/api/voice/speak` | `src/api/routes/voice.ts` |
 | GET | `/api/voice/status` | `src/api/routes/voice.ts` |
@@ -712,30 +713,31 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `extensions` | 2 |
 | `(root)` | `hooks` | 3 |
 | `(root)` | `mcp` | 1 |
-| `(root)` | `models` | 2 |
+| `(root)` | `models` | 3 |
 | `(root)` | `modules` | 1 |
 | `(root)` | `plugins` | 5 |
 | `(root)` | `security` | 5 |
 | `(root)` | `skills` | 1 |
 | `(root)` | `tools` | 5 |
 | `(root)` | `utils` | 1 |
+| `(root)` | `voice` | 1 |
 | `api` | `capabilities` | 1 |
 | `api` | `channels` | 22 |
-| `api` | `config` | 29 |
-| `api` | `core` | 200 |
-| `api` | `db` | 139 |
+| `api` | `config` | 27 |
+| `api` | `core` | 202 |
+| `api` | `db` | 141 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 5 |
-| `api` | `models` | 39 |
+| `api` | `models` | 36 |
 | `api` | `plugins` | 49 |
 | `api` | `security` | 177 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 27 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 6 |
-| `api` | `utils` | 78 |
-| `api` | `voice` | 23 |
+| `api` | `utils` | 75 |
+| `api` | `voice` | 19 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
 | `capabilities` | `setup` | 1 |
@@ -748,7 +750,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `channels` | `security` | 23 |
 | `channels` | `shared` | 5 |
 | `channels` | `utils` | 24 |
-| `channels` | `voice` | 2 |
+| `channels` | `voice` | 3 |
 | `config` | `channels` | 2 |
 | `config` | `core` | 4 |
 | `config` | `db` | 3 |
@@ -759,7 +761,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `config` | `voice` | 1 |
 | `core` | `capabilities` | 2 |
 | `core` | `channels` | 14 |
-| `core` | `config` | 72 |
+| `core` | `config` | 71 |
 | `core` | `db` | 490 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 6 |
@@ -809,13 +811,13 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `mcp` | `security` | 9 |
 | `mcp` | `shared` | 4 |
 | `mcp` | `utils` | 5 |
-| `models` | `config` | 10 |
-| `models` | `core` | 38 |
+| `models` | `config` | 11 |
+| `models` | `core` | 40 |
 | `models` | `db` | 14 |
 | `models` | `security` | 22 |
 | `models` | `services` | 1 |
 | `models` | `shared` | 4 |
-| `models` | `utils` | 43 |
+| `models` | `utils` | 44 |
 | `plugins` | `config` | 12 |
 | `plugins` | `core` | 55 |
 | `plugins` | `db` | 63 |
@@ -835,10 +837,10 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `tools` | 7 |
 | `security` | `utils` | 34 |
 | `services` | `capabilities` | 5 |
-| `services` | `config` | 3 |
+| `services` | `config` | 5 |
 | `services` | `core` | 5 |
 | `services` | `db` | 12 |
-| `services` | `models` | 20 |
+| `services` | `models` | 22 |
 | `services` | `security` | 4 |
 | `services` | `setup` | 1 |
 | `services` | `shared` | 2 |
@@ -875,22 +877,22 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tui-editor` | `shared` | 1 |
 | `tui-editor` | `tui-pi` | 29 |
 | `tui-editor` | `utils` | 2 |
-| `tui-pi` | `config` | 1 |
 | `tui-pi` | `core` | 3 |
 | `tui-pi` | `shared` | 2 |
-| `tui-pi` | `voice` | 2 |
+| `tui-pi` | `voice` | 4 |
 | `utils` | `core` | 4 |
 | `utils` | `models` | 4 |
 | `utils` | `security` | 2 |
 | `visual` | `models` | 1 |
 | `visual` | `utils` | 2 |
 | `voice` | `capabilities` | 1 |
-| `voice` | `config` | 2 |
-| `voice` | `core` | 2 |
+| `voice` | `config` | 5 |
+| `voice` | `core` | 4 |
 | `voice` | `db` | 2 |
-| `voice` | `models` | 9 |
+| `voice` | `models` | 14 |
 | `voice` | `security` | 1 |
-| `voice` | `utils` | 23 |
+| `voice` | `services` | 2 |
+| `voice` | `utils` | 29 |
 
 ### Mutual imports
 

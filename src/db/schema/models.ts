@@ -27,6 +27,8 @@ export const modelConfig = pgTable('model_config', {
   maxTokens: integer('max_tokens').default(DEFAULT_MAX_OUTPUT_TOKENS).notNull(),
   contextWindow: integer('context_window').default(128000).notNull(),
   supportsVision: boolean('supports_vision').default(false).notNull(),
+  /** Accepts audio as chat input (Gemini, gpt-4o-audio, Voxtral, Qwen-Omni). Transcription is a lane, not this. */
+  supportsAudioInput: boolean('supports_audio_input').default(false).notNull(),
   supportsTools: boolean('supports_tools').default(true).notNull(),
   supportsStreaming: boolean('supports_streaming').default(true).notNull(),
   // Default parameters
@@ -135,6 +137,24 @@ export interface ModelMetadata {
   allowRetainedPersonalData?: boolean;
   /** Native decision API on a custom-openai row; never inferred from its model id. */
   decisionProtocol?: 'systemone';
+  /**
+   * When input modalities (image/audio) and tool support were last detected
+   * for this row (src/models/capability-detect.ts). Set once; corrections made
+   * in the model editor afterwards are kept.
+   */
+  capabilitiesDetectedAt?: string;
+  /**
+   * A speech engine row (Transcription / Speech lanes, src/voice/speech-rows.ts):
+   * what it streams with, the voices it offers, the formats it writes.
+   */
+  speech?: {
+    /** The realtime model the live microphone streams to, when it differs from `modelId`. */
+    streamingModel?: string;
+    voices?: string[];
+    formats?: Array<'mp3' | 'wav' | 'opus' | 'ogg' | 'pcm' | 'flac'>;
+  };
+  /** A local engine's model file (whisper.cpp ggml, Piper .onnx). */
+  modelPath?: string;
   /** CLI sub-agent configuration (only for provider='cli') */
   cliAgent?: CLIAgentConfig;
   /** Custom provider configuration (only for provider='custom-openai', 'custom-anthropic', or 'custom-gemini') */

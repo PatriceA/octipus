@@ -34,7 +34,7 @@ or local Piper). Detail for each stage is in the sections below.
 🎤 mic (echoCancellation)                      AudioContext @16 kHz → AudioWorklet (Float32→Int16)
    │
    ▼  binary PCM frames (16 kHz s16, while "listening")
- /voice  WebSocket  (engine from voice.sttProvider; ?engine= overrides)
+ /voice  WebSocket  (engine = the Transcription lane's model; ?engine= picks one)
    ├─ whisper : WhisperEngine.streamTranscribe → 2 s sliding window   (voice-ws.ts)
    ├─ mistral : MistralSTTEngine → wss Mistral realtime
    └─ openai  : OpenAIRealtimeSTTEngine → wss OpenAI realtime
@@ -74,40 +74,60 @@ or local Piper). Detail for each stage is in the sections below.
         Mouth: configured TTS (Voxtral en_paul_neutral by default).  STT floor: 16 kHz mono; telephony bridges 8↔16 kHz.
 ```
 
-## Local Voice
+## Engines are models
 
-### Speech-to-Text (STT)
+Speech to text and text to speech run on the models bound to the
+**Transcription** and **Speech** lanes (Topics page), like every other kind of
+model work. Every place that hears or speaks — channel voice notes, the web
+microphone, `/api/voice/transcribe`, `/api/voice/speak`, voice replies, phone
+calls, the TUI (through the API) and the audio tools — resolves its engine
+there (`src/voice/resolve.ts`):
 
-Pick the engine in **Settings → Voice → "Which engine transcribes your speech"**
-(`voice.sttProvider`).
+- **primary, then backup** — a primary that cannot run (not installed, no key)
+  or fails falls to the backup, logged with the reason;
+- **protection levels** — content that must stay local only reaches a local
+  engine: a cloud primary is skipped for it and a local backup takes it;
+- **accounting** — every call is recorded against its row (cost, spend budgets);
+- an account that may not use the install's hosted keys gets local engines only.
 
-| `voice.sttProvider` | Type | Notes |
-|--------|------|-------|
-| **auto** (default) | — | Best available: a configured cloud realtime engine, else local Whisper |
-| **whisper** | Local | whisper.cpp (Python reference) — offline, no key, free. Needs the model installed (`octi setup`); higher latency; capped at `base` model on CPU |
-| **fasterwhisper** | Local | CTranslate2 — offline, no key. Configurable model size (tiny–large); ~4x faster than whisper.cpp so `small`/`medium` run in realtime on fast hardware. Needs HuggingFace CLI (`huggingface-cli`). Preferred for local accuracy. |
-| **mistral** (Voxtral) | Cloud | `voxtral-mini` realtime streaming. Needs a Mistral API key |
-| **openai** | Cloud | `gpt-realtime-whisper` realtime streaming (natively-streaming, low latency). Needs an OpenAI API key |
+Nothing bound means speech is **off** (not broken): the microphone is hidden,
+a voice note gets one line asking to type, spoken replies stop
+([MODULES.md → Capability gates](MODULES.md#capability-gates)).
 
-**API:** `POST /api/voice/transcribe` — send base64 audio, receive text.
+| Engine | Lane | Row (provider / model id) | Notes |
+|--------|------|-----|-------|
+| whisper.cpp | Transcription | `local-audio` / `whisper.cpp:base` | Offline, no key. Model file: the row's *Model file*, else the installed `ggml-base.bin` (`octi setup`). Streaming windows ≥ 2 s. |
+| faster-whisper | Transcription | `local-audio` / `faster-whisper:<size>` | Offline, CTranslate2, ~4x faster than whisper.cpp; `small`/`medium` run in realtime on fast hardware. Needs `uv`. |
+| Voxtral | Transcription | `mistral` / `voxtral-mini-latest` | Realtime streaming via the row's `metadata.speech.streamingModel`. Mistral key (or the row's own key). |
+| OpenAI | Transcription | `openai` / `gpt-4o-transcribe` | Realtime streaming via `gpt-realtime-whisper`. OpenAI key. |
+| Kokoro | Speech | `local-audio` / `kokoro:<voice>` | Offline, leading open local TTS. Needs `uv` + model files (`octi setup`). WAV. |
+| Piper | Speech | `local-audio` / `piper:<voice>` | Offline, lightweight. The row's *Model file* is the `.onnx` voice. WAV. |
+| Voxtral | Speech | `mistral` / `voxtral-mini-tts-2603` | Mistral key. mp3/wav/opus/flac/pcm. |
+| OpenAI | Speech | `openai` / `gpt-4o-mini-tts` | OpenAI key. mp3/wav/opus/flac/pcm. |
 
-**Config:**
-```
-voice.whisperModelPath = /path/to/ggml-base.bin
-voice.language = en
-```
+**Choosing one:** Topics page → Transcription / Speech → *Use:* (creates the
+row and binds it primary; the one it replaces becomes the backup), or bind any
+row like on any lane. `octi setup` does the same. `POST /api/voice/engines/use`
+`{ direction: 'stt'|'tts', engine, size?, makePrimary? }` is the API.
 
-### Text-to-Speech (TTS)
+**Old engine names still work as requests:** `?engine=` on the `/voice`
+socket and `model` on `/api/voice/transcribe` accept a row name or `auto`,
+`local`, `whisper`, `whisper-cpp`, `fasterwhisper`, `mistral`/`voxtral-*`,
+`openai`/`whisper-1` — they pick the bound row of that engine. A row named
+directly must be an install speech engine of that direction.
 
-Pick the engine in **Settings → Voice → "Which engine speaks replies aloud"**
-(`voice.ttsProvider`).
-
-| `voice.ttsProvider` | Type | Notes |
-|--------|------|-------|
-| **mistral** (Voxtral, default) | Cloud | `voxtral-mini-tts`. Needs a Mistral API key |
-| **openai** | Cloud | `gpt-4o-mini-tts`. Needs an OpenAI API key |
-| **kokoro** | Local | Kokoro-82M via the `kokoro-tts` CLI — offline, no key. Leading open-source TTS on quality (2026); auto-downloads model on first use. Needs `kokoro-tts` installed. |
-| **piper** | Local | Piper neural TTS — offline, no key. Needs the Piper binary + a `.onnx` voice file. Lightweight fallback for constrained environments. |
+**Settings that remain:** `voice.language`, `voice.ttsVoice` (the voice for
+replies and calls, given to the primary Speech engine; a backup speaks in its
+own default; empty = the engine's default), `voice.wakeWord` and the
+telephony keys. `voice.sttProvider`, `voice.fasterWhisperModel`,
+`voice.whisperModelPath`, `voice.ttsProvider` and `voice.piperModelPath` are
+**retired**: on the first boot after the upgrade they were turned into lane
+bindings once (explicit choices kept; `auto` became whisper.cpp first, as
+faster-whisper was only ever chosen by name; the default `mistral` speech
+was kept only when it had a key, else a local voice that runs; an engine of
+the other kind that can run became the backup; a model path carried over
+only when it was not the default and is on disk), and a lane someone bound
+is never touched.
 
 ### Wake Word Detection
 
@@ -174,19 +194,10 @@ work after handoff uses normal routing. Map it on the Models/Topics page, or
 
 ### STT engine for the realtime loop
 
-The engine is chosen by the `voice.sttProvider` setting (Settings → Voice). The
-`/voice` WebSocket also accepts an explicit `?engine=` override (used for
-testing); when omitted it follows the setting:
-
-- **auto** (default) — cloud realtime if a key is set (Voxtral, then OpenAI),
-  else local whisper.
-- **whisper** — local whisper.cpp streaming; no key, offline. Prefer
-  `ggml-small.bin` (`voice.whisperModelPath`) over `base` for accuracy. Streaming
-  windows must be ≥ 2 s (1 s windows return empty on the base model).
-- **mistral** — Mistral Voxtral realtime streaming STT (cloud, needs the Mistral
-  key); more accurate than local small.
-- **openai** — OpenAI `gpt-realtime-whisper` realtime streaming (cloud, needs the
-  OpenAI key).
+The engine is the model bound to the Transcription lane (see *Engines are
+models*). The `/voice` WebSocket accepts `?engine=` to pick one of the bound
+engines. Cloud engines stream natively (low latency); whisper.cpp streams
+2 s windows (1 s windows return empty on the base model).
 
 ### Tuning knobs (web)
 
@@ -422,8 +433,7 @@ https://your-public-url/api/voice/webhook/twilio
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `voice.sttProvider` | `auto` | STT engine: auto, whisper, fasterwhisper, mistral (Voxtral), openai |
-| `voice.ttsProvider` | `mistral` | TTS engine: mistral (Voxtral), openai, kokoro, piper |
+| `voice.ttsVoice` | — | Voice for spoken replies and calls; empty = the bound engine's default |
 | `voice.telephonyProvider` | `disabled` | Provider: twilio, telnyx, plivo |
 | `voice.publicUrl` | — | Webhook URL (ngrok etc.) |
 | `voice.inboundPolicy` | `disabled` | Inbound: disabled, allowlist, open |

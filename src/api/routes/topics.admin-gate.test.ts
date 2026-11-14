@@ -20,6 +20,8 @@ vi.mock('@/api/context', async () => {
 vi.mock('@/models/model-registry', () => ({
   getModelRegistry: () => ({
     getAllModelsIncludeDisabled: () => Promise.resolve([{ name: 'install-model', topicRoles: { build: 'primary' } }]),
+    getModelForTopic: () => Promise.resolve(null),
+    getDefaultModel: () => Promise.resolve(null),
   }),
 }));
 vi.mock('@/models/topic-config', () => ({

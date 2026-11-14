@@ -9,6 +9,7 @@ export interface Model {
   isEnabled: boolean;
   isDefault: boolean;
   supportsVision: boolean;
+  supportsAudioInput?: boolean;
   supportsTools: boolean;
   supportsStreaming: boolean;
   contextWindow: number;

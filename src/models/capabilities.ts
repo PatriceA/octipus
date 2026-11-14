@@ -4,6 +4,7 @@ import { anthropicNativeMessagesEnabled, supportsClaudeStructuredOutput } from '
 export interface ModelCapabilities {
   multiturn: boolean;
   media: boolean;           // vision/image input
+  audioInput: boolean;      // audio as chat input (transcription is a lane, not this)
   tools: boolean;           // function calling
   streaming: boolean;
   systemRole: boolean;      // native system role support (Gemini converts to user turn)
@@ -23,6 +24,7 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
   ollama: {
     multiturn: true,
     media: false,
+    audioInput: false,
     tools: true,
     streaming: true,
     systemRole: true,
@@ -32,6 +34,7 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
   openai: {
     multiturn: true,
     media: true,
+    audioInput: false,
     tools: true,
     streaming: true,
     systemRole: true,
@@ -41,6 +44,7 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
   anthropic: {
     multiturn: true,
     media: true,
+    audioInput: false,
     tools: true,
     streaming: true,
     systemRole: true,
@@ -50,6 +54,7 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
   gemini: {
     multiturn: true,
     media: true,
+    audioInput: true,
     tools: true,
     streaming: true,
     // Gemini does not support a native system role — it is converted to a
@@ -63,6 +68,7 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
   deepseek: {
     multiturn: true,
     media: false,
+    audioInput: false,
     tools: true,
     streaming: true,
     systemRole: true,
@@ -73,6 +79,7 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
     multiturn: true,
     // Pixtral / Mistral Medium support image input.
     media: true,
+    audioInput: false,
     tools: true,
     streaming: true,
     systemRole: true,
@@ -86,6 +93,7 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
     // served via the embed() method.
     multiturn: true,
     media: false,
+    audioInput: false,
     tools: true,
     streaming: true,
     systemRole: true,
@@ -96,6 +104,7 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
     // Moonshot (Kimi) — OpenAI-compatible chat with function calling and JSON mode.
     multiturn: true,
     media: false,
+    audioInput: false,
     tools: true,
     streaming: true,
     systemRole: true,
@@ -107,6 +116,7 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
     // underlying model. Default to all true (similar to litellm).
     multiturn: true,
     media: true,
+    audioInput: false,
     tools: true,
     streaming: true,
     systemRole: true,
@@ -117,6 +127,7 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
     // Voyage AI is an embedding-only provider.
     multiturn: false,
     media: false,
+    audioInput: false,
     tools: false,
     streaming: false,
     systemRole: false,
@@ -127,6 +138,7 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
     // Decision model (Jev): typed answers only — no chat, tools or embeddings.
     multiturn: false,
     media: false,
+    audioInput: false,
     tools: false,
     streaming: false,
     systemRole: false,
@@ -139,6 +151,7 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
     // expose streaming or embeddings back to Octipus.
     multiturn: true,
     media: false,
+    audioInput: false,
     tools: true,
     streaming: false,
     systemRole: true,
@@ -151,6 +164,7 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
     // underlying model may support.
     multiturn: true,
     media: true,
+    audioInput: true,
     tools: true,
     streaming: true,
     systemRole: true,
@@ -176,6 +190,7 @@ export function getCapabilitiesForModel(model: ModelConfigEntry): ModelCapabilit
   const providerDefaults: ModelCapabilities = PROVIDER_CAPABILITY_DEFAULTS[model.provider] ?? {
     multiturn: false,
     media: false,
+    audioInput: false,
     tools: false,
     streaming: false,
     systemRole: false,
@@ -195,6 +210,9 @@ export function getCapabilitiesForModel(model: ModelConfigEntry): ModelCapabilit
   }
   if (model.supportsVision !== undefined) {
     base.media = model.supportsVision;
+  }
+  if (model.supportsAudioInput !== undefined) {
+    base.audioInput = model.supportsAudioInput;
   }
   if (model.supportsStreaming !== undefined) {
     base.streaming = model.supportsStreaming;

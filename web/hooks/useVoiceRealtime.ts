@@ -30,10 +30,12 @@ interface UseVoiceRealtimeArgs {
   enabled: boolean;
   /**
    * Force a transcription engine: 'whisper' (local), 'mistral' (Voxtral cloud),
-   * or 'openai'. Omit or 'auto' to let the server's `voice.sttProvider` setting
+   * or 'openai'. Omit or 'auto' to let the server's Transcription lane binding
    * decide.
    */
   engine?: 'auto' | 'whisper' | 'mistral' | 'openai';
+  /** The conversation spoken into and read aloud: its protection level decides which engines may be used. */
+  sessionId?: string | null;
   /** True while a chat turn is in flight. On its falling edge, if still
    * 'thinking' (no reply spoken — e.g. an error), the mic is unstuck to
    * 'listening'. NOT the speak trigger; that's the page. */
@@ -85,7 +87,9 @@ class PCMWorklet extends AudioWorkletProcessor {
 registerProcessor('pcm-worklet', PCMWorklet);
 `;
 
-export function useVoiceRealtime({ enabled, engine = 'auto', isTurnActive, sendTranscript }: UseVoiceRealtimeArgs) {
+export function useVoiceRealtime({ enabled, engine = 'auto', sessionId, isTurnActive, sendTranscript }: UseVoiceRealtimeArgs) {
+  const sessionIdRef = useRef(sessionId);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
   const [state, setState] = useState<RealtimeState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [partial, setPartial] = useState(''); // live in-progress utterance text
@@ -168,11 +172,11 @@ export function useVoiceRealtime({ enabled, engine = 'auto', isTurnActive, sendT
         const res = await fetch('/api/voice/speak', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: sentence }),
+          body: JSON.stringify({ text: sentence, ...(sessionIdRef.current ? { sessionId: sessionIdRef.current } : {}) }),
           credentials: 'include',
         });
         if (!res.ok) {
-          if (res.status === 503) setError('Voice replies are off — enable a TTS provider in settings.');
+          if (res.status === 409) setError('Spoken replies are off: no Speech engine is bound (Topics page).');
           return null; // caller stops the reply rather than POSTing every sentence
         }
         const buf = await res.arrayBuffer();
@@ -334,7 +338,10 @@ export function useVoiceRealtime({ enabled, engine = 'auto', isTurnActive, sendT
         setPhase('connecting');
 
         // WebSocket first, so we're ready to stream the moment speech starts.
-        ws = await createAuthenticatedWebSocket('/voice', engine && engine !== 'auto' ? { engine } : undefined);
+        const params: Record<string, string> = {};
+        if (engine && engine !== 'auto') params.engine = engine;
+        if (sessionIdRef.current) params.session = sessionIdRef.current;
+        ws = await createAuthenticatedWebSocket('/voice', Object.keys(params).length ? params : undefined);
         ws.binaryType = 'arraybuffer';
         ws.onmessage = (e) => {
           if (cancelled) return;

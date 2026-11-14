@@ -1,7 +1,7 @@
 import { getBrowserBridge } from '@/api/browser-bridge';
 import type { ToolManifest } from '@/core/types';
 import { getLiteLLMClient } from '@/models/litellm-client';
-import { getModelRegistry } from '@/models/model-registry';
+import { resolveMedia } from '@/models/media-resolver';
 import { coreLogger } from '@/utils/logger';
 import { VisualAnalyzer } from '@/visual/analyzer';
 import { type BrowserType, ScreenshotCapture, type ScreenshotResult } from '@/visual/screenshot';
@@ -35,13 +35,9 @@ export class VisualTool extends BaseTool {
     'Capture and analyze web pages with a vision model. Returns UI elements, visual/functional/accessibility issues, and suggestions. Useful for QA and UI testing.';
 
   override async checkAvailability(): Promise<ToolAvailability> {
-    const m = await getModelRegistry().getModelForTopic('vision');
-    if (!m) {
-      return {
-        available: false,
-        reason: 'No model mapped to topic "vision" — assign one in the Models page',
-      };
-    }
+    // A screenshot is read by the Vision lane or the default model if it reads images.
+    const resolution = await resolveMedia('see');
+    if (resolution.mode === 'none') return { available: false, reason: resolution.reason };
     // Need at least one capture backend.
     const extConnected = getBrowserBridge().connected;
     const pwOk = extConnected ? true : await playwrightUsable('chromium');
@@ -90,11 +86,9 @@ export class VisualTool extends BaseTool {
   }
 
   private async resolveVisionModel(): Promise<string> {
-    const m = await getModelRegistry().getModelForTopic('vision');
-    if (!m) {
-      throw new Error('No model mapped to topic "vision". Assign one in the Models page.');
-    }
-    return m.modelId;
+    const resolution = await resolveMedia('see');
+    if (resolution.mode === 'none') throw new Error(resolution.reason);
+    return resolution.row.modelId;
   }
 
   /**
@@ -181,7 +175,7 @@ export class VisualTool extends BaseTool {
           ...result,
         };
       },
-      { requiresPermission: true, permissionAction: 'analyze' },
+      { requiresPermission: true, permissionAction: 'analyze', requires: ['see'] },
     );
 
     this.registerTool(
@@ -206,7 +200,7 @@ export class VisualTool extends BaseTool {
         const result = await analyzer.compare(shots[0], shots[1]);
         return { backend, ...result };
       },
-      { requiresPermission: true, permissionAction: 'analyze' },
+      { requiresPermission: true, permissionAction: 'analyze', requires: ['see'] },
     );
   }
 }

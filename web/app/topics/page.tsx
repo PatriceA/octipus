@@ -14,7 +14,9 @@ interface TopicRow {
   value: string;
   label: string;
   description: string;
-  kind: 'text' | 'background' | 'vision' | 'ocr' | 'embedding' | 'decision';
+  kind: 'text' | 'background' | 'vision' | 'ocr' | 'embedding' | 'decision' | 'image_generation' | 'transcription' | 'speech';
+  /** Media lanes: what actually does the work (may be another lane or the default model); null = off. */
+  effectiveModel?: string | null;
   primaryModel: string | null;
   backupModel: string | null;
   executorModel: string | null;
@@ -34,12 +36,65 @@ const KIND_LABELS: Record<TopicRow['kind'], string> = {
   ocr: 'ocr',
   embedding: 'embedding',
   decision: 'decision',
+  image_generation: 'image generation',
+  transcription: 'speech to text',
+  speech: 'text to speech',
 };
 
 function numOrNull(v: string): number | null {
   if (v.trim() === '') return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+const SPEECH_ENGINES: Record<'stt' | 'tts', Array<{ engine: string; label: string }>> = {
+  stt: [
+    { engine: 'fasterwhisper', label: 'faster-whisper (local)' },
+    { engine: 'whisper', label: 'whisper.cpp (local)' },
+    { engine: 'mistral', label: 'Voxtral (Mistral)' },
+    { engine: 'openai', label: 'OpenAI' },
+  ],
+  tts: [
+    { engine: 'kokoro', label: 'Kokoro (local)' },
+    { engine: 'piper', label: 'Piper (local)' },
+    { engine: 'mistral', label: 'Voxtral (Mistral)' },
+    { engine: 'openai', label: 'OpenAI' },
+  ],
+};
+
+/**
+ * One click to make a speech engine the lane's model (POST /voice/engines/use):
+ * the row is created if needed and bound primary, and the engine it replaces
+ * stays as the backup. Whether it can run (installed, key set) shows as the
+ * lane's effective model.
+ */
+function SpeechEngineButtons({ direction, onUsed }: { direction: 'stt' | 'tts'; onUsed: () => void }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const use = async (engine: string) => {
+    setBusy(engine);
+    setError('');
+    try {
+      await api.post('/voice/engines/use', { direction, engine, makePrimary: true });
+      onUsed();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not use that engine');
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 mt-1.5" data-testid={`speech-engines-${direction}`}>
+      <span className="text-[11px] text-on-surface-variant">Use:</span>
+      {SPEECH_ENGINES[direction].map(({ engine, label }) => (
+        <button key={engine} type="button" disabled={busy !== null} onClick={() => use(engine)}
+          className="px-2 py-0.5 text-[11px] rounded bg-surface-container-high text-on-surface-variant hover:text-on-surface disabled:opacity-50 cursor-pointer">
+          {busy === engine ? '…' : label}
+        </button>
+      ))}
+      {error && <span className="text-[11px] text-error">{error}</span>}
+    </div>
+  );
 }
 
 function TopicCard({
@@ -133,6 +188,16 @@ function TopicCard({
             </span>
           </div>
           <p className="text-xs text-on-surface-variant mt-0.5">{topic.description}</p>
+          {(topic.kind === 'transcription' || topic.kind === 'speech') && canEdit && (
+            <SpeechEngineButtons direction={topic.kind === 'transcription' ? 'stt' : 'tts'} onUsed={onSaved} />
+          )}
+          {topic.effectiveModel !== undefined && (
+            <p className="text-xs mt-1" data-testid={`effective-${topic.value}`}>
+              {topic.effectiveModel
+                ? <span className="text-tertiary">Served by {topic.effectiveModel}</span>
+                : <span className="text-on-surface-variant">Off — nothing here does this yet</span>}
+            </p>
+          )}
         </div>
         {canEdit && (
           <button
@@ -319,7 +384,7 @@ export default function TopicsPage() {
       <PageHeader
         title="topics"
         badge={<Tags className="w-5 h-5 text-on-surface-variant" />}
-        description="A topic binds a kind of work to a model, and every role listed under it runs on that binding. Start with one text model everywhere; override a lane when it needs a different one. Embedding, OCR and vision need compatible models."
+        description="A topic binds a kind of work to a model, and every role listed under it runs on that binding. Start with one text model everywhere; override a lane when it needs a different one. Only a chat model is required: every other lane is optional, and while one is unbound its feature is off and hidden, not broken."
       />
 
       <RootModelNote />

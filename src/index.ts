@@ -118,6 +118,14 @@ async function main() {
     // Capability gates (docs/MODULES.md → Capability gates): decide what this
     // install has a model for BEFORE tools, prompts, jobs or routes are used,
     // so nothing unconfigured is ever offered. Kept current from here on.
+    // Speech engines moved from `voice.*` settings onto the Transcription and
+    // Speech lanes (docs/VOICE.md): once per install, before the gates read them.
+    try {
+      const { migrateVoiceSettingsToLanes } = await import('@/voice/migrate-to-lanes');
+      await migrateVoiceSettingsToLanes();
+    } catch (err) {
+      logger.error({ err }, 'Moving the voice engine settings onto the speech lanes failed; bind them on the Topics page');
+    }
     {
       const { initCapabilityGates, onCapabilitiesChanged } = await import('@/core/capabilities/gates');
       await initCapabilityGates();
@@ -219,6 +227,13 @@ async function main() {
     // manual. Product help uses local on-demand search, independent of models.
     void runKBSelfCheck({ embedTimeoutMs: BOOT_KB_EMBED_TIMEOUT_MS })
       .catch((err) => logger.error({ err }, 'KB self-check threw unexpectedly — KB endpoints will 503 until /knowledge/readiness passes'));
+
+    // What each registered model can read (images, audio): detected once per
+    // row, in the background. An install from before detection has Ollama
+    // vision models marked as text-only; this fixes that without a click.
+    void import('@/models/capability-detect')
+      .then(({ detectCapabilitiesForUndetectedRows }) => detectCapabilitiesForUndetectedRows())
+      .catch((err) => logger.warn({ err }, 'Model capability detection failed; rows keep their current flags'));
 
     // Probe optional capabilities (Playwright, MCP, docker, …) and persist
     // their state to the `capabilities` table so the root agent can

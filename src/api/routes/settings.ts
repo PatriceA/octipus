@@ -279,7 +279,7 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
       }
 
       return {
-        registry: SETTINGS_REGISTRY.map(def => ({
+        registry: SETTINGS_REGISTRY.filter(def => !def.retired).map(def => ({
           key: def.key,
           category: def.category,
           valueType: def.valueType,

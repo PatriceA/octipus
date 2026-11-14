@@ -1,10 +1,8 @@
 import type { Elysia } from '@/api/http';
-import { getConfig } from '@/config';
 import { getSessionManager } from '@/security/auth/session';
 import { userChangeMark } from '@/security/user-change-marks';
 import type { STTEngine } from '@/voice/stt';
 import { apiLogger } from '@/utils/logger';
-import { fileAt } from '@/utils/fs-file';
 import { trackUserSocket } from './user-sockets';
 
 /**
@@ -17,10 +15,8 @@ import { trackUserSocket } from './user-sockets';
  * which decodes every binary frame to a string (gateway-ws.ts) — this one keeps
  * binary as PCM.
  *
- * Engine selection: an explicit `?engine=` (whisper | mistral | openai) wins;
- * otherwise `voice.sttProvider` decides. `auto` prefers a cloud realtime engine
- * (Voxtral/OpenAI, true low-latency streaming) when a key is set, else falls
- * back to local whisper.cpp streaming (~windowSeconds latency, no key).
+ * Engine selection: the model bound to the Transcription lane (primary, then
+ * backup); `?engine=` may name one (see resolveEngine).
  *
  * Client → server:
  *   - binary frame  → a chunk of 16 kHz mono s16le PCM
@@ -46,65 +42,38 @@ function stateOf(ws: { data: unknown }): VoiceWsState {
   return ws.data as VoiceWsState;
 }
 
-async function mistralEngine(language: string): Promise<{ engine: STTEngine; name: string } | { error: string }> {
-  const { getMistralApiKey } = await import('@/models/providers/mistral-provider');
-  if (!(await getMistralApiKey())) return { error: 'Voxtral (Mistral) selected but no Mistral API key is configured.' };
-  const { MistralSTTEngine } = await import('@/voice/stt');
-  return { engine: new MistralSTTEngine(undefined, { language }), name: 'mistral' };
-}
-
-async function openaiEngine(language: string): Promise<{ engine: STTEngine; name: string } | { error: string }> {
-  const { getOpenAIApiKey } = await import('@/models/providers/openai-provider');
-  if (!(await getOpenAIApiKey())) return { error: 'OpenAI selected but no OpenAI API key is configured.' };
-  const { OpenAIRealtimeSTTEngine } = await import('@/voice/stt');
-  return { engine: new OpenAIRealtimeSTTEngine(undefined, { language }), name: 'openai' };
-}
-
-async function whisperEngine(language: string): Promise<{ engine: STTEngine; name: string } | { error: string }> {
-  const { whisperModelPath } = await import('@/voice/whisper');
-  const config = getConfig();
-  const modelPath = config.voice.whisperModelPath || whisperModelPath();
-  if (!(await fileAt(modelPath).exists())) {
-    return { error: 'Local whisper is not installed. Run `octi setup`, or pick a cloud engine in Settings → Voice.' };
-  }
-  const { WhisperEngine } = await import('@/voice/stt');
-  return { engine: new WhisperEngine(modelPath, { language }), name: 'whisper' };
-}
-
-async function fasterWhisperEngine(language: string): Promise<{ engine: STTEngine; name: string } | { error: string }> {
-  const { FasterWhisperEngine } = await import('@/voice/stt');
-  const model = getConfig().voice.fasterWhisperModel || 'small';
-  // uv provisions the Python env + downloads the model on first use; a missing
-  // `uv` surfaces as a start error from ensureWorker (streamed to the client).
-  return { engine: new FasterWhisperEngine({ language, model }), name: 'fasterwhisper' };
-}
-
 /**
- * Build the STT engine for this connection. An explicit `?engine=` query param
- * wins (whisper | mistral | openai); otherwise the configured `voice.sttProvider`
- * decides, with `auto` preferring a cloud realtime engine (lower latency) and
- * falling back to local whisper.
+ * The engine for this connection: the model bound to the Transcription lane
+ * (src/voice/resolve.ts — primary, then backup, protection levels applied).
+ * `?engine=` may ask for one: a row name or an old engine name (`whisper`,
+ * `fasterwhisper`, `mistral`, `openai`, `auto`), which picks the bound row of
+ * that engine. An account that may not use the install's hosted keys gets a
+ * local engine or none.
  */
-async function resolveEngine(engineParam: string | null): Promise<{ engine: STTEngine; name: string } | { error: string }> {
-  const config = getConfig();
-  const language = config.voice.language || 'en';
-  // An explicit ?engine= wins only if it names a real engine; an unknown value
-  // (typo, stale client) falls back to the setting rather than silently routing
-  // to a cloud engine the caller never asked for.
-  const known = ['whisper', 'fasterwhisper', 'mistral', 'openai'];
-  const choice = engineParam && known.includes(engineParam) ? engineParam : config.voice.sttProvider || 'auto';
-
-  if (choice === 'mistral') return mistralEngine(language);
-  if (choice === 'openai') return openaiEngine(language);
-  if (choice === 'fasterwhisper') return fasterWhisperEngine(language);
-  if (choice === 'whisper') return whisperEngine(language);
-
-  // auto: cloud realtime first (low latency), else local whisper.
-  const { getMistralApiKey } = await import('@/models/providers/mistral-provider');
-  if (await getMistralApiKey()) return mistralEngine(language);
-  const { getOpenAIApiKey } = await import('@/models/providers/openai-provider');
-  if (await getOpenAIApiKey()) return openaiEngine(language);
-  return whisperEngine(language);
+async function resolveEngine(engineParam: string | null, userId: string, sessionParam: string | null): Promise<{ engine: STTEngine; name: string; row: import('@/db/schema/models').ModelConfigEntry } | { error: string }> {
+  try {
+    const { resolveSttEngine } = await import('@/voice/resolve');
+    const { mayUseInstallModels } = await import('@/models/install-access');
+    // `?session=`: the conversation being dictated into; its protection level
+    // decides whether a cloud engine may hear it. Only one the caller may speak in.
+    let sessionId: string | undefined;
+    if (sessionParam) {
+      const { sessionRepository } = await import('@/db/repositories/session-repository');
+      const { canActInSession } = await import('@/core/rooms/access');
+      // i2: by id, used only when canActInSession says the caller may speak in it.
+      if (!(await canActInSession(await sessionRepository.findById(sessionParam), userId, 'voice'))) return { error: 'Session not found' };
+      sessionId = sessionParam;
+    }
+    const { engine, name, row } = await resolveSttEngine({
+      override: engineParam || null,
+      userId,
+      sessionId,
+      allowHosted: await mayUseInstallModels(userId),
+    });
+    return { engine, name, row };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
 }
 
 /** Join a new STT emission onto the running transcript. */
@@ -134,13 +103,14 @@ export function setupVoiceWebSocket(app: Elysia): void {
         return;
       }
 
-      const resolved = await resolveEngine(url.searchParams.get('engine'));
+      const resolved = await resolveEngine(url.searchParams.get('engine'), session.userId, url.searchParams.get('session'));
       if ('error' in resolved) {
         ws.send(JSON.stringify({ type: 'error', message: resolved.error }));
         ws.close(4002, 'No STT engine');
         return;
       }
-      const { engine, name } = resolved;
+      const { engine, name, row } = resolved;
+      let pcmBytes = 0;
 
       const st = stateOf(ws);
       st.userId = session.userId;
@@ -167,6 +137,7 @@ export function setupVoiceWebSocket(app: Elysia): void {
       );
       st.push = (pcm) => {
         if (controller && controller.desiredSize !== null && controller.desiredSize <= 0) return; // shed load
+        pcmBytes += pcm.byteLength;
         controller?.enqueue(pcm);
       };
       st.end = () => {
@@ -205,6 +176,9 @@ export function setupVoiceWebSocket(app: Elysia): void {
           safeSend({ type: 'error', message: err instanceof Error ? err.message : 'Transcription failed' });
         } finally {
           await engine.dispose().catch(() => {});
+          // Counted against the bound row: 16 kHz mono s16le is 32 000 bytes a second.
+          const { recordSpeechUsage } = await import('@/voice/resolve');
+          await recordSpeechUsage(row, 'transcription', { userId: session.userId }, { seconds: Math.round(pcmBytes / 32_000) });
           if (!st.closed) {
             try {
               ws.close(1000, 'done');

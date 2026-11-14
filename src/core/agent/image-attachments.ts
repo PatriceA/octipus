@@ -1,9 +1,7 @@
 import { buildAttachedFilesContext, type AttachedFileRef, type ReadFileResult } from '@/core/session-files';
 import type { WorkspaceFS } from '@/security/workspace-fs';
-import { getModelRegistry } from '@/models/model-registry';
 import { getLiteLLMClient } from '@/models/litellm-client';
-import { localRowInstead, ProtectionRoutingError } from '@/core/protection/routing';
-import { modelCandidates } from './model-selector';
+import { resolveMedia } from '@/models/media-resolver';
 
 /** CLI workers receive originals; auxiliary vision is only used for API workers. */
 export async function buildRootAttachmentContext(
@@ -15,16 +13,11 @@ export async function buildRootAttachmentContext(
       imagePaths.push(path);
       return 'Original image supplied to the CLI. Inspect the image itself; if your adapter provides a file reference, use its native image-reading tool. Never interpret binary image bytes as text.';
     }
-    const bound = await getModelRegistry().getModelForTopic('vision');
-    if (!bound) return 'No model on this install can read images, so this image has not been seen. Say so; do not guess what it shows.';
-    // The session includes the attachment's user-selected protection level.
-    let vision: typeof bound;
-    try {
-      vision = await localRowInstead(bound, sessionId, 'vision', () => modelCandidates({ userId })) ?? bound;
-    } catch (err) {
-      if (!(err instanceof ProtectionRoutingError)) throw err;
-      return 'The image was not described: this conversation’s protection level requires a local model, and no suitable local image-reading model is configured. Say so; do not claim to have seen it.';
-    }
+    // The Vision lane, or the default model if it reads images; the
+    // session's protection level (incl. the attachment's) applies there.
+    const resolution = await resolveMedia('see', { sessionId, userId });
+    if (resolution.mode === 'none') return `This image has not been seen: ${resolution.reason} Say so; do not guess what it shows.`;
+    const vision = resolution.row;
     const result = await getLiteLLMClient().completeVision({
       model: vision.modelId, modelConfigName: vision.name, userId, sessionId,
       imageBase64: dataUrl.slice(dataUrl.indexOf(',') + 1), mimeType,
