@@ -89,7 +89,7 @@ registerProcessor('pcm-worklet', PCMWorklet);
 
 export function useVoiceRealtime({ enabled, engine = 'auto', sessionId, isTurnActive, sendTranscript }: UseVoiceRealtimeArgs) {
   const sessionIdRef = useRef(sessionId);
-  sessionIdRef.current = sessionId;
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
   const [state, setState] = useState<RealtimeState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [partial, setPartial] = useState(''); // live in-progress utterance text
