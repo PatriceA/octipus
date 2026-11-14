@@ -652,6 +652,8 @@ async function pickCapabilities(ctx: WizardCtx | null, missing: string[]): Promi
  */
 async function useVoiceEngine(api: ApiClient, direction: 'stt' | 'tts', engine: string, size?: string): Promise<void> {
   try {
+    // Choosing voice turns the Voice module on: its routes answer only while it is (a new install has it off).
+    await api.post('/api/modules/enable', { ids: ['voice'] });
     await api.post('/api/voice/engines/use', { direction, engine, makePrimary: true, ...(size ? { size } : {}) });
   } catch (err) {
     process.stdout.write(`\x1b[33m! Could not bind the ${direction === 'stt' ? 'speech-to-text' : 'speech'} engine: ${(err as Error).message}\x1b[0m\n`);
