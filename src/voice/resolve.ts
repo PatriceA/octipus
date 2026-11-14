@@ -129,12 +129,31 @@ async function refusalFor(row: ModelConfigEntry, req: SpeechRequest): Promise<st
 }
 
 /** Record one speech call against its row (cost, spend budgets). */
+/**
+ * What a speech call costs: the row's `pricing.perAudioMinute` (transcription)
+ * or `pricing.perMillionChars` (speech), else a list price for the cloud
+ * engines; a local engine costs nothing. Undefined when unknown.
+ */
+export async function speechCost(row: ModelConfigEntry, requestType: 'transcription' | 'speech', units: Record<string, number>): Promise<number | undefined> {
+  const pricing = row.metadata?.pricing;
+  if (isLocalSpeechRow(row) || pricing?.free) return 0;
+  const { runsLocally } = await import('@/core/protection/routing');
+  if (await runsLocally(row)) return 0;
+  if (requestType === 'transcription') {
+    const perMinute = pricing?.perAudioMinute ?? (/gpt-4o-mini-transcribe/i.test(row.modelId) ? 0.003 : /whisper-1|gpt-4o-transcribe/i.test(row.modelId) ? 0.006 : /voxtral/i.test(row.modelId) ? 0.001 : undefined);
+    return perMinute !== undefined && typeof units.seconds === 'number' ? (perMinute * units.seconds) / 60 : undefined;
+  }
+  const perMillion = pricing?.perMillionChars ?? (/tts-1-hd/i.test(row.modelId) ? 30 : /tts-1|gpt-4o-mini-tts/i.test(row.modelId) ? 15 : /voxtral.*tts/i.test(row.modelId) ? 16 : undefined);
+  return perMillion !== undefined && typeof units.characters === 'number' ? (perMillion * units.characters) / 1_000_000 : undefined;
+}
+
 export async function recordSpeechUsage(row: ModelConfigEntry, requestType: 'transcription' | 'speech', req: SpeechRequest, units: Record<string, number>, failed = false): Promise<void> {
   const { recordProviderUsage } = await import('@/models/providers/instrumented');
+  const cost = failed ? undefined : await speechCost(row, requestType, units);
   await recordProviderUsage(
     { model: row.modelId, modelConfigName: row.name, messages: [], requestType, userId: req.userId, sessionId: req.sessionId, accountingMetadata: units },
     row.provider,
-    { model: row.modelId, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false } },
+    { model: row.modelId, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false, ...(cost !== undefined ? { reportedCost: cost } : {}) } },
     failed,
   ).catch((err: unknown) => log.warn({ err, model: row.name }, 'Speech usage could not be recorded'));
 }
@@ -171,7 +190,10 @@ export async function transcribeWithLane(audio: Buffer, req: SpeechRequest & { f
       const result = engineKindOf(row) === 'whisper' && 'transcribeBuffer' in engine
         ? await (engine as STTEngine & { transcribeBuffer(b: Buffer): Promise<TranscriptionResult> }).transcribeBuffer(audio)
         : await transcribeAs(engine, audio, req.format);
-      await recordSpeechUsage(row, 'transcription', req, { seconds: Math.round(result.duration || 0) });
+      // Billed by the clip's length, never by how long the call took (the
+      // engines' `duration` is processing time); unknown stays unknown.
+      const seconds = isLocalSpeechRow(row) ? (result.duration || 0) : await (await import('./ffmpeg')).probeBufferSeconds(audio, req.format);
+      await recordSpeechUsage(row, 'transcription', req, seconds !== null ? { seconds: Math.round(seconds) } : {});
       if (errors.length) log.warn({ using: row.name, failed: errors }, 'Transcribed with the backup engine');
       return { ...result, model: row.name };
     } catch (err) {

@@ -58,8 +58,11 @@ export const topicRoutes = new Elysia({ prefix: '/topics' })
         vision: 'see', ocr: 'ocr', image_generation: 'draw', transcription: 'hear', speech: 'speak',
       };
       const effectiveByTopic = new Map<string, string | null>();
+      // Why an off lane is off (nothing bound, or bound but refused), shown next to "off".
+      const offReasonByTopic = new Map<string, string>();
       for (const [topic, need] of Object.entries(MEDIA_NEED)) {
         const resolution = await resolveMedia(need);
+        if (resolution.mode === 'none') offReasonByTopic.set(topic, resolution.reason);
         effectiveByTopic.set(topic, resolution.mode === 'none' ? null
           : resolution.mode === 'lane' && resolution.lane === 'default' ? `${resolution.row.name} (default model reads images)`
           : resolution.mode === 'lane' && resolution.lane !== topic ? `${resolution.row.name} (via ${resolution.lane})`
@@ -70,6 +73,7 @@ export const topicRoutes = new Elysia({ prefix: '/topics' })
         const cfg = getTopicConfig(tdef.value);
         return {
           ...(effectiveByTopic.has(tdef.value) ? { effectiveModel: effectiveByTopic.get(tdef.value) } : {}),
+          ...(offReasonByTopic.has(tdef.value) ? { offReason: offReasonByTopic.get(tdef.value) } : {}),
           value: tdef.value,
           label: tdef.label,
           description: tdef.description,

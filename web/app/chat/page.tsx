@@ -37,6 +37,7 @@ import type { SwarmTreeEvent } from '@/components/swarm-tree';
 import { useVoiceRealtime } from '@/hooks/useVoiceRealtime';
 import { fetchPersistedAgentEvents } from '@/hooks/useAgentEvents';
 import { api, ApiError, getApiUrl } from '@/lib/api';
+import { mediaFromAttachments, mediaFromResult } from '@/lib/turn-media';
 import { useModuleOn, usePageOn } from '@/lib/modules';
 import type { ClientMessage, GatewayEvent, GatewayMessage } from '@/lib/gateway';
 import { useGateway, useGatewayMessages, useGatewayStatus } from '@/lib/gateway-context';
@@ -130,6 +131,11 @@ function mergeHistoricalAndLiveToolCalls(
 }
 
 const STORAGE_KEY_ACTIVE = 'chat_active_session';
+
+/** A message's `media` field, absent (not `undefined`) when the turn made none. */
+function withMedia(media: ChatMessageData['media']): Pick<ChatMessageData, 'media'> {
+  return media ? { media } : {};
+}
 
 function welcomeMessage(): ChatMessageData {
   return {
@@ -371,7 +377,7 @@ export default function ChatPage() {
     const revision = (messageLoadsRef.current.get(sessionId) ?? 0) + 1;
     messageLoadsRef.current.set(sessionId, revision);
     try {
-      const data = await api.get<{ messages: Array<{ id: string; role: string; content: string; createdAt: string; metadata?: { limit?: MessageMetadata['limit']; inlineUiProvenance?: { id: string } } | null }> }>(
+      const data = await api.get<{ messages: Array<{ id: string; role: string; content: string; createdAt: string; metadata?: { limit?: MessageMetadata['limit']; inlineUiProvenance?: { id: string }; attachments?: unknown } | null }> }>(
         `/sessions/${sessionId}/messages?roles=user,assistant,system&limit=10000`, { retryRateLimit: false }
       );
       const msgs = data?.messages?.length
@@ -384,6 +390,8 @@ export default function ChatPage() {
             ...(m.metadata?.limit && { metadata: { limit: m.metadata.limit } }),
             // Sent from an interactive answer's suggestion: its chip.
             ...(m.metadata?.inlineUiProvenance && { fromInlineUi: true }),
+            // The answer's images and speech (generate_image, speak).
+            ...withMedia(mediaFromAttachments(m.metadata?.attachments)),
           }))
         : [welcomeMessage()];
 
@@ -765,7 +773,7 @@ export default function ChatPage() {
    * of the same event, or the persisted copy REST brings back, is not shown
    * twice.
    */
-  const handleChatResponse = (data: { response?: string; sessionId?: string; agentId?: string; classification?: { type?: string }; metadata?: Record<string, any>; content?: unknown }, event?: { id: string; timestamp: number }) => {
+  const handleChatResponse = (data: { response?: string; sessionId?: string; agentId?: string; classification?: { type?: string }; metadata?: Record<string, any>; content?: unknown; media?: unknown }, event?: { id: string; timestamp: number }) => {
     // Interactive answers in a reply that arrives now may start at once (D10).
     if (typeof data.response === 'string') for (const id of inlineUiMarkerIds(data.response)) liveInlineUiRef.current.add(id);
     if (concernsThisTab(data.sessionId)) {
@@ -854,6 +862,7 @@ export default function ChatPage() {
             agentId: data.agentId,
             classification: data.classification?.type,
             metadata: meta,
+            ...withMedia(mediaFromResult(data.media)),
             arrivedLiveAt: now,
           }],
           totalTokens: data.metadata?.sessionTotalTokens != null
@@ -1808,6 +1817,7 @@ export default function ChatPage() {
         agentId?: string;
         classification?: { type: string };
         metadata?: MessageMetadata;
+        media?: unknown;
       }>('/chat', { message: userInput, sessionId: sid, fileRefs, outputMode: outputModeOverride });
       if (fileRefs) setAttachedFiles([]);
 
@@ -1823,6 +1833,7 @@ export default function ChatPage() {
             agentId: result.agentId,
             classification: result.classification?.type,
             metadata: result.metadata,
+            ...withMedia(mediaFromResult(result.media)),
           }],
         }));
 
@@ -2158,6 +2169,7 @@ export default function ChatPage() {
             statusMessage={statusMessage}
             streamingText={isLoading && streaming?.sessionId === activeSessionId ? streaming.text : null}
             onOpenFile={setOpenFilePath}
+            sessionId={activeSessionId ?? undefined}
           />
         </InlineUiProvider>
 

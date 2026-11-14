@@ -259,10 +259,16 @@ export class WhatsAppChannel extends BaseChannel {
       throw new Error('WhatsApp channel not connected');
     }
 
-    // Send attachments first
+    // Send attachments first. One that cannot be sent (a format WhatsApp
+    // refuses, a failed upload) never loses the reply: logged, the text goes out.
     if (response.attachments?.length) {
       for (const attachment of response.attachments) {
-        await this.sendMedia(channelId, attachment);
+        try {
+          await this.sendMedia(channelId, attachment);
+        } catch (err) {
+          channelLogger.warn({ err, type: attachment.type, filename: attachment.filename }, 'WhatsApp attachment could not be sent');
+          (response.undelivered ??= []).push({ filename: attachment.filename, type: attachment.type, error: (err as Error).message });
+        }
       }
     }
 
@@ -296,29 +302,62 @@ export class WhatsAppChannel extends BaseChannel {
     return result?.messages?.[0]?.id || '';
   }
 
+  /**
+   * Upload bytes to WhatsApp's media store (`POST /{phone-number-id}/media`)
+   * and return the media id to send by. A spoken reply becomes OGG/Opus first,
+   * the format WhatsApp shows as a voice note.
+   */
+  private async uploadMedia(attachment: Attachment): Promise<{ id: string; voice: boolean }> {
+    let data = attachment.data as Buffer;
+    let mimeType = attachment.mimeType;
+    let filename = attachment.filename || 'file';
+    let voice = false;
+    if (attachment.type === 'audio' && attachment.voice) {
+      const { toVoiceNote } = await import('@/voice/voice-note');
+      const note = await toVoiceNote(data, mimeType).catch(() => null);
+      if (note) { data = note; mimeType = 'audio/ogg'; filename = filename.replace(/\.[^.]+$/, '') + '.ogg'; voice = true; }
+    }
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', mimeType);
+    form.append('file', new Blob([new Uint8Array(data)], { type: mimeType }), filename);
+    const response = await fetchWithTimeout(`https://graph.facebook.com/v21.0/${this.phoneNumberId}/media`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.accessToken}` },
+      body: form,
+    });
+    if (!response.ok) throw new Error(`WhatsApp media upload failed: ${response.status} ${await response.text()}`);
+    const json = (await response.json()) as { id?: string };
+    if (!json.id) throw new Error('WhatsApp media upload returned no id');
+    return { id: json.id, voice };
+  }
+
   private async sendMedia(to: string, attachment: Attachment): Promise<string> {
-    if (!attachment.url) return '';
+    if (!attachment.url && !attachment.data) return '';
+    // Bytes (a generated image, a spoken reply) are uploaded and sent by id; a URL is sent as a link.
+    const uploaded = !attachment.url && attachment.data ? await this.uploadMedia(attachment) : null;
+    const ref = (): Record<string, string> => (uploaded ? { id: uploaded.id } : { link: attachment.url as string });
 
     let type: string;
-    const mediaObj: Record<string, string> = {};
+    let mediaObj: Record<string, string> = {};
 
     switch (attachment.type) {
       case 'image':
         type = 'image';
-        mediaObj.link = attachment.url;
-        if (attachment.filename) mediaObj.caption = attachment.filename;
+        mediaObj = ref();
+        if (attachment.filename && !uploaded) mediaObj.caption = attachment.filename;
         break;
       case 'video':
         type = 'video';
-        mediaObj.link = attachment.url;
+        mediaObj = ref();
         break;
       case 'audio':
         type = 'audio';
-        mediaObj.link = attachment.url;
+        mediaObj = ref();
         break;
       default:
         type = 'document';
-        mediaObj.link = attachment.url;
+        mediaObj = ref();
         if (attachment.filename) mediaObj.filename = attachment.filename;
         break;
     }

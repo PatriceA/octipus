@@ -73,6 +73,8 @@ export interface TurnEvent {
 export type TurnOutcome = 'success' | 'failed' | 'cancelled';
 export interface TurnResult {
   response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata; outcome?: TurnOutcome;
+  /** Images and speech the turn made for the person (src/core/media/turn-media.ts). */
+  media?: import('@/core/media/turn-media').TurnMediaItem[];
 }
 
 /** What `runTurn` needs once the entry gate (personal or room) let the turn in. */
@@ -1140,8 +1142,11 @@ export class AgentService {
       // (federation §7.5, FI5): an answer that drew on personal data or
       // credential material is not posted where they read it. Read again
       // here, as the approval route does at every tool decision.
+      let withheld = false;
       if (isRoom && scope.space && !scope.audienceFederated) {
-        finalResponse = await this.withheldFromFederatedRoom(resolvedSessionId, scope.space.workspaceId, userId, finalResponse);
+        const shown = await this.withheldFromFederatedRoom(resolvedSessionId, scope.space.workspaceId, userId, finalResponse);
+        withheld = shown !== finalResponse;
+        finalResponse = shown;
       }
       const showSources = (activeSession?.metadata as Record<string, unknown> | undefined)?.showSources !== false;
       if (showSources) {
@@ -1155,9 +1160,17 @@ export class AgentService {
         sessionId: resolvedSessionId, agentId, requesterId: userId, contentStorageOff: audience.contentStorageOff,
       });
 
+      // Images and speech the turn made for the person go with the answer.
+      // An answer the output guard replaced, or one withheld from a room,
+      // carries none of its media either (speech can say what the text may not).
+      const { takeTurnMedia, turnMediaAttachments } = await import('@/core/media/turn-media');
+      const producedMedia = takeTurnMedia(getRunContext()?.runId);
+      const turnMedia = outputCheck.action === 'replace' || withheld || limit ? [] : producedMedia;
+      if (producedMedia.length && !turnMedia.length) coreLogger.warn({ sessionId: resolvedSessionId, dropped: producedMedia.length }, 'Turn media withheld with the answer');
       const persistedAnswer = await messageRepository.createForGeneration({
         sessionId: resolvedSessionId, role: 'assistant', content: finalResponse, agentId,
         metadata: {
+          ...(turnMedia.length && { attachments: turnMediaAttachments(turnMedia) }),
           // A refused turn keeps its structured reason so the chat card
           // survives a reload — not in a room, where every member reads it.
           ...(limit && !isRoom && { limit: limit }),
@@ -1211,6 +1224,7 @@ export class AgentService {
         agentId,
         outcome,
         classification,
+        ...(turnMedia.length && { media: turnMedia }),
         metadata: { latencyMs: Date.now() - startTime, ...(limit && { limit }) },
       };
     } catch (error) {

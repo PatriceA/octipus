@@ -34,6 +34,15 @@ labels reflect blast radius, not contract guarantees.
   `audio` tool: `transcribe_audio` (long recordings cut into parts and
   stitched) and `speak` (saved in the workspace). Both are offered only when
   a Transcription or Speech engine is bound ([MEDIA.md](docs/MEDIA.md)).
+- **Agents draw, and answers carry media.** New `imagegen` tool
+  (`generate_image`, offered when an Image generation model is bound: OpenAI,
+  Gemini/Imagen, OpenRouter, LiteLLM or OpenAI-compatible endpoints).
+  Generated images and `speak` audio come with the answer: in the web chat
+  (thumbnails, player), and as bytes on every channel — Telegram photos and
+  voice notes, WhatsApp media uploads, Slack file uploads (add the
+  `files:write` scope), Teams inline images and short-lived public links.
+  Voice notes get spoken replies on every channel. `send_message` /
+  `send_to_user` take `attachments`.
 - **New lanes:** Image generation, Transcription, Speech. Vision and OCR are
   optional: a model that reads images gets them itself; OCR falls back to
   Vision, then to a default model that reads images. Model rows gain

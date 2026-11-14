@@ -281,6 +281,8 @@ export interface Attachment {
   mimeType: string;
   filename?: string;
   size?: number;
+  /** Audio sent as a voice note where the channel has them (a spoken reply). */
+  voice?: boolean;
 }
 
 export interface ChannelResponse {
@@ -289,6 +291,8 @@ export interface ChannelResponse {
   replyTo?: string;
   threadId?: string;
   metadata?: Record<string, unknown>;
+  /** Filled by the adapter: attachments it could not send (the text still went out). */
+  undelivered?: Array<{ filename?: string; type: Attachment['type']; error: string }>;
 }
 
 // Hook Types

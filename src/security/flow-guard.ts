@@ -148,6 +148,12 @@ export function classifyFlow(call: FlowCall): FlowContract {
       return { taints, egress: 'write' };
     case 'messaging':
       if (action === 'read' || action === 'list') return { taints: ['private', 'suspicious'] };
+      // Files sent with a message carry workspace content out: private, and
+      // credential material when a path names it (`.env`, keys).
+      if (Array.isArray(args?.attachments) && args.attachments.length) {
+        taints.push('private');
+        if (CREDENTIAL_RE.test(argText({ attachments: args.attachments }))) taints.push('secret');
+      }
       return { taints, egress: 'write' };
     case 'email-processor':
       return { taints: ['private', 'suspicious'] };

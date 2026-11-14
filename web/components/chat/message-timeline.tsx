@@ -23,10 +23,12 @@ import { agentCompletionLabel, type AgentCompletionReason } from '../../../src/s
 import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
 import { CompanionAvatar, type CompanionState } from '@/components/companion/companion-avatar';
 import DiffView from '@/components/chat/diff-view';
+import { TurnMediaList } from '@/components/chat/turn-media';
 import { AssistantContent, StreamingContent } from '@/components/chat/inline-ui/content';
 import { Markdown } from '@/components/ui/markdown-renderer';
 import { fmtUsd, type LimitRefusal, periodWord, resetLabel, scopeLabel } from '@/lib/spend-budgets';
 import { initials } from '@/lib/rooms';
+import type { TurnMedia } from '@/lib/turn-media';
 import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -64,6 +66,12 @@ export interface ChatMessageData {
   fromInlineUi?: boolean;
   /** A reply received in this open tab, never reconstructed from history. */
   arrivedLiveAt?: number;
+  /**
+   * Images and speech the turn made for the person, shown under the answer:
+   * live from the turn result's `media`, on reload from the row's
+   * `metadata.attachments` (`source: 'assistant'`). See `@/lib/turn-media`.
+   */
+  media?: TurnMedia[];
 }
 
 export interface TrackedAgent {
@@ -252,7 +260,7 @@ function AssistantMessageFrame({ name, appearance, state, animated, streaming = 
   </div>;
 }
 
-function MessageBubble({ message, untrusted, onOpenFile, companionName, companionAppearance, motionPaused }: { message: ChatMessageData; untrusted?: boolean; onOpenFile?: (path: string) => void; companionName: string; companionAppearance?: CompanionAppearance; motionPaused: boolean }) {
+function MessageBubble({ message, sessionId, untrusted, onOpenFile, companionName, companionAppearance, motionPaused }: { message: ChatMessageData; sessionId?: string; untrusted?: boolean; onOpenFile?: (path: string) => void; companionName: string; companionAppearance?: CompanionAppearance; motionPaused: boolean }) {
   const { role, content, timestamp, classification, metadata } = message;
   const timeStr = new Date(timestamp).toLocaleTimeString();
   // Only a freshly mounted reply celebrates. Reopening a session must not
@@ -358,6 +366,11 @@ function MessageBubble({ message, untrusted, onOpenFile, companionName, companio
             <AssistantContent content={content} untrusted={untrusted} onOpenFile={onOpenFile} />
           </div>
         )}
+
+        {/* The turn's images and speech; their files are read from this session. */}
+        {message.media?.length && sessionId ? (
+          <TurnMediaList media={message.media} sessionId={sessionId} onOpenFile={onOpenFile} />
+        ) : null}
 
         {/* Metadata bar */}
         <div className="flex items-center gap-2 px-1 flex-wrap">
@@ -864,6 +877,8 @@ interface MessageTimelineProps {
   streamingText?: string | null;
   /** Open a file (by resolved path) in the in-chat file view (Thread 2). */
   onOpenFile?: (path: string) => void;
+  /** The session the messages belong to: an answer's media is read from its files. */
+  sessionId?: string;
   /** The empty state's text (default "Start a conversation"). */
   emptyLabel?: string;
   /**
@@ -898,6 +913,7 @@ export default function MessageTimeline({
   statusMessage,
   streamingText,
   onOpenFile,
+  sessionId,
   emptyLabel = 'Start a conversation',
   untrusted = false,
   companionName = 'Octipus',
@@ -1059,7 +1075,7 @@ export default function MessageTimeline({
       {timeline.map((entry, idx) => {
         switch (entry.kind) {
           case 'message':
-            return <div key={`msg-${entry.data.id}`} data-message-id={entry.data.id} tabIndex={-1}><MemoMessageBubble message={entry.data} untrusted={untrusted} onOpenFile={onOpenFile} companionName={companionName} companionAppearance={companionAppearance} motionPaused={motionPaused} /></div>;
+            return <div key={`msg-${entry.data.id}`} data-message-id={entry.data.id} tabIndex={-1}><MemoMessageBubble message={entry.data} sessionId={sessionId} untrusted={untrusted} onOpenFile={onOpenFile} companionName={companionName} companionAppearance={companionAppearance} motionPaused={motionPaused} /></div>;
           case 'agent':
             return <MemoAgentActivityInline key={`agent-${entry.data.id}`} agent={entry.data} onOpenFile={onOpenFile} />;
           case 'team':

@@ -163,9 +163,11 @@ export function toContextMessage(row: Message): AgentMessage {
     : row.metadata?.promptContext;
   // Images shown to the model with this turn come back as references; whether
   // they are re-sent (and which) is decided per request (hydrateMedia).
-  const media = (row.metadata?.attachments ?? [])
-    .filter((a) => typeof a.path === 'string' && (a.type === 'image' || a.type === 'audio'))
-    .map((a) => ({ kind: a.type as 'image' | 'audio', path: a.path as string, mimeType: a.mimeType, source: a.source ?? 'user' }));
+  // Only what the person sent (or a tool showed the model) goes back to the
+  // model; the answer's own media (a generated image) is for the person.
+  const media = (row.role === 'user' ? row.metadata?.attachments ?? [] : [])
+    .filter((a) => typeof a.path === 'string' && (a.type === 'image' || a.type === 'audio') && a.source !== 'assistant')
+    .map((a) => ({ kind: a.type as 'image' | 'audio', path: a.path as string, mimeType: a.mimeType, source: a.source === 'tool' ? 'tool' as const : 'user' as const }));
   return { sourceMessageId: row.id, role: row.role as AgentMessage['role'],
     content: [promptContext, row.content].filter(Boolean).join('\n\n'), timestamp: row.createdAt,
     ...(media.length ? { media } : {}) };

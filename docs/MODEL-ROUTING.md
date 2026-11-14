@@ -6,7 +6,9 @@ How a turn ends up on a specific model, and what the three per-lane bindings
 request picks a role and a lane in the first place).
 
 The lanes are `build`, `verify`, `everyday`, `research` and `background`, plus
-the `ocr` / `vision` / `embedding` model classes. A lane exists if and only if
+the model classes `ocr`, `vision`, `embedding`, `image_generation`,
+`transcription` and `speech` (all optional; [MEDIA.md](MEDIA.md),
+[VOICE.md](VOICE.md)). A lane exists if and only if
 you would plausibly bind a DIFFERENT model to it — not because the subject is
 different.
 

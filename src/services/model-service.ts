@@ -150,6 +150,11 @@ const cliMetadataSchema = z.object({
   pricing: z.object({
     cacheRead: z.number().finite().nonnegative().optional(),
     cacheWrite: z.number().finite().nonnegative().optional(),
+    // Media-lane rates (docs/MEDIA.md → Cost): per image, per audio minute
+    // transcribed, per million characters spoken.
+    perImage: z.number().finite().nonnegative().optional(),
+    perAudioMinute: z.number().finite().nonnegative().optional(),
+    perMillionChars: z.number().finite().nonnegative().optional(),
     source: z.string().optional(),
     verifiedAt: z.string().optional(),
     free: z.boolean().optional(),

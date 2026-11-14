@@ -1,4 +1,6 @@
 import { openAiRoleContent } from '../media-content';
+import type { ImageGenerationRequest, ImageGenerationResult } from '../interface';
+import { openAiImages } from '../openai-images';
 import { normalizeUsage } from '../usage';
 import OpenAI from 'openai';
 import type {
@@ -199,6 +201,12 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
         throw classifyError(err, this.name);
       }
     }
+  }
+
+  /** An endpoint that implements the OpenAI Images API (`/images/generations`). */
+  async generateImage(request: ImageGenerationRequest): Promise<ImageGenerationResult> {
+    const cfg = await this.resolveModelConfig(request.model, { model: request.model, messages: [], modelConfigName: request.modelConfigName, apiKey: request.apiKey, userId: request.userId });
+    return openAiImages(this.createClient(cfg), { ...request, model: cfg.model?.modelId || request.model });
   }
 
   async checkHealth(): Promise<ProviderHealthStatus> {

@@ -36,6 +36,7 @@
  *   OCTIPUS_SETUP_MODEL=gpt-4o-mini
  *   OCTIPUS_SETUP_INSTALL_CAPS=browser,mcp       (comma-separated)
  *   OCTIPUS_SETUP_RECOMMEND=1                     (scan HW + pull a recommended local model)
+ *   OCTIPUS_SETUP_IMAGE_MODEL=gpt-image-1         (optional: bind an image model of the chosen provider)
  *
  * Remote mode (--remote <url>) skips local .env + backend boot and
  * runs the admin/provider/capability steps against the remote API.
@@ -651,6 +652,8 @@ async function pickCapabilities(ctx: WizardCtx | null, missing: string[]): Promi
  */
 async function useVoiceEngine(api: ApiClient, direction: 'stt' | 'tts', engine: string, size?: string): Promise<void> {
   try {
+    // Choosing voice turns the Voice module on: its routes answer only while it is (a new install has it off).
+    await api.post('/api/modules/enable', { ids: ['voice'] });
     await api.post('/api/voice/engines/use', { direction, engine, makePrimary: true, ...(size ? { size } : {}) });
   } catch (err) {
     process.stdout.write(`\x1b[33m! Could not bind the ${direction === 'stt' ? 'speech-to-text' : 'speech'} engine: ${(err as Error).message}\x1b[0m\n`);
@@ -669,6 +672,59 @@ const cloudKeyHint = (provider: 'Mistral' | 'OpenAI') =>
  * wiring the config. Local engines are provisioned in-process (downloads take
  * minutes — an HTTP call would time out); cloud picks just point at the vault.
  */
+/** Image models of the providers whose key setup stores, for the optional Image generation step. */
+const IMAGE_MODELS: Partial<Record<string, { modelId: string; label: string }>> = {
+  openai: { modelId: 'gpt-image-1', label: 'OpenAI gpt-image-1' },
+  gemini: { modelId: 'gemini-2.5-flash-image', label: 'Gemini 2.5 Flash Image' },
+  openrouter: { modelId: 'google/gemini-2.5-flash-image', label: 'Gemini 2.5 Flash Image via OpenRouter' },
+};
+
+/**
+ * Optional: bind an image model to the Image generation lane, so agents can
+ * draw (docs/MEDIA.md). Offered only for a provider whose key setup just
+ * stored; the default is to skip. Non-interactive: OCTIPUS_SETUP_IMAGE_MODEL.
+ */
+async function pickImageGeneration(api: ApiClient, providerId: string | undefined): Promise<void> {
+  if (QUICK || !providerId) return;
+  const offer = IMAGE_MODELS[providerId];
+  let modelId: string | undefined;
+  if (NON_INTERACTIVE) {
+    modelId = process.env.OCTIPUS_SETUP_IMAGE_MODEL?.trim() || undefined;
+    if (!modelId) return;
+    // Only a provider that draws, with the key setup just stored.
+    if (!offer) { warn(`Image generation: ${providerId} has no image models here; skipped (bind one on the Topics page).`); return; }
+  } else {
+    if (!offer) return;
+    const want = await selectStep<'y' | 'n'>(
+      null,
+      'Let agents create images? (an image model on the Image generation lane)',
+      [
+        { value: 'n', label: 'No — skip', description: 'Add one later on the Topics page.' },
+        { value: 'y', label: `Yes — use ${offer.label}`, description: 'Billed per image on your key.' },
+      ],
+      'n',
+    );
+    if (want !== 'y') return;
+    modelId = offer.modelId;
+  }
+  const name = `${providerId} ${modelId}`;
+  try {
+    // A model already drawing keeps drawing, as the backup.
+    const topics = await api.get<{ topics?: Array<{ value: string; primaryModel?: string | null }> } | Array<{ value: string; primaryModel?: string | null }>>('/api/topics').catch(() => null);
+    const list = Array.isArray(topics) ? topics : topics?.topics ?? [];
+    const previous = list.find((t) => t.value === 'image_generation')?.primaryModel ?? null;
+    try {
+      await api.post('/api/models', { name, provider: providerId, modelId, supportsTools: false, supportsStreaming: false });
+    } catch (err) {
+      if (!(err instanceof ApiError && /already exists/i.test(err.serverMessage))) throw err;
+    }
+    await api.put('/api/topics/image_generation/binding', { primaryModel: name, ...(previous && previous !== name ? { backupModel: previous } : {}) });
+    ok(`Image generation: "${name}" bound.`);
+  } catch (err) {
+    warn(`Image generation not set up: ${err instanceof ApiError ? err.serverMessage : (err as Error).message}`);
+  }
+}
+
 async function pickVoice(api: ApiClient): Promise<void> {
   if (QUICK) return;
   // ── Non-interactive: only local defaults, and only on explicit opt-in. ──
@@ -1209,6 +1265,9 @@ async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<voi
 
   // Voice dependencies (local whisper build offer).
   await pickVoice(api);
+
+  // Image generation (optional; only for a provider whose key was just stored).
+  await pickImageGeneration(api, provider.providerId);
 
   // Mark setup complete.
   const completion = await api.post<{ success?: boolean; error?: string }>('/api/settings/setup-complete', {});

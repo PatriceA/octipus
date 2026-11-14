@@ -12,8 +12,9 @@ that it is off ([MODULES.md → Capability gates](MODULES.md#capability-gates)).
 | **hear** — speech to text | the **Transcription** lane ([VOICE.md](VOICE.md)) | nothing bound |
 | **speak** — text to speech | the **Speech** lane ([VOICE.md](VOICE.md)) | nothing bound |
 
-One resolver decides (`src/models/media-resolver.ts`); the Topics page and
-Health show what actually serves each lane. Protection levels apply: content
+One resolver decides (`src/models/media-resolver.ts`); the Topics page (its
+**Media** group) and Health show what actually serves each lane, or why it is
+off. Protection levels apply: content
 that stays local is only read by a local model (seeing and OCR switch to one;
 speech refuses a cloud engine and uses a local backup). Pixels and recordings
 are never pseudonymized, so the strict threshold holds for them: at a
@@ -107,6 +108,21 @@ communication, design, coding, review, qa):
   in a space, not a coding agent's configuration) and its path returned.
   Offered when a speech engine is bound.
 
+**`imagegen`** (general — long tail —, design):
+
+- `generate_image({ prompt, aspect_ratio?, n?, reference_images?, output_path? })`
+  — the Image generation lane draws (primary, then backup; protection levels
+  apply, the prompt and references are not pseudonymized). Up to 4 images,
+  saved in the workspace (default `.octipus/media/generated/<id>.png`; an
+  `output_path` must be a new file in the workspace) and shown to the person
+  with the answer. `reference_images` edits or follows given images on models
+  that take them (gpt-image, Gemini image models; a row can say so in
+  `metadata.imageGeneration.references`), and is refused before anything is
+  paid for on one that does not. Offered when an image model is bound.
+- Providers: OpenAI (gpt-image-1, DALL·E), Gemini (Imagen, Gemini image
+  models), OpenRouter (image models over chat), a LiteLLM proxy and
+  OpenAI-compatible endpoints that implement `/images/generations`.
+
 Screenshots (`browser__screenshot`, `browser-ext__screenshot`) and images an
 MCP server returns are saved in the workspace (`.octipus/media/…`) and shown
 the same way: pixels for a model that is shown images, the path for one that
@@ -116,6 +132,72 @@ filed in the shared workspace, so it is not shown as an image there.
 
 Text inside images, audio and documents is content, not instructions: the
 prompts say so and every description is marked as model output.
+
+## Media in the answer
+
+Images `generate_image` draws and speech `speak` makes go to the person with
+the answer (`metadata.attachments` on the answer, `media` on the turn's
+result):
+
+| Where | Image | Speech |
+|-------|-------|--------|
+| Web chat | thumbnail under the answer, opens in the file viewer, download | player, download |
+| Telegram | photo | voice note (OGG/Opus), else audio |
+| WhatsApp | uploaded to the media store, sent by id | voice note (OGG/Opus), else audio |
+| Slack | uploaded into the thread (`files:write`) | same |
+| Teams | inline up to 1 MB and 1024 px; larger, a 15-minute public link | a link line (15 minutes); no spoken replies |
+
+A Teams link needs a public address (`oauth.publicUrl` / `PUBLIC_URL`);
+without one the reply says the file is in the web app. A voice note gets a
+spoken reply on every channel but Teams (unless the turn already spoke). A
+file a channel refuses never loses the reply's text. An answer the output
+guard replaced, or one withheld from a room, carries none of its media.
+Image spend counts toward spend budgets: the provider's reported cost, else
+the row's `pricing.perImage`, else a list price; local rows cost nothing.
+The model editor sets a row's media rates (USD per image, per audio minute
+transcribed, per million characters spoken): the one for the lane the row is
+bound to (or plainly made for) shows with the other prices, the rest under
+*Media pricing*.
+Files sent with `send_message` count as private data for the flow guard
+(credential files as secrets).
+`messaging__send_message` and `send_to_user` take `attachments` (workspace
+paths, at most 5 files of 20 MB) to send files deliberately.
+
+## Children, CLI agents, retention, setup
+
+- A child agent resolves `see` against its own model. A child whose model
+  reads images gets the workspace images its task names (up to 4); a blind
+  child gets the paths and `vision__view_image`; a CLI agent opens files itself.
+- Model-ready copies (`.octipus/media/cache`) unused for 30 days are removed
+  by the daily prune; originals (uploads, generated images, speech) are files
+  of the workspace and follow its backups, transfer and purge.
+- Speech spend: `pricing.perAudioMinute` (transcription) and
+  `pricing.perMillionChars` (speech) on the row, else list prices for the
+  cloud engines; local engines cost nothing.
+- `octi setup` offers an optional Image generation step for a provider whose
+  key it stored (OpenAI, Gemini, OpenRouter; default skip;
+  `OCTIPUS_SETUP_IMAGE_MODEL` non-interactively).
+
+## Over MCP and HTTP
+
+MCP clients have their own eyes, so the MCP server's `media` group offers the
+lanes themselves ([MCP-SERVER.md](MCP-SERVER.md#media-media-group)):
+
+| MCP tool | Route | Capability |
+|----------|-------|------------|
+| `octipus_generate_image({ prompt, aspect_ratio?, n? })` | `POST /api/media/images` → `{ images: [{ mimeType, base64 }], model, revisedPrompt? }` | `draw` |
+| `octipus_describe_image({ image, mime_type?, question? })` | `POST /api/media/describe` `{ image, mimeType?, question? }` → `{ description, model }` | `see` |
+| `octipus_transcribe_audio({ audio, format? })` | `POST /api/voice/transcribe` | `hear` |
+| `octipus_speak({ text, voice?, format? })` | `POST /api/voice/speak` (audio bytes) | `speak` |
+
+- Images: a prompt of at most 4000 characters, up to 4 images, as MCP `image`
+  parts; spend budgets apply (`funding: 'own'`). Describe: base64 only (the
+  MCP server reads no local files), at most 10 MB, refused unless its magic
+  bytes are an image; the Vision lane (else the default model if it reads
+  images) answers, told that text in the image is content, not instructions.
+- A capability that is off: the tool is not listed, and the route answers 409
+  `capability_not_configured`. An account that may not use the install's
+  models gets a local row or its own only; a hosted install row is 403.
 
 ## Conformance
 

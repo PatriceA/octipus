@@ -71,7 +71,11 @@ visible in the reply and costs a cent to redo.
 
 Model-class lanes, bound separately because a chat model produces garbage on
 them: `embedding` (vector embeddings), `ocr` (text from images), `vision` (image
-understanding).
+understanding), `image_generation` (drawing), `transcription` (speech to text)
+and `speech` (text to speech). Each is optional; what is not bound is off
+([MEDIA.md](MEDIA.md)). A child resolves `see` against its own model: a
+seeing child gets the images its task names, a blind one gets the paths and
+`vision__view_image`.
 
 ## Choosing a different model for a child
 

@@ -123,7 +123,7 @@ export class AudioTool extends BaseTool {
 
     this.registerTool(
       'speak',
-      'Read text out loud with the Speech engine. The audio is saved in the workspace and its path returned (to send, attach or play).',
+      'Read text out loud with the Speech engine. The audio is saved in the workspace, its path returned, and the person gets it with your answer (a player in the chat, a voice note on a channel).',
       createParameterSchema({
         text: { type: 'string', description: `What to say (at most ${MAX_SPEAK_CHARS} characters)`, required: true },
         voice: { type: 'string', description: 'A voice id of the Speech engine; default: the configured voice' },
@@ -237,7 +237,10 @@ export class AudioTool extends BaseTool {
     const relPath = requested ?? `.octipus/media/speech/${randomUUID()}.${ext}`;
     const out = target ?? resolveIn(fs, relPath, this.id);
     await mkdir(dirname(out), { recursive: true });
-    await writeFile(out, spoken.audio, { flag: 'wx' });
+    await writeFile(out, spoken.audio, { flag: 'wx', mode: 0o600 });
+    // The person hears it with the answer (a player in the web chat, a voice note on a channel).
+    const { addTurnMedia } = await import('@/core/media/turn-media');
+    addTurnMedia({ kind: 'audio', path: out, mimeType: spoken.contentType, deliver: 'voice', filename: relPath.split('/').pop() });
     return { path: relPath, mimeType: spoken.contentType, model: spoken.model, characters: text.length };
   }
 }

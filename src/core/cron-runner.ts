@@ -265,6 +265,11 @@ function maybePruneLogs(): void {
     })
     .catch((err: unknown) => coreLogger.error({ err }, 'Log retention prune failed'))
     .finally(() => { logPruneRunning = false; });
+  // The model-ready image copies (src/core/media/cache-prune.ts), on the same daily beat.
+  void import('@/core/media/cache-prune')
+    .then(async ({ pruneMediaCaches }) => pruneMediaCaches(getConfig().workspace.rootPath, new Date(now)))
+    .then((removed) => { if (removed > 0) coreLogger.info({ removed }, 'Media cache: removed copies unused for 30 days'); })
+    .catch((err: unknown) => coreLogger.error({ err }, 'Media cache prune failed'));
 }
 
 /**

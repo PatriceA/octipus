@@ -129,6 +129,14 @@ export class OctiClient {
     path: string,
     options: RequestInit = {},
   ): Promise<T> {
+    return (await this.requestRaw(path, options)).json() as Promise<T>;
+  }
+
+  /** A successful response as it came (binary bodies: speech); a non-2xx answer throws `ApiError`. */
+  private async requestRaw(
+    path: string,
+    options: RequestInit = {},
+  ): Promise<Response> {
     const url = `${this.baseUrl}${path}`;
     let authHeaders = await this.auth.getHeaders(this.baseUrl);
     const send = (headers: Record<string, string>) => fetch(url, {
@@ -157,7 +165,7 @@ export class OctiClient {
       throw new ApiError(`API ${options.method || 'GET'} ${path} failed: ${res.status} ${body}`, res.status, parsed);
     }
 
-    return res.json() as Promise<T>;
+    return res;
   }
 
   // ─── Modules ───
@@ -178,6 +186,31 @@ export class OctiClient {
       enabled: Array.isArray(res.enabled) ? res.enabled : [],
       capabilities: Array.isArray(res.capabilities) ? Object.fromEntries(res.capabilities.map((c) => [c.id, c.on === true])) : null,
     };
+  }
+
+  // ─── Media (docs/MEDIA.md → Over MCP and HTTP) ───
+
+  async generateImage(params: { prompt: string; aspect_ratio?: 'square' | 'landscape' | 'portrait'; n?: number }): Promise<{
+    images: Array<{ mimeType: string; base64: string }>;
+    model: string;
+    revisedPrompt?: string;
+  }> {
+    return this.request('/api/media/images', { method: 'POST', body: JSON.stringify(params) });
+  }
+
+  async describeImage(params: { image: string; mimeType?: string; question?: string }): Promise<{ description: string; model: string }> {
+    return this.request('/api/media/describe', { method: 'POST', body: JSON.stringify(params) });
+  }
+
+  async transcribeAudio(params: { audio: string; format?: string }): Promise<{ text: string; model?: string; language?: string; duration?: number; error?: string }> {
+    return this.request('/api/voice/transcribe', { method: 'POST', body: JSON.stringify(params) });
+  }
+
+  /** The Speech lane's audio for `text`, with its media type. */
+  async speak(params: { text: string; voice_id?: string; format?: string }): Promise<{ base64: string; mimeType: string }> {
+    const res = await this.requestRaw('/api/voice/speak', { method: 'POST', body: JSON.stringify(params) });
+    const mimeType = (res.headers.get('content-type') ?? 'audio/mpeg').split(';')[0].trim();
+    return { base64: Buffer.from(await res.arrayBuffer()).toString('base64'), mimeType };
   }
 
   // ─── Chat ───

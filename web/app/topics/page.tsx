@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Layers, Loader2, Save, Tags } from 'lucide-react';
+import { Image as ImageIcon, Layers, Loader2, Save, Tags } from 'lucide-react';
 import { useState } from 'react';
 import { RootModelNote } from '@/components/models/root-model-note';
 import { LaneRoles, type RoleRow, type ToolOption } from '@/components/topics/lane-roles';
@@ -17,6 +17,8 @@ interface TopicRow {
   kind: 'text' | 'background' | 'vision' | 'ocr' | 'embedding' | 'decision' | 'image_generation' | 'transcription' | 'speech';
   /** Media lanes: what actually does the work (may be another lane or the default model); null = off. */
   effectiveModel?: string | null;
+  /** Media lanes that are off: why (nothing bound, or the binding is refused). */
+  offReason?: string;
   primaryModel: string | null;
   backupModel: string | null;
   executorModel: string | null;
@@ -40,6 +42,9 @@ const KIND_LABELS: Record<TopicRow['kind'], string> = {
   transcription: 'speech to text',
   speech: 'text to speech',
 };
+
+/** The image and audio lanes, grouped under "Media" (docs/MEDIA.md, docs/VOICE.md). */
+const MEDIA_KINDS: ReadonlySet<TopicRow['kind']> = new Set(['vision', 'ocr', 'image_generation', 'transcription', 'speech']);
 
 function numOrNull(v: string): number | null {
   if (v.trim() === '') return null;
@@ -195,7 +200,7 @@ function TopicCard({
             <p className="text-xs mt-1" data-testid={`effective-${topic.value}`}>
               {topic.effectiveModel
                 ? <span className="text-tertiary">Served by {topic.effectiveModel}</span>
-                : <span className="text-on-surface-variant">Off — nothing here does this yet</span>}
+                : <span className="text-on-surface-variant">Off — {topic.offReason ?? 'nothing here does this yet'}</span>}
             </p>
           )}
         </div>
@@ -360,6 +365,19 @@ export default function TopicsPage() {
   // Only text lanes run agents; OCR/vision/embedding are model classes.
   const lanes = topics.filter((tp) => tp.kind === 'text').map((tp) => ({ value: tp.value, label: tp.label }));
   const onSaved = () => queryClient.invalidateQueries({ queryKey: ['topics-config'] });
+  const mediaTopics = topics.filter((tp) => MEDIA_KINDS.has(tp.kind));
+  const renderCard = (topic: TopicRow) => (
+    <TopicCard
+      key={`${topic.value}:${topic.primaryModel}:${topic.backupModel}:${topic.executorModel}:${topic.temperature}:${topic.maxTokens}`}
+      topic={topic}
+      models={models}
+      roles={allRoles.filter((r) => r.lane === topic.value)}
+      lanes={lanes}
+      tools={tools}
+      canEdit={canEdit}
+      onSaved={onSaved}
+    />
+  );
   // Assign-all touches bindings across every model, so refresh both queries.
   const onAssignedAll = () => {
     queryClient.invalidateQueries({ queryKey: ['topics-config'] });
@@ -409,20 +427,26 @@ export default function TopicsPage() {
           </button>
         </div>
       ) : (
-        <div className={cn('space-y-3')}>
-          {topics.map((topic) => (
-            <TopicCard
-              key={`${topic.value}:${topic.primaryModel}:${topic.backupModel}:${topic.executorModel}:${topic.temperature}:${topic.maxTokens}`}
-              topic={topic}
-              models={models}
-              roles={allRoles.filter((r) => r.lane === topic.value)}
-              lanes={lanes}
-              tools={tools}
-              canEdit={canEdit}
-              onSaved={onSaved}
-            />
-          ))}
-        </div>
+        <>
+          <div className={cn('space-y-3')}>
+            {topics.filter((topic) => !MEDIA_KINDS.has(topic.kind)).map(renderCard)}
+          </div>
+          {mediaTopics.length > 0 && (
+            <section className="space-y-3" data-testid="media-lanes" aria-labelledby="media-lanes-heading">
+              <div className="flex items-start gap-2">
+                <ImageIcon className="w-4 h-4 text-primary mt-0.5 shrink-0" />
+                <div className="min-w-0">
+                  <h2 id="media-lanes-heading" className="font-medium text-on-surface">Media</h2>
+                  <p className="text-xs text-on-surface-variant mt-0.5">
+                    Images and audio: reading images and scans, drawing, transcribing and speaking. Each lane is optional;
+                    it shows what actually serves it, or why it is off.
+                  </p>
+                </div>
+              </div>
+              {mediaTopics.map(renderCard)}
+            </section>
+          )}
+        </>
       )}
     </div>
   );
