@@ -397,10 +397,10 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
       { key: 'image_generation', name: 'Image generation', topic: 'image_generation', required: false, need: 'draw',
         help: 'Creates and edits images (generate_image). Without it the tool is not offered.',
         hint: "Assign an image model to the 'image_generation' topic" },
-      { key: 'transcription', name: 'Speech to text', topic: 'transcription', required: false, need: 'hear', capability: 'hear',
+      { key: 'transcription', name: 'Speech to text', topic: 'transcription', required: false, need: 'hear',
         help: 'Voice notes, the microphone, phone calls and transcribe_audio. Without it voice input is off.',
         hint: "Assign a transcription model or local engine to the 'transcription' topic" },
-      { key: 'speech', name: 'Text to speech', topic: 'speech', required: false, need: 'speak', capability: 'speak',
+      { key: 'speech', name: 'Text to speech', topic: 'speech', required: false, need: 'speak',
         help: 'Spoken replies, phone calls and speak. Without it spoken output is off.',
         hint: "Assign a speech model or local engine to the 'speech' topic" },
     ] as const;
@@ -408,7 +408,6 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
     const registry = getModelRegistry();
     const defaultModel = await registry.getDefaultModel();
     const { resolveMedia } = await import('@/models/media-resolver');
-    const { isCapabilityOn } = await import('@/core/capabilities/gates');
 
     const features = await Promise.all(
       FEATURE_TOPICS.map(async (feature) => {
@@ -423,10 +422,6 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
             if (resolution.mode !== 'none') {
               const model = resolution.mode === 'lane' && resolution.lane === 'default' ? `${resolution.row.name} (default model)` : resolution.row.name;
               return { key, name, topic, required, help, configured: true, model };
-            }
-            // Speech engines configured the older way (Settings → Voice) still count.
-            if ('capability' in feature && isCapabilityOn(feature.capability)) {
-              return { key, name, topic, required, help, configured: true, model: 'voice settings' };
             }
             return { key, name, topic, required, help, configured: false, model: null, hint };
           }

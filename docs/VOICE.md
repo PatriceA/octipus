@@ -86,7 +86,7 @@ there (`src/voice/resolve.ts`):
 - **primary, then backup** — a primary that cannot run (not installed, no key)
   or fails falls to the backup, logged with the reason;
 - **protection levels** — content that must stay local only reaches a local
-  engine;
+  engine: a cloud primary is skipped for it and a local backup takes it;
 - **accounting** — every call is recorded against its row (cost, spend budgets);
 - an account that may not use the install's hosted keys gets local engines only.
 
@@ -106,22 +106,27 @@ a voice note gets one line asking to type, spoken replies stop
 | OpenAI | Speech | `openai` / `gpt-4o-mini-tts` | OpenAI key. mp3/wav/opus/flac/pcm. |
 
 **Choosing one:** Topics page → Transcription / Speech → *Use:* (creates the
-row and binds it primary; the one it replaces stays as backup), or bind any
+row and binds it primary; the one it replaces becomes the backup), or bind any
 row like on any lane. `octi setup` does the same. `POST /api/voice/engines/use`
 `{ direction: 'stt'|'tts', engine, size?, makePrimary? }` is the API.
 
 **Old engine names still work as requests:** `?engine=` on the `/voice`
 socket and `model` on `/api/voice/transcribe` accept a row name or `auto`,
 `local`, `whisper`, `whisper-cpp`, `fasterwhisper`, `mistral`/`voxtral-*`,
-`openai`/`whisper-1` — they pick the bound row of that engine.
+`openai`/`whisper-1` — they pick the bound row of that engine. A row named
+directly must be an install speech engine of that direction.
 
 **Settings that remain:** `voice.language`, `voice.ttsVoice` (the voice for
-replies and calls; empty = the engine's default), `voice.wakeWord` and the
+replies and calls, given to the primary Speech engine; a backup speaks in its
+own default; empty = the engine's default), `voice.wakeWord` and the
 telephony keys. `voice.sttProvider`, `voice.fasterWhisperModel`,
 `voice.whisperModelPath`, `voice.ttsProvider` and `voice.piperModelPath` are
 **retired**: on the first boot after the upgrade they were turned into lane
-bindings once (explicit choices kept; `auto` became local first; an engine
-of the other kind that can run became the backup), and a lane someone bound
+bindings once (explicit choices kept; `auto` became whisper.cpp first, as
+faster-whisper was only ever chosen by name; the default `mistral` speech
+was kept only when it had a key, else a local voice that runs; an engine of
+the other kind that can run became the backup; a model path carried over
+only when it was not the default and is on disk), and a lane someone bound
 is never touched.
 
 ### Wake Word Detection

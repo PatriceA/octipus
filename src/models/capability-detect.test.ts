@@ -40,14 +40,15 @@ describe('capability detection — never a false "reads images"', () => {
       'gemma3:1b', 'gemma3:270m', 'gemma-3-1b-it',
       'gpt-4o-transcribe', 'gpt-4o-mini-tts', 'gpt-4o-realtime-preview', 'gpt-4o-search-preview',
       'gemini-2.5-flash-preview-tts', 'text-embedding-3-small', 'dall-e-3', 'gpt-image-1', 'whisper-1',
-      'voxtral-mini-tts-2603',
+      'voxtral-mini-tts-2603', 'mistral-small-2501', 'mistral-small-2409', 'mistral-medium-2312',
+      'gemini-2.0-flash-live-001', 'gemini-2.5-flash-native-audio-preview', 'gpt-4o-audio-captioner',
     ]) {
       expect(inferInputsFromFamily(id), id).toBeUndefined();
     }
   });
 
   test('the image-reading members still are', () => {
-    for (const id of ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1-mini', 'gpt-5', 'o3', 'o4-mini', 'gemma3:4b', 'gemma3:27b', 'gemma4:e4b', 'qwen2.5vl:7b', 'qwen3-vl:8b', 'qwen3.8:9b', 'llava:13b', 'pixtral-12b', 'claude-haiku-4-5']) {
+    for (const id of ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1-mini', 'gpt-5', 'o3', 'o4-mini', 'gemma3:4b', 'gemma3:27b', 'gemma4:e4b', 'qwen2.5vl:7b', 'qwen3-vl:8b', 'qwen3.8:9b', 'llava:13b', 'pixtral-12b', 'claude-haiku-4-5', 'mistral-small-2503', 'mistral-small-3.2', 'mistral-small-latest', 'mistral-medium-2505', 'mistral-medium-latest']) {
       expect(inferInputsFromFamily(id)?.image, id).toBe(true);
     }
   });

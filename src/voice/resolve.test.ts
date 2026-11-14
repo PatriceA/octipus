@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   synthesize: vi.fn(async () => Buffer.from('audio')),
   usage: vi.fn(async () => {}),
   mayLeave: vi.fn(async () => {}),
+  voices: [] as Array<string | undefined>,
 }));
 
 vi.mock('@/models/model-registry', () => ({
@@ -25,7 +26,11 @@ vi.mock('@/models/model-registry', () => ({
   }),
 }));
 vi.mock('@/models/providers/instrumented', () => ({ recordProviderUsage: state.usage }));
-vi.mock('@/core/protection/routing', () => ({ assertMayLeave: state.mayLeave }));
+vi.mock('@/core/protection/routing', () => {
+  class ProtectionRoutingError extends Error {}
+  return { assertMayLeave: state.mayLeave, ProtectionRoutingError };
+});
+vi.mock('@/config', () => ({ getConfig: () => ({ voice: { ttsVoice: 'configured-voice' } }) }));
 vi.mock('./speech-rows', async (orig) => {
   const real = await orig<typeof import('./speech-rows')>();
   return {
@@ -36,7 +41,7 @@ vi.mock('./speech-rows', async (orig) => {
       streamTranscribe: async function* () {},
       dispose: async () => {},
     }),
-    ttsEngineFor: async () => ({ synthesize: state.synthesize, streamSynthesize: async function* () {}, getVoices: async () => [], dispose: async () => {} }),
+    ttsEngineFor: async (_row: unknown, opts: { voice?: string }) => (state.voices.push(opts.voice), { synthesize: state.synthesize, streamSynthesize: async function* () {}, getVoices: async () => [], dispose: async () => {} }),
   };
 });
 
@@ -48,7 +53,7 @@ const row = (name: string, provider: string, modelId: string, lane: string, role
 const ok = (text: string) => async () => ({ text, segments: [], language: 'en', duration: 3 });
 
 beforeEach(() => {
-  state.primary = null; state.backup = null; state.named = {}; state.available = {}; state.transcribe = {};
+  state.primary = null; state.backup = null; state.named = {}; state.available = {}; state.transcribe = {}; state.voices = [];
   vi.clearAllMocks();
 });
 
@@ -82,8 +87,46 @@ describe('speech resolution', () => {
     expect(state.mayLeave).not.toHaveBeenCalled();
     state.primary = row('mistral stt', 'mistral', 'voxtral-mini-latest', 'transcription');
     state.transcribe = { 'mistral stt': ok('x') };
-    state.mayLeave.mockRejectedValueOnce(new Error('level 4 stays local'));
+    const { ProtectionRoutingError } = await import('@/core/protection/routing');
+    state.mayLeave.mockRejectedValue(new (ProtectionRoutingError as unknown as new (m: string) => Error)('level 4 stays local'));
     await expect(resolve.transcribeWithLane(Buffer.from('x'), { sessionId: 's' })).rejects.toThrow(/stays local/);
+    state.mayLeave.mockReset();
+  });
+
+  test('a cloud primary the content may not reach falls to the local backup instead of failing', async () => {
+    state.primary = row('mistral stt', 'mistral', 'voxtral-mini-latest', 'transcription');
+    state.backup = row('local fw', 'local-audio', 'faster-whisper:small', 'transcription', 'backup');
+    state.transcribe = { 'mistral stt': ok('cloud'), 'local fw': ok('local') };
+    const { ProtectionRoutingError } = await import('@/core/protection/routing');
+    state.mayLeave.mockRejectedValue(new (ProtectionRoutingError as unknown as new (m: string) => Error)('level 4 stays local'));
+    await expect(resolve.transcribeWithLane(Buffer.from('x'), { sessionId: 's' })).resolves.toMatchObject({ text: 'local', model: 'local fw' });
+    await expect(resolve.resolveSttEngine({ sessionId: 's' })).resolves.toMatchObject({ row: expect.objectContaining({ name: 'local fw' }) });
+    // Any other error from the check is a bug, not a routing decision: it is not swallowed.
+    state.mayLeave.mockRejectedValue(new Error('database down'));
+    await expect(resolve.transcribeWithLane(Buffer.from('x'), { sessionId: 's' })).rejects.toThrow(/database down/);
+    state.mayLeave.mockReset();
+  });
+
+  test('a row named directly must be an install speech engine of that direction', async () => {
+    state.named['local kokoro'] = row('local kokoro', 'local-audio', 'kokoro:af_sarah', 'speech');
+    state.named['mine'] = { ...row('mine', 'local-audio', 'whisper.cpp:base', 'transcription'), ownerUserId: 'u1' };
+    state.named['mistral chat'] = row('mistral chat', 'mistral', 'mistral-large-latest', 'default');
+    await expect(resolve.speechCandidates('stt', { override: 'local kokoro' })).rejects.toThrow(/not a speech-to-text engine/);
+    await expect(resolve.speechCandidates('stt', { override: 'mine' })).rejects.toThrow(/not a speech-to-text engine/);
+    await expect(resolve.speechCandidates('tts', { override: 'mistral chat' })).rejects.toThrow(/not a text-to-speech engine/);
+    expect((await resolve.speechCandidates('tts', { override: 'local kokoro' })).map((r) => r.name)).toEqual(['local kokoro']);
+  });
+
+  test('the configured voice goes to the primary; a backup speaks in its own voice', async () => {
+    state.primary = row('mistral tts', 'mistral', 'voxtral-mini-tts-2603', 'speech');
+    state.backup = row('local kokoro', 'local-audio', 'kokoro:af_sarah', 'speech', 'backup');
+    state.available['mistral tts'] = false;
+    await resolve.synthesizeWithLane('hi');
+    expect(state.voices).toEqual([undefined]);
+    state.available['mistral tts'] = true;
+    state.voices = [];
+    await resolve.synthesizeWithLane('hi');
+    expect(state.voices).toEqual(['configured-voice']);
   });
 
   test('old engine names pick the bound row of that engine; a row may be named directly', async () => {

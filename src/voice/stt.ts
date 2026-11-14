@@ -408,10 +408,23 @@ export class FasterWhisperEngine extends EventEmitter implements STTEngine {
 
   async transcribe(audio: Buffer | string): Promise<TranscriptionResult> {
     const start = Date.now();
-    const raw = typeof audio === 'string'
-      ? Buffer.from(await fileAt(audio).arrayBuffer())
-      : audio;
-    const pcm = stripWavHeader(new Uint8Array(raw)); // requires 16 kHz mono s16
+    // The worker reads raw 16 kHz mono s16 PCM: a voice note (ogg/opus), a
+    // browser recording (webm) or an m4a is transcoded first, exactly as for
+    // whisper.cpp — passed through as is, its bytes would be read as samples.
+    let source = typeof audio === 'string' ? audio : null;
+    if (!source) {
+      source = tmpPath('-in');
+      await writeFileAt(source, audio as Buffer);
+    }
+    const wavPath = await toWhisperWav(source);
+    let raw: Buffer;
+    try {
+      raw = Buffer.from(await fileAt(wavPath).arrayBuffer());
+    } finally {
+      if (wavPath !== source) await rm(wavPath, { force: true });
+      if (typeof audio !== 'string') await rm(source, { force: true });
+    }
+    const pcm = stripWavHeader(new Uint8Array(raw)); // 16 kHz mono s16 now
     const text = stripNonSpeech(await this.send(pcm)).trim();
     const duration = (Date.now() - start) / 1000;
     return {

@@ -11,12 +11,14 @@ const state = vi.hoisted(() => ({
   bound: {} as Record<string, string>,
   runs: new Set<string>(),
   store: new Map<string, string>(),
+  files: new Set<string>(),
 }));
 
 vi.mock('@/config', () => ({ getConfig: () => ({ voice: state.voice }) }));
-vi.mock('@/db/cache', () => ({
-  rawStore: () => ({ get: async (k: string) => state.store.get(k) ?? null, set: async (k: string, v: string) => { state.store.set(k, v); } }),
+vi.mock('@/config/settings-service', () => ({
+  getSettingsService: () => ({ get: async (k: string) => state.store.get(k) ?? null, set: async (k: string, v: string) => { state.store.set(k, v); } }),
 }));
+vi.mock('node:fs', async (orig) => ({ ...(await orig<typeof import('node:fs')>()), existsSync: (p: string) => state.files.has(p) }));
 vi.mock('@/models/model-registry', () => ({
   getModelRegistry: () => ({
     getModelForTopic: async (lane: string) => (state.bound[lane] ? state.rows[state.bound[lane]] : null),
@@ -41,10 +43,11 @@ const { migrateVoiceSettingsToLanes } = await import('./migrate-to-lanes');
 
 const roles = (name: string) => state.rows[name]?.topicRoles;
 
-beforeEach(() => {
+function beforeEachReset() {
   state.voice = { sttProvider: 'auto', fasterWhisperModel: 'small', ttsProvider: 'mistral' };
-  state.rows = {}; state.bound = {}; state.runs = new Set(); state.store = new Map();
-});
+  state.rows = {}; state.bound = {}; state.runs = new Set(); state.store = new Map(); state.files = new Set();
+}
+beforeEach(beforeEachReset);
 
 describe('moving voice settings onto the lanes', () => {
   test('auto with local whisper and a Mistral key: local first for speech in (backup the cloud), Mistral keeps speaking (backup Kokoro)', async () => {
@@ -85,5 +88,40 @@ describe('moving voice settings onto the lanes', () => {
     expect(first?.[0]).toBe('transcription: already bound, left as is');
     expect(state.rows['local whisper.cpp base']).toBeUndefined();
     await expect(migrateVoiceSettingsToLanes()).resolves.toBeNull();
+    expect(state.store.get('_system.voiceLanesMigrated')).toBeTruthy();
+  });
+
+  test('auto never picks faster-whisper (it was only ever chosen by name)', async () => {
+    state.runs = new Set(['faster-whisper:small']);
+    await migrateVoiceSettingsToLanes();
+    expect(state.bound.transcription).toBeUndefined();
+    expect(state.rows['local faster-whisper small']).toBeUndefined();
+  });
+
+  test('a whisper model path is kept only when the operator set one and it is on disk', async () => {
+    state.runs = new Set(['whisper.cpp:base']);
+    state.voice = { sttProvider: 'whisper', whisperModelPath: './models/whisper/ggml-base.bin' };
+    state.files = new Set(['./models/whisper/ggml-base.bin']);
+    await migrateVoiceSettingsToLanes();
+    expect(state.rows['local whisper.cpp base'].metadata?.modelPath).toBeUndefined();
+
+    beforeEachReset();
+    state.runs = new Set(['whisper.cpp:base']);
+    state.voice = { sttProvider: 'whisper', whisperModelPath: '/data/ggml-large.bin' };
+    await migrateVoiceSettingsToLanes();
+    expect(state.rows['local whisper.cpp base'].metadata?.modelPath).toBeUndefined(); // not on disk
+
+    beforeEachReset();
+    state.runs = new Set(['whisper.cpp:base']);
+    state.voice = { sttProvider: 'whisper', whisperModelPath: '/data/ggml-large.bin' };
+    state.files = new Set(['/data/ggml-large.bin']);
+    await migrateVoiceSettingsToLanes();
+    expect(state.rows['local whisper.cpp base'].metadata?.modelPath).toBe('/data/ggml-large.bin');
+  });
+
+  test('the default "mistral" speech is never replaced by OpenAI', async () => {
+    state.runs = new Set(['gpt-4o-mini-tts']);
+    await migrateVoiceSettingsToLanes();
+    expect(state.bound.speech).toBeUndefined();
   });
 });

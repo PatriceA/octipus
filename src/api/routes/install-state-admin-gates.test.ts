@@ -19,6 +19,7 @@ const fixture = vi.hoisted(() => ({
   extensionReload: null as unknown as import('vitest').Mock<(...args: any[]) => any>,
   pluginReload: null as unknown as import('vitest').Mock<(...args: any[]) => any>,
   installWhisper: null as unknown as import('vitest').Mock<(...args: any[]) => any>,
+  useSpeechEngine: null as unknown as import('vitest').Mock<(...args: any[]) => any>,
   conformance: null as unknown as import('vitest').Mock<(...args: any[]) => any>,
 }));
 
@@ -95,6 +96,10 @@ vi.mock('@/voice/whisper', () => ({
   installWhisper: (...args: unknown[]) => fixture.installWhisper(...args),
   ToolchainMissingError: class extends Error {},
   whisperModelPath: () => '/models/ggml.bin',
+}));
+vi.mock('@/voice/speech-rows', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/voice/speech-rows')>()),
+  useSpeechEngine: (...args: unknown[]) => fixture.useSpeechEngine(...args),
 }));
 vi.mock('@/models/providers/mistral-provider', () => ({ getMistralApiKey: async () => null }));
 vi.mock('@/models/providers/openai-provider', () => ({ getOpenAIApiKey: async () => null }));
@@ -176,6 +181,7 @@ beforeEach(() => {
   fixture.extensionReload = vi.fn(async () => ({ count: 2 }));
   fixture.pluginReload = vi.fn(async () => ({ manifest: { name: 'demo', version: '1', tools: [] } }));
   fixture.installWhisper = vi.fn(async () => {});
+  fixture.useSpeechEngine = vi.fn(async () => ({ row: { name: 'local kokoro' }, bound: 'primary', lane: 'speech' }));
   fixture.conformance = vi.fn(async () => ({ summary: {}, results: [] }));
 });
 
@@ -202,6 +208,7 @@ const GATED: Array<[string, string, unknown?]> = [
   ['GET', '/eval/compare?ids=a,b'],
   ['GET', '/voice/calls'],
   ['POST', '/voice/install', {}],
+  ['POST', '/voice/engines/use', { engine: 'kokoro', direction: 'tts' }],
   ['GET', '/voice/telephony/health'],
 ];
 
@@ -228,6 +235,8 @@ describe('install-state routes', () => {
     await call('POST', '/plugins/demo/reload', {});
     await call('POST', '/tools/github/tools/list_prs/execute', { args: {} });
     await call('POST', '/voice/install', {});
+    await call('POST', '/voice/engines/use', { engine: 'kokoro', direction: 'tts', makePrimary: true });
+    expect(fixture.useSpeechEngine).not.toHaveBeenCalled();
     expect(fixture.extensionReload).not.toHaveBeenCalled();
     expect(fixture.pluginReload).not.toHaveBeenCalled();
     expect(fixture.toolExecute).not.toHaveBeenCalled();

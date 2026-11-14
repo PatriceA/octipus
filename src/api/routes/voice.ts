@@ -433,9 +433,15 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
         });
         // Installed is not enough: it becomes the Transcription engine when
         // nothing else is bound there (never replacing one someone chose).
-        const { useSpeechEngine } = await import('@/voice/speech-rows');
-        const used = await useSpeechEngine('whisper', 'stt');
-        return { ok: true, log, model: used.row.name, bound: used.bound };
+        // The build worked either way: a binding that fails is a warning, not a failed install.
+        try {
+          const { useSpeechEngine } = await import('@/voice/speech-rows');
+          const used = await useSpeechEngine('whisper', 'stt');
+          return { ok: true, log, model: used.row.name, bound: used.bound };
+        } catch (bindError) {
+          apiLogger.warn({ err: bindError }, 'whisper.cpp installed but not bound to the Transcription lane');
+          return { ok: true, log, bound: false, warning: `Installed, but not added as a Transcription engine: ${(bindError as Error).message}. Add it on the Topics page.` };
+        }
       } catch (error) {
         const { ToolchainMissingError } = await import('@/voice/whisper');
         set.status = error instanceof ToolchainMissingError ? 422 : 500;

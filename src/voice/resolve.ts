@@ -23,7 +23,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { boundTo } from '@/models/media-resolver';
 import { logger } from '@/utils/logger';
 import {
-  engineKindOf, isLocalSpeechRow, type SpeechDirection, type SpeechEngineKind, type SpeechFormat,
+  engineKindOf, isLocalSpeechRow, type SpeechDirection, speechDirectionOf, type SpeechEngineKind, type SpeechFormat,
   speechFormats, speechRowAvailable, sttEngineFor, ttsEngineFor,
 } from './speech-rows';
 import type { STTEngine, TranscriptionResult } from './stt';
@@ -71,9 +71,11 @@ export async function speechCandidates(direction: SpeechDirection, req: SpeechRe
     if (alias === 'local') rows = rows.filter(isLocalSpeechRow);
     else if (alias && alias !== 'auto') rows = rows.filter((r) => engineKindOf(r) === alias);
     else if (!alias) {
-      // A row by name: it must be a speech engine of the right direction, bound or not.
+      // A row by name: an install row that is a speech engine of this direction, bound or not.
       const named = await registry.getModel(req.override);
-      if (!named || !engineKindOf(named)) throw new Error(`"${req.override}" is not a ${direction === 'stt' ? 'speech-to-text' : 'text-to-speech'} engine on this install.`);
+      if (!named || named.ownerUserId || speechDirectionOf(named) !== direction) {
+        throw new Error(`"${req.override}" is not a ${direction === 'stt' ? 'speech-to-text' : 'text-to-speech'} engine on this install.`);
+      }
       rows = [named];
     }
     if (rows.length === 0) throw new Error(`No ${req.override} engine is bound to the ${LANE[direction]} lane. Bind one on the Topics page.`);
@@ -96,20 +98,30 @@ export async function pickSpeechRow(direction: SpeechDirection, req: SpeechReque
   const reasons: string[] = [];
   for (const row of rows) {
     const available = await speechRowAvailable(row);
-    if (available.ok) {
-      await assertMayLeaveFor(row, req);
-      if (reasons.length) log.warn({ using: row.name, skipped: reasons }, `Using the ${LANE[direction]} backup`);
-      return row;
-    }
-    reasons.push(`${row.name}: ${available.reason}`);
+    if (!available.ok) { reasons.push(`${row.name}: ${available.reason}`); continue; }
+    const refused = await refusalFor(row, req);
+    if (refused) { reasons.push(`${row.name}: ${refused}`); continue; }
+    if (reasons.length) log.warn({ using: row.name, skipped: reasons }, `Using the ${LANE[direction]} backup`);
+    return row;
   }
   throw new Error(`No ${LANE[direction]} engine can run: ${reasons.join('; ')}`);
 }
 
-async function assertMayLeaveFor(row: ModelConfigEntry, req: SpeechRequest): Promise<void> {
-  if (isLocalSpeechRow(row)) return;
-  const { assertMayLeave } = await import('@/core/protection/routing');
-  await assertMayLeave(row, req.sessionId, row.provider);
+/**
+ * Why this row may not take the request's content (a cloud engine for
+ * content that stays local), or null. A refusal moves on to the next row —
+ * a local backup — instead of failing the whole request.
+ */
+async function refusalFor(row: ModelConfigEntry, req: SpeechRequest): Promise<string | null> {
+  if (isLocalSpeechRow(row)) return null;
+  const { assertMayLeave, ProtectionRoutingError } = await import('@/core/protection/routing');
+  try {
+    await assertMayLeave(row, req.sessionId, row.provider);
+    return null;
+  } catch (err) {
+    if (err instanceof ProtectionRoutingError) return err.message;
+    throw err;
+  }
 }
 
 /** Record one speech call against its row (cost, spend budgets). */
@@ -147,7 +159,8 @@ export async function transcribeWithLane(audio: Buffer, req: SpeechRequest & { f
   for (const row of rows) {
     const available = await speechRowAvailable(row);
     if (!available.ok) { errors.push(`${row.name}: ${available.reason}`); continue; }
-    await assertMayLeaveFor(row, req);
+    const refused = await refusalFor(row, req);
+    if (refused) { errors.push(`${row.name}: ${refused}`); continue; }
     const engine = await sttEngineFor(row, { language: lang });
     try {
       // whisper.cpp reads a WAV it converts itself; the others take the container as is.
@@ -209,9 +222,11 @@ export async function synthesizeWithLane(text: string, req: SpeechRequest & { vo
     throw new CapabilityNotConfiguredError('speak');
   }
   const { getConfig } = await import('@/config');
-  const voice = req.voice || getConfig().voice.ttsVoice || undefined;
   const errors: string[] = [];
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
+    // A voice id belongs to one engine: the request's or the configured voice
+    // goes to the first engine tried; a backup speaks in its own default.
+    const voice = index === 0 ? (req.voice || getConfig().voice.ttsVoice || undefined) : undefined;
     const available = await speechRowAvailable(row);
     if (!available.ok) { errors.push(`${row.name}: ${available.reason}`); continue; }
     const formats = speechFormats(row);
@@ -220,7 +235,8 @@ export async function synthesizeWithLane(text: string, req: SpeechRequest & { vo
       errors.push(`${row.name}: writes ${formats.join('/')} only, not ${req.format}`);
       continue;
     }
-    await assertMayLeaveFor(row, req);
+    const refused = await refusalFor(row, req);
+    if (refused) { errors.push(`${row.name}: ${refused}`); continue; }
     const engine: TTSEngine = await ttsEngineFor(row, { voice, format });
     try {
       const audio = await engine.synthesize(text);

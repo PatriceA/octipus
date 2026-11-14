@@ -50,7 +50,7 @@ export async function detectOllamaInputs(endpoint: string, modelId: string, time
  * embeddings, image generation, moderation): never given image or audio
  * input, whatever family they share a prefix with.
  */
-const NOT_CHAT = /(transcribe|-tts\b|tts-|realtime|-search|embed|whisper|moderation|dall-e|gpt-image|imagen|-image-preview|-image-generation)/;
+const NOT_CHAT = /(transcribe|-tts\b|tts-|realtime|-search|embed|whisper|moderation|dall-e|gpt-image|imagen|-image-preview|-image-generation|-live\b|native-audio|captioner)/;
 
 /**
  * Model families whose input modalities are documented by their vendor, with
@@ -69,7 +69,7 @@ const FAMILY_INPUTS: ReadonlyArray<{ pattern: RegExp; inputs: DetectedInputs }> 
   // Image-in families. OpenAI: the o-series minis and previews are text-only.
   { pattern: /^(chatgpt-4o|gpt-4o(-mini)?(-\d|$|-latest)|gpt-4\.1|gpt-4-turbo(-\d|$)|gpt-5(\.\d)?(-mini|-nano)?(-\d|$|-chat|-latest)|o1(-\d|$)|o3(-\d|$|-pro)|o4-mini(-\d|$))/, inputs: { image: true } },
   { pattern: /^claude-(3-|3\.5-|3\.7-|sonnet-4|opus-4|haiku-4|sonnet-5|opus-5|haiku-5|fable)/, inputs: { image: true } },
-  { pattern: /^(pixtral|mistral-medium-(3|2[5-9]|latest)|mistral-small-(3\.[12]|2[5-9]|latest)|magistral-(medium|small)-1\.2)/, inputs: { image: true } },
+  { pattern: /^(pixtral|mistral-medium-(3|250[5-9]|25[1-9]\d|2[6-9]\d\d|latest)|mistral-small-(3\.[12]|250[3-9]|25[1-9]\d|2[6-9]\d\d|latest)|magistral-(medium|small)-1\.2)/, inputs: { image: true } },
   { pattern: /(^|[-:])vl([-:.]|$)|qwen[\d.]*-?vl|^qwen3\.[5-9]/, inputs: { image: true } },
   // Gemma 3 reads images from 4b up; 1b and 270m are text-only. Gemma 4: all sizes.
   { pattern: /^gemma-?3[:-]?(4b|12b|27b)|^gemma-?4/, inputs: { image: true } },

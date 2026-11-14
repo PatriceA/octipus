@@ -47,7 +47,8 @@ export class RemoteTTSEngine implements TTSEngine {
   constructor(private readonly target: RemoteVoiceTarget, private readonly format: 'wav' | 'mp3' = 'wav') {}
 
   async synthesize(text: string): Promise<Buffer> {
-    const res = await call(this.target, '/speak', { text: text.slice(0, 5000) });
+    // The player plays this format; an engine that cannot write it says so instead of sending noise.
+    const res = await call(this.target, '/speak', { text: text.slice(0, 5000), format: this.format });
     if (!res.ok) {
       const body = (await res.json().catch(() => ({}))) as { error?: string };
       throw new Error(body.error || `Speech failed (${res.status})`);

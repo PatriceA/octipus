@@ -25,6 +25,20 @@ export const LOCAL_AUDIO_PROVIDER = 'local-audio';
 export type SpeechDirection = 'stt' | 'tts';
 export type SpeechFormat = 'mp3' | 'wav' | 'opus' | 'ogg' | 'pcm' | 'flac';
 
+/**
+ * The file extension for an audio MIME type — the name a cloud API and
+ * ffmpeg read the container from (`audio/x-m4a` → m4a, `audio/mpeg` → mp3).
+ */
+export function audioExtensionFor(mimeType: string | undefined, fallback = 'ogg'): string {
+  const sub = (mimeType?.split('/')[1] || '').split(';')[0].trim().toLowerCase().replace(/^x-/, '');
+  const known: Record<string, string> = {
+    mpeg: 'mp3', mp3: 'mp3', mpga: 'mp3', mp4: 'm4a', m4a: 'm4a', aac: 'aac', wav: 'wav', wave: 'wav',
+    ogg: 'ogg', opus: 'opus', webm: 'webm', flac: 'flac', amr: 'amr', '3gpp': '3gp',
+  };
+  if (sub.startsWith('vnd.wave')) return 'wav';
+  return known[sub] ?? (/^[a-z0-9]{2,5}$/.test(sub) ? sub : fallback);
+}
+
 /** The engine families a row can be, and their old `voice.*Provider` names (kept as request aliases). */
 export type SpeechEngineKind = 'whisper' | 'fasterwhisper' | 'kokoro' | 'piper' | 'mistral' | 'openai';
 
@@ -67,6 +81,18 @@ export function engineKindOf(row: Pick<ModelConfigEntry, 'provider' | 'modelId'>
   return undefined;
 }
 
+/** Which way a speech row works: transcription (stt) or speech (tts); undefined = not a speech engine. */
+export function speechDirectionOf(row: Pick<ModelConfigEntry, 'provider' | 'modelId'>): SpeechDirection | undefined {
+  const kind = engineKindOf(row);
+  if (!kind) return undefined;
+  if (kind === 'whisper' || kind === 'fasterwhisper') return 'stt';
+  if (kind === 'kokoro' || kind === 'piper') return 'tts';
+  const id = row.modelId.toLowerCase();
+  if (/tts|speech/.test(id)) return 'tts';
+  if (/transcri|whisper|voxtral/.test(id)) return 'stt';
+  return undefined; // a chat model of a speech provider
+}
+
 /** A local engine runs on this machine (protection levels 3–4 may use it). */
 export function isLocalSpeechRow(row: Pick<ModelConfigEntry, 'provider'>): boolean {
   return row.provider === LOCAL_AUDIO_PROVIDER;
@@ -80,10 +106,17 @@ export function speechFormats(row: Pick<ModelConfigEntry, 'provider' | 'modelId'
   return kind === 'kokoro' || kind === 'piper' ? ['wav'] : ['mp3', 'wav', 'opus', 'flac', 'pcm'];
 }
 
-async function rowApiKey(row: Pick<ModelConfigEntry, 'apiKeyRef'>): Promise<string | undefined> {
+/**
+ * The row's own key (`apiKeyRef`: a vault name or `env:NAME`), or undefined
+ * when the row names none — then the provider's install key is used. A ref
+ * that names a key that is not there fails loud: billing another key would be wrong.
+ */
+async function rowApiKey(row: Pick<ModelConfigEntry, 'apiKeyRef' | 'name'>): Promise<string | undefined> {
   if (!row.apiKeyRef) return undefined;
-  const { getVault } = await import('@/security/vault');
-  return (await getVault().getByName('system', row.apiKeyRef)) || undefined;
+  const { resolveCustomApiKey } = await import('@/services/provider-service');
+  const key = await resolveCustomApiKey(row.apiKeyRef);
+  if (!key) throw new Error(`The key "${row.apiKeyRef}" of model "${row.name}" is not set.`);
+  return key;
 }
 
 /**
@@ -120,6 +153,7 @@ export async function ttsEngineFor(row: ModelConfigEntry, opts: { voice?: string
   const format = opts.format as 'mp3' | 'wav' | 'opus' | 'flac' | 'pcm';
   switch (kind) {
     case 'kokoro':
+      // The row names its voice (kokoro:<voice>); a voice asked for explicitly wins.
       return new tts.KokoroEngine(opts.voice || row.modelId.slice('kokoro:'.length) || undefined, { outputFormat: 'wav' });
     case 'piper': {
       const modelPath = row.metadata?.modelPath || `~/.local/share/piper/voices/${row.modelId.slice('piper:'.length)}.onnx`;
@@ -145,7 +179,12 @@ export async function speechRowAvailable(row: Pick<ModelConfigEntry, 'provider' 
       const { probeWhisper } = await import('./whisper');
       const probe = await probeWhisper();
       if (!probe.binaryOk) return { ok: false, reason: `${probe.binaryReason ?? 'Local whisper is not installed'}. Run \`octi setup\` or install it from the Topics page.` };
-      if (!row.metadata?.modelPath && !probe.modelOk) return { ok: false, reason: 'The whisper model file is missing. Run `octi setup` to download it.' };
+      if (row.metadata?.modelPath) {
+        const { fileAt } = await import('@/utils/fs-file');
+        if (!(await fileAt(row.metadata.modelPath).exists())) return { ok: false, reason: `The whisper model file ${row.metadata.modelPath} is missing.` };
+      } else if (!probe.modelOk) {
+        return { ok: false, reason: 'The whisper model file is missing. Run `octi setup` to download it.' };
+      }
       return { ok: true };
     }
     case 'fasterwhisper':
@@ -162,7 +201,10 @@ export async function speechRowAvailable(row: Pick<ModelConfigEntry, 'provider' 
     }
     case 'mistral':
     case 'openai': {
-      if (row.apiKeyRef && (await rowApiKey(row as ModelConfigEntry))) return { ok: true };
+      if (row.apiKeyRef) {
+        const { resolveCustomApiKey } = await import('@/services/provider-service');
+        return (await resolveCustomApiKey(row.apiKeyRef)) ? { ok: true } : { ok: false, reason: `The model's key "${row.apiKeyRef}" is not set.` };
+      }
       const has = kind === 'mistral'
         ? !!(await (await import('@/models/providers/mistral-provider')).getMistralApiKey())
         : !!(await (await import('@/models/providers/openai-provider')).getOpenAIApiKey());
@@ -190,6 +232,9 @@ export async function useSpeechEngine(
   const registry = getModelRegistry();
   const lane = direction === 'stt' ? 'transcription' as const : 'speech' as const;
   let row = await registry.getModel(entry.row.name);
+  if (row && opts.modelPath && row.metadata?.modelPath !== opts.modelPath) {
+    row = (await registry.updateModel(row.name, { metadata: { ...(row.metadata ?? {}), modelPath: opts.modelPath } })) ?? row;
+  }
   if (!row) {
     row = await registry.registerModel({
       ...entry.row,
@@ -203,7 +248,13 @@ export async function useSpeechEngine(
   if (current?.name === row.name) return { row, bound: 'already-bound', lane };
   if (current && !opts.makePrimary) return { row, bound: 'not-bound', lane };
   if (current) {
-    // The engine it replaces stays as the backup, so nothing that worked stops working.
+    // The engine it replaces becomes the one backup, so nothing that worked
+    // stops working; an older backup steps down.
+    const backup = await registry.getBackupModelForTopic(lane);
+    if (backup && backup.name !== current.name && backup.name !== row.name && backup.topicRoles?.[lane]) {
+      const { [lane]: _dropped, ...rest } = backup.topicRoles;
+      await registry.updateModel(backup.name, { topicRoles: rest });
+    }
     await registry.updateModel(current.name, { topicRoles: { ...(current.topicRoles ?? {}), [lane]: 'backup' } });
   }
   row = await registry.updateModel(row.name, { topicRoles: { ...(row.topicRoles ?? {}), [lane]: 'primary' } }) ?? row;

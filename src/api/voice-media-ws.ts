@@ -114,7 +114,11 @@ interface MediaState {
   speechFrames: number;
   silenceFrames: number;
   closed: boolean;
+  /** No transcription engine could start: wait until then before trying again (no retry per frame). */
+  sttRetryAt?: number;
 }
+
+const STT_RETRY_MS = 30_000;
 
 /** RMS energy of an s16le PCM byte buffer, normalized to [0,1]. */
 function pcmRms(pcm: Uint8Array): number {
@@ -143,8 +147,10 @@ async function startTurn(st: MediaState): Promise<void> {
   } catch (err) {
     apiLogger.error({ err }, 'phone media STT unavailable');
     st.inTurn = false;
+    st.sttRetryAt = Date.now() + STT_RETRY_MS;
     return;
   }
+  st.sttRetryAt = undefined;
   let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
   const stream = new ReadableStream<Uint8Array>({ start(c) { controller = c; } });
   st.turnController = controller;
@@ -319,7 +325,9 @@ export function setupVoiceMediaWebSocket(app: Elysia): void {
       // Idle: wait for speech onset to open a turn.
       if (!st.inTurn) {
         if (rms < RMS_SPEAKING) return;
+        if (st.sttRetryAt && Date.now() < st.sttRetryAt) return;
         await startTurn(st);
+        if (!st.inTurn) return;
       }
 
       feedTurn(st, pcm);

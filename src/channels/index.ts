@@ -206,17 +206,17 @@ function isAudioAttachment(a: Attachment): boolean {
  * downloader (Slack/WhatsApp auth headers) and the default STT engine order
  * (local whisper.cpp → Mistral → OpenAI). Returns '' if nothing transcribed.
  */
-async function transcribeChannelAudio(audioAttachments: Attachment[], message: UnifiedMessage): Promise<string> {
+async function transcribeChannelAudio(audioAttachments: Attachment[], message: UnifiedMessage, sessionId: string): Promise<string> {
   const { downloadAttachment } = await import('./attachment-handler');
   const { transcribeAudioBuffer } = await import('@/voice/stt');
+  const { audioExtensionFor } = await import('@/voice/speech-rows');
   const parts: string[] = [];
   for (const att of audioAttachments) {
     try {
       const buf = await downloadAttachment(att, message);
       if (!buf?.length) continue;
-      const ext = (att.mimeType.split('/')[1] || 'ogg').split(';')[0];
-      // mpeg → mp3 for the name a cloud API reads the container from.
-      const text = (await transcribeAudioBuffer(buf, ext === 'mpeg' ? 'mp3' : ext, { userId: message.userId })).trim();
+      // The session's protection level decides whether a cloud engine may hear it.
+      const text = (await transcribeAudioBuffer(buf, audioExtensionFor(att.mimeType), { userId: message.userId, sessionId })).trim();
       if (text) parts.push(text);
     } catch (err) {
       channelLogger.error({ err, channel: message.channelType }, 'Voice note transcription failed');
@@ -1111,7 +1111,7 @@ export async function initializeChannels(): Promise<void> {
         }
         if (audioAttachments.length) {
           voiceIn = true;
-          const transcript = await transcribeChannelAudio(audioAttachments, message);
+          const transcript = await transcribeChannelAudio(audioAttachments, message, resolvedSessionId);
           if (!transcript) {
             await umi.send(message.channelType, message.channelId, {
               content: "Sorry, I couldn't transcribe that voice message. Please try again or type it out.",
