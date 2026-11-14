@@ -1,3 +1,4 @@
+import { openAiRoleContent } from './media-content';
 import { normalizeUsage } from './usage';
 import OpenAI from 'openai';
 import type {
@@ -369,10 +370,7 @@ export class DeepSeekProvider implements ModelProvider {
         return out;
       }
 
-      const base: ChatCompletionMessageParam & { reasoning_content?: string } = {
-        role: msg.role as 'system' | 'user' | 'assistant',
-        content: msg.content,
-      };
+      const base: ChatCompletionMessageParam & { reasoning_content?: string } = openAiRoleContent(msg);
       if (msg.role === 'assistant' && msg.reasoningContent) {
         base.reasoning_content = msg.reasoningContent;
       }

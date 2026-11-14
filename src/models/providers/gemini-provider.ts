@@ -1,3 +1,4 @@
+import { openAiContentParts } from './media-content';
 import { recordProviderUsage } from './instrumented';
 import { normalizeUsage } from './usage';
 import OpenAI from 'openai';
@@ -192,6 +193,8 @@ export class GeminiProvider implements ModelProvider {
       } else if (msg.role === 'system') {
         // Gemini 2.0+ supports system role via OpenAI-compat endpoint
         result.push({ role: 'system', content: msg.content });
+      } else if (msg.role === 'user') {
+        result.push({ role: 'user', content: openAiContentParts(msg) });
       } else {
         result.push({ role: msg.role, content: msg.content });
       }

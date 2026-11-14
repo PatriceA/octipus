@@ -97,7 +97,7 @@ export class BrowserExtTool extends BaseTool {
         { name: 'select_tab', description: 'Switch to a specific tab', parameters: { tabId: { type: 'number', description: 'Tab ID', required: true } }, returns: 'Tab info' },
         { name: 'get_tabs', description: 'List all open browser tabs', parameters: {}, returns: 'List of tabs' },
         // Screenshots & content
-        { name: 'screenshot', description: 'Take a screenshot of the active tab', parameters: {}, returns: 'Base64 PNG screenshot' },
+        { name: 'screenshot', description: 'Take a screenshot of the active tab', parameters: {}, returns: 'The screenshot\'s workspace path (shown to a model that reads images)' },
         { name: 'extract_content', description: 'Extract text, links, and forms from the page', parameters: { selector: { type: 'string', description: 'CSS selector scope' } }, returns: 'Page content' },
         // Interactions
         { name: 'click', description: 'Click an element by CSS selector', parameters: { selector: { type: 'string', description: 'CSS selector', required: true } }, returns: 'Click result' },
@@ -238,15 +238,18 @@ export class BrowserExtTool extends BaseTool {
 
     this.registerTool(
       'screenshot',
-      'Take a screenshot of the active browser tab. Returns a base64 PNG image.',
+      'Take a screenshot of the active browser tab. It is saved in the workspace (path returned); if you can see images it is shown to you, otherwise look at it with vision__view_image.',
       createParameterSchema({
         tabId: { type: 'number', description: 'Specific tab ID (optional)' },
       }),
-      async (args) => {
+      async (args, context) => {
         const result = await bridge.sendCommand('screenshot', {
           tabId: args.tabId as number | undefined,
         }) as { image: string; tabId: number; url: string; title: string };
-        return { tabId: result.tabId, url: result.url, title: result.title, image: result.image };
+        const bytes = Buffer.from(result.image.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+        const { keepToolImage, withToolMedia } = await import('@/core/media/tool-media');
+        const kept = await keepToolImage(context, bytes);
+        return withToolMedia({ tabId: result.tabId, url: result.url, title: result.title, path: kept.path }, [kept.media]);
       },
       { permissionAction: 'screenshot' },
     );

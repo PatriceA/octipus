@@ -5,6 +5,7 @@ import { actionRecovery, isReadOnlyAction } from './action-recovery';
 import { withExecutionSignal } from './execution-scope';
 import { isToolOn, toolOffMessage } from '@/core/modules/registry';
 import { capabilitiesMet, capabilityOffMessage, firstOffCapability } from '@/core/capabilities/gates';
+import { takeToolMedia, toolMediaMessage } from '@/core/media/tool-media';
 import { isCancellationError } from '@/core/swarm/errors';
 import { type SideEffectCounters, emptyCounters } from '@/core/swarm/receipt';
 import { renderToolActivity } from '@/core/work-stream/renderers';
@@ -372,6 +373,16 @@ export class ToolExecutor {
     this.counters.byName[name] = (this.counters.byName[name] ?? 0) + 1;
   }
 
+  /**
+   * What this agent's own model brings (docs/MEDIA.md): a model that reads
+   * images can `see` — view_image loads the pixels into its context — even
+   * where nothing install-wide can. Set by the worker before each request.
+   */
+  private ownCapabilities: Partial<Record<import('@/shared/capabilities').Capability, boolean>> = {};
+  setOwnCapabilities(own: Partial<Record<import('@/shared/capabilities').Capability, boolean>>): void {
+    this.ownCapabilities = own;
+  }
+
   registerTool(tool: ToolHandler): void {
     this.tools.set(tool.name, tool);
     agentLogger.debug({ agentId: this.context.id, tool: tool.name }, 'Tool registered');
@@ -389,7 +400,7 @@ export class ToolExecutor {
    * declaration no longer offers them.
    */
   getTools(): Map<string, ToolHandler> {
-    const hidden = (tool: ToolHandler) => (tool.toolId !== undefined && !isToolOn(tool.toolId)) || !capabilitiesMet(tool.requires);
+    const hidden = (tool: ToolHandler) => (tool.toolId !== undefined && !isToolOn(tool.toolId)) || !capabilitiesMet(tool.requires, this.ownCapabilities);
     const anyHidden = [...this.tools.values()].some(hidden);
     if (!this.blockedTools.size && !anyHidden) return this.tools;
     return new Map([...this.tools].filter(([name, tool]) => !this.blockedTools.has(name) && !hidden(tool)));
@@ -444,7 +455,7 @@ export class ToolExecutor {
    */
   private resolveToolName(name: string): { canonical: string } | { didYouMean: string } | null {
     // Never a tool of a module that is off (docs/MODULES.md).
-    const names = [...this.tools].filter(([, tool]) => (!tool.toolId || isToolOn(tool.toolId)) && capabilitiesMet(tool.requires)).map(([registered]) => registered);
+    const names = [...this.tools].filter(([, tool]) => (!tool.toolId || isToolOn(tool.toolId)) && capabilitiesMet(tool.requires, this.ownCapabilities)).map(([registered]) => registered);
     // Stage 1: unambiguous bare sub-name → prefixed name.
     if (!name.includes('__')) {
       const suffix = `__${name}`;
@@ -763,7 +774,7 @@ export class ToolExecutor {
       }
       // A capability that is not configured (or was unconfigured since the
       // run started): the call is refused with the reason, never attempted.
-      const missingCapability = firstOffCapability(tool.requires);
+      const missingCapability = firstOffCapability(tool.requires, this.ownCapabilities);
       if (missingCapability) {
         // Not a permission denial: nothing was refused by policy, the install has no model for it.
         results.push({ toolCallId: toolCall.id, result: null, errorCode: 'capability_not_configured', error: capabilityOffMessage(missingCapability) });
@@ -1292,8 +1303,19 @@ export class ToolExecutor {
     // one registry lookup (Redis-cached) per tool batch, not per result.
     const modelSeesImages = await this.boundModelSupportsVision();
 
+    // Images a tool asked to show the model (tool-media.ts): one user message
+    // after this batch's tool results.
+    const shownMedia: import('./types').MediaRef[] = [];
+
     // Build tool result messages
     for (const result of results) {
+      const taken = takeToolMedia(result.result);
+      if (taken.media.length) {
+        // Shown only to a model that is shown images after a tool result
+        // (agent-worker sets `see` per request); the others keep the path.
+        if (this.ownCapabilities.see) shownMedia.push(...taken.media);
+        result.result = taken.result;
+      }
       // Drop UI-only work-stream metadata (e.g. a file diff) before the result
       // reaches the model or the persisted transcript — the model already has
       // the inputs it acted on, so this would be redundant, token-costly context.
@@ -1358,6 +1380,8 @@ export class ToolExecutor {
         agentId: this.context.id,
       });
     }
+
+    if (shownMedia.length) toolMessages.push(toolMediaMessage(shownMedia));
 
     return toolMessages;
   }

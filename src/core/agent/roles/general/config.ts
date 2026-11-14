@@ -8,7 +8,7 @@ export const meta: RoleMeta = {
   // shell/terminal tool is mounted in this session" — true of the role, and
   // wrong about the product. Execution is still gated by the shell tool's own
   // permission + sandbox, which is where that decision belongs.
-  toolIds: ['companion', 'filesystem', 'shell', 'connections', 'repo_registry', 'browser-ext', 'websearch', 'messaging', 'knowledge', 'notes', 'tasks', 'cases', 'records', 'task_state', 'scheduling', 'monitor', 'profiles', 'email-processor', 'mail', 'protection', 'artifacts', 'artifacts_toolbox', 'documents', 'skill-distill', 'mcp', 'mcp_admin', 'plugin_dev'],
+  toolIds: ['companion', 'filesystem', 'shell', 'connections', 'repo_registry', 'browser-ext', 'websearch', 'messaging', 'knowledge', 'notes', 'tasks', 'cases', 'records', 'task_state', 'scheduling', 'monitor', 'profiles', 'email-processor', 'mail', 'protection', 'artifacts', 'artifacts_toolbox', 'documents', 'skill-distill', 'mcp', 'mcp_admin', 'plugin_dev', 'vision'],
   // Lazy tool discovery (every provider; not small models — `shouldUseLazyDiscovery`
   // in lazy-tools.ts): general is a catch-all with the biggest payload (~53k).
   // Core covers the prompt's explicitly-routed everyday intents (filesystem,
@@ -28,7 +28,7 @@ export const meta: RoleMeta = {
   // nothing. "Save this as a skill" names the capability as directly as "run
   // this command" does, and the whole toolbox is 181 tokens of schema — about
   // 2% of the core set — so the discovery round trip was never worth its price.
-  coreToolIds: ['companion', 'monitor', 'filesystem', 'shell', 'connections', 'repo_registry', 'websearch', 'knowledge', 'messaging', 'notes', 'tasks', 'skill-distill'],
+  coreToolIds: ['companion', 'monitor', 'filesystem', 'shell', 'connections', 'repo_registry', 'websearch', 'knowledge', 'messaging', 'notes', 'tasks', 'skill-distill', 'vision'],
   criticalRules: [
     "Ask clarifying questions when the request is ambiguous rather than guessing",
     "Provide sources or reasoning for factual claims",

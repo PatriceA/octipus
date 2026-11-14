@@ -83,6 +83,10 @@ export interface MessageMetadata {
 export interface AttachmentData {
   type: 'image' | 'file' | 'audio' | 'video';
   url?: string;
+  /** A file on this host the model was shown (a normalised image): rebuilt into the turn on reload. */
+  path?: string;
+  /** Where it is shown from (the user's upload or a tool such as generate_image). */
+  source?: 'user' | 'tool';
   mimeType: string;
   filename?: string;
   size?: number;

@@ -1,3 +1,4 @@
+import { ollamaImages, openAiRoleContent } from './media-content';
 import { recordProviderUsage } from './instrumented';
 import { normalizeUsage } from './usage';
 import OpenAI from 'openai';
@@ -792,8 +793,7 @@ export class OllamaProvider implements ModelProvider {
       }
 
       return {
-        role: msg.role as 'system' | 'user' | 'assistant',
-        content: msg.content,
+        ...openAiRoleContent(msg),
       };
     });
   }
@@ -832,9 +832,11 @@ export class OllamaProvider implements ModelProvider {
         };
       }
 
+      const images = msg.role === 'user' ? ollamaImages(msg) : undefined;
       return {
         role: msg.role,
         content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+        ...(images ? { images } : {}),
       };
     });
   }

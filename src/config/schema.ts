@@ -856,6 +856,23 @@ export const configSchema = z.object({
   vaultSync: vaultSyncConfigSchema.prefault({}),
   multiuser: multiuserConfigSchema.prefault({}),
   compaction: compactionConfigSchema.prefault({}),
+  /**
+   * Images and audio in conversations (docs/MEDIA.md).
+   *   imageInput  auto: a model that reads images gets them itself; one that
+   *               cannot gets the path and `vision__view_image`. native: the
+   *               same, but never an eager description. describe: every image
+   *               is described up front by the Vision lane (the old behaviour;
+   *               also forced for models without tool calling).
+   *   replayRecentImages  how many of the newest image-bearing messages keep
+   *               their pixels in each request (older ones become a line the
+   *               model can look again from).
+   */
+  media: z.object({
+    imageInput: z.enum(['auto', 'native', 'describe']).default('auto').catch('auto'),
+    replayRecentImages: z.number().int().min(0).max(10).default(3),
+    /** File images sent alone on a channel as documents too (they always reach the agent). */
+    fileChannelImages: z.boolean().default(false),
+  }).prefault({}),
   memory: z.object({
     /**
      * When to run the memory extractor + judge pipeline.

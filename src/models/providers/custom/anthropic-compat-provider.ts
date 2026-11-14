@@ -1,3 +1,4 @@
+import { anthropicMediaBlocks } from '../media-content';
 import type { ChatCompletionTool } from 'openai/resources/chat/completions';
 import { ClassifiedError, classifyError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import type { AgentMessage, ToolCall } from '@/core/types';
@@ -370,9 +371,15 @@ export function toAnthropicMessages(messages: AgentMessage[]): { system?: string
     }
 
     // Plain user / assistant text turn — skip empty text (Anthropic rejects
-    // empty text blocks; pushMerged drops the resulting empty turn).
-    if (!msg.content?.trim()) continue;
-    pushMerged(msg.role === 'assistant' ? 'assistant' : 'user', [{ type: 'text', text: msg.content }]);
+    // empty text blocks; pushMerged drops the resulting empty turn). A user
+    // turn's images follow its text (an image shown by a tool lands after the
+    // tool results it merges with).
+    const images = msg.role === 'user' ? anthropicMediaBlocks(msg) : [];
+    if (!msg.content?.trim() && images.length === 0) continue;
+    pushMerged(msg.role === 'assistant' ? 'assistant' : 'user', [
+      ...(msg.content?.trim() ? [{ type: 'text' as const, text: msg.content }] : []),
+      ...images,
+    ]);
   }
 
   // Histories can arrive already compacted or re-sliced by callers. If the

@@ -819,7 +819,7 @@ export class MCPBridge extends EventEmitter {
           }
         }
       }
-      return result;
+      return await keepMcpImages(result, context);
     } catch (err) {
       breaker.recordFailure(serverId);
       throw err;
@@ -1434,4 +1434,30 @@ export function getMCPBridge(): MCPBridge {
     bridgeInstance = new MCPBridge();
   }
   return bridgeInstance;
+}
+
+/**
+ * MCP `image` content (a screenshot, a chart) is kept in the agent's
+ * workspace and shown to a model that reads images; the part keeps its path
+ * instead of base64 (docs/MEDIA.md). An image that cannot be kept stays as it
+ * was: the base64 is then stripped for a model that cannot see.
+ */
+async function keepMcpImages(result: unknown, context: AgentContext): Promise<unknown> {
+  if (!result || typeof result !== 'object' || !Array.isArray((result as { content?: unknown }).content)) return result;
+  const parts = (result as { content: Array<Record<string, unknown>> }).content;
+  if (!parts.some((p) => p?.type === 'image' && typeof p.data === 'string')) return result;
+  const { keepToolImage, withToolMedia } = await import('@/core/media/tool-media');
+  const media: import('@/core/types').MediaRef[] = [];
+  const content = await Promise.all(parts.map(async (part) => {
+    if (part?.type !== 'image' || typeof part.data !== 'string') return part;
+    try {
+      const kept = await keepToolImage(context, Buffer.from(part.data, 'base64'));
+      media.push(kept.media);
+      return { type: 'image', path: kept.path, mimeType: part.mimeType };
+    } catch (err) {
+      coreLogger.warn({ err }, 'MCP image could not be kept in the workspace');
+      return part;
+    }
+  }));
+  return withToolMedia({ ...(result as object), content }, media);
 }

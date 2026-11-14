@@ -161,8 +161,14 @@ export function toContextMessage(row: Message): AgentMessage {
   const promptContext = typeof row.metadata?.promptContext === 'string'
     ? omitSpaceTurnContext(omitGroupTranscripts(row.metadata.promptContext))
     : row.metadata?.promptContext;
+  // Images shown to the model with this turn come back as references; whether
+  // they are re-sent (and which) is decided per request (hydrateMedia).
+  const media = (row.metadata?.attachments ?? [])
+    .filter((a) => typeof a.path === 'string' && (a.type === 'image' || a.type === 'audio'))
+    .map((a) => ({ kind: a.type as 'image' | 'audio', path: a.path as string, mimeType: a.mimeType, source: a.source ?? 'user' }));
   return { sourceMessageId: row.id, role: row.role as AgentMessage['role'],
-    content: [promptContext, row.content].filter(Boolean).join('\n\n'), timestamp: row.createdAt };
+    content: [promptContext, row.content].filter(Boolean).join('\n\n'), timestamp: row.createdAt,
+    ...(media.length ? { media } : {}) };
 }
 
 /**

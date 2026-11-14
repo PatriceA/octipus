@@ -1,3 +1,4 @@
+import { openAiRoleContent } from './providers/media-content';
 import OpenAI from 'openai';
 import type {
   ChatCompletionCreateParams,
@@ -391,8 +392,7 @@ export class LiteLLMClient {
       }
 
       const base: ChatCompletionMessageParam & { reasoning_content?: string } = {
-        role: msg.role as 'system' | 'user' | 'assistant',
-        content: msg.content,
+        ...openAiRoleContent(msg),
       };
       if (msg.role === 'assistant' && msg.reasoningContent) {
         base.reasoning_content = msg.reasoningContent;

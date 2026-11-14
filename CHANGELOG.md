@@ -16,6 +16,18 @@ labels reflect blast radius, not contract guarantees.
   Embedding is no longer reported as required. Without an embedding model
   nothing is chunked or embedded; content saved meanwhile is indexed once a
   model is bound (migration 0184).
+- **Agents look at images themselves.** An attached image goes to a model that
+  reads images as the image itself (normalized to ≤ 2048 px), not as a
+  description; a model that cannot see gets the path and `vision__view_image`,
+  and decides whether to look. Channel images (Telegram, Slack, WhatsApp,
+  Teams) are handled the same way, with or without a caption, and are no
+  longer filed as documents unless `media.fileChannelImages` is on. New
+  `vision` tool: `view_image` (pixels for a seeing model, the Vision lane's
+  answer otherwise, region crops, URLs through the SSRF guard) and
+  `read_document_text`. Browser and MCP screenshots are saved in the
+  workspace and shown to a seeing model instead of base64 in the text
+  ([MEDIA.md](docs/MEDIA.md)). Settings `media.imageInput`,
+  `media.replayRecentImages`.
 - **New lanes:** Image generation, Transcription, Speech. Vision and OCR are
   optional: a model that reads images gets them itself; OCR falls back to
   Vision, then to a default model that reads images. Model rows gain

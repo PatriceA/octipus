@@ -52,6 +52,7 @@ import * as ShellModule from './shell';
 import * as SkillDistillModule from './skill-distill';
 import * as TaskStateModule from './task-state';
 import * as TasksModule from './tasks';
+import * as VisionModule from './vision';
 import * as VisualModule from './visual';
 import * as VoiceModule from './voice';
 import * as WebsearchModule from './websearch';
@@ -92,6 +93,7 @@ const MODULES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ['skill-distill', SkillDistillModule],
   ['task-state', TaskStateModule],
   ['tasks', TasksModule],
+  ['vision', VisionModule],
   ['visual', VisualModule],
   ['voice', VoiceModule],
   ['websearch', WebsearchModule],

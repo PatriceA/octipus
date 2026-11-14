@@ -1,3 +1,4 @@
+import { openAiRoleContent } from '../media-content';
 import { normalizeUsage } from '../usage';
 import OpenAI from 'openai';
 import type {
@@ -266,8 +267,7 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
       }
 
       return {
-        role: msg.role as 'system' | 'user' | 'assistant',
-        content: msg.content,
+        ...openAiRoleContent(msg),
       };
     });
   }

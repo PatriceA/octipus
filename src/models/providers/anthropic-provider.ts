@@ -1,3 +1,4 @@
+import { openAiRoleContent } from './media-content';
 import OpenAI from 'openai';
 import type {
   ChatCompletionCreateParams,
@@ -439,8 +440,7 @@ export class AnthropicProvider implements ModelProvider {
       }
 
       return {
-        role: msg.role as 'system' | 'user' | 'assistant',
-        content: msg.content,
+        ...openAiRoleContent(msg),
       };
     });
   }

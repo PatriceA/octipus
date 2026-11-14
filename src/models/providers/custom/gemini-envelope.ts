@@ -11,6 +11,7 @@
  * Responses come back as native Gemini shape (`candidates[].content.parts[]`).
  */
 
+import { geminiMediaParts } from '../media-content';
 import type { ChatCompletionTool } from 'openai/resources/chat/completions';
 import type { AgentMessage } from '@/core/types';
 
@@ -103,7 +104,10 @@ export function buildGeminiContents(messages: AgentMessage[]): Array<Record<stri
 
     contents.push({
       role: msg.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: msg.content }],
+      parts: [
+        ...(msg.content || msg.role === 'assistant' ? [{ text: msg.content }] : []),
+        ...(msg.role === 'user' ? geminiMediaParts(msg) : []),
+      ],
     });
   }
 
