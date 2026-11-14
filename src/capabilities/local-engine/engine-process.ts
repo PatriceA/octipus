@@ -32,6 +32,9 @@ interface Running {
   startedAt: number;
   /** Stopped on purpose: its exit is not a crash. */
   stopping: boolean;
+  /** Requests being served: a switch to another model waits for them. */
+  inFlight: number;
+  idle: Array<() => void>;
 }
 
 let running: Running | null = null;
@@ -52,11 +55,16 @@ export function engineBinaryPath(): string | null {
   return join(engineDir(key, active.tag, active.variant), `${LOCAL_ENGINE_MANIFEST.engine.binary}${EXE}`);
 }
 
+/** What the engine may see of the backend's environment: never its secrets or provider keys. */
+const ENGINE_ENV_ALLOW = /^(PATH|Path|HOME|USERPROFILE|SystemRoot|SYSTEMROOT|windir|TMP|TEMP|TMPDIR|LANG|LC_[A-Z]+|TZ|LD_LIBRARY_PATH|DYLD_LIBRARY_PATH|VK_[A-Z_]+|GGML_[A-Z_]+|CUDA_VISIBLE_DEVICES)$/;
+
 /** The environment the engine runs with (the probe uses the same one). */
 export function engineEnv(bin: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const dir = dirname(bin);
-  const libVar = process.platform === 'darwin' ? 'DYLD_LIBRARY_PATH' : process.platform === 'win32' ? 'PATH' : 'LD_LIBRARY_PATH';
-  return { ...process.env, [libVar]: [dir, process.env[libVar]].filter(Boolean).join(delimiter), ...extra };
+  const base: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && ENGINE_ENV_ALLOW.test(k)) base[k] = v;
+  const libVar = process.platform === 'darwin' ? 'DYLD_LIBRARY_PATH' : process.platform === 'win32' ? (base.Path !== undefined ? 'Path' : 'PATH') : 'LD_LIBRARY_PATH';
+  return { ...base, [libVar]: [dir, base[libVar]].filter(Boolean).join(delimiter), ...extra };
 }
 
 export function isModelInstalled(model: LocalEmbeddingModel): boolean {
@@ -90,7 +98,11 @@ function armIdleStop(): void {
   if (idleTimer) clearTimeout(idleTimer);
   const ms = idleStopMs();
   if (!ms) return;
-  idleTimer = setTimeout(() => { log.info('Local embedding engine idle: stopping'); void stopLocalEngine(); }, ms);
+  idleTimer = setTimeout(() => {
+    if (running && running.inFlight > 0) { armIdleStop(); return; } // still serving
+    log.info('Local embedding engine idle: stopping');
+    void stopLocalEngine();
+  }, ms);
   idleTimer.unref?.();
 }
 
@@ -157,7 +169,7 @@ async function start(model: LocalEmbeddingModel): Promise<Running> {
   const tail: string[] = [];
   void drainLines(proc.stdout, tail);
   void drainLines(proc.stderr, tail);
-  const self: Running = { proc, port, apiKey, model, startedAt: Date.now(), stopping: false };
+  const self: Running = { proc, port, apiKey, model, startedAt: Date.now(), stopping: false, inFlight: 0, idle: [] };
   // Never outlive the backend, whatever way it exits.
   if (!exitHookInstalled) {
     exitHookInstalled = true;
@@ -202,18 +214,55 @@ export async function ensureLocalEngine(modelId: string): Promise<{ port: number
       await starting.promise.catch(() => {});
       continue;
     }
-    if (running) await stopLocalEngine();
+    if (running) {
+      // Another model's requests finish first (at most two minutes), then it is switched.
+      await drained(running, 120_000);
+      if (running && running.model.id !== model.id) await stopLocalEngine();
+      continue; // someone may have started meanwhile: look again
+    }
     const promise = start(model);
     const entry = { modelId: model.id, promise };
     starting = entry;
     try {
-      running = await promise;
+      const started = await promise;
+      // Never leave an engine untracked (it would outlive the idle and shutdown stops).
+      if (running && running !== started) await stopLocalEngine();
+      running = started;
     } finally {
       if (starting === entry) starting = null;
     }
   }
   if (running?.model.id === model.id) return { port: running.port, apiKey: running.apiKey, model: running.model };
   throw new Error(`The local embedding engine is busy switching models; try ${model.id} again.`);
+}
+
+function drained(engine: Running, timeoutMs: number): Promise<void> {
+  if (engine.inFlight === 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    timer.unref?.();
+    engine.idle.push(() => { clearTimeout(timer); resolve(); });
+  });
+}
+
+/**
+ * Run `fn` against the engine serving `modelId`; while it runs, a switch to
+ * another model waits instead of stopping the engine under it.
+ */
+export async function useLocalEngine<T>(modelId: string, fn: (engine: { port: number; apiKey: string; model: LocalEmbeddingModel }) => Promise<T>): Promise<T> {
+  for (;;) {
+    const engine = await ensureLocalEngine(modelId);
+    const current = running;
+    if (!current || current.port !== engine.port) continue; // switched before we got in
+    current.inFlight++;
+    try {
+      return await fn(engine);
+    } finally {
+      current.inFlight--;
+      if (current.inFlight === 0) for (const wake of current.idle.splice(0)) wake();
+      armIdleStop();
+    }
+  }
 }
 
 export async function stopLocalEngine(): Promise<void> {

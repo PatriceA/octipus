@@ -27,16 +27,17 @@ export class LocalEngineProvider implements ModelProvider {
   }
 
   async embed(texts: string[], model: string): Promise<number[][]> {
-    const { ensureLocalEngine } = await import('@/capabilities/local-engine/engine-process');
-    const { port, apiKey } = await ensureLocalEngine(model);
-    const res = await fetch(`http://127.0.0.1:${port}/v1/embeddings`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ input: texts, model }),
-      signal: AbortSignal.timeout(120_000),
+    const { useLocalEngine } = await import('@/capabilities/local-engine/engine-process');
+    const json = await useLocalEngine(model, async ({ port, apiKey }) => {
+      const res = await fetch(`http://127.0.0.1:${port}/v1/embeddings`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({ input: texts, model }),
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (!res.ok) throw new Error(`The local embedding engine answered HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+      return (await res.json()) as { data?: Array<{ index?: number; embedding: number[] }>; usage?: { prompt_tokens?: number; total_tokens?: number } };
     });
-    if (!res.ok) throw new Error(`The local embedding engine answered HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
-    const json = (await res.json()) as { data?: Array<{ index?: number; embedding: number[] }>; usage?: { prompt_tokens?: number; total_tokens?: number } };
     const data = [...(json.data ?? [])].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
     if (data.length !== texts.length) throw new Error(`The local embedding engine returned ${data.length} vectors for ${texts.length} texts.`);
     const tokens = json.usage?.prompt_tokens ?? json.usage?.total_tokens ?? 0;

@@ -25,6 +25,8 @@ const IDLE_TIMEOUT_MS = 60_000;
 /** Write a chunk, honouring back-pressure; a stream error (ENOSPC, a removed folder) rejects. */
 function writeChunk(out: WriteStream, chunk: Uint8Array): Promise<void> {
   return new Promise((resolve, reject) => {
+    if (out.errored) { reject(out.errored); return; }
+    if (out.destroyed) { reject(new Error('The download file was closed')); return; }
     const onError = (err: Error) => { out.off('drain', onDrain); reject(err); };
     const onDrain = () => { out.off('error', onError); resolve(); };
     out.once('error', onError);
@@ -70,6 +72,8 @@ export async function downloadVerified(url: string, target: string, sha256: stri
       const total = opts.size ?? (length !== null ? (resumed ? have + length : length) : null);
       let done = resumed ? have : 0;
       out = createWriteStream(part, { flags: resumed ? 'a' : 'w' });
+      // An open failure (EACCES, ENOSPC, a vanished folder) before the first write is kept, not uncaught.
+      out.on('error', () => {});
       const reader = res.body.getReader();
       for (;;) {
         const { done: end, value } = await reader.read();

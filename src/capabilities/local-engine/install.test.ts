@@ -298,6 +298,35 @@ describe.skipIf(!supported)('local embedding engine', () => {
     expect(await upgradeLocalEngineIfNeeded()).toBe(false);
   });
 
+  test('an update whose build does not run keeps the build in use', async () => {
+    const { startLocalEngineInstall, waitForLocalEngineInstall, upgradeLocalEngineIfNeeded } = await import('./install');
+    startLocalEngineInstall('admin');
+    await waitForLocalEngineInstall();
+    const engines = join(root, 'models', 'engines', 'llama.cpp');
+    const { rename } = await import('node:fs/promises');
+    await rename(join(engines, 'b1'), join(engines, 'b0'));
+    await writeFile(join(engines, 'active.json'), JSON.stringify({ tag: 'b0', variant: 'cpu' }));
+    archive = brokenArchive;
+    archiveSha = createHash('sha256').update(archive).digest('hex');
+    await expect(upgradeLocalEngineIfNeeded()).rejects.toThrow(/does not run/);
+    expect(JSON.parse(await readFile(join(engines, 'active.json'), 'utf8'))).toEqual({ tag: 'b0', variant: 'cpu' });
+    const { LocalEngineProvider } = await import('@/models/providers/local-engine-provider');
+    expect((await new LocalEngineProvider().embed(['ab'], 'tiny'))[0]?.[0]).toBe(2);
+  });
+
+  test('the engine never sees the backend\'s secrets', async () => {
+    process.env.MASTER_KEY = 'secret-master';
+    try {
+      const { engineEnv } = await import('./engine-process');
+      const env = engineEnv('/x/llama-server', { LLAMA_API_KEY: 'k' });
+      expect(env.MASTER_KEY).toBeUndefined();
+      expect(env.LLAMA_API_KEY).toBe('k');
+      expect(env.PATH).toBe(process.env.PATH);
+    } finally {
+      delete process.env.MASTER_KEY;
+    }
+  });
+
   test('a verified install is not downloaded again', async () => {
     const { startLocalEngineInstall, waitForLocalEngineInstall } = await import('./install');
     startLocalEngineInstall('admin');

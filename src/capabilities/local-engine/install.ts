@@ -22,7 +22,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { spawnProcess } from '@/utils/proc';
 import { logger } from '@/utils/logger';
 import { downloadVerified, sha256File } from './download';
-import { engineEnv, ensureLocalEngine, stopLocalEngine } from './engine-process';
+import { engineEnv, stopLocalEngine, useLocalEngine } from './engine-process';
 import { engineAsset, type EngineVariant, LOCAL_ENGINE_MANIFEST, type LocalEmbeddingModel, localEmbeddingModel, modelUrl, type PlatformKey, platformKey } from './manifest';
 import { activeEngine, engineDir, enginesRoot, modelDir, modelFilePath } from './paths';
 
@@ -150,7 +150,8 @@ async function activate(variant: EngineVariant): Promise<boolean> {
   await mkdir(enginesRoot(), { recursive: true });
   await writeFile(join(enginesRoot(), 'active.json'), `${JSON.stringify({ tag, variant })}\n`);
   for (const entry of await readdir(enginesRoot(), { withFileTypes: true }).catch(() => [])) {
-    if (!entry.isDirectory() || !/^b\d+$/.test(entry.name) || entry.name === tag) continue;
+    // Older tags, and staging folders an interrupted install left behind.
+    if (!entry.isDirectory() || !(/^b\d+$/.test(entry.name) || entry.name.startsWith('.staging-')) || entry.name === tag) continue;
     await rm(join(enginesRoot(), entry.name), { recursive: true, force: true }).catch((err: unknown) => log.warn({ err, dir: entry.name }, 'Could not remove an older engine build yet'));
   }
   return changed;
@@ -234,15 +235,16 @@ async function installModel(model: LocalEmbeddingModel, progress: (percent: numb
 
 /** Embed a probe text through the running engine; the dimension must match the manifest. */
 async function probeEmbedding(model: LocalEmbeddingModel): Promise<void> {
-  const { port, apiKey } = await ensureLocalEngine(model.id);
-  const res = await fetch(`http://127.0.0.1:${port}/v1/embeddings`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ input: [`${model.prefixes.document}hello world`], model: model.id }),
-    signal: AbortSignal.timeout(60_000),
+  const json = await useLocalEngine(model.id, async ({ port, apiKey }) => {
+    const res = await fetch(`http://127.0.0.1:${port}/v1/embeddings`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ input: [`${model.prefixes.document}hello world`], model: model.id }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!res.ok) throw new Error(`The engine did not embed the probe text (HTTP ${res.status}).`);
+    return (await res.json()) as { data?: Array<{ embedding?: number[] }> };
   });
-  if (!res.ok) throw new Error(`The engine did not embed the probe text (HTTP ${res.status}).`);
-  const json = (await res.json()) as { data?: Array<{ embedding?: number[] }> };
   const dims = json.data?.[0]?.embedding?.length ?? 0;
   if (dims !== model.dims) throw new Error(`The engine returned ${dims}-dimensional vectors; ${model.id} should give ${model.dims}.`);
 }
@@ -349,11 +351,23 @@ export async function upgradeLocalEngineIfNeeded(): Promise<boolean> {
   const active = activeEngine();
   const key = platformKey();
   if (!key || !active || active.tag === LOCAL_ENGINE_MANIFEST.engine.tag || running) return false;
-  // Holds the same lock as an install: an install asked for meanwhile is refused (409), not run beside it.
+  // Holds the same lock as an install (an install asked for meanwhile gets 409), and shows as a job.
+  const model = localEmbeddingModel() as LocalEmbeddingModel;
+  const record: LocalEngineJob = {
+    id: randomUUID(), ownerId: 'system', modelId: model.id, variant: active.variant, stage: 'engine', percent: 0,
+    statusText: `Updating the engine to llama.cpp ${LOCAL_ENGINE_MANIFEST.engine.tag}`, startedAt: Date.now(),
+  };
+  current = record;
   const job = (async () => {
-    await installEngine(key, active.variant, () => {});
-    log.info({ from: active.tag, to: LOCAL_ENGINE_MANIFEST.engine.tag }, 'Local embedding engine updated');
-    return current as LocalEngineJob;
+    try {
+      await installEngine(key, active.variant, (percent, statusText) => Object.assign(record, { percent, statusText }));
+      Object.assign(record, { stage: 'done', percent: 100, statusText: `Engine updated to llama.cpp ${LOCAL_ENGINE_MANIFEST.engine.tag}.`, finishedAt: Date.now() });
+      log.info({ from: active.tag, to: LOCAL_ENGINE_MANIFEST.engine.tag }, 'Local embedding engine updated');
+    } catch (err) {
+      Object.assign(record, { stage: 'error', error: (err as Error).message, statusText: 'Engine update failed; the installed build stays in use', finishedAt: Date.now() });
+      throw err;
+    }
+    return record;
   })();
   running = job;
   try {
