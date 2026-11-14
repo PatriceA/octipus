@@ -143,6 +143,12 @@ describe('audio and size', () => {
     expect(out[0].media).toBeUndefined();
     expect(out[1].media?.[0].data).toBeTruthy();
     expect((await hydrateMedia([msgs[0]], { fs, readsImages: true, hearsAudio: true }))[0].media?.[0].data).toBeTruthy();
+    // Within its own turn the recording stays, even after a tool shows an image.
+    const toolShown: AgentMessage = { role: 'user', content: '[The image you asked to see]', timestamp: new Date(), media: [{ kind: 'image', path: img, mimeType: 'image/png', source: 'tool' }] };
+    expect((await hydrateMedia([msgs[0], toolShown], { fs, readsImages: true, hearsAudio: true }))[0].media?.[0].data).toBeTruthy();
+    // The next text-only turn: it is not sent again.
+    const next: AgentMessage = { role: 'user', content: 'thanks', timestamp: new Date() };
+    expect((await hydrateMedia([msgs[0], next], { fs, readsImages: true, hearsAudio: true }))[0].media).toBeUndefined();
     const { MAX_HYDRATE_BYTES } = await import('./hydrate');
     const big = join(dir, '.octipus/attachments/big.wav');
     await writeFile(big, Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(MAX_HYDRATE_BYTES)]));

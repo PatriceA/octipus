@@ -47,7 +47,7 @@ function resolveIn(fs: WorkspaceFS, path: string, tool: string): string {
 }
 
 /** Containers cloud engines and local whisper take as they are; anything else (video) is converted first. */
-const DIRECT_AUDIO = new Set(['mp3', 'mpga', 'wav', 'm4a', 'ogg', 'oga', 'opus', 'flac', 'webm', 'aac', 'amr']);
+const DIRECT_AUDIO = new Set(['mp3', 'mpga', 'wav', 'm4a', 'ogg', 'oga', 'opus', 'flac', 'aac', 'amr']);
 /** The longest recording transcribed in one call. */
 export const MAX_AUDIO_SECONDS = 4 * 60 * 60;
 const LANGUAGE = /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/;
@@ -210,6 +210,12 @@ export class AudioTool extends BaseTool {
     let target: string | null = null;
     if (requested) {
       target = resolveIn(fs, requested, this.id);
+      // The workspace itself, not an extra allowed path (a shared temp dir, a dev project).
+      const { realpathSync } = await import('node:fs');
+      const { isInside } = await import('@/security/workspace-fs');
+      let root = fs.root;
+      try { root = realpathSync(fs.root); } catch { /* not created yet */ }
+      if (!isInside(root, target) && !isInside(fs.root, target)) throw new ToolNotExecutedError(this.id, `Path '${requested}' is outside allowed workspace directories`);
       try {
         fs.assertWritable(target);
       } catch (err) {

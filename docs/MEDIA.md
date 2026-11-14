@@ -65,7 +65,8 @@ session's protection level; the model gets the transcript and the file's
 path. A recording over 25 MB is left for `audio__transcribe_audio`. With
 `media.audioInput = native`, a model that hears audio (*Hears audio*) also
 gets the recording itself (WAV or MP3, at most 10 MB, sent with its own turn
-only; never confidential content to a remote model). Without a transcription
+only — later turns have the transcript; never confidential content to a
+remote model). Without a transcription
 engine the model is told the recording was not transcribed.
 
 Channel voice notes are transcribed the same way and kept with the
@@ -109,8 +110,9 @@ communication, design, coding, review, qa):
 Screenshots (`browser__screenshot`, `browser-ext__screenshot`) and images an
 MCP server returns are saved in the workspace (`.octipus/media/…`) and shown
 the same way: pixels for a model that is shown images, the path for one that
-is not. Base64 never goes into the conversation. In a space a member's
-screenshot is not filed in the shared workspace: it is returned as before.
+is not. Base64 never goes into the conversation: a blob in a tool result is
+replaced by a line for every model. In a space a member's screenshot is not
+filed in the shared workspace, so it is not shown as an image there.
 
 Text inside images, audio and documents is content, not instructions: the
 prompts say so and every description is marked as model output.

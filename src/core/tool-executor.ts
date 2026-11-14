@@ -143,7 +143,7 @@ export function stripBinaryBlobs(text: string): string {
   if (text.length < BINARY_BLOB_MIN_CHARS) return text;
   return text.replace(
     new RegExp(`[A-Za-z0-9+/=]{${BINARY_BLOB_MIN_CHARS},}`, 'g'),
-    (blob) => `[binary blob omitted: ${blob.length} chars — this model has no vision capability]`,
+    (blob) => `[binary blob omitted: ${blob.length} chars — an image reaches a model only as an image, never as text]`,
   );
 }
 
@@ -341,34 +341,6 @@ export class ToolExecutor {
    * returned). Only `byName` is tallied; the classified/total counts are
    * derived from it in `getSideEffectCounters`.
    */
-  /**
-   * Can the bound model actually read an image? Cached for the executor's
-   * lifetime — the binding does not change mid-run, and this is consulted on
-   * every tool batch.
-   *
-   * Fails OPEN (assumes vision) on a lookup error: wrongly stripping a blob
-   * from a model that could have used it loses information, while wrongly
-   * keeping one only wastes tokens. Unknown ⇒ leave the output alone.
-   */
-  private visionSupport?: boolean;
-  private async boundModelSupportsVision(): Promise<boolean> {
-    if (this.visionSupport !== undefined) return this.visionSupport;
-    try {
-      const { getModelRegistry } = await import('@/models/model-registry');
-      const registry = getModelRegistry();
-      // The agent's own row (spec §8.1), never another one sharing its modelId.
-      const model = this.context.modelName
-        ? await registry.getModel(this.context.modelName)
-        : await registry.getModelByModelId(this.context.model, { userId: this.context.userId });
-      // A model we cannot find is not a model we can make claims about.
-      this.visionSupport = model ? model.supportsVision : true;
-    } catch (err) {
-      coreLogger.debug({ err, model: this.context.model }, 'Vision-capability lookup failed — leaving tool output intact');
-      this.visionSupport = true;
-    }
-    return this.visionSupport;
-  }
-
   private recordExecuted(name: string): void {
     this.counters.byName[name] = (this.counters.byName[name] ?? 0) + 1;
   }
@@ -1299,9 +1271,6 @@ export class ToolExecutor {
       });
     }
 
-    // Does the bound model actually understand images? Hoisted out of the loop —
-    // one registry lookup (Redis-cached) per tool batch, not per result.
-    const modelSeesImages = await this.boundModelSupportsVision();
 
     // Images a tool asked to show the model (tool-media.ts): one user message
     // after this batch's tool results.
@@ -1349,7 +1318,9 @@ export class ToolExecutor {
           : limit === undefined && raw.length > DEFAULT_MAX_LENGTH
             ? `${raw.slice(0, DEFAULT_MAX_LENGTH)} [truncated]`
             : raw);
-      const modelSafe = modelSeesImages ? sanitized : stripBinaryBlobs(sanitized);
+      // Base64 in result text is never readable as an image, by any model:
+      // a tool shows images as tool media (tool-media.ts) instead.
+      const modelSafe = stripBinaryBlobs(sanitized);
       toolMessages.push({
         role: 'tool',
         content: modelSafe,

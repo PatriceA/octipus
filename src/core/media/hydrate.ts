@@ -84,6 +84,15 @@ function withNotes(msg: AgentMessage, notes: string[], keep: MediaRef[]): AgentM
   return keep.length ? { ...rest, content, media: keep } : { ...rest, content };
 }
 
+/** The latest message the user wrote (not the one a tool's images arrive in). */
+export function latestUserTurnIndex(messages: readonly AgentMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === 'user' && !(m.media?.length && m.media.every((r) => r.source === 'tool'))) return i;
+  }
+  return -1;
+}
+
 /** True when any message carries media (the fast path skips everything else). */
 export function hasMedia(messages: readonly AgentMessage[]): boolean {
   return messages.some((m) => m.media?.length);
@@ -94,6 +103,7 @@ export async function hydrateMedia(messages: AgentMessage[], opts: HydrateOption
   const replay = Math.max(0, opts.replayRecent ?? DEFAULT_REPLAY_RECENT_IMAGES);
   const out = [...messages];
   let kept = 0;
+  const latestUserTurn = latestUserTurnIndex(out);
   for (let i = out.length - 1; i >= 0; i--) {
     const msg = out[i];
     if (!msg.media?.length) continue;
@@ -105,9 +115,9 @@ export async function hydrateMedia(messages: AgentMessage[], opts: HydrateOption
       if (!supported) { notes.push(note(ref, 'unsupported')); continue; }
       if (opts.protectedContent) { notes.push(note(ref, 'protected')); continue; }
       if (!recent) { notes.push(note(ref, 'older')); continue; }
-      // A recording is sent once (its own turn, while it is the newest media):
-      // re-sending minutes of audio with every request costs per audio token.
-      if (ref.kind === 'audio' && kept > 0) { notes.push(note(ref, 'older')); continue; }
+      // A recording goes out with its own turn only (while its message is the
+      // latest user message): minutes of audio are paid per request.
+      if (ref.kind === 'audio' && i !== latestUserTurn) { notes.push(note(ref, 'older')); continue; }
       try {
         const bytes = await readMedia(ref, opts.fs);
         if (bytes) keep.push({ ...ref, data: bytes.toString('base64') });

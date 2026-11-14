@@ -1,4 +1,4 @@
-import { hasMedia, hydrateMedia } from '@/core/media/hydrate';
+import { hasMedia, hydrateMedia, latestUserTurnIndex } from '@/core/media/hydrate';
 import { type OmittedContext, REPEATABLE_CONTEXT_KEY, restoreOmittedContext, withoutRepeatedContext } from './agent/repeated-context';
 import { orderForCache, TOOL_DISCOVERY_TOOL_ID } from './agent/tool-split';
 import { CORE_TOOL_FLOOR } from './agent/tool-intent';
@@ -530,19 +530,25 @@ export class AgentWorker extends BaseAgentWorker {
 
   private estimateRequestTokens(): number {
     const IMAGE_TOKENS = 1_500; // rough fixed cost of one image to a vision model
-    const AUDIO_TOKENS = 10_000; // one native recording, at most ~5 minutes
+    const AUDIO_TOKENS = 20_000; // one native recording, at most 10 MB (~10 minutes of MP3)
     let chars = this.advertisedToolChars();
     let imageTokens = 0;
     // Only the newest `replayRecentImages` media-bearing messages go out with
     // their pixels (hydrateMedia); older ones are a line of text.
     let replayLeft = Math.max(0, getConfig().media?.replayRecentImages ?? 3);
     const replayed = new Set<AgentMessage>();
+    const latestUserTurn = latestUserTurnIndex(this.messages);
     for (let i = this.messages.length - 1; i >= 0 && replayLeft > 0; i--) {
       if (this.messages[i].media?.length) { replayed.add(this.messages[i]); replayLeft--; }
     }
     for (const m of this.messages) {
       // A recording (sent once, ≤ 10 MB) costs far more than an image: ~5 minutes of audio.
-      if (replayed.has(m)) for (const ref of m.media ?? []) imageTokens += ref.kind === 'audio' ? AUDIO_TOKENS : IMAGE_TOKENS;
+      if (replayed.has(m)) {
+        for (const ref of m.media ?? []) {
+          if (ref.kind !== 'audio') imageTokens += IMAGE_TOKENS;
+          else if (m === this.messages[latestUserTurn]) imageTokens += AUDIO_TOKENS;
+        }
+      }
       const c = (m as { content?: unknown }).content;
       if (typeof c === 'string') {
         chars += c.length;

@@ -6,7 +6,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { logger } from '../utils/logger';
 import { FrameAccumulator, StreamingResampler } from './audio-codec';
 import { resolveWhisperBinary, whisperSpawnEnv } from './whisper';
-import { safeInput } from './ffmpeg';
+import { runFfmpegTool, safeInput } from './ffmpeg';
 import { fileAt, writeFileAt } from '@/utils/fs-file';
 
 /** A unique temp path in the OS temp dir (cross-platform; collision-free). */
@@ -77,24 +77,13 @@ export async function isConformantWav(path: string): Promise<boolean> {
 async function toWhisperWav(sourcePath: string): Promise<string> {
   if (await isConformantWav(sourcePath)) return sourcePath;
   const out = tmpPath('-16k.wav');
-  let proc: Subprocess<'ignore', 'pipe', 'pipe'>;
+  // Only a local audio/video container is read (voice/ffmpeg.ts): never a
+  // playlist that names other files; quiet, drained, and stopped if it hangs.
   try {
-    proc = spawn({
-      command: 'ffmpeg',
-      // Only a local audio/video container is read (voice/ffmpeg.ts): never a playlist that names other files.
-      args: ['-nostdin', '-y', ...safeInput(sourcePath), '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', '-f', 'wav', out],
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-  } catch {
-    // spawn throws if the binary is missing on PATH.
-    throw new Error('ffmpeg is required for local whisper transcription but was not found. Install ffmpeg, or use a hosted STT model (voxtral-*, whisper-1).');
-  }
-  await proc.exited;
-  if (proc.exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text();
+    await runFfmpegTool('ffmpeg', ['-y', ...safeInput(sourcePath), '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', '-f', 'wav', out], 10 * 60_000);
+  } catch (err) {
     await rm(out, { force: true });
-    throw new Error(`Audio conversion failed (ffmpeg exit ${proc.exitCode}): ${stderr.slice(-300)}`);
+    throw new Error(`Audio conversion failed: ${(err as Error).message}`);
   }
   return out;
 }

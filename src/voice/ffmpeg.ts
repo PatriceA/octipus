@@ -11,7 +11,7 @@ import { resolve } from 'node:path';
 import { spawnProcess } from '@/utils/proc';
 
 /** Demuxers of real audio/video containers (ffmpeg names; `mov` covers mp4/m4a/3gp). */
-export const MEDIA_DEMUXERS = 'wav,mp3,ogg,flac,aac,amr,matroska,webm,mov,mp4,m4a,3gp,3g2,mj2,avi,asf,caf,aiff,au,w64';
+export const MEDIA_DEMUXERS = 'wav,mp3,ogg,flac,aac,amr,matroska,webm,mov,mp4,m4a,3gp,3g2,mj2,avi,asf,caf,aiff,au,w64,mpegts,mpeg,flv';
 
 /** The arguments that make ffmpeg/ffprobe read `path` and nothing else. */
 export function safeInput(path: string): string[] {
