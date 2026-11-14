@@ -28,6 +28,7 @@ import { validateCliPermissionMode, validateScopedExtraArgs } from '@/shared/cli
 import { anthropicNativeMessagesEnabled, providerControls, validateProviderSettings } from '@/shared/provider-settings';
 import { coreLogger } from '@/utils/logger';
 import { uniqueViolation } from '@/db/unique-violation';
+import { localHostingProblem } from '@/shared/local-hosting';
 
 // ── List / read ──────────────────────────────────────────────────────
 
@@ -221,6 +222,9 @@ export async function registerModel(body: Record<string, unknown>) {
 
   const settingsError = validateProviderSettings(provider, modelId, (body.metadata as import('@/db/schema/models').ModelMetadata | undefined)?.providerSettings, (body.defaultMaxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS) as number, anthropicNativeMessagesEnabled(process.env.ANTHROPIC_NATIVE_MESSAGES));
   if (settingsError) return { error: settingsError };
+  // "Runs on this machine / network" (a local data policy) only for a private endpoint.
+  const hostingError = localHostingProblem(provider, body.endpoint as string | undefined, (body.metadata as import('@/db/schema/models').ModelMetadata | undefined)?.dataPolicy);
+  if (hostingError) return { error: hostingError };
 
   const registry = getModelRegistry();
 
@@ -303,6 +307,11 @@ export async function updateModel(name: string, body: Record<string, unknown>) {
     if (outputLimitError) return { status: 400 as const, error: outputLimitError };
     const settingsError = validateProviderSettings(effective.provider, effective.modelId, effective.metadata?.providerSettings, effective.defaultMaxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, anthropicNativeMessagesEnabled(process.env.ANTHROPIC_NATIVE_MESSAGES));
     if (settingsError) return { status: 400 as const, error: settingsError };
+    // Checked when the policy or the endpoint changes: a local row moved to a public endpoint is refused.
+    if ('metadata' in safeUpdate || 'endpoint' in safeUpdate) {
+      const hostingError = localHostingProblem(effective.provider, effective.endpoint, effective.metadata?.dataPolicy);
+      if (hostingError) return { status: 400 as const, error: hostingError };
+    }
     const model = await registry.updateModel(name, safeUpdate as Partial<NewModelConfigEntry>);
     if (!model) {
       return { status: 404 as const, error: 'Model not found' };
