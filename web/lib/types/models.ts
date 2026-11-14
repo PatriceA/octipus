@@ -32,6 +32,8 @@ export interface Model {
     paramCount?: number;
     /** Decision-model privacy opt-in (see src/models/decision.ts gateDecision). */
     allowRetainedPersonalData?: boolean;
+    /** `hosting: local`: the model runs on this machine or the owner's network (protection levels 3-4 may use it). */
+    dataPolicy?: { hosting: 'local' | 'remote'; retention: 'none' | 'provider'; trainsOnInput: boolean };
     extraBody?: Record<string, unknown>;
     cliAgent?: {
       /** Allow server-side provider API keys into the CLI process. Defaults to false. */

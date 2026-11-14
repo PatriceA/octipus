@@ -11,6 +11,7 @@ import { appendFile, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { modelLogger } from '@/utils/logger';
+import { isPrivateEndpoint } from '@/shared/local-hosting';
 
 export type DecisionQuestion =
   | { type: 'noul'; instructions: string; criteria?: { true: string; false: string } }
@@ -72,25 +73,8 @@ export interface DataPolicy {
 /** Unknown remote = worst case. */
 const WORST_CASE: DataPolicy = { hosting: 'remote', retention: 'provider', trainsOnInput: true };
 
-/**
- * Does this URL stay on the owner's own machine or network? Loopback, RFC 1918
- * and link-local IPv4, IPv6 loopback/ULA, `.local`/`.lan`/`.internal`/`.home`
- * names and single-label hosts (a compose service like `ollama`) count;
- * anything else — including Ollama's own cloud — does not.
- */
-export function isPrivateEndpoint(url: string | null | undefined): boolean {
-  if (!url) return false;
-  let host: string;
-  try { host = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, ''); } catch { return false; }
-  if (host === 'localhost' || host === '::1' || /^f[cd][0-9a-f]{2}:/.test(host)) return true;
-  const ip = host.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
-  if (ip) {
-    const [a, b] = [Number(ip[1]), Number(ip[2])];
-    return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254);
-  }
-  if (host.includes(':')) return false; // any other IPv6 literal is public
-  return !host.includes('.') || /\.(local|lan|internal|home)$/.test(host);
-}
+/** Loopback, private and link-local addresses, `.local`/`.lan`/`.internal`/`.home` and single-label hosts (src/shared/local-hosting.ts). */
+export { isPrivateEndpoint };
 
 /**
  * Effective data policy of a model row. An explicit `metadata.dataPolicy`

@@ -35,7 +35,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [MODEL-ROUTING.md](MODEL-ROUTING.md) | Per-topic primary/backup/executor model bindings, resolution order, and the planner→executor cost split. |
 | [LITELLM.md](LITELLM.md) | Routing every model call through a LiteLLM proxy; authentication and the "401 unreachable" fix. |
 | [OLLAMA.md](OLLAMA.md) | Running Octipus on Ollama: model sizing, tool support, context length, iGPU, and lazy tool discovery. |
-| [CUSTOM-PROVIDERS.md](CUSTOM-PROVIDERS.md) | Custom OpenAI-, Gemini-, and Anthropic-compatible endpoints that aren't backed by a first-party provider. |
+| [CUSTOM-PROVIDERS.md](CUSTOM-PROVIDERS.md) | Custom OpenAI-, Gemini-, and Anthropic-compatible endpoints that aren't backed by a first-party provider; running your own models with llama.cpp. |
 | [EVALUATIONS.md](EVALUATIONS.md) | Model evaluation and provider conformance testing. |
 | [CAPABILITY-COMPARISON.md](CAPABILITY-COMPARISON.md) | Feature-by-feature comparison against other platforms. |
 | [OPENCLAW-COMPARISON.md](OPENCLAW-COMPARISON.md) | Feature, quality, and architecture comparison vs OpenClaw, with gap analysis. |

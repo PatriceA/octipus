@@ -231,3 +231,33 @@ describe('direct provider settings validation', () => {
     expect(result.models[0].providerControls).toMatchObject({ reasoning: true, thinkingBudget: true, strictTools: false, cachePolicy: false, cachedContent: false });
   });
 });
+
+describe('"Runs on this machine / network" (a local data policy)', () => {
+  const LOCAL = { hosting: 'local', retention: 'none', trainsOnInput: false };
+
+  it('registers a custom endpoint at a private address as local', async () => {
+    registry.getModel.mockResolvedValue(null);
+    const result = await registerModel({ name: 'llama', provider: 'custom-openai', modelId: 'qwen3', endpoint: 'http://localhost:8080/v1', metadata: { dataPolicy: LOCAL } });
+    expect(result).not.toHaveProperty('error');
+    expect(registry.registerModel).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ dataPolicy: LOCAL }) }));
+  });
+
+  it('refuses it for a public endpoint', async () => {
+    registry.getModel.mockResolvedValue(null);
+    const result = await registerModel({ name: 'cloud', provider: 'custom-openai', modelId: 'x', endpoint: 'https://api.together.xyz/v1', metadata: { dataPolicy: LOCAL } });
+    expect(result).toMatchObject({ error: expect.stringMatching(/private address/) });
+    expect(registry.registerModel).not.toHaveBeenCalled();
+  });
+
+  it('refuses moving a local row to a public endpoint', async () => {
+    registry.getModel.mockResolvedValue({ name: 'llama', provider: 'custom-openai', modelId: 'qwen3', endpoint: 'http://localhost:8080/v1', metadata: { dataPolicy: LOCAL } });
+    expect(await updateModel('llama', { endpoint: 'https://api.together.xyz/v1' })).toMatchObject({ status: 400, error: expect.stringMatching(/private address/) });
+    expect(registry.updateModel).not.toHaveBeenCalled();
+  });
+
+  it('turning it off, or saving other fields, is never refused', async () => {
+    registry.getModel.mockResolvedValue({ name: 'llama', provider: 'custom-openai', modelId: 'qwen3', endpoint: 'https://api.together.xyz/v1', metadata: { dataPolicy: LOCAL } });
+    expect(await updateModel('llama', { contextWindow: 8192 })).toMatchObject({ ok: true });
+    expect(await updateModel('llama', { metadata: {} })).toMatchObject({ ok: true });
+  });
+});

@@ -3,6 +3,8 @@
 import { AlertCircle, CheckCircle, Cpu, Loader2, Pencil, Plus, RefreshCw, Search, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
+import { isPrivateEndpoint, LOCAL_DATA_POLICY } from '../../../src/shared/local-hosting';
+import { RunsLocallyField } from './edit-model-modal';
 import { Portal } from '@/components/ui/portal';
 import {
   type LiteLLMModel,
@@ -60,6 +62,8 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
     customAuthParamName: '',
     customPathOverride: '',
     customApiKeyRef: '',
+    // "Runs on this machine / network" (custom endpoints only).
+    runsLocally: false,
   });
   const [error, setError] = useState('');
   const [testResult, setTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
@@ -292,7 +296,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
       supportsTools: true, supportsStreaming: true, disableThinking: false,
       priority: 50, costPerInputToken: 0, costPerOutputToken: 0,
       customAuthType: 'bearer', customAuthHeaderName: '', customAuthParamName: '',
-      customPathOverride: '', customApiKeyRef: '',
+      customPathOverride: '', customApiKeyRef: '', runsLocally: false,
     });
     setError('');
     setTestResult(null);
@@ -323,6 +327,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
       customAuthParamName: '',
       customPathOverride: '',
       customApiKeyRef: '',
+      runsLocally: false,
     });
     setError('');
     setTestResult(null);
@@ -395,6 +400,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
         };
         if (formData.customPathOverride) customProvider.pathOverride = formData.customPathOverride;
         metadata.customProvider = customProvider;
+        if (formData.runsLocally && isPrivateEndpoint(formData.endpoint)) metadata.dataPolicy = { ...LOCAL_DATA_POLICY };
       }
 
       await onAdd({
@@ -872,6 +878,14 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                   </p>
                 )}
               </div>
+            )}
+
+            {!isCli && isCustom && (
+              <RunsLocallyField
+                checked={formData.runsLocally}
+                endpoint={formData.endpoint}
+                onChange={(runsLocally) => setFormData({ ...formData, runsLocally })}
+              />
             )}
 
             <div className="grid grid-cols-2 gap-4">
