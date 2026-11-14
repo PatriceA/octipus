@@ -406,7 +406,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
           {!isCli && <label className="block text-sm">Default output limit per request (tokens)
             <input className="w-full rounded-lg bg-surface-container-high px-3 py-2" type="number" min={1} max={formData.maxTokens} value={formData.defaultMaxTokens} onChange={e => setFormData({ ...formData, defaultMaxTokens: Number(e.target.value) })} />
           </label>}
-          {!isCli && <ProviderSettingsFields controls={model.providerControls} provider={model.provider} model={model.modelId} settings={providerSettings} pricing={pricing} onSettings={setProviderSettings} onPricing={setPricing} />}
+          {!isCli && <ProviderSettingsFields controls={model.providerControls} provider={model.provider} model={model.modelId} topics={model.topics ?? []} settings={providerSettings} pricing={pricing} onSettings={setProviderSettings} onPricing={setPricing} />}
           <div className="flex flex-wrap gap-4">
             <label className="flex items-center gap-2 cursor-pointer">
               <input

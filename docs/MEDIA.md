@@ -12,8 +12,9 @@ that it is off ([MODULES.md → Capability gates](MODULES.md#capability-gates)).
 | **hear** — speech to text | the **Transcription** lane ([VOICE.md](VOICE.md)) | nothing bound |
 | **speak** — text to speech | the **Speech** lane ([VOICE.md](VOICE.md)) | nothing bound |
 
-One resolver decides (`src/models/media-resolver.ts`); the Topics page and
-Health show what actually serves each lane. Protection levels apply: content
+One resolver decides (`src/models/media-resolver.ts`); the Topics page (its
+**Media** group) and Health show what actually serves each lane, or why it is
+off. Protection levels apply: content
 that stays local is only read by a local model (seeing and OCR switch to one;
 speech refuses a cloud engine and uses a local backup). Pixels and recordings
 are never pseudonymized, so the strict threshold holds for them: at a
@@ -153,6 +154,10 @@ file a channel refuses never loses the reply's text. An answer the output
 guard replaced, or one withheld from a room, carries none of its media.
 Image spend counts toward spend budgets: the provider's reported cost, else
 the row's `pricing.perImage`, else a list price; local rows cost nothing.
+The model editor sets a row's media rates (USD per image, per audio minute
+transcribed, per million characters spoken): the one for the lane the row is
+bound to (or plainly made for) shows with the other prices, the rest under
+*Media pricing*.
 Files sent with `send_message` count as private data for the flow guard
 (credential files as secrets).
 `messaging__send_message` and `send_to_user` take `attachments` (workspace

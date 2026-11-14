@@ -199,6 +199,38 @@ test.describe('onboarding guide', () => {
     await expect.poll(() => calls.find((c) => c.path === '/modules/enable')?.body).toEqual({ ids: ['artifacts', 'business'] });
   });
 
+  test('images and audio: skipped by default, and planned when chosen', async ({ authenticatedPage: page }) => {
+    state.models = { textReady: true, embeddingReady: true, verifySeparate: false, names: ['openai gpt-4o-mini'], providersWithKey: ['openai'], byTopic: {} };
+    await page.goto('/onboarding');
+    const guide = page.getByTestId('onboarding');
+    await guide.getByRole('checkbox', { name: /Build software/ }).click();
+    await guide.getByRole('button', { name: 'Continue' }).click();
+    await guide.getByRole('button', { name: 'Images & audio' }).click();
+    const section = guide.locator('[data-section="media"]');
+    await expect(section.locator('[data-question="media.images"]').getByRole('radio', { name: 'No' })).toHaveAttribute('aria-checked', 'true');
+    await expect(section.getByRole('radio', { name: 'Not now' })).toHaveAttribute('aria-checked', 'true');
+    await guide.getByRole('button', { name: 'Issue tracker' }).click();
+    await guide.getByRole('button', { name: 'See my plan' }).click();
+    const skipped = guide.getByRole('list', { name: 'What the guide will do' });
+    await expect(skipped).not.toContainText('generate images');
+    await expect(skipped).not.toContainText('speech to text');
+
+    await guide.getByRole('button', { name: 'Change answers' }).click();
+    await guide.getByRole('button', { name: 'Images & audio' }).click();
+    await section.locator('[data-question="media.images"]').getByRole('radio', { name: 'Yes' }).click();
+    await expect(section.getByRole('radio', { name: /OpenAI \(gpt-image-1\)/ })).toHaveAttribute('aria-checked', 'true');
+    // The OpenAI key is already stored: no key asked.
+    await expect(section.locator('[data-question="media.imageKey"]')).toHaveCount(0);
+    await section.getByRole('radio', { name: /Yes, on this server/ }).click();
+    await guide.getByRole('button', { name: 'Issue tracker' }).click();
+    await guide.getByRole('button', { name: 'See my plan' }).click();
+    const list = guide.getByRole('list', { name: 'What the guide will do' });
+    await expect(list).toContainText('Add gpt-image-1 for drawing images');
+    await expect(list).toContainText('Use gpt-image-1 to generate images');
+    await expect(list).toContainText('Hear you (speech to text) with faster-whisper (on this server)');
+    await expect(list).toContainText('Speak replies (text to speech) with Kokoro (on this server)');
+  });
+
   test('putting it away leaves a link on the home page', async ({ authenticatedPage: page }) => {
     await page.goto('/');
     await page.getByRole('button', { name: 'Put the setup guide away' }).click();
