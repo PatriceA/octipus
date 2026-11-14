@@ -26,7 +26,7 @@ const PERSONAL_PREFIXES = [
   '/api/admin', '/api/agents', '/api/auth', '/api/backups', '/api/capabilities', '/api/channels', '/api/chat',
   '/api/calendar', '/api/code-index', '/api/companion', '/api/context-hooks', '/api/devices', '/api/digest', '/api/email', '/api/eval', '/api/evaluations',
   '/api/gateway', '/api/graph', '/api/health', '/api/heartbeat', '/api/hooks', '/api/invites', '/api/logs', '/api/mcp',
-  '/api/me', '/api/memory', '/api/metrics', '/api/models', '/api/modules', '/api/onboarding', '/api/permission-requests', '/api/persona',
+  '/api/me', '/api/media', '/api/memory', '/api/metrics', '/api/models', '/api/modules', '/api/onboarding', '/api/permission-requests', '/api/persona',
   '/api/pipelines', '/api/plugin-host', '/api/plugin-packages', '/api/plugin-ui', '/api/plugins', '/api/recurring-tasks', '/api/roles',
   '/api/runs', '/api/saml', '/api/scim', '/api/search', '/api/settings', '/api/skills', '/api/spend-budgets',
   '/api/swarm', '/api/tools', '/api/topics', '/api/trajectories', '/api/vault', '/api/verification',

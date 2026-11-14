@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-688 mounted routes across 85 route files. The path is the full one, group prefix included — what a client actually calls.
+690 mounted routes across 86 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -310,6 +310,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | PATCH | `/api/me/workspaces/:id` | `src/api/routes/orgs.ts` |
 | POST | `/api/me/workspaces/:id/default` | `src/api/routes/orgs.ts` |
 | POST | `/api/me/workspaces/:id/transfer` | `src/api/routes/orgs.ts` |
+| POST | `/api/media/describe` | `src/api/routes/media.ts` |
+| POST | `/api/media/images` | `src/api/routes/media.ts` |
 | GET | `/api/media/public/:token` | `src/api/routes/media-public.ts` |
 | GET | `/api/memory` | `src/api/routes/memory.ts` |
 | DELETE | `/api/memory/:id` | `src/api/routes/memory.ts` |
@@ -725,19 +727,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 1 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 27 |
-| `api` | `core` | 203 |
+| `api` | `core` | 206 |
 | `api` | `db` | 141 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 5 |
-| `api` | `models` | 36 |
+| `api` | `models` | 41 |
 | `api` | `plugins` | 49 |
 | `api` | `security` | 177 |
 | `api` | `services` | 5 |
-| `api` | `shared` | 27 |
+| `api` | `shared` | 28 |
 | `api` | `skills` | 6 |
 | `api` | `tools` | 6 |
-| `api` | `utils` | 75 |
+| `api` | `utils` | 76 |
 | `api` | `voice` | 19 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
@@ -813,7 +815,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `mcp` | `shared` | 4 |
 | `mcp` | `utils` | 5 |
 | `models` | `config` | 11 |
-| `models` | `core` | 45 |
+| `models` | `core` | 46 |
 | `models` | `db` | 14 |
 | `models` | `security` | 23 |
 | `models` | `services` | 1 |

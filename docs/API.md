@@ -577,6 +577,14 @@ in its body.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/voice/transcribe` | Transcribe audio (base64) to text |
+| POST | `/api/voice/speak` | Speak text (`{ text, voice_id?, format? }`); the audio bytes |
+
+## Media
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/media/images` | Draw with the Image generation lane: `{ prompt, aspect_ratio?, n? }` → `{ images: [{ mimeType, base64 }], model, revisedPrompt? }`. 409 when `draw` is off |
+| POST | `/api/media/describe` | The Vision lane describes an image: `{ image (base64, ≤ 10 MB), mimeType?, question? }` → `{ description, model }`. 409 when nothing can see |
 
 ## Skill Topic Assignments
 

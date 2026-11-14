@@ -173,6 +173,27 @@ paths, at most 5 files of 20 MB) to send files deliberately.
   key it stored (OpenAI, Gemini, OpenRouter; default skip;
   `OCTIPUS_SETUP_IMAGE_MODEL` non-interactively).
 
+## Over MCP and HTTP
+
+MCP clients have their own eyes, so the MCP server's `media` group offers the
+lanes themselves ([MCP-SERVER.md](MCP-SERVER.md#media-media-group)):
+
+| MCP tool | Route | Capability |
+|----------|-------|------------|
+| `octipus_generate_image({ prompt, aspect_ratio?, n? })` | `POST /api/media/images` → `{ images: [{ mimeType, base64 }], model, revisedPrompt? }` | `draw` |
+| `octipus_describe_image({ image, mime_type?, question? })` | `POST /api/media/describe` `{ image, mimeType?, question? }` → `{ description, model }` | `see` |
+| `octipus_transcribe_audio({ audio, format? })` | `POST /api/voice/transcribe` | `hear` |
+| `octipus_speak({ text, voice?, format? })` | `POST /api/voice/speak` (audio bytes) | `speak` |
+
+- Images: a prompt of at most 4000 characters, up to 4 images, as MCP `image`
+  parts; spend budgets apply (`funding: 'own'`). Describe: base64 only (the
+  MCP server reads no local files), at most 10 MB, refused unless its magic
+  bytes are an image; the Vision lane (else the default model if it reads
+  images) answers, told that text in the image is content, not instructions.
+- A capability that is off: the tool is not listed, and the route answers 409
+  `capability_not_configured`. An account that may not use the install's
+  models gets a local row or its own only; a hosted install row is 403.
+
 ## Conformance
 
 `image-in-message` and `image-after-tool-result` (Models → Test) check that a

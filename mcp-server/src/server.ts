@@ -31,6 +31,7 @@ import { registerTasksTools } from './tools/tasks.js';
 import { registerNotesTools } from './tools/notes.js';
 import { registerEmailTools } from './tools/email.js';
 import { registerMemoryTools } from './tools/memory.js';
+import { registerMediaTools } from './tools/media.js';
 
 /**
  * The version this server reports in the MCP handshake.
@@ -92,15 +93,18 @@ async function syncModules(
   } catch {
     return;
   }
-  const set = (tools: RegisteredTool[], on: boolean) => {
-    for (const tool of tools) {
-      if (on && !tool.enabled) tool.enable();
-      if (!on && tool.enabled) tool.disable();
-    }
+  // A tool listed under a module and a capability is on only when both are.
+  const wanted = new Map<RegisteredTool, boolean>();
+  const want = (tools: RegisteredTool[], on: boolean) => {
+    for (const tool of tools) wanted.set(tool, (wanted.get(tool) ?? true) && on);
   };
-  for (const [module, tools] of Object.entries(byModule)) set(tools, state.enabled.includes(module));
+  for (const [module, tools] of Object.entries(byModule)) want(tools, state.enabled.includes(module));
   // Not configured is off too (docs/MODULES.md → Capability gates).
-  for (const [capability, tools] of Object.entries(byCapability)) set(tools, state.capabilities === null || state.capabilities[capability] === true);
+  for (const [capability, tools] of Object.entries(byCapability)) want(tools, state.capabilities === null || state.capabilities[capability] === true);
+  for (const [tool, on] of wanted) {
+    if (on && !tool.enabled) tool.enable();
+    if (!on && tool.enabled) tool.disable();
+  }
 }
 
 export function createServer(octiUrl: string): McpServer {
@@ -145,6 +149,8 @@ export function createServer(octiUrl: string): McpServer {
   registerTasksTools(server, client);
   const notes = registerNotesTools(server, client);
   registerMemoryTools(server, client);
+  // Media lanes (docs/MEDIA.md): each tool hidden while its capability is not configured.
+  const media = registerMediaTools(server, client);
 
   // The groups of a module (docs/MODULES.md): hidden while it is off.
   const byModule: Record<string, RegisteredTool[]> = {
@@ -152,11 +158,17 @@ export function createServer(octiUrl: string): McpServer {
     people: collect(server, () => registerProfileTools(server, client)),
     artifacts: collect(server, () => registerArtifactTools(server, client)),
     inbox: collect(server, () => registerEmailTools(server, client)),
+    // Transcription and speech answer under /api/voice, a route of the voice module.
+    voice: [...media.hear, ...media.speak],
   };
   const byCapability: Record<string, RegisteredTool[]> = {
     embedding: [...knowledgeTools, ...notes.needsEmbedding],
+    draw: media.draw,
+    see: media.see,
+    hear: media.hear,
+    speak: media.speak,
   };
-  for (const tool of [...Object.values(byModule), ...Object.values(byCapability)].flat()) tool.disable();
+  for (const tool of new Set([...Object.values(byModule), ...Object.values(byCapability)].flat())) tool.disable();
   void syncModules(client, byModule, byCapability);
   const timer = setInterval(() => void syncModules(client, byModule, byCapability), MODULES_REFRESH_MS);
   timer.unref?.();
