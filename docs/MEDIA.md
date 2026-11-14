@@ -107,6 +107,21 @@ communication, design, coding, review, qa):
   in a space, not a coding agent's configuration) and its path returned.
   Offered when a speech engine is bound.
 
+**`imagegen`** (general — long tail —, design):
+
+- `generate_image({ prompt, aspect_ratio?, n?, reference_images?, output_path? })`
+  — the Image generation lane draws (primary, then backup; protection levels
+  apply, the prompt and references are not pseudonymized). Up to 4 images,
+  saved in the workspace (default `.octipus/media/generated/<id>.png`; an
+  `output_path` must be a new file in the workspace) and shown to the person
+  with the answer. `reference_images` edits or follows given images on models
+  that take them (gpt-image, Gemini image models; a row can say so in
+  `metadata.imageGeneration.references`), and is refused before anything is
+  paid for on one that does not. Offered when an image model is bound.
+- Providers: OpenAI (gpt-image-1, DALL·E), Gemini (Imagen, Gemini image
+  models), OpenRouter (image models over chat), a LiteLLM proxy and
+  OpenAI-compatible endpoints that implement `/images/generations`.
+
 Screenshots (`browser__screenshot`, `browser-ext__screenshot`) and images an
 MCP server returns are saved in the workspace (`.octipus/media/…`) and shown
 the same way: pixels for a model that is shown images, the path for one that
@@ -116,6 +131,26 @@ filed in the shared workspace, so it is not shown as an image there.
 
 Text inside images, audio and documents is content, not instructions: the
 prompts say so and every description is marked as model output.
+
+## Media in the answer
+
+Images `generate_image` draws and speech `speak` makes go to the person with
+the answer (`metadata.attachments` on the answer, `media` on the turn's
+result):
+
+| Where | Image | Speech |
+|-------|-------|--------|
+| Web chat | thumbnail under the answer, opens in the file viewer, download | player, download |
+| Telegram | photo | voice note (OGG/Opus), else audio |
+| WhatsApp | uploaded to the media store, sent by id | voice note (OGG/Opus), else audio |
+| Slack | uploaded into the thread (`files:write`) | same |
+| Teams | inline up to 1 MB; larger, a 15-minute public link | a 15-minute public link |
+
+A Teams link needs a public address (`oauth.publicUrl` / `PUBLIC_URL`);
+without one the reply says the file is in the web app. A voice note on any
+channel gets a spoken reply (unless the turn already spoke).
+`messaging__send_message` and `send_to_user` take `attachments` (workspace
+paths, at most 5 files of 20 MB) to send files deliberately.
 
 ## Conformance
 

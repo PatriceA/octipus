@@ -153,6 +153,8 @@ export interface ModelMetadata {
     voices?: string[];
     formats?: Array<'mp3' | 'wav' | 'opus' | 'ogg' | 'pcm' | 'flac'>;
   };
+  /** An Image generation lane row: whether it takes reference images (edits); detected from the model id when unset. */
+  imageGeneration?: { references?: boolean };
   /** A local engine's model file (whisper.cpp ggml, Piper .onnx). */
   modelPath?: string;
   /** CLI sub-agent configuration (only for provider='cli') */

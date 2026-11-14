@@ -73,6 +73,8 @@ export interface TurnEvent {
 export type TurnOutcome = 'success' | 'failed' | 'cancelled';
 export interface TurnResult {
   response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata; outcome?: TurnOutcome;
+  /** Images and speech the turn made for the person (src/core/media/turn-media.ts). */
+  media?: import('@/core/media/turn-media').TurnMediaItem[];
 }
 
 /** What `runTurn` needs once the entry gate (personal or room) let the turn in. */
@@ -1155,9 +1157,13 @@ export class AgentService {
         sessionId: resolvedSessionId, agentId, requesterId: userId, contentStorageOff: audience.contentStorageOff,
       });
 
+      // Images and speech the turn made for the person go with the answer.
+      const { takeTurnMedia, turnMediaAttachments } = await import('@/core/media/turn-media');
+      const turnMedia = takeTurnMedia(getRunContext()?.runId);
       const persistedAnswer = await messageRepository.createForGeneration({
         sessionId: resolvedSessionId, role: 'assistant', content: finalResponse, agentId,
         metadata: {
+          ...(turnMedia.length && { attachments: turnMediaAttachments(turnMedia) }),
           // A refused turn keeps its structured reason so the chat card
           // survives a reload — not in a room, where every member reads it.
           ...(limit && !isRoom && { limit: limit }),
@@ -1211,6 +1217,7 @@ export class AgentService {
         agentId,
         outcome,
         classification,
+        ...(turnMedia.length && { media: turnMedia }),
         metadata: { latencyMs: Date.now() - startTime, ...(limit && { limit }) },
       };
     } catch (error) {

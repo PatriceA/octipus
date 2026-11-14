@@ -53,6 +53,7 @@ import * as SkillDistillModule from './skill-distill';
 import * as TaskStateModule from './task-state';
 import * as TasksModule from './tasks';
 import * as AudioModule from './audio';
+import * as ImageGenModule from './imagegen';
 import * as VisionModule from './vision';
 import * as VisualModule from './visual';
 import * as VoiceModule from './voice';
@@ -74,6 +75,7 @@ const MODULES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ['email-processor', EmailProcessorModule],
   ['filesystem', FilesystemModule],
   ['git', GitModule],
+  ['imagegen', ImageGenModule],
   ['github', GithubModule],
   ['google-workspace', GoogleWorkspaceModule],
   ['inline-ui', InlineUiModule],

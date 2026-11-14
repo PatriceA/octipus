@@ -129,6 +129,7 @@ Notifications, hook `notify` actions, hook results (`notifyOwner`) and approval 
    - `mpim:history` — Read group DM messages
    - `users:read` — Read user profile info
    - `files:read` — Access shared files
+   - `files:write` — Send generated images and spoken replies into the thread
    - `app_mentions:read` — Listen for @mentions
    - `commands` — only needed if you add the `/link` slash command (step 7)
 4. Under **Socket Mode**, enable it and generate an **App-Level Token** (`xapp-…`) with `connections:write` scope. With Socket Mode on, Event Subscriptions and Interactivity are delivered over the WebSocket — **no Request URL / event endpoint is configured anywhere** (that's why Octipus settings don't ask for one; the bot connects outbound).

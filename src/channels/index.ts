@@ -284,12 +284,37 @@ async function transcribeChannelAudio(audioAttachments: Attachment[], message: U
   return parts.join('\n\n');
 }
 
+/** What a channel can take in one message: larger files stay in the web app. */
+const MAX_CHANNEL_MEDIA_BYTES = 20 * 1024 * 1024;
+
+/** The turn's media as channel attachments (bytes read from the workspace). */
+async function channelMediaAttachments(media: import('@/core/media/turn-media').TurnMediaItem[]): Promise<Attachment[]> {
+  const { readFile, stat } = await import('node:fs/promises');
+  const out: Attachment[] = [];
+  for (const item of media) {
+    try {
+      const info = await stat(item.path);
+      if (info.size > MAX_CHANNEL_MEDIA_BYTES) continue;
+      out.push({
+        type: item.kind,
+        mimeType: item.mimeType,
+        data: await readFile(item.path),
+        filename: item.filename,
+        ...(item.deliver === 'voice' ? { voice: true } : {}),
+      });
+    } catch (err) {
+      channelLogger.warn({ err, path: item.path }, 'Turn media could not be read for the channel');
+    }
+  }
+  return out;
+}
+
 /**
  * Synthesize an assistant reply to a spoken clip so a voice note gets a voice
  * reply. Best-effort: gated on the `speak` capability, and any synthesis failure is
  * swallowed (undefined → the text reply still goes out on its own).
- * ponytail: Telegram-only for now; other channels' outbound audio senders take a
- * URL, not bytes. Cap the text so long/costly replies aren't fully synthesized.
+ * Sent as a voice note where the channel has them (Telegram, WhatsApp), as a
+ * file elsewhere. Capped so a long reply is not fully synthesized.
  */
 async function synthesizeVoiceReply(text: string, userId?: string, sessionId?: string): Promise<Attachment[] | undefined> {
   // Spoken replies follow the Speech lane: configured = on (docs/VOICE.md).
@@ -305,6 +330,7 @@ async function synthesizeVoiceReply(text: string, userId?: string, sessionId?: s
       mimeType: spoken.contentType,
       data: spoken.audio,
       filename: `reply.${ext}`,
+      voice: true,
     }];
   } catch (err) {
     channelLogger.error({ err }, 'Voice-out synthesis failed');
@@ -1296,17 +1322,21 @@ export async function initializeChannels(): Promise<void> {
           ? summarizeForChannel(result.response)
           : result.response);
 
-        // Voice-in on Telegram → speak the reply back (Telegram sends the audio
-        // clip before the text). Best-effort; undefined leaves a text-only reply.
-        const attachments = voiceIn && message.channelType === 'telegram'
+        // Images and speech the turn made go with the reply. A voice note
+        // gets a spoken reply on every channel (a voice note where the channel
+        // has them), unless the turn already spoke. Best-effort: a reply
+        // without its media still goes out.
+        const media = await channelMediaAttachments(result.media ?? []);
+        const spoken = voiceIn && !media.some((a) => a.voice)
           ? await synthesizeVoiceReply(content, message.userId, resolvedSessionId)
           : undefined;
+        const attachments = [...media, ...(spoken ?? [])];
 
         await umi.send(message.channelType, message.channelId, {
           content,
           replyTo: platformMessageId,
           threadId: replyThread,
-          attachments,
+          ...(attachments.length ? { attachments } : {}),
         });
         recordChannelMessage(message.channelType, 'outbound');
       }

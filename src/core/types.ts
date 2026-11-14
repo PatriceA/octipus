@@ -281,6 +281,8 @@ export interface Attachment {
   mimeType: string;
   filename?: string;
   size?: number;
+  /** Audio sent as a voice note where the channel has them (a spoken reply). */
+  voice?: boolean;
 }
 
 export interface ChannelResponse {

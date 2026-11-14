@@ -14,6 +14,55 @@ import type { AgentContext, ToolManifest } from '@/core/types';
 import { canPromptHuman } from '@/security/approval-policy';
 import { toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema } from '../base-tool';
+import type { Attachment } from '@/core/types';
+
+/** What one message carries at most (channels cap uploads around here). */
+const MAX_ATTACHMENTS = 5;
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const AUDIO_EXT: Record<string, string> = { mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', opus: 'audio/ogg', m4a: 'audio/mp4', flac: 'audio/flac' };
+const VIDEO_EXT: Record<string, string> = { mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime' };
+const FILE_EXT: Record<string, string> = { pdf: 'application/pdf', txt: 'text/plain', md: 'text/markdown', csv: 'text/csv', json: 'application/json', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+
+/**
+ * Workspace files to send with a message, read from the agent's own
+ * workspace (never outside it). An error string when one cannot be sent.
+ */
+async function messageAttachments(raw: unknown, context: AgentContext): Promise<Attachment[] | string> {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) return 'attachments must be a list of workspace paths';
+  const paths = raw.map(String).filter(Boolean);
+  if (paths.length > MAX_ATTACHMENTS) return `At most ${MAX_ATTACHMENTS} attachments per message.`;
+  if (!paths.length) return [];
+  const { WorkspaceFS, isInside } = await import('@/security/workspace-fs');
+  const { readFile, stat } = await import('node:fs/promises');
+  const { realpathSync } = await import('node:fs');
+  const { basename, extname } = await import('node:path');
+  const { sniffImageType } = await import('@/core/media/normalize');
+  let fs: import('@/security/workspace-fs').WorkspaceFS;
+  try { fs = WorkspaceFS.forAgent(context); } catch { return 'This run has no workspace to send files from.'; }
+  let root = fs.root;
+  try { root = realpathSync(fs.root); } catch { /* not created yet */ }
+  const out: Attachment[] = [];
+  for (const path of paths) {
+    let abs: string;
+    try { abs = fs.resolve(path); } catch { return `'${path}' is outside your workspace.`; }
+    if (!isInside(root, abs) && !isInside(fs.root, abs)) return `'${path}' is outside your workspace.`;
+    const info = await stat(abs).catch(() => null);
+    if (!info?.isFile()) return `No file at '${path}'.`;
+    if (info.size > MAX_ATTACHMENT_BYTES) return `'${path}' is ${Math.round(info.size / 1024 / 1024)} MB; at most ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB per file.`;
+    const data = await readFile(abs);
+    const ext = extname(abs).slice(1).toLowerCase();
+    const image = sniffImageType(data);
+    const type: Attachment['type'] = image ? 'image' : AUDIO_EXT[ext] ? 'audio' : VIDEO_EXT[ext] ? 'video' : 'file';
+    const mimeType = image ?? AUDIO_EXT[ext] ?? VIDEO_EXT[ext] ?? FILE_EXT[ext] ?? 'application/octet-stream';
+    out.push({ type, mimeType, data, filename: basename(abs), size: data.length });
+  }
+  return out;
+}
+
+function attachmentKey(attachments: Attachment[]): string {
+  return attachments.map((a) => `${a.filename}:${a.size}`).join(',');
+}
 
 // In-process dedup so a fan-out of sibling agents doesn't ping the user N times
 // with the same text. Keyed by target+content, short TTL. Per-process — fine for
@@ -53,8 +102,8 @@ export class MessagingTool extends BaseTool {
         { action: 'read', description: 'Read and search the history of channels the account can already see', defaultLevel: 'ALLOW' },
       ],
       tools: [
-        { name: 'send_message', description: 'Send a message to one of your own linked chats or an admin-approved shared destination', parameters: { channel: { type: 'string', description: 'Channel type', required: true }, target: { type: 'string', description: 'Target ID', required: true }, message: { type: 'string', description: 'Message content', required: true } }, returns: 'Delivery confirmation' },
-        { name: 'send_to_user', description: 'Send a message to yourself on your linked channels (admins, in an attended session: any user)', parameters: { user_id: { type: 'string', description: 'User ID', required: true }, message: { type: 'string', description: 'Message content', required: true } }, returns: 'Per-channel delivery results' },
+        { name: 'send_message', description: 'Send a message (and workspace files) to one of your own linked chats or an admin-approved shared destination', parameters: { channel: { type: 'string', description: 'Channel type', required: true }, target: { type: 'string', description: 'Target ID', required: true }, message: { type: 'string', description: 'Message content', required: true }, attachments: { type: 'array', description: 'Workspace files to send' } }, returns: 'Delivery confirmation' },
+        { name: 'send_to_user', description: 'Send a message (and workspace files) to yourself on your linked channels (admins, in an attended session: any user)', parameters: { user_id: { type: 'string', description: 'User ID', required: true }, message: { type: 'string', description: 'Message content', required: true }, attachments: { type: 'array', description: 'Workspace files to send' } }, returns: 'Per-channel delivery results' },
         { name: 'list_channels', description: 'List connected messaging channels', parameters: {}, returns: 'Channel list with status' },
         { name: 'list_contacts', description: 'List users with their linked channel accounts', parameters: {}, returns: 'User contact list' },
         { name: 'channel_history', description: 'Read recent messages from a channel or chat', parameters: { channel: { type: 'string', description: 'slack or teams', required: true }, target: { type: 'string', description: 'Channel name or id', required: true } }, returns: 'Messages, newest first' },
@@ -74,6 +123,7 @@ export class MessagingTool extends BaseTool {
         target: { type: 'string', description: 'Target chat id: your own linked chat, your user id for webchat, or an approved shared destination', required: true },
         message: { type: 'string', description: 'Message content to send', required: true },
         reply_to: { type: 'string', description: 'Thread or message ID to reply to (optional)' },
+        attachments: { type: 'array', description: `Workspace files to send with it (images, audio, documents; at most ${MAX_ATTACHMENTS})`, items: { type: 'string' } },
       }),
       async (args, context) => {
         const channel = args.channel as string;
@@ -92,12 +142,14 @@ export class MessagingTool extends BaseTool {
           return { success: false, error: `Channel ${channel} is not connected` };
         }
 
-        const dedupKey = `msg ${channel} ${target} ${contentHash(args.message as string)}`;
+        const attachments = await messageAttachments(args.attachments, context);
+        if (typeof attachments === 'string') return { success: false, error: attachments };
+        const dedupKey = `msg ${channel} ${target} ${contentHash(args.message as string)} ${attachmentKey(attachments)}`;
         if (recentlySent(dedupKey)) {
           return { success: true, deduped: true, channel, target, note: 'Identical message already sent to this target moments ago — suppressed to avoid duplicate notifications.' };
         }
 
-        const r = await sendResolved(resolved, { content: args.message as string });
+        const r = await sendResolved(resolved, { content: args.message as string, ...(attachments.length ? { attachments } : {}) });
         if (!r.ok) return { success: false, error: r.error };
         markSent(dedupKey);
         return { success: true, channel, target };
@@ -112,6 +164,7 @@ export class MessagingTool extends BaseTool {
         user_id: { type: 'string', description: 'User ID to send to (your own, unless you are an admin in an attended session)', required: true },
         message: { type: 'string', description: 'Message content', required: true },
         channel: { type: 'string', description: 'Specific channel to use (optional — sends to all verified channels if omitted)' },
+        attachments: { type: 'array', description: `Workspace files to send with it (images, audio, documents; at most ${MAX_ATTACHMENTS})`, items: { type: 'string' } },
       }),
       async (args, context) => {
         const { userRepository } = await import('@/db/repositories/user-repository');
@@ -151,7 +204,9 @@ export class MessagingTool extends BaseTool {
           return { success: false, error: `User has no verified binding for channel: ${targetChannel}` };
         }
 
-        const dedupKey = `user ${args.user_id} ${targetChannel ?? 'all'} ${contentHash(args.message as string)}`;
+        const attachments = await messageAttachments(args.attachments, context);
+        if (typeof attachments === 'string') return { success: false, error: attachments };
+        const dedupKey = `user ${args.user_id} ${targetChannel ?? 'all'} ${contentHash(args.message as string)} ${attachmentKey(attachments)}`;
         if (recentlySent(dedupKey)) {
           return { success: true, deduped: true, note: 'Identical message already sent to this user moments ago — suppressed to avoid duplicate notifications.' };
         }
@@ -164,7 +219,7 @@ export class MessagingTool extends BaseTool {
             results.push({ channel: binding.channelType, success: false, error: 'Channel not connected' });
             continue;
           }
-          const r = await deliver(scope, binding.channelType, binding.channelId, { content: args.message as string });
+          const r = await deliver(scope, binding.channelType, binding.channelId, { content: args.message as string, ...(attachments.length ? { attachments } : {}) });
           results.push(r.ok
             ? { channel: binding.channelType, success: true }
             : { channel: binding.channelType, success: false, error: r.error });

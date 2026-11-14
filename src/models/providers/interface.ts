@@ -28,6 +28,12 @@ export interface ModelProvider {
   ocr?(document: OcrDocument, model: string): Promise<OcrResult>;
 
   /**
+   * Image generation (optional — providers with an image endpoint). Called
+   * through `generateImageWithLane` (models/image-generation.ts), never directly.
+   */
+  generateImage?(request: ImageGenerationRequest): Promise<ImageGenerationResult>;
+
+  /**
    * Decision ("System One") models only: typed questions → calibrated answers.
    * Called through `decide()` in models/decision.ts, never directly.
    */
@@ -74,4 +80,32 @@ export interface QuotaStatus {
   exhausted: boolean;
   /** Error message from last quota check */
   lastError?: string;
+}
+
+/** The shape of a requested image. */
+export type ImageAspect = 'square' | 'landscape' | 'portrait';
+
+/** One image-generation call on a model row of the Image generation lane. */
+export interface ImageGenerationRequest {
+  /** The provider's model id. */
+  model: string;
+  /** The registry row (`model_config.name`), for the row's endpoint and custom config. */
+  modelConfigName: string;
+  prompt: string;
+  /** How many images (1–4). */
+  n: number;
+  aspect: ImageAspect;
+  /** Images to edit or take as reference (only where the provider supports it). */
+  references?: Array<{ data: Buffer; mimeType: string }>;
+  /** The row's key, already resolved under the row's owner. */
+  apiKey?: string;
+  /** For usage scoping (a personal row's owner). */
+  userId?: string;
+  signal?: AbortSignal;
+}
+
+export interface ImageGenerationResult {
+  images: Array<{ data: Buffer; mimeType: string }>;
+  /** The prompt the provider actually used, when it rewrites prompts. */
+  revisedPrompt?: string;
 }

@@ -374,15 +374,15 @@ export class TeamsChannel extends BaseChannel {
       let activity: Partial<Activity>;
 
       if (response.attachments?.length) {
-        // Create adaptive card or attachments
-        const attachments = response.attachments.map((att) => ({
-          contentType: att.mimeType,
-          contentUrl: att.url,
-          name: att.filename,
-        }));
-
+        // Bytes: an image up to 1 MB goes inline (data URL); anything else
+        // needs a URL Teams can fetch — a short-lived public link, or, without
+        // a public address, a line saying the file is in the web app.
+        const { attachments, notes } = await teamsAttachments(response.attachments);
         const { MessageFactory } = await import('botbuilder');
-        activity = MessageFactory.attachment(attachments[0], response.content);
+        const text = [response.content, ...notes].filter(Boolean).join('\n\n');
+        activity = attachments.length
+          ? MessageFactory.list(attachments as never[], text)
+          : MessageFactory.text(text);
       } else {
         const { MessageFactory } = await import('botbuilder');
         activity = MessageFactory.text(response.content);
@@ -616,3 +616,26 @@ export class TeamsChannel extends BaseChannel {
 }
 
 export const teamsChannel = new TeamsChannel();
+
+/**
+ * Channel attachments as Teams attachments. Bytes: an image up to 1 MB goes
+ * inline (data URL); anything else needs a URL Teams can fetch — a
+ * short-lived public link, or, without a public address, a line saying the
+ * file is in the web app.
+ */
+export async function teamsAttachments(list: Attachment[]): Promise<{ attachments: Array<{ contentType: string; contentUrl: string; name?: string }>; notes: string[] }> {
+  const { publicMediaUrl } = await import('@/core/media/public-links');
+  const notes: string[] = [];
+  const attachments: Array<{ contentType: string; contentUrl: string; name?: string }> = [];
+  for (const att of list) {
+    let contentUrl = att.url;
+    if (!contentUrl && att.data) {
+      contentUrl = att.type === 'image' && att.data.length <= 1024 * 1024
+        ? `data:${att.mimeType};base64,${att.data.toString('base64')}`
+        : publicMediaUrl(att.data, att.mimeType, att.filename || 'file') ?? undefined;
+    }
+    if (contentUrl) attachments.push({ contentType: att.mimeType, contentUrl, name: att.filename });
+    else notes.push(`(${att.filename || (att.type === 'audio' ? 'The audio' : 'A file')} is in the Octipus web app: Teams needs a public address to receive it.)`);
+  }
+  return { attachments, notes };
+}

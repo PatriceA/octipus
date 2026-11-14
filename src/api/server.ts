@@ -101,6 +101,7 @@ import { runRoutes } from './routes/runs';
 import { verificationRoutes } from './routes/verification';
 import { vaultRoutes } from './routes/vault';
 import { voiceRoutes } from './routes/voice';
+import { mediaPublicRoutes } from './routes/media-public';
 import { webhookIncomingRoutes } from './routes/webhook-incoming';
 import { webhookRoutes } from './routes/webhooks';
 import { whatsappWebhookRoutes } from './routes/whatsapp-webhook';
@@ -534,6 +535,9 @@ export function createServer() {
 
   // Teams webhook — unauthenticated (Azure Bot Framework calls directly)
   app.group('/api', (app) => app.use(teamsWebhookRoutes));
+
+  // Short-lived public media links — unauthenticated (the token is the capability; Teams fetches them)
+  app.group('/api', (app) => app.use(mediaPublicRoutes));
 
   // Incoming webhooks — unauthenticated (uses per-hook webhookSecret for auth)
   app.group('/api', (app) => app.use(webhookIncomingRoutes));

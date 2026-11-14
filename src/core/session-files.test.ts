@@ -114,6 +114,13 @@ describe('readSessionFile', () => {
     }
   });
 
+  test('returns audio (a spoken reply) as a data URL for the chat\'s player', async () => {
+    await writeFile(join(root, 'reply.mp3'), Buffer.from('ID3fake'));
+    const result = await readSessionFile(fs, 'reply.mp3');
+    expect(result).toMatchObject({ type: 'audio', mimeType: 'audio/mpeg' });
+    if (result.type === 'audio') expect(result.dataUrl).toBe(`data:audio/mpeg;base64,${Buffer.from('ID3fake').toString('base64')}`);
+  });
+
   test('throws 404 for a missing file', async () => {
     await expect(readSessionFile(fs, 'nope.txt')).rejects.toMatchObject({ status: 404 });
   });

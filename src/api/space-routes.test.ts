@@ -36,6 +36,8 @@ const PERSONAL_PREFIXES = [
   '/api/remote-spaces',
   // Public forms: no sign-in, the scope is the form link's (docs/RECORDS.md).
   '/api/forms',
+  // Short-lived public media links: no sign-in, the token is the capability (docs/MEDIA.md).
+  '/api/media/public',
   // The artifact SDK script, served beside the hosted pages: no content.
   '/octipus-artifact-client.js',
 ];
