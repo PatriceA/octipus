@@ -1,3 +1,5 @@
+import { agyUsage } from './agy-cli-protocol';
+import { prepareAgyRuntime } from './agy-cli-runtime';
 import { prepareGrokRuntime } from './grok-cli-runtime';
 import { redactedCommand } from '@/utils/command-log';
 import { execFile } from 'node:child_process';
@@ -79,13 +81,13 @@ export interface CliRunConnection {
  *   comes back through `answerCliPermissionRequest` → `routeApprovalFor`; the
  *   operator's `allowedTools` pre-approvals are dropped.
  * - Codex: the `read-only` sandbox; its writes happen only through Octipus tools.
- * - Antigravity: `--mode plan`; likewise.
+ * - Antigravity and Grok Build: install-owned only; no shared-space mode.
  * - Mistral Vibe (default `auto-approve`): none yet.
  */
 export const CLI_SPACE_MODES: Readonly<Record<string, string | null>> = {
   'Claude Code': 'permission mode default with the stdio permission tool',
   'Codex CLI': 'read-only sandbox',
-  Antigravity: 'plan mode',
+  Antigravity: null,
   'Mistral Vibe': null,
   'Grok Build': null,
 };
@@ -319,20 +321,6 @@ export function getCodexShellGuardWrapper(): string {
   const path = join(dirname(getShellGuardScriptPath()), 'shell-guard.cmd');
   writeFileSync(path, `@${shellGuardHookCommand()}\r\n`);
   return path;
-}
-
-/** Antigravity customization root holding `.agents/hooks.json` for the shell guard. */
-export function getAgyShellGuardDir(): string {
-  const dir = join(dirname(getShellGuardScriptPath()), 'agy-shell-guard');
-  mkdirSync(join(dir, '.agents'), { recursive: true });
-  // agy runs Windows hooks via Go's `cmd /c`, which backslash-escapes every
-  // quote (verified live: cmd then can't find `\"C:\Program Files\...`). A
-  // quote-free relative wrapper sidesteps it; hooks run in the hooks.json dir.
-  // Explicit `.\`: NoDefaultCurrentDirectoryInExePath may be inherited.
-  if (IS_WIN) writeFileSync(join(dir, '.agents', 'shell-guard.cmd'), `@${shellGuardHookCommand()}\r\n`);
-  const command = IS_WIN ? '.\\shell-guard.cmd' : shellGuardHookCommand();
-  writeFileSync(join(dir, '.agents', 'hooks.json'), JSON.stringify({ 'octipus-shell-guard': { PreToolUse: [{ matcher: 'run_command', hooks: [{ type: 'command', command }] }] } }));
-  return dir;
 }
 
 /** Cached path — reseeded only if the dir has gone missing. */
@@ -628,7 +616,7 @@ export class CLIArgumentBuilder {
       case 'Claude Code':
         return this.buildClaudeArgs(prompt, settings, systemMessages, agentId, connection, resume);
       case 'Antigravity':
-        return this.buildAntigravityArgs(prompt, settings, systemPrompt, connection);
+        return this.buildAntigravityArgs(prompt, settings, systemMessages.length ? systemMessages : systemPrompt ? [systemPrompt] : [], connection, resume);
       case 'Codex CLI':
         return this.buildCodexArgs(prompt, systemPrompt, settings, connection, resume);
       case 'Grok Build': {
@@ -846,46 +834,18 @@ export class CLIArgumentBuilder {
   private buildAntigravityArgs(
     prompt: string,
     settings: CLIAgentConfig,
-    systemPrompt?: string | null,
+    systemMessages: string[],
     connection?: CliRunConnection,
-  ): { binary: string; args: string[]; useShell?: boolean } {
-    // agy (Antigravity) replaces the Gemini CLI. `--print <prompt>` runs a
-    // single prompt non-interactively and emits PLAIN TEXT (no -o json /
-    // stream-json), which the worker buffers via CLIToolConfig.bufferOutput.
-    // --dangerously-skip-permissions auto-approves tool calls (the agy
-    // equivalent of gemini's --approval-mode yolo).
-    const args: string[] = [];
-    if (connection?.planMode || lockedRun(connection) || settings.permissionMode === 'safe' || settings.permissionMode === 'plan') args.push('--mode', 'plan');
-    else if (['workspace', 'accept-edits', 'auto_edit', 'auto'].includes(settings.permissionMode ?? '')) args.push('--mode', 'accept-edits', '--sandbox');
-    else if (!settings.permissionMode || settings.permissionMode === 'full' || settings.permissionMode === 'yolo') args.push('--dangerously-skip-permissions');
-    else throw new Error(`Unsupported Antigravity permission mode: ${settings.permissionMode}`);
-
-    // Model override: env var > settings. agy uses --model (not gemini's -m);
-    // when unset, agy picks the model from its own ~/.gemini config.
-    const model = process.env.ANTIGRAVITY_MODEL || process.env.GEMINI_MODEL || settings.model;
-    if (model) {
-      args.push('--model', model);
-    }
-
-    if (settings.extraArgs?.length) {
-      args.push(...settings.extraArgs);
-    }
-
-    // agy reads hooks only from customization roots; an added workspace dir
-    // is one, so the guard rides in without touching ~/.gemini or the project.
-    if (connection?.shellGuard) args.push('--add-dir', getAgyShellGuardDir());
-
-    // agy has no --system-prompt flag, and text-mode --print takes no stdin
-    // (only --input-format stream-json, which forces stream-json output).
-    // Prepend the expert system prompt to the user prompt; the spawn sites
-    // guard the Windows command-line cap (assertWindowsCmdLineFits).
-    const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
-    args.push('--print', fullPrompt);
-
-    // agy is a native single binary (not a .cmd wrapper), so the worker must
-    // NOT shell-wrap it on Windows — shell:true would re-tokenize the prompt
-    // argv. Passing useShell:false keeps the prompt a single argv element.
-    return { binary: 'agy', args, useShell: false };
+    resume?: { id: string; isFirstRun: boolean },
+  ) {
+    if (!connection) throw new Error('Antigravity requires the scoped Octipus tool bridge');
+    if (settings.mcpConfigPath || settings.allowedTools?.length) throw new Error('Antigravity uses only this session’s Octipus tools; configure tools on the topic.');
+    const launch = resolveOctipusMcpLaunch(connection);
+    return { ...prepareAgyRuntime({ workspace: connection.workingDirectory ?? process.cwd(),
+      instructions: systemMessages.join('\n\n'), model: process.env.ANTIGRAVITY_MODEL || process.env.GEMINI_MODEL || settings.model,
+      extraArgs: settings.extraArgs, resume, apiKeyMode: settings.inheritApiKeys === true,
+      mcp: { runtime: launch.runtime, entry: launch.entry, url: launch.apiUrl, key: launch.apiKey } }),
+      stdinPrompt: JSON.stringify({ event: 'user', message: { content: prompt } }) + '\n' };
   }
 
   /**
@@ -1150,9 +1110,9 @@ export class CLIOutputParser {
   private counters: SideEffectCounters = emptyCounters();
   private claudeUsageByMessage = new Map<string, { freshInput: number; cacheRead: number; cacheCreation: number; output: number }>();
   /**
-   * Did we parse a stream shape we actually understand? Claude, Codex and
-   * Grok stream structured events; a buffered-output tool (agy) yields
-   * no events at all. Its counters would read as all-zero — indistinguishable
+   * Did we parse a stream shape we actually understand? Claude, Codex,
+   * Grok and Antigravity stream structured events; buffered tools may yield
+   * no parseable events. Its counters would read as all-zero — indistinguishable
    * from "did nothing" — so `getSideEffectCounters` reports null (unknown)
    * instead. A wrong zero is worse than no evidence: it fails work that
    * actually succeeded.
@@ -1237,13 +1197,14 @@ export class CLIOutputParser {
   parse(event: Record<string, unknown>, toolName: string): { text: string; replace?: boolean } | null {
     const type = event.type as string;
 
+    if (toolName === 'Antigravity') {
+      this.streamRecognized = true;
+      return this.parseAgyEvent(event);
+    }
     if (toolName === 'Claude Code' || toolName === 'Grok Build') {
       this.streamRecognized = true;
       return this.parseClaudeEvent(event, type, toolName);
     }
-
-    // Antigravity (agy) emits plain text buffered at process close
-    // (CLIToolConfig.bufferOutput), so it has no per-event stream parser here.
 
     if (toolName === 'Codex CLI') {
       this.streamRecognized = true;
@@ -1251,6 +1212,93 @@ export class CLIOutputParser {
     }
 
     return null;
+  }
+
+  private agyStepUsageAvailable = false;
+  private agyDoneSteps = new Set<string>();
+  private agyModelSteps = new Set<string>();
+  private agyResponseText = new Map<string, string>();
+
+  private parseAgyEvent(event: Record<string, unknown>): { text: string; replace?: boolean } | null {
+    if (event.event === 'init') {
+      if (typeof event.conversation_id === 'string') this.callbacks.onVendorSession?.(event.conversation_id);
+      this.callbacks.onSessionInit?.();
+      this.emit('thought', { status: 'running', vendorSessionId: event.conversation_id });
+      return null;
+    }
+    if (event.event === 'step_update') {
+      const step = event.step_update as Record<string, unknown> | undefined;
+      if (!step || typeof step.step_index !== 'number') {
+        this.callbacks.onRunError?.('Antigravity emitted a step without a stable index');
+        return null;
+      }
+      const id = `agy-${step.conversation_id}-${step.step_index}`;
+      const done = step.state === 'DONE';
+      const firstDone = done && !this.agyDoneSteps.has(id);
+      if (firstDone) this.agyDoneSteps.add(id);
+      if (step.step_type === 'agent_response') {
+        this.callbacks.onVendorReply?.();
+        if (!this.agyModelSteps.has(id)) {
+          this.agyModelSteps.add(id);
+          this.callbacks.onTurn();
+        }
+      }
+      if (firstDone && step.usage) this.reportAgyUsage(step.usage, false);
+      if (step.step_type === 'tool') {
+        this.flushCommentary();
+        const info = step.tool_info as Record<string, unknown> | undefined;
+        const parameters = info?.parameters as Record<string, unknown> | undefined;
+        const name = step.tool_name === 'call_mcp_tool' && parameters?.ServerName === 'octipus' && typeof parameters.ToolName === 'string'
+          ? `octipus.${parameters.ToolName}` : String(step.tool_name ?? 'tool');
+        if (!this.startedItemIds.has(id)) {
+          this.startedItemIds.add(id);
+          this.callbacks.onToolCall?.();
+          this.emit('action', { type: 'cli_tool_use', id, toolName: name, args: parameters?.Arguments ?? parameters });
+        }
+        if (firstDone) this.emit('action', { type: 'cli_tool_result', id, toolName: name,
+          output: (typeof info?.output === 'string' ? info.output : JSON.stringify(info?.output ?? '')).slice(0, 2000),
+          isError: !!info?.error || info?.is_error === true });
+      }
+      if (typeof step.text_delta === 'string' && step.step_type === 'agent_response') {
+        const text = (this.agyResponseText.get(id) ?? '') + step.text_delta;
+        this.agyResponseText.set(id, text);
+        this.rememberCommentary(id, text);
+        return { text: step.text_delta };
+      }
+      return null;
+    }
+    if (event.event === 'result') {
+      const result = event.result as Record<string, unknown> | undefined;
+      if (!result) { this.callbacks.onRunError?.('Antigravity emitted an invalid result'); return null; }
+      const aggregate = agyUsage(result.usage);
+      // AGY terminal usage is cumulative across the vendor conversation on
+      // resume. Only DONE step reports belong to this invocation in that case.
+      const resumedAggregate = typeof result.num_turns === 'number' && result.num_turns > 1;
+      const monotonic = !resumedAggregate && aggregate.available && aggregate.inputTokens >= this.reportedInput && aggregate.outputTokens >= this.reportedOutput && (aggregate.cacheReadTokens ?? 0) >= this.reportedCacheRead;
+      const usage = monotonic ? aggregate : { inputTokens: this.reportedInput, outputTokens: this.reportedOutput,
+        totalTokens: this.reportedInput + this.reportedOutput, cacheReadTokens: this.reportedCacheRead,
+        available: this.agyStepUsageAvailable };
+      if (monotonic) this.reportAgyUsage(result.usage, true);
+      const failed = result.status !== 'SUCCESS';
+      this.emit('thought', { status: failed ? 'failed' : 'completed', vendorSessionId: result.conversation_id,
+        stats: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, totalTokens: usage.totalTokens,
+          cacheRead: usage.cacheReadTokens, usageAvailable: usage.available, usageIncomplete: !monotonic, numTurns: this.agyModelSteps.size, vendorConversationTurns: result.num_turns } });
+      if (failed) this.callbacks.onRunError?.(`Antigravity failed: ${typeof result.error === 'string' ? redactedCommand(result.error) : String(result.status ?? 'unknown status')}`);
+      return typeof result.response === 'string' ? { text: result.response, replace: true } : null;
+    }
+    return null;
+  }
+
+  private reportAgyUsage(raw: unknown, aggregate: boolean): void {
+    const usage = agyUsage(raw);
+    if (!usage.available) return;
+    this.agyStepUsageAvailable = true;
+    const input = aggregate ? Math.max(0, usage.inputTokens - this.reportedInput) : usage.inputTokens;
+    const output = aggregate ? Math.max(0, usage.outputTokens - this.reportedOutput) : usage.outputTokens;
+    const cacheRead = aggregate ? Math.max(0, (usage.cacheReadTokens ?? 0) - this.reportedCacheRead) : usage.cacheReadTokens ?? 0;
+    this.reportedInput += input; this.reportedOutput += output; this.reportedCacheRead += cacheRead;
+    this.reportedTokens += input + output;
+    if (input + output > 0) this.callbacks.onTokenUsage?.({ input, output, total: input + output, cacheRead });
   }
 
   private parseClaudeEvent(event: Record<string, unknown>, type: string, vendor = 'Claude Code'): { text: string; replace?: boolean } | null {

@@ -1,5 +1,5 @@
 import { parse as parseToml } from 'smol-toml';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { assertCliSpaceMode, CLI_SPACE_MODES, CLIArgumentBuilder, discoverCodexMcpServers, injectVibeMcpServer, resolveClaudePermissionMode, resolveCodexSandboxMode, resolveVibeMode, stableFirst } from './cli-adapters';
@@ -11,7 +11,16 @@ const mockCodexList = (stdout: string | Error) => vi.mocked(execFile).mockImplem
   return undefined as never;
 }) as never);
 
-const builder = new CLIArgumentBuilder();
+const launchPaths: string[] = [];
+class TrackedBuilder extends CLIArgumentBuilder {
+  override build(...args: Parameters<CLIArgumentBuilder['build']>) {
+    const run = super.build(...args); launchPaths.push(...(run.cleanupPaths ?? [])); return run;
+  }
+}
+const builder = new TrackedBuilder();
+const agyConnection = { url: 'http://127.0.0.1:1234', key: 'test', planMode: false, maxIterations: 5, workingDirectory: '/project' };
+const buildAgy = (prompt: string, settings: import('@/db/schema/models').CLIAgentConfig = {}, messages: string[] = [], system?: string) =>
+  builder.build('Antigravity', prompt, settings, messages, system, undefined, 'test', agyConnection);
 
 it.each([true, false])('Codex keeps writable build caches on fresh and resumed workspace runs (first=%s)', first => {
   const paths = ['/home/fixture/.gradle', '/home/fixture/.android'];
@@ -34,6 +43,7 @@ const SYSTEM_PROMPT_FLAG = process.platform === 'win32' ? '--append-system-promp
 
 const originalEnv = { ...process.env };
 afterEach(() => {
+  for (const path of launchPaths.splice(0)) rmSync(path, { recursive: true, force: true });
   process.env = { ...originalEnv };
   vi.clearAllMocks();
 });
@@ -65,7 +75,7 @@ describe('CLIArgumentBuilder model override', () => {
   it('Antigravity: passes --model when settings.model is set', () => {
     delete process.env.GEMINI_MODEL;
     delete process.env.ANTIGRAVITY_MODEL;
-    const out = builder.build('Antigravity', 'hi', { model: 'gemini-3-pro' }, []);
+    const out = buildAgy('hi', { model: 'gemini-3-pro' }, []);
     expect(out.binary).toBe('agy');
     const i = out.args.indexOf('--model');
     expect(i).toBeGreaterThanOrEqual(0);
@@ -74,7 +84,7 @@ describe('CLIArgumentBuilder model override', () => {
 
   it('Antigravity: env ANTIGRAVITY_MODEL beats settings.model', () => {
     process.env.ANTIGRAVITY_MODEL = 'gemini-3-flash';
-    const out = builder.build('Antigravity', 'hi', { model: 'gemini-3-pro' }, []);
+    const out = buildAgy('hi', { model: 'gemini-3-pro' }, []);
     const i = out.args.indexOf('--model');
     expect(out.args[i + 1]).toBe('gemini-3-flash');
   });
@@ -82,25 +92,25 @@ describe('CLIArgumentBuilder model override', () => {
   it('Antigravity: omits --model entirely when neither set', () => {
     delete process.env.GEMINI_MODEL;
     delete process.env.ANTIGRAVITY_MODEL;
-    const out = builder.build('Antigravity', 'hi', {}, []);
+    const out = buildAgy('hi', {}, []);
     expect(out.args.includes('--model')).toBe(false);
   });
 
-  it('Antigravity: uses --print plain-text mode with auto-approve and no shell wrap', () => {
+  it('Antigravity: uses streaming stdin with scoped MCP and no shell wrap', () => {
     delete process.env.GEMINI_MODEL;
     delete process.env.ANTIGRAVITY_MODEL;
-    const out = builder.build('Antigravity', 'do the thing', {}, []);
+    const out = buildAgy('do the thing', {}, []);
     expect(out.args).toContain('--dangerously-skip-permissions');
-    const p = out.args.indexOf('--print');
-    expect(p).toBeGreaterThanOrEqual(0);
-    expect(out.args[p + 1]).toBe('do the thing');
+    expect(out.args).not.toContain('--print');
+    expect(out.args).toContain('stream-json');
+    expect(JSON.parse(out.stdinPrompt!).message.content).toBe('do the thing');
     expect(out.useShell).toBe(false);
   });
 
-  it('Antigravity: prepends the system prompt to the user prompt', () => {
-    const out = builder.build('Antigravity', 'user ask', {}, [], 'SYSTEM RULES');
-    const p = out.args.indexOf('--print');
-    expect(out.args[p + 1]).toBe('SYSTEM RULES\n\nuser ask');
+  it('Antigravity: keeps system instructions in the managed agent definition', () => {
+    const out = buildAgy('user ask', {}, [], 'SYSTEM RULES');
+    expect(JSON.parse(out.stdinPrompt!).message.content).toBe('user ask');
+    expect(readFileSync(out.env!.ANTIGRAVITY_GEMINI_DIR + '/config/agents/octipus-managed.md', 'utf8')).toContain('SYSTEM RULES');
   });
 
   it('Codex CLI: settings.model overrides default', () => {
@@ -240,8 +250,8 @@ describe('run-scoped CLI configuration', () => {
     expect(claude.args[claude.args.indexOf('--max-turns') + 1]).toBe('7');
     expect(claude.env).toEqual({ MCP_TOOL_TIMEOUT: '7200000' });
     const agy = builder.build('Antigravity', 'task', { permissionMode: 'full' }, [], null, 100, 'test', connection);
-    expect(agy.args).toContain('plan');
-    expect(agy.args).not.toContain('--dangerously-skip-permissions');
+    expect(agy.args).toContain('--agent');
+    expect(agy.args).not.toContain('--mode');
   });
 
   // Coworking §5.6: a CLI model runs in a space only in its adapter's
@@ -275,16 +285,14 @@ describe('run-scoped CLI configuration', () => {
       const codex = builder.build('Codex CLI', 'task', { permissionMode: 'full' }, [], null, 100, 'test', inSpace);
       expect(codex.args[codex.args.indexOf('--sandbox') + 1]).toBe('read-only');
     });
-    it('Antigravity runs in plan mode, never with skipped permissions', () => {
-      const agy = builder.build('Antigravity', 'task', { permissionMode: 'full' }, [], null, 100, 'test', inSpace);
-      expect(agy.args[agy.args.indexOf('--mode') + 1]).toBe('plan');
-      expect(agy.args).not.toContain('--dangerously-skip-permissions');
+    it('Antigravity refuses shared-space use until its credential scope is supported', () => {
+      expect(() => builder.build('Antigravity', 'task', {}, [], null, 100, 'test', inSpace)).toThrow(/cannot run in a shared space/);
     });
     it('Mistral Vibe declares no space mode and is refused', () => {
       expect(CLI_SPACE_MODES['Mistral Vibe']).toBeNull();
       expect(() => builder.build('Mistral Vibe', 'task', {}, [], null, 100, 'test', inSpace)).toThrow(/cannot run in a shared space/);
       expect(() => assertCliSpaceMode('Mistral Vibe')).toThrow(/cannot run in a shared space/);
-      for (const adapter of ['Claude Code', 'Codex CLI', 'Antigravity']) expect(assertCliSpaceMode(adapter)).toBeTruthy();
+      for (const adapter of ['Claude Code', 'Codex CLI']) expect(assertCliSpaceMode(adapter)).toBeTruthy();
     });
   });
 
@@ -298,12 +306,10 @@ describe('run-scoped CLI configuration', () => {
       expect(claude.args[claude.args.indexOf('--permission-prompt-tool') + 1]).toBe('stdio');
       expect(claude.args).toContain('--setting-sources=');
     });
-    it('Codex runs read-only and Antigravity in plan mode', () => {
+    it('Codex runs read-only and Antigravity refuses personal-token use', () => {
       const codex = builder.build('Codex CLI', 'task', {}, [], null, 100, 'test', personal);
       expect(codex.args[codex.args.indexOf('--sandbox') + 1]).toBe('read-only');
-      const agy = builder.build('Antigravity', 'task', {}, [], null, 100, 'test', personal);
-      expect(agy.args[agy.args.indexOf('--mode') + 1]).toBe('plan');
-      expect(agy.args).not.toContain('--dangerously-skip-permissions');
+      expect(() => builder.build('Antigravity', 'task', {}, [], null, 100, 'test', personal)).toThrow(/cannot run on a personal model/);
     });
     it('Mistral Vibe (default auto-approve) is refused', () => {
       expect(() => builder.build('Mistral Vibe', 'task', {}, [], null, 100, 'test', personal)).toThrow(/cannot run on a personal model/);
@@ -456,11 +462,11 @@ it('preserves legacy permission aliases', () => {
   expect(resolveCodexSandboxMode('auto')).toBe('workspace-write');
   expect(resolveVibeMode('yolo')).toBe('auto-approve');
   expect(resolveVibeMode('auto_edit')).toBe('accept-edits');
-  const yolo = builder.build('Antigravity', 'task', { permissionMode: 'yolo' }, []);
+  const yolo = buildAgy('task', { permissionMode: 'yolo' });
   expect(yolo.args).toContain('--dangerously-skip-permissions');
-  const edits = builder.build('Antigravity', 'task', { permissionMode: 'auto_edit' }, []);
-  expect(edits.args).toContain('accept-edits');
-  expect(edits.args).toContain('--sandbox');
+  const edits = buildAgy('task', { permissionMode: 'auto_edit' });
+  expect(edits.args).toContain('--agent');
+  expect(edits.args).not.toContain('--sandbox');
 });
 
 it('isolates Vibe MCP servers while preserving model configuration', () => {
@@ -564,10 +570,12 @@ CURRENT DATE & TIME: now`], null, 100, 'agent-1', connection, { id: 'a3f1-uuid',
     expect(args.slice(0, 2)).toEqual(['exec', '--skip-git-repo-check']);
   });
 
-  it('ignores resume for adapters that cannot do it', () => {
+  it('passes a captured Antigravity conversation ID only on resume', () => {
     const withoutResume = builder.build('Antigravity', 'hello', {}, [], null, 100, 'agent-1', connection);
     const withResume = builder.build('Antigravity', 'hello', {}, [], null, 100, 'agent-1', connection, { id: 'x', isFirstRun: false });
-    expect(withResume.args).toEqual(withoutResume.args);
+    expect(withoutResume.args).not.toContain('--conversation');
+    expect(withResume.args).toContain('--conversation');
+    expect(withResume.args).toContain('x');
   });
 
   // `codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]` (codex v0.154.0) only
@@ -645,7 +653,7 @@ describe('original image delivery', () => {
   });
   it('other adapters retain the original file reference', () => {
     const out = builder.build('Antigravity', 'Look at this', {}, [], undefined, undefined, 'images', connection);
-    expect(out.args[out.args.indexOf('--print') + 1]).toContain(JSON.stringify(image.path));
+    expect(JSON.parse(out.stdinPrompt!).message.content).toContain(JSON.stringify(image.path));
   });
 });
 

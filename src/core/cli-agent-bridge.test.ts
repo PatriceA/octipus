@@ -41,7 +41,7 @@ vi.mock('child_process', async importOriginal => {
   const actual = await importOriginal<typeof import('child_process')>();
   return { ...actual, spawn: (binary: string, args: string[], opts: object) => {
     if (process.env.OCTIPUS_LIVE_CLI) return actual.spawn(binary, args, opts);
-    if (binary !== 'claude' && binary !== 'grok') throw new Error(`Unexpected paid CLI invocation: ${binary}`);
+    if (binary !== 'claude' && binary !== 'grok' && binary !== 'agy') throw new Error(`Unexpected paid CLI invocation: ${binary}`);
     // The worker spawns with `shell: true` on Windows, and cmd.exe splits an
     // unquoted `C:\Program Files\nodejs\node.exe` at the space. Quote what we
     // substitute, exactly as the worker quotes the real binary.
@@ -271,7 +271,7 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI).each([
   expect(fixture.execute).not.toHaveBeenCalled();
 });
 
-it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('Grok retains its isolated config home under the workstation host identity profile', async () => {
+it.skipIf(!!process.env.OCTIPUS_LIVE_CLI).each(['grok-build', 'antigravity'])('%s retains its isolated config home under the workstation host identity profile', async vendor => {
   const { getConfig } = await import('@/config');
   const { workstationAutomationPreset } = await import('@/shared/execution-environment');
   const { homedir } = await import('node:os');
@@ -283,12 +283,18 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('Grok retains its isolated config home
   getConfig().security.executionEnvironments = [{ ...workstationAutomationPreset(userId, 'test', [fixture.dir]), isDefault: true }];
   writeFileSync(fixture.script, `
     if (process.env.GROK_CONFIG) throw new Error('Workstation vendor overlay leaked');
-    if (process.env.HOME === ${JSON.stringify(homedir())} || process.env.USERPROFILE !== process.env.HOME || !process.env.GROK_HOME.startsWith(process.env.HOME) || !process.env.XDG_CONFIG_HOME.startsWith(process.env.HOME)) throw new Error('Managed vendor home was overwritten');
-    console.log(JSON.stringify({type:'system',subtype:'init',tools:['search_tool','use_tool'],mcp_servers:[{name:'octipus',status:'pending'}]}));
-    process.stdout.write(JSON.stringify({type:'result',subtype:'success',result:'Isolated home preserved',num_turns:1}));
+    const configHome = ${JSON.stringify(vendor)} === 'antigravity' ? process.env.ANTIGRAVITY_GEMINI_DIR : process.env.GROK_HOME;
+    if (process.env.HOME === ${JSON.stringify(homedir())} || process.env.USERPROFILE !== process.env.HOME || !configHome.startsWith(process.env.HOME) || !process.env.XDG_CONFIG_HOME.startsWith(process.env.HOME)) throw new Error('Managed vendor home was overwritten');
+    if (${JSON.stringify(vendor)} === 'antigravity') {
+      console.log(JSON.stringify({event:'init',conversation_id:'private-home-test',init:{agent:'octipus-managed',cwd:process.cwd()}}));
+      process.stdout.write(JSON.stringify({event:'result',result:{status:'SUCCESS',response:'Isolated home preserved',usage:{input_tokens:1,output_tokens:1}}}));
+    } else {
+      console.log(JSON.stringify({type:'system',subtype:'init',tools:['search_tool','use_tool'],mcp_servers:[{name:'octipus',status:'pending'}]}));
+      process.stdout.write(JSON.stringify({type:'result',subtype:'success',result:'Isolated home preserved',num_turns:1}));
+    }
   `);
   const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own', id: 'grok-host',
-    sessionId: 's', userId, model: 'cli/grok-build', role: 'general', topic: '', status: 'idle',
+    sessionId: 's', userId, model: `cli/${vendor}`, role: 'general', topic: '', status: 'idle',
     createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
   try { await expect(worker.run('Report readiness')).resolves.toBe('Isolated home preserved'); }
@@ -296,6 +302,35 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('Grok retains its isolated config home
     getConfig().security.executionEnvironments = original;
     if (originalOverlay === undefined) delete process.env.GROK_CONFIG;
     else process.env.GROK_CONFIG = originalOverlay;
+  }
+});
+
+it.skipIf(!!process.env.OCTIPUS_LIVE_CLI).each(['valid', 'regressing-usage', 'resumed-usage', 'init-only', 'partial-no-result', 'no-init', 'bad-agent', 'native-tool', 'native-agent', 'startup-error'])('Antigravity worker enforces managed startup and accounts streaming usage: %s', async mode => {
+  writeFileSync(fixture.script, `
+    const mode = ${JSON.stringify(mode)};
+    if (mode === 'startup-error') {
+      process.stdout.write(JSON.stringify({event:'result',result:{status:'ERROR',error:'Selected vendor model is unavailable',usage:{input_tokens:0,output_tokens:0}}}));
+    } else {
+      if (mode !== 'no-init') console.log(JSON.stringify({event:'init',conversation_id:'11111111-1111-4111-8111-111111111111',init:{agent:mode === 'bad-agent' ? 'default' : 'octipus-managed',cwd:process.cwd(),tools:['run_command','invoke_subagent']}}));
+      if (mode === 'native-tool') console.log(JSON.stringify({event:'step_update',step_update:{step_index:1,step_type:'tool',tool_name:'run_command'}}));
+      if (mode === 'native-agent') console.log(JSON.stringify({event:'step_update',step_update:{step_index:1,subagent_info:{}}}));
+      if (mode === 'init-only') process.exit(0);
+      console.log(JSON.stringify({event:'step_update',step_update:{conversation_id:'test',step_index:1,step_type:'agent_response',state:'DONE',text_delta:'Ready',usage:{input_tokens:1000,output_tokens:100,cache_read_tokens:800}}}));
+      if (mode === 'partial-no-result') process.exit(0);
+      process.stdout.write(JSON.stringify({event:'result',result:{status:'SUCCESS',response:'Ready',num_turns:mode === 'resumed-usage' ? 2 : 1,usage:mode === 'resumed-usage' ? {input_tokens:10000,output_tokens:1000,cache_read_tokens:8000} : mode === 'regressing-usage' ? {input_tokens:0,output_tokens:0} : {input_tokens:1000,output_tokens:100,cache_read_tokens:800}}}));
+    }
+  `);
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own', id: 'agy-worker', sessionId: 's', userId: 'u',
+    model: 'cli/antigravity', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+    { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
+  if (mode === 'valid' || mode === 'regressing-usage' || mode === 'resumed-usage') {
+    await expect(worker.run('Report readiness')).resolves.toBe('Ready');
+    expect(usage).toHaveBeenLastCalledWith(expect.anything(), 'cli', expect.objectContaining({ usage: expect.objectContaining({
+      inputTokens: 1000, outputTokens: 100, totalTokens: 1100, cacheReadTokens: 800, available: true,
+    }) }), false);
+  } else {
+    await expect(worker.run('Report readiness')).rejects.toThrow(mode === 'startup-error' ? 'Selected vendor model is unavailable' : /isolat|outside Octipus|outside the scoped|without a terminal result/);
+    expect(fixture.execute).not.toHaveBeenCalled();
   }
 });
 

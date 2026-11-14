@@ -51,7 +51,7 @@ function mockChildProcess(actual: typeof import('child_process')) {
       return actual.execFile(cmd, args, opts as object, cb as (...a: unknown[]) => void);
     },
     spawn: (binary: string, args: string[], opts: object) => {
-      const script = binary === 'claude' || binary === 'agy' ? fixture.script : binary === 'codex' ? fixture.codexScript : null;
+      const script = binary === 'claude' || binary === 'agy' || binary === 'vibe' ? fixture.script : binary === 'codex' ? fixture.codexScript : null;
       if (!script) throw new Error(`Unexpected CLI invocation: ${binary}`);
       fixture.spawnCount++;
       const shell = (opts as { shell?: boolean }).shell === true;
@@ -285,7 +285,7 @@ afterEach(() => { try { unlinkSync(failMarker()); } catch { /* not there */ } rm
 describe('CLI session reuse', () => {
   it('reports a buffered CLI as running before its output arrives without inventing iterations', async () => {
     writeFileSync(fixture.script, `await new Promise(r => setTimeout(r, 100)); console.log('QA finished');`);
-    const { worker, run } = makeWorker('cli/gemini', { sessionId: 'buffered-status' });
+    const { worker, run } = makeWorker('cli/vibe', { sessionId: 'buffered-status' });
     const events: Array<{ type: string; data: unknown }> = [];
     worker.onEvent(event => { events.push({ type: event.type, data: event.data }); });
     await run('Check the implementation');

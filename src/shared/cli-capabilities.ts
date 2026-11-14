@@ -1,3 +1,5 @@
+export interface CliModelOption { id: string; label: string; tier?: string }
+
 /** Vendor identity used by CLI model discovery and credential scoping. */
 export type CliModelProvider = 'anthropic' | 'google' | 'openai' | 'mistral' | 'zai' | 'moonshot' | 'grok';
 
@@ -33,7 +35,7 @@ export const SCOPED_EXTRA_ARGS: Record<string, { flags: readonly string[]; value
   'Codex CLI': { flags: ['--strict-config'], values: { '--color': ['auto', 'always', 'never'] } },
   'Mistral Vibe': { flags: [], values: {} },
   'Grok Build': { flags: [], values: {} },
-  Antigravity: { flags: ['--disable-slash-commands'], values: { '--effort': ['low', 'medium', 'high'] } },
+  Antigravity: { flags: ['--disable-slash-commands'], values: { '--effort': ['low', 'medium', 'high', 'xhigh', 'max'] } },
 };
 
 /**
@@ -44,16 +46,14 @@ export const SCOPED_EXTRA_ARGS: Record<string, { flags: readonly string[]; value
  * window where a run has no id. `captured` means the CLI assigns the id and
  * we read it out of its machine output (Codex `thread.started.thread_id`).
  *
- * Antigravity is deliberately absent: the installed 1.1.5 print mode emits no
- * conversation id at all, and handing it a stale id starts a fresh
- * conversation SILENTLY, which is worse than not reusing. Vibe is absent
- * because its resume depends on `log_interactions` staying enabled in the
- * user's own config, which we do not control.
+ * Antigravity captures init.conversation_id in stream-json mode. Vibe is absent
+ * because resume depends on log_interactions staying enabled in user config.
  */
 export const CLI_RESUME: Record<string, { style: 'caller-minted' | 'captured'; flag: string }> = {
   'Claude Code': { style: 'caller-minted', flag: '--resume' },
   'Codex CLI': { style: 'captured', flag: 'resume' },
   'Grok Build': { style: 'caller-minted', flag: '--resume' },
+  Antigravity: { style: 'captured', flag: '--conversation' },
 };
 
 export function canResume(adapterKey: string): boolean {

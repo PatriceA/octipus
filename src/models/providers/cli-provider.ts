@@ -1,6 +1,10 @@
+import { prepareAgyRuntime } from '@/core/agy-cli-runtime';
+import type { CLIAgentConfig } from '@/db/schema/models';
+import { discoverAgyModels } from '@/core/agy-cli-models';
+import { agyUsage, verifyAgyToollessOutput } from '@/core/agy-cli-protocol';
 import { isProviderQuotaMessage } from '@/core/errors/provider-recovery';
 import { configuredCliBinary } from '@/core/cli-executable';
-import { describeCliCapabilities, type CliModelProvider } from '@/shared/cli-capabilities';
+import { describeCliCapabilities, type CliModelProvider, type CliModelOption } from '@/shared/cli-capabilities';
 import { cliCredentialOwnerFor, cliEnvFor, cliWorkDirFor } from '@/core/cli-child-env';
 import { discoverCodexMcpServers, getClaudeSpaceSettingsPath, getEmptyMcpConfigPath, getEmptyVibeHome } from '@/core/cli-adapters';
 import { spawn } from 'child_process';
@@ -151,8 +155,13 @@ export interface CLIToolConfig {
    * personal row's one-shot completions, so such a row binds no lane.
    */
   toolLessArgs?: () => string[];
+  /** Per-invocation isolation for CLIs whose tool-less mode needs files and a private home. */
+  prepareToolless?: (prompt: string, settings: CLIAgentConfig, personalHome?: string) => {
+    args: string[]; cwd: string; env: Record<string, string>; stdin: string; cleanup: () => void;
+    parseOutput?: (stdout: string, startTime: number) => CompletionResult;
+  };
   /**
-   * For a CLI whose `buildArgs` carries the prompt in argv (agy, vibe): how an
+   * For a CLI whose `buildArgs` carries the prompt in argv (Vibe): how an
    * approved plugin completion with the CLI's own tools (`allowCliTools`)
    * hands it the prompt on stdin instead, so a multi-line prompt never meets
    * argv (execCli refuses an argument with a line break). `args` is the full
@@ -177,6 +186,8 @@ export interface CLIToolConfig {
   modelProvider: CliModelProvider;
   /** Flag the CLI uses to select a model (`--model`, `-m`) — for docs only */
   modelFlag: string;
+  /** Optional authenticated CLI catalog; no separate provider API key required. */
+  listModels?: () => Promise<CliModelOption[]>;
   /**
    * Extra environment variables to inject into the spawned process, resolved at
    * call time (e.g. re-point the `claude` binary at a vendor's Anthropic-
@@ -251,64 +262,46 @@ export function parseAgyStreamJson(stdout: string, startTime: number): Completio
     } catch { /* not an event line */ }
   }
   if (!last) throw new Error('agy (stream-json) produced no result event');
-  if (String(last.status ?? '').toUpperCase() === 'ERROR') {
+  if (String(last.status ?? '').toUpperCase() !== 'SUCCESS') {
     throw new Error(`agy reported an error: ${typeof last.error === 'string' ? last.error : 'unknown error'}`);
   }
-  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
-  const usage = last.usage && typeof last.usage === 'object' ? last.usage : undefined;
-  const inputTokens = num(usage?.input_tokens);
-  const outputTokens = num(usage?.output_tokens);
   return {
     content: typeof last.response === 'string' ? last.response.trim() : '',
     finishReason: 'stop',
-    usage: { inputTokens, outputTokens, totalTokens: num(usage?.total_tokens) || inputTokens + outputTokens, available: !!usage },
+    usage: agyUsage(last.usage),
     model: 'cli/antigravity',
     latencyMs: Date.now() - startTime,
   };
 }
 
 // ---- Antigravity CLI (agy) ----
-// Replaces the Gemini CLI: Google's `gemini` agentic CLI is superseded by
-// Antigravity (`agy`), which shares the same ~/.gemini config dir and Gemini
-// model backend but has a different, simpler interface — `--print <prompt>`
-// emits PLAIN TEXT (no `-o json`/stream-json), `--model` (not `-m`), and
-// `--dangerously-skip-permissions` (not `--approval-mode`). The canonical
-// pattern is first (new model rows register as `cli/antigravity`); the legacy
-// cli/gemini patterns are retained last so existing rows keep routing here.
+// Managed stream-json custom agent. Legacy Gemini model IDs remain aliases;
+// account auth and model discovery belong to the installed Antigravity CLI.
 const antigravityConfig: CLIToolConfig = {
   name: 'Antigravity',
+  listModels: discoverAgyModels,
+  prepareToolless: (prompt, settings, personalHome) => {
+    if (personalHome) throw new Error('Personal Antigravity CLI credentials are not supported; use an install-owned model or an API provider.');
+    const run = prepareAgyRuntime({ workspace: emptyCompletionDir(), instructions: '',
+      model: process.env.ANTIGRAVITY_MODEL || process.env.GEMINI_MODEL || settings.model,
+      apiKeyMode: settings.inheritApiKeys === true, extraArgs: settings.extraArgs });
+    return { args: run.args, cwd: run.cwd, env: run.env,
+      stdin: JSON.stringify({ event: 'user', message: { content: prompt } }) + '\n',
+      parseOutput: (stdout, startTime) => { verifyAgyToollessOutput(stdout, run.cwd); return parseAgyStreamJson(stdout, startTime); },
+      cleanup: () => { for (const path of run.cleanupPaths) rmSync(path, { recursive: true, force: true }); } };
+  },
+  octipusToolsOnly: true,
   modelPatterns: ['cli/antigravity', 'cli/agy', 'cli/gemini', 'cli/gemini-cli'],
   binaryPath: 'agy',
-  buildArgs: (prompt: string) => ['--dangerously-skip-permissions', '--print', prompt],
-  // `--print` takes the prompt as its value and ignores stdin. The documented
-  // stdin channel is streaming input (https://antigravity.google/docs/cli/headless):
-  // `--input-format stream-json` (which requires `--output-format stream-json`)
-  // reads one JSON object per line, `{"event":"user","message":{"content":…}}`,
-  // and the process exits once stdin is closed and the turn completes. JSON
-  // escapes the line breaks, so the prompt travels as one line on stdin.
-  cliToolsStdin: {
-    args: () => ['--dangerously-skip-permissions', '--input-format', 'stream-json', '--output-format', 'stream-json'],
-    encode: (prompt: string) => `${JSON.stringify({ event: 'user', message: { content: prompt } })}\n`,
-    parseOutput: (stdout: string, startTime: number) => parseAgyStreamJson(stdout, startTime),
-  },
-  // agy --print returns plain text (no structured envelope). bufferOutput=true
-  // routes the whole stdout buffer here at process close.
-  parseOutput: (stdout: string, startTime: number): CompletionResult => ({
-    content: stdout.trim(),
-    finishReason: 'stop',
-    // agy reports no token usage in print mode.
-    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false },
-    model: 'cli/antigravity',
-    latencyMs: Date.now() - startTime,
-  }),
+  buildArgs: () => { throw new Error('Use Antigravity as a managed agent model with the Octipus bridge'); },
+  parseOutput: parseAgyStreamJson,
   isQuotaError: (output: string) =>
     /rate.?limit|quota|exceeded|resource.?exhausted/i.test(output),
   quotaProvider: 'antigravity',
   modelProvider: 'google',
   modelFlag: '--model',
-  bufferOutput: true,
-  // agy has no per-run MCP config surface; it reaches the bridge via the terminal helper.
-  toolBridge: 'terminal',
+  bufferOutput: false,
+  toolBridge: 'mcp',
   billingInfo: {
     vendor: 'Google',
     planNote: 'Google account via `agy` (antigravity) auth in ~/.gemini — same backend as Gemini CLI',
@@ -316,7 +309,7 @@ const antigravityConfig: CLIToolConfig = {
     pricingDocUrl: 'https://ai.google.dev/pricing',
     modelsDocUrl: 'https://ai.google.dev/gemini-api/docs/models',
     modelFlagDocUrl: 'https://antigravity.google/docs/cli',
-    warning: 'Free-tier limits and metered pricing are vendor-controlled. Antigravity manages its own auth and model selection in ~/.gemini.',
+    warning: 'Uses the existing Antigravity login and its own model catalog. Managed runs use only Octipus tools; native tools, plugins and agent spawning are excluded. Vendor credits and model availability apply.',
   },
 };
 
@@ -797,7 +790,7 @@ export class CLIProvider implements ModelProvider {
     // Every one-shot completion runs tool-less (§8.4), a personal row's in its
     // owner's own directory and an install row's in an empty one: its callers
     // summarize external mail, fetched pages and plugin-supplied prompts, and a
-    // CLI with native tools (agy --dangerously-skip-permissions, vibe
+    // CLI with native tools (vibe
     // --auto-approve, codex exec) would act on the host with the server's
     // rights. A CLI with no tool-less mode answers no completion; it runs only
     // as an agent model (the CLI agent worker, with its own isolation).
@@ -809,7 +802,7 @@ export class CLIProvider implements ModelProvider {
     // with a tool-less mode still uses it (tools are never needed), one without
     // runs with its normal arguments in a fresh empty directory.
     const cliTools = options.allowCliTools === true && options.requestType?.startsWith('plugin:') === true;
-    if (!tool.toolLessArgs && !cliTools) {
+    if (!tool.toolLessArgs && !tool.prepareToolless && !cliTools) {
       throw classifyError(new Error(`${tool.name} cannot answer one-shot completions: it has no mode without its own tools. Use it as an agent model (/model) instead of binding it to a lane.`), 'cli');
     }
     const quotaKey = cliQuotaKey(tool.quotaProvider, credentialOwner);
@@ -836,7 +829,12 @@ export class CLIProvider implements ModelProvider {
     let cwd: string;
     let args: string[];
     let cleanup: (() => void) | null = null;
-    if (tool.toolLessArgs) {
+    if (tool.prepareToolless) {
+      const prepared = tool.prepareToolless(prompt, row?.metadata?.cliAgent ?? {}, credentialOwner ? childEnv.HOME : undefined);
+      cwd = prepared.cwd; args = prepared.args; stdinText = prepared.stdin; cleanup = prepared.cleanup;
+      parse = prepared.parseOutput ?? parse;
+      Object.assign(childEnv, prepared.env);
+    } else if (tool.toolLessArgs) {
       // The tool-less mode reads the prompt from stdin: it never reaches argv.
       cwd = credentialOwner ? cliWorkDirFor(credentialOwner.userId) : emptyCompletionDir();
       args = tool.toolLessArgs();
@@ -845,7 +843,7 @@ export class CLIProvider implements ModelProvider {
       // workspace root or the owner's directory, and the prompt never in
       // argv. A stdin tool's builders take an empty string and place `-` (or
       // nothing) instead (codex); a CLI whose normal arguments carry the
-      // prompt (agy, vibe) switches to its stdin channel (`cliToolsStdin`).
+      // prompt (Vibe) switches to its stdin channel (`cliToolsStdin`).
       // execCli still refuses any argument with a line break.
       const fresh = freshCompletionDir();
       cleanup = fresh.remove;
@@ -963,7 +961,7 @@ export class CLIProvider implements ModelProvider {
   }
 
   /** List all available CLI tools */
-  async getAvailableTools(): Promise<{
+  async getAvailableTools(includeModelCatalog = false): Promise<{
     name: string;
     available: boolean;
     modelPatterns: string[];
@@ -972,10 +970,21 @@ export class CLIProvider implements ModelProvider {
     billingInfo: CLIBillingInfo;
     adapter: string;
     capabilities: string;
+    models?: CliModelOption[];
+    modelCatalogError?: string;
   }[]> {
     const results = [];
     for (const tool of CLI_TOOLS) {
       const available = await this.toolAvailable(tool);
+      let models: CliModelOption[] | undefined;
+      let modelCatalogError: string | undefined;
+      if (includeModelCatalog && tool.listModels && available) {
+        try { models = await tool.listModels(); }
+        catch (error) {
+          modelCatalogError = error instanceof Error ? error.message : 'CLI model catalog is unavailable';
+          modelLogger.warn({ tool: tool.name, error: modelCatalogError }, 'CLI model catalog lookup failed');
+        }
+      }
       results.push({
         name: tool.name,
         available,
@@ -985,6 +994,7 @@ export class CLIProvider implements ModelProvider {
         billingInfo: tool.billingInfo,
         adapter: tool.adapter ?? tool.name,
         capabilities: describeCliCapabilities(tool),
+        ...(includeModelCatalog && tool.listModels ? { models: models ?? [], modelCatalogError } : {}),
       });
     }
     return results;
@@ -1024,8 +1034,8 @@ export class CLIProvider implements ModelProvider {
 /**
  * CreateProcess caps the whole Windows command line at 32767 chars, cmd.exe
  * (shell:true) at 8191; past it spawn fails with a bare ENAMETOOLONG or "The
- * command line is too long". agy has to carry system + user prompt in argv (no
- * stdin in text print mode), so fail with an actionable message instead.
+ * command line is too long". Fail with an actionable message when an adapter
+ * still needs an oversized argument; managed Antigravity uses stdin instead.
  */
 export function assertWindowsCmdLineFits(binary: string, args: string[], platform = process.platform, shell = false): void {
   if (platform !== 'win32') return;

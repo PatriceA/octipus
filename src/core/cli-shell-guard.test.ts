@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'fs';
+import { rmSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 import { CLIArgumentBuilder } from './cli-adapters';
@@ -106,10 +106,11 @@ describe('shell guard injection per adapter', () => {
     }
   });
 
-  it('Antigravity: --add-dir customization root with .agents/hooks.json', () => {
-    const { args } = builder.build('Antigravity', 'task', {}, [], null, 100, 'test', connection);
-    const hooks = JSON.parse(readFileSync(join(after(args, '--add-dir'), '.agents', 'hooks.json'), 'utf8'));
-    expect(hooks['octipus-shell-guard'].PreToolUse[0].matcher).toBe('run_command');
+  it('Antigravity has no native shell to hook; project commands use Octipus tools', () => {
+    const run = builder.build('Antigravity', 'task', {}, [], null, 100, 'test', connection);
+    expect(run.args).not.toContain('--add-dir');
+    expect(run.args).toContain('octipus-managed');
+    for (const path of run.cleanupPaths ?? []) rmSync(path, { recursive: true, force: true });
   });
 
   it('is absent when the setting is off', () => {

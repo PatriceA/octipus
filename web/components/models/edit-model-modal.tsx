@@ -141,6 +141,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
   }, [isCli]);
 
   useEffect(() => {
+    if (isCli && cliTool?.models) { setDiscoveredCliModels(cliTool.models); return; }
     if (!isCli || !cliProvider || !supportsModelOverride) return;
     let cancelled = false;
     (async () => {
@@ -156,7 +157,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
       }
     })();
     return () => { cancelled = true; };
-  }, [isCli, cliProvider, supportsModelOverride]);
+  }, [isCli, cliProvider, supportsModelOverride, cliTool]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -216,7 +217,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
           delete cliAgentConfig.inheritApiKeys;
           cliAgentConfig.inheritApiKeys = formData.cliInheritApiKeys;
         }
-        if (cliKind !== 'grok' && formData.cliPermissionMode) cliAgentConfig.permissionMode = formData.cliPermissionMode;
+        if (cliKind !== 'grok' && cliKind !== 'antigravity' && formData.cliPermissionMode) cliAgentConfig.permissionMode = formData.cliPermissionMode;
         if (supportsModelOverride) {
           delete cliAgentConfig.model;
           if (formData.cliModel.trim()) cliAgentConfig.model = formData.cliModel.trim();
@@ -597,8 +598,8 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 </p>
               )}
 
-              {cliKind === 'grok' ? <p className="text-sm text-on-surface-variant">
-                Grok Build uses this session’s Octipus tools and approvals. Access is managed in Environments &amp; Access.
+              {cliKind === 'grok' || cliKind === 'antigravity' ? <p className="text-sm text-on-surface-variant">
+                {cliKind === 'grok' ? 'Grok Build' : 'Antigravity'} uses this session’s Octipus tools and approvals. Access is managed in Environments &amp; Access.
               </p> : <div>
                 <label className="block text-sm font-medium text-on-surface-variant mb-1">Permission Mode</label>
                 <select
