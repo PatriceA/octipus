@@ -105,6 +105,8 @@ export function resolveDataPolicy(model: Pick<ModelConfigEntry, 'provider' | 'mo
   if (model.provider === 'ollama' && isPrivateEndpoint(model.endpoint || ollamaUrl)) return { hosting: 'local', retention: 'none', trainsOnInput: false, zdrRoute };
   // Speech engines running on this machine (src/voice/speech-rows.ts).
   if (model.provider === 'local-audio') return { hosting: 'local', retention: 'none', trainsOnInput: false, zdrRoute };
+  // The local embedding engine: llama-server on 127.0.0.1, started by Octipus.
+  if (model.provider === 'local-engine') return { hosting: 'local', retention: 'none', trainsOnInput: false, zdrRoute };
   // TypeSafe's privacy policy: no training on input, retention "as long as reasonably necessary".
   if (model.provider === 'typesafe') return { hosting: 'remote', retention: 'provider', trainsOnInput: false, zdrRoute };
   return { ...WORST_CASE, zdrRoute };

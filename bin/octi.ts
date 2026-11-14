@@ -197,7 +197,9 @@ async function runCapabilities(args: string[]): Promise<never> {
       process.stdout.write(
         'octi capabilities                  list installed/missing tools\n' +
         'octi capabilities install <id>     install a capability (e.g. browser, mcp)\n' +
-        'octi capabilities install --all    install every missing capability with an installer\n',
+        'octi capabilities install --all    install every missing capability with an installer\n' +
+        'octi capabilities install local-embedding [--model <id>]   download the optional local embedding engine (~330 MB)\n' +
+        'octi capabilities remove local-embedding                    stop it and delete its files\n',
       );
       process.exit(0);
     }
@@ -213,6 +215,43 @@ async function runCapabilities(args: string[]): Promise<never> {
       process.exit(0);
     } catch (err) {
       process.stderr.write(`octi capabilities: backend unreachable at ${base} (${(err as Error).message}). Run \`octi start\` first.\n`);
+      process.exit(1);
+    }
+  }
+
+  // The optional local embedding engine: a download of a few hundred MB that
+  // runs in the backend as a job; this follows it (never part of --all).
+  if ((sub === 'install' || sub === 'remove') && args[1] === 'local-embedding') {
+    const headers = { 'content-type': 'application/json', authorization: `Bearer ${process.env.OCTIPUS_API_TOKEN || ''}` };
+    try {
+      if (sub === 'remove') {
+        const res = await fetch(`${base}/api/local-engine`, { method: 'DELETE', headers });
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        const out = (await res.json()) as { removedRows: string[] };
+        process.stdout.write(`\x1b[32m✓\x1b[0m Local embedding engine removed${out.removedRows.length ? ` (model rows removed: ${out.removedRows.join(', ')})` : ''}.\n`);
+        process.exit(0);
+      }
+      const modelIdx = args.indexOf('--model');
+      const model = modelIdx >= 0 ? args[modelIdx + 1] : undefined;
+      const start = await fetch(`${base}/api/local-engine/install`, { method: 'POST', headers, body: JSON.stringify(model ? { model } : {}) });
+      if (!start.ok) throw new Error(`HTTP ${start.status}: ${await start.text()}`);
+      let last = '';
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const res = await fetch(`${base}/api/local-engine`, { headers });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const { job } = (await res.json()) as { job: { stage: string; percent: number; statusText: string; error?: string; note?: string } | null };
+        if (!job) throw new Error('the install job is gone');
+        const line = `${job.statusText}${job.stage === 'engine' || job.stage === 'model' ? ` ${job.percent}%` : ''}`;
+        if (line !== last) { process.stdout.write(`  ${line}\n`); last = line; }
+        if (job.stage === 'done') {
+          process.stdout.write(`\x1b[32m✓\x1b[0m ${job.statusText}${job.note ? `\n  ${job.note}` : ''}\n`);
+          process.exit(0);
+        }
+        if (job.stage === 'error') throw new Error(job.error ?? 'install failed');
+      }
+    } catch (err) {
+      process.stderr.write(`octi capabilities ${sub} local-embedding: ${(err as Error).message}\n`);
       process.exit(1);
     }
   }

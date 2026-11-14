@@ -1625,6 +1625,14 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
 
   // ── Context hooks ──
   {
+    key: 'localEngine.idleStopMinutes',
+    category: 'models',
+    valueType: 'number',
+    defaultValue: 30,
+    description: 'The local embedding engine (llama-server) stops after this many idle minutes and starts again on the next embedding; 0 keeps it running',
+    isSecret: false,
+  },
+  {
     key: 'media.imageInput',
     category: 'media',
     valueType: 'string',

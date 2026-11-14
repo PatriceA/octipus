@@ -567,6 +567,34 @@ export async function checkCapabilities(): Promise<CheckResult> {
   }
 }
 
+/**
+ * The optional local embedding engine — only when it was installed: the
+ * binary is there and runs, and every installed model is the verified file.
+ * Nothing is reported for an install that never added it.
+ */
+export async function checkLocalEmbedding(): Promise<CheckResult | null> {
+  const { existsSync } = await import('node:fs');
+  const { readFile } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const { modelsRoot, modelDir, modelFilePath } = await import('../src/capabilities/local-engine/paths');
+  const { LOCAL_ENGINE_MANIFEST } = await import('../src/capabilities/local-engine/manifest');
+  const { engineBinaryPath } = await import('../src/capabilities/local-engine/engine-process');
+  const { probeEngine } = await import('../src/capabilities/local-engine/install');
+  const root = modelsRoot();
+  const models = LOCAL_ENGINE_MANIFEST.models.filter((m) => existsSync(modelDir(m)));
+  if (!existsSync(join(root, 'engines', 'llama.cpp')) && models.length === 0) return null;
+  const name = 'Local embedding engine';
+  const remedy = 'Reinstall: `octi capabilities install local-embedding` (or remove it: `octi capabilities remove local-embedding`).';
+  const bin = engineBinaryPath();
+  if (!bin || !existsSync(bin)) return { name, status: 'fail', detail: 'files present but llama-server is missing', critical: false, hint: remedy };
+  if (!(await probeEngine(bin))) return { name, status: 'fail', detail: 'llama-server does not run on this machine', critical: false, hint: remedy };
+  for (const m of models) {
+    const marker = (await readFile(join(modelDir(m), '.verified'), 'utf8').catch(() => '')).trim();
+    if (!existsSync(modelFilePath(m)) || marker !== m.sha256) return { name, status: 'fail', detail: `${m.id}: the model file is missing or unverified`, critical: false, hint: remedy };
+  }
+  return { name, status: 'ok', detail: `llama.cpp ${LOCAL_ENGINE_MANIFEST.engine.tag}; models: ${models.map((m) => m.id).join(', ') || 'none'}`, critical: false };
+}
+
 export async function runDoctor(projectDir: string): Promise<DoctorReport> {
   loadProjectEnv(projectDir);
   const checks = await Promise.all([
@@ -587,7 +615,8 @@ export async function runDoctor(projectDir: string): Promise<DoctorReport> {
     checkBrowserExtension(),
     checkLogSanity(),
     checkDiskSpace(),
-  ]);
+    checkLocalEmbedding().then((c) => c ?? undefined).catch((err: unknown) => ({ name: 'Local embedding engine', status: 'warn' as const, detail: (err as Error).message, critical: false })),
+  ]).then((all) => all.filter((c): c is CheckResult => !!c));
 
   const summary = { ok: 0, warn: 0, fail: 0 };
   for (const c of checks) summary[c.status]++;

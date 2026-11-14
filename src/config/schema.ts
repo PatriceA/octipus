@@ -870,6 +870,11 @@ export const configSchema = z.object({
    *               their pixels in each request (older ones become a line the
    *               model can look again from).
    */
+  /** The optional local embedding engine (docs/RAG.md → Local embeddings). */
+  localEngine: z.object({
+    /** Stop llama-server after this many idle minutes (0 = never); it starts again on the next embedding. */
+    idleStopMinutes: z.number().int().min(0).max(1440).default(30),
+  }).prefault({}),
   media: z.object({
     imageInput: z.enum(['auto', 'native', 'describe']).default('auto').catch('auto'),
     audioInput: z.enum(['transcribe', 'native']).default('transcribe').catch('transcribe'),

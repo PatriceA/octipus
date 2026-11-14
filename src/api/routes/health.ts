@@ -427,7 +427,16 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
           }
           const model = await registry.getModelForTopic(topic);
           const configured = !!model;
-          return { key, name, topic, required, help, configured, model: configured ? model!.name : null, ...(configured ? {} : { hint }) };
+          // The local embedding engine: whether it is installed, running, crashing.
+          const engine = model?.provider === 'local-engine'
+            ? await (async () => {
+              const { localEngineStatus, isModelInstalled } = await import('@/capabilities/local-engine/engine-process');
+              const { localEmbeddingModel } = await import('@/capabilities/local-engine/manifest');
+              const entry = localEmbeddingModel(model.modelId);
+              return { ...localEngineStatus(), installed: !!entry && isModelInstalled(entry) };
+            })()
+            : undefined;
+          return { key, name, topic, required, help, configured, model: configured ? model!.name : null, ...(engine ? { localEngine: engine } : {}), ...(configured ? {} : { hint }) };
         } catch {
           return { key, name, topic, required, help, configured: false, model: null, hint };
         }

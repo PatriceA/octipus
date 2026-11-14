@@ -20,7 +20,7 @@ const CORE_ROUTE_PREFIXES = [
   '/api/admin', '/api/agents', '/api/auth', '/api/backups', '/api/capabilities',
   '/api/chat', '/api/code-index', '/api/companion', '/api/devices', '/api/digest', '/api/documents',
   '/api/eval', '/api/evaluations', '/api/gateway', '/api/graph', '/api/health', '/api/heartbeat', '/api/hooks',
-  '/api/invites', '/api/knowledge', '/api/logs', '/api/mcp', '/api/me', '/api/media', '/api/memory', '/api/metrics', '/api/models',
+  '/api/invites', '/api/knowledge', '/api/local-engine', '/api/logs', '/api/mcp', '/api/me', '/api/media', '/api/memory', '/api/metrics', '/api/models',
   '/api/modules', '/api/notes', '/api/notifications', '/api/onboarding', '/api/permission-requests', '/api/persona',
   '/api/pipelines', '/api/plugin-host', '/api/plugin-packages', '/api/plugin-ui', '/api/plugins', '/api/recurring-tasks', '/api/remote-spaces',
   '/api/roles', '/api/runs', '/api/saml', '/api/scim', '/api/search', '/api/sessions', '/api/settings',
