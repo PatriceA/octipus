@@ -3,29 +3,13 @@ import { getEmbeddingService } from '@/core/rag/embeddings';
 import { agentKnowledgeScope } from '@/core/rag/knowledge-scope';
 import type { ToolManifest } from '@/core/types';
 import { reposFor } from '@/db/repositories/content';
-import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
+import { BaseTool, createParameterSchema } from '../base-tool';
 
 export class DocumentsTool extends BaseTool {
   readonly id = 'documents';
   readonly name = 'Documents';
   readonly version = '1.0.0';
   readonly description = 'List, view, and search uploaded documents, and export a written deliverable as a Word document or a spreadsheet.';
-
-  override async checkAvailability(): Promise<ToolAvailability> {
-    try {
-      const { getModelRegistry } = await import('@/models/model-registry');
-      const registry = getModelRegistry();
-      const visionModel = await registry.getModelForTopic('vision');
-      const hasVision = visionModel?.topics?.includes('vision') ||
-        (visionModel?.topicRoles && 'vision' in visionModel.topicRoles);
-      if (!hasVision) {
-        return { available: true, degraded: true, reason: 'No vision/OCR model configured — document processing limited' };
-      }
-      return { available: true };
-    } catch {
-      return { available: true, degraded: true, reason: 'No vision/OCR model configured' };
-    }
-  }
 
   getManifest(): ToolManifest {
     return {
@@ -161,7 +145,7 @@ export class DocumentsTool extends BaseTool {
           hint: 'Use get_document with the document ID (from sourceId, format "doc:<uuid>") to get full details.',
         };
       },
-      { permissionAction: 'search' },
+      { permissionAction: 'search', requires: ['embedding'] },
     );
 
     this.registerTool(

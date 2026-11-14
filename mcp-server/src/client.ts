@@ -164,8 +164,20 @@ export class OctiClient {
 
   /** The modules that are on (docs/MODULES.md); tools of the others are hidden. */
   async getEnabledModules(): Promise<string[]> {
-    const res = await this.request<{ enabled?: string[] }>('/api/modules');
-    return Array.isArray(res.enabled) ? res.enabled : [];
+    return (await this.getModulesState()).enabled;
+  }
+
+  /**
+   * The modules that are on and the capabilities that are configured
+   * (docs/MODULES.md → Capability gates). A server from before capabilities
+   * reports none: every capability then counts as configured, as it was.
+   */
+  async getModulesState(): Promise<{ enabled: string[]; capabilities: Record<string, boolean> | null }> {
+    const res = await this.request<{ enabled?: string[]; capabilities?: Array<{ id: string; on: boolean }> }>('/api/modules');
+    return {
+      enabled: Array.isArray(res.enabled) ? res.enabled : [],
+      capabilities: Array.isArray(res.capabilities) ? Object.fromEntries(res.capabilities.map((c) => [c.id, c.on === true])) : null,
+    };
   }
 
   // ─── Chat ───

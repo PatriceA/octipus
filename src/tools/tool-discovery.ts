@@ -14,10 +14,19 @@
  * See docs/plans/lazy-tool-discovery.md.
  */
 
+import { capabilitiesMet } from '@/core/capabilities/gates';
 import { isToolOn } from '@/core/modules/registry';
 import type { ToolHandler } from '@/core/agent-base';
 import { rankToolsByQuery } from '@/tools/tool-search';
 import { TOOL_DISCOVERY_TOOL_ID } from '@/core/agent/tool-split';
+
+/**
+ * Listed and describable: not of a module switched off since the worker
+ * started (docs/MODULES.md), and every capability it needs configured
+ * (src/core/capabilities/gates.ts) — not configured is not shown.
+ */
+const offered = (t: { toolId?: string; requires?: readonly import('@/shared/capabilities').Capability[] }): boolean =>
+  (!t.toolId || isToolOn(t.toolId)) && capabilitiesMet(t.requires);
 
 /** Default number of tools returned by a `list_tools` semantic query. */
 const SEARCH_LIMIT = 15;
@@ -57,7 +66,7 @@ export function buildToolDiscoveryHandlers(availableTools: ToolHandler[]): ToolH
       replaySafety: 'read_only',
       execute: async (args) => {
         // A module switched off since the worker started (docs/MODULES.md).
-        const all = Array.from(byName.values()).filter((t) => !t.toolId || isToolOn(t.toolId)).map((t) => ({
+        const all = Array.from(byName.values()).filter(offered).map((t) => ({
           name: t.name,
           description: t.description,
         }));
@@ -93,7 +102,7 @@ export function buildToolDiscoveryHandlers(availableTools: ToolHandler[]): ToolH
           throw new Error(`describe_tool: 'name' must be a string, got ${typeof name}.`);
         }
         const found = byName.get(name);
-        const handler = found && (!found.toolId || isToolOn(found.toolId)) ? found : undefined;
+        const handler = found && offered(found) ? found : undefined;
         if (!handler) {
           throw new Error(
             `Unknown tool '${name}'. Call list_tools to see the available tool names.`,

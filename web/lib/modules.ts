@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { MODULES } from '../../src/modules';
 import type { ModulesResponse, ModuleView } from '../../src/shared/modules';
+import { type CapabilityView, capabilityOfPage } from '../../src/shared/capabilities';
 import { api } from './api';
 
 export type { ModuleView, ModulesResponse } from '../../src/shared/modules';
@@ -38,13 +39,34 @@ export function usePageOn(): (href: string) => boolean {
   const modules = useModules();
   return (href: string) => {
     const path = href.split('?')[0];
-    if (!modules.data) return !isModulePage(path);
-    return offModuleFor(path, modules.data.modules) === undefined;
+    if (!modules.data) return !isModulePage(path) && !capabilityOfPage(path);
+    return offModuleFor(path, modules.data.modules) === undefined && offCapabilityFor(path, modules.data) === undefined;
   };
+}
+
+/**
+ * The capability the page at `pathname` needs, when it is not configured
+ * (src/shared/capabilities.ts → CAPABILITY_PAGES).
+ */
+export function offCapabilityFor(pathname: string, data: Pick<ModulesResponse, 'capabilities'> | undefined): CapabilityView | undefined {
+  const cap = capabilityOfPage(pathname);
+  if (!cap) return undefined;
+  const view = data?.capabilities?.find((c) => c.id === cap);
+  return view?.on ? undefined : (view ?? { id: cap, title: cap, on: false, setupHref: '/topics' });
 }
 
 /** Whether module `id` is on; false until `/api/modules` has answered. */
 export function useModuleOn(id: string): boolean {
   const modules = useModules();
   return modules.data?.enabled.includes(id) ?? false;
+}
+
+/**
+ * Whether capability `id` is configured (src/core/capabilities/gates.ts):
+ * false until `/api/modules` has answered, so a control that needs a model
+ * appears once known to work instead of flashing in and out.
+ */
+export function useCapabilityOn(id: import('../../src/shared/capabilities').Capability): boolean {
+  const modules = useModules();
+  return modules.data?.capabilities?.find((c) => c.id === id)?.on ?? false;
 }

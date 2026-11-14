@@ -187,6 +187,8 @@ describe('L1 — documents', () => {
       'src/core/jobs/recover.ts',
       'src/core/documents/queue.ts',
       'src/core/documents/processor.ts',
+      // The embedding catch-up indexes into the backlog row's own owner and workspace.
+      'src/core/rag/index-backlog.ts',
       'src/db/repositories/document-repository.ts',
     ]);
     const offenders: string[] = [];

@@ -385,7 +385,10 @@ export default function PromptInput({
 
   // Voice input supported if browser has SpeechRecognition OR MediaRecorder (fallback to server STT)
   const voiceSupport = useSyncExternalStore(subscribeNoop, getVoiceSupport, getVoiceSupportServer);
-  const speechSupported = voiceSupport !== 'none';
+  // The browser's own recognition needs no model here; recording for the
+  // server's transcription is offered only when speech to text is configured
+  // (not configured = not shown, docs/MODULES.md → Capability gates).
+  const speechSupported = voiceSupport === 'native' || (voiceSupport === 'server' && voiceAvailable);
   const useServerSTT = voiceSupport === 'server';
 
   // Voice input via Web Speech API
@@ -728,7 +731,7 @@ export default function PromptInput({
         )}
 
         {/* Voice conversation toggle (hands-free, streaming) */}
-        {onToggleRealtimeMode && (
+        {onToggleRealtimeMode && voiceAvailable && (
           <button
             type="button"
             onClick={voiceAvailable ? onToggleRealtimeMode : undefined}

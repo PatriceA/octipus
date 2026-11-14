@@ -5,6 +5,7 @@
  * status. `/:side/embeddings` is the OpenAI-compatible endpoint the managed
  * daemon embeds through when it uses the install's embedding topic.
  */
+import { capabilityRefused } from '@/api/capability-guard';
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
 import { getCocoIndexService, redactCocoIndexStatus, resolveCocoIndexWorkspacePath } from '@/core/code-index/cocoindex';
@@ -19,6 +20,8 @@ export const codeIndexRoutes = new Elysia({ prefix: '/code-index' })
   .post('/cocoindex/:side/embeddings', async ({ user, body, params, set }) => {
     if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
     if (!user.isAdmin) { set.status = 403; return { error: 'Admin access required' }; }
+    const notConfigured = capabilityRefused(set, 'embedding');
+    if (notConfigured) return notConfigured;
     // ccc chunks are ~1k chars; a longer one is an unsplittable blob (base64
     // fonts, data URIs). Rejecting it fails the whole file, which ccc then
     // re-embeds on every run — truncate instead. 64 x 4k keeps a batch bounded.
@@ -69,6 +72,12 @@ export const codeIndexRoutes = new Elysia({ prefix: '/code-index' })
     if (!user.isAdmin) {
       set.status = 403;
       return { error: 'Admin access required' };
+    }
+    // Embedding through Octipus needs Octipus to have an embedding model;
+    // cocoindex's own local model does not.
+    if (body.embeddingSource === 'octipus') {
+      const notConfigured = capabilityRefused(set, 'embedding');
+      if (notConfigured) return notConfigured;
     }
     try {
       const path = await resolveCocoIndexWorkspacePath(body.workspacePath, principal);

@@ -115,6 +115,24 @@ async function main() {
     // CHANGE events, so the initial load needs an explicit reset.
     resetLiteLLMClient();
 
+    // Capability gates (docs/MODULES.md → Capability gates): decide what this
+    // install has a model for BEFORE tools, prompts, jobs or routes are used,
+    // so nothing unconfigured is ever offered. Kept current from here on.
+    {
+      const { initCapabilityGates, onCapabilitiesChanged } = await import('@/core/capabilities/gates');
+      await initCapabilityGates();
+      onCapabilitiesChanged((next, previous) => {
+        // Tools whose availability follows a capability are re-checked, and a
+        // knowledge base that just got its embedding model is self-checked.
+        void import('@/tools/registry').then(({ getToolRegistry }) => getToolRegistry().invalidateAvailabilityCache());
+        if (next.embedding.on && !previous.embedding.on) {
+          void runKBSelfCheck().catch((err) => logger.error({ err }, 'KB self-check after an embedding model was configured failed'));
+        }
+      });
+      const { startIndexBacklogCatchUp } = await import('@/core/rag/index-backlog');
+      startIndexBacklogCatchUp();
+    }
+
     // Each workspace's files live under its own directory, the user's
     // default under `default`; load which is which before any turn runs.
     const { getOrgWorkspaceManager } = await import('@/security/orgs');

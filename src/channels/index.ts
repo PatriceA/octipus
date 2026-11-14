@@ -1,5 +1,6 @@
 export { BaseChannel, type ChannelConfig, type ChannelEvents, getUMI, UnifiedMessageInterface } from './interface';
 
+import { isCapabilityOn } from '@/core/capabilities/gates';
 import { isModuleOn } from '@/core/modules/registry';
 import { coreLogger } from '@/utils/logger';
 import { inlineUiFallbackText } from '@/shared/inline-ui/fence';
@@ -234,7 +235,7 @@ async function transcribeChannelAudio(audioAttachments: Attachment[], message: U
  */
 async function synthesizeVoiceReply(text: string): Promise<Attachment[] | undefined> {
   const config = getConfig();
-  if (!config.voice.ttsEnabled) return undefined;
+  if (!config.voice.ttsEnabled || !isCapabilityOn('speak')) return undefined;
   try {
     const provider = config.voice.ttsProvider;
     // Each engine's real output format (piper hardcodes wav; mistral/openai
@@ -1097,10 +1098,14 @@ export async function initializeChannels(): Promise<void> {
         // as text (all channels build audio attachments identically). Audio is not
         // in the document pipeline's PROCESSABLE_MIMES, so it dead-ended here before.
         const audioAttachments = message.attachments.filter(isAudioAttachment);
-        if (audioAttachments.length && !isModuleOn('voice')) {
-          // Voice is a module (docs/MODULES.md): off, a voice note is not transcribed.
+        if (audioAttachments.length && (!isModuleOn('voice') || !isCapabilityOn('hear'))) {
+          // Voice is a module (docs/MODULES.md): off, a voice note is not
+          // transcribed. Nor without a speech-to-text model: not configured
+          // is off too (docs/MODULES.md → Capability gates), said in one line.
           await umi.send(message.channelType, message.channelId, {
-            content: 'Voice messages are switched off on this install. Please type it out.',
+            content: isModuleOn('voice')
+              ? 'Voice messages are not set up on this install. Please type it out.'
+              : 'Voice messages are switched off on this install. Please type it out.',
             replyTo: platformMessageId,
             threadId: replyThread,
           });
@@ -1154,6 +1159,11 @@ export async function initializeChannels(): Promise<void> {
             if (imageAnalysis) {
               const prefix = `[The user sent image attachment(s). Vision model analysis:\n${imageAnalysis}]\n\n`;
               messageContent = prefix + messageContent;
+            } else if (!isCapabilityOn('see')) {
+              // No model here can read images: the agent is told an image
+              // arrived, so it says so instead of answering as if there were none.
+              const names = fileAttachments.map(a => a.filename || 'image').join(', ');
+              messageContent = `[The user sent image attachment(s): ${names}. No model on this install can read images, so you have not seen them. Say so; do not guess what they show.]\n\n${messageContent}`;
             }
           } else {
             // Files (possibly mixed with images) + caption — acknowledge, send summaries when done

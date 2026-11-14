@@ -118,6 +118,7 @@ describe('workspace transfer', () => {
     await one('documents', `INSERT INTO documents (user_id, filename, original_name, mime_type, size, storage_path, workspace_id) VALUES ($1, 'f', 'f', 'text/plain', 1, '/x', $2) RETURNING id`, [owner, ws]);
     await one('embeddings', `INSERT INTO embeddings (source_id, content, model, embedding, purpose, content_sha256, embedding_version, user_id, workspace_id) VALUES ('s', 'c', 'm', '[0.1,0.2,0.3]', 'document', $1, 'm/3', $2, $3) RETURNING id`, [randomUUID(), owner, ws]);
     await one('hooks', `INSERT INTO hooks (user_id, name, trigger, trigger_config, action, action_config, workspace_id) VALUES ($1, 'h', 'message_received', '{}', 'notify', '{}', $2) RETURNING id`, [owner, ws]);
+    await one('index_backlog', `INSERT INTO index_backlog (kind, source_id, owner_user_id, workspace_id) VALUES ('note', $1, $2, $3) RETURNING source_id AS id`, [randomUUID(), owner, ws]);
     await one('knowledge_links', `INSERT INTO knowledge_links (user_id, from_type, from_id, to_ref, link_type, origin, workspace_id) VALUES ($1, 'note', $2, 'x', 'references', 'wikilink', $3) RETURNING id`, [owner, randomUUID(), ws]);
     await one('memories', `INSERT INTO memories (user_id, fact_type, content, embedding, embedding_version, workspace_id) VALUES ($1, 'fact', 'c', '[0.1,0.2,0.3]', 'm/3', $2) RETURNING id`, [owner, ws]);
     await one('notes', `INSERT INTO notes (user_id, slug, title, body_sha256, workspace_id) VALUES ($1, $2, 't', 'sha', $3) RETURNING id`, [owner, `n-${randomUUID()}`, ws]);
@@ -155,9 +156,11 @@ describe('workspace transfer', () => {
     await mgr.transfer(alice, ws.id, bob);
 
     for (const t of workspaceMoveTables()) {
-      const [row] = await q(`SELECT ${t.ownerColumn}::text AS owner FROM ${t.table} WHERE id::text = $1`, [moved[t.table]]);
+      // index_backlog is keyed by (kind, source_id): its seeded id is the source id.
+      const key = t.table === 'index_backlog' ? 'source_id' : 'id';
+      const [row] = await q(`SELECT ${t.ownerColumn}::text AS owner FROM ${t.table} WHERE ${key}::text = $1`, [moved[t.table]]);
       expect(row.owner, `${t.table} row of the transferred workspace`).toBe(bob);
-      const [kept] = await q(`SELECT ${t.ownerColumn}::text AS owner FROM ${t.table} WHERE id::text = $1`, [control[t.table]]);
+      const [kept] = await q(`SELECT ${t.ownerColumn}::text AS owner FROM ${t.table} WHERE ${key}::text = $1`, [control[t.table]]);
       expect(kept.owner, `${t.table} row of another workspace`).toBe(alice);
     }
     const [n] = await q(`SELECT user_id::text AS owner FROM notifications WHERE id = $1`, [notification.id]);

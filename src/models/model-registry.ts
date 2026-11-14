@@ -1,3 +1,4 @@
+import { notifyCapabilitiesChanged } from '@/core/capabilities/gates';
 import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { mayUseInstallModels } from '@/models/install-access';
@@ -502,6 +503,8 @@ export class ModelRegistry {
     if (result.length > 0) {
       modelLogger.info({ model: name }, 'Default model changed');
       await this.cacheDelete('model:default');
+      // Whether the default model reads images decides `see` (gates.ts).
+      notifyCapabilitiesChanged();
       return true;
     }
 
@@ -561,6 +564,10 @@ export class ModelRegistry {
       await this.cacheDelete(`model:topic:${topic}`);
       await this.cacheDelete(`model:topic:backup:${topic}`);
     }
+    // A row or a binding changed: what the install has a model for may have
+    // too (src/core/capabilities/gates.ts). After the caches are gone, so the
+    // refresh reads the new bindings, not the cached old ones.
+    notifyCapabilitiesChanged();
   }
 }
 

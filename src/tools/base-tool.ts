@@ -7,6 +7,8 @@ import { assertExecutionActive, getExecutionSignal } from '@/core/execution-scop
 import type { ToolHandler } from '@/core/agent-worker';
 import { getAgentHooks, type ToolResultContext } from '@/core/agent/hooks';
 import { toolOffMessage } from '@/core/modules/registry';
+import { capabilityOffMessage, firstOffCapability } from '@/core/capabilities/gates';
+import type { Capability } from '@/shared/capabilities';
 import { isCancellationError } from '@/core/swarm/errors';
 import { recordToolExecution } from '@/core/telemetry';
 import type { AgentContext, ToolManifest, } from '@/core/types';
@@ -40,6 +42,8 @@ export interface ToolExecutionOptions {
   permissionAction?: string | ((args: Record<string, unknown>) => string);
   /** @deprecated General interpolation is prohibited; false does not bypass validation. */
   injectSecrets?: boolean;
+  /** Capabilities the function needs; without them it is hidden and refused (`ToolHandler.requires`). */
+  requires?: readonly Capability[];
 }
 
 export interface ToolAvailability {
@@ -110,6 +114,7 @@ export abstract class BaseTool {
       // call name, matches no manifest permission, and falls back to ASK —
       // turning a declared ALLOW into an approval prompt nobody can answer.
       permissionAction: options?.permissionAction,
+      ...(options?.requires?.length ? { requires: options.requires } : {}),
       description,
       parameters,
       execute: async (args, context) => {
@@ -119,6 +124,8 @@ export abstract class BaseTool {
         assertNoCredentialTemplates(args);
         const off = toolOffMessage(this.id);
         if (off) return { error: off };
+        const missingCapability = firstOffCapability(options?.requires);
+        if (missingCapability) return { error: capabilityOffMessage(missingCapability) };
         // Enforce the `required` list the parameter schema already declares.
         // Nothing used to: a model that omitted a required argument reached the
         // tool body, where an ad-hoc guard let it through (`SLUG_RE.test(

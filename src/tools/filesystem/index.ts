@@ -1,3 +1,4 @@
+import { isCapabilityOn } from '@/core/capabilities/gates';
 import { executionEnvironmentFor } from '@/security/execution-environments';
 import { remoteFilesystemOperation } from './environment-operations';
 import { existsSync, statSync } from 'fs';
@@ -174,6 +175,8 @@ function autoIndexFile(filePath: string, context: AgentContext): void {
   try {
     const config = getConfig();
     if (!config.workspace.autoIndexFiles) return;
+    // No embedding model: nothing is read, chunked or scheduled.
+    if (!isCapabilityOn('embedding')) return;
     // A session whose text stays in its own rows (federation F-D11) indexes nothing.
     if (contentStorageOffFor(context)) return;
 

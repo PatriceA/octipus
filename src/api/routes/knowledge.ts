@@ -1,3 +1,6 @@
+import { capabilityRefused } from '@/api/capability-guard';
+import { isCapabilityOn } from '@/core/capabilities/gates';
+import { capabilityOffText } from '@/shared/capabilities';
 import { loadRepoGraph } from '@/core/repos/registry-service';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
 import { Elysia, t } from '@/api/http';
@@ -79,6 +82,10 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       set.status = 401;
       return { error: 'Authentication required' };
     }
+    // No embedding model is not a fault: the knowledge base is simply off.
+    if (!isCapabilityOn('embedding')) {
+      return { ready: false, configured: false, reason: capabilityOffText('embedding'), lastCheckedAt: new Date().toISOString() };
+    }
     // Re-run the self-check on demand so the UI sees fresh state after
     // the user fixes model mapping or starts Ollama.
     const report = await runKBSelfCheck();
@@ -145,6 +152,8 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       set.status = 401;
       return { error: 'Authentication required' };
     }
+    const notConfigured = capabilityRefused(set, 'embedding');
+    if (notConfigured) return notConfigured;
 
     const resolved = await requestScope(principal, query.scope, 'stats');
     if ('error' in resolved) {
@@ -172,6 +181,8 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       set.status = 401;
       return { error: 'Authentication required' };
     }
+    const notConfigured = capabilityRefused(set, 'embedding');
+    if (notConfigured) return notConfigured;
 
     // Search needs the embedding provider for semantic/hybrid modes.
     // For keyword-only search we could technically run without it, but we
@@ -371,6 +382,8 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       set.status = 401;
       return { error: 'Authentication required' };
     }
+    const notConfigured = capabilityRefused(set, 'embedding');
+    if (notConfigured) return notConfigured;
 
     const { path, type = 'file', purpose, patterns } = body;
     const indexer = getFileIndexer();

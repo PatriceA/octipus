@@ -1,3 +1,4 @@
+import { capabilityConfigured } from '@/core/capabilities/gates';
 import { createHash } from 'node:crypto';
 import { sessionAudience } from '@/core/agent/audience';
 import { z } from 'zod';
@@ -63,7 +64,11 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
     const model = await getModelRegistry().getModelForTopic('background');
     if (!model) throw new Error('No model bound to background; configure one on Topics');
     await backgroundJobRepository.progress(job.id, { stage: 'reviewing', detail: `${evidence.length} bounded evidence excerpts` });
-    const systemText = `${SECURITY_PREAMBLE}\n\n${LEARNING_PROMPT}`;
+    // Without an embedding model memory is off: the review is not asked for memories.
+    const prompt = (await capabilityConfigured('embedding'))
+      ? LEARNING_PROMPT
+      : `${LEARNING_PROMPT}\nMemory is off on this install: always return "memories": [].`;
+    const systemText = `${SECURITY_PREAMBLE}\n\n${prompt}`;
     const evidenceText = JSON.stringify({ trigger: payload.trigger, evidence });
     const contextRoom = model.contextWindow == null ? Infinity
       : model.contextWindow - estimateTokens(systemText) - estimateTokens(evidenceText) - 1024;
@@ -118,6 +123,10 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
       try {
         if (getConfig().memory.extractionCadence === 'off') {
           outputs.push({ kind: 'memory', status: 'disabled', detail: 'Memory extraction is off' }); continue;
+        }
+        // A memory row carries its embedding: without an embedding model memory is off, not failing.
+        if (!(await capabilityConfigured('embedding'))) {
+          outputs.push({ kind: 'memory', status: 'disabled', detail: 'Memory needs an embedding model' }); continue;
         }
         const result = await judgeAndApply([item], { userId: job.userId, workspaceId,
           sourceMessageId: item.sources[0].slice('message:'.length), failOnError: true });

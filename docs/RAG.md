@@ -24,8 +24,11 @@ indexed into `embeddings` (`purpose='note'`) so both are reachable from
 one hybrid search.
 
 - **Embedding model:** anything mapped to topic `embedding` in the
-  model registry (defaults to `nomic-embed-text` via Ollama through
-  LiteLLM). The dimension is auto-detected and pinned by migration
+  model registry. **Optional:** without one the knowledge base is off, not
+  broken — nothing is chunked or embedded, its tools and pages are hidden, and
+  documents, notes and repositories saved meanwhile are indexed by a one-time
+  catch-up once a model is bound ([MODULES.md → Capability
+  gates](MODULES.md#capability-gates)). The dimension is auto-detected and pinned by migration
   0055 once the table has data — see [Vector indexing](#vector-indexing).
   If the model is asymmetric, configure its prefixes — see
   [Asymmetric retrieval prefixes](#asymmetric-retrieval-prefixes).

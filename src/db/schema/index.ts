@@ -20,6 +20,7 @@ export * from './documents';
 export * from './email-handled';
 export * from './context-hooks';
 export * from './embeddings';
+export * from './index-backlog';
 export * from './evaluations';
 export * from './heartbeat-checks';
 export * from './hook-executions';
