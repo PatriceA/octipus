@@ -291,6 +291,8 @@ export interface ChannelResponse {
   replyTo?: string;
   threadId?: string;
   metadata?: Record<string, unknown>;
+  /** Filled by the adapter: attachments it could not send (the text still went out). */
+  undelivered?: Array<{ filename?: string; type: Attachment['type']; error: string }>;
 }
 
 // Hook Types

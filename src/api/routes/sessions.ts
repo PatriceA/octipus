@@ -20,7 +20,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { canActInSession } from '@/core/rooms/access';
 import { contentRepos } from '@/db/repositories/content';
 import { isAuthenticated } from '@/security/principal';
-import { join } from 'node:path';
+import { relative } from 'node:path';
 import { isInside, spaceAccessOf, WorkspaceFS, isSharedWorkspaceId } from '@/security/workspace-fs';
 import { storeChatUploads } from '@/core/chat-uploads';
 import { EXTERNAL_CHANNELS, loadNotifyScope, resolveTarget } from '@/channels/ownership';
@@ -29,7 +29,12 @@ import { EXTERNAL_CHANNELS, loadNotifyScope, resolveTarget } from '@/channels/ow
 function isLocalMedia(fs: WorkspaceFS, path: string): boolean {
   try {
     const abs = fs.resolve(path);
-    return ['.octipus/media', '.octipus/attachments'].some((dir) => isInside(join(fs.root, dir), abs));
+    if (!isInside(fs.root, abs)) return false;
+    // Files of the shapes this host writes, never a folder (an upload's
+    // unguessable id is what protects it).
+    const rel = relative(fs.root, abs).split('\\').join('/');
+    return /^\.octipus\/media\/(generated|speech|screenshots|cache)\/[A-Za-z0-9._-]+$/.test(rel)
+      || /^\.octipus\/attachments\/[a-f0-9-]{36}\/[A-Za-z0-9._-]+$/.test(rel);
   } catch {
     return false;
   }

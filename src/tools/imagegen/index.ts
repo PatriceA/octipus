@@ -127,10 +127,17 @@ export class ImageGenTool extends BaseTool {
       references.push({ data, mimeType });
     }
 
-    const result = await generateImageWithLane(prompt, { n, aspect, references }, {
-      userId: context.userId, sessionId: context.sessionId, agentId: context.id,
-      workspaceId: context.workspaceId ?? null, funding: context.funding, spaceId: context.space?.workspaceId ?? null,
-    });
+    let result: Awaited<ReturnType<typeof generateImageWithLane>>;
+    try {
+      result = await generateImageWithLane(prompt, { n, aspect, references }, {
+        userId: context.userId, sessionId: context.sessionId, agentId: context.id, role: context.role,
+        workspaceId: context.workspaceId ?? null, funding: context.funding, spaceId: context.space?.workspaceId ?? null,
+      });
+    } catch (err) {
+      // A spend budget refused before anything was drawn: a definite no-op.
+      if ((err as Error).name === 'SpendBudgetExceededError') throw new ToolNotExecutedError(this.id, (err as Error).message);
+      throw err;
+    }
 
     const { default: sharp } = await import('sharp');
     const images: Array<{ path: string; mimeType: string; width?: number; height?: number }> = [];

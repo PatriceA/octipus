@@ -21,16 +21,37 @@ export function openAiImageSize(model: string, aspect: ImageAspect): string {
  * default to URLs.
  */
 function asksForBase64(model: string): boolean {
-  return !/gpt-image/i.test(model);
+  // DALL·E only: gpt-image (also behind an alias) rejects the field; any
+  // other server's URL answer is fetched instead.
+  return /dall-e/i.test(model);
 }
 
-/** An image a server returned by URL (it ignored `b64_json`): fetched through the SSRF guard, capped. */
-async function fetchImageUrl(url: string): Promise<{ data: Buffer; mimeType: string } | null> {
-  const { fetchGuarded } = await import('@/utils/sanitize');
-  const res = await fetchGuarded(url);
-  if (!res.ok) return null;
-  const data = Buffer.from(await res.arrayBuffer());
-  if (data.length > 25 * 1024 * 1024) return null;
+const MAX_FETCHED_IMAGE_BYTES = 25 * 1024 * 1024;
+
+/**
+ * An image a server returned by URL: from the server we already call (a local
+ * one too), or through the SSRF guard from anywhere else; capped while
+ * streaming, and stopped after a minute.
+ */
+async function fetchImageUrl(url: string, serverBase: string | undefined): Promise<{ data: Buffer; mimeType: string } | null> {
+  let sameServer = false;
+  try { sameServer = !!serverBase && new URL(url).origin === new URL(serverBase).origin; } catch { return null; }
+  const signal = AbortSignal.timeout(60_000);
+  const res = sameServer ? await fetch(url, { signal }) : await (await import('@/utils/sanitize')).fetchGuarded(url, { signal });
+  if (!res.ok || !res.body) return null;
+  const declared = Number(res.headers.get('content-length') ?? 0);
+  if (declared > MAX_FETCHED_IMAGE_BYTES) return null;
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_FETCHED_IMAGE_BYTES) { await reader.cancel().catch(() => {}); return null; }
+    chunks.push(value);
+  }
+  const data = Buffer.concat(chunks);
   const { sniffImageType } = await import('@/core/media/normalize');
   const mimeType = sniffImageType(data);
   return mimeType ? { data, mimeType } : null;
@@ -61,7 +82,7 @@ export async function openAiImages(client: OpenAI, req: ImageGenerationRequest):
       const bytes = Buffer.from(d.b64_json, 'base64');
       images.push({ data: bytes, mimeType: sniffImageType(bytes) ?? 'image/png' });
     } else if (d.url) {
-      const fetched = await fetchImageUrl(d.url);
+      const fetched = await fetchImageUrl(d.url, (client as unknown as { baseURL?: string }).baseURL).catch(() => null);
       if (fetched) images.push(fetched);
     }
   }

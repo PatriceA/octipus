@@ -19,6 +19,8 @@ export interface ImageGenerationContext {
   sessionId?: string;
   agentId?: string;
   workspaceId?: string | null;
+  /** The agent's role (role spend budgets). */
+  role?: string;
   /** The space the call runs in (a sponsored call is checked against its budgets). */
   spaceId?: string | null;
   funding?: import('@/core/types').AgentFunding;
@@ -90,11 +92,12 @@ async function recordUsage(row: ModelConfigEntry, ctx: ImageGenerationContext, i
   const { recordProviderUsage } = await import('./providers/instrumented');
   const perImage = reportedCost === undefined ? await pricePerImage(row) : undefined;
   const cost = reportedCost ?? (perImage !== undefined ? perImage * images : undefined);
+  const costSource = reportedCost !== undefined ? 'provider' : row.metadata?.pricing?.perImage !== undefined ? 'row pricing' : 'list price';
   await recordProviderUsage(
     {
       model: row.modelId, modelConfigName: row.name, messages: [], requestType: 'image_generation',
       userId: ctx.userId, sessionId: ctx.sessionId, agentId: ctx.agentId, workspaceId: ctx.workspaceId ?? undefined, funding: ctx.funding,
-      accountingMetadata: { images },
+      accountingMetadata: { images, ...(cost !== undefined ? { imageCostSource: costSource } : {}) },
     },
     row.provider,
     { model: row.modelId, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false, ...(cost !== undefined ? { reportedCost: cost } : {}) } },
@@ -113,7 +116,7 @@ export async function generateImageWithLane(
   // Spend budgets apply before anything is paid for (SpendBudgetExceededError).
   if (ctx.userId && ctx.funding) {
     const { checkSpend } = await import('@/security/spend-budgets');
-    await checkSpend({ userId: ctx.userId, workspaceId: ctx.workspaceId ?? null, sessionId: ctx.sessionId ?? null, funding: ctx.funding, spaceId: ctx.spaceId ?? null });
+    await checkSpend({ userId: ctx.userId, role: ctx.role, workspaceId: ctx.workspaceId ?? null, sessionId: ctx.sessionId ?? null, funding: ctx.funding, spaceId: ctx.spaceId ?? null });
   }
   const { getProviderRouter } = await import('./providers');
   const { resolveModelKey } = await import('./model-key');

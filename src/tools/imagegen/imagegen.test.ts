@@ -77,6 +77,13 @@ describe('generate_image', () => {
     expect(state.generate).not.toHaveBeenCalled();
   });
 
+  test('a spend budget that refuses is a definite no-op, not an uncertain action', async () => {
+    const err = Object.assign(new Error('Agents are paused: the daily budget is spent.'), { name: 'SpendBudgetExceededError' });
+    state.generate.mockRejectedValueOnce(err);
+    const { ToolNotExecutedError } = await import('@/core/tool-execution-error');
+    await expect(tool.generate({ prompt: 'cat' }, ctx)).rejects.toBeInstanceOf(ToolNotExecutedError);
+  });
+
   test('reference images are read from the workspace and must be images', async () => {
     state.references = true;
     await writeFile(join(state.root, 'ref.png'), png);

@@ -267,6 +267,7 @@ export class WhatsAppChannel extends BaseChannel {
           await this.sendMedia(channelId, attachment);
         } catch (err) {
           channelLogger.warn({ err, type: attachment.type, filename: attachment.filename }, 'WhatsApp attachment could not be sent');
+          (response.undelivered ??= []).push({ filename: attachment.filename, type: attachment.type, error: (err as Error).message });
         }
       }
     }

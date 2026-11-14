@@ -40,12 +40,21 @@ export async function geminiImages(apiKey: string, req: ImageGenerationRequest):
   for (const r of req.references ?? []) parts.push({ inline_data: { mime_type: r.mimeType, data: r.data.toString('base64') } });
   const images: ImageGenerationResult['images'] = [];
   let revisedPrompt: string | undefined;
+  let shaped = req.aspect !== 'square';
   for (let i = 0; i < req.n; i++) {
-    const json = await post(`${BASE}/${model}:generateContent`, apiKey, {
+    const body = (withShape: boolean) => ({
       contents: [{ role: 'user', parts }],
-      // Older image models refuse imageConfig: it is sent only for a non-square shape.
-      generationConfig: { responseModalities: ['TEXT', 'IMAGE'], ...(req.aspect !== 'square' ? { imageConfig: { aspectRatio } } : {}) },
-    }, req.signal);
+      generationConfig: { responseModalities: ['TEXT', 'IMAGE'], ...(withShape ? { imageConfig: { aspectRatio } } : {}) },
+    });
+    let json: Record<string, unknown>;
+    try {
+      json = await post(`${BASE}/${model}:generateContent`, apiKey, body(shaped), req.signal);
+    } catch (err) {
+      // Older image models refuse imageConfig: draw square rather than fail.
+      if (!shaped || !/image_?config|imageConfig|aspect/i.test((err as Error).message)) throw err;
+      shaped = false;
+      json = await post(`${BASE}/${model}:generateContent`, apiKey, body(false), req.signal);
+    }
     const out = ((json.candidates as Array<{ content?: { parts?: Array<Record<string, unknown>> } }> | undefined)?.[0]?.content?.parts) ?? [];
     for (const part of out) {
       const inline = (part.inlineData ?? part.inline_data) as { data?: string; mimeType?: string; mime_type?: string } | undefined;

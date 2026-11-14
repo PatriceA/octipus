@@ -438,6 +438,7 @@ export class SlackChannel extends BaseChannel {
           } as Parameters<WebClient['files']['uploadV2']>[0]);
         } catch (err) {
           channelLogger.warn({ err, channelId }, 'Slack file upload failed');
+          (response.undelivered ??= []).push({ filename: file.filename, type: file.type, error: (err as Error).message });
           await this.app.client.chat.postMessage({
             channel: channelId,
             ...(threadTs ? { thread_ts: threadTs } : {}),

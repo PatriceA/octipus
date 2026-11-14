@@ -50,7 +50,10 @@ describe('the Image generation lane', () => {
     const out = await generateImageWithLane('a cat', { n: 9, aspect: 'landscape' }, { userId: 'u1', sessionId: 's1' });
     expect(out).toMatchObject({ model: 'gpt image', images: [png, png] });
     expect(generate).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-image-1', modelConfigName: 'gpt image', n: 4, aspect: 'landscape', apiKey: 'key-gpt image' }));
-    expect(state.usage).toHaveBeenCalledWith(expect.objectContaining({ requestType: 'image_generation', accountingMetadata: { images: 2 }, userId: 'u1', sessionId: 's1' }), 'openai', expect.anything(), false);
+    // No price on the row: the list price, labelled as such.
+    expect(state.usage).toHaveBeenCalledWith(
+      expect.objectContaining({ requestType: 'image_generation', accountingMetadata: { images: 2, imageCostSource: 'list price' }, userId: 'u1', sessionId: 's1' }),
+      'openai', expect.objectContaining({ usage: expect.objectContaining({ reportedCost: 0.084 }) }), false);
   });
 
   test('a failing primary falls to the backup; a confidential conversation only reaches a local model', async () => {
@@ -90,6 +93,18 @@ describe('wire formats', () => {
     expect(out).toEqual({ images: [{ data: Buffer.from('img'), mimeType: 'image/png' }], revisedPrompt: 'a red cat' });
     await openAiImages(client, { model: 'gpt-image-1', modelConfigName: 'g', prompt: 'cat', n: 1, aspect: 'square', references: [png] });
     expect(edit).toHaveBeenCalledWith(expect.not.objectContaining({ response_format: expect.anything() }), undefined);
+  });
+
+  test('a URL answer is fetched (from the server called, even a local one) and checked to be an image', async () => {
+    const sharp = (await import('sharp')).default;
+    const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#000' } }).png().toBuffer();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(new Uint8Array(png), { headers: { 'content-length': String(png.length) } }));
+    const generate = vi.fn(async () => ({ data: [{ url: 'http://127.0.0.1:8080/files/out.png' }] }));
+    const client = { images: { generate }, baseURL: 'http://127.0.0.1:8080/v1' } as never;
+    const out = await openAiImages(client, { model: 'sdxl', modelConfigName: 's', prompt: 'cat', n: 1, aspect: 'square' });
+    expect(out.images).toEqual([{ data: png, mimeType: 'image/png' }]);
+    expect(generate).toHaveBeenCalledWith(expect.not.objectContaining({ response_format: expect.anything() }), undefined);
+    fetchMock.mockRestore();
   });
 
   test('chat-modality images (OpenRouter): data URLs on message.images', async () => {

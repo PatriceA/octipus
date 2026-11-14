@@ -149,8 +149,13 @@ export class MessagingTool extends BaseTool {
           return { success: true, deduped: true, channel, target, note: 'Identical message already sent to this target moments ago — suppressed to avoid duplicate notifications.' };
         }
 
-        const r = await sendResolved(resolved, { content: args.message as string, ...(attachments.length ? { attachments } : {}) });
+        const response: import('@/core/types').ChannelResponse = { content: args.message as string, ...(attachments.length ? { attachments } : {}) };
+        const r = await sendResolved(resolved, response);
         if (!r.ok) return { success: false, error: r.error };
+        if (response.undelivered?.length) {
+          // The text went out; a file did not: not a duplicate to suppress, and the model must say so.
+          return { success: false, partial: true, channel, target, error: `The message was sent, but not ${response.undelivered.map((u) => `${u.filename ?? u.type} (${u.error})`).join(', ')}` };
+        }
         markSent(dedupKey);
         return { success: true, channel, target };
       },
@@ -219,10 +224,12 @@ export class MessagingTool extends BaseTool {
             results.push({ channel: binding.channelType, success: false, error: 'Channel not connected' });
             continue;
           }
-          const r = await deliver(scope, binding.channelType, binding.channelId, { content: args.message as string, ...(attachments.length ? { attachments } : {}) });
-          results.push(r.ok
+          const response: import('@/core/types').ChannelResponse = { content: args.message as string, ...(attachments.length ? { attachments } : {}) };
+          const r = await deliver(scope, binding.channelType, binding.channelId, response);
+          const missed = response.undelivered?.length ? `sent without ${response.undelivered.map((u) => `${u.filename ?? u.type} (${u.error})`).join(', ')}` : undefined;
+          results.push(r.ok && !missed
             ? { channel: binding.channelType, success: true }
-            : { channel: binding.channelType, success: false, error: r.error });
+            : { channel: binding.channelType, success: false, error: r.ok ? missed : r.error });
         }
 
         if (results.some(r => r.success)) markSent(dedupKey); // only after ≥1 channel delivered

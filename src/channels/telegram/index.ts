@@ -122,6 +122,7 @@ export class TelegramChannel extends BaseChannel {
           await this.sendAttachment(chatId, attachment, response.replyTo, response.threadId);
         } catch (err) {
           channelLogger.warn({ err, type: attachment.type, filename: attachment.filename }, 'Telegram attachment could not be sent');
+          (response.undelivered ??= []).push({ filename: attachment.filename, type: attachment.type, error: (err as Error).message });
         }
       }
     }

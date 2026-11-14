@@ -1165,7 +1165,7 @@ export class AgentService {
       // carries none of its media either (speech can say what the text may not).
       const { takeTurnMedia, turnMediaAttachments } = await import('@/core/media/turn-media');
       const producedMedia = takeTurnMedia(getRunContext()?.runId);
-      const turnMedia = outputCheck.action === 'replace' || withheld ? [] : producedMedia;
+      const turnMedia = outputCheck.action === 'replace' || withheld || limit ? [] : producedMedia;
       if (producedMedia.length && !turnMedia.length) coreLogger.warn({ sessionId: resolvedSessionId, dropped: producedMedia.length }, 'Turn media withheld with the answer');
       const persistedAnswer = await messageRepository.createForGeneration({
         sessionId: resolvedSessionId, role: 'assistant', content: finalResponse, agentId,
