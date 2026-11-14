@@ -7,9 +7,7 @@ import { getKnowledgeLinkRepository, type KnowledgeLinkRepository } from '@/db/r
 import { insertRevision, loadSpaceNote, writeBodyIfUnchanged } from '@/db/repositories/live-documents';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
 import { assertNoteAccess, getNoteRepository, type NoteRepository, type NoteScope, noteStoreFor, type NoteStore } from '@/db/repositories/note-repository';
-import { type Note, notes } from '@/db/schema/notes';
-import { eq } from 'drizzle-orm';
-import { getDb } from '@/db/postgres';
+import type { Note } from '@/db/schema/notes';
 import { capabilityConfigured } from '@/core/capabilities/gates';
 import { recordSkipped } from '@/core/rag/index-backlog';
 import { coreLogger } from '@/utils/logger';
@@ -484,8 +482,14 @@ export class NoteService {
    * embedding model was configured. False when the note no longer exists.
    * Throws when indexing fails, so the catch-up keeps the item for a retry.
    */
-  async reindexById(noteId: string): Promise<boolean> {
-    const [note] = await getDb().select().from(notes).where(eq(notes.id, noteId)).limit(1);
+  async reindexById(noteId: string, ownerUserId: string, workspaceId: string | null): Promise<boolean> {
+    // Through the scoped repository, as the backlog row's owner: their own
+    // note, or the note of the space it was saved in.
+    const repo = this.notes;
+    const note = (await repo.getById(ownerUserId, noteId))
+      ?? (workspaceId
+        ? await repo.getById({ kind: 'space', workspaceId, userId: ownerUserId, role: 'editor', archived: false }, noteId)
+        : null);
     if (!note) return false;
     await this.indexChunks(note);
     return true;

@@ -94,7 +94,7 @@ const indexers: Record<BacklogKind, BacklogIndexer> = {
   },
   async note(row) {
     const { getNoteService } = await import('@/core/knowledge/notes');
-    return getNoteService().reindexById(row.sourceId);
+    return getNoteService().reindexById(row.sourceId, row.ownerUserId, row.workspaceId ?? null);
   },
   async repo(row) {
     const { repoRegistryRepository } = await import('@/db/repositories/repo-registry-repository');
