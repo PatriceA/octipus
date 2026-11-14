@@ -15,9 +15,25 @@ export function openAiImageSize(model: string, aspect: ImageAspect): string {
   return aspect === 'landscape' ? '1536x1024' : aspect === 'portrait' ? '1024x1536' : '1024x1024';
 }
 
-/** Whether the model returns base64 only when asked (DALL·E); gpt-image always does and rejects the field. */
+/**
+ * Ask for base64 from every model except gpt-image (which always returns it
+ * and rejects the field): DALL·E, a LiteLLM alias and compatible servers
+ * default to URLs.
+ */
 function asksForBase64(model: string): boolean {
-  return /dall-e/i.test(model);
+  return !/gpt-image/i.test(model);
+}
+
+/** An image a server returned by URL (it ignored `b64_json`): fetched through the SSRF guard, capped. */
+async function fetchImageUrl(url: string): Promise<{ data: Buffer; mimeType: string } | null> {
+  const { fetchGuarded } = await import('@/utils/sanitize');
+  const res = await fetchGuarded(url);
+  if (!res.ok) return null;
+  const data = Buffer.from(await res.arrayBuffer());
+  if (data.length > 25 * 1024 * 1024) return null;
+  const { sniffImageType } = await import('@/core/media/normalize');
+  const mimeType = sniffImageType(data);
+  return mimeType ? { data, mimeType } : null;
 }
 
 export async function openAiImages(client: OpenAI, req: ImageGenerationRequest): Promise<ImageGenerationResult> {
@@ -37,8 +53,18 @@ export async function openAiImages(client: OpenAI, req: ImageGenerationRequest):
       image: await Promise.all(req.references.map((r, i) => toFile(r.data, `reference-${i}.${r.mimeType.split('/')[1] ?? 'png'}`, { type: r.mimeType }))),
     } as Parameters<OpenAI['images']['edit']>[0], options)
     : await client.images.generate(common as Parameters<OpenAI['images']['generate']>[0], options);
-  const data = (response as { data?: Array<{ b64_json?: string; revised_prompt?: string }> }).data ?? [];
-  const images = data.filter((d) => d.b64_json).map((d) => ({ data: Buffer.from(d.b64_json as string, 'base64'), mimeType: 'image/png' }));
+  const data = (response as { data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }> }).data ?? [];
+  const { sniffImageType } = await import('@/core/media/normalize');
+  const images: ImageGenerationResult['images'] = [];
+  for (const d of data) {
+    if (d.b64_json) {
+      const bytes = Buffer.from(d.b64_json, 'base64');
+      images.push({ data: bytes, mimeType: sniffImageType(bytes) ?? 'image/png' });
+    } else if (d.url) {
+      const fetched = await fetchImageUrl(d.url);
+      if (fetched) images.push(fetched);
+    }
+  }
   if (images.length === 0) throw new Error(`${req.model} returned no image`);
   return { images, revisedPrompt: data.find((d) => d.revised_prompt)?.revised_prompt };
 }
@@ -54,13 +80,16 @@ export async function chatModalityImages(client: OpenAI, req: ImageGenerationReq
   for (const r of req.references ?? []) content.push({ type: 'image_url', image_url: { url: `data:${r.mimeType};base64,${r.data.toString('base64')}` } });
   const images: ImageGenerationResult['images'] = [];
   let revisedPrompt: string | undefined;
+  let cost: number | undefined;
   for (let i = 0; i < req.n; i++) {
     const response = await client.chat.completions.create({
       model: req.model,
       messages: [{ role: 'user', content }],
       modalities: ['image', 'text'],
       image_config: { aspect_ratio: aspectRatio },
-    } as never, req.signal ? { signal: req.signal } : undefined) as unknown as { choices?: Array<{ message?: { content?: string; images?: Array<{ image_url?: { url?: string } }> } }> };
+      usage: { include: true },
+    } as never, req.signal ? { signal: req.signal } : undefined) as unknown as { usage?: { cost?: number }; choices?: Array<{ message?: { content?: string; images?: Array<{ image_url?: { url?: string } }> } }> };
+    if (typeof response.usage?.cost === 'number') cost = (cost ?? 0) + response.usage.cost;
     const message = response.choices?.[0]?.message;
     for (const img of message?.images ?? []) {
       const url = img.image_url?.url ?? '';
@@ -70,5 +99,5 @@ export async function chatModalityImages(client: OpenAI, req: ImageGenerationReq
     if (!revisedPrompt && message?.content?.trim()) revisedPrompt = message.content.trim();
   }
   if (images.length === 0) throw new Error(`${req.model} returned no image`);
-  return { images, revisedPrompt };
+  return { images, revisedPrompt, ...(cost !== undefined ? { cost } : {}) };
 }

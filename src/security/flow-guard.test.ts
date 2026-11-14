@@ -15,6 +15,9 @@ describe('classifyFlow', () => {
     [{ toolId: 'google-workspace', action: 'drive_read' }, { taints: ['private'] }],
     [{ toolId: 'microsoft365', action: 'email_send' }, { taints: [], egress: 'write' }],
     [{ toolId: 'messaging', action: 'send' }, { taints: [], egress: 'write' }],
+    // Files sent with a message carry workspace content out.
+    [{ toolId: 'messaging', action: 'send', args: { attachments: ['out/chart.png'] } }, { taints: ['private'], egress: 'write' }],
+    [{ toolId: 'messaging', action: 'send', args: { attachments: ['.env'] } }, { taints: ['private', 'secret'], egress: 'write' }],
     [{ toolId: 'github', action: 'read' }, { taints: ['suspicious'] }],
     [{ toolId: 'git', action: 'push' }, { taints: [], egress: 'write' }],
     [{ toolId: 'git', action: 'read' }, { taints: [] }],

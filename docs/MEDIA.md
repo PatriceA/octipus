@@ -144,11 +144,17 @@ result):
 | Telegram | photo | voice note (OGG/Opus), else audio |
 | WhatsApp | uploaded to the media store, sent by id | voice note (OGG/Opus), else audio |
 | Slack | uploaded into the thread (`files:write`) | same |
-| Teams | inline up to 1 MB; larger, a 15-minute public link | a 15-minute public link |
+| Teams | inline up to 1 MB and 1024 px; larger, a 15-minute public link | a link line (15 minutes); no spoken replies |
 
 A Teams link needs a public address (`oauth.publicUrl` / `PUBLIC_URL`);
-without one the reply says the file is in the web app. A voice note on any
-channel gets a spoken reply (unless the turn already spoke).
+without one the reply says the file is in the web app. A voice note gets a
+spoken reply on every channel but Teams (unless the turn already spoke). A
+file a channel refuses never loses the reply's text. An answer the output
+guard replaced, or one withheld from a room, carries none of its media.
+Image spend counts toward spend budgets: the provider's reported cost, else
+the row's `pricing.perImage`, else a list price; local rows cost nothing.
+Files sent with `send_message` count as private data for the flow guard
+(credential files as secrets).
 `messaging__send_message` and `send_to_user` take `attachments` (workspace
 paths, at most 5 files of 20 MB) to send files deliberately.
 

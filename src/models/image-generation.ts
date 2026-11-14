@@ -19,7 +19,9 @@ export interface ImageGenerationContext {
   sessionId?: string;
   agentId?: string;
   workspaceId?: string | null;
-  funding?: import('@/db/schema/models').CostFunding;
+  /** The space the call runs in (a sponsored call is checked against its budgets). */
+  spaceId?: string | null;
+  funding?: import('@/core/types').AgentFunding;
   signal?: AbortSignal;
 }
 
@@ -59,8 +61,35 @@ async function refusal(row: ModelConfigEntry, ctx: ImageGenerationContext): Prom
   return null;
 }
 
-async function recordUsage(row: ModelConfigEntry, ctx: ImageGenerationContext, images: number, failed: boolean): Promise<void> {
+/**
+ * List prices per image (USD, standard quality, 1024 px) where the row names
+ * none: the cost log and spend budgets see image spend even before an
+ * operator enters a price. A local row costs nothing.
+ */
+const LIST_PRICE_PER_IMAGE: Array<[RegExp, number]> = [
+  [/gpt-image-1-mini/i, 0.011],
+  [/gpt-image/i, 0.042],
+  [/dall-e-3/i, 0.04],
+  [/dall-e-2/i, 0.02],
+  [/imagen-4.*ultra/i, 0.06],
+  [/imagen-4.*fast/i, 0.02],
+  [/imagen/i, 0.04],
+  [/gemini.*image|flash-image|nano-banana/i, 0.039],
+];
+
+/** What one image on this row costs, or undefined when unknown. */
+export async function pricePerImage(row: ModelConfigEntry): Promise<number | undefined> {
+  const set = row.metadata?.pricing?.perImage;
+  if (typeof set === 'number') return set;
+  const { runsLocally } = await import('@/core/protection/routing');
+  if (await runsLocally(row)) return 0;
+  return LIST_PRICE_PER_IMAGE.find(([re]) => re.test(row.modelId))?.[1];
+}
+
+async function recordUsage(row: ModelConfigEntry, ctx: ImageGenerationContext, images: number, failed: boolean, reportedCost?: number): Promise<void> {
   const { recordProviderUsage } = await import('./providers/instrumented');
+  const perImage = reportedCost === undefined ? await pricePerImage(row) : undefined;
+  const cost = reportedCost ?? (perImage !== undefined ? perImage * images : undefined);
   await recordProviderUsage(
     {
       model: row.modelId, modelConfigName: row.name, messages: [], requestType: 'image_generation',
@@ -68,7 +97,7 @@ async function recordUsage(row: ModelConfigEntry, ctx: ImageGenerationContext, i
       accountingMetadata: { images },
     },
     row.provider,
-    { model: row.modelId, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false } },
+    { model: row.modelId, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false, ...(cost !== undefined ? { reportedCost: cost } : {}) } },
     failed,
   ).catch((err: unknown) => log.warn({ err, model: row.name }, 'Image generation usage could not be recorded'));
 }
@@ -81,6 +110,11 @@ export async function generateImageWithLane(
   const rows = await candidates();
   if (rows.length === 0) throw new CapabilityNotConfiguredError('draw');
   const n = Math.min(4, Math.max(1, Math.floor(opts.n ?? 1)));
+  // Spend budgets apply before anything is paid for (SpendBudgetExceededError).
+  if (ctx.userId && ctx.funding) {
+    const { checkSpend } = await import('@/security/spend-budgets');
+    await checkSpend({ userId: ctx.userId, workspaceId: ctx.workspaceId ?? null, sessionId: ctx.sessionId ?? null, funding: ctx.funding, spaceId: ctx.spaceId ?? null });
+  }
   const { getProviderRouter } = await import('./providers');
   const { resolveModelKey } = await import('./model-key');
   const errors: string[] = [];
@@ -101,7 +135,7 @@ export async function generateImageWithLane(
         model: row.modelId, modelConfigName: row.name, prompt, n, aspect: opts.aspect ?? 'square',
         references: opts.references, apiKey, userId: ctx.userId, signal: ctx.signal,
       });
-      await recordUsage(row, ctx, result.images.length, false);
+      await recordUsage(row, ctx, result.images.length, false, result.cost);
       if (errors.length) log.warn({ using: row.name, skipped: errors }, 'Using the Image generation backup');
       return { ...result, model: row.name };
     } catch (err) {

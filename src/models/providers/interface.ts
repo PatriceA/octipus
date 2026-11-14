@@ -108,4 +108,6 @@ export interface ImageGenerationResult {
   images: Array<{ data: Buffer; mimeType: string }>;
   /** The prompt the provider actually used, when it rewrites prompts. */
   revisedPrompt?: string;
+  /** USD the provider reported for the call (OpenRouter), when it does. */
+  cost?: number;
 }

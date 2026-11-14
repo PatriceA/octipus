@@ -259,10 +259,15 @@ export class WhatsAppChannel extends BaseChannel {
       throw new Error('WhatsApp channel not connected');
     }
 
-    // Send attachments first
+    // Send attachments first. One that cannot be sent (a format WhatsApp
+    // refuses, a failed upload) never loses the reply: logged, the text goes out.
     if (response.attachments?.length) {
       for (const attachment of response.attachments) {
-        await this.sendMedia(channelId, attachment);
+        try {
+          await this.sendMedia(channelId, attachment);
+        } catch (err) {
+          channelLogger.warn({ err, type: attachment.type, filename: attachment.filename }, 'WhatsApp attachment could not be sent');
+        }
       }
     }
 

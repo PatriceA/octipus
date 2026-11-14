@@ -43,7 +43,8 @@ export async function geminiImages(apiKey: string, req: ImageGenerationRequest):
   for (let i = 0; i < req.n; i++) {
     const json = await post(`${BASE}/${model}:generateContent`, apiKey, {
       contents: [{ role: 'user', parts }],
-      generationConfig: { responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio } },
+      // Older image models refuse imageConfig: it is sent only for a non-square shape.
+      generationConfig: { responseModalities: ['TEXT', 'IMAGE'], ...(req.aspect !== 'square' ? { imageConfig: { aspectRatio } } : {}) },
     }, req.signal);
     const out = ((json.candidates as Array<{ content?: { parts?: Array<Record<string, unknown>> } }> | undefined)?.[0]?.content?.parts) ?? [];
     for (const part of out) {

@@ -41,16 +41,21 @@ describe('public media links', () => {
     expect(publicMedia(token)).toBeNull();
   });
 
-  test('Teams: small images inline, others by public link, none without one (a line instead)', async () => {
+  test('Teams: small images inline, large ones by public link; audio as a link line; a note without a public address', async () => {
     const { teamsAttachments } = await import('@/channels/teams/index');
+    const sharp = (await import('sharp')).default;
+    const smallPng = await sharp({ create: { width: 10, height: 10, channels: 3, background: '#f00' } }).png().toBuffer();
+    const widePng = await sharp({ create: { width: 1536, height: 1024, channels: 3, background: '#f00' } }).png().toBuffer();
     vi.stubEnv('PUBLIC_URL', '');
-    const small = { type: 'image' as const, data: Buffer.from('png'), mimeType: 'image/png', filename: 'a.png' };
+    const small = { type: 'image' as const, data: smallPng, mimeType: 'image/png', filename: 'a.png' };
+    const wide = { type: 'image' as const, data: widePng, mimeType: 'image/png', filename: 'wide.png' };
     const audio = { type: 'audio' as const, data: Buffer.from('mp3'), mimeType: 'audio/mpeg', filename: 'reply.mp3' };
-    const none = await teamsAttachments([small, audio]);
-    expect(none.attachments).toEqual([{ contentType: 'image/png', contentUrl: `data:image/png;base64,${Buffer.from('png').toString('base64')}`, name: 'a.png' }]);
-    expect(none.notes[0]).toMatch(/reply\.mp3 is in the Octipus web app/);
+    const none = await teamsAttachments([small, wide, audio]);
+    expect(none.attachments).toEqual([{ contentType: 'image/png', contentUrl: `data:image/png;base64,${smallPng.toString('base64')}`, name: 'a.png' }]);
+    expect(none.notes).toEqual([expect.stringMatching(/wide\.png is in the Octipus web app/), expect.stringMatching(/reply\.mp3 is in the Octipus web app/)]);
     vi.stubEnv('PUBLIC_URL', 'https://octi.example.com');
-    const linked = await teamsAttachments([audio]);
+    const linked = await teamsAttachments([wide, audio]);
     expect(linked.attachments[0].contentUrl).toMatch(/^https:\/\/octi\.example\.com\/api\/media\/public\//);
+    expect(linked.notes[0]).toMatch(/^reply\.mp3: https:\/\/octi\.example\.com\/api\/media\/public\/\S+ \(link valid for 15 minutes\)$/);
   });
 });

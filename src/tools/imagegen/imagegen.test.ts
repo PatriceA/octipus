@@ -67,6 +67,16 @@ describe('generate_image', () => {
     expect(state.generate).not.toHaveBeenCalled();
   });
 
+  test('several images: each gets its own new name next to the output path, all checked before paying', async () => {
+    state.generate.mockResolvedValue({ images: [{ data: png, mimeType: 'image/png' }, { data: png, mimeType: 'image/png' }], model: 'm' });
+    const out = await tool.generate({ prompt: 'cat', n: 2, output_path: 'cat.png' }, ctx);
+    expect((out.images as Array<{ path: string }>).map((i) => i.path)).toEqual(['cat.png', 'cat-2.png']);
+    state.generate.mockClear();
+    await writeFile(join(state.root, 'dog-2.png'), 'taken');
+    await expect(tool.generate({ prompt: 'dog', n: 2, output_path: 'dog.png' }, ctx)).rejects.toThrow(/dog-2\.png' already exists/);
+    expect(state.generate).not.toHaveBeenCalled();
+  });
+
   test('reference images are read from the workspace and must be images', async () => {
     state.references = true;
     await writeFile(join(state.root, 'ref.png'), png);

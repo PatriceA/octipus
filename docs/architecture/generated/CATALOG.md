@@ -813,12 +813,12 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `mcp` | `shared` | 4 |
 | `mcp` | `utils` | 5 |
 | `models` | `config` | 11 |
-| `models` | `core` | 42 |
+| `models` | `core` | 45 |
 | `models` | `db` | 14 |
-| `models` | `security` | 22 |
+| `models` | `security` | 23 |
 | `models` | `services` | 1 |
 | `models` | `shared` | 4 |
-| `models` | `utils` | 45 |
+| `models` | `utils` | 46 |
 | `plugins` | `config` | 12 |
 | `plugins` | `core` | 55 |
 | `plugins` | `db` | 63 |

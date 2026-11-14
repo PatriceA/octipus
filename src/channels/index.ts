@@ -288,7 +288,7 @@ async function transcribeChannelAudio(audioAttachments: Attachment[], message: U
 const MAX_CHANNEL_MEDIA_BYTES = 20 * 1024 * 1024;
 
 /** The turn's media as channel attachments (bytes read from the workspace). */
-async function channelMediaAttachments(media: import('@/core/media/turn-media').TurnMediaItem[]): Promise<Attachment[]> {
+export async function channelMediaAttachments(media: import('@/core/media/turn-media').TurnMediaItem[]): Promise<Attachment[]> {
   const { readFile, stat } = await import('node:fs/promises');
   const out: Attachment[] = [];
   for (const item of media) {
@@ -1327,7 +1327,8 @@ export async function initializeChannels(): Promise<void> {
         // has them), unless the turn already spoke. Best-effort: a reply
         // without its media still goes out.
         const media = await channelMediaAttachments(result.media ?? []);
-        const spoken = voiceIn && !media.some((a) => a.voice)
+        // Teams has no voice notes and no audio attachment: no spoken reply there.
+        const spoken = voiceIn && !media.some((a) => a.voice) && message.channelType !== 'teams'
           ? await synthesizeVoiceReply(content, message.userId, resolvedSessionId)
           : undefined;
         const attachments = [...media, ...(spoken ?? [])];

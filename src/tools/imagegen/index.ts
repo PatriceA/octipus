@@ -6,7 +6,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname, extname, join } from 'node:path';
+import { basename, dirname, extname, join } from 'node:path';
 import { addTurnMedia } from '@/core/media/turn-media';
 import { ToolNotExecutedError } from '@/core/tool-execution-error';
 import type { AgentContext, ToolManifest } from '@/core/types';
@@ -95,10 +95,18 @@ export class ImageGenTool extends BaseTool {
     const n = Math.min(MAX_IMAGES, Math.max(1, Math.floor(Number(args.n) || 1)));
     const fs = workspaceOf(context);
 
-    // Everything that can be refused is refused before anything is paid for.
+    // Everything that can be refused is refused before anything is paid for,
+    // including where every image of the call will go.
     const requested = typeof args.output_path === 'string' && args.output_path.trim() ? args.output_path.trim() : null;
-    const requestedTarget = requested ? await workspacePath(fs, requested) : null;
-    if (requestedTarget && await stat(requestedTarget).catch(() => null)) throw new ToolNotExecutedError(this.id, `'${requested}' already exists; generate_image writes new files only.`);
+    const planned: Array<{ rel: string; target: string } | null> = [];
+    for (let i = 0; i < n; i++) {
+      if (!requested) { planned.push(null); continue; }
+      const ext = extname(requested);
+      const rel = i === 0 ? requested : join(dirname(requested), `${basename(requested, ext)}-${i + 1}${ext || '.png'}`);
+      const target = await workspacePath(fs, rel);
+      if (await stat(target).catch(() => null)) throw new ToolNotExecutedError(this.id, `'${rel}' already exists; generate_image writes new files only.`);
+      planned.push({ rel, target });
+    }
     const refPaths = Array.isArray(args.reference_images) ? (args.reference_images as unknown[]).map(String).filter(Boolean) : [];
     if (refPaths.length > MAX_REFERENCES) throw new ToolNotExecutedError(this.id, `At most ${MAX_REFERENCES} reference images.`);
     const { imageGenerationTakesReferences, generateImageWithLane } = await import('@/models/image-generation');
@@ -121,24 +129,16 @@ export class ImageGenTool extends BaseTool {
 
     const result = await generateImageWithLane(prompt, { n, aspect, references }, {
       userId: context.userId, sessionId: context.sessionId, agentId: context.id,
-      workspaceId: context.workspaceId ?? null, funding: context.funding,
+      workspaceId: context.workspaceId ?? null, funding: context.funding, spaceId: context.space?.workspaceId ?? null,
     });
 
     const { default: sharp } = await import('sharp');
     const images: Array<{ path: string; mimeType: string; width?: number; height?: number }> = [];
-    for (const [index, image] of result.images.entries()) {
+    for (const [index, image] of result.images.slice(0, n).entries()) {
       const ext = EXT[image.mimeType] ?? 'png';
-      let rel: string;
-      let target: string;
-      if (index === 0 && requested && requestedTarget) {
-        rel = requested;
-        target = requestedTarget;
-      } else {
-        rel = requested
-          ? join(dirname(requested), `${requested.slice(dirname(requested).length + 1).replace(extname(requested), '')}-${index + 1}.${ext}`)
-          : `.octipus/media/generated/${randomUUID()}.${ext}`;
-        target = await workspacePath(fs, rel);
-      }
+      const plan = planned[index];
+      const rel = plan?.rel ?? `.octipus/media/generated/${randomUUID()}.${ext}`;
+      const target = plan?.target ?? await workspacePath(fs, rel);
       await mkdir(dirname(target), { recursive: true });
       await writeFile(target, image.data, { flag: 'wx', mode: 0o600 });
       const meta = await sharp(image.data).metadata().catch(() => ({ width: undefined, height: undefined }));

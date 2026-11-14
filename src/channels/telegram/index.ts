@@ -114,10 +114,15 @@ export class TelegramChannel extends BaseChannel {
 
     const chatId = parseInt(channelId, 10);
 
-    // Send attachments first
+    // Send attachments first. One that cannot be sent (too large, a format
+    // Telegram refuses) never loses the reply: it is logged and the text goes out.
     if (response.attachments?.length) {
       for (const attachment of response.attachments) {
-        await this.sendAttachment(chatId, attachment, response.replyTo, response.threadId);
+        try {
+          await this.sendAttachment(chatId, attachment, response.replyTo, response.threadId);
+        } catch (err) {
+          channelLogger.warn({ err, type: attachment.type, filename: attachment.filename }, 'Telegram attachment could not be sent');
+        }
       }
     }
 

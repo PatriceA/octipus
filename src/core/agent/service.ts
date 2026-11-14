@@ -1142,8 +1142,11 @@ export class AgentService {
       // (federation §7.5, FI5): an answer that drew on personal data or
       // credential material is not posted where they read it. Read again
       // here, as the approval route does at every tool decision.
+      let withheld = false;
       if (isRoom && scope.space && !scope.audienceFederated) {
-        finalResponse = await this.withheldFromFederatedRoom(resolvedSessionId, scope.space.workspaceId, userId, finalResponse);
+        const shown = await this.withheldFromFederatedRoom(resolvedSessionId, scope.space.workspaceId, userId, finalResponse);
+        withheld = shown !== finalResponse;
+        finalResponse = shown;
       }
       const showSources = (activeSession?.metadata as Record<string, unknown> | undefined)?.showSources !== false;
       if (showSources) {
@@ -1158,8 +1161,12 @@ export class AgentService {
       });
 
       // Images and speech the turn made for the person go with the answer.
+      // An answer the output guard replaced, or one withheld from a room,
+      // carries none of its media either (speech can say what the text may not).
       const { takeTurnMedia, turnMediaAttachments } = await import('@/core/media/turn-media');
-      const turnMedia = takeTurnMedia(getRunContext()?.runId);
+      const producedMedia = takeTurnMedia(getRunContext()?.runId);
+      const turnMedia = outputCheck.action === 'replace' || withheld ? [] : producedMedia;
+      if (producedMedia.length && !turnMedia.length) coreLogger.warn({ sessionId: resolvedSessionId, dropped: producedMedia.length }, 'Turn media withheld with the answer');
       const persistedAnswer = await messageRepository.createForGeneration({
         sessionId: resolvedSessionId, role: 'assistant', content: finalResponse, agentId,
         metadata: {

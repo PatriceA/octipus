@@ -20,9 +20,20 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { canActInSession } from '@/core/rooms/access';
 import { contentRepos } from '@/db/repositories/content';
 import { isAuthenticated } from '@/security/principal';
-import { spaceAccessOf, WorkspaceFS, isSharedWorkspaceId } from '@/security/workspace-fs';
+import { join } from 'node:path';
+import { isInside, spaceAccessOf, WorkspaceFS, isSharedWorkspaceId } from '@/security/workspace-fs';
 import { storeChatUploads } from '@/core/chat-uploads';
 import { EXTERNAL_CHANNELS, loadNotifyScope, resolveTarget } from '@/channels/ownership';
+
+/** A path inside this host's `.octipus/media` or `.octipus/attachments` of `fs` (answer media in an SSH session). */
+function isLocalMedia(fs: WorkspaceFS, path: string): boolean {
+  try {
+    const abs = fs.resolve(path);
+    return ['.octipus/media', '.octipus/attachments'].some((dir) => isInside(join(fs.root, dir), abs));
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Session routes — Phase 1a multi-user conversion.
@@ -43,6 +54,7 @@ import { EXTERNAL_CHANNELS, loadNotifyScope, resolveTarget } from '@/channels/ow
  * pass `session.userId` which we just verified the principal is allowed
  * to see (the scoped session exists in the principal's tenant).
  */
+
 export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   .use(apiContext)
   .get('/desk', async ({ user, principal, set }) => {
@@ -549,6 +561,9 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         const context = buildAgentContext({ id: `files-${session.id}`, sessionId: session.id, userId: user.id, scope: { workspaceId: session.workspaceId, space: null, trigger: 'user', funding: 'own' }, role: 'general', topic: 'general', model: 'api', status: 'running', metadata: (session.context ?? {}) as Record<string, unknown> });
         if (principal.workspaceKind !== 'shared' && !await isSharedWorkspaceId(session.workspaceId) && executionEnvironmentFor(context)?.backend === 'ssh') {
           if (/^\.octipus\/attachments\/[a-f0-9-]{36}\/[a-zA-Z0-9._-]+$/.test(query.path!)) return readSessionFile(WorkspaceFS.forSessionAttachments(session, { space: null }), query.path!);
+          // Media the turn made (generated images, speech) is kept here, not on the remote host.
+          const local = WorkspaceFS.forSessionAttachments(session, { space: null });
+          if (isLocalMedia(local, query.path!)) return readSessionFile(local, query.path!);
           const result = await remoteFilesystemOperation('read_session_file', { path: query.path }, context) as import('@/core/session-files').ReadFileResult;
           if ('version' in result) set.headers.ETag = `"${result.version}"`;
           return result;
