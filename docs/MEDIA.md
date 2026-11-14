@@ -158,6 +158,21 @@ Files sent with `send_message` count as private data for the flow guard
 `messaging__send_message` and `send_to_user` take `attachments` (workspace
 paths, at most 5 files of 20 MB) to send files deliberately.
 
+## Children, CLI agents, retention, setup
+
+- A child agent resolves `see` against its own model. A child whose model
+  reads images gets the workspace images its task names (up to 4); a blind
+  child gets the paths and `vision__view_image`; a CLI agent opens files itself.
+- Model-ready copies (`.octipus/media/cache`) unused for 30 days are removed
+  by the daily prune; originals (uploads, generated images, speech) are files
+  of the workspace and follow its backups, transfer and purge.
+- Speech spend: `pricing.perAudioMinute` (transcription) and
+  `pricing.perMillionChars` (speech) on the row, else list prices for the
+  cloud engines; local engines cost nothing.
+- `octi setup` offers an optional Image generation step for a provider whose
+  key it stored (OpenAI, Gemini, OpenRouter; default skip;
+  `OCTIPUS_SETUP_IMAGE_MODEL` non-interactively).
+
 ## Conformance
 
 `image-in-message` and `image-after-tool-result` (Models → Test) check that a

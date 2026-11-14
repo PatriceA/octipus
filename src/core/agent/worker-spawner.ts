@@ -100,7 +100,12 @@ const AGENTS_MD_GUIDE_TOKEN_BUDGET = 2000;
  *
  * Copied key by key so the escalation is opt-in rather than opt-out.
  */
-export function pipelineMetadata(metadata: Record<string, unknown> | undefined, opts: { planMode?: boolean } = {}): Record<string, unknown> | undefined {
+export function pipelineMetadata(
+  metadata: Record<string, unknown> | undefined,
+  opts: { planMode?: boolean; userMedia?: import('@/core/types').MediaRef[] } = {},
+): Record<string, unknown> | undefined {
+  // Images the spawner chose for the child's first message (never the caller's metadata).
+  if (opts.userMedia?.length) return { ...(pipelineMetadata(metadata, { planMode: opts.planMode }) ?? {}), userMedia: opts.userMedia };
   // Plan mode's refusal is the worker's own (the session is planning), not
   // anything copied from the caller: the executor then refuses repository
   // writes too, which the file-writer strip cannot see.
@@ -1031,6 +1036,10 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     }
   }
 
+  // Images the task names (an attachment, a screenshot, a generated image) go
+  // to a child whose model reads images as images; a blind child gets the
+  // paths in its task and vision__view_image (docs/MEDIA.md).
+  const childMedia = await mediaNamedIn(`${task}\n${input}`, context, finalModelEntry);
   const { bindTurnToAgent, finishContextTurn } = await import('@/core/context-hooks');
   const worker = await agentManager.spawn({
     attended: context.attended ?? false,
@@ -1053,7 +1062,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     // forwarding them the agent's own metadata is empty and the `plan` tool
     // answers "Not running inside a pipeline" — which silently disables every
     // `producesPlan`/`loopOverPlan` (foreach) stage.
-    contextMetadata: pipelineMetadata(context.metadata, { planMode: planModeWorker }),
+    contextMetadata: pipelineMetadata(context.metadata, { planMode: planModeWorker, userMedia: childMedia }),
   }).catch((err: unknown) => {
     // A worker that never started still closes its context-hook record.
     void finishContextTurn(contextTurn, { outcome: 'error' });
@@ -1650,4 +1659,37 @@ export async function handleWorkerFailure(
   ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in worker-spawner'));
 
   throw classifyError(lastError);
+}
+
+/** At most this many images go with a child's task. */
+const MAX_CHILD_IMAGES = 4;
+const MEDIA_PATH_RE = /(?:^|[\s"'`(\[])((?:\/[^\s"'`)\]]*)?\.octipus\/(?:attachments|media)\/[^\s"'`)\]]+\.(?:png|jpe?g|gif|webp))/gi;
+
+/**
+ * The workspace images a child's task names, as media for its first message,
+ * when the child's model is shown images (not a CLI agent, which opens files
+ * itself). Missing or unreadable files are left out: the path is still in
+ * the task text.
+ */
+export async function mediaNamedIn(
+  text: string,
+  context: AgentContext,
+  row: { supportsVision?: boolean | null; provider: string } | null | undefined,
+): Promise<import('@/core/types').MediaRef[]> {
+  if (!row?.supportsVision || row.provider === 'cli') return [];
+  const paths = [...new Set([...text.matchAll(MEDIA_PATH_RE)].map((m) => m[1]))].slice(0, MAX_CHILD_IMAGES);
+  if (!paths.length) return [];
+  const { WorkspaceFS } = await import('@/security/workspace-fs');
+  const { MEDIA_CACHE_DIR, normalizeImage } = await import('@/core/media/normalize');
+  let fs: import('@/security/workspace-fs').WorkspaceFS;
+  try { fs = WorkspaceFS.forAgent(context); } catch { return []; }
+  const refs: import('@/core/types').MediaRef[] = [];
+  for (const path of paths) {
+    try {
+      refs.push({ ...(await normalizeImage(fs.resolve(path), fs.resolve(MEDIA_CACHE_DIR))), source: 'user' });
+    } catch {
+      // not an image of this workspace: the path stays in the task
+    }
+  }
+  return refs;
 }

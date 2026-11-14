@@ -129,12 +129,29 @@ async function refusalFor(row: ModelConfigEntry, req: SpeechRequest): Promise<st
 }
 
 /** Record one speech call against its row (cost, spend budgets). */
+/**
+ * What a speech call costs: the row's `pricing.perAudioMinute` (transcription)
+ * or `pricing.perMillionChars` (speech), else a list price for the cloud
+ * engines; a local engine costs nothing. Undefined when unknown.
+ */
+export function speechCost(row: ModelConfigEntry, requestType: 'transcription' | 'speech', units: Record<string, number>): number | undefined {
+  if (isLocalSpeechRow(row)) return 0;
+  const pricing = row.metadata?.pricing;
+  if (requestType === 'transcription') {
+    const perMinute = pricing?.perAudioMinute ?? (/gpt-4o-mini-transcribe/i.test(row.modelId) ? 0.003 : /whisper-1|gpt-4o-transcribe/i.test(row.modelId) ? 0.006 : /voxtral/i.test(row.modelId) ? 0.001 : undefined);
+    return perMinute !== undefined && typeof units.seconds === 'number' ? (perMinute * units.seconds) / 60 : undefined;
+  }
+  const perMillion = pricing?.perMillionChars ?? (/tts-1-hd/i.test(row.modelId) ? 30 : /tts-1|gpt-4o-mini-tts/i.test(row.modelId) ? 15 : /voxtral.*tts/i.test(row.modelId) ? 16 : undefined);
+  return perMillion !== undefined && typeof units.characters === 'number' ? (perMillion * units.characters) / 1_000_000 : undefined;
+}
+
 export async function recordSpeechUsage(row: ModelConfigEntry, requestType: 'transcription' | 'speech', req: SpeechRequest, units: Record<string, number>, failed = false): Promise<void> {
   const { recordProviderUsage } = await import('@/models/providers/instrumented');
+  const cost = failed ? undefined : speechCost(row, requestType, units);
   await recordProviderUsage(
     { model: row.modelId, modelConfigName: row.name, messages: [], requestType, userId: req.userId, sessionId: req.sessionId, accountingMetadata: units },
     row.provider,
-    { model: row.modelId, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false } },
+    { model: row.modelId, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false, ...(cost !== undefined ? { reportedCost: cost } : {}) } },
     failed,
   ).catch((err: unknown) => log.warn({ err, model: row.name }, 'Speech usage could not be recorded'));
 }

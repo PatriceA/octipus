@@ -770,7 +770,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `models` | 145 |
 | `core` | `modules` | 2 |
 | `core` | `plugins` | 8 |
-| `core` | `security` | 232 |
+| `core` | `security` | 233 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
 | `core` | `shared` | 70 |

@@ -38,10 +38,11 @@ describe('normalize', () => {
     const meta = await sharp(await readFile(ref.path)).metadata();
     expect(Math.max(meta.width ?? 0, meta.height ?? 0)).toBeLessThanOrEqual(MAX_IMAGE_EDGE);
     expect(ref.path.startsWith(dir)).toBe(true);
-    const mtime = (await stat(ref.path)).mtimeMs;
+    const before = await readFile(ref.path);
     const again = await normalizeImageBytes(bytes, dir);
     expect(again.path).toBe(ref.path);
-    expect((await stat(again.path)).mtimeMs).toBe(mtime);
+    // Reused as is (not re-encoded); its time is touched so the prune keeps a copy in use.
+    expect(await readFile(again.path)).toEqual(before);
   });
 
   test('a heavy photo is brought down to about 300 KB', async () => {
@@ -164,5 +165,28 @@ describe('after a restart', () => {
       metadata: { attachments: [{ type: 'image', path: '/w/.octipus/media/cache/a.png', mimeType: 'image/png', source: 'user' }, { type: 'file', path: '/w/doc.pdf' }] },
     } as never);
     expect(msg.media).toEqual([{ kind: 'image', path: '/w/.octipus/media/cache/a.png', mimeType: 'image/png', source: 'user' }]);
+  });
+});
+
+describe('cache prune', () => {
+  test('copies unused for 30 days go; originals and other files stay', async () => {
+    const { utimes } = await import('node:fs/promises');
+    const { pruneMediaCaches } = await import('./cache-prune');
+    const cache = join(dir, 'users', 'u1', 'workspaces', 'default', 'files', '.octipus', 'media', 'cache');
+    const spaceCache = join(dir, 'spaces', 's1', 'files', '.octipus', 'media', 'cache');
+    await mkdir(cache, { recursive: true });
+    await mkdir(spaceCache, { recursive: true });
+    const old = join(cache, `${'a'.repeat(64)}.png`);
+    const fresh = join(cache, `${'b'.repeat(64)}.jpg`);
+    const other = join(cache, 'notes.txt');
+    const spaceOld = join(spaceCache, `${'c'.repeat(64)}.png`);
+    for (const f of [old, fresh, other, spaceOld]) await writeFile(f, 'x');
+    const long = new Date(Date.now() - 31 * 24 * 3600_000);
+    for (const f of [old, other, spaceOld]) await utimes(f, long, long);
+    await expect(pruneMediaCaches(dir)).resolves.toBe(2);
+    await expect(stat(old)).rejects.toThrow();
+    await expect(stat(spaceOld)).rejects.toThrow();
+    await expect(stat(fresh)).resolves.toBeTruthy();
+    await expect(stat(other)).resolves.toBeTruthy();
   });
 });

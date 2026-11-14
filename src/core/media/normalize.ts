@@ -7,7 +7,7 @@
  * converted once. The original is never changed.
  */
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, utimes, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { MediaRef } from '@/core/types';
 
@@ -103,6 +103,9 @@ async function findCached(cacheDir: string, sha256: string): Promise<MediaRef | 
     const path = join(cacheDir, `${sha256}.${ext}`);
     try {
       await stat(path);
+      // A copy in use stays: the daily prune removes those unused for 30 days (cache-prune.ts).
+      const now = new Date();
+      await utimes(path, now, now).catch(() => {});
       return { kind: 'image', path, mimeType, sha256, source: 'user' };
     } catch {
       // not cached in this format
