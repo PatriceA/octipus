@@ -127,6 +127,14 @@ export interface ToolHandler {
    * of the head/tail preview, which cuts structured data mid-document.
    */
   maxResultChars?: (args: Record<string, unknown>) => number;
+  /**
+   * Capabilities this handler needs (src/core/capabilities/gates.ts). While
+   * any is not configured the handler is in no tool set an agent sees — not
+   * advertised, not listed by `list_tools`, not callable by codemode — and a
+   * call that reaches it anyway is refused with the reason. Not configured
+   * means off, never "degraded but shown".
+   */
+  requires?: readonly import('@/shared/capabilities').Capability[];
   execute: (args: Record<string, unknown>, context: AgentContext) => Promise<unknown>;
 }
 

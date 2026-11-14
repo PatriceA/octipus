@@ -52,6 +52,9 @@ import * as ShellModule from './shell';
 import * as SkillDistillModule from './skill-distill';
 import * as TaskStateModule from './task-state';
 import * as TasksModule from './tasks';
+import * as AudioModule from './audio';
+import * as ImageGenModule from './imagegen';
+import * as VisionModule from './vision';
 import * as VisualModule from './visual';
 import * as VoiceModule from './voice';
 import * as WebsearchModule from './websearch';
@@ -59,6 +62,7 @@ import * as WebsearchModule from './websearch';
 /** Folder name → module. Order is irrelevant; the registry keys by tool id. */
 const MODULES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ['artifacts', ArtifactsModule],
+  ['audio', AudioModule],
   ['artifacts-toolbox', ArtifactsToolboxModule],
   ['browser', BrowserModule],
   ['browser-ext', BrowserExtModule],
@@ -71,6 +75,7 @@ const MODULES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ['email-processor', EmailProcessorModule],
   ['filesystem', FilesystemModule],
   ['git', GitModule],
+  ['imagegen', ImageGenModule],
   ['github', GithubModule],
   ['google-workspace', GoogleWorkspaceModule],
   ['inline-ui', InlineUiModule],
@@ -92,6 +97,7 @@ const MODULES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ['skill-distill', SkillDistillModule],
   ['task-state', TaskStateModule],
   ['tasks', TasksModule],
+  ['vision', VisionModule],
   ['visual', VisualModule],
   ['voice', VoiceModule],
   ['websearch', WebsearchModule],

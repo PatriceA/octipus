@@ -18,17 +18,18 @@ describe('CLI executable resolution', () => {
   });
 });
 
-it('honors the configured absolute CLI path and reports a missing replacement immediately', async () => {
+it.each(['claude', 'grok'] as const)('honors the configured absolute %s path and reports a missing replacement immediately', async binary => {
   const { getConfig } = await import('@/config');
   const { configuredCliBinary } = await import('./cli-executable');
   const config = getConfig().cliModels;
-  const original = config.claudeCode.binaryPath;
+  const tool = binary === 'grok' ? config.grokBuild : config.claudeCode;
+  const original = tool.binaryPath;
   const dir = mkdtempSync(join(tmpdir(), 'configured cli ')); dirs.push(dir);
   const executable = join(dir, 'custom-claude'); writeFileSync(executable, '#!/bin/sh\nexit 0\n'); chmodSync(executable, 0o755);
   try {
-    config.claudeCode.binaryPath = executable;
-    expect(configuredCliBinary('claude')).toBe(executable);
+    tool.binaryPath = executable;
+    expect(configuredCliBinary(binary)).toBe(executable);
     rmSync(executable);
-    expect(() => configuredCliBinary('claude')).toThrow('Configure cliModels binaryPath');
-  } finally { config.claudeCode.binaryPath = original; }
+    expect(() => configuredCliBinary(binary)).toThrow('Configure cliModels binaryPath');
+  } finally { tool.binaryPath = original; }
 });

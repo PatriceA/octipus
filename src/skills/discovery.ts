@@ -20,6 +20,7 @@
  *     discoverSkillIds returns all active assignments for the topic.
  *   - any other value / unset → hybrid (the algorithm above).
  */
+import { isCapabilityOn } from '@/core/capabilities/gates';
 import { and, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { canonicalTopic } from '@/models/topics';
@@ -157,6 +158,8 @@ async function fetchVectorMatchIds(
   maxByVector: number,
   minSimilarity: number,
 ): Promise<string[]> {
+  // No embedding model: triggers, always_inject and the stale fallback still apply.
+  if (!isCapabilityOn('embedding')) return [];
   let embedding: number[];
   try {
     embedding = await getEmbeddingService().generateEmbedding(message, 'query');

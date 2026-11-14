@@ -43,6 +43,11 @@ export interface SettingDefinition {
    * instead of silently reverting to the default on the runtime path.
    */
   legacyEnvVars?: string[];
+  /**
+   * Replaced by something else: still loaded (a one-time migration reads the
+   * stored value) but not shown or writable. The text says where it went.
+   */
+  retired?: string;
 }
 
 /**
@@ -60,6 +65,8 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'OCTIPUS_CLAUDE_BINARY', description: 'Claude executable name or absolute path. Validated at startup.' },
   { key: 'cliModels.codexCli.binaryPath', category: 'agent', valueType: 'string', defaultValue: 'codex', isSecret: false,
     envVar: 'OCTIPUS_CODEX_BINARY', description: 'Codex executable name or absolute path. Validated at startup.' },
+  { key: 'cliModels.grokBuild.binaryPath', category: 'agent', valueType: 'string', defaultValue: 'grok', isSecret: false,
+    envVar: 'OCTIPUS_GROK_BINARY', description: 'Grok Build executable name or absolute path. Validated at startup.' },
   { key: 'cliModels.antigravityCli.binaryPath', category: 'agent', valueType: 'string', defaultValue: 'agy', isSecret: false,
     envVar: 'OCTIPUS_ANTIGRAVITY_BINARY', description: 'Antigravity executable name or absolute path. Validated at startup.' },
   { key: 'cliModels.museCli.binaryPath', category: 'agent', valueType: 'string', defaultValue: 'muse', isSecret: false,
@@ -802,6 +809,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     defaultValue: './models/whisper/ggml-base.bin',
     description: 'Path to Whisper STT model (ggml format)',
     isSecret: false,
+    retired: 'Speech engines are models on the Transcription and Speech lanes (Topics page); docs/VOICE.md',
     envVar: 'WHISPER_MODEL_PATH',
   },
   {
@@ -811,6 +819,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     defaultValue: '',
     description: 'Path to Piper TTS model',
     isSecret: false,
+    retired: 'Speech engines are models on the Transcription and Speech lanes (Topics page); docs/VOICE.md',
     envVar: 'PIPER_MODEL_PATH',
   },
   {
@@ -820,6 +829,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     defaultValue: 'auto',
     description: 'Which engine transcribes your speech in realtime voice chat',
     isSecret: false,
+    retired: 'Speech engines are models on the Transcription and Speech lanes (Topics page); docs/VOICE.md',
   },
   {
     key: 'voice.fasterWhisperModel',
@@ -828,6 +838,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     defaultValue: 'small',
     description: 'Model for the local faster-whisper STT engine (tiny/base/small/medium/large)',
     isSecret: false,
+    retired: 'Speech engines are models on the Transcription and Speech lanes (Topics page); docs/VOICE.md',
   },
   {
     key: 'voice.ttsProvider',
@@ -835,6 +846,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     valueType: 'string',
     defaultValue: 'mistral',
     description: 'Which engine speaks replies aloud',
+    isSecret: false,
+    retired: 'Speech engines are models on the Transcription and Speech lanes (Topics page); docs/VOICE.md',
+  },
+  {
+    key: 'voice.ttsVoice',
+    category: 'voice',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'Voice for spoken replies and phone calls (one the bound speech engine offers; empty = its default)',
     isSecret: false,
   },
   {
@@ -1617,6 +1637,46 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
 
   // ── Context hooks ──
   {
+    key: 'localEngine.idleStopMinutes',
+    category: 'models',
+    valueType: 'number',
+    defaultValue: 30,
+    description: 'The local embedding engine (llama-server) stops after this many idle minutes and starts again on the next embedding; 0 keeps it running',
+    isSecret: false,
+  },
+  {
+    key: 'media.imageInput',
+    category: 'media',
+    valueType: 'string',
+    defaultValue: 'auto',
+    description: 'Images in chats: auto/native = a model that reads images sees them itself, one that cannot gets view_image; describe = every image is described up front by the Vision lane',
+    isSecret: false,
+  },
+  {
+    key: 'media.audioInput',
+    category: 'media',
+    valueType: 'string',
+    defaultValue: 'transcribe',
+    description: 'Recordings in chats: transcribe = the model gets the transcript; native = a model that hears audio also gets the recording (WAV/MP3)',
+    isSecret: false,
+  },
+  {
+    key: 'media.replayRecentImages',
+    category: 'media',
+    valueType: 'number',
+    defaultValue: 3,
+    description: 'How many of the newest image-bearing messages are re-sent as images with each request (older ones become a line to look again from)',
+    isSecret: false,
+  },
+  {
+    key: 'media.fileChannelImages',
+    category: 'media',
+    valueType: 'boolean',
+    defaultValue: false,
+    description: 'Also file images sent alone on a channel (Telegram, Slack, WhatsApp, Teams) as documents. They always reach the agent; off, they are not added to the document library.',
+    isSecret: false,
+  },
+  {
     key: 'contextHooks.enabled',
     category: 'agent',
     valueType: 'boolean',
@@ -1735,7 +1795,8 @@ export function getSettingDefinition(key: string): SettingDefinition | undefined
 
 /** Get all setting definitions for a category */
 export function getSettingsByCategory(category: string): SettingDefinition[] {
-  return SETTINGS_REGISTRY.filter(d => d.category === category);
+  // A retired setting is not shown or editable (it moved; `retired` says where).
+  return SETTINGS_REGISTRY.filter(d => d.category === category && !d.retired);
 }
 
 /** Get all unique categories */

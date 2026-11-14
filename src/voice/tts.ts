@@ -13,6 +13,10 @@ export interface TTSOptions {
   volume?: number; // 0.0 - 1.0
   sampleRate?: number;
   outputFormat?: 'wav' | 'mp3' | 'ogg' | 'pcm' | 'flac' | 'opus';
+  /** Cloud engines: the model of the row bound to the Speech lane. */
+  model?: string;
+  /** Cloud engines: the key of the model row (its apiKeyRef); unset = the provider's install key. */
+  apiKey?: string;
 }
 
 export interface TTSEngine {
@@ -219,13 +223,14 @@ export class MistralTTSEngine extends EventEmitter implements TTSEngine {
 
   constructor(voiceId?: string, options: TTSOptions = {}) {
     super();
-    this.model = MISTRAL_TTS_MODEL;
+    this.model = options.model || MISTRAL_TTS_MODEL;
     // mp3 ≈3s end-to-end, pcm ≈0.8s. mp3 is the sane default for HTTP callers;
     // a latency-sensitive caller (telephony) should pass outputFormat: 'pcm'.
     this.options = { outputFormat: 'mp3', ...options, voice: voiceId || options.voice || MISTRAL_DEFAULT_VOICE };
   }
 
   private async apiKey(): Promise<string> {
+    if (this.options.apiKey) return this.options.apiKey;
     const { getMistralApiKey } = await import('../models/providers/mistral-provider');
     const key = await getMistralApiKey();
     if (!key) throw new Error('Mistral API key not available. Set MISTRAL_API_KEY or store it in the vault.');
@@ -295,11 +300,12 @@ export class OpenAITTSEngine extends EventEmitter implements TTSEngine {
 
   constructor(voice?: string, options: TTSOptions = {}) {
     super();
-    this.model = OPENAI_TTS_MODEL;
+    this.model = options.model || OPENAI_TTS_MODEL;
     this.options = { outputFormat: 'mp3', ...options, voice: voice || options.voice || OPENAI_DEFAULT_VOICE };
   }
 
   private async apiKey(): Promise<string> {
+    if (this.options.apiKey) return this.options.apiKey;
     const { getOpenAIApiKey } = await import('../models/providers/openai-provider');
     const key = await getOpenAIApiKey();
     if (!key) throw new Error('OpenAI API key not available. Set OPENAI_API_KEY or store it in the vault.');

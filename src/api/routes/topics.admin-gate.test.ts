@@ -20,6 +20,8 @@ vi.mock('@/api/context', async () => {
 vi.mock('@/models/model-registry', () => ({
   getModelRegistry: () => ({
     getAllModelsIncludeDisabled: () => Promise.resolve([{ name: 'install-model', topicRoles: { build: 'primary' } }]),
+    getModelForTopic: () => Promise.resolve(null),
+    getDefaultModel: () => Promise.resolve(null),
   }),
 }));
 vi.mock('@/models/topic-config', () => ({
@@ -59,5 +61,13 @@ describe('GET /topics', () => {
     expect(r.body.topics.find((t: { value: string }) => t.value === 'build')).toMatchObject({
       primaryModel: 'install-model', executorModel: 'exec-model', temperature: 0.2, maxTokens: 999,
     });
+  });
+
+  test('an unbound media lane is off, and says why; a text lane carries neither', async () => {
+    fixture.user = { id: '00000000-0000-4000-8000-000000000001', username: 'root', isAdmin: true };
+    const topics = (await get()).body.topics as Array<{ value: string }>;
+    expect(topics.find((t) => t.value === 'image_generation')).toMatchObject({ effectiveModel: null, offReason: 'No model is bound to the Image generation lane.' });
+    expect(topics.find((t) => t.value === 'speech')).toMatchObject({ effectiveModel: null, offReason: expect.stringContaining('Speech lane') });
+    expect(topics.find((t) => t.value === 'build')).not.toHaveProperty('offReason');
   });
 });

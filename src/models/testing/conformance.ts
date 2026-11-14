@@ -117,6 +117,15 @@ export function capabilitiesFromModel(model: ModelConfigEntry): ModelCapabilitie
   };
 }
 
+const VIEW_IMAGE_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'view_image',
+    description: 'Look at an image file',
+    parameters: { type: 'object', properties: { source: { type: 'string' } }, required: ['source'] },
+  },
+};
+
 // ── Test Cases ────────────────────────────────────────────────
 
 const testCases: ConformanceTestCase[] = [
@@ -338,6 +347,46 @@ const testCases: ConformanceTestCase[] = [
       if (!result.content || result.content.trim().length === 0) {
         throw new Error('Vision response is empty');
       }
+    },
+  },
+
+  // 8b. An image in a chat turn (how an attached image reaches a model that reads images)
+  {
+    name: 'image-in-message',
+    description: 'A user turn carrying an image (MediaRef with bytes) is accepted and answered',
+    requiredCapability: 'media',
+    async run(ctx) {
+      const result = await ctx.complete({
+        messages: [msg('user', PROMPTS.vision, { media: [{ kind: 'image', path: 'conformance.png', mimeType: 'image/png', source: 'user', data: TINY_RED_PNG_BASE64 }] })],
+        temperature: 0,
+        maxTokens: 256,
+      });
+      if (!result.content?.trim()) throw new Error('No answer to a message with an image');
+    },
+  },
+
+  // 8c. An image after a tool result (view_image, a screenshot): the follow-up
+  // user message the tool executor adds. A provider that rejects it is
+  // listed in acceptsImagesAfterToolResults (media-content.ts).
+  {
+    name: 'image-after-tool-result',
+    description: 'After a tool result, a user message with an image is accepted and answered',
+    requiredCapability: 'media',
+    async run(ctx) {
+      if (!ctx.capabilities.tools) return;
+      const toolCallId = 'call_view_1';
+      const result = await ctx.complete({
+        messages: [
+          msg('user', 'Look at the image file test.png and tell me its main colour.'),
+          msg('assistant', '', { toolCalls: [{ id: toolCallId, name: 'view_image', arguments: { source: 'test.png' } }] }),
+          msg('tool', JSON.stringify({ status: 'Image loaded — you can see it now.' }), { toolCallId }),
+          msg('user', '[The image you asked to see, shown below.]', { media: [{ kind: 'image', path: 'test.png', mimeType: 'image/png', source: 'tool', data: TINY_RED_PNG_BASE64 }] }),
+        ],
+        tools: [VIEW_IMAGE_TOOL],
+        temperature: 0,
+        maxTokens: 256,
+      });
+      if (!result.content?.trim() && !result.toolCalls?.length) throw new Error('No answer after an image following a tool result');
     },
   },
 

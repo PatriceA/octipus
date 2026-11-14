@@ -1,3 +1,4 @@
+import { capabilityRefused } from '@/api/capability-guard';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import {
@@ -80,6 +81,8 @@ export const contextHookRoutes = new Elysia({ prefix: '/context-hooks' })
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
     // The personal knowledge base of the caller's workspace; a space's is not evaluated here.
     const workspaceId = principal.workspaceKind === 'shared' ? null : principal.workspaceId ?? null;
+    const notConfigured = capabilityRefused(set, 'embedding');
+    if (notConfigured) return notConfigured;
     try {
       return await evaluateRecall(user.id, workspaceId, (body.cases as Array<{ question: string; expect?: string[] }>).map((c) => ({ question: c.question, expect: c.expect ?? [] })), {
         ...(body.minSimilarity !== undefined ? { minSimilarity: body.minSimilarity } : {}),

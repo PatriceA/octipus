@@ -1,3 +1,6 @@
+import { CapabilityNotConfiguredError, capabilityConfigured } from '@/core/capabilities/gates';
+import { boundTo, type MediaContext, resolvedRow, resolveMedia } from '@/models/media-resolver';
+import { recordSkipped } from '@/core/rag/index-backlog';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
 import { existsSync } from 'fs';
 import { mkdir, readFile, rename, rmdir, unlink } from 'fs/promises';
@@ -268,6 +271,13 @@ export class DocumentProcessor {
 
       this.logger.info({ documentId, category, textLength: extractedText.length }, 'Document processed successfully');
     } catch (err) {
+      if (err instanceof CapabilityNotConfiguredError) {
+        // A scan or image with no OCR/vision model: kept, and marked with
+        // what it needs — not an error of the pipeline.
+        this.logger.info({ documentId, capability: err.capability }, 'Document stored; text not extracted (not configured)');
+        await documentRepository.updateStatus(documentId, 'failed', err.message);
+        return;
+      }
       this.logger.error({ err, documentId }, 'Document processing failed');
       await documentRepository.updateStatus(documentId, 'failed', String(err));
     }
@@ -282,7 +292,27 @@ export class DocumentProcessor {
    * Returns null when there is no such provider — callers fall through to the
    * vision-model path, which is unchanged.
    */
-  private async tryNativeOcr(filePath: string, mimeType: string): Promise<string | null> {
+  /**
+   * The text of a file, by the same strategy the pipeline uses (native OCR,
+   * PDF text, OCR/Vision for scans and images, structured formats, plain
+   * text) — for `vision__read_document_text`, which needs it in the turn.
+   */
+  async extractText(filePath: string, mimeType: string, filename: string, ctx: MediaContext = {}): Promise<string> {
+    switch (classifyFile(mimeType, filename)) {
+      case 'structured':
+        return this.extractStructured(filePath, filename, mimeType);
+      case 'ocr': {
+        // The conversation's protection level decides which models may read it.
+        const native = await this.tryNativeOcr(filePath, mimeType, ctx);
+        if (native !== null) return native;
+        return mimeType === 'application/pdf' ? this.extractPdfText(filePath, ctx) : this.processImage(filePath, ctx);
+      }
+      default:
+        return this.readTextFile(filePath);
+    }
+  }
+
+  private async tryNativeOcr(filePath: string, mimeType: string, ctx: MediaContext = {}): Promise<string | null> {
     const ocrModel = await getModelRegistry().getModelForTopic('ocr');
     if (!ocrModel) return null;
 
@@ -292,12 +322,12 @@ export class DocumentProcessor {
       .find((p) => p.name === ocrModel.provider);
     if (!provider?.ocr) return null;
     // A remote OCR endpoint for content that stays local: the vision path decides.
-    if (await localOnlyLevel(undefined) !== undefined && !await runsLocally(ocrModel)) return null;
+    if (await localOnlyLevel(ctx.sessionId) !== undefined && !await runsLocally(ocrModel)) return null;
 
     try {
       this.logger.info({ model: ocrModel.modelId, provider: provider.name, filePath }, 'Native OCR extraction');
       const data = (await readFile(filePath)).toString('base64');
-      const result = await withProviderUsageContext({ modelConfigName: ocrModel.name }, () => provider.ocr!({ kind: 'base64', data, mimeType }, ocrModel.modelId));
+      const result = await withProviderUsageContext({ modelConfigName: ocrModel.name, userId: ctx.userId, sessionId: ctx.sessionId }, () => provider.ocr!({ kind: 'base64', data, mimeType }, ocrModel.modelId));
       // Native OCR emits clean markdown — no grounding tokens to strip.
       const text = result.pages.map((p) => p.markdown).join('\n\n').trim();
       return text || null;
@@ -348,21 +378,25 @@ export class DocumentProcessor {
    * Uses 'ocr' topic model for text extraction, 'vision' topic model for description.
    * Combines both results so the document has both extracted text and a visual summary.
    */
-  private async processImage(filePath: string): Promise<string> {
+  private async processImage(filePath: string, ctx: MediaContext = {}): Promise<string> {
     const { base64, mimeType } = await this.prepareImage(filePath);
     const registry = getModelRegistry();
     const client = getLiteLLMClient();
     const parts: string[] = [];
     let ocrYieldedText = false;
 
-    // 1. Try OCR (text extraction) with 'ocr' topic model
-    const ocrModel = await registry.getModelForTopic('ocr');
+    // 1. Try OCR (text extraction) with the model bound to the OCR lane
+    const ocrBound = await registry.getModelForTopic('ocr');
+    // A remote OCR model for content that stays local: the vision path (which switches to a local model) decides.
+    const ocrModel = boundTo(ocrBound, 'ocr') && !(await localOnlyLevel(ctx.sessionId) !== undefined && !await runsLocally(ocrBound)) ? ocrBound : null;
     if (ocrModel) {
       try {
         this.logger.info({ model: ocrModel.modelId, filePath }, 'OCR text extraction');
         const ocrResult = await client.completeVision({
           model: ocrModel.modelId,
           modelConfigName: ocrModel.name,
+          userId: ctx.userId,
+          sessionId: ctx.sessionId,
           prompt: '<|grounding|>Convert the document to markdown.',
           imageBase64: base64,
           mimeType,
@@ -380,15 +414,22 @@ export class DocumentProcessor {
       }
     }
 
-    // 2. Vision analysis (image description) with 'vision' topic model.
+    // 2. Vision analysis (image description): the Vision lane, or the default
+    // model when it reads images (src/models/media-resolver.ts).
     // Skip when OCR already produced substantive text — running both doubles cost for documents.
-    const visionModel = await registry.getModelForTopic('vision');
+    // A local OCR endpoint the operator configured (workspace.ocrEndpoint)
+    // stays ahead of the implicit default-model fallback, as before.
+    const seeResolution = await resolveMedia('see', ctx);
+    const endpointConfigured = !!(getConfig().workspace.ocrEndpoint && getConfig().workspace.ocrModel);
+    const visionModel = seeResolution.mode === 'lane' && seeResolution.lane === 'default' && endpointConfigured ? null : resolvedRow(seeResolution);
     if (visionModel && !ocrYieldedText) {
       try {
         this.logger.info({ model: visionModel.modelId, filePath }, 'Vision image analysis');
         const visionResult = await client.completeVision({
           model: visionModel.modelId,
           modelConfigName: visionModel.name,
+          userId: ctx.userId,
+          sessionId: ctx.sessionId,
           prompt: 'Describe this image in detail. What does it show? Include all visible details, objects, text, colors, and layout.',
           imageBase64: base64,
           mimeType,
@@ -444,7 +485,9 @@ export class DocumentProcessor {
         return data.response || '';
       }
 
-      throw new Error('No vision or OCR model configured. Assign a model with the "ocr" or "vision" topic in the Models page.');
+      // Not configured is not a failure of this document (docs/MODULES.md →
+      // Capability gates): it says what is missing.
+      throw new CapabilityNotConfiguredError('ocr');
     }
 
     return parts.join('\n\n');
@@ -454,7 +497,7 @@ export class DocumentProcessor {
    * Extract text from a PDF using pdftotext (poppler).
    * Falls back to page-by-page OCR via pdftoppm + vision model for image-based PDFs.
    */
-  private async extractPdfText(filePath: string): Promise<string> {
+  private async extractPdfText(filePath: string, ctx: MediaContext = {}): Promise<string> {
     // 1. Try pdfjs-dist for text extraction (no external tools needed)
     try {
       const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
@@ -512,17 +555,11 @@ export class DocumentProcessor {
     }
 
     // 3. Image-based PDF — render each page to PNG via pdftoppm, send to vision model
-    const registry = getModelRegistry();
-    const ocrModel = await registry.getModelForTopic('ocr');
-    const visionModel = !ocrModel ? await registry.getModelForTopic('vision') : null;
-    const model = ocrModel || visionModel;
-
-    if (!model) {
-      throw new Error(
-        'Scanned/image-only PDF detected, but no OCR/vision model is configured. ' +
-          'Assign a model to topic "ocr" or "vision" on the Models page.',
-      );
-    }
+    // The OCR lane, then the Vision lane, then the default model if it reads images.
+    const resolution = await resolveMedia('ocr', ctx);
+    if (resolution.mode === 'none') throw new CapabilityNotConfiguredError('ocr');
+    const model = resolution.row;
+    const ocrModel = resolution.mode === 'lane' && resolution.lane === 'ocr' ? model : null;
 
     if (!(await hasPdftoppm())) {
       throw new Error(
@@ -532,14 +569,14 @@ export class DocumentProcessor {
       );
     }
 
-    return this.ocrPdfWithPdftoppm(filePath, model.modelId, ocrModel ? 'ocr' : 'vision');
+    return this.ocrPdfWithPdftoppm(filePath, model.modelId, ocrModel ? 'ocr' : 'vision', { ...ctx, modelConfigName: model.name });
   }
 
   /**
    * Render PDF pages to PNGs with pdftoppm, then OCR each via the vision model.
    * Capped at 20 pages to avoid runaway costs on long scanned PDFs.
    */
-  private async ocrPdfWithPdftoppm(filePath: string, modelId: string, topic: 'ocr' | 'vision'): Promise<string> {
+  private async ocrPdfWithPdftoppm(filePath: string, modelId: string, topic: 'ocr' | 'vision', ctx: MediaContext & { modelConfigName?: string } = {}): Promise<string> {
     const { spawnSync } = await import('child_process');
     const { readdir } = await import('fs/promises');
     const workDir = join(tmpdir(), `pdf-ocr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
@@ -579,6 +616,9 @@ export class DocumentProcessor {
           const pngBuffer = await readFile(pngPath);
           const result = await client.completeVision({
             model: modelId,
+            modelConfigName: ctx.modelConfigName,
+            userId: ctx.userId,
+            sessionId: ctx.sessionId,
             prompt,
             imageBase64: pngBuffer.toString('base64'),
             mimeType: 'image/png',
@@ -954,6 +994,20 @@ export class DocumentProcessor {
     // into anyone's knowledge base: the document is marked failed instead.
     if (!UUID_RE.test(owner.userId)) {
       throw new Error(`Document ${documentId} is owned by "${owner.userId}", not a user — cannot index it into a personal knowledge base`);
+    }
+    // No embedding model: the document is still extracted, summarised and
+    // filed; only its chunks wait. Nothing is chunked — it is recorded and
+    // indexed by the catch-up once a model is configured.
+    if (!(await capabilityConfigured('embedding'))) {
+      // A re-processed document loses its earlier chunks now (deleting needs no
+      // model), so a keyword search never serves its old text.
+      await getEmbeddingService().deleteBySource({ ownerUserId: owner.userId, workspaceId: owner.workspaceId }, purpose ?? 'document', `doc:${documentId}`);
+      await recordSkipped({
+        kind: 'document', sourceId: documentId, ownerUserId: owner.userId, workspaceId: owner.workspaceId,
+        purpose: purpose ?? 'document', metadata: { filePath: filename },
+      });
+      this.logger.info({ documentId, filename }, 'Document not indexed: no embedding model configured (recorded for catch-up)');
+      return;
     }
     const embeddingModel = (await getModelRegistry().getModelForTopic('embedding'))?.modelId ?? null;
     this.logger.info({ documentId, filename, model: embeddingModel, purpose: purpose ?? 'document' }, 'Indexing document into knowledge base');

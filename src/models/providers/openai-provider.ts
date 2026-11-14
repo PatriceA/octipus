@@ -1,3 +1,6 @@
+import { openAiRoleContent } from './media-content';
+import type { ImageGenerationRequest, ImageGenerationResult } from './interface';
+import { openAiImages } from './openai-images';
 import { recordProviderUsage } from './instrumented';
 import { normalizeUsage } from './usage';
 import OpenAI from 'openai';
@@ -272,6 +275,12 @@ export class OpenAIProvider implements ModelProvider {
       return response.data.map((d) => d.embedding);
   }
 
+  /** gpt-image-1 / DALL·E through the Images API (edits when references are given). */
+  async generateImage(request: ImageGenerationRequest): Promise<ImageGenerationResult> {
+    const client = await this.createClient(request.apiKey);
+    return openAiImages(client, request);
+  }
+
   async checkHealth(): Promise<ProviderHealthStatus> {
     const startTime = Date.now();
 
@@ -352,10 +361,7 @@ export class OpenAIProvider implements ModelProvider {
         };
       }
 
-      return {
-        role: msg.role as 'system' | 'user' | 'assistant',
-        content: msg.content,
-      };
+      return openAiRoleContent(msg);
     });
   }
 }

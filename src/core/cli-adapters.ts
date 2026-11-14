@@ -1,3 +1,4 @@
+import { prepareGrokRuntime } from './grok-cli-runtime';
 import { redactedCommand } from '@/utils/command-log';
 import { execFile } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'crypto';
@@ -94,6 +95,7 @@ export const CLI_SPACE_MODES: Readonly<Record<string, string | null>> = {
   Antigravity: 'plan mode',
   'Mistral Vibe': null,
   'Muse Code': null,
+  'Grok Build': null,
 };
 
 /** Throws unless `adapter` declares a space mode. */
@@ -816,7 +818,7 @@ export class CLIArgumentBuilder {
     agentId?: string,
     connection?: CliRunConnection,
     resume?: { id: string; isFirstRun: boolean },
-  ): { binary: string; args: string[]; stdinPrompt?: string; keepStdinOpen?: boolean; museTurn?: string; useShell?: boolean; env?: Record<string, string> } {
+  ): { binary: string; args: string[]; stdinPrompt?: string; keepStdinOpen?: boolean; museTurn?: string; useShell?: boolean; env?: Record<string, string>; cwd?: string; cleanupPaths?: string[] } {
     if (connection?.images?.length && toolName !== 'Claude Code' && toolName !== 'Codex CLI' && toolName !== 'Muse Code') {
       prompt += '\n\nOriginal image attachments (inspect with your native image-reading tool):\n' + connection.images.map(image => JSON.stringify(image.path)).join('\n');
     }
@@ -832,6 +834,17 @@ export class CLIArgumentBuilder {
         return this.buildAntigravityArgs(prompt, settings, systemPrompt, connection);
       case 'Codex CLI':
         return this.buildCodexArgs(prompt, systemPrompt, settings, connection, resume);
+      case 'Grok Build': {
+        if (!connection) throw new Error('Grok Build requires the scoped Octipus tool bridge');
+        if (settings.mcpConfigPath || settings.allowedTools?.length) throw new Error('Grok Build uses only this session’s Octipus tools; configure tools on the topic instead.');
+        const launch = resolveOctipusMcpLaunch(connection);
+        return prepareGrokRuntime({
+          prompt: [...systemMessages, prompt].filter(Boolean).join('\n\n'),
+          workspace: connection.workingDirectory ?? process.cwd(),
+          model: settings.model, maxTurns: connection.maxIterations, resume,
+          mcp: { runtime: launch.runtime, entry: launch.entry, url: launch.apiUrl, key: launch.apiKey },
+        });
+      }
       case 'Mistral Vibe':
         return this.buildVibeArgs(prompt, settings, maxTokenBudget, connection);
       case 'Muse Code':
@@ -982,7 +995,7 @@ export class CLIArgumentBuilder {
       args.push('-p', prompt, '--verbose', '--output-format', 'stream-json');
     }
 
-    // Claude is the only CLI that lets the caller mint the id, so the first
+    // Claude accepts a caller-minted id (as does Grok), so the first
     // run declares it and every later run resumes it. Nothing has to be
     // scraped, and there is no window in which a run has no id.
     if (resume) {
@@ -1391,8 +1404,8 @@ export class CLIOutputParser {
   private counters: SideEffectCounters = emptyCounters();
   private claudeUsageByMessage = new Map<string, { freshInput: number; cacheRead: number; cacheCreation: number; output: number }>();
   /**
-   * Did we parse a stream shape we actually understand? Only `Claude Code` and
-   * `Codex CLI` stream structured events; a buffered-output tool (agy) yields
+   * Did we parse a stream shape we actually understand? Claude, Codex and
+   * Grok stream structured events; a buffered-output tool (agy) yields
    * no events at all. Its counters would read as all-zero — indistinguishable
    * from "did nothing" — so `getSideEffectCounters` reports null (unknown)
    * instead. A wrong zero is worse than no evidence: it fails work that
@@ -1478,9 +1491,9 @@ export class CLIOutputParser {
   parse(event: Record<string, unknown>, toolName: string): { text: string; replace?: boolean } | null {
     const type = event.type as string;
 
-    if (toolName === 'Claude Code') {
+    if (toolName === 'Claude Code' || toolName === 'Grok Build') {
       this.streamRecognized = true;
-      return this.parseClaudeEvent(event, type);
+      return this.parseClaudeEvent(event, type, toolName);
     }
 
     // Antigravity (agy) emits plain text buffered at process close
@@ -1596,7 +1609,7 @@ export class CLIOutputParser {
     }
   }
 
-  private parseClaudeEvent(event: Record<string, unknown>, type: string): { text: string; replace?: boolean } | null {
+  private parseClaudeEvent(event: Record<string, unknown>, type: string, vendor = 'Claude Code'): { text: string; replace?: boolean } | null {
     // Claude Code stream-json format:
     // { type: "system", subtype: "init" }
     // { type: "assistant", message: { id, content: [{ type: "tool_use", id, name, input }, { type: "text", text }], usage } }
@@ -1761,10 +1774,10 @@ export class CLIOutputParser {
       if (isError) {
         const reason =
           subtype === 'error_max_turns'
-            ? `Claude Code hit the max-turns limit${numTurns != null ? ` (${numTurns} turns)` : ''}`
+            ? `${vendor} hit the max-turns limit${numTurns != null ? ` (${numTurns} turns)` : ''}`
             : subtype === 'error_during_execution'
-              ? 'Claude Code failed during execution'
-              : `Claude Code reported an error${subtype ? ` (${subtype})` : ''}`;
+              ? `${vendor} failed during execution`
+              : `${vendor} reported an error${subtype ? ` (${subtype})` : ''}`;
         const diagnostics = [result, vendorErrors].filter(Boolean).join('\n');
         this.callbacks.onRunError?.(diagnostics ? `${reason}: ${redactedCommand(diagnostics).slice(0, 16_000)}` : reason);
       }

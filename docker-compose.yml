@@ -38,6 +38,8 @@ services:
       - octipus-workspace:/data/workspace
       - octipus-documents:/data/documents
       - octipus-extensions:/data/extensions
+      # Optional local embedding engine and models (docs/RAG.md → Local embeddings).
+      - octipus-models:/data/models
       # Docker socket (OPT-IN — disabled by default): lets Octipus spawn
       # sibling containers for tools not installed in the main image.
       #
@@ -87,3 +89,4 @@ volumes:
   octipus-workspace:
   octipus-documents:
   octipus-extensions:
+  octipus-models:

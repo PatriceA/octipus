@@ -1,3 +1,6 @@
+import { openAiRoleContent } from './media-content';
+import type { ImageGenerationRequest, ImageGenerationResult } from './interface';
+import { chatModalityImages } from './openai-images';
 import { cacheAffinityKey, normalizeUsage } from './usage';
 import OpenAI from 'openai';
 import type {
@@ -287,6 +290,12 @@ export class OpenRouterProvider implements ModelProvider {
     }
   }
 
+  /** Image models answer chat requests with `modalities: ['image', 'text']`. */
+  async generateImage(request: ImageGenerationRequest): Promise<ImageGenerationResult> {
+    const client = await this.createClient(request.apiKey);
+    return chatModalityImages(client, request);
+  }
+
   async checkHealth(): Promise<ProviderHealthStatus> {
     const startTime = Date.now();
 
@@ -416,8 +425,7 @@ export class OpenRouterProvider implements ModelProvider {
       }
 
       return {
-        role: msg.role as 'system' | 'user' | 'assistant',
-        content: msg.content,
+        ...openAiRoleContent(msg),
         ...(msg.role === 'assistant' ? this.reasoningFields(msg, model) : {}),
       };
     });

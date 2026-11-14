@@ -156,6 +156,8 @@ export interface ExtensionProviderModelDef {
   maxOutput: number;
   supportsTools?: boolean;
   supportsVision?: boolean;
+  /** Accepts audio as chat input. */
+  supportsAudioInput?: boolean;
   supportsStreaming?: boolean;
   /** USD per 1M input tokens, for cost tracking. Default 0. */
   costPerMillionInput?: number;

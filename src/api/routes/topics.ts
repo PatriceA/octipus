@@ -50,9 +50,30 @@ export const topicRoutes = new Elysia({ prefix: '/topics' })
         }
       }
 
+      // A media lane can be served by something other than its own binding
+      // (Vision by a default model that reads images, OCR by Vision): say
+      // what actually does the work, so an unbound lane does not read as broken.
+      const { resolveMedia } = await import('@/models/media-resolver');
+      const MEDIA_NEED: Record<string, 'see' | 'ocr' | 'draw' | 'hear' | 'speak'> = {
+        vision: 'see', ocr: 'ocr', image_generation: 'draw', transcription: 'hear', speech: 'speak',
+      };
+      const effectiveByTopic = new Map<string, string | null>();
+      // Why an off lane is off (nothing bound, or bound but refused), shown next to "off".
+      const offReasonByTopic = new Map<string, string>();
+      for (const [topic, need] of Object.entries(MEDIA_NEED)) {
+        const resolution = await resolveMedia(need);
+        if (resolution.mode === 'none') offReasonByTopic.set(topic, resolution.reason);
+        effectiveByTopic.set(topic, resolution.mode === 'none' ? null
+          : resolution.mode === 'lane' && resolution.lane === 'default' ? `${resolution.row.name} (default model reads images)`
+          : resolution.mode === 'lane' && resolution.lane !== topic ? `${resolution.row.name} (via ${resolution.lane})`
+          : resolution.row.name);
+      }
+
       const topics = TOPICS.map((tdef) => {
         const cfg = getTopicConfig(tdef.value);
         return {
+          ...(effectiveByTopic.has(tdef.value) ? { effectiveModel: effectiveByTopic.get(tdef.value) } : {}),
+          ...(offReasonByTopic.has(tdef.value) ? { offReason: offReasonByTopic.get(tdef.value) } : {}),
           value: tdef.value,
           label: tdef.label,
           description: tdef.description,

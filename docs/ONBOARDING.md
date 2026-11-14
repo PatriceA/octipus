@@ -36,14 +36,15 @@ typography and Companion accent as the rest of the app, including dark mode.
 | **Product management** | Your issue tracker, a product agent (role `pm`), calendar check-ins |
 | **Research and knowledge** | Document search (an embedding model), a research agent |
 
-**2. A few questions, one section at a time.** Three sections are asked of
+**2. A few questions, one section at a time.** Four sections are asked of
 everyone; the others come with a use case:
 
 | Section | For | Questions |
 |---|---|---|
-| AI models | everyone (admins only) | API key, a coding CLI or Ollama; a second model that checks work; document search |
+| AI models | everyone (admins only) | API key, a coding CLI or Ollama; a second model that checks work; document search (on this server, Ollama or OpenAI; optional) |
 | Areas of work | everyone | separate areas (personal workspaces), a shared space for a team, one login per company with its own mailbox |
 | Your chat | everyone | Telegram (bot token and link code), Slack, Teams or WhatsApp |
+| Images & audio | everyone (admins only) | generate images (OpenAI or Gemini, bound to the Image generation lane); voice on this server (faster-whisper and Kokoro) or in the cloud (OpenAI or Mistral), bound to the Transcription and Speech lanes. Both start at "no": nothing is bound unless chosen. A provider without a stored key asks for one, or leaves a to-do |
 | Building software | Build software | coding CLIs, coding lane, repositories folder, GitHub token, coding agent and how it works tasks |
 | Issue tracker | Build software, Product management | GitHub Issues (through the GitHub tool, nothing to connect), or, for admins, another tool by its MCP address |
 | Your company | Run my company | name and what it does, inbox watch, what is urgent, draft or send replies, check interval, idea agent |
@@ -106,8 +107,9 @@ last run did counts as done.
     not product features, so the guide does not offer them.
   - `development`: none, so a developer gets the core only.
   - A chat picked to talk to Octipus from (Telegram, Slack, …) turns on the
-    chat channels. Voice no use case brings: tick it in the picker below, or
-    turn it on in Settings → Modules. Only an admin's run has this step.
+    chat channels. Voice no use case brings: choosing voice under Images &
+    audio turns it on (its engines are set through `POST /api/voice/engines/use`),
+    or tick it in the picker below, or turn it on in Settings → Modules. Only an admin's run has this step.
   It only turns modules on, never off, so running the guide again with fewer
   use cases changes nothing that is on. It calls `POST /api/modules/enable`.
 - **The plan review has a module picker** (admins). The modules the use cases

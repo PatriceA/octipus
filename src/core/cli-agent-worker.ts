@@ -1,3 +1,4 @@
+import { grokToolIsolationError } from './grok-cli-runtime';
 import { environmentCredentialOptions } from '@/security/environment-credentials';
 import { nativeCliEnvironment } from '@/security/environment-identity';
 import { executionEnvironmentDescription, executionEnvironmentFor } from '@/security/execution-environments';
@@ -1389,7 +1390,7 @@ When a task matches one of these skills, load it with get_skill before starting 
       const configIndex = args.indexOf('--mcp-config');
       // Windows writes the system prompt to a temp file (command-line length cap).
       const sysFileIndex = args.indexOf('--append-system-prompt-file');
-      const paths = [built.env?.VIBE_HOME, ...(this.connection && configIndex >= 0 ? [args[configIndex + 1]] : []), ...(sysFileIndex >= 0 ? [args[sysFileIndex + 1]] : [])];
+      const paths = [...(built.cleanupPaths ?? []), built.env?.VIBE_HOME, ...(this.connection && configIndex >= 0 ? [args[configIndex + 1]] : []), ...(sysFileIndex >= 0 ? [args[sysFileIndex + 1]] : [])];
       for (const path of paths) if (path) {
         try { rmSync(path, { recursive: true, force: true }); }
         catch (err) { agentLogger.warn({ err, path }, 'CLI temporary configuration cleanup failed'); }
@@ -1427,12 +1428,12 @@ When a task matches one of these skills, load it with get_skill before starting 
       (type, data) => {
         const stats = (data as { stats?: { inputTokens?: number; outputTokens?: number; totalTokens?: number; cacheRead?: number; cacheCreation?: number } }).stats;
         if (type === 'thought' && stats?.totalTokens != null) {
-          const claude = toolConfig.modelProvider === 'anthropic' || toolConfig.modelProvider === 'zai' || toolConfig.modelProvider === 'moonshot';
-          const input = (stats.inputTokens ?? 0) + (claude ? (stats.cacheRead ?? 0) + (stats.cacheCreation ?? 0) : 0);
-          invocationUsage = { inputTokens: (claude ? 0 : invocationUsage.inputTokens) + input,
-            outputTokens: (claude ? 0 : invocationUsage.outputTokens) + (stats.outputTokens ?? 0),
-            totalTokens: (claude ? 0 : invocationUsage.totalTokens) + stats.totalTokens,
-            cacheReadTokens: (claude ? 0 : invocationUsage.cacheReadTokens ?? 0) + (stats.cacheRead ?? 0),
+          const messagesUsage = toolConfig.modelProvider === 'anthropic' || toolConfig.modelProvider === 'zai' || toolConfig.modelProvider === 'moonshot' || toolConfig.modelProvider === 'grok';
+          const input = (stats.inputTokens ?? 0) + (messagesUsage ? (stats.cacheRead ?? 0) + (stats.cacheCreation ?? 0) : 0);
+          invocationUsage = { inputTokens: (messagesUsage ? 0 : invocationUsage.inputTokens) + input,
+            outputTokens: (messagesUsage ? 0 : invocationUsage.outputTokens) + (stats.outputTokens ?? 0),
+            totalTokens: (messagesUsage ? 0 : invocationUsage.totalTokens) + stats.totalTokens,
+            cacheReadTokens: (messagesUsage ? 0 : invocationUsage.cacheReadTokens ?? 0) + (stats.cacheRead ?? 0),
             cacheCreationTokens: stats.cacheCreation, available: stats.totalTokens > 0 };
         }
         // Native tool uses feed the flow label (security/flow-guard.ts); bridged
@@ -1593,12 +1594,19 @@ When a task matches one of these skills, load it with get_skill before starting 
     const baseEnv = cliEnvFor(this.credentialOwner, toolConfig, { ...toolEnv,
         ...(this.connection ? { OCTIPUS_AGENT_URL: this.connection.url, OCTIPUS_AGENT_KEY: this.connection.key } : {}),
       }, settings.inheritApiKeys === true);
-    const initialEnv = toolHome ? cliSpaceEnv(baseEnv, toolHome) : nativeCliEnvironment(this.context, baseEnv);
-    // muse's config directory stays the run's own, whatever the execution
-    // environment does with XDG_CONFIG_HOME: muse has no native tool that would use it.
+    // Bridge-only vendors need their own login, not the workstation's native
+    // tool configuration. Project tools receive that identity through Octipus.
+    const initialEnv = toolHome ? cliSpaceEnv(baseEnv, toolHome)
+      : toolConfig.octipusToolsOnly ? baseEnv : nativeCliEnvironment(this.context, baseEnv);
+    // muse's config directory stays the run's own (`prepareMuseHome`).
     if (muse) initialEnv.XDG_CONFIG_HOME = muse.home;
     const runtimeCredentials = await environmentCredentialOptions(this.context, { env: initialEnv }).catch((error: unknown) => { cleanupContextFiles(); throw error; });
-    const env = runtimeCredentials.options.env;
+    // Workstation identity and credential shaping must not replace an adapter's
+    // isolated configuration home. Project tools still use the chosen environment
+    // through the bridge; the vendor process reads only its managed configuration.
+    const env = toolConfig.octipusToolsOnly
+      ? { ...runtimeCredentials.options.env, ...built.env }
+      : runtimeCredentials.options.env;
     return new Promise<string>((resolve, reject) => {
       if (this.aborted) { cleanupContextFiles(); reject(new Error('Agent was aborted before CLI spawn')); return; }
       try { assertWindowsCmdLineFits(binary, args, process.platform, useShellForSpawn); } catch (err) { cleanupContextFiles(); reject(err); return; }
@@ -1622,7 +1630,7 @@ When a task matches one of these skills, load it with get_skill before starting 
       // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- binary from the configured CLI tool, args built by its adapter; shell only on Windows with every value quoted (windowsShellQuote); the flagged `opts` carries two booleans that pick resume mode and cold-history length
       const proc = spawn(shellQuote(binary), useShellForSpawn ? args.map(quoteArg) : args, {
         env,
-        cwd: workspaceCwd,
+        cwd: built.cwd ?? workspaceCwd,
         stdio: ['pipe', 'pipe', 'pipe'],
         // No spawn-option `timeout` — the single timeout source is the
         // hardTimeout below, which stamps abortReason='timeout' so a timeout
@@ -1690,6 +1698,24 @@ When a task matches one of these skills, load it with get_skill before starting 
       // one blob at process close, not incremental stream-json events. For those
       // we collect raw stdout and run parseOutput on the full buffer in `close`.
       let rawStdout = '';
+      // Muse Code's isolation is fixed before launch by its per-run config
+      // (`prepareMuseHome`'s `run.toolset`), which muse enforces; it reports
+      // none in-stream, so there is nothing to wait for.
+      let isolationVerified = !toolConfig.octipusToolsOnly || adapterKey === 'Muse Code';
+      // Both newline-delimited events and the final EOF record pass here.
+      const verifyIsolation = (event: Record<string, unknown>): boolean => {
+        if (!toolConfig.octipusToolsOnly) return true;
+        const init = event.type === 'system' && event.subtype === 'init';
+        const reason = init ? grokToolIsolationError(event)
+          : !isolationVerified ? 'Grok Build did not provide verified scoped tool isolation before output.' : undefined;
+        if (reason) {
+          this.runError = reason;
+          this.stop();
+          return false;
+        }
+        if (init) isolationVerified = true;
+        return true;
+      };
 
       proc.stdout.on('data', (chunk: Buffer) => {
         if (this.aborted) return; // Stop processing events after abort
@@ -1705,6 +1731,7 @@ When a task matches one of these skills, load it with get_skill before starting 
           if (!line.trim() || this.aborted) continue;
           try {
             const event = runtimeCredentials.mask(JSON.parse(line));
+            if (!verifyIsolation(event)) continue;
             if (built.museTurn) {
               const step = museProtocolStep(event, built.museTurn);
               if (step.write && proc.stdin?.writable) proc.stdin.write(step.write);
@@ -1883,7 +1910,7 @@ When a task matches one of these skills, load it with get_skill before starting 
             // Process remaining streamed line buffer
             try {
               const event = runtimeCredentials.mask(JSON.parse(lineBuffer));
-              const result = parser.parse(event, adapterKey);
+              const result = verifyIsolation(event) ? parser.parse(event, adapterKey) : null;
               if (result) {
                 if (result.replace) accumulatedText = result.text;
                 else accumulatedText += result.text;
@@ -1893,6 +1920,10 @@ When a task matches one of these skills, load it with get_skill before starting 
                 accumulatedText = runtimeCredentials.mask(lineBuffer.trim());
               }
             }
+          }
+
+          if (!isolationVerified && !this.runError) {
+            this.runError = 'Grok Build did not provide verified scoped tool isolation before completion.';
           }
 
           // Background work the CLI started and never reported finished died

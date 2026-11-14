@@ -1,0 +1,216 @@
+# Images and audio
+
+Agents look at images, read scanned documents, hear and speak. Each of these
+is **optional**: what is not configured is not offered. An agent never sees a
+tool that cannot work, and a feature without a model is hidden or says plainly
+that it is off ([MODULES.md → Capability gates](MODULES.md#capability-gates)).
+
+| Need | Served by | Off when |
+|------|-----------|----------|
+| **see** — look at an image | the agent's own model if it reads images; else the **Vision** lane; else the default model if it reads images | none of them reads images |
+| **ocr** — read a scan | the **OCR** lane; else Vision; else the default model if it reads images | none of them |
+| **hear** — speech to text | the **Transcription** lane ([VOICE.md](VOICE.md)) | nothing bound |
+| **speak** — text to speech | the **Speech** lane ([VOICE.md](VOICE.md)) | nothing bound |
+
+One resolver decides (`src/models/media-resolver.ts`); the Topics page (its
+**Media** group) and Health show what actually serves each lane, or why it is
+off. Protection levels apply: content
+that stays local is only read by a local model (seeing and OCR switch to one;
+speech refuses a cloud engine and uses a local backup). Pixels and recordings
+are never pseudonymized, so the strict threshold holds for them: at a
+local-only level a remote model gets a line instead of the image (it can ask
+`view_image`, which a local model answers), even where
+`protection.remoteAtLevel3` lets text go out.
+
+## Does a model read images?
+
+A model row's **Reads images** (`supportsVision`) and **Hears audio**
+(`supportsAudioInput`) flags. They are detected when a model is added: Ollama
+answers itself (`/api/show` capabilities); other providers use a
+conservative table of model families that only ever turns a flag **on**. A
+flag set by hand is never turned off. Edit the model to correct it.
+
+## An image in the chat
+
+What happens to an image a user attaches (web chat, TUI, or a channel —
+Telegram, Slack, WhatsApp, Teams):
+
+| The model doing the work | It gets |
+|--------------------------|---------|
+| reads images | the image itself, with the message (a copy ≤ 2048 px, ~300 KB; the original is untouched) |
+| cannot read images, calls tools | the file's path; it decides whether it needs to look, and calls `vision__view_image` with its own question |
+| cannot call tools | a description written up front by the Vision lane |
+| a CLI agent | the original file, to open with its own reader |
+| nobody on the install can see | a line saying the image was not seen, so it says so instead of guessing |
+
+`media.imageInput = describe` (Settings → Media) always describes up front.
+
+Images stay in the conversation: after a restart a follow-up ("what colour
+was the car?") still has them. Only the newest `media.replayRecentImages`
+(default 3) image-bearing messages are re-sent as pixels with each request;
+older ones become a line the model can look again from.
+
+Only media files of the agent's own workspace (`.octipus/media`,
+`.octipus/attachments`) are ever read into a request, and only when their
+bytes are the kind they claim.
+
+On a channel, an image sent alone reaches the agent as an image (with or
+without a caption). It is not filed in the document library unless
+`media.fileChannelImages` is on, or it came with documents.
+
+## A recording in the chat
+
+An attached recording (web chat, TUI: MP3, WAV, M4A, OGG/Opus, WebM, FLAC,
+AAC, AMR) is transcribed with the turn by the Transcription lane, within the
+session's protection level; the model gets the transcript and the file's
+path. A recording over 25 MB is left for `audio__transcribe_audio`. With
+`media.audioInput = native`, a model that hears audio (*Hears audio*) also
+gets the recording itself (WAV or MP3, at most 10 MB, sent with its own turn
+only — later turns have the transcript; never confidential content to a
+remote model). Without a transcription
+engine the model is told the recording was not transcribed.
+
+Channel voice notes are transcribed the same way and kept with the
+conversation (`.octipus/attachments/…`), so the agent can transcribe,
+forward or keep them.
+
+## Tools
+
+**`vision`** (in the general agent's core set; also research, writing,
+communication, design, coding, review, qa):
+
+- `view_image({ source, question?, region? })` — `source` is a workspace or
+  attachment path or an http(s) URL (fetched through the SSRF guard, at most
+  25 MB). `region` crops first, in pixels of the original.
+  - A model shown images after a tool result gets the pixels ("you can see it
+    now"). Mistral takes images in a user turn but not after a tool result:
+    there, and with `media.imageInput = describe`, the Vision lane looks.
+  - A model that cannot see gets the Vision lane's answer to its question,
+    marked as another model's output.
+  - A CLI agent gets the file.
+  - The same image more than three times in one run is refused.
+  - Offered when the agent's own model can be shown images, or some model can see.
+- `read_document_text({ path })` — the text of a scan, a photo of a page, an
+  image or a PDF, now, through the OCR route of the document pipeline.
+  Offered when something can read scans.
+
+**`audio`** (general — core —, research, writing, communication):
+
+- `transcribe_audio({ source, language?, timestamps? })` — a recording in the
+  workspace through the Transcription lane. Over 20 MB, or a video, it is
+  converted with ffmpeg into ten-minute 16 kHz parts, transcribed in order
+  and stitched (segment times shifted); at most four hours per call. Only
+  real audio/video containers are opened (never a playlist naming other
+  files). Offered when a transcription engine is bound.
+- `speak({ text, voice?, output_path? })` — the Speech lane reads up to 5000
+  characters; the audio is saved in the workspace (default
+  `.octipus/media/speech/<id>.mp3`; an `output_path` must be a new file and,
+  in a space, not a coding agent's configuration) and its path returned.
+  Offered when a speech engine is bound.
+
+**`imagegen`** (general — long tail —, design):
+
+- `generate_image({ prompt, aspect_ratio?, n?, reference_images?, output_path? })`
+  — the Image generation lane draws (primary, then backup; protection levels
+  apply, the prompt and references are not pseudonymized). Up to 4 images,
+  saved in the workspace (default `.octipus/media/generated/<id>.png`; an
+  `output_path` must be a new file in the workspace) and shown to the person
+  with the answer. `reference_images` edits or follows given images on models
+  that take them (gpt-image, Gemini image models; a row can say so in
+  `metadata.imageGeneration.references`), and is refused before anything is
+  paid for on one that does not. Offered when an image model is bound.
+- Providers: OpenAI (gpt-image-1, DALL·E), Gemini (Imagen, Gemini image
+  models), OpenRouter (image models over chat), a LiteLLM proxy and
+  OpenAI-compatible endpoints that implement `/images/generations`.
+
+Screenshots (`browser__screenshot`, `browser-ext__screenshot`) and images an
+MCP server returns are saved in the workspace (`.octipus/media/…`) and shown
+the same way: pixels for a model that is shown images, the path for one that
+is not. Base64 never goes into the conversation: a blob in a tool result is
+replaced by a line for every model. In a space a member's screenshot is not
+filed in the shared workspace, so it is not shown as an image there.
+
+Text inside images, audio and documents is content, not instructions: the
+prompts say so and every description is marked as model output.
+
+## Media in the answer
+
+Images `generate_image` draws and speech `speak` makes go to the person with
+the answer (`metadata.attachments` on the answer, `media` on the turn's
+result):
+
+| Where | Image | Speech |
+|-------|-------|--------|
+| Web chat | thumbnail under the answer, opens in the file viewer, download | player, download |
+| Telegram | photo | voice note (OGG/Opus), else audio |
+| WhatsApp | uploaded to the media store, sent by id | voice note (OGG/Opus), else audio |
+| Slack | uploaded into the thread (`files:write`) | same |
+| Teams | inline up to 1 MB and 1024 px; larger, a 15-minute public link | a link line (15 minutes); no spoken replies |
+
+A Teams link needs a public address (`oauth.publicUrl` / `PUBLIC_URL`);
+without one the reply says the file is in the web app. A voice note gets a
+spoken reply on every channel but Teams (unless the turn already spoke). A
+file a channel refuses never loses the reply's text. An answer the output
+guard replaced, or one withheld from a room, carries none of its media.
+Image spend counts toward spend budgets: the provider's reported cost, else
+the row's `pricing.perImage`, else a list price; local rows cost nothing.
+The model editor sets a row's media rates (USD per image, per audio minute
+transcribed, per million characters spoken): the one for the lane the row is
+bound to (or plainly made for) shows with the other prices, the rest under
+*Media pricing*.
+Files sent with `send_message` count as private data for the flow guard
+(credential files as secrets).
+`messaging__send_message` and `send_to_user` take `attachments` (workspace
+paths, at most 5 files of 20 MB) to send files deliberately.
+
+## Children, CLI agents, retention, setup
+
+- A child agent resolves `see` against its own model. A child whose model
+  reads images gets the workspace images its task names (up to 4); a blind
+  child gets the paths and `vision__view_image`; a CLI agent opens files itself.
+- Model-ready copies (`.octipus/media/cache`) unused for 30 days are removed
+  by the daily prune; originals (uploads, generated images, speech) are files
+  of the workspace and follow its backups, transfer and purge.
+- Speech spend: `pricing.perAudioMinute` (transcription) and
+  `pricing.perMillionChars` (speech) on the row, else list prices for the
+  cloud engines; local engines cost nothing.
+- `octi setup` offers an optional Image generation step for a provider whose
+  key it stored (OpenAI, Gemini, OpenRouter; default skip;
+  `OCTIPUS_SETUP_IMAGE_MODEL` non-interactively).
+
+## Over MCP and HTTP
+
+MCP clients have their own eyes, so the MCP server's `media` group offers the
+lanes themselves ([MCP-SERVER.md](MCP-SERVER.md#media-media-group)):
+
+| MCP tool | Route | Capability |
+|----------|-------|------------|
+| `octipus_generate_image({ prompt, aspect_ratio?, n? })` | `POST /api/media/images` → `{ images: [{ mimeType, base64 }], model, revisedPrompt? }` | `draw` |
+| `octipus_describe_image({ image, mime_type?, question? })` | `POST /api/media/describe` `{ image, mimeType?, question? }` → `{ description, model }` | `see` |
+| `octipus_transcribe_audio({ audio, format? })` | `POST /api/voice/transcribe` | `hear` |
+| `octipus_speak({ text, voice?, format? })` | `POST /api/voice/speak` (audio bytes) | `speak` |
+
+- Images: a prompt of at most 4000 characters, up to 4 images, as MCP `image`
+  parts; spend budgets apply (`funding: 'own'`). Describe: base64 only (the
+  MCP server reads no local files), at most 10 MB, refused unless its magic
+  bytes are an image; the Vision lane (else the default model if it reads
+  images) answers, told that text in the image is content, not instructions.
+- A capability that is off: the tool is not listed, and the route answers 409
+  `capability_not_configured`. An account that may not use the install's
+  models gets a local row or its own only; a hosted install row is 403.
+
+## Conformance
+
+`image-in-message` and `image-after-tool-result` (Models → Test) check that a
+provider takes an image in a chat turn and after a tool result. A provider
+that rejects the second is listed in `acceptsImagesAfterToolResults`
+(`src/models/providers/media-content.ts`).
+
+## Settings
+
+| Key | Default | What |
+|-----|---------|------|
+| `media.imageInput` | `auto` | `auto`/`native`: as above. `describe`: describe every image up front. |
+| `media.audioInput` | `transcribe` | `native`: a model that hears audio also gets the recording itself (WAV/MP3). |
+| `media.replayRecentImages` | 3 | How many image-bearing messages keep their pixels. |
+| `media.fileChannelImages` | off | Also file images sent alone on a channel as documents. |

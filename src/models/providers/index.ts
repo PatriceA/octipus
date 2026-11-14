@@ -25,6 +25,8 @@ import { MoonshotProvider } from './moonshot-provider';
 import { OllamaProvider } from './ollama-provider';
 import { OpenAIProvider } from './openai-provider';
 import { OpenRouterProvider } from './openrouter-provider';
+import { LocalAudioProvider } from './local-audio-provider';
+import { LocalEngineProvider } from './local-engine-provider';
 import { VoyageProvider } from './voyage-provider';
 import { TypeSafeProvider } from './typesafe-provider';
 import { ZaiProvider } from './zai-provider';
@@ -158,6 +160,8 @@ export class ProviderRouter {
     this.providers.push(new MetaProvider());
     this.providers.push(new OpenRouterProvider());
     this.providers.push(new VoyageProvider()); // embeddings only
+    this.providers.push(new LocalAudioProvider()); // local speech engines (Transcription / Speech lanes)
+    this.providers.push(new LocalEngineProvider()); // the optional local embedding engine (llama-server)
     this.providers.push(new TypeSafeProvider()); // decisions only
 
     // Custom providers — routed by DB provider column

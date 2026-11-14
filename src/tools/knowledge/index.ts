@@ -11,7 +11,7 @@ import { agentKnowledgeOwner, agentKnowledgeScope } from '@/core/rag/knowledge-s
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
 import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
-import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
+import { BaseTool, createParameterSchema } from '../base-tool';
 
 /**
  * Sandbox for the indexing tools. Like the filesystem tool's `workspaceFor`,
@@ -71,24 +71,9 @@ export class KnowledgeTool extends BaseTool {
   readonly name = 'Knowledge Base';
   readonly version = '1.2.0';
   readonly description = 'Search and manage the RAG knowledge base — hybrid search (semantic + keyword), index files, and read stored knowledge.';
-
-  override async checkAvailability(): Promise<ToolAvailability> {
-    try {
-      const { getModelRegistry } = await import('@/models/model-registry');
-      const registry = getModelRegistry();
-      const embeddingModel = await registry.getModelForTopic('embedding');
-      const hasEmbedding = embeddingModel?.topics?.includes('embedding') ||
-        (embeddingModel?.topicRoles && 'embedding' in embeddingModel.topicRoles);
-      if (!hasEmbedding) {
-        return { available: true, degraded: true, reason: 'No embedding model configured — indexing and semantic search disabled' };
-      }
-      return { available: true };
-    } catch (err) {
-      const { toolLogger } = await import('@/utils/logger');
-      toolLogger.warn({ err, toolId: this.id }, 'KnowledgeTool availability check failed — treating embedding features as degraded');
-      return { available: true, degraded: true, reason: 'Embedding model availability could not be determined' };
-    }
-  }
+  // The knowledge-base functions need an embedding model and are gated one by
+  // one (`requires: ['embedding']`): without one they are hidden, while the
+  // bundled product docs and the link graph keep working.
 
   getManifest(): ToolManifest {
     return {
@@ -138,7 +123,7 @@ export class KnowledgeTool extends BaseTool {
           summary: `${stats.total} entries across ${Object.keys(stats.byPurpose).length} purposes. Avg content length: ${stats.avgContentLength} chars. Abstract coverage: ${stats.abstractCoverage.withAbstract}/${stats.total}.`,
         };
       },
-      { permissionAction: 'search' },
+      { permissionAction: 'search', requires: ['embedding'] },
     );
 
     this.registerTool(
@@ -241,7 +226,7 @@ export class KnowledgeTool extends BaseTool {
           hint: `${base.hint} 'linked' lists entities reached by following authored edges from the matched entries.`,
         };
       },
-      { permissionAction: 'search' },
+      { permissionAction: 'search', requires: ['embedding'] },
     );
 
     this.registerTool(
@@ -268,7 +253,7 @@ export class KnowledgeTool extends BaseTool {
           language: entry.metadata.language,
         };
       },
-      { permissionAction: 'search' },
+      { permissionAction: 'search', requires: ['embedding'] },
     );
 
     this.registerTool(
@@ -287,7 +272,7 @@ export class KnowledgeTool extends BaseTool {
         const chunks = await indexer.indexFile(agentKnowledgeOwner(context), safePath, 'document');
         return { indexed: true, chunks, path: safePath };
       },
-      { permissionAction: 'index' },
+      { permissionAction: 'index', requires: ['embedding'] },
     );
 
     this.registerTool(
@@ -307,7 +292,7 @@ export class KnowledgeTool extends BaseTool {
         });
         return result;
       },
-      { permissionAction: 'index' },
+      { permissionAction: 'index', requires: ['embedding'] },
     );
 
     this.registerTool(
@@ -333,7 +318,7 @@ export class KnowledgeTool extends BaseTool {
             : `${args.dry_run ? 'Would remove' : 'Removed'} ${result.total} entries: ${result.orphanedDocuments} orphaned, ${result.staleAgentOutputs} stale, ${result.shortEntries} short, ${result.duplicates} duplicates.`,
         };
       },
-      { permissionAction: 'index' },
+      { permissionAction: 'index', requires: ['embedding'] },
     );
 
     this.registerTool(
@@ -354,7 +339,7 @@ export class KnowledgeTool extends BaseTool {
             : `${verified} entr${verified === 1 ? 'y is' : 'ies are'} now marked verified as of today.`,
         };
       },
-      { permissionAction: 'index' },
+      { permissionAction: 'index', requires: ['embedding'] },
     );
 
     this.registerTool(

@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import {
   checkBasePersona,
+  checkLocalEmbedding,
   checkNodeRuntime,
   checkEnvFile,
   checkVaultKeys,
@@ -116,5 +117,36 @@ describe('octi doctor — full report', () => {
     const report = await runDoctor(process.cwd());
     const json = JSON.stringify(report);
     expect(JSON.parse(json)).toEqual(report);
+  });
+});
+
+describe('octi doctor — local embedding engine', () => {
+  test('not reported when it was never installed', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'octipus-doctor-le-'));
+    const prev = process.env.OCTIPUS_MODELS_DIR;
+    process.env.OCTIPUS_MODELS_DIR = dir;
+    try {
+      expect(await checkLocalEmbedding()).toBeNull();
+    } finally {
+      if (prev === undefined) delete process.env.OCTIPUS_MODELS_DIR; else process.env.OCTIPUS_MODELS_DIR = prev;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('files without a working engine fail, with the remedy', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'octipus-doctor-le-'));
+    const prev = process.env.OCTIPUS_MODELS_DIR;
+    process.env.OCTIPUS_MODELS_DIR = dir;
+    try {
+      const { mkdirSync } = await import('fs');
+      mkdirSync(join(dir, 'engines', 'llama.cpp'), { recursive: true });
+      const result = await checkLocalEmbedding();
+      expect(result).toMatchObject({ name: 'Local embedding engine', critical: false });
+      expect(result?.status).toBe('fail');
+      expect(result?.hint).toMatch(/octi capabilities install local-embedding/);
+    } finally {
+      if (prev === undefined) delete process.env.OCTIPUS_MODELS_DIR; else process.env.OCTIPUS_MODELS_DIR = prev;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

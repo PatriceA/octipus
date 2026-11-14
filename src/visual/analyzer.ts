@@ -61,14 +61,10 @@ export class VisualAnalyzer {
   /** Resolve vision model from config at call time. No hardcoded default. */
   private async resolveVisionModel(): Promise<string> {
     if (this.visionModel) return this.visionModel;
-    const { getModelRegistry } = await import('@/models/model-registry');
-    const bound = await getModelRegistry().getModelForTopic('vision');
-    if (!bound?.modelId) {
-      throw new Error(
-        "No vision model configured. Bind a model to the 'vision' topic in the Models page.",
-      );
-    }
-    return bound.modelId;
+    const { resolveMedia } = await import('@/models/media-resolver');
+    const resolution = await resolveMedia('see');
+    if (resolution.mode === 'none') throw new Error(resolution.reason);
+    return resolution.row.modelId;
   }
 
   /**

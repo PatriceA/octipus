@@ -6,7 +6,8 @@ import { VisualAnalyzer } from './analyzer';
 // Spy the accessor so the rest of the module stays real.
 const registrySpy = vi.spyOn(modelRegistry, 'getModelRegistry').mockReturnValue({
   getModelForTopic: async (topic: string) =>
-    topic === 'vision' ? { modelId: 'mock-vision-model' } : null,
+    topic === 'vision' ? { modelId: 'mock-vision-model', topicRoles: { vision: 'primary' } } : null,
+  getDefaultModel: async () => null,
 } as unknown as ReturnType<typeof modelRegistry.getModelRegistry>);
 
 afterAll(() => registrySpy.mockRestore());
@@ -45,7 +46,7 @@ describe('VisualAnalyzer', () => {
     registrySpy.mockReturnValueOnce({
       getModelForTopic: async () => null,
     } as unknown as ReturnType<typeof modelRegistry.getModelRegistry>);
-    await expect(analyzer.analyze(mockScreenshot)).rejects.toThrow(/No vision model configured/);
+    await expect(analyzer.analyze(mockScreenshot)).rejects.toThrow(/No model on this install can read images/);
   });
 
   test('analyze parses valid JSON response', async () => {

@@ -98,6 +98,37 @@ test.describe('models page', () => {
     });
   });
 
+  test('Grok Build keeps access in Octipus and saves the selected vendor model', async ({ authenticatedPage: page }) => {
+    const grokModel = {
+      id: 'cli-grok-1', name: 'grok-build-test', provider: 'cli', modelId: 'cli/grok-build',
+      isEnabled: true, isDefault: false, supportsVision: false, supportsTools: false,
+      supportsStreaming: false, contextWindow: 200_000, maxTokens: 16_384, topics: [],
+      priority: 80, costPerInputToken: 0, costPerOutputToken: 0, metadata: { cliAgent: {} },
+    };
+    let saved: Record<string, unknown> | undefined;
+    await page.route('**/api/models', route => json(route, 200, { models: [grokModel] }));
+    await page.route('**/api/models/cli/status', route => json(route, 200, { tools: [{
+      name: 'Grok Build', available: true, modelPatterns: ['cli/grok-build', 'cli/grok'],
+      modelProvider: 'grok', adapter: 'Grok Build', modelFlag: '--model', quota: null,
+    }] }));
+    await page.route('**/api/models/grok-build-test', route => {
+      if (route.request().method() !== 'PATCH') return route.fallback();
+      saved = route.request().postDataJSON() as Record<string, unknown>;
+      return json(route, 200, grokModel);
+    });
+    await page.goto('/models');
+    await page.getByTitle('Edit model').click();
+    const modal = page.locator('form').filter({ hasText: 'CLI Agent Settings' });
+    await expect(modal.getByText(/Grok Build uses this session/)).toBeVisible();
+    await expect(modal.getByText('Permission Mode', { exact: true })).toHaveCount(0);
+    await expect(modal.getByText('Allowed Tools', { exact: true })).toHaveCount(0);
+    await modal.getByPlaceholder('(vendor default)').fill('grok-test-model');
+    await modal.getByRole('button', { name: 'Save Changes' }).click();
+    await expect.poll(() => saved).toBeTruthy();
+    expect(saved).toMatchObject({ metadata: { cliAgent: { model: 'grok-test-model', inheritApiKeys: false } } });
+    expect((saved?.metadata as { cliAgent: Record<string, unknown> }).cliAgent).not.toHaveProperty('permissionMode');
+  });
+
   test('a topics response with no topics array does not take down the page', async ({
     authenticatedPage: page,
   }) => {

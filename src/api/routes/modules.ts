@@ -2,12 +2,13 @@ import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
 import { enableModules, enabledModules, ModuleChangeError, moduleById, moduleViews, setModuleOn } from '@/core/modules/registry';
+import { capabilityViews } from '@/core/capabilities/gates';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import type { ModulesResponse } from '@/shared/modules';
 import { isAuthenticated } from '@/security/principal';
 
 function modulesResponse(): ModulesResponse {
-  return { modules: moduleViews(), enabled: [...enabledModules()] };
+  return { modules: moduleViews(), enabled: [...enabledModules()], capabilities: capabilityViews() };
 }
 
 /**

@@ -422,6 +422,32 @@ export class SlackChannel extends BaseChannel {
 
     const result = await this.app.client.chat.postMessage(options as unknown as Parameters<WebClient['chat']['postMessage']>[0]);
 
+    // Bytes (a generated image, a spoken reply, a file) are uploaded into the
+    // same thread (`files:write`). A failed upload says so in the thread
+    // instead of losing the file silently.
+    const files = (response.attachments ?? []).filter((a) => a.data && !a.url);
+    if (files.length) {
+      const threadTs = response.threadId ?? (result.ts as string | undefined);
+      for (const file of files) {
+        try {
+          await this.app.client.files.uploadV2({
+            channel_id: channelId,
+            ...(threadTs ? { thread_ts: threadTs } : {}),
+            file: file.data as Buffer,
+            filename: file.filename || (file.type === 'image' ? 'image.png' : file.type === 'audio' ? 'audio.mp3' : 'file'),
+          } as Parameters<WebClient['files']['uploadV2']>[0]);
+        } catch (err) {
+          channelLogger.warn({ err, channelId }, 'Slack file upload failed');
+          (response.undelivered ??= []).push({ filename: file.filename, type: file.type, error: (err as Error).message });
+          await this.app.client.chat.postMessage({
+            channel: channelId,
+            ...(threadTs ? { thread_ts: threadTs } : {}),
+            text: `(${file.filename || 'A file'} could not be uploaded here: add the files:write scope to the Slack app, or open it in the Octipus web app.)`,
+          }).catch(() => {});
+        }
+      }
+    }
+
     // The bot's own posts in a listening channel: a question it answered is not "unanswered".
     if (result.ts && this.listenChannels.has(channelId)) {
       recordGroupMessage('slack', channelId, response.threadId ?? result.ts, {

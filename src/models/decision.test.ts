@@ -23,6 +23,12 @@ describe('privacy gate', () => {
     expect(resolveDataPolicy(row('ollama', 'm', {}, 'https://ollama.com'), 'http://localhost:11434').hosting).toBe('remote'); // row endpoint wins
   });
 
+  it('the local embedding engine is local (it runs on this server)', () => {
+    const engine = resolveDataPolicy(row('local-engine', 'embeddinggemma-2'));
+    expect(engine.hosting).toBe('local');
+    expect(gateDecision('secret', engine)).toMatchObject({ allowed: true, redactPII: false });
+  });
+
   it('secret never leaves the machine', () => {
     for (const p of [direct, gateway, zdrContract]) expect(gateDecision('secret', p).allowed).toBe(false);
   });

@@ -61,13 +61,21 @@ export class WebChatChannel extends BaseChannel {
         proactive: true,
         messageId,
         timestamp: new Date().toISOString(),
-        ...(response.attachments?.length ? { attachments: response.attachments } : {}),
+        ...(response.attachments?.length ? { attachments: response.attachments.map(inAppAttachment).filter((a) => a !== null) } : {}),
         ...(response.metadata ? { metadata: response.metadata } : {}),
       },
     });
     channelLogger.debug({ userId, messageId }, 'In-app delivery published to the gateway');
     return [messageId];
   }
+}
+
+/** Bytes cannot ride a JSON event: a small file goes as a data URL, a larger one stays in the conversation's attachments. */
+function inAppAttachment(att: import('@/core/types').Attachment): Omit<import('@/core/types').Attachment, 'data'> | null {
+  const { data, ...rest } = att;
+  if (!data) return rest;
+  if (data.length > 2 * 1024 * 1024) return null;
+  return { ...rest, url: `data:${att.mimeType};base64,${data.toString('base64')}`, size: data.length };
 }
 
 export const webChatChannel = new WebChatChannel();

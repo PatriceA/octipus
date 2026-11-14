@@ -150,6 +150,11 @@ const cliMetadataSchema = z.object({
   pricing: z.object({
     cacheRead: z.number().finite().nonnegative().optional(),
     cacheWrite: z.number().finite().nonnegative().optional(),
+    // Media-lane rates (docs/MEDIA.md → Cost): per image, per audio minute
+    // transcribed, per million characters spoken.
+    perImage: z.number().finite().nonnegative().optional(),
+    perAudioMinute: z.number().finite().nonnegative().optional(),
+    perMillionChars: z.number().finite().nonnegative().optional(),
     source: z.string().optional(),
     verifiedAt: z.string().optional(),
     free: z.boolean().optional(),
@@ -230,7 +235,26 @@ export async function registerModel(body: Record<string, unknown>) {
     // by the Topics page (PUT /topics/:topic/binding), so a model is created
     // unbound and gets its topics there. Keeps a single source of truth.
     const { topics: _topics, topicRoles: _topicRoles, ...createBody } = body;
-    return await registry.registerModel(createBody as NewModelConfigEntry);
+    // What the model can read (images, audio) is detected, not left at the
+    // column default: the native multimodal path depends on it. Detection
+    // only turns a flag on; the row is marked so a later correction stays.
+    const { detectInputs, upgradeFlags } = await import('@/models/capability-detect');
+    const { getConfig } = await import('@/config');
+    // Ollama's own answer overrides the form's defaults; a documented family
+    // answer fills only a flag the request left unset (an explicit false stays).
+    const detection = await detectInputs({ provider, modelId, endpoint: (body.endpoint as string | undefined) ?? null }, getConfig().ollama?.url);
+    const explicitOk = provider === 'ollama';
+    const detected = detection && {
+      image: (explicitOk || body.supportsVision === undefined) && detection.inputs.image,
+      audio: (explicitOk || body.supportsAudioInput === undefined) && detection.inputs.audio,
+    };
+    const flags = upgradeFlags({ supportsVision: body.supportsVision === true, supportsAudioInput: body.supportsAudioInput === true }, detected);
+    const metadata = {
+      ...((createBody.metadata as Record<string, unknown> | undefined) ?? {}),
+      // Stamped only on an answer: an Ollama that could not be asked is asked again at boot.
+      ...(detection ? { capabilitiesDetectedAt: new Date().toISOString() } : {}),
+    };
+    return await registry.registerModel({ ...createBody, ...flags, metadata } as NewModelConfigEntry);
   } catch (err) {
     const msg = (err as Error).message;
     if (uniqueViolation(err) !== null || msg.includes('unique') || msg.includes('duplicate')) {
@@ -248,7 +272,7 @@ export async function registerModel(body: Record<string, unknown>) {
  * previous 404/400 behaviour.
  */
 export async function updateModel(name: string, body: Record<string, unknown>) {
-  for (const key of ['supportsTools', 'supportsVision', 'supportsStreaming']) {
+  for (const key of ['supportsTools', 'supportsVision', 'supportsAudioInput', 'supportsStreaming']) {
     if (key in body && typeof body[key] !== 'boolean') {
       return { status: 400 as const, error: `${key} must be a boolean.` };
     }

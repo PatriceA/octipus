@@ -210,6 +210,13 @@ export const whatsappConfigSchema = z.object({
 });
 
 // Voice configuration schema
+/**
+ * `sttProvider`, `fasterWhisperModel`, `whisperModelPath`, `ttsProvider` and
+ * `piperModelPath` are RETIRED: speech engines are model rows on the
+ * Transcription and Speech lanes (src/voice/resolve.ts). They are still parsed
+ * so the one-time migration (src/voice/migrate-to-lanes.ts) can read what an
+ * install had; nothing else reads them.
+ */
 export const voiceConfigSchema = z.object({
   sttEnabled: z.boolean().default(false),
   ttsEnabled: z.boolean().default(false),
@@ -241,6 +248,8 @@ export const voiceConfigSchema = z.object({
   ttsProvider: z.enum(['mistral', 'openai', 'kokoro', 'piper']).default('mistral').catch('mistral'),
   whisperModelPath: z.string().optional(),
   piperModelPath: z.string().optional(),
+  /** Voice for spoken replies and calls; empty = the bound speech engine's default. */
+  ttsVoice: z.string().optional(),
   wakeWord: z.string().optional(),
   language: z.string().default('en'),
 });
@@ -354,6 +363,9 @@ export const cliModelsConfigSchema = z.object({
     enabled: z.boolean().default(true),
     binaryPath: z.string().default('agy'),
     timeout: z.number().min(0).default(300000),
+  }).prefault({}),
+  grokBuild: z.object({
+    binaryPath: z.string().default('grok'),
   }).prefault({}),
   codexCli: z.object({
     enabled: z.boolean().default(false),
@@ -847,6 +859,32 @@ export const configSchema = z.object({
   vaultSync: vaultSyncConfigSchema.prefault({}),
   multiuser: multiuserConfigSchema.prefault({}),
   compaction: compactionConfigSchema.prefault({}),
+  /**
+   * Images and audio in conversations (docs/MEDIA.md).
+   *   imageInput  auto: a model that reads images gets them itself; one that
+   *               cannot gets the path and `vision__view_image`. native: the
+   *               same, but never an eager description. describe: every image
+   *               is described up front by the Vision lane (the old behaviour;
+   *               also forced for models without tool calling).
+   *   audioInput  transcribe: an attached recording reaches the model as its
+   *               transcript. native: a model that hears audio also gets
+   *               the recording itself (WAV/MP3).
+   *   replayRecentImages  how many of the newest image-bearing messages keep
+   *               their pixels in each request (older ones become a line the
+   *               model can look again from).
+   */
+  /** The optional local embedding engine (docs/RAG.md → Local embeddings). */
+  localEngine: z.object({
+    /** Stop llama-server after this many idle minutes (0 = never); it starts again on the next embedding. */
+    idleStopMinutes: z.number().int().min(0).max(1440).default(30),
+  }).prefault({}),
+  media: z.object({
+    imageInput: z.enum(['auto', 'native', 'describe']).default('auto').catch('auto'),
+    audioInput: z.enum(['transcribe', 'native']).default('transcribe').catch('transcribe'),
+    replayRecentImages: z.number().int().min(0).max(10).default(3),
+    /** File images sent alone on a channel as documents too (they always reach the agent). */
+    fileChannelImages: z.boolean().default(false),
+  }).prefault({}),
   memory: z.object({
     /**
      * When to run the memory extractor + judge pipeline.

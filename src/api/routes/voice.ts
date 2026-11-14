@@ -1,73 +1,30 @@
 import { mayUseInstallModels } from '@/models/install-access';
 import { Elysia, t } from '@/api/http';
-import { fetchWithTimeout } from '@/utils/http';
 import { adminDenied } from '@/api/admin-guard';
 import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
 import { isAdmin } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
-import { fileAt } from '@/utils/fs-file';
+
+/**
+ * The conversation speech is for, when the caller names one it may use:
+ * its protection level decides whether a cloud engine may hear or speak it
+ * (a spoken reply carries what the agent read). Unknown or not theirs → 404.
+ */
+async function speechSession(userId: string, sessionId: string | undefined): Promise<string | undefined | null> {
+  if (!sessionId) return undefined;
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const { canActInSession } = await import('@/core/rooms/access');
+  // i2: by id, and only used when canActInSession says the caller may speak in it.
+  const session = await sessionRepository.findById(sessionId);
+  return (await canActInSession(session, userId, 'voice')) ? sessionId : null;
+}
 
 /** Hosted TTS is metered per 1k characters — bound the request body. */
 const MAX_TTS_CHARS = 5000;
 
 const TTS_FORMATS = ['mp3', 'wav', 'pcm', 'flac', 'opus'] as const;
-type TtsFormat = (typeof TTS_FORMATS)[number];
 
-const TTS_CONTENT_TYPES: Record<TtsFormat, string> = {
-  mp3: 'audio/mpeg',
-  wav: 'audio/wav',
-  pcm: 'application/octet-stream',
-  flac: 'audio/flac',
-  opus: 'audio/opus',
-};
-
-/**
- * What each engine actually emits, regardless of the requested format. Only
- * Mistral & OpenAI forward `response_format` upstream; piper hardcodes its
- * output, so honouring the client's `format` there would mislabel the body.
- */
-const TTS_ENGINE_FORMAT: Record<string, TtsFormat | null> = {
-  piper: 'wav',
-  kokoro: 'wav',
-  mistral: null, // honours the requested format
-  openai: null, // honours the requested format
-};
-
-/** Resolve real voice availability: does whisper actually run, or is a cloud key set. */
-async function resolveVoiceAvailability(config: ReturnType<typeof getConfig>) {
-  const { getVoiceAvailability } = await import('@/voice/whisper');
-  const { getMistralApiKey } = await import('@/models/providers/mistral-provider');
-  const { getOpenAIApiKey } = await import('@/models/providers/openai-provider');
-  return getVoiceAvailability({
-    sttProvider: config.voice.sttProvider,
-    ttsProvider: config.voice.ttsProvider,
-    hasMistralKey: !!(await getMistralApiKey()),
-    hasOpenAIKey: !!(await getOpenAIApiKey()),
-    piperModelPath: config.voice.piperModelPath,
-  });
-}
-
-// Lazy-initialized local whisper engine
-let localWhisper: import('@/voice/stt').WhisperEngine | null = null;
-
-async function getLocalWhisper() {
-  if (localWhisper) return localWhisper;
-
-  const config = getConfig();
-  // Use the configured model path, else the installed default — and only if the
-  // file actually exists, so this agrees with what /status's probe reports
-  // (avoids "status says ready but transcribe 400s").
-  const { whisperModelPath } = await import('@/voice/whisper');
-  const modelPath = config.voice.whisperModelPath || whisperModelPath();
-  if (!(await fileAt(modelPath).exists())) return null;
-
-  const { WhisperEngine } = await import('@/voice/stt');
-  localWhisper = new WhisperEngine(modelPath, {
-    language: config.voice.language || 'en',
-  });
-  return localWhisper;
-}
 
 /**
  * The URL a telephony provider signed: the public base (`voice.publicUrl`)
@@ -352,78 +309,38 @@ async function answerVoiceWebhook(
   return telephonyProvider.generateHangupResponse();
 }
 
-/** TTS engines that call a hosted API on the install's keys. */
-const HOSTED_TTS = new Set(['mistral', 'openai']);
-
 export const voiceRoutes = new Elysia({ prefix: '/voice' })
   .use(apiContext)
 
   .post(
     '/transcribe',
-    async ({ user, body }) => {
+    async ({ user, body, set }) => {
       if (!user) {
         return { error: 'Not authenticated' };
       }
 
       try {
         const { audio, format, model } = body;
-        const transcriptionModel = model || 'local';
-        // Hosted engines spend the install's keys: only local whisper for an
-        // account the install's models are not for (install-access.ts).
-        const installOk = await mayUseInstallModels(user.id);
-        if (!installOk && transcriptionModel !== 'local' && transcriptionModel !== 'whisper-cpp') {
-          return { error: 'Hosted transcription uses the install\'s keys, which this account may not use; use local whisper' };
-        }
-
-        // Mistral (Voxtral) hosted transcription
-        if (transcriptionModel.startsWith('voxtral')) {
-          const { MistralSTTEngine } = await import('@/voice/stt');
-          const engine = new MistralSTTEngine(transcriptionModel, { language: getConfig().voice.language });
-          const result = await engine.transcribe(Buffer.from(audio, 'base64'));
-          return { text: result.text, model: transcriptionModel, language: result.language, duration: result.duration };
-        }
-
-        // Try local whisper engine first (if configured)
-        if (transcriptionModel === 'local' || transcriptionModel === 'whisper-cpp') {
-          const engine = await getLocalWhisper();
-          if (engine) {
-            const audioBuffer = Buffer.from(audio, 'base64');
-            const result = await engine.transcribeBuffer(audioBuffer);
-            return { text: result.text, model: 'whisper-cpp', language: result.language, duration: result.duration };
-          }
-          // Fall through to OpenAI if local not configured and model was 'local'
-          if (transcriptionModel === 'whisper-cpp' || !installOk) {
-            return { error: 'Local whisper not configured (set voice.whisperModelPath)' };
-          }
-        }
-
-        // OpenAI Whisper API fallback
-        if (transcriptionModel.startsWith('whisper') || transcriptionModel.includes('openai') || transcriptionModel === 'local') {
-          const formData = new FormData();
-          const audioBuffer = Buffer.from(audio, 'base64');
-          const blob = new Blob([audioBuffer], { type: `audio/${format || 'webm'}` });
-          formData.append('file', blob, `audio.${format || 'webm'}`);
-          formData.append('model', transcriptionModel === 'local' ? 'whisper-1' : transcriptionModel);
-
-          const response = await fetchWithTimeout('https://api.openai.com/v1/audio/transcriptions', {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${process.env.OPENAI_API_KEY || ''}`,
-            },
-            body: formData,
-          });
-
-          if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            return { error: err?.error?.message || `Transcription failed (${response.status})` };
-          }
-
-          const result = await response.json();
-          return { text: result.text, model: transcriptionModel };
-        }
-
-        return { error: `Unsupported transcription model: ${transcriptionModel}` };
+        const sessionId = await speechSession(user.id, body.sessionId);
+        if (sessionId === null) { set.status = 404; return { error: 'Session not found' }; }
+        // The engine bound to the Transcription lane (primary, then backup);
+        // `model` may name a row or an old engine name. Hosted engines spend
+        // the install's keys: only local ones for an account the install's
+        // models are not for (install-access.ts).
+        const { transcribeWithLane } = await import('@/voice/resolve');
+        const result = await transcribeWithLane(Buffer.from(audio, 'base64'), {
+          userId: user.id,
+          sessionId,
+          override: model || null,
+          allowHosted: await mayUseInstallModels(user.id),
+          format: format || 'webm',
+        });
+        return { text: result.text, model: result.model, language: result.language, duration: result.duration };
       } catch (error) {
+        if ((error as { code?: string }).code === 'capability_not_configured') {
+          set.status = 409;
+          return { error: (error as Error).message, code: 'capability_not_configured', capability: 'hear' };
+        }
         apiLogger.error({ error }, 'Voice transcription failed');
         return { error: (error as Error).message };
       }
@@ -432,7 +349,8 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
       body: t.Object({
         audio: t.String({ description: 'Base64-encoded audio data' }),
         format: t.Optional(t.String({ description: 'Audio format (webm, ogg, mp3, wav)' })),
-        model: t.Optional(t.String({ description: 'Transcription model: "local", "whisper-cpp", "whisper-1" (OpenAI), or "voxtral-*" (Mistral)' })),
+        model: t.Optional(t.String({ description: 'A Transcription-lane model row name, or an engine name ("local", "whisper", "fasterwhisper", "mistral"/"voxtral-*", "openai"/"whisper-1"); unset = the lane binding' })),
+        sessionId: t.Optional(t.String({ maxLength: 100, description: 'The conversation the audio belongs to (its protection level applies)' })),
       }),
       detail: { tags: ['voice'] },
     }
@@ -446,43 +364,31 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
         return { error: 'Not authenticated' };
       }
 
-      const config = getConfig();
-      // Gate on REAL availability (same source as /status), not the config flag —
-      // otherwise a mistral default with no key passes here and 500s downstream.
-      const availability = await resolveVoiceAvailability(config);
-      if (!availability.tts.available) {
-        set.status = 503;
-        return { error: availability.tts.reason || 'Text-to-speech is not enabled (configure a TTS provider/key, or voice.piperModelPath for local piper)' };
-      }
-
       try {
-        const provider = config.voice.ttsProvider;
-        // Hosted engines spend the install's keys (install-access.ts).
-        if (HOSTED_TTS.has(provider) && !(await mayUseInstallModels(user.id))) {
-          set.status = 403;
-          return { error: 'Speech synthesis here uses the install\'s keys, which this account may not use' };
-        }
-        const requested = body.format || 'mp3';
-        // Engines with a fixed output format win over the request, so the
-        // Content-Type always describes the bytes we actually return.
-        const fixed = TTS_ENGINE_FORMAT[provider];
-        const format = fixed ?? requested;
-        if (fixed && body.format && body.format !== fixed) {
-          set.status = 400;
-          return { error: `The "${provider}" TTS engine only produces ${fixed}; omit "format" or select a provider that supports ${body.format}` };
-        }
-
-        const { createTTSEngine } = await import('@/voice/tts');
-        const engine = createTTSEngine(provider, body.voice_id, { outputFormat: format });
-        const audio = await engine.synthesize(body.text);
-
-        return new Response(new Uint8Array(audio), {
-          headers: { 'Content-Type': TTS_CONTENT_TYPES[format as keyof typeof TTS_CONTENT_TYPES] },
+        // The engine bound to the Speech lane (primary, then backup). The
+        // requested format must be one the engine writes: the Content-Type
+        // always describes the bytes returned.
+        const sessionId = await speechSession(user.id, body.sessionId);
+        if (sessionId === null) { set.status = 404; return { error: 'Session not found' }; }
+        const { synthesizeWithLane } = await import('@/voice/resolve');
+        const spoken = await synthesizeWithLane(body.text, {
+          userId: user.id,
+          sessionId,
+          voice: body.voice_id,
+          format: body.format,
+          strictFormat: !!body.format,
+          allowHosted: await mayUseInstallModels(user.id),
         });
+        return new Response(new Uint8Array(spoken.audio), { headers: { 'Content-Type': spoken.contentType } });
       } catch (error) {
+        if ((error as { code?: string }).code === 'capability_not_configured') {
+          set.status = 409;
+          return { error: (error as Error).message, code: 'capability_not_configured', capability: 'speak' };
+        }
+        const message = (error as Error).message;
+        set.status = /writes .* only|may not use/.test(message) ? 400 : 500;
         apiLogger.error({ error }, 'Voice synthesis failed');
-        set.status = 500;
-        return { error: (error as Error).message };
+        return { error: message };
       }
     },
     {
@@ -492,6 +398,7 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
         text: t.String({ minLength: 1, maxLength: MAX_TTS_CHARS }),
         voice_id: t.Optional(t.String({ description: 'Preset or custom voice id (provider-specific)' })),
         format: t.Optional(t.Union(TTS_FORMATS.map((f) => t.Literal(f)))),
+        sessionId: t.Optional(t.String({ maxLength: 100, description: 'The conversation the speech belongs to (its protection level applies)' })),
       }),
       detail: { tags: ['voice'] },
     }
@@ -503,27 +410,30 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
       if (!user) return { error: 'Not authenticated' };
 
       const config = getConfig();
-      const availability = await resolveVoiceAvailability(config);
-
+      const { speechStatus } = await import('@/voice/resolve');
+      const allowHosted = await mayUseInstallModels(user.id);
+      const [stt, tts] = await Promise.all([
+        speechStatus('stt', { userId: user.id, allowHosted }),
+        speechStatus('tts', { userId: user.id, allowHosted }),
+      ]);
       return {
-        // Real availability — the binary actually runs / a cloud key exists —
-        // not just a config flag. The web voice UI gates on sttAvailable.
+        // What actually serves each direction now (the lane binding, probed:
+        // the binary runs / the key exists). The web voice UI gates on sttAvailable.
         // Native mobile STT/TTS can use the per-request voice gate without
         // configuring a server audio engine. Clients check this contract.
         mobileVoice: true,
-        sttAvailable: availability.stt.available,
-        sttReason: availability.stt.reason,
-        sttLocal: availability.stt.local,
-        sttExternal: availability.stt.external,
-        ttsAvailable: availability.tts.available,
-        ttsReason: availability.tts.reason,
+        sttAvailable: stt.available,
+        sttReason: stt.reason,
+        sttLocal: stt.available && stt.local,
+        sttExternal: stt.available && !stt.local,
+        ttsAvailable: tts.available,
+        ttsReason: tts.reason,
         // Retained for compatibility with existing callers.
-        sttEnabled: availability.stt.available,
-        ttsEnabled: availability.tts.available,
-        // The engine choice and the host model path are install configuration.
-        ...(isAdmin(principal) ? { ttsProvider: config.voice.ttsProvider } : {}),
-        localWhisper: availability.stt.local,
-        ...(isAdmin(principal) ? { whisperModelPath: config.voice.whisperModelPath || null } : {}),
+        sttEnabled: stt.available,
+        ttsEnabled: tts.available,
+        localWhisper: stt.engine === 'whisper',
+        // Which models serve them are install configuration.
+        ...(isAdmin(principal) ? { sttModel: stt.model, sttEngine: stt.engine, ttsModel: tts.model, ttsEngine: tts.engine, ttsProvider: tts.engine } : {}),
         language: config.voice.language || 'en',
       };
     },
@@ -543,7 +453,17 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
           log.push(line);
           if (log.length > 200) log.shift(); // keep the tail, cap memory
         });
-        return { ok: true, log };
+        // Installed is not enough: it becomes the Transcription engine when
+        // nothing else is bound there (never replacing one someone chose).
+        // The build worked either way: a binding that fails is a warning, not a failed install.
+        try {
+          const { useSpeechEngine } = await import('@/voice/speech-rows');
+          const used = await useSpeechEngine('whisper', 'stt');
+          return { ok: true, log, model: used.row.name, bound: used.bound };
+        } catch (bindError) {
+          apiLogger.warn({ err: bindError }, 'whisper.cpp installed but not bound to the Transcription lane');
+          return { ok: true, log, bound: false, warning: `Installed, but not added as a Transcription engine: ${(bindError as Error).message}. Add it on the Topics page.` };
+        }
       } catch (error) {
         const { ToolchainMissingError } = await import('@/voice/whisper');
         set.status = error instanceof ToolchainMissingError ? 422 : 500;
@@ -552,6 +472,37 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
       }
     },
     { detail: { tags: ['voice'] } }
+  )
+
+  // Register a speech engine from the catalog and bind it to its lane when
+  // that lane is free (or `makePrimary`: the engine it replaces stays as the
+  // backup). What `octi setup` calls after installing a local engine.
+  .post(
+    '/engines/use',
+    async ({ user, principal, body, set }) => {
+      const denied = adminDenied({ set, user, principal });
+      if (denied) return denied;
+      try {
+        const { useSpeechEngine } = await import('@/voice/speech-rows');
+        const used = await useSpeechEngine(body.engine, body.direction, {
+          size: body.size, modelPath: body.modelPath, makePrimary: body.makePrimary,
+        });
+        return { model: used.row.name, lane: used.lane, bound: used.bound };
+      } catch (error) {
+        set.status = 400;
+        return { error: (error as Error).message };
+      }
+    },
+    {
+      body: t.Object({
+        direction: t.Union([t.Literal('stt'), t.Literal('tts')]),
+        engine: t.Union(['whisper', 'fasterwhisper', 'kokoro', 'piper', 'mistral', 'openai'].map((e) => t.Literal(e))) as never,
+        size: t.Optional(t.Union(['tiny', 'base', 'small', 'medium', 'large'].map((e) => t.Literal(e)))),
+        modelPath: t.Optional(t.String({ maxLength: 4096 })),
+        makePrimary: t.Optional(t.Boolean()),
+      }),
+      detail: { tags: ['voice'] },
+    }
   )
 
   // Telephony webhook — receives call events from Twilio/Telnyx/Plivo.

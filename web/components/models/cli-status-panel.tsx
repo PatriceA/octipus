@@ -185,7 +185,7 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
                   )}
                   {options.length === 0 && provider && (
                     <span className="text-[10px] text-on-surface-variant">
-                      (no {provider} key — type to set)
+                      (catalog unavailable — type a model ID)
                     </span>
                   )}
                 </div>

@@ -178,7 +178,7 @@ export function buildExtensionProviderRows(extension: string, def: ExtensionProv
     const contextWindow = positiveInt(extension, `model '${m.id}' contextWindow`, m.contextWindow, 10_000_000);
     const maxOutput = positiveInt(extension, `model '${m.id}' maxOutput`, m.maxOutput, 1_000_000);
     if (maxOutput > contextWindow) fail(extension, `model '${m.id}' maxOutput exceeds its contextWindow`);
-    for (const flag of ['supportsVision', 'supportsTools', 'supportsStreaming'] as const) {
+    for (const flag of ['supportsVision', 'supportsAudioInput', 'supportsTools', 'supportsStreaming'] as const) {
       if (m[flag] !== undefined && typeof m[flag] !== 'boolean') fail(extension, `model '${m.id}' ${flag} must be a boolean`);
     }
     if (m.description !== undefined && (typeof m.description !== 'string' || m.description.length > 500)) fail(extension, `model '${m.id}' description must be a string of at most 500 characters`);
@@ -201,6 +201,7 @@ export function buildExtensionProviderRows(extension: string, def: ExtensionProv
       maxTokens: maxOutput,
       contextWindow,
       supportsVision: m.supportsVision ?? false,
+      supportsAudioInput: m.supportsAudioInput ?? false,
       supportsTools: m.supportsTools ?? true,
       supportsStreaming: m.supportsStreaming ?? true,
       defaultTemperature: 0.7,

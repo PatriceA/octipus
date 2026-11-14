@@ -2,7 +2,7 @@ import type { RoleMeta } from '../types';
 export const meta: RoleMeta = {
   role: 'design',
   description: 'UI/UX, layout, accessibility',
-  toolIds: ['browser', 'filesystem'],
+  toolIds: ['browser', 'filesystem', 'vision', 'imagegen'],
   criticalRules: [
     "Always consider accessibility (WCAG 2.1 AA minimum) in every design decision",
     "Design mobile-first, then scale up to larger viewports",

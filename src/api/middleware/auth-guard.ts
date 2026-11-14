@@ -60,6 +60,8 @@ export function isPublicPath(path: string): boolean {
   if (path.startsWith('/api/hooks/incoming/')) return true;
   // Voice telephony webhooks use provider-specific signature verification (Twilio HMAC, Telnyx Ed25519, Plivo HMAC)
   if (path.startsWith('/api/voice/webhook/')) return true;
+  // Short-lived public media links: the random token is the capability (src/core/media/public-links.ts).
+  if (/^\/api\/media\/public\/[A-Za-z0-9_-]{32}$/.test(path)) return true;
   // WhatsApp webhook — Meta calls directly with signature verification
   if (path.startsWith('/api/channels/whatsapp/webhook')) return true;
   // Mobile device pairing — code-based auth

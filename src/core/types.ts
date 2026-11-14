@@ -153,6 +153,26 @@ export interface AgentMessage {
    * one cache entry. Ignored by providers whose caching is automatic.
    */
   cacheBreak?: boolean;
+  /**
+   * Images (or audio) this message carries for a model that reads them
+   * natively (docs/MEDIA.md). Stored as references, never bytes: the bytes
+   * are loaded only while a request is built (`hydrateMedia`), so transcripts,
+   * compaction and the DB stay small.
+   */
+  media?: MediaRef[];
+}
+
+/** A file a message shows the model (src/core/media). */
+export interface MediaRef {
+  kind: 'image' | 'audio';
+  /** Absolute path of the (normalised) file on this host. */
+  path: string;
+  mimeType: string;
+  sha256?: string;
+  /** Who put it there: the user's attachment, or a tool (view_image, a screenshot). */
+  source: 'user' | 'tool';
+  /** Base64 bytes: set only on a request's copy of the message, never stored. */
+  data?: string;
 }
 
 export interface ToolCall {
@@ -261,6 +281,8 @@ export interface Attachment {
   mimeType: string;
   filename?: string;
   size?: number;
+  /** Audio sent as a voice note where the channel has them (a spoken reply). */
+  voice?: boolean;
 }
 
 export interface ChannelResponse {
@@ -269,6 +291,8 @@ export interface ChannelResponse {
   replyTo?: string;
   threadId?: string;
   metadata?: Record<string, unknown>;
+  /** Filled by the adapter: attachments it could not send (the text still went out). */
+  undelivered?: Array<{ filename?: string; type: Attachment['type']; error: string }>;
 }
 
 // Hook Types

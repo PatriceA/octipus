@@ -1,3 +1,4 @@
+import { openAiRoleContent } from './media-content';
 import { normalizeUsage } from './usage';
 import OpenAI from 'openai';
 import type {
@@ -235,7 +236,7 @@ export class VertexProvider implements ModelProvider {
           })),
         };
       }
-      return { role: msg.role as 'system' | 'user' | 'assistant', content: msg.content };
+      return openAiRoleContent(msg);
     });
   }
 }

@@ -1,3 +1,4 @@
+import { hasMedia, hydrateMedia, latestUserTurnIndex } from '@/core/media/hydrate';
 import { type OmittedContext, REPEATABLE_CONTEXT_KEY, restoreOmittedContext, withoutRepeatedContext } from './agent/repeated-context';
 import { orderForCache, TOOL_DISCOVERY_TOOL_ID } from './agent/tool-split';
 import { CORE_TOOL_FLOOR } from './agent/tool-intent';
@@ -28,10 +29,12 @@ import { billableTokens } from '@/models/billable-tokens';
 import { collectStream, type StreamProgress } from '@/models/stream-collect';
 import { getModelRegistry } from '@/models/model-registry';
 import { modelCandidates } from './agent/model-selector';
-import { localOnlyLevel, localRowInstead, ProtectionRoutingError, PSEUDONYMIZED } from './protection/routing';
+import { localOnlyLevel, localRowInstead, ProtectionRoutingError, PSEUDONYMIZED, rawMediaStaysLocal } from './protection/routing';
+import { WorkspaceFS } from '@/security/workspace-fs';
 import { type ToolShimSchema, proseShowsToolIntent, translateToToolCall } from '@/models/toolshim';
 import { applyTopicParamOverrides, getTopicConfig } from '@/models/topic-config';
 import { getConfig } from '@/config';
+import { seesToolImages } from '@/models/providers/media-content';
 import { writePromptDump } from './prompt-dumps';
 import type { ModelConfigEntry } from '@/db/schema/models';
 import { AUTO_COMPACT_FILL, AUTO_COMPACT_TOKENS, compactMessagesWithSummary, CONTEXT_OVERFLOW_TRUNCATED_MARKER, SUMMARY_MAX_TOKENS, DEFAULT_TOOL_OUTPUT_SOFT_CAP, shouldCompactToolOutputs, stripSignedReasoning, truncateOldestToolOutputs } from '@/utils/context-compaction';
@@ -527,9 +530,25 @@ export class AgentWorker extends BaseAgentWorker {
 
   private estimateRequestTokens(): number {
     const IMAGE_TOKENS = 1_500; // rough fixed cost of one image to a vision model
+    const AUDIO_TOKENS = 20_000; // one native recording, at most 10 MB (~10 minutes of MP3)
     let chars = this.advertisedToolChars();
     let imageTokens = 0;
+    // Only the newest `replayRecentImages` media-bearing messages go out with
+    // their pixels (hydrateMedia); older ones are a line of text.
+    let replayLeft = Math.max(0, getConfig().media?.replayRecentImages ?? 3);
+    const replayed = new Set<AgentMessage>();
+    const latestUserTurn = latestUserTurnIndex(this.messages);
+    for (let i = this.messages.length - 1; i >= 0 && replayLeft > 0; i--) {
+      if (this.messages[i].media?.length) { replayed.add(this.messages[i]); replayLeft--; }
+    }
     for (const m of this.messages) {
+      // A recording (sent once, ≤ 10 MB) costs far more than an image: ~5 minutes of audio.
+      if (replayed.has(m)) {
+        for (const ref of m.media ?? []) {
+          if (ref.kind !== 'audio') imageTokens += IMAGE_TOKENS;
+          else if (m === this.messages[latestUserTurn]) imageTokens += AUDIO_TOKENS;
+        }
+      }
       const c = (m as { content?: unknown }).content;
       if (typeof c === 'string') {
         chars += c.length;
@@ -701,12 +720,26 @@ export class AgentWorker extends BaseAgentWorker {
     this.messages.splice(index < 0 ? this.messages.length : index, 0, { role: 'system', content, timestamp: new Date(), ...(opts.cacheBreak ? { cacheBreak: true } : {}) });
   }
 
+  /** The media the spawner handed this turn, once (a later user message does not repeat it). */
+  private takeUserMedia(): import('./types').MediaRef[] {
+    const media = this.context.metadata?.userMedia;
+    if (!Array.isArray(media)) return [];
+    delete this.context.metadata.userMedia;
+    return media.filter((m): m is import('./types').MediaRef => !!m && typeof (m as { path?: unknown }).path === 'string');
+  }
+
   async addUserMessage(content: string): Promise<void> {
     // A retrieved block an earlier turn still in view carries is not sent again
     // (`repeated-context.ts`); the stored row records what was actually sent.
     const { text: promptContext, omitted } = withoutRepeatedContext(this.pendingPromptContext.trim(), this.context.metadata?.[REPEATABLE_CONTEXT_KEY] as unknown[] | undefined, this.messages);
     this.pendingPromptContext = '';
-    const message: AgentMessage = { role: 'user', content: [promptContext, content].filter(Boolean).join('\n\n'), timestamp: new Date() };
+    // Images this turn shows the model itself (root-runner → `userMedia`):
+    // references on the message, bytes only in each request (hydrateMedia).
+    const userMedia = this.takeUserMedia();
+    const message: AgentMessage = {
+      role: 'user', content: [promptContext, content].filter(Boolean).join('\n\n'), timestamp: new Date(),
+      ...(userMedia.length ? { media: userMedia } : {}),
+    };
     this.omittedContext = omitted.length ? { content: message.content as string, omitted } : undefined;
     const composition = this.measurePromptComposition(content, omitted);
     this.messages.push(message);
@@ -725,6 +758,8 @@ export class AgentWorker extends BaseAgentWorker {
         ...(storedContext ? { promptContext: storedContext } : {}),
         ...(composition ? { promptComposition: withoutText(composition) } : {}),
         ...(provenance ? { inlineUiProvenance: { id: provenance } } : {}),
+        // Rebuilt into the turn when the conversation is reloaded (session-history).
+        ...(userMedia.length ? { attachments: userMedia.map((m) => ({ type: m.kind, path: m.path, mimeType: m.mimeType, source: m.source })) } : {}),
       };
       const row = await messageRepository.create({
         sessionId: this.context.sessionId,
@@ -2714,6 +2749,11 @@ export class AgentWorker extends BaseAgentWorker {
    * runs on a local model, or the turn stops before anything leaves the
    * house (`ProtectionRoutingError`).
    */
+  /** The workspace whose media a request may read; none for an agent without one. */
+  private mediaWorkspace(): WorkspaceFS | null {
+    try { return WorkspaceFS.forAgent(this.context); } catch { return null; }
+  }
+
   private async followProtectionLevel(bound?: ModelConfigEntry | null): Promise<ModelConfigEntry | null | undefined> {
     // Nothing to look up while the session may use any model.
     if (await localOnlyLevel(this.context.sessionId, PSEUDONYMIZED) === undefined) return bound;
@@ -2747,6 +2787,11 @@ export class AgentWorker extends BaseAgentWorker {
     const model = (await this.followProtectionLevel(bound)) ?? bound;
 
     const litellmModel = model.modelId;
+    // A model that is shown images after a tool result can look with
+    // view_image whatever the install has bound (gates.ts).
+    this.toolExecutor.setOwnCapabilities({
+      see: seesToolImages(model, getConfig().media?.imageInput) && !(await rawMediaStaysLocal(this.context.sessionId, model)),
+    });
     const { declarableTools, sharedToolCount, deferredTools } = this.requestTools(model);
     const tools: ChatCompletionTool[] = this.toolExecutor.toolsDisabled ? [] : declarableTools;
 
@@ -2893,6 +2938,19 @@ export class AgentWorker extends BaseAgentWorker {
     const deferredSet = deferredTools ? new Set(deferredTools) : undefined;
     const loadedTools = deferredSet ? completionOpts.tools?.filter((t) => t.type !== 'function' || !deferredSet.has(t.function.name)) : completionOpts.tools;
     const signature = prefixSignature(litellmModel, loadedTools, this.messages.filter((m) => m.role === 'system').map((m) => m.content));
+    // Images and audio go out as bytes only in this request's copy, and only
+    // the newest few (docs/MEDIA.md); the stored conversation keeps references.
+    if (hasMedia(completionOpts.messages)) {
+      completionOpts.messages = await hydrateMedia(completionOpts.messages, {
+        fs: this.mediaWorkspace(),
+        // Pixels and recordings are not pseudonymized: content at a local-only
+        // level reaches only a local model as it is (strict threshold).
+        protectedContent: await rawMediaStaysLocal(this.context.sessionId, model),
+        readsImages: model.supportsVision === true,
+        hearsAudio: model.supportsAudioInput === true && getConfig().media?.audioInput === 'native',
+        replayRecent: getConfig().media?.replayRecentImages,
+      });
+    }
     const result = await this.completeViaTarget(target, providerName, completionOpts);
     this.observeCacheBreak(providerName, { ...signature, at: sentAt }, result.usage);
 

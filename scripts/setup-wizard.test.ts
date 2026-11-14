@@ -8,6 +8,7 @@ import {
   ApiError,
   type BootstrapConfig,
   buildEnv,
+  pickEmbedding,
   readExistingSecrets,
   readlinePrompt,
   setupBackendEnv,
@@ -253,4 +254,110 @@ test('existing quoted secrets retain their actual values on setup rerun', () => 
   const file = join(dir, '.env');
   writeFileSync(file, `MASTER_KEY="${KEYS.masterKey}"\nJWT_SECRET='${KEYS.jwtSecret}'\nSESSION_SECRET=${KEYS.sessionSecret}\n`);
   expect(readExistingSecrets(file)).toEqual(KEYS);
+});
+
+describe('setup-wizard — Search & memory (embedding) step', () => {
+  type Call = { method: 'get' | 'post' | 'put'; path: string; body?: unknown };
+  const fakeApi = (opts: { bound?: string | null; platform?: string | null; failGet?: boolean; ollama?: boolean } = {}) => {
+    const calls: Call[] = [];
+    const api = {
+      get: async <T>(path: string): Promise<T> => {
+        calls.push({ method: 'get', path });
+        if (opts.failGet) throw new Error('HTTP 404');
+        if (path === '/api/local-engine') {
+          return {
+            platform: opts.platform === undefined ? 'linux-x64' : opts.platform,
+            embeddingBound: opts.bound ?? null,
+            models: [{ id: 'embeddinggemma-2', label: 'EmbeddingGemma 2', sizeBytes: 309_855_456, default: true }],
+            job: null,
+          } as T;
+        }
+        if (path === '/api/topics') return [{ value: 'embedding', primaryModel: opts.bound ?? null }] as T;
+        if (path === '/api/onboarding') return { ollama: { reachable: opts.ollama ?? false } } as T;
+        throw new Error(`unexpected GET ${path}`);
+      },
+      post: async <T>(path: string, body: unknown): Promise<T> => { calls.push({ method: 'post', path, body }); return {} as T; },
+      put: async <T>(path: string, body: unknown): Promise<T> => { calls.push({ method: 'put', path, body }); return {} as T; },
+    };
+    const writes = () => calls.filter((c) => c.method !== 'get');
+    return { api, calls, writes };
+  };
+  const withEnv = async (value: string | undefined, fn: () => Promise<void>) => {
+    const prev = process.env.OCTIPUS_SETUP_EMBEDDING;
+    if (value === undefined) delete process.env.OCTIPUS_SETUP_EMBEDDING; else process.env.OCTIPUS_SETUP_EMBEDDING = value;
+    try { await fn(); } finally { if (prev === undefined) delete process.env.OCTIPUS_SETUP_EMBEDDING; else process.env.OCTIPUS_SETUP_EMBEDDING = prev; }
+  };
+  const quiet = () => {
+    const write = process.stdout.write.bind(process.stdout);
+    let out = '';
+    process.stdout.write = ((chunk: string | Uint8Array) => { out += String(chunk); return true; }) as typeof process.stdout.write;
+    return { restore: () => { process.stdout.write = write; }, out: () => out };
+  };
+
+  test('quick setup asks nothing and downloads nothing; it prints where to add it later', async () => {
+    const { api, writes } = fakeApi();
+    const asked: string[] = [];
+    const io = quiet();
+    try {
+      await withEnv('local', () => pickEmbedding(api, 'openai', { quick: true, nonInteractive: false, select: async (t) => { asked.push(t); return 'local'; } }));
+    } finally { io.restore(); }
+    expect(asked).toEqual([]);
+    expect(writes()).toEqual([]);
+    expect(io.out()).toMatch(/octi capabilities install local-embedding/);
+  });
+
+  test('the interactive question defaults to skip, and skipping writes nothing', async () => {
+    const { api, writes } = fakeApi({ ollama: true });
+    let offered: string[] = [];
+    let defaultValue = '';
+    await withEnv(undefined, () => pickEmbedding(api, 'openai', {
+      quick: false, nonInteractive: false,
+      select: async (_t, items, def) => { offered = items.map((i) => i.value); defaultValue = def; return def; },
+    }));
+    expect(defaultValue).toBe('skip');
+    expect(offered).toEqual(['skip', 'local', 'ollama', 'openai']);
+    expect(writes()).toEqual([]);
+  });
+
+  test('non-interactive setup without OCTIPUS_SETUP_EMBEDDING skips', async () => {
+    const { api, writes } = fakeApi();
+    await withEnv(undefined, () => pickEmbedding(api, 'openai', { quick: false, nonInteractive: true }));
+    expect(writes()).toEqual([]);
+  });
+
+  test('a bound embedding model is never asked about or replaced', async () => {
+    const { api, writes } = fakeApi({ bound: 'my-embedder' });
+    const asked: string[] = [];
+    await withEnv('openai', () => pickEmbedding(api, 'openai', { quick: false, nonInteractive: true, select: async (t) => { asked.push(t); return 'openai'; } }));
+    expect(asked).toEqual([]);
+    expect(writes()).toEqual([]);
+  });
+
+  test('when the lane cannot be checked, nothing is bound', async () => {
+    const { api, writes } = fakeApi({ failGet: true });
+    const io = quiet();
+    try {
+      await withEnv('openai', () => pickEmbedding(api, 'openai', { quick: false, nonInteractive: true }));
+    } finally { io.restore(); }
+    expect(writes()).toEqual([]);
+  });
+
+  test('ollama and local are not offered where they cannot work', async () => {
+    const { api } = fakeApi({ platform: null, ollama: false });
+    let offered: string[] = [];
+    await pickEmbedding(api, 'anthropic', { quick: false, nonInteractive: false, select: async (_t, items) => { offered = items.map((i) => i.value); return 'skip'; } });
+    expect(offered).toEqual(['skip']);
+  });
+
+  test('OCTIPUS_SETUP_EMBEDDING=openai binds text-embedding-3-small on an unbound lane', async () => {
+    const { api, writes } = fakeApi();
+    const io = quiet();
+    try {
+      await withEnv('openai', () => pickEmbedding(api, 'openai', { quick: false, nonInteractive: true }));
+    } finally { io.restore(); }
+    expect(writes()).toEqual([
+      { method: 'post', path: '/api/models', body: expect.objectContaining({ name: 'openai text-embedding-3-small', provider: 'openai' }) },
+      { method: 'put', path: '/api/topics/embedding/binding', body: { primaryModel: 'openai text-embedding-3-small' } },
+    ]);
+  });
 });

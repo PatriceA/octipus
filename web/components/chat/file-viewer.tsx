@@ -32,6 +32,7 @@ type FileResponse =
   | { type: 'directory'; path: string; entries: Array<{ name: string; path: string; isDirectory: boolean; size?: number }> }
   | { type: 'text'; path: string; content: string; version: string; size: number; modifiedAt: string }
   | { type: 'image'; path: string; dataUrl: string; mimeType: string; version: string; size: number; modifiedAt: string }
+  | { type: 'audio'; path: string; dataUrl: string; mimeType: string; version: string; size: number; modifiedAt: string }
   | { type: 'binary'; path: string; version: string; size: number; modifiedAt: string }
   | { type: 'too-large'; path: string; size: number };
 
@@ -297,6 +298,12 @@ export default function FileViewer({ sessionId, path: initialPath, onClose, onAt
               {/* Source is an in-memory data: URL from the session file API, not a
                   remote asset — next/image would force `unoptimized` and add no value. */}
               <img src={data.dataUrl} alt={displayName(path)} className="max-h-[60vh] object-contain" />
+            </div>
+          )}
+
+          {!loading && !error && data?.type === 'audio' && (
+            <div className="flex items-center justify-center bg-[#0d1117] p-6">
+              <audio controls src={data.dataUrl} className="w-full max-w-md" />
             </div>
           )}
 

@@ -1,8 +1,8 @@
 /**
  * What the onboarding guide asks (docs/ONBOARDING.md): the use cases a person
- * picks from, and the sections of questions each brings in. Three sections
- * are asked of everyone (models, areas of work, a chat); the rest come with a
- * use case. A question that is already answered by the install says so
+ * picks from, and the sections of questions each brings in. Four sections
+ * are asked of everyone (models, areas of work, a chat, images and audio);
+ * the rest come with a use case. A question that is already answered by the install says so
  * (`alreadyDone`) and starts from what is there.
  *
  * Questions only collect answers; `plan.ts` turns them into the calls that
@@ -55,6 +55,38 @@ export const EMBEDDING_MODELS = {
   ollama: { provider: 'ollama', modelId: 'nomic-embed-text' },
   openai: { provider: 'openai', modelId: 'text-embedding-3-small' },
 } as const;
+
+/** Image models the guide offers for the Image generation lane (docs/MEDIA.md → imagegen). */
+export const IMAGE_MODELS: Array<{ provider: string; label: string; modelId: string }> = [
+  { provider: 'openai', label: 'OpenAI (gpt-image-1)', modelId: 'gpt-image-1' },
+  { provider: 'gemini', label: 'Google Gemini (gemini-2.5-flash-image)', modelId: 'gemini-2.5-flash-image' },
+];
+
+/**
+ * Speech engines the guide offers, by the engine names of the speech catalog
+ * (`src/voice/speech-rows.ts` SPEECH_ENGINE_CATALOG, `POST /voice/engines/use`).
+ * Local: faster-whisper small hears, Kokoro speaks (what `octi setup` installs).
+ */
+export const VOICE_ENGINES: Record<'local' | 'openai' | 'mistral', { label: string; stt: { engine: string; size?: string; name: string }; tts: { engine: string; name: string } }> = {
+  local: { label: 'faster-whisper and Kokoro, on this server', stt: { engine: 'fasterwhisper', size: 'small', name: 'faster-whisper (on this server)' }, tts: { engine: 'kokoro', name: 'Kokoro (on this server)' } },
+  openai: { label: 'OpenAI (gpt-4o-transcribe, gpt-4o-mini-tts)', stt: { engine: 'openai', name: 'OpenAI gpt-4o-transcribe' }, tts: { engine: 'openai', name: 'OpenAI gpt-4o-mini-tts' } },
+  mistral: { label: 'Mistral Voxtral', stt: { engine: 'mistral', name: 'Mistral Voxtral' }, tts: { engine: 'mistral', name: 'Mistral Voxtral' } },
+};
+
+/** The cloud provider the media answers need a key for ('' for none). */
+export function mediaKeyProvider(a: Answers, which: 'image' | 'voice'): string {
+  if (which === 'image') return a['media.images'] === true && typeof a['media.imageProvider'] === 'string' ? a['media.imageProvider'] : '';
+  return a['media.voice'] === 'cloud' && typeof a['media.voiceProvider'] === 'string' ? a['media.voiceProvider'] : '';
+}
+
+/** A key for `provider` is stored, or these answers store one (the model step, document search). */
+export function keyAvailable(a: Answers, s: OnboardingState, provider: string): boolean {
+  const text = (id: string) => (typeof a[id] === 'string' ? (a[id] as string).trim() : '');
+  if (!provider || s.models.providersWithKey.includes(provider)) return true;
+  if (text('models.source') === 'key' && text('models.provider') === provider && text('models.key')) return true;
+  return provider === 'openai' && text('models.embedding') === 'openai' && Boolean(text('models.embeddingKey'));
+}
+
 
 const has = (a: Answers, id: string): boolean => a[id] === true;
 const is = (a: Answers, id: string, value: string): boolean => a[id] === value;
@@ -160,6 +192,9 @@ const modelQuestions: Question[] = [
     help: 'Needs an embedding model, a small model that indexes text.',
     options: (s) => [
       ...(s.models.embeddingReady ? [{ value: 'keep', label: 'Keep the one already set up' }] : []),
+      ...(s.localEmbedding?.supported && !s.models.embeddingReady
+        ? [{ value: 'local', label: `Yes, on this server (${s.localEmbedding.label})`, hint: `Downloads about ${s.localEmbedding.sizeMb + 30} MB once; no key, nothing leaves the server.` }]
+        : []),
       { value: 'ollama', label: 'Yes, locally with Ollama (nomic-embed-text)' },
       { value: 'openai', label: 'Yes, with OpenAI (text-embedding-3-small)' },
       { value: 'skip', label: 'Not now' },
@@ -173,6 +208,69 @@ const modelQuestions: Question[] = [
     prompt: 'OpenAI API key for search',
     when: (a, s) => is(a, 'models.embedding', 'openai') && !s.models.providersWithKey.includes('openai')
       && !(is(a, 'models.source', 'key') && is(a, 'models.provider', 'openai')),
+  },
+];
+
+/**
+ * Images and audio (docs/MEDIA.md, docs/VOICE.md). Optional and skipped by
+ * default: nothing is bound unless chosen here.
+ */
+const mediaQuestions: Question[] = [
+  {
+    id: 'media.images',
+    kind: 'yesno',
+    prompt: 'Should Octipus generate images?',
+    help: 'Agents can draw pictures, diagrams and illustrations when you ask. Each image is paid to the provider.',
+    initial: () => false,
+    alreadyDone: (s) => (s.models.byTopic.image_generation ? `Image generation already uses "${s.models.byTopic.image_generation}".` : null),
+  },
+  {
+    id: 'media.imageProvider',
+    kind: 'choice',
+    prompt: 'Which provider should draw them?',
+    options: (s, a) => IMAGE_MODELS.map((m) => ({ value: m.provider, label: m.label, hint: keyAvailable(a, s, m.provider) ? 'key available' : 'needs its API key' })),
+    initial: (s, a) => (IMAGE_MODELS.find((m) => keyAvailable(a, s, m.provider)) ?? IMAGE_MODELS[0]).provider,
+    when: (a) => has(a, 'media.images'),
+  },
+  {
+    id: 'media.imageKey',
+    kind: 'secret',
+    prompt: 'API key for images',
+    help: 'Stored encrypted in the vault. Leave empty to add it later under Settings → Secrets.',
+    when: (a, s) => !keyAvailable(a, s, mediaKeyProvider(a, 'image')),
+  },
+  {
+    id: 'media.voice',
+    kind: 'choice',
+    prompt: 'Talk to Octipus and hear spoken replies?',
+    help: 'Speech to text for the microphone and voice notes, text to speech for replies. Turns on the Voice module.',
+    options: [
+      { value: 'skip', label: 'Not now' },
+      { value: 'local', label: 'Yes, on this server', hint: 'faster-whisper and Kokoro: free and private; needs `uv` on the server, the models download once' },
+      { value: 'cloud', label: 'Yes, with a cloud provider', hint: 'OpenAI or Mistral; needs its API key' },
+    ],
+    initial: () => 'skip',
+    alreadyDone: (s) => (s.models.byTopic.transcription || s.models.byTopic.speech
+      ? `Voice already uses ${[s.models.byTopic.transcription, s.models.byTopic.speech].filter(Boolean).map((n) => `"${n}"`).join(' and ')}.` : null),
+  },
+  {
+    id: 'media.voiceProvider',
+    kind: 'choice',
+    prompt: 'Which provider?',
+    options: (s, a) => (['openai', 'mistral'] as const).map((p) => ({ value: p, label: VOICE_ENGINES[p].label, hint: keyAvailable(a, s, p) ? 'key available' : 'needs its API key' })),
+    initial: (s, a) => (keyAvailable(a, s, 'mistral') && !keyAvailable(a, s, 'openai') ? 'mistral' : 'openai'),
+    when: (a) => is(a, 'media.voice', 'cloud'),
+  },
+  {
+    id: 'media.voiceKey',
+    kind: 'secret',
+    prompt: 'API key for voice',
+    help: 'Stored encrypted in the vault. Leave empty to add it later under Settings → Secrets.',
+    // One key per provider: a key just entered for images counts.
+    when: (a, s) => {
+      const provider = mediaKeyProvider(a, 'voice');
+      return !keyAvailable(a, s, provider) && !(provider === mediaKeyProvider(a, 'image') && typeof a['media.imageKey'] === 'string' && a['media.imageKey'].trim() !== '');
+    },
   },
 ];
 
@@ -470,6 +568,14 @@ export const SECTIONS: Section[] = [
   },
   { id: 'areas', title: 'Areas of work', intro: 'Keep separate things separate.', useCases: 'all', questions: areaQuestions },
   { id: 'chat', title: 'Your chat', intro: 'Octipus can message you, and you can answer it.', useCases: 'all', questions: chatQuestions },
+  {
+    id: 'media',
+    title: 'Images & audio',
+    intro: 'Drawing images, and talking with Octipus. Optional: skip it and nothing changes.',
+    useCases: 'all',
+    adminOnly: true,
+    questions: mediaQuestions,
+  },
   { id: 'dev', title: 'Building software', intro: 'Coding agents and where your code lives.', useCases: ['development'], questions: devQuestions },
   { id: 'tools', title: 'Issue tracker', intro: 'Let agents read and update your tickets.', useCases: ['development', 'product'], questions: toolQuestions },
   { id: 'company', title: 'Your company', intro: 'Your inbox, your to-do list and what matters to you.', useCases: ['company'], questions: companyQuestions },

@@ -7,6 +7,72 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Optional local embeddings.** Search across documents, notes and memories
+  without a key: llama.cpp and a small embedding model (EmbeddingGemma 2,
+  about 330 MB with the engine) installed on the server only when an admin
+  says yes — Topics page, `octi capabilities install local-embedding`, the
+  optional "Search & memory" step of `octi setup` (`OCTIPUS_SETUP_EMBEDDING`),
+  the web onboarding, or Docker (`install-docker.sh` asks; build arg
+  `OCTIPUS_BAKE_EMBEDDING=1`; new `octipus-models` volume). Downloads are
+  pinned and SHA-256 verified, the engine runs on 127.0.0.1 with a key per
+  start and stops when idle (`localEngine.idleStopMinutes`). An embedding
+  model already bound is never replaced. Nothing changes for installs that
+  do not add it ([RAG.md → Local embeddings](docs/RAG.md#local-embeddings)).
+
+- Add Grok Build as a CLI agent model, using an existing login, scoped Octipus
+  tools, resumable conversations, streamed activity and cache-aware token usage.
+- **Everything beyond one chat model is optional.** Embedding, reading images,
+  OCR, image generation, speech to text and text to speech: not configured
+  means off — no tools offered to agents, no prompt text, no background work,
+  hidden pages and controls ([MODULES.md → Capability gates](docs/MODULES.md#capability-gates)).
+  Embedding is no longer reported as required. Without an embedding model
+  nothing is chunked or embedded; content saved meanwhile is indexed once a
+  model is bound (migration 0184).
+- **Agents look at images themselves.** An attached image goes to a model that
+  reads images as the image itself (normalized to ≤ 2048 px), not as a
+  description; a model that cannot see gets the path and `vision__view_image`,
+  and decides whether to look. Channel images (Telegram, Slack, WhatsApp,
+  Teams) are handled the same way, with or without a caption, and are no
+  longer filed as documents unless `media.fileChannelImages` is on. New
+  `vision` tool: `view_image` (pixels for a seeing model, the Vision lane's
+  answer otherwise, region crops, URLs through the SSRF guard) and
+  `read_document_text`. Browser and MCP screenshots are saved in the
+  workspace and shown to a seeing model instead of base64 in the text
+  ([MEDIA.md](docs/MEDIA.md)). Settings `media.imageInput`,
+  `media.replayRecentImages`.
+- **Agents hear and speak.** A recording attached in the chat is transcribed
+  with the turn (with `media.audioInput = native`, a model that hears audio
+  also gets it); channel voice notes are kept with the conversation. New
+  `audio` tool: `transcribe_audio` (long recordings cut into parts and
+  stitched) and `speak` (saved in the workspace). Both are offered only when
+  a Transcription or Speech engine is bound ([MEDIA.md](docs/MEDIA.md)).
+- **Agents draw, and answers carry media.** New `imagegen` tool
+  (`generate_image`, offered when an Image generation model is bound: OpenAI,
+  Gemini/Imagen, OpenRouter, LiteLLM or OpenAI-compatible endpoints).
+  Generated images and `speak` audio come with the answer: in the web chat
+  (thumbnails, player), and as bytes on every channel — Telegram photos and
+  voice notes, WhatsApp media uploads, Slack file uploads (add the
+  `files:write` scope), Teams inline images and short-lived public links.
+  Voice notes get spoken replies on every channel. `send_message` /
+  `send_to_user` take `attachments`.
+- **New lanes:** Image generation, Transcription, Speech. Vision and OCR are
+  optional: a model that reads images gets them itself; OCR falls back to
+  Vision, then to a default model that reads images. Model rows gain
+  *Hears audio* (migration 0185); what a model reads is detected (Ollama
+  `/api/show`, a per-family table), once for existing rows at boot.
+- **Migration — voice engines moved to the lanes.** `voice.sttProvider`,
+  `voice.fasterWhisperModel`, `voice.whisperModelPath`, `voice.ttsProvider`
+  and `voice.piperModelPath` are retired. On the first boot they become
+  model rows bound to the Transcription and Speech lanes: an explicit choice
+  is kept; `auto` now means **local first** everywhere (the microphone used to
+  try the cloud first); the next engine of the other kind that can run becomes
+  the backup. Check the Topics page after upgrading. `?engine=` on `/voice`
+  and `model` on `/api/voice/transcribe` still accept the old engine names.
+  `/api/voice/transcribe` no longer reads only `OPENAI_API_KEY` from the
+  environment, phone calls use the bound engines instead of a fixed whisper
+  and Voxtral voice (`voice.ttsVoice` picks the voice), the TUI transcribes and
+  speaks through the server, and speech calls are recorded in usage/spend.
+
 ## v0.7.0 — Your agent workspace (2026-11-13)
 
 ### Highlights

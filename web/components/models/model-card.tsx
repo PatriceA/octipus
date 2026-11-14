@@ -143,6 +143,9 @@ export function ModelCard({ model, onEdit, onToggleEnabled, onDelete, readOnly =
         {model.supportsVision && (
           <span className="px-2 py-0.5 bg-primary/10 text-primary text-xs rounded">Vision</span>
         )}
+        {model.supportsAudioInput && (
+          <span className="px-2 py-0.5 bg-primary/10 text-primary text-xs rounded">Audio</span>
+        )}
         {model.supportsTools && (
           <span className="px-2 py-0.5 bg-primary/10 text-primary text-xs rounded">Tools</span>
         )}

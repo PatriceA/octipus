@@ -19,7 +19,10 @@ const fixture = vi.hoisted(() => ({
   extensionReload: null as unknown as import('vitest').Mock<(...args: any[]) => any>,
   pluginReload: null as unknown as import('vitest').Mock<(...args: any[]) => any>,
   installWhisper: null as unknown as import('vitest').Mock<(...args: any[]) => any>,
+  useSpeechEngine: null as unknown as import('vitest').Mock<(...args: any[]) => any>,
   conformance: null as unknown as import('vitest').Mock<(...args: any[]) => any>,
+  localEngineInstall: null as unknown as import('vitest').Mock<(...args: any[]) => any>,
+  localEngineRemove: null as unknown as import('vitest').Mock<(...args: any[]) => any>,
 }));
 
 vi.mock('@/api/context', async () => ({
@@ -86,14 +89,19 @@ vi.mock('@/core/gateway/hub', () => ({
   }),
 }));
 vi.mock('@/channels/interface', () => ({ getUMI: () => ({ getAllChannels: () => [] }) }));
+vi.mock('@/voice/resolve', () => ({
+  speechStatus: async (direction: 'stt' | 'tts') => (direction === 'stt'
+    ? { available: true, model: 'local whisper.cpp base', engine: 'whisper', local: true, reason: null }
+    : { available: false, model: null, engine: null, local: false, reason: 'none' }),
+}));
 vi.mock('@/voice/whisper', () => ({
-  getVoiceAvailability: () => ({
-    stt: { available: true, reason: null, local: true, external: false },
-    tts: { available: false, reason: 'none' },
-  }),
   installWhisper: (...args: unknown[]) => fixture.installWhisper(...args),
   ToolchainMissingError: class extends Error {},
   whisperModelPath: () => '/models/ggml.bin',
+}));
+vi.mock('@/voice/speech-rows', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/voice/speech-rows')>()),
+  useSpeechEngine: (...args: unknown[]) => fixture.useSpeechEngine(...args),
 }));
 vi.mock('@/models/providers/mistral-provider', () => ({ getMistralApiKey: async () => null }));
 vi.mock('@/models/providers/openai-provider', () => ({ getOpenAIApiKey: async () => null }));
@@ -121,7 +129,14 @@ vi.mock('@/models/model-registry', () => ({
   getModelRegistry: () => ({
     getAllModels: async () => [SYSTEM, OTHER_ORG],
     getModelsForUser: async () => [SYSTEM, PERSONAL, PERSONAL_OFF],
+    getModelForTopic: async () => null,
   }),
+}));
+vi.mock('@/capabilities/local-engine/install', () => ({
+  startLocalEngineInstall: (...args: unknown[]) => fixture.localEngineInstall(...args),
+  removeLocalEngine: (...args: unknown[]) => fixture.localEngineRemove(...args),
+  localEngineJob: () => null,
+  rowName: (m: { id: string }) => `local ${m.id}`,
 }));
 vi.mock('@/models/testing', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/models/testing')>(),
@@ -152,10 +167,11 @@ const { evaluationRoutes } = await import('./evaluations');
 const { voiceRoutes } = await import('./voice');
 const { knowledgeRoutes } = await import('./knowledge');
 const { searchRoutes } = await import('./search');
+const { localEngineRoutes } = await import('./local-engine');
 
 const app = new App()
   .use(toolRoutes).use(pluginRoutes).use(mcpRoutes).use(capabilitiesRoutes).use(gatewayRoutes)
-  .use(evalRoutes).use(evaluationRoutes).use(voiceRoutes).use(knowledgeRoutes).use(searchRoutes);
+  .use(evalRoutes).use(evaluationRoutes).use(voiceRoutes).use(knowledgeRoutes).use(searchRoutes).use(localEngineRoutes);
 
 async function call(method: string, path: string, body?: unknown) {
   const res = await app.handle(new Request(`http://test${path}`, {
@@ -175,6 +191,9 @@ beforeEach(() => {
   fixture.extensionReload = vi.fn(async () => ({ count: 2 }));
   fixture.pluginReload = vi.fn(async () => ({ manifest: { name: 'demo', version: '1', tools: [] } }));
   fixture.installWhisper = vi.fn(async () => {});
+  fixture.localEngineInstall = vi.fn(() => ({ id: 'job', stage: 'engine' }));
+  fixture.localEngineRemove = vi.fn(async () => ({ removedRows: [] }));
+  fixture.useSpeechEngine = vi.fn(async () => ({ row: { name: 'local kokoro' }, bound: 'primary', lane: 'speech' }));
   fixture.conformance = vi.fn(async () => ({ summary: {}, results: [] }));
 });
 
@@ -201,7 +220,11 @@ const GATED: Array<[string, string, unknown?]> = [
   ['GET', '/eval/compare?ids=a,b'],
   ['GET', '/voice/calls'],
   ['POST', '/voice/install', {}],
+  ['POST', '/voice/engines/use', { engine: 'kokoro', direction: 'tts' }],
   ['GET', '/voice/telephony/health'],
+  ['GET', '/local-engine'],
+  ['POST', '/local-engine/install', {}],
+  ['DELETE', '/local-engine'],
 ];
 
 describe('install-state routes', () => {
@@ -227,6 +250,12 @@ describe('install-state routes', () => {
     await call('POST', '/plugins/demo/reload', {});
     await call('POST', '/tools/github/tools/list_prs/execute', { args: {} });
     await call('POST', '/voice/install', {});
+    await call('POST', '/voice/engines/use', { engine: 'kokoro', direction: 'tts', makePrimary: true });
+    await call('POST', '/local-engine/install', {});
+    await call('DELETE', '/local-engine');
+    expect(fixture.useSpeechEngine).not.toHaveBeenCalled();
+    expect(fixture.localEngineInstall).not.toHaveBeenCalled();
+    expect(fixture.localEngineRemove).not.toHaveBeenCalled();
     expect(fixture.extensionReload).not.toHaveBeenCalled();
     expect(fixture.pluginReload).not.toHaveBeenCalled();
     expect(fixture.toolExecute).not.toHaveBeenCalled();
@@ -269,17 +298,15 @@ describe('install-state routes', () => {
 });
 
 describe('member-visible routes drop install details', () => {
-  test('GET /voice/status omits the TTS provider and whisper model path for a non-admin', async () => {
+  test('GET /voice/status omits which engines serve speech for a non-admin', async () => {
     const res = await call('GET', '/voice/status');
     expect(res.status).toBe(200);
     expect(res.body.sttAvailable).toBe(true);
-    expect(res.body).not.toHaveProperty('ttsProvider');
-    expect(res.body).not.toHaveProperty('whisperModelPath');
+    for (const key of ['ttsProvider', 'sttModel', 'ttsModel', 'sttEngine', 'ttsEngine']) expect(res.body).not.toHaveProperty(key);
 
     fixture.user = ADMIN;
     const admin = await call('GET', '/voice/status');
-    expect(admin.body).toHaveProperty('ttsProvider');
-    expect(admin.body).toHaveProperty('whisperModelPath');
+    expect(admin.body).toMatchObject({ sttModel: 'local whisper.cpp base', sttEngine: 'whisper', ttsModel: null });
   });
 
   test('GET /knowledge/readiness gives a non-admin only whether the KB works', async () => {

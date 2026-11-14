@@ -48,6 +48,8 @@ interface PromptInputProps {
   /** The composer handle (`insertDraft`). */
   composerRef?: Ref<PromptInputHandle>;
   disabled?: boolean;
+  /** The conversation dictated into: its protection level decides which engines may hear it. */
+  sessionId?: string | null;
   placeholder?: string;
   /** Reason voice is unavailable (no STT engine / no cloud key) — for the tooltip. */
   voiceError?: string | null;
@@ -115,6 +117,7 @@ export default function PromptInput({
   voiceError = null,
   voiceAvailable = true,
   composerRef,
+  sessionId = null,
 }: PromptInputProps) {
   const [text, setText] = useState('');
   // The interactive answer a suggestion in the draft came from; sent with the
@@ -385,7 +388,10 @@ export default function PromptInput({
 
   // Voice input supported if browser has SpeechRecognition OR MediaRecorder (fallback to server STT)
   const voiceSupport = useSyncExternalStore(subscribeNoop, getVoiceSupport, getVoiceSupportServer);
-  const speechSupported = voiceSupport !== 'none';
+  // The browser's own recognition needs no model here; recording for the
+  // server's transcription is offered only when speech to text is configured
+  // (not configured = not shown, docs/MODULES.md → Capability gates).
+  const speechSupported = voiceSupport === 'native' || (voiceSupport === 'server' && voiceAvailable);
   const useServerSTT = voiceSupport === 'server';
 
   // Voice input via Web Speech API
@@ -433,7 +439,7 @@ export default function PromptInput({
             const res = await fetch('/api/voice/transcribe', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ audio: base64, format }),
+              body: JSON.stringify({ audio: base64, format, ...(sessionId ? { sessionId } : {}) }),
               credentials: 'include',
             });
             const data = await res.json();
@@ -512,7 +518,7 @@ export default function PromptInput({
       console.error('Failed to start speech recognition:', err);
       setIsListening(false);
     }
-  }, [isListening, text, useServerSTT]);
+  }, [isListening, text, useServerSTT, sessionId]);
 
   // Cleanup speech recognition on unmount
   useEffect(() => {
@@ -728,7 +734,7 @@ export default function PromptInput({
         )}
 
         {/* Voice conversation toggle (hands-free, streaming) */}
-        {onToggleRealtimeMode && (
+        {onToggleRealtimeMode && voiceAvailable && (
           <button
             type="button"
             onClick={voiceAvailable ? onToggleRealtimeMode : undefined}

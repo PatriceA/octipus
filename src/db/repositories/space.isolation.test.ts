@@ -128,6 +128,7 @@ const ALLOWLIST: Record<string, string> = {
   'src/db/repositories/note-repository.ts': ACCESS_LAYER,
   'src/db/repositories/knowledge-link-repository.ts': ACCESS_LAYER,
   'src/core/rag/embeddings.ts': ACCESS_LAYER,
+  'src/core/rag/index-backlog.ts': 'The embedding catch-up job, never a request: it counts the backlog and indexes each row into that row\'s own owner and workspace; it returns no content to any caller.',
   'src/core/rag/knowledge-scope.ts': ACCESS_LAYER,
   'src/core/rag/retention-service.ts': ACCESS_LAYER,
   'src/core/memory/repository.ts': ACCESS_LAYER,

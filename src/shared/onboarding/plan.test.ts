@@ -81,6 +81,20 @@ describe('models', () => {
     expect(step(steps, 'model:ollama nomic-embed-text')).toMatchObject({ call: { body: { endpoint: 'http://gpu:11434' } } });
   });
 
+  test('local search is offered where a build exists, and installs on the server', () => {
+    const local = { supported: true, label: 'EmbeddingGemma 2 (Q8_0)', sizeMb: 310 };
+    const question = sectionsFor(['research']).flatMap((sec) => sec.questions).find((q) => q.id === 'models.embedding')!;
+    const values = (st: OnboardingState) => (typeof question.options === 'function' ? question.options(st, {}) : question.options ?? []).map((o) => o.value);
+    expect(values(fresh({ localEmbedding: local }))).toContain('local');
+    expect(values(fresh({ localEmbedding: { ...local, supported: false } }))).not.toContain('local');
+    expect(values(fresh())).not.toContain('local');
+    // A model already set is kept: no local offer.
+    expect(values(fresh({ localEmbedding: local, models: { ...fresh().models, embeddingReady: true } }))).not.toContain('local');
+    const steps = plan(['research'], { 'models.source': 'keep', 'models.embedding': 'local' }, fresh({ localEmbedding: local }));
+    expect(step(steps, 'local-embedding')).toMatchObject({ kind: 'api', call: { method: 'POST', path: '/local-engine/install' } });
+    expect(ids(steps)).not.toContain('bind:embedding');
+  });
+
   test('someone who is not an admin is never planned an install-wide change', () => {
     const state = fresh({ isAdmin: false });
     expect(visibleQuestions(sectionsFor(['company'])[0], {}, state)).toEqual([]);
@@ -245,12 +259,84 @@ describe('answers', () => {
   });
 
   test('questions of a use case not chosen are not asked or planned', () => {
-    expect(sectionsFor(['research']).map((s) => s.id)).toEqual(['models', 'areas', 'chat', 'research']);
+    expect(sectionsFor(['research']).map((s) => s.id)).toEqual(['models', 'areas', 'chat', 'media', 'research']);
     expect(ids(plan(['research'], { 'dev.roleAgent': true, 'company.mail': true }))).not.toContain('role:coding');
   });
 
   test('an install already set up is not marked again', () => {
     expect(ids(plan(['research'], {}, fresh({ setupComplete: true })))).not.toContain('setup-complete');
+  });
+});
+
+describe('images and audio', () => {
+  const keyed = (providers: string[]) => fresh({ models: { ...fresh().models, providersWithKey: providers } });
+  const media = (steps: PlanStep[]) => ids(steps).filter((id) => /image_generation|image-1|flash-image|^voice:|^key:(openai|gemini|mistral)$|^todo:key:/.test(id));
+
+  test('skipped by default: nothing is added or bound, and no Voice module is asked for', () => {
+    const answers = initialAnswers(['development'], fresh());
+    expect(answers).toMatchObject({ 'media.images': false, 'media.voice': 'skip' });
+    const steps = plan(['development'], {});
+    expect(media(steps)).toEqual([]);
+    expect(requiredModulesFor(['development'], answers)).not.toContain('voice');
+  });
+
+  test('generate images: the chosen provider\'s model is added and bound to the Image generation lane', () => {
+    const steps = plan(['development'], { 'media.images': true, 'media.imageProvider': 'gemini' }, keyed(['gemini']));
+    expect(step(steps, 'model:gemini gemini-2.5-flash-image')).toMatchObject({
+      kind: 'api', call: { method: 'POST', path: '/models', body: { name: 'gemini gemini-2.5-flash-image', provider: 'gemini', modelId: 'gemini-2.5-flash-image', supportsTools: false } },
+    });
+    expect(step(steps, 'bind:image_generation')).toMatchObject({
+      call: { method: 'PUT', path: '/topics/image_generation/binding', body: { primaryModel: 'gemini gemini-2.5-flash-image' } },
+      dependsOn: ['model:gemini gemini-2.5-flash-image'],
+    });
+  });
+
+  test('the image key: from this answer, from the model step, or a to-do while the lane stays unbound', () => {
+    const entered = plan(['development'], { 'media.images': true, 'media.imageProvider': 'openai', 'media.imageKey': 'sk-img' });
+    expect(step(entered, 'key:openai')).toMatchObject({ secret: true, call: { body: { settings: { 'openai.apiKey': 'sk-img' } } } });
+    expect(step(entered, 'model:openai gpt-image-1')?.dependsOn).toEqual(['key:openai']);
+    const fromModels = plan(['development'], { 'models.source': 'key', 'models.provider': 'openai', 'models.key': 'sk-main', 'models.modelId': 'gpt-4o-mini', 'media.images': true, 'media.imageProvider': 'openai' });
+    expect(step(fromModels, 'model:openai gpt-image-1')?.dependsOn).toEqual(['key:main']);
+    const missing = plan(['development'], { 'media.images': true, 'media.imageProvider': 'openai' });
+    expect(step(missing, 'todo:key:openai')).toMatchObject({ kind: 'todo', href: '/secrets' });
+    expect(ids(missing)).not.toContain('bind:image_generation');
+  });
+
+  test('a lane already on that model is listed as done', () => {
+    const state = fresh({ models: { ...fresh().models, providersWithKey: ['openai'], names: ['openai gpt-image-1'], byTopic: { image_generation: 'openai gpt-image-1' } } });
+    const steps = plan(['development'], { 'media.images': true, 'media.imageProvider': 'openai' }, state);
+    expect(found(steps)).toEqual(expect.arrayContaining(['model:openai gpt-image-1', 'bind:image_generation']));
+  });
+
+  test('local voice: faster-whisper and Kokoro from the speech catalog, after the Voice module is on', () => {
+    const steps = plan(['development'], { 'media.voice': 'local' }, fresh({ modules: { enabled: [], byUseCase: {} } }));
+    expect(step(steps, 'modules')).toMatchObject({ call: { body: { ids: ['voice'] } } });
+    expect(step(steps, 'voice:stt')).toMatchObject({ call: { method: 'POST', path: '/voice/engines/use', body: { direction: 'stt', engine: 'fasterwhisper', size: 'small', makePrimary: true } }, dependsOn: ['modules'] });
+    expect(step(steps, 'voice:tts')).toMatchObject({ call: { body: { direction: 'tts', engine: 'kokoro', makePrimary: true } }, dependsOn: ['modules'] });
+    expect(requiredModulesFor(['development'], { 'media.voice': 'local' })).toContain('voice');
+  });
+
+  test('cloud voice: the provider\'s engines, with its key; a key entered for images serves both', () => {
+    const steps = plan(['development'], { 'media.voice': 'cloud', 'media.voiceProvider': 'mistral' }, keyed(['mistral']));
+    expect(step(steps, 'voice:stt')).toMatchObject({ call: { body: { direction: 'stt', engine: 'mistral' } } });
+    expect(step(steps, 'voice:tts')).toMatchObject({ call: { body: { direction: 'tts', engine: 'mistral' } } });
+    const shared = plan(['development'], { 'media.images': true, 'media.imageProvider': 'openai', 'media.imageKey': 'sk-1', 'media.voice': 'cloud', 'media.voiceProvider': 'openai' });
+    expect(step(shared, 'voice:tts')?.dependsOn).toEqual(expect.arrayContaining(['key:openai']));
+    expect(ids(shared).filter((id) => id === 'key:openai')).toHaveLength(1);
+    const missing = plan(['development'], { 'media.voice': 'cloud', 'media.voiceProvider': 'openai' });
+    expect(ids(missing)).toContain('todo:key:openai');
+    expect(ids(missing)).not.toContain('voice:stt');
+  });
+
+  test('someone who is not an admin is never planned a media change', () => {
+    const steps = plan(['development'], { 'media.images': true, 'media.imageProvider': 'openai', 'media.voice': 'local' }, fresh({ isAdmin: false, models: { ...fresh().models, providersWithKey: ['openai'] } }));
+    expect(media(steps)).toEqual([]);
+  });
+
+  test('basic mode never asks or plans it', () => {
+    expect(sectionsFor([], true).map((s) => s.id)).not.toContain('media');
+    const steps = plan([], { _basicsOnly: true, 'models.source': 'cli', 'models.cliTool': 'cli/claude-code', 'media.images': true, 'media.imageProvider': 'openai', 'media.voice': 'local' }, keyed(['openai']));
+    expect(media(steps)).toEqual([]);
   });
 });
 

@@ -167,6 +167,19 @@ describe('direct provider settings validation', () => {
     expect(await registerModel({ name: 'plain', modelId: 'gpt-4o', provider: 'openai', metadata: { providerSettings: { reasoningEffort: 'high' } } })).toHaveProperty('error');
     expect(registry.registerModel).not.toHaveBeenCalled();
   });
+  it('accepts and persists media pricing (per image, per audio minute, per million chars)', async () => {
+    const pricing = { perImage: 0.04, perAudioMinute: 0.006, perMillionChars: 15 };
+    registry.getModel.mockResolvedValue({ name: 'media', modelId: 'gpt-image-1', provider: 'openai' });
+    expect(await updateModel('media', { metadata: { pricing } })).toHaveProperty('ok', true);
+    expect(registry.updateModel).toHaveBeenCalledWith('media', { metadata: { pricing } });
+    registry.getModel.mockResolvedValue(null);
+    expect(await registerModel({ name: 'media-new', modelId: 'gpt-image-1', provider: 'openai', metadata: { pricing } })).toMatchObject({ metadata: { pricing } });
+  });
+  it.each(['perImage', 'perAudioMinute', 'perMillionChars'])('rejects a negative %s rate', async (key) => {
+    registry.getModel.mockResolvedValue({ name: 'media', modelId: 'gpt-image-1', provider: 'openai' });
+    expect(await updateModel('media', { metadata: { pricing: { [key]: -1 } } })).toMatchObject({ status: 400, error: expect.stringContaining(`pricing.${key}`) });
+    expect(registry.updateModel).not.toHaveBeenCalled();
+  });
   it('rejects negative model rates', async () => {
     expect(await registerModel({ name: 'bad', modelId: 'gpt-5', provider: 'openai', costPerInputToken: -1 })).toHaveProperty('error');
   });

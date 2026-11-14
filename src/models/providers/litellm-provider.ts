@@ -1,4 +1,6 @@
 import { getConfig } from '@/config';
+import type { ImageGenerationRequest, ImageGenerationResult } from './interface';
+import { openAiImages } from './openai-images';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import { getLiteLLMClient } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
@@ -24,6 +26,14 @@ export class LiteLLMProvider implements ModelProvider {
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
     const client = getLiteLLMClient();
     yield* client.streamViaProxy(options);
+  }
+
+  /** The proxy's OpenAI-compatible `/images/generations`. */
+  async generateImage(request: ImageGenerationRequest): Promise<ImageGenerationResult> {
+    const config = getConfig();
+    const { default: OpenAI } = await import('openai');
+    const client = new OpenAI({ baseURL: config.litellm.proxyUrl, apiKey: config.litellm.apiKey || 'sk-litellm', timeout: 180_000, maxRetries: 1 });
+    return openAiImages(client, request);
   }
 
   async checkHealth(): Promise<ProviderHealthStatus> {

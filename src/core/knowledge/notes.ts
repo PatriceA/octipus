@@ -8,6 +8,8 @@ import { insertRevision, loadSpaceNote, writeBodyIfUnchanged } from '@/db/reposi
 import { withProviderUsageContext } from '@/models/providers/instrumented';
 import { assertNoteAccess, getNoteRepository, type NoteRepository, type NoteScope, noteStoreFor, type NoteStore } from '@/db/repositories/note-repository';
 import type { Note } from '@/db/schema/notes';
+import { capabilityConfigured } from '@/core/capabilities/gates';
+import { recordSkipped } from '@/core/rag/index-backlog';
 import { coreLogger } from '@/utils/logger';
 import { type EmbeddingService, getEmbeddingService, sha256Hex } from '@/core/rag/embeddings';
 import { type KnowledgeOwner, noteKnowledgeScope } from '@/core/rag/knowledge-scope';
@@ -437,15 +439,34 @@ export class NoteService {
     return live ? { ...note, body: live.text, bodySha256: live.sha256 } : note;
   }
 
-  /** Refresh the note's embedding chunks. Returns false (logged) on failure. */
+  /** Replace the note's embedding chunks. Throws on failure. */
+  private async indexChunks(note: Note): Promise<void> {
+    const owner = noteOwner(note);
+    await this.embeddings.deleteBySource(owner, 'note', sourceIdFor(note.id));
+    if (note.body.trim().length === 0) return;
+    await this.embeddings.indexText(owner, 'note', sourceIdFor(note.id), note.body, {
+      title: note.title,
+    });
+  }
+
+  /**
+   * Refresh the note's embedding chunks. Returns false (logged) on failure.
+   * Without an embedding model nothing is chunked: the note is recorded for
+   * the catch-up that indexes it once a model is configured.
+   */
   private async reindex(note: Note): Promise<boolean> {
-    try {
-      const owner = noteOwner(note);
-      await this.embeddings.deleteBySource(owner, 'note', sourceIdFor(note.id));
+    if (!(await capabilityConfigured('embedding'))) {
+      // The earlier body's chunks go now (deleting needs no model), so a
+      // keyword search never serves text the note no longer has.
+      await this.embeddings.deleteBySource(noteOwner(note), 'note', sourceIdFor(note.id))
+        .catch((err: unknown) => coreLogger.warn({ err, noteId: note.id }, 'Could not remove the earlier chunks of an edited note'));
       if (note.body.trim().length === 0) return true;
-      await this.embeddings.indexText(owner, 'note', sourceIdFor(note.id), note.body, {
-        title: note.title,
-      });
+      await recordSkipped({ kind: 'note', sourceId: note.id, ownerUserId: note.userId, workspaceId: note.workspaceId ?? null })
+        .catch((err: unknown) => coreLogger.warn({ err, noteId: note.id }, 'Could not record the note for catch-up indexing'));
+      return false;
+    }
+    try {
+      await this.indexChunks(note);
       return true;
     } catch (err) {
       coreLogger.warn(
@@ -454,6 +475,24 @@ export class NoteService {
       );
       return false;
     }
+  }
+
+  /**
+   * The catch-up (src/core/rag/index-backlog.ts): index a note saved while no
+   * embedding model was configured. False when the note no longer exists.
+   * Throws when indexing fails, so the catch-up keeps the item for a retry.
+   */
+  async reindexById(noteId: string, ownerUserId: string, workspaceId: string | null): Promise<boolean> {
+    // Through the scoped repository, as the backlog row's owner: their own
+    // note, or the note of the space it was saved in.
+    const repo = this.notes;
+    const note = (await repo.getById(ownerUserId, noteId))
+      ?? (workspaceId
+        ? await repo.getById({ kind: 'space', workspaceId, userId: ownerUserId, role: 'editor', archived: false }, noteId)
+        : null);
+    if (!note) return false;
+    await this.indexChunks(note);
+    return true;
   }
 
   async getById(scope: NoteScope, id: string): Promise<Note | null> {

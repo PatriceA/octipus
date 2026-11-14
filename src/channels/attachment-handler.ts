@@ -50,11 +50,13 @@ function isProcessable(attachment: Attachment): boolean {
  * download files, create DB records, enqueue for OCR/categorization.
  */
 /** Returns the ids of the documents enqueued for this message, for result routing. */
-export async function processChannelAttachments(message: UnifiedMessage): Promise<string[]> {
+export async function processChannelAttachments(message: UnifiedMessage, opts: { includeImages?: boolean } = {}): Promise<string[]> {
   const enqueued: string[] = [];
   if (!message.attachments?.length) return enqueued;
 
-  const processable = message.attachments.filter(isProcessable);
+  // An image is a message to the agent, not a document: it is filed only when
+  // asked (`media.fileChannelImages`) or when it came with documents.
+  const processable = message.attachments.filter((a) => isProcessable(a) && (opts.includeImages !== false || !a.mimeType?.startsWith('image/')));
   if (processable.length === 0) return enqueued;
 
   const config = getConfig();

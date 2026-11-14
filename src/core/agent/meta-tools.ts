@@ -422,6 +422,8 @@ export function createMetaTools(
     },
     {
       name: 'remember_this',
+      // A memory row carries its embedding (dedup probe + recall vector).
+      requires: ['embedding'],
       description:
         'Promote one durable fact about the user into long-term memory. Use SPARINGLY — only when the user states something the next session genuinely needs to recall (preference, profile fact, recurring workflow note). Do NOT use for one-shot intents, transient task state, or facts about anyone other than the user. The fact must be one sentence, third-person about the user. PII is auto-redacted; do not pre-redact.',
       parameters: {

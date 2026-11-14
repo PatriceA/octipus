@@ -365,87 +365,81 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
   .get('/features', async ({ user, principal, set }) => {
     const denied = adminDenied({ set, user, principal });
     if (denied) return denied;
+    // Text lanes resolve to their own binding; the root runs on the default
+    // model. Media rows report what EFFECTIVELY serves them (the media
+    // resolver: a lane, or the default model where that counts), and every
+    // row but chat is optional (docs/MODULES.md → Capability gates).
     const FEATURE_TOPICS = [
       { key: 'chat', name: 'Chat', topic: 'general', required: true,
-        help: 'The base chat brain — every message that is not delegated runs on your default model.',
+        help: 'The base chat brain — every message that is not delegated runs on your default model. The only thing Octipus requires.',
         hint: 'Add a model and set it as the default' },
-      { key: 'orchestration', name: 'Orchestration', topic: 'general', required: true,
-        help: 'The swarm rootAgent that routes work to specialist agents. Its depth (Router/Light/Full) follows the default model size.',
-        hint: 'Set a default model — orchestration runs on it' },
-      { key: 'agents', name: 'Specialist agents', topic: 'agents', required: true,
-        help: 'The model lane every specialist/expert worker (Coder, custom experts, …) resolves from. Workers fail loud if unbound.',
-        hint: "Assign a model to the 'agents' topic" },
-      { key: 'writing', name: 'Writing (long-form text roles)', topic: 'writing', required: false,
-        help: 'The model lane for the Writer, Project Manager and Communication roles — split from Agents so they can run on a cheaper/faster model. Those roles fail loud if this is unbound.',
-        hint: "Assign a model to the 'writing' topic (or rebind those roles to 'agents')" },
+      { key: 'build', name: 'Build', topic: 'build', required: false,
+        help: 'Implementation, architecture, debugging and review work. Workers on this lane fail loud while it is unbound.',
+        hint: "Assign a model to the 'build' topic" },
+      { key: 'everyday', name: 'Everyday', topic: 'everyday', required: false,
+        help: 'Chat, lookups, summaries, drafting: high volume, low stakes.',
+        hint: "Assign a fast, cheap model to the 'everyday' topic" },
+      { key: 'verify', name: 'Verify', topic: 'verify', required: false,
+        help: 'Review and QA — best a different model from the one that did the work. Unbound: falls back to build.',
+        hint: "Assign a model to the 'verify' topic" },
       { key: 'research', name: 'Research', topic: 'research', required: false,
-        help: 'The model lane for investigation and deep research — the highest-token work in the system, since a researcher fans out into children that each re-send a growing context. Its own lane so it can be pinned to a local or cheap model. Research fails loud if this is unbound.',
+        help: 'Investigation and deep research — the highest-token work. Research fails loud if this is unbound.',
         hint: "Assign a (local/cheap) model to the 'research' topic" },
-      { key: 'embedding', name: 'Knowledge base (embeddings)', topic: 'embedding', required: true,
-        help: 'Embeddings power knowledge-base indexing and semantic search. Required for RAG.',
-        hint: "Assign the 'embedding' topic to an embedding model" },
       { key: 'background', name: 'Background tasks', topic: 'background', required: false,
-        help: 'Memory extraction, knowledge-base review, evaluation, chunk summaries, tool-call translation. Optional — without it these features are skipped.',
+        help: 'Memory extraction, knowledge-base review, evaluation, chunk summaries, tool-call translation. Without it these features are skipped.',
         hint: "Assign a (cheap/local) model to the 'background' topic" },
-      { key: 'ocr', name: 'Document OCR', topic: 'ocr', required: false,
-        help: 'Extracts text from scanned PDFs and images. Falls back to the Vision model if unset.',
-        hint: "Assign an OCR model (e.g. glm-ocr) to the 'ocr' topic" },
-      { key: 'vision', name: 'Image vision', topic: 'vision', required: false,
-        help: 'Describes image attachments and is the fallback for OCR.',
-        hint: "Assign a vision model to the 'vision' topic" },
-      { key: 'voice', name: 'Voice calls', topic: 'voice', required: false,
-        help: 'Phone-call conversations (Twilio/Telnyx/Plivo). Optional — falls back to the default model if unset.',
-        hint: "Assign a fast model to the 'voice' topic" },
+      { key: 'embedding', name: 'Search & memory (embeddings)', topic: 'embedding', required: false,
+        help: 'Knowledge-base indexing, semantic search and memory. Without one these features are off (not broken); content saved meanwhile is indexed once one is added.',
+        hint: "Assign an embedding model to the 'embedding' topic" },
+      { key: 'vision', name: 'Reading images', topic: 'vision', required: false, need: 'see',
+        help: 'A model that reads images itself gets them directly. This row shows what reads images for models that cannot: the Vision lane, else the default model if it reads images.',
+        hint: "Use a default model that reads images, or assign one to the 'vision' topic" },
+      { key: 'ocr', name: 'Scanned documents (OCR)', topic: 'ocr', required: false, need: 'ocr',
+        help: 'Extracts text from scanned PDFs and images: the OCR lane, else Vision, else the default model if it reads images.',
+        hint: "Assign an OCR model (e.g. DeepSeek-OCR, GLM-OCR) to the 'ocr' topic" },
+      { key: 'image_generation', name: 'Image generation', topic: 'image_generation', required: false, need: 'draw',
+        help: 'Creates and edits images (generate_image). Without it the tool is not offered.',
+        hint: "Assign an image model to the 'image_generation' topic" },
+      { key: 'transcription', name: 'Speech to text', topic: 'transcription', required: false, need: 'hear',
+        help: 'Voice notes, the microphone, phone calls and transcribe_audio. Without it voice input is off.',
+        hint: "Assign a transcription model or local engine to the 'transcription' topic" },
+      { key: 'speech', name: 'Text to speech', topic: 'speech', required: false, need: 'speak',
+        help: 'Spoken replies, phone calls and speak. Without it spoken output is off.',
+        hint: "Assign a speech model or local engine to the 'speech' topic" },
     ] as const;
 
     const registry = getModelRegistry();
-    // Chat and Orchestration run on the *default* model: the root agent and
-    // router resolve via getDefaultModel(), and getModelForTopic() has no
-    // default fallback. So a 'general' binding is NOT what makes them work —
-    // resolve those rows against the default instead of the topic.
     const defaultModel = await registry.getDefaultModel();
-
-    // A model "explicitly" serves a specialist topic only when it carries that
-    // topic (legacy array or topicRoles) — the default model can't stand in.
-    const isExplicit = (
-      model: Awaited<ReturnType<typeof registry.getModelForTopic>>,
-      topic: string,
-    ): boolean => !!(model && (model.topics?.includes(topic) || (model.topicRoles && topic in model.topicRoles)));
-
-    const SPECIALIST_TOPICS = ['embedding', 'vision', 'ocr'];
+    const { resolveMedia } = await import('@/models/media-resolver');
 
     const features = await Promise.all(
-      FEATURE_TOPICS.map(async ({ key, name, topic, required, help, hint }) => {
+      FEATURE_TOPICS.map(async (feature) => {
+        const { key, name, topic, required, help, hint } = feature;
         try {
           if (topic === 'general') {
             const configured = !!defaultModel;
-            return {
-              key, name, topic, required, help, configured,
-              model: configured ? defaultModel!.name : null,
-              ...(configured ? {} : { hint }),
-            };
+            return { key, name, topic, required, help, configured, model: configured ? defaultModel!.name : null, ...(configured ? {} : { hint }) };
           }
-
-          const model = await registry.getModelForTopic(topic);
-          const explicit = SPECIALIST_TOPICS.includes(topic) ? isExplicit(model, topic) : !!model;
-          let configured = !!(model && explicit);
-          let resolvedModel = configured ? model!.name : null;
-
-          // The document processor falls OCR back to the vision model, so OCR
-          // is functional whenever either 'ocr' or 'vision' is explicitly bound.
-          if (key === 'ocr' && !configured) {
-            const vision = await registry.getModelForTopic('vision');
-            if (isExplicit(vision, 'vision')) {
-              configured = true;
-              resolvedModel = `${vision!.name} (via vision)`;
+          if ('need' in feature) {
+            const resolution = await resolveMedia(feature.need);
+            if (resolution.mode !== 'none') {
+              const model = resolution.mode === 'lane' && resolution.lane === 'default' ? `${resolution.row.name} (default model)` : resolution.row.name;
+              return { key, name, topic, required, help, configured: true, model };
             }
+            return { key, name, topic, required, help, configured: false, model: null, hint };
           }
-
-          return {
-            key, name, topic, required, help, configured,
-            model: resolvedModel,
-            ...(configured ? {} : { hint }),
-          };
+          const model = await registry.getModelForTopic(topic);
+          const configured = !!model;
+          // The local embedding engine: whether it is installed, running, crashing.
+          const engine = model?.provider === 'local-engine'
+            ? await (async () => {
+              const { localEngineStatus, isModelInstalled } = await import('@/capabilities/local-engine/engine-process');
+              const { localEmbeddingModel } = await import('@/capabilities/local-engine/manifest');
+              const entry = localEmbeddingModel(model.modelId);
+              return { ...localEngineStatus(), installed: !!entry && isModelInstalled(entry) };
+            })()
+            : undefined;
+          return { key, name, topic, required, help, configured, model: configured ? model!.name : null, ...(engine ? { localEngine: engine } : {}), ...(configured ? {} : { hint }) };
         } catch {
           return { key, name, topic, required, help, configured: false, model: null, hint };
         }

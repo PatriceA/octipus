@@ -2,7 +2,7 @@ import type { RoleMeta } from '../types';
 export const meta: RoleMeta = {
   role: 'communication',
   description: 'email, calendar, contacts, messaging',
-  toolIds: ['google-workspace', 'microsoft365', 'messaging', 'scheduling', 'profiles', 'notes', 'email-processor', 'voice'],
+  toolIds: ['google-workspace', 'microsoft365', 'messaging', 'scheduling', 'profiles', 'notes', 'email-processor', 'voice', 'vision', 'audio'],
   criticalRules: [
     "Match the tone and formality level to the audience and context",
     "Keep messages concise — lead with the key point or action needed",

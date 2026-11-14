@@ -1,3 +1,6 @@
+/** Vendor identity used by CLI model discovery and credential scoping. */
+export type CliModelProvider = 'anthropic' | 'google' | 'openai' | 'mistral' | 'zai' | 'moonshot' | 'grok' | 'meta';
+
 /**
  * Product-facing CLI adapter limits, shared by backend, web and TUI.
  * Pure: no node imports, so the web bundle can use it.
@@ -5,8 +8,10 @@
 export interface CliCapabilitySource {
   /** Whole result arrives at process exit (no streamed events). */
   bufferOutput?: boolean;
-  /** How the CLI reaches its Octipus tools; defaults to a per-run MCP config. `mcp-only`: the run has no vendor-native tools at all. */
-  toolBridge?: 'mcp' | 'mcp-only' | 'terminal';
+  /** Every action goes through the session's Octipus tools. */
+  octipusToolsOnly?: boolean;
+  /** How the CLI reaches its Octipus tools; defaults to a per-run MCP config. */
+  toolBridge?: 'mcp' | 'terminal';
   name?: string;
   adapter?: string;
 }
@@ -24,11 +29,12 @@ export const CLI_SPACE_REFUSALS: Readonly<Record<string, string>> = {
 export function describeCliCapabilities(tool: CliCapabilitySource): string {
   const buffered = tool.bufferOutput === true;
   const refusal = CLI_SPACE_REFUSALS[tool.adapter ?? tool.name ?? ''];
-  return `${tool.toolBridge === 'terminal' ? 'Octipus tools via terminal bridge' : tool.toolBridge === 'mcp-only' ? 'Octipus tools only, via scoped MCP (no vendor-native tools)' : 'Octipus tools via scoped MCP'} · visible plans and feedback · ` +
+  return `${tool.toolBridge === 'terminal' ? 'Octipus tools via terminal bridge' : 'Octipus tools via scoped MCP'} · visible plans and feedback · ` +
     `${buffered ? 'activity reported at completion' : 'streamed activity'}. ` +
     'Guidance arrives with the next Octipus tool response. ' +
     (buffered ? 'Late guidance is reported with the result and needs another message. ' : 'Late guidance can use a bounded follow-up turn. ') +
-    (tool.toolBridge === 'mcp-only' ? 'Every tool call uses Octipus approvals.' : 'Octipus tool approvals use this session; vendor-native controls vary.') +
+    (tool.octipusToolsOnly ? 'All actions use this session’s Octipus permissions; vendor-native tools are disabled.'
+      : 'Octipus tool approvals use this session; vendor-native controls vary.') +
     (refusal ? ` Not available in shared spaces or on personal models: ${refusal}.` : '');
 }
 
@@ -41,6 +47,7 @@ export const SCOPED_EXTRA_ARGS: Record<string, { flags: readonly string[]; value
   'Codex CLI': { flags: ['--strict-config'], values: { '--color': ['auto', 'always', 'never'] } },
   'Mistral Vibe': { flags: [], values: {} },
   'Muse Code': { flags: [], values: { '--reasoning-effort': ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] } },
+  'Grok Build': { flags: [], values: {} },
   Antigravity: { flags: ['--disable-slash-commands'], values: { '--effort': ['low', 'medium', 'high'] } },
 };
 
@@ -66,6 +73,7 @@ export const CLI_RESUME: Record<string, { style: 'caller-minted' | 'captured'; f
   'Claude Code': { style: 'caller-minted', flag: '--resume' },
   'Codex CLI': { style: 'captured', flag: 'resume' },
   'Muse Code': { style: 'caller-minted', flag: 'session/resume' },
+  'Grok Build': { style: 'caller-minted', flag: '--resume' },
 };
 
 /**

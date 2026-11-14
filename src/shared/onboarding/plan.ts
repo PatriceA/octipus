@@ -9,7 +9,7 @@
  * listed as `done`, so the person sees it was found, not forgotten. The same
  * step asked for by two use cases appears once.
  */
-import { cliModelName, EMBEDDING_MODELS, KEY_PROVIDERS, picked, sectionsFor } from './use-cases';
+import { cliModelName, EMBEDDING_MODELS, IMAGE_MODELS, KEY_PROVIDERS, keyAvailable, mediaKeyProvider, picked, sectionsFor, VOICE_ENGINES } from './use-cases';
 import type { Answers, ApiCall, OnboardingState, PlanStep, UseCaseId } from './types';
 
 /** The lanes `/topics/assign-all` binds (src/models/topics.ts TEXT_TOPIC_VALUES). */
@@ -222,6 +222,12 @@ function modelSteps(plan: Plan, a: Answers, s: OnboardingState): void {
 
   const embedding = str(a, 'models.embedding');
   if (embedding === 'keep' && s.models.embeddingReady) plan.done('models:embedding', 'Document search already has a model');
+  if (embedding === 'local' && !s.models.embeddingReady) {
+    // A background download; the install binds the model only while the lane is still unbound.
+    plan.api('local-embedding', `Install ${s.localEmbedding?.label ?? 'the local embedding model'} on this server`, { method: 'POST', path: '/local-engine/install', body: {} }, {
+      detail: 'Downloads in the background; the Topics page shows the progress. Search turns on when it finishes.',
+    });
+  }
   if (embedding === 'ollama' || embedding === 'openai') {
     const m = EMBEDDING_MODELS[embedding];
     const url = str(a, 'models.ollamaUrl') || s.ollama.url;
@@ -235,6 +241,70 @@ function modelSteps(plan: Plan, a: Answers, s: OnboardingState): void {
     const name = modelName(m.provider, m.modelId);
     const step = ensureModel(plan, s, name, { provider: m.provider, modelId: m.modelId, ...(embedding === 'ollama' ? { endpoint: url } : {}) }, `Add ${m.modelId} for search`, deps);
     bind(plan, s, 'embedding', name, step, 'Use it to search documents, notes and memories');
+  }
+}
+
+/**
+ * The key a media choice needs: stored from the answer, or already there, or
+ * a to-do to add it (and the lane stays unbound). Returns the step ids the
+ * media steps wait for, or null when there is no key to use.
+ */
+function mediaKey(plan: Plan, a: Answers, s: OnboardingState, provider: string, answer: string): string[] | null {
+  const label = KEY_PROVIDERS.find((p) => p.id === provider)?.label ?? provider;
+  const key = str(a, answer);
+  if (key) {
+    plan.api(`key:${provider}`, `Store your ${label} API key`, { method: 'PUT', path: '/settings/batch', body: { settings: { [`${provider}.apiKey`]: key } } }, { secret: true, detail: 'Encrypted in the vault.' });
+    return [`key:${provider}`];
+  }
+  if (keyAvailable(a, s, provider)) return plan.has('key:main') && str(a, 'models.provider') === provider ? ['key:main'] : plan.has(`key:${provider}`) ? [`key:${provider}`] : [];
+  plan.add({ id: `todo:key:${provider}`, kind: 'todo', title: `Add your ${label} API key`, detail: 'Under Settings → Secrets. Then run this guide again, or choose the model on the Topics page.', href: '/secrets' });
+  return null;
+}
+
+/**
+ * Images and audio (docs/MEDIA.md, docs/VOICE.md), admins only. Nothing is
+ * planned unless chosen: the default answers skip both.
+ */
+function mediaSteps(plan: Plan, a: Answers, s: OnboardingState): void {
+  if (!s.isAdmin) return;
+  const imageProvider = mediaKeyProvider(a, 'image');
+  const image = IMAGE_MODELS.find((m) => m.provider === imageProvider);
+  if (image) {
+    const deps = mediaKey(plan, a, s, image.provider, 'media.imageKey');
+    if (deps) {
+      const name = modelName(image.provider, image.modelId);
+      // An image model is not a chat model: it calls no tools and streams nothing.
+      const step = ensureModel(plan, s, name, { provider: image.provider, modelId: image.modelId, supportsTools: false, supportsStreaming: false }, `Add ${image.modelId} for drawing images`, deps.length ? deps : undefined);
+      const previous = s.models.byTopic.image_generation;
+      if (previous && previous !== name) {
+        // A model already draws here: it stays, as the backup (nothing that worked stops working).
+        plan.api('bind:image_generation', `Use ${image.modelId} to generate images (${previous} stays as backup)`,
+          { method: 'PUT', path: '/topics/image_generation/binding', body: { primaryModel: name, backupModel: previous } }, { dependsOn: step ? [step] : undefined });
+      } else {
+        bind(plan, s, 'image_generation', name, step, `Use ${image.modelId} to generate images`);
+      }
+    }
+  }
+
+  const voice = str(a, 'media.voice');
+  if (voice !== 'local' && voice !== 'cloud') return;
+  const provider = voice === 'cloud' ? mediaKeyProvider(a, 'voice') : 'local';
+  if (provider !== 'local' && provider !== 'openai' && provider !== 'mistral') return;
+  // A key entered for images serves voice too when it is the same provider.
+  const deps = provider === 'local' ? [] : plan.has(`key:${provider}`) ? [`key:${provider}`] : mediaKey(plan, a, s, provider, 'media.voiceKey');
+  if (!deps) return;
+  // The engines come from the speech catalog (POST /voice/engines/use creates
+  // the row and binds it primary; one it replaces stays as the backup). The
+  // route is the Voice module's, turned on first (requiredModules).
+  const after = [...deps, ...(plan.has('modules') ? ['modules'] : [])];
+  const engines = VOICE_ENGINES[provider];
+  const where = provider === 'local' ? 'Runs on this server; needs `uv`, and the model downloads once.' : 'Uses your API key; billed by the provider.';
+  for (const [direction, lane, title] of [['stt', 'transcription', 'Hear you (speech to text)'], ['tts', 'speech', 'Speak replies (text to speech)']] as const) {
+    const engine = direction === 'stt' ? engines.stt : engines.tts;
+    plan.api(`voice:${direction}`, `${title} with ${engine.name}`, {
+      method: 'POST', path: '/voice/engines/use',
+      body: { direction, engine: engine.engine, ...('size' in engine && engine.size ? { size: engine.size } : {}), makePrimary: true },
+    }, { dependsOn: after.length ? after : undefined, detail: `Binds the ${lane === 'transcription' ? 'Transcription' : 'Speech'} lane. ${where}` });
   }
 }
 
@@ -457,6 +527,8 @@ function requiredModules(a: Answers): Map<string, string> {
   if (chatChannel && chatChannel !== 'none') required.set('channels', 'Chat channels');
   const useCases = (a._useCases as UseCaseId[] | undefined) ?? [];
   if (useCases.includes('company') && yes(a, 'company.mail')) required.set('inbox', 'Email inbox');
+  // Voice chosen under Images & audio: its engines are set through the Voice module's routes.
+  if (a._basicsOnly !== true && (str(a, 'media.voice') === 'local' || str(a, 'media.voice') === 'cloud')) required.set('voice', 'Voice and phone calls');
   return required;
 }
 
@@ -538,6 +610,7 @@ export function buildPlan(useCases: readonly UseCaseId[], answers: Answers, stat
   if (asked.has('models')) modelSteps(plan, a, state);
   if (asked.has('areas')) areaSteps(plan, a, state, opts);
   if (asked.has('chat')) chatSteps(plan, a, state);
+  if (asked.has('media')) mediaSteps(plan, a, state);
   if (asked.has('dev')) devSteps(plan, a, state);
   if (asked.has('tools')) trackerSteps(plan, a, state);
   if (asked.has('company')) companySteps(plan, a, state);

@@ -33,6 +33,11 @@ export interface OnboardingState {
   /** CLI coding agents on this host (admins only). */
   cliTools: Array<{ name: string; modelId: string; available: boolean }>;
   ollama: { url: string; reachable: boolean };
+  /**
+   * The optional local embedding engine (docs/RAG.md → Local embeddings):
+   * offered when a build exists for this host (admins only).
+   */
+  localEmbedding?: { supported: boolean; label: string; sizeMb: number };
   workspaces: Array<{ id: string; name: string; slug: string; kind: string; isDefault: boolean }>;
   /** The caller's connected mailbox. */
   mailbox: 'google' | 'microsoft' | null;

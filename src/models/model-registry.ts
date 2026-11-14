@@ -1,3 +1,4 @@
+import { notifyCapabilitiesChanged } from '@/core/capabilities/gates';
 import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { mayUseInstallModels } from '@/models/install-access';
@@ -7,7 +8,7 @@ import { type ModelConfigEntry, modelConfig, type NewModelConfigEntry, userModel
 import { getCapabilitiesForModel, type ModelCapabilities } from '@/models/capabilities';
 import { EXTENSION_MODEL_PREFIX, getExtensionModel, isExtensionModelName, listExtensionModels } from '@/models/extension-models';
 import { SINGLE_MODEL_CHAT_TOPICS } from '@/models/single-model-binding';
-import { canonicalTopic } from '@/models/topics';
+import { canonicalTopic, MEDIA_TOPIC_VALUES } from '@/models/topics';
 import { getUserOrgIds } from '@/services/org-membership';
 import { modelLogger } from '@/utils/logger';
 
@@ -502,6 +503,8 @@ export class ModelRegistry {
     if (result.length > 0) {
       modelLogger.info({ model: name }, 'Default model changed');
       await this.cacheDelete('model:default');
+      // Whether the default model reads images decides `see` (gates.ts).
+      notifyCapabilitiesChanged();
       return true;
     }
 
@@ -556,11 +559,15 @@ export class ModelRegistry {
     // / evaluation) plus the non-text model classes, so adding a topic in one
     // place keeps invalidation correct — previously this hardcoded list silently
     // omitted knowledge_review and evaluation, leaking their stale bindings.
-    const topics = [...SINGLE_MODEL_CHAT_TOPICS, 'embedding', 'ocr', 'vision', 'decision'];
+    const topics = [...SINGLE_MODEL_CHAT_TOPICS, ...MEDIA_TOPIC_VALUES, 'decision'];
     for (const topic of topics) {
       await this.cacheDelete(`model:topic:${topic}`);
       await this.cacheDelete(`model:topic:backup:${topic}`);
     }
+    // A row or a binding changed: what the install has a model for may have
+    // too (src/core/capabilities/gates.ts). After the caches are gone, so the
+    // refresh reads the new bindings, not the cached old ones.
+    notifyCapabilitiesChanged();
   }
 }
 

@@ -114,10 +114,16 @@ export class TelegramChannel extends BaseChannel {
 
     const chatId = parseInt(channelId, 10);
 
-    // Send attachments first
+    // Send attachments first. One that cannot be sent (too large, a format
+    // Telegram refuses) never loses the reply: it is logged and the text goes out.
     if (response.attachments?.length) {
       for (const attachment of response.attachments) {
-        await this.sendAttachment(chatId, attachment, response.replyTo, response.threadId);
+        try {
+          await this.sendAttachment(chatId, attachment, response.replyTo, response.threadId);
+        } catch (err) {
+          channelLogger.warn({ err, type: attachment.type, filename: attachment.filename }, 'Telegram attachment could not be sent');
+          (response.undelivered ??= []).push({ filename: attachment.filename, type: attachment.type, error: (err as Error).message });
+        }
       }
     }
 
@@ -504,7 +510,9 @@ export class TelegramChannel extends BaseChannel {
         if (attachment.url) {
           await this.bot.api.sendPhoto(chatId, attachment.url, options);
         } else if (attachment.data) {
-          await this.bot.api.sendPhoto(chatId, new Blob([attachment.data as BlobPart]) as any, options);
+          // A generated image arrives as bytes.
+          const { InputFile } = await import('grammy');
+          await this.bot.api.sendPhoto(chatId, new InputFile(attachment.data as Uint8Array, attachment.filename || 'image.png'), options);
         }
         break;
 
@@ -514,6 +522,9 @@ export class TelegramChannel extends BaseChannel {
             ...options,
             caption: attachment.filename,
           });
+        } else if (attachment.data) {
+          const { InputFile } = await import('grammy');
+          await this.bot.api.sendDocument(chatId, new InputFile(attachment.data as Uint8Array, attachment.filename || 'file'), options);
         }
         break;
 
@@ -521,8 +532,17 @@ export class TelegramChannel extends BaseChannel {
         if (attachment.url) {
           await this.bot.api.sendAudio(chatId, attachment.url, options);
         } else if (attachment.data) {
-          // Voice-out: synthesized TTS arrives as raw bytes, not a URL.
+          // Speech arrives as raw bytes. A spoken reply is a voice note
+          // (OGG/Opus); other audio, or a failed conversion, a music file.
           const { InputFile } = await import('grammy');
+          if (attachment.voice) {
+            const { toVoiceNote } = await import('@/voice/voice-note');
+            const note = await toVoiceNote(attachment.data, attachment.mimeType).catch(() => null);
+            if (note) {
+              await this.bot.api.sendVoice(chatId, new InputFile(new Uint8Array(note), 'reply.ogg'), options);
+              break;
+            }
+          }
           await this.bot.api.sendAudio(chatId, new InputFile(attachment.data as Uint8Array, attachment.filename), options);
         }
         break;

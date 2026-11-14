@@ -8,10 +8,11 @@ import { api } from '@/lib/api';
 import { Portal } from '@/components/ui/portal';
 import type { CLITool, Model } from '@/lib/types/models';
 
-type CliKind = 'claude' | 'antigravity' | 'codex' | 'vibe' | 'muse' | 'glm' | 'kimi' | null;
+type CliKind = 'claude' | 'antigravity' | 'codex' | 'vibe' | 'muse' | 'glm' | 'kimi' | 'grok' | null;
 
 function fallbackCliKind(modelId: string): CliKind {
   const id = modelId.toLowerCase();
+  if (id.startsWith('cli/grok')) return 'grok';
   if (id.includes('claude')) return 'claude';
   if (id.includes('antigravity') || id.includes('agy') || id.includes('gemini')) return 'antigravity';
   if (id.includes('codex')) return 'codex';
@@ -35,6 +36,7 @@ function cliKindForTool(tool: CLITool | undefined, modelId: string): CliKind {
     case 'meta': return 'muse';
     case 'zai': return 'glm';
     case 'moonshot': return 'kimi';
+    case 'grok': return 'grok';
     default: return fallbackCliKind(modelId);
   }
 }
@@ -82,12 +84,15 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
     defaultMaxTokens: model.defaultMaxTokens ?? Math.min(4096, model.maxTokens),
     priority: model.priority,
     supportsVision: model.supportsVision,
+    supportsAudioInput: model.supportsAudioInput ?? false,
     supportsTools: model.supportsTools,
     supportsStreaming: model.supportsStreaming,
     disableThinking: model.metadata?.extraBody?.think === false,
     allowRetainedPersonalData: model.metadata?.allowRetainedPersonalData === true,
     // Stored as a raw count; the field edits in billions for readability.
     paramCountB: model.metadata?.paramCount ? String(model.metadata.paramCount / 1_000_000_000) : '',
+    // A local speech engine's model file (whisper.cpp ggml, Piper .onnx).
+    modelPath: (model.metadata as { modelPath?: string } | undefined)?.modelPath ?? '',
     costPerInputToken: model.costPerInputToken,
     costPerOutputToken: model.costPerOutputToken,
     // CLI agent settings
@@ -121,7 +126,8 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
   const supportsModelOverride = cliKind !== 'vibe';
   const supportsApiKeyInheritance = cliKind !== 'glm' && cliKind !== 'kimi';
   // Muse Code runs with Octipus tools only: no vendor permission mode to translate.
-  const supportsPermissionMode = cliKind !== 'muse';
+  // Muse Code and Grok Build have no tools of their own: Octipus decides every call.
+  const supportsPermissionMode = cliKind !== 'muse' && cliKind !== 'grok';
   const preservedNativePermission = formData.cliPermissionMode && !SHARED_PERMISSION_MODES.has(formData.cliPermissionMode)
     ? formData.cliPermissionMode
     : null;
@@ -169,6 +175,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
         defaultMaxTokens: formData.defaultMaxTokens,
         priority: formData.priority,
         supportsVision: formData.supportsVision,
+        supportsAudioInput: formData.supportsAudioInput,
         supportsTools: formData.supportsTools,
         supportsStreaming: formData.supportsStreaming,
         costPerInputToken: formData.costPerInputToken,
@@ -243,6 +250,12 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
         };
       }
 
+      if (model.provider === 'local-audio') {
+        const base = (payload.metadata as Record<string, unknown> | undefined) ?? { ...(model.metadata || {}) };
+        if (formData.modelPath.trim()) base.modelPath = formData.modelPath.trim();
+        else delete base.modelPath;
+        payload.metadata = base;
+      }
       // Parameter count drives root agent auto-mode selection. Apply it last
       // so none of the provider-specific metadata branches above clobber it,
       // and only send metadata when there's something to persist.
@@ -339,6 +352,19 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
             </div>
           </div>
 
+          {model.provider === 'local-audio' && (
+            <div>
+              <label className="block text-sm font-medium text-on-surface-variant mb-1">Model file</label>
+              <input
+                type="text"
+                value={formData.modelPath}
+                onChange={(e) => setFormData({ ...formData, modelPath: e.target.value })}
+                placeholder="Empty = the installed default (whisper.cpp ggml or Piper .onnx path)"
+                className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface"
+              />
+            </div>
+          )}
+
           <div>
             <label className="block text-sm font-medium text-on-surface-variant mb-1">Parameter Count (billions)</label>
             <input
@@ -385,7 +411,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
           {!isCli && <label className="block text-sm">Default output limit per request (tokens)
             <input className="w-full rounded-lg bg-surface-container-high px-3 py-2" type="number" min={1} max={formData.maxTokens} value={formData.defaultMaxTokens} onChange={e => setFormData({ ...formData, defaultMaxTokens: Number(e.target.value) })} />
           </label>}
-          {!isCli && <ProviderSettingsFields controls={model.providerControls} provider={model.provider} model={model.modelId} settings={providerSettings} pricing={pricing} onSettings={setProviderSettings} onPricing={setPricing} />}
+          {!isCli && <ProviderSettingsFields controls={model.providerControls} provider={model.provider} model={model.modelId} topics={model.topics ?? []} settings={providerSettings} pricing={pricing} onSettings={setProviderSettings} onPricing={setPricing} />}
           <div className="flex flex-wrap gap-4">
             <label className="flex items-center gap-2 cursor-pointer">
               <input
@@ -394,7 +420,16 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 onChange={(e) => setFormData({ ...formData, supportsVision: e.target.checked })}
                 className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary"
               />
-              <span className="text-sm text-on-surface-variant">Vision</span>
+              <span className="text-sm text-on-surface-variant" title="The model reads images itself; they are sent to it directly instead of through the Vision lane">Reads images</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={formData.supportsAudioInput}
+                onChange={(e) => setFormData({ ...formData, supportsAudioInput: e.target.checked })}
+                className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary"
+              />
+              <span className="text-sm text-on-surface-variant" title="The model accepts audio as input (Gemini, gpt-4o-audio, Voxtral, Qwen-Omni). Speech to text is the Transcription lane, not this">Hears audio</span>
             </label>
             <label className="flex items-center gap-2 cursor-pointer">
               <input
@@ -588,7 +623,11 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 <p className="text-xs text-on-surface-variant mt-1">
                   Octipus translates this level to the CLI&apos;s native permission controls.
                 </p>
-              </div> : (
+              </div> : cliKind === 'grok' ? (
+                <p className="text-sm text-on-surface-variant">
+                  Grok Build uses this session’s Octipus tools and approvals. Access is managed in Environments &amp; Access.
+                </p>
+              ) : (
                 <p className="text-xs text-on-surface-variant">
                   Muse Code has no tools of its own here: every tool call is an Octipus tool, decided by Octipus&apos;s permission rules.
                 </p>

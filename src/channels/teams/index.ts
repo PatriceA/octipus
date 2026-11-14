@@ -374,15 +374,15 @@ export class TeamsChannel extends BaseChannel {
       let activity: Partial<Activity>;
 
       if (response.attachments?.length) {
-        // Create adaptive card or attachments
-        const attachments = response.attachments.map((att) => ({
-          contentType: att.mimeType,
-          contentUrl: att.url,
-          name: att.filename,
-        }));
-
+        // Bytes: an image up to 1 MB goes inline (data URL); anything else
+        // needs a URL Teams can fetch — a short-lived public link, or, without
+        // a public address, a line saying the file is in the web app.
+        const { attachments, notes } = await teamsAttachments(response.attachments);
         const { MessageFactory } = await import('botbuilder');
-        activity = MessageFactory.attachment(attachments[0], response.content);
+        const text = [response.content, ...notes].filter(Boolean).join('\n\n');
+        activity = attachments.length
+          ? MessageFactory.list(attachments as never[], text)
+          : MessageFactory.text(text);
       } else {
         const { MessageFactory } = await import('botbuilder');
         activity = MessageFactory.text(response.content);
@@ -616,3 +616,45 @@ export class TeamsChannel extends BaseChannel {
 }
 
 export const teamsChannel = new TeamsChannel();
+
+/**
+ * Channel attachments as Teams attachments. Bytes: an image up to 1 MB goes
+ * inline (data URL); anything else needs a URL Teams can fetch — a
+ * short-lived public link, or, without a public address, a line saying the
+ * file is in the web app.
+ */
+export async function teamsAttachments(list: Attachment[]): Promise<{ attachments: Array<{ contentType: string; contentUrl: string; name?: string }>; notes: string[] }> {
+  const { publicMediaUrl } = await import('@/core/media/public-links');
+  const notes: string[] = [];
+  const attachments: Array<{ contentType: string; contentUrl: string; name?: string }> = [];
+  for (const att of list) {
+    const name = att.filename || (att.type === 'audio' ? 'The audio' : att.type === 'image' ? 'The image' : 'A file');
+    // Teams renders an image attachment, inline (data URL) only up to 1 MB and
+    // 1024 px; it has no audio attachment: audio and files go as a link line.
+    if (att.type === 'image') {
+      let contentUrl = att.url;
+      if (!contentUrl && att.data) {
+        contentUrl = await fitsInline(att.data)
+          ? `data:${att.mimeType};base64,${att.data.toString('base64')}`
+          : publicMediaUrl(att.data, att.mimeType, att.filename || 'image.png') ?? undefined;
+      }
+      if (contentUrl) attachments.push({ contentType: att.mimeType, contentUrl, name: att.filename });
+      else notes.push(`(${name} is in the Octipus web app: Teams needs a public address to receive it.)`);
+      continue;
+    }
+    const link = att.url ?? (att.data ? publicMediaUrl(att.data, att.mimeType, att.filename || 'file') : null);
+    notes.push(link ? `${name}: ${link} (link valid for 15 minutes)` : `(${name} is in the Octipus web app: Teams needs a public address to receive it.)`);
+  }
+  return { attachments, notes };
+}
+
+async function fitsInline(data: Buffer): Promise<boolean> {
+  if (data.length > 1024 * 1024) return false;
+  try {
+    const { default: sharp } = await import('sharp');
+    const meta = await sharp(data).metadata();
+    return (meta.width ?? 0) <= 1024 && (meta.height ?? 0) <= 1024;
+  } catch {
+    return false;
+  }
+}

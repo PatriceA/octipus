@@ -1,3 +1,6 @@
+import { openAiContentParts } from './media-content';
+import type { ImageGenerationRequest, ImageGenerationResult } from './interface';
+import { geminiImages } from './gemini-images';
 import { recordProviderUsage } from './instrumented';
 import { normalizeUsage } from './usage';
 import OpenAI from 'openai';
@@ -192,6 +195,8 @@ export class GeminiProvider implements ModelProvider {
       } else if (msg.role === 'system') {
         // Gemini 2.0+ supports system role via OpenAI-compat endpoint
         result.push({ role: 'system', content: msg.content });
+      } else if (msg.role === 'user') {
+        result.push({ role: 'user', content: openAiContentParts(msg) });
       } else {
         result.push({ role: msg.role, content: msg.content });
       }
@@ -295,6 +300,16 @@ export class GeminiProvider implements ModelProvider {
         }
       }
     }
+  }
+
+  /**
+   * Imagen (`:predict`) and Gemini image models (`:generateContent` with
+   * IMAGE output) over the native API — the OpenAI-compatible surface has no images.
+   */
+  async generateImage(request: ImageGenerationRequest): Promise<ImageGenerationResult> {
+    const apiKey = request.apiKey || await this.getApiKey();
+    if (!apiKey) throw classifyError(new Error('Gemini API key not available. Set GEMINI_API_KEY or store it in the vault.'), 'gemini');
+    return geminiImages(apiKey, request);
   }
 
   async checkHealth(): Promise<ProviderHealthStatus> {

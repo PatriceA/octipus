@@ -22,6 +22,14 @@ const m = vi.hoisted(() => ({
   deliver: vi.fn(),
   findById: vi.fn(),
 }));
+const fsRoot = vi.hoisted(() => ({ dir: '' }));
+vi.mock('@/security/workspace-fs', async (orig) => {
+  const real = await orig<typeof import('@/security/workspace-fs')>();
+  const TestFS = new Proxy(real.WorkspaceFS, {
+    get: (target, prop, receiver) => (prop === 'forAgent' ? () => target.withRoot(fsRoot.dir) : Reflect.get(target, prop, receiver)),
+  });
+  return { ...real, WorkspaceFS: TestFS };
+});
 vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ check: async () => ({ level: 'ALLOW' }) }) }));
 vi.mock('@/db/repositories/audit-repository', () => ({ auditRepository: { log: async () => {} } }));
 vi.mock('@/core/action-recovery', () => ({
@@ -118,4 +126,24 @@ test('an admin’s unattended run may only send_to_user the admin', async () => 
 
   const self = await sendToUser({ user_id: 'admin-1', message: msg() }, ctx(false, 'admin-1'));
   expect(self.success).toBe(true);
+});
+
+test('files from the workspace go with the message; one the channel refuses is reported, not "sent"', async () => {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  fsRoot.dir = await mkdtemp(join(tmpdir(), 'octipus-msg-'));
+  try {
+    await writeFile(join(fsRoot.dir, 'report.pdf'), '%PDF-1.7');
+    m.resolve.mockImplementation(async (...a: [unknown, string, string]) => allow(...a));
+    const ok = await sendMessage({ channel: 'telegram', target: 'tg-self', message: msg(), attachments: ['report.pdf'] }, ctx(true));
+    expect(ok.success).toBe(true);
+    expect(m.targetSend).toHaveBeenCalledWith(expect.objectContaining({ attachments: [expect.objectContaining({ type: 'file', mimeType: 'application/pdf', filename: 'report.pdf' })] }));
+    m.targetSend.mockImplementationOnce(async (response: { undelivered?: unknown[] }) => { response.undelivered = [{ filename: 'report.pdf', type: 'file', error: 'too big' }]; });
+    const partial = await sendMessage({ channel: 'telegram', target: 'tg-self', message: msg(), attachments: ['report.pdf'] }, ctx(true));
+    expect(partial).toMatchObject({ success: false, error: expect.stringMatching(/sent, but not report\.pdf \(too big\)/) });
+    expect((await sendMessage({ channel: 'telegram', target: 'tg-self', message: msg(), attachments: ['../etc/passwd'] }, ctx(true))).error).toMatch(/outside your workspace/);
+  } finally {
+    await rm(fsRoot.dir, { recursive: true, force: true });
+  }
 });

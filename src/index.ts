@@ -115,6 +115,44 @@ async function main() {
     // CHANGE events, so the initial load needs an explicit reset.
     resetLiteLLMClient();
 
+    // Capability gates (docs/MODULES.md → Capability gates): decide what this
+    // install has a model for BEFORE tools, prompts, jobs or routes are used,
+    // so nothing unconfigured is ever offered. Kept current from here on.
+    // Speech engines moved from `voice.*` settings onto the Transcription and
+    // Speech lanes (docs/VOICE.md): once per install, before the gates read them.
+    try {
+      const { migrateVoiceSettingsToLanes } = await import('@/voice/migrate-to-lanes');
+      await migrateVoiceSettingsToLanes();
+    } catch (err) {
+      logger.error({ err }, 'Moving the voice engine settings onto the speech lanes failed; bind them on the Topics page');
+    }
+    {
+      const { initCapabilityGates, onCapabilitiesChanged } = await import('@/core/capabilities/gates');
+      await initCapabilityGates();
+      onCapabilitiesChanged((next, previous) => {
+        // Tools whose availability follows a capability are re-checked, and a
+        // knowledge base that just got its embedding model is self-checked.
+        void import('@/tools/registry').then(({ getToolRegistry }) => getToolRegistry().invalidateAvailabilityCache());
+        if (next.embedding.on && !previous.embedding.on) {
+          void runKBSelfCheck().catch((err) => logger.error({ err }, 'KB self-check after an embedding model was configured failed'));
+        }
+      });
+      const { startIndexBacklogCatchUp } = await import('@/core/rag/index-backlog');
+      startIndexBacklogCatchUp();
+      // The local embedding engine starts in the background only when its row
+      // is the bound embedding model (otherwise it starts on demand, or never).
+      void (async () => {
+        const { getModelRegistry } = await import('@/models/model-registry');
+        const bound = await getModelRegistry().getModelForTopic('embedding');
+        if (bound?.provider !== 'local-engine') return;
+        // An update brought a new engine tag: fetched beside the old build, switched after its probe.
+        const { upgradeLocalEngineIfNeeded } = await import('@/capabilities/local-engine/install');
+        await upgradeLocalEngineIfNeeded().catch((err: unknown) => logger.warn({ err }, 'Local embedding engine update failed; the installed build stays in use'));
+        const { ensureLocalEngine } = await import('@/capabilities/local-engine/engine-process');
+        await ensureLocalEngine(bound.modelId);
+      })().catch((err: unknown) => logger.warn({ err }, 'Local embedding engine did not start at boot; it starts on the next embedding'));
+    }
+
     // Each workspace's files live under its own directory, the user's
     // default under `default`; load which is which before any turn runs.
     const { getOrgWorkspaceManager } = await import('@/security/orgs');
@@ -201,6 +239,13 @@ async function main() {
     // manual. Product help uses local on-demand search, independent of models.
     void runKBSelfCheck({ embedTimeoutMs: BOOT_KB_EMBED_TIMEOUT_MS })
       .catch((err) => logger.error({ err }, 'KB self-check threw unexpectedly — KB endpoints will 503 until /knowledge/readiness passes'));
+
+    // What each registered model can read (images, audio): detected once per
+    // row, in the background. An install from before detection has Ollama
+    // vision models marked as text-only; this fixes that without a click.
+    void import('@/models/capability-detect')
+      .then(({ detectCapabilitiesForUndetectedRows }) => detectCapabilitiesForUndetectedRows())
+      .catch((err) => logger.warn({ err }, 'Model capability detection failed; rows keep their current flags'));
 
     // Probe optional capabilities (Playwright, MCP, docker, …) and persist
     // their state to the `capabilities` table so the root agent can
@@ -505,6 +550,8 @@ async function main() {
       // otherwise a tick could claim a lease right before exit.
       stopCronLoop();
       stopRoleTurnLeaseClaims();
+      // The local embedding engine is a child process: it goes with us.
+      const engineStopped = import('@/capabilities/local-engine/engine-process').then(({ stopLocalEngine }) => stopLocalEngine()).catch(() => {});
 
       // Stop all running agents (kills CLI child processes)
       try {
@@ -610,6 +657,9 @@ async function main() {
       } catch {
         // Module may not have loaded; nothing to close.
       }
+
+      // The engine was asked to stop at the start; it has had the whole shutdown to exit.
+      await engineStopped;
 
       clearTimeout(forceExit);
       logger.info('Shutdown complete');

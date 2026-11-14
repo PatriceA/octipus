@@ -41,7 +41,32 @@ describe('AsyncLineReader', () => {
   });
 });
 
+const hasFfmpeg = (await import('node:child_process')).spawnSync('ffmpeg', ['-version']).status === 0;
+
 describe('FasterWhisperEngine', () => {
+  test.skipIf(!hasFfmpeg)('a compressed voice note is transcoded to 16 kHz PCM before it reaches the worker', async () => {
+    const { spawnSync } = await import('node:child_process');
+    const { mkdtempSync, readFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'fw-'));
+    try {
+      const ogg = join(dir, 'note.ogg');
+      // One second of tone at 48 kHz stereo, as a phone voice note would be.
+      expect(spawnSync('ffmpeg', ['-nostdin', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1:sample_rate=48000', '-ac', '2', '-c:a', 'libvorbis', ogg]).status).toBe(0);
+      const engine = new FasterWhisperEngine();
+      let sent: Uint8Array | null = null;
+      (engine as unknown as { send: (pcm: Uint8Array) => Promise<string> }).send = async (pcm) => { sent = pcm; return 'hello'; };
+      await expect(engine.transcribe(readFileSync(ogg))).resolves.toMatchObject({ text: 'hello' });
+      expect(sent).not.toBeNull();
+      // 16 kHz mono s16: ~32 000 bytes for one second, and no Ogg container bytes.
+      expect(Math.abs(sent!.length - 32_000)).toBeLessThan(2_000);
+      expect(Buffer.from(sent!.subarray(0, 4)).toString('latin1')).not.toBe('OggS');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('defaults to the small model', () => {
     // small is the safe realtime-on-CPU default (see voice.fasterWhisperModel).
     expect(new FasterWhisperEngine()).toBeInstanceOf(FasterWhisperEngine);

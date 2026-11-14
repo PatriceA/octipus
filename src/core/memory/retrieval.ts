@@ -39,6 +39,7 @@
  * call site the old one lacked.
  */
 
+import { isCapabilityOn } from '@/core/capabilities/gates';
 import type { MemoryRecord } from '@/db/schema/memories';
 import { coreLogger } from '@/utils/logger';
 import { estimateTokens } from '@/utils/token-count';
@@ -168,6 +169,7 @@ export async function retrieveForContext(scope: MemoryContextScope): Promise<Mem
  * block, which is what it would have had anyway.
  */
 async function rankAgainstTurn(scope: MemoryContextScope, limit: number): Promise<MemoryRecord[]> {
+  if (!isCapabilityOn('embedding')) return [];
   try {
     const { getEmbeddingService } = await import('@/core/rag/embeddings');
     const vector = await getEmbeddingService().generateEmbedding(scope.query as string);

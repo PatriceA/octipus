@@ -28,6 +28,7 @@ const SECTION_LINES: Record<string, string> = {
   models: 'First, my brain: which AI model should I think with?',
   areas: 'Should I keep some of your work apart from the rest?',
   chat: 'Where can I reach you when you are away from the screen?',
+  media: 'Shall I draw images for you, or talk with you out loud? Skip this if not.',
   dev: 'Now, how you build software. Which coding tools should I use?',
   tools: 'Where do your tickets live?',
   company: 'Tell me about your company, so I know what matters to you.',
@@ -219,7 +220,9 @@ export function OnboardingGuide({ variant }: { variant: 'home' | 'page' }) {
     if (isAddition(q, answers[q.id], v)) react('done');
     setFormProblem(null);
     invalidateReceipts();
-    setAnswers((prev) => ({ ...prev, [q.id]: v, ...(q.id === 'models.provider' ? { 'models.key': '', 'models.modelId': KEY_PROVIDERS.find((p) => p.id === v)?.model ?? '', 'models.verifyModelId': '' } : {}) }));
+    setAnswers((prev) => ({ ...prev, [q.id]: v, ...(q.id === 'models.provider' ? { 'models.key': '', 'models.modelId': KEY_PROVIDERS.find((p) => p.id === v)?.model ?? '', 'models.verifyModelId': '' } : {}),
+      // A key typed for one provider is never stored as another's.
+      ...(q.id === 'media.imageProvider' ? { 'media.imageKey': '' } : {}), ...(q.id === 'media.voiceProvider' ? { 'media.voiceKey': '' } : {}) }));
   };
 
   const replan = (a: Answers, s: OnboardingState) => {

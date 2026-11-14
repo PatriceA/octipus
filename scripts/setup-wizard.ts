@@ -36,6 +36,9 @@
  *   OCTIPUS_SETUP_MODEL=gpt-4o-mini
  *   OCTIPUS_SETUP_INSTALL_CAPS=browser,mcp       (comma-separated)
  *   OCTIPUS_SETUP_RECOMMEND=1                     (scan HW + pull a recommended local model)
+ *   OCTIPUS_SETUP_IMAGE_MODEL=gpt-image-1         (optional: bind an image model of the chosen provider)
+ *   OCTIPUS_SETUP_EMBEDDING=local|ollama|openai   (optional: a search model, only when none is bound;
+ *                                                  interactive runs take it as the default answer)
  *
  * Remote mode (--remote <url>) skips local .env + backend boot and
  * runs the admin/provider/capability steps against the remote API.
@@ -644,12 +647,18 @@ async function pickCapabilities(ctx: WizardCtx | null, missing: string[]): Promi
   return picked;
 }
 
-/** Persist a voice setting through the authenticated (admin) settings API. */
-async function setVoiceSetting(api: ApiClient, key: string, value: string): Promise<void> {
+/**
+ * Make an engine the one its lane uses (docs/VOICE.md: speech engines are
+ * models on the Transcription and Speech lanes). The server registers the
+ * row and binds it primary; an engine already there stays as the backup.
+ */
+async function useVoiceEngine(api: ApiClient, direction: 'stt' | 'tts', engine: string, size?: string): Promise<void> {
   try {
-    await api.put(`/api/settings/${key}`, { value });
+    // Choosing voice turns the Voice module on: its routes answer only while it is (a new install has it off).
+    await api.post('/api/modules/enable', { ids: ['voice'] });
+    await api.post('/api/voice/engines/use', { direction, engine, makePrimary: true, ...(size ? { size } : {}) });
   } catch (err) {
-    process.stdout.write(`\x1b[33m! Could not save ${key}: ${(err as Error).message}\x1b[0m\n`);
+    process.stdout.write(`\x1b[33m! Could not bind the ${direction === 'stt' ? 'speech-to-text' : 'speech'} engine: ${(err as Error).message}\x1b[0m\n`);
   }
 }
 
@@ -665,6 +674,138 @@ const cloudKeyHint = (provider: 'Mistral' | 'OpenAI') =>
  * wiring the config. Local engines are provisioned in-process (downloads take
  * minutes — an HTTP call would time out); cloud picks just point at the vault.
  */
+/** Image models of the providers whose key setup stores, for the optional Image generation step. */
+const IMAGE_MODELS: Partial<Record<string, { modelId: string; label: string }>> = {
+  openai: { modelId: 'gpt-image-1', label: 'OpenAI gpt-image-1' },
+  gemini: { modelId: 'gemini-2.5-flash-image', label: 'Gemini 2.5 Flash Image' },
+  openrouter: { modelId: 'google/gemini-2.5-flash-image', label: 'Gemini 2.5 Flash Image via OpenRouter' },
+};
+
+/**
+ * Optional: bind an image model to the Image generation lane, so agents can
+ * draw (docs/MEDIA.md). Offered only for a provider whose key setup just
+ * stored; the default is to skip. Non-interactive: OCTIPUS_SETUP_IMAGE_MODEL.
+ */
+async function pickImageGeneration(api: ApiClient, providerId: string | undefined): Promise<void> {
+  if (QUICK || !providerId) return;
+  const offer = IMAGE_MODELS[providerId];
+  let modelId: string | undefined;
+  if (NON_INTERACTIVE) {
+    modelId = process.env.OCTIPUS_SETUP_IMAGE_MODEL?.trim() || undefined;
+    if (!modelId) return;
+    // Only a provider that draws, with the key setup just stored.
+    if (!offer) { warn(`Image generation: ${providerId} has no image models here; skipped (bind one on the Topics page).`); return; }
+  } else {
+    if (!offer) return;
+    const want = await selectStep<'y' | 'n'>(
+      null,
+      'Let agents create images? (an image model on the Image generation lane)',
+      [
+        { value: 'n', label: 'No — skip', description: 'Add one later on the Topics page.' },
+        { value: 'y', label: `Yes — use ${offer.label}`, description: 'Billed per image on your key.' },
+      ],
+      'n',
+    );
+    if (want !== 'y') return;
+    modelId = offer.modelId;
+  }
+  const name = `${providerId} ${modelId}`;
+  try {
+    // A model already drawing keeps drawing, as the backup.
+    const topics = await api.get<{ topics?: Array<{ value: string; primaryModel?: string | null }> } | Array<{ value: string; primaryModel?: string | null }>>('/api/topics').catch(() => null);
+    const list = Array.isArray(topics) ? topics : topics?.topics ?? [];
+    const previous = list.find((t) => t.value === 'image_generation')?.primaryModel ?? null;
+    try {
+      await api.post('/api/models', { name, provider: providerId, modelId, supportsTools: false, supportsStreaming: false });
+    } catch (err) {
+      if (!(err instanceof ApiError && /already exists/i.test(err.serverMessage))) throw err;
+    }
+    await api.put('/api/topics/image_generation/binding', { primaryModel: name, ...(previous && previous !== name ? { backupModel: previous } : {}) });
+    ok(`Image generation: "${name}" bound.`);
+  } catch (err) {
+    warn(`Image generation not set up: ${err instanceof ApiError ? err.serverMessage : (err as Error).message}`);
+  }
+}
+
+/**
+ * Optional "Search & memory": an embedding model for searching documents,
+ * notes and memories (docs/RAG.md). Asked only while the embedding lane is
+ * unbound — a model already there is never replaced (its vectors would need a
+ * rebuild). The default is to skip: Octipus runs without one, and indexes
+ * nothing until one is set. Non-interactive: OCTIPUS_SETUP_EMBEDDING.
+ */
+export interface EmbeddingStepOptions {
+  quick?: boolean;
+  nonInteractive?: boolean;
+  /** The question; defaults to the wizard's prompt (tests pass their own). */
+  select?: (title: string, items: Array<{ value: string; label: string; description?: string }>, defaultValue: string) => Promise<string>;
+}
+
+export async function pickEmbedding(api: Pick<ApiClient, 'get' | 'post' | 'put'>, providerId: string | undefined, opts: EmbeddingStepOptions = {}): Promise<void> {
+  const quick = opts.quick ?? QUICK;
+  const nonInteractive = opts.nonInteractive ?? NON_INTERACTIVE;
+  const select = opts.select ?? ((title, items, def) => selectStep<string>(null, title, items, def));
+  type EngineState = { platform: string | null; embeddingBound: string | null; models: Array<{ id: string; label: string; sizeBytes: number; default: boolean }>; job?: { stage: string; percent: number; statusText: string; error?: string; note?: string } | null };
+  // Fails closed: when the backend cannot say the lane is free, nothing is bound.
+  const engine = await api.get<EngineState>('/api/local-engine').catch(() => null);
+  const topics = await api.get<{ topics?: Array<{ value: string; primaryModel?: string | null }> } | Array<{ value: string; primaryModel?: string | null }>>('/api/topics').catch(() => null);
+  if (!engine || !topics) { gray('Search & memory: skipped (could not check the embedding lane). Set it later on the Topics page.'); return; }
+  const list = Array.isArray(topics) ? topics : topics?.topics ?? [];
+  if (engine.embeddingBound || list.find((t) => t.value === 'embedding')?.primaryModel) return;
+  if (quick) { gray('Search & memory are off. Add a local model any time: Topics page → Install local embeddings, or `octi capabilities install local-embedding`.'); return; }
+  const local = engine.platform ? engine.models.find((m) => m.default) : undefined;
+  // Ollama is offered when the backend reaches it.
+  const ollama = (await api.get<{ ollama?: { reachable?: boolean } }>('/api/onboarding').catch(() => null))?.ollama?.reachable === true;
+  let choice: string;
+  if (nonInteractive) {
+    choice = process.env.OCTIPUS_SETUP_EMBEDDING?.trim() || 'skip';
+  } else {
+    choice = await select(
+      'Search & memory — search across documents, notes and memories? (an embedding model)',
+      [
+        { value: 'skip', label: 'No — skip', description: 'Octipus runs without it; nothing is indexed. Add one later: octi capabilities install local-embedding.' },
+        ...(local ? [{ value: 'local', label: `On this machine (${local.label})`, description: `Downloads about ${Math.round(local.sizeBytes / 1e6) + 30} MB once. Free, private, no key.` }] : []),
+        ...(ollama ? [{ value: 'ollama', label: 'With Ollama (nomic-embed-text)', description: 'Your Ollama server; run `ollama pull nomic-embed-text` there.' }] : []),
+        ...(providerId === 'openai' ? [{ value: 'openai', label: 'With OpenAI (text-embedding-3-small)', description: 'Billed per token on the key you just stored.' }] : []),
+      ],
+      // Docker with baked embeddings (scripts/install-docker.sh) defaults to them.
+      process.env.OCTIPUS_SETUP_EMBEDDING === 'local' && local ? 'local' : 'skip',
+    );
+  }
+  if (choice === 'skip') return;
+  try {
+    if (choice === 'local') {
+      if (!engine.platform) { warn('Search: no local engine build exists for this machine; skipped.'); return; }
+      await api.post('/api/local-engine/install', {});
+      let last = '';
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1000));
+        const state = await api.get<EngineState>('/api/local-engine');
+        const job = state.job;
+        if (!job) break;
+        const line = `${job.statusText}${job.stage === 'engine' || job.stage === 'model' ? ` ${job.percent}%` : ''}`;
+        if (line !== last) { gray(`  ${line}`); last = line; }
+        if (job.stage === 'error') throw new Error(job.error || 'install failed');
+        if (job.stage === 'done') { ok(`Search: ${job.statusText}`); if (job.note) gray(`  ${job.note}`); break; }
+      }
+      return;
+    }
+    const pick = choice === 'openai' ? { provider: 'openai', modelId: 'text-embedding-3-small' } : choice === 'ollama' ? { provider: 'ollama', modelId: 'nomic-embed-text' } : null;
+    if (!pick) { warn(`Search: unknown choice "${choice}" (local, ollama or openai); skipped.`); return; }
+    const name = `${pick.provider} ${pick.modelId}`;
+    try {
+      await api.post('/api/models', { name, provider: pick.provider, modelId: pick.modelId, supportsTools: false, supportsStreaming: false });
+    } catch (err) {
+      if (!(err instanceof ApiError && /already exists/i.test(err.serverMessage))) throw err;
+    }
+    await api.put('/api/topics/embedding/binding', { primaryModel: name });
+    ok(`Search: "${name}" is the embedding model.`);
+    if (pick.provider === 'ollama') gray('  → Run `ollama pull nomic-embed-text` on your Ollama server if it is not there yet.');
+  } catch (err) {
+    warn(`Search not set up: ${err instanceof ApiError ? err.serverMessage : (err as Error).message}`);
+  }
+}
+
 async function pickVoice(api: ApiClient): Promise<void> {
   if (QUICK) return;
   // ── Non-interactive: only local defaults, and only on explicit opt-in. ──
@@ -673,10 +814,9 @@ async function pickVoice(api: ApiClient): Promise<void> {
     if (!hasUv()) { warn(`Voice: skipped local install — ${UV_INSTALL_HINT}`); return; }
     try {
       await installFasterWhisper('small', gray);
-      await setVoiceSetting(api, 'voice.sttProvider', 'fasterwhisper');
-      await setVoiceSetting(api, 'voice.fasterWhisperModel', 'small');
+      await useVoiceEngine(api, 'stt', 'fasterwhisper', 'small');
       await installKokoro(gray);
-      await setVoiceSetting(api, 'voice.ttsProvider', 'kokoro');
+      await useVoiceEngine(api, 'tts', 'kokoro');
       ok('Local voice installed (faster-whisper small + Kokoro).');
     } catch (err) { warn(`Voice install failed: ${(err as Error).message}`); }
     return;
@@ -717,8 +857,7 @@ async function pickVoice(api: ApiClient): Promise<void> {
       })),
       'small',
     );
-    await setVoiceSetting(api, 'voice.sttProvider', 'fasterwhisper');
-    await setVoiceSetting(api, 'voice.fasterWhisperModel', model);
+    await useVoiceEngine(api, 'stt', 'fasterwhisper', model);
     if (!hasUv()) {
       warn(`Selected faster-whisper "${model}", but \`uv\` is not installed. ${UV_INSTALL_HINT}`);
       gray('  The model will download automatically once `uv` is available.');
@@ -730,7 +869,7 @@ async function pickVoice(api: ApiClient): Promise<void> {
       } catch (err) { warn(`faster-whisper download failed: ${(err as Error).message}`); }
     }
   } else if (stt === 'mistral' || stt === 'openai') {
-    await setVoiceSetting(api, 'voice.sttProvider', stt);
+    await useVoiceEngine(api, 'stt', stt);
     ok(`Speech-to-text set to ${stt === 'mistral' ? 'Voxtral (Mistral)' : 'OpenAI'} (cloud).`);
     cloudKeyHint(stt === 'mistral' ? 'Mistral' : 'OpenAI');
   }
@@ -750,7 +889,7 @@ async function pickVoice(api: ApiClient): Promise<void> {
   );
 
   if (tts === 'kokoro') {
-    await setVoiceSetting(api, 'voice.ttsProvider', 'kokoro');
+    await useVoiceEngine(api, 'tts', 'kokoro');
     if (!hasUv()) {
       warn(`Selected Kokoro, but \`uv\` is not installed. ${UV_INSTALL_HINT}`);
     } else {
@@ -761,16 +900,16 @@ async function pickVoice(api: ApiClient): Promise<void> {
       } catch (err) { warn(`Kokoro download failed: ${(err as Error).message}`); }
     }
   } else if (tts === 'piper') {
-    await setVoiceSetting(api, 'voice.ttsProvider', 'piper');
+    await useVoiceEngine(api, 'tts', 'piper');
     ok('Spoken replies set to Piper.');
-    gray('  → Install the Piper binary + a .onnx voice, then set `voice.piperModelPath` in Settings → Voice.');
+    gray('  → Install the Piper binary + a .onnx voice, then set its path on the "local piper" model (Models page).');
   } else if (tts === 'mistral' || tts === 'openai') {
-    await setVoiceSetting(api, 'voice.ttsProvider', tts);
+    await useVoiceEngine(api, 'tts', tts);
     ok(`Spoken replies set to ${tts === 'mistral' ? 'Voxtral (Mistral)' : 'OpenAI'} (cloud).`);
     cloudKeyHint(tts === 'mistral' ? 'Mistral' : 'OpenAI');
   }
 
-  gray('Voice configured. Toggle it per chat with the mic / conversation buttons.');
+  gray('Voice configured (Topics page → Transcription / Speech). Toggle it per chat with the mic / conversation buttons.');
 }
 
 // ── Main ───────────────────────────────────────────────────────────
@@ -1205,8 +1344,14 @@ async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<voi
     }
   }
 
+  // Search & memory (optional; only while no embedding model is bound).
+  await pickEmbedding(api, provider.providerId);
+
   // Voice dependencies (local whisper build offer).
   await pickVoice(api);
+
+  // Image generation (optional; only for a provider whose key was just stored).
+  await pickImageGeneration(api, provider.providerId);
 
   // Mark setup complete.
   const completion = await api.post<{ success?: boolean; error?: string }>('/api/settings/setup-complete', {});

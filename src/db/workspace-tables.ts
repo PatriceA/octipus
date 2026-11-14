@@ -69,6 +69,9 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   { table: 'file_leases', ownerColumn: 'holder_user_id', transfer: 'n/a', purge: 'delete' },
   { table: 'embeddings', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   { table: 'hooks', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
+  // Content saved while no embedding model was configured, waiting to be
+  // indexed into its owner's knowledge base (src/core/rag/index-backlog.ts).
+  { table: 'index_backlog', ownerColumn: 'owner_user_id', transfer: 'move', purge: 'delete' },
   { table: 'knowledge_links', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },
   // Mail accounts and their messages (docs/MAIL.md); `mail_raw` goes with a message.
   { table: 'mail_accounts', ownerColumn: 'user_id', transfer: 'move', purge: 'delete' },

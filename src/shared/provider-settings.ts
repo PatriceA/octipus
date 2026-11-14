@@ -11,6 +11,12 @@ export interface ModelPricing {
   /** USD per million tokens. Zero is an explicitly free rate. */
   cacheRead?: number;
   cacheWrite?: number;
+  /** USD per generated image (Image generation lane). */
+  perImage?: number;
+  /** USD per minute of audio transcribed (Transcription lane). */
+  perAudioMinute?: number;
+  /** USD per million characters spoken (Speech lane). */
+  perMillionChars?: number;
   source?: string;
   verifiedAt?: string;
   free?: boolean;

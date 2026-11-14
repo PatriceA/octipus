@@ -25,8 +25,8 @@ process.env.LOG_LEVEL ??= 'error';
 const PERSONAL_PREFIXES = [
   '/api/admin', '/api/agents', '/api/auth', '/api/backups', '/api/capabilities', '/api/channels', '/api/chat',
   '/api/calendar', '/api/code-index', '/api/companion', '/api/context-hooks', '/api/devices', '/api/digest', '/api/email', '/api/eval', '/api/evaluations',
-  '/api/gateway', '/api/graph', '/api/health', '/api/heartbeat', '/api/hooks', '/api/invites', '/api/logs', '/api/mcp',
-  '/api/me', '/api/memory', '/api/metrics', '/api/models', '/api/modules', '/api/onboarding', '/api/permission-requests', '/api/persona',
+  '/api/gateway', '/api/graph', '/api/local-engine', '/api/health', '/api/heartbeat', '/api/hooks', '/api/invites', '/api/logs', '/api/mcp',
+  '/api/me', '/api/media', '/api/memory', '/api/metrics', '/api/models', '/api/modules', '/api/onboarding', '/api/permission-requests', '/api/persona',
   '/api/pipelines', '/api/plugin-host', '/api/plugin-packages', '/api/plugin-ui', '/api/plugins', '/api/recurring-tasks', '/api/roles',
   '/api/runs', '/api/saml', '/api/scim', '/api/search', '/api/settings', '/api/skills', '/api/spend-budgets',
   '/api/swarm', '/api/tools', '/api/topics', '/api/trajectories', '/api/vault', '/api/verification',
@@ -36,6 +36,8 @@ const PERSONAL_PREFIXES = [
   '/api/remote-spaces',
   // Public forms: no sign-in, the scope is the form link's (docs/RECORDS.md).
   '/api/forms',
+  // Short-lived public media links: no sign-in, the token is the capability (docs/MEDIA.md).
+  '/api/media/public',
   // The artifact SDK script, served beside the hosted pages: no content.
   '/octipus-artifact-client.js',
 ];

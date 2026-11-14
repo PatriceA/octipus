@@ -83,6 +83,12 @@ export interface MessageMetadata {
 export interface AttachmentData {
   type: 'image' | 'file' | 'audio' | 'video';
   url?: string;
+  /** A file on this host the model was shown (a normalised image): rebuilt into the turn on reload. */
+  path?: string;
+  /** Where it comes from: the user's upload, a tool shown to the model, or the answer's own media (generate_image, speak). */
+  source?: 'user' | 'tool' | 'assistant';
+  /** Answer media: sent as a file, or as a voice note where the channel has them. */
+  deliver?: 'attach' | 'voice';
   mimeType: string;
   filename?: string;
   size?: number;

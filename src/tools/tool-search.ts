@@ -11,6 +11,7 @@
  * Degrades gracefully: any failure (no query, no embedding provider, error)
  * returns `null` so the caller falls back to the full unranked list.
  */
+import { isCapabilityOn } from '@/core/capabilities/gates';
 import { type EmbedSide, getEmbeddingService, sha256Hex } from '@/core/rag/embeddings';
 import { toolLogger } from '@/utils/logger';
 
@@ -65,6 +66,9 @@ export async function rankToolsByQuery(
 ): Promise<ToolSummary[] | null> {
   const q = query.trim();
   if (!q || tools.length === 0) return null;
+  // No embedding model: keyword/full-list fallback, without trying to embed.
+  // An injected embedder (tests) is used as given.
+  if (embed === defaultEmbedder && !isCapabilityOn('embedding')) return null;
 
   try {
     const queryVec = await embed(q, 'query');

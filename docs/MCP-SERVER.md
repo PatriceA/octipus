@@ -31,8 +31,21 @@ Standalone MCP server (`mcp-server/`) that exposes Octipus capabilities as MCP t
 | `octipus_list_recurring_tasks` | List recurring tasks |
 | `octipus_update_recurring_task` | Update a recurring task |
 | `octipus_delete_recurring_task` | Delete a recurring task |
+| `octipus_generate_image` | Draw with the Image generation lane; returns MCP `image` parts |
+| `octipus_describe_image` | Have the Vision lane describe a base64 image |
+| `octipus_transcribe_audio` | Transcribe base64 audio with the Transcription lane |
+| `octipus_speak` | Speak text with the Speech lane; returns an MCP `audio` part |
 
-The table above shows commonly used tools. The server registers 83 tools across 23 groups — see `mcp-server/src/tools/` for the complete list, or ask the running server for `tools/list`.
+The table above shows commonly used tools. The server registers 87 tools across 24 groups — see `mcp-server/src/tools/` for the complete list, or ask the running server for `tools/list`.
+
+### Media (`media` group)
+
+The four media tools ([MEDIA.md → Over MCP and HTTP](MEDIA.md#over-mcp-and-http))
+are each shown only while their capability is configured (`draw`, `see`,
+`hear`, `speak`, read from `GET /api/modules` every minute), so a client never
+sees one that would answer 409. Transcription and speech are also hidden while
+the voice module is off. Images and audio travel as base64: the server reads no
+local files.
 
 ### Retries without duplicates (`clientRequestId`)
 

@@ -69,6 +69,18 @@ const IMAGE_EXT: Record<string, string> = {
   '.ico': 'image/x-icon',
 };
 
+/** Audio the chat plays (a spoken reply, a recording): served like images, up to the same size. */
+const AUDIO_EXT: Record<string, string> = {
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.oga': 'audio/ogg',
+  '.opus': 'audio/ogg',
+  '.m4a': 'audio/mp4',
+  '.flac': 'audio/flac',
+  '.webm': 'audio/webm',
+};
+
 export interface DirEntry {
   name: string;
   path: string;
@@ -80,6 +92,7 @@ export type ReadFileResult =
   | { type: 'directory'; path: string; entries: DirEntry[] }
   | { type: 'text'; path: string; content: string; version: string; size: number; modifiedAt: string }
   | { type: 'image'; path: string; dataUrl: string; mimeType: string; version: string; size: number; modifiedAt: string }
+  | { type: 'audio'; path: string; dataUrl: string; mimeType: string; version: string; size: number; modifiedAt: string }
   | { type: 'binary'; path: string; version: string; size: number; modifiedAt: string }
   | { type: 'too-large'; path: string; size: number };
 
@@ -152,7 +165,7 @@ export async function readSessionFile(fs: WorkspaceFS, path: string): Promise<Re
     return { type: 'directory', path: resolved, entries };
   }
 
-  const image = IMAGE_EXT[extname(resolved).toLowerCase()];
+  const image = IMAGE_EXT[extname(resolved).toLowerCase()] ?? AUDIO_EXT[extname(resolved).toLowerCase()];
   if (st.size > (image ? 10 * MAX_FILE_BYTES : MAX_FILE_BYTES)) {
     return { type: 'too-large', path: resolved, size: st.size };
   }
@@ -165,6 +178,10 @@ export async function readSessionFile(fs: WorkspaceFS, path: string): Promise<Re
   const imageMime = IMAGE_EXT[ext];
   if (imageMime && ext !== '.svg') {
     return { type: 'image', path: resolved, mimeType: imageMime, dataUrl: `data:${imageMime};base64,${buf.toString('base64')}`, ...meta };
+  }
+  const audioMime = AUDIO_EXT[ext];
+  if (audioMime) {
+    return { type: 'audio', path: resolved, mimeType: audioMime, dataUrl: `data:${audioMime};base64,${buf.toString('base64')}`, ...meta };
   }
   if (looksBinary(buf)) {
     return { type: 'binary', path: resolved, ...meta };
@@ -299,6 +316,9 @@ export async function buildAttachedFilesContext(
       }
       case 'too-large':
         blocks.push(`--- ${name} is too large to inline (${res.size} bytes) ---`);
+        break;
+      case 'audio':
+        blocks.push(`--- Audio file: ${res.path} (${res.mimeType}) — play it in the chat; call audio__transcribe_audio for its text ---`);
         break;
       case 'binary':
         blocks.push(`--- ${name} is a binary file — open it in the file view ---`);

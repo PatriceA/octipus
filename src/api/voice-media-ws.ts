@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnProcess as spawn } from '@/utils/proc';
 import type { Elysia } from '@/api/http';
-import { getConfig } from '@/config';
 import { apiLogger } from '@/utils/logger';
 import { pcm16kToTwilioMedia, TwilioInboundDecoder } from '@/voice/telephony/media-bridge';
 import { generatePhoneReply, type PhoneTurn } from '@/voice/telephony/reply';
@@ -65,18 +64,19 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** TTS a reply to 16 kHz mono s16le PCM (mp3 → ffmpeg), rate-safe for the bridge. */
 async function synthesizeReplyPcm16k(text: string): Promise<Int16Array | null> {
-  const { MistralTTSEngine } = await import('@/voice/tts');
-  // ponytail: fixed default voice; expose a voice.ttsVoice setting when callers
-  // need to pick one (the /speak route already accepts a per-request voice_id).
-  const voice = 'en_paul_neutral';
+  // The engine bound to the Speech lane, in the voice of `voice.ttsVoice`.
+  const { synthesizeWithLane } = await import('@/voice/resolve');
   let mp3: Buffer;
+  let ext: string;
   try {
-    mp3 = await new MistralTTSEngine(voice, { outputFormat: 'mp3' }).synthesize(text);
+    const spoken = await synthesizeWithLane(text, { format: 'mp3' });
+    mp3 = spoken.audio;
+    ext = spoken.format === 'opus' ? 'ogg' : spoken.format;
   } catch (err) {
     apiLogger.error({ err }, 'phone TTS synthesis failed');
     return null;
   }
-  const src = join(tmpdir(), `phone-tts-${crypto.randomUUID()}.mp3`);
+  const src = join(tmpdir(), `phone-tts-${crypto.randomUUID()}.${ext}`);
   const out = join(tmpdir(), `phone-tts-${crypto.randomUUID()}.pcm`);
   try {
     await writeFileAt(src, mp3);
@@ -114,7 +114,11 @@ interface MediaState {
   speechFrames: number;
   silenceFrames: number;
   closed: boolean;
+  /** No transcription engine could start: wait until then before trying again (no retry per frame). */
+  sttRetryAt?: number;
 }
+
+const STT_RETRY_MS = 30_000;
 
 /** RMS energy of an s16le PCM byte buffer, normalized to [0,1]. */
 function pcmRms(pcm: Uint8Array): number {
@@ -135,12 +139,18 @@ async function startTurn(st: MediaState): Promise<void> {
   st.turnText = '';
   st.speechFrames = 0;
   st.silenceFrames = 0;
-  const { whisperModelPath } = await import('@/voice/whisper');
-  const { WhisperEngine } = await import('@/voice/stt');
-  const engine = new WhisperEngine(getConfig().voice.whisperModelPath || whisperModelPath(), {
-    language: getConfig().voice.language || 'en',
-    streamWindowSeconds: 2,
-  });
+  // The engine bound to the Transcription lane, streaming (a phone call is live).
+  let engine: import('@/voice/stt').STTEngine;
+  try {
+    const { resolveSttEngine } = await import('@/voice/resolve');
+    engine = (await resolveSttEngine({ streamWindowSeconds: 2 })).engine;
+  } catch (err) {
+    apiLogger.error({ err }, 'phone media STT unavailable');
+    st.inTurn = false;
+    st.sttRetryAt = Date.now() + STT_RETRY_MS;
+    return;
+  }
+  st.sttRetryAt = undefined;
   let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
   const stream = new ReadableStream<Uint8Array>({ start(c) { controller = c; } });
   st.turnController = controller;
@@ -315,7 +325,9 @@ export function setupVoiceMediaWebSocket(app: Elysia): void {
       // Idle: wait for speech onset to open a turn.
       if (!st.inTurn) {
         if (rms < RMS_SPEAKING) return;
+        if (st.sttRetryAt && Date.now() < st.sttRetryAt) return;
         await startTurn(st);
+        if (!st.inTurn) return;
       }
 
       feedTurn(st, pcm);

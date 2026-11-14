@@ -61,6 +61,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     openssh-client \
     python3 \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy built app
@@ -90,7 +91,15 @@ COPY plugins/ plugins/
 COPY plugin-sdk/ plugin-sdk/
 
 # Create data directories
-RUN mkdir -p /data/workspace /data/documents /data/extensions
+RUN mkdir -p /data/workspace /data/documents /data/extensions /data/models
+
+# Optional local embedding engine (docs/RAG.md → Local embeddings): llama.cpp
+# and a small embedding model live in /data/models (a volume). Off by
+# default; OCTIPUS_BAKE_EMBEDDING=1 downloads them, verified, at build time so
+# `octi capabilities install local-embedding` finds them and only registers.
+ENV OCTIPUS_MODELS_DIR=/data/models
+ARG OCTIPUS_BAKE_EMBEDDING=0
+RUN if [ "$OCTIPUS_BAKE_EMBEDDING" = "1" ]; then npm run --silent local-engine:fetch; fi
 
 # Pre-bake optional capabilities so the container reports them as
 # `available` via /api/capabilities on first boot. The streamlined

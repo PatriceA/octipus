@@ -9,6 +9,7 @@ export interface Model {
   isEnabled: boolean;
   isDefault: boolean;
   supportsVision: boolean;
+  supportsAudioInput?: boolean;
   supportsTools: boolean;
   supportsStreaming: boolean;
   contextWindow: number;
@@ -74,7 +75,7 @@ export interface CLITool {
   /** Server-rendered summary of what this adapter can do in a managed run. */
   capabilities?: string;
   /** Direct provider whose model catalog drives this CLI's picker. */
-  modelProvider?: 'anthropic' | 'google' | 'openai' | 'mistral' | 'zai' | 'moonshot' | 'meta';
+  modelProvider?: import('../../../src/shared/cli-capabilities').CliModelProvider;
   /** CLI flag for model selection (display only). */
   modelFlag?: string;
   billingInfo?: CLIBillingInfo;

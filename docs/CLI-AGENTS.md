@@ -9,6 +9,55 @@ in a subscription.
 
 Pi supplies the TUI components. It is not an additional agent integration.
 
+## Grok Build
+
+Install Grok Build and run `grok login` as the OS account running Octipus.
+In **Models → Detected CLI Tools**, add **Grok Build** (`cli/grok-build`,
+alias `cli/grok`), then select that model for a session or an agent topic.
+The CLI and the xAI API provider are separate integrations: adding the CLI
+needs no xAI API key in Octipus. An optional model ID in the model editor
+is passed to `--model`; leaving it empty uses Grok's vendor default. Run
+`grok models` to see the models your login can use. A custom model selection
+in the workstation's Grok config is not imported.
+
+Managed Grok runs advertise only the scoped Octipus MCP server and Grok's
+`search_tool` / `use_tool` helpers. Files, shell commands, plans and delegation
+use the session's existing Octipus tools, environment and approval policy.
+Grok's native shell, file editing, web search and subagents are disabled.
+Startup metadata is checked; unexpected tools or MCP servers stop the run.
+Native permission-mode and external MCP settings do not apply to this adapter.
+
+Each invocation gets a private temporary home and prompt file (no prompt in
+shell arguments), a config containing only the current bridge credential,
+and `GROK_AUTH_PATH` pointing to the existing `~/.grok/auth.json` login.
+Grok retains its original credential locking and refresh path; no login bytes
+are read or copied by Octipus. The original user/project configs, hooks, plugins and
+MCP integrations are not imported. The temporary home is removed after the
+run. Transcripts use a directory symlink (a junction on Windows).
+`GROK_HOME` or `GROK_AUTH_PATH` can specify the source login; both `HOME` and
+`USERPROFILE` are isolated for the child because the tested Grok 1.0.77 build
+does not consistently honour `GROK_HOME` on its own. OS-enforced vendor policy
+still applies.
+
+Transcripts remain under `~/.octipus/grok-build/`, partitioned by login
+path and project. The adapter runs in an empty internal directory;
+Octipus tools resolve the real project from the session. Root conversations
+and explicitly keyed children resume their saved Grok UUID with `--resume`.
+Streaming text, tool activity, reported costs, turns and cache-token usage
+use the same Messages-format parser as Claude, with Grok-labelled failures.
+A resumed run receives a new scoped bridge configuration.
+
+This adapter is currently for install-owned agent models. Shared-space and
+personal-token models, tool-less completion lanes and native `/compact`
+are not supported; these paths fail explicitly. The application enforces
+turn/token/time budgets; the Grok CLI has no native dollar-budget setting.
+API keys are excluded by default. Enabling **Pass server API keys** forwards
+only `XAI_API_KEY`, which can change the billing path.
+
+Verified against Grok Build 1.0.77: actual scoped-tool invocation, session
+resume, plan publication and usage reporting. Vendor flags can change;
+repeat the opt-in live test after upgrading the CLI.
+
 ## Executable paths and pipeline recovery
 
 At startup, Octipus reads the user's login PATH and checks configured CLI
@@ -16,11 +65,12 @@ executables. Standard `~/.local/bin` and `~/.npm-global/bin` installations are
 included. Set `cliModels.path` in Settings to use an explicit PATH instead;
 restart after changing it. The executable settings are
 `cliModels.claudeCode.binaryPath`, `cliModels.codexCli.binaryPath`,
-`cliModels.antigravityCli.binaryPath` and `cliModels.museCli.binaryPath`. Each
-accepts a command name or absolute path. Their first-boot environment
-equivalents are `OCTIPUS_CLI_PATH`, `OCTIPUS_CLAUDE_BINARY`,
-`OCTIPUS_CODEX_BINARY`, `OCTIPUS_ANTIGRAVITY_BINARY` and `OCTIPUS_MUSE_BINARY`. Authenticated detailed health reports executable
-paths or the PATH searched when resolution fails.
+`cliModels.antigravityCli.binaryPath`, `cliModels.grokBuild.binaryPath` and
+`cliModels.museCli.binaryPath`. Each accepts a command name or absolute path.
+Their first-boot environment equivalents are `OCTIPUS_CLI_PATH`,
+`OCTIPUS_CLAUDE_BINARY`, `OCTIPUS_CODEX_BINARY`, `OCTIPUS_ANTIGRAVITY_BINARY`,
+`OCTIPUS_GROK_BINARY` and `OCTIPUS_MUSE_BINARY`. Authenticated detailed health
+reports executable paths or the PATH searched when resolution fails.
 
 `create_pipeline` returns a handle after saving the graph and initial checkpoint.
 Use `get_pipeline_status({id})` for stage results and remaining items, and
@@ -787,7 +837,7 @@ adapters that support it), so the vendor continues the conversation it
 already holds instead of Octipus re-sending the whole conversation as a new
 prompt each time.
 
-Claude Code, Codex CLI and Muse Code support this. Claude's id is minted by
+Claude Code, Codex CLI, Grok Build and Muse Code support this. Claude and Grok IDs are minted by
 Octipus itself and passed on the first run (`--session-id`), so there is
 never a run with no id to resume later; Codex assigns its own id, which
 Octipus captures from `thread.started`. Muse Code's is minted too (a UUIDv7,
@@ -1014,7 +1064,7 @@ guidance reporting, unqueued context reads, Codex discovery and adapter
 arguments. The vendor flags themselves (`--permission-prompt-tool stdio`,
 `--input-format stream-json`, Codex `-c mcp_servers=…`, agy `--mode plan`) are
 only exercised by the opt-in live test and can drift with vendor releases. An
-opt-in test (`OCTIPUS_LIVE_CLI=claude-code`, `codex`, `vibe` or `antigravity` with Vitest's
+opt-in test (`OCTIPUS_LIVE_CLI=claude-code`, `codex`, `grok-build`, `vibe` or `antigravity` with Vitest's
 `src/core/cli-agent-bridge.test.ts`) exercises a configured real CLI login against
 isolated sample tools and an in-memory plan repository. It does not contact
 personal accounts or modify project files, but consumes vendor usage.

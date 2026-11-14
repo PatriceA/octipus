@@ -338,8 +338,8 @@ export async function runRootAgent(
     ? (await import('@/core/session-files')).readSessionFile(attachmentFs, path)
     : await (await import('@/tools/filesystem/environment-operations')).remoteFilesystemOperation('read_session_file', { path }, remoteAttachmentContext) as import('@/core/session-files').ReadFileResult : undefined;
   const attachments = attachmentFs
-    ? await buildRootAttachmentContext(attachmentFs, extras.attachedFiles!, (modelMeta ? modelMeta.provider === 'cli' : !!getCLIToolConfig(modelName)), userId, message, sessionId, readAttachment)
-    : { context: '', imagePaths: [] };
+    ? await buildRootAttachmentContext(attachmentFs, extras.attachedFiles!, (modelMeta ? modelMeta.provider === 'cli' : !!getCLIToolConfig(modelName)), userId, message, sessionId, readAttachment, modelMeta)
+    : { context: '', imagePaths: [], media: [] };
   extraSystemContext += attachments.context;
 
   // Resolve the root agent mode for THIS turn. 'auto' (default) re-derives
@@ -991,6 +991,8 @@ export async function runRootAgent(
       companionSourceFiles: companionSourceRefs,
       ...(supervisor ? { companionAuthorityRevision: supervisor.revision } : {}),
       ...(attachments.imagePaths.length ? { imageAttachments: attachments.imagePaths } : {}),
+      // Images the root's model reads itself: attached to this turn's user message (docs/MEDIA.md).
+      ...(attachments.media.length ? { userMedia: attachments.media } : {}),
       sessionGeneration: sessionGeneration(sessionCtx),
       inputGuardFlags: guardFlags,
       ...(isDevMode ? { projectPath: environmentProject! } : {}),

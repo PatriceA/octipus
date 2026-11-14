@@ -41,7 +41,7 @@ describe('museCliConfig', () => {
     expect(museCliConfig.name).toBe('Muse Code');
     expect(museCliConfig.modelPatterns).toEqual(['cli/muse']);
     expect(museCliConfig.bufferOutput).toBeUndefined();
-    expect(museCliConfig.toolBridge).toBe('mcp-only');
+    expect(museCliConfig.octipusToolsOnly).toBe(true);
     // The CLI status panel looks the quota up under the kebab-cased name.
     expect(museCliConfig.quotaProvider).toBe('muse-code');
     expect(museCliConfig.promptVia).toBe('file');
@@ -54,7 +54,7 @@ describe('museCliConfig', () => {
 
   it('describes itself as Octipus-tools-only and says why spaces refuse it', () => {
     const text = describeCliCapabilities(museCliConfig);
-    expect(text).toContain('Octipus tools only, via scoped MCP (no vendor-native tools)');
+    expect(text).toContain('vendor-native tools are disabled');
     expect(text).toContain('Not available in shared spaces or on personal models: it keeps one login');
   });
 
