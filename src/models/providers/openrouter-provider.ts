@@ -1,3 +1,4 @@
+import { openAiRoleContent } from './media-content';
 import { cacheAffinityKey, normalizeUsage } from './usage';
 import OpenAI from 'openai';
 import type {
@@ -416,8 +417,7 @@ export class OpenRouterProvider implements ModelProvider {
       }
 
       return {
-        role: msg.role as 'system' | 'user' | 'assistant',
-        content: msg.content,
+        ...openAiRoleContent(msg),
         ...(msg.role === 'assistant' ? this.reasoningFields(msg, model) : {}),
       };
     });

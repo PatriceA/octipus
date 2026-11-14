@@ -5,6 +5,7 @@ import { actionRecovery, isReadOnlyAction } from './action-recovery';
 import { withExecutionSignal } from './execution-scope';
 import { isToolOn, toolOffMessage } from '@/core/modules/registry';
 import { capabilitiesMet, capabilityOffMessage, firstOffCapability } from '@/core/capabilities/gates';
+import { takeToolMedia, toolMediaMessage } from '@/core/media/tool-media';
 import { isCancellationError } from '@/core/swarm/errors';
 import { type SideEffectCounters, emptyCounters } from '@/core/swarm/receipt';
 import { renderToolActivity } from '@/core/work-stream/renderers';
@@ -142,7 +143,7 @@ export function stripBinaryBlobs(text: string): string {
   if (text.length < BINARY_BLOB_MIN_CHARS) return text;
   return text.replace(
     new RegExp(`[A-Za-z0-9+/=]{${BINARY_BLOB_MIN_CHARS},}`, 'g'),
-    (blob) => `[binary blob omitted: ${blob.length} chars — this model has no vision capability]`,
+    (blob) => `[binary blob omitted: ${blob.length} chars — an image reaches a model only as an image, never as text]`,
   );
 }
 
@@ -340,36 +341,18 @@ export class ToolExecutor {
    * returned). Only `byName` is tallied; the classified/total counts are
    * derived from it in `getSideEffectCounters`.
    */
-  /**
-   * Can the bound model actually read an image? Cached for the executor's
-   * lifetime — the binding does not change mid-run, and this is consulted on
-   * every tool batch.
-   *
-   * Fails OPEN (assumes vision) on a lookup error: wrongly stripping a blob
-   * from a model that could have used it loses information, while wrongly
-   * keeping one only wastes tokens. Unknown ⇒ leave the output alone.
-   */
-  private visionSupport?: boolean;
-  private async boundModelSupportsVision(): Promise<boolean> {
-    if (this.visionSupport !== undefined) return this.visionSupport;
-    try {
-      const { getModelRegistry } = await import('@/models/model-registry');
-      const registry = getModelRegistry();
-      // The agent's own row (spec §8.1), never another one sharing its modelId.
-      const model = this.context.modelName
-        ? await registry.getModel(this.context.modelName)
-        : await registry.getModelByModelId(this.context.model, { userId: this.context.userId });
-      // A model we cannot find is not a model we can make claims about.
-      this.visionSupport = model ? model.supportsVision : true;
-    } catch (err) {
-      coreLogger.debug({ err, model: this.context.model }, 'Vision-capability lookup failed — leaving tool output intact');
-      this.visionSupport = true;
-    }
-    return this.visionSupport;
-  }
-
   private recordExecuted(name: string): void {
     this.counters.byName[name] = (this.counters.byName[name] ?? 0) + 1;
+  }
+
+  /**
+   * What this agent's own model brings (docs/MEDIA.md): a model that reads
+   * images can `see` — view_image loads the pixels into its context — even
+   * where nothing install-wide can. Set by the worker before each request.
+   */
+  private ownCapabilities: Partial<Record<import('@/shared/capabilities').Capability, boolean>> = {};
+  setOwnCapabilities(own: Partial<Record<import('@/shared/capabilities').Capability, boolean>>): void {
+    this.ownCapabilities = own;
   }
 
   registerTool(tool: ToolHandler): void {
@@ -389,7 +372,7 @@ export class ToolExecutor {
    * declaration no longer offers them.
    */
   getTools(): Map<string, ToolHandler> {
-    const hidden = (tool: ToolHandler) => (tool.toolId !== undefined && !isToolOn(tool.toolId)) || !capabilitiesMet(tool.requires);
+    const hidden = (tool: ToolHandler) => (tool.toolId !== undefined && !isToolOn(tool.toolId)) || !capabilitiesMet(tool.requires, this.ownCapabilities);
     const anyHidden = [...this.tools.values()].some(hidden);
     if (!this.blockedTools.size && !anyHidden) return this.tools;
     return new Map([...this.tools].filter(([name, tool]) => !this.blockedTools.has(name) && !hidden(tool)));
@@ -444,7 +427,7 @@ export class ToolExecutor {
    */
   private resolveToolName(name: string): { canonical: string } | { didYouMean: string } | null {
     // Never a tool of a module that is off (docs/MODULES.md).
-    const names = [...this.tools].filter(([, tool]) => (!tool.toolId || isToolOn(tool.toolId)) && capabilitiesMet(tool.requires)).map(([registered]) => registered);
+    const names = [...this.tools].filter(([, tool]) => (!tool.toolId || isToolOn(tool.toolId)) && capabilitiesMet(tool.requires, this.ownCapabilities)).map(([registered]) => registered);
     // Stage 1: unambiguous bare sub-name → prefixed name.
     if (!name.includes('__')) {
       const suffix = `__${name}`;
@@ -763,7 +746,7 @@ export class ToolExecutor {
       }
       // A capability that is not configured (or was unconfigured since the
       // run started): the call is refused with the reason, never attempted.
-      const missingCapability = firstOffCapability(tool.requires);
+      const missingCapability = firstOffCapability(tool.requires, this.ownCapabilities);
       if (missingCapability) {
         // Not a permission denial: nothing was refused by policy, the install has no model for it.
         results.push({ toolCallId: toolCall.id, result: null, errorCode: 'capability_not_configured', error: capabilityOffMessage(missingCapability) });
@@ -1288,12 +1271,20 @@ export class ToolExecutor {
       });
     }
 
-    // Does the bound model actually understand images? Hoisted out of the loop —
-    // one registry lookup (Redis-cached) per tool batch, not per result.
-    const modelSeesImages = await this.boundModelSupportsVision();
+
+    // Images a tool asked to show the model (tool-media.ts): one user message
+    // after this batch's tool results.
+    const shownMedia: import('./types').MediaRef[] = [];
 
     // Build tool result messages
     for (const result of results) {
+      const taken = takeToolMedia(result.result);
+      if (taken.media.length) {
+        // Shown only to a model that is shown images after a tool result
+        // (agent-worker sets `see` per request); the others keep the path.
+        if (this.ownCapabilities.see) shownMedia.push(...taken.media);
+        result.result = taken.result;
+      }
       // Drop UI-only work-stream metadata (e.g. a file diff) before the result
       // reaches the model or the persisted transcript — the model already has
       // the inputs it acted on, so this would be redundant, token-costly context.
@@ -1327,7 +1318,9 @@ export class ToolExecutor {
           : limit === undefined && raw.length > DEFAULT_MAX_LENGTH
             ? `${raw.slice(0, DEFAULT_MAX_LENGTH)} [truncated]`
             : raw);
-      const modelSafe = modelSeesImages ? sanitized : stripBinaryBlobs(sanitized);
+      // Base64 in result text is never readable as an image, by any model:
+      // a tool shows images as tool media (tool-media.ts) instead.
+      const modelSafe = stripBinaryBlobs(sanitized);
       toolMessages.push({
         role: 'tool',
         content: modelSafe,
@@ -1358,6 +1351,8 @@ export class ToolExecutor {
         agentId: this.context.id,
       });
     }
+
+    if (shownMedia.length) toolMessages.push(toolMediaMessage(shownMedia));
 
     return toolMessages;
   }

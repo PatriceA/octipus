@@ -1,3 +1,4 @@
+import { openAiRoleContent } from './media-content';
 import { recordProviderUsage } from './instrumented';
 import { normalizeUsage } from './usage';
 import { createHash } from 'node:crypto';
@@ -431,10 +432,7 @@ export class MistralProvider implements ModelProvider {
         return out;
       }
 
-      const base: ChatCompletionMessageParam & { reasoning_content?: string } = {
-        role: msg.role as 'system' | 'user' | 'assistant',
-        content: msg.content,
-      };
+      const base: ChatCompletionMessageParam & { reasoning_content?: string } = openAiRoleContent(msg);
       if (isReasoning && msg.role === 'assistant' && msg.reasoningContent) {
         base.reasoning_content = msg.reasoningContent;
       }

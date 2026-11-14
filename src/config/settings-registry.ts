@@ -1625,6 +1625,38 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
 
   // ── Context hooks ──
   {
+    key: 'media.imageInput',
+    category: 'media',
+    valueType: 'string',
+    defaultValue: 'auto',
+    description: 'Images in chats: auto/native = a model that reads images sees them itself, one that cannot gets view_image; describe = every image is described up front by the Vision lane',
+    isSecret: false,
+  },
+  {
+    key: 'media.audioInput',
+    category: 'media',
+    valueType: 'string',
+    defaultValue: 'transcribe',
+    description: 'Recordings in chats: transcribe = the model gets the transcript; native = a model that hears audio also gets the recording (WAV/MP3)',
+    isSecret: false,
+  },
+  {
+    key: 'media.replayRecentImages',
+    category: 'media',
+    valueType: 'number',
+    defaultValue: 3,
+    description: 'How many of the newest image-bearing messages are re-sent as images with each request (older ones become a line to look again from)',
+    isSecret: false,
+  },
+  {
+    key: 'media.fileChannelImages',
+    category: 'media',
+    valueType: 'boolean',
+    defaultValue: false,
+    description: 'Also file images sent alone on a channel (Telegram, Slack, WhatsApp, Teams) as documents. They always reach the agent; off, they are not added to the document library.',
+    isSecret: false,
+  },
+  {
     key: 'contextHooks.enabled',
     category: 'agent',
     valueType: 'boolean',

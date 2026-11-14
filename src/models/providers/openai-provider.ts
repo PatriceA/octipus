@@ -1,3 +1,4 @@
+import { openAiRoleContent } from './media-content';
 import { recordProviderUsage } from './instrumented';
 import { normalizeUsage } from './usage';
 import OpenAI from 'openai';
@@ -352,10 +353,7 @@ export class OpenAIProvider implements ModelProvider {
         };
       }
 
-      return {
-        role: msg.role as 'system' | 'user' | 'assistant',
-        content: msg.content,
-      };
+      return openAiRoleContent(msg);
     });
   }
 }

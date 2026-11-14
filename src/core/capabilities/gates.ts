@@ -68,14 +68,18 @@ export function isCapabilityOn(cap: Capability): boolean {
   return snapshot[cap].on;
 }
 
-/** Every capability in `caps` is configured (an empty list is always met). */
-export function capabilitiesMet(caps: readonly Capability[] | undefined): boolean {
-  return !caps || caps.every(isCapabilityOn);
+/**
+ * Every capability in `caps` is configured (an empty list is always met).
+ * `own` adds what the asking agent brings itself: an agent whose model reads
+ * images has `see` even when nothing install-wide does.
+ */
+export function capabilitiesMet(caps: readonly Capability[] | undefined, own: Partial<Record<Capability, boolean>> = {}): boolean {
+  return !caps || caps.every((cap) => own[cap] === true || isCapabilityOn(cap));
 }
 
-/** The first capability of `caps` that is off, if any. */
-export function firstOffCapability(caps: readonly Capability[] | undefined): Capability | undefined {
-  return caps?.find((cap) => !isCapabilityOn(cap));
+/** The first capability of `caps` that is off, if any (`own` as in `capabilitiesMet`). */
+export function firstOffCapability(caps: readonly Capability[] | undefined, own: Partial<Record<Capability, boolean>> = {}): Capability | undefined {
+  return caps?.find((cap) => own[cap] !== true && !isCapabilityOn(cap));
 }
 
 export function capabilitySnapshot(): CapabilitySnapshot {

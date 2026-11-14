@@ -22,6 +22,8 @@ export { ShellTool, shellTool } from './shell';
 export { LocalShellOperations } from './shell/local-operations';
 export type { ShellExecResult, ShellOperations } from './shell/operations';
 export { TasksTool, tasksTool } from './tasks';
+export { AudioTool, audioTool } from './audio';
+export { VisionTool, visionTool } from './vision';
 export { VisualTool, visualTool } from './visual';
 export { VoiceCallTool } from './voice';
 export { WebSearchTool, websearchTool } from './websearch';

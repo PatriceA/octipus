@@ -75,6 +75,16 @@ export async function localOnlyLevel(sessionId: string | undefined, egress: Egre
 type HostedRow = Pick<ModelConfigEntry, 'provider' | 'modelId' | 'metadata' | 'endpoint'>;
 
 /**
+ * Must images and recordings of `sessionId` stay away from `row`? They are
+ * not pseudonymized, so the strict threshold applies (level 3 stays local even
+ * where `protection.remoteAtLevel3` lets the text of a completion go out).
+ */
+export async function rawMediaStaysLocal(sessionId: string | undefined, row: HostedRow | null | undefined): Promise<boolean> {
+  if (await localOnlyLevel(sessionId) === undefined) return false;
+  return !(await runsLocally(row));
+}
+
+/**
  * Does a call on `row` stay on the owner's own machine or network? The
  * row's data policy (models/decision.ts), and for Ollama a check that the
  * model is not one of Ollama's cloud models. A CLI agent is a vendor's

@@ -30,10 +30,10 @@ const CORE_ROUTE_PREFIXES = [
 
 /** Built-in tool containers of the core. */
 const CORE_TOOLS = [
-  'browser', 'browser-ext', 'companion', 'connections', 'data', 'docker', 'documents',
+  'audio', 'browser', 'browser-ext', 'companion', 'connections', 'data', 'docker', 'documents',
   'filesystem', 'git', 'github', 'google-workspace', 'inline-ui', 'knowledge',
   'mcp_admin', 'microsoft365', 'monitor', 'notes', 'plan', 'plugin_dev', 'repo_registry', 'scheduling',
-  'shell', 'skill-distill', 'task_state', 'tasks', 'visual', 'websearch',
+  'shell', 'skill-distill', 'task_state', 'tasks', 'vision', 'visual', 'websearch',
 ];
 
 /** Sidebar pages of the core. */

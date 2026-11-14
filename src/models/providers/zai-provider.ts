@@ -1,3 +1,4 @@
+import { openAiRoleContent } from './media-content';
 import { recordProviderUsage } from './instrumented';
 import { normalizeUsage } from './usage';
 import OpenAI from 'openai';
@@ -330,8 +331,7 @@ export class ZaiProvider implements ModelProvider {
 
       return {
         ...(msg.role === 'assistant' && msg.reasoningContent ? { reasoning_content: msg.reasoningContent } : {}),
-        role: msg.role as 'system' | 'user' | 'assistant',
-        content: msg.content,
+        ...openAiRoleContent(msg),
       };
     });
   }
