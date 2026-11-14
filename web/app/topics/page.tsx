@@ -5,6 +5,7 @@ import { Image as ImageIcon, Layers, Loader2, Save, Tags } from 'lucide-react';
 import { useState } from 'react';
 import { RootModelNote } from '@/components/models/root-model-note';
 import { LaneRoles, type RoleRow, type ToolOption } from '@/components/topics/lane-roles';
+import { LocalEmbeddingPanel } from '@/components/topics/local-embedding';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -196,6 +197,7 @@ function TopicCard({
           {(topic.kind === 'transcription' || topic.kind === 'speech') && canEdit && (
             <SpeechEngineButtons direction={topic.kind === 'transcription' ? 'stt' : 'tts'} onUsed={onSaved} />
           )}
+          {topic.kind === 'embedding' && canEdit && <LocalEmbeddingPanel onChanged={onSaved} />}
           {topic.effectiveModel !== undefined && (
             <p className="text-xs mt-1" data-testid={`effective-${topic.value}`}>
               {topic.effectiveModel

@@ -37,6 +37,8 @@
  *   OCTIPUS_SETUP_INSTALL_CAPS=browser,mcp       (comma-separated)
  *   OCTIPUS_SETUP_RECOMMEND=1                     (scan HW + pull a recommended local model)
  *   OCTIPUS_SETUP_IMAGE_MODEL=gpt-image-1         (optional: bind an image model of the chosen provider)
+ *   OCTIPUS_SETUP_EMBEDDING=local|ollama|openai   (optional: a search model, only when none is bound;
+ *                                                  interactive runs take it as the default answer)
  *
  * Remote mode (--remote <url>) skips local .env + backend boot and
  * runs the admin/provider/capability steps against the remote API.
@@ -725,6 +727,76 @@ async function pickImageGeneration(api: ApiClient, providerId: string | undefine
   }
 }
 
+/**
+ * Optional "Search & memory": an embedding model for searching documents,
+ * notes and memories (docs/RAG.md). Asked only while the embedding lane is
+ * unbound — a model already there is never replaced (its vectors would need a
+ * rebuild). The default is to skip: Octipus runs without one, and indexes
+ * nothing until one is set. Non-interactive: OCTIPUS_SETUP_EMBEDDING.
+ */
+async function pickEmbedding(api: ApiClient, providerId: string | undefined): Promise<void> {
+  type EngineState = { platform: string | null; embeddingBound: string | null; models: Array<{ id: string; label: string; sizeBytes: number; default: boolean }>; job?: { stage: string; percent: number; statusText: string; error?: string; note?: string } | null };
+  // Fails closed: when the backend cannot say the lane is free, nothing is bound.
+  const engine = await api.get<EngineState>('/api/local-engine').catch(() => null);
+  const topics = await api.get<{ topics?: Array<{ value: string; primaryModel?: string | null }> } | Array<{ value: string; primaryModel?: string | null }>>('/api/topics').catch(() => null);
+  if (!engine || !topics) { gray('Search & memory: skipped (could not check the embedding lane). Set it later on the Topics page.'); return; }
+  const list = Array.isArray(topics) ? topics : topics?.topics ?? [];
+  if (engine.embeddingBound || list.find((t) => t.value === 'embedding')?.primaryModel) return;
+  if (QUICK) { gray('Search & memory are off. Add a local model any time: Topics page → Install local embeddings, or `octi capabilities install local-embedding`.'); return; }
+  const local = engine.platform ? engine.models.find((m) => m.default) : undefined;
+  // Ollama is offered when the backend reaches it.
+  const ollama = (await api.get<{ ollama?: { reachable?: boolean } }>('/api/onboarding').catch(() => null))?.ollama?.reachable === true;
+  let choice: string;
+  if (NON_INTERACTIVE) {
+    choice = process.env.OCTIPUS_SETUP_EMBEDDING?.trim() || 'skip';
+  } else {
+    choice = await selectStep<string>(
+      null,
+      'Search & memory — search across documents, notes and memories? (an embedding model)',
+      [
+        { value: 'skip', label: 'No — skip', description: 'Octipus runs without it; nothing is indexed. Add one later: octi capabilities install local-embedding.' },
+        ...(local ? [{ value: 'local', label: `On this machine (${local.label})`, description: `Downloads about ${Math.round(local.sizeBytes / 1e6) + 30} MB once. Free, private, no key.` }] : []),
+        ...(ollama ? [{ value: 'ollama', label: 'With Ollama (nomic-embed-text)', description: 'Your Ollama server; run `ollama pull nomic-embed-text` there.' }] : []),
+        ...(providerId === 'openai' ? [{ value: 'openai', label: 'With OpenAI (text-embedding-3-small)', description: 'Billed per token on the key you just stored.' }] : []),
+      ],
+      // Docker with baked embeddings (scripts/install-docker.sh) defaults to them.
+      process.env.OCTIPUS_SETUP_EMBEDDING === 'local' && local ? 'local' : 'skip',
+    );
+  }
+  if (choice === 'skip') return;
+  try {
+    if (choice === 'local') {
+      if (!engine.platform) { warn('Search: no local engine build exists for this machine; skipped.'); return; }
+      await api.post('/api/local-engine/install', {});
+      let last = '';
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1000));
+        const state = await api.get<EngineState>('/api/local-engine');
+        const job = state.job;
+        if (!job) break;
+        const line = `${job.statusText}${job.stage === 'engine' || job.stage === 'model' ? ` ${job.percent}%` : ''}`;
+        if (line !== last) { gray(`  ${line}`); last = line; }
+        if (job.stage === 'error') throw new Error(job.error || 'install failed');
+        if (job.stage === 'done') { ok(`Search: ${job.statusText}`); if (job.note) gray(`  ${job.note}`); break; }
+      }
+      return;
+    }
+    const pick = choice === 'openai' ? { provider: 'openai', modelId: 'text-embedding-3-small' } : choice === 'ollama' ? { provider: 'ollama', modelId: 'nomic-embed-text' } : null;
+    if (!pick) { warn(`Search: unknown choice "${choice}" (local, ollama or openai); skipped.`); return; }
+    const name = `${pick.provider} ${pick.modelId}`;
+    try {
+      await api.post('/api/models', { name, provider: pick.provider, modelId: pick.modelId, supportsTools: false, supportsStreaming: false });
+    } catch (err) {
+      if (!(err instanceof ApiError && /already exists/i.test(err.serverMessage))) throw err;
+    }
+    await api.put('/api/topics/embedding/binding', { primaryModel: name });
+    ok(`Search: "${name}" is the embedding model.`);
+    if (pick.provider === 'ollama') gray('  → Run `ollama pull nomic-embed-text` on your Ollama server if it is not there yet.');
+  } catch (err) {
+    warn(`Search not set up: ${err instanceof ApiError ? err.serverMessage : (err as Error).message}`);
+  }
+}
+
 async function pickVoice(api: ApiClient): Promise<void> {
   if (QUICK) return;
   // ── Non-interactive: only local defaults, and only on explicit opt-in. ──
@@ -1262,6 +1334,9 @@ async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<voi
       process.stdout.write(`  \x1b[33m! install failed: ${(err as Error).message}\x1b[0m\n`);
     }
   }
+
+  // Search & memory (optional; only while no embedding model is bound).
+  await pickEmbedding(api, provider.providerId);
 
   // Voice dependencies (local whisper build offer).
   await pickVoice(api);

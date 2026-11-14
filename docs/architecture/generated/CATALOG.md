@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-690 mounted routes across 86 route files. The path is the full one, group prefix included — what a client actually calls.
+693 mounted routes across 87 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -261,6 +261,9 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/knowledge/readiness` | `src/api/routes/knowledge.ts` |
 | POST | `/api/knowledge/search` | `src/api/routes/knowledge.ts` |
 | GET | `/api/knowledge/stats` | `src/api/routes/knowledge.ts` |
+| DELETE | `/api/local-engine` | `src/api/routes/local-engine.ts` |
+| GET | `/api/local-engine` | `src/api/routes/local-engine.ts` |
+| POST | `/api/local-engine/install` | `src/api/routes/local-engine.ts` |
 | GET | `/api/logs/recent` | `src/api/routes/logs.ts` |
 | GET | `/api/logs/stats` | `src/api/routes/logs.ts` |
 | GET | `/api/logs/stream` | `src/api/routes/logs.ts` |
@@ -708,7 +711,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | From | Imports | Sites |
 |---|---|---|
 | `(root)` | `api` | 1 |
-| `(root)` | `capabilities` | 1 |
+| `(root)` | `capabilities` | 4 |
 | `(root)` | `channels` | 1 |
 | `(root)` | `config` | 4 |
 | `(root)` | `core` | 37 |
@@ -716,7 +719,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `extensions` | 2 |
 | `(root)` | `hooks` | 3 |
 | `(root)` | `mcp` | 1 |
-| `(root)` | `models` | 3 |
+| `(root)` | `models` | 4 |
 | `(root)` | `modules` | 1 |
 | `(root)` | `plugins` | 5 |
 | `(root)` | `security` | 5 |
@@ -724,7 +727,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `tools` | 5 |
 | `(root)` | `utils` | 1 |
 | `(root)` | `voice` | 1 |
-| `api` | `capabilities` | 1 |
+| `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 27 |
 | `api` | `core` | 206 |
@@ -732,7 +735,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 5 |
-| `api` | `models` | 41 |
+| `api` | `models` | 42 |
 | `api` | `plugins` | 49 |
 | `api` | `security` | 178 |
 | `api` | `services` | 5 |
@@ -741,11 +744,12 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `tools` | 6 |
 | `api` | `utils` | 76 |
 | `api` | `voice` | 19 |
+| `capabilities` | `config` | 1 |
 | `capabilities` | `db` | 2 |
-| `capabilities` | `models` | 1 |
+| `capabilities` | `models` | 4 |
 | `capabilities` | `setup` | 1 |
 | `capabilities` | `tools` | 4 |
-| `capabilities` | `utils` | 6 |
+| `capabilities` | `utils` | 11 |
 | `channels` | `config` | 7 |
 | `channels` | `core` | 48 |
 | `channels` | `db` | 44 |
@@ -762,7 +766,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `config` | `shared` | 6 |
 | `config` | `utils` | 5 |
 | `config` | `voice` | 1 |
-| `core` | `capabilities` | 2 |
+| `core` | `capabilities` | 3 |
 | `core` | `channels` | 14 |
 | `core` | `config` | 73 |
 | `core` | `db` | 490 |
@@ -814,6 +818,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `mcp` | `security` | 9 |
 | `mcp` | `shared` | 4 |
 | `mcp` | `utils` | 5 |
+| `models` | `capabilities` | 2 |
 | `models` | `config` | 11 |
 | `models` | `core` | 46 |
 | `models` | `db` | 14 |
@@ -903,6 +908,7 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 
 - api <-> security
 - api <-> tools
+- capabilities <-> models
 - channels <-> config
 - channels <-> core
 - config <-> core

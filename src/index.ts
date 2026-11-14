@@ -139,6 +139,18 @@ async function main() {
       });
       const { startIndexBacklogCatchUp } = await import('@/core/rag/index-backlog');
       startIndexBacklogCatchUp();
+      // The local embedding engine starts in the background only when its row
+      // is the bound embedding model (otherwise it starts on demand, or never).
+      void (async () => {
+        const { getModelRegistry } = await import('@/models/model-registry');
+        const bound = await getModelRegistry().getModelForTopic('embedding');
+        if (bound?.provider !== 'local-engine') return;
+        // An update brought a new engine tag: fetched beside the old build, switched after its probe.
+        const { upgradeLocalEngineIfNeeded } = await import('@/capabilities/local-engine/install');
+        await upgradeLocalEngineIfNeeded().catch((err: unknown) => logger.warn({ err }, 'Local embedding engine update failed; the installed build stays in use'));
+        const { ensureLocalEngine } = await import('@/capabilities/local-engine/engine-process');
+        await ensureLocalEngine(bound.modelId);
+      })().catch((err: unknown) => logger.warn({ err }, 'Local embedding engine did not start at boot; it starts on the next embedding'));
     }
 
     // Each workspace's files live under its own directory, the user's
@@ -538,6 +550,8 @@ async function main() {
       // otherwise a tick could claim a lease right before exit.
       stopCronLoop();
       stopRoleTurnLeaseClaims();
+      // The local embedding engine is a child process: it goes with us.
+      const engineStopped = import('@/capabilities/local-engine/engine-process').then(({ stopLocalEngine }) => stopLocalEngine()).catch(() => {});
 
       // Stop all running agents (kills CLI child processes)
       try {
@@ -643,6 +657,9 @@ async function main() {
       } catch {
         // Module may not have loaded; nothing to close.
       }
+
+      // The engine was asked to stop at the start; it has had the whole shutdown to exit.
+      await engineStopped;
 
       clearTimeout(forceExit);
       logger.info('Shutdown complete');

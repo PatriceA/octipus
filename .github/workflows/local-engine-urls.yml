@@ -1,0 +1,33 @@
+name: Local engine URLs
+
+# Weekly: every pinned download of the optional local embedding engine
+# (src/capabilities/local-engine/manifest.json) still answers, and its
+# checksums still match. Not per PR: it depends on GitHub and Hugging Face.
+
+on:
+  schedule:
+    # Tuesdays 05:41 UTC, off the top of the hour.
+    - cron: '41 5 * * 2'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-engine-urls
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check pinned engine and model URLs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/node-setup
+      - run: npm ci --ignore-scripts
+      - run: npx tsx scripts/pin-local-engine.ts --check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

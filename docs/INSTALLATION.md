@@ -128,7 +128,7 @@ export OCTIPUS_SETUP_MODEL='your-installed-model'
 export OCTIPUS_SETUP_BASE_URL=http://localhost:11434
 ```
 
-For a hosted provider, select its provider ID/model and set `OCTIPUS_SETUP_API_KEY`. For external storage, set `OCTIPUS_SETUP_STORAGE=external` and `OCTIPUS_SETUP_DATABASE_URL` to an existing PostgreSQL database with pgvector. External services are not created by native setup. Additional variables are documented in [setup-wizard.ts](../scripts/setup-wizard.ts).
+For a hosted provider, select its provider ID/model and set `OCTIPUS_SETUP_API_KEY`. For external storage, set `OCTIPUS_SETUP_STORAGE=external` and `OCTIPUS_SETUP_DATABASE_URL` to an existing PostgreSQL database with pgvector. External services are not created by native setup. Optional extras: `OCTIPUS_SETUP_EMBEDDING=local|ollama|openai` (search across documents and memories, only when no embedding model is bound; [RAG.md → Local embeddings](RAG.md#local-embeddings)) and `OCTIPUS_SETUP_IMAGE_MODEL`. Additional variables are documented in [setup-wizard.ts](../scripts/setup-wizard.ts).
 
 ## Docker
 

@@ -191,6 +191,9 @@ const modelQuestions: Question[] = [
     help: 'Needs an embedding model, a small model that indexes text.',
     options: (s) => [
       ...(s.models.embeddingReady ? [{ value: 'keep', label: 'Keep the one already set up' }] : []),
+      ...(s.localEmbedding?.supported && !s.models.embeddingReady
+        ? [{ value: 'local', label: `Yes, on this server (${s.localEmbedding.label})`, hint: `Downloads about ${s.localEmbedding.sizeMb + 30} MB once; no key, nothing leaves the server.` }]
+        : []),
       { value: 'ollama', label: 'Yes, locally with Ollama (nomic-embed-text)' },
       { value: 'openai', label: 'Yes, with OpenAI (text-embedding-3-small)' },
       { value: 'skip', label: 'Not now' },
