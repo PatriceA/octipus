@@ -79,11 +79,12 @@ async function releaseAsset(key: PlatformKey, variant: EngineVariant): Promise<{
   const sha256 = pinned.sha256 ?? fromApi;
   if (!sha256) throw new Error(`No checksum is known for ${asset.name}; refusing to install an unverified binary.`);
   if (pinned.sha256 && fromApi && pinned.sha256 !== fromApi) throw new Error(`The pinned checksum of ${asset.name} does not match the release's.`);
-  // Only the release's own download location (GitHub then redirects to its file storage).
-  if (!asset.browser_download_url.startsWith(`https://github.com/${repo}/releases/download/${tag}/`)) {
-    throw new Error(`Unexpected download location for ${asset.name}: ${asset.browser_download_url}`);
-  }
-  return { url: asset.browser_download_url, name: asset.name, sha256, size: asset.size };
+  // The download URL is built here, never taken from the API answer: only the
+  // release's own location (GitHub then redirects to its file storage), for a
+  // plain file name that matched the pinned pattern.
+  if (!/^[A-Za-z0-9._-]+$/.test(asset.name)) throw new Error(`Unexpected asset name in the llama.cpp ${tag} release: ${asset.name}`);
+  const url = `https://github.com/${LOCAL_ENGINE_MANIFEST.engine.repo}/releases/download/${encodeURIComponent(LOCAL_ENGINE_MANIFEST.engine.tag)}/${encodeURIComponent(asset.name)}`;
+  return { url, name: asset.name, sha256, size: asset.size };
 }
 
 async function run(command: string, args: string[], timeoutMs = 60_000, env?: NodeJS.ProcessEnv): Promise<{ code: number; output: string }> {
@@ -172,7 +173,8 @@ async function installEngine(key: PlatformKey, variant: EngineVariant, progress:
   await mkdir(enginesRoot(), { recursive: true });
   const work = await mkdtemp(join(enginesRoot(), '.staging-'));
   try {
-    const archive = join(work, asset.name);
+    // A fixed local name: nothing from the API answer becomes a path.
+    const archive = join(work, asset.name.endsWith('.zip') ? 'engine.zip' : 'engine.tar.gz');
     await downloadVerified(asset.url, archive, asset.sha256, {
       size: asset.size,
       onProgress: (done, total) => progress(total ? Math.round((done / total) * 100) : 0, `Downloading the engine (${Math.round(done / 1e6)} MB)`),

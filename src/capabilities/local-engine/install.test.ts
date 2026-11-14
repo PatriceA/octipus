@@ -129,7 +129,7 @@ beforeEach(() => {
     if (url.startsWith('https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/b1')) {
       return Response.json({ assets: [{ name: `llama-b1-bin-${arch}.tar.gz`, browser_download_url: 'https://github.com/ggml-org/llama.cpp/releases/download/b1/asset.tar.gz', digest: `sha256:${archiveSha}`, size: archive.length }] });
     }
-    if (url === 'https://github.com/ggml-org/llama.cpp/releases/download/b1/asset.tar.gz') { assetFetches++; return new Response(new Uint8Array(archive)); }
+    if (url === `https://github.com/ggml-org/llama.cpp/releases/download/b1/llama-b1-bin-${arch}.tar.gz`) { assetFetches++; return new Response(new Uint8Array(archive)); }
     if (url.startsWith(`https://huggingface.co/test/tiny-GGUF/resolve/${'a'.repeat(40)}/`)) { modelFetches++; return new Response(new Uint8Array(modelBody)); }
     return realFetch(input, init);
   });
