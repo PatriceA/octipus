@@ -17,13 +17,12 @@
  * Idempotent (verified files are kept); concurrent calls share one job.
  */
 import { randomUUID } from 'node:crypto';
-import { chmod, cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { chmod, cp, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join } from 'node:path';
 import { spawnProcess } from '@/utils/proc';
 import { logger } from '@/utils/logger';
 import { downloadVerified, sha256File } from './download';
-import { ensureLocalEngine, stopLocalEngine } from './engine-process';
+import { engineEnv, ensureLocalEngine, stopLocalEngine } from './engine-process';
 import { engineAsset, type EngineVariant, LOCAL_ENGINE_MANIFEST, type LocalEmbeddingModel, localEmbeddingModel, modelUrl, type PlatformKey, platformKey } from './manifest';
 import { activeEngine, engineDir, enginesRoot, modelDir, modelFilePath } from './paths';
 
@@ -36,6 +35,7 @@ export interface LocalEngineJob {
   id: string;
   ownerId: string;
   modelId: string;
+  variant: EngineVariant;
   stage: LocalEngineStage;
   /** Download progress of the current stage, 0–100. */
   percent: number;
@@ -79,11 +79,15 @@ async function releaseAsset(key: PlatformKey, variant: EngineVariant): Promise<{
   const sha256 = pinned.sha256 ?? fromApi;
   if (!sha256) throw new Error(`No checksum is known for ${asset.name}; refusing to install an unverified binary.`);
   if (pinned.sha256 && fromApi && pinned.sha256 !== fromApi) throw new Error(`The pinned checksum of ${asset.name} does not match the release's.`);
+  // Only the release's own download location (GitHub then redirects to its file storage).
+  if (!asset.browser_download_url.startsWith(`https://github.com/${repo}/releases/download/${tag}/`)) {
+    throw new Error(`Unexpected download location for ${asset.name}: ${asset.browser_download_url}`);
+  }
   return { url: asset.browser_download_url, name: asset.name, sha256, size: asset.size };
 }
 
-async function run(command: string, args: string[], timeoutMs = 60_000): Promise<{ code: number; output: string }> {
-  const proc = spawnProcess({ command, args, stdout: 'pipe', stderr: 'pipe' });
+async function run(command: string, args: string[], timeoutMs = 60_000, env?: NodeJS.ProcessEnv): Promise<{ code: number; output: string }> {
+  const proc = spawnProcess({ command, args, stdout: 'pipe', stderr: 'pipe', ...(env ? { env } : {}) });
   const timer = setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* gone */ } }, timeoutMs);
   timer.unref?.();
   const [out, err, code] = await Promise.all([
@@ -108,15 +112,20 @@ async function findBinaryDir(root: string, name: string, depth = 4): Promise<str
   return null;
 }
 
-async function extract(archive: string, into: string): Promise<void> {
+/** Extract a release archive (zip entries may not leave `into`). Exported for tests. */
+export async function extractArchive(archive: string, into: string): Promise<void> {
   await mkdir(into, { recursive: true });
   if (archive.endsWith('.zip')) {
     const { default: JSZip } = await import('jszip');
     const zip = await JSZip.loadAsync(await readFile(archive));
     for (const entry of Object.values(zip.files)) {
+      // JSZip rewrites "../" away; the name as stored is what is checked (a release never has one).
+      const stored = (entry as { unsafeOriginalName?: string }).unsafeOriginalName ?? entry.name;
       const target = join(into, entry.name);
       // Zip-slip: every entry stays inside the target directory.
-      if (!target.startsWith(`${into}/`) && !target.startsWith(`${into}\\`)) throw new Error(`Unsafe path in the release archive: ${entry.name}`);
+      if (stored.split(/[\\/]/).includes('..') || isAbsolute(stored) || (!target.startsWith(`${into}/`) && !target.startsWith(`${into}\\`))) {
+        throw new Error(`Unsafe path in the release archive: ${stored}`);
+      }
       if (entry.dir) { await mkdir(target, { recursive: true }); continue; }
       await mkdir(dirname(target), { recursive: true });
       await writeFile(target, await entry.async('nodebuffer'));
@@ -127,30 +136,40 @@ async function extract(archive: string, into: string): Promise<void> {
   if (code !== 0) throw new Error(`Could not extract ${archive}: ${output.trim().slice(-300)}`);
 }
 
-/** Record the build in use (after its probe passed) and drop older tags. */
-async function activate(variant: EngineVariant): Promise<void> {
+/**
+ * Record the build in use (after its probe passed). The running engine is
+ * stopped first when the build changes (it restarts on the new one; Windows
+ * cannot delete a running binary), then older tags are removed, best effort:
+ * what cannot be removed now is removed next time.
+ */
+async function activate(variant: EngineVariant): Promise<boolean> {
   const { tag } = LOCAL_ENGINE_MANIFEST.engine;
+  const before = activeEngine();
+  const changed = before?.tag !== tag || before?.variant !== variant;
+  if (changed) await stopLocalEngine();
   await mkdir(enginesRoot(), { recursive: true });
   await writeFile(join(enginesRoot(), 'active.json'), `${JSON.stringify({ tag, variant })}\n`);
   for (const entry of await readdir(enginesRoot(), { withFileTypes: true }).catch(() => [])) {
-    if (entry.isDirectory() && entry.name !== tag && /^b\d+$/.test(entry.name)) await rm(join(enginesRoot(), entry.name), { recursive: true, force: true });
+    if (!entry.isDirectory() || !/^b\d+$/.test(entry.name) || entry.name === tag) continue;
+    await rm(join(enginesRoot(), entry.name), { recursive: true, force: true }).catch((err: unknown) => log.warn({ err, dir: entry.name }, 'Could not remove an older engine build yet'));
   }
+  return changed;
 }
 
 /**
  * The engine binary for this platform and variant at the manifest's tag,
  * downloaded beside any older build, verified, probed, then made active.
  */
-async function installEngine(key: PlatformKey, variant: EngineVariant, progress: (percent: number, text: string) => void): Promise<string> {
+async function installEngine(key: PlatformKey, variant: EngineVariant, progress: (percent: number, text: string) => void): Promise<{ bin: string; changed: boolean }> {
   const exe = `${LOCAL_ENGINE_MANIFEST.engine.binary}${process.platform === 'win32' ? '.exe' : ''}`;
   const dir = engineDir(key, LOCAL_ENGINE_MANIFEST.engine.tag, variant);
   const bin = join(dir, exe);
-  if (await probeEngine(bin)) {
-    await activate(variant);
-    return bin;
-  }
+  if (await probeEngine(bin)) return { bin, changed: await activate(variant) };
   const asset = await releaseAsset(key, variant);
-  const work = await mkdtemp(join(tmpdir(), 'octipus-llama-'));
+  // Staged beside its destination (same file system): the extracted folder is
+  // renamed into place, so the release's relative library symlinks stay intact.
+  await mkdir(enginesRoot(), { recursive: true });
+  const work = await mkdtemp(join(enginesRoot(), '.staging-'));
   try {
     const archive = join(work, asset.name);
     await downloadVerified(asset.url, archive, asset.sha256, {
@@ -159,12 +178,12 @@ async function installEngine(key: PlatformKey, variant: EngineVariant, progress:
     });
     progress(100, 'Extracting the engine');
     const unpacked = join(work, 'x');
-    await extract(archive, unpacked);
+    await extractArchive(archive, unpacked);
     const from = await findBinaryDir(unpacked, exe);
     if (!from) throw new Error(`${asset.name} has no ${exe}`);
     await rm(dir, { recursive: true, force: true });
     await mkdir(dirname(dir), { recursive: true });
-    await cp(from, dir, { recursive: true });
+    await rename(from, dir).catch(() => cp(from, dir, { recursive: true, verbatimSymlinks: true }));
     if (process.platform !== 'win32') {
       for (const name of await readdir(dir)) {
         if (name === exe || name.startsWith('llama-') || name.endsWith('.so') || name.endsWith('.dylib')) await chmod(join(dir, name), 0o755).catch(() => {});
@@ -178,16 +197,19 @@ async function installEngine(key: PlatformKey, variant: EngineVariant, progress:
     await rm(dir, { recursive: true, force: true });
     throw new Error(`The downloaded llama-server${variant === 'cpu' ? '' : ` (${variant})`} does not run on this machine (\`--version\` failed).`);
   }
-  await activate(variant);
-  return bin;
+  return { bin, changed: await activate(variant) };
 }
 
-/** Does the binary run? (`--version` exits 0, or prints a version.) */
+/**
+ * Does the binary run? `--version` must exit 0 and print llama.cpp's
+ * `version: <build>` line, with the same library path the engine starts
+ * with (a loader error such as "GLIBC_2.38 not found" is a failure).
+ */
 export async function probeEngine(bin: string): Promise<boolean> {
   if (!(await stat(bin).catch(() => null))?.isFile()) return false;
   try {
-    const { code, output } = await run(bin, ['--version'], 30_000);
-    return code === 0 || /version/i.test(output);
+    const { code, output } = await run(bin, ['--version'], 30_000, engineEnv(bin));
+    return code === 0 && /^version: \d+/m.test(output);
   } catch {
     return false;
   }
@@ -245,31 +267,39 @@ async function registerRow(model: LocalEmbeddingModel): Promise<{ name: string; 
       metadata: metadata as never,
     } as never);
   }
-  const bound = await registry.getModelForTopic('embedding');
-  if (bound && boundTo(bound, 'embedding')) return { name, bound: bound.name === name };
+  // Any row holding the lane, enabled or not (a disabled primary comes back when re-enabled).
+  const holder = (await registry.getAllModelsIncludeDisabled()).find((r) => boundTo(r, 'embedding'));
+  if (holder) return { name, bound: holder.name === name };
   const row = await registry.getModel(name);
   await registry.updateModel(name, { topicRoles: { ...(row?.topicRoles ?? {}), embedding: 'primary' } });
   return { name, bound: true };
 }
 
-/** Run the install; one at a time (a second call joins the running one). */
+/** Another install, update or removal is running (the API answers 409). */
+export class LocalEngineBusyError extends Error {
+  constructor(message = 'The local embedding engine is being installed or updated; try again when it finishes.') { super(message); }
+}
+
+/** Run the install; one at a time (the same request again joins the running one). */
 export function startLocalEngineInstall(ownerId: string, modelId?: string, onUpdate?: (job: LocalEngineJob) => void, opts: { gpu?: EngineVariant } = {}): LocalEngineJob {
   const model = localEmbeddingModel(modelId);
   if (!model) throw new Error(`Unknown local embedding model "${modelId}". Known: ${LOCAL_ENGINE_MANIFEST.models.map((m) => m.id).join(', ')}`);
-  if (running && current) return current;
   const key = platformKey();
   // A GPU build is opt-in; without one asked for, the build already in use stays.
   const variant: EngineVariant = opts.gpu ?? activeEngine()?.variant ?? 'cpu';
+  if (running) {
+    if (current && current.modelId === model.id && current.variant === variant) return current;
+    throw new LocalEngineBusyError(current ? `An install of ${current.modelId} is running; try again when it finishes.` : undefined);
+  }
   if (key && !engineAsset(key, variant)) throw new Error(`llama.cpp has no ${variant} build for ${key}.`);
-  const job: LocalEngineJob = { id: randomUUID(), ownerId, modelId: model.id, stage: 'engine', percent: 0, statusText: 'Starting', startedAt: Date.now() };
+  const job: LocalEngineJob = { id: randomUUID(), ownerId, modelId: model.id, variant, stage: 'engine', percent: 0, statusText: 'Starting', startedAt: Date.now() };
   current = job;
   const update = (patch: Partial<LocalEngineJob>) => { Object.assign(job, patch); onUpdate?.({ ...job }); };
   running = (async () => {
     try {
       if (!key) throw new Error(`No llama.cpp build exists for ${process.platform}-${process.arch}.`);
+      // A running engine on another build is stopped when the new one is activated.
       await installEngine(key, variant, (percent, statusText) => update({ stage: 'engine', percent, statusText }));
-      // A running engine on an older build restarts on the new one.
-      await stopLocalEngine();
       await installModel(model, (percent, statusText) => update({ stage: 'model', percent, statusText }));
       update({ stage: 'probe', percent: 100, statusText: 'Starting the engine and embedding a probe' });
       await probeEmbedding(model);
@@ -319,9 +349,18 @@ export async function upgradeLocalEngineIfNeeded(): Promise<boolean> {
   const active = activeEngine();
   const key = platformKey();
   if (!key || !active || active.tag === LOCAL_ENGINE_MANIFEST.engine.tag || running) return false;
-  await installEngine(key, active.variant, () => {});
-  await stopLocalEngine();
-  log.info({ from: active.tag, to: LOCAL_ENGINE_MANIFEST.engine.tag }, 'Local embedding engine updated');
+  // Holds the same lock as an install: an install asked for meanwhile is refused (409), not run beside it.
+  const job = (async () => {
+    await installEngine(key, active.variant, () => {});
+    log.info({ from: active.tag, to: LOCAL_ENGINE_MANIFEST.engine.tag }, 'Local embedding engine updated');
+    return current as LocalEngineJob;
+  })();
+  running = job;
+  try {
+    await job;
+  } finally {
+    if (running === job) running = null;
+  }
   return true;
 }
 
@@ -335,6 +374,7 @@ export async function waitForLocalEngineInstall(): Promise<LocalEngineJob | null
  * RAG then reports that no embedding model is configured (fail loud).
  */
 export async function removeLocalEngine(): Promise<{ removedRows: string[] }> {
+  if (running) throw new LocalEngineBusyError('The local embedding engine is being installed or updated; remove it when that finishes.');
   await stopLocalEngine();
   const { getModelRegistry } = await import('@/models/model-registry');
   const registry = getModelRegistry();

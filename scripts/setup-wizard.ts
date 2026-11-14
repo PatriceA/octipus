@@ -736,12 +736,14 @@ async function pickImageGeneration(api: ApiClient, providerId: string | undefine
  */
 async function pickEmbedding(api: ApiClient, providerId: string | undefined): Promise<void> {
   type EngineState = { platform: string | null; embeddingBound: string | null; models: Array<{ id: string; label: string; sizeBytes: number; default: boolean }>; job?: { stage: string; percent: number; statusText: string; error?: string; note?: string } | null };
+  // Fails closed: when the backend cannot say the lane is free, nothing is bound.
   const engine = await api.get<EngineState>('/api/local-engine').catch(() => null);
   const topics = await api.get<{ topics?: Array<{ value: string; primaryModel?: string | null }> } | Array<{ value: string; primaryModel?: string | null }>>('/api/topics').catch(() => null);
+  if (!engine || !topics) { gray('Search & memory: skipped (could not check the embedding lane). Set it later on the Topics page.'); return; }
   const list = Array.isArray(topics) ? topics : topics?.topics ?? [];
-  if (engine?.embeddingBound || list.find((t) => t.value === 'embedding')?.primaryModel) return;
+  if (engine.embeddingBound || list.find((t) => t.value === 'embedding')?.primaryModel) return;
   if (QUICK) { gray('Search & memory are off. Add a local model any time: Topics page → Install local embeddings, or `octi capabilities install local-embedding`.'); return; }
-  const local = engine?.platform ? engine.models.find((m) => m.default) : undefined;
+  const local = engine.platform ? engine.models.find((m) => m.default) : undefined;
   // Ollama is offered when the backend reaches it.
   const ollama = (await api.get<{ ollama?: { reachable?: boolean } }>('/api/onboarding').catch(() => null))?.ollama?.reachable === true;
   let choice: string;
@@ -764,7 +766,7 @@ async function pickEmbedding(api: ApiClient, providerId: string | undefined): Pr
   if (choice === 'skip') return;
   try {
     if (choice === 'local') {
-      if (!engine?.platform) { warn('Search: no local engine build exists for this machine; skipped.'); return; }
+      if (!engine.platform) { warn('Search: no local engine build exists for this machine; skipped.'); return; }
       await api.post('/api/local-engine/install', {});
       let last = '';
       for (;;) {

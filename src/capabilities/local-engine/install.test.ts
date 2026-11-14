@@ -7,7 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -34,6 +34,10 @@ vi.mock('./manifest.json', () => ({
       id: 'tiny', label: 'Tiny', repo: 'test/tiny-GGUF', revision: 'a'.repeat(40), file: 'tiny.gguf',
       sha256: MODEL_SHA, size: MODEL_BYTES.length, dims: 8, pooling: 'mean', contextLength: 512,
       prefixes: { query: 'q: ', document: 'd: ' }, license: 'test',
+    }, {
+      id: 'tiny2', label: 'Tiny 2', repo: 'test/tiny-GGUF', revision: 'a'.repeat(40), file: 'tiny2.gguf',
+      sha256: MODEL_SHA, size: MODEL_BYTES.length, dims: 8, pooling: 'mean', contextLength: 512,
+      prefixes: { query: 'q: ', document: 'd: ' }, license: 'test',
     }],
   },
 }));
@@ -55,9 +59,11 @@ vi.mock('@/models/providers/instrumented', () => ({ recordProviderUsage: async (
 const FAKE_SERVER = `#!/usr/bin/env node
 const http = require('node:http');
 const args = process.argv.slice(2);
-if (args.includes('--version')) { console.log('version: 1 (fake)'); process.exit(0); }
+if (args.includes('--version')) { console.error('version: 1 (fake)'); process.exit(0); }
+if (args.includes('--api-key')) { console.error('the key must not be on the command line'); process.exit(2); }
 const port = Number(args[args.indexOf('--port') + 1]);
-const key = args[args.indexOf('--api-key') + 1];
+const offset = args[args.indexOf('-m') + 1].endsWith('tiny2.gguf') ? 100 : 0;
+const key = process.env.LLAMA_API_KEY;
 http.createServer((req, res) => {
   if (req.headers.authorization !== 'Bearer ' + key) { res.writeHead(401); return res.end(); }
   if (req.url === '/health') { res.writeHead(200); return res.end('{"status":"ok"}'); }
@@ -65,7 +71,7 @@ http.createServer((req, res) => {
   req.on('data', (c) => { body += c; });
   req.on('end', () => {
     const input = JSON.parse(body).input;
-    const data = input.map((t, i) => ({ index: i, embedding: Array.from({ length: 8 }, (_, j) => t.length + j) })).reverse();
+    const data = input.map((t, i) => ({ index: i, embedding: Array.from({ length: 8 }, (_, j) => offset + t.length + j) })).reverse();
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ data, usage: { prompt_tokens: 3 } }));
   });
@@ -74,11 +80,19 @@ http.createServer((req, res) => {
 
 const supported = ['linux-x64', 'linux-arm64', 'darwin-arm64', 'darwin-x64'].includes(`${process.platform}-${process.arch}`);
 const arch = `${process.platform === 'darwin' ? 'macos' : 'ubuntu'}-${process.arch}`;
+/** A binary that cannot load its libraries (it prints "version", but fails). */
+const BROKEN_SERVER = `#!/bin/sh
+echo "llama-server: /lib/x86_64-linux-gnu/libc.so.6: version \\\`GLIBC_2.38' not found" >&2
+exit 1
+`;
 let root = '';
 let archive = Buffer.alloc(0);
 let archiveSha = '';
+let goodArchive = Buffer.alloc(0);
+let brokenArchive = Buffer.alloc(0);
 let modelBody = MODEL_BYTES;
 let assetFetches = 0;
+let modelFetches = 0;
 const realFetch = globalThis.fetch;
 
 beforeAll(async () => {
@@ -87,10 +101,19 @@ beforeAll(async () => {
   await mkdir(build, { recursive: true });
   await writeFile(join(build, 'llama-server'), FAKE_SERVER);
   await chmod(join(build, 'llama-server'), 0o755);
+  // Releases ship versioned libraries behind relative symlinks.
+  await writeFile(join(build, 'libggml.so.0.1'), 'lib');
+  await symlink('libggml.so.0.1', join(build, 'libggml.so.0'));
   const tarPath = join(root, `llama-b1-bin-${arch}.tar.gz`);
   execFileSync('tar', ['-czf', tarPath, '-C', join(root, 'release'), 'build']);
-  archive = await readFile(tarPath);
-  archiveSha = createHash('sha256').update(archive).digest('hex');
+  goodArchive = await readFile(tarPath);
+  const brokenBuild = join(root, 'broken', 'build', 'bin');
+  await mkdir(brokenBuild, { recursive: true });
+  await writeFile(join(brokenBuild, 'llama-server'), BROKEN_SERVER);
+  await chmod(join(brokenBuild, 'llama-server'), 0o755);
+  const brokenTar = join(root, 'broken.tar.gz');
+  execFileSync('tar', ['-czf', brokenTar, '-C', join(root, 'broken'), 'build']);
+  brokenArchive = await readFile(brokenTar);
 });
 afterAll(async () => { await rm(root, { recursive: true, force: true }); });
 
@@ -98,13 +121,16 @@ beforeEach(() => {
   process.env.OCTIPUS_MODELS_DIR = join(root, 'models');
   rows.clear();
   modelBody = MODEL_BYTES;
+  archive = goodArchive;
+  archiveSha = createHash('sha256').update(archive).digest('hex');
+  modelFetches = 0;
   vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     if (url.startsWith('https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/b1')) {
-      return Response.json({ assets: [{ name: `llama-b1-bin-${arch}.tar.gz`, browser_download_url: 'https://github.test/asset.tar.gz', digest: `sha256:${archiveSha}`, size: archive.length }] });
+      return Response.json({ assets: [{ name: `llama-b1-bin-${arch}.tar.gz`, browser_download_url: 'https://github.com/ggml-org/llama.cpp/releases/download/b1/asset.tar.gz', digest: `sha256:${archiveSha}`, size: archive.length }] });
     }
-    if (url === 'https://github.test/asset.tar.gz') { assetFetches++; return new Response(new Uint8Array(archive)); }
-    if (url === `https://huggingface.co/test/tiny-GGUF/resolve/${'a'.repeat(40)}/tiny.gguf`) return new Response(new Uint8Array(modelBody));
+    if (url === 'https://github.com/ggml-org/llama.cpp/releases/download/b1/asset.tar.gz') { assetFetches++; return new Response(new Uint8Array(archive)); }
+    if (url.startsWith(`https://huggingface.co/test/tiny-GGUF/resolve/${'a'.repeat(40)}/`)) { modelFetches++; return new Response(new Uint8Array(modelBody)); }
     return realFetch(input, init);
   });
 });
@@ -116,6 +142,35 @@ afterEach(async () => {
   await removeLocalEngine();
   vi.unstubAllGlobals();
   delete process.env.OCTIPUS_MODELS_DIR;
+});
+
+describe('release archives', () => {
+  test('a zip entry that escapes the target folder is refused', async () => {
+    const { default: JSZip } = await import('jszip');
+    const zip = new JSZip();
+    zip.file('build/bin/llama-server.exe', 'x');
+    zip.file('../escaped.txt', 'x');
+    const dir = await mkdtemp(join(tmpdir(), 'octipus-zip-'));
+    const file = join(dir, 'a.zip');
+    await writeFile(file, await zip.generateAsync({ type: 'nodebuffer' }));
+    const { extractArchive } = await import('./install');
+    await expect(extractArchive(file, join(dir, 'x'))).rejects.toThrow(/Unsafe path/);
+    expect(existsSync(join(dir, 'escaped.txt'))).toBe(false);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test('a zip release is extracted', async () => {
+    const { default: JSZip } = await import('jszip');
+    const zip = new JSZip();
+    zip.file('build/bin/llama-server.exe', 'binary');
+    const dir = await mkdtemp(join(tmpdir(), 'octipus-zip-'));
+    const file = join(dir, 'a.zip');
+    await writeFile(file, await zip.generateAsync({ type: 'nodebuffer' }));
+    const { extractArchive } = await import('./install');
+    await extractArchive(file, join(dir, 'x'));
+    expect(await readFile(join(dir, 'x', 'build', 'bin', 'llama-server.exe'), 'utf8')).toBe('binary');
+    await rm(dir, { recursive: true, force: true });
+  });
 });
 
 describe.skipIf(!supported)('local embedding engine', () => {
@@ -131,6 +186,49 @@ describe.skipIf(!supported)('local embedding engine', () => {
     expect(row).toMatchObject({ provider: 'local-engine', modelId: 'tiny', topicRoles: { embedding: 'primary' } });
     expect(row.metadata).toMatchObject({ embedPrefixes: { query: 'q: ', document: 'd: ' }, dims: 8 });
     expect(existsSync(join(root, 'models', 'embeddings', 'tiny', 'tiny.gguf'))).toBe(true);
+    // The library symlink is still relative and resolves inside the engine folder.
+    const engine = join(root, 'models', 'engines', 'llama.cpp', 'b1');
+    const [dir] = (await import('node:fs')).readdirSync(engine);
+    expect(await readlink(join(engine, dir!, 'libggml.so.0'))).toBe('libggml.so.0.1');
+    expect(existsSync(join(engine, dir!, 'libggml.so.0'))).toBe(true);
+  });
+
+  test('a binary that does not run is refused, even when its error mentions a version', async () => {
+    archive = brokenArchive;
+    archiveSha = createHash('sha256').update(archive).digest('hex');
+    const { startLocalEngineInstall, waitForLocalEngineInstall } = await import('./install');
+    startLocalEngineInstall('admin');
+    const job = await waitForLocalEngineInstall();
+    expect(job?.stage).toBe('error');
+    expect(job?.error).toMatch(/does not run on this machine/);
+    expect(existsSync(join(root, 'models', 'engines', 'llama.cpp', 'active.json'))).toBe(false);
+    const { engineBinaryPath } = await import('./engine-process');
+    expect(engineBinaryPath()).toBeNull();
+  });
+
+  test('removing or installing something else while an install runs is refused', async () => {
+    const { LocalEngineBusyError, removeLocalEngine, startLocalEngineInstall, waitForLocalEngineInstall } = await import('./install');
+    const first = startLocalEngineInstall('admin');
+    expect(startLocalEngineInstall('admin')).toBe(first);
+    expect(() => startLocalEngineInstall('admin', 'tiny2')).toThrow(LocalEngineBusyError);
+    await expect(removeLocalEngine()).rejects.toThrow(LocalEngineBusyError);
+    expect((await waitForLocalEngineInstall())?.stage).toBe('done');
+  });
+
+  test('callers for two models each get an engine serving their own model', async () => {
+    const { startLocalEngineInstall, waitForLocalEngineInstall } = await import('./install');
+    startLocalEngineInstall('admin');
+    await waitForLocalEngineInstall();
+    startLocalEngineInstall('admin', 'tiny2');
+    await waitForLocalEngineInstall();
+    const { LocalEngineProvider } = await import('@/models/providers/local-engine-provider');
+    const provider = new LocalEngineProvider();
+    const [a, b] = await Promise.all([provider.embed(['x'], 'tiny'), provider.embed(['x'], 'tiny2')]);
+    expect(a[0]?.[0]).toBe(1);
+    expect(b[0]?.[0]).toBe(101);
+    const { localEngineStatus } = await import('./engine-process');
+    // Switching models is a stop, not a crash.
+    expect(localEngineStatus().recentCrashes).toBe(0);
   });
 
   test('an embedding model already bound is never replaced', async () => {
@@ -205,9 +303,11 @@ describe.skipIf(!supported)('local embedding engine', () => {
     startLocalEngineInstall('admin');
     await waitForLocalEngineInstall();
     assetFetches = 0;
+    modelFetches = 0;
     startLocalEngineInstall('admin');
     expect((await waitForLocalEngineInstall())?.stage).toBe('done');
     expect(assetFetches).toBe(0);
+    expect(modelFetches).toBe(0);
   });
 
   test('a GPU build is refused where none is built', async () => {

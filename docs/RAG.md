@@ -535,9 +535,13 @@ What it installs (`src/capabilities/local-engine/manifest.json`, pinned):
 - **Engine:** llama.cpp `llama-server`, one release tag, the build for this
   platform (Linux x64/arm64, macOS arm64/x64, Windows x64/arm64; Metal on
   Apple silicon). `--gpu vulkan` takes the Vulkan build where one exists
-  (Linux x64, Windows x64). The download must match its SHA-256 (from the
-  manifest, else GitHub's release digest), and the binary must run
-  (`--version`) before it is used.
+  (Linux x64, Windows x64; native installs with a Vulkan driver — the
+  Docker image has none, and llama.cpp falls back to the CPU when no GPU
+  backend loads). The archive must come from the release's own download
+  location and match its SHA-256 (pinned in the manifest by
+  `scripts/pin-local-engine.ts`; an asset not yet pinned is checked against
+  GitHub's release digest), and the binary must run (`--version` exits 0 and
+  prints its build) with the library path it starts with, before it is used.
 - **Model** (default `embeddinggemma-2`, Q8_0, about 310 MB, 768 dimensions,
   100+ languages; also `embeddinggemma-300m` and `qwen3-embedding-0.6b`), at
   a pinned Hugging Face revision, SHA-256 verified, with its query/document
@@ -551,7 +555,8 @@ row is added unbound and the install says so. To switch, bind it on the
 Topics page and rebuild the vectors (Vector indexing, Embedding-drift check).
 
 **Running.** `llama-server` listens on 127.0.0.1, on a free port, with a new
-API key each start. It starts on the first embedding (and at boot only when
+API key each start, passed in its environment (never on the command line,
+which other local users can read); the slots endpoint is off. It starts on the first embedding (and at boot only when
 its row is the bound embedding model), stops after
 `localEngine.idleStopMinutes` idle (default 30; 0 = never) and with Octipus,
 and restarts on demand after a crash (not after three crashes in five
@@ -562,6 +567,9 @@ build in use and switched to after its probe passes; vectors are unaffected.
 A new default model is never swapped under an existing binding.
 `scripts/pin-local-engine.ts` re-pins the manifest (maintainers);
 `--check` runs weekly in CI to confirm every pinned URL still answers.
+
+Only one install, update or removal runs at a time: a different request
+meanwhile is refused (HTTP 409), the same one joins it.
 
 **Remove.** Stops the engine and deletes its files and rows. If the local
 model was bound, the lane is unbound and search reports that no embedding

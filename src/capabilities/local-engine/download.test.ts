@@ -12,6 +12,7 @@ let server: Server;
 let base = '';
 let dir = '';
 let dropFirst = false;
+let stallFirst = false;
 const ranges: string[] = [];
 
 beforeAll(async () => {
@@ -22,6 +23,11 @@ beforeAll(async () => {
     const start = range ? Number(/bytes=(\d+)-/.exec(range)?.[1] ?? 0) : 0;
     const slice = body.subarray(start);
     res.writeHead(range ? 206 : 200, { 'content-length': String(slice.length) });
+    if (stallFirst && !range) {
+      stallFirst = false;
+      res.write(slice.subarray(0, 10_000));
+      return; // never ends: the client must give up and resume
+    }
     if (dropFirst && !range) {
       dropFirst = false;
       res.write(slice.subarray(0, 10_000), () => res.destroy());
@@ -67,12 +73,36 @@ describe('downloadVerified', () => {
     expect(Buffer.compare(await readFile(target), body)).toBe(0);
   });
 
+  test('a connection that stalls is dropped and resumed', async () => {
+    stallFirst = true;
+    const target = join(dir, 'stalled.bin');
+    await downloadVerified(`${base}/f`, target, sha, { size: body.length, idleTimeoutMs: 300 });
+    expect(await sha256File(target)).toBe(sha);
+  });
+
+  test('a target folder removed mid-download is recreated, not a hang', async () => {
+    const sub = join(dir, 'gone', 'deeper');
+    const target = join(sub, 'f.bin');
+    let removed = false;
+    await downloadVerified(`${base}/f`, target, sha, {
+      onProgress: (done) => { if (!removed && done > 0) { removed = true; void rm(join(dir, 'gone'), { recursive: true, force: true }); } },
+    });
+    expect(await sha256File(target)).toBe(sha);
+  });
+
   test('a partial file from an earlier run is resumed', async () => {
     const target = join(dir, 'earlier.bin');
     await writeFile(`${target}.part`, body.subarray(0, 20_000));
     ranges.length = 0;
     await downloadVerified(`${base}/f`, target, sha);
     expect(ranges).toContain('bytes=20000-');
+    expect(await sha256File(target)).toBe(sha);
+  });
+
+  test('a stale partial from another revision is fetched again from the start', async () => {
+    const target = join(dir, 'stale.bin');
+    await writeFile(`${target}.part`, Buffer.from('y'.repeat(20_000)));
+    await downloadVerified(`${base}/f`, target, sha);
     expect(await sha256File(target)).toBe(sha);
   });
 });

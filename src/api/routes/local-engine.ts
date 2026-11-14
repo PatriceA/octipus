@@ -43,13 +43,13 @@ export const localEngineRoutes = new Elysia({ prefix: '/local-engine' })
   .post('/install', async ({ user, principal, body, set }) => {
     const denied = adminDenied({ set, user, principal });
     if (denied) return denied;
-    const { startLocalEngineInstall } = await import('@/capabilities/local-engine/install');
+    const { LocalEngineBusyError, startLocalEngineInstall } = await import('@/capabilities/local-engine/install');
     try {
       const job = startLocalEngineInstall(user!.id, body?.model, undefined, body?.gpu ? { gpu: body.gpu } : {});
       set.status = 202;
       return { job };
     } catch (err) {
-      set.status = 400;
+      set.status = err instanceof LocalEngineBusyError ? 409 : 400;
       return { error: (err as Error).message };
     }
   }, {
@@ -59,6 +59,12 @@ export const localEngineRoutes = new Elysia({ prefix: '/local-engine' })
   .delete('/', async ({ user, principal, set }) => {
     const denied = adminDenied({ set, user, principal });
     if (denied) return denied;
-    const { removeLocalEngine } = await import('@/capabilities/local-engine/install');
-    return { ok: true, ...(await removeLocalEngine()) };
+    const { LocalEngineBusyError, removeLocalEngine } = await import('@/capabilities/local-engine/install');
+    try {
+      return { ok: true, ...(await removeLocalEngine()) };
+    } catch (err) {
+      if (!(err instanceof LocalEngineBusyError)) throw err;
+      set.status = 409;
+      return { error: err.message };
+    }
   }, { detail: { tags: ['local-engine'] } });

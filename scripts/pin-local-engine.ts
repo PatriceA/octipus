@@ -34,6 +34,7 @@ for (const [key, asset] of [...Object.entries(manifest.engine.assets), ...gpuAss
   const digest = hit.digest?.startsWith('sha256:') ? hit.digest.slice(7) : null;
   if (CHECK) {
     if (asset.sha256 && digest && asset.sha256 !== digest) failures.push(`${key}: pinned SHA-256 differs from the release's`);
+    if (!asset.sha256) process.stdout.write(`! ${key}: not pinned (checked against GitHub's digest at install); run this script without --check and commit\n`);
     process.stdout.write(`${key}: ${hit.name} ok\n`);
     continue;
   }

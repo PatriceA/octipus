@@ -551,7 +551,7 @@ async function main() {
       stopCronLoop();
       stopRoleTurnLeaseClaims();
       // The local embedding engine is a child process: it goes with us.
-      void import('@/capabilities/local-engine/engine-process').then(({ stopLocalEngine }) => stopLocalEngine()).catch(() => {});
+      const engineStopped = import('@/capabilities/local-engine/engine-process').then(({ stopLocalEngine }) => stopLocalEngine()).catch(() => {});
 
       // Stop all running agents (kills CLI child processes)
       try {
@@ -657,6 +657,9 @@ async function main() {
       } catch {
         // Module may not have loaded; nothing to close.
       }
+
+      // The engine was asked to stop at the start; it has had the whole shutdown to exit.
+      await engineStopped;
 
       clearTimeout(forceExit);
       logger.info('Shutdown complete');

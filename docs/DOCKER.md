@@ -49,7 +49,7 @@ docker compose --env-file .env.compose exec octipus npm run setup -- --remote ht
 | `octipus-documents` | `/data/documents` | Uploaded documents |
 | `octipus-extensions` | `/data/extensions` | Plugins and extensions |
 | `octipus-pgdata` | PostgreSQL data | Database persistence |
-| `octipus-models` | `/data/models` | Optional local embedding engine and model ([RAG.md → Local embeddings](RAG.md#local-embeddings)). Empty unless chosen; `--build-arg OCTIPUS_BAKE_EMBEDDING=1` puts them in the image (offline installs). `scripts/install-docker.sh` asks. |
+| `octipus-models` | `/data/models` | Optional local embedding engine and model ([RAG.md → Local embeddings](RAG.md#local-embeddings)). Empty unless chosen; `--build-arg OCTIPUS_BAKE_EMBEDDING=1` puts them in the image (offline installs). `scripts/install-docker.sh` asks. Docker copies baked files into the volume only when the volume is created: on an existing `octipus-models` volume, install from the Topics page or `octi capabilities install local-embedding` instead. |
 
 ## Installed CLI Tools
 
