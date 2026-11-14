@@ -69,9 +69,16 @@ never goes down within the session. While the `protection` module is on:
 
 A model counts as local when its data policy says `hosting: local`, as
 `src/models/decision.ts` decides for decision models: Ollama on a private
-endpoint (and not one of Ollama's cloud models), or a row with an explicit
-local `dataPolicy`. A CLI agent runs on its vendor's servers and never counts
-as local, and neither does a fallback to the LiteLLM proxy.
+endpoint (and not one of Ollama's cloud models), the speech engines and the
+local embedding engine Octipus runs itself, or a row with an explicit local
+`dataPolicy`. For a custom endpoint (llama.cpp, LM Studio, vLLM, …) that is
+the model editor's **Runs on this machine / network** switch: it is offered,
+and accepted by the API, only for an endpoint at localhost, a private address
+or a `.local`/`.lan` host (`src/shared/local-hosting.ts`), and moving such a
+row to a public endpoint is refused. Tick it only when that server runs the
+model itself, not when it forwards to a cloud service. A CLI agent runs on its
+vendor's servers and never counts as local, and neither does a LiteLLM proxy
+row or a fallback to the LiteLLM proxy.
 
 ### What raises the level
 

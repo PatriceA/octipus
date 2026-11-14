@@ -7,6 +7,13 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Local custom endpoints count as local.** A model on a custom
+  OpenAI-compatible endpoint (llama.cpp, LM Studio, vLLM, …) can be marked
+  **Runs on this machine / network** in the model editor, so conversations at
+  protection levels 3–4 may use it. Only for an endpoint at localhost, a
+  private address or a `.local`/`.lan` host; the API refuses it otherwise
+  ([PROTECTION-LEVELS.md](docs/PROTECTION-LEVELS.md)).
+
 - Modernize Antigravity CLI integration: scoped Octipus-only tools, streamed
   activity, resumable conversations, account model discovery, safe tool-less
   completions and measured cache-aware token usage.

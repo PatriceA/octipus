@@ -4,6 +4,7 @@ import { ProviderSettingsFields } from './provider-settings-fields';
 import { Terminal, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { validateScopedExtraArgs } from '../../../src/shared/cli-capabilities';
+import { isPrivateEndpoint, LOCAL_DATA_POLICY } from '../../../src/shared/local-hosting';
 import { api } from '@/lib/api';
 import { Portal } from '@/components/ui/portal';
 import type { CLITool, Model } from '@/lib/types/models';
@@ -89,6 +90,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
     supportsStreaming: model.supportsStreaming,
     disableThinking: model.metadata?.extraBody?.think === false,
     allowRetainedPersonalData: model.metadata?.allowRetainedPersonalData === true,
+    runsLocally: model.metadata?.dataPolicy?.hosting === 'local',
     // Stored as a raw count; the field edits in billions for readability.
     paramCountB: model.metadata?.paramCount ? String(model.metadata.paramCount / 1_000_000_000) : '',
     // A local speech engine's model file (whisper.cpp ggml, Piper .onnx).
@@ -295,6 +297,13 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
         }
         payload.metadata = { ...model.metadata, ...(payload.metadata as object), providerSettings: supportedSettings, pricing };
       }
+      // "Runs on this machine / network": a local data policy, which protection levels 3-4 accept.
+      if (isCustomProvider) {
+        const meta = { ...((payload.metadata as Record<string, unknown>) || model.metadata || {}) };
+        if (formData.runsLocally && isPrivateEndpoint(formData.endpoint)) meta.dataPolicy = { ...LOCAL_DATA_POLICY };
+        else if ((meta.dataPolicy as { hosting?: string } | undefined)?.hosting === 'local') delete meta.dataPolicy;
+        payload.metadata = meta;
+      }
       await onSave(model.name, payload);
       onClose();
     } catch (err) {
@@ -460,6 +469,14 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
               <span className="text-sm text-on-surface-variant">Disable Thinking</span>
             </label>
           </div>
+
+          {isCustomProvider && (
+            <RunsLocallyField
+              checked={formData.runsLocally}
+              endpoint={formData.endpoint}
+              onChange={(runsLocally) => setFormData({ ...formData, runsLocally })}
+            />
+          )}
 
           {model.provider === 'typesafe' && (
             <label className="flex items-start gap-2 cursor-pointer border border-outline-variant/20 rounded-lg p-3 bg-surface-container">
@@ -727,5 +744,34 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
       </div>
     </div>
     </Portal>
+  );
+}
+
+/**
+ * "Runs on this machine / network" for a custom endpoint (llama.cpp, LM
+ * Studio, vLLM, …): a local data policy, so conversations at protection
+ * levels 3-4 may use the model. Only offered for a private endpoint; the API
+ * refuses it otherwise.
+ */
+export function RunsLocallyField({ checked, endpoint, onChange }: { checked: boolean; endpoint: string; onChange: (value: boolean) => void }) {
+  const privateEndpoint = isPrivateEndpoint(endpoint);
+  return (
+    <label className={`flex items-start gap-2 border border-outline-variant/20 rounded-lg p-3 bg-surface-container ${privateEndpoint ? 'cursor-pointer' : 'opacity-70'}`} data-testid="runs-locally">
+      <input
+        type="checkbox"
+        checked={checked && privateEndpoint}
+        disabled={!privateEndpoint}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5 w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary"
+      />
+      <span className="text-sm">
+        <span className="font-medium text-on-surface">Runs on this machine / network</span>
+        <span className="block text-xs text-on-surface-variant mt-0.5">
+          {privateEndpoint
+            ? 'Conversations at protection levels 3–4 may use it. Only tick this if the server itself runs the model: not a proxy or gateway that forwards to a cloud service.'
+            : 'Only for a model served at localhost, a private address or a .local/.lan host.'}
+        </span>
+      </span>
+    </label>
   );
 }

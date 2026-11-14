@@ -116,7 +116,7 @@ on the way in.
 
 ## What's NOT supported (yet)
 
-- Image / multi-modal input — text only for now
+- Image input on the Gemini-compatible flavor (text only). The OpenAI- and Anthropic-compatible flavors send images ([MEDIA.md](MEDIA.md)) when the model is marked **Reads images**.
 - Embeddings — no custom flavor implements `embed()`
 - Batch / parallel mode (proxy-specific feature)
 
@@ -148,3 +148,18 @@ autodiscovery.
 Presets included: `lmstudio`, `llamacpp`, `vllm`, `sglang`, `tgi`,
 `ollama-openai`. Discovery/health degrade gracefully (return `[]` / `false`)
 when the endpoint is unreachable, so the UI can fall back to manual entry.
+
+### Local for protection levels
+
+A custom endpoint counts as remote until the model is marked **Runs on this
+machine / network** (model editor; `metadata.dataPolicy = { hosting: 'local',
+retention: 'none', trainsOnInput: false }`). Then conversations at protection
+levels 3–4 may use it ([PROTECTION-LEVELS.md](PROTECTION-LEVELS.md)). It can
+be set only for an endpoint at localhost, a private address or a
+`.local`/`.lan` host. Tick it only when the server runs the model itself, not
+when it is a proxy or gateway to a cloud service.
+
+For llama.cpp: start `llama-server` with `--jinja` for tool calls and
+`--mmproj <file>` for images (then tick **Reads images** on the model). One
+`llama-server` serves one model; run one per model, or put a switcher such as
+llama-swap in front.
