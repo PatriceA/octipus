@@ -28,6 +28,12 @@ labels reflect blast radius, not contract guarantees.
   workspace and shown to a seeing model instead of base64 in the text
   ([MEDIA.md](docs/MEDIA.md)). Settings `media.imageInput`,
   `media.replayRecentImages`.
+- **Agents hear and speak.** A recording attached in the chat is transcribed
+  with the turn (with `media.audioInput = native`, a model that hears audio
+  also gets it); channel voice notes are kept with the conversation. New
+  `audio` tool: `transcribe_audio` (long recordings cut into parts and
+  stitched) and `speak` (saved in the workspace). Both are offered only when
+  a Transcription or Speech engine is bound ([MEDIA.md](docs/MEDIA.md)).
 - **New lanes:** Image generation, Transcription, Speech. Vision and OCR are
   optional: a model that reads images gets them itself; OCR falls back to
   Vision, then to a default model that reads images. Model rows gain

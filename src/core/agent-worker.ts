@@ -2921,7 +2921,7 @@ export class AgentWorker extends BaseAgentWorker {
     if (hasMedia(completionOpts.messages)) {
       completionOpts.messages = await hydrateMedia(completionOpts.messages, {
         readsImages: model.supportsVision === true,
-        hearsAudio: model.supportsAudioInput === true,
+        hearsAudio: model.supportsAudioInput === true && getConfig().media?.audioInput === 'native',
         replayRecent: getConfig().media?.replayRecentImages,
       });
     }

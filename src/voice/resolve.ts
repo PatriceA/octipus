@@ -152,13 +152,13 @@ export async function resolveSttEngine(req: SpeechRequest & { streamWindowSecond
 }
 
 /** Transcribe a whole clip. Primary, then backup when the primary fails at call time. */
-export async function transcribeWithLane(audio: Buffer, req: SpeechRequest & { format?: string } = {}): Promise<TranscriptionResult & { model: string }> {
+export async function transcribeWithLane(audio: Buffer, req: SpeechRequest & { format?: string; language?: string } = {}): Promise<TranscriptionResult & { model: string }> {
   const rows = await speechCandidates('stt', req);
   if (rows.length === 0) {
     if (req.allowHosted === false) throw new Error('Hosted transcription uses the install\'s keys, which this account may not use; bind a local engine for it.');
     throw new CapabilityNotConfiguredError('hear');
   }
-  const lang = await language();
+  const lang = req.language || await language();
   const errors: string[] = [];
   for (const row of rows) {
     const available = await speechRowAvailable(row);

@@ -49,6 +49,20 @@ On a channel, an image sent alone reaches the agent as an image (with or
 without a caption). It is not filed in the document library unless
 `media.fileChannelImages` is on, or it came with documents.
 
+## A recording in the chat
+
+An attached recording (web chat, TUI: MP3, WAV, M4A, OGG/Opus, WebM, FLAC,
+AAC, AMR) is transcribed with the turn by the Transcription lane, within the
+session's protection level; the model gets the transcript and the file's
+path. A recording over 25 MB is left for `audio__transcribe_audio`. With
+`media.audioInput = native`, a model that hears audio (*Hears audio*) also
+gets the recording itself (WAV or MP3). Without a transcription engine the
+model is told the recording was not transcribed.
+
+Channel voice notes are transcribed the same way and kept with the
+conversation (`.octipus/attachments/…`), so the agent can transcribe,
+forward or keep them.
+
 ## Tools
 
 **`vision`** (in the general agent's core set; also research, writing,
@@ -68,6 +82,17 @@ communication, design, coding, review, qa):
 - `read_document_text({ path })` — the text of a scan, a photo of a page, an
   image or a PDF, now, through the OCR route of the document pipeline.
   Offered when something can read scans.
+
+**`audio`** (general — core —, research, writing, communication):
+
+- `transcribe_audio({ source, language?, timestamps? })` — a recording in the
+  workspace through the Transcription lane. Over 20 MB it is cut with ffmpeg
+  into ten-minute parts, transcribed in order and stitched (segment times
+  shifted). Offered when a transcription engine is bound.
+- `speak({ text, voice?, output_path? })` — the Speech lane reads up to 5000
+  characters; the audio is saved in the workspace (default
+  `.octipus/media/speech/<id>.mp3`) and its path returned. Offered when a
+  speech engine is bound.
 
 Screenshots (`browser__screenshot`, `browser-ext__screenshot`) and images an
 MCP server returns are saved in the workspace (`.octipus/media/…`) and shown
@@ -89,5 +114,6 @@ that rejects the second is listed in `acceptsImagesAfterToolResults`
 | Key | Default | What |
 |-----|---------|------|
 | `media.imageInput` | `auto` | `auto`/`native`: as above. `describe`: describe every image up front. |
+| `media.audioInput` | `transcribe` | `native`: a model that hears audio also gets the recording itself (WAV/MP3). |
 | `media.replayRecentImages` | 3 | How many image-bearing messages keep their pixels. |
 | `media.fileChannelImages` | off | Also file images sent alone on a channel as documents. |

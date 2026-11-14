@@ -1633,6 +1633,14 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
   },
   {
+    key: 'media.audioInput',
+    category: 'media',
+    valueType: 'string',
+    defaultValue: 'transcribe',
+    description: 'Recordings in chats: transcribe = the model gets the transcript; native = a model that hears audio also gets the recording (WAV/MP3)',
+    isSecret: false,
+  },
+  {
     key: 'media.replayRecentImages',
     category: 'media',
     valueType: 'number',

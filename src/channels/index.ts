@@ -206,14 +206,7 @@ async function analyzeImageAttachments(
  */
 async function storeChannelImages(images: Attachment[], message: UnifiedMessage, sessionId: string): Promise<import('@/core/session-files').AttachedFileRef[] | null> {
   try {
-    const { sessionRepository } = await import('@/db/repositories/session-repository');
-    const { WorkspaceFS, isSharedWorkspaceId } = await import('@/security/workspace-fs');
-    // i2: the channel's own session, resolved for this sender above.
-    const session = await sessionRepository.findById(sessionId);
-    const { canActInSession } = await import('@/core/rooms/access');
-    if (!session || !(await canActInSession(session, message.userId, 'personal_tool')) || await isSharedWorkspaceId(session.workspaceId)) return null;
     const { downloadAttachment } = await import('./attachment-handler');
-    const { storeChatUploads } = await import('@/core/chat-uploads');
     const files: File[] = [];
     for (const img of images) {
       const bytes = await downloadAttachment(img, message);
@@ -221,13 +214,29 @@ async function storeChannelImages(images: Attachment[], message: UnifiedMessage,
       const name = img.filename || `image${guessImageExtension(img.mimeType)}`;
       files.push(new File([new Uint8Array(bytes)], name, { type: img.mimeType }));
     }
-    const fs = WorkspaceFS.forSessionAttachments(session, { space: null });
-    const uploaded = await storeChatUploads(fs, files);
-    return uploaded.map((u) => ({ path: u.path }));
+    const paths = await keepChannelFiles(files, message.userId, sessionId);
+    return paths ? paths.map((path) => ({ path })) : null;
   } catch (err) {
     channelLogger.warn({ err, channel: message.channelType }, 'Could not keep channel images with the conversation; describing them instead');
     return null;
   }
+}
+
+/**
+ * Keep files a channel sent with the conversation (`.octipus/attachments/…`,
+ * like a web upload). Null when the session is not the sender's own personal
+ * one (a space's session: no requester space access here).
+ */
+async function keepChannelFiles(files: File[], userId: string, sessionId: string): Promise<string[] | null> {
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const { WorkspaceFS, isSharedWorkspaceId } = await import('@/security/workspace-fs');
+  // i2: the channel's own session, resolved for this sender above.
+  const session = await sessionRepository.findById(sessionId);
+  const { canActInSession } = await import('@/core/rooms/access');
+  if (!session || !(await canActInSession(session, userId, 'personal_tool')) || await isSharedWorkspaceId(session.workspaceId)) return null;
+  const { storeChatUploads } = await import('@/core/chat-uploads');
+  const uploaded = await storeChatUploads(WorkspaceFS.forSessionAttachments(session, { space: null }), files);
+  return uploaded.map((u) => u.path);
 }
 
 function guessImageExtension(mimeType: string | undefined): string {
@@ -257,9 +266,14 @@ async function transcribeChannelAudio(audioAttachments: Attachment[], message: U
     try {
       const buf = await downloadAttachment(att, message);
       if (!buf?.length) continue;
+      const ext = audioExtensionFor(att.mimeType);
+      // The recording stays with the conversation (the agent can transcribe it
+      // again, forward it or keep it); best-effort, the transcript does not wait on it.
+      const kept = await keepChannelFiles([new File([new Uint8Array(buf)], att.filename || `voice-note.${ext}`, { type: att.mimeType })], message.userId, sessionId)
+        .catch((err: unknown) => { channelLogger.warn({ err }, 'Could not keep a voice note with the conversation'); return null; });
       // The session's protection level decides whether a cloud engine may hear it.
-      const text = (await transcribeAudioBuffer(buf, audioExtensionFor(att.mimeType), { userId: message.userId, sessionId })).trim();
-      if (text) parts.push(text);
+      const text = (await transcribeAudioBuffer(buf, ext, { userId: message.userId, sessionId })).trim();
+      if (text) parts.push(kept?.[0] ? `${text}\n[Voice note kept at ${kept[0]}]` : text);
     } catch (err) {
       channelLogger.error({ err, channel: message.channelType }, 'Voice note transcription failed');
     }

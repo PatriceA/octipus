@@ -77,3 +77,22 @@ test('remote project attachments use the selected reader rather than resolving a
   expect(result.context).toContain('changed since the user last viewed');
   expect(result.context).not.toContain('could not be read');
 });
+
+test('an attached recording is transcribed with the turn; a model that hears gets it too only when asked (native)', async () => {
+  root = await mkdtemp(join(tmpdir(), 'octipus-images-'));
+  await writeFile(join(root, 'memo.wav'), Buffer.from('RIFFfake'));
+  const gates = await import('@/core/capabilities/gates');
+  gates.setCapabilitiesForTest({ hear: true });
+  const resolve = await import('@/voice/resolve');
+  const spy = vi.spyOn(resolve, 'transcribeWithLane').mockResolvedValue({ text: 'buy milk', segments: [], language: 'en', duration: 1, model: 'm' });
+  const hearing = { name: 'hearing', provider: 'openai', supportsVision: false, supportsTools: true, supportsAudioInput: true } as never;
+  const result = await buildRootAttachmentContext(WorkspaceFS.withRoot(root), [{ path: 'memo.wav' }], false, 'user', 'What did I say?', 'sess', undefined, hearing);
+  expect(result.context).toMatch(/Transcript \(speech to text; may contain errors\)[\s\S]*buy milk/);
+  expect(spy).toHaveBeenCalledWith(expect.any(Buffer), expect.objectContaining({ sessionId: 'sess', format: 'wav' }));
+  expect(result.media).toEqual([]); // media.audioInput defaults to transcribe
+  gates.setCapabilitiesForTest({ hear: false });
+  const off = await buildRootAttachmentContext(WorkspaceFS.withRoot(root), [{ path: 'memo.wav' }], false, 'user', 'What did I say?', 'sess', undefined, hearing);
+  expect(off.context).toMatch(/No speech-to-text engine is configured/);
+  gates.resetCapabilitiesForTest();
+  spy.mockRestore();
+});
