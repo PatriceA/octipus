@@ -129,6 +129,35 @@ test.describe('models page', () => {
     expect((saved?.metadata as { cliAgent: Record<string, unknown> }).cliAgent).not.toHaveProperty('permissionMode');
   });
 
+  test('Antigravity uses the CLI account catalog and accepts max effort without native permission controls', async ({ authenticatedPage: page }) => {
+    const model = { id: 'agy-1', name: 'agy-account', provider: 'cli', modelId: 'cli/gemini', isEnabled: true, isDefault: false,
+      supportsVision: false, supportsTools: false, supportsStreaming: false, contextWindow: 200_000, maxTokens: 16_384,
+      topics: [], priority: 80, costPerInputToken: 0, costPerOutputToken: 0, metadata: { cliAgent: {} } };
+    const catalog = [{ id: 'vendor-model-a', label: 'Account model A' }];
+    let saved: Record<string, unknown> | undefined; let providerRequests = 0;
+    await page.route('**/api/models', route => json(route, 200, { models: [model] }));
+    await page.route('**/api/models/cli/status', route => json(route, 200, { tools: [{ name: 'Antigravity', available: true,
+      modelPatterns: ['cli/antigravity', 'cli/agy', 'cli/gemini'], modelProvider: 'google', adapter: 'Antigravity', models: catalog, quota: null }] }));
+    await page.route('**/api/models/providers/*/available', route => { providerRequests++; return json(route, 200, { configured: false }); });
+    await page.route('**/api/models/agy-account', route => {
+      if (route.request().method() !== 'PATCH') return route.fallback();
+      saved = route.request().postDataJSON() as Record<string, unknown>; return json(route, 200, model);
+    });
+    await page.goto('/models');
+    await page.getByText('CLI tools · configuration and status', { exact: true }).click();
+    await expect(page.locator('select').filter({ has: page.locator('option[value="vendor-model-a"]') })).toHaveCount(1);
+    await page.getByTitle('Edit model').click();
+    const modal = page.locator('form').filter({ hasText: 'CLI Agent Settings' });
+    await expect(modal.getByText(/Antigravity uses this session/)).toBeVisible();
+    await expect(modal.getByText('Permission Mode', { exact: true })).toHaveCount(0);
+    await modal.getByPlaceholder('(vendor default)').fill('vendor-model-a');
+    await modal.getByPlaceholder('Leave empty', { exact: true }).fill('--effort max');
+    await modal.getByRole('button', { name: 'Save Changes' }).click();
+    await expect.poll(() => saved).toBeTruthy();
+    expect(saved).toMatchObject({ metadata: { cliAgent: { model: 'vendor-model-a', extraArgs: ['--effort', 'max'] } } });
+    expect(providerRequests).toBe(0);
+  });
+
   test('a topics response with no topics array does not take down the page', async ({
     authenticatedPage: page,
   }) => {

@@ -45,12 +45,13 @@ describe('CLI skill index', () => {
     fixture.delayMs = 500;
     expect(await index('Claude Code', 'slow-claude').text()).toContain('fintus-release-tagging');
     expect(await index('Codex CLI', 'slow-codex').text()).toContain('fintus-release-tagging');
+    expect(await index('Antigravity', 'slow-agy').text()).toContain('fintus-release-tagging');
   });
 
   it('never holds a CLI that does not resume more than 300 ms', async () => {
     fixture.delayMs = 500;
     const started = Date.now();
-    expect(await index('Antigravity', 'slow-agy').text()).toBe('');
+    expect(await index('Mistral Vibe', 'slow-vibe').text()).toBe('');
     expect(Date.now() - started).toBeLessThan(450);
   });
 

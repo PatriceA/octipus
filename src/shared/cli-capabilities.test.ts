@@ -11,8 +11,8 @@ describe('CLI resume capability', () => {
     expect(CLI_RESUME['Codex CLI'].style).toBe('captured');
   });
 
-  it('refuses Antigravity — 1.1.5 emits no id and silently forks on a stale one', () => {
-    expect(canResume('Antigravity')).toBe(false);
+  it('captures Antigravity conversation IDs from streaming init', () => {
+    expect(CLI_RESUME.Antigravity).toEqual({ style: 'captured', flag: '--conversation' });
   });
 
   it('refuses Mistral Vibe', () => {

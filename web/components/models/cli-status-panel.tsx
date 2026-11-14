@@ -15,7 +15,7 @@ export interface CLIStatusPanelProps {
 interface DiscoveredModel {
   id: string;
   label: string;
-  tier: string;
+  tier?: string;
 }
 
 export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLIStatusPanelProps) {
@@ -25,7 +25,7 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
   // Fetch the curated model list for each CLI's underlying provider once on mount.
   useEffect(() => {
     const providersToLoad: string[] = Array.from(
-      new Set(tools.map(t => t.modelProvider).filter((p): p is NonNullable<typeof p> => !!p))
+      new Set(tools.filter(t => !t.models).map(t => t.modelProvider).filter((p): p is NonNullable<typeof p> => !!p))
     );
     providersToLoad.forEach(async (provider: string) => {
       try {
@@ -110,11 +110,12 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
         {tools.map(tool => {
           const registered = findRegistered(tool);
           const provider = tool.modelProvider;
-          const options = provider ? discovered[provider] || [] : [];
+          const options = tool.models ?? (provider ? discovered[provider] || [] : []);
           const currentModel = (registered?.metadata?.cliAgent as { model?: string } | undefined)?.model || '';
 
           return (
             <div key={tool.name} className="space-y-2 border-b border-outline-variant/5 pb-3 last:border-0 last:pb-0">
+              {tool.modelCatalogError && <p className="text-xs text-warning">{tool.modelCatalogError}</p>}
               {tool.capabilities && <p className="text-xs text-on-surface-variant">{tool.capabilities}</p>}
               <div className="flex items-center justify-between text-sm">
                 <div className="flex items-center gap-2 min-w-0">

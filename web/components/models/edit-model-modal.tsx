@@ -112,12 +112,13 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
   const [providerSettings, setProviderSettings] = useState(model.metadata?.providerSettings ?? {});
   const [pricing, setPricing] = useState(model.metadata?.pricing ?? {});
   const [error, setError] = useState('');
-  const [discoveredCliModels, setDiscoveredCliModels] = useState<DiscoveredModel[]>([]);
+  const [providerCliModels, setProviderCliModels] = useState<DiscoveredModel[]>([]);
   const [cliTools, setCliTools] = useState<CLITool[]>([]);
 
   const isCli = model.provider === 'cli';
   const isCustomProvider = model.provider.startsWith('custom-');
   const cliTool = isCli ? cliTools.find(tool => toolMatchesModel(tool, model.modelId)) : undefined;
+  const discoveredCliModels = cliTool?.models ?? providerCliModels;
   const cliKind: CliKind = isCli ? cliKindForTool(cliTool, model.modelId) : null;
   // The CLI registry calls this backend "google"; model discovery uses the setup-provider id "gemini".
   const cliProvider = cliTool?.modelProvider === 'google' ? 'gemini' : cliTool?.modelProvider;
@@ -125,8 +126,8 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
   const supportsClaudeStyleLimits = cliKind === 'claude' || cliKind === 'vibe' || cliKind === 'glm' || cliKind === 'kimi';
   const supportsModelOverride = cliKind !== 'vibe';
   const supportsApiKeyInheritance = cliKind !== 'glm' && cliKind !== 'kimi';
-  // Muse Code and Grok Build have no tools of their own: Octipus decides every call.
-  const supportsPermissionMode = cliKind !== 'muse' && cliKind !== 'grok';
+  // Managed Muse, Grok and Antigravity runs use only Octipus tools and approvals.
+  const supportsPermissionMode = cliKind !== 'muse' && cliKind !== 'grok' && cliKind !== 'antigravity';
   const preservedNativePermission = formData.cliPermissionMode && !SHARED_PERMISSION_MODES.has(formData.cliPermissionMode)
     ? formData.cliPermissionMode
     : null;
@@ -145,6 +146,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
   }, [isCli]);
 
   useEffect(() => {
+    if (cliTool?.models) return;
     if (!isCli || !cliProvider || !supportsModelOverride) return;
     let cancelled = false;
     (async () => {
@@ -153,14 +155,14 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
           `/models/providers/${cliProvider}/available`
         );
         if (!cancelled && res?.configured && Array.isArray(res.models)) {
-          setDiscoveredCliModels(res.models);
+          setProviderCliModels(res.models);
         }
       } catch {
         // No API key configured for the underlying provider — picker stays as a free-text input.
       }
     })();
     return () => { cancelled = true; };
-  }, [isCli, cliProvider, supportsModelOverride]);
+  }, [isCli, cliProvider, supportsModelOverride, cliTool]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -622,9 +624,9 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 <p className="text-xs text-on-surface-variant mt-1">
                   Octipus translates this level to the CLI&apos;s native permission controls.
                 </p>
-              </div> : cliKind === 'grok' ? (
+              </div> : cliKind === 'grok' || cliKind === 'antigravity' ? (
                 <p className="text-sm text-on-surface-variant">
-                  Grok Build uses this session’s Octipus tools and approvals. Access is managed in Environments &amp; Access.
+                  {cliKind === 'grok' ? 'Grok Build' : 'Antigravity'} uses this session’s Octipus tools and approvals. Access is managed in Environments &amp; Access.
                 </p>
               ) : (
                 <p className="text-xs text-on-surface-variant">

@@ -463,11 +463,11 @@ and applicable plan/delegation tools. Calls run through the native
 never accepts an identity or session override from tool arguments and does not
 use the standalone MCP server's bootstrap admin token.
 
-Claude Code (including the GLM/Kimi variants), Codex and Vibe receive a per-run
-MCP configuration. Muse Code receives one too, and nothing else: its bridge is
-its only tool source (see [Muse Code](#muse-code)). Antigravity can reach the
-same bridge through a supplied terminal helper. The helper supports listing tools and calling a named tool with
-JSON arguments; credentials are inherited privately through the environment.
+Claude Code (including the GLM/Kimi variants), Codex, Vibe, Muse Code, Grok Build and
+Antigravity receive a per-run scoped MCP connection. Antigravity uses a managed
+custom agent with no native tools or native subagents. Bridge credentials are
+inherited privately through the environment and refreshed on each invocation,
+including resumed conversations.
 
 A CLI agent rarely calls `search_knowledge` on its own: it has its own file
 and web search. The knowledge base and notes closest to each message are
@@ -475,7 +475,9 @@ therefore injected into its instructions by the context hooks
 ([CONTEXT-HOOKS.md](CONTEXT-HOOKS.md)), and the Recall page shows, per model,
 how often an agent used them or searched itself.
 
-The working directory remains the session's project or user workspace, except
+For Antigravity and Grok Build, the vendor process runs in a private empty
+directory; project work goes through the scoped Octipus tools. For other
+adapters the working directory remains the session's project or user workspace, except
 for a coding child given its own git worktree (see
 [Optional git worktree per coding child](#optional-git-worktree-per-coding-child)). System
 instructions are passed with the invocation. Octipus does not temporarily
@@ -485,9 +487,10 @@ These controls scope **Octipus bridge calls**. They do not turn the vendor CLI
 into an OS-isolated tenant: vendor-native tools, host files, account credentials,
 hooks and local configuration remain subject to the vendor's runtime and
 sandbox. Use a trusted local execution account. Claude, Codex and Vibe isolate
-their configured MCP list for the run; Antigravity's host integrations are not
-isolated by its terminal-helper connection. Muse Code is the exception to the
-vendor-native caveat: it runs with no native tools at all.
+their configured MCP list for the run. Antigravity and Grok Build exclude host
+hooks, plugins, native tools and native agent spawning through their managed
+configuration; they still run as the trusted Octipus OS account.
+Muse Code also runs with no native tools (see below).
 
 ## Muse Code
 
@@ -664,7 +667,7 @@ Octipus's bridge are not members of Octipus's managed child tree.
 | Codex CLI | Scoped MCP | `read-only` sandbox | Structured stream | Vendor's noninteractive sandbox policy; no interactive relay |
 | Mistral Vibe | Scoped MCP | `plan` agent | Buffered | Vendor agent mode; no interactive relay |
 | Muse Code | Scoped MCP, its only tools | Octipus withholds write tools | Structured stream | None needed: no native tools; every call is an Octipus tool call |
-| Antigravity | Terminal bridge | `plan` mode | Buffered text | Vendor mode; no interactive relay |
+| Antigravity | Scoped MCP only | Octipus plan/tool policy | Structured stream | Octipus tool approvals; no native tools or agents |
 
 All **Octipus tool** calls use Octipus permissions. Attended sessions can approve
 through their existing UI/TUI/channel; unattended ASK is blocked. Claude's own
@@ -722,7 +725,7 @@ Octipus' ALLOW/ASK/DENY rules. The previous default, `bypassPermissions`, never
 emitted those requests, so the relay was inert unless an operator chose a mode.
 Set `permissionMode: full` on the model row to restore bypass.
 
-Adapters that report no token usage (Mistral Vibe, Antigravity) are accounted
+Adapters that report no token usage (Mistral Vibe) are accounted
 with a character-based estimate (about four characters per token) flagged as
 `estimated` on the cost row, so token budgets and pipeline pools no longer treat
 those runs as free. The prompt handed to every CLI (and every native agent run)
@@ -745,8 +748,13 @@ wall-clock timeout, including those waits; exceptionally long calls can still
 exceed that transport limit.
 Reported usage is accumulated, with duplicate Claude message fragments deduped.
 Claude/Vibe receive turn caps, and Vibe receives its own token cap. Exact token
-accounting remains unavailable for adapters that do not report usage; Antigravity
-has a timeout backstop, not a measured token-limit guarantee. Observed bridge
+accounting remains unavailable for adapters that do not report usage. Antigravity
+reports streamed per-step usage and a final aggregate: input already includes
+cache reads and output already includes thinking tokens, so neither is added
+a second time. Duplicate steps are ignored and a regressing final aggregate
+cannot erase usage already observed. On resume the terminal totals include
+earlier turns, so only the newly streamed step reports are charged. Token limits use these measured reports;
+a vendor request already in flight can still overshoot a limit. Observed bridge
 file changes and permission denials contribute to execution evidence, without
 counting the outer MCP envelope a second time. Native vendor telemetry can be
 incomplete, so counts are observed evidence rather than a complete audit of the
@@ -770,10 +778,9 @@ space either; log the CLI in, or set its environment on the model.) Octipus's
 file tools and native writes never write a coding agent's configuration
 (`.claude/`, `.codex/`, `.gemini/`, `.agents/`, `.vibe/`, `.mcp.json`) in a
 space. Codex runs in the
-`read-only` sandbox; Antigravity in `--mode plan`. Mistral Vibe declares no
-such mode and is refused in spaces; Muse Code is refused too, for its shared
-login and session store ([Muse Code](#muse-code)). Either refusal names its
-reason. A commenter's turn uses API models only.
+`read-only` sandbox. Antigravity, Grok Build and Mistral Vibe do not declare
+a shared-space mode and are refused in spaces. Muse Code is refused too, for its shared login and session store
+([Muse Code](#muse-code)). A commenter's turn uses API models only.
 See [SPACES.md](SPACES.md).
 
 ## Authentication and fallback
@@ -802,7 +809,7 @@ tool-less mode: prompt on stdin, no native tools, no MCP servers, no user or
 project settings, an install row's in an empty directory (a personal row's in
 its owner's own one), never the workspace root. Their callers feed in fetched
 pages, mail and plugin-written prompts, so a CLI that cannot run without its
-own tools (Antigravity, Vibe, Codex) answers no completion: the call fails
+own tools (Vibe, Codex) answers no completion: the call fails
 with "it has no mode without its own tools". Use such a CLI as an agent model
 (`/model`, a role or pipeline stage) and bind an API model, Claude Code or
 Muse Code to the lanes. Muse Code reads no prompt from stdin, so its prompt
@@ -812,7 +819,7 @@ The one exception is a plugin's `model:complete` call, by explicit approval
 only: its package declares `model.trustedInput` (its prompts carry no
 outside data) and an admin approved `model:cli-tools`
 ([PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md#model-calls-on-cli-lanes)). Such a
-call still runs tool-less on a CLI that can; on Antigravity, Vibe or Codex
+call still runs tool-less on a CLI that can; on Vibe or Codex
 it runs with the CLI's normal arguments, in a fresh empty directory, and is
 audited with `cliTools: true`. The prompt (system text included, line breaks
 and all) goes on stdin, never into the command line, which still refuses any
@@ -825,9 +832,10 @@ argument with a line break:
 | Muse Code | Always tool-less (`run.toolset: []` in a config home of its own, no MCP server, nothing trusted). muse reads no prompt from stdin (`--prompt-file /dev/stdin` is refused as not a regular file), so the prompt goes in a 0600 file in a fresh directory, removed afterwards | muse 1.4.18, verified live: "unknown tool … Session tool ids: (none)" |
 | Antigravity | `agy --input-format stream-json --output-format stream-json`: one line `{"event":"user","message":{"content":"…"}}` on stdin; the answer is the `result` event's `response`, with token usage. `--print` takes the prompt only as its value and ignores stdin, so it is not used for these calls. | [Antigravity headless mode](https://antigravity.google/docs/cli/headless) |
 
-Agent runs are unchanged: Antigravity still gets `--print <prompt>` as one
-argument (no shell on Windows), Vibe its prompt inline or on stdin on
-Windows. Every other plugin call is refused on a CLI
+Antigravity uses this stdin protocol for both agent runs and one-shot
+completions. Completions use the managed agent with no MCP servers, verify
+its startup identity, and reject any reported tool or native-agent action.
+Vibe receives its agent prompt inline or on stdin on Windows. Every other plugin call is refused on a CLI
 lane (`409 cli_model`), and every core completion keeps the rule above.
 
 ## Session reuse
@@ -837,27 +845,41 @@ adapters that support it), so the vendor continues the conversation it
 already holds instead of Octipus re-sending the whole conversation as a new
 prompt each time.
 
-Claude Code, Codex CLI, Grok Build and Muse Code support this. Claude and Grok IDs are minted by
-Octipus itself and passed on the first run (`--session-id`), so there is
-never a run with no id to resume later; Codex assigns its own id, which
-Octipus captures from `thread.started`. Muse Code's is minted too (a UUIDv7,
-which its session protocol requires): the first run starts the session under
-it (`session/start`), later runs `session/resume` it. A resume of a session
-muse no longer holds fails (`sessionNotFound`), so Octipus first checks that
-muse still holds the session log
-(`${XDG_DATA_HOME:-~/.local/share}/muse/sessions/YYYY/MM/DD/<id>/session.jsonl`)
-and starts cold otherwise. A run that is never resumed passes
-`--no-session-log` to `muse serve`, as Codex passes `--ephemeral`; session logs of resumable
-runs stay in the vendor's directory, as Claude's and Codex's do. Antigravity and Mistral Vibe do not
-participate, for different reasons:
+Claude Code, Codex CLI, Grok Build, Muse Code and Antigravity support this. Claude and
+Grok IDs are minted by Octipus itself and passed on the first run
+(`--session-id`). Codex assigns its own ID, captured from `thread.started`.
+Antigravity's ID is captured from `init.conversation_id` and passed back using
+`--conversation`; a mismatched returned ID is treated as a failed resume,
+not silently accepted as continuity. Mistral Vibe is not reused because its
+resume support depends on a user-controlled logging setting.
 
-- **Antigravity**: the installed build's print mode emits no conversation id
-  at all. Handing it a stale id does not error — it silently starts a brand
-  new conversation, which is worse than not reusing, so Octipus never tries.
-- **Mistral Vibe**: is not installed in this environment, and its resume
-  support depends on the vendor's own `log_interactions` config flag staying
-  enabled in the user's local configuration — something Octipus does not
-  control and cannot verify.
+Muse Code uses a caller-minted UUIDv7 with `session/start` and `session/resume`.
+It checks that the original session log still exists before resuming and starts
+cold otherwise. Non-resumed Muse runs use `--no-session-log`.
+
+### Antigravity runtime and models
+
+The managed integration is validated against `agy` 1.5.8. It loads a private
+`octipus-managed` custom agent (`tools: []`, `subagent: false`) with only the
+Octipus MCP server. The CLI's init event lists its complete native registry,
+not the effective custom-agent tool set; Octipus checks the selected agent,
+private working directory, conversation identity and emitted actions instead.
+
+Each invocation gets a private HOME, Gemini configuration and settings override.
+Host hooks, plugins, project instructions, status scripts and external MCP
+configurations are excluded. The original `antigravity-cli` account directory
+is linked as a directory, so native credential refresh locks and atomic token
+replacement use the existing store; no private credential is copied. Native
+conversations remain in that account store. Runs retain their own settings
+files, avoiding concurrent login-mode changes to the workstation's settings.
+This is an install-owned integration; personal CLI credentials and shared-space
+execution are not supported.
+
+The Models page gets its choices from `agy models`, with coalesced cached
+lookups, without a separate Google API model lookup or key. Model availability
+and vendor credits depend on the logged-in account. `--effort` supports `low`,
+`medium`, `high`, `xhigh` and `max`. By default runs use the stored CLI login;
+explicit `inheritApiKeys` selects Gemini API authentication instead.
 
 ### What invalidates a stored session
 
@@ -1062,7 +1084,7 @@ configuration, compiled stdio transport, tool errors, context identity, plan
 updates, feedback, permission denial, cancellation, follow-up turns, late
 guidance reporting, unqueued context reads, Codex discovery and adapter
 arguments. The vendor flags themselves (`--permission-prompt-tool stdio`,
-`--input-format stream-json`, Codex `-c mcp_servers=…`, agy `--mode plan`) are
+`--input-format stream-json`, Codex `-c mcp_servers=…`, Antigravity managed custom-agent startup) are
 only exercised by the opt-in live test and can drift with vendor releases. An
 opt-in test (`OCTIPUS_LIVE_CLI=claude-code`, `codex`, `grok-build`, `vibe` or `antigravity` with Vitest's
 `src/core/cli-agent-bridge.test.ts`) exercises a configured real CLI login against

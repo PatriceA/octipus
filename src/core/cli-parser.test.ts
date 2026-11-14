@@ -402,7 +402,7 @@ describe('CLIOutputParser — side-effect counters', () => {
     // A buffered-output CLI (agy) emits no parseable events. All-zero counters
     // would read as "wrote nothing" and wrongly fail work that succeeded.
     const { parser, feed } = makeParser();
-    feed({ type: 'whatever' }, 'Antigravity');
+    feed({ type: 'whatever' }, 'Mistral Vibe');
     expect(parser.getSideEffectCounters()).toBeNull();
   });
 });

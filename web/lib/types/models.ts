@@ -67,6 +67,8 @@ export interface CLIBillingInfo {
 }
 
 export interface CLITool {
+  models?: import('../../../src/shared/cli-capabilities').CliModelOption[];
+  modelCatalogError?: string;
   name: string;
   available: boolean;
   modelPatterns: string[];

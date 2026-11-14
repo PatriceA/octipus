@@ -1,3 +1,4 @@
+import { agyIsolationError } from './agy-cli-runtime';
 import { grokToolIsolationError } from './grok-cli-runtime';
 import { environmentCredentialOptions } from '@/security/environment-credentials';
 import { nativeCliEnvironment } from '@/security/environment-identity';
@@ -1281,7 +1282,7 @@ When a task matches one of these skills, load it with get_skill before starting 
     let previouslyAcknowledged: { id: string; createdAt: string } | undefined;
     if (reuseSessions) {
       const model = (adapterKey === 'Claude Code' ? process.env.CLAUDE_MODEL : adapterKey === 'Codex CLI' ? process.env.CODEX_MODEL
-        : adapterKey === 'Muse Code' ? process.env.MUSE_MODEL : undefined) || settings.model;
+        : adapterKey === 'Antigravity' ? process.env.ANTIGRAVITY_MODEL || process.env.GEMINI_MODEL : adapterKey === 'Muse Code' ? process.env.MUSE_MODEL : undefined) || settings.model;
       // Permission and plan mode are not fingerprinted: every invocation passes
       // them again, a resumed one too (Claude `--permission-mode`, Codex
       // `-c sandbox_mode`), and the plan directive rides in the volatile tail.
@@ -1426,15 +1427,16 @@ When a task matches one of these skills, load it with get_skill before starting 
       this.context.id,
       this.context.model,
       (type, data) => {
-        const stats = (data as { stats?: { inputTokens?: number; outputTokens?: number; totalTokens?: number; cacheRead?: number; cacheCreation?: number } }).stats;
+        const stats = (data as { stats?: { inputTokens?: number; outputTokens?: number; totalTokens?: number; cacheRead?: number; cacheCreation?: number; usageAvailable?: boolean } }).stats;
         if (type === 'thought' && stats?.totalTokens != null) {
           const messagesUsage = toolConfig.modelProvider === 'anthropic' || toolConfig.modelProvider === 'zai' || toolConfig.modelProvider === 'moonshot' || toolConfig.modelProvider === 'grok';
+          const aggregateStats = messagesUsage || adapterKey === 'Antigravity';
           const input = (stats.inputTokens ?? 0) + (messagesUsage ? (stats.cacheRead ?? 0) + (stats.cacheCreation ?? 0) : 0);
-          invocationUsage = { inputTokens: (messagesUsage ? 0 : invocationUsage.inputTokens) + input,
-            outputTokens: (messagesUsage ? 0 : invocationUsage.outputTokens) + (stats.outputTokens ?? 0),
-            totalTokens: (messagesUsage ? 0 : invocationUsage.totalTokens) + stats.totalTokens,
-            cacheReadTokens: (messagesUsage ? 0 : invocationUsage.cacheReadTokens ?? 0) + (stats.cacheRead ?? 0),
-            cacheCreationTokens: stats.cacheCreation, available: stats.totalTokens > 0 };
+          invocationUsage = { inputTokens: (aggregateStats ? 0 : invocationUsage.inputTokens) + input,
+            outputTokens: (aggregateStats ? 0 : invocationUsage.outputTokens) + (stats.outputTokens ?? 0),
+            totalTokens: (aggregateStats ? 0 : invocationUsage.totalTokens) + stats.totalTokens,
+            cacheReadTokens: (aggregateStats ? 0 : invocationUsage.cacheReadTokens ?? 0) + (stats.cacheRead ?? 0),
+            cacheCreationTokens: stats.cacheCreation, available: stats.usageAvailable ?? stats.totalTokens > 0 };
         }
         // Native tool uses feed the flow label (security/flow-guard.ts); bridged
         // Octipus tools are observed by ToolExecutor instead.
@@ -1471,6 +1473,14 @@ When a task matches one of these skills, load it with get_skill before starting 
           }
         },
         onTokenUsage: (tokens) => {
+          // AGY reports step usage before its final aggregate. Retain those
+          // observations if the process is cancelled or dies before result.
+          if (adapterKey === 'Antigravity') invocationUsage = {
+            inputTokens: invocationUsage.inputTokens + tokens.input,
+            outputTokens: invocationUsage.outputTokens + tokens.output,
+            totalTokens: invocationUsage.totalTokens + tokens.total,
+            cacheReadTokens: (invocationUsage.cacheReadTokens ?? 0) + (tokens.cacheRead ?? 0), available: true,
+          };
           this.totalTokens += tokens.total;
           // Spend proxy: fresh input + paid cache writes + output; cache reads excluded
           // (Plan 1's split, `billableTokens`) — a resumed session replaying
@@ -1702,16 +1712,32 @@ When a task matches one of these skills, load it with get_skill before starting 
       // (`prepareMuseHome`'s `run.toolset`), which muse enforces; it reports
       // none in-stream, so there is nothing to wait for.
       let isolationVerified = !toolConfig.octipusToolsOnly || adapterKey === 'Muse Code';
+      let agyResultReceived = false;
       // Both newline-delimited events and the final EOF record pass here.
       const verifyIsolation = (event: Record<string, unknown>): boolean => {
         if (!toolConfig.octipusToolsOnly) return true;
-        const init = event.type === 'system' && event.subtype === 'init';
-        const reason = init ? grokToolIsolationError(event)
-          : !isolationVerified ? 'Grok Build did not provide verified scoped tool isolation before output.' : undefined;
+        // Startup failures can precede init; retain diagnostics, never accept success without init.
+        if (!isolationVerified && adapterKey === 'Antigravity' && event.event === 'result' && event.result && typeof event.result === 'object' && 'status' in event.result && event.result.status !== 'SUCCESS') {
+          parser.parse(event, adapterKey);
+          this.stop();
+          return false;
+        }
+        const init = adapterKey === 'Antigravity' ? event.event === 'init' : event.type === 'system' && event.subtype === 'init';
+        const reason = !init && !isolationVerified ? `${toolConfig.name} did not provide verified scoped tool isolation before output.`
+          : adapterKey === 'Antigravity' ? agyIsolationError(event, built.cwd ?? workspaceCwd, resume && !resume.isFirstRun ? resume.id : undefined)
+            : init ? grokToolIsolationError(event) : undefined;
         if (reason) {
           this.runError = reason;
           this.stop();
           return false;
+        }
+        if (adapterKey === 'Antigravity') {
+          if (agyResultReceived) {
+            this.runError = 'Antigravity emitted activity after its terminal result.';
+            this.stop();
+            return false;
+          }
+          if (event.event === 'result') agyResultReceived = true;
         }
         if (init) isolationVerified = true;
         return true;
@@ -1923,7 +1949,11 @@ When a task matches one of these skills, load it with get_skill before starting 
           }
 
           if (!isolationVerified && !this.runError) {
-            this.runError = 'Grok Build did not provide verified scoped tool isolation before completion.';
+            this.runError = `${toolConfig.name} did not provide verified scoped tool isolation before completion.`;
+          }
+
+          if (adapterKey === 'Antigravity' && !agyResultReceived && !this.runError && !this.aborted && code === 0 && !signal) {
+            this.runError = 'Antigravity exited without a terminal result; completion is unverified.';
           }
 
           // Background work the CLI started and never reported finished died
@@ -1937,7 +1967,7 @@ When a task matches one of these skills, load it with get_skill before starting 
           }
 
           if (!invocationUsage.available) {
-            // Buffered adapters (Vibe, Antigravity) report no usage. Estimate
+            // Adapters or failed invocations without usage reports need an estimate
             // from characters so token budgets and pipeline pools stop treating
             // these runs as free; the row is marked as an estimate.
             const est = (s: string | null | undefined) => Math.ceil((s?.length ?? 0) / 4);

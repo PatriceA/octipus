@@ -14,7 +14,7 @@ import type { ModelConfigEntry } from '@/db/schema/models';
 import type { CLIToolConfig } from '@/models/providers/cli-provider';
 import { type SpaceToolHome, withToolHome } from '@/security/space-tool-env';
 
-export function buildChildEnv(tool: CLIToolConfig, toolEnv?: Record<string, string>, inheritApiKeys = false): Record<string, string> {
+export function buildChildEnv(tool: Pick<CLIToolConfig, 'modelProvider'>, toolEnv?: Record<string, string>, inheritApiKeys = false): Record<string, string> {
   const base: Record<string, string> = {};
   const pass = (k: string) => { const v = process.env[k]; if (v != null) base[k] = v; };
   // Core shell/runtime env every CLI needs to find its binary + config dir.
@@ -38,6 +38,7 @@ export function buildChildEnv(tool: CLIToolConfig, toolEnv?: Record<string, stri
     meta: ['META_API_KEY'],
     grok: ['XAI_API_KEY'],
   };
+  if (tool.modelProvider === 'google') pass('ANTIGRAVITY_GEMINI_DIR');
   if (tool.modelProvider === 'grok') { pass('GROK_HOME'); pass('GROK_AUTH_PATH'); }
   if (inheritApiKeys) for (const k of authByProvider[tool.modelProvider] || []) pass(k);
   if (tool.modelProvider === 'anthropic') pass('CLAUDE_CODE_OAUTH_TOKEN');

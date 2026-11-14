@@ -7,6 +7,10 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- Modernize Antigravity CLI integration: scoped Octipus-only tools, streamed
+  activity, resumable conversations, account model discovery, safe tool-less
+  completions and measured cache-aware token usage.
+
 - **Optional local embeddings.** Search across documents, notes and memories
   without a key: llama.cpp and a small embedding model (EmbeddingGemma 2,
   about 330 MB with the engine) installed on the server only when an admin

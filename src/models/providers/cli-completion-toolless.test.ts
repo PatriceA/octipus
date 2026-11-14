@@ -2,7 +2,7 @@
  * Every one-shot CLI completion runs tool-less: an install row's too, not
  * only a personal row's. Its callers feed in fetched pages, external mail and
  * plugin-supplied prompts (the host API's model:complete), so a CLI that can
- * only run with its own tools (agy --dangerously-skip-permissions, vibe
+ * only run with its own tools (vibe
  * --auto-approve, codex exec) answers no completion at all, and one that can
  * run tool-less runs that way, in an empty directory, prompt on stdin.
  *
@@ -58,7 +58,7 @@ function stubbed() {
       promptFile: promptAt >= 0 ? readFileSync(args[promptAt + 1], 'utf8') : undefined });
     if (binary === 'muse') return [{ payload_type: 'run.usage', payload: { models: [{ input_tokens: 9, cached_tokens: 0, output_tokens: 2 }] } },
       { payload_type: 'run.terminal.completed', payload: { terminal: 'completed', text: 'muse answer' } }].map(e => JSON.stringify(e)).join('\n');
-    if (binary === 'agy') return AGY_STREAM;
+    if (binary === 'agy') return AGY_STREAM.split('\n').map(line => { const event = JSON.parse(line); if (event.event === 'init') event.init = { ...event.init, agent: 'octipus-managed', cwd: opts.cwd }; return JSON.stringify(event); }).join('\n');
     if (binary === 'vibe') return JSON.stringify([{ role: 'user', content: 'q' }, { role: 'assistant', content: 'vibe answer' }]);
     return JSON.stringify({ result: 'ok', usage: { input_tokens: 1, output_tokens: 1 } });
   };
@@ -66,7 +66,7 @@ function stubbed() {
 }
 
 describe('one-shot CLI completions on an install row', () => {
-  test.each(['cli/antigravity', 'cli/vibe', 'cli/codex'])('%s, which has no tool-less mode, is refused before anything spawns', async (model) => {
+  test.each(['cli/vibe', 'cli/codex'])('%s, which has no tool-less mode, is refused before anything spawns', async (model) => {
     const { provider, spawns } = stubbed();
     await expect(provider.complete({ model, messages })).rejects.toThrow(/no mode without its own tools/);
     expect(spawns).toEqual([]);
@@ -112,20 +112,14 @@ describe('an approved plugin call (allowCliTools)', () => {
   const prompt = 'Summarize the fixed digest template.';
   const one = [{ role: 'user' as const, content: prompt, timestamp: new Date() }];
 
-  test('agy runs in a fresh empty directory, removed afterwards, the prompt as a stream-json user event on stdin', async () => {
+  test.each([true, false])('Antigravity stays tool-less even for approved plugins (approved=%s)', async approved => {
     const { provider, spawns } = stubbed();
-    const result = await provider.complete({ model: 'cli/antigravity', messages: one, ...plugin });
+    const result = await provider.complete({ model: 'cli/antigravity', messages: one, ...(approved ? plugin : {}) });
     expect(spawns).toHaveLength(1);
-    const [spawn] = spawns;
-    expect(spawn.binary).toBe('agy');
-    expect(spawn.args).toEqual(['--dangerously-skip-permissions', '--input-format', 'stream-json', '--output-format', 'stream-json']);
-    expect(spawn.args).not.toContain('--print');
-    expect(JSON.parse(spawn.stdin as string)).toEqual({ event: 'user', message: { content: prompt } });
+    expect(spawns[0].args).toEqual(expect.arrayContaining(['--agent', 'octipus-managed', '--input-format', 'stream-json']));
+    expect(JSON.parse(spawns[0].stdin!).message.content).toBe(prompt);
     expect(result.content).toBe('agy answer');
-    expect(result.usage).toMatchObject({ inputTokens: 12, outputTokens: 3, totalTokens: 15, available: true });
-    expect(spawn.cwd).toMatch(/octipus-cli[\\/]completion-tools-[^\\/]+$/);
-    expect(spawn.cwdExisted).toBe(true);
-    expect(existsSync(spawn.cwd as string)).toBe(false);
+    expect(spawns[0].args.join(' ')).not.toContain(prompt);
   });
 
   test('vibe runs with a bare -p and the prompt on stdin; codex with `-` and the prompt on stdin; each call its own directory', async () => {
@@ -143,27 +137,20 @@ describe('an approved plugin call (allowCliTools)', () => {
     expect(spawns[1].cwd).not.toBe(spawns[0].cwd);
   });
 
-  test('a multi-line prompt with a system text reaches agy and vibe whole on stdin, and never argv', async () => {
+  test('a multi-line prompt with a system text reaches vibe whole on stdin, and never argv', async () => {
     const multi = [
       { role: 'system' as const, content: 'You write digests.\nKeep it short.', timestamp: new Date() },
       { role: 'user' as const, content: 'Line one\nLine two\r\nLine three', timestamp: new Date() },
     ];
     const expected = '[System] You write digests.\nKeep it short.\n\nLine one\nLine two\r\nLine three';
     const { provider, spawns } = stubbed();
-    await provider.complete({ model: 'cli/antigravity', messages: multi, ...plugin });
     await provider.complete({ model: 'cli/vibe', messages: multi, ...plugin });
-    expect(spawns.map((s) => s.binary)).toEqual(['agy', 'vibe']);
+    expect(spawns.map((s) => s.binary)).toEqual(['vibe']);
     for (const spawn of spawns) {
       expect(spawn.args.some((arg) => /[\r\n]/.test(arg))).toBe(false);
       expect(spawn.args.some((arg) => arg.includes('Line one') || arg.includes('digests'))).toBe(false);
     }
-    // agy: one JSON line (the line breaks are escaped), decoding to the whole prompt.
-    const agyStdin = spawns[0].stdin as string;
-    expect(agyStdin.endsWith('\n')).toBe(true);
-    expect(agyStdin.slice(0, -1)).not.toMatch(/[\r\n]/);
-    expect(JSON.parse(agyStdin).message.content).toBe(expected);
-    // vibe: the prompt as is.
-    expect(spawns[1].stdin).toBe(expected);
+    expect(spawns[0].stdin).toBe(expected);
   });
 
   test('the line-break guard still refuses an argument with a line break, before anything spawns', async () => {
@@ -185,8 +172,8 @@ describe('an approved plugin call (allowCliTools)', () => {
     expect(spawns[0].cwd).toMatch(/octipus-cli[\\/]completion-cwd$/);
   });
 
-  test('without it, or set by a caller that is not a plugin call, agy, vibe and codex are still refused', async () => {
-    for (const model of ['cli/antigravity', 'cli/vibe', 'cli/codex']) {
+  test('without it, or set by a caller that is not a plugin call, vibe and codex are still refused', async () => {
+    for (const model of ['cli/vibe', 'cli/codex']) {
       const { provider, spawns } = stubbed();
       await expect(provider.complete({ model, messages: one, requestType: 'plugin:digest' })).rejects.toThrow(/no mode without its own tools/);
       await expect(provider.complete({ model, messages: one, allowCliTools: true })).rejects.toThrow(/no mode without its own tools/);

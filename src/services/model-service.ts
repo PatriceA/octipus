@@ -373,7 +373,7 @@ export async function getCliStatus() {
   const quotaTracker = getQuotaTracker();
 
   const [tools, quotas] = await Promise.all([
-    cliProvider.getAvailableTools(),
+    cliProvider.getAvailableTools(true),
     quotaTracker.getAllStatuses(),
   ]);
 
