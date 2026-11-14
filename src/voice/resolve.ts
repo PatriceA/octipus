@@ -68,6 +68,10 @@ export async function speechCandidates(direction: SpeechDirection, req: SpeechRe
   rows = rows.filter((r, i) => rows.findIndex((o) => o.name === r.name) === i);
   if (req.override) {
     const alias = ALIASES[req.override] ?? (req.override.startsWith('voxtral') ? 'mistral' : undefined);
+    // A cloud engine asked for by an account that may not spend the install's keys.
+    if (req.allowHosted === false && (alias === 'mistral' || alias === 'openai')) {
+      throw new Error(`${req.override} uses the install's keys, which this account may not use; bind a local engine for it.`);
+    }
     if (alias === 'local') rows = rows.filter(isLocalSpeechRow);
     else if (alias && alias !== 'auto') rows = rows.filter((r) => engineKindOf(r) === alias);
     else if (!alias) {

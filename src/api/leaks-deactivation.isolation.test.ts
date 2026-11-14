@@ -58,14 +58,21 @@ vi.mock('@/security/vault', async () => ({
   getVault: () => ({ getByName: async (_owner: string, ref: string) => stubs.scimTokens.get(ref) ?? null }),
 }));
 
-vi.mock('@/voice/stt', () => ({
-  FasterWhisperEngine: class {
-    async *streamTranscribe(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
-      const reader = stream.getReader();
-      while (!(await reader.read()).done) { /* drain until the socket ends */ }
-    }
-    async dispose(): Promise<void> {}
-  },
+// The /voice socket's engine: the Transcription lane resolves to a stub that
+// drains the socket (engines are model rows; none is bound in this database).
+vi.mock('@/voice/resolve', () => ({
+  resolveSttEngine: async () => ({
+    name: 'fasterwhisper',
+    row: { name: 'local faster-whisper small', provider: 'local-audio', modelId: 'faster-whisper:small' },
+    engine: {
+      async *streamTranscribe(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+        const reader = stream.getReader();
+        while (!(await reader.read()).done) { /* drain until the socket ends */ }
+      },
+      async dispose(): Promise<void> {},
+    },
+  }),
+  recordSpeechUsage: async () => {},
 }));
 
 const ADMIN = '10000000-0000-4000-8000-000000000001';

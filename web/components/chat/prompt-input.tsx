@@ -518,7 +518,7 @@ export default function PromptInput({
       console.error('Failed to start speech recognition:', err);
       setIsListening(false);
     }
-  }, [isListening, text, useServerSTT]);
+  }, [isListening, text, useServerSTT, sessionId]);
 
   // Cleanup speech recognition on unmount
   useEffect(() => {
