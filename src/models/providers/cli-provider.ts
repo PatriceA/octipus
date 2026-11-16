@@ -1,6 +1,7 @@
 import { prepareAgyRuntime } from '@/core/agy-cli-runtime';
 import type { CLIAgentConfig } from '@/db/schema/models';
 import { discoverAgyModels } from '@/core/agy-cli-models';
+import { discoverMuseModels } from '@/core/muse-cli-models';
 import { agyUsage, verifyAgyToollessOutput } from '@/core/agy-cli-protocol';
 import { isProviderQuotaMessage } from '@/core/errors/provider-recovery';
 import { configuredCliBinary } from '@/core/cli-executable';
@@ -576,6 +577,7 @@ const museCliConfig: CLIToolConfig = {
   quotaProvider: 'muse-code',
   modelProvider: 'meta',
   modelFlag: '--model',
+  listModels: () => discoverMuseModels(),
   octipusToolsOnly: true,
   billingInfo: {
     vendor: 'Meta',
