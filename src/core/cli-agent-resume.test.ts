@@ -1213,9 +1213,11 @@ describe('Codex steering receipts', () => {
         presented = (worker as unknown as { controlContext(): Promise<string> }).controlContext();
       }
     });
-    expect(await run('Deploy')).toBe('Correction received in direct follow-up');
+    const result = await run('Deploy');
+    expect(result).toContain('Correction received in direct follow-up');
+    expect(result).toContain('remains unhandled');
     expect(JSON.parse(await presented!).guidanceItems).toHaveLength(1);
-    expect(fixture.spawnCount).toBe(2);
+    expect(fixture.spawnCount).toBe(3);
   });
 
   it('keeps tool-presented guidance pending and starts an explicit follow-up', async () => {
@@ -1223,6 +1225,7 @@ describe('Codex steering receipts', () => {
     const internal = worker as unknown as {
       controlContext(): Promise<string>; executeCLI(): Promise<string>;
       buildPrompt(): string;
+      toolExecutor: { getTools(): Map<string, { execute(args: Record<string, unknown>): Promise<string> }> };
     };
     const events: unknown[] = [];
     worker.onEvent(event => events.push(event.data));
@@ -1235,6 +1238,10 @@ describe('Codex steering receipts', () => {
         return 'Original work finished';
       }
       expect(internal.buildPrompt()).toContain('Use the workstation Ollama; remove tower Ollama');
+      const current = JSON.parse(await internal.controlContext());
+      await internal.toolExecutor.getTools().get('get_cli_run_context')!.execute({
+        acknowledgeGuidanceIds: current.guidanceItems.map((item: { id: string }) => item.id),
+      });
       return 'Correction handled';
     });
     expect(await run('Deploy')).toBe('Correction handled');
