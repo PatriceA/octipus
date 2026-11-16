@@ -753,8 +753,10 @@ export class AgentWorker extends BaseAgentWorker {
       // read afresh each turn and never stored with it.
       const storedContext = omitSpaceTurnContext(promptContext).trim();
       const provenance = getRunContext()?.inlineUiProvenance;
+      const synthetic = getRunContext()?.syntheticUserMessage;
       const metadata = {
         trigger:this.context.trigger,
+        ...(synthetic ? { synthetic } : {}),
         ...(storedContext ? { promptContext: storedContext } : {}),
         ...(composition ? { promptComposition: withoutText(composition) } : {}),
         ...(provenance ? { inlineUiProvenance: { id: provenance } } : {}),

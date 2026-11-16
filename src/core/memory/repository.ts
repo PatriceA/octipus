@@ -9,7 +9,9 @@
  *                       row's `superseded_by` to the new id. The two
  *                       writes share a transaction so a crash mid-way
  *                       cannot leave a dangling pointer.
- *   - `softDelete`    — set `valid_until = now()` on an existing row.
+ *   - `softDelete`    — set `valid_until = now()` on an existing row
+ *                       (with a typed `archive_reason` when the system
+ *                       retires it).
  *                       Active retrieval drops it on next read. We
  *                       prefer this over a destructive DELETE so the
  *                       audit trail survives and the LLM judge can
@@ -36,7 +38,7 @@
 import { withFilteredVectorScan } from '@/db/vector-indexes';
 import { and, desc, eq, getTableColumns, inArray, isNull, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { type Memory, type MemoryRecord, memories, type NewMemory, standingScoreSql } from '@/db/schema/memories';
+import { type Memory, type MemoryArchiveReason, type MemoryRecord, memories, type NewMemory, standingScoreSql } from '@/db/schema/memories';
 import { coreLogger } from '@/utils/logger';
 
 /** Every column but the vector: the widest one, and no read path uses it. */
@@ -58,6 +60,18 @@ function similarityOf(distance: number | string): number {
   return Number.isFinite(similarity) ? similarity : 0;
 }
 
+/** A row still in force: not superseded, not retired, not past its own end. */
+function liveRow() {
+  return [
+    isNull(memories.supersededBy),
+    or(isNull(memories.validUntil), sql`${memories.validUntil} > now()`),
+    or(isNull(memories.expiresAt), sql`${memories.expiresAt} > now()`),
+  ];
+}
+
+/** What a writer supplies; the rest are defaults or managed by the repository. */
+export type NewMemoryRecord = Omit<NewMemory, 'id' | 'createdAt' | 'updatedAt' | 'supersededBy' | 'accessCount' | 'lastAccessedAt' | 'archiveReason'>;
+
 export type MemoryAccessScope = {
   userId: string;
   /** Role id for per-role scoping. NULL = caller wants user-level + global. */
@@ -77,7 +91,7 @@ export type MemoryAccessScope = {
 export class MemoryRepository {
   private get db() { return getDb(); }
 
-  async addNew(record: Omit<NewMemory, 'id' | 'createdAt' | 'updatedAt' | 'supersededBy' | 'accessCount' | 'lastAccessedAt'>): Promise<Memory> {
+  async addNew(record: NewMemoryRecord): Promise<Memory> {
     const rows = await this.db.insert(memories).values(record).returning();
     return rows[0];
   }
@@ -90,24 +104,35 @@ export class MemoryRepository {
    */
   async supersede(
     oldId: string,
-    newRecord: Omit<NewMemory, 'id' | 'createdAt' | 'updatedAt' | 'supersededBy' | 'accessCount' | 'lastAccessedAt'>,
+    newRecord: NewMemoryRecord,
+    reason: Extract<MemoryArchiveReason, 'superseded' | 'contradicted'> = 'superseded',
   ): Promise<Memory> {
     return this.db.transaction(async (tx) => {
       const inserted = await tx.insert(memories).values(newRecord).returning();
       const newRow = inserted[0];
       await tx
         .update(memories)
-        .set({ supersededBy: newRow.id, updatedAt: new Date() })
+        .set({ supersededBy: newRow.id, archiveReason: reason, updatedAt: new Date() })
         .where(eq(memories.id, oldId));
       return newRow;
     });
   }
 
-  async softDelete(id: string): Promise<void> {
+  /** Retire a row. `reason` when the system retires it; a manual delete leaves it NULL. */
+  async softDelete(id: string, reason: MemoryArchiveReason | null = null): Promise<void> {
     await this.db
       .update(memories)
-      .set({ validUntil: new Date(), updatedAt: new Date() })
-      .where(eq(memories.id, id));
+      .set({ validUntil: new Date(), archiveReason: reason, updatedAt: new Date() })
+      // A row already retired keeps the reason it was retired for.
+      .where(and(eq(memories.id, id), ...liveRow()));
+  }
+
+  /** A tentative fact the owner said again, in another message. */
+  async markObserved(id: string): Promise<void> {
+    await this.db
+      .update(memories)
+      .set({ status: 'observed', updatedAt: new Date() })
+      .where(and(eq(memories.id, id), eq(memories.status, 'tentative'), ...liveRow()));
   }
 
   async getById(id: string): Promise<Memory | null> {
@@ -130,15 +155,19 @@ export class MemoryRepository {
     return `[${queryEmbedding.join(',')}]`;
   }
 
-  /** Rows visible to a scope: same user, live, and role/workspace-compatible. */
+  /**
+   * Rows visible to a scope: same user, live, not past their own end date, and
+   * role/workspace-compatible. `expires_at` is checked here as well as by the
+   * repair pass, so a fact stops being recalled the moment it ends rather
+   * than at the next repair tick.
+   */
   private scopeConditions(scope: MemoryAccessScope) {
     const scopeFilter = scope.agentScope
       ? or(isNull(memories.agentScope), eq(memories.agentScope, scope.agentScope))
       : isNull(memories.agentScope);
     return [
       eq(memories.userId, scope.userId),
-      isNull(memories.supersededBy),
-      or(isNull(memories.validUntil), sql`${memories.validUntil} > now()`),
+      ...liveRow(),
       scopeFilter,
       scope.workspaceId
         ? or(isNull(memories.workspaceId), eq(memories.workspaceId, scope.workspaceId))
@@ -184,7 +213,7 @@ export class MemoryRepository {
         and(
           eq(memories.userId, scope.userId),
           eq(memories.factType, scope.factType),
-          isNull(memories.supersededBy),
+          ...liveRow(),
           scopeFilter,
           workspaceScope,
         ),
@@ -201,8 +230,9 @@ export class MemoryRepository {
    *
    * Distinct from `searchSimilar`, and the difference is the point.
    * `searchSimilar` answers the judge's question — "is this new fact an update
-   * to an existing one?" — so it pins `fact_type` and ignores expiry, because
-   * an expired row is still a row you can supersede. This answers the reader's
+   * to an existing one?" — so it pins `fact_type`. Both skip dead rows: a fact
+   * that ended or was retired is not one a new fact can restate (the judge
+   * would NOOP a genuinely new fact against it) or replace. This answers the reader's
    * question — "what do I know that bears on what was just asked?" — where
    * pinning a fact type would be nonsense (nobody asks a question of one
    * fact_type) and returning an expired fact would be a lie.

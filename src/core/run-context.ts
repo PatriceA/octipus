@@ -42,6 +42,13 @@ export interface RunContext {
   readonly inlineUiNotes?: readonly string[];
   /** The interactive answer this turn's message was sent from (stored on the user row for its chip). */
   readonly inlineUiProvenance?: string;
+  /**
+   * The root's user message this run is not the owner's words but text the
+   * service composed for the agent (`'plan'`: the planner's brief run on
+   * "go"). Stamped on the stored user row as `metadata.synthetic`, so memory
+   * never treats it as evidence (src/core/memory/owner-messages.ts).
+   */
+  readonly syntheticUserMessage?: 'plan';
 }
 
 const storage = new AsyncLocalStorage<RunContext>();

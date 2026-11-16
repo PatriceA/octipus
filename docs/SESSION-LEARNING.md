@@ -17,14 +17,14 @@ Plan saves and their queued checks share a database transaction. The worker poll
 
 A check uses evidence recorded at or before its trigger: up to eight chat messages, eight verification records and 100 execution events, plus the milestone's plan evidence. Excerpts are redacted and capped at 2,400 characters each within a 40,000-character total budget. Older records may be omitted. This is a recent-evidence check, not an exhaustive reread of multi-day vendor transcript files.
 
-Claude/Codex tool-result excerpts already recorded by Octipus are included. Tool requests and plan/assistant success claims are labelled separately and cannot alone support a project lesson or skill. Every candidate must cite supplied evidence; personal memories may cite only user messages. The learning reviewer does not use the legacy per-turn extractor's English first-person heuristic.
+Claude/Codex tool-result excerpts already recorded by Octipus are included. Tool requests and plan/assistant success claims are labelled separately and cannot alone support a project lesson or skill. Every candidate must cite supplied evidence; personal memories may cite only user messages a person typed (Companion handoffs, monitors, schedules, internal inputs and the plan brief are stored as user rows but are labelled as requests, not user evidence) and must carry a verbatim `quote` from one of them. A memory that cites anything else is dropped on its own with a `rejected` receipt; the review's lessons and skill are kept. An `expires` date is the end of that day in your timezone. The learning reviewer does not use the legacy per-turn extractor's English first-person heuristic.
 
 One bounded review call produces project lessons, personal facts and at most one skill candidate. Empty output is valid. Background model errors, invalid/truncated output, missing evidence and failed writes have distinct receipts.
 
 ## Writes and isolation
 
 - Project lessons become workspace-scoped, indexed notes with source references. Identical normalized content reuses its note. Notes saved without successful indexing are reported as partial failures.
-- Personal facts use the existing memory judge and embedding-backed deduplication. `memory.extractionCadence=off` also disables personal memory writes from learning checks.
+- Personal facts are written only when their quote is found, server-side, in a cited message of yours in the session's current conversation ([where a memory comes from](RAG.md#where-a-memory-comes-from)); otherwise the receipt says `rejected` with the reason. Accepted facts then use the existing memory judge and embedding-backed deduplication. `memory.extractionCadence=off` also disables personal memory writes from learning checks.
 - Skills use the same semantic/exact deduplication and rejection suppression as manual `distill_skill`, then await human approval.
 - Knowledge and skill writes recheck the corresponding tool permission. ASK and DENY cannot be approved by the background worker.
 - Session ownership and workspace are checked before evidence is read. Unscoped sessions use the user's default workspace for saved learning, matching the agent's memory scope.

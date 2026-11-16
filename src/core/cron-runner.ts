@@ -25,6 +25,7 @@ const TRAJECTORY_COMPRESS_INTERVAL_MS = 24 * 3600_000; // Daily
 const SPACE_FILES_SWEEP_INTERVAL_MS = 3600_000; // Hourly
 const VECTOR_INDEX_INTERVAL_MS = 24 * 3600_000; // Daily
 const LOG_PRUNE_INTERVAL_MS = 24 * 3600_000; // Daily
+const MEMORY_REPAIR_INTERVAL_MS = 24 * 3600_000; // Daily
 
 /**
  * Default age cap for finished agent rows + their events. Nobody needs an
@@ -45,6 +46,8 @@ let lastTrajectoryCompress = 0;
 let lastVectorIndexEnsure = Date.now();
 let lastLogPrune = 0;
 let logPruneRunning = false;
+let lastMemoryRepair = 0;
+let memoryRepairRunning = false;
 let reminderSweepRunning = false;
 let mailSweepRunning = false;
 let scanSweepRunning = false;
@@ -273,6 +276,25 @@ function maybePruneLogs(): void {
 }
 
 /**
+ * Retire expired memories and fold exact duplicates (src/core/memory/repair.ts)
+ * once a day. No model call. Not awaited, like the log prune; a run still
+ * going makes the next one a no-op.
+ */
+function maybeRepairMemories(): void {
+  const now = Date.now();
+  if (memoryRepairRunning || now - lastMemoryRepair < MEMORY_REPAIR_INTERVAL_MS) return;
+  lastMemoryRepair = now;
+  memoryRepairRunning = true;
+  void import('@/core/memory/repair')
+    .then(({ repairMemories }) => repairMemories(new Date(now)))
+    .then((result) => {
+      if (result.expired > 0 || result.merged > 0) coreLogger.info(result, 'Memory repair: retired expired and duplicate facts');
+    })
+    .catch((err: unknown) => coreLogger.error({ err }, 'Memory repair failed'))
+    .finally(() => { memoryRepairRunning = false; });
+}
+
+/**
  * Claim a due schedule hook for this tick: move its nextRunAt on (and disable
  * a one-shot) only if nextRunAt still holds what the tick read. Every instance
  * runs this loop, and two can read the same due hook; only the one whose
@@ -376,6 +398,7 @@ async function processCronTick(): Promise<void> {
     await maybeCompressTrajectories();
     maybeEnsureVectorIndexes();
     maybePruneLogs();
+    maybeRepairMemories();
     const db = getDb();
     const now = new Date();
 

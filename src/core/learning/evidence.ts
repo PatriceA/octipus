@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { agentEvents } from '@/db/schema/agent-events';
 import { messages } from '@/db/schema/messages';
+import { visibleMessages } from '@/db/repositories/message-visibility';
 import { verificationEvidence } from '@/db/schema/verification-evidence';
 import { filterPII } from '@/core/agent/pii-filter';
 
@@ -28,7 +29,11 @@ export function boundEvidence(rows: LearningEvidence[]): LearningEvidence[] {
 export async function gatherEvidence(userId: string, sessionId: string, through: Date, plan?: unknown): Promise<LearningEvidence[]> {
   const db = getDb();
   const [chat, checks, events] = await Promise.all([
-    db.select({ id: messages.id, role: messages.role, text: sql<string>`left(${messages.content}, 3000)` }).from(messages)
+    db.select({ id: messages.id, role: messages.role, text: sql<string>`left(${messages.content}, 3000)`,
+      // A user row a person typed; Companion handoffs, monitors, schedules,
+      // internal inputs and the plan brief are stored as user rows too but are
+      // not the owner's words.
+      typed: sql<boolean>`(coalesce(${messages.metadata}->>'trigger', 'user') = 'user' AND ${messages.metadata}->>'synthetic' IS NULL AND ${visibleMessages})` }).from(messages)
       .where(and(eq(messages.sessionId, sessionId), lte(messages.createdAt, through), inArray(messages.role, ['user', 'assistant'])))
       .orderBy(desc(messages.createdAt)).limit(8),
     db.select({ id: verificationEvidence.id, text: sql<string>`left(jsonb_build_object('kind', ${verificationEvidence.kind}, 'passed', ${verificationEvidence.passed}, 'detail', ${verificationEvidence.detail})::text, 3000)` })
@@ -41,7 +46,9 @@ export async function gatherEvidence(userId: string, sessionId: string, through:
   ]);
   return boundEvidence([
     ...(plan ? [{ id: 'plan', kind: 'plan' as const, text: JSON.stringify(plan) }] : []),
-    ...chat.map(row => ({ id: `message:${row.id}`, kind: row.role as 'user' | 'assistant', text: row.text })),
+    // Only a typed user row is `user` evidence (the only kind a personal memory
+    // may cite); any other user row is a request to the agent.
+    ...chat.map(row => ({ id: `message:${row.id}`, kind: row.role === 'user' ? (row.typed ? 'user' as const : 'request' as const) : 'assistant' as const, text: row.text })),
     ...checks.map(row => ({ id: `check:${row.id}`, kind: 'verification' as const, text: row.text })),
     ...events.map(row => ({ id: `event:${row.id}`, kind: row.observed ? 'execution' as const : 'request' as const, text: row.text })),
   ]);

@@ -7,6 +7,16 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Memory learns only from your own words.** Every new long-term memory
+  cites your own messages and a verbatim quote, which the server checks
+  against the stored message before writing; assistant replies, tool output,
+  compaction summaries and plan briefs can no longer become memories, and
+  `remember_this` now requires a `quote`. Memories keep the quote (shown on
+  the Memory page), a kind, a status and an optional end date; recall skips
+  ended facts and a daily repair pass retires them and merges exact
+  duplicates. Migration 0190; existing memories are kept and still recalled.
+  See [where a memory comes from](docs/RAG.md#where-a-memory-comes-from).
+
 - **Standing instructions for Companion.** Tell Companion how you want it to
   work and it saves the rule with your exact words (checked by the server); it
   follows them in every turn, background check-ins included, and the Companion

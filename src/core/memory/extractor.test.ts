@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'vitest';
-import { looksWorthExtracting, parseExtractorResponse } from './extractor';
+import { localDate, looksWorthExtracting, parseExtractorResponse } from './extractor';
 import { JUDGE_RELEVANCE_FLOOR, parseJudgeAction, relevantClosest } from './judge';
 import { renderMemoriesBlock } from './retrieval';
+import { EXTRACTION_BATCH_MESSAGES, MAX_EXTRACTION_BATCHES, ownerBatches } from './index';
 import type { Memory } from '@/db/schema/memories';
 
 describe('memory.extractor', () => {
@@ -171,5 +172,50 @@ describe('memory.judge — relevance floor', () => {
   test('the floor sits below any plausible restatement and above noise', () => {
     expect(JUDGE_RELEVANCE_FLOOR).toBeGreaterThan(0);
     expect(JUDGE_RELEVANCE_FLOOR).toBeLessThan(1);
+  });
+});
+
+describe('memory.extractor — citations and time', () => {
+  const ids = ['msg-a', 'msg-b'];
+  const now = new Date('2026-11-16T12:00:00Z');
+  const parse = (fact: Record<string, unknown>) =>
+    parseExtractorResponse(JSON.stringify({ facts: [{ fact_type: 'profile', content: 'X', confidence: 1, ...fact }] }), ids, now);
+
+  test('message numbers become owner message ids; unknown numbers are dropped', () => {
+    expect(parse({ m: [2, 'm1', 9, 0] })[0].sourceMessageIds).toEqual(['msg-b', 'msg-a']);
+    expect(parse({})[0].sourceMessageIds).toEqual([]);
+  });
+
+  test('kind is kept only when it is one of the known kinds', () => {
+    expect(parse({ kind: 'plan' })[0].kind).toBe('plan');
+    expect(parse({ kind: 'rumour' })[0].kind).toBeUndefined();
+  });
+
+  test('expires is the end of that day; a fact already past is dropped', () => {
+    expect(parse({ expires: '2026-11-20' })[0].expiresAt?.toISOString()).toBe('2026-11-20T23:59:59.999Z');
+    expect(parse({ expires: '2026-11-15' })).toEqual([]);
+    expect(parse({ expires: 'next week' })[0].expiresAt).toBeUndefined();
+  });
+
+  test('a date is a day in the owner\'s timezone: a fact ending later today there is kept', () => {
+    // 03:00 UTC on the 17th is still the evening of the 16th in Los Angeles.
+    const late = new Date('2026-11-17T03:00:00Z');
+    const raw = JSON.stringify({ facts: [{ fact_type: 'profile', content: 'X', confidence: 1, expires: '2026-11-16' }] });
+    expect(parseExtractorResponse(raw, ids, late, 'UTC')).toEqual([]);
+    expect(parseExtractorResponse(raw, ids, late, 'America/Los_Angeles')[0].expiresAt?.toISOString()).toBe('2026-11-17T07:59:59.999Z');
+    expect(localDate(late, 'America/Los_Angeles')).toBe('2026-11-16');
+    expect(localDate(late, 'UTC')).toBe('2026-11-17');
+  });
+});
+
+describe('memory — owner message batching', () => {
+  test('only messages worth reading are batched, newest kept when there are too many', () => {
+    const msgs = Array.from({ length: 40 }, (_, i) => ({ id: `m${i}`, content: `I mention fact number ${i} about my work` }));
+    const { batches, skipped } = ownerBatches([{ id: 'q', content: 'what time is it?' }, ...msgs]);
+    expect(batches.length).toBe(MAX_EXTRACTION_BATCHES);
+    expect(batches.flat().length + skipped).toBe(40);
+    expect(batches.flat().at(-1)?.id).toBe('m39');
+    expect(batches.flat().some((m) => m.id === 'q')).toBe(false);
+    expect(batches.every((b) => b.length <= EXTRACTION_BATCH_MESSAGES)).toBe(true);
   });
 });

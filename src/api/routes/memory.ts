@@ -14,7 +14,13 @@ const logger = apiLogger.child({ component: 'memory-route' });
  * underlying supersession chain — DELETE soft-deletes by setting
  * valid_until, never destructive — so the audit trail survives.
  *
- * Active rows = supersededBy IS NULL AND (validUntil IS NULL OR validUntil > now()).
+ * Active rows = supersededBy IS NULL AND (validUntil IS NULL OR validUntil > now())
+ * AND (expiresAt IS NULL OR expiresAt > now()).
+ *
+ * Every row carries its provenance: `sourceQuote` (the owner's own words it
+ * was learned from, verified against `sourceMessageId` when it was written;
+ * NULL on rows older than migration 0190), `kind`, `status`, `expiresAt` and,
+ * once retired, `archiveReason`.
  * The list endpoint can include superseded rows via ?includeHistory=true
  * for the UI's "show update chain" view.
  */
@@ -46,6 +52,12 @@ export const memoryRoutes = new Elysia({ prefix: '/memory' })
           confidence: memories.confidence,
           supersededBy: memories.supersededBy,
           validUntil: memories.validUntil,
+          sourceMessageId: memories.sourceMessageId,
+          sourceQuote: memories.sourceQuote,
+          kind: memories.kind,
+          status: memories.status,
+          expiresAt: memories.expiresAt,
+          archiveReason: memories.archiveReason,
           accessCount: memories.accessCount,
           lastAccessedAt: memories.lastAccessedAt,
           createdAt: memories.createdAt,

@@ -7,6 +7,7 @@ import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { handleCommand } from '@/core/commands';
 import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from '@/core/memory';
+import { isTypedOwnerRow } from '@/core/memory/owner-messages';
 import { refreshSessionLevel } from '@/core/protection/session-level';
 import { prepareAttachmentProtection } from '@/core/protection/attachments';
 import { finishContextTurn, runContextHooks } from '@/core/context-hooks';
@@ -885,13 +886,16 @@ export class AgentService {
           coreLogger.warn({ err }, 'memory.retrieveForContext failed on plan path');
         }
 
-        const { response, agentId, sources: _planSources, outcome, limit: planLimit } = await this.runRootAgent(
+        // The brief is stored as the root's user row; mark it as composed, not
+        // typed, so memory never cites it as the owner's words.
+        const planRun = { ...(getRunContext() ?? { runId: generateRunId() }), syntheticUserMessage: 'plan' as const };
+        const { response, agentId, sources: _planSources, outcome, limit: planLimit } = await runWithContext(planRun, () => this.runRootAgent(
           resolvedSessionId, userId, planMessage, classification, inputGuard.flags, channel,
           planMemoryBlock + spaceContext + groupContextBlock,
           scope,
           undefined,
           { takenTasks: takenTasks.tasks, ...(attachedFiles.length ? { attachedFiles } : {}) },
-        );
+        ));
         void _planSources;
         const outputCheck = guardOutput(await inlineUiGuardText(response, resolvedSessionId), inputGuard.flags);
         const finalResponse = await this.withInlineUiStored(
@@ -905,17 +909,10 @@ export class AgentService {
         });
         await sessionRepository.incrementMessageCount(resolvedSessionId);
 
-        // Plan-execute path also extracts memory from the original
-        // user "go" message. Even though the message is short, the
-        // executor LLM sees the brief — facts in the brief should
-        // get a chance to be extracted. Fire-and-forget like the
-        // main path.
-        if (!memoryOff) updateMemoriesAfterTurn({
-          userId,
-          workspaceId,
-          agentScope: classification.topic ?? null,
-          userMessage: planState.brief,
-        }).catch((err) => coreLogger.warn({ err }, 'memory.updateAfterTurn failed on plan path'));
+        // No memory extraction here. The brief is written by the planning
+        // model, not the owner, so it is not evidence (memory learns only from
+        // the owner's own messages); the owner's words that shaped the plan
+        // were read on their own turns, and "go" says nothing about them.
 
         return {
           response: finalResponse, sessionId: resolvedSessionId, agentId, classification, outcome,
@@ -1045,32 +1042,36 @@ export class AgentService {
         // `on_compaction` path is handled inside session-compaction.ts
         // so the per-turn path skips here.
         if (memoryCadence !== 'per_turn' || memoryOff) return;
-        // Best-effort provenance: pick up the just-persisted user
-        // message id. Returns undefined when persistence hasn't landed
-        // yet (e.g. the worker persists asynchronously) — that's fine,
-        // the column is nullable on purpose.
+        // Memory learns only from the owner's own words: the stored user
+        // message of this turn is the one thing a fact may cite. The turns
+        // around it (the assistant's replies included) go along as
+        // reference context, never as evidence. No stored message, no
+        // extraction — a fact must point at the words it came from.
         void (async () => {
-          let sourceMessageId: string | null = null;
-          let recentTurns: Array<{ role: 'user' | 'assistant'; content: string }> = [];
           try {
-            const latest = await messageRepository.findRecentBySession(resolvedSessionId, 4, ['user', 'assistant']);
-            const lastUser = [...latest].reverse().find((m) => m.role === 'user' && m.content === message);
-            sourceMessageId = lastUser?.id ?? null;
-            recentTurns = latest
-              .filter((m): m is typeof m & { role: 'user' | 'assistant' } => m.role === 'user' || m.role === 'assistant')
+            // User rows only: progress updates and replies cannot push this
+            // turn's row out of the window.
+            const userRows = await messageRepository.findRecentBySession(resolvedSessionId, 5, ['user']);
+            const owner = [...userRows].reverse().find((m) => m.content === message);
+            if (!owner) {
+              coreLogger.debug({ sessionId: resolvedSessionId }, 'memory.updateAfterTurn: this turn\'s message is not stored — nothing to cite, skipped');
+              return;
+            }
+            // A row the service composed or a trigger wrote is not the owner's
+            // words: no extractor call is spent on it.
+            if (!isTypedOwnerRow(owner)) return;
+            const latest = await messageRepository.findRecentBySession(resolvedSessionId, 8, ['user', 'assistant']);
+            const context = latest
+              .filter((m): m is typeof m & { role: 'user' | 'assistant' } =>
+                m.id !== owner.id && m.metadata?.kind !== 'progress' && (m.role === 'user' || m.role === 'assistant'))
               .slice(-3)
               .map((m) => ({ role: m.role, content: m.content }));
-          } catch (err) {
-            coreLogger.debug({ err }, 'memory.updateAfterTurn: provenance lookup failed (non-fatal)');
-          }
-          try {
             await updateMemoriesAfterTurn({
               userId,
               workspaceId,
               agentScope: memoryScope,
-              sourceMessageId,
-              userMessage: message,
-              recentTurns,
+              ownerMessages: [{ id: owner.id, content: owner.content }],
+              context,
             });
           } catch (err) {
             coreLogger.warn({ err }, 'memory.updateAfterTurn failed (non-fatal)');
