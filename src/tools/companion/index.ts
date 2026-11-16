@@ -5,7 +5,7 @@ import { raiseSessionLevel } from '@/core/protection/session-level';
 import { BaseTool, createParameterSchema } from '../base-tool';
 import { adoptCompanionExecutionSchema, companionBasisSchema, createCompanionGoalSchema, startCompanionSessionSchema, companionSessionMessageSchema, updateCompanionGoalSchema } from '@/shared/companion-supervision';
 import { CompanionBasisError, captureOwnerInputs, verifyCompanionBasis } from '@/core/companion/basis';
-import { companionReportSchema, fileCompanionReport } from '@/core/companion/reports';
+import { companionReportSchema, externalChatsAllowed, fileCompanionReport } from '@/core/companion/reports';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { observeFlow } from '@/security/flow-guard';
 import { persistCompanionSource } from '@/core/companion/provenance';
@@ -115,7 +115,11 @@ export class CompanionTool extends BaseTool {
         if (!settings.supervisorSessionId || settings.supervisorSessionId !== context.sessionId) throw new CompanionBasisError('Only the Companion supervisor can file reports');
         const input = companionReportSchema.parse(args);
         if (input.goalId) await carry(s, input.goalId, context);
-        return fileCompanionReport({ userId: context.userId, workspaceId: context.workspaceId! }, context.sessionId, input);
+        const { getFlowLabel } = await import('@/security/flow-guard');
+        const { sessionProtectionLevel } = await import('@/core/protection/session-level');
+        // What this check-in read decides whether its words may go to third-party chats.
+        const externalChats = externalChatsAllowed({ protectionLevel: sessionProtectionLevel(context.sessionId), flowLabel: { secret: getFlowLabel(context.sessionId).secret } });
+        return fileCompanionReport({ userId: context.userId, workspaceId: context.workspaceId! }, context.sessionId, input, new Date(), { externalChats });
       // Like send_status_update it only writes to the owner's own Companion chat, so it sits under
       // 'read': a write-level ASK would prompt on every background check-in.
       }, { permissionAction: 'read', recoverySafe: true });

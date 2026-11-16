@@ -46,7 +46,7 @@ beforeAll(async () => {
 
   mod = await import('./approval-manager');
   const { getNotificationService } = await import('@/core/notification-service');
-  vi.spyOn(getNotificationService(), 'notify').mockResolvedValue(undefined);
+  vi.spyOn(getNotificationService(), 'notify').mockResolvedValue(true);
 });
 
 afterEach(async () => {

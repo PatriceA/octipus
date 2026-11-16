@@ -38,8 +38,12 @@ export class NotificationService {
      * nothing: a caller notifying about a space has checked the target's
      * membership. Older callers pass it as `metadata.workspaceId`.
      */
-    options: { workspaceId?: string | null } = {},
-  ): Promise<void> {
+    /**
+     * `id` makes the notice idempotent: a notice whose id was already stored is
+     * not stored, pushed or delivered again (returns false).
+     */
+    options: { workspaceId?: string | null; id?: string } = {},
+  ): Promise<boolean> {
     try {
       if (options.workspaceId != null && !UUID_RE.test(options.workspaceId)) {
         throw new Error(`notify: workspaceId ${options.workspaceId} is not a workspace id`);
@@ -47,14 +51,16 @@ export class NotificationService {
       const workspaceId = options.workspaceId !== undefined
         ? options.workspaceId
         : typeof metadata?.workspaceId === 'string' && UUID_RE.test(metadata.workspaceId) ? metadata.workspaceId : null;
-      await this.db.insert(notifications).values({
+      const inserted = await this.db.insert(notifications).values({
+        ...(options.id ? { id: options.id } : {}),
         userId,
         workspaceId: workspaceId ?? null,
         type,
         title,
         body,
         metadata: metadata || {},
-      });
+      }).onConflictDoNothing().returning({ id: notifications.id });
+      if (!inserted.length) return false;
 
       // Paired phones receive approvals and access-checked room notifications.
       if (type.startsWith('approval') || type === 'room_message' || type === 'room_mention') {
@@ -103,8 +109,10 @@ export class NotificationService {
           }
         } catch (err) { coreLogger.error({ err }, 'silent failure in notification-service'); }
       }
+      return true;
     } catch (error) {
       coreLogger.error({ error, userId, type }, 'Failed to create notification');
+      return false;
     }
   }
 

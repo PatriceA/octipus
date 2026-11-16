@@ -237,7 +237,10 @@ export async function announceApproval(event: TurnEvent): Promise<void> {
   const session = await sessionRepository.findById(event.sessionId);
   if (!session || !(await canActInSession(session, userId, 'chat'))) return;
   // A space's background runs are not one person's to answer from their phone.
-  if (BACKGROUND_CHANNELS.has(session.channelType) && !(await isSharedWorkspaceId(session.workspaceId))) {
+  // Companion acts while its owner is away: with chat notices turned on, its
+  // decisions go to the owner's own chats like a background run's.
+  if ((BACKGROUND_CHANNELS.has(session.channelType) || (session.context?.companionSupervisor && isCompanionDecision(data) && await companionChatNotices(userId, session.workspaceId)))
+    && !(await isSharedWorkspaceId(session.workspaceId))) {
     await forwardToOwnerChats(data, userId, requestId);
     return;
   }
@@ -289,6 +292,18 @@ export async function announceApproval(event: TurnEvent): Promise<void> {
     channelLogger.info({ sessionId: session.id, channelType, reason: target.reason },
       'Approval not posted in chat: the chat is not the user\'s own nor an approved destination; it can be answered in the web app');
   }
+}
+
+/** A Companion escalation question (src/core/companion/decisions.ts), as opposed to an approval in the owner's live Companion chat. */
+function isCompanionDecision(data: ApprovalEventData): boolean {
+  return data.kind === 'question' && JSON.stringify(data.options) === JSON.stringify(['Try another fix', 'Leave it']);
+}
+
+async function companionChatNotices(userId: string, workspaceId: string | null): Promise<boolean> {
+  if (!workspaceId) return false;
+  const { CompanionService } = await import('@/core/companion/service');
+  const settings = await new CompanionService({ userId, workspaceId }).readSettings().catch(() => null);
+  return settings?.notifyChats === true;
 }
 
 /**

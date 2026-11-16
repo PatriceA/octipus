@@ -157,9 +157,13 @@ export const companionIncidents = pgTable('companion_incidents', {
   strategies: jsonb('strategies').$type<string[]>().notNull().default([]),
   evidenceId: uuid('evidence_id'),
   revision: integer('revision').notNull().default(0),
+  /** The escalation revision the owner was asked about (as an approval they can answer from chat). */
+  decisionRevision: integer('decision_revision'),
+  decisionRequestId: uuid('decision_request_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [uniqueIndex('companion_incidents_identity_idx').on(t.goalId, t.sessionId, t.fingerprint)]);
+export type CompanionIncident = typeof companionIncidents.$inferSelect;
 
 export const companionActivations = pgTable('companion_activations', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -202,10 +206,16 @@ export const companionReports = pgTable('companion_reports', {
   deadline: timestamp('deadline', { withTimezone: true }),
   message: text('message').notNull(),
   textHash: text('text_hash').notNull(),
-  decision: text('decision').$type<'delivered' | 'recorded'>().notNull(),
+  decision: text('decision').$type<'delivered' | 'sending' | 'recorded'>().notNull(),
   reason: text('reason').notNull(),
   messageId: uuid('message_id'),
+  deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+  /** Held for quiet hours: sent when they end, if the gate still lets it through. */
+  deferredUntil: timestamp('deferred_until', { withTimezone: true }),
+  /** The Companion conversation a held report is posted to. */
+  sessionId: uuid('session_id').references(() => sessions.id, { onDelete: 'cascade' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [index('companion_reports_matter_idx').on(t.userId, t.workspaceId, t.matterKey, t.createdAt),
-  check('companion_reports_decision_chk', sql`${t.decision} IN ('delivered', 'recorded')`)]);
+  index('companion_reports_deferred_idx').on(t.deferredUntil).where(sql`${t.deferredUntil} IS NOT NULL`),
+  check('companion_reports_decision_chk', sql`${t.decision} IN ('delivered', 'sending', 'recorded')`)]);
 export type CompanionReport = typeof companionReports.$inferSelect;

@@ -17,7 +17,7 @@ export interface CompanionActionView {
 }
 /** A background report: delivered to the owner's chat, or kept on the Companion page with the gate's reason. */
 export interface CompanionReportView {
-  id: string; message: string; decision: 'delivered' | 'recorded'; reason: string; impact: 'low' | 'normal' | 'high'; createdAt: string;
+  id: string; message: string; decision: 'delivered' | 'sending' | 'recorded'; reason: string; impact: 'low' | 'normal' | 'high'; createdAt: string;
 }
 /**
  * The owner's own words behind a Companion write: a quote the server found in
@@ -50,6 +50,8 @@ export const companionSettingsSchema = z.object({
   quietHoursStart: z.number().int().min(0).max(23).default(22),
   quietHoursEnd: z.number().int().min(0).max(23).default(7),
   timezone: z.string().min(1).max(100).default('UTC'),
+  /** Also send Companion notices and decisions to the owner's linked chats (Telegram, Slack, Teams, WhatsApp). */
+  notifyChats: z.boolean().default(false),
 }).strict();
 export type CompanionSettingsInput = z.infer<typeof companionSettingsSchema>;
 
