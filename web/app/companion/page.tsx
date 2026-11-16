@@ -10,7 +10,7 @@ import { GoalRecovery } from '@/components/companion/goal-recovery';
 import { CompanionChatEntry } from '@/components/companion/chat-entry';
 import { useCompanionChat } from '@/hooks/useCompanionChat';
 import { SupervisionSettings } from '@/components/companion/supervision-settings';
-import type { CompanionGoalView as CompanionGoal, CompanionLinkView as CompanionSessionLink, CompanionActionView as CompanionAction } from '../../../src/shared/companion-supervision';
+import type { CompanionGoalView as CompanionGoal, CompanionLinkView as CompanionSessionLink, CompanionActionView as CompanionAction, CompanionReportView } from '../../../src/shared/companion-supervision';
 
 type ModelChoice = { name: string; modelId: string; isEnabled: boolean; supportsTools: boolean; provider: string };
 const field = 'w-full rounded-xs border border-outline-variant bg-surface-container px-3 py-2 text-sm';
@@ -42,6 +42,8 @@ function CompanionWorkspacePage() {
   const goals = useQuery({ queryKey: ['companion', activeWorkspace?.id], queryFn: () => api.get<{ goals: CompanionGoal[] }>('/companion/goals'), enabled: personal, refetchInterval: 5000 });
   const detail = useQuery({ queryKey: ['companion', activeWorkspace?.id, selected], queryFn: () => api.get<{ goal: CompanionGoal; links: CompanionSessionLink[] }>(`/companion/goals/${selected}`), enabled: personal && !!selected, refetchInterval: 5000 });
   const actions = useQuery({ queryKey: ['companion', activeWorkspace?.id, selected, 'actions'], queryFn: () => api.get<{ actions: CompanionAction[] }>(`/companion/goals/${selected}/actions`), enabled: personal && !!selected, refetchInterval: 5000 });
+  const generalReports = useQuery({ queryKey: ['companion', activeWorkspace?.id, 'reports'], queryFn: () => api.get<{ reports: CompanionReportView[] }>('/companion/reports'), enabled: personal, refetchInterval: 15000 });
+  const reports = useQuery({ queryKey: ['companion', activeWorkspace?.id, selected, 'reports'], queryFn: () => api.get<{ reports: CompanionReportView[] }>(`/companion/goals/${selected}/reports`), enabled: personal && !!selected, refetchInterval: 15000 });
   const models = useQuery({ queryKey: ['models', activeWorkspace?.id], queryFn: () => api.get<{ models: ModelChoice[] }>('/models'), enabled: personal });
   const sessions = useQuery({ queryKey: ['companion-sessions', activeWorkspace?.id], queryFn: () => api.get<{ sessions: { id: string; title: string | null }[] }>('/sessions?limit=100'), enabled: personal });
   const goal = detail.data?.goal;
@@ -68,6 +70,7 @@ function CompanionWorkspacePage() {
         <label className="block">Acceptance criteria, one per line<textarea className={field} value={criteria} onChange={event => setCriteria(event.target.value)} required maxLength={10_000} rows={2} /></label>
         <button className={button} disabled={busy || !request.trim()}>Create goal</button>
       </form>
+      {!!generalReports.data?.reports?.length && <div className="space-y-2"><h2>Reports</h2>{generalReports.data.reports.map(report => <ReportRow key={report.id} report={report} />)}</div>}
       <div className="grid gap-6 md:grid-cols-[240px_1fr]">
         <div className="space-y-2" aria-label="Goals">
           {goals.isLoading && <p>Loading goals…</p>}
@@ -113,11 +116,16 @@ function CompanionWorkspacePage() {
             </form>
           </>}
           {activeWorkspace && <GoalRecovery key={`${activeWorkspace.id}:${goal.id}`} goal={goal} workspaceId={activeWorkspace.id} />}
+          {!!reports.data?.reports?.length && <div className="space-y-2"><h3>Reports</h3>{reports.data.reports.map(report => <ReportRow key={report.id} report={report} />)}</div>}
           <div className="space-y-2"><h3>Activity</h3>{actions.data?.actions.map(action => <div className="border-l-2 border-outline-variant pl-3 text-sm" key={action.id}><p>{action.kind.replaceAll('_', ' ')} · {action.status}</p>{action.basis && <p className="text-on-surface-variant">Because you said “{action.basis.quote}”</p>}{action.result && <p className="whitespace-pre-wrap text-on-surface-variant">{action.result}</p>}</div>)}</div>
         </section>}
       </div>
     </>}
   </div>;
+}
+
+function ReportRow({ report }: { report: CompanionReportView }) {
+  return <div className="border-l-2 border-outline-variant pl-3 text-sm"><p className="whitespace-pre-wrap">{report.message}</p><p className="text-on-surface-variant">{report.decision === 'delivered' ? 'Sent to you' : 'Kept here'} · {report.reason}</p></div>;
 }
 
 export default function CompanionPage() {

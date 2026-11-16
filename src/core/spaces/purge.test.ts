@@ -106,6 +106,7 @@ async function seedSpaceRows(ws: string, author: string): Promise<{ sessionId: s
   const goalId = randomUUID();
   await one('companion_goals', `INSERT INTO companion_goals (id,user_id,workspace_id,request_key,title,request,outcome,acceptance_criteria) VALUES ($1,$2,$3,$4,'Goal','Work','Verified','[]')`, [goalId,author,ws,randomUUID()]);
   await one('companion_settings', `INSERT INTO companion_settings (user_id,workspace_id) VALUES ($1,$2)`, [author,ws]);
+  await one('companion_reports', `INSERT INTO companion_reports (user_id,workspace_id,matter_key,impact,evidence,material_change,message,text_hash,decision,reason) VALUES ($1,$2,'workspace:x','normal','strong','none','Held','h','recorded','Held')`, [author,ws]);
   await q(`INSERT INTO companion_session_links (goal_id,session_id,purpose,active) VALUES ($1,$2,'Historical link',false)`, [goalId,session.id]);
   await q(`INSERT INTO companion_actions (goal_id,session_id,request_key,generation,kind,message,status) VALUES ($1,$2,$3,'','message_session','Historical action','completed')`, [goalId,session.id,randomUUID()]);
   await one('contacts', `INSERT INTO contacts (user_id, name, workspace_id) VALUES ($1, 'k', $2)`, [author, ws]);

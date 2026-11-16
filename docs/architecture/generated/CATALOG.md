@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-693 mounted routes across 87 route files. The path is the full one, group prefix included — what a client actually calls.
+695 mounted routes across 87 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -158,8 +158,10 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/companion/goals/:id/incident-decision` | `src/api/routes/companion.ts` |
 | GET | `/api/companion/goals/:id/incidents` | `src/api/routes/companion.ts` |
 | POST | `/api/companion/goals/:id/messages` | `src/api/routes/companion.ts` |
+| GET | `/api/companion/goals/:id/reports` | `src/api/routes/companion.ts` |
 | POST | `/api/companion/goals/:id/sessions` | `src/api/routes/companion.ts` |
 | GET | `/api/companion/goals/:id/sessions/:sessionId` | `src/api/routes/companion.ts` |
+| GET | `/api/companion/reports` | `src/api/routes/companion.ts` |
 | GET | `/api/companion/settings` | `src/api/routes/companion.ts` |
 | PUT | `/api/companion/settings` | `src/api/routes/companion.ts` |
 | GET | `/api/contacts` | `src/api/routes/cases.ts` |
@@ -769,7 +771,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `capabilities` | 3 |
 | `core` | `channels` | 14 |
 | `core` | `config` | 73 |
-| `core` | `db` | 494 |
+| `core` | `db` | 499 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 6 |
 | `core` | `mcp` | 11 |
@@ -868,7 +870,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `api` | 2 |
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 5 |
-| `tools` | `core` | 151 |
+| `tools` | `core` | 152 |
 | `tools` | `db` | 42 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |

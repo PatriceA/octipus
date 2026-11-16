@@ -1570,7 +1570,8 @@ export class AgentService {
     progress?: number,
     generation?: string,
   ): Promise<unknown> {
-    if(context.metadata?.companionBriefing===true)return {sent:false};
+    // Briefings and background Companion check-ins are private; a check-in tells the owner only through companion__report.
+    if(context.metadata?.companionBriefing===true||getRunContext()?.companionObservation)return {sent:false};
     const saved = await saveProgressMessage(message, context, generation);
     if (!saved) return { sent: false };
     this.emit({

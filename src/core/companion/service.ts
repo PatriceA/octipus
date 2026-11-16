@@ -49,6 +49,7 @@ export class CompanionService {
   beginVerification(id: string, incidentId: string) { return this.repo.beginVerification(id, incidentId); }
   advanceIncident(id: string, incidentId: string, input: { expectedRevision: number; strategy?: string; evidenceId?: string }) { return this.repo.advanceIncident(id, incidentId, input); }
   actions(id: string) { return this.repo.actions(id); }
+  reports(id?: string) { return this.repo.reports(id); }
   findSessions(query: string, limit?: number) { return this.repo.findSessions(query, limit); }
   readSession(sessionId: string) { return this.repo.readSession(sessionId); }
   readReport(id:string,sessionId:string,input:{messageId?:string;actionId?:string;offset:number;limit:number}){return this.repo.readReport(id,sessionId,input);}

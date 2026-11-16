@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { and, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { companionActions, companionIncidents, companionEvents, companionGoals, companionSessionLinks, companionSettings, type CompanionGoal } from '@/db/schema/companion-supervision';
+import { companionActions, companionIncidents, companionReports, companionEvents, companionGoals, companionSessionLinks, companionSettings, type CompanionGoal } from '@/db/schema/companion-supervision';
 import { workspaces } from '@/db/schema/organizations';
 import { users } from '@/db/schema/users';
 import { sessions, sessionGeneration } from '@/db/schema/sessions';
@@ -426,6 +426,18 @@ export class CompanionSupervisionRepository {
       return (await tx.insert(companionActions).values({ goalId: id, sessionId: data.sessionId, requestKey: data.requestKey,
         authoritySettingsId: this.authority?.settingsId, authorityRevision: this.authority?.revision,
         ...repair, basis: basis ?? null, kind: 'steer_session', message: data.message, protectionLevel: level, flowLabel: labels, generation: sessionGeneration(sources.find(source => source.id === data.sessionId)?.context) }).returning())[0];
+    });
+  }
+
+  /** Background reports about one goal, or (without an id) those about no goal, delivered or kept on the Companion page. */
+  async reports(id?: string) {
+    return this.db().transaction(async tx => {
+      await this.assertScope(tx);
+      if (id) await this.goal(tx, id);
+      return tx.select({ id: companionReports.id, message: companionReports.message, decision: companionReports.decision, reason: companionReports.reason,
+        impact: companionReports.impact, createdAt: companionReports.createdAt }).from(companionReports)
+        .where(and(id ? eq(companionReports.goalId, id) : isNull(companionReports.goalId), eq(companionReports.userId, this.scope.userId), eq(companionReports.workspaceId, this.scope.workspaceId)))
+        .orderBy(desc(companionReports.createdAt)).limit(20);
     });
   }
 
