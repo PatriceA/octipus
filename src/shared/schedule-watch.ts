@@ -26,14 +26,17 @@ export type WatchSource =
 export const WATCH_MAX_SOURCES = 5;
 
 /**
- * What the server keeps about the last dispatched run of a watched schedule
- * (`triggerConfig.watchState`, server-held). `fingerprint` is null when a
- * source was unavailable before that run: such a run never makes the next one
- * skippable.
+ * What the server keeps about the latest started run of a watched schedule
+ * (`triggerConfig.watchState`, server-held). `fingerprint` is the one probed
+ * after that run succeeded; null while it runs, after a failure, or when a
+ * source could not be read — none of which makes the next run skippable.
+ * `unconfirmed`: the turn ended without reporting success (a refusal, a
+ * command's answer). `runId` names the run that may record the outcome.
  */
 export interface WatchState {
   fingerprint: string | null;
-  outcome: 'running' | 'success' | 'failed';
+  outcome: 'running' | 'success' | 'failed' | 'unconfirmed';
+  runId: string;
   at: string;
 }
 

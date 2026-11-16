@@ -612,6 +612,8 @@ export class AgentService {
     return {
       response: text,
       classification: { type: 'casual', confidence: 0 },
+      // Nothing ran: a scheduled hook records the run as failed (hooks/actions.ts).
+      outcome: 'failed',
     };
   }
 
@@ -751,6 +753,8 @@ export class AgentService {
             response: sessionBudgetMessage(sessionTokens, tokenBudget, explicitBudget),
             sessionId: resolvedSessionId,
             classification: { type: 'casual', confidence: 1 },
+            // Refused before any work: not a successful turn (a scheduled hook records a failure).
+            outcome: 'failed',
           };
         }
         if (sessionTokens >= tokenBudget * 0.8) {
@@ -775,6 +779,8 @@ export class AgentService {
           response: blockResponse,
           sessionId: resolvedSessionId,
           classification: { type: 'casual' as const, confidence: 1, complexity: 'simple' as const },
+          // Refused, not answered. A room keeps showing the refusal as its answer.
+          ...(isRoom ? {} : { outcome: 'failed' as const }),
         };
       }
       if (inputGuard.action === 'warn') {

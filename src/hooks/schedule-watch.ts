@@ -7,14 +7,16 @@
  * fetch, a stat of a workspace file, a task-board query, the heartbeat's inbox
  * and GitHub probes), and the results are hashed together with the hook's
  * action config into a fingerprint. The run is skipped only when every source
- * was read, the fingerprint equals the one taken before the last run, and that
- * run succeeded. A source that cannot be read never counts as unchanged: the
- * run goes ahead, and it leaves no fingerprint to skip the next one against.
+ * was read, the fingerprint equals the one recorded by the last run, and that
+ * run succeeded. The fingerprint a successful run records is taken AFTER it
+ * finished (a second probe), so what the run itself changed in a watched
+ * source (a report it rewrote, a task it closed) is not a change for the next
+ * run. A source that cannot be read never counts as unchanged: the run goes
+ * ahead, and it leaves no fingerprint to skip the next one against.
  *
  * The state (`triggerConfig.watchState`) is server-held: the hooks routes drop
  * a user-supplied value and edits keep the stored one (SERVER_TRIGGER_CONFIG_KEYS).
  */
-import { createHash } from 'node:crypto';
 import { lstat, readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { and, eq, sql } from 'drizzle-orm';
@@ -25,6 +27,8 @@ import { notInSharedWorkspace } from '@/db/repositories/scoped';
 import { type Hook, hooks } from '@/db/schema/hooks';
 import { tasks } from '@/db/schema/tasks';
 import { WATCH_MAX_SOURCES, type WatchSource, type WatchState } from '@/shared/schedule-watch';
+import { withDeadline } from '@/utils/concurrency';
+import { sha256 } from '@/utils/crypto';
 
 const watchSourceSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -53,7 +57,8 @@ void _sameShape;
  * what the owner asked to receive arrives every time. Not a direct spawn
  * either: it reports success when the agent starts, not when it finishes, so
  * "the last run succeeded" could not be known. Returns the normalized list
- * (undefined when there is none, `null`, or `[]`) or the reason it is refused.
+ * (undefined when there is none, `null`, or `[]`) or the reason it is refused;
+ * a hook that cannot watch says to remove `watch`.
  */
 export function checkScheduleWatch(hook: {
   trigger: string;
@@ -72,30 +77,44 @@ export function checkScheduleWatch(hook: {
   const trigger = (hook.triggerConfig ?? {}) as Record<string, unknown>;
   const action = (hook.actionConfig ?? {}) as Record<string, unknown>;
   if (hook.trigger !== 'schedule' || typeof trigger.cronExpression !== 'string' || !trigger.cronExpression.trim() || trigger.scheduledAt) {
-    return { ok: false, error: 'watch is only for recurring (cron) schedules' };
+    return { ok: false, error: 'watch is only for recurring (cron) schedules: remove `watch` from triggerConfig' };
   }
   if (hook.action !== 'spawn_agent' || action.orchestrated !== true) {
-    return { ok: false, error: 'watch is only for scheduled agent runs routed through the root agent (spawn_agent with orchestrated: true)' };
+    return { ok: false, error: 'watch is only for scheduled agent runs routed through the root agent (spawn_agent with orchestrated: true): remove `watch` from triggerConfig, or keep orchestrated on' };
   }
   if (Number(action.awayDigestHours) > 0) {
-    return { ok: false, error: 'A digest (awayDigestHours) runs every time; it cannot watch sources' };
+    return { ok: false, error: 'A digest (awayDigestHours) runs every time and cannot watch sources: remove `watch` from triggerConfig' };
   }
   return { ok: true, watch: parsed.data };
 }
 
-/** The hook's watch list as stored; an invalid one (written around the API) reads as none. */
-export function watchSources(triggerConfig: Hook['triggerConfig'] | null | undefined): WatchSource[] {
-  const parsed = watchListSchema.safeParse((triggerConfig as Record<string, unknown> | null | undefined)?.watch);
-  return parsed.success ? parsed.data : [];
+/**
+ * Why an edit may not be saved because of the hook's stored `watch`, or null.
+ * An edit that writes triggerConfig is checked in full. An edit of the action
+ * alone is refused only when it turns a hook that could watch into one that
+ * cannot (with "remove `watch`"); a hook whose stored watch was already
+ * ineligible (written around the API, ignored by the runner) stays editable.
+ */
+export function watchEditError(
+  before: { trigger: string; triggerConfig: unknown; action: string; actionConfig: unknown },
+  after: { trigger: string; triggerConfig: unknown; action: string; actionConfig: unknown },
+  triggerConfigChanged: boolean,
+): string | null {
+  const next = checkScheduleWatch(after);
+  if (next.ok) return null;
+  if (triggerConfigChanged) return next.error;
+  return checkScheduleWatch(before).ok ? next.error : null;
 }
+
+const OUTCOMES: ReadonlySet<string> = new Set(['running', 'success', 'failed', 'unconfirmed']);
 
 /** The stored state of the last dispatched run, if well-formed. */
 export function storedWatchState(triggerConfig: Hook['triggerConfig'] | null | undefined): WatchState | undefined {
   const s = (triggerConfig as Record<string, unknown> | null | undefined)?.watchState as Partial<WatchState> | undefined;
   if (!s || typeof s !== 'object') return undefined;
   if (s.fingerprint !== null && typeof s.fingerprint !== 'string') return undefined;
-  if (s.outcome !== 'running' && s.outcome !== 'success' && s.outcome !== 'failed') return undefined;
-  return { fingerprint: s.fingerprint ?? null, outcome: s.outcome, at: String(s.at ?? '') };
+  if (typeof s.outcome !== 'string' || !OUTCOMES.has(s.outcome)) return undefined;
+  return { fingerprint: s.fingerprint ?? null, outcome: s.outcome, runId: String(s.runId ?? ''), at: String(s.at ?? '') };
 }
 
 export type WatchDecision =
@@ -104,7 +123,8 @@ export type WatchDecision =
 
 /**
  * Pure: skip only when every source was read (`fingerprint` not null), it
- * equals the fingerprint taken before the last run, and that run succeeded.
+ * equals the fingerprint the last run recorded, and that run succeeded. A run
+ * still in progress (`running`), failed or unconfirmed never yields a skip.
  */
 export function decideWatch(stored: WatchState | undefined, fingerprint: string | null): WatchDecision {
   if (fingerprint === null) return { run: true, reason: 'unavailable' };
@@ -122,35 +142,35 @@ export interface WatchOwner { userId: string; workspaceId: string | null }
 /**
  * One reader per source kind. Each returns a JSON-able observation or throws
  * when the source cannot be read (unavailable — never an empty observation).
- * Injectable so the decision is tested without a network, mailbox or `gh`.
+ * `signal` aborts when the probe's deadline passes: a fetch, a mail request or
+ * a `gh` child it started stops. Injectable so the decision is tested without
+ * a network, mailbox or `gh`.
  */
 export interface WatchProbeDeps {
-  page: (url: string) => Promise<unknown>;
-  path: (owner: WatchOwner, path: string) => Promise<unknown>;
-  tasks: (owner: WatchOwner) => Promise<unknown>;
-  inbox: (owner: WatchOwner) => Promise<unknown>;
-  githubPrs: (owner: WatchOwner) => Promise<unknown>;
+  page: (url: string, signal: AbortSignal) => Promise<unknown>;
+  path: (owner: WatchOwner, path: string, signal: AbortSignal) => Promise<unknown>;
+  tasks: (owner: WatchOwner, signal: AbortSignal) => Promise<unknown>;
+  inbox: (owner: WatchOwner, signal: AbortSignal) => Promise<unknown>;
+  githubPrs: (owner: WatchOwner, signal: AbortSignal) => Promise<unknown>;
 }
 
 /** Files up to this size are hashed by content; larger ones by size and modification time. */
 export const WATCH_HASH_MAX_BYTES = 5_000_000;
 /** A directory with more entries than this cannot be watched (it reads as unavailable). */
 export const WATCH_DIR_MAX_ENTRIES = 1000;
-/** Longest one probe may take before it counts as unavailable. */
+/** Longest one probe may take before it counts as unavailable (and is aborted). */
 export const WATCH_PROBE_TIMEOUT_MS = 20_000;
 
-const hashOf = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
-
 export const defaultWatchProbeDeps: WatchProbeDeps = {
-  async page(url) {
+  async page(url, signal) {
     // The plugin host's `web:read` fetch: SSRF-guarded, HTML only, capped.
     // The extracted article text, not the raw HTML, so a rotating ad slot or
     // a per-request nonce does not count as a change.
     const { fetchArticle } = await import('@/core/web-read/fetch');
-    const article = await fetchArticle(url);
-    return hashOf(`${article.title}\n${article.textContent}`);
+    const article = await fetchArticle(url, signal);
+    return sha256(`${article.title}\n${article.textContent}`);
   },
-  async path(owner, path) {
+  async path(owner, path, signal) {
     const { WorkspaceFS } = await import('@/security/workspace-fs');
     const { backgroundUserPrincipal } = await import('@/core/tasks/sourced');
     const fs = WorkspaceFS.forPrincipal(backgroundUserPrincipal(owner.userId, owner.workspaceId));
@@ -166,7 +186,7 @@ export const defaultWatchProbeDeps: WatchProbeDeps = {
     }
     if (st.isFile()) {
       return st.size <= WATCH_HASH_MAX_BYTES
-        ? { type: 'file', sha256: hashOf(await readFile(abs)) }
+        ? { type: 'file', sha256: sha256(await readFile(abs, { signal })) }
         : { type: 'file', size: st.size, mtimeMs: st.mtimeMs };
     }
     if (!st.isDirectory()) throw new Error('Not a file or directory');
@@ -187,7 +207,7 @@ export const defaultWatchProbeDeps: WatchProbeDeps = {
       .where(and(eq(tasks.userId, owner.userId), notInSharedWorkspace(tasks.workspaceId)));
     return { count: row?.count ?? 0, latest: row?.latest ?? null };
   },
-  async inbox(owner) {
+  async inbox(owner, signal) {
     // The heartbeat's inbox probe (core/email/watch.ts): the recent inbox
     // message ids, the same window and filters. It reads ids only.
     const { isJobOn } = await import('@/core/modules/registry');
@@ -195,74 +215,85 @@ export const defaultWatchProbeDeps: WatchProbeDeps = {
     const { defaultEmailWatchDeps, EMAIL_LOOKBACK_MS } = await import('@/core/email/watch');
     const provider = await defaultEmailWatchDeps.provider(owner.userId);
     if (!provider) throw new Error('No mailbox connected');
-    const listed = await defaultEmailWatchDeps.list(owner.userId, provider, new Date(Date.now() - EMAIL_LOOKBACK_MS));
+    const listed = await defaultEmailWatchDeps.list(owner.userId, provider, new Date(Date.now() - EMAIL_LOOKBACK_MS), signal);
     return listed.map((m) => m.id).sort();
   },
-  async githubPrs(owner) {
+  async githubPrs(owner, signal) {
     // The heartbeat's GitHub probe: the server's `gh`, so admins only, and a
     // stored DENY on github/read still wins (heartbeat.ts defaultGithubAllowed).
     const { defaultGithubAllowed, pullRequestKey } = await import('@/core/heartbeat');
     if (!(await defaultGithubAllowed(owner.userId))) throw new Error('GitHub is not readable for this user');
-    const { probeFailingPullRequests } = await import('@/core/heartbeat-probes');
-    const prs = await probeFailingPullRequests();
+    const { probeFailingPullRequests, runGh } = await import('@/core/heartbeat-probes');
+    const prs = await probeFailingPullRequests({ runGh }, signal);
     if (prs === null) throw new Error('GitHub could not be read');
     return prs.map(pullRequestKey).sort();
   },
 };
 
-function readSource(source: WatchSource, owner: WatchOwner, deps: WatchProbeDeps): Promise<unknown> {
+function readSource(source: WatchSource, owner: WatchOwner, deps: WatchProbeDeps, signal: AbortSignal): Promise<unknown> {
   switch (source.kind) {
-    case 'url': return deps.page(source.url);
-    case 'file': return deps.path(owner, source.path);
-    case 'tasks': return deps.tasks(owner);
-    case 'inbox': return deps.inbox(owner);
-    case 'github_prs': return deps.githubPrs(owner);
+    case 'url': return deps.page(source.url, signal);
+    case 'file': return deps.path(owner, source.path, signal);
+    case 'tasks': return deps.tasks(owner, signal);
+    case 'inbox': return deps.inbox(owner, signal);
+    case 'github_prs': return deps.githubPrs(owner, signal);
   }
-}
-
-function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([
-    work,
-    new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`Timed out after ${ms} ms`)), ms); }),
-  ]).finally(() => clearTimeout(timer));
 }
 
 export interface WatchProbe {
   /** Null when any source could not be read. */
   fingerprint: string | null;
-  /** The sources that could not be read, and why (`watch`: the stored list itself is unusable). */
+  /** The sources that could not be read, and why (`watch`: no source to read). */
   unavailable: Array<{ kind: WatchSource['kind'] | 'watch'; reason: string }>;
 }
 
 /**
- * Read every watched source of `hook` (in parallel, each bounded by
- * `timeoutMs`) and hash them, with the hook's action config, into one
- * fingerprint: editing the prompt or the watch list makes the next run run.
+ * Read `sources` (the hook's validated watch list, checkScheduleWatch) in
+ * parallel, each aborted after `timeoutMs`, and hash the observations with
+ * the hook's action config into one fingerprint: editing the prompt or the
+ * watch list makes the next run run.
  */
 export async function probeWatch(
-  hook: Pick<Hook, 'userId' | 'workspaceId' | 'triggerConfig' | 'actionConfig'>,
+  hook: Pick<Hook, 'userId' | 'workspaceId' | 'actionConfig'>,
+  sources: readonly WatchSource[],
   deps: WatchProbeDeps = defaultWatchProbeDeps,
   timeoutMs = WATCH_PROBE_TIMEOUT_MS,
 ): Promise<WatchProbe> {
-  const sources = watchSources(hook.triggerConfig);
   const owner = { userId: hook.userId, workspaceId: hook.workspaceId ?? null };
   const results = await Promise.all(sources.map((source) =>
-    withTimeout(Promise.resolve().then(() => readSource(source, owner, deps)), timeoutMs).then(
+    withDeadline((signal) => readSource(source, owner, deps, signal), timeoutMs, `Timed out after ${timeoutMs} ms`).then(
       (value) => ({ ok: true as const, value }),
       (err: unknown) => ({ ok: false as const, reason: (err as Error)?.message ?? String(err) }),
     )));
   const unavailable: WatchProbe['unavailable'] = results.flatMap((r, i) => (r.ok ? [] : [{ kind: sources[i].kind, reason: r.reason.slice(0, 300) }]));
-  if (sources.length === 0) unavailable.push({ kind: 'watch', reason: 'No valid watch sources' });
+  if (sources.length === 0) unavailable.push({ kind: 'watch', reason: 'No watch sources' });
   if (unavailable.length > 0) return { fingerprint: null, unavailable };
   const values = results.map((r) => (r.ok ? r.value : undefined));
-  return { fingerprint: hashOf(canonical({ v: 1, action: hook.actionConfig, watch: sources, values })), unavailable };
+  return { fingerprint: sha256(canonical({ v: 1, action: hook.actionConfig, watch: sources, values })), unavailable };
 }
 
-/** Store the state of the run just dispatched or finished; other triggerConfig keys untouched. */
-export async function recordWatchState(hookId: string, state: WatchState): Promise<void> {
+/**
+ * Mark a run as started: `running` (never a baseline for a skip) under a new
+ * `runId`, whatever was stored. Only this run may record its outcome.
+ */
+export async function startWatchRun(hookId: string, runId: string, at: Date): Promise<void> {
+  const state: WatchState = { fingerprint: null, outcome: 'running', runId, at: at.toISOString() };
   await getDb()
     .update(hooks)
     .set({ triggerConfig: sql`coalesce(${hooks.triggerConfig}, '{}'::jsonb) || jsonb_build_object('watchState', ${JSON.stringify(state)}::jsonb)` })
     .where(eq(hooks.id, hookId));
+}
+
+/**
+ * Record how run `state.runId` ended — compare-and-set: only while it is
+ * still the latest run started, so an older overlapping run finishing last
+ * never overwrites a newer one. Returns whether it was recorded.
+ */
+export async function finishWatchRun(hookId: string, state: WatchState): Promise<boolean> {
+  const rows = await getDb()
+    .update(hooks)
+    .set({ triggerConfig: sql`coalesce(${hooks.triggerConfig}, '{}'::jsonb) || jsonb_build_object('watchState', ${JSON.stringify(state)}::jsonb)` })
+    .where(and(eq(hooks.id, hookId), sql`${hooks.triggerConfig}->'watchState'->>'runId' = ${state.runId}`))
+    .returning({ id: hooks.id });
+  return rows.length > 0;
 }

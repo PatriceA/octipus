@@ -14,7 +14,7 @@ import { recurringTasks } from '@/db/schema/recurring-tasks';
 import { loadNotifyScope, type NotifyScope } from '@/channels/ownership';
 import { hookConfigTargets, invalidHookTargets, notifyTargetsError } from '@/hooks/actions';
 import { getHookManager } from '@/hooks/manager';
-import { checkScheduleWatch } from '@/hooks/schedule-watch';
+import { checkScheduleWatch, watchEditError } from '@/hooks/schedule-watch';
 import { getHookSuggestions } from '@/hooks/suggestions';
 import type { TriggerContext } from '@/hooks/triggers';
 import { isAuthenticated } from '@/security/principal';
@@ -305,16 +305,23 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
         }
       }
       if (body.triggerConfig !== undefined || body.actionConfig !== undefined) {
-        // The watch is checked against the hook as it will be after the edit.
-        const triggerConfig = (patch.triggerConfig ?? existing.triggerConfig) as HookRow['triggerConfig'];
-        const watch = checkScheduleWatch({ trigger: existing.trigger, triggerConfig, action: existing.action, actionConfig: body.actionConfig ?? existing.actionConfig });
-        if (!watch.ok) {
+        // `watch`, against the hook as it will be after the edit: in full when
+        // triggerConfig is written; for an action-only edit, only when the edit
+        // makes a hook that could watch ineligible ("remove `watch`").
+        const after = {
+          trigger: existing.trigger, action: existing.action,
+          triggerConfig: (patch.triggerConfig ?? existing.triggerConfig) as HookRow['triggerConfig'],
+          actionConfig: body.actionConfig ?? existing.actionConfig,
+        };
+        const watchError = watchEditError(existing, after, body.triggerConfig !== undefined);
+        if (watchError) {
           set.status = 400;
-          return { error: watch.error };
+          return { error: watchError };
         }
-        if (patch.triggerConfig) {
-          if (watch.watch) triggerConfig.watch = watch.watch;
-          else delete triggerConfig.watch;
+        if (body.triggerConfig !== undefined) {
+          const watch = checkScheduleWatch(after);
+          if (watch.ok && watch.watch) after.triggerConfig.watch = watch.watch;
+          else delete after.triggerConfig.watch;
         }
       }
       if (body.actionConfig !== undefined) {

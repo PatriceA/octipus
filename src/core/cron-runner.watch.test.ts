@@ -3,8 +3,10 @@
  * cron runner's dispatch on embedded PGlite with the real migrations and the
  * real HookManager: an unchanged run is skipped and logged without reaching
  * the action (no agent turn, no model call), a failed run is never the
- * baseline for a skip and tells the owner, an unreadable source always runs,
- * and a hook without `watch` runs every time.
+ * baseline for a skip and tells the owner (once per streak), an unreadable
+ * source always runs, the run's own edits are not a change, a refusal is no
+ * baseline, a declined hook is not probed, only the latest run records its
+ * outcome, and a hook without `watch` runs every time.
  *
  * executeAction is mocked: it is the one way from a hook to an agent turn, so
  * its call count is the number of model-backed runs.
@@ -18,12 +20,17 @@ import type { Hook } from '@/db/schema/hooks';
 
 const executed: string[] = [];
 let failNext = false;
+/** The turn ends without `outcome: 'success'` (a refusal, a command's answer). */
+let unconfirmedNext = false;
+/** The run itself changes a watched source (adds a task to the board it watches). */
+let selfEditNext = false;
 vi.mock('@/hooks/actions', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/actions')>()),
   executeAction: vi.fn(async (hook: Hook) => {
     executed.push(hook.name);
     if (failNext) return { success: false, error: 'The model provider is unreachable' };
-    return { success: true, data: { response: 'Nothing new.' } };
+    if (selfEditNext) await addTask(`Follow-up written by ${hook.name}`);
+    return { success: true, data: { response: 'Nothing new.', orchestrated: true, outcome: unconfirmedNext ? null : 'success' } };
   }),
 }));
 
@@ -54,6 +61,8 @@ afterAll(async () => {
 beforeEach(() => {
   executed.length = 0;
   failNext = false;
+  unconfirmedNext = false;
+  selfEditNext = false;
 });
 
 async function createHook(name: string, triggerConfig: Record<string, unknown>, action: 'spawn_agent' | 'notify' = 'spawn_agent'): Promise<string> {
@@ -82,6 +91,14 @@ async function hookRow(hookId: string) {
   const { eq } = await import('drizzle-orm');
   const [row] = await getDb().select().from(hooks).where(eq(hooks.id, hookId));
   return row;
+}
+
+async function failureNotes(name: string) {
+  const { getDb } = await import('@/db/postgres');
+  const { notifications } = await import('@/db/schema/notifications');
+  const { and, eq } = await import('drizzle-orm');
+  const notes = await getDb().select().from(notifications).where(and(eq(notifications.userId, userId), eq(notifications.type, 'schedule_failed')));
+  return notes.filter((n) => n.title.includes(`"${name}"`));
 }
 
 async function addTask(title: string) {
@@ -115,10 +132,7 @@ describe('fireClaimedScheduleHook with watch', () => {
     const failed = await hookRow(hookId);
     expect(failed.lastError).toContain('unreachable');
     expect(failed.triggerConfig.watchState?.outcome).toBe('failed');
-    const { getDb } = await import('@/db/postgres');
-    const { notifications } = await import('@/db/schema/notifications');
-    const { and, eq } = await import('drizzle-orm');
-    const notes = await getDb().select().from(notifications).where(and(eq(notifications.userId, userId), eq(notifications.type, 'schedule_failed')));
+    const notes = await failureNotes('Board watch');
     expect(notes).toHaveLength(1);
     expect(notes[0].title).toContain('Board watch');
     expect(notes[0].body).toContain('unreachable');
@@ -160,5 +174,68 @@ describe('fireClaimedScheduleHook with watch', () => {
     expect(await fire(hookId)).toBe('success');
     expect(await fire(hookId)).toBe('success');
     expect(executed).toHaveLength(2);
+  });
+
+  test('what the run itself changed in a watched source is not a change: the fingerprint is taken after the run', async () => {
+    const hookId = await createHook('Self editor', { watch: [{ kind: 'tasks' }] });
+    selfEditNext = true;
+    expect(await fire(hookId)).toBe('success');
+    selfEditNext = false;
+    expect(await fire(hookId)).toBe('skipped');
+    expect(executed).toHaveLength(1);
+  });
+
+  test('a turn that ended without confirmed success (a refusal) is never a baseline for a skip', async () => {
+    const hookId = await createHook('Refused', { watch: [{ kind: 'tasks' }] });
+    unconfirmedNext = true;
+    expect(await fire(hookId)).toBe('success');
+    expect((await hookRow(hookId)).triggerConfig.watchState).toMatchObject({ outcome: 'unconfirmed', fingerprint: null });
+    expect(await fire(hookId)).toBe('success');
+    expect(await fire(hookId)).toBe('success');
+    expect(executed).toHaveLength(3);
+    unconfirmedNext = false;
+    expect(await fire(hookId)).toBe('success');
+    expect(await fire(hookId)).toBe('skipped');
+  });
+
+  test('a hook its gates decline is not probed nor logged as unchanged (only the gate\'s own skip), and its lastError is cleared as before', async () => {
+    const hookId = await createHook('Exhausted', { watch: [{ kind: 'tasks' }] });
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(`UPDATE hooks SET max_executions = 1, execution_count = 1, last_error = 'old' WHERE id = '${hookId}'`);
+    const { defaultWatchProbeDeps } = await import('@/hooks/schedule-watch');
+    let probed = 0;
+    const counting = { ...defaultWatchProbeDeps, tasks: async (...args: Parameters<typeof defaultWatchProbeDeps.tasks>) => { probed++; return defaultWatchProbeDeps.tasks(...args); } };
+    expect(await fire(hookId, { watchProbe: counting })).toBe('not_run');
+    expect(probed).toBe(0);
+    expect(executed).toHaveLength(0);
+    const { getHookManager } = await import('@/hooks/manager');
+    const { executions } = await getHookManager().getExecutions({ hookId });
+    expect(executions).toHaveLength(1);
+    expect(executions[0]).toMatchObject({ status: 'skipped', error: 'max_executions' });
+    expect((await hookRow(hookId)).lastError).toBeNull();
+  });
+
+  test('only the latest-started run records its outcome (compare-and-set on the run id)', async () => {
+    const hookId = await createHook('Overlap', { watch: [{ kind: 'tasks' }] });
+    const { startWatchRun, finishWatchRun } = await import('@/hooks/schedule-watch');
+    await startWatchRun(hookId, 'older', new Date());
+    await startWatchRun(hookId, 'newer', new Date());
+    expect(await finishWatchRun(hookId, { fingerprint: 'f-old', outcome: 'success', runId: 'older', at: '' })).toBe(false);
+    expect((await hookRow(hookId)).triggerConfig.watchState).toMatchObject({ outcome: 'running', runId: 'newer' });
+    expect(await finishWatchRun(hookId, { fingerprint: 'f-new', outcome: 'success', runId: 'newer', at: '' })).toBe(true);
+    expect((await hookRow(hookId)).triggerConfig.watchState).toMatchObject({ outcome: 'success', fingerprint: 'f-new' });
+  });
+
+  test('the owner is told once per failure streak', async () => {
+    const hookId = await createHook('Flaky', {});
+    failNext = true;
+    expect(await fire(hookId)).toBe('failed');
+    expect(await fire(hookId)).toBe('failed');
+    expect(await failureNotes('Flaky')).toHaveLength(1);
+    failNext = false;
+    expect(await fire(hookId)).toBe('success');
+    failNext = true;
+    expect(await fire(hookId)).toBe('failed');
+    expect(await failureNotes('Flaky')).toHaveLength(2);
   });
 });

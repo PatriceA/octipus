@@ -8,14 +8,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, onTestFinished, test } from 'vitest';
 import type { Hook } from '@/db/schema/hooks';
-import { formatWatchSource, parseWatchLines, type WatchState } from '@/shared/schedule-watch';
-import { checkScheduleWatch, decideWatch, defaultWatchProbeDeps, probeWatch, storedWatchState, type WatchProbeDeps } from './schedule-watch';
+import { formatWatchSource, parseWatchLines, type WatchSource, type WatchState } from '@/shared/schedule-watch';
+import { checkScheduleWatch, decideWatch, defaultWatchProbeDeps, probeWatch, storedWatchState, type WatchProbeDeps, watchEditError } from './schedule-watch';
 
 const userId = '11111111-1111-4111-8111-111111111111';
-const state = (fingerprint: string | null, outcome: WatchState['outcome']): WatchState => ({ fingerprint, outcome, at: '2026-11-16T08:00:00.000Z' });
+const state = (fingerprint: string | null, outcome: WatchState['outcome']): WatchState => ({ fingerprint, outcome, runId: 'r1', at: '2026-11-16T08:00:00.000Z' });
 
-function hook(watch: unknown, actionConfig: Record<string, unknown> = { orchestrated: true, agentPrompt: 'Summarize what changed.' }) {
-  return { userId, workspaceId: null, triggerConfig: { cronExpression: '0 * * * *', watch }, actionConfig } as unknown as Pick<Hook, 'userId' | 'workspaceId' | 'triggerConfig' | 'actionConfig'>;
+function hook(actionConfig: Record<string, unknown> = { orchestrated: true, agentPrompt: 'Summarize what changed.' }) {
+  return { userId, workspaceId: null, actionConfig } as unknown as Pick<Hook, 'userId' | 'workspaceId' | 'actionConfig'>;
 }
 
 /** Probes that return `values[kind]`, or throw for a kind listed in `down`. */
@@ -34,8 +34,9 @@ describe('decideWatch', () => {
   test('unchanged after a failed run → run', () => {
     expect(decideWatch(state('abc', 'failed'), 'abc')).toEqual({ run: true, reason: 'last_run_not_successful' });
   });
-  test('unchanged after a run that never finished → run', () => {
+  test('unchanged after a run in progress, never finished, or not confirmed → run', () => {
     expect(decideWatch(state('abc', 'running'), 'abc')).toEqual({ run: true, reason: 'last_run_not_successful' });
+    expect(decideWatch(state('abc', 'unconfirmed'), 'abc')).toEqual({ run: true, reason: 'last_run_not_successful' });
   });
   test('a source unavailable → run, even when the last run succeeded', () => {
     expect(decideWatch(state('abc', 'success'), null)).toEqual({ run: true, reason: 'unavailable' });
@@ -54,12 +55,12 @@ describe('decideWatch', () => {
 });
 
 describe('probeWatch', () => {
-  const watch = [{ kind: 'tasks' }, { kind: 'url', url: 'https://example.com/status' }];
+  const watch: WatchSource[] = [{ kind: 'tasks' }, { kind: 'url', url: 'https://example.com/status' }];
 
   test('the same observations give the same fingerprint; a changed one a different one', async () => {
-    const a = await probeWatch(hook(watch), fakeDeps({ tasks: { count: 3, latest: 't1' }, url: 'h1' }));
-    const b = await probeWatch(hook(watch), fakeDeps({ url: 'h1', tasks: { latest: 't1', count: 3 } }));
-    const c = await probeWatch(hook(watch), fakeDeps({ tasks: { count: 4, latest: 't2' }, url: 'h1' }));
+    const a = await probeWatch(hook(), watch, fakeDeps({ tasks: { count: 3, latest: 't1' }, url: 'h1' }));
+    const b = await probeWatch(hook(), watch, fakeDeps({ url: 'h1', tasks: { latest: 't1', count: 3 } }));
+    const c = await probeWatch(hook(), watch, fakeDeps({ tasks: { count: 4, latest: 't2' }, url: 'h1' }));
     expect(a.fingerprint).toMatch(/^[0-9a-f]{64}$/);
     expect(b.fingerprint).toBe(a.fingerprint);
     expect(c.fingerprint).not.toBe(a.fingerprint);
@@ -68,27 +69,29 @@ describe('probeWatch', () => {
 
   test('editing the prompt changes the fingerprint, so the next run runs', async () => {
     const values = { tasks: { count: 3 }, url: 'h1' };
-    const before = await probeWatch(hook(watch), fakeDeps(values));
-    const after = await probeWatch(hook(watch, { orchestrated: true, agentPrompt: 'Something else.' }), fakeDeps(values));
+    const before = await probeWatch(hook(), watch, fakeDeps(values));
+    const after = await probeWatch(hook({ orchestrated: true, agentPrompt: 'Something else.' }), watch, fakeDeps(values));
     expect(after.fingerprint).not.toBe(before.fingerprint);
   });
 
   test('a source that cannot be read leaves no fingerprint (unavailable is never unchanged)', async () => {
-    const probe = await probeWatch(hook(watch), fakeDeps({ tasks: { count: 3 } }, ['url']));
+    const probe = await probeWatch(hook(), watch, fakeDeps({ tasks: { count: 3 } }, ['url']));
     expect(probe.fingerprint).toBeNull();
     expect(probe.unavailable).toEqual([{ kind: 'url', reason: 'url unavailable' }]);
     expect(decideWatch(state('anything', 'success'), probe.fingerprint).run).toBe(true);
   });
 
-  test('a probe that hangs counts as unavailable', async () => {
-    const deps = { ...fakeDeps({}), tasks: () => new Promise<never>(() => {}) };
-    const probe = await probeWatch(hook([{ kind: 'tasks' }]), deps, 20);
+  test('a probe that hangs counts as unavailable, and is told to stop', async () => {
+    let aborted = false;
+    const deps = { ...fakeDeps({}), tasks: (_owner: unknown, signal: AbortSignal) => new Promise<never>(() => { signal.addEventListener('abort', () => { aborted = true; }); }) };
+    const probe = await probeWatch(hook(), [{ kind: 'tasks' }], deps, 20);
     expect(probe.fingerprint).toBeNull();
     expect(probe.unavailable[0]?.reason).toMatch(/Timed out/);
+    expect(aborted).toBe(true);
   });
 
-  test('an unusable stored watch list is unavailable, not unchanged', async () => {
-    const probe = await probeWatch(hook([{ kind: 'nope' }]), fakeDeps({}));
+  test('no source to read is unavailable, not unchanged', async () => {
+    const probe = await probeWatch(hook(), [], fakeDeps({}));
     expect(probe.fingerprint).toBeNull();
   });
 
@@ -111,16 +114,17 @@ describe('probeWatch', () => {
     mkdirSync(join(root, 'inbox'), { recursive: true });
     writeFileSync(join(root, 'notes.md'), 'one');
     const owner = { userId, workspaceId: null };
-    const file = await defaultWatchProbeDeps.path(owner, 'notes.md');
-    expect(await defaultWatchProbeDeps.path(owner, 'notes.md')).toEqual(file);
+    const live = new AbortController().signal;
+    const file = await defaultWatchProbeDeps.path(owner, 'notes.md', live);
+    expect(await defaultWatchProbeDeps.path(owner, 'notes.md', live)).toEqual(file);
     writeFileSync(join(root, 'notes.md'), 'two');
-    expect(await defaultWatchProbeDeps.path(owner, 'notes.md')).not.toEqual(file);
-    const dir = await defaultWatchProbeDeps.path(owner, 'inbox');
+    expect(await defaultWatchProbeDeps.path(owner, 'notes.md', live)).not.toEqual(file);
+    const dir = await defaultWatchProbeDeps.path(owner, 'inbox', live);
     writeFileSync(join(root, 'inbox', 'new.txt'), 'x');
-    expect(await defaultWatchProbeDeps.path(owner, 'inbox')).not.toEqual(dir);
-    expect(await defaultWatchProbeDeps.path(owner, 'missing.md')).toEqual({ exists: false });
+    expect(await defaultWatchProbeDeps.path(owner, 'inbox', live)).not.toEqual(dir);
+    expect(await defaultWatchProbeDeps.path(owner, 'missing.md', live)).toEqual({ exists: false });
     // Outside the owner's workspace: unavailable, not "absent".
-    await expect(defaultWatchProbeDeps.path(owner, '../../../../../../etc/hostname')).rejects.toThrow(/outside/);
+    await expect(defaultWatchProbeDeps.path(owner, '../../../../../../etc/hostname', live)).rejects.toThrow(/outside/);
   });
 });
 
@@ -149,6 +153,24 @@ describe('checkScheduleWatch', () => {
     expect(checkScheduleWatch({ ...base, triggerConfig: { cronExpression: '0 9 * * *', watch: [{ kind: 'tasks', extra: 1 }] } })).toMatchObject({ ok: false });
     expect(checkScheduleWatch({ ...base, triggerConfig: { cronExpression: '0 9 * * *', watch: [{ kind: 'file', path: ' notes/today.md ' }] } }))
       .toEqual({ ok: true, watch: [{ kind: 'file', path: 'notes/today.md' }] });
+  });
+});
+
+describe('watchEditError', () => {
+  const watching = { trigger: 'schedule', triggerConfig: { cronExpression: '0 9 * * *', watch: [{ kind: 'tasks' }] }, action: 'spawn_agent', actionConfig: { orchestrated: true } };
+
+  test('an action-only edit is refused only when it makes a watching hook ineligible, and says to remove watch', () => {
+    const direct = { ...watching, actionConfig: { orchestrated: false } };
+    expect(watchEditError(watching, direct, false)).toMatch(/remove `watch`/);
+    expect(watchEditError(watching, { ...watching, actionConfig: { orchestrated: true, agentPrompt: 'new' } }, false)).toBeNull();
+    // A hook whose stored watch was already ineligible stays editable.
+    const reminder = { ...watching, action: 'notify', actionConfig: {} };
+    expect(watchEditError(reminder, { ...reminder, actionConfig: { notifyMessage: 'x' } }, false)).toBeNull();
+  });
+
+  test('an edit that writes triggerConfig is checked in full', () => {
+    const reminder = { ...watching, action: 'notify', actionConfig: {} };
+    expect(watchEditError(reminder, reminder, true)).toMatch(/remove `watch`/);
   });
 });
 

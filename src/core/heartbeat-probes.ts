@@ -77,12 +77,12 @@ export function parseFailingPullRequests(response: unknown): FailingPullRequest[
 const GH_TIMEOUT_MS = 10_000;
 
 /** The shared runner with the probe's timeout: a background tick cannot wait on a hung `gh`. */
-export function runGh(args: string[]): Promise<string> {
-  return runGhShared(args, { timeoutMs: GH_TIMEOUT_MS });
+export function runGh(args: string[], signal?: AbortSignal): Promise<string> {
+  return runGhShared(args, { timeoutMs: GH_TIMEOUT_MS, signal });
 }
 
 export interface GithubProbeDeps {
-  runGh: (args: string[]) => Promise<string>;
+  runGh: (args: string[], signal?: AbortSignal) => Promise<string>;
 }
 
 /**
@@ -91,9 +91,9 @@ export interface GithubProbeDeps {
  * as "nothing is red", and the caller keeps what it already knew instead of
  * treating every PR as cleared.
  */
-export async function probeFailingPullRequests(deps: GithubProbeDeps = { runGh }): Promise<FailingPullRequest[] | null> {
+export async function probeFailingPullRequests(deps: GithubProbeDeps = { runGh }, signal?: AbortSignal): Promise<FailingPullRequest[] | null> {
   try {
-    const raw = await deps.runGh(['api', 'graphql', '-f', `query=${FAILING_PR_QUERY}`]);
+    const raw = await deps.runGh(['api', 'graphql', '-f', `query=${FAILING_PR_QUERY}`], signal);
     return parseFailingPullRequests(JSON.parse(raw));
   } catch (err) {
     coreLogger.debug({ err: (err as Error).message }, 'heartbeat: github probe unavailable (skipping)');

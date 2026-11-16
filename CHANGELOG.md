@@ -213,14 +213,17 @@ The curated release notes above are used for the GitHub release.
   to five sources in `triggerConfig.watch` (a web page, a workspace file or
   directory, the task board, the connected inbox, failing pull requests).
   Before each run they are read without a model; when every source was read,
-  nothing changed since the previous run, and that run succeeded, the run is
-  skipped and logged as `skipped` (`reason: "unchanged"`). A source that
+  nothing changed since the previous run, and that run confirmed success, the
+  run is skipped and logged as `skipped` (`reason: "unchanged"`). The
+  baseline is probed after a successful run, so the run's own edits to a
+  watched source are not a change. A source that
   cannot be read never counts as unchanged. Reminders, digests and one-shots
   always run. See [Hooks](docs/HOOKS.md#watch-skip-unchanged-runs).
 - **A failed scheduled run tells its owner.** The cron runner now sets
   `lastError` when a scheduled hook's action fails (it used to clear it) and
-  posts a `schedule_failed` notification that names the schedule. An
-  orchestrated `spawn_agent` turn that fails or is cancelled is recorded as a
+  posts a `schedule_failed` notification that names the schedule, once per
+  failure streak. An orchestrated `spawn_agent` turn that fails, is cancelled
+  or is refused (no model, session budget spent, input guard) is recorded as a
   failed execution rather than a success.
 
 - Plugin-store values have an explicit 128-container nesting limit, returning

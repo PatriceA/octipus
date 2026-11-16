@@ -67,7 +67,8 @@ export interface ListedMessage { id: string; item?: InboxItem }
 /** Provider access the probe uses; injectable so the gate is testable without a mailbox. */
 export interface EmailWatchDeps {
   provider: (userId: string) => Promise<EmailProvider | null>;
-  list: (userId: string, provider: EmailProvider, since: Date) => Promise<ListedMessage[]>;
+  /** `signal` (optional) stops the request early (a schedule's watch probe, hooks/schedule-watch.ts). */
+  list: (userId: string, provider: EmailProvider, since: Date, signal?: AbortSignal) => Promise<ListedMessage[]>;
   fetch: (userId: string, provider: EmailProvider, ids: string[]) => Promise<InboxItem[]>;
 }
 
@@ -82,9 +83,9 @@ export function gmailWatchQuery(since: Date): string {
 
 export const defaultEmailWatchDeps: EmailWatchDeps = {
   provider: detectProvider,
-  async list(userId, provider, since) {
+  async list(userId, provider, since, signal) {
     if (provider === 'google') {
-      const res = (await gmailApi(userId, 'GET', `/messages?maxResults=${EMAIL_LIST_LIMIT}&q=${encodeURIComponent(gmailWatchQuery(since))}`)) as {
+      const res = (await gmailApi(userId, 'GET', `/messages?maxResults=${EMAIL_LIST_LIMIT}&q=${encodeURIComponent(gmailWatchQuery(since))}`, undefined, signal)) as {
         messages?: { id: string }[];
       };
       return (res.messages ?? []).map((m) => ({ id: m.id }));
@@ -95,6 +96,8 @@ export const defaultEmailWatchDeps: EmailWatchDeps = {
       'GET',
       `/me/mailFolders/inbox/messages?$top=${EMAIL_LIST_LIMIT}&$filter=${filter}&$orderby=receivedDateTime desc` +
         '&$select=id,conversationId,subject,from,receivedDateTime,isRead,bodyPreview',
+      undefined,
+      signal,
     )) as { value?: GraphMessage[] };
     return normalizeM365List(res.value ?? []).map((item) => ({ id: item.id, item }));
   },

@@ -305,12 +305,18 @@ The **Calendar tab** in the Hooks & Tasks page shows a weekly grid of scheduled 
 ### A failed run tells you
 
 When a scheduled hook's action fails — an orchestrated agent turn that
-errors or is cancelled, a notify that reached no channel, a webhook that
-answered with an error — the cron runner sets `lastError` and posts a
-`schedule_failed` notification: `Scheduled task "<name>" failed`, with the
-first 280 characters of the error. A missing summary never goes unnoticed.
-The notification is in-app (and pushed to the web client); it is not sent to
-chat channels. A direct (non-orchestrated) `spawn_agent` run reports success
+errors, is cancelled or is refused (no model, session budget spent, input
+guard), a notify that reached no channel, a webhook that answered with an
+error — the cron runner sets `lastError` and posts a `schedule_failed`
+notification: `Scheduled task "<name>" failed`, with the first 280
+characters of the error. A missing summary never goes unnoticed, and a
+schedule that keeps failing does not repeat it: only the failure that sets
+`lastError` from empty notifies (one atomic update, so two overlapping runs
+cannot both), and the next success clears it. A run the hook's own gates
+decline (cooldown, max executions, conditions, deactivated owner) clears
+`lastError`, as before. The notification is in-app (and pushed to the web
+client); it is not sent to chat channels, where a hook with "send result to
+my linked channels" has already delivered the turn's answer. A direct (non-orchestrated) `spawn_agent` run reports success
 when the agent starts, so its later failure is reported by the agent's own
 `agent_error` notification instead.
 
@@ -323,14 +329,27 @@ hashes the observations, together with the hook's action config, into a
 fingerprint (`src/hooks/schedule-watch.ts`). The run is **skipped** only when
 
 1. every source was read,
-2. the fingerprint equals the one taken before the previous run, and
-3. that previous run succeeded.
+2. the fingerprint equals the one the previous run recorded, and
+3. that previous run confirmed success (the turn reported `outcome:
+   "success"`; a refusal or a command's answer does not).
+
+The fingerprint a successful run records is probed **after** the run
+finished, so what the run itself wrote to a watched source (a report it
+rewrote, a task it closed) does not count as a change next time. The flip
+side: a change someone else made while the run was in progress is absorbed
+into that baseline too.
 
 A skipped run starts no agent and spends no tokens; it is recorded in the
 execution log as `status: "skipped"` with `result.reason: "unchanged"`, does
-not touch `lastError`, and is not a failure. Otherwise the run goes ahead as
-before. The first run, a run after a failed or interrupted one, and a run
-after an edit of the prompt or the watch list always run.
+not touch `lastError`, and is not a failure. The hook's own gates
+(cooldown, max executions, conditions, deactivated owner) are checked first:
+a hook that would not fire is neither probed nor logged. Otherwise the run
+goes ahead as before. The first run, a run after a failed, refused or
+interrupted one, a run while another is still in progress, and a run after
+an edit of the prompt or the watch list always run. Each run is marked
+`running` under its own run id when it starts and records its outcome only
+if no later run has started since (compare-and-set), so an older
+overlapping run never overwrites a newer one.
 
 ```json
 {
@@ -360,11 +379,16 @@ In the web editor this is the **Watch** list of a recurring agent schedule:
 one source per line (`url https://…`, `file reports/today.md`, `tasks`,
 `inbox`, `github_prs`). **Run now** (the test button) always runs.
 
-**Unavailable is never unchanged.** A source that errors, times out (20 s),
-is switched off or not connected makes the run go ahead, and that run leaves
+**Unavailable is never unchanged.** A source that errors, times out (20 s;
+the fetch, mail request or `gh` process is aborted), is switched off or not
+connected makes the run go ahead, and that run leaves
 no fingerprint to compare the next one with. The last-run state
-(`triggerConfig.watchState`: fingerprint, `running` / `success` / `failed`) is
-written only by the server; the API drops a value sent by a client.
+(`triggerConfig.watchState`: fingerprint, `running` / `success` / `failed` /
+`unconfirmed`, run id) is written only by the server; the API drops a value
+sent by a client. Editing only the action of a hook whose stored watch it can
+no longer carry (turning off "Route through rootAgent", say) is refused with
+"remove `watch`"; a hook whose stored watch was already ineligible stays
+editable.
 
 What this does not cover:
 
@@ -378,6 +402,8 @@ What this does not cover:
 - Pages that render their content with JavaScript, or change their text on
   every request, read as changed (or never as changed) accordingly; there is
   no selector. Directories are not watched recursively.
+- Two probes per successful run (before and after) — cheap, but the URL and
+  inbox sources are read twice.
 - The inbox window slides: a message ageing out of the last 3 days changes the
   fingerprint and causes one extra run, never a missed one.
 - No new integrations: only sources that already had a cheap, model-free

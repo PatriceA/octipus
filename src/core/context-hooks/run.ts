@@ -12,6 +12,7 @@ import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
 import { type ContextHookRunRecord, contextTurns } from '@/db/schema/context-hooks';
 import { coreLogger } from '@/utils/logger';
+import { withDeadline } from '@/utils/concurrency';
 import { KIND_RUNNERS } from './kinds';
 import { listContextHooks } from './store';
 import { agentUsageKey, toolUseSnapshot, type ToolUseCount } from './tool-usage';
@@ -39,14 +40,6 @@ export interface ContextHooksOutcome {
 }
 
 const NONE: ContextHooksOutcome = { text: '', blocks: [], labelledBlocks: [], turn: null };
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), ms); }),
-  ]).finally(() => clearTimeout(timer));
-}
 
 /**
  * The hooks' blocks for this agent start, and the turn record to finish.
@@ -76,7 +69,7 @@ export async function runContextHooks(
     const hookStart = Date.now();
     let result: ContextHookResult;
     try {
-      result = await withTimeout(KIND_RUNNERS[hook.kind]({ ...input, tokenBudget: settings.maxTokens }, hook.config), HOOK_TIMEOUT_MS);
+      result = await withDeadline(() => KIND_RUNNERS[hook.kind]({ ...input, tokenBudget: settings.maxTokens }, hook.config), HOOK_TIMEOUT_MS);
     } catch (err) {
       const reason = (err as Error)?.message === 'timeout' ? 'timeout' : 'failed';
       coreLogger.warn({ err, hook: hook.name, userId: input.userId }, 'context hook failed — skipped for this turn');

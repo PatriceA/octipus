@@ -293,7 +293,19 @@ describe('watch on a scheduled hook through the API', () => {
     // Turning the run into a direct spawn while it watches is refused.
     const direct = await patchJson(aliceHooksApp, `/api/hooks/${created.body.id}`, { actionConfig: { orchestrated: false, agentPrompt: 'x' } });
     expect(direct.status).toBe(400);
-    expect(direct.body.error).toMatch(/orchestrated/);
+    expect(direct.body.error).toMatch(/remove `watch`/);
+  });
+
+  test('a hook whose stored watch is already ineligible stays editable by an action-only edit', async () => {
+    const created = await postJson(aliceHooksApp, '/api/hooks', { ...schedule({}), action: 'notify', actionConfig: { notifyOwner: true } });
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(`UPDATE hooks SET trigger_config = trigger_config || '{"watch":[{"kind":"tasks"}]}'::jsonb WHERE id = '${created.body.id}'`);
+    const edited = await patchJson(aliceHooksApp, `/api/hooks/${created.body.id}`, { actionConfig: { notifyOwner: true, notifyMessage: 'Stand-up in 5' } });
+    expect(edited.status).toBe(200);
+    // Writing triggerConfig with the ineligible watch is refused, saying to remove it.
+    const rewrite = await patchJson(aliceHooksApp, `/api/hooks/${created.body.id}`, { triggerConfig: { cronExpression: '0 * * * *', watch: [{ kind: 'tasks' }] } });
+    expect(rewrite.status).toBe(400);
+    expect(rewrite.body.error).toMatch(/remove `watch`/);
   });
 
   test('invalid sources, one-shots and reminders are refused', async () => {

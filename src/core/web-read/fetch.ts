@@ -54,12 +54,13 @@ export async function readCapped(res: Response, max = MAX_HTML_BYTES): Promise<s
   return new TextDecoder('utf-8', { fatal: false }).decode(all);
 }
 
-export async function fetchArticle(url: string): Promise<WebArticle> {
+/** `signal` (optional) stops the fetch early, on top of its own 15 s timeout. */
+export async function fetchArticle(url: string, signal?: AbortSignal): Promise<WebArticle> {
   let res: Response;
   try {
     res = await fetchGuarded(url, {
       headers: { 'User-Agent': BROWSER_UA, Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' },
-      signal: AbortSignal.timeout(15_000),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
       redirect: 'follow',
     });
   } catch (err) {

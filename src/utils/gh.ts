@@ -31,6 +31,8 @@ export interface RunGhOptions {
   token?: string;
   /** A space run's tool home (`space-tool-env.ts`): `HOME`, `GH_CONFIG_DIR` and git's config there, the host's identity removed. */
   toolHome?: SpaceToolHome;
+  /** Aborting it kills the `gh` child and rejects, like the timeout. */
+  signal?: AbortSignal;
 }
 
 /** The environment of one `gh` run. Exported for the tests. */
@@ -52,11 +54,21 @@ export function runGh(args: string[], opts: RunGhOptions = {}): Promise<string> 
           reject(new Error(`gh timed out after ${opts.timeoutMs}ms`));
         }, opts.timeoutMs)
       : null;
+    const onAbort = () => {
+      child.kill('SIGKILL');
+      reject(new Error('gh was aborted'));
+    };
+    if (opts.signal?.aborted) onAbort();
+    else opts.signal?.addEventListener('abort', onAbort, { once: true });
+    const done = () => {
+      if (timer) clearTimeout(timer);
+      opts.signal?.removeEventListener('abort', onAbort);
+    };
     child.stdout.on('data', (d: Buffer) => { stdout += d; });
     child.stderr.on('data', (d: Buffer) => { stderr += d; });
-    child.on('error', (err) => { if (timer) clearTimeout(timer); reject(err); });
+    child.on('error', (err) => { done(); reject(err); });
     child.on('close', (code) => {
-      if (timer) clearTimeout(timer);
+      done();
       if (code === 0 || (code !== null && opts.acceptExitCodes?.includes(code))) resolve(stdout);
       else reject(new Error(stderr.trim() || `gh command failed with code ${code}`));
     });
