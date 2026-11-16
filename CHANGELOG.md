@@ -7,6 +7,18 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Companion acts on your own words, checked by the server.** Every goal,
+  session start, instruction, adoption, maintenance start and resume Companion
+  makes carries a quote of what you asked for. The server checks the quote is
+  really in your message, or in the words you gave when the goal was created,
+  and the Companion page shows it as "Because you said…". Background check-ins
+  can no longer raise a goal's token budget or cancel a goal, and an owner-turn
+  budget raise, cancellation, incident retry or new goal needs your current
+  message. Messages Companion sends to project sessions are marked as coming
+  from Companion, not from you (so they cannot confirm a waiting plan), and
+  per-turn memory extraction now runs only on turns you sent
+  ([COMPANION-SUPERVISION.md](docs/COMPANION-SUPERVISION.md)).
+
 - Add provider-reported z.ai/Kimi Code plan usage, reset information and a
   dedicated Kimi Code key entry. Keep legacy Moonshot API bindings unchanged.
 - Fix z.ai/Kimi CLI catalogs to use their own configured endpoints and keys,

@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { bigserial, boolean, check, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
-import type { CompanionCompletionEvidence, CompanionGoalState } from '@/shared/companion-supervision';
+import type { CompanionBasisRecord, CompanionCompletionEvidence, CompanionGoalState, CompanionOwnerInput } from '@/shared/companion-supervision';
 import { users } from './users';
 import { workspaces } from './organizations';
 import { sessions } from './sessions';
@@ -29,6 +29,8 @@ export const companionGoals = pgTable('companion_goals', {
   protectionLevel: integer('protection_level').notNull().default(1),
   revision: integer('revision').notNull().default(0),
   completionEvidence: jsonb('completion_evidence').$type<CompanionCompletionEvidence[]>().notNull().default([]),
+  /** The owner's words when the goal was created; background coordination can cite only these. */
+  ownerInputs: jsonb('owner_inputs').$type<CompanionOwnerInput[]>().notNull().default([]),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   completedAt: timestamp('completed_at', { withTimezone: true }),
@@ -89,6 +91,8 @@ export const companionActions = pgTable('companion_actions', {
   leaseToken: uuid('lease_token'),
   leaseUntil: timestamp('lease_until', { withTimezone: true }),
   result: text('result'),
+  /** The verified owner quote this action was taken on ("Because you said…"). */
+  basis: jsonb('basis').$type<CompanionBasisRecord | null>(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [uniqueIndex('companion_actions_request_idx').on(t.goalId, t.requestKey), index('companion_actions_due_idx').on(t.status, t.createdAt),

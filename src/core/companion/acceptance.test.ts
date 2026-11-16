@@ -126,19 +126,19 @@ test.skipIf(!sandboxAvailable)('engine observes a persisted blocker after restar
    if(sid===settings.supervisorSessionId){
     const detail=await repo.read(goal.id);const actions=await repo.actions(goal.id);
     const original=detail.links.find(link=>link.purpose===goal.outcome && link.origin==='created' && !actions.some(action=>action.sessionId===link.sessionId&&action.incidentId));
-    if(!detail.links.length){await call('start_session',{id:goal.id,input:{requestKey:randomUUID(),expectedRevision:detail.goal.revision,modelName:'fixture-local',projectPath:projectRoot}});}
+    if(!detail.links.length){await call('start_session',{id:goal.id,input:{requestKey:randomUUID(),expectedRevision:detail.goal.revision,modelName:'fixture-local',projectPath:projectRoot},basis:{source:'goal',quote:'Finish the milestone'}});}
     else if(original&&actions.some(action=>action.status==='failed')){
      const incident=await repo.detectIncident(goal.id,original.sessionId);
      if(incident?.state==='observed'){
       await call('advance_incident',{id:goal.id,incidentId:incident.id,expectedRevision:incident.revision,strategy:'Restore the runtime prerequisite through configured maintenance and verify the original sandbox'});
-      await call('start_maintenance',{id:goal.id,input:{requestKey:randomUUID(),expectedRevision:(await repo.read(goal.id)).goal.revision,modelName:'fixture-local'}});
+      await call('start_maintenance',{id:goal.id,input:{requestKey:randomUUID(),expectedRevision:(await repo.read(goal.id)).goal.revision,modelName:'fixture-local'},basis:{source:'goal',quote:'Finish the milestone'}});
      }else if(incident?.state==='repairing'&&actions.some(action=>action.incidentId===incident.id&&action.status==='completed')){
       const proof=await call('verify_incident',{id:goal.id,incidentId:incident.id,command:'test -f engine-sdk',cwd:projectRoot}) as {evidenceId:string;passed:boolean};expect(proof.passed).toBe(true);
       await call('advance_incident',{id:goal.id,incidentId:incident.id,expectedRevision:incident.revision+1,evidenceId:proof.evidenceId});
-      await call('message_session',{id:goal.id,input:{requestKey:randomUUID(),sessionId:original.sessionId,message:'Continue the original milestone after the verified runtime repair.'}});
+      await call('message_session',{id:goal.id,input:{requestKey:randomUUID(),sessionId:original.sessionId,message:'Continue the original milestone after the verified runtime repair.'},basis:{source:'goal',quote:'repairing its runtime if needed'}});
 
      }else if(incident?.state==='resolved'&&!acceptanceId){
-      if(!actions.some(action=>action.kind==='message_session'))await call('message_session',{id:goal.id,input:{requestKey:randomUUID(),sessionId:original.sessionId,message:'Continue the original milestone after the verified runtime repair.'}});
+      if(!actions.some(action=>action.kind==='message_session'))await call('message_session',{id:goal.id,input:{requestKey:randomUUID(),sessionId:original.sessionId,message:'Continue the original milestone after the verified runtime repair.'},basis:{source:'goal',quote:'repairing its runtime if needed'}});
      }else if(acceptanceId&&actions.every(action=>!['queued','running','unknown'].includes(action.status))){
       await call('update',{id:goal.id,input:{expectedRevision:detail.goal.revision,state:'completed',evidence:[{criterionIndex:0,evidenceId:acceptanceId,summary:'Fresh registered runtime gate passed after recovery'}]}});
      }

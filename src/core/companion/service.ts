@@ -1,5 +1,5 @@
 import { CompanionSupervisionRepository } from '@/db/repositories/companion-supervision-repository';
-import type { CompanionScope } from '@/shared/companion-supervision';
+import type { CompanionBasisRecord, CompanionScope } from '@/shared/companion-supervision';
 import { CompanionSupervisionError, startCompanionSessionSchema } from '@/shared/companion-supervision';
 import { resolveModel } from '@/models/resolve-model';
 import { canServeText } from '@/models/topics';
@@ -11,18 +11,18 @@ export class CompanionService {
     this.repo = repo ?? new CompanionSupervisionRepository(scope);
     if (this.repo.scope.userId !== scope.userId || this.repo.scope.workspaceId !== scope.workspaceId) throw new Error('Companion repository scope mismatch');
   }
-  createGoal(input: unknown) { return this.repo.create(input); }
+  createGoal(input: unknown, ownerInputs?: import('@/shared/companion-supervision').CompanionOwnerInput[]) { return this.repo.create(input, ownerInputs); }
   listGoals(limit?: number) { return this.repo.list(limit); }
   readGoal(id: string) { return this.repo.read(id); }
   adoptExecution(id: string, input: unknown) { return this.repo.adopt(id, input); }
   updateGoal(id: string, input: unknown) { return this.repo.update(id, input); }
-  async startSession(id: string, input: unknown, automatic = false) {
+  async startSession(id: string, input: unknown, automatic = false, basis?: CompanionBasisRecord) {
     const data = startCompanionSessionSchema.parse(input);
     const model = await resolveModel({ userId: this.repo.scope.userId, name: data.modelName });
     if (!model || !canServeText(model) || !(model.supportsTools || model.provider === 'cli') || /reasoner|thinking/.test(model.modelId)) throw new CompanionSupervisionError('conflict', 'Choose an available text model with tools for this session');
-    return this.repo.startSession(id, { ...data, modelName: model.name }, automatic);
+    return this.repo.startSession(id, { ...data, modelName: model.name }, automatic, undefined, basis);
   }
-  async startMaintenance(id: string, input: unknown) {
+  async startMaintenance(id: string, input: unknown, basis?: CompanionBasisRecord) {
     const runtime = (await import('./maintenance')).maintenanceRuntime(this.repo.scope);
     const data = startCompanionSessionSchema.parse(input);
     const settings = await this.repo.readSettings();
@@ -37,11 +37,11 @@ export class CompanionService {
     const model = await resolveModel({ userId: this.repo.scope.userId, name: data.modelName });
     if (!model || model.provider === 'cli' || !model.supportsTools || !canServeText(model) || /reasoner|thinking/.test(model.modelId))
       throw new CompanionSupervisionError('conflict', 'Choose an API or local tool-capable model for scoped maintenance');
-    return this.repo.startSession(id, { ...data, modelName: model.name, projectPath: undefined }, true, runtime.binding);
+    return this.repo.startSession(id, { ...data, modelName: model.name, projectPath: undefined }, true, runtime.binding, basis);
   }
   markBriefingStart(id:string,actionId:string){return this.repo.markBriefingStart(id,actionId);}
   requestBriefing(id:string,input:{sessionId:string;requestKey:string;refresh?:boolean}){return this.repo.requestBriefing(id,input);}
-  messageSession(id: string, input: unknown) { return this.repo.queueMessage(id, input); }
+  messageSession(id: string, input: unknown, basis?: CompanionBasisRecord) { return this.repo.queueMessage(id, input, basis); }
   authorizeGoal(id: string, profile: unknown, expectedRevision: number) { return this.repo.authorizeGoal(id, profile, expectedRevision); }
   incidents(id: string) { return this.repo.incidents(id); }
   detectIncident(id: string, sessionId: string) { return this.repo.detectIncident(id, sessionId); }
