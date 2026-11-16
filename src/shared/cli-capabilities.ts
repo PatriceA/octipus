@@ -109,3 +109,10 @@ export function validateScopedExtraArgs(adapter: string, args: readonly string[]
     if (!values?.includes(value)) reject();
   }
 }
+
+/** Provider-reported plan usage, distinct from locally recorded quota refusals. */
+export type CliPlanUsage = {
+  checkedAt: string;
+  windows: Array<{ label: string; usedPercent: number; resetsAt?: string }>;
+  error?: string;
+};

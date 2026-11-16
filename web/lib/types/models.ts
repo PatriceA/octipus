@@ -69,6 +69,7 @@ export interface CLIBillingInfo {
 }
 
 export interface CLITool {
+  planUsage?: import('../../../src/shared/cli-capabilities').CliPlanUsage;
   models?: import('../../../src/shared/cli-capabilities').CliModelOption[];
   modelCatalogError?: string;
   name: string;

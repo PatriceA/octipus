@@ -1240,7 +1240,7 @@ When a task matches one of these skills, load it with get_skill before starting 
     // stored record, so it starts — and records — a fresh vendor conversation,
     // and the close handler's recovery branches check the flag so a retry can
     // never trigger another one.
-    const providerEnv = await toolConfig.buildEnv?.();
+    const providerEnv = await toolConfig.buildEnv?.(settings);
     // Roots continue one vendor session per octipus session. A child only
     // resumes when its spawner gave it an explicit `resumeKey` (parent scope,
     // role, task), and never while another live agent holds the same key —

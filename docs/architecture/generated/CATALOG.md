@@ -820,7 +820,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `mcp` | `utils` | 5 |
 | `models` | `capabilities` | 2 |
 | `models` | `config` | 11 |
-| `models` | `core` | 51 |
+| `models` | `core` | 54 |
 | `models` | `db` | 14 |
 | `models` | `security` | 24 |
 | `models` | `services` | 1 |
