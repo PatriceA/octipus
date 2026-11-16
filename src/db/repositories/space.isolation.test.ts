@@ -235,6 +235,10 @@ const ALLOWLIST: Record<string, string> = {
   'src/api/routes/memory.ts': PERSONAL_READER,
   'src/api/routes/search.ts': PERSONAL_READER,
   'src/core/heartbeat.ts': PERSONAL_READER,
+  // Eval grading (not served to users): every read is bound to the dedicated eval user's id
+  // (and its goals/settings/sessions), to check what a test turn changed.
+  'src/eval/state.ts': 'eval grading, scoped to the eval user',
+  'src/eval/runner.ts': 'eval grading, scoped to the eval user',
   'src/hooks/schedule-watch.ts': PERSONAL_READER,
   'src/core/context-hooks/kinds.ts': PERSONAL_READER,
   'src/core/tasks/role-agents.ts': PERSONAL_READER,
