@@ -6,7 +6,7 @@ const mock = vi.hoisted(() => ({
 }));
 vi.mock('@/db/repositories/background-job-repository', () => ({ backgroundJobRepository: { finish: mock.finish, progress: mock.progress } }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { findById: mock.session } }));
-vi.mock('./evidence', () => ({ gatherEvidence: mock.evidence, gatherPatchableSkills: mock.patchable }));
+vi.mock('./evidence', async (importOriginal) => ({ ...await importOriginal<typeof import('./evidence')>(), gatherEvidence: mock.evidence, gatherPatchableSkills: mock.patchable }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getModelForTopic: mock.model }) }));
 vi.mock('@/models/litellm-client', () => ({ getLiteLLMClient: () => ({ complete: mock.complete }) }));
 vi.mock('@/core/knowledge/notes', () => ({ getNoteService: () => ({ save: mock.save }) }));
@@ -163,4 +163,16 @@ test('a patch for a skill not offered, or one the writer refuses, is a refusal r
   mock.patch.mockRejectedValue(new SkillPatchError('locked', 'The owner edited this skill'));
   await processLearningJob(job);
   expect(mock.finish.mock.calls[0][1].result.outputs).toEqual([expect.objectContaining({ kind: 'skill_patch', status: 'refused', detail: expect.stringContaining('owner edited') })]);
+});
+test('patch targets count against the evidence budget, and failing to read them does not fail the check', async () => {
+  const target = { id: 'skill-1', name: 'deploy', content: 'x'.repeat(5000) };
+  mock.patchable.mockResolvedValue([target]);
+  await processLearningJob(job);
+  expect(mock.evidence.mock.calls[0][4]).toEqual({ reserveChars: 5000 + 'skill-1'.length + 'deploy'.length + 50 });
+  mock.finish.mockReset(); mock.evidence.mockClear();
+  mock.patchable.mockRejectedValue(new Error('db hiccup'));
+  await processLearningJob(job);
+  expect(mock.evidence.mock.calls[0][4]).toEqual({ reserveChars: 0 });
+  expect(JSON.parse(mock.complete.mock.calls.at(-1)![0].messages[1].content).learnedSkills).toEqual([]);
+  expect(mock.finish.mock.calls[0][1]).toMatchObject({ status: 'done' });
 });

@@ -25,4 +25,10 @@ export interface SkillProposalView {
   patchOldText: string | null;
   patchNewText: string | null;
   baseContentHash: string | null;
+  /** The skill an approval created, merged into or patched. */
+  promotedSkillId: string | null;
+  /** Patches only: the target skill's content now (null when it is gone). */
+  currentContent?: string | null;
+  /** Patches only: the content changed since the patch was made; approval will be refused. */
+  stale?: boolean;
 }

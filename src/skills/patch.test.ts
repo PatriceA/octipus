@@ -40,6 +40,13 @@ describe('patch validation', () => {
     expect(code(() => validateSkillPatch('step '.repeat(MAX_PATCHED_SKILL_CHARS / 5 - 1) + 'end', 'end', 'y'.repeat(100)))).toBe('size');
     expect(code(() => validateSkillPatch(content, '2. Push it.', '2. Push it.'))).toBe('no_change');
   });
+  test('a patch already applied, or one that would apply twice, is refused', () => {
+    // newText contains oldText: after approval oldText still matches once.
+    const applied = applySkillPatch(content, '3. Restart the service.', '3. Restart the service. Wait for /health.');
+    expect(code(() => validateSkillPatch(applied, '3. Restart the service.', '3. Restart the service. Wait for /health.'))).toBe('no_change');
+    // A shortening leaves newText inside oldText, which is fine.
+    expect(validateSkillPatch(content, '3. Restart the service.', '3. Restart')).toContain('3. Restart\n4.');
+  });
   test('a valid patch returns the patched content; deletion is allowed', () => {
     expect(validateSkillPatch(content, '4. Push it.\n', '')).toBe('1. Build the image.\n2. Push it.\n3. Restart the service.\n');
   });

@@ -17,6 +17,28 @@ import type { ToolHandler } from '@/core/agent-base';
 import { getSkillRegistry } from '@/skills/registry';
 import { buildSkillResourceHandlers } from './skill-runtime';
 import { updateSkill } from '@/skills/update';
+import { contentStorageOffFor } from '@/core/agent/audience';
+import type { AgentContext } from '@/core/types';
+import { agentEventRepository } from '@/db/repositories/agent-event-repository';
+import { isExternalSkillId } from '@/skills/external-loader';
+import { toolLogger } from '@/utils/logger';
+
+/**
+ * Record that this session loaded a DB skill's body: a `skill_load` action
+ * event. Tool-call events carry no arguments, so this is what session
+ * learning reads to know which learned skills a session actually used (its
+ * only patch targets, docs/SESSION-LEARNING.md). Losing the record loses a
+ * patch target, not the skill, so a failed write is logged, not thrown.
+ */
+async function recordSkillLoad(skillId: string, context: AgentContext): Promise<void> {
+  if (isExternalSkillId(skillId) || !context.sessionId || contentStorageOffFor(context)) return;
+  try {
+    await agentEventRepository.create({ agentId: context.id, sessionId: context.sessionId, userId: context.userId,
+      workspaceId: context.workspaceId ?? null, type: 'action', data: { type: 'skill_load', skillId } });
+  } catch (err) {
+    toolLogger.warn({ err, skillId, sessionId: context.sessionId }, 'Could not record a skill load for session learning');
+  }
+}
 
 export function buildSkillLoaderHandlers(): ToolHandler[] {
   return [
@@ -80,10 +102,12 @@ export function buildSkillLoaderHandlers(): ToolHandler[] {
         if (typeof skillId !== 'string') {
           throw new Error("get_skill: 'skill_id' must be a string.");
         }
-        const rendered = await getSkillRegistry().renderSkill(skillId, context.userId);
+        const registry = getSkillRegistry();
+        const rendered = await registry.renderSkill(skillId, context.userId);
         if (rendered === null) {
           throw new Error(`Unknown skill '${skillId}'. Call list_skills to see available ids.`);
         }
+        await recordSkillLoad(registry.canonicalId(skillId), context);
         return rendered;
       },
     },

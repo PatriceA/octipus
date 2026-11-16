@@ -63,6 +63,13 @@ export function validateSkillPatch(content: string, oldText: string, newText: st
     throw new SkillPatchError('pii', `newText contains personal data or secrets (${[...new Set(pii.redactions.map(r => r.type))].join(', ')})`);
   }
   const patched = applySkillPatch(content, oldText, newText);
+  // Already applied, or would apply twice: where newText contains oldText
+  // ("Push it." -> "Push it. Then tag."), oldText still matches once after
+  // approval and the same patch would grow the skill again. A newText inside
+  // oldText (a shortening) is necessarily present and is fine.
+  if (newText && !oldText.includes(newText) && content.includes(newText)) {
+    throw new SkillPatchError('no_change', 'newText already appears in the skill; the change looks applied already');
+  }
   if (patched.length > MAX_PATCHED_SKILL_CHARS) throw new SkillPatchError('size', `The patched skill would exceed ${MAX_PATCHED_SKILL_CHARS} characters`);
   return patched;
 }

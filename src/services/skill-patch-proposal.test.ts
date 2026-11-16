@@ -135,7 +135,7 @@ describe('the owner-edit lock', () => {
     const skillId = await seedSkill();
     await updateSkill(skillId, { description: 'Deploy, by the agent' }, userId);
     expect((await readSkill(skillId)).ownerEditedAt).toBeNull();
-    await updateSkill(skillId, { content: `${content}5. Check logs.\n` }, userId, { ownerEdit: true });
+    await updateSkill(skillId, { content: `${content}5. Check logs.\n` }, userId, { inPerson: true });
     expect((await readSkill(skillId)).ownerEditedAt).toBeInstanceOf(Date);
   });
 
@@ -144,7 +144,7 @@ describe('the owner-edit lock', () => {
     const { approveProposal } = await import('@/services/skill-proposal-service');
     const skillId = await seedSkill();
     const pending = await file(skillId, '2. Push it.', '2. Push it with --tag.');
-    await updateSkill(skillId, { description: 'Deploy (edited)' }, userId, { ownerEdit: true });
+    await updateSkill(skillId, { description: 'Deploy (edited)' }, userId, { inPerson: true });
     await expect(file(skillId, '1. Build the image.', '1. Build it.')).rejects.toMatchObject({ code: 'locked' });
     await expect(approveProposal(pending.proposalId as string, { userId })).rejects.toMatchObject({ code: 'locked' });
     expect((await readSkill(skillId)).content).toBe(content);
@@ -181,19 +181,69 @@ describe('the owner-edit lock', () => {
 });
 
 describe('learning review targets', () => {
-  test('offers only unlocked learned skills that the session\'s events name', async () => {
+  test('offers only unlocked learned skills whose body this session loaded', async () => {
     const { agentEvents } = await import('@/db/schema/agent-events');
     const { gatherPatchableSkills } = await import('@/core/learning/evidence');
-    const referenced = await seedSkill();
+    const loaded = await seedSkill();
+    const viaCli = await seedSkill();
     const locked = await seedSkill({ ownerEditedAt: new Date() });
-    await seedSkill();
+    const listed = await seedSkill();
     const sessionId = randomUUID();
-    await (await db()).insert(agentEvents).values([referenced, locked].map(id => ({
-      agentId: 'agent-1', sessionId, userId, type: 'action', data: { toolName: 'get_skill', args: { skill_id: id } }, createdAt: new Date(Date.now() - 1000),
-    })));
+    const at = new Date(Date.now() - 1000);
+    const event = (data: Record<string, unknown>, type = 'action') => ({ agentId: 'agent-1', sessionId, userId, type, data, createdAt: at });
+    await (await db()).insert(agentEvents).values([
+      event({ type: 'skill_load', skillId: loaded }),
+      event({ type: 'skill_load', skillId: locked }),
+      event({ type: 'cli_tool_use', toolName: 'mcp__octipus__get_skill', args: { skill_id: viaCli } }),
+      // A list_skills result names every skill: that is not a load.
+      event({ results: [{ toolCallId: 't1', result: [loaded, viaCli, locked, listed].map(id => ({ id })) }] }, 'observation'),
+      event({ type: 'tool_call', toolName: 'list_skills', note: listed }),
+      // Another session's load does not count here.
+      { ...event({ type: 'skill_load', skillId: listed }), sessionId: randomUUID() },
+    ]);
     const offered = await gatherPatchableSkills(userId, sessionId, new Date());
-    expect(offered.map(skill => skill.id)).toEqual([referenced]);
+    expect(offered.map(skill => skill.id).sort()).toEqual([loaded, viaCli].sort());
     expect(offered[0].content).toBe(content);
     expect(await gatherPatchableSkills(userId, sessionId, new Date(Date.now() - 60_000))).toEqual([]);
+  });
+});
+
+describe('review safety', () => {
+  test('an identical patch that was already approved is not filed again', async () => {
+    const { approveProposal } = await import('@/services/skill-proposal-service');
+    const skillId = await seedSkill();
+    const first = await file(skillId, '3. Restart the service.', '3. Restart the service. Wait for /health.');
+    await approveProposal(first.proposalId as string, { userId });
+    expect((await readProposal(first.proposalId as string)).promotedSkillId).toBe(skillId);
+    // Same patch again: newText contains oldText, which still matches once.
+    await expect(file(skillId, '3. Restart the service.', '3. Restart the service. Wait for /health.'))
+      .resolves.toMatchObject({ deduped: true, message: expect.stringContaining('already approved') });
+  });
+
+  test('approving with the owner\'s own name or text stamps the lock; a plain approval does not', async () => {
+    const { skillProposals } = await import('@/db/schema/skill-proposals');
+    const { approveProposal } = await import('@/services/skill-proposal-service');
+    const seed = async (name: string) => (await (await db()).insert(skillProposals).values({
+      userId, fingerprint: randomUUID(), name, description: 'rotate', draftPromptTemplate: 'steps', kind: 'skill', lastExemplarAt: new Date(),
+    }).returning())[0].id;
+    const plain = await approveProposal(await seed('plain-skill'), { userId, actorId: userId });
+    expect((await readSkill(plain!.id)).ownerEditedAt).toBeNull();
+    const edited = await approveProposal(await seed('edited-skill'), { userId, actorId: userId, systemPrompt: 'my own steps' });
+    expect((await readSkill(edited!.id)).ownerEditedAt).toBeInstanceOf(Date);
+    // An admin's override on someone else's proposal is not the owner's text.
+    const byAdmin = await approveProposal(await seed('admin-skill'), { actorId: otherId, name: 'admin-named' });
+    expect((await readSkill(byAdmin!.id)).ownerEditedAt).toBeNull();
+  });
+
+  test('the listing shows a patch with its skill\'s current content and whether it is stale', async () => {
+    const { listPendingProposals, withPatchContext } = await import('@/services/skill-proposal-service');
+    const { updateSkill } = await import('@/skills/update');
+    const skillId = await seedSkill();
+    await file(skillId, '2. Push it.', '2. Push it with --tag.');
+    let [listed] = await withPatchContext(await listPendingProposals(userId));
+    expect(listed).toMatchObject({ currentContent: content, stale: false });
+    await updateSkill(skillId, { content: `${content}5. Check logs.\n` }, userId);
+    [listed] = await withPatchContext(await listPendingProposals(userId));
+    expect(listed.stale).toBe(true);
   });
 });

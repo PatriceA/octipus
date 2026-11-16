@@ -38,10 +38,11 @@ export const skills = pgTable(
     /** Free-form notes left by the curator (auto-archive reason, refresh suggestion). */
     curationNotes: text('curation_notes'),
     /**
-     * When the owner last wrote this skill through the API or the Skills page
-     * (create, edit, import). NULL = only learning/approval wrote it. Set, it
-     * locks the skill against automatic changes: no patch proposals, and the
-     * curator never archives it (docs/SESSION-LEARNING.md).
+     * When the owner last wrote this skill in person (`isInPersonWrite`:
+     * create, edit, import, or an approval with their own name/text). NULL =
+     * only learning, approval or an agent wrote it. Set, it locks the skill
+     * against automatic changes: no patch proposals, no same-name overwrite,
+     * and the curator never archives it (docs/SESSION-LEARNING.md).
      */
     ownerEditedAt: timestamp('owner_edited_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),

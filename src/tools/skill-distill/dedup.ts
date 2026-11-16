@@ -37,6 +37,34 @@ export type DedupHit =
   /** It is already a live skill. */
   | { kind: 'skill'; id: string; name: string; similarity?: number };
 
+/** The latest proposal of a fingerprint, when it still blocks filing the same one again. */
+export type ProposalHit =
+  | Extract<DedupHit, { kind: 'pending' | 'suppressed' }>
+  /** Approved already. A skill proposal falls through to the live-skill check; an identical patch is a duplicate. */
+  | { kind: 'promoted'; id: string; name: string };
+
+/**
+ * Check 1, shared with patch proposals (src/services/file-skill-proposal.ts):
+ * `userId`'s latest proposal with this fingerprint — pending, rejected and
+ * still inside its 90-day suppression, or promoted. Null when there is none
+ * or its rejection has expired.
+ */
+export async function findProposalByFingerprint(userId: string, fingerprint: string): Promise<ProposalHit | null> {
+  const [row] = await getDb()
+    .select({ id: skillProposals.id, name: skillProposals.name, status: skillProposals.status, rejectedUntil: skillProposals.rejectedUntil })
+    .from(skillProposals)
+    .where(and(eq(skillProposals.fingerprint, fingerprint), eq(skillProposals.userId, userId)))
+    .orderBy(desc(skillProposals.createdAt))
+    .limit(1);
+  if (!row) return null;
+  if (row.status === 'pending') return { kind: 'pending', id: row.id, name: row.name };
+  if (row.status === 'promoted') return { kind: 'promoted', id: row.id, name: row.name };
+  if (row.status === 'rejected' && row.rejectedUntil && row.rejectedUntil > new Date()) {
+    return { kind: 'suppressed', id: row.id, name: row.name, until: row.rejectedUntil };
+  }
+  return null;
+}
+
 /** Cap on the proposals embedded per call — the pending queue is small by design. */
 const MAX_PENDING_COMPARED = 20;
 
@@ -51,29 +79,11 @@ export async function findExisting(
 ): Promise<DedupHit | null> {
   const db = getDb();
 
-  // 1. Same normalized name, same user — whatever state it is in.
-  const [byFingerprint] = await db
-    .select()
-    .from(skillProposals)
-    .where(and(eq(skillProposals.fingerprint, fingerprint), eq(skillProposals.userId, userId)))
-    .orderBy(desc(skillProposals.createdAt))
-    .limit(1);
-
-  if (byFingerprint) {
-    if (byFingerprint.status === 'pending') {
-      return { kind: 'pending', id: byFingerprint.id, name: byFingerprint.name };
-    }
-    if (byFingerprint.status === 'rejected' && byFingerprint.rejectedUntil && byFingerprint.rejectedUntil > new Date()) {
-      return {
-        kind: 'suppressed',
-        id: byFingerprint.id,
-        name: byFingerprint.name,
-        until: byFingerprint.rejectedUntil,
-      };
-    }
-    // 'promoted' falls through to the live-skill checks below, which name the
-    // skill it became; an expired rejection is fair game to re-propose.
-  }
+  // 1. Same normalized name, same user — whatever state it is in. A
+  // 'promoted' one falls through to the live-skill checks below, which name
+  // the skill it became; an expired rejection is fair game to re-propose.
+  const byFingerprint = await findProposalByFingerprint(userId, fingerprint);
+  if (byFingerprint && byFingerprint.kind !== 'promoted') return byFingerprint;
 
   const visibleSkills = and(
     or(eq(skills.userId, userId), eq(skills.isSystem, true)),

@@ -346,6 +346,8 @@ export async function stubSkills(page: Page): Promise<void> {
             targetSkillId: 's9',
             patchOldText: '2. Push it.',
             patchNewText: '2. Push it with --tag.',
+            currentContent: '1. Build.\n2. Push it.\n',
+            stale: false,
           },
         ],
       });

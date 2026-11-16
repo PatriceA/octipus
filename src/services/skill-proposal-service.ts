@@ -8,7 +8,7 @@
  * (re-approvable → duplicates).
  */
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { type SkillProposalRecord, skillProposals } from '@/db/schema/skill-proposals';
 import { skills } from '@/db/schema/skills';
@@ -34,12 +34,36 @@ export async function listPendingProposals(userId?: string): Promise<SkillPropos
   return db.select().from(skillProposals).where(where).orderBy(asc(skillProposals.createdAt));
 }
 
+/**
+ * Each pending patch proposal with its skill's current content and whether
+ * that content still has the hash the patch was made against, so a reviewer
+ * sees the change in context and knows up front an approval would be refused.
+ * Other proposals pass through unchanged.
+ */
+export async function withPatchContext(proposals: SkillProposalRecord[]): Promise<Array<SkillProposalRecord & { currentContent?: string | null; stale?: boolean }>> {
+  const ids = [...new Set(proposals.flatMap(p => p.kind === 'patch' && p.targetSkillId ? [p.targetSkillId] : []))];
+  if (!ids.length) return proposals;
+  const rows = await getDb().select({ id: skills.id, content: skills.content }).from(skills).where(inArray(skills.id, ids));
+  const content = new Map(rows.map(row => [row.id, row.content]));
+  return proposals.map(p => {
+    if (p.kind !== 'patch' || !p.targetSkillId) return p;
+    const current = content.get(p.targetSkillId) ?? null;
+    return { ...p, currentContent: current, stale: skillContentHash(current) !== p.baseContentHash };
+  });
+}
+
 export interface ApproveOptions {
   /** Restrict to this owner. Omit for an admin/system caller. */
   userId?: string;
   /** Override the proposal's own name / prompt before promoting. */
   name?: string;
   systemPrompt?: string;
+  /**
+   * Who approves. When it is the proposal's owner and they override the name
+   * or prompt, the skill holds their own words: it is stamped owner-edited
+   * (`ownerEditedAt`) and so locked against learning patches.
+   */
+  actorId?: string;
 }
 
 export type ApproveResult =
@@ -92,6 +116,7 @@ async function promote(id: string, opts: ApproveOptions): Promise<ApproveResult>
     const name = opts.name ?? proposal.name;
     const content = opts.systemPrompt ?? proposal.draftPromptTemplate;
     const normalized = normalizeSkillName(name);
+    const ownerWritten = (opts.name !== undefined || opts.systemPrompt !== undefined) && opts.actorId === proposal.userId;
 
     const skill = await db.transaction(async (tx) => {
       // Approving a proposal for a skill the user already has updates that
@@ -111,6 +136,9 @@ async function promote(id: string, opts: ApproveOptions): Promise<ApproveResult>
               sql`trim(both '-' from lower(regexp_replace(${skills.name}, '[^a-zA-Z0-9]+', '-', 'g'))) = ${normalized}`,
             ))
             .limit(1)
+            // Held until commit: an owner edit landing between this read and
+            // the merge below waits, and is not overwritten.
+            .for('update')
         : [];
 
       // Merging would overwrite a skill the owner wrote: the owner-edit lock
@@ -133,8 +161,9 @@ async function promote(id: string, opts: ApproveOptions): Promise<ApproveResult>
               descriptionEmbedding: null,
               descriptionHash: null,
               updatedAt: new Date(),
+              ...(ownerWritten ? { ownerEditedAt: new Date() } : {}),
             })
-            .where(eq(skills.id, duplicate.id))
+            .where(and(eq(skills.id, duplicate.id), isNull(skills.ownerEditedAt)))
             .returning()
         : await tx.insert(skills).values({
             id: randomUUID(),
@@ -144,6 +173,7 @@ async function promote(id: string, opts: ApproveOptions): Promise<ApproveResult>
             category: 'general',
             isSystem: false,
             userId: proposal.userId,
+            ownerEditedAt: ownerWritten ? new Date() : null,
           }).returning();
 
       // The update matched nothing (row deleted mid-transaction) — roll back
@@ -156,7 +186,7 @@ async function promote(id: string, opts: ApproveOptions): Promise<ApproveResult>
       // approve` are two front doors now) would both read it pending and both
       // insert. Whoever loses the flip finds no row and rolls their insert back.
       const [flipped] = await tx.update(skillProposals)
-        .set({ status: 'promoted' })
+        .set({ status: 'promoted', promotedSkillId: created.id })
         .where(and(eq(skillProposals.id, id), eq(skillProposals.status, 'pending')))
         .returning({ id: skillProposals.id });
       if (!flipped) throw new AlreadyResolvedError();
@@ -186,7 +216,9 @@ async function applyPatch(proposal: SkillProposalRecord, opts: ApproveOptions): 
   }
   const { targetSkillId, patchOldText, patchNewText, baseContentHash } = proposal;
   const skill = await getDb().transaction(async (tx) => {
-    const [current] = await tx.select().from(skills).where(eq(skills.id, targetSkillId)).limit(1);
+    // Locked until commit, so an owner edit cannot land between these checks
+    // and the write; the write re-states them anyway (below).
+    const [current] = await tx.select().from(skills).where(eq(skills.id, targetSkillId)).limit(1).for('update');
     try {
       assertPatchable(current, proposal.userId);
     } catch (err) {
@@ -204,13 +236,20 @@ async function applyPatch(proposal: SkillProposalRecord, opts: ApproveOptions): 
       throw new ProposalRefusedError('invalid', `${err.message}; reject this patch.`);
     }
     // Content only: name and description, and so the stored embedding, stay.
+    // Written only while the content is still what was checked and nobody
+    // has stamped the lock.
     const [updated] = await tx.update(skills).set({ content, updatedAt: new Date() })
-      .where(eq(skills.id, current.id)).returning();
+      .where(and(eq(skills.id, current.id), isNull(skills.ownerEditedAt),
+        current.content === null ? isNull(skills.content) : eq(skills.content, current.content)))
+      .returning();
+    if (!updated) {
+      throw new ProposalRefusedError('stale', 'The skill changed while this patch was being applied, so it was not applied. Reject it.');
+    }
     const [flipped] = await tx.update(skillProposals)
-      .set({ status: 'promoted' })
+      .set({ status: 'promoted', promotedSkillId: updated.id })
       .where(and(eq(skillProposals.id, proposal.id), eq(skillProposals.status, 'pending')))
       .returning({ id: skillProposals.id });
-    if (!updated || !flipped) throw new AlreadyResolvedError();
+    if (!flipped) throw new AlreadyResolvedError();
     return updated;
   });
   coreLogger.info({ proposalId: proposal.id, skillId: skill.id }, 'Skill patch proposal applied');

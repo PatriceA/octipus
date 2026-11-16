@@ -43,6 +43,21 @@ describe('buildSkillLoaderHandlers', () => {
     spy.mockRestore();
   });
 
+  test('get_skill records a skill_load event for session learning; never for a mounted skill, never failing the load', async () => {
+    const { agentEventRepository } = await import('@/db/repositories/agent-event-repository');
+    const create = vi.spyOn(agentEventRepository, 'create').mockResolvedValue(undefined);
+    const render = vi.spyOn(getSkillRegistry(), 'renderSkill').mockResolvedValue('## Alpha\n\nFULL BODY');
+    const session = { id: 'agent-1', sessionId: 's1', userId: 'u1', workspaceId: 'w1' } as AgentContext;
+    await tool('get_skill').execute({ skill_id: 'a' }, session);
+    expect(create).toHaveBeenCalledWith({ agentId: 'agent-1', sessionId: 's1', userId: 'u1', workspaceId: 'w1', type: 'action', data: { type: 'skill_load', skillId: 'a' } });
+    create.mockClear();
+    await tool('get_skill').execute({ skill_id: 'external:user:deploy' }, session);
+    expect(create).not.toHaveBeenCalled();
+    create.mockRejectedValue(new Error('db down'));
+    await expect(tool('get_skill').execute({ skill_id: 'a' }, session)).resolves.toBe('## Alpha\n\nFULL BODY');
+    create.mockRestore(); render.mockRestore();
+  });
+
   test('get_skill throws a helpful error for an unknown id', async () => {
     const spy = vi.spyOn(getSkillRegistry(), 'renderSkill').mockResolvedValue(null);
     await expect(tool('get_skill').execute({ skill_id: 'nope' }, ctx)).rejects.toThrow(/list_skills/);

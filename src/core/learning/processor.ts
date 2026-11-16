@@ -20,7 +20,8 @@ import { SkillPatchError } from '@/skills/patch';
 import { getPermissionManager } from '@/security/permissions';
 import { getConfig } from '@/config';
 import type { LearningCheckView } from '@/shared/learning';
-import { gatherEvidence, gatherPatchableSkills } from './evidence';
+import { gatherEvidence, gatherPatchableSkills, type PatchableSkill, patchTargetChars } from './evidence';
+import { coreLogger } from '@/utils/logger';
 import { LEARNING_PROMPT, parseLearningReview } from './review';
 import { DEFAULT_MAX_OUTPUT_TOKENS } from '@/db/schema/models';
 import { estimateTokens } from '@/utils/token-count';
@@ -59,7 +60,18 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
       const { getOrgWorkspaceManager } = await import('@/security/orgs');
       workspaceId = (await getOrgWorkspaceManager().ensureDefaultWorkspace(job.userId)).id;
     }
-    const evidence = await gatherEvidence(job.userId, session.id, new Date(payload.through), payload.plan);
+    // Learned skills this session loaded: the only patch targets on offer.
+    // Without them a check still reviews everything else, so a failed read
+    // is logged and the check goes on.
+    let learnedSkills: PatchableSkill[] = [];
+    try {
+      learnedSkills = await gatherPatchableSkills(job.userId, session.id, new Date(payload.through));
+    } catch (err) {
+      coreLogger.warn({ err, jobId: job.id, sessionId: session.id }, 'Learning check: could not read patch targets; reviewing without them');
+    }
+    // Their text counts against the same input budget as the evidence.
+    const evidence = await gatherEvidence(job.userId, session.id, new Date(payload.through), payload.plan,
+      { reserveChars: patchTargetChars(learnedSkills) });
     if (!evidence.some(row => row.kind === 'execution' || row.kind === 'verification')) {
       await backgroundJobRepository.finish(job.id, { status: 'done', stage: 'insufficient_evidence', result: { reason: 'No recorded execution evidence at this milestone.', outputs } });
       return;
@@ -71,8 +83,6 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
     const prompt = (await capabilityConfigured('embedding'))
       ? LEARNING_PROMPT
       : `${LEARNING_PROMPT}\nMemory is off on this install: always return "memories": [].`;
-    // Learned skills this session used: the only patch targets on offer.
-    const learnedSkills = await gatherPatchableSkills(job.userId, session.id, new Date(payload.through));
     const systemText = `${SECURITY_PREAMBLE}\n\n${prompt}`;
     const evidenceText = JSON.stringify({ trigger: payload.trigger, evidence, learnedSkills });
     const contextRoom = model.contextWindow == null ? Infinity

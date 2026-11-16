@@ -135,8 +135,19 @@ export default function SkillProposalsPage() {
               </div>
               {p.kind === 'patch' && (
                 <div className="mt-3">
-                  <div className="text-xs text-on-surface-variant mb-1">Proposed change (old → new); approval is refused if the skill changed since.</div>
-                  <DiffView patch={computeLineDiff(p.patchOldText ?? '', p.patchNewText ?? '').patch} className="text-xs" />
+                  {p.stale || p.currentContent == null ? (
+                    <>
+                      <div className="text-xs text-error mb-1">
+                        The skill changed since this patch was proposed (or is gone): approving will be refused. Reject it. The proposed passage:
+                      </div>
+                      <DiffView patch={computeLineDiff(p.patchOldText ?? '', p.patchNewText ?? '').patch} className="text-xs" />
+                    </>
+                  ) : (
+                    <>
+                      <div className="text-xs text-on-surface-variant mb-1">Proposed change, in the skill as it reads now:</div>
+                      <DiffView patch={computeLineDiff(p.currentContent, p.draftPromptTemplate, { context: 3 }).patch} className="text-xs" />
+                    </>
+                  )}
                 </div>
               )}
               <details className="mt-3">

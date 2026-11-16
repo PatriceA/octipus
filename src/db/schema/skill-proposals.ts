@@ -36,6 +36,8 @@ export const skillProposals = pgTable('skill_proposals', {
   patchNewText: text('patch_new_text'),
   /** sha256 of the skill content the patch was made against; approval refuses when it changed. */
   baseContentHash: text('base_content_hash'),
+  /** The skill an approval created, merged into or patched (NULL before migration 0191). */
+  promotedSkillId: text('promoted_skill_id').references(() => skills.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({
   userIdx: index('skill_proposals_user_idx').on(t.userId),

@@ -499,7 +499,7 @@ In a personal workspace these routes answer 404.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/skills/proposals` | List pending skill proposals, including `kind: "patch"` proposals against a learned skill (`targetSkillId`, `patchOldText`, `patchNewText`, `baseContentHash`). |
+| GET | `/api/skills/proposals` | List pending skill proposals, including `kind: "patch"` proposals against a learned skill (`targetSkillId`, `patchOldText`, `patchNewText`, `baseContentHash`, plus `currentContent` and `stale`). |
 | POST | `/api/skills/proposals/:id/approve` | Promote a proposal to a skill, or apply a patch. Body: `{ name?, systemPrompt? }` (not for patches: `400 override`). `409 {code: "stale" \| "locked" \| "missing" \| "invalid"}` when it cannot be applied as it stands; it stays pending. See [Session learning](SESSION-LEARNING.md#repairing-a-learned-skill). |
 | POST | `/api/skills/proposals/:id/reject` | Reject and suppress for 90 days. |
 

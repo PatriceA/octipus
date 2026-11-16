@@ -1,11 +1,10 @@
 import { createHash } from 'node:crypto';
-import { and, desc, eq } from 'drizzle-orm';
 import { filterPII } from '@/core/agent/pii-filter';
 import { getDb } from '@/db/postgres';
 import { skillRepository } from '@/db/repositories/skill-repository';
 import { skillProposals } from '@/db/schema/skill-proposals';
 import { assertPatchable, skillContentHash, validateSkillPatch } from '@/skills/patch';
-import { type DedupHit, findExisting } from '@/tools/skill-distill/dedup';
+import { type DedupHit, findExisting, findProposalByFingerprint } from '@/tools/skill-distill/dedup';
 import { type DistilledSkill, skillFingerprint } from '@/tools/skill-distill/distiller';
 import { toolLogger } from '@/utils/logger';
 
@@ -88,22 +87,24 @@ export async function fileSkillPatchProposal(patch: SkillPatchInput, userId: str
   const skill = await skillRepository.findById(patch.skillId);
   assertPatchable(skill, userId);
   const content = skill.content ?? '';
-  const patched = validateSkillPatch(content, patch.oldText, patch.newText);
 
-  const db = getDb();
   const fingerprint = createHash('sha256')
     .update(`${userId}:patch:${skill.id}:${patch.oldText}\u0000${patch.newText}`).digest('hex');
-  const [existing] = await db.select().from(skillProposals)
-    .where(and(eq(skillProposals.fingerprint, fingerprint), eq(skillProposals.userId, userId)))
-    .orderBy(desc(skillProposals.createdAt)).limit(1);
-  if (existing?.status === 'pending') {
+  const existing = await findProposalByFingerprint(userId, fingerprint);
+  if (existing?.kind === 'pending') {
     return { deduped: true, proposalId: existing.id, name: skill.name, status: 'pending', message: 'The same patch is already pending review.' };
   }
-  if (existing?.status === 'rejected' && existing.rejectedUntil && existing.rejectedUntil > new Date()) {
-    return { deduped: true, name: skill.name, message: `The same patch was rejected and stays suppressed until ${existing.rejectedUntil.toISOString().slice(0, 10)} — nothing filed.` };
+  if (existing?.kind === 'suppressed') {
+    return { deduped: true, name: skill.name, message: `The same patch was rejected and stays suppressed until ${existing.until.toISOString().slice(0, 10)} — nothing filed.` };
   }
+  // Approved before: filing it again would apply it twice where newText
+  // contains oldText (validateSkillPatch catches most of those too).
+  if (existing?.kind === 'promoted') {
+    return { deduped: true, name: skill.name, message: 'The same patch was already approved — nothing filed.' };
+  }
+  const patched = validateSkillPatch(content, patch.oldText, patch.newText);
 
-  const [proposal] = await db.insert(skillProposals).values({
+  const [proposal] = await getDb().insert(skillProposals).values({
     userId,
     fingerprint,
     name: skill.name,

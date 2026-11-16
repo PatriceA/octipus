@@ -1,14 +1,16 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 const fixture = vi.hoisted(() => ({
   findSkill: vi.fn(), update: vi.fn(), findUser: vi.fn(),
+  // What the auth layer derived: a login session (web/mobile) or null (an API token).
+  auth: { principal: { kind: 'user' } as Record<string, unknown>, session: null as Record<string, unknown> | null },
 }));
 const OWNER = vi.hoisted(() => '00000000-0000-4000-8000-0000000000aa');
 vi.mock('@/db/repositories/user-repository', () => ({ userRepository: { findById: fixture.findUser } }));
 vi.mock('@/db/repositories/skill-repository', () => ({ skillRepository: { findById: fixture.findSkill, update: fixture.update } }));
 vi.mock('@/api/context', async () => ({
-  apiContext: new (await import('@/api/http')).App().derive(() => ({ user: { id: OWNER } })),
+  apiContext: new (await import('@/api/http')).App().derive(() => ({ user: { id: OWNER }, ...fixture.auth })),
 }));
-import { updateSkill } from './update';
+import { isInPersonWrite, updateSkill } from './update';
 import { buildSkillLoaderHandlers } from '@/tools/skill-loader';
 import type { AgentContext } from '@/core/types';
 import { App } from '@/api/http';
@@ -19,6 +21,7 @@ beforeEach(() => {
   fixture.findUser.mockResolvedValue({ id: OWNER, isAdmin: false });
   fixture.findSkill.mockResolvedValue({ id: 'skill', userId: OWNER, isSystem: false });
   fixture.update.mockImplementation(async (id, patch) => ({ id, ...patch }));
+  fixture.auth = { principal: { kind: 'user' }, session: null };
 });
 
 test('agent updates content in place and never forwards ownership or omitted fields', async () => {
@@ -86,11 +89,32 @@ test('REST used by MCP saves a partial update and returns real HTTP errors', asy
   }));
   const saved = await request();
   expect(saved.status).toBe(200);
-  // A write through the API is the owner's: it locks the skill against learning patches.
-  expect(await saved.json()).toEqual({ id: 'skill', content: 'New body', ownerEditedAt: expect.any(String) });
+  // On an API token (scripts, the MCP bridge) it is not an in-person edit: no lock.
+  expect(await saved.json()).toEqual({ id: 'skill', content: 'New body' });
   fixture.findSkill.mockResolvedValue({ userId: 'other', isSystem: false });
   expect((await request()).status).toBe(403);
   fixture.findSkill.mockResolvedValue(undefined);
   expect((await request()).status).toBe(404);
   expect(fixture.update).toHaveBeenCalledOnce();
+});
+
+test('only the owner editing in person on a login session locks the skill', async () => {
+  const app = new App().use(skillRoutes);
+  const patch = async () => (await app.handle(new Request('http://test/skills/skill', {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: 'New body' }),
+  }))).json();
+  fixture.auth = { principal: { kind: 'user' }, session: { userAgent: 'Mozilla/5.0' } };
+  expect(await patch()).toMatchObject({ ownerEditedAt: expect.any(String) });
+  // An admin editing someone else's skill in person: not that owner's edit.
+  fixture.findUser.mockResolvedValue({ id: OWNER, isAdmin: true });
+  fixture.findSkill.mockResolvedValue({ id: 'skill', userId: 'someone-else', isSystem: false });
+  expect(await patch()).not.toHaveProperty('ownerEditedAt');
+});
+
+test('in-person writes: a user on a login session, not a token, the MCP server login or an impersonating admin', () => {
+  expect(isInPersonWrite({ kind: 'user' }, { userAgent: 'Mozilla/5.0' })).toBe(true);
+  expect(isInPersonWrite({ kind: 'user' }, null)).toBe(false);
+  expect(isInPersonWrite({ kind: 'user' }, { userAgent: 'Mobile: Octipus MCP server' })).toBe(false);
+  expect(isInPersonWrite({ kind: 'user', actorUserId: 'admin-1' }, { userAgent: 'Mozilla/5.0' })).toBe(false);
+  expect(isInPersonWrite({ kind: 'service' }, { userAgent: 'Mozilla/5.0' })).toBe(false);
 });

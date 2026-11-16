@@ -7,6 +7,20 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Learned skills can be repaired, owner-edited skills are locked.** A
+  learning check may propose a patch to a learned skill whose body the session
+  loaded: one passage, matched exactly once, PII-checked, made against a
+  recorded content hash. It still needs approval on Skills → Proposals, which
+  shows the change in the skill's context and refuses a patch whose skill
+  changed since (`409 stale`). A skill the owner creates, edits, imports or
+  approves with their own text while signed in (not through an API token or the
+  MCP bridge) is locked against patches, against being overwritten by a
+  same-name proposal, and against curator archiving. Skill usage now counts
+  loading a skill's body, not its line in a role's skill index. Migration
+  `0191_skill_patch_proposals` does not lock existing skills; they lock on the
+  owner's next edit. See
+  [Session learning](docs/SESSION-LEARNING.md#repairing-a-learned-skill).
+
 - **Memory learns only from your own words.** Every new long-term memory
   cites your own messages and a verbatim quote, which the server checks
   against the stored message before writing; assistant replies, tool output,
@@ -207,6 +221,7 @@ The detailed notes below preserve the implementation and operator history.
 The curated release notes above are used for the GitHub release.
 
 ### Changed
+
 
 - **Learned skills can be repaired, owner-edited skills are locked.** A
   learning check may propose a patch to a learned skill the session used: one
