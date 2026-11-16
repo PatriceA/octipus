@@ -3,14 +3,27 @@
  * on embedded PGlite. The root agent is mocked: the test observes which session
  * each event runs in, nothing runs.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hook } from '@/core/types';
 import type { TriggerContext } from './triggers';
 
 const turns = vi.hoisted(() => ({ sessions: [] as string[], fail: false }));
+const direct = vi.hoisted(() => ({ contexts: [] as Array<Record<string, unknown>> }));
+vi.mock('@/core/agent-manager', () => ({ getAgentManager: () => ({ spawn: async (options: { sessionId: string; userId: string; contextMetadata: Record<string, unknown> }) => {
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const session = await sessionRepository.findById(options.sessionId);
+  expect(session?.userId).toBe(options.userId);
+  const { bindDefaultEnvironment } = await import('@/security/environment-session');
+  const { buildAgentContext } = await import('@/core/agent/context');
+  await bindDefaultEnvironment(buildAgentContext({ id: 'worker', sessionId: options.sessionId, userId: options.userId,
+    scope: { workspaceId: session!.workspaceId, space: null, trigger: 'schedule', funding: 'own' },
+    topic: 'automation', model: 'test', role: 'general' }), String(options.contextMetadata.executionEnvironmentId ?? 'selected-environment'));
+  direct.contexts.push(options.contextMetadata);
+  return { getContext: () => ({ id: 'worker' }), run: async () => '' };
+} }) }));
 vi.mock('@/core/agent', () => ({
   getAgentService: () => ({
     handleMessage: async (sessionId: string) => {
@@ -58,6 +71,7 @@ beforeEach(async () => {
   turns.sessions = [];
   await executeRaw('DELETE FROM hook_thread_sessions');
 });
+afterEach(() => vi.restoreAllMocks());
 
 const THREAD_KEY = '{{webhook.body.repository.full_name}}#{{webhook.body.pull_request.number}}';
 
@@ -147,6 +161,56 @@ describe('threadSession', () => {
 });
 
 describe('spawn_agent with a thread key', () => {
+  test('concurrent deliveries create one owned session before dispatch', async () => {
+    const results = await Promise.all(Array.from({ length: 4 }, () => actions.executeAction(hook(), prEvent(799))));
+    expect(results.every(result => result.success)).toBe(true);
+    expect(new Set(turns.sessions).size).toBe(1);
+  });
+  test('direct thread workers have a persisted owned session before environment binding', async () => {
+    direct.contexts = [];
+    const result = await actions.executeAction(hook({ orchestrated: false }), prEvent(800));
+    expect(result.success).toBe(true);
+    expect(direct.contexts).toHaveLength(1);
+  });
+
+  test('direct workers use the configured folder and persist its environment for later events', async () => {
+    const folder = realpathSync(mkdtempSync(join(tmpdir(), 'hook-project-')));
+    try {
+      const config = await import('@/config');
+      const original = config.getConfig();
+      const { workstationAutomationPreset } = await import('@/shared/execution-environment');
+      const profile = { ...workstationAutomationPreset(userId, crypto.randomUUID(), [folder]), isDefault: true };
+      vi.spyOn(config, 'getConfig').mockReturnValue({ ...original, security: { ...original.security, executionEnvironments: [profile] } });
+      direct.contexts = [];
+      const h = hook({ orchestrated: false, projectPath: folder });
+      const first = await actions.executeAction(h, prEvent(801));
+      const second = await actions.executeAction(h, prEvent(801, 'synchronize'));
+      expect(first.success).toBe(true);
+      expect(second.success).toBe(true);
+      expect(direct.contexts).toEqual([
+        { executionEnvironmentId: profile.id, projectPath: folder },
+        { executionEnvironmentId: profile.id, projectPath: folder },
+      ]);
+      const outside = await actions.executeAction(hook({ projectPath: join(folder, 'missing') }), prEvent(802));
+      expect(outside.success).toBe(false);
+    } finally { rmSync(folder, { recursive: true, force: true }); }
+  });
+
+  test('a hook project cannot escape its folder grants or use a revoked environment', async () => {
+    const folder = realpathSync(mkdtempSync(join(tmpdir(), 'hook-project-grant-')));
+    try {
+      const config = await import('@/config');
+      const original = config.getConfig();
+      const { workstationAutomationPreset } = await import('@/shared/execution-environment');
+      const profile = { ...workstationAutomationPreset(userId, crypto.randomUUID(), [folder]), authority: 'tools' as const, pipelineAutonomy: false, isDefault: true };
+      vi.spyOn(config, 'getConfig').mockReturnValue({ ...original, security: { ...original.security, executionEnvironments: [profile] } });
+      expect((await actions.executeAction(hook({ projectPath: tmpdir() }), prEvent(803))).error).toContain('outside');
+      expect((await actions.executeAction(hook({ projectPath: folder }), prEvent(804))).success).toBe(true);
+      profile.enabled = false;
+      expect((await actions.executeAction(hook({ projectPath: folder }), prEvent(804, 'synchronize'))).error).toContain('disabled');
+    } finally { rmSync(folder, { recursive: true, force: true }); }
+  });
+
   test('events on one PR share a session; another PR gets its own', async () => {
     const a1 = await actions.executeAction(hook(), prEvent(42));
     const b = await actions.executeAction(hook(), prEvent(43));

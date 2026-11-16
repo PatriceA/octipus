@@ -443,6 +443,13 @@ async function executeSpawnAgent(
     : resolveHookSessionId(context, hook);
   let sessionId = resolved.sessionId;
   const userId = hook?.userId || context.message?.userId || context.agent?.userId || 'system';
+  // A thread reservation contains an id, not a session row. Direct workers
+  // bind their environment at spawn, before the root could create that row.
+  if (thread?.sessionId) {
+    const { resolveSession } = await import('@/core/agent/session-resolver');
+    const { withEnvironmentSessionLock } = await import('@/security/environment-session');
+    await withEnvironmentSessionLock(sessionId, () => resolveSession(sessionId, userId, 'hook'));
+  }
   if (resolved.minted && hook) {
     // A heartbeat hook runs in an automation session, as runRoleHeartbeat
     // creates it; any other hook in the 'hook' session its orchestrated turn
@@ -468,6 +475,10 @@ async function executeSpawnAgent(
   if(hook?.trigger==='heartbeat'){
     const source=(await import('@/core/heartbeat')).heartbeatTaskSource(context);
     if(source)await (await import('@/core/tasks/provenance')).persistHeartbeatTaskProvenance(userId,sessionId,source);
+  }
+  if (config.projectPath !== undefined) {
+    const { configureHookProject } = await import('./session-project');
+    await configureHookProject(sessionId, userId, config.projectPath);
   }
   // Use the hook owner's userId so notifications and permissions resolve correctly
 
@@ -606,7 +617,9 @@ async function executeSpawnAgent(
   // has no producer in a space: a space session refuses (§5.6).
   const { sessionRepository } = await import('@/db/repositories/session-repository');
   const { resolveAgentScope, withAgentUsage } = await import('@/core/agent/context');
-  const scope = await resolveAgentScope({ session: await sessionRepository.findById(sessionId), userId, trigger: 'schedule' });
+  const session = await sessionRepository.findById(sessionId);
+  const scope = await resolveAgentScope({ session, userId, trigger: 'schedule' });
+  const sessionContext = session?.context;
 
   let agent: Awaited<ReturnType<typeof agentManager.spawn>>;
   try {
@@ -614,6 +627,10 @@ async function executeSpawnAgent(
       sessionId,
       userId,
       ...scope,
+      contextMetadata: {
+        ...(sessionContext?.executionEnvironmentId ? { executionEnvironmentId: sessionContext.executionEnvironmentId } : {}),
+        ...(sessionContext?.projectPath ? { projectPath: sessionContext.projectPath } : {}),
+      },
       topic: config.agentTopic,
       model: config.agentModel,
       systemPrompt: prompt,

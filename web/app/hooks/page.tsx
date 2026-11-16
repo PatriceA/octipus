@@ -459,6 +459,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
   const [scheduledAt, setScheduledAt] = useState<string | null>(null);
   const [messagePattern, setMessagePattern] = useState('');
   const [agentPrompt, setAgentPrompt] = useState('');
+  const [projectPath, setProjectPath] = useState('');
   const [threadKey, setThreadKey] = useState('');
   const [threadEndActions, setThreadEndActions] = useState('');
   const [readOnly, setReadOnly] = useState(false);
@@ -509,6 +510,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
       const actionConfig: Record<string, unknown> = {};
       if (action === 'spawn_agent') {
         actionConfig.agentPrompt = agentPrompt;
+        if (projectPath.trim()) actionConfig.projectPath = projectPath.trim();
         actionConfig.orchestrated = orchestrated;
         actionConfig.notifyOwner = notifyOwner;
         Object.assign(actionConfig, threadConfig(trigger, threadKey, threadEndActions, readOnly, onlyOnChange));
@@ -729,6 +731,11 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                   Use {'{{webhook.body.field}}'} for template variables
                 </p>
               </div>
+              <label className="block text-sm text-on-surface">
+                Project folder (optional)
+                <input value={projectPath} onChange={e => setProjectPath(e.target.value)} className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-on-surface" placeholder="Absolute folder on the selected machine" />
+                <span className="mt-1 block text-xs text-on-surface-variant">Use this project for every run. Access follows Environments &amp; Access.</span>
+              </label>
               {trigger === 'webhook' && (
                 <ThreadFields threadKey={threadKey} setThreadKey={setThreadKey} endActions={threadEndActions} setEndActions={setThreadEndActions} readOnly={readOnly} setReadOnly={setReadOnly} onlyOnChange={onlyOnChange} setOnlyOnChange={setOnlyOnChange} />
               )}
@@ -870,6 +877,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
 
   // Action config — spawn_agent
   const [agentPrompt, setAgentPrompt] = useState((hook.actionConfig?.agentPrompt as string) || '');
+  const [projectPath, setProjectPath] = useState((hook.actionConfig?.projectPath as string) || '');
   const [threadKey, setThreadKey] = useState((hook.actionConfig?.threadKey as string) || '');
   const [threadEndActions, setThreadEndActions] = useState(((hook.actionConfig?.threadEndActions as string[]) || []).join(', '));
   const [readOnly, setReadOnly] = useState(hook.actionConfig?.readOnly === true);
@@ -932,6 +940,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
     switch (action) {
       case 'spawn_agent':
         cfg.agentPrompt = agentPrompt;
+        if (projectPath.trim()) cfg.projectPath = projectPath.trim();
         cfg.orchestrated = orchestrated;
         cfg.notifyOwner = notifyOwner;
         if (agentTopic) cfg.agentTopic = agentTopic;
@@ -1089,6 +1098,11 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
                 <textarea value={agentPrompt} onChange={e => setAgentPrompt(e.target.value)} rows={3} className={inputCls} placeholder="Review the changes..." />
                 <p className="mt-1 text-xs text-on-surface-variant">Use {'{{webhook.body.field}}'} for template variables</p>
               </div>
+              <label className="block text-sm text-on-surface">
+                Project folder (optional)
+                <input value={projectPath} onChange={e => setProjectPath(e.target.value)} className="mt-1 w-full rounded-lg border border-outline-variant bg-surface px-3 py-2 text-on-surface" placeholder="Absolute folder on the selected machine" />
+                <span className="mt-1 block text-xs text-on-surface-variant">Use this project for every run. Access follows Environments &amp; Access.</span>
+              </label>
               {trigger === 'webhook' && (
                 <ThreadFields threadKey={threadKey} setThreadKey={setThreadKey} endActions={threadEndActions} setEndActions={setThreadEndActions} readOnly={readOnly} setReadOnly={setReadOnly} onlyOnChange={onlyOnChange} setOnlyOnChange={setOnlyOnChange} />
               )}
