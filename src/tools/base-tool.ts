@@ -54,6 +54,17 @@ export interface ToolExecutionOptions {
   untrustedSource?: string;
 }
 
+/**
+ * `options` with `untrustedSource` set to `<toolId>:<action>` when the
+ * permission action is a `…_read`: a workspace suite's mail, calendar, drive,
+ * document and contact reads return text other people wrote or shared.
+ */
+export function readsAreUntrusted(toolId: string, options?: ToolExecutionOptions): ToolExecutionOptions | undefined {
+  const action = options?.permissionAction;
+  return typeof action === 'string' && action.endsWith('_read') && !options?.untrustedSource
+    ? { ...options, untrustedSource: `${toolId}:${action}` } : options;
+}
+
 export interface ToolAvailability {
   available: boolean;
   degraded?: boolean;

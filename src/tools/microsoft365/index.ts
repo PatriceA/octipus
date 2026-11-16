@@ -1,7 +1,7 @@
-import type { ToolManifest, } from '@/core/types';
+import type { AgentContext, ToolManifest, } from '@/core/types';
 import { fetchWithTimeout } from '@/utils/http';
 import { getOAuthManager, OAUTH_VAULT_NAMES } from '@/security/oauth';
-import { BaseTool, type ToolAvailability } from '../base-tool';
+import { BaseTool, readsAreUntrusted, type ToolAvailability, type ToolExecutionOptions } from '../base-tool';
 import { registerCalendarTools } from './calendar';
 import { registerContactsTools } from './contacts';
 import { registerMailTools } from './mail';
@@ -66,7 +66,10 @@ export class Microsoft365Tool extends BaseTool {
   }
 
   protected async registerTools(): Promise<void> {
-    const register = this.registerTool.bind(this);
+    // Reads return text other people wrote or shared: the model gets it inside the untrusted envelope.
+    const register = (name: string, description: string, parameters: Record<string, unknown>,
+      execute: (args: Record<string, unknown>, context: AgentContext) => Promise<unknown>, options?: ToolExecutionOptions) =>
+      this.registerTool(name, description, parameters, execute, readsAreUntrusted(this.id, options));
     const api = this.graphApi.bind(this);
     registerMailTools(register, api);
     registerCalendarTools(register, api);

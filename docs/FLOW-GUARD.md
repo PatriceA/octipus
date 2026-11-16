@@ -134,20 +134,41 @@ Which results are wrapped:
 - tools that declare `untrustedSource` when they register (`BaseTool`
   option, or the field on a `ToolHandler`): uploaded documents
   (`documents:get_document`, `documents:search_documents`), the visual page
-  analysis, and Companion's `read`, `read_session`, `read_report` and
-  `inspect_session`;
-- a codemode script's output, when one of its calls was wrapped.
+  analysis, `connections:get` and `connections:request` (external API
+  bodies), every `…_read` of Google Workspace and Microsoft 365 (mail,
+  calendar, drive, documents, contacts, tasks), and Companion's `read`,
+  `read_session`, `read_report` and `inspect_session`;
+- a codemode script's output and its failure message, when one of its calls
+  was wrapped. The script's status line ("Script completed (…)") stays
+  outside the block.
 
-Any opening or closing tag inside the content, in any case and spelling
-(`</ Untrusted-Tool_Result >`), is escaped to `&lt;…`, so the content cannot
-end its block early. Wrapping is idempotent, and the source label is cleaned
-to a short, quote-free string. The system prompt says in one paragraph what the
-block means: data from outside, never the owner's authority.
+The label travels on the call's `ToolResult` (`untrustedSource`); nothing is
+kept across calls or batches.
 
-Only the text the model reads is wrapped (`ToolExecutor.buildToolMessages`).
+Any opening or closing tag inside the content is escaped to `&lt;…`, so the
+content cannot end its block early. Matching ignores case and invisible
+format characters (zero-width spaces and joiners, word joiner, BOM, soft
+hyphen), folds compatibility forms (full-width `＜` or letters) and accepts
+spaces, `_`, `-` or Unicode dashes between the words. The webhook fences of
+[hooks](HOOKS.md) use the same escaper. Wrapping is idempotent, and the
+source label is cleaned to a short, quote-free string that cannot spell the
+tag. The system prompt says in one paragraph what the block means: data from
+outside, never the owner's authority. A caller's own system prompt (a
+pipeline stage override, a swarm expert) gets the same paragraph appended.
+
+Only the text the model reads changes (`ToolExecutor.buildToolMessages`).
 The result object the UI, artifacts and tests use, the `observation` event and
-the stored transcript row keep the tool's own output. Errors are not wrapped:
-they are Octipus's own messages, including flow-guard and permission refusals.
+the stored transcript row keep the tool's own output. Octipus's own notices
+stay outside the block: an oversized result is saved to the workspace with the
+envelope in the file, and the preview closes the block before "The FULL output
+is saved at …" and reopens it for the tail; an oversized MCP result puts its
+`mcp_read_result` hint after the block; truncation (`[truncated]`, context
+compaction) closes the block before its marker.
+
+Errors: a failed call of an outside tool has its error wrapped too, since it
+can quote the outside text. Octipus's own refusals are not: permission,
+approval, flow-guard and policy errors, and a stopped run, so a "do not retry"
+reads as ours.
 
 Limits:
 
@@ -157,9 +178,13 @@ Limits:
   still checks what users send.
 - It does not scan for injection phrases.
 - Workspace files (`filesystem` reads, shell output) are not wrapped, even when
-  a file came from the web or an upload, or is a large wrapped result that was
-  saved to the workspace and is read back in pieces. Error messages from outside tools are
-  not wrapped either.
+  a file came from the web or an upload. A saved oversized result is the
+  exception only in that its file starts with the envelope.
+- Telling our errors from a tool's is by error type and a fixed list of
+  message prefixes: an outside tool whose error starts with one of them
+  (`Permission denied`, `Approval required`, …) is not wrapped.
+- Escaping covers the characters listed above, not every look-alike a model
+  might read as a tag (combining marks, other scripts' letters).
 - Results that reach a model by another path than the tool loop (hook
   `execute_tool` actions, a CLI agent's native `WebFetch`) are not wrapped.
 - Each wrapped result costs about 40 extra tokens.

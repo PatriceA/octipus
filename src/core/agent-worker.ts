@@ -58,7 +58,7 @@ import {
 import type { ChildResult, PendingChild } from './swarm/types';
 import { getPermissionManager } from '@/security/permissions';
 import { isRealUserId } from '@/security/principal';
-import { unwrapUntrusted } from '@/security/untrusted-envelope';
+import { truncateKeepingEnvelope, unwrapUntrusted } from '@/security/untrusted-envelope';
 import { ToolExecutor } from './tool-executor';
 import { DetachedChildManager } from './agent-worker/detached-child-manager';
 import { DriftDetector } from './agent-worker/drift-detector';
@@ -1566,7 +1566,7 @@ export class AgentWorker extends BaseAgentWorker {
           }, 'Context window exceeded, compacting aggressively and retrying');
 
           this.messages = this.messages.map((msg) => msg.role === 'tool' && msg.content.length > 2000
-            ? { ...msg, content: msg.content.slice(0, 2000) + CONTEXT_OVERFLOW_TRUNCATED_MARKER }
+            ? { ...msg, content: truncateKeepingEnvelope(msg.content, 2000, CONTEXT_OVERFLOW_TRUNCATED_MARKER) }
             : msg);
 
           const { messages: compacted } = await compactMessagesWithSummary(this.messages, {

@@ -186,6 +186,13 @@ export interface ToolResult {
   result: unknown;
   error?: string;
   errorCode?: string;
+  /**
+   * The result (or the tool's own error) carries outside content: the model
+   * reads it inside the untrusted envelope with this label
+   * (security/untrusted-envelope.ts). `result` and `error` stay as the tool
+   * returned them.
+   */
+  untrustedSource?: string;
 }
 
 // Task Types

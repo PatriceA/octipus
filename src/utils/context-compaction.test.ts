@@ -11,6 +11,7 @@ import {
   usableContextWindow,
 } from './context-compaction';
 import { contextLimits, estimateTokens } from './context-compaction';
+import { UNTRUSTED_TAG, wrapUntrusted } from '@/security/untrusted-envelope';
 
 describe('estimateTokens (real tokenizer)', () => {
   test('empty string is zero', () => {
@@ -70,6 +71,17 @@ describe('truncateOldestToolOutputs', () => {
     const pass = truncateOldestToolOutputs(messages, { softCap: 10 });
     expect(pass.truncated).toBe(6);
     expect(pass.firstChanged).toBe(7);
+  });
+
+  test('a wrapped output keeps its envelope closed, with the marker outside it', () => {
+    const messages = [msg('tool', wrapUntrusted('websearch:fetch', big(5000))), ...toolMessages(11, 10)];
+    const { messages: out } = truncateOldestToolOutputs(messages, { softCap: 10, maxToolChars: 2000 });
+    const cut = out[0].content;
+    expect(cut.startsWith(`<${UNTRUSTED_TAG} source="websearch:fetch">`)).toBe(true);
+    expect(cut.match(new RegExp(`</${UNTRUSTED_TAG}>`, 'g'))).toHaveLength(1);
+    expect(cut.indexOf(`</${UNTRUSTED_TAG}>`)).toBeLessThan(cut.indexOf('truncated to keep context small'));
+    // Still recognised as already truncated: no second fold.
+    expect(truncateOldestToolOutputs(out, { softCap: 10, maxToolChars: 2000 }).truncated).toBe(0);
   });
 
   test('preserves non-tool turns interleaved with tool messages', () => {
