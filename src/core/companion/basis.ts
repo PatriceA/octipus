@@ -35,8 +35,8 @@ export function quoteFound(quote: string, sources: readonly string[]): boolean {
  * schedule and Companion turns are stored as user rows with their trigger;
  * internal rows (check-in prompts, briefings) and cleared history never count.
  */
-export async function ownerMessages(sessionId: string, opts: { limit: number; since?: Date }) {
-  const [session] = await getDb().select({ context: sessions.context }).from(sessions).where(eq(sessions.id, sessionId));
+export async function ownerMessages(sessionId: string, userId: string, opts: { limit: number; since?: Date }) {
+  const [session] = await getDb().select({ context: sessions.context }).from(sessions).where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId), eq(sessions.kind, 'chat')));
   if (!session) return [];
   const generation = sessionGeneration(session.context);
   const cleared = session.context?.clearedAt;
@@ -64,7 +64,7 @@ export class CompanionBasisError extends ToolNotExecutedError {
  * message that started the current owner turn: budget raises, cancellation,
  * retries of an escalated incident and new goals need words said now.
  */
-export async function verifyCompanionBasis(raw: unknown, context: Pick<AgentContext, 'sessionId' | 'trigger'>,
+export async function verifyCompanionBasis(raw: unknown, context: Pick<AgentContext, 'sessionId' | 'userId' | 'trigger'>,
   goal: { ownerInputs: CompanionOwnerInput[] } | null, opts: { thisTurn?: boolean } = {}): Promise<CompanionBasisRecord> {
   const parsed = companionBasisSchema.safeParse(raw);
   if (!parsed.success) throw new CompanionBasisError('Give a basis: {source:"owner_message"|"goal", quote:"<the owner\'s exact words asking for this>"}.');
@@ -72,7 +72,7 @@ export async function verifyCompanionBasis(raw: unknown, context: Pick<AgentCont
   const at = new Date().toISOString();
   if (basis.source === 'owner_message') {
     if (context.trigger !== 'user') throw new CompanionBasisError('Background work cannot cite a chat message; cite the owner\'s words saved with the goal (source "goal"), or ask the owner.');
-    const rows = await ownerMessages(context.sessionId, opts.thisTurn ? { limit: 1 } : { limit: 5, since: new Date(Date.now() - 24 * 3600_000) });
+    const rows = await ownerMessages(context.sessionId, context.userId, opts.thisTurn ? { limit: 1 } : { limit: 5, since: new Date(Date.now() - 24 * 3600_000) });
     const match = rows.find(row => quoteFound(basis.quote, [row.content]));
     if (!match) throw new CompanionBasisError(opts.thisTurn
       ? 'The quote is not in the owner\'s current message. This action needs the owner to ask for it now; ask them instead of acting.'
