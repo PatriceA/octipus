@@ -321,11 +321,16 @@ async function main() {
     regressed = hasRegressions(report);
   }
 
-  // Gate membership and verdict. The gate file is the baseline: a test is
-  // admitted only after a clean run of five or more attempts (gate.ts).
+  // Gate verdict and membership. The gate file is the baseline: a test is
+  // admitted only after a clean run of five or more attempts (gate.ts). The
+  // verdict is decided against the file as it was BEFORE this run admitted or
+  // removed anything — a run must not grade itself against its own admissions.
   const gatePath = gate && gate !== 'default' ? resolve(gate) : resolve(dir, 'gate.json');
+  const before = readGate(gatePath);
+  const verdict = gate ? decideGate(before, suites, results, dir, { suite: options.suite, tags: options.tags }) : undefined;
+  if (verdict && !jsonOnly) console.log(formatGateReport(verdict));
   if (admitRun) {
-    const { members, change } = admit(readGate(gatePath), suites, results, dir);
+    const { members, change } = admit(before, suites, results, dir);
     await writeFileAt(gatePath, serializeGate(members));
     if (!jsonOnly) {
       console.log(`\nGate file: ${gatePath}`);
@@ -334,9 +339,7 @@ async function main() {
       if (change.unproven.length) console.log(`  passed but fewer than 5 attempts (not admitted): ${change.unproven.join(', ')}`);
     }
   }
-  if (gate) {
-    const verdict = decideGate(readGate(gatePath), suites, results, dir);
-    if (!jsonOnly) console.log(formatGateReport(verdict));
+  if (verdict) {
     // The gate decides the exit code on its own: a failing test that never
     // earned a place in the gate does not block, and an unsafe failure in
     // one that did blocks even when everything else is green.

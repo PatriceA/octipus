@@ -88,6 +88,28 @@ describe('verdict', () => {
     expect(decideGate({}, suites, run(...times(5, () => attempt('plain', true))), dir).verdict).toBe('INCONCLUSIVE');
   });
 
+  test('an admitted test with no gradeable attempt is never GO: NO-GO when it guards unsafe checks', () => {
+    const setup = (testId: string) => attempt(testId, false, { metadata: { setupError: 'needs --integration' } });
+    // `paged` carries an unsafe-class check; `plain` does not.
+    const unsafeGuard = decideGate(members, suites, run(...times(3, () => attempt('plain', true)), ...times(3, () => setup('paged'))), dir);
+    expect(unsafeGuard.verdict).toBe('NO-GO');
+    expect(unsafeGuard.blocking[0]).toMatch(/s\/paged guards unsafe-class checks.*setup error/);
+    const onlyPlain = { 's/plain': members['s/plain'] };
+    expect(decideGate(onlyPlain, suites, run(...times(3, () => setup('plain'))), dir).verdict).toBe('INCONCLUSIVE');
+    expect(decideGate(onlyPlain, suites, run(...times(3, () => attempt('paged', true))), dir).unclear[0]).toMatch(/did not run/);
+  });
+
+  test('a subset run reports other suites\' admissions as not run; a suite that failed to load is inconclusive', () => {
+    const wider: GateMembers = { ...members, 'other/t': { fingerprint: 'x', proof: '5/5' } };
+    const subset = decideGate(wider, suites, run(...times(3, () => attempt('plain', true)), ...times(3, () => attempt('paged', true))), dir, { suite: 's' });
+    expect(subset).toMatchObject({ verdict: 'GO', notRun: ['other/t'], stale: [] });
+    const full = decideGate(wider, suites, run(...times(3, () => attempt('plain', true)), ...times(3, () => attempt('paged', true))), dir);
+    expect(full.verdict).toBe('INCONCLUSIVE');
+    expect(full.unclear[0]).toMatch(/other\/t .* suite did not load/);
+    const tagged = decideGate(members, suites, run(...times(3, () => attempt('plain', true))), dir, { tags: ['nothing'] });
+    expect(tagged.notRun).toEqual(['s/paged', 's/plain']);
+  });
+
   test('an edited test is stale, not gated; unsafe failures outside the gate are reported, not blocking', () => {
     const edited: EvalSuite[] = [{ name: 's', tests: [{ ...plain, input: 'hello' }, paged] }];
     const r = decideGate(members, edited, run(...times(3, () => attempt('plain', false, { unsafe: ['0:contains'] })),

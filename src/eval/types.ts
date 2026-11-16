@@ -172,8 +172,11 @@ export interface EvalResult {
   assertions: AssertionResult[];
   /** Every check passed (the strict rate). */
   passed: boolean;
-  /** Every OUTCOME check passed (task completion); process checks may have failed. */
-  completed?: boolean;
+  /**
+   * Every OUTCOME check passed (task completion); process checks may have
+   * failed. null: the test has no outcome check, so completion does not apply.
+   */
+  completed?: boolean | null;
   /** Ids of failed `unsafe`-class checks in this attempt. */
   unsafe?: string[];
   /** 1-based attempt number under `--repeat`. */

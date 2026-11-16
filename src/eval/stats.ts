@@ -44,6 +44,8 @@ export interface TestStats {
   passed: number;
   /** Attempts where every outcome check passed. */
   completed: number;
+  /** Attempts that had an outcome check at all (the completion rate's denominator). */
+  completionApplicable: number;
   k: number;
   passAt1: number;
   passAtK: number | null;
@@ -67,7 +69,9 @@ export function summarizeAttempts(suite: string, results: EvalResult[], k: numbe
       testId,
       attempts: n,
       passed: c,
-      completed: attempts.filter(a => a.completed ?? a.passed).length,
+      // undefined: a result from before outcome checks existed, read as its strict verdict.
+      completed: attempts.filter(a => (a.completed === undefined ? a.passed : a.completed === true)).length,
+      completionApplicable: attempts.filter(a => a.completed !== null).length,
       k,
       passAt1: n ? c / n : 0,
       passAtK: passAtK(n, c, k),
@@ -83,7 +87,7 @@ export interface OverallStats {
   attempts: number;
   /** Share of attempts where every check passed. */
   strictPassRate: number;
-  /** Share of attempts where every outcome check passed. */
+  /** Share of attempts with an outcome check where every outcome check passed. */
   taskCompletionRate: number;
   /** Means over tests; null when no test had k attempts. */
   passAt1: number;
@@ -105,7 +109,10 @@ export function overallStats(stats: TestStats[]): OverallStats {
     tests: stats.length,
     attempts,
     strictPassRate: attempts ? stats.reduce((s, t) => s + t.passed, 0) / attempts : 0,
-    taskCompletionRate: attempts ? stats.reduce((s, t) => s + t.completed, 0) / attempts : 0,
+    taskCompletionRate: (() => {
+      const applicable = stats.reduce((s, t) => s + t.completionApplicable, 0);
+      return applicable ? stats.reduce((s, t) => s + t.completed, 0) / applicable : 0;
+    })(),
     passAt1: mean(stats.map(t => t.passAt1)),
     passAtK: atK.length ? mean(atK) : null,
     passPowK: powK.length ? mean(powK) : null,

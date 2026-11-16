@@ -90,6 +90,46 @@ export const STATE_TABLE_ASSERTIONS: Record<string, string> = {
   companion_reports: 'companion_reports', companion_incidents: 'companion_incidents',
 };
 
+/** Every assertion type that reads the database rather than the reply. */
+export const STATE_ASSERTION_TYPES: ReadonlySet<string> = new Set(['db_rows', ...Object.keys(STATE_TABLE_ASSERTIONS)]);
+
+/** `memory_absent`: no memory of the eval user (created in the window) matches `pattern`. */
+export function memoryAbsentQuery(pattern: unknown, since?: StateQuery['since']): StateQuery {
+  if (typeof pattern !== 'string' || !pattern) throw new StateSetupError('memory_absent needs a value: the pattern no memory may match.');
+  return { table: 'memories', matches: { content: pattern }, count: 0, ...(since ? { since } : {}) };
+}
+
+/**
+ * The query a state assertion stands for, from its YAML fields (`table`,
+ * `where`, `matches`, `count`/`min`/`max`, `since`) or from an already-built
+ * `query`. One builder for the loader and the evaluator.
+ */
+export function stateQueryFor(type: string, fields: Record<string, unknown>): StateQuery {
+  const prebuilt = fields.query as StateQuery | undefined;
+  const since = (prebuilt?.since ?? fields.since) as StateQuery['since'] | undefined;
+  if (since !== undefined && since !== 'test' && since !== 'all') throw new StateSetupError('since must be "test" or "all".');
+  if (type === 'memory_absent') return memoryAbsentQuery(fields.value, since);
+  if (prebuilt) return { ...prebuilt, table: prebuilt.table || STATE_TABLE_ASSERTIONS[type] || '' };
+  // The YAML parser reads `{ a: b }` flow mappings as a string; refuse rather
+  // than drop the filter and count every row.
+  for (const field of ['where', 'matches'] as const) {
+    const v = fields[field];
+    if (v !== undefined && (typeof v !== 'object' || v === null || Array.isArray(v))) {
+      throw new StateSetupError(`${field} must be a block mapping (one "column: value" per line)`);
+    }
+  }
+  const table = typeof fields.table === 'string' ? fields.table : STATE_TABLE_ASSERTIONS[type];
+  if (!table) throw new StateSetupError(`${type} needs a table.`);
+  const num = (k: 'count' | 'min' | 'max') => (typeof fields[k] === 'number' ? { [k]: fields[k] as number } : {});
+  return {
+    table,
+    ...(fields.where ? { where: fields.where as Record<string, unknown> } : {}),
+    ...(fields.matches ? { matches: fields.matches as Record<string, string> } : {}),
+    ...num('count'), ...num('min'), ...num('max'),
+    ...(since ? { since } : {}),
+  };
+}
+
 function entry(name: string): Entry {
   const found = TABLES[name];
   if (!found) throw new StateSetupError(`Table "${name}" is not readable by evals. Use one of: ${STATE_TABLES.join(', ')}.`);
@@ -120,7 +160,7 @@ const ENV_REF = /^\$env:([A-Z][A-Z0-9_]*)$/;
  * environment variable, for values that differ per install (the controller
  * model a Companion fixture runs on). Anything else is taken as written.
  */
-function resolveRef(value: unknown, refs: Record<string, string>): unknown {
+export function resolveRef(value: unknown, refs: Record<string, string>): unknown {
   const env = typeof value === 'string' ? ENV_REF.exec(value) : null;
   if (env) {
     const found = process.env[env[1]];
@@ -137,7 +177,7 @@ function resolveRef(value: unknown, refs: Record<string, string>): unknown {
   return value;
 }
 
-function scopeRefs(scope: Pick<StateScope, 'userId' | 'workspaceId' | 'refs'>): Record<string, string> {
+export function scopeRefs(scope: Pick<StateScope, 'userId' | 'workspaceId' | 'refs'>): Record<string, string> {
   return { ...(scope.refs ?? {}), user: scope.userId, ...(scope.workspaceId ? { workspace: scope.workspaceId } : {}) };
 }
 
@@ -229,7 +269,8 @@ export interface InsertedFixtures {
  * and timestamp columns take ISO or relative ("-10m") times. On any failure the
  * rows already inserted are removed before the error is rethrown.
  */
-export async function insertFixtures(rows: FixtureRow[], scope: Pick<StateScope, 'userId' | 'workspaceId'>): Promise<InsertedFixtures> {
+export async function insertFixtures(rows: FixtureRow[], scope: Pick<StateScope, 'userId' | 'workspaceId'>,
+  at: Date = new Date()): Promise<InsertedFixtures> {
   const { getDb } = await import('@/db/postgres');
   const inserted: InsertedFixtures = { refs: {}, created: [] };
   try {
@@ -239,9 +280,9 @@ export async function insertFixtures(rows: FixtureRow[], scope: Pick<StateScope,
       const values: Record<string, unknown> = { ...(defaults?.() ?? {}) };
       if (cols.userId) values.userId = scope.userId;
       if (cols.workspaceId && scope.workspaceId) values.workspaceId = scope.workspaceId;
-      // This process's clock, not the database default: `since: test` is taken
-      // from the same clock after setup, so a fixture never counts as the turn's.
-      if (cols.createdAt) values.createdAt = new Date(Date.now() - 1000);
+      // Before `at` (the database clock read before setup), so a fixture never
+      // counts as the turn's under `since: test`.
+      if (cols.createdAt) values.createdAt = new Date(at.getTime() - 1000);
       const refs = scopeRefs({ ...scope, refs: inserted.refs });
       for (const [name, raw] of Object.entries(row.values ?? {})) {
         const { key, col } = column(table, name);
@@ -305,6 +346,43 @@ export async function cleanupCreated(tables: string[], scope: StateScope): Promi
     if (!cols.createdAt) throw new StateSetupError(`cleanup: "${name}" has no created_at.`);
     await getDb().delete(table).where(and(scoped(name, scope), gte(cols.createdAt, scope.since)));
   }
+}
+
+/** The database's clock: `since` must compare with created_at defaults on the same clock. */
+export async function dbNow(): Promise<Date> {
+  const { queryRaw } = await import('@/db/postgres');
+  const { rows } = await queryRaw('SELECT clock_timestamp() AS now');
+  return new Date(rows[0].now as string | Date);
+}
+
+/**
+ * Wait until post-turn work for the eval user has gone quiet: no new model
+ * calls for memory extraction or embedding (`cost_log`) and no new memories
+ * for `quietMs`, after at least `minMs`. The backend runs extraction
+ * fire-and-forget with no pending marker this process can read, so activity
+ * is the signal. Throws StateSetupError when it is still busy at `timeoutMs`,
+ * rather than grading a half-finished state.
+ */
+export async function waitForQuiet(scope: Pick<StateScope, 'userId' | 'since'>, opts: { minMs?: number; quietMs?: number; timeoutMs: number }): Promise<void> {
+  const { queryRaw } = await import('@/db/postgres');
+  const start = Date.now();
+  const quietMs = opts.quietMs ?? 5000;
+  const signature = async () => {
+    const { rows } = await queryRaw(
+      `SELECT (SELECT count(*) FROM cost_log WHERE user_id = $1 AND created_at >= $2 AND request_type IN ('memory_extraction', 'embedding'))
+            + (SELECT count(*) FROM memories WHERE user_id = $1 AND (created_at >= $2 OR updated_at >= $2)) AS n`,
+      [scope.userId, scope.since.toISOString()]);
+    return String(rows[0].n);
+  };
+  let last = await signature();
+  let lastChange = Date.now();
+  while (Date.now() - start < opts.timeoutMs) {
+    await new Promise((ok) => setTimeout(ok, 1000));
+    const now = await signature();
+    if (now !== last) { last = now; lastChange = Date.now(); }
+    if (Date.now() - start >= (opts.minMs ?? 0) && Date.now() - lastChange >= quietMs) return;
+  }
+  throw new StateSetupError(`Post-turn work (memory extraction) was still running after ${Math.round(opts.timeoutMs / 1000)}s; the end state was not graded.`);
 }
 
 /** Validate a query's shape at load time: table and columns exist. */

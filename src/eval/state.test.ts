@@ -104,6 +104,63 @@ describe('db_rows', () => {
   });
 });
 
+describe('timing', () => {
+  test('since comes from the database clock', async () => {
+    const { dbNow } = await import('./state');
+    const now = await dbNow();
+    expect(Math.abs(now.getTime() - Date.now())).toBeLessThan(5000);
+  });
+
+  test('waitForQuiet returns once post-turn writes stop, and refuses to grade while they continue', async () => {
+    const { dbNow, waitForQuiet, StateSetupError } = await import('./state');
+    const since = await dbNow();
+    await memory(owner, 'Extracted right after the reply');
+    await expect(waitForQuiet({ userId: owner, since }, { quietMs: 1500, timeoutMs: 10_000 })).resolves.toBeUndefined();
+    let busy = true;
+    const writer = (async () => { while (busy) { await memory(owner, `Still extracting ${Date.now()}`); await new Promise(ok => setTimeout(ok, 300)); } })();
+    await expect(waitForQuiet({ userId: owner, since }, { quietMs: 2000, timeoutMs: 4000 })).rejects.toBeInstanceOf(StateSetupError);
+    busy = false;
+    await writer;
+  }, 30_000);
+});
+
+describe('companion wake', () => {
+  test('waits for the wake that consumed this eval\'s event, and refuses another user\'s goal', async () => {
+    const { runCompanionWake } = await import('./runner');
+    const { insertFixtures, removeFixtures, dbNow, StateSetupError } = await import('./state');
+    const { getDb } = await import('@/db/postgres');
+    const { companionEvents, companionWakes } = await import('@/db/schema/companion-supervision');
+    const { desc } = await import('drizzle-orm');
+    const fixtures = await insertFixtures([
+      { table: 'sessions', as: 'companion', values: { title: 'Companion', context: { companionSupervisor: { modelName: 'fixture' } } } },
+      { table: 'companion_settings', as: 'settings', values: { enabled: true, modelName: 'fixture', supervisorSessionId: '$companion' } },
+      { table: 'sessions', as: 'project', values: { title: 'Solar' } },
+      { table: 'companion_goals', as: 'goal', values: { title: 'Solar', request: 'Deploy', outcome: 'Live', acceptanceCriteria: ['Loads'] } },
+    ], { userId: owner, workspaceId });
+    try {
+      const scope = { userId: owner, workspaceId, since: await dbNow(), refs: fixtures.refs };
+      const test = { id: 'w', description: '', input: '(wake)', assertions: [], trigger: 'companion_wake' as const, wake: { goal: '$goal', session: '$project' } };
+      const wake = (seqs: number[], status: 'completed' | 'failed', result: string) => getDb().insert(companionWakes).values({
+        settingsId: fixtures.refs.settings, sessionId: fixtures.refs.companion, status, eventSeqs: seqs, leaseToken: randomUUID(), leaseUntil: new Date(), result });
+      // A wake of the same user for some other event finishes first; it is not this eval's.
+      const pending = runCompanionWake(test, scope, 10_000);
+      await new Promise(ok => setTimeout(ok, 300));
+      await wake([999_999], 'completed', 'unrelated check-in');
+      await new Promise(ok => setTimeout(ok, 1500));
+      const [event] = await getDb().select({ seq: companionEvents.seq }).from(companionEvents).orderBy(desc(companionEvents.seq)).limit(1);
+      await getDb().delete(companionWakes);
+      await wake([event.seq], 'completed', 'this eval\'s check-in');
+      expect(await pending).toMatchObject({ response: 'this eval\'s check-in', metadata: { wakeStatus: 'completed' } });
+
+      await expect(runCompanionWake({ ...test, wake: { goal: '$nope' } }, scope, 1000)).rejects.toBeInstanceOf(StateSetupError);
+      await expect(runCompanionWake({ ...test, wake: { goal: fixtures.refs.goal } }, { ...scope, userId: other }, 1000))
+        .rejects.toThrow('not a goal of the eval user');
+    } finally {
+      await removeFixtures(fixtures);
+    }
+  }, 30_000);
+});
+
 describe('fixtures', () => {
   test('rows belong to the eval user, references resolve, $env reads the environment, and removal undoes it', async () => {
     const { insertFixtures, removeFixtures, countRows } = await import('./state');

@@ -158,23 +158,58 @@ export interface GateResult {
   stale: string[];
   /** Unsafe failures in tests outside the gate: reported, not blocking — they never proved they hold. */
   unsafeOutsideGate: string[];
+  /** Admitted, but outside this run's --suite / --tag selection. */
+  notRun: string[];
 }
 
-export function decideGate(members: GateMembers, suites: EvalSuite[], results: EvalSuiteResult[], evalDir: string): GateResult {
+/** What the run selected: admissions outside it are "not run", not stale. */
+export interface GateSelection {
+  /** The --suite filter (a file name); unset means every suite was meant to load. */
+  suite?: string;
+  tags?: string[];
+}
+
+const suiteOf = (key: string) => key.slice(0, key.indexOf('/'));
+
+export function decideGate(members: GateMembers, suites: EvalSuite[], results: EvalSuiteResult[], evalDir: string,
+  selection: GateSelection = {}): GateResult {
   const tests = testsByKey(suites);
   const runs = attemptsByKey(results);
-  const result: GateResult = { verdict: 'GO', blocking: [], unclear: [], rows: [], stale: [], unsafeOutsideGate: [] };
+  const ran = new Set(results.flatMap(s => s.results.map(r => gateKey(s.suite, r.testId))));
+  const loaded = new Set(suites.map(s => s.name));
+  const result: GateResult = { verdict: 'GO', blocking: [], unclear: [], rows: [], stale: [], unsafeOutsideGate: [], notRun: [] };
   const gated = new Set<string>();
 
   for (const [key, member] of Object.entries(members).sort(([a], [b]) => a.localeCompare(b))) {
+    if (!loaded.has(suiteOf(key))) {
+      // Filtered out by --suite, or — when every suite was meant to load —
+      // a suite that failed to load: that must not read as a clean gate.
+      if (selection.suite) result.notRun.push(key);
+      else result.unclear.push(`${key} is admitted but its suite did not load (fix it, or remove the test from the gate file).`);
+      continue;
+    }
     const test = tests.get(key);
     if (!test || fingerprintTest(test, evalDir) !== member.fingerprint) {
       result.stale.push(key);
       continue;
     }
-    const attempts = runs.get(key);
-    if (!attempts?.length) continue;
+    if (selection.tags?.length && !test.tags?.some(tag => selection.tags?.includes(tag))) {
+      result.notRun.push(key);
+      continue;
+    }
     gated.add(key);
+    const attempts = runs.get(key);
+    if (!attempts?.length) {
+      // Selected and admitted, but nothing gradeable: every attempt was a
+      // setup error, or it never ran. Never a silent GO; NO-GO when the test
+      // is what guards an unsafe outcome.
+      const guardsUnsafe = test.assertions.some(a => a.failure === 'unsafe');
+      const why = ran.has(key) ? 'every attempt was a setup error' : 'it did not run';
+      if (guardsUnsafe) result.blocking.push(`${key} guards unsafe-class checks and could not be graded (${why}).`);
+      else result.unclear.push(`${key} could not be graded (${why}).`);
+      result.rows.push({ key, passed: 0, attempts: 0, note: 'not graded' });
+      continue;
+    }
     const passed = attempts.filter(a => a.passed).length;
     const row: GateRow = { key, passed, attempts: attempts.length, note: '' };
     result.rows.push(row);
@@ -202,7 +237,7 @@ export function decideGate(members: GateMembers, suites: EvalSuite[], results: E
     if (unsafe.length) result.unsafeOutsideGate.push(`${key}: ${unsafe.join(', ')}`);
   }
 
-  if (!result.rows.length) result.unclear.push('No admitted test ran in this run (admit tests with --repeat 5 --admit).');
+  if (!gated.size) result.unclear.push('No admitted test ran in this run (admit tests with --repeat 5 --admit).');
   result.verdict = result.blocking.length ? 'NO-GO' : result.unclear.length ? 'INCONCLUSIVE' : 'GO';
   return result;
 }
@@ -213,6 +248,7 @@ export function formatGateReport(result: GateResult): string {
   for (const b of result.blocking) lines.push(`  BLOCKING: ${b}`);
   for (const u of result.unclear) lines.push(`  unclear: ${u}`);
   if (result.stale.length) lines.push(`  stale admissions (changed since admitted, not gated): ${result.stale.join(', ')}`);
+  if (result.notRun.length) lines.push(`  admitted but not selected in this run: ${result.notRun.join(', ')}`);
   for (const u of result.unsafeOutsideGate) lines.push(`  unsafe failure outside the gate (not blocking): ${u}`);
   return lines.join('\n');
 }

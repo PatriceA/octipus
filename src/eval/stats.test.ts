@@ -58,6 +58,21 @@ describe('summaries', () => {
     expect(result.results[3]).toMatchObject({ passed: false, completed: false, unsafe: [], metadata: { setupError: expect.stringMatching(/--integration/) } });
   });
 
+  test('a test without outcome checks is left out of the completion rate, not counted complete', () => {
+    const stats = summarizeAttempts('s', [attempt('a', true, { completed: null }), attempt('b', false, { completed: false }), attempt('c', true)], 1);
+    expect(stats.map(t => [t.completed, t.completionApplicable])).toEqual([[0, 0], [0, 1], [1, 1]]);
+    expect(overallStats(stats).taskCompletionRate).toBe(0.5);
+  });
+
+  test('stateful tests of one eval user share a lane; others run in lanes of their own', async () => {
+    const { executionLanes } = await import('./runner');
+    const user = '11111111-2222-4333-8444-555555555555';
+    const state = (id: string, userId = user) => ({ id, description: '', input: 'x', context: { userId }, assertions: [{ type: 'memory_absent', value: 'X' }] });
+    const plain = (id: string) => ({ id, description: '', input: 'x', context: { userId: user }, assertions: [{ type: 'contains', value: 'x' }] });
+    const lanes = executionLanes([state('s1'), plain('p1'), state('s2'), state('o1', '22222222-2222-4333-8444-555555555555'), plain('p2')]);
+    expect(lanes.map(l => l.map(t => t.id))).toEqual([['s1', 's2'], ['p1'], ['o1'], ['p2']]);
+  });
+
   test('a single run still reports, with pass@k undefined past one attempt', () => {
     const [only] = summarizeAttempts('s', [attempt('a', true)], 5);
     expect(only).toMatchObject({ attempts: 1, passAt1: 1, passAtK: null, passPowK: null });

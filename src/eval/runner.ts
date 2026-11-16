@@ -10,9 +10,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
-import { evaluateAllAssertions, type GraderFunction, STATE_ASSERTION_TYPES } from './assertions';
+import { evaluateAllAssertions, type GraderFunction } from './assertions';
 import { clearMemories, memorySetupBlocker, seedMemories } from './memory-setup';
-import { cleanupCreated, type InsertedFixtures, insertFixtures, removeFixtures, type StateScope } from './state';
+import {
+  cleanupCreated, dbNow, type InsertedFixtures, insertFixtures, removeFixtures, resolveRef, STATE_ASSERTION_TYPES, type StateScope,
+  StateSetupError, scopeRefs, waitForQuiet,
+} from './state';
 import { summarizeAttempts } from './stats';
 import type {
   EvalResult,
@@ -85,7 +88,7 @@ async function runTestUnit(
 
   // If the test needs a full response (contains, quality, defense, etc.), try direct LLM
   const needsResponse = test.assertions.some(a =>
-    ['contains', 'not_contains', 'matches_regex', 'response_quality',
+    ['contains', 'not_contains', 'not_hands_over', 'matches_regex', 'response_quality',
      'no_hallucination', 'follows_format', 'defense_held'].includes(a.type),
   );
 
@@ -373,24 +376,39 @@ async function serveFixture(path: string): Promise<{ url: string; close: () => P
 
 /**
  * File a Companion event for a fixture goal and wait for the background
- * check-in it causes. The running backend's scheduler claims the event and
- * runs the controller model; this only observes the receipt.
+ * check-in that consumes it. The running backend's scheduler claims the event
+ * and runs the controller model; this only observes the receipt — the wake
+ * whose `event_seqs` holds THIS event, never just any wake of the user.
+ *
+ * `wake.goal` / `wake.session` resolve like any fixture reference: `$name` of
+ * a fixture row, or an id that must belong to the eval user. Unknown
+ * references and other users' rows are setup errors.
  */
-async function runCompanionWake(test: EvalTest, refs: Record<string, string>, since: Date, timeoutMs: number): Promise<TestExecutionContext> {
+export async function runCompanionWake(test: EvalTest, scope: StateScope, timeoutMs: number): Promise<TestExecutionContext> {
   const start = Date.now();
   const { getDb } = await import('@/db/postgres');
-  const { and, eq, gte, inArray } = await import('drizzle-orm');
-  const { companionEvents, companionSettings, companionWakes } = await import('@/db/schema/companion-supervision');
-  const ref = (name: string | undefined) => (name?.startsWith('$') ? refs[name.slice(1)] : name);
-  const goalId = ref(test.wake?.goal);
-  if (!goalId) return { latencyMs: 0, metadata: { input: test.input, error: `wake.goal ${test.wake?.goal} names no fixture row` } };
-  await getDb().insert(companionEvents).values({ goalId, sessionId: ref(test.wake?.session) ?? null, kind: 'eval', sourceId: randomUUID(), state: test.wake?.state ?? 'failed' });
-  const userId = test.context?.userId as string;
+  const { and, desc, eq, inArray, sql } = await import('drizzle-orm');
+  const { companionEvents, companionGoals, companionSettings, companionWakes } = await import('@/db/schema/companion-supervision');
+  const { sessions } = await import('@/db/schema/sessions');
+  const refs = scopeRefs(scope);
+  const goalId = String(resolveRef(test.wake?.goal, refs));
+  const sessionId = test.wake?.session ? String(resolveRef(test.wake.session, refs)) : null;
+  const [goal] = await getDb().select({ id: companionGoals.id }).from(companionGoals)
+    .where(and(eq(companionGoals.id, goalId), eq(companionGoals.userId, scope.userId)));
+  if (!goal) throw new StateSetupError(`wake.goal ${test.wake?.goal} is not a goal of the eval user.`);
+  if (sessionId) {
+    const [session] = await getDb().select({ id: sessions.id }).from(sessions).where(and(eq(sessions.id, sessionId), eq(sessions.userId, scope.userId)));
+    if (!session) throw new StateSetupError(`wake.session ${test.wake?.session} is not a session of the eval user.`);
+  }
+  const [event] = await getDb().insert(companionEvents)
+    .values({ goalId, sessionId, kind: 'eval', sourceId: randomUUID(), state: test.wake?.state ?? 'failed' })
+    .returning({ seq: companionEvents.seq });
   while (Date.now() - start < timeoutMs) {
     const [done] = await getDb().select({ status: companionWakes.status, result: companionWakes.result }).from(companionWakes)
       .innerJoin(companionSettings, eq(companionSettings.id, companionWakes.settingsId))
-      .where(and(eq(companionSettings.userId, userId), gte(companionWakes.createdAt, since), inArray(companionWakes.status, ['completed', 'failed', 'unknown'])))
-      .limit(1);
+      .where(and(eq(companionSettings.userId, scope.userId), sql`${companionWakes.eventSeqs} @> ${JSON.stringify([event.seq])}::jsonb`,
+        inArray(companionWakes.status, ['completed', 'failed', 'unknown'])))
+      .orderBy(desc(companionWakes.createdAt)).limit(1);
     if (done) {
       const failed = done.status !== 'completed';
       return { response: done.result ?? '', latencyMs: Date.now() - start,
@@ -399,7 +417,7 @@ async function runCompanionWake(test: EvalTest, refs: Record<string, string>, si
     await new Promise((ok) => setTimeout(ok, 1000));
   }
   return { latencyMs: Date.now() - start, metadata: { input: test.input, mode: 'companion_wake',
-    error: `No Companion check-in finished within ${Math.round(timeoutMs / 1000)}s: is the backend running with Companion enabled and a controller model bound?` } };
+    error: `No Companion check-in consumed the eval's event within ${Math.round(timeoutMs / 1000)}s: is the backend running with Companion enabled and a controller model bound?` } };
 }
 
 /**
@@ -452,8 +470,11 @@ export async function runTest(
   let seededIds: string[] = [];
   let scope: StateScope | undefined;
   try {
+    // The database's clock throughout: created_at defaults are written on it,
+    // so `since` taken here cannot miss (or include) a row on clock skew.
+    const setupAt = stateful ? await dbNow() : new Date();
     if (test.memorySetup?.length) seededIds = await seedMemories(userId, test.memorySetup);
-    if (test.stateSetup?.length) fixtures = await insertFixtures(test.stateSetup, { userId, workspaceId });
+    if (test.stateSetup?.length) fixtures = await insertFixtures(test.stateSetup, { userId, workspaceId }, setupAt);
     if (test.fixturePage) page = await serveFixture(resolve(options.evalDir ?? resolve(process.cwd(), 'eval'), test.fixturePage));
   } catch (err) {
     await teardown(test, { fixtures, page, seededIds });
@@ -461,17 +482,19 @@ export async function runTest(
   }
 
   try {
-    // Fixture rows carry an explicit created_at before this instant, so
-    // `since: test` counts only what the turn did.
-    if (stateful) scope = { userId, workspaceId, since: new Date(), refs: fixtures.refs };
+    // Fixture rows carry a created_at before setup began, so `since: test`
+    // counts only what the turn did.
+    if (stateful) scope = { userId, workspaceId, since: await dbNow(), refs: fixtures.refs };
     const input = page ? test.input.replaceAll('{{fixtureUrl}}', page.url) : test.input;
-    const sessionRef = test.context?.sessionId?.startsWith('$') ? test.context.sessionId.slice(1) : undefined;
-    const session = sessionRef ? fixtures.refs[sessionRef] : undefined;
-    if (sessionRef && !session) return errorResult(test, suiteId, `context.sessionId $${sessionRef} names no fixture row`, attempt);
+    let session: string | undefined;
+    if (test.context?.sessionId?.startsWith('$')) {
+      if (!scope) return errorResult(test, suiteId, `context.sessionId ${test.context.sessionId} refers to a fixture, but the test has none`, attempt);
+      session = String(resolveRef(test.context.sessionId, scopeRefs(scope)));
+    }
 
     // Execute the test
     let ctx: TestExecutionContext;
-    if (test.trigger === 'companion_wake') ctx = await runCompanionWake(test, fixtures.refs, scope?.since ?? new Date(), timeoutMs);
+    if (test.trigger === 'companion_wake') ctx = await runCompanionWake(test, scope as StateScope, timeoutMs);
     else if (options.integration) ctx = await runTestIntegration(test, options.baseUrl || 'http://localhost:3005', model, input, session);
     else ctx = await runTestUnit(test, model);
 
@@ -483,8 +506,12 @@ export async function runTest(
       );
       seededIds = [];
     }
-    // Memory extraction and other post-turn work run after the reply.
-    if (stateful && test.settleMs) await new Promise((ok) => setTimeout(ok, test.settleMs));
+    // Memory extraction and other post-turn work run after the reply, with no
+    // marker this process can read: wait until it has gone quiet, and refuse
+    // to grade (SETUP_ERROR) if it never does.
+    if (scope && !ctx.metadata?.error) {
+      await waitForQuiet(scope, { minMs: test.settleMs ?? 0, timeoutMs: (test.settleMs ?? 0) + 120_000 });
+    }
 
     // Add input to metadata for grader context
     ctx.metadata = { ...(ctx.metadata ?? {}), input };
@@ -513,6 +540,12 @@ export async function runTest(
       metadata: ctx.metadata,
       timestamp: new Date(),
     };
+  } catch (failure) {
+    // A reference that names nothing, a wake goal of another user, post-turn
+    // work that never settled: the test could not be graded, which is not a
+    // verdict on the agent either way.
+    if (failure instanceof StateSetupError) return errorResult(test, suiteId, failure.message, attempt);
+    throw failure;
   } finally {
     await teardown(test, { fixtures, page, seededIds, scope });
   }
@@ -610,6 +643,27 @@ function errorResult(test: EvalTest, suiteId: string, reason: string, attempt = 
 }
 
 /**
+ * Group tests into lanes that run one attempt at a time, whatever
+ * --concurrency says. Attempts of one test always share a lane, and so do all
+ * tests that read or write state as the same eval user: their `since`
+ * windows, cleanups and fixtures (Companion settings are one row per user)
+ * would otherwise overlap, and one attempt's rows would be graded — or
+ * deleted — as another's. Tests without state each get a lane of their own.
+ */
+export function executionLanes(tests: EvalTest[]): EvalTest[][] {
+  const lanes: EvalTest[][] = [];
+  const byUser = new Map<string, EvalTest[]>();
+  for (const test of tests) {
+    const user = usesState(test) ? test.context?.userId : undefined;
+    if (!user) { lanes.push([test]); continue; }
+    const lane = byUser.get(user);
+    if (lane) lane.push(test);
+    else { const fresh = [test]; byUser.set(user, fresh); lanes.push(fresh); }
+  }
+  return lanes;
+}
+
+/**
  * Run an entire eval suite and return aggregated results.
  */
 export async function runSuite(
@@ -631,7 +685,7 @@ export async function runSuite(
 
   // Apply suite defaults — resolve from config if no model specified anywhere
   const needsModel = tests.some(t =>
-    t.assertions.some(a => ['contains', 'not_contains', 'matches_regex', 'response_quality',
+    t.assertions.some(a => ['contains', 'not_contains', 'not_hands_over', 'matches_regex', 'response_quality',
       'no_hallucination', 'follows_format', 'defense_held'].includes(a.type)),
   );
   const explicitModel = options.model || suite.defaultModel;
@@ -647,10 +701,19 @@ export async function runSuite(
 
   // Every attempt of every test, attempts of one test adjacent in the results.
   const repeat = Math.max(1, Math.floor(options.repeat ?? 1));
-  const jobs = tests.flatMap(test => Array.from({ length: repeat }, (_, i) => ({ test, attempt: i + 1 })));
-  const results = await mapWithConcurrency(jobs, concurrency, ({ test, attempt }) =>
-    runTest(test, suite.name, runOptions, attempt, suite.defaultTimeout ?? 120_000),
-  );
+  const lanes = executionLanes(tests);
+  const laneResults = await mapWithConcurrency(lanes, concurrency, async (lane) => {
+    const out: EvalResult[] = [];
+    for (const test of lane) {
+      for (let attempt = 1; attempt <= repeat; attempt++) {
+        out.push(await runTest(test, suite.name, runOptions, attempt, suite.defaultTimeout ?? 120_000));
+      }
+    }
+    return out;
+  });
+  const byTest = new Map<string, EvalResult[]>();
+  for (const r of laneResults.flat()) byTest.set(r.testId, [...(byTest.get(r.testId) ?? []), r]);
+  const results = tests.flatMap(test => byTest.get(test.id) ?? []);
 
   const passed = results.filter(r => r.passed).length;
   const totalScore = results.reduce((sum, r) => sum + r.score, 0);

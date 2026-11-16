@@ -5,22 +5,20 @@
  */
 
 import { basename, extname, resolve } from 'path';
-import { STATE_TABLE_ASSERTIONS, type StateQuery, validateFixtures, validateStateQuery } from './state';
+import { STATE_ASSERTION_TYPES, stateQueryFor, validateFixtures, validateStateQuery } from './state';
 import type { Assertion, AssertionType, EvalSuite, EvalTest } from './types';
 import { fileAt, globFiles } from '@/utils/fs-file';
 
 const VALID_ASSERTION_TYPES: Set<string> = new Set([
   'routes_to_role', 'uses_tool', 'not_uses_tool',
-  'contains', 'not_contains', 'matches_regex',
+  'contains', 'not_contains', 'not_hands_over', 'matches_regex',
   'classification', 'confidence_above', 'output_mode',
   'response_quality', 'latency_under',
   'no_hallucination', 'follows_format', 'token_count_under',
   'defense_held',
   'recalls_memory',
-  'db_rows', ...Object.keys(STATE_TABLE_ASSERTIONS),
+  ...STATE_ASSERTION_TYPES,
 ]);
-
-const STATE_TYPES = new Set(['db_rows', ...Object.keys(STATE_TABLE_ASSERTIONS)]);
 
 // ── Lightweight YAML parser ──────────────────────────────────────────
 // Handles the subset needed for eval suites: scalars, arrays, objects.
@@ -245,34 +243,13 @@ function validateAssertion(a: Record<string, unknown>, testId: string): Assertio
     kind: a.kind as Assertion['kind'],
     failure: a.failure as Assertion['failure'],
   };
-  if (STATE_TYPES.has(a.type)) {
-    // The parser reads `{ a: b }` flow mappings as a string; refuse rather than
-    // drop the filter and count every row.
-    for (const field of ['where', 'matches'] as const) {
-      if (a[field] !== undefined && (typeof a[field] !== 'object' || a[field] === null || Array.isArray(a[field]))) {
-        throw new Error(`Test "${testId}": ${field} must be a block mapping (one "column: value" per line)`);
-      }
-    }
-    const query: StateQuery = {
-      table: typeof a.table === 'string' ? a.table : (STATE_TABLE_ASSERTIONS[a.type] ?? ''),
-      ...(a.where && typeof a.where === 'object' ? { where: a.where as Record<string, unknown> } : {}),
-      ...(a.matches && typeof a.matches === 'object' ? { matches: a.matches as Record<string, string> } : {}),
-      ...(typeof a.count === 'number' ? { count: a.count } : {}),
-      ...(typeof a.min === 'number' ? { min: a.min } : {}),
-      ...(typeof a.max === 'number' ? { max: a.max } : {}),
-      ...(a.since === 'all' || a.since === 'test' ? { since: a.since } : {}),
-    };
-    if (a.type === 'memory_absent') {
-      if (typeof a.value !== 'string' || !a.value) throw new Error(`Test "${testId}": memory_absent needs a value (the pattern no memory may match)`);
-      query.matches = { content: a.value };
-      query.count = 0;
-    }
+  if (STATE_ASSERTION_TYPES.has(a.type)) {
     try {
-      validateStateQuery(query);
+      assertion.query = stateQueryFor(a.type, a);
+      validateStateQuery(assertion.query);
     } catch (err) {
       throw new Error(`Test "${testId}": ${(err as Error).message}`);
     }
-    assertion.query = query;
   }
   return assertion;
 }
