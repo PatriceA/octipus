@@ -98,7 +98,7 @@ test.describe('models page', () => {
     });
   });
 
-  test('Grok Build keeps access in Octipus and saves the selected vendor model', async ({ authenticatedPage: page }) => {
+  test('Grok Build offers only the CLI account catalog and saves the selected vendor model', async ({ authenticatedPage: page }) => {
     const grokModel = {
       id: 'cli-grok-1', name: 'grok-build-test', provider: 'cli', modelId: 'cli/grok-build',
       isEnabled: true, isDefault: false, supportsVision: false, supportsTools: false,
@@ -106,10 +106,14 @@ test.describe('models page', () => {
       priority: 80, costPerInputToken: 0, costPerOutputToken: 0, metadata: { cliAgent: {} },
     };
     let saved: Record<string, unknown> | undefined;
+    let providerRequests = 0;
+    await page.route('**/api/models/providers/*/available', route => { providerRequests++; return json(route, 200, { configured: true, models: [{ id: 'api-only-model', label: 'API model' }] }); });
     await page.route('**/api/models', route => json(route, 200, { models: [grokModel] }));
     await page.route('**/api/models/cli/status', route => json(route, 200, { tools: [{
       name: 'Grok Build', available: true, modelPatterns: ['cli/grok-build', 'cli/grok'],
       modelProvider: 'grok', adapter: 'Grok Build', modelFlag: '--model', quota: null,
+      models: [{ id: 'grok-account-model', label: 'grok-account-model (default)' }],
+      planUsage: { checkedAt: '2026-11-16T10:00:00Z', windows: [], error: 'Grok plan usage unavailable; check /usage inside Grok.' },
     }] }));
     await page.route('**/api/models/grok-build-test', route => {
       if (route.request().method() !== 'PATCH') return route.fallback();
@@ -117,17 +121,60 @@ test.describe('models page', () => {
       return json(route, 200, grokModel);
     });
     await page.goto('/models');
+    await page.getByText('CLI tools · configuration and status', { exact: true }).click();
+    const picker = page.locator('select').filter({ has: page.locator('option[value="grok-account-model"]') });
+    await expect(picker).toHaveCount(1);
+    await expect(page.getByText('Grok plan usage unavailable; check /usage inside Grok.', { exact: true })).toBeVisible();
+    await expect(picker.locator('option')).toHaveCount(2);
+    await expect(page.locator('option[value="api-only-model"]')).toHaveCount(0);
     await page.getByTitle('Edit model').click();
     const modal = page.locator('form').filter({ hasText: 'CLI Agent Settings' });
     await expect(modal.getByText(/Grok Build uses this session/)).toBeVisible();
     await expect(modal.getByText('Permission Mode', { exact: true })).toHaveCount(0);
     await expect(modal.getByText('Allowed Tools', { exact: true })).toHaveCount(0);
-    await modal.getByPlaceholder('(vendor default)').fill('grok-test-model');
+    await modal.getByPlaceholder('(vendor default)').fill('grok-account-model');
+    await expect(modal.locator('datalist option')).toHaveCount(1);
+    await expect(modal.locator('datalist option')).toHaveAttribute('value', 'grok-account-model');
     await modal.getByRole('button', { name: 'Save Changes' }).click();
     await expect.poll(() => saved).toBeTruthy();
-    expect(saved).toMatchObject({ metadata: { cliAgent: { model: 'grok-test-model', inheritApiKeys: false } } });
+    expect(saved).toMatchObject({ metadata: { cliAgent: { model: 'grok-account-model', inheritApiKeys: false } } });
+    expect(providerRequests).toBe(0);
     expect((saved?.metadata as { cliAgent: Record<string, unknown> }).cliAgent).not.toHaveProperty('permissionMode');
   });
+
+  for (const spec of [
+    { name: 'Claude Code (z.ai GLM)', modelId: 'cli/glm', provider: 'zai' },
+    { name: 'Claude Code (Moonshot Kimi)', modelId: 'cli/kimi', provider: 'moonshot' },
+  ]) {
+    test(`${spec.name} uses its CLI catalog instead of an unrelated provider catalog`, async ({ authenticatedPage: page }) => {
+      const model = { id: 'vendor-cli-1', name: 'vendor-cli', provider: 'cli', modelId: spec.modelId,
+        isEnabled: true, isDefault: false, supportsVision: false, supportsTools: false, supportsStreaming: false,
+        contextWindow: 200_000, maxTokens: 16_384, topics: [], priority: 80,
+        costPerInputToken: 0, costPerOutputToken: 0, metadata: { cliAgent: {} } };
+      let requests = 0; let saved: Record<string, unknown> | undefined;
+      await page.route('**/api/models', route => json(route, 200, { models: [model] }));
+      await page.route('**/api/models/providers/*/available', route => { requests++; return json(route, 200, { configured: false }); });
+      await page.route('**/api/models/cli/status', route => json(route, 200, { tools: [{ name: spec.name,
+        available: true, modelPatterns: [spec.modelId], modelProvider: spec.provider, adapter: 'Claude Code',
+        models: [{ id: 'coding-plan-model', label: 'Coding plan model' }], quota: { provider: spec.provider, exhausted: false },
+        planUsage: { checkedAt: '2026-11-16T10:00:00Z', windows: [{ label: '5 hours', usedPercent: 25, resetsAt: '2030-01-01T00:00:00Z' }] } }] }));
+      await page.route('**/api/models/vendor-cli', route => {
+        saved = route.request().postDataJSON() as Record<string, unknown>; return json(route, 200, model);
+      });
+      await page.goto('/models');
+      await page.getByText('CLI tools · configuration and status', { exact: true }).click();
+      await expect(page.getByText('5 hours: 25% used', { exact: true })).toBeVisible();
+      await expect(page.locator('option[value="coding-plan-model"]')).toHaveCount(1);
+      await page.getByTitle('Edit model').click();
+      const modal = page.locator('form').filter({ hasText: 'CLI Agent Settings' });
+      await expect(modal.locator('datalist option[value="coding-plan-model"]')).toHaveCount(1);
+      await modal.getByPlaceholder('(vendor default)').fill('coding-plan-model');
+      await modal.getByRole('button', { name: 'Save Changes' }).click();
+      await expect.poll(() => saved).toBeTruthy();
+      expect(saved).toMatchObject({ metadata: { cliAgent: { model: 'coding-plan-model' } } });
+      expect(requests).toBe(0);
+    });
+  }
 
   test('Antigravity uses the CLI account catalog and accepts max effort without native permission controls', async ({ authenticatedPage: page }) => {
     const model = { id: 'agy-1', name: 'agy-account', provider: 'cli', modelId: 'cli/gemini', isEnabled: true, isDefault: false,

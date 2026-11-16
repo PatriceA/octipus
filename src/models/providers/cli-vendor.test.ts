@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+const vault = vi.hoisted(() => ({ kimi: null as string | null }));
+vi.mock('@/security/vault', () => ({ getVault: () => ({ getByName: async (_scope: string, name: string) => name === 'kimi_api_key' ? vault.kimi : null }) }));
 import { CLI_TOOLS, CLIProvider, glmCliConfig, kimiCliConfig } from './cli-provider';
 
 describe('GLM / Kimi CLI configs (Claude-binary + Anthropic endpoint)', () => {
@@ -6,10 +8,13 @@ describe('GLM / Kimi CLI configs (Claude-binary + Anthropic endpoint)', () => {
   const realMoonshot = process.env.MOONSHOT_API_KEY;
 
   beforeEach(() => {
+    vault.kimi = null;
     process.env.ZAI_API_KEY = 'zai-test';
     process.env.MOONSHOT_API_KEY = 'moonshot-test';
+    vi.stubEnv('KIMI_API_KEY', 'kimi-code-test');
   });
   afterEach(() => {
+    vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks();
     if (realZai === undefined) delete process.env.ZAI_API_KEY; else process.env.ZAI_API_KEY = realZai;
     if (realMoonshot === undefined) delete process.env.MOONSHOT_API_KEY; else process.env.MOONSHOT_API_KEY = realMoonshot;
     delete process.env.ZAI_CLI_MODEL;
@@ -49,11 +54,40 @@ describe('GLM / Kimi CLI configs (Claude-binary + Anthropic endpoint)', () => {
     expect(env.ANTHROPIC_MODEL).toBe('glm-4.6');
   });
 
-  it('kimi buildEnv points the claude binary at Moonshot with the resolved token', async () => {
+  it('kimi uses its coding-plan endpoint and explicitly selected account model', async () => {
+    const env = await kimiCliConfig.buildEnv!({ model: 'account-code-model' });
+    expect(env.ANTHROPIC_BASE_URL).toBe('https://api.kimi.ai/coding');
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe('kimi-code-test');
+    expect(env.ANTHROPIC_MODEL).toBe('account-code-model');
+  });
+
+  it('retains the old Moonshot endpoint and model when only a legacy key is present', async () => {
+    delete process.env.KIMI_API_KEY;
     const env = await kimiCliConfig.buildEnv!();
     expect(env.ANTHROPIC_BASE_URL).toBe('https://api.moonshot.ai/anthropic');
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe('moonshot-test');
     expect(env.ANTHROPIC_MODEL).toBe('kimi-k2-0711-preview');
+  });
+
+  it('preserves an explicitly configured Moonshot API endpoint', async () => {
+    vi.stubEnv('MOONSHOT_ANTHROPIC_BASE_URL', 'https://api.moonshot.ai/anthropic');
+    expect((await kimiCliConfig.buildEnv!({ model: 'explicit-api-model' })).ANTHROPIC_BASE_URL).toBe('https://api.moonshot.ai/anthropic');
+  });
+
+  it('prefers a dedicated coding-plan vault key over a legacy Moonshot environment key', async () => {
+    delete process.env.KIMI_API_KEY; vault.kimi = 'dedicated-vault-key';
+    const env = await kimiCliConfig.buildEnv!({ model: 'coding-model' });
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe('dedicated-vault-key');
+    expect(env.ANTHROPIC_BASE_URL).toBe('https://api.kimi.ai/coding');
+  });
+
+  it('uses a single account model and asks for selection when multiple coding models exist', async () => {
+    const fetcher = vi.fn(async () => Response.json({ data: [{ id: 'single-account-model' }] }));
+    vi.stubGlobal('fetch', fetcher);
+    expect((await kimiCliConfig.buildEnv!()).ANTHROPIC_MODEL).toBe('single-account-model');
+    const now = Date.now(); vi.spyOn(Date, 'now').mockReturnValue(now + 301_000);
+    fetcher.mockImplementation(async () => Response.json({ data: [{ id: 'first' }, { id: 'second' }] }));
+    await expect(kimiCliConfig.buildEnv!()).rejects.toThrow('select an account model in Models');
   });
 
   it('model selection is overridable via env', async () => {

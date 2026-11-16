@@ -75,6 +75,8 @@ describe('one-shot CLI completions on an install row', () => {
   test.each(['cli/claude-code', 'cli/glm', 'cli/kimi'])('%s runs tool-less, prompt on stdin, in an empty directory', async (model) => {
     process.env.ZAI_API_KEY ??= 'zai-test';
     process.env.MOONSHOT_API_KEY ??= 'moonshot-test';
+    process.env.KIMI_API_KEY ??= 'kimi-code-test';
+    process.env.MOONSHOT_CLI_MODEL ??= 'account-code-model';
     const { provider, spawns } = stubbed();
     await provider.complete({ model, messages });
     expect(spawns).toHaveLength(1);

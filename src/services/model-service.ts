@@ -388,7 +388,7 @@ export async function getCliStatus() {
 
   return {
     tools: tools.map(tool => {
-      const quota = quotas.find(q => q.provider === tool.name.toLowerCase().replace(/\s+/g, '-'));
+      const quota = quotas.find(q => q.provider === tool.quotaProvider);
       return { ...tool, quota: quota || null };
     }),
   };

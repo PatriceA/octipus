@@ -1,6 +1,11 @@
 import { prepareAgyRuntime } from '@/core/agy-cli-runtime';
 import type { CLIAgentConfig } from '@/db/schema/models';
 import { discoverAgyModels } from '@/core/agy-cli-models';
+import { discoverGrokModels } from '@/core/grok-cli-models';
+import { makeAnthropicCliModelCatalog } from '@/core/anthropic-cli-models';
+import { makeCliPlanUsage } from '@/core/cli-plan-usage';
+import type { CliPlanUsage } from '@/shared/cli-capabilities';
+import { discoverMuseModels } from '@/core/muse-cli-models';
 import { agyUsage, verifyAgyToollessOutput } from '@/core/agy-cli-protocol';
 import { isProviderQuotaMessage } from '@/core/errors/provider-recovery';
 import { configuredCliBinary } from '@/core/cli-executable';
@@ -196,13 +201,14 @@ export interface CLIToolConfig {
   modelFlag: string;
   /** Optional authenticated CLI catalog; no separate provider API key required. */
   listModels?: () => Promise<CliModelOption[]>;
+  planUsage?: () => Promise<CliPlanUsage>;
   /**
    * Extra environment variables to inject into the spawned process, resolved at
    * call time (e.g. re-point the `claude` binary at a vendor's Anthropic-
    * compatible endpoint with `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`).
    * Merged over `process.env`.
    */
-  buildEnv?: () => Promise<Record<string, string>>;
+  buildEnv?: (settings?: CLIAgentConfig) => Promise<Record<string, string>>;
   /**
    * The CLI emits its entire result as a single blob at process end (e.g. vibe
    * `--output json` writes one JSON array), not incremental stream-json events.
@@ -576,6 +582,7 @@ const museCliConfig: CLIToolConfig = {
   quotaProvider: 'muse-code',
   modelProvider: 'meta',
   modelFlag: '--model',
+  listModels: () => discoverMuseModels(),
   octipusToolsOnly: true,
   billingInfo: {
     vendor: 'Meta',
@@ -623,8 +630,8 @@ function resolveWorkspaceRoot(): string {
 // Both vendors publish an Anthropic-compatible endpoint, so the existing
 // `claude` binary drives them unchanged — we just re-point it via env
 // (ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN + ANTHROPIC_MODEL). This is the
-// documented, reliable path; the standalone `zcode`/`kimi` binaries have no
-// non-interactive mode our subprocess wrapper can consume.
+// adapter used by these model entries. Native vendor CLIs are separate
+// clients and their account state is not assumed to match these credentials.
 
 /** Resolve a vendor API key: env var first, then the system vault. */
 async function resolveCliVendorKey(envVar: string, vaultName: string): Promise<string> {
@@ -696,7 +703,8 @@ interface AnthropicCompatCliSpec {
   keyVault: string;
   /** Env var selecting the model + its default. */
   modelEnv: string;
-  defaultModel: string;
+  defaultModel?: string;
+  legacyKey?: { env: string; vault: string; baseUrl: string; defaultModel: string };
   quotaProvider: string;
   modelProvider: 'zai' | 'moonshot';
   billingInfo: CLIBillingInfo;
@@ -708,6 +716,28 @@ interface AnthropicCompatCliSpec {
  * arg-builder + stream parser without coupling dispatch to the display name.
  */
 function makeAnthropicCompatCliConfig(spec: AnthropicCompatCliSpec): CLIToolConfig {
+  const credentialEnv = async () => {
+    const primary = await resolveCliVendorKey(spec.keyEnv, spec.keyVault);
+    const legacy = !primary && spec.legacyKey ? await resolveCliVendorKey(spec.legacyKey.env, spec.legacyKey.vault) : '';
+    const token = primary || legacy;
+    if (!token) throw new Error(`${spec.name}: no API key configured. Set ${spec.keyEnv} or store ${spec.keyVault} in the vault.`);
+    const override = process.env[spec.baseUrlEnv];
+    return { ANTHROPIC_BASE_URL: override || (legacy && spec.legacyKey ? spec.legacyKey.baseUrl : spec.defaultBaseUrl),
+      ANTHROPIC_AUTH_TOKEN: token, ANTHROPIC_API_KEY: '', API_TIMEOUT_MS: '3000000',
+      ...(legacy && spec.legacyKey && !override ? { ANTHROPIC_MODEL: spec.legacyKey.defaultModel } : {}),
+    };
+  };
+  const listModels = makeAnthropicCliModelCatalog(spec.name, credentialEnv);
+  const buildEnv = async (settings?: CLIAgentConfig) => {
+    const env = await credentialEnv();
+    let model = process.env[spec.modelEnv] || settings?.model || spec.defaultModel || env.ANTHROPIC_MODEL;
+    if (!model) {
+      const models = await listModels();
+      if (models.length !== 1) throw new Error(`${spec.name}: select an account model in Models before running this CLI.`);
+      model = models[0].id;
+    }
+    return { ...env, ANTHROPIC_MODEL: model };
+  };
   return {
     name: spec.name,
     modelPatterns: spec.modelPatterns,
@@ -719,20 +749,9 @@ function makeAnthropicCompatCliConfig(spec: AnthropicCompatCliSpec): CLIToolConf
     toolLessArgs: () => ['-p', '--output-format', 'json', '--strict-mcp-config', '--mcp-config', getEmptyMcpConfigPath(),
       '--tools=', '--setting-sources=', '--settings', getClaudeSpaceSettingsPath(false)],
     parseOutput: parseClaudeStyleOutput(spec.modelLabel),
-    buildEnv: async () => {
-      const token = await resolveCliVendorKey(spec.keyEnv, spec.keyVault);
-      if (!token) {
-        throw new Error(`${spec.name}: no API key configured. Set ${spec.keyEnv} or store ${spec.keyVault} in the vault.`);
-      }
-      return {
-        ANTHROPIC_BASE_URL: process.env[spec.baseUrlEnv] || spec.defaultBaseUrl,
-        ANTHROPIC_AUTH_TOKEN: token,
-        // Clear any real Anthropic key so it can't shadow the vendor auth token.
-        ANTHROPIC_API_KEY: '',
-        ANTHROPIC_MODEL: process.env[spec.modelEnv] || spec.defaultModel,
-        API_TIMEOUT_MS: '3000000',
-      };
-    },
+    buildEnv,
+    listModels,
+    planUsage: makeCliPlanUsage(spec.modelProvider, credentialEnv),
     isQuotaError: (output: string) => /rate.?limit|quota|exceeded|too many/i.test(output),
     quotaProvider: spec.quotaProvider,
     modelProvider: spec.modelProvider,
@@ -769,11 +788,11 @@ const kimiCliConfig: CLIToolConfig = makeAnthropicCompatCliConfig({
   modelPatterns: ['cli/kimi', 'cli/kimi-code', 'cli/moonshot'],
   modelLabel: 'cli/kimi',
   baseUrlEnv: 'MOONSHOT_ANTHROPIC_BASE_URL',
-  defaultBaseUrl: 'https://api.moonshot.ai/anthropic',
-  keyEnv: 'MOONSHOT_API_KEY',
-  keyVault: 'moonshot_api_key',
+  defaultBaseUrl: 'https://api.kimi.ai/coding',
+  keyEnv: 'KIMI_API_KEY',
+  keyVault: 'kimi_api_key',
+  legacyKey: { env: 'MOONSHOT_API_KEY', vault: 'moonshot_api_key', baseUrl: 'https://api.moonshot.ai/anthropic', defaultModel: 'kimi-k2-0711-preview' },
   modelEnv: 'MOONSHOT_CLI_MODEL',
-  defaultModel: 'kimi-k2-0711-preview',
   quotaProvider: 'moonshot-cli',
   modelProvider: 'moonshot',
   billingInfo: {
@@ -783,7 +802,7 @@ const kimiCliConfig: CLIToolConfig = makeAnthropicCompatCliConfig({
     pricingDocUrl: 'https://platform.moonshot.ai/',
     modelsDocUrl: 'https://platform.kimi.ai/docs/models',
     modelFlagDocUrl: 'https://platform.kimi.ai/docs/api/overview',
-    warning: 'Runs the Claude Code binary against Moonshot’s Anthropic-compatible endpoint. Requires the `claude` CLI installed and a Moonshot key (MOONSHOT_API_KEY / moonshot_api_key). Pick the Kimi model via MOONSHOT_CLI_MODEL. Note: Moonshot rescales temperature (×0.6).',
+    warning: 'Runs the Claude Code binary against Moonshot’s Anthropic-compatible endpoint. Requires the `claude` CLI installed and a Kimi Code key (KIMI_API_KEY / kimi_api_key; legacy Moonshot key bindings remain accepted). Choose an account model in Models. Explicit MOONSHOT_ANTHROPIC_BASE_URL overrides are preserved. Note: Moonshot rescales temperature (×0.6).',
   },
 });
 
@@ -792,6 +811,9 @@ const kimiCliConfig: CLIToolConfig = makeAnthropicCompatCliConfig({
 // It has no stdin tool-less completion contract, so it is not a completion lane.
 const grokBuildConfig: CLIToolConfig = {
   name: 'Grok Build',
+  listModels: discoverGrokModels,
+  planUsage: async () => ({ checkedAt: new Date().toISOString(), windows: [],
+    error: 'Grok plan usage is unavailable in this managed headless runtime. Check /usage inside Grok; local token totals are not your remaining plan allowance.' }),
   octipusToolsOnly: true,
   modelPatterns: ['cli/grok-build', 'cli/grok'],
   binaryPath: 'grok',
@@ -904,7 +926,7 @@ export class CLIProvider implements ModelProvider {
     // `cliAgent.inheritApiKeys` opts a key-mode CLI back into its own key,
     // exactly as it does for managed runs.
     const inheritApiKeys = row?.metadata?.cliAgent?.inheritApiKeys === true;
-    const childEnv = cliEnvFor(credentialOwner, tool, tool.buildEnv ? await tool.buildEnv() : undefined, inheritApiKeys);
+    const childEnv = cliEnvFor(credentialOwner, tool, tool.buildEnv ? await tool.buildEnv(row?.metadata?.cliAgent) : undefined, inheritApiKeys);
     // Every completion hands the prompt over on stdin: the prompt itself, or
     // the CLI's encoding of it (`cliToolsStdin.encode`).
     let stdinText = prompt;
@@ -1069,16 +1091,18 @@ export class CLIProvider implements ModelProvider {
     available: boolean;
     modelPatterns: string[];
     modelProvider: CliModelProvider;
+    quotaProvider: string;
     modelFlag: string;
     billingInfo: CLIBillingInfo;
     adapter: string;
     capabilities: string;
     models?: CliModelOption[];
     modelCatalogError?: string;
+    planUsage?: CliPlanUsage;
   }[]> {
-    const results = [];
-    for (const tool of CLI_TOOLS) {
+    return Promise.all(CLI_TOOLS.map(async tool => {
       const available = await this.toolAvailable(tool);
+      const planUsagePromise = includeModelCatalog && tool.planUsage && available ? tool.planUsage() : Promise.resolve(undefined);
       let models: CliModelOption[] | undefined;
       let modelCatalogError: string | undefined;
       if (includeModelCatalog && tool.listModels && available) {
@@ -1088,19 +1112,21 @@ export class CLIProvider implements ModelProvider {
           modelLogger.warn({ tool: tool.name, error: modelCatalogError }, 'CLI model catalog lookup failed');
         }
       }
-      results.push({
+      const planUsage = await planUsagePromise;
+      return {
         name: tool.name,
+        ...(planUsage ? { planUsage } : {}),
         available,
         modelPatterns: tool.modelPatterns,
         modelProvider: tool.modelProvider,
+        quotaProvider: tool.quotaProvider,
         modelFlag: tool.modelFlag,
         billingInfo: tool.billingInfo,
         adapter: tool.adapter ?? tool.name,
         capabilities: describeCliCapabilities(tool),
         ...(includeModelCatalog && tool.listModels ? { models: models ?? [], modelCatalogError } : {}),
-      });
-    }
-    return results;
+      };
+    }));
   }
 
   // Overridable seam: delegates to module-level execCli so tests can stub

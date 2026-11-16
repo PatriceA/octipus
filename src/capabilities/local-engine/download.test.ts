@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -85,8 +86,9 @@ describe('downloadVerified', () => {
     const target = join(sub, 'f.bin');
     let removed = false;
     await downloadVerified(`${base}/f`, target, sha, {
-      onProgress: (done) => { if (!removed && done > 0) { removed = true; void rm(join(dir, 'gone'), { recursive: true, force: true }); } },
+      onProgress: (done) => { if (!removed && done > 0) { removed = true; rmSync(join(dir, 'gone'), { recursive: true, force: true }); } },
     });
+    expect(removed).toBe(true);
     expect(await sha256File(target)).toBe(sha);
   });
 

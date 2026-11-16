@@ -7,6 +7,13 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- Add provider-reported z.ai/Kimi Code plan usage, reset information and a
+  dedicated Kimi Code key entry. Keep legacy Moonshot API bindings unchanged.
+- Fix z.ai/Kimi CLI catalogs to use their own configured endpoints and keys,
+  and include Grok/z.ai/Kimi quota blocks using the correct provider IDs.
+- Populate Grok Build model pickers from `grok models`, using the existing CLI
+  login and account availability instead of the separate xAI API catalog.
+
 - **Local custom endpoints count as local.** A model on a custom
   OpenAI-compatible endpoint (llama.cpp, LM Studio, vLLM, …) can be marked
   **Runs on this machine / network** in the model editor, so conversations at
