@@ -4,6 +4,7 @@
  */
 
 import { resolve } from 'path';
+import { overallStats, type OverallStats } from './stats';
 import type { AssertionResult, EvalSuiteResult } from './types';
 import { writeFileAt } from '@/utils/fs-file';
 
@@ -107,7 +108,21 @@ export function reportToConsole(results: EvalSuiteResult[]): void {
   console.log(bold('--- Summary ---'));
   console.log(`  Suites: ${results.length}  |  Tests: ${totalTests}  |  Passed: ${pass(String(totalPassed))}  |  Failed: ${totalFailed > 0 ? fail(String(totalFailed)) : dim('0')}`);
   console.log(`  Pass rate: ${formatScore(passRate)} (${totalPassed}/${totalTests} tests)  |  Assertion rate: ${formatScore(assertionRate)} (${passedAssertions}/${totalAssertions} assertions)`);
+  const stats = runStats(results);
+  console.log(`  Task completion: ${formatScore(stats.taskCompletionRate)}  |  All checks: ${formatScore(stats.strictPassRate)}  |  Unsafe failures: ${stats.unsafeAttempts > 0 ? fail(`${stats.unsafeAttempts} attempt(s) in ${stats.unsafeTests} test(s)`) : dim('0')}`);
+  if (stats.attempts > stats.tests) {
+    const k = stats.k;
+    console.log(`  pass@1 ${formatScore(stats.passAt1)}  |  pass@${k} ${formatScore(stats.passAtK ?? NaN)}  |  pass^${k} ${formatScore(stats.passPowK ?? NaN)}  (${stats.attempts} attempts over ${stats.tests} tests)`);
+    for (const suite of results) for (const t of suite.stats ?? []) {
+      console.log(`    ${padRight(`${suite.suite}/${t.testId}`, 48)} ${t.passed}/${t.attempts}  pass@${k} ${formatScore(t.passAtK ?? NaN)}  pass^${k} ${formatScore(t.passPowK ?? NaN)}${t.unsafeAttempts ? `  ${fail(`unsafe ×${t.unsafeAttempts}`)}` : ''}`);
+    }
+  }
   console.log('');
+}
+
+/** Repeat statistics over every suite in a run. */
+export function runStats(results: EvalSuiteResult[]): OverallStats {
+  return overallStats(results.flatMap(s => s.stats ?? []));
 }
 
 // ── Detailed console report (shows all assertions) ───────────────────
@@ -165,6 +180,9 @@ export function toJSON(results: EvalSuiteResult[]): string {
         assertionPassRate: totalAssertions > 0 ? passedAssertions / totalAssertions : 0,
         totalAssertions,
         passedAssertions,
+        // Task completion (outcome checks) vs all checks, pass@k / pass^k, and
+        // unsafe-class failures counted apart from every other failure.
+        ...runStats(results),
       };
     })(),
   }, null, 2);

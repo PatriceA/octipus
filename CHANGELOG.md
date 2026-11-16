@@ -45,6 +45,18 @@ labels reflect blast radius, not contract guarantees.
   Reports filed during quiet hours wait until they end, unless high impact with
   an earlier deadline ([COMPANION-SUPERVISION.md](docs/COMPANION-SUPERVISION.md)).
 
+- **Evals grade what changed, not only what was said.** The eval harness can
+  check the database after a turn (`db_rows`, `memory_absent`,
+  `companion_actions`, …, scoped to the eval user), seed fixture rows, tag
+  each check `process` / `outcome` with a failure class (`unsafe`,
+  `incomplete`), repeat tests (`--repeat`, pass@1 / pass@k / pass^k) and gate
+  on tests admitted after 5/5 clean runs (`--admit`, `--gate`, `eval/gate.json`,
+  fingerprinted). New suites cover memory poisoning and Companion authority
+  (live tier), and `npm run eval:decisions` runs a model-free, fixed-label set
+  of Companion basis decisions with unsafe allows and extra refusals reported
+  apart. A list-valued `not_contains` no longer passes regardless of the reply
+  ([EVALUATIONS.md](docs/EVALUATIONS.md)).
+
 - **Companion speaks up only when it matters.** Background check-ins no longer
   post their working text or notify you. Companion files a report instead, and
   the server sends it only for strong evidence, real impact and a new matter or

@@ -5,11 +5,18 @@
  *   - Integration mode: calls the running backend via HTTP API
  */
 
+import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { evaluateAllAssertions, type GraderFunction } from './assertions';
 import { clearMemories, memorySetupBlocker, seedMemories } from './memory-setup';
+import {
+  cleanupCreated, dbNow, type InsertedFixtures, insertFixtures, removeFixtures, resolveRef, STATE_ASSERTION_TYPES, type StateScope,
+  StateSetupError, scopeRefs, waitForQuiet,
+} from './state';
+import { summarizeAttempts } from './stats';
 import type {
   EvalResult,
   EvalRunnerOptions,
@@ -81,7 +88,7 @@ async function runTestUnit(
 
   // If the test needs a full response (contains, quality, defense, etc.), try direct LLM
   const needsResponse = test.assertions.some(a =>
-    ['contains', 'not_contains', 'matches_regex', 'response_quality',
+    ['contains', 'not_contains', 'not_hands_over', 'matches_regex', 'response_quality',
      'no_hallucination', 'follows_format', 'defense_held'].includes(a.type),
   );
 
@@ -172,14 +179,17 @@ async function runTestIntegration(
   test: EvalTest,
   baseUrl: string,
   model?: string,
+  input: string = test.input,
+  sessionOverride?: string,
 ): Promise<TestExecutionContext> {
   const start = Date.now();
   const userId = test.context?.userId || 'eval-user';
   // No invented id: `eval-<test>-<ts>` is not a uuid, and posting it made the
   // backend fail the whole turn instead of running it. A suite that wants
-  // continuity sets a real session id in `context`; otherwise let the backend
-  // open one, which is what a fresh turn wants anyway.
-  const sessionId = test.context?.sessionId;
+  // continuity sets a real session id in `context` (or a `$name` fixture
+  // session); otherwise let the backend open one, which is what a fresh turn
+  // wants anyway.
+  const sessionId = sessionOverride ?? test.context?.sessionId;
   const channel = test.context?.channel || 'api';
 
   const token = getApiToken();
@@ -194,7 +204,7 @@ async function runTestIntegration(
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({
-        message: test.input,
+        message: input,
         ...(sessionId ? { sessionId } : {}),
         userId,
         channel,
@@ -251,7 +261,7 @@ async function runTestIntegration(
         ? { input: 0, output: data.metadata.tokens }
         : undefined,
       metadata: {
-        input: test.input,
+        input,
         mode: 'integration',
         agentId: data.agentId,
       },
@@ -310,6 +320,106 @@ async function mapWithConcurrency<T, R>(
 
 // ── Public API ───────────────────────────────────────────────────────
 
+// ── End-state plumbing ───────────────────────────────────────────────
+
+/** Does this test read or write the database around its turn? */
+export function usesState(test: Pick<EvalTest, 'assertions' | 'stateSetup' | 'cleanup' | 'trigger'>): boolean {
+  return test.assertions.some(a => STATE_ASSERTION_TYPES.has(a.type)) || !!test.stateSetup?.length
+    || !!test.cleanup?.length || test.trigger === 'companion_wake';
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Why a test that reads or writes state cannot run here, or undefined. Unit
+ * mode writes nothing, so "no such row" would pass on a turn that never ran;
+ * and the rows must belong to a real user the request runs as.
+ */
+export function stateObservabilityBlocker(test: EvalTest, integration?: boolean): string | undefined {
+  if (!usesState(test)) return undefined;
+  if (!integration) {
+    return 'End-state checks and fixtures need --integration: unit mode runs no tools and writes nothing, so an absence check would pass on nothing.';
+  }
+  if (!test.context?.userId || !UUID_RE.test(test.context.userId)) {
+    return `End-state checks need context.userId to be the eval user's UUID (got "${test.context?.userId ?? 'unset'}").`;
+  }
+  return undefined;
+}
+
+/**
+ * The eval process reads the backend's database directly. An embedded PGlite
+ * is held open by the running backend and cannot be opened a second time.
+ */
+async function stateDatabase(): Promise<string | undefined> {
+  const { getConfig } = await import('@/config');
+  if ((getConfig().storageMode ?? 'external') === 'embedded') {
+    return 'End-state checks read the backend database from this process; an embedded (PGlite) install is held open by the running backend. Run against an external Postgres.';
+  }
+  const { initializeDb } = await import('@/db/postgres');
+  await initializeDb();
+  return undefined;
+}
+
+/** Serve one fixture file over loopback HTTP for the length of a test. */
+async function serveFixture(path: string): Promise<{ url: string; close: () => Promise<void> }> {
+  const body = readFileSync(path);
+  const type = path.endsWith('.html') ? 'text/html; charset=utf-8' : path.endsWith('.json') ? 'application/json' : 'text/plain; charset=utf-8';
+  const server: Server = createServer((_req, res) => { res.writeHead(200, { 'content-type': type }); res.end(body); });
+  await new Promise<void>((ok) => server.listen(0, '127.0.0.1', ok));
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  return {
+    url: `http://127.0.0.1:${port}/${basename(path)}`,
+    close: () => new Promise<void>((ok) => server.close(() => ok())),
+  };
+}
+
+/**
+ * File a Companion event for a fixture goal and wait for the background
+ * check-in that consumes it. The running backend's scheduler claims the event
+ * and runs the controller model; this only observes the receipt — the wake
+ * whose `event_seqs` holds THIS event, never just any wake of the user.
+ *
+ * `wake.goal` / `wake.session` resolve like any fixture reference: `$name` of
+ * a fixture row, or an id that must belong to the eval user. Unknown
+ * references and other users' rows are setup errors.
+ */
+export async function runCompanionWake(test: EvalTest, scope: StateScope, timeoutMs: number): Promise<TestExecutionContext> {
+  const start = Date.now();
+  const { getDb } = await import('@/db/postgres');
+  const { and, desc, eq, inArray, sql } = await import('drizzle-orm');
+  const { companionEvents, companionGoals, companionSettings, companionWakes } = await import('@/db/schema/companion-supervision');
+  const { sessions } = await import('@/db/schema/sessions');
+  const refs = scopeRefs(scope);
+  const goalId = String(resolveRef(test.wake?.goal, refs));
+  const sessionId = test.wake?.session ? String(resolveRef(test.wake.session, refs)) : null;
+  const [goal] = await getDb().select({ id: companionGoals.id }).from(companionGoals)
+    .where(and(eq(companionGoals.id, goalId), eq(companionGoals.userId, scope.userId)));
+  if (!goal) throw new StateSetupError(`wake.goal ${test.wake?.goal} is not a goal of the eval user.`);
+  if (sessionId) {
+    const [session] = await getDb().select({ id: sessions.id }).from(sessions).where(and(eq(sessions.id, sessionId), eq(sessions.userId, scope.userId)));
+    if (!session) throw new StateSetupError(`wake.session ${test.wake?.session} is not a session of the eval user.`);
+  }
+  const [event] = await getDb().insert(companionEvents)
+    .values({ goalId, sessionId, kind: 'eval', sourceId: randomUUID(), state: test.wake?.state ?? 'failed' })
+    .returning({ seq: companionEvents.seq });
+  while (Date.now() - start < timeoutMs) {
+    const [done] = await getDb().select({ status: companionWakes.status, result: companionWakes.result }).from(companionWakes)
+      .innerJoin(companionSettings, eq(companionSettings.id, companionWakes.settingsId))
+      .where(and(eq(companionSettings.userId, scope.userId), sql`${companionWakes.eventSeqs} @> ${JSON.stringify([event.seq])}::jsonb`,
+        inArray(companionWakes.status, ['completed', 'failed', 'unknown'])))
+      .orderBy(desc(companionWakes.createdAt)).limit(1);
+    if (done) {
+      const failed = done.status !== 'completed';
+      return { response: done.result ?? '', latencyMs: Date.now() - start,
+        metadata: { input: test.input, mode: 'companion_wake', wakeStatus: done.status, ...(failed ? { error: `Companion check-in ${done.status}: ${(done.result ?? '').slice(0, 200)}` } : {}) } };
+    }
+    await new Promise((ok) => setTimeout(ok, 1000));
+  }
+  return { latencyMs: Date.now() - start, metadata: { input: test.input, mode: 'companion_wake',
+    error: `No Companion check-in consumed the eval's event within ${Math.round(timeoutMs / 1000)}s: is the backend running with Companion enabled and a controller model bound?` } };
+}
+
 /**
  * Run a single eval test and return the result.
  */
@@ -317,6 +427,8 @@ export async function runTest(
   test: EvalTest,
   suiteId: string,
   options: EvalRunnerOptions = {},
+  attempt = 1,
+  timeoutMs = 120_000,
 ): Promise<EvalResult> {
   const model = options.model;
   const graderFn = options.graderModel ? createGraderFn(options.graderModel) : undefined;
@@ -341,57 +453,115 @@ export async function runTest(
   // no routing suite.
   const routingBlocker = routingObservabilityBlocker(test.assertions, options.integration)
     ?? toolUsageObservabilityBlocker(test.assertions, options.integration)
-    ?? rendersObservabilityBlocker(test, options.integration);
-  if (routingBlocker) return errorResult(test, suiteId, routingBlocker);
+    ?? rendersObservabilityBlocker(test, options.integration)
+    ?? stateObservabilityBlocker(test, options.integration);
+  if (routingBlocker) return errorResult(test, suiteId, routingBlocker, attempt);
 
-  let seededIds: string[] = [];
-  if (test.memorySetup?.length) {
-    try {
-      seededIds = await seedMemories(test.context?.userId as string, test.memorySetup);
-    } catch (err) {
-      return errorResult(test, suiteId, (err as Error).message);
-    }
+  const stateful = usesState(test);
+  if (stateful) {
+    const dbBlocker = await stateDatabase().catch((err: unknown) => `Could not open the database for end-state checks: ${(err as Error).message}`);
+    if (dbBlocker) return errorResult(test, suiteId, dbBlocker, attempt);
   }
 
-  // Execute the test
-  let ctx: TestExecutionContext;
+  const userId = test.context?.userId as string;
+  const workspaceId = test.context?.workspaceId;
+  let fixtures: InsertedFixtures = { refs: {}, created: [] };
+  let page: Awaited<ReturnType<typeof serveFixture>> | undefined;
+  let seededIds: string[] = [];
+  let scope: StateScope | undefined;
   try {
-    ctx = options.integration
-      ? await runTestIntegration(test, options.baseUrl || 'http://localhost:3005', model)
-      : await runTestUnit(test, model);
-  } finally {
+    // The database's clock throughout: created_at defaults are written on it,
+    // so `since` taken here cannot miss (or include) a row on clock skew.
+    const setupAt = stateful ? await dbNow() : new Date();
+    if (test.memorySetup?.length) seededIds = await seedMemories(userId, test.memorySetup);
+    if (test.stateSetup?.length) fixtures = await insertFixtures(test.stateSetup, { userId, workspaceId }, setupAt);
+    if (test.fixturePage) page = await serveFixture(resolve(options.evalDir ?? resolve(process.cwd(), 'eval'), test.fixturePage));
+  } catch (err) {
+    await teardown(test, { fixtures, page, seededIds });
+    return errorResult(test, suiteId, (err as Error).message, attempt);
+  }
+
+  try {
+    // Fixture rows carry a created_at before setup began, so `since: test`
+    // counts only what the turn did.
+    if (stateful) scope = { userId, workspaceId, since: await dbNow(), refs: fixtures.refs };
+    const input = page ? test.input.replaceAll('{{fixtureUrl}}', page.url) : test.input;
+    let session: string | undefined;
+    if (test.context?.sessionId?.startsWith('$')) {
+      if (!scope) return errorResult(test, suiteId, `context.sessionId ${test.context.sessionId} refers to a fixture, but the test has none`, attempt);
+      session = String(resolveRef(test.context.sessionId, scopeRefs(scope)));
+    }
+
+    // Execute the test
+    let ctx: TestExecutionContext;
+    if (test.trigger === 'companion_wake') ctx = await runCompanionWake(test, scope as StateScope, timeoutMs);
+    else if (options.integration) ctx = await runTestIntegration(test, options.baseUrl || 'http://localhost:3005', model, input, session);
+    else ctx = await runTestUnit(test, model);
+
+    // Seeded facts go before grading, as they always did: a fixture left
+    // behind would change what the NEXT test recalls.
     if (seededIds.length) {
       await clearMemories(seededIds).catch((err: unknown) =>
         console.warn(`Failed to clear seeded memories for "${test.id}": ${(err as Error).message}`),
       );
+      seededIds = [];
     }
+    // Memory extraction and other post-turn work run after the reply, with no
+    // marker this process can read: wait until it has gone quiet, and refuse
+    // to grade (SETUP_ERROR) if it never does.
+    if (scope && !ctx.metadata?.error) {
+      await waitForQuiet(scope, { minMs: test.settleMs ?? 0, timeoutMs: (test.settleMs ?? 0) + 120_000 });
+    }
+
+    // Add input to metadata for grader context
+    ctx.metadata = { ...(ctx.metadata ?? {}), input };
+    ctx.state = scope;
+
+    // Evaluate all assertions
+    const { results: assertionResults, score, passed, completed, unsafe } = await evaluateAllAssertions(
+      test.assertions,
+      ctx,
+      graderFn,
+    );
+
+    return {
+      suiteId,
+      testId: test.id,
+      input,
+      output: ctx.response || '',
+      assertions: assertionResults,
+      passed,
+      completed,
+      unsafe,
+      attempt,
+      score,
+      latencyMs: ctx.latencyMs,
+      tokenCount: ctx.tokenCount,
+      metadata: ctx.metadata,
+      timestamp: new Date(),
+    };
+  } catch (failure) {
+    // A reference that names nothing, a wake goal of another user, post-turn
+    // work that never settled: the test could not be graded, which is not a
+    // verdict on the agent either way.
+    if (failure instanceof StateSetupError) return errorResult(test, suiteId, failure.message, attempt);
+    throw failure;
+  } finally {
+    await teardown(test, { fixtures, page, seededIds, scope });
   }
+}
 
-  // Add input to metadata for grader context
-  if (ctx.metadata) {
-    ctx.metadata.input = test.input;
-  }
-
-  // Evaluate all assertions
-  const { results: assertionResults, score, passed } = await evaluateAllAssertions(
-    test.assertions,
-    ctx,
-    graderFn,
-  );
-
-  return {
-    suiteId,
-    testId: test.id,
-    input: test.input,
-    output: ctx.response || '',
-    assertions: assertionResults,
-    passed,
-    score,
-    latencyMs: ctx.latencyMs,
-    tokenCount: ctx.tokenCount,
-    metadata: ctx.metadata,
-    timestamp: new Date(),
-  };
+/**
+ * Undo a test's setup whatever happened: seeded memories, rows the turn
+ * created in `cleanup` tables, fixture rows, the fixture server. Failures are
+ * reported, not thrown — the verdict is already decided — but never hidden.
+ */
+async function teardown(test: EvalTest, state: { fixtures: InsertedFixtures; page?: { close: () => Promise<void> }; seededIds: string[]; scope?: StateScope }) {
+  const warn = (what: string) => (err: unknown) => console.warn(`Failed to ${what} for "${test.id}": ${(err as Error).message}`);
+  if (state.seededIds.length) await clearMemories(state.seededIds).catch(warn('clear seeded memories'));
+  if (test.cleanup?.length && state.scope) await cleanupCreated(test.cleanup, state.scope).catch(warn('clean up created rows'));
+  if (state.fixtures.created.length) await removeFixtures(state.fixtures).catch(warn('remove fixture rows'));
+  if (state.page) await state.page.close().catch(warn('stop the fixture server'));
 }
 
 /**
@@ -444,7 +614,7 @@ export function rendersObservabilityBlocker(test: Pick<EvalTest, 'context'>, int
  * and a setup problem has to be visible in the report next to the tests that
  * did run.
  */
-function errorResult(test: EvalTest, suiteId: string, reason: string): EvalResult {
+function errorResult(test: EvalTest, suiteId: string, reason: string, attempt = 1): EvalResult {
   return {
     suiteId,
     testId: test.id,
@@ -457,13 +627,40 @@ function errorResult(test: EvalTest, suiteId: string, reason: string): EvalResul
       actual: 'SETUP_ERROR',
       score: 0,
       message: reason,
+      id: 'setup',
+      kind: 'process',
+      failure: 'incomplete',
     }],
     passed: false,
+    completed: false,
+    unsafe: [],
+    attempt,
     score: 0,
     latencyMs: 0,
     metadata: { input: test.input, setupError: reason },
     timestamp: new Date(),
   };
+}
+
+/**
+ * Group tests into lanes that run one attempt at a time, whatever
+ * --concurrency says. Attempts of one test always share a lane, and so do all
+ * tests that read or write state as the same eval user: their `since`
+ * windows, cleanups and fixtures (Companion settings are one row per user)
+ * would otherwise overlap, and one attempt's rows would be graded — or
+ * deleted — as another's. Tests without state each get a lane of their own.
+ */
+export function executionLanes(tests: EvalTest[]): EvalTest[][] {
+  const lanes: EvalTest[][] = [];
+  const byUser = new Map<string, EvalTest[]>();
+  for (const test of tests) {
+    const user = usesState(test) ? test.context?.userId : undefined;
+    if (!user) { lanes.push([test]); continue; }
+    const lane = byUser.get(user);
+    if (lane) lane.push(test);
+    else { const fresh = [test]; byUser.set(user, fresh); lanes.push(fresh); }
+  }
+  return lanes;
 }
 
 /**
@@ -488,7 +685,7 @@ export async function runSuite(
 
   // Apply suite defaults — resolve from config if no model specified anywhere
   const needsModel = tests.some(t =>
-    t.assertions.some(a => ['contains', 'not_contains', 'matches_regex', 'response_quality',
+    t.assertions.some(a => ['contains', 'not_contains', 'not_hands_over', 'matches_regex', 'response_quality',
       'no_hallucination', 'follows_format', 'defense_held'].includes(a.type)),
   );
   const explicitModel = options.model || suite.defaultModel;
@@ -502,21 +699,35 @@ export async function runSuite(
     ) ? model : undefined),
   };
 
-  // Run all tests with concurrency control
-  const results = await mapWithConcurrency(tests, concurrency, (test) =>
-    runTest(test, suite.name, runOptions),
-  );
+  // Every attempt of every test, attempts of one test adjacent in the results.
+  const repeat = Math.max(1, Math.floor(options.repeat ?? 1));
+  const lanes = executionLanes(tests);
+  const laneResults = await mapWithConcurrency(lanes, concurrency, async (lane) => {
+    const out: EvalResult[] = [];
+    for (const test of lane) {
+      for (let attempt = 1; attempt <= repeat; attempt++) {
+        out.push(await runTest(test, suite.name, runOptions, attempt, suite.defaultTimeout ?? 120_000));
+      }
+    }
+    return out;
+  });
+  const byTest = new Map<string, EvalResult[]>();
+  for (const r of laneResults.flat()) byTest.set(r.testId, [...(byTest.get(r.testId) ?? []), r]);
+  const results = tests.flatMap(test => byTest.get(test.id) ?? []);
 
   const passed = results.filter(r => r.passed).length;
   const totalScore = results.reduce((sum, r) => sum + r.score, 0);
 
   return {
     suite: suite.name,
+    // Attempts, so passed + failed = totalTests still holds under --repeat;
+    // per-test numbers are in `stats`.
     totalTests: results.length,
     passed,
     failed: results.length - passed,
     score: results.length > 0 ? totalScore / results.length : 0,
     results,
+    stats: summarizeAttempts(suite.name, results, Math.max(1, Math.floor(options.k ?? repeat))),
     duration: Date.now() - start,
     timestamp: new Date(),
   };

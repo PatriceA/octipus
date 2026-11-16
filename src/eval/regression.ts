@@ -65,11 +65,16 @@ const suitesOf = (input: ResultsInput): EvalSuiteResult[] =>
  * up unrelated tests that happen to share a name.
  */
 function outcomes(input: ResultsInput): Map<string, Outcome> {
-  const map = new Map<string, Outcome>();
+  const map = new Map<string, Outcome & { attempts: number }>();
   for (const suite of suitesOf(input)) {
     for (const r of suite.results ?? []) {
       const key = `${suite.suite}/${r.testId}`;
-      map.set(key, { key, suite: suite.suite, testId: r.testId, passed: r.passed, score: r.score });
+      // Under --repeat a test has several attempts: it passed only if every
+      // attempt did (pass^k), and its score is the mean.
+      const prev = map.get(key);
+      map.set(key, prev
+        ? { ...prev, passed: prev.passed && r.passed, score: (prev.score * prev.attempts + r.score) / (prev.attempts + 1), attempts: prev.attempts + 1 }
+        : { key, suite: suite.suite, testId: r.testId, passed: r.passed, score: r.score, attempts: 1 });
     }
   }
   return map;

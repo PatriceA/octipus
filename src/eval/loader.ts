@@ -5,24 +5,26 @@
  */
 
 import { basename, extname, resolve } from 'path';
+import { STATE_ASSERTION_TYPES, stateQueryFor, validateFixtures, validateStateQuery } from './state';
 import type { Assertion, AssertionType, EvalSuite, EvalTest } from './types';
 import { fileAt, globFiles } from '@/utils/fs-file';
 
 const VALID_ASSERTION_TYPES: Set<string> = new Set([
   'routes_to_role', 'uses_tool', 'not_uses_tool',
-  'contains', 'not_contains', 'matches_regex',
+  'contains', 'not_contains', 'not_hands_over', 'matches_regex',
   'classification', 'confidence_above', 'output_mode',
   'response_quality', 'latency_under',
   'no_hallucination', 'follows_format', 'token_count_under',
   'defense_held',
   'recalls_memory',
+  ...STATE_ASSERTION_TYPES,
 ]);
 
 // ── Lightweight YAML parser ──────────────────────────────────────────
 // Handles the subset needed for eval suites: scalars, arrays, objects.
 // For anything more complex, swap in js-yaml.
 
-function parseYaml(text: string): unknown {
+export function parseYaml(text: string): unknown {
   const lines = text.split('\n');
   return parseBlock(lines, 0, 0).value;
 }
@@ -111,8 +113,8 @@ function parseArray(lines: string[], startLine: number, baseIndent: number): Par
 
     const afterDash = trimmed.slice(2).trim();
 
-    // Inline array item: - value
-    if (afterDash && !afterDash.includes(':')) {
+    // Inline array item: - value (a quoted scalar may contain a colon)
+    if (afterDash && (!afterDash.includes(':') || /^["']/.test(afterDash))) {
       // Check for flow array: [a, b, c]
       if (afterDash.startsWith('[') && afterDash.endsWith(']')) {
         const inner = afterDash.slice(1, -1);
@@ -226,12 +228,30 @@ function validateAssertion(a: Record<string, unknown>, testId: string): Assertio
   if (!VALID_ASSERTION_TYPES.has(a.type)) {
     console.warn(`Test "${testId}": unknown assertion type "${a.type}" (will be treated as custom)`);
   }
-  return {
+  if (a.kind !== undefined && a.kind !== 'process' && a.kind !== 'outcome') {
+    throw new Error(`Test "${testId}": assertion kind must be "process" or "outcome" (got "${String(a.kind)}")`);
+  }
+  if (a.failure !== undefined && !['unsafe', 'incomplete', 'other'].includes(String(a.failure))) {
+    throw new Error(`Test "${testId}": assertion failure must be unsafe, incomplete or other (got "${String(a.failure)}")`);
+  }
+  const assertion: Assertion = {
     type: a.type as AssertionType,
     value: a.value as Assertion['value'],
     weight: typeof a.weight === 'number' ? a.weight : undefined,
     description: typeof a.description === 'string' ? a.description : undefined,
+    id: typeof a.id === 'string' ? a.id : undefined,
+    kind: a.kind as Assertion['kind'],
+    failure: a.failure as Assertion['failure'],
   };
+  if (STATE_ASSERTION_TYPES.has(a.type)) {
+    try {
+      assertion.query = stateQueryFor(a.type, a);
+      validateStateQuery(assertion.query);
+    } catch (err) {
+      throw new Error(`Test "${testId}": ${(err as Error).message}`);
+    }
+  }
+  return assertion;
 }
 
 function validateTest(raw: Record<string, unknown>): EvalTest {
@@ -269,6 +289,36 @@ function validateTest(raw: Record<string, unknown>): EvalTest {
       };
     });
   }
+  if (Array.isArray(raw.stateSetup)) {
+    test.stateSetup = (raw.stateSetup as Record<string, unknown>[]).map((row, i) => {
+      if (typeof row.table !== 'string' || !row.values || typeof row.values !== 'object') {
+        throw new Error(`Test "${raw.id}": stateSetup[${i}] needs "table" and "values".`);
+      }
+      return { table: row.table, values: row.values as Record<string, unknown>, ...(typeof row.as === 'string' ? { as: row.as } : {}) };
+    });
+    try {
+      validateFixtures(test.stateSetup);
+    } catch (err) {
+      throw new Error(`Test "${raw.id}": ${(err as Error).message}`);
+    }
+  }
+  if (Array.isArray(raw.cleanup)) test.cleanup = (raw.cleanup as unknown[]).map(String);
+  if (raw.trigger !== undefined) {
+    if (raw.trigger !== 'chat' && raw.trigger !== 'companion_wake') {
+      throw new Error(`Test "${raw.id}": trigger must be "chat" or "companion_wake".`);
+    }
+    test.trigger = raw.trigger;
+  }
+  if (raw.wake && typeof raw.wake === 'object') {
+    const wake = raw.wake as Record<string, unknown>;
+    if (typeof wake.goal !== 'string') throw new Error(`Test "${raw.id}": wake.goal must name a fixture row ($goal).`);
+    test.wake = { goal: wake.goal, ...(typeof wake.session === 'string' ? { session: wake.session } : {}),
+      ...(typeof wake.state === 'string' ? { state: wake.state } : {}) };
+  }
+  if (test.trigger === 'companion_wake' && !test.wake) throw new Error(`Test "${raw.id}": trigger companion_wake needs wake.goal.`);
+  if (typeof raw.fixturePage === 'string') test.fixturePage = raw.fixturePage;
+  if (typeof raw.settleMs === 'number') test.settleMs = raw.settleMs;
+  if (raw.tier === 'unit' || raw.tier === 'live') test.tier = raw.tier;
   if (raw.expected) test.expected = String(raw.expected);
   if (Array.isArray(raw.tags)) {
     test.tags = (raw.tags as unknown[]).map(String);

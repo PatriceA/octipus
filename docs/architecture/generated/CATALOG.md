@@ -796,9 +796,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `db` | `services` | 1 |
 | `db` | `shared` | 10 |
 | `db` | `utils` | 20 |
-| `eval` | `config` | 3 |
-| `eval` | `core` | 6 |
-| `eval` | `db` | 8 |
+| `eval` | `config` | 4 |
+| `eval` | `core` | 7 |
+| `eval` | `db` | 31 |
 | `eval` | `models` | 8 |
 | `eval` | `security` | 2 |
 | `eval` | `utils` | 5 |

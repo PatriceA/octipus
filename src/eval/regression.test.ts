@@ -31,6 +31,14 @@ const suite = (name: string, tests: [string, boolean][]): EvalSuiteResult => ({
 });
 
 describe('compareToBaseline', () => {
+  test('repeated attempts count as one test that passed only if every attempt did', () => {
+    const before = [suite('memory', [['a', true], ['a', true], ['b', true]])];
+    const after = [suite('memory', [['a', true], ['a', false], ['b', true], ['b', true]])];
+    const report = compareToBaseline(before, after);
+    expect(report.regressions).toEqual([{ suite: 'memory', testId: 'a', before: 1, after: 0.5 }]);
+    expect(report.passRateAfter).toBe(0.5);
+  });
+
   test('a swap — one fixed, one broken — still fails the gate', () => {
     const before = [suite('routing', [['a', true], ['b', false]])];
     const after = [suite('routing', [['a', false], ['b', true]])];
