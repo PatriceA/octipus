@@ -10,7 +10,7 @@ import { GoalRecovery } from '@/components/companion/goal-recovery';
 import { CompanionChatEntry } from '@/components/companion/chat-entry';
 import { useCompanionChat } from '@/hooks/useCompanionChat';
 import { SupervisionSettings } from '@/components/companion/supervision-settings';
-import type { CompanionGoalView as CompanionGoal, CompanionLinkView as CompanionSessionLink, CompanionActionView as CompanionAction, CompanionReportView } from '../../../src/shared/companion-supervision';
+import type { CompanionGoalView as CompanionGoal, CompanionLinkView as CompanionSessionLink, CompanionActionView as CompanionAction, CompanionInstructionView, CompanionReportView } from '../../../src/shared/companion-supervision';
 
 type ModelChoice = { name: string; modelId: string; isEnabled: boolean; supportsTools: boolean; provider: string };
 const field = 'w-full rounded-xs border border-outline-variant bg-surface-container px-3 py-2 text-sm';
@@ -42,6 +42,7 @@ function CompanionWorkspacePage() {
   const goals = useQuery({ queryKey: ['companion', activeWorkspace?.id], queryFn: () => api.get<{ goals: CompanionGoal[] }>('/companion/goals'), enabled: personal, refetchInterval: 5000 });
   const detail = useQuery({ queryKey: ['companion', activeWorkspace?.id, selected], queryFn: () => api.get<{ goal: CompanionGoal; links: CompanionSessionLink[] }>(`/companion/goals/${selected}`), enabled: personal && !!selected, refetchInterval: 5000 });
   const actions = useQuery({ queryKey: ['companion', activeWorkspace?.id, selected, 'actions'], queryFn: () => api.get<{ actions: CompanionAction[] }>(`/companion/goals/${selected}/actions`), enabled: personal && !!selected, refetchInterval: 5000 });
+  const instructions = useQuery({ queryKey: ['companion', activeWorkspace?.id, 'instructions'], queryFn: () => api.get<{ instructions: CompanionInstructionView[] }>('/companion/instructions'), enabled: personal, refetchInterval: 15000 });
   const generalReports = useQuery({ queryKey: ['companion', activeWorkspace?.id, 'reports'], queryFn: () => api.get<{ reports: CompanionReportView[] }>('/companion/reports'), enabled: personal, refetchInterval: 15000 });
   const reports = useQuery({ queryKey: ['companion', activeWorkspace?.id, selected, 'reports'], queryFn: () => api.get<{ reports: CompanionReportView[] }>(`/companion/goals/${selected}/reports`), enabled: personal && !!selected, refetchInterval: 15000 });
   const models = useQuery({ queryKey: ['models', activeWorkspace?.id], queryFn: () => api.get<{ models: ModelChoice[] }>('/models'), enabled: personal });
@@ -70,6 +71,9 @@ function CompanionWorkspacePage() {
         <label className="block">Acceptance criteria, one per line<textarea className={field} value={criteria} onChange={event => setCriteria(event.target.value)} required maxLength={10_000} rows={2} /></label>
         <button className={button} disabled={busy || !request.trim()}>Create goal</button>
       </form>
+      {!!instructions.data?.instructions?.length && <div className="space-y-2"><h2>Standing instructions</h2>{instructions.data.instructions.map(item => <div className="border-l-2 border-outline-variant pl-3 text-sm" key={item.id}>
+        <p>“{item.quote}”</p><p className="text-on-surface-variant">From your message on {new Date(item.createdAt).toLocaleDateString()} · {item.text}</p>
+        <button className="text-sm underline" disabled={busy} onClick={() => void change(() => api.delete(`/companion/instructions/${item.id}`))}>Remove</button></div>)}</div>}
       {!!generalReports.data?.reports?.length && <div className="space-y-2"><h2>Reports</h2>{generalReports.data.reports.map(report => <ReportRow key={report.id} report={report} />)}</div>}
       <div className="grid gap-6 md:grid-cols-[240px_1fr]">
         <div className="space-y-2" aria-label="Goals">

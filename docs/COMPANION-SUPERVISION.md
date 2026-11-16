@@ -28,6 +28,10 @@ A basis records where authority came from; it does not grant any. Autonomy, appr
 
 Messages Companion sends to project sessions start with a line saying they come from Companion, not from you, and that they cannot approve actions, raise limits or widen permissions. One visible effect: a Companion message such as “go” no longer confirms a plan that is waiting for your go-ahead; confirm it yourself. Memory extraction after a turn runs only for turns you sent yourself, so Companion handoffs, monitors and schedules are not extracted as memories. The separate session-learning review still reads Companion-run sessions for lessons and skill proposals.
 
+## Standing instructions
+
+Tell Companion how you want it to work ("ask me before any production deploy", "leave the billing service alone") and it saves the instruction as your exact words, quoted from the message you just sent; the server checks the quote. Saving or removing one goes through Companion's write permission, so with the default setting you confirm it. Companion's own wording is kept only as a note: what it follows is your quote. Saved instructions are part of every Companion turn, including background check-ins, so they do not depend on a transcript or a briefing. Companion replaces or withdraws one only when you say so. The Companion page lists them under **Standing instructions** with "From your message on …" and a **Remove** button. Instructions guide Companion; they never grant permissions it does not already have. An instruction tied to a goal stops applying when the goal ends, and one with an end date stops on that date. At most 50 are kept.
+
 ## When Companion tells you something
 
 Background check-ins are private. Their working text stays out of your Companion conversation and does not notify you. To tell you something, Companion files a report naming the matter, its impact, how strong the evidence is, any deadline and what changed. The server decides whether it reaches you:

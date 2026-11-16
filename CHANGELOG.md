@@ -7,6 +7,12 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Standing instructions for Companion.** Tell Companion how you want it to
+  work and it saves the rule with your exact words (checked by the server); it
+  follows them in every turn, background check-ins included, and the Companion
+  page lists them with a Remove button
+  ([COMPANION-SUPERVISION.md](docs/COMPANION-SUPERVISION.md)).
+
 - **Answer Companion from your phone or chat.** Companion notices go through the
   notification service (bell, live tabs) and, when you turn it on, to your linked
   Telegram, Slack, Teams or WhatsApp chats. A repair that reached its limit asks

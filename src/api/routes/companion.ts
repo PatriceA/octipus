@@ -2,6 +2,7 @@ import { ZodError } from 'zod';
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
 import { CompanionService } from '@/core/companion/service';
+import { CompanionBasisError } from '@/core/companion/basis';
 import { CompanionSupervisionError } from '@/shared/companion-supervision';
 import { isAuthenticated, requireScope, type Principal } from '@/security/principal';
 import { API_SCOPES } from '@/security/scopes';
@@ -19,6 +20,7 @@ async function handle<T>(principal: Principal, set: { status?: string | number }
   try { return await run(service(principal, write)); }
   catch (error) {
     if (error instanceof ZodError) { set.status = 400; return { error: 'Invalid Companion request', details: error.issues.map(issue => ({ path: issue.path.join('.'), message: issue.message })) }; }
+    if (error instanceof CompanionBasisError) { set.status = 409; return { error: error.message, code: 'conflict' }; }
     if (error instanceof CompanionSupervisionError) {
       set.status = { scope_unavailable: 403, not_found: 404, conflict: 409, invalid_evidence: 400 }[error.code];
       return { error: error.message, code: error.code };
@@ -34,6 +36,16 @@ export const companionRoutes = new Elysia({ prefix: '/companion' }).use(apiConte
   })
   .get('/goals', ({ principal, set }) => handle(principal, set, false, async s => ({ goals: await s.listGoals() })))
   .get('/reports', ({ principal, set }) => handle(principal, set, false, async s => ({ reports: await s.reports() })))
+  .get('/instructions', ({ principal, set }) => handle(principal, set, false, async s => {
+    const { activeCompanionInstructions } = await import('@/core/companion/instructions');
+    await s.readSettings();
+    return { instructions: await activeCompanionInstructions(s.scope) };
+  }))
+  .delete('/instructions/:id', ({ principal, set, params }) => handle(principal, set, true, async s => {
+    const { retireCompanionInstruction } = await import('@/core/companion/instructions');
+    await s.readSettings();
+    return retireCompanionInstruction(s.scope, params.id, 'owner');
+  }), { params: id })
   .post('/goals', ({ principal, set, body }) => handle(principal, set, true, s => s.createGoal(body)), { body: t.Unknown() })
   .get('/goals/:id', ({ principal, set, params }) => handle(principal, set, false, s => s.readGoal(params.id)), { params: id })
   .patch('/goals/:id', ({ principal, set, params, body }) => handle(principal, set, true, s => s.updateGoal(params.id, body)), { params: id, body: t.Unknown() })

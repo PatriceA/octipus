@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-695 mounted routes across 87 route files. The path is the full one, group prefix included — what a client actually calls.
+697 mounted routes across 87 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -161,6 +161,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/companion/goals/:id/reports` | `src/api/routes/companion.ts` |
 | POST | `/api/companion/goals/:id/sessions` | `src/api/routes/companion.ts` |
 | GET | `/api/companion/goals/:id/sessions/:sessionId` | `src/api/routes/companion.ts` |
+| GET | `/api/companion/instructions` | `src/api/routes/companion.ts` |
+| DELETE | `/api/companion/instructions/:id` | `src/api/routes/companion.ts` |
 | GET | `/api/companion/reports` | `src/api/routes/companion.ts` |
 | GET | `/api/companion/settings` | `src/api/routes/companion.ts` |
 | PUT | `/api/companion/settings` | `src/api/routes/companion.ts` |
@@ -732,7 +734,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 27 |
-| `api` | `core` | 206 |
+| `api` | `core` | 209 |
 | `api` | `db` | 141 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
@@ -771,7 +773,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `capabilities` | 3 |
 | `core` | `channels` | 15 |
 | `core` | `config` | 73 |
-| `core` | `db` | 501 |
+| `core` | `db` | 503 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 6 |
 | `core` | `mcp` | 11 |
@@ -781,7 +783,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `security` | 233 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
-| `core` | `shared` | 73 |
+| `core` | `shared` | 74 |
 | `core` | `skills` | 11 |
 | `core` | `tools` | 34 |
 | `core` | `utils` | 238 |
@@ -870,7 +872,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `api` | 2 |
 | `tools` | `channels` | 2 |
 | `tools` | `config` | 5 |
-| `tools` | `core` | 153 |
+| `tools` | `core` | 154 |
 | `tools` | `db` | 42 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |

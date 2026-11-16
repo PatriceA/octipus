@@ -11,6 +11,7 @@ export class CompanionService {
     this.repo = repo ?? new CompanionSupervisionRepository(scope);
     if (this.repo.scope.userId !== scope.userId || this.repo.scope.workspaceId !== scope.workspaceId) throw new Error('Companion repository scope mismatch');
   }
+  get scope(): CompanionScope { return this.repo.scope; }
   createGoal(input: unknown, ownerInputs?: import('@/shared/companion-supervision').CompanionOwnerInput[]) { return this.repo.create(input, ownerInputs); }
   listGoals(limit?: number) { return this.repo.list(limit); }
   readGoal(id: string) { return this.repo.read(id); }

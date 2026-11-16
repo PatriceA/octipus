@@ -106,6 +106,7 @@ const PERSONAL_READER = 'personal reader';
 const ALLOWLIST: Record<string, string> = {
   'src/core/companion/basis.ts': 'Owner-quote check reads only the caller\'s own chat session (bound to its user) and owner rows in it; a captured goal input is the message that check returned.',
   'src/core/companion/reports.ts': 'Reports bind the caller\'s own Companion supervisor session (owner, workspace, supervisor marker) and a goal in the same personal scope; returns only the gate decision.',
+  'src/core/companion/instructions.ts': 'Standing instructions bind the caller\'s own user and personal workspace on every read and write; goal links are checked in the same scope.',
   'src/core/companion/authority.ts': 'Internal delegation revision check binds settings to the action owner/workspace; the caller separately validates the current personal scope before dispatch.',
   'src/core/companion/user-control.ts': 'Post-authorization owner stop: reads only linkage predicates for the already authorized session and disables its supervision; returns no content.',
   'src/core/companion/activation.ts': 'Internal maintenance activation validates the current personal owner and runtime binding; global ID/status probes protect all work from restart interruption.',

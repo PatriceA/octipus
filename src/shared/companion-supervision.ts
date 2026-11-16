@@ -15,6 +15,8 @@ export interface CompanionLinkView {
 export interface CompanionActionView {
   id: string; kind: string; status: string; result: string | null; basis?: CompanionBasisRecord | null;
 }
+/** A standing instruction the owner gave Companion, with the words it came from. */
+export interface CompanionInstructionView { id: string; text: string; quote: string; goalId: string | null; createdAt: string; validUntil: string | null }
 /** A background report: delivered to the owner's chat, or kept on the Companion page with the gate's reason. */
 export interface CompanionReportView {
   id: string; message: string; decision: 'delivered' | 'sending' | 'recorded'; reason: string; impact: 'low' | 'normal' | 'high'; createdAt: string;
