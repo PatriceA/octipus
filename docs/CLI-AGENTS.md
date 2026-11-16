@@ -17,7 +17,9 @@ alias `cli/grok`), then select that model for a session or an agent topic.
 The CLI and the xAI API provider are separate integrations: adding the CLI
 needs no xAI API key in Octipus. An optional model ID in the model editor
 is passed to `--model`; leaving it empty uses Grok's vendor default. Run
-`grok models` to see the models your login can use. A custom model selection
+`grok models` to see the models your login can use. Octipus uses that same
+account catalog in the detected-CLI picker and the edit dialog, without a
+separate xAI API key. A free account sees only its available models. A custom model selection
 in the workstation's Grok config is not imported.
 
 Managed Grok runs advertise only the scoped Octipus MCP server and Grok's
@@ -1252,3 +1254,37 @@ Read-only pipeline verification checks retain their approved target when a
 trailing `# octipus-fallback: reason` comment is added for the CLI network guard.
 The comment does not authorize changed URLs, request bodies, headers, redirects
 or additional commands.
+
+
+### CLI catalog and quota status
+
+Grok Build lists account models using `grok models`. Its `grok usage --json`
+command is available in CLI 1.0.77, but can refuse plan usage without its
+background service and direct the owner to interactive `/usage`. Octipus does
+not infer remaining plan allowance from local token counts.
+
+The z.ai GLM and Kimi adapters run Claude Code against their configured
+Anthropic-compatible endpoint. Their model catalogs use those same credentials
+and service. For Kimi Code subscriptions, configure `kimi_api_key` in Secrets &
+Credentials (or `KIMI_API_KEY`); this selects the Kimi Code coding endpoint.
+Choose a model from its account catalog. If exactly one model is available it
+can be used directly; multiple models require an explicit selection. The old
+hardcoded Kimi model is not applied to a coding-plan account.
+
+Legacy `MOONSHOT_API_KEY` / `moonshot_api_key` bindings preserve the old Moonshot
+API endpoint and default model. An explicit `MOONSHOT_ANTHROPIC_BASE_URL` always
+wins. This avoids silently switching existing API users to a different service.
+Save a coding-plan key under `kimi_api_key` to select the coding service. Native Kimi OAuth login is not this Claude adapter's key.
+
+z.ai and Kimi Code report live plan windows with used percentages and reset
+information. These read-only requests use the CLI's own key on its configured
+official host. Requests are coalesced and cached for a minute; failures display
+as unavailable, not zero. Unsupported proxy/API endpoints do not send credentials
+to a different quota service. See the vendors' own implementations:
+[z.ai plan usage](https://github.com/zai-org/zai-coding-plugins/blob/main/plugins/glm-plan-usage/skills/usage-query-skill/scripts/query-usage.mjs)
+and [Kimi managed usage](https://github.com/MoonshotAI/kimi-code/blob/main/packages/oauth/src/managed-usage.ts).
+
+Separately, quota badges indicate blocks recorded by Octipus, not a remaining
+subscription balance. Grok, z.ai and Kimi use their actual quota-provider IDs,
+independent of their display names. Grok's managed headless runtime cannot
+currently retrieve a plan balance and labels it unavailable.

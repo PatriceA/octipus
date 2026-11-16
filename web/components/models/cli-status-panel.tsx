@@ -104,6 +104,7 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
       <p className="text-xs text-on-surface-variant mb-3">
         These vendor CLIs were detected on your system. Billing and quota are vendor-managed —
         provider permission, subscription coverage and extra charges are provider decisions. Octipus uses the CLI’s existing login/configuration.
+        Quota badges show blocks recorded by Octipus, not live remaining subscription allowance.
         See <a className="underline" href="/docs/features/cli-providers/" target="_blank" rel="noreferrer">CLI Providers docs</a>.
       </p>
       <div className="space-y-3">
@@ -116,6 +117,13 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
           return (
             <div key={tool.name} className="space-y-2 border-b border-outline-variant/5 pb-3 last:border-0 last:pb-0">
               {tool.modelCatalogError && <p className="text-xs text-warning">{tool.modelCatalogError}</p>}
+              {tool.planUsage && <div className="text-xs text-on-surface-variant">
+                {tool.planUsage.error ? <span>{tool.planUsage.error}</span> : tool.planUsage.windows.map(window => (
+                  <span key={window.label} className={`mr-3 ${window.usedPercent >= 100 ? 'text-error' : ''}`} title={window.resetsAt ? `Resets ${new Date(window.resetsAt).toLocaleString()}` : undefined}>
+                    {window.label}: {Math.round(window.usedPercent)}% used
+                  </span>
+                ))}
+              </div>}
               {tool.capabilities && <p className="text-xs text-on-surface-variant">{tool.capabilities}</p>}
               <div className="flex items-center justify-between text-sm">
                 <div className="flex items-center gap-2 min-w-0">
@@ -132,11 +140,11 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  {tool.quota && registered && (
+                  {tool.quota && registered && (tool.quota.exhausted || !tool.planUsage?.windows.length) && (
                     <span className={`text-xs px-2 py-0.5 rounded ${
-                      tool.quota.exhausted ? 'bg-error/10 text-error' : 'bg-tertiary-container/40 text-tertiary border border-tertiary/60'
+                      tool.quota.exhausted ? 'bg-error/10 text-error' : 'bg-surface-container-high text-on-surface-variant'
                     }`}>
-                      {tool.quota.exhausted ? 'Quota Exhausted' : 'Quota OK'}
+                      {tool.quota.exhausted ? 'Quota Exhausted' : 'No recorded quota block'}
                     </span>
                   )}
                   {tool.available && !registered && (
