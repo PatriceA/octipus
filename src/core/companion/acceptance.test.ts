@@ -29,7 +29,7 @@ beforeAll(async()=>{
  refreshConfigKey('security.shellSandbox','required');
  refreshConfigKey('security.companionMaintenance',{enabled:true,userId,roots:[dir],hostServices:false,sshAgent:false,allowActivation:false,interruptionPolicy:'wait'});
  const {CompanionSupervisionRepository}=await import('@/db/repositories/companion-supervision-repository');const repo=new CompanionSupervisionRepository({userId,workspaceId});
- await repo.saveSettings({enabled:true,modelName:'fixture-local',autonomy:'repair'},0);
+ await repo.saveSettings({enabled:true,modelName:'fixture-local',autonomy:'repair',quietHoursStart:0,quietHoursEnd:0},0);
  const goal=await repo.create({requestKey:randomUUID(),title:'Repair a runtime',request:'Repair and verify the configured runtime',outcome:'The affected runtime works',acceptanceCriteria:['Fresh gate passes']});goalId=goal.id;
  const {maintenanceRuntime}=await import('./maintenance');
  const action=await repo.startSession(goal.id,{requestKey:randomUUID(),expectedRevision:0,modelName:'fixture-local'},true,maintenanceRuntime({userId,workspaceId}).binding);sessionId=action.sessionId;

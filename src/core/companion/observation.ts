@@ -125,7 +125,7 @@ async function runObservation(claimed: {
     // The wake's own text stays private; companion__report decides what reaches the owner.
     // A check-in that could not run (no model, a limit, an error) is the owner's to know:
     // at most one such report a day, through the same gate.
-    if (result.outcome === 'failed') {
+    if (result.outcome !== 'success' && result.outcome !== 'cancelled') {
       const { fileCompanionReport } = await import('./reports');
       await fileCompanionReport({ userId: settings.userId, workspaceId: settings.workspaceId }, wake.sessionId, {
         matter: `supervision-check-in-failed-${new Date().toISOString().slice(0, 10)}`, impact: 'high', evidence: 'strong',

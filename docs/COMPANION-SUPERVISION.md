@@ -37,7 +37,15 @@ Background check-ins are private. Their working text stays out of your Companion
 - At most twelve reports a day are sent across your workspaces; beyond that only high-impact reports go through.
 - A check-in that cannot run (no model, a spending limit, an error) sends at most one high-impact report a day saying so.
 
+During your Companion quiet hours a report that passes the gate is held and sent when they end, unless nothing new needs it by then (the gate runs again). A high-impact report whose deadline falls before quiet hours end is sent at once.
+
 A sent report appears as a Companion message and triggers the usual presence notification. Reports that were held back stay under **Reports** on the Companion page (per goal, or at the top for reports about no goal) with the reason. Status updates from background check-ins are not sent. Matters are identified by the key Companion gives them; a different key for the same thing can still produce a second report. The deterministic notices for completed goals, verified repairs, failed pipelines and stalled handoffs are separate and unchanged.
+
+## Notices and decisions away from the app
+
+Companion's notices (a goal passed its checks, a repair passed its runtime check, a supervised pipeline failed, a queued handoff has not started) go through the regular notification service: they appear in the bell and live in every open tab, once per event. Turn on **Also send notices and decisions to my linked chats** under **Background supervision** to have them, and sent reports, delivered to your linked Telegram, Slack, Teams or WhatsApp chats as well.
+
+When a repair reaches its limit, Companion asks whether to try one more, different fix as an approval with the options **Try another fix** and **Leave it**. It shows in the app, reaches a paired phone, and with chat notices on is posted to your linked chats, where a typed reply answers it. The answer is tied to the incident as it was when asked: if the incident changed meanwhile, nothing is retried. The question stays answerable for 24 hours (and is lost if the server restarts); after that, or if you prefer, decide on the Companion page as before. Notices and questions wait during quiet hours.
 
 ## Todo inbox and heartbeat
 

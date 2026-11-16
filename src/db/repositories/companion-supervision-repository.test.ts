@@ -81,6 +81,8 @@ beforeAll(async () => {
   await pg.exec(readFileSync('src/db/migrations/0167_companion_wake_usage.sql','utf8'));
   await pg.exec(readFileSync('src/db/migrations/0168_companion_briefings.sql','utf8'));
   await pg.exec(readFileSync('src/db/migrations/0186_companion_owner_basis.sql','utf8'));
+  await pg.exec(readFileSync('src/db/migrations/0187_companion_reports.sql','utf8'));
+  await pg.exec(readFileSync('src/db/migrations/0188_companion_notices.sql','utf8'));
   db = drizzle(pg);
   runtime.db = db;
 }, 30_000);

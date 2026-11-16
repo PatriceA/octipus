@@ -7,6 +7,14 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Answer Companion from your phone or chat.** Companion notices go through the
+  notification service (bell, live tabs) and, when you turn it on, to your linked
+  Telegram, Slack, Teams or WhatsApp chats. A repair that reached its limit asks
+  "Try another fix / Leave it" as an approval you can answer from a paired phone
+  or by replying in chat; the answer only applies to the incident as it was.
+  Reports filed during quiet hours wait until they end, unless high impact with
+  an earlier deadline ([COMPANION-SUPERVISION.md](docs/COMPANION-SUPERVISION.md)).
+
 - **Companion speaks up only when it matters.** Background check-ins no longer
   post their working text or notify you. Companion files a report instead, and
   the server sends it only for strong evidence, real impact and a new matter or
