@@ -29,10 +29,20 @@ A hook has three parts:
 | Action | What it does | Config fields |
 |--------|-------------|---------------|
 | `notify` | Send message to channel(s) | `notifyChannels[]`, `notifyMessage`, `channelType`, `channelId` |
-| `spawn_agent` | Start an AI agent | `agentPrompt`, `agentTopic`, `agentModel`, `orchestrated` |
+| `spawn_agent` | Start an AI agent | `agentPrompt`, `agentTopic`, `agentModel`, `orchestrated`, `projectPath` |
 | `webhook` | Send outgoing HTTP request | `webhookUrl`, `webhookMethod`, `webhookHeaders`, `webhookBody` |
 | `n8n_workflow` | Trigger N8N workflow | `workflowId`, `workflowData` |
 | `execute_tool` | Run a registered tool | `toolId`, `toolAction`, `toolParams` |
+
+### Agent Action — Project Folder
+
+For an agent action, **Project folder** in the create/edit form selects an
+absolute folder on its execution environment. It is owner configuration, not a
+webhook template. Folder grants and environment revocation still apply. The
+folder and environment are saved on the session and passed to direct workers,
+including new per-thread sessions. A missing local folder fails instead of
+running in a different project. Leave it empty to retain the session's existing
+project or use the environment default.
 
 ### Notify Action — Channel Format
 

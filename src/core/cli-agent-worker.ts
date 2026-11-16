@@ -430,7 +430,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         detachedChildrenNote: 'Call collect_children before your final answer to receive their results; otherwise the run collects them for you.',
       } : {}),
       guidanceDelivery: this.isCodex()
-        ? 'These are pending owner/session instructions. Handle them before further affected work. After applying each instruction or reporting its blocker, call get_cli_run_context with acknowledgeGuidanceIds containing its id. Acknowledgement is receipt, not proof of completion. Pending plan feedback must be acknowledged through update_work_plan.'
+        ? 'These are pending owner/session instructions. Briefly answer questions or acknowledge a scope/authorization change in user-visible commentary before continuing affected work. After applying each instruction or reporting its blocker, call get_cli_run_context with acknowledgeGuidanceIds containing its id. A completed CLI turn does not acknowledge guidance. Acknowledgement is receipt, not proof of completion. Pending plan feedback must be acknowledged through update_work_plan.'
         : 'Review this guidance before further affected work. Pending feedback must be acknowledged through update_work_plan.',
     });
   }
@@ -819,12 +819,12 @@ When a task matches one of these skills, load it with get_skill before starting 
         followups++;
         this.messages.push({ role: 'assistant', content: result, timestamp: new Date() });
         const guidanceContext = await this.controlContext();
-        const presentedIds = [...this.pendingCodexGuidance.keys()];
         this.messages.push({ role: 'user', content: `New guidance: ${guidanceContext}\nReconcile this guidance with completed effects. Apply only outstanding instructions or report their blocker; do not repeat completed actions.`, timestamp: new Date() });
         result = await this.executeCLI();
         if (!this.aborted) {
-          for (const id of presentedIds) this.pendingCodexGuidance.delete(id);
-          if (presentedIds.length) this.emit('thought', { type: 'steering_followup_completed', count: presentedIds.length });
+          // A completed subprocess is not evidence that Codex handled its
+          // guidance. Only its explicit acknowledgement consumes those ids.
+          this.emit('thought', { type: 'steering_followup_completed', pending: this.pendingGuidanceCount() });
         }
         if (!this.aborted && this.detached.count() > 0) result = await this.settleDetachedChildren(result, buffered);
         await checkLateFeedback();

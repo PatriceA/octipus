@@ -337,6 +337,8 @@ export interface TriggerConfig {
 }
 
 export interface ActionConfig {
+  /** Owner-selected folder on the execution environment, never an event template. */
+  projectPath?: string;
   /** The module the automation is part of (docs/MODULES.md): it does not run while that module is off. */
   module?: string;
   // For notify
