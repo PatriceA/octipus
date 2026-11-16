@@ -15,6 +15,10 @@ export interface CompanionLinkView {
 export interface CompanionActionView {
   id: string; kind: string; status: string; result: string | null; basis?: CompanionBasisRecord | null;
 }
+/** A background report: delivered to the owner's chat, or kept on the Companion page with the gate's reason. */
+export interface CompanionReportView {
+  id: string; message: string; decision: 'delivered' | 'recorded'; reason: string; impact: 'low' | 'normal' | 'high'; createdAt: string;
+}
 /**
  * The owner's own words behind a Companion write: a quote the server found in
  * an owner message or in the words the owner gave when the goal was created.

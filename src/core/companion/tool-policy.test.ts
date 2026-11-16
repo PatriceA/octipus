@@ -43,3 +43,10 @@ test('only enabled owner-requested coordination exposes incident retry decisions
   for(const mode of ['observe','coordinate','repair'] as const)for(const enabled of [false,true])for(const userTurn of [false,true])
     expect(companionControllerTools(mode,enabled,userTurn).has('companion__reopen_incident')).toBe(enabled&&userTurn&&mode!=='observe');
 });
+
+test('background check-ins can file reports in every mode; owner turns answer directly', () => {
+  for (const mode of ['observe', 'coordinate', 'repair'] as const) for (const enabled of [false, true]) {
+    expect(companionControllerTools(mode, enabled, false).has('companion__report')).toBe(true);
+    expect(companionControllerTools(mode, enabled, true).has('companion__report')).toBe(false);
+  }
+});

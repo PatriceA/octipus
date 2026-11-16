@@ -5,6 +5,7 @@ import { raiseSessionLevel } from '@/core/protection/session-level';
 import { BaseTool, createParameterSchema } from '../base-tool';
 import { adoptCompanionExecutionSchema, companionBasisSchema, createCompanionGoalSchema, startCompanionSessionSchema, companionSessionMessageSchema, updateCompanionGoalSchema } from '@/shared/companion-supervision';
 import { CompanionBasisError, captureOwnerInputs, verifyCompanionBasis } from '@/core/companion/basis';
+import { companionReportSchema, fileCompanionReport } from '@/core/companion/reports';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { observeFlow } from '@/security/flow-guard';
 import { persistCompanionSource } from '@/core/companion/provenance';
@@ -69,7 +70,7 @@ export class CompanionTool extends BaseTool {
       permissions: [{ action: 'read', description: 'Inspect your supervised goals', defaultLevel: 'ALLOW' },
         { action: 'write', description: 'Create or change supervised goals', defaultLevel: 'ASK' },
         { action: 'execute', description: 'Start project sessions and send instructions under this goal', defaultLevel: 'ASK' }],
-      tools: ['find_sessions', 'read_session', 'list', 'read', 'create', 'update', 'adopt', 'start_session', 'message_session', 'control_session', 'inspect_session', 'detect_incident', 'reopen_incident', 'advance_incident', 'verify_incident', 'start_maintenance', 'maintenance_run', 'activate', 'maintenance_check', 'maintenance_review', 'reconcile_activation', 'maintenance_inspect', 'read_part', 'read_report', 'request_briefing', 'heartbeat_status'].map(name => ({ name, description: name, parameters: {}, returns: 'Goal or action receipt' })) };
+      tools: ['find_sessions', 'read_session', 'list', 'read', 'create', 'update', 'adopt', 'start_session', 'message_session', 'control_session', 'inspect_session', 'detect_incident', 'reopen_incident', 'advance_incident', 'verify_incident', 'start_maintenance', 'maintenance_run', 'activate', 'maintenance_check', 'maintenance_review', 'reconcile_activation', 'maintenance_inspect', 'read_part', 'read_report', 'request_briefing', 'heartbeat_status', 'report'].map(name => ({ name, description: name, parameters: {}, returns: 'Goal or action receipt' })) };
   }
   protected async registerTools() {
     this.registerTool('find_sessions', 'Find existing personal conversations by title in this workspace, including sessions not adopted by Companion. Use when the owner names a session such as Life2. An empty goal list says nothing about whether that conversation exists. Matches are bounded; multiple matches require choosing the right session, not recreating it.',
@@ -106,6 +107,18 @@ export class CompanionTool extends BaseTool {
         await persistCompanionSource({userId:context.userId,workspaceId:context.workspaceId!},context.sessionId);
         return report;
       },{permissionAction:'read',readOnly:true});
+    this.registerTool('report', 'Background check-ins only: tell the owner one thing they need to know. Your check-in reply itself is private. The server delivers the report only for strong evidence, real impact, and a new matter or a material change since the owner was last told; otherwise it is recorded on the Companion page. Never use it for routine progress or to repeat an unanswered report.',
+      z.toJSONSchema(companionReportSchema, { io: 'input' }), async (args, context) => {
+        if (context.trigger === 'user') throw new CompanionBasisError('In an owner turn, answer the owner directly instead of filing a report');
+        const s = service(context);
+        const settings = await s.readSettings();
+        if (!settings.supervisorSessionId || settings.supervisorSessionId !== context.sessionId) throw new CompanionBasisError('Only the Companion supervisor can file reports');
+        const input = companionReportSchema.parse(args);
+        if (input.goalId) await carry(s, input.goalId, context);
+        return fileCompanionReport({ userId: context.userId, workspaceId: context.workspaceId! }, context.sessionId, input);
+      // Like send_status_update it only writes to the owner's own Companion chat, so it sits under
+      // 'read': a write-level ASK would prompt on every background check-in.
+      }, { permissionAction: 'read', recoverySafe: true });
     this.registerTool('heartbeat_status', 'Check whether a role can pick up parked todo ideas on its next eligible heartbeat. Does not enable automation, grant permissions or start work. Normal heartbeat also respects quiet hours, budgets and task leases.',
       z.toJSONSchema(z.object({role:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).default('general')}),{io:'input'}),async(args,context)=>{
         const input=z.object({role:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).default('general')}).parse(args);

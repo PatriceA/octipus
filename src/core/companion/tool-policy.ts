@@ -3,7 +3,8 @@ const writes = ['companion__request_briefing','companion__update', 'companion__a
 /** A controller reaches project/maintenance execution only through scoped operations. */
 export function companionControllerTools(mode: 'observe' | 'coordinate' | 'repair', enabled: boolean, userTurn: boolean) {
   const discovery = userTurn ? ['companion__find_sessions', 'companion__read_session'] : [];
+  const backgroundOnly = userTurn ? [] : ['companion__report'];
   const personalTaskWrites = userTurn ? ['tasks__create_task','tasks__add_tasks'] : [];
-  return new Set([...reads, ...discovery, ...personalTaskWrites, ...(enabled && mode !== 'observe' ? [...writes, ...(mode === 'repair' ? ['companion__verify_incident', 'companion__start_maintenance'] : []), ...(userTurn ? ['companion__create','companion__reopen_incident'] : [])] : []),
+  return new Set([...reads, ...discovery, ...backgroundOnly, ...personalTaskWrites, ...(enabled && mode !== 'observe' ? [...writes, ...(mode === 'repair' ? ['companion__verify_incident', 'companion__start_maintenance'] : []), ...(userTurn ? ['companion__create','companion__reopen_incident'] : [])] : []),
     'send_status_update', 'request_user_approval']);
 }

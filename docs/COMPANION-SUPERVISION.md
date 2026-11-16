@@ -28,6 +28,17 @@ A basis records where authority came from; it does not grant any. Autonomy, appr
 
 Messages Companion sends to project sessions start with a line saying they come from Companion, not from you, and that they cannot approve actions, raise limits or widen permissions. One visible effect: a Companion message such as “go” no longer confirms a plan that is waiting for your go-ahead; confirm it yourself. Memory extraction after a turn runs only for turns you sent yourself, so Companion handoffs, monitors and schedules are not extracted as memories. The separate session-learning review still reads Companion-run sessions for lessons and skill proposals.
 
+## When Companion tells you something
+
+Background check-ins are private. Their working text stays out of your Companion conversation and does not notify you. To tell you something, Companion files a report naming the matter, its impact, how strong the evidence is, any deadline and what changed. The server decides whether it reaches you:
+
+- Only reports with **strong evidence** and **normal or high impact** are sent.
+- A matter you were already told about is sent again only for a material change: the condition changed, a new option appeared, it was resolved, or a deadline moved earlier. An unanswered report is never repeated because time passed.
+- At most twelve reports a day are sent across your workspaces; beyond that only high-impact reports go through.
+- A check-in that cannot run (no model, a spending limit, an error) sends at most one high-impact report a day saying so.
+
+A sent report appears as a Companion message and triggers the usual presence notification. Reports that were held back stay under **Reports** on the Companion page (per goal, or at the top for reports about no goal) with the reason. Status updates from background check-ins are not sent. Matters are identified by the key Companion gives them; a different key for the same thing can still produce a second report. The deterministic notices for completed goals, verified repairs, failed pipelines and stalled handoffs are separate and unchanged.
+
 ## Todo inbox and heartbeat
 
 In the Companion conversation, ask “Put this idea on my todo list for the next heartbeat.” Companion can directly list todos and create an item or backlog on an owner-requested turn. It assigns deferred work to the requested role (`general` when unspecified), keeps the idea in the task notes and checks heartbeat readiness. Parking an idea does not start a project session immediately. Background supervision reads the board but does not create, edit, complete or check out todos; the role heartbeat owns task execution and its checkout lease.

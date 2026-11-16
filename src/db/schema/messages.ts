@@ -42,6 +42,8 @@ export interface MessageMetadata {
   companion?: CompanionIdentity;
   /** An intermediate public update, distinct from the completed turn's answer. */
   kind?: 'progress';
+  /** A background Companion report the server let through to the owner (src/core/companion/reports.ts). */
+  companionReport?: { id: string; goalId?: string };
   sessionGeneration?: string;
   /** Immutable context supplied with this user turn, outside the system prefix. */
   promptContext?: string;

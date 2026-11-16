@@ -33,6 +33,7 @@ export const companionRoutes = new Elysia({ prefix: '/companion' }).use(apiConte
     body: t.Object({ expectedRevision: t.Integer({ minimum: 0 }), settings: t.Unknown() }),
   })
   .get('/goals', ({ principal, set }) => handle(principal, set, false, async s => ({ goals: await s.listGoals() })))
+  .get('/reports', ({ principal, set }) => handle(principal, set, false, async s => ({ reports: await s.reports() })))
   .post('/goals', ({ principal, set, body }) => handle(principal, set, true, s => s.createGoal(body)), { body: t.Unknown() })
   .get('/goals/:id', ({ principal, set, params }) => handle(principal, set, false, s => s.readGoal(params.id)), { params: id })
   .patch('/goals/:id', ({ principal, set, params, body }) => handle(principal, set, true, s => s.updateGoal(params.id, body)), { params: id, body: t.Unknown() })
@@ -50,6 +51,7 @@ export const companionRoutes = new Elysia({ prefix: '/companion' }).use(apiConte
   .post('/goals/:id/incident-decision',({principal,set,params,body})=>handle(principal,set,true,s=>s.reopenIncident(params.id,body.incidentId,body.expectedRevision)),{params:id,body:t.Object({incidentId:t.String({pattern:'^[0-9a-fA-F-]{36}$'}),expectedRevision:t.Integer({minimum:0})})})
   .get('/goals/:id/incidents', ({ principal, set, params }) => handle(principal, set, false, async s => ({ incidents: await s.incidents(params.id) })), { params: id })
   .get('/goals/:id/actions', ({ principal, set, params }) => handle(principal, set, false, async s => ({ actions: await s.actions(params.id) })), { params: id })
+  .get('/goals/:id/reports', ({ principal, set, params }) => handle(principal, set, false, async s => ({ reports: await s.reports(params.id) })), { params: id })
   .get('/goals/:id/sessions/:sessionId', ({ principal, set, params }) => handle(principal, set, false, s => s.inspectSession(params.id, params.sessionId)),
     { params: t.Object({ id: t.String({ pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' }), sessionId: t.String({ pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' }) }) })
   .post('/goals/:id/sessions', ({ principal, set, params, body }) => handle(principal, set, true, async s => {

@@ -185,3 +185,27 @@ export const companionStageReservations=pgTable('companion_stage_reservations',{
  pipelineId:uuid('pipeline_id').primaryKey().references(()=>pipelines.id,{onDelete:'cascade'}),
  goalId:uuid('goal_id').notNull().references(()=>companionGoals.id,{onDelete:'cascade'}),tokens:integer('tokens').notNull(),createdAt:timestamp('created_at',{withTimezone:true}).notNull().defaultNow(),
 });
+
+/**
+ * What a background check-in wanted to tell the owner, and whether the server
+ * let it through. Delivery is decided here, not by the model's wording.
+ */
+export const companionReports = pgTable('companion_reports', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  workspaceId: uuid('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  goalId: uuid('goal_id').references(() => companionGoals.id, { onDelete: 'cascade' }),
+  matterKey: text('matter_key').notNull(),
+  impact: text('impact').$type<'low' | 'normal' | 'high'>().notNull(),
+  evidence: text('evidence').$type<'strong' | 'uncertain'>().notNull(),
+  materialChange: text('material_change').$type<'none' | 'condition_changed' | 'new_option' | 'deadline_advanced' | 'resolved'>().notNull(),
+  deadline: timestamp('deadline', { withTimezone: true }),
+  message: text('message').notNull(),
+  textHash: text('text_hash').notNull(),
+  decision: text('decision').$type<'delivered' | 'recorded'>().notNull(),
+  reason: text('reason').notNull(),
+  messageId: uuid('message_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [index('companion_reports_matter_idx').on(t.userId, t.workspaceId, t.matterKey, t.createdAt),
+  check('companion_reports_decision_chk', sql`${t.decision} IN ('delivered', 'recorded')`)]);
+export type CompanionReport = typeof companionReports.$inferSelect;

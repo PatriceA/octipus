@@ -7,6 +7,12 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Companion speaks up only when it matters.** Background check-ins no longer
+  post their working text or notify you. Companion files a report instead, and
+  the server sends it only for strong evidence, real impact and a new matter or
+  a material change; held-back reports stay on the goal's Companion page with
+  the reason ([COMPANION-SUPERVISION.md](docs/COMPANION-SUPERVISION.md)).
+
 - **Companion acts on your own words, checked by the server.** Every goal,
   session start, instruction, adoption, maintenance start and resume Companion
   makes carries a quote of what you asked for. The server checks the quote is

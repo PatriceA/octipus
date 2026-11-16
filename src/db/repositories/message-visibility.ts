@@ -8,7 +8,9 @@ export const visibleMessages = sql`coalesce(${messages.metadata}->>'visibility',
 export function withMessageVisibility(data: NewMessage): NewMessage {
   const run = getRunContext();
   if (run?.sessionId !== data.sessionId) return data;
-  if (run.companionBriefing || (run.companionObservation && data.role === 'user')) {
+  // A background check-in is private: its prompt, tool traffic and final text
+  // stay out of the chat. Only a report the server delivered is shown.
+  if (run.companionBriefing || (run.companionObservation && !data.metadata?.companionReport)) {
     return { ...data, metadata: { ...data.metadata, visibility: 'internal' } };
   }
   return data;

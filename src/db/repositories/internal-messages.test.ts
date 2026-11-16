@@ -28,7 +28,8 @@ test('internal prompts never displace visible history pages or emit chat message
   await messageRepository.create({sessionId:session.id,role:'user',content:'Hello',createdAt:new Date(1000)});
   await runWithContext({runId:'observe',sessionId:session.id,companionObservation:true},async()=>{
    await messageRepository.create({sessionId:session.id,role:'user',content:'Internal wake'});
-   await messageRepository.create({sessionId:session.id,role:'assistant',content:'Your project is ready.',createdAt:new Date(2000)});
+   await messageRepository.create({sessionId:session.id,role:'assistant',content:'Private check-in notes'});
+   await messageRepository.create({sessionId:session.id,role:'assistant',content:'Your project is ready.',createdAt:new Date(2000),metadata:{companionReport:{id:randomUUID()}}});
   });
   await runWithContext({runId:'brief',sessionId:session.id,companionBriefing:true},async()=>{
    await messageRepository.create({sessionId:session.id,role:'user',content:'Internal handoff request'});

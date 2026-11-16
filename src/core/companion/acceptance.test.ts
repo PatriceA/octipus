@@ -141,6 +141,7 @@ test.skipIf(!sandboxAvailable)('engine observes a persisted blocker after restar
       if(!actions.some(action=>action.kind==='message_session'))await call('message_session',{id:goal.id,input:{requestKey:randomUUID(),sessionId:original.sessionId,message:'Continue the original milestone after the verified runtime repair.'},basis:{source:'goal',quote:'repairing its runtime if needed'}});
      }else if(acceptanceId&&actions.every(action=>!['queued','running','unknown'].includes(action.status))){
       await call('update',{id:goal.id,input:{expectedRevision:detail.goal.revision,state:'completed',evidence:[{criterionIndex:0,evidenceId:acceptanceId,summary:'Fresh registered runtime gate passed after recovery'}]}});
+      await call('report',{goalId:goal.id,matter:'milestone-complete',impact:'normal',evidence:'strong',materialChange:'resolved',message:'The milestone is done: the runtime was repaired and the gate passes again.'});
      }
     }
    }else if(_message.startsWith('SESSION BRIEFING')){
@@ -163,7 +164,7 @@ test.skipIf(!sandboxAvailable)('engine observes a persisted blocker after restar
  await vi.waitFor(async()=>{await dispatcher.tick();expect((await repo.read(goal.id)).goal.state).toBe('completed');},{timeout:15000,interval:30});
  expect(continuations).toBe(1);expect((await repo.incidents(goal.id))[0].state).toBe('resolved');
  expect((await repo.read(goal.id)).links).toHaveLength(2);
- expect(agentBoundary.publish).toHaveBeenCalled();
+ await vi.waitFor(()=>expect(agentBoundary.publish).toHaveBeenCalledTimes(1),{timeout:5000,interval:30});
  agentBoundary.handle.mockReset();
 });
 
