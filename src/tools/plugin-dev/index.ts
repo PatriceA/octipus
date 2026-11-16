@@ -19,7 +19,7 @@
  * action on the admin page or the CLI.
  */
 import { realpathSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { getConfig } from '@/config';
 import { publicLinkBase } from '@/core/public-url';
 import { ToolNotExecutedError } from '@/core/tool-execution-error';
@@ -56,26 +56,36 @@ const real = (path: string): string => {
 
 /**
  * The package directory an agent names, resolved like the filesystem tool
- * resolves its reads, and refused unless it is inside both the agent's
- * sandbox root and the calling user's own Octipus workspaces
- * (`<dataRoot>/users/<id>/workspaces`): an execution environment whose root
- * is broad (`/`, a home directory) does not open other users' workspaces,
- * `/etc` or the server's files. Never the sandbox root itself, the plugin
- * store or a remote environment.
+ * resolves its reads. Sources may be in the caller's own Octipus workspaces
+ * or the selected environment's explicitly approved folders. Account-wide
+ * filesystem access alone does not approve every host directory as a plugin
+ * source. Other users' data, shared-space data and installed plugin files
+ * remain excluded, including through symlinks or an approved parent folder.
  */
 export function workspacePackageDir(rawPath: unknown, context: AgentContext): string {
   if (typeof rawPath !== 'string' || !rawPath.trim()) throw new ToolNotExecutedError(PLUGIN_DEV_TOOL_ID, 'path: the plugin directory in your workspace');
-  if (executionEnvironmentFor(context)?.backend === 'ssh') {
+  const environment = executionEnvironmentFor(context);
+  if (environment?.backend === 'ssh') {
     throw new ToolNotExecutedError(PLUGIN_DEV_TOOL_ID, 'Your files are in a remote environment; plugin tools read the Octipus host\'s workspace only. Write the plugin in a session without a remote environment.');
   }
   const { path, root } = filesystemTool.resolveForRead(rawPath.trim(), context);
   const workspace = real(root);
   const dir = real(path);
   const own = real(userWorkspacesDir(context.userId));
-  if (!isInside(workspace, dir) || dir === workspace || !isInside(own, dir) || dir === own) {
-    throw new ToolNotExecutedError(PLUGIN_DEV_TOOL_ID, `${rawPath} is not a directory inside your own workspace (${own}); write the plugin there first (filesystem write_file)`);
+  const users = real(dirname(dirname(userWorkspacesDir(context.userId))));
+  const spaces = [getConfig().workspace.rootPath, getConfig().workspace.documentsPath]
+    .map(folder => real(join(folder, 'spaces')));
+  const approved = environment?.roots.some(folder => isInside(real(folder), dir)) === true;
+  const personal = isInside(own, dir) && dir !== own;
+  const privateData = (isInside(users, dir) && !personal) || isInside(dir, users)
+    || spaces.some(folder => isInside(folder, dir) || isInside(dir, folder));
+  if (privateData) {
+    throw new ToolNotExecutedError(PLUGIN_DEV_TOOL_ID, `${rawPath} is not a directory inside your own workspace: protected Octipus user/shared data and directories containing it cannot be plugin sources`);
   }
-  if (pluginStoreDirs().some((store) => isInside(real(store), dir))) {
+  if ((!personal && !approved) || (!approved && dir === workspace) || dir === own) {
+    throw new ToolNotExecutedError(PLUGIN_DEV_TOOL_ID, `${rawPath} is not a directory inside your own workspace (${own}) or approved environment folders; choose a project folder in Settings → Environments & Access`);
+  }
+  if (pluginStoreDirs().some((store) => isInside(real(store), dir) || isInside(dir, real(store)))) {
     throw new ToolNotExecutedError(PLUGIN_DEV_TOOL_ID, `${rawPath} is in the plugin store; point at the copy you wrote in your workspace`);
   }
   return dir;
@@ -150,7 +160,7 @@ export class PluginDevTool extends BaseTool {
 
     this.registerTool(
       PLUGIN_DEV_TOOLS.validate,
-      'Validate a plugin package directory in your workspace without installing it: the manifest against the contract, its '
+      'Validate a plugin package directory in your workspace or approved environment folders without installing it: the manifest against the contract, its '
         + 'contributions (tools it names, cron, command names in use), the tree (no links or special files, size), and that '
         + 'the files its server starts from are in the package. Returns every problem at once, warnings, and the content hash '
         + 'an install would record.',
@@ -178,9 +188,9 @@ export class PluginDevTool extends BaseTool {
       'Install a validated plugin package (runtime "package") from your workspace. It is installed DISABLED: Octipus does not '
         + 'start it until an admin reviews its content hash on the admin page and enables it — tell the user that. Asks the user '
         + 'for approval; only an admin\'s agent may install. Never installs runtime "in-process". With upgrade: true it replaces '
-        + 'a package an agent of the same user installed (disabled again); never one a person or another user\'s agent installed, nor the name of a plugin shipped with Octipus. Only a directory in your own workspace.',
+        + 'a package an agent of the same user installed (disabled again); never one a person or another user\'s agent installed, nor the name of a plugin shipped with Octipus. Only a directory in your own workspace or explicitly approved environment folders.',
       createParameterSchema({
-        path: { type: 'string', description: 'The plugin directory in your workspace', required: true },
+        path: { type: 'string', description: 'The plugin directory in your workspace or approved environment folders', required: true },
         upgrade: { type: 'boolean', description: 'Replace the installed version of a package an agent installed' },
       }),
       async (args, context) => {
