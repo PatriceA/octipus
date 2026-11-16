@@ -70,7 +70,7 @@ function CompanionWorkspacePage() {
         <label className="block">Acceptance criteria, one per line<textarea className={field} value={criteria} onChange={event => setCriteria(event.target.value)} required maxLength={10_000} rows={2} /></label>
         <button className={button} disabled={busy || !request.trim()}>Create goal</button>
       </form>
-      {!!generalReports.data?.reports.length && <div className="space-y-2"><h2>Reports</h2>{generalReports.data.reports.map(report => <ReportRow key={report.id} report={report} />)}</div>}
+      {!!generalReports.data?.reports?.length && <div className="space-y-2"><h2>Reports</h2>{generalReports.data.reports.map(report => <ReportRow key={report.id} report={report} />)}</div>}
       <div className="grid gap-6 md:grid-cols-[240px_1fr]">
         <div className="space-y-2" aria-label="Goals">
           {goals.isLoading && <p>Loading goals…</p>}
@@ -116,7 +116,7 @@ function CompanionWorkspacePage() {
             </form>
           </>}
           {activeWorkspace && <GoalRecovery key={`${activeWorkspace.id}:${goal.id}`} goal={goal} workspaceId={activeWorkspace.id} />}
-          {!!reports.data?.reports.length && <div className="space-y-2"><h3>Reports</h3>{reports.data.reports.map(report => <ReportRow key={report.id} report={report} />)}</div>}
+          {!!reports.data?.reports?.length && <div className="space-y-2"><h3>Reports</h3>{reports.data.reports.map(report => <ReportRow key={report.id} report={report} />)}</div>}
           <div className="space-y-2"><h3>Activity</h3>{actions.data?.actions.map(action => <div className="border-l-2 border-outline-variant pl-3 text-sm" key={action.id}><p>{action.kind.replaceAll('_', ' ')} · {action.status}</p>{action.basis && <p className="text-on-surface-variant">Because you said “{action.basis.quote}”</p>}{action.result && <p className="whitespace-pre-wrap text-on-surface-variant">{action.result}</p>}</div>)}</div>
         </section>}
       </div>

@@ -59,9 +59,9 @@ export async function fileCompanionReport(scope: { userId: string; workspaceId: 
   const matterKey = `${input.goalId ?? 'workspace'}:${normalized(input.matter).replace(/[^\p{L}\p{N}:_-]+/gu, '-')}`;
   const textHash = createHash('sha256').update(normalized(input.message)).digest('hex');
   const outcome = await getDb().transaction(async tx => {
-    const [session] = await tx.select({ id: sessions.id, context: sessions.context, userId: sessions.userId, workspaceId: sessions.workspaceId }).from(sessions)
-      .where(eq(sessions.id, supervisorSessionId)).for('update');
-    if (!session || session.userId !== scope.userId || session.workspaceId !== scope.workspaceId || !session.context?.companionSupervisor)
+    const [session] = await tx.select({ id: sessions.id, context: sessions.context }).from(sessions)
+      .where(and(eq(sessions.id, supervisorSessionId), eq(sessions.userId, scope.userId), eq(sessions.workspaceId, scope.workspaceId))).for('update');
+    if (!session?.context?.companionSupervisor)
       throw new Error('Reports go to the owner\'s Companion conversation only');
     if (input.goalId) {
       const [goal] = await tx.select({ id: companionGoals.id }).from(companionGoals)
