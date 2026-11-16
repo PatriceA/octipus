@@ -200,6 +200,9 @@ function toSkill(loc: ScanLocation, found: FoundFile): Skill | undefined {
     usageCount: 0,
     archivedAt: null,
     curationNotes: null,
+    // Patches never reach a mounted skill (src/skills/patch.ts), so the
+    // owner-edit lock has nothing to guard here.
+    ownerEditedAt: null,
     createdAt: now,
     updatedAt: now,
   } satisfies Skill;

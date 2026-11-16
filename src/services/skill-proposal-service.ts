@@ -12,6 +12,7 @@ import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { type SkillProposalRecord, skillProposals } from '@/db/schema/skill-proposals';
 import { skills } from '@/db/schema/skills';
+import { applySkillPatch, assertPatchable, SkillPatchError, skillContentHash } from '@/skills/patch';
 import { normalizeSkillName } from '@/tools/skill-distill/distiller';
 import { coreLogger } from '@/utils/logger';
 
@@ -50,6 +51,17 @@ class AlreadyResolvedError extends Error {
   constructor() { super('proposal already resolved'); }
 }
 
+/**
+ * The proposal is pending but cannot be applied as it stands; it stays
+ * pending for the owner to reject. `stale`: the skill changed since the patch
+ * was made. `locked`: the owner edited the skill. `missing`: the skill is
+ * gone. `invalid`: the patch no longer fits the skill (archived, no longer
+ * the owner's, malformed). `override`: a patch takes no name/content override.
+ */
+export class ProposalRefusedError extends Error {
+  constructor(readonly code: 'stale' | 'locked' | 'missing' | 'override' | 'invalid', message: string) { super(message); }
+}
+
 /** Promote a pending proposal. Returns null when it isn't pending (or isn't the caller's). */
 export async function approveProposal(id: string, opts: ApproveOptions = {}): Promise<ApproveResult> {
   try {
@@ -67,6 +79,7 @@ async function promote(id: string, opts: ApproveOptions): Promise<ApproveResult>
 
   const [proposal] = await db.select().from(skillProposals).where(and(...filters)).limit(1);
   if (!proposal) return null;
+  if (proposal.kind === 'patch') return applyPatch(proposal, opts);
 
   // Every proposal promotes into a SKILL. A proposal used to be able to become
   // an expert instead — a row carrying a prompt and a role — which is the layer
@@ -90,7 +103,7 @@ async function promote(id: string, opts: ApproveOptions): Promise<ApproveResult>
       // every other such name, so it never merges.
       const [duplicate] = normalized
         ? await tx
-            .select({ id: skills.id })
+            .select({ id: skills.id, ownerEditedAt: skills.ownerEditedAt })
             .from(skills)
             .where(and(
               eq(skills.userId, proposal.userId),
@@ -99,6 +112,13 @@ async function promote(id: string, opts: ApproveOptions): Promise<ApproveResult>
             ))
             .limit(1)
         : [];
+
+      // Merging would overwrite a skill the owner wrote: the owner-edit lock
+      // holds against this automatic update too. Approving under another
+      // name (`opts.name`) still creates a separate skill.
+      if (duplicate?.ownerEditedAt) {
+        throw new ProposalRefusedError('locked', `You edited the existing skill "${name}", so this proposal will not overwrite it. Reject it, or approve it under another name.`);
+      }
 
       const [created] = duplicate
         ? await tx.update(skills)
@@ -150,6 +170,51 @@ async function promote(id: string, opts: ApproveOptions): Promise<ApproveResult>
     return { promoted: 'skill', id: skill.id, name: skill.name, record: skill };
   }
 
+}
+
+/**
+ * Apply an approved patch proposal (src/skills/patch.ts) in one transaction:
+ * the skill must still be a learned skill of the proposal's owner, unedited
+ * by them, with exactly the content the patch was made against.
+ */
+async function applyPatch(proposal: SkillProposalRecord, opts: ApproveOptions): Promise<ApproveResult> {
+  if (opts.name !== undefined || opts.systemPrompt !== undefined) {
+    throw new ProposalRefusedError('override', 'A patch proposal is approved as proposed; it takes no name or content override.');
+  }
+  if (!proposal.targetSkillId || proposal.patchOldText == null || proposal.patchNewText == null || !proposal.baseContentHash) {
+    throw new ProposalRefusedError('invalid', 'This patch proposal is incomplete; reject it.');
+  }
+  const { targetSkillId, patchOldText, patchNewText, baseContentHash } = proposal;
+  const skill = await getDb().transaction(async (tx) => {
+    const [current] = await tx.select().from(skills).where(eq(skills.id, targetSkillId)).limit(1);
+    try {
+      assertPatchable(current, proposal.userId);
+    } catch (err) {
+      if (!(err instanceof SkillPatchError)) throw err;
+      throw new ProposalRefusedError(err.code === 'locked' || err.code === 'missing' ? err.code : 'invalid', `${err.message}; reject this patch.`);
+    }
+    if (skillContentHash(current.content) !== baseContentHash) {
+      throw new ProposalRefusedError('stale', 'The skill changed after this patch was proposed, so it was not applied. Reject it; a later learning check can propose a patch against the current text.');
+    }
+    let content: string;
+    try {
+      content = applySkillPatch(current.content ?? '', patchOldText, patchNewText);
+    } catch (err) {
+      if (!(err instanceof SkillPatchError)) throw err;
+      throw new ProposalRefusedError('invalid', `${err.message}; reject this patch.`);
+    }
+    // Content only: name and description, and so the stored embedding, stay.
+    const [updated] = await tx.update(skills).set({ content, updatedAt: new Date() })
+      .where(eq(skills.id, current.id)).returning();
+    const [flipped] = await tx.update(skillProposals)
+      .set({ status: 'promoted' })
+      .where(and(eq(skillProposals.id, proposal.id), eq(skillProposals.status, 'pending')))
+      .returning({ id: skillProposals.id });
+    if (!updated || !flipped) throw new AlreadyResolvedError();
+    return updated;
+  });
+  coreLogger.info({ proposalId: proposal.id, skillId: skill.id }, 'Skill patch proposal applied');
+  return { promoted: 'skill', id: skill.id, name: skill.name, record: skill };
 }
 
 /**

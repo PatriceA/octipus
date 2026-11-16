@@ -2,11 +2,11 @@ import { beforeEach, expect, test, vi } from 'vitest';
 import type { BackgroundJob } from '@/db/schema/background-jobs';
 const mock = vi.hoisted(() => ({
   finish: vi.fn(), progress: vi.fn(), session: vi.fn(), evidence: vi.fn(), model: vi.fn(), complete: vi.fn(),
-  save: vi.fn(), findNote: vi.fn(), judge: vi.fn(), proposal: vi.fn(), permission: vi.fn(), owner: vi.fn(),
+  save: vi.fn(), findNote: vi.fn(), judge: vi.fn(), proposal: vi.fn(), permission: vi.fn(), owner: vi.fn(), patchable: vi.fn(), patch: vi.fn(),
 }));
 vi.mock('@/db/repositories/background-job-repository', () => ({ backgroundJobRepository: { finish: mock.finish, progress: mock.progress } }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { findById: mock.session } }));
-vi.mock('./evidence', () => ({ gatherEvidence: mock.evidence }));
+vi.mock('./evidence', () => ({ gatherEvidence: mock.evidence, gatherPatchableSkills: mock.patchable }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getModelForTopic: mock.model }) }));
 vi.mock('@/models/litellm-client', () => ({ getLiteLLMClient: () => ({ complete: mock.complete }) }));
 vi.mock('@/core/knowledge/notes', () => ({ getNoteService: () => ({ save: mock.save }) }));
@@ -20,7 +20,7 @@ vi.mock('@/core/memory/owner-messages', async () => {
   const { verifyQuotes } = await import('@/core/memory/quote-basis');
   return { verifyOwnerQuotes: async (_userId: string, candidates: Parameters<typeof verifyQuotes>[0]) => verifyQuotes(candidates, mock.owner()) };
 });
-vi.mock('@/services/file-skill-proposal', () => ({ fileSkillProposal: mock.proposal }));
+vi.mock('@/services/file-skill-proposal', () => ({ fileSkillProposal: mock.proposal, fileSkillPatchProposal: mock.patch }));
 vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ check: mock.permission }) }));
 vi.mock('@/core/tasks/timezone', () => ({ resolveUserTimezone: async () => 'America/Los_Angeles' }));
 vi.mock('@/config', () => ({ getConfig: () => ({ memory: { extractionCadence: 'per_turn' } }) }));
@@ -36,6 +36,7 @@ beforeEach(() => {
   mock.complete.mockResolvedValue({ content: JSON.stringify(empty) });
   mock.permission.mockResolvedValue({ level: 'ALLOW' });
   mock.owner.mockReturnValue([{ id: 'm1', text: 'Please keep replies short, I read on my phone' }]);
+  mock.patchable.mockResolvedValue([]);
 });
 test('quiet runs are reviewed using execution evidence and report deliberate no-op', async () => {
   await processLearningJob(job);
@@ -140,4 +141,26 @@ test('a memory citing a monitor request is rejected alone; the review\'s knowled
     { kind: 'knowledge', status: 'saved', id: 'n1' },
     expect.objectContaining({ kind: 'memory', status: 'rejected' }),
   ]);
+});
+const patch = { skillId: 'skill-1', oldText: '2. Push it.', newText: '2. Push it with --tag.', reason: 'Untagged push failed', sources: ['event:1'] };
+test('offers the session\'s learned skills and files a patch only for one of them', async () => {
+  mock.patchable.mockResolvedValue([{ id: 'skill-1', name: 'deploy', content: '1. Build.\n2. Push it.' }]);
+  mock.complete.mockResolvedValue({ content: JSON.stringify({ ...empty, patches: [patch] }) });
+  mock.patch.mockResolvedValue({ proposalId: 'p2', status: 'pending' });
+  await processLearningJob(job);
+  expect(JSON.parse(mock.complete.mock.calls[0][0].messages[1].content).learnedSkills).toEqual([expect.objectContaining({ id: 'skill-1' })]);
+  expect(mock.patch).toHaveBeenCalledWith({ skillId: 'skill-1', oldText: patch.oldText, newText: patch.newText, reason: patch.reason }, 'u1', 'learning:j1:session:s1');
+  expect(mock.finish.mock.calls[0][1]).toMatchObject({ status: 'done', result: { outputs: [{ kind: 'skill_patch', status: 'proposed', id: 'p2' }] } });
+});
+test('a patch for a skill not offered, or one the writer refuses, is a refusal rather than a failed write', async () => {
+  const { SkillPatchError } = await import('@/skills/patch');
+  mock.complete.mockResolvedValue({ content: JSON.stringify({ ...empty, patches: [patch] }) });
+  await processLearningJob(job);
+  expect(mock.patch).not.toHaveBeenCalled();
+  expect(mock.finish.mock.calls[0][1]).toMatchObject({ status: 'done', result: { outputs: [{ kind: 'skill_patch', status: 'refused' }] } });
+  mock.finish.mockReset();
+  mock.patchable.mockResolvedValue([{ id: 'skill-1', name: 'deploy', content: '2. Push it.' }]);
+  mock.patch.mockRejectedValue(new SkillPatchError('locked', 'The owner edited this skill'));
+  await processLearningJob(job);
+  expect(mock.finish.mock.calls[0][1].result.outputs).toEqual([expect.objectContaining({ kind: 'skill_patch', status: 'refused', detail: expect.stringContaining('owner edited') })]);
 });

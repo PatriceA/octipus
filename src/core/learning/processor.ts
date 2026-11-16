@@ -15,11 +15,12 @@ import { verifyOwnerQuotes } from '@/core/memory/owner-messages';
 import { expiryOf, ownerTimezone } from '@/core/memory/extractor';
 import { getNoteRepository, personalNoteScope } from '@/db/repositories/note-repository';
 import { getNoteService } from '@/core/knowledge/notes';
-import { fileSkillProposal } from '@/services/file-skill-proposal';
+import { fileSkillPatchProposal, fileSkillProposal } from '@/services/file-skill-proposal';
+import { SkillPatchError } from '@/skills/patch';
 import { getPermissionManager } from '@/security/permissions';
 import { getConfig } from '@/config';
 import type { LearningCheckView } from '@/shared/learning';
-import { gatherEvidence } from './evidence';
+import { gatherEvidence, gatherPatchableSkills } from './evidence';
 import { LEARNING_PROMPT, parseLearningReview } from './review';
 import { DEFAULT_MAX_OUTPUT_TOKENS } from '@/db/schema/models';
 import { estimateTokens } from '@/utils/token-count';
@@ -70,8 +71,10 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
     const prompt = (await capabilityConfigured('embedding'))
       ? LEARNING_PROMPT
       : `${LEARNING_PROMPT}\nMemory is off on this install: always return "memories": [].`;
+    // Learned skills this session used: the only patch targets on offer.
+    const learnedSkills = await gatherPatchableSkills(job.userId, session.id, new Date(payload.through));
     const systemText = `${SECURITY_PREAMBLE}\n\n${prompt}`;
-    const evidenceText = JSON.stringify({ trigger: payload.trigger, evidence });
+    const evidenceText = JSON.stringify({ trigger: payload.trigger, evidence, learnedSkills });
     const contextRoom = model.contextWindow == null ? Infinity
       : model.contextWindow - estimateTokens(systemText) - estimateTokens(evidenceText) - 1024;
     const ceiling = Math.min(model.maxTokens ?? model.defaultMaxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, contextRoom);
@@ -160,6 +163,23 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
           id: typeof result.proposalId === 'string' ? result.proposalId : undefined,
           detail: typeof result.message === 'string' ? result.message : undefined });
       } catch (err) { outputs.push({ kind: 'skill', status: 'failed', detail: errorText(err) }); }
+    }
+    for (const item of review.patches) {
+      try {
+        if (!learnedSkills.some(skill => skill.id === item.skillId)) {
+          throw new SkillPatchError('not_patchable', 'The patch names a skill that was not offered for this session');
+        }
+        await canWrite('skill-distill', 'distill', { source: 'text', content: item.newText });
+        const result = await fileSkillPatchProposal({ skillId: item.skillId, oldText: item.oldText, newText: item.newText, reason: item.reason },
+          job.userId, `learning:${job.id}:session:${session.id}`);
+        outputs.push({ kind: 'skill_patch', status: result.deduped ? 'duplicate' : 'proposed',
+          id: typeof result.proposalId === 'string' ? result.proposalId : undefined,
+          detail: typeof result.message === 'string' ? result.message : undefined });
+      } catch (err) {
+        // A patch that does not match exactly once, carries PII or targets a
+        // locked skill is refused, not a failed write: nothing was lost.
+        outputs.push({ kind: 'skill_patch', status: err instanceof SkillPatchError ? 'refused' : 'failed', detail: errorText(err) });
+      }
     }
     const failed = outputs.some(output => output.status === 'failed' || output.status === 'saved_unindexed');
     await backgroundJobRepository.finish(job.id, { status: failed ? 'error' : 'done',

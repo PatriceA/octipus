@@ -1338,6 +1338,13 @@
       "when": 1794448800000,
       "tag": "0190_memory_provenance",
       "breakpoints": true
+    },
+    {
+      "idx": 191,
+      "version": "7",
+      "when": 1794452400000,
+      "tag": "0191_skill_patch_proposals",
+      "breakpoints": true
     }
   ]
 }

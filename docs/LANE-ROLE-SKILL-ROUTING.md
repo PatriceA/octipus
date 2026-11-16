@@ -167,12 +167,18 @@ proposal. It branches on `kind`:
 - `kind = 'skill'` → inserts a row into the `skills` table (a distilled
   procedure).
 - `kind` records what the distiller thought it was proposing; every proposal promotes to a SKILL.
+- `kind = 'patch'` → replaces exactly one passage of an existing learned skill,
+  after checking the skill's content is unchanged since the patch was made and
+  the owner has not edited it ([Session learning](SESSION-LEARNING.md#repairing-a-learned-skill)).
 
 Each promotion is atomic with the status flip (no orphan skill if the
 status update fails). Rejecting a proposal suppresses re-proposal for 90 days.
 
 **Prune (curation).** `runSkillCurator` flags skills unused for 30 days and
-auto-archives after 90 (see the roadmap "Skill auto-extension" item for the
+auto-archives after 90, least recently used first; it skips system skills and
+skills the owner has edited (`owner_edited_at`). "Used" means the body was
+loaded, not that the skill was listed in an index. Nothing schedules the
+curator yet (see the roadmap "Skill auto-extension" item for the
 generative-refresh follow-up).
 
 ## Pipeline Stages

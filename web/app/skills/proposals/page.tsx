@@ -3,24 +3,18 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Loader2, X } from 'lucide-react';
 import { useState } from 'react';
+import DiffView from '@/components/chat/diff-view';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { computeLineDiff } from '../../../../src/shared/diff';
+import type { SkillProposalView as SkillProposal } from '../../../../src/shared/skill-proposals';
 
-interface SkillProposal {
-  id: string;
-  userId: string;
-  fingerprint: string;
-  name: string;
-  description: string;
-  draftPromptTemplate: string;
-  exemplarCount: number;
-  lastExemplarAt: string;
-  kind?: 'skill' | 'expert';
-  sourceRef?: string | null;
-  status: 'pending' | 'approved' | 'rejected' | 'promoted';
-  createdAt: string;
-}
+const KIND_TITLE: Record<SkillProposal['kind'], string> = {
+  skill: 'Approving creates a reusable skill',
+  expert: 'Approving creates a custom expert',
+  patch: 'Approving replaces one passage of an existing learned skill',
+};
 
 export default function SkillProposalsPage() {
   const qc = useQueryClient();
@@ -67,7 +61,7 @@ export default function SkillProposalsPage() {
       <div className="max-w-5xl mx-auto">
         <PageHeader
           title="skills/proposals"
-          description="Suggestions from recurring interaction patterns and distilled skills (skill_distill). The → badge shows whether approving creates a skill or an expert. Nothing activates until you approve."
+          description="Suggestions from recurring interaction patterns, distilled skills (skill_distill) and patches to learned skills. The → badge shows what approving does. Nothing activates until you approve."
         />
 
         {error && (
@@ -107,9 +101,9 @@ export default function SkillProposalsPage() {
                     </span>
                     <span
                       className="px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-mono leading-none border border-outline-variant/30 bg-surface-container-high text-on-surface-variant rounded-xs"
-                      title={p.kind === 'skill' ? 'Approving creates a reusable skill' : 'Approving creates a custom expert'}
+                      title={KIND_TITLE[p.kind]}
                     >
-                      → {p.kind ?? 'expert'}
+                      → {p.kind}
                     </span>
                     {busyId === p.id && (
                       <span aria-hidden className="dot dot-live bg-primary text-primary shrink-0" />
@@ -139,8 +133,14 @@ export default function SkillProposalsPage() {
                   </button>
                 </div>
               </div>
+              {p.kind === 'patch' && (
+                <div className="mt-3">
+                  <div className="text-xs text-on-surface-variant mb-1">Proposed change (old → new); approval is refused if the skill changed since.</div>
+                  <DiffView patch={computeLineDiff(p.patchOldText ?? '', p.patchNewText ?? '').patch} className="text-xs" />
+                </div>
+              )}
               <details className="mt-3">
-                <summary className="text-xs text-on-surface-variant cursor-pointer hover:text-on-surface">Draft prompt template</summary>
+                <summary className="text-xs text-on-surface-variant cursor-pointer hover:text-on-surface">{p.kind === 'patch' ? 'Skill after the patch' : 'Draft prompt template'}</summary>
                 <pre className="mt-2 p-2 bg-surface-container-low rounded-xs text-xs text-on-surface-variant whitespace-pre-wrap overflow-x-auto">
                   {p.draftPromptTemplate}
                 </pre>

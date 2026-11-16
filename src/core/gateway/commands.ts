@@ -403,7 +403,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     ],
     handler: async (ctx) => {
       const {
-        approveProposal, listPendingProposals, rejectProposal,
+        approveProposal, listPendingProposals, ProposalRefusedError, rejectProposal,
       } = await import('@/services/skill-proposal-service');
 
       // Everyone, admins included, sees and acts on their own proposals only.
@@ -414,8 +414,10 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
 
       if (!action) {
         if (pending.length === 0) return { text: 'No pending skill proposals.' };
-        const lines = pending.map((p, i) =>
-          `  ${i + 1}. ${p.name} (${p.kind}) — ${p.description}\n     from ${p.exemplarCount} run(s)`,
+        const clip = (text: string | null, t = text ?? '') => JSON.stringify(t.length > 120 ? `${t.slice(0, 117)}...` : t);
+        const lines = pending.map((p, i) => p.kind === 'patch'
+          ? `  ${i + 1}. ${p.name} (patch) — ${p.description}\n     replace ${clip(p.patchOldText)}\n     with    ${clip(p.patchNewText)}`
+          : `  ${i + 1}. ${p.name} (${p.kind}) — ${p.description}\n     from ${p.exemplarCount} run(s)`,
         );
         return {
           text: `Pending skill proposals:\n${lines.join('\n')}\n\n`
@@ -438,10 +440,16 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
       }
 
       if (action === 'approve') {
-        const result = await approveProposal(target.id, { userId: scope });
-        return result
-          ? { text: `Approved: "${result.name}" is now a ${result.promoted}.` }
-          : { text: 'That proposal is no longer pending.' };
+        try {
+          const result = await approveProposal(target.id, { userId: scope });
+          if (!result) return { text: 'That proposal is no longer pending.' };
+          return target.kind === 'patch'
+            ? { text: `Approved: the patch to "${result.name}" is applied.` }
+            : { text: `Approved: "${result.name}" is now a ${result.promoted}.` };
+        } catch (err) {
+          if (err instanceof ProposalRefusedError) return { text: `Not applied: ${err.message}` };
+          throw err;
+        }
       }
 
       const suppressedUntil = await rejectProposal(target.id, scope);

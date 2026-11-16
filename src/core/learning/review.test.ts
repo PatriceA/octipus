@@ -50,3 +50,11 @@ test('a memory citing a monitor or Companion handoff is dropped alone; the revie
   expect(parsed.memories).toEqual([]);
   expect(parsed.droppedMemories).toHaveLength(1);
 });
+test('a patch must cite execution evidence; older outputs without patches still parse', () => {
+  const patch = { skillId: 'skill-1', oldText: '  2. Push it.', newText: '2. Push it with --tag.', reason: 'Push failed without a tag', sources: ['event:1'] };
+  const parsed = parseLearningReview(JSON.stringify({ ...review, patches: [patch] }), evidence);
+  expect(parsed.patches[0].oldText).toBe('  2. Push it.');
+  expect(() => parseLearningReview(JSON.stringify({ ...review, patches: [{ ...patch, sources: ['plan'] }] }), evidence)).toThrow('execution evidence');
+  expect(() => parseLearningReview(JSON.stringify({ ...review, patches: [patch, patch] }), evidence)).toThrow();
+  expect(parseLearningReview(JSON.stringify(review), evidence).patches).toEqual([]);
+});

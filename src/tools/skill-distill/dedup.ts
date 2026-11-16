@@ -14,7 +14,7 @@
  * Never throws: an unavailable embedding model degrades to checks 1-2.
  */
 import { isCapabilityOn } from '@/core/capabilities/gates';
-import { and, desc, eq, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { getDb } from '@/db/postgres';
 import { cosineSimilarity } from '@/db/schema/embeddings';
@@ -127,7 +127,8 @@ export async function findExisting(
   const pending = await db
     .select()
     .from(skillProposals)
-    .where(and(eq(skillProposals.userId, userId), eq(skillProposals.status, 'pending')))
+    // A patch proposal's draft is an existing skill's text, not a new skill.
+    .where(and(eq(skillProposals.userId, userId), eq(skillProposals.status, 'pending'), ne(skillProposals.kind, 'patch')))
     .orderBy(desc(skillProposals.createdAt))
     .limit(MAX_PENDING_COMPARED);
 

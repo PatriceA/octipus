@@ -25,6 +25,7 @@ export type SkillUpdate = Partial<Pick<Skill,
   | 'frameworks'
   | 'triggers'
   | 'alwaysInject'
+  | 'ownerEditedAt'
 >>;
 
 /**
@@ -164,8 +165,9 @@ export class SkillRepository {
   /**
    * Find skills the curator may want to archive: not used for `unusedDays`
    * AND not already archived AND not system skills (those are explicit
-   * conventions we don't auto-prune). Caller decides whether to actually
-   * archive — this is the read side.
+   * conventions we don't auto-prune) AND not owner-edited (the owner wrote
+   * it; only they retire it). Least recently used first, never-used first of
+   * all. Caller decides whether to actually archive — this is the read side.
    */
   async findStale(unusedDays: number, limit = 50): Promise<Skill[]> {
     const cutoff = new Date(Date.now() - unusedDays * 24 * 60 * 60 * 1000);
@@ -176,12 +178,14 @@ export class SkillRepository {
         and(
           isNull(skills.archivedAt),
           eq(skills.isSystem, false),
+          isNull(skills.ownerEditedAt),
           or(
             isNull(skills.lastUsedAt),
             lt(skills.lastUsedAt, cutoff),
           ),
         ),
       )
+      .orderBy(sql`${skills.lastUsedAt} ASC NULLS FIRST`, skills.createdAt)
       .limit(limit);
   }
 

@@ -25,6 +25,7 @@ function makeSkill(overrides: Partial<Skill> = {}): Skill {
     usageCount: overrides.usageCount ?? 0,
     archivedAt: overrides.archivedAt ?? null,
     curationNotes: overrides.curationNotes ?? null,
+    ownerEditedAt: overrides.ownerEditedAt ?? null,
     createdAt: overrides.createdAt ?? new Date(Date.now() - 365 * 24 * 60 * 60 * 1000),
     updatedAt: overrides.updatedAt ?? new Date(),
   } as Skill;

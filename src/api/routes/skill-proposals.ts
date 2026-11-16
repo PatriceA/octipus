@@ -3,6 +3,7 @@ import { apiContext } from '@/api/context';
 import {
   approveProposal,
   listPendingProposals,
+  ProposalRefusedError,
   rejectProposal,
 } from '@/services/skill-proposal-service';
 import { coreLogger } from '@/utils/logger';
@@ -47,6 +48,12 @@ export const skillProposalRoutes = new Elysia({ prefix: '/skills/proposals' })
         skill: result.record,
       };
     } catch (err) {
+      // Stale, locked or otherwise inapplicable: the proposal stays pending
+      // and the caller is told why (docs/SESSION-LEARNING.md).
+      if (err instanceof ProposalRefusedError) {
+        set.status = err.code === 'override' ? 400 : 409;
+        return { error: err.message, code: err.code };
+      }
       coreLogger.error({ err }, 'Skill proposal approve failed');
       set.status = 500;
       return { error: (err as Error).message };

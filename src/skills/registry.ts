@@ -164,9 +164,12 @@ export class SkillRegistry {
     if (skillIds.length === 0) return '';
     const found = await this.getByIds(skillIds, userId);
     if (found.length === 0) return '';
-    // Summary-only injection still counts as usage — the LLM saw the skill
-    // exists and may load its full content via the MCP tool.
-    recordSkillUsage(found.filter((s) => !isExternalSkillId(s.id)).map((s) => s.id));
+    // A one-line index entry is not use: every skill of a role is listed on
+    // every spawn, so counting it here made `last_used_at` say "used today"
+    // for skills nobody loaded and left the curator's least-recently-used
+    // order meaningless. Use is recorded where the body is loaded: `get_skill`
+    // (renderSkill), GET /api/skills/:id (the MCP get_skill) and full-content
+    // injection (buildPromptFragment / buildTopicPromptFragment).
     const lines = [
       'Available skills (call `get_skill` with the id to load the full spec):',
       ...found.map(buildPromptSummary),

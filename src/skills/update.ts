@@ -10,8 +10,13 @@ export class SkillUpdateError extends Error {
 const textFields = ['name', 'description', 'category', 'content'] as const;
 const arrayFields = ['principles', 'bestPractices', 'antiPatterns', 'frameworks'] as const;
 
-/** Shared by the agent tool and REST/MCP, preserving omitted fields and skill identity. */
-export async function updateSkill(skillId: unknown, fields: Record<string, unknown>, userId: string) {
+/**
+ * Shared by the agent tool and REST/MCP, preserving omitted fields and skill identity.
+ * `ownerEdit`: the owner wrote this through the API or the Skills page, which
+ * stamps `ownerEditedAt` and so locks the skill against learning patches.
+ * The in-process agent tool passes false.
+ */
+export async function updateSkill(skillId: unknown, fields: Record<string, unknown>, userId: string, { ownerEdit = false }: { ownerEdit?: boolean } = {}) {
   if (!userId) throw new SkillUpdateError('Not authenticated', 401);
   if (typeof skillId !== 'string' || !skillId.trim()) throw new SkillUpdateError('skill_id must be a non-empty string', 400);
   const ownerId = requireRealUserId(userId);
@@ -37,6 +42,7 @@ export async function updateSkill(skillId: unknown, fields: Record<string, unkno
     patch[key] = value;
   }
   if (!Object.keys(patch).length) throw new SkillUpdateError('Provide at least one skill field to update', 400);
+  if (ownerEdit) patch.ownerEditedAt = new Date();
   const updated = await skillRepository.update(skillId, patch);
   if (!updated) throw new SkillUpdateError('Skill not found', 404);
   return updated;

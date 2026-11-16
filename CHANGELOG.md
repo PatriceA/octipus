@@ -208,6 +208,19 @@ The curated release notes above are used for the GitHub release.
 
 ### Changed
 
+- **Learned skills can be repaired, owner-edited skills are locked.** A
+  learning check may propose a patch to a learned skill the session used: one
+  passage, matched exactly once, PII-checked, made against a recorded content
+  hash. It still needs approval on Skills → Proposals, which shows the old →
+  new passage and refuses a patch whose skill changed since (`409 stale`).
+  A skill the owner creates, edits or imports through the API or the Skills
+  page is locked against patches, against being overwritten by a same-name
+  proposal, and against curator archiving. Skill usage now counts loading a
+  skill's body, not its line in a role's skill index. Migration
+  `0191_skill_patch_proposals` backfills existing non-system skills as
+  owner-written unless a promoted proposal shows they were learned. See
+  [Session learning](docs/SESSION-LEARNING.md#repairing-a-learned-skill).
+
 - **Recurring scheduled agent runs can skip unchanged runs (`watch`).** A
   schedule hook whose action is an orchestrated `spawn_agent` turn may name up
   to five sources in `triggerConfig.watch` (a web page, a workspace file or

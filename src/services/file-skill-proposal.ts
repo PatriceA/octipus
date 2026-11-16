@@ -1,5 +1,10 @@
+import { createHash } from 'node:crypto';
+import { and, desc, eq } from 'drizzle-orm';
+import { filterPII } from '@/core/agent/pii-filter';
 import { getDb } from '@/db/postgres';
+import { skillRepository } from '@/db/repositories/skill-repository';
 import { skillProposals } from '@/db/schema/skill-proposals';
+import { assertPatchable, skillContentHash, validateSkillPatch } from '@/skills/patch';
 import { type DedupHit, findExisting } from '@/tools/skill-distill/dedup';
 import { type DistilledSkill, skillFingerprint } from '@/tools/skill-distill/distiller';
 import { toolLogger } from '@/utils/logger';
@@ -68,4 +73,54 @@ function describeExisting(hit: DedupHit): Record<string, unknown> {
     status: 'pending',
     message: `An equivalent proposal ("${hit.name}") is already pending review.`,
   };
+}
+
+export interface SkillPatchInput { skillId: string; oldText: string; newText: string; reason: string }
+
+/**
+ * File a pending patch proposal against a learned skill (src/skills/patch.ts).
+ * Throws `SkillPatchError` when the skill is not a patchable learned skill of
+ * `userId` (system, mounted, someone else's, archived, owner-edited) or when
+ * the patch fails the exactly-once, size or PII checks. The proposal records
+ * the content hash it was made against; approval refuses once that changed.
+ */
+export async function fileSkillPatchProposal(patch: SkillPatchInput, userId: string, sourceRef: string): Promise<Record<string, unknown>> {
+  const skill = await skillRepository.findById(patch.skillId);
+  assertPatchable(skill, userId);
+  const content = skill.content ?? '';
+  const patched = validateSkillPatch(content, patch.oldText, patch.newText);
+
+  const db = getDb();
+  const fingerprint = createHash('sha256')
+    .update(`${userId}:patch:${skill.id}:${patch.oldText}\u0000${patch.newText}`).digest('hex');
+  const [existing] = await db.select().from(skillProposals)
+    .where(and(eq(skillProposals.fingerprint, fingerprint), eq(skillProposals.userId, userId)))
+    .orderBy(desc(skillProposals.createdAt)).limit(1);
+  if (existing?.status === 'pending') {
+    return { deduped: true, proposalId: existing.id, name: skill.name, status: 'pending', message: 'The same patch is already pending review.' };
+  }
+  if (existing?.status === 'rejected' && existing.rejectedUntil && existing.rejectedUntil > new Date()) {
+    return { deduped: true, name: skill.name, message: `The same patch was rejected and stays suppressed until ${existing.rejectedUntil.toISOString().slice(0, 10)} — nothing filed.` };
+  }
+
+  const [proposal] = await db.insert(skillProposals).values({
+    userId,
+    fingerprint,
+    name: skill.name,
+    description: filterPII(patch.reason).filtered,
+    // The skill as it would read after approval — what an older client that
+    // only shows the draft displays. Approval recomputes it from the stored
+    // passages after re-checking `baseContentHash`.
+    draftPromptTemplate: patched,
+    kind: 'patch',
+    sourceRef,
+    lastExemplarAt: new Date(),
+    targetSkillId: skill.id,
+    patchOldText: patch.oldText,
+    patchNewText: patch.newText,
+    baseContentHash: skillContentHash(content),
+  }).returning();
+
+  toolLogger.info({ proposalId: proposal?.id, skillId: skill.id, userId }, 'Filed a skill patch proposal');
+  return { proposalId: proposal?.id, name: skill.name, status: 'pending', note: 'Filed as a pending patch proposal for review (the skill is unchanged until approved).' };
 }

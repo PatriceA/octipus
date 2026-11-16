@@ -86,7 +86,8 @@ test('REST used by MCP saves a partial update and returns real HTTP errors', asy
   }));
   const saved = await request();
   expect(saved.status).toBe(200);
-  expect(await saved.json()).toEqual({ id: 'skill', content: 'New body' });
+  // A write through the API is the owner's: it locks the skill against learning patches.
+  expect(await saved.json()).toEqual({ id: 'skill', content: 'New body', ownerEditedAt: expect.any(String) });
   fixture.findSkill.mockResolvedValue({ userId: 'other', isSystem: false });
   expect((await request()).status).toBe(403);
   fixture.findSkill.mockResolvedValue(undefined);

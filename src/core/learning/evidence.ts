@@ -1,10 +1,12 @@
-import { and, desc, eq, inArray, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lte, ne, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { agentEvents } from '@/db/schema/agent-events';
 import { messages } from '@/db/schema/messages';
 import { visibleMessages } from '@/db/repositories/message-visibility';
+import { skills } from '@/db/schema/skills';
 import { verificationEvidence } from '@/db/schema/verification-evidence';
 import { filterPII } from '@/core/agent/pii-filter';
+import { MAX_PATCHED_SKILL_CHARS } from '@/skills/patch';
 
 export interface LearningEvidence { id: string; kind: 'user' | 'assistant' | 'execution' | 'verification' | 'plan' | 'request'; text: string }
 export const MAX_EVIDENCE_CHARS = 40_000;
@@ -52,4 +54,27 @@ export async function gatherEvidence(userId: string, sessionId: string, through:
     ...checks.map(row => ({ id: `check:${row.id}`, kind: 'verification' as const, text: row.text })),
     ...events.map(row => ({ id: `event:${row.id}`, kind: row.observed ? 'execution' as const : 'request' as const, text: row.text })),
   ]);
+}
+
+/** A learned skill the review may propose a patch for, with its current content. */
+export interface PatchableSkill { id: string; name: string; content: string }
+export const MAX_PATCHABLE_SKILLS = 2;
+
+/**
+ * The owner's learned skills (own, not system, not archived, not owner-edited)
+ * that this session's recorded agent events name by id up to `through` —
+ * loaded with get_skill, read or updated. Only these are offered to the
+ * review for a patch, so a patch always targets a skill the work actually used.
+ * Skills already at the patched-size cap are left out. Caller validates session ownership.
+ */
+export async function gatherPatchableSkills(userId: string, sessionId: string, through: Date): Promise<PatchableSkill[]> {
+  const rows = await getDb().select({ id: skills.id, name: skills.name, content: skills.content }).from(skills)
+    .where(and(sql`${skills.userId}::text = ${userId}`, eq(skills.isSystem, false), isNull(skills.archivedAt), isNull(skills.ownerEditedAt),
+      ne(skills.content, ''), sql`length(${skills.content}) <= ${MAX_PATCHED_SKILL_CHARS}`,
+      sql`EXISTS (SELECT 1 FROM ${agentEvents} WHERE ${agentEvents.userId} = ${userId} AND ${agentEvents.sessionId} = ${sessionId}
+        AND ${agentEvents.createdAt} <= ${through.toISOString()}::timestamptz AND position(${skills.id} in ${agentEvents.data}::text) > 0)`))
+    .orderBy(sql`${skills.lastUsedAt} DESC NULLS LAST`).limit(MAX_PATCHABLE_SKILLS);
+  // Content is shown redacted, like every other excerpt; a patch quoting a
+  // redaction placeholder simply fails the exact match against the stored text.
+  return rows.map(row => ({ id: row.id, name: row.name, content: filterPII(row.content ?? '').filtered }));
 }

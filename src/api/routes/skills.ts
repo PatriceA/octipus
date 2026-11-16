@@ -9,6 +9,7 @@ import { hiddenSkillRepository } from '@/db/repositories/hidden-skill-repository
 import { skillSelections } from '@/db/schema/skill-selections';
 import { isExternalSkillId } from '@/skills/external-loader';
 import { getSkillRegistry } from '@/skills/registry';
+import { recordSkillUsage } from '@/skills/usage-tracker';
 import { updateSkill, SkillUpdateError } from '@/skills/update';
 import { getSkillModes } from '@/skills/selection';
 import { skillSelectionRepository } from '@/db/repositories/skill-selection-repository';
@@ -224,6 +225,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
             bestPractices: portable.bestPractices ?? existing.bestPractices,
             antiPatterns: portable.antiPatterns ?? existing.antiPatterns,
             frameworks: portable.frameworks ?? existing.frameworks,
+            ownerEditedAt: new Date(),
           };
 
           await skillRepository.update(existing.id, updateData);
@@ -245,6 +247,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
           frameworks: portable.frameworks ?? [],
           isSystem: false,
           userId: user.id === 'system' ? null : user.id,
+          ownerEditedAt: new Date(),
         });
         createdIds.push(id);
       }
@@ -314,6 +317,9 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
     async ({ user, params, set }) => {
       const skill = await getSkillRegistry().get(params.id, user?.id);
       if (!skill || (!user && !skill.isSystem)) { set.status = 404; return { error: 'Skill not found' }; }
+      // The MCP server's get_skill loads a body through here (CLI agents);
+      // the web Skills page lists skills and never reads one by id.
+      if (!isExternalSkillId(skill.id)) recordSkillUsage([skill.id]);
       return skill;
     },
     {
@@ -340,6 +346,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
         frameworks: body.frameworks ?? [],
         isSystem: false,
         userId: user.id === 'system' ? null : user.id,
+        ownerEditedAt: new Date(),
       }).returning();
 
       return created;
@@ -365,7 +372,10 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
     async ({ user, params, body, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        return await updateSkill(params.id, body, user.id);
+        // A write through the API counts as the owner's and locks the skill
+        // against learning patches (docs/SESSION-LEARNING.md). That includes
+        // the MCP server's update tool, which this route cannot tell apart.
+        return await updateSkill(params.id, body, user.id, { ownerEdit: true });
       } catch (error) {
         if (!(error instanceof SkillUpdateError)) throw error;
         set.status = error.status;
