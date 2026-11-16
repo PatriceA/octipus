@@ -57,8 +57,12 @@ async function main() {
 
     console.log('\n[integration] Running tests (INTEGRATION=1)...');
     // The runner's own config already excludes `tests/web` (Playwright owns
-    // those). Extra args narrow the run to specific files.
-    testExit = await run('npx', ['vitest', 'run', ...extraArgs], {
+    // those). Extra args narrow the run to specific files; without them only
+    // the suites that use this Postgres run (`integrationSuites`), the rest
+    // having already run unchanged in the CI workflow.
+    const { integrationSuites } = await import('../vitest.config');
+    if (!extraArgs.length && !integrationSuites.length) throw new Error('no integration suites found');
+    testExit = await run('npx', ['vitest', 'run', ...(extraArgs.length ? extraArgs : integrationSuites)], {
       INTEGRATION: '1',
       DATABASE_URL,
       STORAGE_MODE: 'external',

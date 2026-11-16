@@ -94,6 +94,18 @@ const testFiles = ALL.flatMap((pattern) => globSync(pattern))
 const database = testFiles.filter(usesDatabase);
 const pure = testFiles.filter((f) => !database.includes(f));
 
+/**
+ * The suites the integration lane exists for: they switch on `INTEGRATION=1`
+ * and talk to the shared Postgres. Every other suite behaves identically there
+ * and already ran in the CI workflow, so the integration runner
+ * (scripts/test-integration.ts) runs only these.
+ */
+const INTEGRATION_MARKERS = ['process.env.INTEGRATION', '@/test-helpers/integration'];
+export const integrationSuites = testFiles.filter((file) => {
+  const source = readFileSync(file, 'utf8');
+  return INTEGRATION_MARKERS.some((marker) => source.includes(marker));
+});
+
 export default defineConfig({
   resolve: { tsconfigPaths: true },
   plugins: [markdownAsText()],
@@ -101,7 +113,7 @@ export default defineConfig({
     // Own one exclusive root per invocation, shared with workers via provide.
     // Teardown removes only that root after all projects finish.
     // The CLI suites need the built tool bridge (cli-bridge-build.ts).
-    globalSetup: ['./src/test-helpers/tmp-cleanup.ts', './src/test-helpers/cli-bridge-build.ts'],
+    globalSetup: ['./src/test-helpers/tmp-cleanup.ts', './src/test-helpers/cli-bridge-build.ts', './src/test-helpers/pglite-template.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['lcov'],

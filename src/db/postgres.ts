@@ -110,8 +110,12 @@ async function initEmbedded(dataDir: string): Promise<DrizzleDB> {
 
   // An initialization error may mean damaged durable data. Never erase the
   // directory or retry with an empty database, including on first-boot faults.
-  const { mkdirSync } = await import('fs');
+  const { cpSync, existsSync, mkdirSync } = await import('fs');
   mkdirSync(resolvedDir, { recursive: true });
+  // Test runs only: a brand-new directory starts as a copy of the migrated
+  // template built once per run (src/test-helpers/pglite-template.ts).
+  const template = process.env.VITEST ? process.env.OCTIPUS_PGLITE_TEMPLATE : undefined;
+  if (template && !existsSync(`${resolvedDir}/PG_VERSION`)) cpSync(template, resolvedDir, { recursive: true });
   let client: Awaited<ReturnType<typeof PGlite.create>>;
   try {
     client = await PGlite.create({ dataDir: resolvedDir, extensions: { vector } });

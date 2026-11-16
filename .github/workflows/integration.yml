@@ -26,9 +26,9 @@ jobs:
   integration:
     name: Integration (postgres)
     runs-on: ubuntu-latest
-    # The serial database lane outgrew 25 minutes: that limit cancelled a
-    # progressing run before all suites could finish. Keep per-test deadlines.
-    timeout-minutes: 60
+    # Only the INTEGRATION=1 suites run here (vitest.config.ts
+    # `integrationSuites`); everything else already ran in the CI workflow.
+    timeout-minutes: 20
     # Dummy 32+ char secrets satisfy config-load validation — the same reason
     # the `CI` workflow sets them. Integration tests mock LLM providers, so no
     # real API keys are needed; only Docker (Postgres) is required.
@@ -53,22 +53,6 @@ jobs:
       - name: Build CLI tool bridge (spawned CLI runs resolve mcp-server/dist)
         run: npm ci && npm run build
         working-directory: mcp-server
-
-      # The browser is cached per Playwright version; the OS libraries come
-      # from apt. `--with-deps` runs apt-get update, which also pulls Google's
-      # Chrome index shipped in the runner image (unused: Playwright brings its
-      # own browser) and has been slow or broken upstream, so drop it first.
-      - name: Cache Playwright browser
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-
-      - name: Prepare Ubuntu package sources
-        uses: ./.github/actions/ubuntu-apt
-
-      - name: Install browser for page extraction tests
-        run: npx playwright install --with-deps chromium
 
       - name: Integration tests
         run: npx tsx scripts/test-integration.ts

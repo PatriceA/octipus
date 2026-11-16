@@ -16,6 +16,8 @@ if (!testTmpRoot) throw new Error('Test scratch root was not provided by global 
 process.env.TMPDIR = testTmpRoot;
 process.env.TMP = testTmpRoot;
 process.env.TEMP = testTmpRoot;
+const pgliteTemplate = inject('pgliteTemplate');
+if (pgliteTemplate) process.env.OCTIPUS_PGLITE_TEMPLATE = pgliteTemplate;
 
 const rand = (bytes: number) => randomBytes(bytes).toString('hex');
 
