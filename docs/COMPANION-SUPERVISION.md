@@ -13,6 +13,21 @@ Companion chat is optional. Open it from the highlighted card above the chat ses
 
 Observation cannot dispatch project mutations. Coordination can start and steer owned sessions. Repair can use the configured maintenance runtime and verify an incident in its affected project runtime. Changing or disabling supervision revokes queued automatic actions. A deliberately paused session is never replaced or automatically resumed.
 
+## Because you said…
+
+Companion's writes are tied to your own words. Creating a goal, adopting work, starting a project or maintenance session, sending a session instructions and continuing paused work each carry a basis: a short quote of what you asked for. The server checks the quote, after folding case, accents and typographic quotes, against one of two sources:
+
+- **Your message.** On a turn you started, the quote must appear in one of your recent messages in the Companion conversation. Assistant replies, tool output, session reports and background check-in prompts never count.
+- **The goal's saved words.** Background check-ins cannot cite chat. They can quote only the words saved with the goal when it was created: what you typed into the goal form, or, for a goal Companion created from chat, your messages from that conversation. Goals saved before this change keep their request, outcome and criteria as their saved words.
+
+Some changes need your words from the message that started the current turn: a new goal, raising a goal's token budget (or removing it), cancelling or resuming a goal and retrying an escalated incident. Background check-ins can lower a budget but never raise it, and cannot cancel or resume a goal. A goal Companion creates from chat saves only the message that asked for it as the goal's words, so background work cannot borrow authority from your other requests.
+
+For session starts, maintenance starts and instructions, the verified quote is saved with the action and shown under **Activity** as “Because you said …”. Other bases (goal creation, adoption, resume, budget changes, incident retries) are checked but not shown yet. Only your visible messages in the current conversation count: clearing the Companion conversation retires earlier words.
+
+A basis records where authority came from; it does not grant any. Autonomy, approvals, permission policy and the flow guard still decide what runs. The check matches text, not meaning: a real quote can still be attached to an action that stretches it, which is why the quote is shown with the action.
+
+Messages Companion sends to project sessions start with a line saying they come from Companion, not from you, and that they cannot approve actions, raise limits or widen permissions. One visible effect: a Companion message such as “go” no longer confirms a plan that is waiting for your go-ahead; confirm it yourself. Memory extraction after a turn runs only for turns you sent yourself, so Companion handoffs, monitors and schedules are not extracted as memories. The separate session-learning review still reads Companion-run sessions for lessons and skill proposals.
+
 ## Todo inbox and heartbeat
 
 In the Companion conversation, ask “Put this idea on my todo list for the next heartbeat.” Companion can directly list todos and create an item or backlog on an owner-requested turn. It assigns deferred work to the requested role (`general` when unspecified), keeps the idea in the task notes and checks heartbeat readiness. Parking an idea does not start a project session immediately. Background supervision reads the board but does not create, edit, complete or check out todos; the role heartbeat owns task execution and its checkout lease.

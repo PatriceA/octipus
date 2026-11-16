@@ -8,7 +8,7 @@ import { afterAll, beforeAll, beforeEach, expect, test, vi } from 'vitest';
 import type { getDb } from '@/db/postgres';
 import { CompanionService } from '@/core/companion/service';
 import { CompanionSupervisionRepository } from './companion-supervision-repository';
-import { CompanionDispatcher } from '@/core/companion/dispatcher';
+import { COMPANION_DELEGATED_HEADER, CompanionDispatcher } from '@/core/companion/dispatcher';
 import { tickCompanionObservation } from '@/core/companion/observation';
 import { companionStallSuspected, scanCompanionStalls, COMPANION_STALL_SILENCE_MS } from '@/core/companion/stalls';
 import { recordCompanionOwnerStop } from '@/core/companion/user-control';
@@ -80,6 +80,7 @@ beforeAll(async () => {
   await pg.exec(readFileSync('src/db/migrations/0166_companion_sources.sql','utf8'));
   await pg.exec(readFileSync('src/db/migrations/0167_companion_wake_usage.sql','utf8'));
   await pg.exec(readFileSync('src/db/migrations/0168_companion_briefings.sql','utf8'));
+  await pg.exec(readFileSync('src/db/migrations/0186_companion_owner_basis.sql','utf8'));
   db = drizzle(pg);
   runtime.db = db;
 }, 30_000);
@@ -430,7 +431,7 @@ test('live steering is delivered even when both execution slots are occupied', a
   try {
     await dispatcher.tick();
     await waitAction(steer.id, 'completed');
-    expect(runtime.steer).toHaveBeenCalledWith(first.sessionId, expect.objectContaining({ content: 'Use the updated requirement' }));
+    expect(runtime.steer).toHaveBeenCalledWith(first.sessionId, expect.objectContaining({ content: `${COMPANION_DELEGATED_HEADER}\n\nUse the updated requirement` }));
   } finally { release(); await waitAction(first.id, 'completed'); await waitAction(second.id, 'completed'); }
 });
 

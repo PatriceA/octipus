@@ -15,7 +15,7 @@ import { assertNoCredentialTemplates } from '@/security/credential-boundary';
 import {
   adoptCompanionExecutionSchema, canTransitionCompanionGoal, companionScopeSchema,
   CompanionSupervisionError, createCompanionGoalSchema, updateCompanionGoalSchema,
-  type CompanionCompletionEvidence, type CompanionScope,
+  type CompanionBasisRecord, type CompanionCompletionEvidence, type CompanionOwnerInput, type CompanionScope,
   startCompanionSessionSchema, companionSessionMessageSchema,
   companionSettingsSchema,
 } from '@/shared/companion-supervision';
@@ -83,8 +83,15 @@ export class CompanionSupervisionRepository {
     return protectedGoal;
   }
 
-  async create(input: unknown) {
+  /**
+   * Owner words saved with the goal default to what the owner typed into the
+   * goal form. The Companion tool passes the owner's own messages instead,
+   * because a model wrote the request, outcome and criteria text.
+   */
+  async create(input: unknown, ownerInputs?: CompanionOwnerInput[]) {
     const data = createCompanionGoalSchema.parse(input);
+    const at = new Date().toISOString();
+    const owned = ownerInputs ?? [data.request, data.outcome, ...data.acceptanceCriteria].map(text => ({ text, origin: 'form' as const, at }));
     assertNoCredentialTemplates(data);
     if(data.attachments.length){
       const [source]=data.sourceSessionId?await this.db().select({context:sessions.context}).from(sessions).where(and(eq(sessions.id,data.sourceSessionId),eq(sessions.userId,this.scope.userId),eq(sessions.workspaceId,this.scope.workspaceId),eq(sessions.kind,'chat'),isNull(sessions.groupChannelId))):[];
@@ -98,7 +105,7 @@ export class CompanionSupervisionRepository {
       await this.assertAuthority(tx);
       // Claim the request key before source locks. Retries must acquire the
       // goal before a session, just like adoption, including concurrent creates.
-      const [created] = await tx.insert(companionGoals).values({ ...data, ...this.scope, taskId: null, workPlanSessionId: null, sourceSessionId: null }).onConflictDoNothing({
+      const [created] = await tx.insert(companionGoals).values({ ...data, ...this.scope, ownerInputs: owned, taskId: null, workPlanSessionId: null, sourceSessionId: null }).onConflictDoNothing({
         target: [companionGoals.userId, companionGoals.workspaceId, companionGoals.requestKey],
       }).returning();
       if (!created) {
@@ -276,7 +283,7 @@ export class CompanionSupervisionRepository {
     });
   }
 
-  async startSession(id: string, input: unknown, automatic = false, maintenanceBinding?: string) {
+  async startSession(id: string, input: unknown, automatic = false, maintenanceBinding?: string, basis?: CompanionBasisRecord) {
     const data = startCompanionSessionSchema.parse(input);
     assertNoCredentialTemplates(data);
     return this.db().transaction(async tx => {
@@ -320,7 +327,7 @@ export class CompanionSupervisionRepository {
           ...(maintenanceBinding ? { companionMaintenance: { binding: maintenanceBinding, authorityRevision: maintenanceSettings!.revision, ...repair } } : {}),
           ...(data.projectPath ? { devMode: true, projectPath: data.projectPath } : {}) } });
       await tx.insert(companionSessionLinks).values({ goalId: id, sessionId, origin: 'created', ownership: 'owner', purpose: goal.outcome });
-      const [action] = await tx.insert(companionActions).values({ goalId: id, requestKey: data.requestKey, sessionId, kind: 'start_session', ...repair, authoritySettingsId: this.authority?.settingsId, authorityRevision: this.authority?.revision,
+      const [action] = await tx.insert(companionActions).values({ goalId: id, requestKey: data.requestKey, sessionId, kind: 'start_session', ...repair, basis: basis ?? null, authoritySettingsId: this.authority?.settingsId, authorityRevision: this.authority?.revision,
         attachments:goal.attachments, protectionLevel: level, flowLabel: { ...goal.flowLabel, ...sourceLabels?.flowLabel },
         message: `${maintenanceBinding ? "MAINTENANCE SESSION: Inspect the linked incident and existing work before repair. Use maintenance_run for the explicitly configured maintenance runtime. Preserve unrelated edits. For source changes run focused tests, independent code review and build. Verify the affected project runtime before resolution. Do not restart without activation policy.\n\n" : ""}Companion goal: ${goal.title}\n\n${goal.request}\n\nRequired outcome: ${goal.outcome}\n\nAcceptance criteria:\n${goal.acceptanceCriteria.map(value => `- ${value}`).join('\n')}\n\nContinue within this request. Report actual results and blockers; do not claim completion without evidence.` }).returning();
       await tx.update(companionGoals).set({ state: 'active', revision: goal.revision + 1, protectionLevel: level, updatedAt: new Date() }).where(this.goalWhere(id));
@@ -368,7 +375,7 @@ export class CompanionSupervisionRepository {
     });
   }
 
-  async queueMessage(id: string, input: unknown) {
+  async queueMessage(id: string, input: unknown, basis?: CompanionBasisRecord) {
     const data = companionSessionMessageSchema.parse(input);
     if (this.authority) await this.detectIncident(id, data.sessionId);
     assertNoCredentialTemplates(data);
@@ -418,7 +425,7 @@ export class CompanionSupervisionRepository {
       await tx.update(companionGoals).set({ protectionLevel: level, flowLabel: labels }).where(this.goalWhere(id));
       return (await tx.insert(companionActions).values({ goalId: id, sessionId: data.sessionId, requestKey: data.requestKey,
         authoritySettingsId: this.authority?.settingsId, authorityRevision: this.authority?.revision,
-        ...repair, kind: 'steer_session', message: data.message, protectionLevel: level, flowLabel: labels, generation: sessionGeneration(sources.find(source => source.id === data.sessionId)?.context) }).returning())[0];
+        ...repair, basis: basis ?? null, kind: 'steer_session', message: data.message, protectionLevel: level, flowLabel: labels, generation: sessionGeneration(sources.find(source => source.id === data.sessionId)?.context) }).returning())[0];
     });
   }
 

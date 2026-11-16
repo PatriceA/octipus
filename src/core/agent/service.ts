@@ -1207,7 +1207,9 @@ export class AgentService {
       }
 
       const syntheticCoordination=!!getRunContext()?.companionBriefing||(session.context?.companionSupervisor&&scope.trigger!=='user');
-      if(!syntheticCoordination)fireMemoryUpdate();
+      // Memory learns from the owner's own messages only: Companion handoffs,
+      // monitors and schedules are not the owner speaking.
+      if(!syntheticCoordination&&scope.trigger==='user')fireMemoryUpdate();
       void finishContextTurn(contextHooks.turn, { agentId, response: finalResponse, outcome });
       // Group threads, rooms and space sessions are never learned from (the
       // processor refuses them too).

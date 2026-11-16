@@ -1303,6 +1303,13 @@
       "when": 1794430800000,
       "tag": "0185_model_audio_input",
       "breakpoints": true
+    },
+    {
+      "idx": 186,
+      "version": "7",
+      "when": 1794434400000,
+      "tag": "0186_companion_owner_basis",
+      "breakpoints": true
     }
   ]
 }

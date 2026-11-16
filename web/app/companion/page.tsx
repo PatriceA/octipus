@@ -113,7 +113,7 @@ function CompanionWorkspacePage() {
             </form>
           </>}
           {activeWorkspace && <GoalRecovery key={`${activeWorkspace.id}:${goal.id}`} goal={goal} workspaceId={activeWorkspace.id} />}
-          <div className="space-y-2"><h3>Activity</h3>{actions.data?.actions.map(action => <div className="border-l-2 border-outline-variant pl-3 text-sm" key={action.id}><p>{action.kind.replaceAll('_', ' ')} · {action.status}</p>{action.result && <p className="whitespace-pre-wrap text-on-surface-variant">{action.result}</p>}</div>)}</div>
+          <div className="space-y-2"><h3>Activity</h3>{actions.data?.actions.map(action => <div className="border-l-2 border-outline-variant pl-3 text-sm" key={action.id}><p>{action.kind.replaceAll('_', ' ')} · {action.status}</p>{action.basis && <p className="text-on-surface-variant">Because you said “{action.basis.quote}”</p>}{action.result && <p className="whitespace-pre-wrap text-on-surface-variant">{action.result}</p>}</div>)}</div>
         </section>}
       </div>
     </>}

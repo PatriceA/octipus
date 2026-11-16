@@ -5,7 +5,7 @@ export type CompanionGoalState = typeof companionGoalStates[number];
 /** Browser-safe wire views; database schemas carry server-only dependencies. */
 export interface CompanionGoalView {
   id: string; title: string; request: string; outcome: string; acceptanceCriteria: string[];
-  dependencies?: string[]; tokenBudget?: number | null;
+  dependencies?: string[]; tokenBudget?: number | null; ownerInputs?: CompanionOwnerInput[];
   executionPolicy?: { profile: unknown; approvedAt: string } | null; completionEvidence?: CompanionCompletionEvidence[];
   state: CompanionGoalState; priority: number; revision: number; protectionLevel: number;
 }
@@ -13,8 +13,21 @@ export interface CompanionLinkView {
   id: string; sessionId: string; pipelineId: string | null; purpose: string; ownership: 'owner' | 'observer'; active: boolean;
 }
 export interface CompanionActionView {
-  id: string; kind: string; status: string; result: string | null;
+  id: string; kind: string; status: string; result: string | null; basis?: CompanionBasisRecord | null;
 }
+/**
+ * The owner's own words behind a Companion write: a quote the server found in
+ * an owner message or in the words the owner gave when the goal was created.
+ * It records where authority came from; it never widens permissions.
+ */
+export const companionBasisSchema = z.object({
+  source: z.enum(['owner_message', 'goal']).describe('owner_message: the owner\'s message in this conversation. goal: the owner\'s words saved with the goal.'),
+  quote: z.string().trim().min(4).max(400).describe('Copy the owner\'s exact words that ask for this action. Paraphrases are refused.'),
+}).strict();
+export type CompanionBasis = z.infer<typeof companionBasisSchema>;
+export interface CompanionBasisRecord { source: CompanionBasis['source']; quote: string; messageId?: string; at: string }
+/** Owner words captured when a goal is created: typed into the goal form, or the owner's messages in the creating turn. */
+export interface CompanionOwnerInput { text: string; messageId?: string; origin: 'form' | 'message'; at: string }
 export const companionScopeSchema = z.object({ userId: z.uuid(), workspaceId: z.uuid() }).strict();
 export type CompanionScope = z.infer<typeof companionScopeSchema>;
 
