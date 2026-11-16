@@ -219,3 +219,26 @@ export const companionReports = pgTable('companion_reports', {
   index('companion_reports_deferred_idx').on(t.deferredUntil).where(sql`${t.deferredUntil} IS NOT NULL`),
   check('companion_reports_decision_chk', sql`${t.decision} IN ('delivered', 'sending', 'recorded')`)]);
 export type CompanionReport = typeof companionReports.$inferSelect;
+
+/**
+ * The owner's standing instructions for Companion ("never deploy on Fridays"),
+ * each with the quote it came from. Saved only on an owner turn and only with a
+ * verified quote; read into every controller turn, including background ones.
+ */
+export const companionInstructions = pgTable('companion_instructions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  workspaceId: uuid('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  goalId: uuid('goal_id').references(() => companionGoals.id, { onDelete: 'cascade' }),
+  text: text('text').notNull(),
+  quote: text('quote').notNull(),
+  sourceMessageId: uuid('source_message_id'),
+  replacesId: uuid('replaces_id'),
+  state: text('state').$type<'active' | 'retired'>().notNull().default('active'),
+  retiredReason: text('retired_reason').$type<'replaced' | 'removed' | 'expired' | null>(),
+  validUntil: timestamp('valid_until', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  retiredAt: timestamp('retired_at', { withTimezone: true }),
+}, t => [index('companion_instructions_scope_idx').on(t.userId, t.workspaceId, t.state),
+  check('companion_instructions_state_chk', sql`${t.state} IN ('active', 'retired')`)]);
+export type CompanionInstruction = typeof companionInstructions.$inferSelect;

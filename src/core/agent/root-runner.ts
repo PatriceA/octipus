@@ -740,6 +740,12 @@ export async function runRootAgent(
   // Chat/work split (Thread 3): tell the root agent whether to deliver in
   // chat or as a file. Empty for the default-inline case, so unchanged.
   volatileParts.push(tagger.tag('volatile', 'turn', 'Output directive', buildOutputDirective(outputDirective.mode, outputDirective.forced)));
+  // The owner's standing instructions for Companion, with their own words, in every controller turn.
+  if (supervisor && session?.workspaceId) {
+    const { activeCompanionInstructions, companionInstructionsBlock } = await import('@/core/companion/instructions');
+    const block = companionInstructionsBlock(await activeCompanionInstructions({ userId: session.userId, workspaceId: session.workspaceId }));
+    if (block) volatileParts.push(tagger.tag('volatile', 'turn', 'Companion standing instructions', `\n\n${block}`));
+  }
   // What happened to interactive answers in the user's client, and where this
   // message came from (ids and enums only, checked against the session).
   const inlineUiNotes = getRunContext()?.inlineUiNotes;

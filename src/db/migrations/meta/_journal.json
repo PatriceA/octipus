@@ -1324,6 +1324,13 @@
       "when": 1794441600000,
       "tag": "0188_companion_notices",
       "breakpoints": true
+    },
+    {
+      "idx": 189,
+      "version": "7",
+      "when": 1794445200000,
+      "tag": "0189_companion_instructions",
+      "breakpoints": true
     }
   ]
 }

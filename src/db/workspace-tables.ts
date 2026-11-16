@@ -54,6 +54,8 @@ export const WORKSPACE_TABLES: readonly WorkspaceTable[] = [
   // Companion configuration and grants are personal consent. A new workspace
   // owner must authorize their own supervisor; goals cascade to links/actions on purge.
   { table: 'companion_goals', ownerColumn: 'user_id', transfer: 'n/a', purge: 'delete' },
+  // The owner's standing instructions for Companion, with their quotes.
+  { table: 'companion_instructions', ownerColumn: 'user_id', transfer: 'n/a', purge: 'delete' },
   // What a background check-in told, or held back from, its owner.
   { table: 'companion_reports', ownerColumn: 'user_id', transfer: 'n/a', purge: 'delete' },
   { table: 'companion_settings', ownerColumn: 'user_id', transfer: 'n/a', purge: 'delete' },

@@ -6,6 +6,7 @@ import { BaseTool, createParameterSchema } from '../base-tool';
 import { adoptCompanionExecutionSchema, companionBasisSchema, createCompanionGoalSchema, startCompanionSessionSchema, companionSessionMessageSchema, updateCompanionGoalSchema } from '@/shared/companion-supervision';
 import { CompanionBasisError, captureOwnerInputs, verifyCompanionBasis } from '@/core/companion/basis';
 import { companionReportSchema, externalChatsAllowed, fileCompanionReport } from '@/core/companion/reports';
+import { rememberCompanionInstruction, rememberInstructionSchema, retireCompanionInstruction } from '@/core/companion/instructions';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { observeFlow } from '@/security/flow-guard';
 import { persistCompanionSource } from '@/core/companion/provenance';
@@ -70,7 +71,7 @@ export class CompanionTool extends BaseTool {
       permissions: [{ action: 'read', description: 'Inspect your supervised goals', defaultLevel: 'ALLOW' },
         { action: 'write', description: 'Create or change supervised goals', defaultLevel: 'ASK' },
         { action: 'execute', description: 'Start project sessions and send instructions under this goal', defaultLevel: 'ASK' }],
-      tools: ['find_sessions', 'read_session', 'list', 'read', 'create', 'update', 'adopt', 'start_session', 'message_session', 'control_session', 'inspect_session', 'detect_incident', 'reopen_incident', 'advance_incident', 'verify_incident', 'start_maintenance', 'maintenance_run', 'activate', 'maintenance_check', 'maintenance_review', 'reconcile_activation', 'maintenance_inspect', 'read_part', 'read_report', 'request_briefing', 'heartbeat_status', 'report'].map(name => ({ name, description: name, parameters: {}, returns: 'Goal or action receipt' })) };
+      tools: ['find_sessions', 'read_session', 'list', 'read', 'create', 'update', 'adopt', 'start_session', 'message_session', 'control_session', 'inspect_session', 'detect_incident', 'reopen_incident', 'advance_incident', 'verify_incident', 'start_maintenance', 'maintenance_run', 'activate', 'maintenance_check', 'maintenance_review', 'reconcile_activation', 'maintenance_inspect', 'read_part', 'read_report', 'request_briefing', 'heartbeat_status', 'report', 'remember_instruction', 'retire_instruction'].map(name => ({ name, description: name, parameters: {}, returns: 'Goal or action receipt' })) };
   }
   protected async registerTools() {
     this.registerTool('find_sessions', 'Find existing personal conversations by title in this workspace, including sessions not adopted by Companion. Use when the owner names a session such as Life2. An empty goal list says nothing about whether that conversation exists. Matches are bounded; multiple matches require choosing the right session, not recreating it.',
@@ -123,6 +124,18 @@ export class CompanionTool extends BaseTool {
       // Like send_status_update it only writes to the owner's own Companion chat, so it sits under
       // 'read': a write-level ASK would prompt on every background check-in.
       }, { permissionAction: 'read', recoverySafe: true });
+    const retireInstructionSchema = z.object({ id: z.uuid(), quote: z.string().trim().min(4).max(400) }).strict();
+    this.registerTool('remember_instruction', 'Owner turns only: save a lasting instruction the owner just gave about how Companion should work ("ask me before any deploy"). Quote their exact words; the server checks the quote is in their message. Saved instructions are shown to you in every turn, including background check-ins. To change one, pass replaces with its id. Never save something the owner did not say, or a one-off request.',
+      z.toJSONSchema(rememberInstructionSchema, { io: 'input' }), async (args, context) => {
+        await service(context).readSettings();
+        return rememberCompanionInstruction({ userId: context.userId, workspaceId: context.workspaceId! }, context, args);
+      }, { permissionAction: 'write', recoverySafe: true });
+    this.registerTool('retire_instruction', 'Owner turns only: withdraw a standing instruction the owner just told you to drop. Quote their exact words.',
+      z.toJSONSchema(retireInstructionSchema, { io: 'input' }), async (args, context) => {
+        await service(context).readSettings();
+        const input = retireInstructionSchema.parse(args);
+        return retireCompanionInstruction({ userId: context.userId, workspaceId: context.workspaceId! }, input.id, { context, quote: input.quote });
+      }, { permissionAction: 'write', recoverySafe: true });
     this.registerTool('heartbeat_status', 'Check whether a role can pick up parked todo ideas on its next eligible heartbeat. Does not enable automation, grant permissions or start work. Normal heartbeat also respects quiet hours, budgets and task leases.',
       z.toJSONSchema(z.object({role:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).default('general')}),{io:'input'}),async(args,context)=>{
         const input=z.object({role:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).default('general')}).parse(args);
