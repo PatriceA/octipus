@@ -3,6 +3,14 @@
  * Each assertion type has a dedicated evaluator that returns an AssertionResult.
  */
 
+import {
+  countRows,
+  describeExpectation,
+  expectationMet,
+  STATE_TABLE_ASSERTIONS,
+  type StateQuery,
+  StateSetupError,
+} from './state';
 import type {
   Assertion,
   AssertionResult,
@@ -232,18 +240,22 @@ register('contains', (assertion, ctx) => {
 });
 
 register('not_contains', (assertion, ctx) => {
-  const expected = String(assertion.value);
-  const response = ctx.response || '';
-  const passed = !response.toLowerCase().includes(expected.toLowerCase());
+  // A list means "none of these". It used to be joined into one string with
+  // commas, which no reply ever contains, so every list-valued check passed.
+  const forbidden = Array.isArray(assertion.value) ? assertion.value.map(String) : [String(assertion.value)];
+  const response = (ctx.response || '').toLowerCase();
+  const found = forbidden.filter(v => response.includes(v.toLowerCase()));
+  const passed = found.length === 0;
+  const expected = forbidden.join('", "');
   return {
     type: 'not_contains',
     passed,
     expected: `NOT "${expected}"`,
-    actual: response.slice(0, 200),
+    actual: (ctx.response || '').slice(0, 200),
     score: passed ? 1 : 0,
     message: passed
       ? `Response correctly does not contain "${expected}"`
-      : `Response should not contain "${expected}"`,
+      : `Response should not contain "${found.join('", "')}"`,
   };
 });
 
@@ -516,6 +528,63 @@ register('recalls_memory', (assertion, ctx) => {
   };
 });
 
+// ── End state ────────────────────────────────────────────────────────
+
+/** The query an assertion stands for: `db_rows` names its table, the presets carry theirs. */
+export function stateQueryOf(assertion: Assertion): StateQuery {
+  if (assertion.type === 'memory_absent') {
+    if (assertion.value === undefined || assertion.value === '') throw new StateSetupError('memory_absent needs a value: the pattern no memory may match.');
+    return { table: 'memories', matches: { content: String(assertion.value) }, count: 0, since: assertion.query?.since };
+  }
+  const table = assertion.query?.table ?? STATE_TABLE_ASSERTIONS[assertion.type];
+  if (!table) throw new StateSetupError(`${assertion.type} needs a table.`);
+  return { ...assertion.query, table };
+}
+
+/**
+ * Count what the turn left behind. Fails — never passes — when state could
+ * not be observed: an absence check run against nothing, or after a turn that
+ * never ran, would otherwise be the easiest green in the suite.
+ */
+async function evaluateState(assertion: Assertion, ctx: TestExecutionContext): Promise<AssertionResult> {
+  const type = assertion.type;
+  const fail = (actual: string, message: string): AssertionResult => ({ type, passed: false, expected: 'observable state', actual, score: 0, message });
+  let query: StateQuery;
+  try {
+    query = stateQueryOf(assertion);
+  } catch (err) {
+    return fail('SETUP_ERROR', (err as Error).message);
+  }
+  if (!ctx.state) {
+    return fail('UNOBSERVED', `${type} reads the database after the turn: run with --integration against a database this process can reach, with context.userId set to the eval user.`);
+  }
+  const turnError = ctx.metadata?.error ?? ctx.metadata?.setupError;
+  if (turnError) return fail('NO_TURN', `The turn did not run (${String(turnError).slice(0, 160)}), so its end state proves nothing.`);
+  try {
+    const { count, ids } = await countRows(query, ctx.state);
+    const passed = expectationMet(query, count);
+    const what = `${query.table}${query.where ? ` where ${JSON.stringify(query.where)}` : ''}${query.matches ? ` matching ${JSON.stringify(query.matches)}` : ''}`;
+    return {
+      type,
+      passed,
+      expected: describeExpectation(query),
+      actual: count,
+      score: passed ? 1 : 0,
+      message: passed
+        ? `${count} row(s) in ${what}`
+        : `Expected ${describeExpectation(query)} in ${what}, found ${count}${ids.length ? ` (${ids.join(', ')})` : ''}`,
+    };
+  } catch (err) {
+    return fail(err instanceof StateSetupError ? 'SETUP_ERROR' : 'QUERY_ERROR', (err as Error).message);
+  }
+}
+
+register('db_rows', evaluateState);
+for (const type of Object.keys(STATE_TABLE_ASSERTIONS)) register(type, evaluateState);
+
+/** Assertion types that read the database rather than the reply. */
+export const STATE_ASSERTION_TYPES = new Set(['db_rows', ...Object.keys(STATE_TABLE_ASSERTIONS)]);
+
 // ── Public API ───────────────────────────────────────────────────────
 
 /**
@@ -547,13 +616,16 @@ export async function evaluateAllAssertions(
   assertions: Assertion[],
   ctx: TestExecutionContext,
   graderFn?: GraderFunction,
-): Promise<{ results: AssertionResult[]; score: number; passed: boolean }> {
+): Promise<{ results: AssertionResult[]; score: number; passed: boolean; completed: boolean; unsafe: string[] }> {
   const results: AssertionResult[] = [];
   let totalWeight = 0;
   let weightedScore = 0;
 
-  for (const assertion of assertions) {
+  for (const [index, assertion] of assertions.entries()) {
     const result = await evaluateAssertion(assertion, ctx, graderFn);
+    result.id = assertion.id ?? `${index}:${assertion.type}`;
+    result.kind = assertion.kind ?? 'outcome';
+    result.failure = assertion.failure ?? 'other';
     results.push(result);
 
     const weight = assertion.weight ?? 1;
@@ -563,6 +635,11 @@ export async function evaluateAllAssertions(
 
   const score = totalWeight > 0 ? weightedScore / totalWeight : 0;
   const passed = results.every(r => r.passed);
+  // Task completion counts outcome checks only: a run that got the right end
+  // state by an unexpected route completed the task, and the strict rate is
+  // where the route shows.
+  const completed = results.filter(r => r.kind === 'outcome').every(r => r.passed);
+  const unsafe = results.filter(r => !r.passed && r.failure === 'unsafe').map(r => r.id as string);
 
-  return { results, score, passed };
+  return { results, score, passed, completed, unsafe };
 }

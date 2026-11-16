@@ -13,15 +13,18 @@
  *   npx tsx src/eval/cli.ts --detailed            # Show all assertion details
  *   npx tsx src/eval/cli.ts --json                # Output JSON only
  *   npx tsx src/eval/cli.ts --no-save             # Don't save results to disk
+ *   npx tsx src/eval/cli.ts -i --repeat 5 --admit # Admit tests that pass 5/5 to eval/gate.json
+ *   npx tsx src/eval/cli.ts -i --repeat 3 --gate  # GO / NO-GO against the admitted tests
  */
 
 import { resolve } from 'path';
 import { loadSuites } from './loader';
+import { admit, decideGate, formatGateReport, readGate, serializeGate } from './gate';
 import { compareToBaseline, formatRegressionReport, hasRegressions, resolveBaselinePath } from './regression';
 import { reportDetailedToConsole, reportToConsole, saveResults, toJSON } from './reporter';
 import { runAllSuites } from './runner';
 import type { EvalRunnerOptions } from './types';
-import { fileAt } from '@/utils/fs-file';
+import { fileAt, writeFileAt } from '@/utils/fs-file';
 
 // ── Argument parsing ─────────────────────────────────────────────────
 
@@ -32,6 +35,8 @@ function parseArgs(argv: string[]): {
   noSave: boolean;
   evalDir?: string;
   baseline?: string;
+  gate?: string;
+  admit: boolean;
   help: boolean;
 } {
   const options: EvalRunnerOptions = {};
@@ -40,7 +45,17 @@ function parseArgs(argv: string[]): {
   let noSave = false;
   let evalDir: string | undefined;
   let baseline: string | undefined;
+  let gate: string | undefined;
+  let admitRun = false;
   let help = false;
+  const count = (flag: string, raw: string | undefined) => {
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 1) {
+      console.error(`${flag} needs a positive whole number (got "${raw ?? ''}")`);
+      process.exit(1);
+    }
+    return n;
+  };
 
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i];
@@ -90,6 +105,20 @@ function parseArgs(argv: string[]): {
       case '--baseline':
         baseline = argv[++i];
         break;
+      case '--repeat':
+      case '-r':
+        options.repeat = count('--repeat', argv[++i]);
+        break;
+      case '--k':
+        options.k = count('--k', argv[++i]);
+        break;
+      case '--gate':
+        // Optional path: `--gate` alone uses <eval-dir>/gate.json.
+        gate = argv[i + 1] && !argv[i + 1].startsWith('-') ? argv[++i] : 'default';
+        break;
+      case '--admit':
+        admitRun = true;
+        break;
       case '--help':
       case '-h':
         help = true;
@@ -105,7 +134,7 @@ function parseArgs(argv: string[]): {
     }
   }
 
-  return { options, detailed, jsonOnly, noSave, evalDir, baseline, help };
+  return { options, detailed, jsonOnly, noSave, evalDir, baseline, gate, admit: admitRun, help };
 }
 
 function printHelp() {
@@ -130,6 +159,14 @@ Options:
                           Pass "latest" for the newest file in eval/results/.
                           A test that PASSED in the baseline and fails now exits 1,
                           even if the overall score went up.
+  --repeat, -r <n>        Attempts per test (default 1). Reports pass@1, pass@k
+                          and pass^k per test.
+  --k <n>                 k for pass@k / pass^k (default: --repeat)
+  --admit                 Update the gate file from this run: a test that passed
+                          every attempt of a run of 5 or more is admitted with
+                          its fingerprint; a test with a failed attempt is removed.
+  --gate [path]           GO / NO-GO against the admitted tests (default
+                          <eval-dir>/gate.json). Exit 0 only on GO.
   --help, -h              Show this help message
 
 Examples:
@@ -158,7 +195,7 @@ async function exitClean(code: number): Promise<never> {
 }
 
 async function main() {
-  const { options, detailed, jsonOnly, noSave, evalDir, baseline, help } = parseArgs(process.argv);
+  const { options, detailed, jsonOnly, noSave, evalDir, baseline, gate, admit: admitRun, help } = parseArgs(process.argv);
 
   if (help) {
     printHelp();
@@ -219,6 +256,7 @@ async function main() {
   }
 
   const dir = evalDir ? resolve(evalDir) : resolve(process.cwd(), 'eval');
+  options.evalDir = dir;
 
   if (!jsonOnly) {
     console.log(`Loading eval suites from ${dir}...`);
@@ -281,6 +319,30 @@ async function main() {
       console.log(formatRegressionReport(report));
     }
     regressed = hasRegressions(report);
+  }
+
+  // Gate membership and verdict. The gate file is the baseline: a test is
+  // admitted only after a clean run of five or more attempts (gate.ts).
+  const gatePath = gate && gate !== 'default' ? resolve(gate) : resolve(dir, 'gate.json');
+  if (admitRun) {
+    const { members, change } = admit(readGate(gatePath), suites, results, dir);
+    await writeFileAt(gatePath, serializeGate(members));
+    if (!jsonOnly) {
+      console.log(`\nGate file: ${gatePath}`);
+      console.log(`  admitted: ${change.admitted.join(', ') || 'none'}`);
+      console.log(`  removed: ${change.removed.join(', ') || 'none'}`);
+      if (change.unproven.length) console.log(`  passed but fewer than 5 attempts (not admitted): ${change.unproven.join(', ')}`);
+    }
+  }
+  if (gate) {
+    const verdict = decideGate(readGate(gatePath), suites, results, dir);
+    if (!jsonOnly) console.log(formatGateReport(verdict));
+    // The gate decides the exit code on its own: a failing test that never
+    // earned a place in the gate does not block, and an unsafe failure in
+    // one that did blocks even when everything else is green.
+    const code = verdict.verdict === 'GO' && !regressed ? 0 : 1;
+    if (dbInitialized) await exitClean(code);
+    process.exit(code);
   }
 
   // Exit code: 0 if all passed, 1 if any failed
