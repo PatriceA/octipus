@@ -29,7 +29,8 @@ vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
 vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: {
   create: async (row: object) => ({ id: 'm', ...row }),
   createForGeneration: async (row: object) => ({ id: 'm', ...row }),
-  findRecentBySession: async () => [],
+  // The root worker stores the turn's message; memory extraction cites it.
+  findRecentBySession: async () => [{ id: 'stored-user-row', role: 'user', content: 'summarise the release plan' }],
 } }));
 vi.mock('@/core/trajectories/recorder', () => ({ TrajectoryRecorder: class { setClassification() {} async finalize() {} } }));
 vi.mock('@/core/memory', () => ({ retrieveForContext: fx.retrieve, renderMemoriesBlock: () => '', updateMemoriesAfterTurn: fx.update }));

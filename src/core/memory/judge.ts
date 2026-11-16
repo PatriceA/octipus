@@ -25,6 +25,7 @@ import { filterPII } from '@/core/agent/pii-filter';
 import { SECURITY_PREAMBLE } from '@/core/agent/roles';
 import type { MemoryRecord } from '@/db/schema/memories';
 import type { CandidateFact } from './extractor';
+import { storedQuote, type VerifiedFact } from './quote-basis';
 import { getMemoryRepository } from './repository';
 
 export type JudgeAction = 'ADD' | 'UPDATE' | 'DELETE' | 'NOOP';
@@ -35,12 +36,11 @@ export interface JudgeContext {
   userId: string;
   workspaceId?: string | null;
   agentScope?: string | null;
-  sourceMessageId?: string | null;
 }
 
 export interface JudgeOutcome {
   action: JudgeAction;
-  candidate: CandidateFact;
+  candidate: VerifiedFact;
   /** ID of the row affected (for UPDATE/DELETE) or the newly created row (ADD). */
   memoryId?: string;
   /** Closest existing fact at the time of the decision. */
@@ -180,18 +180,24 @@ async function llmJudge(candidate: CandidateFact, closest: MemoryRecord, userId:
  * because the surviving fact is less specific and more easily
  * confused with a future genuine email mention.
  */
-function redactPII(candidate: CandidateFact): CandidateFact {
+function redactPII(candidate: VerifiedFact): VerifiedFact {
   const result = filterPII(candidate.content);
   if (!result.hasRedactions) return candidate;
   return {
-    factType: candidate.factType,
+    ...candidate,
     content: result.filtered,
     confidence: Math.max(0.5, candidate.confidence - 0.2),
   };
 }
 
+/**
+ * Persist candidates. Only `VerifiedFact`s are accepted: each carries the
+ * owner's quote and the owner messages it was found in (`verifyQuotes`), and
+ * those are stored with the row. There is no path from here that writes a
+ * memory without them.
+ */
 export async function judgeAndApply(
-  candidates: CandidateFact[],
+  candidates: VerifiedFact[],
   ctx: JudgeContext,
 ): Promise<JudgeOutcome[]> {
   if (candidates.length === 0) return [];
@@ -267,38 +273,39 @@ export async function judgeAndApply(
       : undefined;
 
     const embeddingVersion = buildEmbeddingVersion(embeddingModelId, queryVec.length, embeddingPrefixTag);
+    const record = {
+      userId: ctx.userId,
+      workspaceId: ctx.workspaceId ?? null,
+      agentScope: ctx.agentScope ?? null,
+      factType: candidate.factType,
+      content: candidate.content,
+      embedding: queryVec,
+      embeddingVersion,
+      sourceMessageId: candidate.basis.sourceMessageIds[0],
+      sourceQuote: storedQuote(candidate.basis.quote),
+      kind: candidate.kind ?? null,
+      status: candidate.status,
+      expiresAt: candidate.expiresAt ?? null,
+      confidence: candidate.confidence,
+    };
 
     try {
       if (action === 'ADD') {
-        const created = await repo.addNew({
-          userId: ctx.userId,
-          workspaceId: ctx.workspaceId ?? null,
-          agentScope: ctx.agentScope ?? null,
-          factType: candidate.factType,
-          content: candidate.content,
-          embedding: queryVec,
-          embeddingVersion,
-          sourceMessageId: ctx.sourceMessageId ?? null,
-          confidence: candidate.confidence,
-        });
+        const created = await repo.addNew(record);
         outcomes.push({ action, candidate, memoryId: created.id, matchedAgainst });
       } else if (action === 'UPDATE' && closest) {
-        const created = await repo.supersede(closest.id, {
-          userId: ctx.userId,
-          workspaceId: ctx.workspaceId ?? null,
-          agentScope: ctx.agentScope ?? null,
-          factType: candidate.factType,
-          content: candidate.content,
-          embedding: queryVec,
-          embeddingVersion,
-          sourceMessageId: ctx.sourceMessageId ?? null,
-          confidence: candidate.confidence,
-        });
+        const created = await repo.supersede(closest.id, record, 'superseded');
         outcomes.push({ action, candidate, memoryId: created.id, matchedAgainst });
       } else if (action === 'DELETE' && closest) {
-        await repo.softDelete(closest.id);
+        // The owner negated it, in words the quote check found.
+        await repo.softDelete(closest.id, 'contradicted');
         outcomes.push({ action, candidate, memoryId: closest.id, matchedAgainst });
       } else {
+        // The owner said it again in another message: no longer a one-off.
+        if (closest?.status === 'tentative' && closest.sourceMessageId
+          && !candidate.basis.sourceMessageIds.includes(closest.sourceMessageId)) {
+          await repo.markObserved(closest.id);
+        }
         outcomes.push({ action: 'NOOP', candidate, matchedAgainst });
       }
     } catch (err) {

@@ -15,6 +15,12 @@ interface MemoryRow {
   confidence: number;
   supersededBy: string | null;
   validUntil: string | null;
+  /** The owner's own words this was learned from; null on older rows. */
+  sourceQuote: string | null;
+  kind: string | null;
+  status: string | null;
+  expiresAt: string | null;
+  archiveReason: string | null;
   accessCount: number;
   lastAccessedAt: string | null;
   createdAt: string;
@@ -62,7 +68,7 @@ export default function MemoryPage() {
     <div className="p-6 max-w-5xl mx-auto">
       <PageHeader
         title="memory"
-        description="long-term facts extracted from your conversations — soft-delete (set valid_until) keeps the audit trail intact for the llm judge's future add/update decisions"
+        description="long-term facts learned only from your own messages, each with the words it came from — soft-delete (set valid_until) keeps the audit trail intact for the llm judge's future add/update decisions"
       />
 
       <div className="flex gap-3 items-center mb-4 text-sm">
@@ -99,15 +105,16 @@ export default function MemoryPage() {
         <div className="border border-dashed border-outline-variant p-6 rounded-xs text-center font-mono">
           <span aria-hidden className="block text-lg text-outline mb-2">[--]</span>
           <p className="text-[12px] text-on-surface-variant">
-            no memories yet — extracted automatically after each turn (when an embedding + extractor
-            model is configured) or written explicitly by an agent via the <code>remember_this</code> tool
+            no memories yet — learned from your own messages after each turn (when an embedding + extractor
+            model is configured) or when you ask the agent to remember something (<code>remember_this</code>)
           </p>
         </div>
       )}
 
       <ul className="space-y-2 stagger">
         {list.data?.memories.map((m) => {
-          const isExpired = m.validUntil && new Date(m.validUntil) < new Date();
+          const isExpired = (m.validUntil && new Date(m.validUntil) < new Date())
+            || (m.expiresAt && new Date(m.expiresAt) < new Date());
           const isSuperseded = !!m.supersededBy;
           const inactive = isExpired || isSuperseded;
           return (
@@ -119,17 +126,34 @@ export default function MemoryPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex flex-wrap gap-2 text-xs font-mono mb-1">
                     <span className="border px-1.5 rounded">{m.factType}</span>
+                    {m.kind && <span className="border px-1.5 rounded opacity-70">{m.kind}</span>}
+                    {m.status === 'tentative' && <span className="border px-1.5 rounded opacity-70" title="Said once">tentative</span>}
                     {m.agentScope && <span className="border px-1.5 rounded opacity-70">scope: {m.agentScope}</span>}
                     {m.confidence < 0.9 && (
                       <span className="border px-1.5 rounded opacity-70">p≈{m.confidence.toFixed(2)}</span>
                     )}
                     {isSuperseded && <span className="border border-warning/60 px-1.5 rounded-xs text-warning">superseded</span>}
-                    {isExpired && <span className="border border-error/60 px-1.5 rounded-xs text-error">expired</span>}
+                    {isExpired && (
+                      <span className="border border-error/60 px-1.5 rounded-xs text-error">
+                        {m.archiveReason && m.archiveReason !== 'expired' ? m.archiveReason : 'expired'}
+                      </span>
+                    )}
+                    {!isExpired && m.expiresAt && (
+                      <span className="opacity-50">until {new Date(m.expiresAt).toLocaleDateString()}</span>
+                    )}
                     <span className="opacity-50">
                       {m.accessCount} reads · {new Date(m.updatedAt).toLocaleDateString()}
                     </span>
                   </div>
                   <div className="text-sm">{m.content}</div>
+                  {m.sourceQuote && (
+                    <blockquote
+                      className="mt-1 border-l-2 border-foreground/20 pl-2 text-xs italic opacity-70"
+                      title="Your own words this memory was learned from"
+                    >
+                      “{m.sourceQuote}”
+                    </blockquote>
+                  )}
                 </div>
                 <div className="flex gap-1 shrink-0">
                   <button

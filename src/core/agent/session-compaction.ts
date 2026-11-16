@@ -303,13 +303,18 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
       nativeConversation: native && nativeTail ? { ...native, checkpointId: entry.id,
         messages: capNativeSnapshot([{ role: 'user', content: `[Conversation checkpoint]\n${summary}`, timestamp: last.createdAt.toISOString() }, ...stripSignedReasoning(nativeTail)]) } : null,
     }, { keepCliSessionPrefixes: CHILD_CLI_SESSION_KEY_PREFIXES });
-    if (published && extractsMemoryOnCompaction(getConfig().memory?.extractionCadence, audience)) {
+    // The summary is not evidence: it is the model's account of the whole
+    // exchange, assistant and tool content included. What is read for memory
+    // is the owner's own messages in the prefix it covers, with their ids, so
+    // each fact can cite and be checked against the words it came from.
+    const ownerMessages = compactedOwnerMessages(prefix);
+    if (published && ownerMessages.length > 0 && extractsMemoryOnCompaction(getConfig().memory?.extractionCadence, audience)) {
       const { updateMemoriesAfterTurn } = await import('@/core/memory');
       const { turnWorkspaceId } = await import('./session-resolver');
       const { userId, workspaceId } = history.session;
       // Memories follow the session's workspace, as on every turn.
       void turnWorkspaceId(userId, workspaceId)
-        .then(ws => updateMemoriesAfterTurn({ userId, workspaceId: ws, agentScope: null, userMessage: result.summaryText }))
+        .then(ws => updateMemoriesAfterTurn({ userId, workspaceId: ws, agentScope: null, ownerMessages }))
         .catch(err => coreLogger.warn({ err, sessionId }, 'on-compaction memory update failed'));
     }
     if (published) coreLogger.info({ sessionId, tokensBefore, tokensAfter, savingsRatio }, 'Session checkpoint committed; vendor conversations rotated');
@@ -492,10 +497,15 @@ function roomSummaryChunks<T extends { content: string; role: string; createdAt:
   return chunks;
 }
 
+/** The owner's own messages among the rows a checkpoint summarized: what on-compaction extraction reads. */
+export function compactedOwnerMessages(rows: ReadonlyArray<{ id: string; role: string; content: string }>): Array<{ id: string; content: string }> {
+  return rows.filter((row) => row.role === 'user').map((row) => ({ id: row.id, content: row.content }));
+}
+
 /**
- * Whether a published checkpoint feeds memory extraction. Never for a
- * group-channel thread or a room (the summary carries other members' words,
- * which must not become the requester's personal memories), nor for a space
+ * Whether a published checkpoint's owner messages feed memory extraction.
+ * Never for a group-channel thread or a room (its user rows are other
+ * members' words, which must not become the requester's personal memories), nor for a space
  * session (personal memories never touch a space, I7): `sessionAudience`.
  */
 export function extractsMemoryOnCompaction(

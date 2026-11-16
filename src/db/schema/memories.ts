@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { customType, index, integer, pgTable, real, text, timestamp, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { check, customType, index, integer, pgTable, real, text, timestamp, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
 
 /**
  * Memory-redesign Phase D — atomic, updatable long-term memories.
@@ -68,6 +68,25 @@ export const memories = pgTable('memories', {
   embeddingVersion: text('embedding_version').notNull(),
   /** Provenance. FK omitted on purpose: messages may be compacted away. */
   sourceMessageId: uuid('source_message_id'),
+  /**
+   * The owner's own words this fact rests on: a verbatim quote, checked
+   * server-side against a cited `role='user'` message of this user before the
+   * row was written (`src/core/memory/quote-basis.ts`), PII-redacted, at most
+   * `MAX_SOURCE_QUOTE_CHARS`. NULL on rows written before migration 0190.
+   */
+  sourceQuote: text('source_quote'),
+  /** What sort of thing the fact is (`MemoryKind`). NULL = unknown / older row. */
+  kind: text('kind').$type<MemoryKind>(),
+  /** How strongly the owner's words back it (`MemoryStatus`). NULL = older row. */
+  status: text('status').$type<MemoryStatus>(),
+  /**
+   * When the fact itself stops being true, as the owner said it ("I'm in
+   * Berlin until Friday"). Recall skips the row from then on, and the repair
+   * pass retires it (`archive_reason = 'expired'`). NULL = no known end.
+   */
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+  /** Why the row stopped being active (`MemoryArchiveReason`). NULL while active, after a manual delete, or on older rows. */
+  archiveReason: text('archive_reason').$type<MemoryArchiveReason>(),
   /** LLM-extractor's confidence 0..1. Used to filter low-quality facts. */
   confidence: real('confidence').notNull().default(1.0),
   /** Soft TTL. NULL = persistent. */
@@ -94,12 +113,38 @@ export const memories = pgTable('memories', {
   workspaceIdx: index('memories_workspace_idx').on(table.workspaceId),
   supersededIdx: index('memories_superseded_by_idx').on(table.supersededBy),
   validUntilIdx: index('memories_valid_until_idx').on(table.validUntil),
+  expiresAtIdx: index('memories_expires_at_idx').on(table.expiresAt).where(sql`${table.expiresAt} IS NOT NULL`),
+  kindCheck: check('memories_kind_check', sql`${table.kind} IS NULL OR ${table.kind} IN ('fact', 'preference', 'plan', 'event', 'possession')`),
+  statusCheck: check('memories_status_check', sql`${table.status} IS NULL OR ${table.status} IN ('tentative', 'observed', 'stated')`),
+  archiveReasonCheck: check('memories_archive_reason_check', sql`${table.archiveReason} IS NULL OR ${table.archiveReason} IN ('superseded', 'contradicted', 'expired', 'merged', 'stale')`),
+  sourceQuoteCheck: check('memories_source_quote_len_check', sql`${table.sourceQuote} IS NULL OR char_length(${table.sourceQuote}) <= 400`),
 }));
 
 export type Memory = typeof memories.$inferSelect;
 export type NewMemory = typeof memories.$inferInsert;
 /** A memory as the read paths return it: without the vector, which none of them uses. */
 export type MemoryRecord = Omit<Memory, 'embedding'>;
+
+/** Longest stored `source_quote` (the column's CHECK constraint). */
+export const MAX_SOURCE_QUOTE_CHARS = 400;
+
+export const MEMORY_KINDS = ['fact', 'preference', 'plan', 'event', 'possession'] as const;
+/** A plan or an event is the kind of fact that ends; the others usually hold until changed. */
+export type MemoryKind = (typeof MEMORY_KINDS)[number];
+
+/**
+ * tentative — one owner message said it; observed — more than one did;
+ * stated — the owner asked for it to be remembered (`remember_this`).
+ */
+export type MemoryStatus = 'tentative' | 'observed' | 'stated';
+
+/**
+ * Why a row was retired. superseded: a newer fact replaced it; contradicted:
+ * the owner said it is no longer true; expired: its `expires_at` passed;
+ * merged: an exact duplicate of another row (repair pass); stale: reserved
+ * for an age-based pass, which does not exist yet.
+ */
+export type MemoryArchiveReason = 'superseded' | 'contradicted' | 'expired' | 'merged' | 'stale';
 
 export type MemoryFactType =
   | 'preference'

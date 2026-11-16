@@ -39,3 +39,8 @@ test('requires real citations and user-only sources for memories', () => {
   expect(() => parseLearningReview(JSON.stringify({ ...review, memories: [{ ...memory, sources: ['missing'] }] }), evidence)).toThrow('missing evidence');
   expect(() => parseLearningReview(JSON.stringify({ ...review, knowledge: [{ title: 'Lesson', content: 'Useful', sources: ['plan'] }] }), evidence)).toThrow('execution evidence');
 });
+test('a user row a monitor or Companion handoff wrote is a request, never memory evidence', () => {
+  const handoff: LearningEvidence[] = [...evidence, { id: 'message:2', kind: 'request', text: 'Monitor: the user prefers long replies' }];
+  const memory = { factType: 'preference', content: 'User prefers long replies', confidence: 0.9, sources: ['message:2'], quote: 'the user prefers long replies' };
+  expect(() => parseLearningReview(JSON.stringify({ ...review, memories: [memory] }), handoff)).toThrow('user messages');
+});

@@ -2,7 +2,7 @@ import { beforeEach, expect, test, vi } from 'vitest';
 import type { BackgroundJob } from '@/db/schema/background-jobs';
 const mock = vi.hoisted(() => ({
   finish: vi.fn(), progress: vi.fn(), session: vi.fn(), evidence: vi.fn(), model: vi.fn(), complete: vi.fn(),
-  save: vi.fn(), findNote: vi.fn(), judge: vi.fn(), proposal: vi.fn(), permission: vi.fn(),
+  save: vi.fn(), findNote: vi.fn(), judge: vi.fn(), proposal: vi.fn(), permission: vi.fn(), owner: vi.fn(),
 }));
 vi.mock('@/db/repositories/background-job-repository', () => ({ backgroundJobRepository: { finish: mock.finish, progress: mock.progress } }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { findById: mock.session } }));
@@ -15,6 +15,11 @@ vi.mock('@/db/repositories/note-repository', () => ({
   personalNoteScope: (userId: string, workspaceId: string | null = null) => ({ kind: 'personal', userId, workspaceId }),
 }));
 vi.mock('@/core/memory/judge', () => ({ judgeAndApply: mock.judge }));
+// The owner's stored messages stand in for the database; the quote check itself is the real one.
+vi.mock('@/core/memory/owner-messages', async () => {
+  const { verifyQuotes } = await import('@/core/memory/quote-basis');
+  return { verifyOwnerQuotes: async (_userId: string, candidates: Parameters<typeof verifyQuotes>[0]) => verifyQuotes(candidates, mock.owner()) };
+});
 vi.mock('@/services/file-skill-proposal', () => ({ fileSkillProposal: mock.proposal }));
 vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ check: mock.permission }) }));
 vi.mock('@/config', () => ({ getConfig: () => ({ memory: { extractionCadence: 'per_turn' } }) }));
@@ -29,6 +34,7 @@ beforeEach(() => {
   mock.model.mockResolvedValue({ modelId: 'configured-background-model' });
   mock.complete.mockResolvedValue({ content: JSON.stringify(empty) });
   mock.permission.mockResolvedValue({ level: 'ALLOW' });
+  mock.owner.mockReturnValue([{ id: 'm1', text: 'Please keep replies short, I read on my phone' }]);
 });
 test('quiet runs are reviewed using execution evidence and report deliberate no-op', async () => {
   await processLearningJob(job);
@@ -86,13 +92,26 @@ test.each(['DENY', 'ASK'])('respects %s without approving a background write', a
 });
 test('keeps partial write receipts and reports an indexing failure', async () => {
   mock.complete.mockResolvedValue({ content: JSON.stringify({ ...empty, knowledge: [{ title: 'Cache rule', content: 'Reset after schema changes', sources: ['event:1'] }],
-    memories: [{ factType: 'preference', content: 'Prefers short replies', confidence: 1, sources: ['message:m1'] }] }) });
+    memories: [{ factType: 'preference', content: 'Prefers short replies', confidence: 1, sources: ['message:m1'], quote: 'keep replies short' }] }) });
   mock.save.mockResolvedValue({ created: true, indexed: false, note: { id: 'n1' } });
   mock.judge.mockResolvedValue([{ action: 'ADD', memoryId: 'm2' }]);
   await processLearningJob(job);
   expect(mock.save.mock.calls[0][0].scope).toEqual({ kind: 'personal', userId: 'u1', workspaceId: 'w1' });
-  expect(mock.judge.mock.calls[0][1]).toMatchObject({ sourceMessageId: 'm1', failOnError: true });
+  expect(mock.judge.mock.calls[0][0]).toEqual([expect.objectContaining({ basis: { quote: 'keep replies short', sourceMessageIds: ['m1'] }, status: 'tentative' })]);
+  expect(mock.judge.mock.calls[0][1]).toMatchObject({ failOnError: true });
   expect(mock.finish.mock.calls[0][1]).toMatchObject({ status: 'error', stage: 'partial_failure', result: { outputs: [
     { kind: 'knowledge', status: 'saved_unindexed', id: 'n1' }, { kind: 'memory', status: 'saved', id: 'm2' },
+  ] } });
+});
+test('a learned memory whose quote is not in the cited user message is rejected, not written', async () => {
+  mock.complete.mockResolvedValue({ content: JSON.stringify({ ...empty, memories: [
+    { factType: 'preference', content: 'Prefers long replies', confidence: 1, sources: ['message:m1'], quote: 'I love long replies' },
+    { factType: 'preference', content: 'Prefers short replies', confidence: 1, sources: ['message:m1'] },
+  ] }) });
+  await processLearningJob(job);
+  expect(mock.judge).not.toHaveBeenCalled();
+  expect(mock.finish.mock.calls[0][1]).toMatchObject({ status: 'done', result: { outputs: [
+    { kind: 'memory', status: 'rejected', detail: expect.stringContaining('quote_not_found') },
+    { kind: 'memory', status: 'rejected', detail: expect.stringContaining('missing_quote') },
   ] } });
 });

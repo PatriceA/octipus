@@ -8,7 +8,7 @@ turns and sessions, all sharing the same pgvector install:
 | Surface | What it stores | Schema | Hot files |
 |---|---|---|---|
 | **Knowledge base** | Document chunks, message chunks, image captions, per-repo maps + `AGENTS.md`, agent-flagged knowledge artefacts. **Never raw source code** — see [Code-exclusion policy](#code-exclusion-policy-raw-code-is-never-indexed). | `embeddings` | `src/core/rag/embeddings.ts`, `src/core/rag/retention-service.ts` |
-| **Long-term memory** | Atomic user-scoped facts (preference, profile, relationship, …) with supersession history; retrieval is scoped to the current workspace (rows written under another workspace never surface — a fact learned for one client stays with that client; user-level rows with no workspace surface everywhere) | `memories` (+ `memories_active` view) | `src/core/memory/*` |
+| **Long-term memory** | Atomic user-scoped facts (preference, profile, relationship, …) learned only from your own messages, each with the quote it came from, with supersession history; retrieval is scoped to the current workspace (rows written under another workspace never surface — a fact learned for one client stays with that client; user-level rows with no workspace surface everywhere) | `memories` (+ `memories_active` view) | `src/core/memory/*` |
 | **Workflow state** | Typed sibling-agent outputs scoped to a session, with LISTEN/NOTIFY fan-out | `task_state` | `src/core/agent-task-recorder.ts`, `src/db/repositories/task-state-repository.ts`, `src/db/task-state-listener.ts` |
 | **Knowledge graph** | Authored markdown notes and the explicit edges between knowledge entities (`[[wikilinks]]`, `#tags`) — see [KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md) | `notes`, `knowledge_links` | `src/core/knowledge/*` |
 
@@ -305,6 +305,69 @@ The semantic pass is skipped entirely when it cannot help or cannot run:
 
 Each of those falls back to exactly the pre-Phase-6 block, so the feature has
 no configuration and no failure mode beyond "you get what you got before".
+
+## Where a memory comes from
+
+Long-term memory learns **only from your own messages**, and every memory
+written since migration 0190 keeps the words it came from.
+
+- **Your words are the only evidence.** A message counts as yours when it is a
+  stored `role='user'` row in your own session, written by you, typed by a
+  person (`metadata.trigger` absent or `user` — not a schedule, a monitor, a
+  Companion handoff, a listen probe or a remote member), not an internal
+  coordination input, and in the session's current conversation (not from
+  before a clear). The assistant's replies, tool output, web pages, compaction
+  summaries and plan briefs are never evidence.
+- **Every fact carries a quote.** The per-turn extractor, the learning review
+  (`docs/SESSION-LEARNING.md`) and `remember_this` all hand in a verbatim
+  `quote` and the messages it cites. The server loads those messages from the
+  database, keeps only the ones that are yours, and keeps the fact only if
+  one of them contains the quote after normalisation (NFKC, case folded,
+  accents stripped, typographic quotes and dashes made plain, whitespace
+  collapsed). Empty quotes, quotes over 400 characters, quotes of a few
+  characters and quotes that look like a secret (API keys, card or social
+  security numbers, an IBAN, "my password is …", "PIN: …") are refused.
+  Rejections are logged with their reason, never the quote
+  (`src/core/memory/quote-basis.ts`, `src/core/memory/owner-messages.ts`).
+- **The extractor may still read context.** After a turn it sees your
+  message as numbered, citable evidence, and up to three earlier turns —
+  the assistant's included — under a *REFERENCE ONLY* heading, so "that
+  one" can be resolved. Reference text has no number and cannot be cited.
+- **On `memory.extractionCadence: on_compaction`** the extractor reads your
+  own messages in the stretch the checkpoint summarized (newest first, at most
+  three batches of eight), not the summary. The plan-execution path ("go")
+  no longer extracts at all: the brief is the planner's text, and your
+  messages that shaped it were read on their own turns.
+- **What is stored.** `source_quote` (PII-redacted, ≤ 400 characters) next to
+  `source_message_id`; `kind` (`fact`, `preference`, `plan`, `event`,
+  `possession`); `status` — `tentative` (said once), `observed` (said in more
+  than one message) or `stated` (you asked for it to be remembered); and
+  `expires_at` when you said when it stops being true. The Memory page shows
+  the quote under each fact, and `GET /api/memory` returns all of these.
+- **Temporal hygiene.** Recall skips a fact from its `expires_at` on. A daily,
+  model-free repair pass (`src/core/memory/repair.ts`, from the cron tick)
+  retires those rows (`archive_reason = 'expired'`) and folds exact
+  duplicates — same text after normalisation, same workspace and role scope
+  — into one (`merged`; a tentative survivor becomes observed when the
+  duplicate came from another message). A superseded fact records
+  `superseded`, a fact you negated `contradicted`. A delete from the Memory
+  page leaves the reason empty.
+
+What this does **not** cover:
+
+- The quote proves the words are yours, not that the fact follows from them.
+  "Yes, that's right" is a real quote; the extractor is told a quote must
+  state the fact on its own, but the check cannot judge meaning.
+- If you paste text — an email, a web page — into your own message, it is
+  your message, and a quote from it passes.
+- Paraphrases are not merged by the repair pass ("prefers tabs" / "likes tabs
+  better"); that is still the judge's job when a new fact arrives. Facts that
+  go stale without an end date are not retired (`stale` is reserved for that
+  and nothing writes it yet).
+- Memories written before migration 0190 have no quote, kind or status. They
+  are still recalled and shown; nothing back-fills them.
+- A scheduled prompt is your earlier words, but its run is not read for
+  memory: the run may splice fetched content into the stored row.
 
 ## Code-exclusion policy (raw code is never indexed)
 
@@ -625,7 +688,7 @@ CREATE INDEX embeddings_repo_id_idx ON embeddings (repo_id);
 
 | Env / setting | Default | Description |
 |---|---|---|
-| `memory.extractionCadence` (config) | `per_turn` | When the memory extractor runs: `per_turn` (after every user turn), `on_compaction` (only on session compaction), or `off`. Knowledge-base indexing is unaffected. |
+| `memory.extractionCadence` (config) | `per_turn` | When the memory extractor runs: `per_turn` (after every user turn, on that turn's message), `on_compaction` (on session compaction, on your own messages in the compacted stretch — never the summary), or `off`. Knowledge-base indexing is unaffected. |
 | `AGENT_TASK_RECORDING` (env) | `true` | Toggle whether completed agents record their outputs to `task_state`. |
 | `RAG_AUTO_INDEX` (env) | `true` | Reserved — agent-output auto-index was removed in Phase B; this flag is now used only by tests. |
 
@@ -663,9 +726,11 @@ CREATE INDEX embeddings_repo_id_idx ON embeddings (repo_id);
 | `src/db/migrations/0056_drop_source_type.sql` | Retired the legacy `source_type` column |
 | `src/db/migrations/0073_cloudy_glorian.sql` | Added `embeddings.repo_id` (multi-repo scope) + index |
 | `mcp-server/src/tools/knowledge.ts` | External-model MCP bridge |
-| `src/core/memory/{extractor,judge,retrieval,repository}.ts` | Layer 1 — long-term user-fact memory (extract → judge → apply, turn-start retrieve, supersession chain) |
+| `src/core/memory/{extractor,judge,retrieval,repository}.ts` | Layer 1 — long-term user-fact memory (extract → verify quote → judge → apply, turn-start retrieve, supersession chain) |
+| `src/core/memory/{quote-basis,owner-messages}.ts` | Owner-only evidence: what counts as your message, quote normalisation and verification |
+| `src/core/memory/repair.ts` | Daily model-free repair: expire past `expires_at`, merge exact duplicates |
 | `src/core/memory/recall.test.ts` | The recall benchmark behind the two-ordering design above |
 | `src/db/task-state-listener.ts` | Layer 3 — LISTEN/NOTIFY subscriber for `task_state_<session_id>` fan-out (Postgres only) |
-| `src/core/agent/meta-tools.ts` (`remember_this`) | Agent-callable memory write — only path the LLM uses to promote a fact |
+| `src/core/agent/meta-tools.ts` (`remember_this`) | Agent-callable memory write — requires a quote from one of your recent messages in the session |
 | `src/api/routes/memory.ts` | Operator REST — list / chain / soft-delete user memories |
 | `web/app/memory/page.tsx` | UI for the same — including supersession-chain view |

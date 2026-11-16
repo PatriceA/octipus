@@ -11,6 +11,7 @@ import { withInstallUsage } from '@/models/providers/instrumented';
 import { SECURITY_PREAMBLE } from '@/core/agent/roles';
 import { filterPII } from '@/core/agent/pii-filter';
 import { judgeAndApply } from '@/core/memory/judge';
+import { verifyOwnerQuotes } from '@/core/memory/owner-messages';
 import { getNoteRepository, personalNoteScope } from '@/db/repositories/note-repository';
 import { getNoteService } from '@/core/knowledge/notes';
 import { fileSkillProposal } from '@/services/file-skill-proposal';
@@ -128,8 +129,21 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
         if (!(await capabilityConfigured('embedding'))) {
           outputs.push({ kind: 'memory', status: 'disabled', detail: 'Memory needs an embedding model' }); continue;
         }
-        const result = await judgeAndApply([item], { userId: job.userId, workspaceId,
-          sourceMessageId: item.sources[0].slice('message:'.length), failOnError: true });
+        // Personal memory learns only from the owner's own words: the quote
+        // must be found in a cited message of theirs, read from the database.
+        const expiresAt = item.expires ? new Date(`${item.expires}T23:59:59.999Z`) : undefined;
+        if (expiresAt && expiresAt <= new Date()) {
+          outputs.push({ kind: 'memory', status: 'rejected', detail: 'The fact had already ended' }); continue;
+        }
+        const { accepted, rejected } = await verifyOwnerQuotes(job.userId, [{
+          factType: item.factType, content: item.content, confidence: item.confidence, quote: item.quote,
+          ...(item.kind ? { kind: item.kind } : {}), ...(expiresAt ? { expiresAt } : {}),
+          sourceMessageIds: item.sources.map(id => id.slice('message:'.length)),
+        }]);
+        if (accepted.length === 0) {
+          outputs.push({ kind: 'memory', status: 'rejected', detail: `Not backed by a quote from your own messages (${rejected[0]?.reason ?? 'unknown'})` }); continue;
+        }
+        const result = await judgeAndApply(accepted, { userId: job.userId, workspaceId, failOnError: true });
         if (result.length !== 1) throw new Error('Memory judge produced no write outcome');
         outputs.push({ kind: 'memory', status: result[0].action === 'NOOP' ? 'duplicate' : 'saved', id: result[0].memoryId });
       } catch (err) { outputs.push({ kind: 'memory', status: 'failed', detail: errorText(err) }); }

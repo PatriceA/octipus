@@ -32,7 +32,7 @@ process.env.LOG_LEVEL ??= 'error';
 const fx = vi.hoisted(() => ({
   turns: [] as Array<{ workspaceId: string | null; filePath?: string; taskId?: string; artifactId?: string }>,
   retrieve: [] as Array<{ workspaceId?: string | null }>,
-  update: [] as Array<{ workspaceId?: string | null; userMessage?: string }>,
+  update: [] as Array<{ workspaceId?: string | null; ownerMessages?: Array<{ id: string; content: string }>; context?: unknown[] }>,
 }));
 
 vi.mock('@/models/model-registry', () => ({
@@ -42,7 +42,7 @@ vi.mock('@/core/trajectories/recorder', () => ({ TrajectoryRecorder: class { set
 vi.mock('@/core/memory', () => ({
   retrieveForContext: async (scope: { workspaceId?: string | null }) => { fx.retrieve.push(scope); return []; },
   renderMemoriesBlock: () => '',
-  updateMemoriesAfterTurn: async (input: { workspaceId?: string | null; userMessage?: string }) => { fx.update.push(input); return []; },
+  updateMemoriesAfterTurn: async (input: (typeof fx.update)[number]) => { fx.update.push(input); return []; },
 }));
 vi.mock('@/core/learning/queue', () => ({ enqueueTurnLearning: async () => {} }));
 vi.mock('@/core/cli-session-store', async (importOriginal) => ({
@@ -60,8 +60,11 @@ vi.mock('@/utils/context-compaction', async (importOriginal) => ({
 vi.mock('./root-runner', () => ({
   // The "agent": the real tools, run with the context the turn built.
   runRootAgent: async (...args: unknown[]) => {
-    const [, , sessionId, userId, , , , , , scope] = args as [unknown, unknown, string, string, unknown, unknown, unknown, unknown, unknown, AgentScope];
+    const [, , sessionId, userId, message, , , , , scope] = args as [unknown, unknown, string, string, string, unknown, unknown, unknown, unknown, AgentScope];
     const workspaceId = scope.workspaceId;
+    // The real root worker stores the turn's user message; memory cites it.
+    const { messageRepository } = await import('@/db/repositories/message-repository');
+    await messageRepository.create({ sessionId, role: 'user', content: message, metadata: { trigger: 'user' } });
     const context: AgentContext = buildAgentContext({
       id: `agent-${randomUUID()}`, sessionId, userId, scope, topic: 'general', model: 'test-model',
       role: 'general', root: true, status: 'running',
@@ -243,9 +246,16 @@ describe('a turn in a non-default workspace', () => {
     try {
       const { maybeCompactSession } = await import('./session-compaction');
       expect(await maybeCompactSession(sessionId, { force: true })).toBe(true);
-      await vi.waitFor(() => expect(fx.update.some((u) => u.userMessage === 'The launch moved to May.')).toBe(true));
-      const fromCompaction = fx.update.filter((u) => u.userMessage === 'The launch moved to May.');
-      expect(fromCompaction.every((u) => u.workspaceId === projectWs)).toBe(true);
+      const ownerRow = (await queryRaw(`SELECT id FROM messages WHERE session_id = $1 AND content = 'Plan the launch.'`, [sessionId])).rows[0] as { id: string };
+      const fromCompaction = () => fx.update.filter((u) => u.ownerMessages?.some((m) => m.id === ownerRow.id));
+      await vi.waitFor(() => expect(fromCompaction().length).toBeGreaterThan(0));
+      expect(fromCompaction().every((u) => u.workspaceId === projectWs)).toBe(true);
+      // The summary is the model's account, not the owner's words: what is read
+      // is the owner's own rows in the compacted prefix, with their ids, and
+      // nothing else — no assistant row, no summary text.
+      expect(fromCompaction().at(-1)?.ownerMessages).toEqual([{ id: ownerRow.id, content: 'Plan the launch.' }]);
+      expect(JSON.stringify(fx.update)).not.toContain('The launch moved to May.');
+      expect(JSON.stringify(fx.update)).not.toContain('Planned for April.');
     } finally {
       refreshConfigKey('memory.extractionCadence', 'per_turn');
     }
