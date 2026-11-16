@@ -36,10 +36,11 @@ export default async function setup(project: Pick<TestProject, 'provide'>): Prom
     try { await runMigrations(); } finally { await closeDb(); }
     project.provide('pgliteTemplate', dir);
   } catch (error) {
-    // Not fatal: without a template each suite runs initdb + migrations itself.
+    // Fatal: the database project runs two workers, which is only safe because
+    // no suite runs initdb itself (vitest.config.ts). A template that will not
+    // build means the migrations are broken anyway.
     rmSync(dir, { recursive: true, force: true });
-    console.warn(`[test setup] PGlite template build failed, database suites start from scratch: ${error instanceof Error ? error.message : error}`);
-    return () => {};
+    throw new Error(`[test setup] PGlite template build failed: ${error instanceof Error ? error.message : error}`, { cause: error });
   } finally {
     // In place: replacing process.env detaches it from the real environment.
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];

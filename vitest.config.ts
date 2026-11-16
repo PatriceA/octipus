@@ -53,15 +53,18 @@ const NEVER = ['node_modules/**', 'dist/**', 'tests/web/**', 'web/**'];
 /**
  * A test file talks to a real database if it stands up embedded PGlite or if it
  * runs against the shared Postgres under `INTEGRATION=1`. Those get a project of
- * their own with a single worker, for two separate reasons that both end in a
- * red run:
+ * their own with a worker cap, for two separate reasons that both end in a red
+ * run:
  *
- *  - Several WASM Postgres instances booting at once do not merely go slow. The
- *    runtime wedges inside a syscall where no timer can fire, so the file's own
- *    hook timeout never trips and the whole run hangs instead of failing.
+ *  - Several WASM Postgres instances running initdb at once do not merely go
+ *    slow. The runtime wedged inside a syscall where no timer can fire, so the
+ *    file's own hook timeout never tripped and the whole run hung. Suites now
+ *    boot from a migrated template copy (src/test-helpers/pglite-template.ts)
+ *    and run no initdb, so two at a time is safe; the template build is
+ *    mandatory for that reason.
  *  - The integration suites truncate shared tables. Run in parallel against one
  *    server they deadlock against each other, which reads as a product bug and
- *    is not one.
+ *    is not one. Under `INTEGRATION=1` the project stays at one worker.
  *
  * Classified by reading the files rather than from a hand-maintained list, so a
  * new database suite lands in the right project without anyone remembering to
@@ -93,6 +96,7 @@ const testFiles = ALL.flatMap((pattern) => globSync(pattern))
   .sort();
 const database = testFiles.filter(usesDatabase);
 const pure = testFiles.filter((f) => !database.includes(f));
+const dbWorkers = process.env.INTEGRATION === '1' ? 1 : 2;
 
 /**
  * The suites the integration lane exists for: they switch on `INTEGRATION=1`
@@ -134,8 +138,13 @@ export default defineConfig({
           name: 'database',
           include: database,
           exclude: NEVER,
-          maxWorkers: 1,
-          fileParallelism: false,
+          // Two embedded databases at once: each suite has its own DATA_DIR and
+          // boots from the migrated template, so no longer runs initdb. The
+          // integration lane stays serial: its suites share one Postgres.
+          maxWorkers: dbWorkers,
+          fileParallelism: dbWorkers > 1,
+          // Vitest requires its own group for a project with its own worker cap.
+          sequence: { groupOrder: 1 },
         },
       },
     ],

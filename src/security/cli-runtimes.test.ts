@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'vitest';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -15,7 +15,9 @@ afterEach(() => {
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'octipus-cli-test-')); dirs.push(dir);
   mkdirSync(join(dir, 'bin')); mkdirSync(join(dir, 'target')); mkdirSync(join(dir, 'workspace'));
-  const executable = join(dir, 'target', 'echo'); copyFileSync('/bin/echo', executable); chmodSync(executable, 0o755);
+  // A script, not a copy of /bin/echo: multi-call coreutils (uutils, Ubuntu
+  // 26.04) dispatch on argv[0] and refuse to run as `oc`.
+  const executable = join(dir, 'target', 'echo'); writeFileSync(executable, '#!/bin/sh\necho "$@"\n'); chmodSync(executable, 0o755);
   const link = join(dir, 'bin', 'oc'); symlinkSync(executable, link);
   return { dir, executable, link };
 }

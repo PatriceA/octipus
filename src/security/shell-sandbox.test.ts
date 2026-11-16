@@ -17,7 +17,7 @@ import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest';
 import { existsSync } from 'node:fs';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 vi.mock('node:os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:os')>();
@@ -217,7 +217,8 @@ console.log('user CLI executed; runtime read-only; credentials hidden');
     symlinkSync('../lib/node_modules/sandbox-cli/cli.cjs', join(bin, 'sandbox-cli'));
     vi.mocked(homedir).mockReturnValue(home);
     getConfig().security.shellSandbox = 'required';
-    const out = wrapCommand(['sandbox-cli'], { workspaceRoot: workspace, path: '/usr/bin:/bin' });
+    // The running node, wherever it lives (CI images ship none in /usr/bin).
+    const out = wrapCommand(['sandbox-cli'], { workspaceRoot: workspace, path: `${dirname(process.execPath)}:/usr/bin:/bin` });
     try {
       const result = spawnSync(out.argv[0], out.argv.slice(1), { encoding: 'utf8' });
       expect(result.stderr).toBe('');
@@ -309,7 +310,7 @@ test.skipIf(!hasBwrap)('Android SDK is readable by isolated test jobs while SDK 
   const { wrapCommand } = await import('./shell-sandbox');
   getConfig().security.shellSandbox = 'required';
   const code = `const fs=require('fs'),a=require('assert/strict');a.equal(process.env.ANDROID_HOME,${JSON.stringify(sdk)});a.equal(process.env.ANDROID_SDK_ROOT,process.env.ANDROID_HOME);a.equal(fs.readFileSync(process.env.ANDROID_HOME+'/platforms/android.jar','utf8'),'installed-sdk-marker');a.equal(fs.existsSync(${JSON.stringify(join(home, '.android/adbkey'))}),false);a.throws(()=>fs.writeFileSync(process.env.ANDROID_HOME+'/write-probe','denied'));`;
-  const wrapped = wrapCommand(['/usr/bin/node', '-e', code], { workspaceRoot: workspace });
+  const wrapped = wrapCommand([existsSync('/usr/bin/node') ? '/usr/bin/node' : process.execPath, '-e', code], { workspaceRoot: workspace });
   try {
     const { spawnSync } = await import('node:child_process');
     const result = spawnSync(wrapped.argv[0], wrapped.argv.slice(1), { encoding: 'utf8' });
