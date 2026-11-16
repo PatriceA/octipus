@@ -18,7 +18,8 @@ import { getConfig } from '@/config';
 import { withDispatchAuthorization } from '@/security/dispatch-authorization';
 import { routeApprovalFor } from '@/security/approval-route';
 import { askStillAuthorized } from '@/security/approved-calls';
-import { applyFlowGuard, ensureSharedAudienceKnown, isOwnerOnlyDelivery, isVaultAuthenticated, observeFlow } from '@/security/flow-guard';
+import { applyFlowGuard, classifyFlow, ensureSharedAudienceKnown, type FlowCall, isOwnerOnlyDelivery, isVaultAuthenticated, observeFlow } from '@/security/flow-guard';
+import { wrapUntrusted } from '@/security/untrusted-envelope';
 import { getPermissionManager } from '@/security/permissions';
 import { withoutPersonalOnlyTools } from '@/security/space-tools';
 import { agentLogger, coreLogger } from '@/utils/logger';
@@ -164,6 +165,18 @@ export function resolvedFileChangePath(result: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * The envelope label for a call's result, or undefined when it carries no
+ * outside content: the handler's declared `untrustedSource`, else the call's
+ * flow-guard contract — whatever the guard counts as `suspicious` (web, mail,
+ * GitHub, MCP, extension tools) reaches the model as data. Labelled like the
+ * flow label's provenance (`toolId:action`).
+ */
+export function untrustedSourceFor(tool: Pick<ToolHandler, 'untrustedSource'>, call: FlowCall): string | undefined {
+  if (tool.untrustedSource) return tool.untrustedSource;
+  return classifyFlow(call).taints.includes('suspicious') ? `${call.toolId}:${call.action}` : undefined;
+}
+
 /** Tools whose wall-clock duration is *paused* out of the calling agent's
  * timer — the agent is blocked waiting on the child, not doing work. */
 const DELEGATION_TOOLS = new Set(['spawn_child', 'escalate_to_other_lane']);
@@ -245,6 +258,14 @@ export class ToolExecutor {
   /** Tools a codemode script's calls blocked: announced with the next batch's results. */
   private blockedByNested: string[] = [];
   private blockedTools = new Set<string>();
+  /**
+   * Per tool call: the envelope label its result gets in the model's text
+   * (`untrustedSourceFor`). Taken by `buildToolMessages`, or by
+   * `runNestedCall` into `nestedUntrusted` for the script that made it.
+   */
+  private untrustedSources = new Map<string, string>();
+  /** Labels of what the running codemode script's calls read; its output is wrapped too. */
+  private nestedUntrusted = new Set<string>();
   private lastOutcome: ToolBatchOutcome = { calls: 0, failed: 0, errors: [] };
   private _toolsDisabled: boolean = false;
 
@@ -341,6 +362,21 @@ export class ToolExecutor {
    * returned). Only `byName` is tallied; the classified/total counts are
    * derived from it in `getSideEffectCounters`.
    */
+  /**
+   * Remember the envelope label of a call that succeeded, for
+   * `buildToolMessages` (`untrustedSourceFor`). `untouched`: the model gets
+   * the tool's own output, not a notice of ours that replaced it (a result
+   * withheld from a CLI harness).
+   */
+  private noteUntrusted(toolCall: ToolCall, tool: ToolHandler, call: FlowCall, untouched: boolean): void {
+    // A codemode script's output carries whatever its calls read.
+    const nested = toolCall.name === CODEMODE_TOOL_NAME && this.nestedUntrusted.size
+      ? `codemode script (${[...this.nestedUntrusted].join(', ')})` : undefined;
+    if (toolCall.name === CODEMODE_TOOL_NAME) this.nestedUntrusted.clear();
+    const source = untouched ? untrustedSourceFor(tool, call) ?? nested : undefined;
+    if (source) this.untrustedSources.set(toolCall.id, source);
+  }
+
   private recordExecuted(name: string): void {
     this.counters.byName[name] = (this.counters.byName[name] ?? 0) + 1;
   }
@@ -583,6 +619,11 @@ export class ToolExecutor {
   async runNestedCall(call: ToolCall): Promise<ToolResult> {
     const results = await this.runCalls([call]);
     this.blockedByNested.push(...this.trackFailures([call], results));
+    const source = this.untrustedSources.get(call.id);
+    if (source) {
+      this.untrustedSources.delete(call.id);
+      this.nestedUntrusted.add(source);
+    }
     return results[0];
   }
 
@@ -767,7 +808,8 @@ export class ToolExecutor {
       if (toolId === 'agent') {
         try {
           const toolExecStart = Date.now();
-          const result = await this.withheldFromHarness(await tool.execute(toolCall.arguments, this.context));
+          const executed = await tool.execute(toolCall.arguments, this.context);
+          const result = await this.withheldFromHarness(executed);
           const toolExecMs = Date.now() - toolExecStart;
 
           // Delegation tools: pause parent's timeout clock for this duration.
@@ -798,6 +840,7 @@ export class ToolExecutor {
 
           results.push({ toolCallId: toolCall.id, result });
           this.recordExecuted(toolCall.name);
+          this.noteUntrusted(toolCall, tool, { toolId, action: toolCall.name }, result === executed);
 
           if (tool.final) {
             this._toolsDisabled = true;
@@ -825,6 +868,7 @@ export class ToolExecutor {
             }
           }
         } catch (error) {
+          if (toolCall.name === CODEMODE_TOOL_NAME) this.nestedUntrusted.clear();
           this.recordPreflightRefusal(error, toolCall);
           const uncertainRecord = uncertainExecutionRecord(error);
           if (uncertainRecord) {
@@ -1101,6 +1145,7 @@ export class ToolExecutor {
         if (shellFailed) this.counters.toolErrors++;
         this.recordExecuted(toolCall.name);
         observeFlow(this.context.sessionId, flowCall);
+        this.noteUntrusted(toolCall, tool, flowCall, result === executed);
 
         // Emit file change events for file-modifying operations.
         // Prefer the path the tool actually wrote to (its result), not the
@@ -1320,7 +1365,13 @@ export class ToolExecutor {
             : raw);
       // Base64 in result text is never readable as an image, by any model:
       // a tool shows images as tool media (tool-media.ts) instead.
-      const modelSafe = stripBinaryBlobs(sanitized);
+      const stripped = stripBinaryBlobs(sanitized);
+      // Outside content goes to the model as data (security/untrusted-envelope.ts).
+      // Only this text: the result object, the UI events and the transcript row
+      // keep the tool's own output. Errors are ours and stay plain.
+      const source = this.untrustedSources.get(result.toolCallId);
+      this.untrustedSources.delete(result.toolCallId);
+      const modelSafe = source && !result.error ? wrapUntrusted(source, stripped) : stripped;
       toolMessages.push({
         role: 'tool',
         content: modelSafe,

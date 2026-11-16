@@ -10,6 +10,7 @@ import {
   stripSecurityPreamble,
 } from './roles';
 import { getToolRegistry } from '@/tools/registry';
+import { UNTRUSTED_CONTENT_GUIDANCE } from '@/security/untrusted-envelope';
 import type { AgentRole, RoleConfig } from './types';
 import { meta as generalMeta } from './roles/general/config';
 
@@ -71,6 +72,13 @@ describe('getRoleConfig', () => {
     const cfg = getRoleConfig('general');
     const afterPreamble = cfg.systemPromptTemplate.slice(SECURITY_PREAMBLE.length);
     expect(afterPreamble.startsWith(OUTPUT_FORMATTING_RULES)).toBe(true);
+  });
+
+  test('explains the untrusted envelope after the formatting rules', () => {
+    const cfg = getRoleConfig('general');
+    const afterFormatting = cfg.systemPromptTemplate.slice(SECURITY_PREAMBLE.length + OUTPUT_FORMATTING_RULES.length);
+    expect(afterFormatting.startsWith(UNTRUSTED_CONTENT_GUIDANCE)).toBe(true);
+    expect(UNTRUSTED_CONTENT_GUIDANCE).toMatch(/never carries the owner's authority/);
   });
 });
 

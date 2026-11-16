@@ -23,6 +23,7 @@ import {
 import { BUILDER_LABELS, categorizeBuilderParts, splitBasePrompt } from './prompt-parts';
 import { OUTPUT_FORMATTING_RULES, SECURITY_PREAMBLE } from './roles';
 import { VAULT_USAGE_GUIDANCE } from './vault-guidance';
+import { UNTRUSTED_CONTENT_GUIDANCE } from '@/security/untrusted-envelope';
 
 beforeEach(() => _resetPromptCompositionForTesting());
 
@@ -31,12 +32,13 @@ const msg = (role: AgentMessage['role'], content: string, extra: Partial<AgentMe
 
 describe('splitBasePrompt', () => {
   test('separates the guardrails, the persona a hook inserted and the role prompt, losing nothing', () => {
-    const base = `${SECURITY_PREAMBLE}PERSONA: warm and brief.\n${OUTPUT_FORMATTING_RULES}${VAULT_USAGE_GUIDANCE}You are Octipus.`;
+    const base = `${SECURITY_PREAMBLE}PERSONA: warm and brief.\n${OUTPUT_FORMATTING_RULES}${UNTRUSTED_CONTENT_GUIDANCE}${VAULT_USAGE_GUIDANCE}You are Octipus.`;
     const parts = splitBasePrompt(base, 'general role prompt');
     expect(parts.map((p) => [p.category, p.label])).toEqual([
       ['guardrails', 'Security preamble'],
       ['role', 'Persona'],
       ['guardrails', 'Output formatting'],
+      ['guardrails', 'Outside content'],
       ['guardrails', 'Vault guidance'],
       ['role', 'general role prompt'],
     ]);

@@ -175,7 +175,7 @@ export class VisualTool extends BaseTool {
           ...result,
         };
       },
-      { requiresPermission: true, permissionAction: 'analyze', requires: ['see'] },
+      { requiresPermission: true, permissionAction: 'analyze', requires: ['see'], untrustedSource: 'visual:analyze_page' },
     );
 
     this.registerTool(
@@ -200,7 +200,7 @@ export class VisualTool extends BaseTool {
         const result = await analyzer.compare(shots[0], shots[1]);
         return { backend, ...result };
       },
-      { requiresPermission: true, permissionAction: 'analyze', requires: ['see'] },
+      { requiresPermission: true, permissionAction: 'analyze', requires: ['see'], untrustedSource: 'visual:compare_pages' },
     );
   }
 }
