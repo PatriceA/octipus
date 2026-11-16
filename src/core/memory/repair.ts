@@ -2,11 +2,15 @@
  * Model-free memory repair, run daily from the cron tick
  * (`src/core/cron-runner.ts`). Two passes, no model and no embedding call:
  *
- *  1. Expire: an active row whose `expires_at` has passed is retired
- *     (`valid_until = expires_at`, `archive_reason = 'expired'`). Recall
- *     already skips such a row from the moment it ends; this records why.
- *  2. Merge: active rows of one user and scope (workspace, role) whose text is
- *     the same after normalisation (`factKey`) are folded into one. The row
+ *  1. Expire: a row still active (not superseded, no `valid_until`) whose
+ *     `expires_at` has passed is retired (`valid_until = expires_at`,
+ *     `archive_reason = 'expired'`). Recall already skips such a row from the
+ *     moment it ends; this records why. A row a person or the judge already
+ *     retired keeps its own date and reason.
+ *  2. Merge: active rows of one user and scope (workspace, role) with the same
+ *     fact type, kind and end (both permanent, or the same `expires_at`) whose
+ *     text is the same after normalisation (`factKey`) are folded into one, so
+ *     a permanent fact is never folded into one that ends. The row
  *     kept is the most-read, then the oldest; the others point at it
  *     (`superseded_by`, `archive_reason = 'merged'`). A kept row that was
  *     tentative becomes observed when a duplicate came from another message,
@@ -32,6 +36,9 @@ interface RepairRow {
   id: string;
   workspaceId: string | null;
   agentScope: string | null;
+  factType: string;
+  kind: string | null;
+  expiresAt: Date | null;
   content: string;
   sourceMessageId: string | null;
   sourceQuote: string | null;
@@ -44,7 +51,8 @@ interface RepairRow {
 export function planMerges(rows: readonly RepairRow[]): Array<{ keep: RepairRow; merge: RepairRow[] }> {
   const groups = new Map<string, RepairRow[]>();
   for (const row of rows) {
-    const key = `${row.workspaceId ?? ''}\u0000${row.agentScope ?? ''}\u0000${factKey(row.content)}`;
+    const key = [row.workspaceId ?? '', row.agentScope ?? '', row.factType, row.kind ?? '',
+      row.expiresAt ? row.expiresAt.toISOString() : 'permanent', factKey(row.content)].join('\u0000');
     const group = groups.get(key);
     if (group) group.push(row);
     else groups.set(key, [row]);
@@ -67,7 +75,7 @@ async function expirePastDue(now: Date): Promise<number> {
       isNotNull(memories.expiresAt),
       lte(memories.expiresAt, now),
       isNull(memories.supersededBy),
-      or(isNull(memories.validUntil), sql`${memories.validUntil} > ${memories.expiresAt}`),
+      isNull(memories.validUntil),
     ))
     .returning({ id: memories.id });
   return rows.length;
@@ -78,6 +86,7 @@ async function mergeDuplicates(userId: string, now: Date): Promise<number> {
   const rows = await db
     .select({
       id: memories.id, workspaceId: memories.workspaceId, agentScope: memories.agentScope, content: memories.content,
+      factType: memories.factType, kind: memories.kind, expiresAt: memories.expiresAt,
       sourceMessageId: memories.sourceMessageId, sourceQuote: memories.sourceQuote, status: memories.status,
       accessCount: memories.accessCount, createdAt: memories.createdAt,
     })

@@ -445,7 +445,7 @@ export function createMetaTools(
           },
           quote: {
             type: 'string',
-            description: 'The user\'s own words that state the fact, copied exactly from one of their messages in this conversation (at most 200 characters). Example: "I always indent with tabs".',
+            description: 'The user\'s own words that state the fact, copied exactly from one of their messages in this conversation (at least three words, at most 200 characters, containing the key words of the fact). Example: "I always indent with tabs".',
           },
           kind: {
             type: 'string',
@@ -481,7 +481,7 @@ export function createMetaTools(
         const { checkQuoteBasis, judgeAndApply } = await import('@/core/memory');
         const { loadRecentOwnerMessages } = await import('@/core/memory/owner-messages');
         const owner = await loadRecentOwnerMessages(context.userId, sessionId);
-        const verdict = checkQuoteBasis(typeof args.quote === 'string' ? args.quote : undefined, owner.map((m) => m.id), owner);
+        const verdict = checkQuoteBasis(typeof args.quote === 'string' ? args.quote : undefined, fact, owner.map((m) => m.id), owner);
         if (!verdict.ok) {
           return { stored: false, reason: `quote not accepted (${verdict.reason}): it must be copied from one of the user's own messages in this conversation` };
         }

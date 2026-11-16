@@ -314,19 +314,25 @@ written since migration 0190 keeps the words it came from.
 - **Your words are the only evidence.** A message counts as yours when it is a
   stored `role='user'` row in your own session, written by you, typed by a
   person (`metadata.trigger` absent or `user` — not a schedule, a monitor, a
-  Companion handoff, a listen probe or a remote member), not an internal
-  coordination input, and in the session's current conversation (not from
-  before a clear). The assistant's replies, tool output, web pages, compaction
-  summaries and plan briefs are never evidence.
+  Companion handoff, a listen probe or a remote member), not text the service
+  composed for the agent (`metadata.synthetic` — the plan brief run on "go"
+  is stored as a user row and marked so), not an internal coordination input,
+  and in the session's current conversation (not from before a clear). The
+  assistant's replies, tool output, web pages, compaction summaries and plan
+  briefs are never evidence. A turn whose stored row is not yours spends no
+  extractor call at all.
 - **Every fact carries a quote.** The per-turn extractor, the learning review
   (`docs/SESSION-LEARNING.md`) and `remember_this` all hand in a verbatim
   `quote` and the messages it cites. The server loads those messages from the
   database, keeps only the ones that are yours, and keeps the fact only if
   one of them contains the quote after normalisation (NFKC, case folded,
   accents stripped, typographic quotes and dashes made plain, whitespace
-  collapsed). Empty quotes, quotes over 400 characters, quotes of a few
-  characters and quotes that look like a secret (API keys, card or social
-  security numbers, an IBAN, "my password is …", "PIN: …") are refused.
+  collapsed). The quote must also be at least three words and share a
+  content word (four letters or more, not a stopword; inflections count;
+  CJK words from two characters) with the fact written from it, so "I need"
+  cannot carry an invented fact. Empty quotes, quotes over 400 characters and
+  quotes that look like a secret (API keys, card or social security numbers,
+  an IBAN, "my password is …", "PIN: …") are refused.
   Rejections are logged with their reason, never the quote
   (`src/core/memory/quote-basis.ts`, `src/core/memory/owner-messages.ts`).
 - **The extractor may still read context.** After a turn it sees your
@@ -342,22 +348,28 @@ written since migration 0190 keeps the words it came from.
   `source_message_id`; `kind` (`fact`, `preference`, `plan`, `event`,
   `possession`); `status` — `tentative` (said once), `observed` (said in more
   than one message) or `stated` (you asked for it to be remembered); and
-  `expires_at` when you said when it stops being true. The Memory page shows
+  `expires_at` when you said when it stops being true — a date is the end of
+  that day in your timezone (your profile's, else UTC), and "today" in the
+  extractor's prompt is your local date. The Memory page shows
   the quote under each fact, and `GET /api/memory` returns all of these.
 - **Temporal hygiene.** Recall skips a fact from its `expires_at` on. A daily,
   model-free repair pass (`src/core/memory/repair.ts`, from the cron tick)
-  retires those rows (`archive_reason = 'expired'`) and folds exact
-  duplicates — same text after normalisation, same workspace and role scope
-  — into one (`merged`; a tentative survivor becomes observed when the
-  duplicate came from another message). A superseded fact records
-  `superseded`, a fact you negated `contradicted`. A delete from the Memory
-  page leaves the reason empty.
+  retires those still active (`archive_reason = 'expired'`; a fact you or the
+  judge already retired keeps its own date and reason) and folds exact
+  duplicates — same text after normalisation, same workspace, role scope,
+  fact type, kind and end (a permanent fact is never folded into one that
+  ends) — into one (`merged`; a tentative survivor becomes observed when the
+  duplicate came from another message). When a new fact arrives the judge
+  compares it only with live facts, never ended or retired ones. A superseded
+  fact records `superseded`, a fact you negated `contradicted`. A delete from
+  the Memory page leaves the reason empty.
 
 What this does **not** cover:
 
-- The quote proves the words are yours, not that the fact follows from them.
-  "Yes, that's right" is a real quote; the extractor is told a quote must
-  state the fact on its own, but the check cannot judge meaning.
+- The quote proves the words are yours and share a word with the fact, not
+  that the fact follows from them: a quote that shares one word with an
+  invented fact still passes. The extractor is told a quote must state the
+  fact on its own, but the check cannot judge meaning.
 - If you paste text — an email, a web page — into your own message, it is
   your message, and a quote from it passes.
 - Paraphrases are not merged by the repair pass ("prefers tabs" / "likes tabs

@@ -14,6 +14,7 @@ const fx = vi.hoisted(() => ({
   enqueue: vi.fn(async () => {}),
   context: {} as Record<string, unknown>,
   taken: [] as Array<{ id: string; title: string }>,
+  storedMeta: {} as Record<string, unknown>,
 }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getDefaultModel: async () => ({ modelId: 'test-model' }) }) }));
 vi.mock('./session-resolver', () => ({ resolveSession: async (id: string) => id, turnWorkspaceId: async () => 'workspace' }));
@@ -30,7 +31,7 @@ vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: {
   create: async (row: object) => ({ id: 'm', ...row }),
   createForGeneration: async (row: object) => ({ id: 'm', ...row }),
   // The root worker stores the turn's message; memory extraction cites it.
-  findRecentBySession: async () => [{ id: 'stored-user-row', role: 'user', content: 'summarise the release plan' }],
+  findRecentBySession: async () => [{ id: 'stored-user-row', role: 'user', content: 'summarise the release plan', metadata: fx.storedMeta }],
 } }));
 vi.mock('@/core/trajectories/recorder', () => ({ TrajectoryRecorder: class { setClassification() {} async finalize() {} } }));
 vi.mock('@/core/memory', () => ({ retrieveForContext: fx.retrieve, renderMemoriesBlock: () => '', updateMemoriesAfterTurn: fx.update }));
@@ -53,6 +54,7 @@ beforeEach(() => {
   for (const f of [fx.root, fx.retrieve, fx.update, fx.enqueue]) f.mockClear();
   fx.context = {};
   fx.taken = [];
+  fx.storedMeta = {};
   fx.root.mockResolvedValue({ response: 'Friday works.', agentId: 'agent', sources: [], outcome: 'success' });
 });
 
@@ -69,6 +71,17 @@ describe('group-channel turns', () => {
     expect(fx.update).not.toHaveBeenCalled();
     expect(fx.enqueue).not.toHaveBeenCalled();
     expect(isSharedAudience('group-session')).toBe(true);
+  });
+
+  test('a 1:1 turn whose stored row is not the owner\'s words spends no extractor call', async () => {
+    for (const meta of [{ trigger: 'monitor' }, { trigger: 'user', synthetic: 'plan' }, { visibility: 'internal' }]) {
+      fx.storedMeta = meta;
+      fx.update.mockClear();
+      await new AgentService().handleMessage('dm-session', 'user', 'summarise the release plan', 'slack');
+      await settle();
+      expect(fx.retrieve).toHaveBeenCalled();
+      expect(fx.update).not.toHaveBeenCalled();
+    }
   });
 
   test('the same turn in a 1:1 session uses memories and queues learning as before', async () => {

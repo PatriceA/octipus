@@ -135,6 +135,8 @@ const ALLOWLIST: Record<string, string> = {
   'src/core/rag/knowledge-scope.ts': ACCESS_LAYER,
   'src/core/rag/retention-service.ts': ACCESS_LAYER,
   'src/core/memory/repository.ts': ACCESS_LAYER,
+  'src/core/memory/owner-messages.ts': "Memory's quote check: the caller's own user rows, in sessions bound to their user id; returns those rows' text to the check only.",
+  'src/core/memory/repair.ts': 'The daily memory repair, never a request: per user, retires ended rows and merges duplicates within one workspace and scope; returns counts only.',
   'src/core/spaces/service.ts': ACCESS_LAYER,
   'src/core/spaces/invites.ts': ACCESS_LAYER,
   'src/core/spaces/membership.ts': ACCESS_LAYER,

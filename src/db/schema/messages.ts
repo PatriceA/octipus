@@ -45,6 +45,11 @@ export interface MessageMetadata {
   /** A background Companion report the server let through to the owner (src/core/companion/reports.ts). */
   companionReport?: { id: string; goalId?: string };
   sessionGeneration?: string;
+  /**
+   * A `user` row whose text the service composed rather than the owner typed
+   * (`'plan'`: the brief run on "go"). Never memory evidence.
+   */
+  synthetic?: 'plan';
   /** Immutable context supplied with this user turn, outside the system prefix. */
   promptContext?: string;
   /** The root request's size by category (sizes only), for the Context inspector. */

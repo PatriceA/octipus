@@ -45,6 +45,8 @@ import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { SECURITY_PREAMBLE } from '@/core/agent/roles';
 import { MEMORY_KINDS, type MemoryKind } from '@/db/schema/memories';
+import { dateOnlyToEndOfDay, isValidTimezone } from '@/core/tasks/rank';
+import { resolveUserTimezone } from '@/core/tasks/timezone';
 
 export interface CandidateFact {
   factType: string;
@@ -73,6 +75,8 @@ export interface ExtractorInput {
   userId: string;
   /** For resolving "tomorrow" and rejecting dates already past. */
   now?: Date;
+  /** The owner's timezone (IANA); resolved from their profile when absent. */
+  timezone?: string;
 }
 
 /** Longest owner message shown to the extractor; a quote must come from what it was shown. */
@@ -112,7 +116,8 @@ Rules:
 - "content" must be ONE sentence, third-person about the user
   (e.g. "The user prefers async over sync APIs").
 - "quote" is copied character for character from a cited owner message
-  (at most 200 characters) and on its own states the fact. No quote, no fact.
+  (at least three words, at most 200 characters), contains the key words of
+  the fact and on its own states it. No quote, no fact.
 - Pick exactly one fact_type per fact:
   - preference        — taste / opinion (e.g. tabs vs spaces)
   - profile           — biographical (e.g. role, location)
@@ -151,11 +156,30 @@ function citedIds(raw: unknown, ownerMessageIds: readonly string[]): string[] {
   return ids;
 }
 
-/** A plain `YYYY-MM-DD` read as the end of that day (UTC); anything else is no date. */
-function expiryOf(raw: unknown): Date | undefined {
-  if (typeof raw !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return undefined;
-  const date = new Date(`${raw}T23:59:59.999Z`);
-  return Number.isNaN(date.getTime()) ? undefined : date;
+/**
+ * A plain `YYYY-MM-DD` read as the end of that day in the owner's timezone, so
+ * a fact that ends "today" is kept until their day is over. Anything else is
+ * no date. Shared by the extractor and the learning review.
+ */
+export function expiryOf(raw: unknown, timezone: string): Date | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const date = dateOnlyToEndOfDay(raw, timezone);
+  return date && !Number.isNaN(date.getTime()) ? date : undefined;
+}
+
+/** The owner's calendar date at `now`, `YYYY-MM-DD`. */
+export function localDate(now: Date, timezone: string): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: isValidTimezone(timezone) ? timezone : 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+}
+
+/** The owner's timezone; UTC (logged) when it cannot be read. */
+export async function ownerTimezone(userId: string): Promise<string> {
+  try {
+    return await resolveUserTimezone(userId);
+  } catch (err) {
+    coreLogger.warn({ err, userId }, 'memory: could not read the owner\'s timezone — dates read as UTC');
+    return 'UTC';
+  }
 }
 
 /**
@@ -164,7 +188,7 @@ function expiryOf(raw: unknown): Date | undefined {
  * whose `expires` has already passed is dropped: there is nothing left to
  * remember.
  */
-export function parseExtractorResponse(raw: string, ownerMessageIds: readonly string[] = [], now: Date = new Date()): CandidateFact[] {
+export function parseExtractorResponse(raw: string, ownerMessageIds: readonly string[] = [], now: Date = new Date(), timezone = 'UTC'): CandidateFact[] {
   // Be liberal about what we accept: some models wrap in ```json``` fences
   // even when told not to. Strip the fence then parse.
   const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
@@ -187,7 +211,7 @@ export function parseExtractorResponse(raw: string, ownerMessageIds: readonly st
     if (typeof ft !== 'string' || typeof content !== 'string') continue;
     const conf = typeof fact.confidence === 'number' ? fact.confidence : 0;
     if (conf < 0.5) continue;
-    const expiresAt = expiryOf(fact.expires);
+    const expiresAt = expiryOf(fact.expires, timezone);
     if (expiresAt && expiresAt <= now) continue;
     const kind = MEMORY_KINDS.find((k) => k === fact.kind);
     out.push({
@@ -204,8 +228,8 @@ export function parseExtractorResponse(raw: string, ownerMessageIds: readonly st
 }
 
 /** The user prompt: reference context (unnumbered) apart from the numbered owner messages. */
-export function buildExtractorPayload(input: Pick<ExtractorInput, 'ownerMessages' | 'context'>, now: Date): string {
-  const parts = [`Today: ${now.toISOString().slice(0, 10)}`];
+export function buildExtractorPayload(input: Pick<ExtractorInput, 'ownerMessages' | 'context'>, now: Date, timezone = 'UTC'): string {
+  const parts = [`Today: ${localDate(now, timezone)} (${timezone})`];
   const context = (input.context ?? []).map((t) => `${t.role}: ${t.content}`).join('\n');
   if (context) parts.push(`REFERENCE ONLY (earlier turns; not evidence, never quote from these):\n${context}`);
   const owner = input.ownerMessages
@@ -231,6 +255,7 @@ export async function extractFacts(input: ExtractorInput): Promise<CandidateFact
   }
 
   const now = input.now ?? new Date();
+  const timezone = input.timezone ?? await ownerTimezone(input.userId);
   let result;
   try {
     result = await getLiteLLMClient().complete({
@@ -240,7 +265,7 @@ export async function extractFacts(input: ExtractorInput): Promise<CandidateFact
       requestType: 'memory_extraction',
       messages: [
         { role: 'system', content: EXTRACTOR_SYSTEM_PROMPT, timestamp: new Date() },
-        { role: 'user', content: buildExtractorPayload(input, now), timestamp: new Date() },
+        { role: 'user', content: buildExtractorPayload(input, now, timezone), timestamp: new Date() },
       ],
       temperature: 0,
       maxTokens: 800,
@@ -254,5 +279,5 @@ export async function extractFacts(input: ExtractorInput): Promise<CandidateFact
     return [];
   }
 
-  return parseExtractorResponse(result.content ?? '', input.ownerMessages.map((m) => m.id), now);
+  return parseExtractorResponse(result.content ?? '', input.ownerMessages.map((m) => m.id), now, timezone);
 }

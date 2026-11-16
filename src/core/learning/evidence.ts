@@ -30,9 +30,10 @@ export async function gatherEvidence(userId: string, sessionId: string, through:
   const db = getDb();
   const [chat, checks, events] = await Promise.all([
     db.select({ id: messages.id, role: messages.role, text: sql<string>`left(${messages.content}, 3000)`,
-      // A user row a person typed; Companion handoffs, monitors, schedules and
-      // internal inputs are stored as user rows too but are not the owner's words.
-      typed: sql<boolean>`(coalesce(${messages.metadata}->>'trigger', 'user') = 'user' AND ${visibleMessages})` }).from(messages)
+      // A user row a person typed; Companion handoffs, monitors, schedules,
+      // internal inputs and the plan brief are stored as user rows too but are
+      // not the owner's words.
+      typed: sql<boolean>`(coalesce(${messages.metadata}->>'trigger', 'user') = 'user' AND ${messages.metadata}->>'synthetic' IS NULL AND ${visibleMessages})` }).from(messages)
       .where(and(eq(messages.sessionId, sessionId), lte(messages.createdAt, through), inArray(messages.role, ['user', 'assistant'])))
       .orderBy(desc(messages.createdAt)).limit(8),
     db.select({ id: verificationEvidence.id, text: sql<string>`left(jsonb_build_object('kind', ${verificationEvidence.kind}, 'passed', ${verificationEvidence.passed}, 'detail', ${verificationEvidence.detail})::text, 3000)` })

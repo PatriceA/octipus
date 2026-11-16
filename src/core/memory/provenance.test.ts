@@ -95,7 +95,9 @@ describe('owner messages', () => {
     const internal = await message(sessionId, 'user', 'I live in Porto', { metadata: { visibility: 'internal' } });
     const schedule = await message(sessionId, 'user', 'I live in Porto', { metadata: { trigger: 'schedule' } });
     const typed = await message(sessionId, 'user', 'I live in Porto', { metadata: { trigger: 'user' } });
-    const found = await loadOwnerMessages(owner, [mine, reply, tool, foreign, otherAuthor, monitor, internal, schedule, typed, 'not-a-uuid']);
+    // The plan brief run on "go" is stored as the root's user row, trigger 'user'.
+    const brief = await message(sessionId, 'user', 'Execute this project plan: the user lives in Porto', { metadata: { trigger: 'user', synthetic: 'plan' } });
+    const found = await loadOwnerMessages(owner, [mine, reply, tool, foreign, otherAuthor, monitor, internal, schedule, typed, brief, 'not-a-uuid']);
     expect(found.map((m) => m.id).sort()).toEqual([mine, typed].sort());
   });
 
@@ -165,6 +167,31 @@ describe('learning a fact', () => {
   });
 });
 
+describe('dead rows', () => {
+  const base = { workspaceId: null, agentScope: null, factType: 'preference', embeddingVersion: 't/3', sourceMessageId: null, confidence: 1 };
+
+  test('the judge never matches a new fact against an ended or retired row', async () => {
+    const { getMemoryRepository } = await import('./repository');
+    const repo = getMemoryRepository();
+    await repo.addNew({ ...base, userId: owner, content: 'Ended.', embedding: [1, 0, 0], expiresAt: new Date(Date.now() - 1000) });
+    await repo.addNew({ ...base, userId: owner, content: 'Retired.', embedding: [1, 0, 0], validUntil: new Date(Date.now() - 1000) });
+    const live = await repo.addNew({ ...base, userId: owner, content: 'Live.', embedding: [0.9, 0.1, 0] });
+    expect((await repo.searchSimilar([1, 0, 0], { userId: owner, factType: 'preference' })).map((r) => r.id)).toEqual([live.id]);
+  });
+
+  test('retiring or confirming a row already retired changes nothing', async () => {
+    const { getMemoryRepository } = await import('./repository');
+    const repo = getMemoryRepository();
+    const ended = await repo.addNew({ ...base, userId: owner, content: 'Ended.', embedding: [1, 0, 0], status: 'tentative',
+      validUntil: new Date(Date.now() - 1000) });
+    const { queryRaw } = await import('@/db/postgres');
+    await queryRaw(`UPDATE memories SET archive_reason = 'expired' WHERE id = $1`, [ended.id]);
+    await repo.softDelete(ended.id, 'contradicted');
+    await repo.markObserved(ended.id);
+    expect(await rows()).toEqual([expect.objectContaining({ archive_reason: 'expired', status: 'tentative' })]);
+  });
+});
+
 describe('repair', () => {
   test('retires expired facts and folds exact duplicates within a scope', async () => {
     const { getMemoryRepository } = await import('./repository');
@@ -188,6 +215,25 @@ describe('repair', () => {
     expect(after.find((r) => r.kind === 'event')?.valid_until).not.toBeNull();
     // Idempotent.
     expect(await repairMemories()).toEqual({ expired: 0, merged: 0 });
+  });
+
+  test('never folds a permanent fact into one that ends, and leaves retired rows as they were', async () => {
+    const { getMemoryRepository } = await import('./repository');
+    const { repairMemories } = await import('./repair');
+    const repo = getMemoryRepository();
+    const base = { userId: owner, workspaceId: null, agentScope: null, factType: 'profile', embedding: [1, 0, 0], embeddingVersion: 't/3', sourceMessageId: null, confidence: 1 };
+    const tomorrow = new Date(Date.now() + 86_400_000);
+    await repo.addNew({ ...base, content: 'The user works from Lisbon.' });
+    await repo.addNew({ ...base, content: 'The user works from Lisbon.', kind: 'plan', expiresAt: tomorrow });
+    // Retired by the owner yesterday; its own end passed an hour ago.
+    const deletedAt = new Date(Date.now() - 86_400_000);
+    await repo.addNew({ ...base, content: 'The user is on leave.', validUntil: deletedAt, expiresAt: new Date(Date.now() - 3_600_000) });
+    expect(await repairMemories()).toEqual({ expired: 0, merged: 0 });
+    const after = await rows();
+    expect(after.filter((r) => r.content === 'The user works from Lisbon.' && r.superseded_by === null)).toHaveLength(2);
+    const leave = after.find((r) => r.content === 'The user is on leave.');
+    expect(leave).toMatchObject({ archive_reason: null });
+    expect((leave?.valid_until as Date).getTime()).toBe(deletedAt.getTime());
   });
 
   test('a superseded fact records why', async () => {

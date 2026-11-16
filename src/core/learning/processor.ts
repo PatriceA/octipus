@@ -12,6 +12,7 @@ import { SECURITY_PREAMBLE } from '@/core/agent/roles';
 import { filterPII } from '@/core/agent/pii-filter';
 import { judgeAndApply } from '@/core/memory/judge';
 import { verifyOwnerQuotes } from '@/core/memory/owner-messages';
+import { expiryOf, ownerTimezone } from '@/core/memory/extractor';
 import { getNoteRepository, personalNoteScope } from '@/db/repositories/note-repository';
 import { getNoteService } from '@/core/knowledge/notes';
 import { fileSkillProposal } from '@/services/file-skill-proposal';
@@ -120,6 +121,8 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
           ...(!saved.indexed ? { detail: 'Note saved; embedding/indexing unavailable' } : {}) });
       } catch (err) { outputs.push({ kind: 'knowledge', status: 'failed', detail: errorText(err) }); }
     }
+    for (const dropped of review.droppedMemories) outputs.push({ kind: 'memory', status: 'rejected', detail: dropped.reason });
+    let timezone: string | undefined;
     for (const item of review.memories) {
       try {
         if (getConfig().memory.extractionCadence === 'off') {
@@ -131,7 +134,7 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
         }
         // Personal memory learns only from the owner's own words: the quote
         // must be found in a cited message of theirs, read from the database.
-        const expiresAt = item.expires ? new Date(`${item.expires}T23:59:59.999Z`) : undefined;
+        const expiresAt = item.expires ? expiryOf(item.expires, timezone ??= await ownerTimezone(job.userId)) : undefined;
         if (expiresAt && expiresAt <= new Date()) {
           outputs.push({ kind: 'memory', status: 'rejected', detail: 'The fact had already ended' }); continue;
         }

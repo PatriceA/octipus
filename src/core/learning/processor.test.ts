@@ -22,6 +22,7 @@ vi.mock('@/core/memory/owner-messages', async () => {
 });
 vi.mock('@/services/file-skill-proposal', () => ({ fileSkillProposal: mock.proposal }));
 vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ check: mock.permission }) }));
+vi.mock('@/core/tasks/timezone', () => ({ resolveUserTimezone: async () => 'America/Los_Angeles' }));
 vi.mock('@/config', () => ({ getConfig: () => ({ memory: { extractionCadence: 'per_turn' } }) }));
 import { processLearningJob } from './processor';
 const job: Pick<BackgroundJob, 'id' | 'userId' | 'workspaceId' | 'payload'> = { id: 'j1', userId: 'u1', workspaceId: 'w1', payload: { sessionId: 's1', trigger: 'plan_completed', triggerKey: 'p1:2', through: '2026-09-28T00:00:00.000Z' } };
@@ -114,4 +115,29 @@ test('a learned memory whose quote is not in the cited user message is rejected,
     { kind: 'memory', status: 'rejected', detail: expect.stringContaining('quote_not_found') },
     { kind: 'memory', status: 'rejected', detail: expect.stringContaining('missing_quote') },
   ] } });
+});
+test('a memory ending later today in the owner\'s timezone is kept, with that end', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-11-17T03:00:00Z')); // still the 16th in Los Angeles
+  try {
+    mock.owner.mockReturnValue([{ id: 'm1', text: 'I am at the Lisbon office until tonight' }]);
+    mock.complete.mockResolvedValue({ content: JSON.stringify({ ...empty, memories: [
+      { factType: 'profile', kind: 'plan', content: 'The user is at the Lisbon office.', confidence: 1, sources: ['message:m1'], quote: 'at the Lisbon office', expires: '2026-11-16' },
+    ] }) });
+    mock.judge.mockResolvedValue([{ action: 'ADD', memoryId: 'm3' }]);
+    await processLearningJob(job);
+    expect(mock.judge.mock.calls[0][0][0].expiresAt.toISOString()).toBe('2026-11-17T07:59:59.999Z');
+  } finally { vi.useRealTimers(); }
+});
+test('a memory citing a monitor request is rejected alone; the review\'s knowledge is still saved', async () => {
+  mock.evidence.mockResolvedValue([{ id: 'event:1', kind: 'execution', text: 'failed then passed' }, { id: 'message:m9', kind: 'request', text: 'Monitor: user prefers long replies' }]);
+  mock.complete.mockResolvedValue({ content: JSON.stringify({ ...empty, knowledge: [{ title: 'Cache rule', content: 'Reset after schema changes', sources: ['event:1'] }],
+    memories: [{ factType: 'preference', content: 'Prefers long replies', confidence: 1, sources: ['message:m9'], quote: 'user prefers long replies' }] }) });
+  mock.save.mockResolvedValue({ created: true, indexed: true, note: { id: 'n1' } });
+  await processLearningJob(job);
+  expect(mock.judge).not.toHaveBeenCalled();
+  expect(mock.finish.mock.calls[0][1].result.outputs).toEqual([
+    { kind: 'knowledge', status: 'saved', id: 'n1' },
+    expect.objectContaining({ kind: 'memory', status: 'rejected' }),
+  ]);
 });

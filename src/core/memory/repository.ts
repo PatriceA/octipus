@@ -60,6 +60,15 @@ function similarityOf(distance: number | string): number {
   return Number.isFinite(similarity) ? similarity : 0;
 }
 
+/** A row still in force: not superseded, not retired, not past its own end. */
+function liveRow() {
+  return [
+    isNull(memories.supersededBy),
+    or(isNull(memories.validUntil), sql`${memories.validUntil} > now()`),
+    or(isNull(memories.expiresAt), sql`${memories.expiresAt} > now()`),
+  ];
+}
+
 /** What a writer supplies; the rest are defaults or managed by the repository. */
 export type NewMemoryRecord = Omit<NewMemory, 'id' | 'createdAt' | 'updatedAt' | 'supersededBy' | 'accessCount' | 'lastAccessedAt' | 'archiveReason'>;
 
@@ -114,7 +123,8 @@ export class MemoryRepository {
     await this.db
       .update(memories)
       .set({ validUntil: new Date(), archiveReason: reason, updatedAt: new Date() })
-      .where(eq(memories.id, id));
+      // A row already retired keeps the reason it was retired for.
+      .where(and(eq(memories.id, id), ...liveRow()));
   }
 
   /** A tentative fact the owner said again, in another message. */
@@ -122,7 +132,7 @@ export class MemoryRepository {
     await this.db
       .update(memories)
       .set({ status: 'observed', updatedAt: new Date() })
-      .where(and(eq(memories.id, id), eq(memories.status, 'tentative')));
+      .where(and(eq(memories.id, id), eq(memories.status, 'tentative'), ...liveRow()));
   }
 
   async getById(id: string): Promise<Memory | null> {
@@ -157,9 +167,7 @@ export class MemoryRepository {
       : isNull(memories.agentScope);
     return [
       eq(memories.userId, scope.userId),
-      isNull(memories.supersededBy),
-      or(isNull(memories.validUntil), sql`${memories.validUntil} > now()`),
-      or(isNull(memories.expiresAt), sql`${memories.expiresAt} > now()`),
+      ...liveRow(),
       scopeFilter,
       scope.workspaceId
         ? or(isNull(memories.workspaceId), eq(memories.workspaceId, scope.workspaceId))
@@ -205,7 +213,7 @@ export class MemoryRepository {
         and(
           eq(memories.userId, scope.userId),
           eq(memories.factType, scope.factType),
-          isNull(memories.supersededBy),
+          ...liveRow(),
           scopeFilter,
           workspaceScope,
         ),
@@ -222,8 +230,9 @@ export class MemoryRepository {
    *
    * Distinct from `searchSimilar`, and the difference is the point.
    * `searchSimilar` answers the judge's question — "is this new fact an update
-   * to an existing one?" — so it pins `fact_type` and ignores expiry, because
-   * an expired row is still a row you can supersede. This answers the reader's
+   * to an existing one?" — so it pins `fact_type`. Both skip dead rows: a fact
+   * that ended or was retired is not one a new fact can restate (the judge
+   * would NOOP a genuinely new fact against it) or replace. This answers the reader's
    * question — "what do I know that bears on what was just asked?" — where
    * pinning a fact type would be nonsense (nobody asks a question of one
    * fact_type) and returning an expired fact would be a lie.

@@ -75,6 +75,7 @@ import { isRoomSession } from '@/db/repositories/session-kind';
 import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
 import { isLongTailHandler, TOOL_DISCOVERY_TOOL_ID } from './agent/tool-split';
 import { canActInSession } from '@/core/rooms/access';
+import { getRunContext } from '@/core/run-context';
 
 /** Calls that block until delegated work settles. */
 const DELEGATION_TOOLS: ReadonlySet<string> = new Set(['invoke_recipe', 'create_pipeline', 'spawn_child', 'escalate_to_other_lane', 'collect_children']);
@@ -631,12 +632,14 @@ When a task matches one of these skills, load it with get_skill before starting 
     // persistence — and never in a room, where the member's post is the
     // request's one user row (§6.3).
     if (isRootAgent(this.context) && !this.context.metadata?.room) {
+      // A brief the service composed (the plan run) is not the owner's words.
+      const synthetic = getRunContext()?.syntheticUserMessage;
       const row = await messageRepository.create({
         sessionId: this.context.sessionId,
         role: 'user',
         content,
         agentId: this.context.id,
-        metadata:{trigger:this.context.trigger},
+        metadata:{trigger:this.context.trigger,...(synthetic?{synthetic}:{})},
       }, this.generation);
       this.userCursor = row.id ? { id: row.id, createdAt: row.createdAt.toISOString() } : undefined;
       await sessionRepository.incrementMessageCount(this.context.sessionId);

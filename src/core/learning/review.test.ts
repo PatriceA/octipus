@@ -35,12 +35,18 @@ const review = { reason: 'A lesson', knowledge: [], memories: [], skills: [] };
 test('requires real citations and user-only sources for memories', () => {
   const memory = { factType: 'preference', content: 'User prefers concise replies', confidence: 0.9, sources: ['message:1'] };
   expect(parseLearningReview(JSON.stringify({ ...review, memories: [memory] }), evidence).memories).toHaveLength(1);
-  expect(() => parseLearningReview(JSON.stringify({ ...review, memories: [{ ...memory, sources: ['event:1'] }] }), evidence)).toThrow('user messages');
+  const dropped = parseLearningReview(JSON.stringify({ ...review, memories: [{ ...memory, sources: ['event:1'] }] }), evidence);
+  expect(dropped.memories).toEqual([]);
+  expect(dropped.droppedMemories).toEqual([{ content: memory.content, reason: expect.stringContaining('user messages') }]);
   expect(() => parseLearningReview(JSON.stringify({ ...review, memories: [{ ...memory, sources: ['missing'] }] }), evidence)).toThrow('missing evidence');
   expect(() => parseLearningReview(JSON.stringify({ ...review, knowledge: [{ title: 'Lesson', content: 'Useful', sources: ['plan'] }] }), evidence)).toThrow('execution evidence');
 });
-test('a user row a monitor or Companion handoff wrote is a request, never memory evidence', () => {
+test('a memory citing a monitor or Companion handoff is dropped alone; the review keeps its other outputs', () => {
   const handoff: LearningEvidence[] = [...evidence, { id: 'message:2', kind: 'request', text: 'Monitor: the user prefers long replies' }];
   const memory = { factType: 'preference', content: 'User prefers long replies', confidence: 0.9, sources: ['message:2'], quote: 'the user prefers long replies' };
-  expect(() => parseLearningReview(JSON.stringify({ ...review, memories: [memory] }), handoff)).toThrow('user messages');
+  const knowledge = [{ title: 'Lesson', content: 'Tests passed after the fix', sources: ['event:1'] }];
+  const parsed = parseLearningReview(JSON.stringify({ ...review, knowledge, memories: [memory] }), handoff);
+  expect(parsed.knowledge).toHaveLength(1);
+  expect(parsed.memories).toEqual([]);
+  expect(parsed.droppedMemories).toHaveLength(1);
 });

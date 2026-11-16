@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { looksWorthExtracting, parseExtractorResponse } from './extractor';
+import { localDate, looksWorthExtracting, parseExtractorResponse } from './extractor';
 import { JUDGE_RELEVANCE_FLOOR, parseJudgeAction, relevantClosest } from './judge';
 import { renderMemoriesBlock } from './retrieval';
 import { EXTRACTION_BATCH_MESSAGES, MAX_EXTRACTION_BATCHES, ownerBatches } from './index';
@@ -195,6 +195,16 @@ describe('memory.extractor — citations and time', () => {
     expect(parse({ expires: '2026-11-20' })[0].expiresAt?.toISOString()).toBe('2026-11-20T23:59:59.999Z');
     expect(parse({ expires: '2026-11-15' })).toEqual([]);
     expect(parse({ expires: 'next week' })[0].expiresAt).toBeUndefined();
+  });
+
+  test('a date is a day in the owner\'s timezone: a fact ending later today there is kept', () => {
+    // 03:00 UTC on the 17th is still the evening of the 16th in Los Angeles.
+    const late = new Date('2026-11-17T03:00:00Z');
+    const raw = JSON.stringify({ facts: [{ fact_type: 'profile', content: 'X', confidence: 1, expires: '2026-11-16' }] });
+    expect(parseExtractorResponse(raw, ids, late, 'UTC')).toEqual([]);
+    expect(parseExtractorResponse(raw, ids, late, 'America/Los_Angeles')[0].expiresAt?.toISOString()).toBe('2026-11-17T07:59:59.999Z');
+    expect(localDate(late, 'America/Los_Angeles')).toBe('2026-11-16');
+    expect(localDate(late, 'UTC')).toBe('2026-11-17');
   });
 });
 

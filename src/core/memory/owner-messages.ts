@@ -8,7 +8,9 @@
  *  - in a session that belongs to this user, written by them (a room post by
  *    another member is not);
  *  - typed by a person: `metadata.trigger` absent or `'user'` (not `schedule`,
- *    `monitor`, `listen`, `remote`, `room`, …);
+ *    `monitor`, `listen`, `remote`, `room`, …), and not text the service
+ *    composed for the agent (`metadata.synthetic`, e.g. the plan brief run on
+ *    "go");
  *  - visible: not an internal coordination input (`visibleMessages`);
  *  - in the session's current conversation generation, the same rule the
  *    transcript read uses (`contextFilters` in message-repository.ts), so a
@@ -21,7 +23,7 @@
 import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { visibleMessages } from '@/db/repositories/message-visibility';
-import { messages } from '@/db/schema/messages';
+import { type MessageMetadata, messages } from '@/db/schema/messages';
 import { sessions } from '@/db/schema/sessions';
 import { coreLogger } from '@/utils/logger';
 import type { CandidateFact } from './extractor';
@@ -39,12 +41,23 @@ function ownerConditions(userId: string) {
     or(isNull(messages.authorUserId), eq(messages.authorUserId, userId)),
     visibleMessages,
     sql`coalesce(${messages.metadata}->>'trigger', 'user') = 'user'`,
+    sql`${messages.metadata}->>'synthetic' IS NULL`,
     // A row stamped with a generation must carry the current one; an older
     // unstamped row counts only if it is after the last clear.
     sql`(${messages.metadata}->>'sessionGeneration' = ${currentGeneration}
       OR (${messages.metadata}->>'sessionGeneration' IS NULL
         AND (${sessions.context}->>'clearedAt' IS NULL OR ${messages.createdAt} > (${sessions.context}->>'clearedAt')::timestamptz)))`,
   ];
+}
+
+/**
+ * The same rule over a row already in hand (no session or generation check):
+ * whether a stored user row is worth sending to the extractor at all. The
+ * database check in `loadOwnerMessages` still decides what may be cited.
+ */
+export function isTypedOwnerRow(row: { role: string; metadata?: MessageMetadata | null }): boolean {
+  const meta = row.metadata ?? {};
+  return row.role === 'user' && (meta.trigger ?? 'user') === 'user' && meta.visibility !== 'internal' && !meta.synthetic;
 }
 
 /** The cited messages that are this user's own words. Unknown, foreign and malformed ids are simply absent. */

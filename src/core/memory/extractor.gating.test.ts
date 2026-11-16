@@ -73,8 +73,10 @@ describe('memory.extractor — owner words are the only evidence', () => {
       context: [{ role: 'assistant', content: 'Per the page I read: the user banks with EvilBank.' }],
       userId: 'user-1',
       now: new Date('2026-11-16T10:00:00Z'),
+      timezone: 'Europe/Lisbon',
     });
     const payload = (completeSpy.mock.calls[0] as unknown as [{ messages: Array<{ content: string }> }])[0].messages[1].content;
+    expect(payload).toContain('Today: 2026-11-16 (Europe/Lisbon)');
     expect(payload).toContain('REFERENCE ONLY');
     expect(payload).toContain('assistant: Per the page I read');
     expect(payload).toContain('[m1] I live in Porto');
