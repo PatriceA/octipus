@@ -15,10 +15,11 @@ import { CODEMODE_TOOL_NAME } from '@/tools/codemode';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { getConfig } from '@/config';
-import { withDispatchAuthorization } from '@/security/dispatch-authorization';
+import { ApprovalBlockedError, withDispatchAuthorization } from '@/security/dispatch-authorization';
 import { routeApprovalFor } from '@/security/approval-route';
 import { askStillAuthorized } from '@/security/approved-calls';
-import { applyFlowGuard, ensureSharedAudienceKnown, isOwnerOnlyDelivery, isVaultAuthenticated, observeFlow } from '@/security/flow-guard';
+import { applyFlowGuard, classifyFlow, ensureSharedAudienceKnown, type FlowCall, isOwnerOnlyDelivery, isVaultAuthenticated, observeFlow } from '@/security/flow-guard';
+import { truncateKeepingEnvelope, unwrapUntrusted, wrapUntrusted } from '@/security/untrusted-envelope';
 import { getPermissionManager } from '@/security/permissions';
 import { withoutPersonalOnlyTools } from '@/security/space-tools';
 import { agentLogger, coreLogger } from '@/utils/logger';
@@ -162,6 +163,31 @@ export function resolvedFileChangePath(result: unknown): string | undefined {
   const path = r.path;
   if (typeof path === 'string' && path.length > 0) return path;
   return undefined;
+}
+
+/**
+ * The envelope label for a call's result, or undefined when it carries no
+ * outside content: the handler's declared `untrustedSource`, else the call's
+ * flow-guard contract — whatever the guard counts as `suspicious` (web, mail,
+ * GitHub, MCP, extension tools) reaches the model as data. Labelled like the
+ * flow label's provenance (`toolId:action`).
+ */
+export function untrustedSourceFor(tool: Pick<ToolHandler, 'untrustedSource'>, call: FlowCall): string | undefined {
+  if (tool.untrustedSource) return tool.untrustedSource;
+  return classifyFlow(call).taints.includes('suspicious') ? `${call.toolId}:${call.action}` : undefined;
+}
+
+/**
+ * Errors Octipus itself raises around a call (permission, approval, policy,
+ * stop): never wrapped, so a "do not retry" reads as ours. Anything else a
+ * tool of outside content throws may quote that content.
+ */
+const OWN_ERROR_RE = /^(Permission denied|Permission changed|Permission was revoked|Approval required|Approval was not granted|Agent stopped|Tool \S+ denied by policy|Blocked by hook)/;
+
+/** The envelope label for a failed call's error, if the error may carry the tool's outside content. */
+function untrustedErrorSource(source: string | undefined, error: unknown): string | undefined {
+  if (!source || error instanceof ToolNotExecutedError || error instanceof ApprovalBlockedError || isCancellationError(error)) return undefined;
+  return OWN_ERROR_RE.test(error instanceof Error ? error.message : String(error)) ? undefined : source;
 }
 
 /** Tools whose wall-clock duration is *paused* out of the calling agent's
@@ -767,7 +793,8 @@ export class ToolExecutor {
       if (toolId === 'agent') {
         try {
           const toolExecStart = Date.now();
-          const result = await this.withheldFromHarness(await tool.execute(toolCall.arguments, this.context));
+          const executed = await tool.execute(toolCall.arguments, this.context);
+          const result = await this.withheldFromHarness(executed);
           const toolExecMs = Date.now() - toolExecStart;
 
           // Delegation tools: pause parent's timeout clock for this duration.
@@ -796,7 +823,8 @@ export class ToolExecutor {
             });
           }
 
-          results.push({ toolCallId: toolCall.id, result });
+          // A result withheld from a CLI harness is our notice, not the tool's output.
+          results.push({ toolCallId: toolCall.id, result, ...(result === executed && tool.untrustedSource ? { untrustedSource: tool.untrustedSource } : {}) });
           this.recordExecuted(toolCall.name);
 
           if (tool.final) {
@@ -1097,7 +1125,11 @@ export class ToolExecutor {
           result: completedActivity.result,
         });
 
-        results.push({ toolCallId: toolCall.id, result, ...(shellFailed ? { error: sanitizeToolOutput(result) } : {}) });
+        // Outside content reaches the model inside the untrusted envelope
+        // (buildToolMessages); a result withheld from a CLI harness is our notice.
+        const untrustedSource = result === executed ? untrustedSourceFor(tool, flowCall) : undefined;
+        results.push({ toolCallId: toolCall.id, result, ...(shellFailed ? { error: sanitizeToolOutput(result) } : {}),
+          ...(untrustedSource ? { untrustedSource } : {}) });
         if (shellFailed) this.counters.toolErrors++;
         this.recordExecuted(toolCall.name);
         observeFlow(this.context.sessionId, flowCall);
@@ -1205,10 +1237,13 @@ export class ToolExecutor {
         });
 
         if (!cancelled) this.counters.toolErrors++;
+        // A tool of outside content may quote it in its own error.
+        const untrustedSource = untrustedErrorSource(untrustedSourceFor(tool, flowCall), error);
         results.push({
           toolCallId: toolCall.id,
           result: null,
           error: (error as Error).message,
+          ...(untrustedSource ? { untrustedSource } : {}),
         });
       }
     }
@@ -1295,32 +1330,39 @@ export class ToolExecutor {
       // truncation below, since a housekeeping write must not turn a
       // successful command into an error.
       const raw = result.error ? null : sanitizeToolOutput(stripWorkStreamMeta(result.result), { maxLength: Infinity });
+      // Outside content goes to the model as data (security/untrusted-envelope.ts):
+      // the saved file and the text the model reads carry the envelope, with
+      // our own notices (saved at…, truncated) outside it. The result object
+      // and the UI events keep the tool's own output.
+      const source = result.untrustedSource;
       // A handler with its own ceiling (MCP) returns structured data: over the
       // ceiling it becomes a valid-JSON envelope, never a mid-document cut.
       const call = toolCalls.find((c) => c.id === result.toolCallId);
       const limit = call ? this.tools.get(call.name)?.maxResultChars?.(call.arguments) : undefined;
       const spilled = raw && limit !== undefined
-        ? await spillMcpResult(raw, { toolCallId: result.toolCallId, context: this.context, limit })
+        ? await spillMcpResult(raw, { toolCallId: result.toolCallId, context: this.context, limit, untrustedSource: source })
         : raw
         ? await spillToolOutput(raw, {
             toolCallId: result.toolCallId,
             context: this.context,
             threshold: DEFAULT_MAX_LENGTH,
+            untrustedSource: source,
           })
         : null;
+      const wrapped = (text: string) => (source ? wrapUntrusted(source, text) : text);
       // `raw` is already the sanitized string; re-running the sanitizer over it
       // only to truncate is a second full pass over up to a megabyte.
-      const sanitized =
-        result.error ||
+      const tooLong = raw !== null && limit === undefined && raw.length > DEFAULT_MAX_LENGTH;
+      const text =
+        (result.error && wrapped(result.error)) ||
         spilled ||
-        (raw === null
-          ? ''
-          : limit === undefined && raw.length > DEFAULT_MAX_LENGTH
-            ? `${raw.slice(0, DEFAULT_MAX_LENGTH)} [truncated]`
-            : raw);
+        (raw === null ? '' : tooLong ? truncateKeepingEnvelope(wrapped(raw), DEFAULT_MAX_LENGTH, ' [truncated]') : wrapped(raw));
       // Base64 in result text is never readable as an image, by any model:
       // a tool shows images as tool media (tool-media.ts) instead.
-      const modelSafe = stripBinaryBlobs(sanitized);
+      const modelSafe = stripBinaryBlobs(text);
+      // The transcript row keeps the tool's own text, without the envelope.
+      const sanitized = result.error || (spilled && source ? unwrapUntrusted(spilled) : spilled)
+        || (raw === null ? '' : tooLong ? `${raw.slice(0, DEFAULT_MAX_LENGTH)} [truncated]` : raw);
       toolMessages.push({
         role: 'tool',
         content: modelSafe,

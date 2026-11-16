@@ -17,6 +17,7 @@ import { configuredCliBinary } from './cli-executable';
 import { APPROVAL_DISCONNECT_REASON, APPROVAL_TIMEOUT_REASON, APPROVAL_UNFINISHED_REASON, approvalWaitReason } from './approval-wait';
 import { inlineUiRepairMessage, storeInlineUiBlocks } from '@/core/inline-ui/extract';
 import { VAULT_USAGE_GUIDANCE } from '@/core/agent/vault-guidance';
+import { UNTRUSTED_CONTENT_GUIDANCE } from '@/security/untrusted-envelope';
 import { usageContextOf } from '@/core/agent/context';
 import { recordProviderUsage } from '@/models/providers/instrumented';
 import { billableTokens } from '@/models/billable-tokens';
@@ -770,7 +771,11 @@ When a task matches one of these skills, load it with get_skill before starting 
         planMode: isPlanMode(session.context as { planMode?: boolean }), maxIterations: this.config.maxIterations };
       const helper = resolveCliMcpEntry().replace(/index\.js$/, 'agent-bridge-client.js');
       const quote = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
-      // Custom CLI prompts may bypass role composition; give them the same vault workflow.
+      // Custom CLI prompts may bypass role composition; give them the same vault workflow
+      // and the same reading of the untrusted envelope around bridged tool results.
+      if (!this.systemMessages.some(message => message.includes(UNTRUSTED_CONTENT_GUIDANCE))) {
+        this.addSystemMessage(UNTRUSTED_CONTENT_GUIDANCE);
+      }
       if (!this.systemMessages.some(message => message.includes(VAULT_USAGE_GUIDANCE))) {
         this.addSystemMessage(VAULT_USAGE_GUIDANCE);
       }

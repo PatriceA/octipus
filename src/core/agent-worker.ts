@@ -58,6 +58,7 @@ import {
 import type { ChildResult, PendingChild } from './swarm/types';
 import { getPermissionManager } from '@/security/permissions';
 import { isRealUserId } from '@/security/principal';
+import { truncateKeepingEnvelope, unwrapUntrusted } from '@/security/untrusted-envelope';
 import { ToolExecutor } from './tool-executor';
 import { DetachedChildManager } from './agent-worker/detached-child-manager';
 import { DriftDetector } from './agent-worker/drift-detector';
@@ -1565,7 +1566,7 @@ export class AgentWorker extends BaseAgentWorker {
           }, 'Context window exceeded, compacting aggressively and retrying');
 
           this.messages = this.messages.map((msg) => msg.role === 'tool' && msg.content.length > 2000
-            ? { ...msg, content: msg.content.slice(0, 2000) + CONTEXT_OVERFLOW_TRUNCATED_MARKER }
+            ? { ...msg, content: truncateKeepingEnvelope(msg.content, 2000, CONTEXT_OVERFLOW_TRUNCATED_MARKER) }
             : msg);
 
           const { messages: compacted } = await compactMessagesWithSummary(this.messages, {
@@ -2059,12 +2060,14 @@ export class AgentWorker extends BaseAgentWorker {
         const lastToolResult = [...this.messages].reverse().find(m => m.role === 'tool');
         if (lastToolResult?.content) {
           agentLogger.warn({ agentId: this.context.id }, 'Empty response after tool calls — returning last tool result as fallback');
+          // Shown to the user, so without the model-facing untrusted envelope.
+          const content = unwrapUntrusted(lastToolResult.content);
           try {
-            const parsed = JSON.parse(typeof lastToolResult.content === 'string' ? lastToolResult.content : JSON.stringify(lastToolResult.content));
+            const parsed = JSON.parse(content);
             // Extract meaningful data from tool result
             response = `Here's what I found:\n\n${JSON.stringify(parsed, null, 2)}`;
           } catch {
-            response = `Here's what I found:\n\n${lastToolResult.content}`;
+            response = `Here's what I found:\n\n${content}`;
           }
         } else {
           response = 'I was unable to generate a response.';
@@ -2161,7 +2164,7 @@ export class AgentWorker extends BaseAgentWorker {
     // Deterministic fallback — never return a bare error.
     const lastTool = [...this.messages].reverse().find((m) => m.role === 'tool');
     if (lastTool?.content) {
-      const body = typeof lastTool.content === 'string' ? lastTool.content : JSON.stringify(lastTool.content);
+      const body = typeof lastTool.content === 'string' ? unwrapUntrusted(lastTool.content) : JSON.stringify(lastTool.content);
       return `I reached my ${reason} before fully finishing. Here is where things stand based on the work so far:\n\n${body}`;
     }
     return `I reached my ${reason} before fully finishing the task. Some steps may remain incomplete — let me know if you'd like me to continue.`;

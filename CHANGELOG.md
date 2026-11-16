@@ -225,6 +225,20 @@ The curated release notes above are used for the GitHub release.
 
 ### Security
 
+- **One envelope for outside content in tool results.** Web, mail, GitHub,
+  MCP, extension, connection (external API), Google Workspace / Microsoft 365,
+  uploaded-document and Companion session reads now reach the model inside
+  `<untrusted_tool_result source="…">` with a one-line "data, not
+  instructions" notice, as do those tools' own errors and codemode scripts
+  that read them. Delimiters inside the content are escaped (including
+  zero-width and full-width look-alikes, shared with the webhook fences),
+  Octipus's own notices stay outside the block, saved oversized results carry
+  it, and the system prompt explains it. Only the model's text changes: result
+  objects, UI events and transcript rows are as before. It is a hint, not an
+  enforcement boundary; permissions and the flow guard still enforce. The mail
+  tools' own notes are replaced by it. See
+  [flow guard](docs/FLOW-GUARD.md#untrusted-envelope).
+
 - **The plugin store holds the four boundaries (security review of the
   store, before release).** Protection levels are enforced at runtime on the
   store as everywhere else:

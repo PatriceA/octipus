@@ -30,6 +30,7 @@ import { isRealUserId } from '@/security/principal';
 import { QuotaExceededError } from '@/security/quota-error';
 import { classifyError } from '@/core/errors/classification';
 import { SpendBudgetExceededError } from '@/security/spend-budget-error';
+import { withUntrustedGuidance } from '@/security/untrusted-envelope';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { getToolRegistry } from '@/tools/registry';
 import { formatDateTimeContext } from '@/utils/date-context';
@@ -602,7 +603,9 @@ export async function spawnWorker(
   // carries it, the SECURITY_PREAMBLE with them. The swarm path always appended;
   // these two now agree.
   const roleTemplate = (finalIsSmall && roleConfig.liteSystemPromptTemplate) || roleConfig.systemPromptTemplate;
-  const base = (overrides?.systemPrompt || roleTemplate) + formatCriticalRules(roleConfig.criticalRules ?? []);
+  // A caller's own prompt replaces the role template, and with it the
+  // guardrail that explains the untrusted envelope around tool results.
+  const base = (overrides?.systemPrompt ? withUntrustedGuidance(overrides.systemPrompt) : roleTemplate) + formatCriticalRules(roleConfig.criticalRules ?? []);
   // The role template and the fixed worker guidance below are the same bytes
   // for every user of this install: the install tier (C3), cached as its own
   // unit. A caller's own prompt is not known to be.

@@ -20,6 +20,7 @@ import type { AgentWorker } from '@/core/agent-worker';
 import type { ToolHandler } from '@/core/agent-base';
 import type { AgentNode, PendingChild } from '@/core/swarm/types';
 import { agentPrincipal } from '@/security/principal';
+import { UNTRUSTED_CONTENT_GUIDANCE } from '@/security/untrusted-envelope';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { getRunContext } from '@/core/run-context';
@@ -618,7 +619,7 @@ export async function runRootAgent(
     }
   }
 
-  let systemPrompt = supervisor ? `${SECURITY_PREAMBLE}${OUTPUT_FORMATTING_RULES}You are Companion, the owner's project supervisor. Use only your scoped coordination tools. Project implementation stays in existing project sessions. Ground decisions in current briefings and receipts; do not invent architecture, deployment targets, authority or completed work.` : isLite
+  let systemPrompt = supervisor ? `${SECURITY_PREAMBLE}${OUTPUT_FORMATTING_RULES}${UNTRUSTED_CONTENT_GUIDANCE}You are Companion, the owner's project supervisor. Use only your scoped coordination tools. Project implementation stays in existing project sessions. Ground decisions in current briefings and receipts; do not invent architecture, deployment targets, authority or completed work.` : isLite
     ? (rootRoleConfig.liteSystemPromptTemplate ?? rootRoleConfig.systemPromptTemplate)
     : rootRoleConfig.systemPromptTemplate;
   // The controller's standing instructions live in companion/controller-prompt.md,

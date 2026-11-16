@@ -44,6 +44,25 @@ export interface ToolExecutionOptions {
   injectSecrets?: boolean;
   /** Capabilities the function needs; without them it is hidden and refused (`ToolHandler.requires`). */
   requires?: readonly Capability[];
+  /**
+   * The result carries outside content (an uploaded document, another
+   * conversation, a page a vision model looked at): the model receives it
+   * inside the untrusted envelope, labelled with this source. Calls the flow
+   * guard already marks `suspicious` (web, mail, GitHub, MCP) are wrapped
+   * without it. Changes only the text the model sees, never the result.
+   */
+  untrustedSource?: string;
+}
+
+/**
+ * `options` with `untrustedSource` set to `<toolId>:<action>` when the
+ * permission action is a `…_read`: a workspace suite's mail, calendar, drive,
+ * document and contact reads return text other people wrote or shared.
+ */
+export function readsAreUntrusted(toolId: string, options?: ToolExecutionOptions): ToolExecutionOptions | undefined {
+  const action = options?.permissionAction;
+  return typeof action === 'string' && action.endsWith('_read') && !options?.untrustedSource
+    ? { ...options, untrustedSource: `${toolId}:${action}` } : options;
 }
 
 export interface ToolAvailability {
@@ -115,6 +134,7 @@ export abstract class BaseTool {
       // turning a declared ALLOW into an approval prompt nobody can answer.
       permissionAction: options?.permissionAction,
       ...(options?.requires?.length ? { requires: options.requires } : {}),
+      untrustedSource: options?.untrustedSource,
       description,
       parameters,
       execute: async (args, context) => {

@@ -34,6 +34,7 @@ import type { RoutedScriptTool, ToolHandler } from '@/core/agent-base';
 import { TOOL_DISCOVERY_TOOL_ID } from '@/core/agent/tool-split';
 import type { ToolCall, ToolResult } from '@/core/types';
 import { stripWorkStreamMeta } from '@/shared/work-stream';
+import { wrapUntrusted } from '@/security/untrusted-envelope';
 import { rankToolsByQuery, type ToolSummary } from '@/tools/tool-search';
 import { toolLogger } from '@/utils/logger';
 
@@ -189,6 +190,9 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
       // leaves them: an approval wait or a slow tool is not cancelled). Awaited
       // below, so the model is never told a script failed while its calls go on.
       const inFlight = new Map<string, Promise<unknown>>();
+      // Envelope labels of what this script's calls read (ToolResult.untrustedSource):
+      // its output, and its failure, may carry that content.
+      const untrusted = new Set<string>();
       const onHostAbort = () => abort.abort();
       host.signal?.addEventListener('abort', onHostAbort, { once: true });
 
@@ -213,6 +217,7 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
           } finally {
             inFlight.delete(call.id);
           }
+          if (result.untrustedSource) untrusted.add(result.untrustedSource);
           if (result.error) throw new Error(result.error);
           return stripWorkStreamMeta(result.result) ?? null;
         },
@@ -276,6 +281,9 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
       }
       const calls = result.calls.length;
       const header = `${Date.now() - started}ms, ${calls} tool call${calls === 1 ? '' : 's'}`;
+      // The script's own text goes in the untrusted envelope when one of its
+      // calls read outside content; our status line stays outside it.
+      const wrapped = (text: string) => (untrusted.size ? wrapUntrusted(`codemode script (${[...untrusted].join(', ')})`, text) : text);
 
       toolLogger.info(
         { ok: result.ok, calls, failedCalls: result.calls.filter((c) => c.status === 'error').length, ms: Date.now() - started, outputChars: output.length },
@@ -290,11 +298,12 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
         const late = lateCalls.length > 0
           ? `\n${lateCalls.length} tool call${lateCalls.length === 1 ? ' was' : 's were'} still running when the script stopped and finished afterwards: their effects stand.`
           : '';
-        throw new Error(`Script failed (${result.error.kind}, ${calls} tool call${calls === 1 ? '' : 's'}): ${error}${late}${output ? `\nOutput before the failure:\n${output}` : ''}`);
+        const detail = `${error}${output ? `\nOutput before the failure:\n${output}` : ''}`;
+        throw new Error(`Script failed (${result.error.kind}, ${calls} tool call${calls === 1 ? '' : 's'}): ${untrusted.size ? `\n${wrapped(detail)}` : detail}${late}`);
       }
       for (const key of result.storeWrites.delete) delete store[key];
       Object.assign(store, result.storeWrites.set);
-      return `Script completed (${header}).\n${output}`;
+      return `Script completed (${header}).\n${wrapped(output)}`;
     },
   };
 }

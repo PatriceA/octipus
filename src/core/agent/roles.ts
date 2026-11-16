@@ -1,4 +1,5 @@
 import { VAULT_USAGE_GUIDANCE } from './vault-guidance';
+import { UNTRUSTED_CONTENT_GUIDANCE } from '@/security/untrusted-envelope';
 /**
  * Role registry shim — backwards-compatible export of `ROLE_CONFIGS`,
  * `getRoleConfig`, and `getToolsForRole`.
@@ -64,11 +65,11 @@ export function getRoleConfig(role: AgentRole): RoleConfig {
   const config = ROLE_CONFIGS[role] || ROLE_CONFIGS.general;
   return {
     ...config,
-    systemPromptTemplate: SECURITY_PREAMBLE + OUTPUT_FORMATTING_RULES + VAULT_USAGE_GUIDANCE + config.systemPromptTemplate,
+    systemPromptTemplate: SECURITY_PREAMBLE + OUTPUT_FORMATTING_RULES + UNTRUSTED_CONTENT_GUIDANCE + VAULT_USAGE_GUIDANCE + config.systemPromptTemplate,
     // Mirror the preamble treatment for the lite variant (Phase C) so callers
     // can swap it in and strip the preamble uniformly. Undefined stays undefined.
     liteSystemPromptTemplate: config.liteSystemPromptTemplate
-      ? SECURITY_PREAMBLE + OUTPUT_FORMATTING_RULES + VAULT_USAGE_GUIDANCE + config.liteSystemPromptTemplate
+      ? SECURITY_PREAMBLE + OUTPUT_FORMATTING_RULES + UNTRUSTED_CONTENT_GUIDANCE + VAULT_USAGE_GUIDANCE + config.liteSystemPromptTemplate
       : undefined,
   };
 }
@@ -98,6 +99,9 @@ export function stripSecurityPreamble(prompt: string | undefined): string {
   }
   if (remaining.startsWith(OUTPUT_FORMATTING_RULES)) {
     remaining = remaining.slice(OUTPUT_FORMATTING_RULES.length);
+  }
+  if (remaining.startsWith(UNTRUSTED_CONTENT_GUIDANCE)) {
+    remaining = remaining.slice(UNTRUSTED_CONTENT_GUIDANCE.length);
   }
   if (remaining.startsWith(VAULT_USAGE_GUIDANCE)) {
     remaining = remaining.slice(VAULT_USAGE_GUIDANCE.length);

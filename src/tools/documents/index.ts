@@ -106,7 +106,7 @@ export class DocumentsTool extends BaseTool {
           metadata: doc.metadata,
         };
       },
-      { permissionAction: 'read' },
+      { permissionAction: 'read', untrustedSource: 'documents:get_document' },
     );
 
     this.registerTool(
@@ -145,7 +145,7 @@ export class DocumentsTool extends BaseTool {
           hint: 'Use get_document with the document ID (from sourceId, format "doc:<uuid>") to get full details.',
         };
       },
-      { permissionAction: 'search', requires: ['embedding'] },
+      { permissionAction: 'search', requires: ['embedding'], untrustedSource: 'documents:search_documents' },
     );
 
     this.registerTool(

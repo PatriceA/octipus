@@ -135,6 +135,13 @@ export interface ToolHandler {
    * means off, never "degraded but shown".
    */
   requires?: readonly import('@/shared/capabilities').Capability[];
+  /**
+   * Trusted handler metadata: the result carries outside content, and the
+   * model gets it inside the untrusted envelope (security/untrusted-envelope.ts)
+   * labelled with this source. Needed only where the flow guard's contract
+   * does not already mark the call `suspicious` (those are wrapped anyway).
+   */
+  untrustedSource?: string;
   execute: (args: Record<string, unknown>, context: AgentContext) => Promise<unknown>;
 }
 

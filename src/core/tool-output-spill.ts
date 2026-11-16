@@ -26,6 +26,7 @@ import type { AgentContext, MCPServer } from '@/core/types';
 import type { MCPToolDefinition } from '@/mcp/protocol';
 import { DEFAULT_MAX_LENGTH } from '@/utils/sanitize';
 import { coreLogger } from '@/utils/logger';
+import { spliceNotice, wrapUntrusted } from '@/security/untrusted-envelope';
 
 /** Directory, relative to the agent's workspace root, holding spilled output. */
 export const SPILL_DIR = '.octipus/tool-output';
@@ -65,15 +66,19 @@ function safeId(id: string): string {
 
 /**
  * Build the model-facing preview for text that has been saved to `relPath`.
- * Pure, so the shape is testable without touching a filesystem.
+ * Pure, so the shape is testable without touching a filesystem. The notice is
+ * ours: when the cut runs through an untrusted envelope, the envelope is
+ * closed before it and reopened after it (`spliceNotice`).
  */
 export function previewFor(text: string, relPath: string): string {
   const head = text.slice(0, HEAD_CHARS);
   const tail = text.slice(-TAIL_CHARS);
   const omitted = text.length - head.length - tail.length;
-  return (
-    `${head}\n\n[... ${omitted} of ${text.length} characters omitted. The FULL output is saved at ` +
-    `${relPath} — read or grep that file instead of re-running the command ...]\n\n${tail}`
+  return spliceNotice(
+    head,
+    `\n\n[... ${omitted} of ${text.length} characters omitted. The FULL output is saved at ` +
+    `${relPath} — read or grep that file instead of re-running the command ...]\n\n`,
+    tail,
   );
 }
 
@@ -91,6 +96,8 @@ export async function spillToolOutput(
     threshold: number;
     /** Injected in tests; production resolves the agent's own workspace. */
     fs?: WorkspaceFS;
+    /** Outside content: the saved file and the preview carry the untrusted envelope. */
+    untrustedSource?: string;
   },
 ): Promise<string | null> {
   if (text.length <= opts.threshold) return null;
@@ -101,7 +108,8 @@ export async function spillToolOutput(
   try {
     // File tools may resolve relative paths against a dev repository/worktree.
     // Return the actual storage location so the saved output stays retrievable.
-    return previewFor(text, (await saveSpill(text, opts)).path);
+    const saved = opts.untrustedSource ? wrapUntrusted(opts.untrustedSource, text) : text;
+    return previewFor(saved, (await saveSpill(saved, opts)).path);
   } catch (err) {
     coreLogger.warn(
       { err, toolCallId: opts.toolCallId, tool: opts.toolName, chars: text.length },
@@ -111,7 +119,7 @@ export async function spillToolOutput(
   }
 }
 
-type SpillOpts = { toolCallId: string; context?: AgentContext; fs?: WorkspaceFS };
+type SpillOpts = { toolCallId: string; context?: AgentContext; fs?: WorkspaceFS; untrustedSource?: string };
 
 /** Write `text` byte-for-byte under SPILL_DIR; throws when it cannot. */
 async function saveSpill(text: string, opts: SpillOpts): Promise<{ id: string; path: string }> {
@@ -189,8 +197,12 @@ export function mcpResultLimit(
  * Valid-JSON stand-in for an MCP result over `limit`: size, spill location and
  * the read hint first, then as much of the data's start as keeps the envelope
  * itself within `limit`. Pure, so the shape is testable without a filesystem.
+ *
+ * With `untrustedSource` the data's start goes in an untrusted envelope
+ * instead, followed by the JSON fields without `head`: our hint stays outside
+ * the block.
  */
-export function mcpEnvelope(text: string, limit: number, spill: { id: string; path: string } | { error: string }): string {
+export function mcpEnvelope(text: string, limit: number, spill: { id: string; path: string } | { error: string }, untrustedSource?: string): string {
   const meta = {
     truncated: true,
     totalChars: text.length,
@@ -203,6 +215,15 @@ export function mcpEnvelope(text: string, limit: number, spill: { id: string; pa
         }
       : { spillError: spill.error, hint: 'Full result could not be saved; call the tool again with a smaller page.' }),
   };
+  if (untrustedSource) {
+    const fields = JSON.stringify(meta);
+    let headChars = Math.max(0, limit - fields.length - 1);
+    for (;;) {
+      const out = `${wrapUntrusted(untrustedSource, text.slice(0, headChars))}\n${fields}`;
+      if (out.length <= limit || headChars === 0) return out;
+      headChars = Math.max(0, headChars - (out.length - limit));
+    }
+  }
   // Escaping can grow the head, so shrink by the overshoot until it fits.
   let headChars = Math.max(0, limit - JSON.stringify(meta).length - 32);
   for (;;) {
@@ -219,12 +240,14 @@ export function mcpEnvelope(text: string, limit: number, spill: { id: string; pa
  */
 export async function spillMcpResult(text: string, opts: SpillOpts & { limit: number }): Promise<string | null> {
   if (text.length <= opts.limit) return null;
-  if (contentStorageOffFor(opts.context)) return mcpEnvelope(text, opts.limit, { error: 'content storage is off for this session' });
+  const source = opts.untrustedSource;
+  if (contentStorageOffFor(opts.context)) return mcpEnvelope(text, opts.limit, { error: 'content storage is off for this session' }, source);
   try {
-    return mcpEnvelope(text, opts.limit, await saveSpill(text, opts));
+    // The saved copy carries the envelope too: it can be read back with file tools.
+    return mcpEnvelope(text, opts.limit, await saveSpill(source ? wrapUntrusted(source, text) : text, opts), source);
   } catch (err) {
     coreLogger.warn({ err, toolCallId: opts.toolCallId, chars: text.length }, 'Could not save oversized MCP result');
-    return mcpEnvelope(text, opts.limit, { error: err instanceof Error ? err.message : String(err) });
+    return mcpEnvelope(text, opts.limit, { error: err instanceof Error ? err.message : String(err) }, source);
   }
 }
 

@@ -119,6 +119,7 @@ import type { ToolAdvertisement } from '@/core/agent-base';
 import { applyRoleFit, buildDelegationGuidance } from './swarm-tool';
 import { isProviderQuotaError } from '@/core/errors/classification';
 import { inheritScope, writesWithheld } from '@/core/agent/context';
+import { withUntrustedGuidance } from '@/security/untrusted-envelope';
 import {
   type AgentNode,
   type ChildResult,
@@ -2626,6 +2627,8 @@ export class SwarmSpawner {
       const roleConfig = getRoleConfig(childRole);
       systemPrompt = (isSmall && roleConfig.liteSystemPromptTemplate) || roleConfig.systemPromptTemplate;
     }
+    // An expert's own prompt has no role template, so no guardrail for the untrusted envelope.
+    systemPrompt = withUntrustedGuidance(systemPrompt);
 
     // Expert critical rules — injected on the worker path but previously dropped
     // on the swarm path (the Researcher expert's "always cite / distinguish fact

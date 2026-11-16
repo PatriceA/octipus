@@ -15,6 +15,7 @@ import { withInstallUsage } from '@/models/providers/instrumented';
 import { coreLogger } from '@/utils/logger';
 export { stripSignedReasoning } from '@/models/signed-reasoning';
 import { estimateTokens } from '@/utils/token-count';
+import { truncateKeepingEnvelope } from '@/security/untrusted-envelope';
 
 // Summarizer input sizing. A single pass reads at most SUMMARY_INPUT_CHARS; a
 // longer history is condensed by a bounded map-reduce (chunk → summarize each →
@@ -271,7 +272,8 @@ export function truncateOldestToolOutputs(
   for (const idx of candidates) {
     const msg = result[idx];
     if (!truncatable(msg)) continue;
-    result[idx] = { ...msg, content: msg.content.slice(0, maxToolChars) + TOOL_OUTPUT_TRUNCATED_MARKER };
+    // An untrusted envelope the cut runs through is closed again; the marker is ours, outside it.
+    result[idx] = { ...msg, content: truncateKeepingEnvelope(msg.content, maxToolChars, TOOL_OUTPUT_TRUNCATED_MARKER) };
     firstChanged ??= idx;
     truncated++;
   }
