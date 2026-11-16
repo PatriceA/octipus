@@ -807,9 +807,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `extensions` | `utils` | 5 |
 | `hooks` | `channels` | 4 |
 | `hooks` | `config` | 2 |
-| `hooks` | `core` | 29 |
-| `hooks` | `db` | 19 |
-| `hooks` | `security` | 3 |
+| `hooks` | `core` | 32 |
+| `hooks` | `db` | 20 |
+| `hooks` | `security` | 7 |
 | `hooks` | `shared` | 1 |
 | `hooks` | `tools` | 1 |
 | `hooks` | `utils` | 8 |

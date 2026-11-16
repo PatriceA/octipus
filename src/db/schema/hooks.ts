@@ -173,6 +173,8 @@ export interface ActionConfig {
   // For spawn_agent
   agentTopic?: string;
   agentPrompt?: string;
+  /** Owner-selected project folder on the execution environment; never a webhook template. */
+  projectPath?: string;
   agentModel?: string;
   // For webhook
   webhookUrl?: string;
