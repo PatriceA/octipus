@@ -235,6 +235,7 @@ const ALLOWLIST: Record<string, string> = {
   'src/api/routes/memory.ts': PERSONAL_READER,
   'src/api/routes/search.ts': PERSONAL_READER,
   'src/core/heartbeat.ts': PERSONAL_READER,
+  'src/hooks/schedule-watch.ts': PERSONAL_READER,
   'src/core/context-hooks/kinds.ts': PERSONAL_READER,
   'src/core/tasks/role-agents.ts': PERSONAL_READER,
   'src/core/tasks/heartbeat-dispatch.ts': PERSONAL_READER,
