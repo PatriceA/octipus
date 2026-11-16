@@ -116,3 +116,6 @@ logs.zip
 # Native Windows plugin runner (reproducible source and lockfile are tracked).
 /native/windows-sandbox/target/
 /native/bin/
+
+# Vitest blob reports (`--reporter=blob`, the CI shards).
+/.vitest/

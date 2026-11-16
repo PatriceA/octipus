@@ -35,12 +35,9 @@ jobs:
           path: acceptance-report.json
 
   backend:
-    name: Backend (typecheck · lint · test)
+    name: Backend (typecheck · lint)
     runs-on: ubuntu-latest
-    # Nearly 190 database suites run serially to avoid shared-DB deadlocks
-    # and concurrent PGlite hangs. Allow the complete suite plus coverage on
-    # slower hosted runners; individual test/hook deadlines remain unchanged.
-    timeout-minutes: 60
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -64,6 +61,28 @@ jobs:
       - name: Catalog is current
         run: npm run catalog:check
 
+  # The suite split across three runners: one runner spent ~12 minutes on it.
+  # Each shard writes a blob report (with its coverage) that backend-coverage
+  # merges, so the ratchet still sees the whole suite.
+  backend-test:
+    name: Backend tests (shard ${{ matrix.shard }}/3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node (+ npm cache)
+        uses: ./.github/actions/node-setup
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Build CLI tool bridge (spawned CLI runs resolve mcp-server/dist)
         run: npm ci && npm run build
         working-directory: mcp-server
@@ -85,17 +104,52 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Test
-        run: npm run test -- --coverage
+        run: npx vitest run --shard="$SHARD/3" --coverage --reporter=default --reporter=blob
         env:
+          SHARD: ${{ matrix.shard }}
           # Dummy 32+ char secrets to satisfy config-load validation in tests.
           # Code paths that construct LiteLLMClient eagerly call loadConfig().
           MASTER_KEY: ci-dummy-master-key-for-unit-tests-only-1234567890
           JWT_SECRET: ci-dummy-jwt-secret-for-unit-tests-only-1234567890
           SESSION_SECRET: ci-dummy-session-secret-for-unit-tests-only-1234567890
 
+      - name: Upload blob report
+        uses: actions/upload-artifact@v7
+        with:
+          name: vitest-blob-${{ matrix.shard }}
+          path: .vitest/blob/
+          include-hidden-files: true
+          retention-days: 1
+
+  backend-coverage:
+    name: Backend tests (coverage)
+    needs: backend-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node (+ npm cache)
+        uses: ./.github/actions/node-setup
+
+      - name: Install dependencies
+        run: npm ci
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: vitest-blob-*
+          path: .vitest/blob/
+          merge-multiple: true
+
+      # Rebuilds the run's summary and coverage/lcov.info from the shard blobs
+      # (verified equal to an unsharded run's lcov).
+      - name: Merge shard reports
+        run: npx vitest --merge-reports --coverage
+
       # Surface coverage in the job summary and fail if it drops below the
-      # committed baseline (scripts/coverage-baseline.json). `npm run test`
-      # above writes coverage/lcov.info (vitest.config.ts). Self-contained — no
+      # committed baseline (scripts/coverage-baseline.json). Self-contained — no
       # Codecov/token/upload.
       - name: Coverage summary + ratchet
         run: npx tsx scripts/coverage-check.ts
