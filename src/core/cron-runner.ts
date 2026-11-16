@@ -14,7 +14,8 @@ import { agentRepository } from '@/db/repositories/agent-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { type Hook, hooks } from '@/db/schema/hooks';
 import { retentionPolicies } from '@/db/schema/retention-policies';
-import { getHookManager } from '@/hooks/manager';
+import { getHookManager, type HookManager } from '@/hooks/manager';
+import { checkScheduleWatch, decideWatch, probeWatch, recordWatchState, storedWatchState, type WatchProbeDeps } from '@/hooks/schedule-watch';
 import { coreLogger } from '@/utils/logger';
 
 const CRON_INTERVAL_MS = 60_000; // Check every minute
@@ -355,6 +356,131 @@ export async function retryNotStartedHook(
   return retryAt;
 }
 
+/** What running a claimed scheduled hook uses; each part injectable for tests. */
+export interface ScheduleFireDeps {
+  triggerHook: HookManager['triggerHook'];
+  logExecution: HookManager['logExecution'];
+  /** The watch probes (src/hooks/schedule-watch.ts); the real sources when absent. */
+  watchProbe?: WatchProbeDeps;
+  notify: (userId: string, type: string, title: string, body: string, metadata: Record<string, unknown>) => Promise<void>;
+}
+
+function defaultFireDeps(): ScheduleFireDeps {
+  const manager = getHookManager();
+  return {
+    triggerHook: manager.triggerHook.bind(manager),
+    logExecution: manager.logExecution.bind(manager),
+    notify: async (...args) => {
+      const { getNotificationService } = await import('@/core/notification-service');
+      await getNotificationService().notify(...args);
+    },
+  };
+}
+
+/** `skipped`: unchanged watch; `not_run`: a hook gate (cooldown, conditions, owner) declined it. */
+export type ScheduleFireOutcome = 'skipped' | 'success' | 'failed' | 'not_run';
+
+/**
+ * Run one scheduled hook this instance has claimed (claimDueHook).
+ *
+ * A recurring hook with `watch` (src/hooks/schedule-watch.ts) is probed
+ * first, without a model: when every source was read, the fingerprint equals
+ * the one taken before the last run, and that run succeeded, the run is
+ * skipped — no action, no agent turn — and logged as `skipped` with reason
+ * `unchanged`. Otherwise the fingerprint is stored as `running` and replaced
+ * by the run's outcome when it ends.
+ *
+ * A run that fails sets the hook's lastError and tells the owner with a
+ * short notification that names the schedule; one that succeeds clears it.
+ */
+export async function fireClaimedScheduleHook(
+  hook: Hook,
+  now: Date,
+  nextRun: Date | null,
+  overrides: Partial<ScheduleFireDeps> = {},
+): Promise<ScheduleFireOutcome> {
+  const deps = { ...defaultFireDeps(), ...overrides };
+  const cronExpression = hook.triggerConfig?.cronExpression as string;
+  const context = { schedule: { cronExpression, scheduledTime: now, hookName: hook.name } };
+  // Only what may carry a watch skips (a recurring orchestrated agent run),
+  // even when the row was written around the API: a one-shot, a reminder
+  // or a digest always runs.
+  const checked = checkScheduleWatch(hook);
+  const watched = checked.ok && !!checked.watch?.length;
+  let fingerprint: string | null = null;
+  if (watched) {
+    const started = Date.now();
+    // Whatever goes wrong deciding, the run goes ahead: an error is never "unchanged".
+    try {
+      const probe = await probeWatch(hook, deps.watchProbe);
+      const decision = decideWatch(storedWatchState(hook.triggerConfig), probe.fingerprint);
+      if (!decision.run) {
+        await deps.logExecution({
+          hookId: hook.id, source: 'hook', status: 'skipped', triggerType: 'schedule', actionType: hook.action,
+          result: { reason: 'unchanged', fingerprint: probe.fingerprint }, durationMs: Date.now() - started, triggerContext: context,
+        });
+        coreLogger.info({ hookId: hook.id, name: hook.name, nextRun }, 'Scheduled hook skipped: watched sources unchanged');
+        return 'skipped';
+      }
+      if (probe.unavailable.length > 0) {
+        coreLogger.info({ hookId: hook.id, unavailable: probe.unavailable }, 'Watched schedule runs: a source could not be read');
+      }
+      fingerprint = probe.fingerprint;
+      await recordWatchState(hook.id, { fingerprint, outcome: 'running', at: now.toISOString() });
+    } catch (err) {
+      fingerprint = null;
+      coreLogger.error({ err, hookId: hook.id }, 'Watched schedule: the unchanged check failed; running');
+    }
+  }
+
+  let failure: string | null = null;
+  try {
+    const results = await deps.triggerHook(
+      hook.id,
+      { type: 'schedule', data: { hookId: hook.id }, timestamp: now },
+      context,
+      // The row this tick claimed (a one-shot is already disabled in the DB).
+      { claimedRow: hook },
+    );
+    const [result] = results;
+    if (results.length > 0 && results.every((r) => r.result?.notStarted === true)) {
+      // Refused before any work (agent cap, quota, paused budget): recorded
+      // and retried, not a failure of the schedule itself.
+      const scheduledAt = hook.triggerConfig?.scheduledAt as string | undefined;
+      await retryNotStartedHook(hook, !!scheduledAt && !cronExpression, scheduledAt, result?.result?.error ?? 'Refused before it started');
+      return 'not_run';
+    }
+    if (!result) {
+      // Declined by a hook gate. A watched hook keeps `running`: its next run is not skipped.
+      coreLogger.info({ hookId: hook.id, name: hook.name }, 'Scheduled hook not run (cooldown, max executions, conditions or owner)');
+      return 'not_run';
+    }
+    if (result.error) failure = result.error;
+    else if (result.result && !result.result.success) failure = result.result.error || 'The action did not succeed';
+  } catch (err) {
+    failure = (err as Error).message || String(err);
+  }
+
+  const db = getDb();
+  await db.update(hooks)
+    .set({ lastError: failure ? failure.slice(0, 2000) : null, updatedAt: new Date() })
+    .where(eq(hooks.id, hook.id))
+    .catch((err: unknown) => coreLogger.error({ err, hookId: hook.id }, 'Could not record the scheduled hook\'s last error'));
+  if (watched) {
+    await recordWatchState(hook.id, { fingerprint, outcome: failure ? 'failed' : 'success', at: new Date().toISOString() })
+      .catch((err: unknown) => coreLogger.error({ err, hookId: hook.id }, 'Could not record the watched schedule\'s outcome'));
+  }
+  if (!failure) {
+    coreLogger.info({ hookId: hook.id, name: hook.name, nextRun }, 'Scheduled hook completed');
+    return 'success';
+  }
+  coreLogger.error({ error: failure, hookId: hook.id }, 'Scheduled hook execution failed');
+  // A missing summary must never go unnoticed: say which schedule and why.
+  await deps.notify(hook.userId, 'schedule_failed', `Scheduled task "${hook.name}" failed`, failure.slice(0, 280), { hookId: hook.id })
+    .catch((err: unknown) => coreLogger.error({ err, hookId: hook.id }, 'Could not notify the owner of a failed scheduled hook'));
+  return 'failed';
+}
+
 /**
  * The sweeps of modules (docs/MODULES.md), each only while its module is on.
  * Not awaited, like the reminders: a slow mail server never holds up
@@ -471,7 +597,6 @@ async function processCronTick(): Promise<void> {
     if (dueHooks.length === 0) return;
 
     coreLogger.info({ count: dueHooks.length }, 'Processing due scheduled hooks');
-    const hookManager = getHookManager();
 
     for (const hook of dueHooks) {
       const cronExpression = hook.triggerConfig?.cronExpression as string;
@@ -489,47 +614,10 @@ async function processCronTick(): Promise<void> {
         continue;
       }
 
-      try {
-        // Execute directly via hookManager.triggerHook() — this handles action execution + logging
-        // Fire-and-forget for long-running actions (spawn_agent) to avoid blocking the cron loop
-        hookManager.triggerHook(
-          hook.id,
-          { type: 'schedule', data: { hookId: hook.id }, timestamp: now },
-          { schedule: { cronExpression, scheduledTime: now, hookName: hook.name } },
-          // The row this tick claimed (a one-shot is already disabled in the DB).
-          { claimedRow: hook },
-        ).then(async (results) => {
-          const refused = results.length > 0 && results.every((r) => r.result?.notStarted === true);
-          if (refused) {
-            await retryNotStartedHook(hook, isDatetimeTask, scheduledAt, results[0]?.result?.error ?? 'Refused before it started')
-              .catch((err: unknown) => coreLogger.error({ err }, 'background task failed in cron-runner'));
-            return;
-          }
-          db.update(hooks)
-            .set({ lastError: null, updatedAt: new Date() })
-            .where(eq(hooks.id, hook.id))
-            .catch((err: unknown) => coreLogger.error({ err }, 'background task failed in cron-runner'));
-          coreLogger.info({ hookId: hook.id, name: hook.name, nextRun }, 'Scheduled hook completed');
-        }).catch(err => {
-          db.update(hooks)
-            .set({ lastError: (err as Error).message, updatedAt: new Date() })
-            .where(eq(hooks.id, hook.id))
-            .catch((err: unknown) => coreLogger.error({ err }, 'background task failed in cron-runner'));
-          coreLogger.error({ err, hookId: hook.id }, 'Scheduled hook execution failed');
-        });
-
-        coreLogger.info({ hookId: hook.id, name: hook.name, nextRun }, 'Scheduled hook triggered');
-      } catch (err) {
-        await db
-          .update(hooks)
-          .set({
-            lastError: (err as Error).message,
-            updatedAt: now,
-          })
-          .where(eq(hooks.id, hook.id));
-
-        coreLogger.error({ err, hookId: hook.id }, 'Scheduled hook execution failed');
-      }
+      // Not awaited: a watched hook's probes (and every hook's action) can
+      // take a while, and must not hold up the other due hooks.
+      void fireClaimedScheduleHook(hook, now, nextRun)
+        .catch((err: unknown) => coreLogger.error({ err, hookId: hook.id }, 'Scheduled hook dispatch failed'));
     }
   } catch (err) {
     coreLogger.error({ err }, 'Cron tick failed');

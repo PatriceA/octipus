@@ -599,8 +599,12 @@ async function executeSpawnAgent(
     }
 
     await closeThreadIfEnded(thread, hook);
+    // A turn that failed or was cancelled is a failed run, not a success
+    // with an error text for an answer (the cron runner tells the owner).
+    const failed = result.outcome === 'failed' || result.outcome === 'cancelled';
     return {
-      success: true,
+      success: !failed,
+      ...(failed ? { error: (result.response || `The agent turn ${result.outcome}`).slice(0, 1000) } : {}),
       data: { agentId: result.agentId, response: result.response, orchestrated: true, ...(readOnly ? { readOnly: true } : {}), ...threadData(thread) },
     };
   }

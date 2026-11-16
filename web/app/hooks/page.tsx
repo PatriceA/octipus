@@ -9,6 +9,7 @@ import { Portal } from '@/components/ui/portal';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useWorkspaceId } from '@/lib/workspace-context';
+import { formatWatchSource, parseWatchLines, type WatchSource } from '../../../src/shared/schedule-watch';
 
 interface Hook {
   id: string;
@@ -287,6 +288,11 @@ function ExecutionLog({ hookId }: { hookId?: string }) {
               {exec.error && (
                 <p className="text-xs text-error truncate mt-0.5">{exec.error}</p>
               )}
+              {exec.status === 'skipped' && (
+                <p className="text-xs text-on-surface-variant truncate mt-0.5">
+                  {exec.result?.reason === 'unchanged' ? 'skipped — unchanged (watched sources, no model call)' : 'skipped'}
+                </p>
+              )}
             </div>
             <span className="text-xs text-on-surface-variant shrink-0">
               {new Date(exec.createdAt).toLocaleString()}
@@ -442,6 +448,35 @@ function ThreadFields({ threadKey, setThreadKey, endActions, setEndActions, read
   );
 }
 
+/**
+ * `watch` of a recurring scheduled agent run (docs/HOOKS.md): one source per
+ * line. The run is skipped when none changed since the last successful run.
+ */
+function WatchField({ value, setValue }: { value: string; setValue: (v: string) => void }) {
+  return (
+    <div>
+      <label className="block text-xs font-bold text-on-surface-variant uppercase mb-2">Watch — skip unchanged runs (optional)</label>
+      <textarea
+        value={value}
+        onChange={e => setValue(e.target.value)}
+        rows={3}
+        className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm font-mono focus:ring-1 focus:ring-primary"
+        placeholder={'url https://example.com/status\nfile reports/today.md\ntasks\ninbox\ngithub_prs'}
+      />
+      <p className="mt-1 text-xs text-on-surface-variant">
+        One source per line (at most 5). Before each run they are checked without a model; when nothing changed since the last
+        successful run, the run is skipped. A source that cannot be read never counts as unchanged. Needs "Route through rootAgent".
+      </p>
+    </div>
+  );
+}
+
+/** The watch list of the field, or the line it cannot read. */
+function watchFromText(text: string): { watch: WatchSource[] } | { error: string } {
+  const parsed = parseWatchLines(text);
+  return 'error' in parsed ? { error: `Watch: ${parsed.error}` } : { watch: parsed.sources };
+}
+
 interface CreateHookModalProps {
   open: boolean;
   onClose: () => void;
@@ -470,6 +505,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
   const [notifyMessage, setNotifyMessage] = useState('');
   const [webhookUrl, setWebhookUrl] = useState('');
   const [runOnce, setRunOnce] = useState(false);
+  const [watchText, setWatchText] = useState('');
   const [userChannels, setUserChannels] = useState<{ channelType: string; channelUserName?: string }[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -506,6 +542,15 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
         }
       }
       if (trigger === 'message_received' && messagePattern) triggerConfig.pattern = messagePattern;
+      if (trigger === 'schedule' && !scheduledAt && action === 'spawn_agent' && watchText.trim()) {
+        const parsed = watchFromText(watchText);
+        if ('error' in parsed) {
+          setError(parsed.error);
+          setIsSubmitting(false);
+          return;
+        }
+        triggerConfig.watch = parsed.watch;
+      }
 
       const actionConfig: Record<string, unknown> = {};
       if (action === 'spawn_agent') {
@@ -555,6 +600,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
       setNotifyChannels('');
       setNotifyMessage('');
       setWebhookUrl('');
+      setWatchText('');
     } catch (err) {
       setError((err as Error).message);
     }
@@ -748,6 +794,9 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                 />
                 Route through rootAgent (recommended — enables multi-stage pipelines)
               </label>
+              {trigger === 'schedule' && !scheduledAt && (
+                <WatchField value={watchText} setValue={setWatchText} />
+              )}
               <label className="flex items-center gap-2 text-sm text-on-surface">
                 <input
                   type="checkbox"
@@ -905,6 +954,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
   const [toolAction, setToolAction] = useState((hook.actionConfig?.toolAction as string) || '');
 
   const [runOnce, setRunOnce] = useState(hook.maxExecutions === 1);
+  const [watchText, setWatchText] = useState(((hook.triggerConfig?.watch as WatchSource[] | undefined) ?? []).map(formatWatchSource).join('\n'));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
 
@@ -932,6 +982,11 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
       }
     }
     if (trigger === 'message_received' && messagePattern) cfg.pattern = messagePattern;
+    if (trigger === 'schedule' && !editScheduledAt && action === 'spawn_agent' && watchText.trim()) {
+      const parsed = watchFromText(watchText);
+      if ('error' in parsed) throw new Error(parsed.error);
+      cfg.watch = parsed.watch;
+    }
     return cfg;
   };
 
@@ -1105,6 +1160,9 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
               </label>
               {trigger === 'webhook' && (
                 <ThreadFields threadKey={threadKey} setThreadKey={setThreadKey} endActions={threadEndActions} setEndActions={setThreadEndActions} readOnly={readOnly} setReadOnly={setReadOnly} onlyOnChange={onlyOnChange} setOnlyOnChange={setOnlyOnChange} />
+              )}
+              {trigger === 'schedule' && !editScheduledAt && (
+                <WatchField value={watchText} setValue={setWatchText} />
               )}
               <label className="flex items-center gap-2 text-sm text-on-surface">
                 <input type="checkbox" checked={orchestrated} onChange={e => setOrchestrated(e.target.checked)} className="rounded" />

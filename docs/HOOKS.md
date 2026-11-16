@@ -298,8 +298,91 @@ The **Calendar tab** in the Hooks & Tasks page shows a weekly grid of scheduled 
 | `triggerConfig.cronExpression` | Cron schedule (for recurring tasks) |
 | `triggerConfig.scheduledAt` | ISO 8601 datetime (for one-time tasks) |
 | `triggerConfig.timezone` | Timezone (default: UTC) |
+| `triggerConfig.watch` | Sources whose unchanged state skips a run (see [Watch](#watch-skip-unchanged-runs)) |
 | `nextRunAt` | Computed next execution time |
 | `lastError` | Last execution error (null on success) |
+
+### A failed run tells you
+
+When a scheduled hook's action fails — an orchestrated agent turn that
+errors or is cancelled, a notify that reached no channel, a webhook that
+answered with an error — the cron runner sets `lastError` and posts a
+`schedule_failed` notification: `Scheduled task "<name>" failed`, with the
+first 280 characters of the error. A missing summary never goes unnoticed.
+The notification is in-app (and pushed to the web client); it is not sent to
+chat channels. A direct (non-orchestrated) `spawn_agent` run reports success
+when the agent starts, so its later failure is reported by the agent's own
+`agent_error` notification instead.
+
+### Watch: skip unchanged runs
+
+A recurring schedule whose action is an orchestrated `spawn_agent` turn may
+name the sources it depends on in `triggerConfig.watch` (at most 5). Before
+each scheduled run the cron runner reads them **without a model call** and
+hashes the observations, together with the hook's action config, into a
+fingerprint (`src/hooks/schedule-watch.ts`). The run is **skipped** only when
+
+1. every source was read,
+2. the fingerprint equals the one taken before the previous run, and
+3. that previous run succeeded.
+
+A skipped run starts no agent and spends no tokens; it is recorded in the
+execution log as `status: "skipped"` with `result.reason: "unchanged"`, does
+not touch `lastError`, and is not a failure. Otherwise the run goes ahead as
+before. The first run, a run after a failed or interrupted one, and a run
+after an edit of the prompt or the watch list always run.
+
+```json
+{
+  "trigger": "schedule",
+  "triggerConfig": {
+    "cronExpression": "*/30 * * * *",
+    "watch": [
+      { "kind": "url", "url": "https://status.example.com" },
+      { "kind": "file", "path": "reports/today.md" },
+      { "kind": "tasks" }
+    ]
+  },
+  "action": "spawn_agent",
+  "actionConfig": { "orchestrated": true, "agentPrompt": "Tell me what changed and what needs me." }
+}
+```
+
+| `kind` | Reads | Probe |
+|--------|-------|-------|
+| `url` (`url`) | A public HTML page: the hash of its extracted article text | The plugin host's `web:read` fetch (`src/core/web-read/fetch.ts`): SSRF-guarded, HTML only, 5 MB cap |
+| `file` (`path`) | A file (content hash up to 5 MB, else size + modification time) or a directory (its entries' names, sizes and times, not recursive, at most 1000) in the owner's workspace; a missing path is an observation | `WorkspaceFS` path resolution: relative to the workspace, nothing outside it |
+| `tasks` | The owner's personal task board: count and latest update | One database query |
+| `inbox` | The ids of recent inbox mail (the last 3 days, Gmail's bulk tabs excluded) | The heartbeat's inbox probe (`src/core/email/watch.ts`); needs the `inbox` module and a connected mailbox |
+| `github_prs` | Open pull requests by the token's user whose checks are failing | The heartbeat's GitHub probe (the server's `gh`); admins only, a DENY on `github/read` wins |
+
+In the web editor this is the **Watch** list of a recurring agent schedule:
+one source per line (`url https://…`, `file reports/today.md`, `tasks`,
+`inbox`, `github_prs`). **Run now** (the test button) always runs.
+
+**Unavailable is never unchanged.** A source that errors, times out (20 s),
+is switched off or not connected makes the run go ahead, and that run leaves
+no fingerprint to compare the next one with. The last-run state
+(`triggerConfig.watchState`: fingerprint, `running` / `success` / `failed`) is
+written only by the server; the API drops a value sent by a client.
+
+What this does not cover:
+
+- Only recurring, orchestrated `spawn_agent` schedules can watch. A reminder
+  (`notify`), a digest (`awayDigestHours`), a one-shot (`scheduledAt`), a
+  heartbeat and a direct spawn are refused by the API and, if written around
+  it, run every time anyway.
+- A skip is decided on what the probes see, not on what the agent would read:
+  a prompt that also depends on something not watched (the calendar, the
+  date, another site) misses those changes. Watch only what the run is about.
+- Pages that render their content with JavaScript, or change their text on
+  every request, read as changed (or never as changed) accordingly; there is
+  no selector. Directories are not watched recursively.
+- The inbox window slides: a message ageing out of the last 3 days changes the
+  fingerprint and causes one extra run, never a missed one.
+- No new integrations: only sources that already had a cheap, model-free
+  probe are offered (no calendar change marker exists, so there is no
+  `calendar` kind).
 
 ### Cron Expression Format
 
@@ -364,7 +447,7 @@ Every hook and recurring task execution is recorded in the `hook_executions` tab
 
 Each log entry contains:
 - **source**: `hook` or `manual_test`
-- **status**: `success`, `error`, or `skipped`
+- **status**: `success`, `error`, or `skipped` (a watched schedule whose sources did not change: `result.reason` is `unchanged`; the UI shows "skipped — unchanged")
 - **triggerType / actionType**: what fired and what ran
 - **result**: full action output (JSON)
 - **error**: error message if failed

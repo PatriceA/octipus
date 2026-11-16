@@ -1372,8 +1372,9 @@ export class AgentService {
     return {
       response: `I encountered an error processing your message: ${(error as Error).message}`,
       classification: { type: 'casual', confidence: 0 },
-      // A room turn's runner reports it to the room (`room.turn` done, failed).
-      ...(info.isRoom ? { outcome: 'failed' as const } : {}),
+      // A room turn's runner reports it to the room (`room.turn` done,
+      // failed); a scheduled hook records the run as failed (hooks/actions.ts).
+      outcome: 'failed',
     };
   }
 

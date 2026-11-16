@@ -107,7 +107,7 @@ export interface HeartbeatProbeDeps {
   boardWritesAllowed?: (hook: Hook) => Promise<boolean>;
 }
 
-async function defaultGithubAllowed(userId: string): Promise<boolean> {
+export async function defaultGithubAllowed(userId: string): Promise<boolean> {
   try {
     const { userRepository } = await import('@/db/repositories/user-repository');
     const user = await userRepository.findById(userId);
