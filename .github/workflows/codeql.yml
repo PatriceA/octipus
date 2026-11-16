@@ -5,6 +5,14 @@ on:
     branches: [main]
   push:
     branches: [main]
+    # Pushes that only touch prose or images have nothing for the JS/TS
+    # extractor to scan. docs/ also holds .mjs/.html/.py, so only file types
+    # are ignored, never the directory. pull_request is left unfiltered:
+    # CodeQL is a required check, and a skipped run would block the PR.
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.png'
+      - '**/*.svg'
   schedule:
     # Weekly, Mondays 06:17 UTC (off-peak, avoids the top-of-hour rush).
     - cron: '17 6 * * 1'
