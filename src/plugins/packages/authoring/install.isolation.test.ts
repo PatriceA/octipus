@@ -3,7 +3,7 @@
  * an agent writes a template into its workspace and installs it with
  * `plugin_install`.
  *
- * What must hold: only a directory inside the agent's own workspace is taken;
+ * What must hold: only an owned workspace or approved environment source is taken;
  * only an admin's agent installs; runtime "in-process" is refused; the
  * package is installed disabled and nothing of it runs; the audit row and the
  * package view say an agent wrote it (user and session); an agent upgrades
@@ -13,10 +13,10 @@
  * Backed by ephemeral PGlite.
  */
 import { randomBytes } from 'node:crypto';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest';
 import type { AgentContext } from '@/core/types';
 
 const rand = (n: number) => randomBytes(n).toString('hex');
@@ -32,6 +32,7 @@ const otherAdmin = '66666666-6666-4666-8666-666666666666';
 const session = '55555555-5555-4555-8555-555555555555';
 
 const ctx = (userId: string): AgentContext => ({ id: 'agent-1', userId, sessionId: '', role: 'general', status: 'running' } as unknown as AgentContext);
+afterEach(() => vi.restoreAllMocks());
 
 /** The agent's workspace root, as the filesystem tool resolves it. */
 async function workspaceOf(userId: string): Promise<string> {
@@ -168,6 +169,54 @@ describe('plugin_install', () => {
     const theirs = await writeTemplate(member, 'tool-only', 'plugins/broad-theirs');
     expect(() => workspacePackageDir(theirs, broad(admin))).toThrow(/not a directory inside your own workspace/);
     expect(() => workspacePackageDir('/etc', broad(admin))).toThrow(/not a directory inside your own workspace/);
+  });
+
+  test.each(['host', 'sandbox'] as const)('plugin sources follow explicit %s folder grants, not the session starting folder', async backend => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'plugin-approved-folders-')));
+    try {
+      const config = await import('@/config');
+      const original = config.getConfig();
+      const { workstationAutomationPreset } = await import('@/shared/execution-environment');
+      const first = join(root, 'project-a');
+      const second = join(root, 'project-b');
+      const outside = join(root, 'unapproved');
+      for (const dir of [first, second, outside]) mkdirSync(dir);
+      const profile = { ...workstationAutomationPreset(admin, 'plugin-authoring', [first, second]), backend,
+        isDefault: true, authority: 'tools' as const, pipelineAutonomy: false, hostIdentity: false };
+      vi.spyOn(config, 'getConfig').mockReturnValue({ ...original, security: { ...original.security, executionEnvironments: [profile] } });
+      const caller = { ...ctx(admin), metadata: { projectPath: first, executionEnvironmentId: profile.id } };
+      const { workspacePackageDir } = await import('@/tools/plugin-dev');
+      expect(workspacePackageDir(second, caller)).toBe(second);
+      mkdirSync(join(second, 'plugin'));
+      expect(workspacePackageDir(join(second, 'plugin'), caller)).toBe(join(second, 'plugin'));
+      expect(() => workspacePackageDir(outside, caller)).toThrow();
+      symlinkSync(outside, join(first, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
+      expect(() => workspacePackageDir(join(first, 'escape'), caller)).toThrow();
+      profile.enabled = false;
+      expect(() => workspacePackageDir(second, caller)).toThrow(/disabled/);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('broad account access still protects private data and installed plugin stores', async () => {
+    const config = await import('@/config');
+    const original = config.getConfig();
+    const { workstationAutomationPreset } = await import('@/shared/execution-environment');
+    const { workspacePackageDir } = await import('@/tools/plugin-dev');
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'plugin-account-grant-')));
+    try {
+      const profile = { ...workstationAutomationPreset(admin, 'plugin-account', [root, original.workspace.rootPath]), isDefault: true };
+      vi.spyOn(config, 'getConfig').mockReturnValue({ ...original, security: { ...original.security, executionEnvironments: [profile] } });
+      const caller = { ...ctx(admin), metadata: { executionEnvironmentId: profile.id, projectPath: root } };
+      const theirs = await writeTemplate(member, 'tool-only', 'plugins/approved-parent-theirs');
+      expect(() => workspacePackageDir(theirs, caller)).toThrow(/not a directory inside your own workspace/);
+      for (const dir of ['plugin-packages', 'plugin-data', 'plugin-downloads', 'plugin-run', 'spaces']) {
+        const path = join(original.workspace.rootPath, dir, 'example');
+        mkdirSync(path, { recursive: true });
+        expect(() => workspacePackageDir(path, caller)).toThrow();
+      }
+      expect(() => workspacePackageDir(original.workspace.rootPath, caller)).toThrow();
+      expect(() => workspacePackageDir('/etc', caller)).toThrow();
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   test('another user\'s agent may not upgrade it, and a shipped plugin\'s name is refused', async () => {

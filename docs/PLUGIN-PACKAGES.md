@@ -2674,12 +2674,14 @@ live](#where-plugins-live)).
   install the directory from the admin page or the API. (`plugin_api` says
   `youCanInstall: false` up front.) The call itself is a `write` the user
   approves, so the admin says yes to each install.
-- **A path outside the calling user's own workspaces** (resolved as the
-  filesystem tool resolves reads, then checked by real path against both the
-  agent's sandbox root and `<data root>/users/<user id>/workspaces`, so an
-  execution environment rooted at `/` or a home directory does not open other
-  users' workspaces, `/etc` or the server's files), the sandbox root itself,
-  the plugin store, a remote execution environment, and a shared space.
+- **A path outside the calling user's own workspaces and explicitly approved
+  execution-environment folders.** Paths pass the filesystem tool's read
+  checks and are checked by real path, so a package can live in a configured
+  project repository outside the session's starting folder. Broad host-account
+  access alone does not approve arbitrary plugin sources. Other users' data,
+  shared-space data, installed plugin stores and directories containing those
+  protected trees remain excluded. Remote execution environments and shared
+  spaces remain unsupported for these host-side authoring tools.
 - **`runtime: "in-process"`**, with a message saying so.
 - **A package that does not validate**, with every problem.
 - **The name of a plugin shipped with Octipus** (one of `SHIPPED_PLUGINS`,
