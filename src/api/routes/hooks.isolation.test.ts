@@ -265,3 +265,52 @@ describe('heartbeat hooks through the API', () => {
     expect(same.status).toBe(200);
   });
 });
+
+describe('watch on a scheduled hook through the API', () => {
+  const schedule = (triggerConfig: Record<string, unknown>, actionConfig: Record<string, unknown> = { orchestrated: true, agentPrompt: 'What changed?' }) => ({
+    name: 'watched', trigger: 'schedule', action: 'spawn_agent', actionConfig,
+    triggerConfig: { cronExpression: '0 * * * *', ...triggerConfig },
+  });
+
+  test('a valid list is stored; the last-run state cannot be written by the user', async () => {
+    const created = await postJson(aliceHooksApp, '/api/hooks', schedule({
+      watch: [{ kind: 'tasks' }, { kind: 'file', path: ' notes/today.md ' }],
+      watchState: { fingerprint: 'forged', outcome: 'success', at: '2099-01-01T00:00:00Z' },
+    }));
+    expect(created.status).toBe(200);
+    expect(created.body.triggerConfig.watch).toEqual([{ kind: 'tasks' }, { kind: 'file', path: 'notes/today.md' }]);
+    expect(created.body.triggerConfig.watchState).toBeUndefined();
+
+    const state = { fingerprint: 'abc', outcome: 'success', at: '2026-11-16T08:00:00.000Z' };
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(`UPDATE hooks SET trigger_config = trigger_config || '${JSON.stringify({ watchState: state })}'::jsonb WHERE id = '${created.body.id}'`);
+    const edited = await patchJson(aliceHooksApp, `/api/hooks/${created.body.id}`, {
+      triggerConfig: { cronExpression: '0 * * * *', watch: [{ kind: 'inbox' }], watchState: { fingerprint: 'other', outcome: 'success', at: '' } },
+    });
+    expect(edited.status).toBe(200);
+    expect(edited.body.triggerConfig).toEqual({ cronExpression: '0 * * * *', watch: [{ kind: 'inbox' }], watchState: state });
+
+    // Turning the run into a direct spawn while it watches is refused.
+    const direct = await patchJson(aliceHooksApp, `/api/hooks/${created.body.id}`, { actionConfig: { orchestrated: false, agentPrompt: 'x' } });
+    expect(direct.status).toBe(400);
+    expect(direct.body.error).toMatch(/remove `watch`/);
+  });
+
+  test('a hook whose stored watch is already ineligible stays editable by an action-only edit', async () => {
+    const created = await postJson(aliceHooksApp, '/api/hooks', { ...schedule({}), action: 'notify', actionConfig: { notifyOwner: true } });
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(`UPDATE hooks SET trigger_config = trigger_config || '{"watch":[{"kind":"tasks"}]}'::jsonb WHERE id = '${created.body.id}'`);
+    const edited = await patchJson(aliceHooksApp, `/api/hooks/${created.body.id}`, { actionConfig: { notifyOwner: true, notifyMessage: 'Stand-up in 5' } });
+    expect(edited.status).toBe(200);
+    // Writing triggerConfig with the ineligible watch is refused, saying to remove it.
+    const rewrite = await patchJson(aliceHooksApp, `/api/hooks/${created.body.id}`, { triggerConfig: { cronExpression: '0 * * * *', watch: [{ kind: 'tasks' }] } });
+    expect(rewrite.status).toBe(400);
+    expect(rewrite.body.error).toMatch(/remove `watch`/);
+  });
+
+  test('invalid sources, one-shots and reminders are refused', async () => {
+    expect((await postJson(aliceHooksApp, '/api/hooks', schedule({ watch: [{ kind: 'shell', cmd: 'ls' }] }))).status).toBe(400);
+    expect((await postJson(aliceHooksApp, '/api/hooks', schedule({ cronExpression: undefined, scheduledAt: '2099-01-01T09:00:00Z', watch: [{ kind: 'tasks' }] }))).status).toBe(400);
+    expect((await postJson(aliceHooksApp, '/api/hooks', { ...schedule({ watch: [{ kind: 'tasks' }] }), action: 'notify', actionConfig: { notifyOwner: true } })).status).toBe(400);
+  });
+});

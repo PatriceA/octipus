@@ -1,4 +1,5 @@
 import { boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import type { WatchSource, WatchState } from '@/shared/schedule-watch';
 import { sessions } from './sessions';
 import { users } from './users';
 
@@ -73,13 +74,13 @@ export const hooks = pgTable('hooks', {
 /**
  * trigger_config keys only the server writes (the heartbeat's own state: the
  * daily counter, the surfaced items, the permission notice, a role turn's
- * lease). User input never sets them (sanitizeTriggerConfig in
+ * lease; a watched schedule's last fingerprint). User input never sets them (sanitizeTriggerConfig in
  * core/heartbeat.ts), and HookManager.updateHook keeps the stored ones in
  * the same UPDATE, so an edit made from a stale read cannot write them back.
  */
 export const SERVER_TRIGGER_CONFIG_KEYS = [
   'heartbeatDayKey', 'heartbeatRunsToday', 'heartbeatSeen', 'heartbeatPermissionNotified',
-  'heartbeatInFlightUntil', 'heartbeatInFlightToken',
+  'heartbeatInFlightUntil', 'heartbeatInFlightToken', 'watchState',
 ] as const;
 
 export interface TriggerConfig {
@@ -90,6 +91,14 @@ export interface TriggerConfig {
   cronExpression?: string;
   timezone?: string;
   scheduledAt?: string; // ISO 8601 datetime for one-time scheduled tasks
+  /**
+   * For a recurring orchestrated agent schedule — sources read without a
+   * model before each run; an unchanged fingerprint after a successful run
+   * skips the run (src/hooks/schedule-watch.ts). `watchState` is the
+   * fingerprint taken before the last run and how that run ended; server-held.
+   */
+  watch?: WatchSource[];
+  watchState?: WatchState;
   // For webhook
   webhookPath?: string;
   webhookSecret?: string;

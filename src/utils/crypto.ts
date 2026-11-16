@@ -102,7 +102,7 @@ export function generateId(): string {
 /**
  * Hash data using SHA-256
  */
-export function sha256(data: string): string {
+export function sha256(data: string | Buffer): string {
   return createHash('sha256').update(data).digest('hex');
 }
 

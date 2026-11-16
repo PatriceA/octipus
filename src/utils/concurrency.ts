@@ -1,3 +1,22 @@
+/**
+ * `work` with a deadline: after `ms` the signal it was given aborts, so a
+ * fetch or child process it started stops, and the promise rejects with
+ * `message`. Settling first clears the timer.
+ */
+export function withDeadline<T>(work: (signal: AbortSignal) => Promise<T>, ms: number, message = 'timeout'): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    Promise.resolve().then(() => work(controller.signal)),
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort(new Error(message));
+        reject(new Error(message));
+      }, ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 /** `fn` over `items`, at most `limit` at a time; results in input order. */
 export async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);

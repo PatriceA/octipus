@@ -74,7 +74,10 @@ Those actions require an explicit user request or a separately configured
 workflow. This replaces the previous implicit General-agent mail check.
 
 Mail before the watch was enabled is excluded, as are Gmail promotions, social
-and forum categories. Only mail no agent/user has already handled is eligible.
+and forum categories. The same inbox probe (and the GitHub one) can gate a
+recurring scheduled agent run instead: a schedule with `watch: [{ "kind":
+"inbox" }]` skips its run when no new mail arrived since its last successful
+run ([Hooks](./HOOKS.md#watch-skip-unchanged-runs)). Only mail no agent/user has already handled is eligible.
 The existing mail-watch ledger records `surfaced`, not `handled`. The settings
 page's outcome history still shows actions performed by other inbox workflows.
 

@@ -599,9 +599,16 @@ async function executeSpawnAgent(
     }
 
     await closeThreadIfEnded(thread, hook);
+    // A turn that failed or was cancelled is a failed run, not a success
+    // with an error text for an answer (the cron runner tells the owner).
+    // `outcome` is passed on: a turn that ended without one (a command's
+    // answer, a refusal) is not a confirmed success, and a watched schedule
+    // never skips after it (src/core/cron-runner.ts).
+    const failed = result.outcome === 'failed' || result.outcome === 'cancelled';
     return {
-      success: true,
-      data: { agentId: result.agentId, response: result.response, orchestrated: true, ...(readOnly ? { readOnly: true } : {}), ...threadData(thread) },
+      success: !failed,
+      ...(failed ? { error: (result.response || `The agent turn ${result.outcome}`).slice(0, 1000) } : {}),
+      data: { agentId: result.agentId, response: result.response, orchestrated: true, outcome: result.outcome ?? null, ...(readOnly ? { readOnly: true } : {}), ...threadData(thread) },
     };
   }
 

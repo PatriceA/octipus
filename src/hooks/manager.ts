@@ -143,17 +143,7 @@ export class HookManager extends EventEmitter {
   ): Promise<HookExecutionResult | null> {
     const startTime = Date.now();
     const skipped = async (reason: string, detail: Record<string, unknown> = {}): Promise<null> => {
-      // One row per webhook delivery (each is an event that was dropped). A
-      // schedule or heartbeat tick repeats the same skip every interval, so
-      // it is logged only when the hook's latest row is not already that skip.
-      if (logSkips && event.type !== 'webhook' && (await this.lastSkipReason(hook.id)) === reason) return null;
-      if (logSkips) {
-        await this.logExecution({
-          hookId: hook.id, source: 'hook', status: 'skipped', triggerType: event.type, actionType: hook.action,
-          error: reason, result: { skipped: reason, ...detail }, durationMs: Date.now() - startTime,
-          triggerContext: this.sanitizeContext(context),
-        });
-      }
+      if (logSkips) await this.recordSkip(hook, event, context, reason, detail, startTime);
       return null;
     };
 
@@ -192,31 +182,14 @@ export class HookManager extends EventEmitter {
       context = gated.context;
     }
 
-    // Check cooldown (a manual test is not a real run, so it isn't throttled)
-    if (!manualTest && hook.cooldownMs && hook.lastExecutedAt) {
-      const elapsed = Date.now() - new Date(hook.lastExecutedAt).getTime();
-      if (elapsed < hook.cooldownMs) {
-        coreLogger.debug({ hookId: hook.id, cooldownRemaining: hook.cooldownMs - elapsed }, 'Hook in cooldown');
-        return skipped('cooldown', { cooldownRemainingMs: hook.cooldownMs - elapsed });
-      }
-    }
-
-    // Check max executions
-    if (!manualTest && hook.maxExecutions && hook.executionCount >= hook.maxExecutions) {
-      coreLogger.debug({ hookId: hook.id }, 'Hook max executions reached');
-      return skipped('max_executions', { executionCount: hook.executionCount, maxExecutions: hook.maxExecutions });
-    }
-
-    // A deactivated owner's hooks never fire — scheduled, heartbeat, webhook
-    // or event alike. Read at fire time: the flag can change between ticks.
-    const [owner] = await this.db
-      .select({ isActive: users.isActive })
-      .from(users)
-      .where(eq(users.id, hook.userId))
-      .limit(1);
-    if (!owner?.isActive) {
+    const declined = await this.runDeclined(hook, manualTest);
+    if (declined?.reason === 'owner_inactive') {
       coreLogger.info({ hookId: hook.id, userId: hook.userId }, 'Hook skipped: owner is deactivated');
       return null;
+    }
+    if (declined) {
+      coreLogger.debug({ hookId: hook.id, reason: declined.reason }, 'Hook not run');
+      return skipped(declined.reason, declined.detail);
     }
 
     // Reserve the run before executing: one conditional UPDATE stamps
@@ -298,6 +271,47 @@ export class HookManager extends EventEmitter {
         executionTime,
       };
     }
+  }
+
+  /**
+   * Why `hook` would not run now, before any reservation: cooldown, max
+   * executions (a manual test is not a real run, so neither applies), or a
+   * deactivated owner — whose hooks never fire, scheduled, heartbeat, webhook
+   * or event alike; read at fire time, as the flag can change between ticks.
+   * Null when it would run.
+   */
+  private async runDeclined(hook: Hook, manualTest: boolean): Promise<{ reason: string; detail?: Record<string, unknown> } | null> {
+    if (!manualTest && hook.cooldownMs && hook.lastExecutedAt) {
+      const elapsed = Date.now() - new Date(hook.lastExecutedAt).getTime();
+      if (elapsed < hook.cooldownMs) return { reason: 'cooldown', detail: { cooldownRemainingMs: hook.cooldownMs - elapsed } };
+    }
+    if (!manualTest && hook.maxExecutions && hook.executionCount >= hook.maxExecutions) {
+      return { reason: 'max_executions', detail: { executionCount: hook.executionCount, maxExecutions: hook.maxExecutions } };
+    }
+    const [owner] = await this.db
+      .select({ isActive: users.isActive })
+      .from(users)
+      .where(eq(users.id, hook.userId))
+      .limit(1);
+    if (!owner?.isActive) return { reason: 'owner_inactive' };
+    return null;
+  }
+
+  /**
+   * Why a scheduled `hook` would not fire for this event, or null: the same
+   * gates as {@link runHook} (trigger match, conditions, cooldown, max
+   * executions, owner), without reserving a run; a cooldown or max-executions
+   * skip is logged as runHook logs it. The cron runner asks before it spends
+   * probes on a watched schedule (src/core/cron-runner.ts); the run itself
+   * checks again.
+   */
+  async scheduleGate(hook: Hook, event: TriggerEvent, context: TriggerContext): Promise<string | null> {
+    if (!matchesTrigger(hook, event, context)) return 'trigger does not match';
+    if (!checkConditions(hook.conditions, context)) return 'conditions not met';
+    const declined = await this.runDeclined(hook, false);
+    // Logged like runHook's own skip (owner_inactive is not, as there).
+    if (declined && declined.reason !== 'owner_inactive') await this.recordSkip(hook, event, context, declined.reason, declined.detail ?? {}, Date.now());
+    return declined?.reason ?? null;
   }
 
   /**
@@ -406,6 +420,21 @@ export class HookManager extends EventEmitter {
     const stamp = row.lastExecutedAt ?? new Date();
     this.mirrorCounters(hook, row.executionCount, stamp);
     return stamp;
+  }
+
+  /**
+   * Log a gate's skip. One row per webhook delivery (each is an event that was
+   * dropped). A schedule or heartbeat tick repeats the same skip every
+   * interval, so it is logged only when the hook's latest row is not already
+   * that skip.
+   */
+  private async recordSkip(hook: Hook, event: TriggerEvent, context: TriggerContext, reason: string, detail: Record<string, unknown>, startTime: number): Promise<void> {
+    if (event.type !== 'webhook' && (await this.lastSkipReason(hook.id)) === reason) return;
+    await this.logExecution({
+      hookId: hook.id, source: 'hook', status: 'skipped', triggerType: event.type, actionType: hook.action,
+      error: reason, result: { skipped: reason, ...detail }, durationMs: Date.now() - startTime,
+      triggerContext: this.sanitizeContext(context),
+    });
   }
 
   /** The reason of the hook's latest execution row when it is a skip, else null. */

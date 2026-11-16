@@ -28,12 +28,12 @@ export async function detectProvider(userId: string): Promise<EmailProvider | nu
   return null;
 }
 
-async function call(token: string, base: string, method: string, path: string, body?: unknown): Promise<unknown> {
+async function call(token: string, base: string, method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<unknown> {
   const res = await fetch(`${base}${path}`, {
     method,
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(15_000),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
   });
   if (!res.ok) {
     // Log the upstream detail server-side; return a generic message so provider
@@ -46,10 +46,11 @@ async function call(token: string, base: string, method: string, path: string, b
   return res.json();
 }
 
-export async function gmailApi(userId: string, method: string, path: string, body?: unknown): Promise<unknown> {
-  return call(await requireToken(userId, 'google'), GMAIL_BASE, method, path, body);
+/** `signal` (optional) stops the request early, on top of its own 15 s timeout. */
+export async function gmailApi(userId: string, method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<unknown> {
+  return call(await requireToken(userId, 'google'), GMAIL_BASE, method, path, body, signal);
 }
 
-export async function graphApi(userId: string, method: string, path: string, body?: unknown): Promise<unknown> {
-  return call(await requireToken(userId, 'microsoft'), GRAPH_BASE, method, path, body);
+export async function graphApi(userId: string, method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<unknown> {
+  return call(await requireToken(userId, 'microsoft'), GRAPH_BASE, method, path, body, signal);
 }
