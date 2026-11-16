@@ -3,7 +3,9 @@ import { apiContext } from '@/api/context';
 import {
   approveProposal,
   listPendingProposals,
+  ProposalRefusedError,
   rejectProposal,
+  withPatchContext,
 } from '@/services/skill-proposal-service';
 import { coreLogger } from '@/utils/logger';
 
@@ -21,7 +23,7 @@ export const skillProposalRoutes = new Elysia({ prefix: '/skills/proposals' })
   .use(apiContext)
   .get('/', async ({ user, set }) => {
     try {
-      return { proposals: await listPendingProposals(ownerFilter(user)) };
+      return { proposals: await withPatchContext(await listPendingProposals(ownerFilter(user))) };
     } catch (err) {
       set.status = 500;
       return { error: (err as Error).message };
@@ -33,6 +35,7 @@ export const skillProposalRoutes = new Elysia({ prefix: '/skills/proposals' })
         userId: ownerFilter(user),
         name: body?.name,
         systemPrompt: body?.systemPrompt,
+        actorId: user?.id,
       });
       if (!result) { set.status = 404; return { error: 'proposal not found or not pending' }; }
       // `skill` is the key this route has always returned for a skill, and an
@@ -47,6 +50,12 @@ export const skillProposalRoutes = new Elysia({ prefix: '/skills/proposals' })
         skill: result.record,
       };
     } catch (err) {
+      // Stale, locked or otherwise inapplicable: the proposal stays pending
+      // and the caller is told why (docs/SESSION-LEARNING.md).
+      if (err instanceof ProposalRefusedError) {
+        set.status = err.code === 'override' ? 400 : 409;
+        return { error: err.message, code: err.code };
+      }
       coreLogger.error({ err }, 'Skill proposal approve failed');
       set.status = 500;
       return { error: (err as Error).message };

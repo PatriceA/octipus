@@ -76,6 +76,16 @@ describe('/proposals', () => {
     expect(rejectSpy).not.toHaveBeenCalled();
   });
 
+  test('a patch is listed as old → new, and a stale approval says why it was not applied', async () => {
+    listSpy.mockResolvedValue([{ ...proposal('p-3', 'deploy-service'), kind: 'patch', description: 'Push failed', patchOldText: '2. Push it.', patchNewText: '2. Push it with --tag.' }]);
+    const list = (await registry.execute('/proposals', ctx))!.text;
+    expect(list).toContain('1. deploy-service (patch) — Push failed');
+    expect(list).toContain('replace "2. Push it."');
+    expect(list).toContain('with    "2. Push it with --tag."');
+    approveSpy.mockRejectedValue(new service.ProposalRefusedError('stale', 'The skill changed after this patch was proposed'));
+    expect((await registry.execute('/proposals approve 1', ctx))!.text).toBe('Not applied: The skill changed after this patch was proposed');
+  });
+
   test('every caller, admins included, is scoped to their own proposals', async () => {
     await registry.execute('/proposals', ctx);
     expect(listSpy).toHaveBeenCalledWith(uuid);

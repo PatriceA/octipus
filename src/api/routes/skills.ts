@@ -9,7 +9,8 @@ import { hiddenSkillRepository } from '@/db/repositories/hidden-skill-repository
 import { skillSelections } from '@/db/schema/skill-selections';
 import { isExternalSkillId } from '@/skills/external-loader';
 import { getSkillRegistry } from '@/skills/registry';
-import { updateSkill, SkillUpdateError } from '@/skills/update';
+import { recordSkillUsage } from '@/skills/usage-tracker';
+import { isInPersonWrite, updateSkill, SkillUpdateError } from '@/skills/update';
 import { getSkillModes } from '@/skills/selection';
 import { skillSelectionRepository } from '@/db/repositories/skill-selection-repository';
 import { scopedRepos } from '@/db/repositories/scoped';
@@ -157,10 +158,12 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
 
   .post(
     '/import',
-    async ({ user, principal, body, set }) => {
+    async ({ user, principal, session, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
 
       const db = getDb();
+      // Only the owner importing in person locks a skill (docs/SESSION-LEARNING.md#the-owner-edit-lock).
+      const inPerson = isInPersonWrite(principal, session);
       const admin = isAdmin(principal);
       const overwrite = body.overwrite ?? false;
       let incoming: PortableSkill[] = [];
@@ -224,6 +227,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
             bestPractices: portable.bestPractices ?? existing.bestPractices,
             antiPatterns: portable.antiPatterns ?? existing.antiPatterns,
             frameworks: portable.frameworks ?? existing.frameworks,
+            ...(inPerson && owns(existing) ? { ownerEditedAt: new Date() } : {}),
           };
 
           await skillRepository.update(existing.id, updateData);
@@ -245,6 +249,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
           frameworks: portable.frameworks ?? [],
           isSystem: false,
           userId: user.id === 'system' ? null : user.id,
+          ownerEditedAt: inPerson ? new Date() : null,
         });
         createdIds.push(id);
       }
@@ -314,6 +319,9 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
     async ({ user, params, set }) => {
       const skill = await getSkillRegistry().get(params.id, user?.id);
       if (!skill || (!user && !skill.isSystem)) { set.status = 404; return { error: 'Skill not found' }; }
+      // The MCP server's get_skill loads a body through here (CLI agents);
+      // the web Skills page lists skills and never reads one by id.
+      if (!isExternalSkillId(skill.id)) recordSkillUsage([skill.id]);
       return skill;
     },
     {
@@ -324,7 +332,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
 
   .post(
     '/',
-    async ({ user, body }) => {
+    async ({ user, principal, session, body }) => {
       if (!user) return { error: 'Not authenticated' };
 
       const db = getDb();
@@ -340,6 +348,8 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
         frameworks: body.frameworks ?? [],
         isSystem: false,
         userId: user.id === 'system' ? null : user.id,
+        // Created in person: the owner's own skill, locked against learning patches.
+        ownerEditedAt: isInPersonWrite(principal, session) ? new Date() : null,
       }).returning();
 
       return created;
@@ -362,10 +372,13 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
 
   .patch(
     '/:id',
-    async ({ user, params, body, set }) => {
+    async ({ user, principal, session, params, body, set }) => {
       if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        return await updateSkill(params.id, body, user.id);
+        // The owner editing in person (web/mobile login, not an API token,
+        // the MCP bridge or an impersonating admin) locks the skill against
+        // learning patches (docs/SESSION-LEARNING.md#the-owner-edit-lock).
+        return await updateSkill(params.id, body, user.id, { inPerson: isInPersonWrite(principal, session) });
       } catch (error) {
         if (!(error instanceof SkillUpdateError)) throw error;
         set.status = error.status;

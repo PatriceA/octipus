@@ -16,6 +16,15 @@ test.describe('skills pages', () => {
     await expect(page.locator('body')).toContainText(/auto-test|auto-docs|proposals/i, { timeout: 10_000 });
   });
 
+  test('a patch proposal shows its old → new passage', async ({ authenticatedPage: page }) => {
+    await page.goto('/skills/proposals');
+    await expect(page.locator('body')).toContainText('→ patch', { timeout: 10_000 });
+    await expect(page.locator('body')).toContainText('-2. Push it.');
+    await expect(page.locator('body')).toContainText('+2. Push it with --tag.');
+    // In context: the unchanged line around the passage is shown too.
+    await expect(page.locator('body')).toContainText('1. Build.');
+  });
+
   test('approving a proposal hits the approve endpoint', async ({ authenticatedPage: page }) => {
     let approveCalled = false;
     await page.route('**/api/skills/proposals/*/approve**', (route) => {
