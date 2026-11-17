@@ -775,7 +775,7 @@ export async function collectorRepositories(grant: HostTokenGrant, principal: Pr
     if (!policy.roots.some(p => pathInEnvironment(p, root))) return { ok: false, status: 403, code: 'repo_not_approved', error: 'The selected folder is not approved for this plugin.' };
     if (policy.level > grant.maxProtection) return { ok: false, status: 403, code: 'protection_level', error: 'This plugin cannot read evidence at the configured protection level.' };
     const { setupRepositories } = await import('./setup-repositories');
-    const value = await setupRepositories(caller, parsed.data.environmentId, root, parsed.data.repository);
+    const value = await setupRepositories(caller, parsed.data.environmentId, root, parsed.data.repository, policy.roots);
     await noteHostRead(grant, policy.level);
     return { ok: true, value };
   } catch (error) {

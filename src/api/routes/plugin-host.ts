@@ -318,13 +318,14 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
   .use(apiContext)
 
   .get('/connections', (ctx) => run(ctx, 'connections.options', 'connections:read', async ({ grant, principal }) => {
+    if (principal.workspaceKind === 'shared' || (grant.readLevel ?? 1) > 1) { ctx.set.status = 403; return { error: 'Connections require a personal workspace at protection level 1', code: 'connection_context' }; }
     const { findRow } = await import('@/plugins/packages/service');
     const { readAvailableConnectionProfiles } = await import('@/security/credential-connections');
     const row = await findRow(grant.plugin);
     let grants: unknown;
     try { grants = JSON.parse(String(row?.settings.connection_grants ?? '{}')); } catch { ctx.set.status = 409; return { error: 'Review the plugin’s connection access in setup.' }; }
     if (!grants || typeof grants !== 'object' || Array.isArray(grants)) { ctx.set.status = 409; return { error: 'Review the plugin’s connection access in setup.' }; }
-    const connections = await readAvailableConnectionProfiles({ userId: grant.userId, workspaceId: principal.workspaceId, ...(principal.workspaceKind === 'shared' ? { space: true } : {}) });
+    const connections = await readAvailableConnectionProfiles({ userId: grant.userId, workspaceId: principal.workspaceId });
     return { connections: connections.filter(c => c.http && Object.hasOwn(grants, c.id)).map(c => ({ id: c.id, origin: c.http!.origin, pathPrefix: c.http!.pathPrefix, paths: (grants as Record<string, unknown>)[c.id] })) };
   }), { detail: { tags: ['plugin-host'] } })
 

@@ -1,5 +1,5 @@
 import { beforeEach, expect, test, vi } from 'vitest';
-const state = vi.hoisted(() => ({ environments: [{ id: 'env', name: 'Workstation', enabled: true, backend: 'host', userId: 'owner', workspaceId: null, roots: ['/projects'] }], connections: [{ id: 'tracker', userId: 'owner', workspaceId: null, credential: 'vault-ref', http: { origin: 'https://example.com', pathPrefix: '/api', git: false }, stdio: [] }] }));
+const state = vi.hoisted(() => ({ environments: [{ id: 'env', name: 'Workstation', enabled: true, backend: 'host', userId: 'owner', workspaceId: null, roots: ['/projects'], pathDirectories: [] }], connections: [{ id: 'tracker', userId: 'owner', workspaceId: null, credential: 'vault-ref', http: { origin: 'https://example.com', pathPrefix: '/api', git: false }, stdio: [] }] }));
 vi.mock('@/security/execution-environments', async original => ({ ...await original<typeof import('@/security/execution-environments')>(), configuredExecutionEnvironments: () => state.environments }));
 vi.mock('@/security/credential-connections', async original => ({ ...await original<typeof import('@/security/credential-connections')>(), readAvailableConnectionProfiles: async () => state.connections }));
 import { parseManifest } from './manifest';
@@ -38,7 +38,7 @@ test('Git origin discovery never exposes username, password or URL query credent
 });
 
 test('repository discovery enforces per-path denials and refuses metadata outside approved roots', async () => {
- const { mkdtempSync, mkdirSync, rmSync } = await import('node:fs');
+ const { mkdtempSync, mkdirSync, rmSync, symlinkSync } = await import('node:fs');
  const { tmpdir } = await import('node:os');
  const { join } = await import('node:path');
  const { execFileSync } = await import('node:child_process');
@@ -56,6 +56,11 @@ test('repository discovery enforces per-path denials and refuses metadata outsid
    expect(found).toMatchObject({ repositories: [{ name: 'service' }], hidden: 1 });
    await expect(setupRepositories({ userId: 'owner' }, 'env', root, hidden)).rejects.toThrow(/deny/);
    await expect(setupRepositories({ userId: 'owner' }, 'env', root, outside)).rejects.toThrow(/outside/);
+   const externalGit = join(outside, 'metadata'); git(outside, 'init', '-q', '--bare', externalGit);
+   const linked = join(root, 'linked'); mkdirSync(linked); symlinkSync(externalGit, join(linked, '.git'));
+   await expect(setupRepositories({ userId: 'owner' }, 'env', root, linked)).rejects.toThrow(/metadata/);
+   state.environments[0].roots = [root, outside];
+   await expect(setupRepositories({ userId: 'owner' }, 'env', root, linked, [root])).rejects.toThrow(/metadata/);
    check.mockRestore();
  } finally { state.environments[0].roots = ['/projects']; rmSync(root, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }); }
 });
