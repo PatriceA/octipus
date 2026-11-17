@@ -7,6 +7,14 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Accepted for one week: picomatch ReDoS (GHSA-fc5q-39xc-vjpf).** No fixed
+  `picomatch` release exists yet (4.0.7 is the latest and affected). It is
+  reached only through build and test tooling (vitest, vite, ESLint); the
+  served backend and web app do not run it. The dependency audit accepts it
+  until 2026-11-24 and fails again after that, so it is revisited. The audit
+  exceptions can now accept a hoisted package by naming everything that pulls
+  it in ([scripts/audit-allowlist.README.md](scripts/audit-allowlist.README.md)).
+
 - **Fixed: CLI runs on a host-identity environment no longer lose characters
   from their output.** Inherited variables with a credential-like name but a
   short value (a flag set to `1`, a token count) were masked everywhere in the
