@@ -15,10 +15,15 @@ runs:
         # Ubuntu-domain DNS can fail across both Azure and the main archive.
         # Probe a separately hosted mirror too; apt still verifies Ubuntu's
         # signatures with the existing Signed-By keys, suites and components.
+        # A single short connection timeout is not evidence of an unavailable
+        # mirror: runner networking can still be settling after allocation.
+        # Retry transient transport errors within a bounded setup window.
         for candidate in https://archive.ubuntu.com/ubuntu https://mirrors.edge.kernel.org/ubuntu; do
-          if curl --fail --silent --show-error --head --connect-timeout 4 --max-time 12 \
+          if curl --fail --silent --show-error --head --connect-timeout 8 --max-time 15 \
+              --retry 2 --retry-all-errors --retry-delay 2 --retry-max-time 35 \
               "$candidate/dists/$VERSION_CODENAME/InRelease" >/dev/null \
-            && curl --fail --silent --show-error --head --connect-timeout 4 --max-time 12 \
+            && curl --fail --silent --show-error --head --connect-timeout 8 --max-time 15 \
+              --retry 2 --retry-all-errors --retry-delay 2 --retry-max-time 35 \
               "$candidate/dists/$VERSION_CODENAME-security/InRelease" >/dev/null; then
             mirror="$candidate"
             break
