@@ -7,6 +7,18 @@ import { CLIArgumentBuilder, CLIOutputParser, disposeMuseHome, museAllowance, mu
 import { describeCliCapabilities } from '@/shared/cli-capabilities';
 import { museCliConfig, parseMuseJsonl } from './cli-provider';
 
+// The move-back failure case needs a rename that fails for any user: a
+// read-only directory does not stop root, which CI containers run as.
+const failRename = vi.hoisted(() => ({ on: false }));
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>();
+  const renameSync: typeof actual.renameSync = (from, to) => {
+    if (failRename.on) throw Object.assign(new Error(`EACCES: permission denied, rename '${String(from)}'`), { code: 'EACCES' });
+    return actual.renameSync(from, to);
+  };
+  return { ...actual, default: { ...actual, renameSync }, renameSync };
+});
+
 // Trimmed from live `muse exec --json` runs (Muse Code 1.4.18, 2026-11-13).
 // Envelope fields other than payload_type/payload are dropped; ids shortened.
 const jsonl = (events: object[]) => events.map(e => JSON.stringify(e)).join('\n') + '\n';
@@ -354,12 +366,13 @@ describe.skipIf(process.platform === 'win32')('prepareMuseHome / disposeMuseHome
     // The move-back fails (config dir not writable): the run dir, holding the only refreshed copy, stays.
     const c = await prepareMuseHome({ workspace: temp('ws-'), tools: [], env: { HOME: home, PATH: process.env.PATH } });
     refresh(c, 'only-copy');
-    chmodSync(realDir, 0o500);
+    failRename.on = true;
     try {
       disposeMuseHome(c, { HOME: home });
     } finally {
-      chmodSync(realDir, 0o700);
+      failRename.on = false;
     }
+    expect(readFileSync(join(realDir, 'auth.json'), 'utf8')).toBe('newer-elsewhere!');
     expect(readFileSync(join(c, 'muse', 'auth.json'), 'utf8')).toBe('only-copy');
     dirs.push(c);
   });
