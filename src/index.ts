@@ -526,11 +526,11 @@ async function main() {
     // Handle graceful shutdown. Idempotent: SIGTERM immediately followed by
     // SIGINT (or a double Ctrl-C) must not run the teardown twice.
     let shuttingDown = false;
-    const shutdown = async () => {
+    const shutdown = async (signal = 'requested') => {
       stopDeferredPipelineWakeups();
       if (shuttingDown) return;
       shuttingDown = true;
-      logger.info('Shutting down...');
+      logger.info({ signal }, 'Shutting down...');
 
       // Watchdog: the teardown below is a chain of un-timed awaits (gateway,
       // MCP bridge, channel sockets). If any one never resolves — a Slack
@@ -666,8 +666,8 @@ async function main() {
       process.exit(0);
     };
 
-    process.on('SIGTERM', shutdown);
-    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
 
     // Last-resort guards: a stray rejection/exception from any channel, tool, or
     // background task must NOT silently wedge or kill the process — there is no

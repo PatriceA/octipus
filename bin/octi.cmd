@@ -125,10 +125,10 @@ exit /b 0
 :: ─── Helpers ────────────────────────────────────────────────────────────────
 
 :kill_port
-:: Kill all processes listening on a given port
+:: Kill only this checkout's processes listening on a given port
 :: Usage: call :kill_port 3005
 set "_PORT=%~1"
-powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort %_PORT% -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort %_PORT% -ErrorAction SilentlyContinue | ForEach-Object { $owner = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $_.OwningProcess) -ErrorAction SilentlyContinue; if ($owner.CommandLine -and $owner.CommandLine.IndexOf(($env:PROJECT_DIR + [IO.Path]::DirectorySeparatorChar), [StringComparison]::OrdinalIgnoreCase) -ge 0) { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue } }" >nul 2>&1
 exit /b 0
 
 :check_port

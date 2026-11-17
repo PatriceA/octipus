@@ -322,7 +322,15 @@ if [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]] || [[ "$(uname 
   IS_WINDOWS=true
 fi
 
-# Kill any process using a given port
+# A port is not proof of ownership: test checkouts and other applications may
+# share these settings. Only clean up a listener whose command names this copy.
+is_project_process() {
+  local args
+  args=$(ps -p "$1" -o args= 2>/dev/null || true)
+  [[ "$args" == *"$PROJECT_DIR/"* ]]
+}
+
+# Kill this checkout's processes using a given port.
 kill_port_users() {
   local port="$1"
 
@@ -332,6 +340,7 @@ kill_port_users() {
     pids=$(netstat -ano 2>/dev/null | grep ":${port} " | grep "LISTENING" | awk '{print $NF}' | sort -u || true)
     for pid in $pids; do
       if [[ -n "$pid" && "$pid" != "0" ]]; then
+        is_project_process "$pid" || continue
         taskkill //F //PID "$pid" >/dev/null 2>&1 || true
       fi
     done
@@ -352,14 +361,35 @@ kill_port_users() {
     fi
     if [[ -n "$pids" ]]; then
       for pid in $pids; do
+        is_project_process "$pid" || continue
         kill "$pid" 2>/dev/null || true
       done
       sleep 0.5
       for pid in $pids; do
+        is_project_process "$pid" || continue
         kill -9 "$pid" 2>/dev/null || true
       done
     fi
   fi
+}
+
+# Start services in their own process session. nohup only ignores SIGHUP; an
+# agent runner cleaning up its command's process group can still kill them.
+start_detached() {
+  local pid_file="$1" log_file="$2"
+  shift 2
+  node -e '
+    const { spawn } = require("node:child_process");
+    const { openSync, closeSync, writeFileSync } = require("node:fs");
+    const [pidFile, log, ...command] = process.argv.slice(1);
+    const fd = openSync(log, "a");
+    const child = spawn(command[0], command.slice(1), {
+      detached: true, stdio: ["ignore", fd, fd], env: process.env,
+    });
+    closeSync(fd);
+    child.once("error", error => { console.error(error.message); process.exitCode = 1; });
+    child.once("spawn", () => { writeFileSync(pidFile, String(child.pid) + "\n"); child.unref(); });
+  ' "$pid_file" "$log_file" "$@"
 }
 
 # Kill a tracked process and its children
@@ -420,10 +450,10 @@ kill_all_octipus() {
         taskkill //F //PID "$pid" //T >/dev/null 2>&1 || true
       fi
     done
-    # Also kill any node processes for the web UI (next.js)
+    # Also match development servers, but never another checkout's app.
     local node_pids
     node_pids=$(WMIC process where "name='node.exe'" get ProcessId,CommandLine 2>/dev/null \
-      | grep -i "next" | awk '{print $NF}' || true)
+      | grep -i "$(echo "$PROJECT_DIR" | tr '/' '\\')" | grep -i "next" | awk '{print $NF}' || true)
     for pid in $node_pids; do
       if [[ -n "$pid" && "$pid" != "0" ]]; then
         taskkill //F //PID "$pid" //T >/dev/null 2>&1 || true
@@ -438,7 +468,7 @@ kill_all_octipus() {
     pkill -f "node.*${PROJECT_DIR}/scripts/supervisor.mjs" 2>/dev/null || true
     pkill -f "node.*${PROJECT_DIR}/dist/index.js" 2>/dev/null || true
     pkill -f "node.*${PROJECT_DIR}/.last-good-build/index.js" 2>/dev/null || true
-    pkill -f "tsx.*src/index.ts" 2>/dev/null || true
+    pkill -f "tsx.*${PROJECT_DIR}/src/index.ts" 2>/dev/null || true
     pkill -f "node.*${PROJECT_DIR}/web/serve.mjs" 2>/dev/null || true
   fi
 
@@ -722,7 +752,8 @@ start_backend() {
   if [[ $root_deps -eq 1 ]]; then log_warn "Starting anyway — a dependency the backend needs may be missing"; fi
   if [[ "$LAUNCH_DEV" == true ]]; then
     log_step "Starting backend (dev mode with hot reload)..."
-    nohup npm run dev > "$LOG_FILE" 2>&1 &
+    : > "$LOG_FILE"
+    start_detached "$PID_FILE_BACKEND" "$LOG_FILE" npm run dev
   else
     # A failed build is not the end: the supervisor falls back to the last
     # build that ran, or to recovery mode, so the machine stays reachable.
@@ -736,10 +767,10 @@ start_backend() {
     # node_modules/.bin first on PATH, as npm puts it, for anything the
     # backend spawns by name.
     rm -f "$SUPERVISOR_STATE_FILE"
+    : > "$LOG_FILE"
     OCTIPUS_STATE_DIR="$STATE_DIR" PATH="$PROJECT_DIR/node_modules/.bin:$PATH" \
-      nohup node "$PROJECT_DIR/scripts/supervisor.mjs" > "$LOG_FILE" 2>&1 &
+      start_detached "$PID_FILE_BACKEND" "$LOG_FILE" node "$PROJECT_DIR/scripts/supervisor.mjs"
   fi
-  echo $! > "$PID_FILE_BACKEND"
 
   log_step "Waiting for backend to be ready..."
   if [[ "$LAUNCH_DEV" == true ]]; then
@@ -830,12 +861,11 @@ start_web() {
     log_step "Starting web UI..."
     # `node serve.mjs` is what `npm run start` ran; see start_backend for why
     # without npm.
-    PATH="$PROJECT_DIR/web/node_modules/.bin:$PATH" nohup node "$PROJECT_DIR/web/serve.mjs" >> "$WEB_LOG_FILE" 2>&1 &
+    PATH="$PROJECT_DIR/web/node_modules/.bin:$PATH" start_detached "$PID_FILE_WEB" "$WEB_LOG_FILE" node "$PROJECT_DIR/web/serve.mjs"
   else
     log_step "Starting web UI (dev mode)..."
-    nohup npm run dev >> "$WEB_LOG_FILE" 2>&1 &
+    start_detached "$PID_FILE_WEB" "$WEB_LOG_FILE" npm run dev
   fi
-  echo $! > "$PID_FILE_WEB"
 
   if wait_for_health "http://localhost:$WEB_PORT/" 15 "$(get_pid "$PID_FILE_WEB")"; then
     log_info "Web UI is ready on port $WEB_PORT"

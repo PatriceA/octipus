@@ -10,13 +10,14 @@
  * destructive paths (PID files, log files) cannot touch a real install. Only
  * the commands that do NOT start processes are exercised.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 const BIN_DIR = dirname(fileURLToPath(import.meta.url));
 const BIN_BASH = join(BIN_DIR, 'octi');
@@ -25,7 +26,7 @@ function runBash(args: string[], env: Record<string, string | undefined> = {}): 
   const home = mkdtempSync(join(tmpdir(), 'octi-cli-test-'));
   try {
     const stdout = execFileSync('bash', [BIN_BASH, ...args], {
-      env: { ...process.env, HOME: home, NO_COLOR: '1', ...env },
+      env: { ...process.env, API_PORT: '1', WEB_PORT: '2', OCTIPUS_INSIDE_PID: '', HOME: home, NO_COLOR: '1', ...env },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -192,6 +193,29 @@ describe('octi recovery', () => {
 });
 
 describe('octi stop/restart from inside the backend', () => {
+  test.skipIf(process.platform === 'win32')('started services survive cleanup of the launching process group', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'octi-detached-'));
+    const pidFile = join(root, 'service.pid');
+    const portFile = join(root, 'service.port');
+    const entry = join(root, 'server.cjs');
+    writeFileSync(entry, `require('node:http').createServer((_,res)=>res.end('alive')).listen(0,'127.0.0.1',function(){require('node:fs').writeFileSync(process.argv[2],String(this.address().port))});`);
+    const helper = readFileSync(BIN_BASH, 'utf8').match(/^start_detached\(\) \{[\s\S]*?^\}/m)![0];
+    const launcher = spawn('bash', ['-c', `${helper}\nstart_detached "$1" "$2" "$3" "$4" "$5"\nsleep 30`, '--', pidFile, join(root, 'service.log'), process.execPath, entry, portFile], { detached: true, stdio: 'ignore' });
+    let pid: number | undefined;
+    try {
+      await vi.waitFor(() => expect(existsSync(portFile) && existsSync(pidFile)).toBe(true));
+      pid = Number(readFileSync(pidFile, 'utf8'));
+      const exited = once(launcher, 'exit');
+      process.kill(-launcher.pid!, 'SIGTERM');
+      await exited;
+      const response = await fetch(`http://127.0.0.1:${readFileSync(portFile, 'utf8')}/`);
+      expect(await response.text()).toBe('alive');
+    } finally {
+      if (launcher.exitCode === null && launcher.signalCode === null) launcher.kill();
+      if (pid) { try { process.kill(pid); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; } }
+    }
+  });
+
   test('hands off to a detached copy, which does the work instead of handing off again', async () => {
     // An isolated checkout and HOME, and ports nothing listens on: the
     // detached `stop` only ever touches this temp install.
@@ -199,7 +223,7 @@ describe('octi stop/restart from inside the backend', () => {
     const home = mkdtempSync(join(tmpdir(), 'octi-cli-test-'));
     // OCTI_HANDED_OFF is what an earlier hand-off used to leave in the
     // environment of the backend it started; it must not stop this one.
-    const env = { ...process.env, HOME: home, NO_COLOR: '1', OCTIPUS_INSIDE_PID: String(process.pid), OCTI_HANDED_OFF: '1' };
+    const env = { ...process.env, API_PORT: '1', WEB_PORT: '2', HOME: home, NO_COLOR: '1', OCTIPUS_INSIDE_PID: String(process.pid), OCTI_HANDED_OFF: '1' };
     const out = plain(execFileSync('bash', [script, 'stop'], { env, encoding: 'utf8', cwd: root }));
     expect(out).toContain("'stop' handed off to a detached process");
 
@@ -213,5 +237,23 @@ describe('octi stop/restart from inside the backend', () => {
     }
     expect(text).toContain('No Octipus processes were running');
     expect(text).not.toContain('handed off');
+  }, 30_000);
+
+  test('a stop in an isolated checkout cannot kill an unrelated listener on inherited ports', async () => {
+    const { root, script } = isolatedBashProject('API_PORT=1\nWEB_PORT=2\n');
+    const home = mkdtempSync(join(tmpdir(), 'octi-port-owner-'));
+    const child = spawn(process.execPath, ['-e', `require('node:http').createServer((_,res)=>res.end('unrelated')).listen(0,'127.0.0.1',function(){console.log(this.address().port)});`], { stdio: ['ignore', 'pipe', 'ignore'] });
+    try {
+      const [data] = await once(child.stdout!, 'data');
+      const port = String(data).trim();
+      execFileSync('bash', [script, 'stop'], {
+        env: { ...process.env, HOME: home, API_PORT: port, WEB_PORT: port, OCTIPUS_INSIDE_PID: '' },
+        cwd: root, stdio: 'pipe', timeout: 20_000,
+      });
+      const response = await fetch(`http://127.0.0.1:${port}/`);
+      expect(await response.text()).toBe('unrelated');
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) { const exited = once(child, 'exit'); child.kill(); await exited; }
+    }
   }, 30_000);
 });
