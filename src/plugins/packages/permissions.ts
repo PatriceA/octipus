@@ -105,6 +105,7 @@ export function computePermissions(manifest: PluginManifest, files: PermissionFi
       .sort((a, b) => byCodeUnit(a.id, b.id)),
     trustedInput: manifest.model?.trustedInput === true,
     maxProtection: defaultMaxProtection(manifest),
+    ...(manifest.companions?.length ? { companions: [...manifest.companions].sort((a, b) => byCodeUnit(a.id, b.id)) } : {}),
   };
 }
 

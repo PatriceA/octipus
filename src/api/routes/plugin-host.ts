@@ -30,6 +30,8 @@ import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { contentRepos } from '@/db/repositories/content';
 import { users } from '@/db/schema/users';
+import { pluginPackages } from '@/db/schema/plugin-packages';
+import { pluginConnectionGet } from '@/plugins/packages/host-connections';
 import { type HostTokenGrant, noteHostRead, verifyHostToken } from '@/plugins/packages/host-api';
 import { readLevelOf } from '@/plugins/packages/read-level';
 import { STORE_AUDIT_WINDOW_MS, storeAuditAggregator } from '@/plugins/packages/store-audit';
@@ -314,6 +316,22 @@ const noteView = (n: { id: string; slug: string; title: string; body: string; ta
 
 export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
   .use(apiContext)
+
+  .post('/connections/get', (ctx) => run(ctx, 'connections.get', 'connections:read', async ({ grant, principal }, details) => {
+    if (principal.workspaceKind === 'shared' || (grant.readLevel ?? 1) > 1) {
+      ctx.set.status = 403;
+      details.code = 'connection_context';
+      return { error: 'Connections require a personal workspace at protection level 1', code: 'connection_context' };
+    }
+    const [row] = await getDb().select({ settings: pluginPackages.settings }).from(pluginPackages)
+      .where(eq(pluginPackages.name, grant.plugin)).limit(1);
+    const out = await pluginConnectionGet({ userId: grant.userId, workspaceId: grant.workspaceId }, row?.settings ?? {}, ctx.body);
+    if ('error' in out) { ctx.set.status = out.status; details.code = out.code; }
+    return out;
+  }), {
+    body: t.Object({ connection: t.String({ minLength: 1, maxLength: 80 }), path: t.String({ minLength: 1, maxLength: 2000 }), expectedOrigin: t.Optional(t.String({ maxLength: 300 })) }, { additionalProperties: false }),
+    detail: { tags: ['plugin-host'] },
+  })
 
   // What this call's token may do.
   .get('/whoami', (ctx) => run(ctx, 'whoami', null, async ({ grant, principal }) => ({
@@ -803,6 +821,7 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
 
 /** Exported for the catalog and tests: the endpoints and the scope each needs. */
 export const PLUGIN_HOST_ENDPOINTS: ReadonlyArray<{ method: string; path: string; scope: PluginHostScope | null }> = [
+  { method: 'POST', path: '/api/plugin-host/connections/get', scope: 'connections:read' },
   { method: 'GET', path: '/api/plugin-host/whoami', scope: null },
   { method: 'GET', path: '/api/plugin-host/notes', scope: 'notes:read' },
   { method: 'POST', path: '/api/plugin-host/notes', scope: 'notes:write' },

@@ -31,7 +31,6 @@ import { getDb } from '@/db/postgres';
 import { pluginPackages } from '@/db/schema/plugin-packages';
 import { getMCPBridge, PLUGIN_SERVER_PREFIX } from '@/mcp/bridge';
 import type { PluginDashboardDecl, PluginDashboardLink, PluginDashboardView, PluginManifest, PluginPageLink } from '@/shared/plugin-package';
-import { publicLinkBase } from '@/core/public-url';
 import { isTrustedProxy } from '@/security/client-ip';
 import { coreLogger } from '@/utils/logger';
 import { CONTENT_MISMATCH_PROBLEM, hashPackageContent } from './integrity';
@@ -125,20 +124,13 @@ const HOST_RE = /^[A-Za-z0-9.-]+(:\d{1,5})?$|^\[[0-9A-Fa-f:.]+\](:\d{1,5})?$/;
 
 /**
  * The absolute base URL of a package's UI directory, the only source its CSP
- * allows: from the configured public URL (`oauth.publicUrl` / `PUBLIC_URL`)
- * when there is one; otherwise the address the request came in on, where
- * `X-Forwarded-Host` / `-Proto` count only from a trusted proxy
- * (`security.trustedProxies`). Null when the host does not look like one.
+ * allows: the address serving this document, where forwarded host/protocol
+ * count only from a trusted proxy. A configured public URL must not replace
+ * this origin: local/desktop clients load relative assets from their own URL.
+ * Null when the host does not look like one.
  */
-export function uiBaseUrl(request: Request, name: string, socketAddress?: string, publicBase = publicLinkBase()): string | null {
+export function uiBaseUrl(request: Request, name: string, socketAddress?: string): string | null {
   const path = `${PLUGIN_UI_PREFIX}/${encodeURIComponent(name)}/`;
-  if (publicBase) {
-    try {
-      const pub = new URL(publicBase);
-      if ((pub.protocol === 'https:' || pub.protocol === 'http:') && HOST_RE.test(pub.host)) return `${pub.protocol}//${pub.host}${path}`;
-    } catch { /* not a URL: fall through to the request */ }
-    return null;
-  }
   const url = new URL(request.url);
   const trusted = socketAddress !== undefined && isTrustedProxy(socketAddress);
   const fwdHost = trusted ? request.headers.get('x-forwarded-host')?.split(',')[0]?.trim() : undefined;

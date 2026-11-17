@@ -31,6 +31,7 @@ export const HOST_SCOPE_WORDS: Record<string, string> = {
   'mail:draft': 'Saves mail drafts (never sends them)',
   'mail:send': 'Sends mail as you',
   'calendar:read': 'Reads your calendar',
+  'connections:read': 'Reads exact API paths from admin-approved named connections; credentials stay in the trusted client',
   'calendar:write': 'Adds events to your calendar and changes the ones it added',
 };
 
@@ -73,6 +74,7 @@ export function permissionsAskSummary(p: PluginPermissionsSummary): string[] {
   if (p.pages.length > 0) out.push(`Adds ${plural(p.pages.length, 'page', 'pages')}: ${p.pages.map((x) => x.title).join(', ')}`);
   const dashboards = p.dashboards ?? [];
   if (dashboards.length > 0) out.push(`Adds ${plural(dashboards.length, 'dashboard', 'dashboards')}: ${dashboards.map((x) => x.title).join(', ')}`);
+  for (const c of p.companions ?? []) out.push('Includes ' + (c.optional ? 'optional ' : '') + 'companion service: ' + c.title + ' (manual installation on ' + c.runsOn + ')');
   if (p.trustedInput) out.push('Asks to run its model calls on CLI lanes (needs a separate approval)');
   out.push(`Sees data up to protection level ${p.maxProtection}`);
   return out;
@@ -137,6 +139,14 @@ export function diffPermissions(before: PluginPermissionsSummary, after: PluginP
   }
   for (const [name, effect] of was) if (!now.has(name)) add('tool', 'removed', `tool ${name} (${effect})`, false);
   diffContributions(before, after, add);
+  const oldCompanions = new Map((before.companions ?? []).map(c => [c.id, c]));
+  const newCompanions = new Map((after.companions ?? []).map(c => [c.id, c]));
+  for (const [id, c] of newCompanions) {
+    const old = oldCompanions.get(id);
+    if (!old) add('companions', 'added', 'companion service ' + id + ' (manual installation)', true);
+    else if (JSON.stringify(old) !== JSON.stringify(c)) add('companions', 'changed', 'companion service ' + id + ' metadata or bundle path', true);
+  }
+  for (const id of oldCompanions.keys()) if (!newCompanions.has(id)) add('companions', 'removed', 'companion service ' + id, false);
   if (!before.trustedInput && after.trustedInput) add('trustedInput', 'added', 'model.trustedInput', true);
   if (before.trustedInput && !after.trustedInput) add('trustedInput', 'removed', 'model.trustedInput', false);
   if (before.maxProtection !== after.maxProtection) {

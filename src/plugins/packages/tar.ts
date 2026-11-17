@@ -107,7 +107,7 @@ function paxRecords(data: Buffer): Map<string, string> {
 type Entry = { kind: 'dir'; path: string | null } | { kind: 'file'; path: string; data: Buffer; mode: number };
 
 /** Read every entry of an uncompressed tar, refusing what a package may not contain. */
-export function readTarEntries(tar: Buffer): Entry[] {
+export function readTarEntries(tar: Buffer, options: { plainUstar?: boolean } = {}): Entry[] {
   const entries: Entry[] = [];
   let off = 0;
   let longPath: string | null = null;
@@ -124,6 +124,11 @@ export function readTarEntries(tar: Buffer): Entry[] {
     const type = String.fromCharCode(header[156] || 0x30);
     const name = cString(header, 0, 100);
     const ustar = header.subarray(257, 262).toString('ascii') === 'ustar';
+    if (options.plainUstar && (
+      header.subarray(257, 263).toString('ascii') !== 'ustar\0'
+      || header.subarray(263, 265).toString('ascii') !== '00'
+      || !['0', '5'].includes(type)
+    )) throw new TarError('Companion archives require plain POSIX ustar files/directories; extension headers and other entry types are not supported');
     const prefix = ustar ? cString(header, 345, 155) : '';
     const headerSize = octal(header, 124, 12, 'size');
     const extended = type === 'x' || type === 'g' || type === 'L';
@@ -155,6 +160,10 @@ export function readTarEntries(tar: Buffer): Entry[] {
     const refused = REFUSED_TYPES[type];
     if (refused) throw new TarError(`The archive contains ${refused} (${JSON.stringify(rawPath)}); a package holds regular files only`);
     const path = safeEntryPath(rawPath);
+    if (options.plainUstar && (path === null || (rawPath !== path && !(type === '5' && rawPath === path + '/')))) {
+      throw new TarError('Companion archive paths must be canonical relative paths');
+    }
+    if (options.plainUstar && (octal(header, 100, 8, 'mode') & ~0o777) !== 0) throw new TarError('Companion archive has special permission bits');
     if (type === '5') {
       entries.push({ kind: 'dir', path });
     } else if (type === '0' || type === '7') {
@@ -164,6 +173,7 @@ export function readTarEntries(tar: Buffer): Entry[] {
       throw new TarError(`The archive contains an entry of unknown type "${type}" (${JSON.stringify(rawPath)})`);
     }
   }
+  if (options.plainUstar && (!ended || tar.length % BLOCK !== 0 || tar.length - off < 2 * BLOCK || !tar.subarray(off).every(b => b === 0))) throw new TarError('Companion archive must end with zero blocks, without trailing data');
   if (!ended && off < tar.length) throw new TarError('The archive is truncated');
   if (longPath !== null || paxPath !== null) throw new TarError('The archive ends inside an extended header');
   return entries;

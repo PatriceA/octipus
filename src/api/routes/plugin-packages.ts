@@ -143,6 +143,30 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
     { query: t.Object({ url: t.String({ minLength: 9, maxLength: 2000, pattern: '^https://' }) }), detail: { tags: ['plugin-packages'] } },
   )
 
+  .get('/:name/companions/:id/:file', async ({ request, user, principal, set, params }) => {
+    const denied = pluginAdminDenied({ set, user, principal, request }, 'read');
+    if (denied) return denied;
+    const { findRow, packageDir, checkPackageBeforeStart } = await import('@/plugins/packages/service');
+    const row = await findRow(params.name);
+    const companion = row?.manifest.companions?.find(c => c.id === params.id);
+    if (!row || !companion) { set.status = 404; return { error: 'No such companion' }; }
+    try {
+      const problem = await checkPackageBeforeStart(row.name);
+      if (problem) { set.status = 409; return { error: problem }; }
+      const { companionFile, MAX_COMPANION_BUNDLE_BYTES } = await import('@/plugins/packages/companions');
+      const bundle = params.file === 'bundle';
+      const bytes = await companionFile(packageDir(row.name), bundle ? companion.bundle : companion.guide, bundle ? MAX_COMPANION_BUNDLE_BYTES : 65536);
+      const { hashPackageContent } = await import('@/plugins/packages/integrity');
+      if (await hashPackageContent(packageDir(row.name), row) !== row.contentHash) { set.status = 409; return { error: 'Package content changed; review it again' }; }
+      return new Response(new Uint8Array(bytes), { headers: {
+        'Content-Type': bundle ? 'application/gzip' : 'text/markdown; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="' + row.name + '-' + companion.id + '-' + row.version + (bundle ? '.tar.gz' : '-setup.md') + '"',
+        'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store',
+        'Content-Security-Policy': "default-src 'none'; sandbox",
+      } });
+    } catch (err) { apiLogger.warn({ err, plugin: row.name }, 'Companion download failed'); set.status = 409; return { error: 'Companion files could not be verified' }; }
+  }, { params: t.Object({ name: t.String({ pattern: '^[a-z][a-z0-9-]{1,49}$' }), id: t.String({ pattern: '^[a-z][a-z0-9-]{0,39}$' }), file: t.Union([t.Literal('bundle'), t.Literal('guide')]) }), detail: { tags: ['plugin-packages'] } })
+
   // Installed packages with a newer version from the same source, each with a permissions diff.
   .get(
     '/updates',

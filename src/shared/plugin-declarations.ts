@@ -33,7 +33,7 @@ import { HOST_SCOPE_WORDS, storeWords } from './plugin-permissions';
 
 export type PluginDeclarationKind =
   | 'runtime' | 'in-process' | 'network' | 'host' | 'tool' | 'command' | 'schedule' | 'event' | 'prompt' | 'context'
-  | 'page' | 'dashboard' | 'secret' | 'setting' | 'store' | 'model-cli-tools' | 'protection' | 'change';
+  | 'page' | 'dashboard' | 'companion' | 'secret' | 'setting' | 'store' | 'model-cli-tools' | 'protection' | 'change';
 
 export interface PluginDeclarationItem {
   /** Stable for the same package: `host:notes:read`, `tool:save_note`, … */
@@ -59,7 +59,7 @@ export interface PluginGuidanceWarning {
 }
 
 /** Host scopes that can carry data out of the house (src/plugins/packages/service.ts, `EGRESS_HOST_SCOPES`). */
-export const EGRESS_SCOPES: readonly string[] = ['web:read', 'model:complete', 'agent:run', 'mail:send'];
+export const EGRESS_SCOPES: readonly string[] = ['web:read', 'model:complete', 'agent:run', 'mail:send', 'connections:read'];
 
 /** The admin page's notes on scopes that need saying (web/app/admin/plugins/page.tsx). */
 export const AGENT_RUN_NOTE = 'agent:run starts background agent runs as the user who asks (from a write tool only): the host\'s own agent of a role, '
@@ -243,6 +243,13 @@ export function declarationItems(
       id: `dashboard:${d.id}`, kind: 'dashboard', label: `Adds the dashboard "${d.title}"`,
       detail: d.widgets.map((w) => `${w.title} (${w.type}) ← ${w.tool}${w.input !== undefined ? ` ${JSON.stringify(w.input)}` : ''}`).join('; '),
       guidance: DASHBOARD_NOTE,
+    });
+  }
+  for (const c of p.companions ?? []) {
+    items.push({ id: 'companion:' + c.id, kind: 'companion',
+      label: 'Includes ' + (c.optional ? 'optional ' : '') + 'companion service "' + c.title + '"',
+      detail: JSON.stringify(c),
+      guidance: 'Manual installation on ' + c.runsOn + '. Runs outside the plugin sandbox. Approving this package does not install or start the companion; uninstalling the plugin does not remove it.',
     });
   }
   // Names from the summary (a listing carries them); the manifest's labels and required flags when at hand.
