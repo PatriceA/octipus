@@ -126,6 +126,8 @@ function OAuthInbox() {
           setItems((xs) => xs.map((x) => (x.id === id ? { ...x, unread: true } : x)));
         });
       }
+    } catch (err) {
+      setError((err as Error).message);
     } finally {
       setBusy('');
     }
@@ -137,7 +139,7 @@ function OAuthInbox() {
     try {
       const res = await api.post<{ summary?: string; error?: string }>(`/email/message/${openMsg.id}/summarize`, {});
       setSummary(res.summary || res.error || '');
-    } finally { setBusy(''); }
+    } catch (err) { setError((err as Error).message); } finally { setBusy(''); }
   };
 
   // Step 1: ask the model for reply directions; the user picks one next.
@@ -148,7 +150,7 @@ function OAuthInbox() {
       const res = await api.post<{ options?: string[]; error?: string }>(`/email/message/${openMsg.id}/reply-options`, {});
       if (res.error) setError(res.error);
       else setReplyOpts(res.options && res.options.length > 0 ? res.options : ['Write a reply']);
-    } finally { setBusy(''); }
+    } catch (err) { setError((err as Error).message); } finally { setBusy(''); }
   };
 
   // Step 2: draft a reply in the direction the user chose.
@@ -159,7 +161,7 @@ function OAuthInbox() {
       const res = await api.post<Draft & { error?: string }>(`/email/message/${openMsg.id}/draft`, { instruction });
       if (res.error) setError(res.error);
       else { setDraft({ to: res.to, subject: res.subject, body: res.body }); setReplyOpts(null); }
-    } finally { setBusy(''); }
+    } catch (err) { setError((err as Error).message); } finally { setBusy(''); }
   };
 
   // An email that needs something from me becomes a to-do, linked to the thread.
@@ -170,7 +172,7 @@ function OAuthInbox() {
       const res = await api.post<{ task?: { id: string; title: string }; error?: string }>(`/email/message/${openMsg.id}/task`, {});
       if (res.error) setError(res.error);
       else setSummary(`Added to your to-do list: ${res.task?.title ?? openMsg.subject}`);
-    } finally { setBusy(''); }
+    } catch (err) { setError((err as Error).message); } finally { setBusy(''); }
   };
 
   const archive = async () => {
@@ -180,7 +182,7 @@ function OAuthInbox() {
       await api.post(`/email/message/${openMsg.id}/archive`, {});
       setItems((xs) => xs.filter((x) => x.id !== openMsg.id));
       setOpenMsg(null);
-    } finally { setBusy(''); }
+    } catch (err) { setError((err as Error).message); } finally { setBusy(''); }
   };
 
   const send = async () => {
@@ -191,7 +193,7 @@ function OAuthInbox() {
       const res = await api.post<{ sent?: boolean; error?: string }>('/email/send', { ...draft, confirm: true });
       if (res.error) setError(res.error);
       else { setDraft(null); setSummary('Reply sent.'); }
-    } finally { setBusy(''); }
+    } catch (err) { setError((err as Error).message); } finally { setBusy(''); }
   };
 
   // Keep the reply in the mailbox's own Drafts, to finish from any mail app.
@@ -202,7 +204,7 @@ function OAuthInbox() {
       const res = await api.post<{ saved?: boolean; error?: string }>(`/email/message/${openMsg.id}/save-draft`, { body: draft.body });
       if (res.error) setError(res.error);
       else { setDraft(null); setSummary('Saved to your mailbox drafts. Nothing was sent.'); }
-    } finally { setBusy(''); }
+    } catch (err) { setError((err as Error).message); } finally { setBusy(''); }
   };
 
   const toggleApplyLabels = (on: boolean) => {
@@ -259,7 +261,7 @@ function OAuthInbox() {
           + (res.labelError ? ` Labelling failed: ${res.labelError}` : '')
           + (gone.size ? ` Archived ${gone.size} low-priority spam/marketing.` : ''));
       } else if (res.error) setError(res.error);
-    } finally { setTriaging(false); }
+    } catch (err) { setError((err as Error).message); } finally { setTriaging(false); }
   };
 
   const undoArchive = async () => {
@@ -271,7 +273,7 @@ function OAuthInbox() {
       setItems((xs) => [...restored, ...xs].sort((a, b) => b.receivedAt.localeCompare(a.receivedAt)));
       setLastArchived(batch.filter((_, i) => results[i].status !== 'fulfilled'));
       setNotice(restored.length === batch.length ? `Restored ${restored.length} to the inbox.` : `Restored ${restored.length} of ${batch.length}; the rest failed — try Undo again.`);
-    } finally { setBusy(''); }
+    } catch (err) { setError((err as Error).message); } finally { setBusy(''); }
   };
 
   if (loading) {

@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { decide, type DecisionObservation, type DecisionQuestion, type DecisionSite, recordShadow } from '@/models/decision';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { resolveModel } from '@/models/resolve-model';
+import { getCLIToolConfig } from '@/core/cli-agent-factory';
 import { userRepository } from '@/db/repositories/user-repository';
 import { coreLogger } from '@/utils/logger';
 import {
@@ -23,10 +24,26 @@ import { detectProvider, gmailApi, graphApi } from './providers';
 import type { EmailMessage, EmailProvider, EmailTriage, InboxItem } from './types';
 import { mapLimit } from '@/utils/concurrency';
 
-/** The user's `everyday` model — their personal binding first, then the install's (coworking spec §8.2). */
+/** A CLI agent with no tool-less mode (codex) serves chat on a lane but refuses one-shot completions. */
+const completes = (row: { provider: string; modelId: string }) => {
+  if (row.provider !== 'cli') return true;
+  const tool = getCLIToolConfig(row.modelId);
+  return !!(tool?.toolLessArgs || tool?.prepareToolless);
+};
+
+/**
+ * The user's `everyday` model — their personal binding first, then the install's (coworking spec §8.2).
+ * Mail content goes only to a model that answers without its own tools: an install lane whose primary
+ * can't falls to its backup. A personal row never does: that would switch who pays for the call.
+ */
 async function everydayModel(userId: string): Promise<{ model: string; modelConfigName: string }> {
-  const model = await resolveModel({ userId, topic: 'everyday' });
-  if (!model) throw new Error('No model is bound to the "everyday" lane — bind one in the Models page.');
+  const primary = await resolveModel({ userId, topic: 'everyday' });
+  if (!primary) throw new Error('No model is bound to the "everyday" lane — bind one in the Models page.');
+  const model = completes(primary) ? primary : primary.ownerUserId ? null : await resolveModel({ userId, topic: 'everyday', backup: true });
+  if (!model || !completes(model)) {
+    const fix = primary.ownerUserId ? 'Bind an API or local model of your own to the everyday lane.' : "Bind an API or local model as the everyday lane's backup on the Topics page.";
+    throw new Error(`The "everyday" lane runs ${primary.name}, a CLI agent that cannot answer one-shot requests like triage, summaries or drafts. ${fix}`);
+  }
   return { model: model.modelId, modelConfigName: model.name };
 }
 
@@ -365,7 +382,7 @@ export function triageEntries(parsed: unknown): Array<[string, Record<string, un
  * Live decision-model triage (docs/plans/decision-models.md, site 1).
  * Confident decisions win; unanswered items retain the existing LLM path.
  */
-const TRIAGE_SITE: DecisionSite = { id: 'email.triage', sensitivity: 'personal', minConfidence: 0.8 };
+const TRIAGE_SITE: DecisionSite = { id: 'email.triage', sensitivity: 'personal', minConfidence: 0.7 };
 const TRIAGE_LIVE = true;
 const PRIORITIES = ['low', 'normal', 'high'] as const;
 
@@ -513,7 +530,8 @@ export async function triageInbox(userId: string, items: InboxItem[]): Promise<R
       return { ...llm, ...decided };
     } catch (err) {
       record({ event: 'reference_failed', items: items.length, accepted: Object.keys(decided).length, compared, decisionMs, elapsedMs: Date.now() - started });
-      coreLogger.warn({ runId }, 'email: reference triage failed; decision records retained');
+      // Message only, capped: a provider error can echo the prompt (mail metadata).
+      coreLogger.warn({ runId, error: String((err as Error)?.message ?? err).slice(0, 200) }, 'email: reference triage failed; decision records retained');
       // An evaluation failure must not invalidate a fully answered live batch.
       if (items.every(item => decided[item.id])) return decided;
       throw err;

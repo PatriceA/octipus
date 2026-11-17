@@ -14,6 +14,9 @@ let observed: DecisionAnswers | null = null;
 let llmFails = false;
 let llmCalls = 0;
 let referencePrompt = '';
+let referenceModel = '';
+let primary: { provider?: string; modelId: string; name: string } = { modelId: 'chat-model', name: 'chat-model' };
+let backup: { provider?: string; modelId: string; name: string } | null = null;
 vi.mock('@/models/decision', () => ({ recordShadow: vi.fn(), decide: vi.fn(async (_site, _state, _questions, observe?: (observation: DecisionObservation) => void) => {
   const answers = observed ?? decision;
   if (answers) observe?.({ model: 'local-clef', modelId: 'clef', answers, latencyMs: 12,
@@ -23,12 +26,13 @@ vi.mock('@/models/decision', () => ({ recordShadow: vi.fn(), decide: vi.fn(async
 vi.mock('@/db/repositories/user-repository', () => ({ userRepository: { findById: async () => ({ preferences: {} }) } }));
 vi.mock('@/models/model-registry', async () => ({
   ...(await vi.importActual<typeof import('@/models/model-registry')>('@/models/model-registry')),
-  getModelRegistry: () => ({ getModelForTopic: async () => ({ modelId: 'chat-model', name: 'chat-model' }), getUserBinding: async () => null }),
+  getModelRegistry: () => ({ getModelForTopic: async () => primary, getBackupModelForTopic: async () => backup, getUserBinding: async () => null }),
 }));
 vi.mock('@/models/litellm-client', async () => ({
   ...(await vi.importActual<typeof import('@/models/litellm-client')>('@/models/litellm-client')),
-  getLiteLLMClient: () => ({ complete: async (opts: { messages: Array<{ content: string }> }) => {
+  getLiteLLMClient: () => ({ complete: async (opts: { model: string; messages: Array<{ content: string }> }) => {
     llmCalls++;
+    referenceModel = opts.model;
     referencePrompt = opts.messages[0].content;
     if (llmFails) throw new Error("reference unavailable");
     const ids = [...opts.messages[1].content.matchAll(/^(m\d+)\t/gm)].map((m) => m[1]);
@@ -41,13 +45,22 @@ const { recordShadow, decide } = await import('@/models/decision');
 const item: InboxItem = { id: 'm1', provider: 'google', from: { email: 'a@b.c' }, subject: 's', snippet: 'x', receivedAt: '', unread: true };
 
 describe('triageInbox with a decision model (live)', () => {
-  beforeEach(() => { decision = null; observed = null; llmCalls = 0; llmFails = false; referencePrompt = ''; vi.mocked(recordShadow).mockClear(); vi.mocked(decide).mockClear(); });
+  beforeEach(() => { primary = { modelId: 'chat-model', name: 'chat-model' }; backup = null; decision = null; observed = null; llmCalls = 0; llmFails = false; referencePrompt = ''; vi.mocked(recordShadow).mockClear(); vi.mocked(decide).mockClear(); });
 
   test('120 mails are triaged in batches of 30, all of them', async () => {
     const many = Array.from({ length: 120 }, (_, i) => ({ ...item, id: `m${i}` }));
     const out = await triageInbox('u', many);
     expect(Object.keys(out)).toHaveLength(120);
     expect(llmCalls).toBe(4);
+  });
+
+  test('a CLI agent that cannot answer one-shot requests hands triage to the backup, else says why', async () => {
+    primary = { provider: 'cli', modelId: 'cli/codex', name: 'codex' };
+    await expect(triageInbox('u', [item])).rejects.toThrow(/codex, a CLI agent .* backup/);
+    expect(llmCalls).toBe(0);
+    backup = { provider: 'litellm', modelId: 'api-model', name: 'api-model' };
+    expect((await triageInbox('u', [item])).m1.priority).toBe('high');
+    expect(referenceModel).toBe('api-model');
   });
 
   test('no decision model → LLM triage unchanged', async () => {
@@ -61,7 +74,7 @@ describe('triageInbox with a decision model (live)', () => {
     };
     await triageInbox('u', [{ ...item, subject: 'PRIVATE_SUBJECT', snippet: 'PRIVATE_SNIPPET' }]);
     const logs = vi.mocked(recordShadow).mock.calls.filter(([, kind]) => kind === 'email-evaluation').map(([entry]) => entry);
-    expect(logs.find(e => e.event === 'decision')).toMatchObject({ messageId: 'm1', threshold: 0.8,
+    expect(logs.find(e => e.event === 'decision')).toMatchObject({ messageId: 'm1', threshold: 0.7,
       decision: { model: 'local-clef', confident: false, priority: { value: 'low', confidence: 0.76 }, category: { value: 'promotion', confidence: 0.92 } } });
     expect(logs.find(e => e.event === 'comparison')).toMatchObject({ messageId: 'm1', referenceModel: 'chat-model', selectedSource: 'llm', reference: { priority: 'high', category: 'work' } });
     expect(new Set(logs.map(e => e.runId)).size).toBe(1);
@@ -92,7 +105,7 @@ describe('triageInbox with a decision model (live)', () => {
     if (questions.priority.type !== 'score') throw new Error('Expected ordered priority criteria');
     expect(referencePrompt).toContain(questions.priority.instructions);
     for (const criterion of questions.priority.criteria) expect(referencePrompt).toContain(criterion);
-    expect(vi.mocked(decide).mock.calls[0][0].minConfidence).toBe(0.8);
+    expect(vi.mocked(decide).mock.calls[0][0].minConfidence).toBe(0.7);
     const logs = vi.mocked(recordShadow).mock.calls.map(([entry]) => entry);
     expect(logs.find(e => e.event === 'comparison')).toMatchObject({ priorityRubric: 'action-required-v2', selectedSource: 'decision', reference: { priority: 'high', category: 'work' }, priorityAgreed: false, categoryAgreed: false });
   });
