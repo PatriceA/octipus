@@ -254,6 +254,9 @@ export async function resolvePolicy(plugin: string, caller: ReturnType<typeof ca
   if (environment.backend !== 'host') {
     throw new CollectorError(`The collector runs in host environments only (this one is ${environment.backend}); nothing was accessed`, 'environment_backend', 409);
   }
+  if (await denied(caller.userId, caller.workspaceId ?? null, 'git', 'read')) {
+    throw new CollectorError('Your rules deny git.read', 'git_read_denied', 403);
+  }
   const { findRow } = await import('./service');
   const row = await findRow(plugin);
   if (!row?.enabled) throw new CollectorError('The plugin is not enabled', 'plugin_disabled', 403);
@@ -612,15 +615,21 @@ export async function startCollectorRun(grant: HostTokenGrant, principal: Princi
   if (!limited.allowed) return { ok: false, status: 429, code: 'rate_limited', error: `At most ${COLLECTOR_RUNS_PER_HOUR} collector runs an hour per plugin`, retryAfter: limited.retryAfterSeconds ?? 600 };
 
   const title = (req.title?.trim() || `${req.repos.length} repositories, ${req.http.length} requests`).slice(0, 200);
-  const row = await backgroundJobRepository.create({
-    kind: 'collector', userId: grant.userId, workspaceId, title, status: 'running',
-    payload: { plugin: grant.plugin, tool: grant.tool, environmentId: req.environmentId, workspaceId } satisfies RunPayload,
-  });
+  // Reserve before the first await: simultaneous requests must not both pass
+  // admission while their durable rows are being created.
   inFlight.set(key, (inFlight.get(key) ?? 0) + 1);
-  void collectInBackground(row.id, grant, workspaceId, req).finally(() => {
+  const release = () => {
     const n = (inFlight.get(key) ?? 1) - 1;
     if (n > 0) inFlight.set(key, n); else inFlight.delete(key);
-  });
+  };
+  let row: BackgroundJob;
+  try {
+    row = await backgroundJobRepository.create({
+      kind: 'collector', userId: grant.userId, workspaceId, title, status: 'running',
+      payload: { plugin: grant.plugin, tool: grant.tool, environmentId: req.environmentId, workspaceId } satisfies RunPayload,
+    });
+  } catch (error) { release(); throw error; }
+  void collectInBackground(row.id, grant, workspaceId, req).finally(release);
   coreLogger.info({ plugin: grant.plugin, jobId: row.id, repos: req.repos.length, http: req.http.length }, 'plugin-host: collector run started');
   return { ok: true, value: { id: row.id, status: 'running' } };
 }
@@ -746,7 +755,7 @@ export async function collectorOptions(grant: HostTokenGrant, principal: Princip
       connections = [...policy.connections];
     } catch (err) {
       if (!(err instanceof CollectorError)) throw err;
-      if (err.code === 'not_configured' || err.code === 'plugin_disabled') return { ok: false, status: err.status, code: err.code, error: err.message };
+      if (err.code === 'not_configured' || err.code === 'plugin_disabled' || err.code === 'git_read_denied') return { ok: false, status: err.status, code: err.code, error: err.message };
     }
   }
   return { ok: true, value: { environments, connections } };

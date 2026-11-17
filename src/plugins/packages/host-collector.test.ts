@@ -225,6 +225,14 @@ describe('git evidence', () => {
 });
 
 describe('authorization', () => {
+  test('an explicit Git read denial blocks collection and discovery before fetching', async () => {
+    h.deny.add('git.read');
+    await expect(collect()).rejects.toMatchObject({ code: 'git_read_denied' });
+    expect(await startCollectorRun(grant(), principal(), request())).toMatchObject({ ok: false, code: 'git_read_denied' });
+    expect(await collectorOptions(grant(), principal())).toMatchObject({ ok: false, code: 'git_read_denied' });
+    expect(h.fetchCalls).toEqual([]);
+    expect(h.httpCalls).toEqual([]);
+  });
   test('a folder outside the approved roots, by traversal or symlink, is refused', async () => {
     await expect(collect(request({ repos: [{ ...request().repos[0], path: `${root}/../${outside.split('/').pop()}` }] }))).rejects.toMatchObject({ code: 'repo_not_approved' });
     await expect(collect(request({ repos: [{ ...request().repos[0], path: join(root, 'escape') }] }))).rejects.toMatchObject({ code: 'repo_not_approved' });
@@ -309,6 +317,17 @@ describe('authorization', () => {
     const out = await collectorOptions(grant(), principal());
     expect(out.ok && out.value.environments.map((e) => e.id)).toEqual(['env-a']);
     expect(out.ok && out.value.connections.sort()).toEqual(['forge', 'tracker']);
+  });
+
+  test('simultaneous requests admit one run, not one per pending database insert', async () => {
+    const started = await Promise.all([startCollectorRun(grant(), principal(), request()), startCollectorRun(grant(), principal(), request())]);
+    expect(started.filter(result => result.ok)).toHaveLength(1);
+    expect(started.filter(result => !result.ok)).toMatchObject([{ code: 'too_many_runs' }]);
+    const accepted = started.find(result => result.ok)!;
+    if (accepted.ok) await vi.waitFor(async () => {
+      const view = await readCollectorRun(grant(), principal(), accepted.value.id);
+      expect(view.ok && view.value.status).toBe('done');
+    }, { timeout: 20_000 });
   });
 });
 
