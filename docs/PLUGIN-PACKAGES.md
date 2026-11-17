@@ -2046,6 +2046,10 @@ the refusals counted since the previous row.
 
 ### Repository evidence collector
 
+Granting `repos:collect` limits a package to protection level 1: its connection
+query paths can carry data to the approved services, even without a custom page.
+Classifying evidence above that level withholds it; it does not lower its label.
+
 `repos:collect` lets a package gather read-only evidence from Git
 repositories and approved HTTP connections without receiving a shell, a file
 read or a credential (`src/plugins/packages/host-collector.ts`). The package

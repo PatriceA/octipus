@@ -1490,7 +1490,7 @@ export { defaultMaxProtection } from './permissions';
  * fetches the web on the package's prompt (`agent:run`), mail to any address
  * (`mail:send`).
  */
-export const EGRESS_HOST_SCOPES: readonly PluginHostScope[] = ['web:read', 'model:complete', 'agent:run', 'mail:send', 'connections:read'];
+export const EGRESS_HOST_SCOPES: readonly PluginHostScope[] = ['web:read', 'model:complete', 'agent:run', 'mail:send', 'connections:read', 'repos:collect'];
 
 /**
  * The level a package may see, as enforced: its `maxProtection` (or the

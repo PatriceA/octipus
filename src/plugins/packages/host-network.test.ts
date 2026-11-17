@@ -194,6 +194,13 @@ describe('launch and server config', () => {
     expect((await serverFor(row({ ...trusted, model: undefined }, ['model:complete', 'model:cli-tools']) as never)).plugin).not.toHaveProperty('modelCliTools');
   });
 
+  test('an approved collector cannot send higher-level data through connection query paths', async () => {
+    const { serverFor } = await import('./service');
+    const collector = { ...base, host: ['documents:read', 'repos:collect'], maxProtection: 4 };
+    expect((await serverFor(row(collector, ['documents:read', 'repos:collect']) as never)).plugin?.maxProtection).toBe(1);
+    expect((await serverFor(row(collector, ['documents:read']) as never)).plugin?.maxProtection).toBe(4);
+  });
+
   test('a package with pages leaves the house: maxProtection 1, whatever it declares', async () => {
     const { serverFor } = await import('./service');
     const { computePermissions } = await import('./permissions');
