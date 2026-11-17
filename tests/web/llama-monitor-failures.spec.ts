@@ -173,6 +173,32 @@ test('cancelled edits never write and failed edits remain retryable',async({auth
  expectNoConsoleErrors(consoleErrors);
 });
 
+test('saved trend shows isolated prefill readings, preserves gaps and explains missing throughput',async({authenticatedPage:page,consoleErrors})=>{
+ const {state,frame}=await setup(page);
+ const id='1000',engine=state.entries.get('profiles')!.value.profiles[0];
+ const samples=[null,650,null,700,null].map((prefillTps,index)=>({
+  at:new Date(1000+index*10000).toISOString(),engineId:'one',models:[],health:'ok',hostScope:'Test fixture',
+  values:{prefillTps,outputTps:null},warnings:[],
+ }));
+ state.entries.set('session/'+id,{value:{id,engine,count:samples.length},version:1});
+ samples.forEach((value,index)=>state.entries.set('sample/'+id+'/'+String(index+1).padStart(4,'0'),{value,version:1}));
+ await page.reload();
+ await expect(frame.locator('#status')).toContainText('Ready.');
+ await frame.locator('#view').click();
+ await expect(frame.locator('#chart circle[data-metric="prefillTps"]')).toHaveCount(2);
+ await expect(frame.locator('#chart circle[data-metric="outputTps"]')).toHaveCount(0);
+ await expect(frame.locator('#chart circle title').first()).toContainText('650 tok/s');
+ const segments=await frame.locator('#chart polyline').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('points')));
+ expect(segments).toHaveLength(2);
+ expect(segments.every(segment=>!segment!.includes(' '))).toBe(true);
+ const onlyIdle=samples.map(sample=>({...sample,values:{prefillTps:null,outputTps:null}}));
+ onlyIdle.forEach((value,index)=>state.entries.set('sample/'+id+'/'+String(index+1).padStart(4,'0'),{value,version:2}));
+ await frame.locator('#view').click();
+ await expect(frame.locator('#chart text')).toHaveText('No active throughput samples recorded.');
+ await expect(frame.locator('#chart circle')).toHaveCount(0);
+ expectNoConsoleErrors(consoleErrors);
+});
+
 test('engine switch and removal clear old telemetry even when next engine read fails',async({authenticatedPage:page,consoleErrors})=>{
  const {state,frame}=await setup(page);
  await frame.locator('#refresh').click();
