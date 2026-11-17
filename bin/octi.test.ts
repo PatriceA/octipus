@@ -239,19 +239,28 @@ describe('octi stop/restart from inside the backend', () => {
     expect(text).not.toContain('handed off');
   }, 30_000);
 
-  test('a stop in an isolated checkout cannot kill an unrelated listener on inherited ports', async () => {
+  test.skipIf(process.platform === 'win32').each([false, true])('stop cleans up only a listener belonging to its checkout (owned=%s)', async owned => {
     const { root, script } = isolatedBashProject('API_PORT=1\nWEB_PORT=2\n');
     const home = mkdtempSync(join(tmpdir(), 'octi-port-owner-'));
-    const child = spawn(process.execPath, ['-e', `require('node:http').createServer((_,res)=>res.end('unrelated')).listen(0,'127.0.0.1',function(){console.log(this.address().port)});`], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const source = `require('node:http').createServer((_,res)=>res.end('unrelated')).listen(0,'127.0.0.1',function(){console.log(this.address().port)});`;
+    const entry = join(root, 'listener.cjs');
+    writeFileSync(entry, source);
+    const child = spawn(process.execPath, owned ? [entry] : ['-e', source], { stdio: ['ignore', 'pipe', 'ignore'] });
     try {
       const [data] = await once(child.stdout!, 'data');
       const port = String(data).trim();
+      const exited = once(child, 'exit');
       execFileSync('bash', [script, 'stop'], {
         env: { ...process.env, HOME: home, API_PORT: port, WEB_PORT: port, OCTIPUS_INSIDE_PID: '' },
         cwd: root, stdio: 'pipe', timeout: 20_000,
       });
-      const response = await fetch(`http://127.0.0.1:${port}/`);
-      expect(await response.text()).toBe('unrelated');
+      if (owned) {
+        await exited;
+        expect(child.signalCode).toBe('SIGTERM');
+      } else {
+        const response = await fetch(`http://127.0.0.1:${port}/`);
+        expect(await response.text()).toBe('unrelated');
+      }
     } finally {
       if (child.exitCode === null && child.signalCode === null) { const exited = once(child, 'exit'); child.kill(); await exited; }
     }
