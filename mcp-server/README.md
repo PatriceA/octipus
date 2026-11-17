@@ -99,6 +99,16 @@ From a checkout, point the client at the built entry instead — `"command":
 "node"`, `"args": ["/absolute/path/to/octipus/mcp-server/dist/index.js"]` — so
 it runs the revision you are editing rather than the published one.
 
+### Compact toolset
+
+A client that sends every tool schema with each request can start the server
+with `--toolset compact` (or `"env": { "OCTIPUS_MCP_TOOLSET": "compact" }`).
+It then lists three tools — `octipus_search_tools`, `octipus_describe_tool`
+and `octipus_call_tool` — that find, describe and run the full set with the
+same validation, deadlines and module gating as a direct call. Clients with
+their own tool search or code mode, such as Claude Code, do not need it. See
+[MCP-SERVER.md](../docs/MCP-SERVER.md#compact-toolset---toolset-compact).
+
 ## HTTP/SSE transport
 
 ```bash

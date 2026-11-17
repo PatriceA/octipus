@@ -38,6 +38,29 @@ Standalone MCP server (`mcp-server/`) that exposes Octipus capabilities as MCP t
 
 The table above shows commonly used tools. The server registers 87 tools across 24 groups — see `mcp-server/src/tools/` for the complete list, or ask the running server for `tools/list`.
 
+### Compact toolset (`--toolset compact`)
+
+A client that loads every tool schema up front pays for all 87 of them on each
+request. Start the server with `--toolset compact` (or
+`OCTIPUS_MCP_TOOLSET=compact`) and it offers three tools instead, after the
+search-and-execute pattern:
+
+| Tool | What it does |
+|------|--------------|
+| `octipus_search_tools` | `query` (and optional `limit`, default 10) → matching tool names and one-line descriptions, plus how many are available |
+| `octipus_describe_tool` | `name` → that tool's description, input schema, and output schema/annotations when it has them |
+| `octipus_call_tool` | `name`, `arguments` → that tool's own result, unchanged (text, images, audio, `isError`) |
+
+The full set is registered on an inner server reached over an in-process MCP
+connection, so a compact call is validated, time-bounded and module-gated
+exactly like a direct one: a tool whose module or capability is off is neither
+found nor callable. An unknown name or rejected arguments come back as a tool
+error. The default stays `full`; an unknown toolset name stops the server.
+
+Use it for clients without tool search or code mode of their own. Claude Code
+already defers MCP schemas (tool search), and its code mode calls MCP tools as
+functions, so it needs neither.
+
 ### Media (`media` group)
 
 The four media tools ([MEDIA.md → Over MCP and HTTP](MEDIA.md#over-mcp-and-http))

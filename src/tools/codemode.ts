@@ -130,6 +130,21 @@ function formatValue(value: unknown): string {
   return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 }
 
+/**
+ * How long a script may run: its `timeout_ms` option, capped at the maximum.
+ * Source the parser rejects fails in `execute` straight away, so the maximum
+ * is only an upper bound there.
+ */
+export function scriptTimeoutMs(code: unknown): number {
+  if (typeof code !== 'string') return MAX_TIMEOUT_MS;
+  try {
+    return Math.min(parseCodemodeSource(code).options.timeoutMs ?? MAX_TIMEOUT_MS, MAX_TIMEOUT_MS);
+  } catch (err) {
+    if (err instanceof CodemodeSourceError) return MAX_TIMEOUT_MS;
+    throw err;
+  }
+}
+
 export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
   // Per worker: a run's scripts share state, a new run starts empty.
   const store: Record<string, unknown> = {};
@@ -145,6 +160,9 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
       required: ['code'],
     },
     previewParam: 'code',
+    // A transport that bounds each call (the CLI bridge) must wait as long as
+    // the script may run, or it abandons a script whose tool calls go on.
+    executionTimeoutMs: (args) => scriptTimeoutMs(args.code),
     execute: async (args) => {
       if (typeof args.code !== 'string') {
         throw new Error(`codemode: 'code' must be a string, got ${typeof args.code}.`);

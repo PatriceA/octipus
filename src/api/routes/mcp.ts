@@ -6,7 +6,7 @@ import { apiContext } from '@/api/context';
 import type { MCPServer } from '@/core/types';
 import { getMCPBridge } from '@/mcp/bridge';
 import { getMcpCircuitBreaker } from '@/mcp/circuit-breaker';
-import { exposureConfigError, type McpExposure, resolveToolExposure } from '@/shared/mcp-exposure';
+import { DEFAULT_MCP_EXPOSURE, exposureConfigError, type McpExposure, resolveToolExposure } from '@/shared/mcp-exposure';
 
 /** A sentence, not a manual: the section shows at most 250 characters of it. */
 const MAX_DESCRIPTION_CHARS = 500;
@@ -42,7 +42,7 @@ export const mcpRoutes = new Elysia({ prefix: '/mcp' })
           postUrl: cfg.postUrl,
           isEnabled: cfg.isEnabled,
           description: cfg.description ?? '',
-          exposure: cfg.exposure ?? 'deferred',
+          exposure: cfg.exposure ?? DEFAULT_MCP_EXPOSURE,
           toolExposure: cfg.toolExposure ?? {},
           status: conn?.status || 'disconnected',
           error: conn?.error,

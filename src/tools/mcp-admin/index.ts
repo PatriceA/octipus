@@ -176,8 +176,9 @@ export class McpAdminTool extends BaseTool {
             exposure: {
               type: 'string',
               description:
-                "How its tools reach agents: 'deferred' (default, via mcp_list_tools), 'direct' (declared on every request — " +
-                "only for a few tools used constantly), 'codemode' (codemode scripts only), or 'hidden'",
+                "How its tools reach agents: 'codemode' (default: codemode scripts, so results stay out of the conversation), " +
+                "'deferred' (via mcp_list_tools / mcp_call_tool), 'direct' (declared on every request — only for a few tools " +
+                "used constantly), or 'hidden'",
             },
             description: { type: 'string', description: 'What the server offers, in one sentence — shown to agents so they know when to use it' },
             toolExposure: {

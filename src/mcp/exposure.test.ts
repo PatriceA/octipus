@@ -71,9 +71,16 @@ describe('mcpToolNames', () => {
 });
 
 describe('MCP exposure in the bridge', () => {
-  test('default (deferred): no per-tool handlers, every tool listed', async () => {
+  test('default (codemode): no per-tool handlers; scripts reach every tool, and only a worker without codemode lists them', async () => {
     const bridge = bridgeWith({});
     expect(bridge.getLazyToolHandlers().some((h) => h.name.startsWith('mcp__'))).toBe(false);
+    expect(await listed(bridge, true)).toEqual({ names: [], codemodeOnly: 4 });
+    expect((await listed(bridge, false)).names).toEqual(['delete_repo', 'get_issue', 'get_pr', 'search']);
+    expect(bridge.getScriptTools().map((t) => t.name).sort()).toEqual(['mcp__gh__delete_repo', 'mcp__gh__get_issue', 'mcp__gh__get_pr', 'mcp__gh__search']);
+  });
+
+  test('an explicit deferred server is still listed to a codemode worker', async () => {
+    const bridge = bridgeWith({ exposure: 'deferred' });
     expect((await listed(bridge, true)).names).toEqual(['delete_repo', 'get_issue', 'get_pr', 'search']);
   });
 

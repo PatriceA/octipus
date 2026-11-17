@@ -7,6 +7,22 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **MCP servers go through the codemode executor by default; CLI agents get
+  it too.** A server that sets no `exposure` is now `codemode`: agents call its
+  tools from one script and only the script's output enters the conversation.
+  Agents without codemode (small models, remote rooms) still reach the same
+  tools through `mcp_list_tools` / `mcp_call_tool`. Servers saved as
+  `deferred` (the MCP page saved every new server that way) keep it; change
+  them on the MCP page. Plugin packages' declared tools follow the default.
+  CLI workers (Claude Code, Codex, Grok Build, Muse Code, Antigravity, Vibe)
+  now get the `codemode` tool over their Octipus MCP connection; its calls
+  pass the worker's normal permission pipeline. The standalone MCP server has
+  a compact toolset (`--toolset compact` / `OCTIPUS_MCP_TOOLSET=compact`):
+  three tools that search, describe and call its 87. See
+  [Tool exposure](docs/MCP-INTEGRATION.md#tool-exposure),
+  [Codemode in CLI runs](docs/CLI-AGENTS.md#codemode-in-cli-runs) and
+  [Compact toolset](docs/MCP-SERVER.md#compact-toolset---toolset-compact).
+
 - **Learned skills can be repaired, owner-edited skills are locked.** A
   learning check may propose a patch to a learned skill whose body the session
   loaded: one passage, matched exactly once, PII-checked, made against a

@@ -10,6 +10,8 @@ import { redactedCommand } from '@/utils/command-log';
 import { redactAgentDiagnostics } from '@/security/credential-redaction';
 import { createAgentActivityTools } from './agent/activity-tools';
 import { buildToolDiscoveryHandlers } from '@/tools/tool-discovery';
+import { buildCodemodeHandler, CODEMODE_TOOL_NAME } from '@/tools/codemode';
+import { getMCPBridge } from '@/mcp/bridge';
 import { providerResetAt } from '@/core/errors/provider-recovery';
 import { readSessionFile } from '@/core/session-files';
 import type { CliImageAttachment } from './cli-adapters';
@@ -558,6 +560,18 @@ When a task matches one of these skills, load it with get_skill before starting 
       this.emit(type, data);
     }, undefined, this.abortController.signal);
     this.toolExecutor.remoteHarness = true;
+    if (config.codemode) {
+      // Same executor as a native worker (src/tools/codemode.ts): the script's
+      // calls run through this worker's ToolExecutor, so they pass the same
+      // permission, approval and protection checks as a bridged call.
+      const executor = this.toolExecutor;
+      this.toolExecutor.registerTool(buildCodemodeHandler({
+        tools: () => Array.from(executor.getTools().values()),
+        routedTools: () => getMCPBridge().getScriptTools(),
+        call: (call) => executor.runNestedCall(call),
+        signal: this.abortController.signal,
+      }));
+    }
     this.registerTool({ name: 'get_cli_run_context', description: 'Read the current Octipus plan, feedback and new user guidance. Check before further work and before your final answer.',
       parameters: { type: 'object', properties: this.isCodex() ? {
         acknowledgeGuidanceIds: { type: 'array', items: { type: 'string' }, description: 'IDs of owner guidance handled or explicitly reported as blocked.' },
@@ -800,6 +814,10 @@ When a task matches one of these skills, load it with get_skill before starting 
 ` +
         `Use list_tools and describe_tool to discover authorized Octipus tools, then call_discovered_tool with their name and arguments. mcp_list_tools discovers external MCP servers; an empty external-server list does not mean the parent Octipus MCP connection is unavailable. For failed or already-collected child execution history use get_agent_activity.
 ` +
+        (this.toolExecutor.getTools().has(CODEMODE_TOOL_NAME)
+          ? `For several Octipus or external MCP calls in a row, calls that can run in parallel, or results you only need part of, call the codemode tool once with a script instead of one call per step: only the script's output reaches you. MCP servers listed as (codemode) are reached only from codemode scripts.
+`
+          : '') +
         `Delegate only through Octipus spawn_child and collect_children. Your CLI's native subagents are disabled: they live inside this CLI process, and background work is lost when the process exits.`);
       const skillIndex = await this.cliSkillIndex();
       if (skillIndex) this.addSystemMessage(skillIndex);

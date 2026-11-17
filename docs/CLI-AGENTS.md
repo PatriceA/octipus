@@ -1096,6 +1096,32 @@ personal accounts or modify project files, but consumes vendor usage.
 Approximately 90% coverage of useful everyday workflows is the implementation
 target, not a measured compatibility percentage or a promise of feature parity.
 
+### Codemode in CLI runs
+
+Every CLI worker with tools also gets Octipus's `codemode` tool, served over the
+run's Octipus MCP connection like its other tools. The vendor model writes one
+JavaScript script; the script runs inside Octipus (QuickJS sandbox, no network
+or files), calls the run's Octipus tools and the external MCP servers as
+`tools.<name>(args)`, and only its output goes back to the vendor. Each call a
+script makes goes through the worker's `ToolExecutor`: the same permission,
+approval, flow-guard and protection checks as a call the CLI makes itself, and
+a result withheld from a remote harness is withheld from the script too.
+
+- External MCP servers with `codemode` exposure (the default) are reached only
+  from scripts; `mcp_list_tools` reports how many tools each holds for them.
+- The bridge bounds a `codemode` call by the script's own `timeout_ms` (at most
+  five minutes), not the default per-call budget.
+- Scripts cannot call the vendor's native tools (Claude Code's Bash, Codex's
+  shell): those run inside the CLI process. For Muse Code, Antigravity and Grok
+  Build, whose only tools are Octipus tools, a script reaches everything the
+  run can do.
+- Claude Code's own experimental code mode (`CLAUDE_CODE_EXPERIMENTAL_CODE_MODE`,
+  a persistent `REPL` tool) is not turned on by Octipus. Where a model row's
+  environment turns it on, Claude's REPL calls the Octipus tools, `codemode`
+  included, as functions; the two executors nest rather than conflict.
+  Octipus does not detect it: the tool list is fetched before Claude's
+  `init` event reports its own tools.
+
 ### Lazy discovery
 
 CLI workers advertise the same core tool schemas as direct workers when lazy

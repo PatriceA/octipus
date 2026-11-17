@@ -32,6 +32,7 @@ import { registerNotesTools } from './tools/notes.js';
 import { registerEmailTools } from './tools/email.js';
 import { registerMemoryTools } from './tools/memory.js';
 import { registerMediaTools } from './tools/media.js';
+import { registerCompactTools, type Toolset } from './compact.js';
 
 /**
  * The version this server reports in the MCP handshake.
@@ -107,11 +108,18 @@ async function syncModules(
   }
 }
 
-export function createServer(octiUrl: string): McpServer {
-  const server = new McpServer({
+/**
+ * The server a client connects to. With the `compact` toolset (compact.ts) it
+ * offers three tools that search, describe and call the full set, which is
+ * registered on an inner server no client connects to directly.
+ */
+export function createServer(octiUrl: string, options: { toolset?: Toolset } = {}): McpServer {
+  const outer = new McpServer({
     name: 'octipus',
     version: packageVersion(),
   });
+  const compact = options.toolset === 'compact';
+  const server = compact ? new McpServer({ name: 'octipus-tools', version: packageVersion() }) : outer;
 
   // Bound every handler, including authentication and local work before HTTP.
   for (const method of ['tool', 'registerTool'] as const) {
@@ -172,12 +180,15 @@ export function createServer(octiUrl: string): McpServer {
   void syncModules(client, byModule, byCapability);
   const timer = setInterval(() => void syncModules(client, byModule, byCapability), MODULES_REFRESH_MS);
   timer.unref?.();
-  // One server per HTTP session: the refresh ends with it.
-  const onclose = server.server.onclose;
-  server.server.onclose = () => {
+  const closeCompact = compact ? registerCompactTools(outer, server) : undefined;
+  // One server per HTTP session: the refresh (and a compact set's inner
+  // connection) ends with it.
+  const onclose = outer.server.onclose;
+  outer.server.onclose = () => {
     clearInterval(timer);
+    void closeCompact?.().catch(error => console.error('Closing the compact toolset failed:', (error as Error).message));
     onclose?.();
   };
 
-  return server;
+  return outer;
 }

@@ -97,7 +97,8 @@ describe('MCPBridge.serversSection', () => {
       // Every tool hidden through a bare `*`: nothing to list.
       { id: 'all-hidden', toolExposure: { '*': 'hidden' as const } },
       { id: 'live', exposure: 'codemode' as const, description: 'Live server' },
-      { id: 'pending', description: 'Not connected yet' },
+      { id: 'pending', exposure: 'deferred' as const, description: 'Not connected yet' },
+      { id: 'unset', description: 'No exposure set' },
     ];
     const cold = bridgeWith(configured).serversSection({ codemode: true }) as string;
     const warm = bridgeWith(configured.map((s) => s.id === 'live' ? { ...s, connected: { tools: ['a'], instructions: 'Live instructions.' } } : s))
@@ -105,6 +106,8 @@ describe('MCPBridge.serversSection', () => {
     expect(warm).toBe(cold);
     expect(cold).toContain('- live (codemode): Live server');
     expect(cold).toContain('- pending (mcp_list_tools): Not connected yet');
+    // No exposure set: the default, codemode.
+    expect(cold).toContain('- unset (codemode): No exposure set');
     expect(cold).not.toContain('- off');
     expect(cold).not.toContain('all-hidden');
   });

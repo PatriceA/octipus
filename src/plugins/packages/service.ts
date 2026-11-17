@@ -98,6 +98,7 @@ import { hostEnforcement, type PluginSandboxHost, pluginSandboxHost, pluginSandb
 import { checkPackageTree, PackageTreeError } from './tree';
 import { companionFilesProblems } from './companions';
 import { HOST_API_URL, hostApiTarget, isHostScope, issueHostCallMeta, revokePluginTokens } from './host-api';
+import { DEFAULT_MCP_EXPOSURE } from '@/shared/mcp-exposure';
 
 type Tx = Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0];
 
@@ -1555,9 +1556,10 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
     },
     requestTimeoutMs: m.server.requestTimeoutMs,
     isEnabled: row.enabled,
-    // Declared tools are reachable through mcp_list_tools / mcp_call_tool;
-    // every other name the server offers is hidden (an exact name wins over `*`).
-    toolExposure: { ...Object.fromEntries(Object.keys(tools).map((t) => [t, 'deferred' as const])), '*': 'hidden' },
+    // Declared tools get the default exposure (codemode scripts, or
+    // mcp_list_tools / mcp_call_tool for a worker without codemode); every
+    // other name the server offers is hidden (an exact name wins over `*`).
+    toolExposure: { ...Object.fromEntries(Object.keys(tools).map((t) => [t, DEFAULT_MCP_EXPOSURE])), '*': 'hidden' },
     plugin: {
       package: row.name, version: row.version, tools: effects,
       // What the model is told each tool does: the manifest's words the admin agreed to, never the running server's.
