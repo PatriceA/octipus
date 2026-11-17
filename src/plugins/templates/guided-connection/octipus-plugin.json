@@ -1,0 +1,19 @@
+{
+  "name": "my-connection",
+  "version": "0.1.0",
+  "apiVersion": "1.2.0",
+  "title": "My connection",
+  "description": "A starting point for a plugin using an existing vault-backed API connection.",
+  "server": { "command": "node", "args": ["server.mjs"] },
+  "host": ["connections:read"],
+  "tools": { "connection_check": { "effect": "read", "description": "Check the configured service without changing it" } },
+  "settings": [
+    { "key": "connection", "label": "Service connection", "type": "text", "required": true },
+    { "key": "health_path", "label": "Health endpoint path", "type": "text", "required": true, "help": "The exact read-only endpoint, for example /health." },
+    { "key": "connection_grants", "label": "Approved API reads", "type": "textarea", "required": true }
+  ],
+  "setup": {
+    "resources": [{ "setting": "connection", "kind": "connection" }, { "setting": "connection_grants", "kind": "http-grants" }],
+    "check": { "tool": "connection_check" }
+  }
+}

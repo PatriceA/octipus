@@ -29,6 +29,7 @@ import { installAgentPlugin, installedForValidation, isActiveAdmin } from '@/plu
 import { listTemplates, readTemplate } from '@/plugins/packages/authoring/templates';
 import { validatePluginDirectory } from '@/plugins/packages/authoring/validate';
 import { networkStatus } from '@/plugins/packages/service';
+import { pluginCapabilityPreflight } from '@/plugins/packages/authoring/preflight';
 import { executionEnvironmentFor } from '@/security/execution-environments';
 import { isInside, userWorkspacesDir } from '@/security/workspace-fs';
 import { toolLogger } from '@/utils/logger';
@@ -110,7 +111,7 @@ export class PluginDevTool extends BaseTool {
         { action: 'write', description: 'Install a plugin package from your workspace, disabled, for an admin to review and enable', defaultLevel: 'ASK', dangerous: true },
       ],
       tools: [
-        { name: PLUGIN_DEV_TOOLS.api, description: 'The live plugin package contract', parameters: {}, returns: 'Manifest JSON schema, events, effects, limits, MCP contract, environment, sandbox, templates' },
+        { name: PLUGIN_DEV_TOOLS.api, description: 'The live plugin package contract', parameters: { needs: { type: 'object', description: 'Requested protectionLevel, interface and host scopes: compatibility before building' } }, returns: 'Manifest JSON schema, events, effects, limits, MCP contract, environment, sandbox, templates' },
         { name: PLUGIN_DEV_TOOLS.template, description: 'List the plugin templates, or return one template\'s files', parameters: { name: { type: 'string', description: 'Template name' } }, returns: 'Templates, or one template\'s files' },
         { name: PLUGIN_DEV_TOOLS.validate, description: 'Validate a plugin directory in your workspace without installing it', parameters: { path: { type: 'string', description: 'Plugin directory', required: true } }, returns: 'ok, problems, warnings, content hash' },
         { name: PLUGIN_DEV_TOOLS.install, description: 'Install a plugin package from your workspace, disabled (admins only, asks first)', parameters: { path: { type: 'string', description: 'Plugin directory', required: true } }, returns: 'The installed package, its content hash and how an admin enables it' },
@@ -125,12 +126,12 @@ export class PluginDevTool extends BaseTool {
         + 'tool effects, contribution kinds (commands, schedules with cron syntax, events, prompt, context), limits, the MCP stdio '
         + 'contract, the environment variables a package gets, the sandbox and network rules on this host, the templates, and '
         + 'whether you may install (youCanInstall). Read it before writing a plugin.',
-      createParameterSchema({}),
-      async (_args, context) => pluginApiContract({
+      createParameterSchema({ needs: { type: 'object', description: 'Before building: {protectionLevel:1..4, interface:page|dashboard|tools, host:[required host scopes]}. Checks compatibility without lowering classification.' } }),
+      async (args, context) => ({ ...await pluginApiContract({
         canInstall: await isActiveAdmin(context.userId),
         network: (m) => networkStatus(m),
         adminPage: adminPluginsPage(),
-      }),
+      }), ...(args.needs !== undefined ? { preflight: pluginCapabilityPreflight(args.needs) } : {}) }),
       { permissionAction: 'read', readOnly: true },
     );
 

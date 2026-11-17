@@ -296,6 +296,7 @@ export interface PluginConsentItem extends PluginDeclarationItem {
 
 /** `POST /api/plugin-packages/preview`: a package downloaded, verified and staged, not installed. */
 export interface PluginInstallPreview {
+  configuration?: import('./plugin-setup').PluginSetupConfiguration;
   previewId: string;
   name: string;
   version: string;
@@ -315,6 +316,7 @@ export interface PluginInstallPreview {
 
 /** `GET /api/plugin-packages/:name/consent`: the declarations of an installed package's content, to agree to before enabling. */
 export interface PluginConsentView {
+  configuration?: import('./plugin-setup').PluginSetupConfiguration;
   name: string;
   version: string;
   title: string;
@@ -328,6 +330,7 @@ export interface PluginConsentView {
 
 /** What an install or consent with the admin's agreement answers. */
 export interface PluginConsentResult {
+  check?: import('./plugin-setup').PluginSetupCheck;
   name: string;
   version: string;
   contentHash: string;

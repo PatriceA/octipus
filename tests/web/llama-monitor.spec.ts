@@ -67,6 +67,7 @@ test('real dashboard saves engines, reloads, reads, records, shares theme and fi
     return r.fulfill({ json: { result: { content: [{ type: 'text', text: JSON.stringify(snapshot) }] } } });
   });
 
+  await page.route('**/api/plugins/llama-monitor/call/connection_options', r => r.fulfill({ json: { result: { content: [{ type: 'text', text: JSON.stringify({ connections: [{ id: 'engine_api', origin: 'https://engine.example.com', paths: ['/health', '/metrics'] }] }) }] } } }));
   await page.goto('/plugins/llama-monitor/dashboard');
   const frame = page.frameLocator('[data-testid="plugin-frame"]');
   await expect(frame.locator('#error')).toHaveText('Store access denied');
@@ -82,8 +83,10 @@ test('real dashboard saves engines, reloads, reads, records, shares theme and fi
   expect(box!.height).toBeGreaterThan(500);
   expect(box!.width).toBeGreaterThan(900);
   await frame.locator('#name').fill('Test engine');
-  await frame.locator('#url').fill('https://engine.example.com');
-  await frame.locator('#connection').fill('engine_api');
+  await frame.locator('#discover-connections').click();
+  await frame.locator('#approved-engine').selectOption('engine_api');
+  await expect(frame.locator('#url')).toHaveValue('https://engine.example.com');
+  await expect(frame.locator('#connection')).toHaveValue('engine_api');
   await frame.locator('#save').click();
   await expect(frame.locator('#status')).toContainText('Engine saved: Test engine');
   await expect(frame.locator('#engines option')).toHaveCount(2);

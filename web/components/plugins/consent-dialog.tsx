@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { AlertTriangle, CircleCheck, Info, ShieldCheck, X } from 'lucide-react';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { problemsOf } from '@/components/business/common';
 import { Portal } from '@/components/ui/portal';
 import { api } from '@/lib/api';
@@ -19,6 +19,10 @@ import {
   requiredConsentIds,
 } from '@/lib/plugin-packages';
 import { cn } from '@/lib/utils';
+import { SetupFields } from './setup-fields';
+import { CompanionServices } from './companion-services';
+import { fromFieldValues, toFieldValues, type FieldValues } from '@/components/business/common';
+import type { PluginSetupConfiguration, PluginSetupDraft, PluginSetupCheck } from '../../../src/shared/plugin-setup';
 
 /** How long Install stays disabled once the declarations show, so a click aimed at what was there before cannot land on it (as the plugin page's confirm). */
 export const CONSENT_ARM_DELAY_MS = 700;
@@ -29,6 +33,7 @@ export type ConsentSource =
   | { kind: 'installed'; name: string };
 
 interface ConsentData {
+  configuration?: PluginSetupConfiguration;
   name: string;
   version: string;
   title: string;
@@ -83,15 +88,75 @@ export function ConsentDialog({ source, onClose, onDone, enableByDefault }: {
   const [ticked, setTicked] = useState<Record<string, boolean>>({});
   const [enable, setEnable] = useState(enableByDefault ?? source.kind === 'installed');
   const [armed, setArmed] = useState(false);
+  const [stage, setStage] = useState<'configure' | 'review' | 'test' | 'ready'>('review');
+  const [values, setValues] = useState<FieldValues>({});
+  const [secretValues, setSecretValues] = useState<Record<string, string>>({});
+  const [setupError, setSetupError] = useState('');
+  const [savedAt, setSavedAt] = useState('');
+  const [hydrated, setHydrated] = useState(false);
+  const [recoveryName, setRecoveryName] = useState<string | null>(null);
+  const [receipt, setReceipt] = useState<PluginConsentResult | null>(null);
+  const revision = useRef(0);
+  const saving = useRef<Promise<unknown>>(Promise.resolve());
+  const effectiveSource: ConsentSource = recoveryName ? { kind: 'installed', name: recoveryName } : source;
   const query = useQuery({
-    queryKey: ['plugin-consent', source],
-    queryFn: () => load(source),
+    queryKey: ['plugin-consent', effectiveSource],
+    queryFn: () => load(effectiveSource),
     retry: false,
     gcTime: 0,
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
   });
   const data = query.data;
+  useEffect(() => {
+    if (!data?.configuration) return;
+    let cancelled = false;
+    api.get<{ draft: PluginSetupDraft | null }>(`/plugin-packages/setup/${encodeURIComponent(data.name)}/draft`).then(({ draft }) => {
+      if (cancelled) return;
+      setTicked({});
+      revision.current = draft?.revision ?? 0;
+      const configuration = data.configuration!;
+      const initial = draft?.contentHash === data.contentHash ? draft.settings : configuration.settings;
+      setValues(toFieldValues(configuration.fields, initial));
+      setStage(configuration.fields.length || configuration.secrets.some(s => !s.configured) ? 'configure' : 'review');
+      if (enableByDefault === undefined) setEnable(true);
+      setHydrated(true);
+    }).catch(error => { if (!cancelled) setSetupError(`Could not restore setup: ${problemsOf(error)}`); });
+    return () => { cancelled = true; };
+  }, [data, query.dataUpdatedAt, enableByDefault]);
+  const saveDraft = useCallback(async () => {
+    if (!data?.configuration || !hydrated) return Promise.resolve();
+    const settings = fromFieldValues(data.configuration.fields, values);
+    const next = saving.current.then(async () => {
+      const result = await api.put<{ draft: PluginSetupDraft }>(`/plugin-packages/setup/${encodeURIComponent(data.name)}/draft`, {
+        previewId: data.previewId ?? undefined, contentHash: data.contentHash, settings, revision: revision.current,
+        stage: stage === 'configure' ? 'configure' : 'review',
+      });
+      revision.current = result.draft.revision;
+      setSavedAt(result.draft.updatedAt);
+    });
+    saving.current = next.catch(error => { setSetupError(problemsOf(error)); });
+    return next;
+  }, [data, hydrated, values, stage]);
+  useEffect(() => {
+    if (!hydrated || stage !== 'configure' && stage !== 'review') return;
+    const timer = setTimeout(() => { void saveDraft().catch(error => setSetupError(problemsOf(error))); }, 800);
+    return () => clearTimeout(timer);
+    // Save only edits, not the save receipt itself.
+  }, [saveDraft, hydrated, stage]);
+  const preflight = useMutation({
+    mutationFn: async () => {
+      if (!data?.configuration) return;
+      for (const secret of data.configuration.secrets) if (secret.required && !secret.configured && !secretValues[secret.key]?.trim()) throw new Error(`${secret.label} is required. Enter it here; it goes directly to the vault on install.`);
+      await api.post(`/plugin-packages/setup/${encodeURIComponent(data.name)}/preflight`, { previewId: data.previewId ?? undefined, contentHash: data.contentHash, settings: fromFieldValues(data.configuration.fields, values) });
+      await saveDraft();
+    },
+    onSuccess: () => { setSetupError(''); setStage('review'); },
+  });
+  const connectionCheck = useMutation({
+    mutationFn: (result: PluginConsentResult) => api.post<PluginSetupCheck>(`/plugin-packages/setup/${encodeURIComponent(result.name)}/check`, { contentHash: result.contentHash }),
+    onSuccess: check => { setReceipt(current => current ? { ...current, check } : null); setStage(check.ok ? 'ready' : 'test'); },
+  });
   useEffect(() => {
     if (!data) return;
     const timer = setTimeout(() => setArmed(true), CONSENT_ARM_DELAY_MS);
@@ -100,10 +165,10 @@ export function ConsentDialog({ source, onClose, onDone, enableByDefault }: {
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     dialog.current?.focus();
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { if (receipt) onDone(receipt); else onClose(); } };
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('keydown', onKey); previous?.focus?.(); };
-  }, [onClose]);
+  }, [onClose, onDone, receipt]);
   const required = data ? requiredConsentIds(data.declarations) : [];
   const allTicked = required.every((id) => ticked[id]);
   const submit = useMutation({
@@ -111,14 +176,26 @@ export function ConsentDialog({ source, onClose, onDone, enableByDefault }: {
       if (!data) throw new Error('Nothing to agree to');
       // Every required item, and an optional choice only when ticked (never pre-ticked).
       const accepted = data.declarations.filter((i) => !i.carried && ticked[i.id] === true).map((i) => i.id);
-      return data.previewId
-        ? api.post<PluginConsentResult>('/plugin-packages/install', { previewId: data.previewId, contentHash: data.contentHash, accepted, enable })
-        : api.post<PluginConsentResult>(`/plugin-packages/${encodeURIComponent(data.name)}/consent`, { contentHash: data.contentHash, accepted, enable });
+      const configuration = data.configuration ? { settings: fromFieldValues(data.configuration.fields, values), secrets: secretValues } : {};
+      return data.previewId && !data.configuration?.installed
+        ? api.post<PluginConsentResult>('/plugin-packages/install', { previewId: data.previewId, contentHash: data.contentHash, accepted, enable, ...configuration })
+        : api.post<PluginConsentResult>(`/plugin-packages/${encodeURIComponent(data.name)}/consent`, { contentHash: data.contentHash, accepted, enable, ...configuration });
     },
-    onSuccess: (result) => onDone(result),
+    onSuccess: result => {
+      if (!data?.configuration) { onDone(result); return; }
+      setSecretValues({}); setReceipt(result);
+      if (result.enableProblem) { setSetupError(result.enableProblem); setRecoveryName(result.name); return; }
+      if (result.enabled && data.configuration.check) { setStage('test'); connectionCheck.mutate(result); }
+      else setStage('ready');
+    },
   });
+  const recover = useMutation({ mutationFn: () => data ? load({ kind: 'installed', name: data.name }) : Promise.reject(new Error('No package to inspect')),
+    onSuccess: installed => {
+      if (installed.contentHash !== data?.contentHash) { setSetupError('The installed content differs. Close this dialog and review the installed package.'); return; }
+      setSecretValues({}); setRecoveryName(installed.name); setSetupError('Installation was found. Continue configuration without reinstalling. Vault values are not read back; enter a replacement only if you need to change one.');
+    } });
   const upgrade = data?.upgradeFrom !== null && data?.upgradeFrom !== undefined;
-  const action = source.kind === 'installed' ? (enable ? 'Agree and enable' : 'Agree') : upgrade ? 'Upgrade' : 'Install';
+  const action = data?.configuration?.installed ? (enable ? 'Apply and enable' : 'Save configuration') : source.kind === 'installed' ? (enable ? 'Agree and enable' : 'Agree') : upgrade ? 'Upgrade' : 'Install';
 
   return (
     <Portal>
@@ -136,7 +213,7 @@ export function ConsentDialog({ source, onClose, onDone, enableByDefault }: {
             <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-primary" aria-hidden />
             <div className="min-w-0 flex-1">
               <h2 id={titleId} className="text-sm font-semibold text-on-surface">
-                {data ? `${action} ${displayText(data.title)}` : source.kind === 'preview' ? 'Checking the package…' : 'Reading the package…'}
+                {data ? `${data.configuration ? 'Set up' : action} ${displayText(data.title)}` : source.kind === 'preview' ? 'Checking the package…' : 'Reading the package…'}
               </h2>
               {data && (
                 <p className="mt-0.5 text-xs text-on-surface-variant">
@@ -147,21 +224,30 @@ export function ConsentDialog({ source, onClose, onDone, enableByDefault }: {
                 </p>
               )}
             </div>
-            <button type="button" onClick={onClose} aria-label="Close" className="rounded-xs p-1 text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface">
+            <button type="button" onClick={() => receipt ? onDone(receipt) : onClose()} aria-label="Close" className="rounded-xs p-1 text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface">
               <X className="h-4 w-4" />
             </button>
           </div>
 
           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
+            {data?.configuration && <nav aria-label="Plugin setup progress" className="flex flex-wrap gap-3 border-b border-outline-variant pb-3 text-xs">{(['configure', 'review', 'test', 'ready'] as const).map((step, index) => <span key={step} aria-current={step === stage ? 'step' : undefined} className={step === stage ? 'font-semibold text-primary' : 'text-on-surface-variant'}>{index + 1}. { { configure: 'Connect resources', review: 'Review access', test: 'Check readiness', ready: 'Ready' }[step]}</span>)}</nav>}
             {query.isLoading && <p className="text-xs text-on-surface-variant" role="status">Downloading and verifying the signature, the listing and the content hash…</p>}
             {query.error && <p role="alert" className="whitespace-pre-line text-xs text-error">! {problemsOf(query.error)}</p>}
-            {data && (
+            {data?.configuration && stage === 'configure' && <SetupFields configuration={data.configuration} values={values} onChange={setValues} secrets={secretValues} onSecrets={setSecretValues} disabled={submit.isPending || !hydrated} />}
+            {data?.configuration?.companions?.length && (stage === 'configure' || stage === 'test') ? <CompanionServices companions={data.configuration.companions} plugin={receipt?.name ?? (data.configuration.installed ? data.name : undefined)} /> : null}
+            {data?.configuration && !hydrated && <p role="status" className="text-xs text-on-surface-variant">Restoring saved configuration…</p>}
+            {setupError && <p role="alert" className="text-sm text-error">{setupError}</p>}
+            {preflight.error && <p role="alert" className="text-sm text-error">{problemsOf(preflight.error)}</p>}
+            {data && stage === 'review' && (
               <>
+                {data.configuration && <>
+                  <p className="text-sm text-on-surface">{data.configuration.installed ? 'This exact package is already installed. Setup will configure it without installing it again.' : 'Local use does not require marketplace publishing or your own signing key.'}</p>
+                  <details className="rounded-lg border border-outline-variant p-3"><summary className="cursor-pointer text-sm">Selected resources and settings</summary><dl className="mt-2 space-y-2 text-xs">{Object.entries(fromFieldValues(data.configuration.fields, values)).map(([key, value]) => <div key={key}><dt className="font-medium">{data.configuration?.fields.find(f => f.key === key)?.label ?? key}</dt><dd className="whitespace-pre-wrap break-all text-on-surface-variant">{String(value)}</dd></div>)}</dl></details>
+                </>}
                 <p className="text-xs text-on-surface">
-                  It declares what it will do. Tick each item to agree to it; {source.kind === 'installed' ? 'enabling' : 'the install'} runs only
-                  with every item agreed, for exactly this content:{' '}
-                  <code className="break-all font-mono text-on-surface-variant" data-testid="consent-content-hash">{data.contentHash}</code>
+                  Review what this plugin can do. Approve its required access together, or inspect the individual items. Optional choices remain yours.
                 </p>
+                <details className="text-xs text-on-surface-variant"><summary className="cursor-pointer">Technical verification</summary><code className="break-all font-mono" data-testid="consent-content-hash">{data.contentHash}</code></details>
                 {data.guidance.length > 0 && (
                   <div className="space-y-0.5" data-testid="consent-notes">
                     {data.guidance.map((g) => <Guidance key={`${g.code}-${g.message}`} text={g.message} tone={g.code === 'deprecated' || g.code === 'signature' || g.code === 'incompatible' ? 'warning' : 'info'} />)}
@@ -179,6 +265,7 @@ export function ConsentDialog({ source, onClose, onDone, enableByDefault }: {
                     </ul>
                   </section>
                 )}
+                <label className="flex items-start gap-2 rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm font-medium"><input type="checkbox" className="mt-0.5 accent-primary" checked={allTicked} disabled={submit.isPending} onChange={e => setTicked(current => ({ ...current, ...Object.fromEntries(required.map(id => [id, e.target.checked])) }))} />Approve all required access described below for this package</label>
                 <ul className="space-y-1.5" aria-label="Declarations">
                   {data.declarations.map((item) => {
                     const id = `consent-${item.id.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
@@ -213,7 +300,7 @@ export function ConsentDialog({ source, onClose, onDone, enableByDefault }: {
                               {fresh && item.status === 'changed' && <span className="ml-2 rounded-xs bg-primary px-1 text-[11px] font-medium text-on-primary">changed</span>}
                               {item.optional && <span className="ml-2 text-xs text-on-surface-variant" data-testid="consent-optional">(optional: left unticked, it is not done)</span>}
                             </label>
-                            <p id={`${id}-detail`} className="break-all font-mono text-xs text-on-surface-variant">{displayText(item.detail)}</p>
+                            <details className="text-xs text-on-surface-variant"><summary className="cursor-pointer">Details</summary><p id={`${id}-detail`} className="break-all font-mono">{displayText(item.detail)}</p></details>
                             {item.guidance && <Guidance text={item.guidance} tone={guidanceTone(item)} />}
                           </div>
                         </div>
@@ -223,28 +310,43 @@ export function ConsentDialog({ source, onClose, onDone, enableByDefault }: {
                 </ul>
               </>
             )}
+            {receipt && (stage === 'test' || stage === 'ready') && <section className="space-y-3" aria-live="polite">
+              <h3 className="text-lg font-semibold">{stage === 'ready' ? receipt.enabled ? 'Your plugin is ready' : 'Installed and kept disabled' : 'Checking readiness'}</h3>
+              {connectionCheck.isPending && <p>Running the plugin’s declared read-only test…</p>}
+              {receipt.check && <p className={receipt.check.ok ? 'text-tertiary' : 'text-error'}>{receipt.check.message}</p>}
+              {connectionCheck.error && <p role="alert" className="text-error">{problemsOf(connectionCheck.error)}</p>}
+              {!data?.configuration?.check && receipt.enabled && <p className="text-sm text-on-surface-variant">Enabled. This plugin does not provide an automatic connection test.</p>}
+              {stage === 'test' && !connectionCheck.isPending && <button type="button" onClick={() => connectionCheck.mutate(receipt)} className="rounded-lg border border-outline-variant px-3 py-2 text-sm">Retry connection test</button>}
+            </section>}
             {submit.error && <p role="alert" className="whitespace-pre-line text-xs text-error">! {problemsOf(submit.error)}</p>}
+            {submit.error && data?.previewId && <button type="button" disabled={recover.isPending} onClick={() => recover.mutate()} className="text-sm text-primary underline">Check whether installation already finished</button>}
+            {recover.error && <p role="alert" className="text-sm text-error">{problemsOf(recover.error)}</p>}
           </div>
 
           <div className="flex flex-wrap items-center gap-3 border-t border-outline-variant/60 px-4 py-3">
-            <label className="flex items-center gap-2 text-xs text-on-surface">
+            {stage === 'review' && <label className="flex items-center gap-2 text-xs text-on-surface">
               <input type="checkbox" className="h-4 w-4 accent-primary" checked={enable} onChange={(e) => setEnable(e.target.checked)} disabled={submit.isPending} />
               {source.kind === 'installed' ? 'Enable it now' : 'Enable after install'}
-            </label>
+            </label>}
             <span className="flex-1 text-xs text-on-surface-variant" aria-live="polite" data-testid="consent-progress">
-              {data ? `${required.filter((x) => ticked[x]).length} of ${required.length} agreed` : ''}
+              {stage === 'configure' ? savedAt ? 'Configuration saved · secrets stay unsaved until install' : 'Configuration saves automatically · secrets are not saved in drafts' : stage === 'review' && data ? `${required.filter((x) => ticked[x]).length} of ${required.length} agreed` : ''}
             </span>
-            <button type="button" onClick={onClose} className="rounded-xs border border-outline-variant px-3 py-1.5 text-xs text-on-surface hover:bg-surface-container-high">
-              Cancel
+            <button type="button" onClick={() => receipt ? onDone(receipt) : onClose()} className="rounded-xs border border-outline-variant px-3 py-1.5 text-xs text-on-surface hover:bg-surface-container-high">
+              {receipt ? 'Close' : 'Cancel'}
             </button>
+            {stage === 'configure' && <button type="button" disabled={preflight.isPending || !hydrated} onClick={() => preflight.mutate()} className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-on-primary disabled:opacity-50">{preflight.isPending ? 'Checking…' : 'Continue to review'}</button>}
+            {stage === 'review' && <>
+            {data?.configuration && (data.configuration.fields.length > 0 || data.configuration.secrets.length > 0) && <button type="button" onClick={() => { setTicked({}); setStage('configure'); }} className="text-xs text-primary underline">Edit configuration</button>}
             <button
               type="button"
-              disabled={!data || !armed || !allTicked || submit.isPending}
+              disabled={!data || !armed || !allTicked || submit.isPending || !!data.configuration && !hydrated || !!submit.error && !!data.previewId && !recoveryName}
               onClick={() => submit.mutate()}
               className="inline-flex items-center gap-1 rounded-xs bg-primary px-3 py-1.5 text-xs font-medium text-on-primary disabled:opacity-50"
             >
               <CircleCheck className="h-3.5 w-3.5" aria-hidden /> {action}
-            </button>
+            </button></>}
+            {stage === 'ready' && receipt?.enabled && data?.configuration?.open && <a href={data.configuration.open.href} onClick={() => onDone(receipt)} className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-on-primary">{data.configuration.open.label}</a>}
+            {stage === 'ready' && receipt && <button type="button" onClick={() => onDone(receipt)} className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-on-primary">Done</button>}
           </div>
         </div>
       </div>

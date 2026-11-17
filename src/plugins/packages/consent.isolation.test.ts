@@ -244,3 +244,28 @@ describe('install consent', () => {
     expect(await listRunningRuns(NAME, other)).toEqual([]);
   });
 });
+
+test('guided settings are checked before installation and included without a separate configuration round trip', async () => {
+ const { previewInstall, installPreview } = await import('./consent');
+ const { findRow } = await import('./service');
+ const path = fixture('8.0.0', m => { m.settings = [{ key: 'region', label: 'Region', type: 'text', required: true }]; });
+ const preview = await previewInstall({ path }, admin);
+ expect(preview.configuration?.fields[0].key).toBe('region');
+ await expect(installPreview(preview.previewId, { contentHash: preview.contentHash, accepted: preview.declarations.map(i => i.id), settings: {} }, admin)).rejects.toThrow(/Region/);
+ expect(await findRow(NAME)).toBeNull();
+ const result = await installPreview(preview.previewId, { contentHash: preview.contentHash, accepted: preview.declarations.map(i => i.id), settings: { region: 'local' } }, admin);
+ expect(result.enableProblem).toBeNull();
+ expect((await findRow(NAME))?.settings.region).toBe('local');
+});
+
+test('setup drafts survive reload, isolate owners and workspaces, and reject stale writes', async () => {
+ const { pluginSetupRepository } = await import('@/db/repositories/plugin-setup-repository');
+ const contentHash = `sha256:${'e'.repeat(64)}`;
+ const first = await pluginSetupRepository.save(admin, null, 'draft-test', { contentHash, settings: { region: 'one' }, stage: 'configure' }, 0);
+ expect((await pluginSetupRepository.get(admin, null, 'draft-test'))?.settings.region).toBe('one');
+ expect(await pluginSetupRepository.get(other, null, 'draft-test')).toBeNull();
+ expect(await pluginSetupRepository.get(admin, 'workspace', 'draft-test')).toBeNull();
+ await expect(pluginSetupRepository.save(admin, null, 'draft-test', { contentHash, settings: { region: 'two' }, stage: 'review' }, 0)).rejects.toThrow(/another window/);
+ const second = await pluginSetupRepository.save(admin, null, 'draft-test', { contentHash, settings: { region: 'two' }, stage: 'review' }, first.revision);
+ expect(second.revision).toBe(2);
+});

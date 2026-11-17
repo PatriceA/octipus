@@ -761,4 +761,27 @@ export async function collectorOptions(grant: HostTokenGrant, principal: Princip
   return { ok: true, value: { environments, connections } };
 }
 
+/** Repository/ref pickers use the same current folder grant as collection. */
+export async function collectorRepositories(grant: HostTokenGrant, principal: Principal, input: unknown): Promise<CollectorOutcome<unknown>> {
+  const limited = checkRateLimit(`plugin-repo-picker:${grant.plugin}:${grant.userId}`, { capacity: 10, refillPerSecond: 0.5 });
+  if (!limited.allowed) return { ok: false, status: 429, code: 'rate_limited', error: 'Wait a moment before browsing repositories again.' };
+  if (principal.workspaceKind === 'shared') return { ok: false, status: 409, code: 'space', error: 'Repository selection requires a personal workspace.' };
+  const parsed = z.object({ environmentId: z.string().min(1).max(100), root: z.string().min(1).max(2000), repository: z.string().max(2000).optional() }).strict().safeParse(input);
+  if (!parsed.success) return { ok: false, status: 400, code: 'invalid', error: 'Choose an environment and approved folder.' };
+  try {
+    const caller = callerOf(grant, principal.workspaceId ?? null, parsed.data.environmentId);
+    const policy = await resolvePolicy(grant.plugin, caller);
+    const root = await realpath(parsed.data.root);
+    if (!policy.roots.some(p => pathInEnvironment(p, root))) return { ok: false, status: 403, code: 'repo_not_approved', error: 'The selected folder is not approved for this plugin.' };
+    if (policy.level > grant.maxProtection) return { ok: false, status: 403, code: 'protection_level', error: 'This plugin cannot read evidence at the configured protection level.' };
+    const { setupRepositories } = await import('./setup-repositories');
+    const value = await setupRepositories(caller, parsed.data.environmentId, root, parsed.data.repository, policy.roots);
+    await noteHostRead(grant, policy.level);
+    return { ok: true, value };
+  } catch (error) {
+    if (error instanceof CollectorError) return { ok: false, status: error.status, code: error.code, error: error.message };
+    return { ok: false, status: 400, code: 'discovery_failed', error: error instanceof Error ? error.message : 'Repository discovery failed.' };
+  }
+}
+
 export { CollectorError };

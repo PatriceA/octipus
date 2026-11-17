@@ -120,9 +120,8 @@ export async function installAgentPlugin(req: AgentInstallRequest): Promise<Agen
       contentHash: row.contentHash ?? '',
       signedBy: row.signedBy,
       warnings: [...validation.warnings.filter((w) => !w.includes('is installed (version')), ...row.warnings],
-      review: `Installed disabled. Octipus does not start it until an admin reviews it and enables it: open ${req.adminPage}, check that ${row.name} `
-        + `shows content hash ${row.contentHash} and "Authored by an agent", read its tools, effects and hosts, set any required settings `
-        + `and secrets, approve what it adds for every user (commands, schedules, events, prompt, context) if anything, then enable it (or: octi plugin list, then PATCH /api/plugin-packages/${row.name} { "enabled": true }).`,
+      review: `Installed disabled. Continue in the guided setup: ${req.adminPage}?setup=${encodeURIComponent(row.name)}. `
+        + 'Choose resources, review the access once, and run its setup check. Private local use does not require signing keys or marketplace publication.',
     };
   } catch (err) {
     if (err instanceof PluginPackageError) return refused(err.message, err.problems.length > 1 || err.problems[0] !== err.message ? err.problems : undefined);

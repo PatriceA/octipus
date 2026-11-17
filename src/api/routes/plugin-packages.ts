@@ -409,7 +409,7 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
       if (denied) return denied;
       try {
         const { installPreview } = await import('@/plugins/packages/consent');
-        return await installPreview(body.previewId, { contentHash: body.contentHash, accepted: body.accepted, enable: body.enable === true }, principal.userId);
+        return await installPreview(body.previewId, { contentHash: body.contentHash, accepted: body.accepted, enable: body.enable === true, settings: body.settings, secrets: body.secrets }, principal.userId, { userId: principal.userId, workspaceId: principal.workspaceId });
       } catch (err) {
         return refused(err, set);
       }
@@ -420,6 +420,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
         contentHash: t.String({ maxLength: 71, pattern: '^sha256:[0-9a-f]{64}$' }),
         accepted: t.Array(t.String({ maxLength: 400 }), { maxItems: 1000 }),
         enable: t.Optional(t.Boolean()),
+        settings: t.Optional(t.Record(t.String(), t.Unknown())),
+        secrets: t.Optional(t.Record(t.String(), t.String({ maxLength: MAX_PLUGIN_SECRET_LENGTH }))),
       }),
       detail: { tags: ['plugin-packages'] },
     },
@@ -540,7 +542,7 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
       if (denied) return denied;
       try {
         const { consentToInstalled } = await import('@/plugins/packages/consent');
-        return await consentToInstalled(params.name, { contentHash: body.contentHash, accepted: body.accepted, enable: body.enable === true }, principal.userId);
+        return await consentToInstalled(params.name, { contentHash: body.contentHash, accepted: body.accepted, enable: body.enable === true, settings: body.settings, secrets: body.secrets }, principal.userId, { userId: principal.userId, workspaceId: principal.workspaceId });
       } catch (err) {
         return refused(err, set);
       }
@@ -551,6 +553,8 @@ export const pluginPackageRoutes = new Elysia({ prefix: '/plugin-packages' })
         contentHash: t.String({ maxLength: 71, pattern: '^sha256:[0-9a-f]{64}$' }),
         accepted: t.Array(t.String({ maxLength: 400 }), { maxItems: 1000 }),
         enable: t.Optional(t.Boolean()),
+        settings: t.Optional(t.Record(t.String(), t.Unknown())),
+        secrets: t.Optional(t.Record(t.String(), t.String({ maxLength: MAX_PLUGIN_SECRET_LENGTH }))),
       }),
       detail: { tags: ['plugin-packages'] },
     },

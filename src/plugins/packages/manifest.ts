@@ -5,7 +5,7 @@
  * when an agent first calls it.
  */
 import { z } from 'zod';
-import { fieldListSchema } from '@/core/records/fields';
+import { fieldListSchema, validateRecordData } from '@/core/records/fields';
 import { SIGNATURE_FILE } from './integrity';
 import { refineRuntime, runtimeFields } from './manifest-runtime';
 import { contributionFields, contributionProblems } from './manifest-contributions';
@@ -14,6 +14,7 @@ import { STORE_FIELDS, storeProblems } from './manifest-store';
 import { DASHBOARD_FIELDS, dashboardProblems } from './manifest-dashboards';
 import { UI_HOST_FIELDS } from './manifest-ui-host';
 import { COMPANION_FIELDS } from './manifest-companions';
+import { setupSchema } from './manifest-setup';
 import {
   PLUGIN_PACKAGE_API_VERSION,
   PLUGIN_TOOL_EFFECTS,
@@ -62,6 +63,7 @@ export const manifestSchema = z.object({
     .refine(hostPortOk, 'network: a port is 1-65535')).max(50).optional(),
   maxProtection: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).optional(),
   settings: fieldListSchema.optional(),
+  setup: setupSchema.optional(),
   secrets: z.array(z.object({
     key: z.string().regex(ENV_KEY_RE, 'secrets: a key is an environment variable name such as API_TOKEN'),
     label: z.string().trim().min(1).max(100),
@@ -76,6 +78,22 @@ export const manifestSchema = z.object({
   ...COMPANION_FIELDS,
 }).strict().superRefine((m, ctx) => {
   refineRuntime(m, ctx);
+  if (m.setup) {
+    if (Number(m.apiVersion.split('.')[1]) < 2) ctx.addIssue({ code: 'custom', message: 'setup requires apiVersion 1.2.0 or newer' });
+    const seen = new Set<string>();
+    for (const r of m.setup.resources ?? []) {
+      const field = m.settings?.find(f => f.key === r.setting);
+      if (!field || !['text', 'textarea', 'select'].includes(field.type)) ctx.addIssue({ code: 'custom', message: `setup.resources: ${r.setting} must name a text, textarea or select setting` });
+      if (seen.has(r.setting)) ctx.addIssue({ code: 'custom', message: `setup.resources: duplicate setting ${r.setting}` });
+      seen.add(r.setting);
+      if (r.presets && r.kind !== 'http-grants') ctx.addIssue({ code: 'custom', message: 'setup.resources presets apply to http-grants only' });
+      if (r.kind === 'protection' && Object.hasOwn(m.setup.defaults ?? {}, r.setting)) ctx.addIssue({ code: 'custom', message: 'Protection classification must be chosen by the owner, not defaulted by the plugin' });
+    }
+    for (const key of Object.keys(m.setup.defaults ?? {})) if (!m.settings?.some(f => f.key === key)) ctx.addIssue({ code: 'custom', message: `setup.defaults: unknown setting ${key}` });
+    try { validateRecordData((m.settings ?? []).map(f => ({ ...f, required: false })), m.setup.defaults ?? {}); }
+    catch { ctx.addIssue({ code: 'custom', message: 'setup.defaults must match the declared setting types and options' }); }
+    if (m.setup.check && m.tools?.[m.setup.check.tool]?.effect !== 'read') ctx.addIssue({ code: 'custom', message: 'setup.check must name one of this package’s read-only tools' });
+  }
   if (m.companions && Number(m.apiVersion.split('.')[1]) < 1) ctx.addIssue({ code: 'custom', message: 'companions requires apiVersion 1.1.0 or newer' });
   // Pages call the plugin's own sandboxed tools, and the host API token rides
   // those tool calls: both need the package runtime.
