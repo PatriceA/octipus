@@ -71,14 +71,15 @@ export const pluginSetupRoutes = new Elysia({ prefix: '/plugin-packages/setup' }
       if (!check || row.manifest.tools?.[check.tool]?.effect !== 'read') throw new PluginPackageError('invalid', 'This plugin does not declare a read-only connection test.');
       const workspaceId = ctx.principal.workspaceId ?? null;
       const context = buildAgentContext({ id: `plugin-setup-${crypto.randomUUID()}`, sessionId: '', userId: ctx.principal.userId,
-        scope: { workspaceId, space: null, trigger: 'user', funding: fundingFor('user', null) }, topic: 'plugin-setup', model: 'plugin-setup', role: 'general', attended: false, status: 'running' });
+        scope: { workspaceId, space: null, trigger: 'user', funding: fundingFor('user', null) }, topic: 'plugin-setup', model: 'plugin-setup', role: 'general', attended: false, status: 'running', metadata: { source: 'plugin-page', plugin: row.name, setup: true } });
       const server = `${PLUGIN_SERVER_PREFIX}${row.name}`;
       const result = await getMCPBridge().callTool(server, check.tool, check.input ?? {}, context, { server_id: server, tool_name: check.tool, arguments: check.input ?? {} });
       const envelope = result as { isError?: boolean; content?: Array<{ type: string; text?: string }>; structuredContent?: unknown };
       const text = envelope.content?.find(c => c.type === 'text')?.text;
-      const data: unknown = envelope.structuredContent ?? (text ? JSON.parse(text) : null);
+      let data: unknown = envelope.structuredContent ?? null;
+      if (data === null && text && !envelope.isError) { try { data = JSON.parse(text); } catch { /* An unstructured response cannot establish readiness. */ } }
       const view = data as { ok?: unknown; message?: unknown } | null;
-      const out: PluginSetupCheck = { ok: !envelope.isError && view?.ok === true, message: typeof view?.message === 'string' ? view.message.slice(0, 1000) : 'The plugin did not confirm a successful connection.', checkedAt: new Date().toISOString() };
+      const out: PluginSetupCheck = { ok: !envelope.isError && view?.ok === true, message: typeof view?.message === 'string' ? view.message.slice(0, 1000) : envelope.isError && text ? text.slice(0, 1000) : 'The plugin did not confirm a successful connection.', checkedAt: new Date().toISOString() };
       return out;
     } catch (error) { apiLogger.warn({ plugin: ctx.params.name, errorClass: error instanceof Error ? error.name : 'unknown' }, 'Plugin setup check failed'); return fail(error, ctx.set); }
   }, { params: nameParam, body: t.Object({ contentHash: hash }) });
