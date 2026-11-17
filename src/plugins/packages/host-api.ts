@@ -239,6 +239,7 @@ export const SCOPE_TOOL_ACTION: Record<PluginHostScope, { toolId: string; action
   'mail:draft': null,
   'mail:send': null,
   'calendar:read': null,
+  'connections:read': { toolId: 'connections', action: 'read' },
   'calendar:write': null,
 };
 

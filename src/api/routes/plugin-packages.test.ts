@@ -15,6 +15,8 @@ const fixture = vi.hoisted(() => ({
   user: null as TestUser | null,
   /** The API token's scopes; null: a browser session (or an unscoped token), every scope. */
   scopes: null as string[] | null,
+  companionProblem: null as string | null,
+  companionChanged: false,
   calls: [] as Array<{ fn: string; args: unknown[] }>,
 }));
 
@@ -25,13 +27,16 @@ vi.mock('@/api/context', async () => ({
   })),
 }));
 
-const row = { name: 'demo', version: '1.0.0', enabled: false, contentHash: `sha256:${'a'.repeat(64)}`, signedBy: 'Acme', warnings: [], manifest: {} };
+const row = { name: 'demo', version: '1.0.0', enabled: false, contentHash: `sha256:${'a'.repeat(64)}`, signedBy: 'Acme', warnings: [], manifest: { companions: [{ id:'collector', bundle:'collector/bundle.tar.gz', guide:'collector/README.md' }] } };
 vi.mock('@/plugins/packages/service', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/plugins/packages/service')>(),
   listPackages: async () => { fixture.calls.push({ fn: 'listPackages', args: [] }); return []; },
   installFromDirectory: async (...args: unknown[]) => { fixture.calls.push({ fn: 'installFromDirectory', args }); return row; },
   configure: async (...args: unknown[]) => { fixture.calls.push({ fn: 'configure', args }); return row; },
   packageView: async () => row,
+  findRow: async (name: string) => name === 'demo' ? row : null,
+  packageDir: () => '/fixture',
+  checkPackageBeforeStart: async () => fixture.companionProblem,
   setSecret: async () => {},
   uninstall: async () => {},
 }));
@@ -94,6 +99,14 @@ vi.mock('@/db/repositories/plugin-store-repository', () => ({
 }));
 vi.mock('@/plugins/packages/store', () => ({ storeQuotaOf: async () => 5_242_880 }));
 
+vi.mock('@/plugins/packages/companions', () => ({
+ MAX_COMPANION_BUNDLE_BYTES: 8388608,
+ companionFile: async (_dir: string, path: string) => { fixture.calls.push({fn:'companionFile',args:[path]}); return Buffer.from(path.endsWith('.md')?'setup guide':'bundle bytes'); },
+}));
+vi.mock('@/plugins/packages/integrity', async original => ({
+ ...await original<typeof import('@/plugins/packages/integrity')>(),
+ hashPackageContent: async () => fixture.companionChanged ? 'sha256:changed' : row.contentHash,
+}));
 const { pluginPackageRoutes } = await import('./plugin-packages');
 const app = new App({ prefix: '/api' }).use(pluginPackageRoutes);
 
@@ -110,6 +123,8 @@ const SHA = `sha256:${'b'.repeat(64)}`;
 const ROUTES: Array<[string, string, unknown?]> = [
   ['GET', '/'],
   ['GET', '/registry'],
+  ['GET', '/demo/companions/collector/bundle'],
+  ['GET', '/demo/companions/collector/guide'],
   ['GET', '/bundled'],
   ['POST', '/', { path: '/opt/plugins/demo' }],
   ['POST', '/', { bundled: 'reader' }],
@@ -131,6 +146,23 @@ describe('plugin package routes', () => {
   beforeEach(() => {
     fixture.calls = [];
     fixture.scopes = null;
+    fixture.companionProblem = null;
+    fixture.companionChanged = false;
+  });
+
+  test('disabled companion downloads are attachments; changed or revoked content is refused', async () => {
+    fixture.user = ADMIN;
+    const request = () => app.handle(new Request('http://localhost/api/plugin-packages/demo/companions/collector/bundle'));
+    const good = await request();
+    expect(good.status).toBe(200);
+    expect(good.headers.get('content-disposition')).toContain('attachment;');
+    expect(good.headers.get('content-type')).toBe('application/gzip');
+    expect(await good.text()).toBe('bundle bytes');
+    fixture.companionProblem = 'Revoked package';
+    expect((await request()).status).toBe(409);
+    fixture.companionProblem = null;fixture.companionChanged = true;
+    expect((await request()).status).toBe(409);
+    expect((await app.handle(new Request('http://localhost/api/plugin-packages/demo/companions/collector/other'))).status).toBe(422);
   });
 
   // Every change needs api:admin; a read at least api:read (src/api/plugin-route-guard.ts).

@@ -96,6 +96,7 @@ import { forgetRunChecks } from './run-check';
 import { keyRevocation, packageRevocation, revokedKeyIds } from './revocations';
 import { hostEnforcement, type PluginSandboxHost, pluginSandboxHost, pluginSandboxPlan } from './sandbox-policy';
 import { checkPackageTree, PackageTreeError } from './tree';
+import { companionFilesProblems } from './companions';
 import { HOST_API_URL, hostApiTarget, isHostScope, issueHostCallMeta, revokePluginTokens } from './host-api';
 
 type Tx = Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0];
@@ -211,7 +212,10 @@ export async function readManifest(dir: string): Promise<PluginManifest> {
     throw new PluginPackageError('invalid', `${PLUGIN_MANIFEST_FILE} is not valid JSON: ${(err as Error).message}`);
   }
   try {
-    return parseManifest(json);
+    const manifest = parseManifest(json);
+    const problems = await companionFilesProblems(manifest, dir);
+    if (problems.length) throw new PluginPackageError('invalid', 'Companion files do not fit the contract', problems);
+    return manifest;
   } catch (err) {
     if (err instanceof ManifestError) throw new PluginPackageError('invalid', `${PLUGIN_MANIFEST_FILE} does not fit the contract`, err.problems);
     throw err;
@@ -1486,7 +1490,7 @@ export { defaultMaxProtection } from './permissions';
  * fetches the web on the package's prompt (`agent:run`), mail to any address
  * (`mail:send`).
  */
-export const EGRESS_HOST_SCOPES: readonly PluginHostScope[] = ['web:read', 'model:complete', 'agent:run', 'mail:send'];
+export const EGRESS_HOST_SCOPES: readonly PluginHostScope[] = ['web:read', 'model:complete', 'agent:run', 'mail:send', 'connections:read'];
 
 /**
  * The level a package may see, as enforced: its `maxProtection` (or the

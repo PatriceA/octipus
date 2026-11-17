@@ -166,6 +166,27 @@ function PluginFrame({ page }: { page: PluginPageLink }) {
     void (call ? run(call) : runStore(store as BridgeStore)).finally(() => { inFlight.current -= 1; });
   }, [reply, run, runStore]);
 
+  // Share presentation tokens only, through the authenticated port. The
+  // sandbox keeps DOM, cookies and storage isolated.
+  const sendTheme = useCallback(() => {
+    const css = getComputedStyle(document.documentElement);
+    const tokens: Record<string, string> = {};
+    for (const key of Array.from(css)) {
+      if (/^--(?:color-|font-|radius)/.test(key)) tokens[key] = css.getPropertyValue(key).trim();
+    }
+    port.current?.postMessage({
+      octipus: 'theme', tokens,
+      colorScheme: document.documentElement.classList.contains('dark') ? 'dark' : 'light',
+      fontFamily: getComputedStyle(document.body).fontFamily,
+    });
+  }, []);
+
+  useEffect(() => {
+    const observer = new MutationObserver(sendTheme);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-palette'] });
+    return () => observer.disconnect();
+  }, [sendTheme]);
+
   // The handshake: the first `ready` from this frame, with this nonce and one port. Later ones are ignored.
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -174,10 +195,11 @@ function PluginFrame({ page }: { page: PluginPageLink }) {
       const [p] = event.ports;
       port.current = p;
       p.onmessage = (e) => onCall(e.data);
+      sendTheme();
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [nonce, onCall]);
+  }, [nonce, onCall, sendTheme]);
 
   // Leaving the page closes the port.
   useEffect(() => () => { port.current?.close(); port.current = null; }, []);
@@ -197,7 +219,7 @@ function PluginFrame({ page }: { page: PluginPageLink }) {
     <main className="flex h-full min-h-0 flex-col" data-testid="plugin-page">
       <header className="flex items-center gap-2 border-b border-outline-variant/40 px-4 py-2">
         <h1 className="text-sm font-semibold text-on-surface">{page.title}</h1>
-        <span className="text-xs text-on-surface-variant">{page.pluginTitle}</span>
+        {page.pluginTitle !== page.title && <span className="text-xs text-on-surface-variant">{page.pluginTitle}</span>}
       </header>
       {navigatedAway && (
         <p role="alert" data-testid="plugin-navigated" className="border-b border-outline-variant/40 px-4 py-2 text-xs text-error">

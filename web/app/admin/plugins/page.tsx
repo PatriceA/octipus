@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { BarChart3, CircleCheck, Cpu, Power, Settings2, ShieldAlert, ShieldOff, Trash2 } from 'lucide-react';
 import { useRef, useState } from 'react';
+import { CompanionServices } from '@/components/plugins/companion-services';
 import { ConsentDialog, type ConsentSource } from '@/components/plugins/consent-dialog';
 import { FieldInputs, type FieldValues, fromFieldValues, problemsOf, toFieldValues } from '@/components/business/common';
 import { api } from '@/lib/api';
@@ -729,6 +730,7 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
       )}
       <Provenance pkg={pkg} />
       <PagesAndScopes pkg={pkg} unapproved={unapproved} />
+      <CompanionServices companions={pkg.manifest.companions} plugin={pkg.name} />
       <ModelCliTools pkg={pkg} />
       <Contributions pkg={pkg} />
       {pkg.signature && pkg.signature.status !== 'valid' && pkg.signature.status !== 'unsigned' && (

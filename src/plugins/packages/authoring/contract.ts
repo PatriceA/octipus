@@ -58,6 +58,7 @@ const EVENTS: Record<PluginEventType, string> = {
  * constant: a new scope does not compile until it is described here.
  */
 const HOST_SCOPES: Record<PluginHostScope, string> = {
+  'connections:read': 'POST /api/plugin-host/connections/get { connection, path } performs GET only through the calling user\'s approved named connection. The plugin admin must set connection_grants (JSON object mapping connection names to exact allowed origin-relative paths) in package settings. No request headers, body, query overrides, redirects or credentials returned; personal workspace and level 1 only. Responses capped at 1 MiB, 10 seconds.',
   'notes:read': 'GET /api/plugin-host/notes?limit=&tag= → { notes }: the user\'s notes in the call\'s workspace (at most 100), bodies included.',
   'notes:write': 'POST /api/plugin-host/notes { title, body?, tags? } → { id, slug }: creates a note; never overwrites (409 exists).',
   'tasks:read': 'GET /api/plugin-host/tasks?status= → { tasks, withheld }: the user\'s own tasks; those above maxProtection are left out.',
@@ -135,6 +136,7 @@ export async function pluginApiContract(opts: {
     manifestFile: PLUGIN_MANIFEST_FILE,
     manifestSchema: manifestJsonSchema(),
     manifestRules: [
+      'companions (apiVersion 1.1.0): manual-install services, never automatically installed or started. Declare id, title, description, optional, runsOn, platforms, requirements, dataAccess, privileges, installation: manual, bundle (.tar.gz) and guide (.md). Files are package-relative, pinned and downloadable by admins even while disabled. Archive links, traversal, duplicates and oversized contents are refused.',
       `apiVersion: the same MAJOR as ${PLUGIN_PACKAGE_API_VERSION} and a MINOR no newer.`,
       'runtime "package" (the default) requires server and tools; entry is only for "in-process".',
       'name: not octipus, mcp, system or plugin.',

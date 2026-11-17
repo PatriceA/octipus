@@ -1500,6 +1500,30 @@ unwrapped (`not_enforced`) and `required` refuses to start the server.
 
 ## Pages
 
+### Approved API connection reads
+
+The host scope `connections:read` adds `POST /api/plugin-host/connections/get`
+with `{ connection, path, expectedOrigin? }`. It performs **GET only** through
+the calling user's existing Secrets → Connect API grant. Credentials remain
+inside the trusted connection client; the package receives only masked
+`{ status, ok, body }`, with no response headers. Responses are bounded to
+1 MiB and 10 seconds, and redirects are not followed. An `expectedOrigin`
+must exactly match the configured connection origin.
+
+An admin must also set the package setting `connection_grants` to a JSON
+object mapping connection names to exact origin-relative paths, for example
+`{"llama":["/health","/v1/models","/props","/metrics"]}`. Names and paths
+not in that setting are refused before resolving credentials. Wildcards,
+user-supplied headers, bodies and query overrides are not supported. Each
+path includes any query string in its exact approval. The user must still
+hold the connection and `connections.read` permission; a plugin's approval
+does not give another user access to an administrator's credentials.
+
+This scope is egress, restricted to protection level 1 and personal
+workspaces. Token scope checks, the package's proxy stamp, current user and
+workspace checks and host API auditing apply as for other scopes. The admin
+reviews every path, including whether a service treats a GET as mutating.
+
 A package can add pages to the web app: static HTML of its own, shown in a
 sandboxed frame, that talks to the host only through a `postMessage` bridge
 calling the package's **own tools** as the signed-in user.
@@ -1548,11 +1572,10 @@ the package's UI directory, and only:
   request without it is refused; on plain http to another address (a LAN
   install), where no browser sends it, its absence is accepted and the CSP
   below still sandboxes the document;
-- under this CSP, `<base>` being the configured public URL (`oauth.publicUrl` /
-  `PUBLIC_URL`) plus `/api/plugin-ui/<name>/` — or, without one, the address
-  the request came in on (`X-Forwarded-Host` / `-Proto` only from a proxy in
-  `security.trustedProxies`). With a public URL set, pages work only when the
-  app is opened at that URL:
+- under this CSP, `<base>` being the address serving the document plus
+  `/api/plugin-ui/<name>/` (`X-Forwarded-Host` / `-Proto` only from a proxy in
+  `security.trustedProxies`). The public link URL does not override this:
+  local, LAN and public clients load assets from their own serving origin:
 
   ```
   default-src 'none'; script-src <base>; style-src <base>; img-src <base> data:;
@@ -1565,6 +1588,8 @@ the package's UI directory, and only:
   `sandbox allow-scripts` without `allow-same-origin`: the document has an
   opaque origin even when opened directly, so it cannot read the app's
   cookies, storage or DOM. Only the app itself may frame it.
+
+The host sends `{ octipus: 'theme', tokens, colorScheme, fontFamily }` over the established MessagePort after handshake and when the app theme changes. `tokens` contains the computed `--color-*`, `--font-*` and `--radius*` values from global CSS. Use these semantic variables for page styles; apply updates with `document.documentElement.style.setProperty`. Plugin pages fill the content viewport and scroll within their frame. Theme messages grant no access to host DOM or user data.
 
 The files are static and the same for everyone, so they are served without a
 sign-in (a sandboxed frame's requests carry no cookie). **Put no data or
@@ -2348,6 +2373,39 @@ to write; a write signed by the session cookie must come from this site
 ([API](#api)). A page writes at the package's level for its user, which is 1
 for a package with pages. Writes and deletes are audited in aggregate
 (`resource_type = plugin_page`).
+
+## Companion services (manifest API 1.1)
+
+A package can ship optional external services in `companions`. They are files
+and documentation, not lifecycle hooks: Octipus never installs, starts, updates
+or removes them, and the plugin sandbox gains no additional permissions.
+
+Each companion declares `id`, `title`, `description`, `optional`, `runsOn`,
+`platforms` (linux/macos/windows), `requirements`, `dataAccess`, `privileges`,
+`installation: "manual"`, `bundle` (a package-relative .tar.gz) and `guide`
+(a package-relative .md). Explain the exact feature that needs the service
+and whether it runs on the Octipus host or another machine. Never include
+operator-specific endpoints or credentials.
+
+Both files are content-pinned with the package. Validation and packing refuse
+missing files, links, invalid archive paths, duplicate archive entries, more than
+64 archive entries, bundles above 8 MiB compressed or 16 MiB expanded, and guides
+above 64 KiB. Companion metadata is part of the permissions listing and install
+consent; changed metadata requires review again. This is acknowledgement of
+included software, not authorization to deploy it.
+
+Admin → Plugins shows **Companion services** and authenticated downloads:
+`GET /api/plugin-packages/:name/companions/:id/bundle` or `/guide`.
+Downloads work while the plugin is disabled, require an administrator with
+API read scope, and refuse changed or revoked content. They always download as
+attachments; no package code is executed. The in-app marketplace and public
+store page show the same metadata; download from the installed package or
+extract its version tarball. Keep the external service's credential in its own
+trusted runtime, and connect through an approved named API connection.
+
+Use `apiVersion: "1.1.0"` for packages with companions. Existing 1.0 manifests
+remain supported. Release this host support and pin the marketplace's
+`OCTIPUS_REF` to the released commit before publishing such a package.
 
 ## Bundled plugins
 
