@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Octipus is under active development. Security fixes target the `main` branch only. Tagged releases older than the latest two are **not** patched. Run `main` or the most recent tag.
+Octipus is under active development. Security fixes land on `main` first and ship in the next tagged release. When severity warrants it, a patch release is cut for one of the latest two tagged releases (as `v0.5.1` was); older tags are **not** patched. Run `main` or the most recent tag.
 
 ## Reporting a Vulnerability
 
@@ -34,13 +34,15 @@ issue or discussion.
 ## Scope
 
 **In scope:**
-- Auth bypass (JWT, WebAuthn, TOTP, session tokens)
-- Permission escalation (role, trust level, tool allowlist)
+- Auth bypass (JWT sessions, passkeys/WebAuthn, TOTP, SAML SSO, OAuth sign-in, personal access tokens)
+- Permission escalation (role, trust level, tool allowlist, approval receipts, scoped grants)
 - Prompt injection leading to unintended tool use or data exfiltration
 - SSRF, command injection, path traversal, deserialization bugs
-- Vault encryption / key handling
-- Channel adapter signature verification (WhatsApp, Slack, Telegram, Teams)
-- MCP server auth
+- Vault encryption / key handling, and credential leaks past [diagnostic masking](#credential-execution-boundary)
+- Escaping a sandbox Octipus claims: the shell sandbox (bwrap, firejail, Windows), plugin package isolation and egress scopes, and the codemode script sandbox
+- Crossing the boundary of an [execution environment](docs/EXECUTION_ENVIRONMENTS.md), a shared [space](docs/SPACES.md) or a federated room
+- Channel and webhook signature verification (WhatsApp, Slack, Telegram, Teams, and the Twilio, Telnyx and Plivo voice webhooks)
+- MCP server auth, including the per-run bridge capability that CLI agents receive
 - Audit log tampering or gaps
 
 **Out of scope:**
@@ -96,7 +98,10 @@ them in argv, redirect them to a file or send them elsewhere before returning.
 
 Diagnostic masking covers known active credentials and common raw, JSON,
 URL, base64 and hex representations. It is defense in depth, not arbitrary
-transformation tracking. If diagnostic redaction fails, details are withheld.
+transformation tracking. On a host-identity environment, inherited variables
+are masked because their names look like credentials; values shorter than 8
+characters (flags, counts) are not, because masking them corrupted ordinary
+output. Vault bindings are masked at any length. If diagnostic redaction fails, details are withheld.
 An unavailable or unsupported authenticated operation must fail closed rather
 than falling back to secret-bearing shell execution.
 
