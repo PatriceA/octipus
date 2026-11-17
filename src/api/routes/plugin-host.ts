@@ -317,6 +317,17 @@ const noteView = (n: { id: string; slug: string; title: string; body: string; ta
 export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
   .use(apiContext)
 
+  .get('/connections', (ctx) => run(ctx, 'connections.options', 'connections:read', async ({ grant, principal }) => {
+    const { findRow } = await import('@/plugins/packages/service');
+    const { readAvailableConnectionProfiles } = await import('@/security/credential-connections');
+    const row = await findRow(grant.plugin);
+    let grants: unknown;
+    try { grants = JSON.parse(String(row?.settings.connection_grants ?? '{}')); } catch { ctx.set.status = 409; return { error: 'Review the plugin’s connection access in setup.' }; }
+    if (!grants || typeof grants !== 'object' || Array.isArray(grants)) { ctx.set.status = 409; return { error: 'Review the plugin’s connection access in setup.' }; }
+    const connections = await readAvailableConnectionProfiles({ userId: grant.userId, workspaceId: principal.workspaceId, ...(principal.workspaceKind === 'shared' ? { space: true } : {}) });
+    return { connections: connections.filter(c => c.http && Object.hasOwn(grants, c.id)).map(c => ({ id: c.id, origin: c.http!.origin, pathPrefix: c.http!.pathPrefix, paths: (grants as Record<string, unknown>)[c.id] })) };
+  }), { detail: { tags: ['plugin-host'] } })
+
   .post('/connections/get', (ctx) => run(ctx, 'connections.get', 'connections:read', async ({ grant, principal }, details) => {
     if (principal.workspaceKind === 'shared' || (grant.readLevel ?? 1) > 1) {
       ctx.set.status = 403;
@@ -601,6 +612,14 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
     return outcome.value;
   }), { detail: { tags: ['plugin-host'] } })
 
+  .get('/collector/repositories', (ctx) => run(ctx, 'collector.repositories', 'repos:collect', async ({ grant, principal }) => {
+    const { collectorRepositories } = await import('@/plugins/packages/host-collector');
+    const params = new URL(ctx.request.url).searchParams;
+    const outcome = await collectorRepositories(grant, principal, { environmentId: params.get('environmentId'), root: params.get('root'), ...(params.has('repository') ? { repository: params.get('repository') } : {}) });
+    if (!outcome.ok) { ctx.set.status = outcome.status; return { error: outcome.error, code: outcome.code }; }
+    return outcome.value;
+  }), { detail: { tags: ['plugin-host'] } })
+
   .post('/collector/runs', (ctx) => run(ctx, 'collector.start', 'repos:collect', async ({ grant, principal }, details) => {
     const { startCollectorRun } = await import('@/plugins/packages/host-collector');
     const outcome = await startCollectorRun(grant, principal, ctx.body);
@@ -871,6 +890,7 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
 
 /** Exported for the catalog and tests: the endpoints and the scope each needs. */
 export const PLUGIN_HOST_ENDPOINTS: ReadonlyArray<{ method: string; path: string; scope: PluginHostScope | null }> = [
+  { method: 'GET', path: '/api/plugin-host/connections', scope: 'connections:read' },
   { method: 'POST', path: '/api/plugin-host/connections/get', scope: 'connections:read' },
   { method: 'GET', path: '/api/plugin-host/whoami', scope: null },
   { method: 'GET', path: '/api/plugin-host/notes', scope: 'notes:read' },
@@ -901,6 +921,7 @@ export const PLUGIN_HOST_ENDPOINTS: ReadonlyArray<{ method: string; path: string
   { method: 'POST', path: '/api/plugin-host/calendar/events', scope: 'calendar:write' },
   { method: 'PUT', path: '/api/plugin-host/calendar/events/:id', scope: 'calendar:write' },
   { method: 'GET', path: '/api/plugin-host/collector/environments', scope: 'repos:collect' },
+  { method: 'GET', path: '/api/plugin-host/collector/repositories', scope: 'repos:collect' },
   { method: 'POST', path: '/api/plugin-host/collector/runs', scope: 'repos:collect' },
   { method: 'GET', path: '/api/plugin-host/collector/runs/:id', scope: 'repos:collect' },
   { method: 'DELETE', path: '/api/plugin-host/collector/runs/:id', scope: 'repos:collect' },

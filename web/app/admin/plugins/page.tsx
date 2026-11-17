@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { BarChart3, CircleCheck, Cpu, Power, Settings2, ShieldAlert, ShieldOff, Trash2 } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CompanionServices } from '@/components/plugins/companion-services';
 import { ConsentDialog, type ConsentSource } from '@/components/plugins/consent-dialog';
 import { FieldInputs, type FieldValues, fromFieldValues, problemsOf, toFieldValues } from '@/components/business/common';
@@ -628,7 +628,11 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [configuring, setConfiguring] = useState(false);
-  const [consenting, setConsenting] = useState(false);
+  const [consenting, setConsenting] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('setup') === pkg.name);
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('setup') === pkg.name) { url.searchParams.delete('setup'); window.history.replaceState(window.history.state, '', url); }
+  }, [pkg.name]);
   const [showUsage, setShowUsage] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const uninstall = useMutation({
@@ -668,6 +672,7 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
         </span>
         <SignatureState signature={pkg.signature} />
         <NetworkState network={pkg.network} />
+        <button type="button" onClick={() => setConsenting(true)} className="rounded-lg border border-primary/40 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/5">Set up / check</button>
         <button
           type="button"
           disabled={disable.isPending}

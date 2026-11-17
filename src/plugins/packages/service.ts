@@ -1297,7 +1297,7 @@ async function deleteSecret(name: string, key: string, entries?: SystemSecretLis
 type SystemSecretList = Awaited<ReturnType<ReturnType<typeof getVault>['list']>>;
 
 /** Which of a package's declared secrets have a value, against one listing of the system secrets. */
-async function secretsSet(row: PluginPackageRow, entries?: SystemSecretList): Promise<string[]> {
+export async function secretsSet(row: PluginPackageRow, entries?: SystemSecretList): Promise<string[]> {
   const declared = row.manifest.secrets ?? [];
   if (declared.length === 0) return [];
   const names = new Set((entries ?? await getVault().list('system')).map((e) => e.name));

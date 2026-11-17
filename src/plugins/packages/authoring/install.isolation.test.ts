@@ -127,7 +127,8 @@ describe('plugin_install', () => {
     expect(result).toMatchObject({ installed: true, name: 'agent-tools', enabled: false, upgraded: false, contentHash: expected });
     if (!result.installed) throw new Error('not installed');
     expect(result.review).toContain('/admin/plugins');
-    expect(result.review).toContain(expected);
+    expect(result.review).toContain('?setup=agent-tools');
+    expect(result.review).not.toContain('PATCH');
 
     const svc = await import('../service');
     const view = await svc.packageView('agent-tools');

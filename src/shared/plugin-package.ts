@@ -5,6 +5,7 @@
  */
 import type { PluginDeclarationItem, PluginGuidanceWarning } from './plugin-declarations';
 import type { FieldDef } from './record-fields';
+import type { PluginSetupDecl } from './plugin-setup';
 
 /** The manifest file at a package's root. */
 export const PLUGIN_MANIFEST_FILE = 'octipus-plugin.json';
@@ -13,7 +14,7 @@ export const PLUGIN_MANIFEST_FILE = 'octipus-plugin.json';
 export const MAX_PLUGIN_SECRET_LENGTH = 10_000;
 
 /** The manifest contract this host reads (`apiVersion`, same MAJOR, MINOR not newer). */
-export const PLUGIN_PACKAGE_API_VERSION = '1.1.0';
+export const PLUGIN_PACKAGE_API_VERSION = '1.2.0';
 
 /**
  * What a tool does, as its package declares it. The host decides the
@@ -80,6 +81,8 @@ export interface PluginManifest extends PluginManifestContributions {
   maxProtection?: 1 | 2 | 3 | 4;
   /** Non-secret settings, handed to the package as `OCTIPUS_SETTING_<KEY>`. */
   settings?: FieldDef[];
+  /** Guided configuration using existing environments, folders and connections. */
+  setup?: PluginSetupDecl;
   secrets?: PluginSecretDecl[];
   /** Pages shown in the web app (see "Pages and host API" below). */
   ui?: PluginUiDecl;

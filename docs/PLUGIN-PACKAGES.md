@@ -2841,3 +2841,55 @@ line.
   `revokedKeys`, `notAfter`).
 - In a shared space, plugin tools follow the rules of personal connections
   (reads allowed, writes asked or refused); space-level packages come later.
+
+
+## Guided setup (API 1.2)
+
+Use **Administration → Plugin packages → Set up / check**, or the setup link returned by
+`plugin_install`. The same flow configures a marketplace package or a private local package:
+choose resources, review required access together, install/enable, then run the package's
+read-only readiness check. Optional access stays optional. Technical declarations and the
+content hash remain available under details. Private local use requires no publisher key.
+
+The optional `setup` manifest declaration maps existing settings to native selectors:
+
+```json
+"setup": {
+  "resources": [
+    { "setting": "collector_roots", "kind": "folder", "multiple": true },
+    { "setting": "collector_connections", "kind": "connection", "multiple": true },
+    { "setting": "collector_protection_level", "kind": "protection" }
+  ],
+  "check": { "tool": "setup_check" }
+}
+```
+
+Supported kinds are `environment`, `folder`, `connection`, `http-grants` and `protection`.
+`connectionKind: "git"` filters Git-enabled connections. `http-grants` can provide named
+`presets` of exact API paths; the owner still selects the connections and approves access.
+`defaults` can initialize ordinary declared settings, but cannot choose evidence classification.
+The check must name a declared read tool returning `{ "ok": true, "message": "…" }`.
+Describe precisely what it checked; a configuration check is not proof of remote connectivity.
+
+Resource discovery exposes existing authority only. Execution rechecks ownership, workspace,
+current folder/connection grants, scopes and protection limits. Repository discovery supports
+host environments, never fetches, and returns bounded saved refs and sanitized remote paths.
+A package page's protection ceiling is checked before installation. Higher-classification data
+must retain its classification and use a compatible interface; setup never downgrades it.
+External companion services are separately deployed to their actual target host. Installing a
+plugin does not execute its companion bundle or assume that Docker runs on the workstation.
+
+Non-secret drafts are user/workspace scoped, revision checked and expire after 30 days.
+Secret values go directly to the vault on submission; drafts only report whether a value is
+configured. After a lost response, **Check whether installation already finished** reconciles
+the installed content hash before allowing another action. A failed readiness check retries
+only that check, without reinstalling the package.
+
+Authors can start with `src/plugins/templates/guided-connection`: a vendorable dependency-free
+host client, minimal MCP server and safe DOM form helpers. Call `plugin_api` with the intended
+protection level, interface and host capabilities before building. Its compatibility preflight
+identifies unsupported combinations early. Host-client helpers use the broker and never expose
+raw vault credentials. `GET /api/plugin-host/connections` returns only metadata for approved
+connections; `GET /api/plugin-host/collector/repositories` discovers allowed local repositories
+and refs. Custom profile screens can use these APIs through declared read tools instead of
+asking users to copy environment IDs or write JSON.

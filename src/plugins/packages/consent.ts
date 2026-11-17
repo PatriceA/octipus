@@ -60,6 +60,9 @@ import {
 } from '@/shared/plugin-package';
 import { diffPermissions } from '@/shared/plugin-permissions';
 import { coreLogger } from '@/utils/logger';
+import { setupConfiguration, validateSetupSettings } from './setup';
+import type { ConnectionPrincipal } from '@/security/credential-connections';
+import { MAX_PLUGIN_SECRET_LENGTH } from '@/shared/plugin-package';
 import { contributionsHashOf, hasContributions } from './contributions/approval';
 import { hashPackageContent } from './integrity';
 import { packagePermissions } from './permissions';
@@ -80,6 +83,8 @@ import {
   stagePackage,
   storeHandover,
   upgradeChanges,
+  secretsSet,
+  setSecret,
 } from './service';
 
 /** How long a preview may be installed. */
@@ -113,6 +118,12 @@ interface Preview {
 }
 
 const previews = new Map<string, Preview>();
+
+/** A draft may use only a live preview belonging to its owner. */
+export function setupPreview(previewId: string, owner: string): { manifest: PluginManifest; contentHash: string } | null {
+  const p = previews.get(previewId);
+  return p && p.actorUserId === owner && p.expiresAt > Date.now() ? { manifest: p.manifest, contentHash: p.contentHash } : null;
+}
 let swept = false;
 
 /** Where previews are staged: beside the plugin store, never in it. */
@@ -301,6 +312,7 @@ export async function previewInstall(source: PreviewSource, actorUserId: string)
     ...modelTrustWarnings(manifest).map((message) => ({ code: 'model_cli_tools', message })),
   ];
   const view: PluginInstallPreview = {
+    configuration: setupConfiguration(manifest, current?.settings ?? {}, current ? await secretsSet(current) : [], current?.contentHash === contentHash, current?.enabled ?? false),
     previewId: id, name: manifest.name, version: manifest.version, title: manifest.title, contentHash, signedBy: signature.signedBy, origin,
     declarations: items, guidance, diff, upgradeFrom: current?.version ?? null, expiresAt: new Date(expiresAt).toISOString(),
   };
@@ -353,8 +365,27 @@ async function enableAfter(name: string, enable: boolean, actorUserId: string): 
  * Install a preview with the admin's consent: `contentHash` is the hash they
  * saw, `accepted` the ids they agreed to (every item not carried).
  */
+export interface SetupConsentRequest { contentHash: string; accepted: readonly string[]; enable?: boolean; settings?: unknown; secrets?: Record<string, string> }
+
+function checkSecrets(manifest: PluginManifest, secrets: Record<string, string> | undefined): void {
+  for (const [key, value] of Object.entries(secrets ?? {})) {
+    if (!manifest.secrets?.some(s => s.key === key) || typeof value !== 'string' || value.length > MAX_PLUGIN_SECRET_LENGTH) throw new PluginPackageError('invalid', 'A secret field is invalid; use the fields declared by this plugin.');
+  }
+}
+
+async function finishConfiguration(name: string, req: SetupConsentRequest, actorUserId: string): Promise<string | null> {
+  try {
+    if (req.settings !== undefined) await configure(name, { settings: req.settings }, actorUserId);
+    for (const [key, value] of Object.entries(req.secrets ?? {})) if (value.trim()) await setSecret(name, key, value, actorUserId);
+    return null;
+  } catch (error) {
+    coreLogger.warn({ plugin: name, errorClass: error instanceof Error ? error.name : 'unknown' }, 'Plugin installed; configuration needs attention');
+    return 'The package is installed, but configuration could not be completed. Resume setup; do not reinstall it.';
+  }
+}
+
 export async function installPreview(
-  previewId: string, req: { contentHash: string; accepted: readonly string[]; enable?: boolean }, actorUserId: string,
+  previewId: string, req: SetupConsentRequest, actorUserId: string, caller: ConnectionPrincipal = { userId: actorUserId, workspaceId: null },
 ): Promise<PluginConsentResult> {
   await sweep();
   const preview = previews.get(previewId);
@@ -366,6 +397,8 @@ export async function installPreview(
     throw new PluginPackageError('conflict', `You agreed to ${req.contentHash}, but this preview is ${preview.contentHash}; preview the package again`);
   }
   checkAccepted(requiredConsentIds(preview.items), req.accepted);
+  if (req.settings !== undefined) req = { ...req, settings: await validateSetupSettings(preview.manifest, req.settings, caller) };
+  checkSecrets(preview.manifest, req.secrets);
   refuseWithoutSandbox(preview.manifest, preview.options.origin);
   // Single use: from here on the preview is spent, whatever happens.
   previews.delete(preview.id);
@@ -395,8 +428,9 @@ export async function installPreview(
       version: row.version, contentHash: row.contentHash, previewId: preview.id, accepted: [...accepted].sort(),
       carried: preview.items.filter((i) => i.carried).map((i) => i.id), upgradeFrom: preview.view.upgradeFrom,
     });
-    const { enabled, enableProblem } = await enableAfter(row.name, req.enable === true, actorUserId);
-    return { name: row.name, version: row.version, contentHash: row.contentHash ?? preview.contentHash, enabled, enableProblem, warnings: row.warnings };
+    const configurationProblem = await finishConfiguration(row.name, req, actorUserId);
+    const { enabled, enableProblem } = await enableAfter(row.name, req.enable === true && !configurationProblem, actorUserId);
+    return { name: row.name, version: row.version, contentHash: row.contentHash ?? preview.contentHash, enabled, enableProblem: configurationProblem ?? enableProblem, warnings: row.warnings };
   } finally {
     await rm(preview.dir, { recursive: true, force: true }).catch(() => {});
   }
@@ -411,6 +445,7 @@ export async function consentView(name: string): Promise<PluginConsentView> {
   const permissions = await packagePermissions(row.manifest, dir);
   const covered = contentHash === row.contentHash ? await coveredBy(row) : () => false;
   return {
+    configuration: setupConfiguration(row.manifest, row.settings, await secretsSet(row), true, row.enabled),
     name, version: row.version, title: row.manifest.title, contentHash, signedBy: row.signedBy, origin: row.origin ?? null, enabled: row.enabled,
     // What its consent already covers for exactly these files (approved scopes, contributions, in-process) is carried.
     declarations: (() => {
@@ -428,7 +463,7 @@ export async function consentView(name: string): Promise<PluginConsentView> {
  * refuses files that no longer hash to `contentHash`.
  */
 export async function consentToInstalled(
-  name: string, req: { contentHash: string; accepted: readonly string[]; enable?: boolean }, actorUserId: string,
+  name: string, req: SetupConsentRequest, actorUserId: string, caller: ConnectionPrincipal = { userId: actorUserId, workspaceId: null },
 ): Promise<PluginConsentResult> {
   const view = await consentView(name);
   if (view.contentHash !== req.contentHash) {
@@ -439,8 +474,12 @@ export async function consentToInstalled(
   if (!row) throw new PluginPackageError('not_found', `Plugin package not found: ${name}`);
   refuseWithoutSandbox(row.manifest, row.origin);
   const m = row.manifest;
-  const missing = req.enable === true ? await missingConfiguration(row) : [];
-  const enable = req.enable === true && missing.length === 0;
+  if (req.settings !== undefined) req = { ...req, settings: await validateSetupSettings(m, req.settings, caller) };
+  checkSecrets(m, req.secrets);
+  const configurationProblem = await finishConfiguration(name, req, actorUserId);
+  const refreshed = await findRow(name);
+  const missing = req.enable === true && refreshed ? await missingConfiguration(refreshed) : [];
+  const enable = req.enable === true && missing.length === 0 && !configurationProblem;
   const contributionsHash = hasContributions(m) ? await contributionsHashOf(m, packageDir(name)) : null;
   await configure(name, {
     approveContent: req.contentHash,
@@ -453,6 +492,6 @@ export async function consentToInstalled(
   const after = await findRow(name);
   return {
     name, version: row.version, contentHash: req.contentHash, enabled: after?.enabled ?? false,
-    enableProblem: req.enable === true && missing.length > 0 ? `Set ${missing.join(', ')} before enabling it` : null, warnings: [],
+    enableProblem: configurationProblem ?? (req.enable === true && missing.length > 0 ? `Set ${missing.join(', ')} before enabling it` : null), warnings: [],
   };
 }

@@ -86,6 +86,7 @@ import { taskRoutes } from './routes/tasks';
 import { caseRoutes, contactRoutes } from './routes/cases';
 import { publicFormRoutes, recordRoutes, recordTypeRoutes } from './routes/records';
 import { pluginPackageRoutes } from './routes/plugin-packages';
+import { pluginSetupRoutes } from './routes/plugin-setup';
 import { pluginHostRoutes } from './routes/plugin-host';
 import { pluginCallRoutes, pluginUiRoutes } from './routes/plugin-ui';
 import { mailRoutes } from './routes/mail';
@@ -469,6 +470,7 @@ export function createServer() {
         .use(recordRoutes)
         .use(publicFormRoutes)
         .use(pluginPackageRoutes)
+        .use(pluginSetupRoutes)
         .use(pluginUiRoutes)
         .use(pluginCallRoutes)
         .use(pluginHostRoutes)

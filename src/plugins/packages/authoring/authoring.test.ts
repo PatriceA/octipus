@@ -97,7 +97,7 @@ describe('plugin_api contract', () => {
     // The default protection level, from the function the server uses.
     expect(c.defaultMaxProtection.examples).toEqual({ nothing: 4, networkHosts: 1, hostWebRead: 1, hostAgentRun: 1, hostMailSend: 1, uiPages: 1, uiPagesDeclared4: 1 });
     expect(c.defaultMaxProtection.examples.networkHosts).toBe(defaultMaxProtection({ network: ['a.example.com'] }));
-    expect(c.templates.map((t) => t.name)).toEqual(['tool-only', 'with-command', 'with-schedule', 'with-store']);
+    expect(c.templates.map((t) => t.name)).toEqual(['guided-connection', 'tool-only', 'with-command', 'with-schedule', 'with-store']);
     // Every host scope is described, with its endpoint.
     expect(Object.keys(c.hostApi.scopes).sort()).toEqual([...PLUGIN_HOST_SCOPES].sort());
     expect(c.hostApi.scopes['documents:write']).toContain('POST /api/plugin-host/documents');
