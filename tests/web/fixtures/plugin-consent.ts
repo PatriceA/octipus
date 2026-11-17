@@ -41,8 +41,13 @@ export function consentView(p: PluginPermissionsSummary, over: Partial<PluginCon
   };
 }
 
-/** Tick every consent item that is not carried. */
+/**
+ * Tick every consent item that is not carried. Waits for the items first: the
+ * dialog renders them only once its preview has loaded, and counting before
+ * that ticked nothing, which left Install disabled until the test timed out.
+ */
 export async function tickAll(dialog: import('@playwright/test').Locator): Promise<void> {
+  await dialog.locator('[data-testid="consent-item"]').first().waitFor();
   const boxes = dialog.locator('[data-testid="consent-item"][data-carried="false"] input[type="checkbox"]');
   const n = await boxes.count();
   for (let i = 0; i < n; i++) await boxes.nth(i).check();
