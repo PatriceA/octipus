@@ -18,6 +18,11 @@ import {
   sendReply,
   summarizeMessage,
   triageInbox,
+  triageReview,
+  backlogProgress,
+  startLabelBacklog,
+  BacklogBusyError,
+  setUserLabel,
   type InboxItem,
 } from '@/core/email';
 import { saveReplyDraft } from '@/core/email/drafts';
@@ -323,6 +328,58 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
         autoArchive: t.Optional(t.Boolean()),
         applyLabels: t.Optional(t.Boolean()),
       })),
+      detail: { tags: ['email'] },
+    }
+  )
+
+  // Triage review queue: mails the decision model was unsure of or that it and
+  // the reference model disagree on, plus how well it does against the labels.
+  .get(
+    '/triage/review',
+    async ({ user, principal, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      return { ...(await triageReview(user.id)), progress: backlogProgress(user.id) };
+    },
+    { detail: { tags: ['email'] } }
+  )
+
+  // The owner's label for one mail: it wins over every model from now on.
+  .put(
+    '/triage/label/:id',
+    async ({ user, principal, params, body, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      const categories = await getCategories(user.id);
+      if (!Object.hasOwn(categories, body.category)) { set.status = 400; return { error: `Unknown category: ${body.category}` }; }
+      if (!(await setUserLabel(user.id, params.id, body, (await detectProvider(user.id)) ?? undefined))) { set.status = 404; return { error: 'Triage has not seen this mail yet' }; }
+      return { ok: true };
+    },
+    {
+      params: t.Object({ id: t.String({ minLength: 1, maxLength: 256 }) }),
+      body: t.Object({
+        priority: t.Union([t.Literal('low'), t.Literal('normal'), t.Literal('high')]),
+        category: t.String({ minLength: 1, maxLength: 100 }),
+      }),
+      detail: { tags: ['email'] },
+    }
+  )
+
+  // Label the inbox backlog with a model the owner picks, then run the decision
+  // model over it: the thresholds are fitted from the first triage on.
+  .post(
+    '/triage/backlog',
+    async ({ user, principal, body, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      try {
+        if (!(await detectProvider(user.id))) { set.status = 400; return { error: 'No mailbox connected' }; }
+        await startLabelBacklog(user.id, body.model, body.limit);
+        return { started: true, progress: backlogProgress(user.id) };
+      } catch (err) {
+        set.status = err instanceof BacklogBusyError ? 409 : 400;
+        return { error: (err as Error).message };
+      }
+    },
+    {
+      body: t.Object({ model: t.String({ minLength: 1, maxLength: 200 }), limit: t.Integer({ minimum: 1, maximum: 2000 }) }),
       detail: { tags: ['email'] },
     }
   );
