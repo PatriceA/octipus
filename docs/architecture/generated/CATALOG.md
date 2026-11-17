@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-693 mounted routes across 87 route files. The path is the full one, group prefix included — what a client actually calls.
+697 mounted routes across 87 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -418,6 +418,10 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/plugin-host/calendar/events` | `src/api/routes/plugin-host.ts` |
 | POST | `/api/plugin-host/calendar/events` | `src/api/routes/plugin-host.ts` |
 | PUT | `/api/plugin-host/calendar/events/:id` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/collector/environments` | `src/api/routes/plugin-host.ts` |
+| POST | `/api/plugin-host/collector/runs` | `src/api/routes/plugin-host.ts` |
+| DELETE | `/api/plugin-host/collector/runs/:id` | `src/api/routes/plugin-host.ts` |
+| GET | `/api/plugin-host/collector/runs/:id` | `src/api/routes/plugin-host.ts` |
 | POST | `/api/plugin-host/documents` | `src/api/routes/plugin-host.ts` |
 | GET | `/api/plugin-host/documents/:id` | `src/api/routes/plugin-host.ts` |
 | PUT | `/api/plugin-host/documents/:id` | `src/api/routes/plugin-host.ts` |
@@ -736,7 +740,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 5 |
 | `api` | `models` | 42 |
-| `api` | `plugins` | 49 |
+| `api` | `plugins` | 53 |
 | `api` | `security` | 178 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 28 |
@@ -827,15 +831,15 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `models` | `shared` | 5 |
 | `models` | `utils` | 47 |
 | `plugins` | `config` | 12 |
-| `plugins` | `core` | 55 |
-| `plugins` | `db` | 63 |
+| `plugins` | `core` | 57 |
+| `plugins` | `db` | 64 |
 | `plugins` | `extensions` | 2 |
 | `plugins` | `mcp` | 7 |
 | `plugins` | `models` | 2 |
-| `plugins` | `security` | 20 |
+| `plugins` | `security` | 28 |
 | `plugins` | `shared` | 35 |
 | `plugins` | `tools` | 1 |
-| `plugins` | `utils` | 37 |
+| `plugins` | `utils` | 38 |
 | `security` | `api` | 1 |
 | `security` | `config` | 20 |
 | `security` | `core` | 39 |

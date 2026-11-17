@@ -32,6 +32,7 @@ export const HOST_SCOPE_WORDS: Record<string, string> = {
   'mail:send': 'Sends mail as you',
   'calendar:read': 'Reads your calendar',
   'calendar:write': 'Adds events to your calendar and changes the ones it added',
+  'repos:collect': 'Reads Git history and approved connections in the background, within folders and connections an admin approved',
 };
 
 /** The store in words: "Keeps up to 5 MB of its own data per user". */

@@ -240,6 +240,8 @@ export const SCOPE_TOOL_ACTION: Record<PluginHostScope, { toolId: string; action
   'mail:send': null,
   'calendar:read': null,
   'calendar:write': null,
+  // Git reads in the caller's environment; each fetch or connection read also meets connections.fetch / connections.read (./host-collector.ts).
+  'repos:collect': { toolId: 'git', action: 'read' },
 };
 
 /**

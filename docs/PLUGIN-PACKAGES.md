@@ -2019,6 +2019,58 @@ limited per client address (then `429`) and audited in aggregate: one row
 (op `refused`, its `code`, `count`) per kind and package per minute, carrying
 the refusals counted since the previous row.
 
+### Repository evidence collector
+
+`repos:collect` lets a package gather read-only evidence from Git
+repositories and approved HTTP connections without receiving a shell, a file
+read or a credential (`src/plugins/packages/host-collector.ts`). The package
+sends a typed request; the host runs it in the background as a
+`background_jobs` row of kind `collector` and the package keeps only the run id.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/plugin-host/collector/environments` | The caller's enabled `host` environments in this workspace, with the folders both the environment owner and the package admin approved, and the approved connection ids. |
+| `POST /api/plugin-host/collector/runs` | Start a run (a `write` or `external` tool only); answers `202 { id }`. |
+| `GET /api/plugin-host/collector/runs/:id` | Status, stage and, once done, the evidence (withheld above `maxProtection`). |
+| `DELETE /api/plugin-host/collector/runs/:id` | Cancel the run. |
+
+**What runs.** A fixed list of Git reads: `rev-parse` (refs, trees, shallow
+state, common directory), `log baseline..ref` (SHA, parents, commit time,
+subject, body), `merge-base --is-ancestor`, `rev-list --left-right --count`,
+`diff --name-only` and `git cherry` in both directions (patch equivalence).
+Git runs without hooks, global or system configuration, pager, external diff
+or prompts. A repository with `fetch` is fetched through the existing
+connection Git broker (`authenticatedGit`), one ref per fetch, into
+`refs/remotes/octipus-audit/heads/*` and `refs/remotes/octipus-audit/tags/*`
+only; local branches, tags and worktrees are left alone. `http` entries are GET
+requests through `authenticatedFetch`, paginated by a declared scheme (`none`,
+`offset` with an optional total, `token` with an optional last-page flag,
+`page`) and JSON pointers. An `http` entry with `expand` repeats its path,
+`{keys}` replaced by a batch of issue keys (`PROJECT-NUMBER` of the listed
+projects; the host builds the pattern) found in the collected commit messages
+or at a JSON pointer in an earlier entry's items; keys from incomplete evidence
+make the expansion incomplete.
+
+**Who approves what.** The repository's real path (and its Git common
+directory) must lie inside both the execution environment's own folders and
+the package's admin setting `collector_roots`; connections must be listed in
+`collector_connections` and be available to the caller. The admin classifies
+the evidence with `collector_protection_level` (1–4); without it the scope
+refuses (`403 not_configured`). The environment is named by id, must be the
+caller's, enabled and a `host` backend; it, the package's enabled state and its
+settings are resolved again before every repository, fetch and page, so
+revocation stops a running collection. The user's rules on `git.read` grant the
+scope; `connections.fetch` and `connections.read` DENY refuse fetches and
+requests. Personal workspaces only; a run is read back only by the same
+package, user and workspace.
+
+**Bounds and honesty.** One run at a time per package and user, 12 an hour,
+15 minutes per run, 2 minutes per Git operation, 5 minutes per fetch, 30
+seconds per page, at most 50 pages, 5000 commits per range and 8 MB of
+evidence. Every part carries `complete`; a shallow clone, failed fetch,
+unresolved ref, truncated range, page cap, HTTP error or inconsistent
+pagination makes the evidence incomplete instead of supplying a value.
+
 ### Mail and calendar
 
 `mail:read`, `mail:draft`, `mail:send`, `calendar:read` and `calendar:write`

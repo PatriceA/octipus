@@ -25,7 +25,7 @@ function runBash(args: string[], env: Record<string, string | undefined> = {}): 
   const home = mkdtempSync(join(tmpdir(), 'octi-cli-test-'));
   try {
     const stdout = execFileSync('bash', [BIN_BASH, ...args], {
-      env: { ...process.env, HOME: home, NO_COLOR: '1', ...env },
+      env: { ...process.env, API_PORT: '1', WEB_PORT: '2', OCTIPUS_INSIDE_PID: '', HOME: home, NO_COLOR: '1', ...env },
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -199,7 +199,7 @@ describe('octi stop/restart from inside the backend', () => {
     const home = mkdtempSync(join(tmpdir(), 'octi-cli-test-'));
     // OCTI_HANDED_OFF is what an earlier hand-off used to leave in the
     // environment of the backend it started; it must not stop this one.
-    const env = { ...process.env, HOME: home, NO_COLOR: '1', OCTIPUS_INSIDE_PID: String(process.pid), OCTI_HANDED_OFF: '1' };
+    const env = { ...process.env, API_PORT: '1', WEB_PORT: '2', HOME: home, NO_COLOR: '1', OCTIPUS_INSIDE_PID: String(process.pid), OCTI_HANDED_OFF: '1' };
     const out = plain(execFileSync('bash', [script, 'stop'], { env, encoding: 'utf8', cwd: root }));
     expect(out).toContain("'stop' handed off to a detached process");
 
