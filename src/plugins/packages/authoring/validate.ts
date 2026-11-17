@@ -15,6 +15,7 @@ import { hashPackageContent } from '../integrity';
 import { ManifestError, manifestSchema, parseManifest } from '../manifest';
 import { modelTrustWarnings } from '../service';
 import { checkPackageTree, PackageTreeError } from '../tree';
+import { companionFilesProblems } from '../companions';
 
 export interface PluginValidation {
   /** No problem: the install would accept it (an admin still has to enable it). */
@@ -150,6 +151,7 @@ export async function validatePluginDirectory(
   if (!manifest) return result(null, null);
   if (pluginRuntime(manifest) === 'in-process') return result(manifest, null);
 
+  problems.push(...await companionFilesProblems(manifest, dir));
   if (manifest.server) problems.push(...await serverProblems(dir, manifest.server, warnings));
   problems.push(...await contributionInstallProblems(manifest, dir, installed));
   // model.trustedInput: it grants nothing until an admin approves it, and what else the package reads reaches its prompts.

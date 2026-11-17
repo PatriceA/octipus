@@ -56,6 +56,28 @@ const pkg = (over: Record<string, unknown>) => ({
 });
 
 test.describe('plugin packages', () => {
+  test('optional companions explain separate installation and download bundle while disabled', async ({authenticatedPage:page}) => {
+    const companion={"id":"host-collector","title":"Host telemetry collector","description":"Optional read-only service providing CPU, RAM and AMD GPU metrics. Engine metrics work without it.","optional":true,"runsOn":"The Linux machine hosting the engine; use the physical host for physical RAM readings","platforms":["linux"],"requirements":["Python 3.9 or newer","systemd 247 or newer","Readable Linux procfs and AMD DRM sysfs for GPU readings"],"dataAccess":["CPU and RAM counters from /proc","AMD GPU counters from /sys","Optional process RSS and cgroup memory counters"],"privileges":"Administrator installs the service and provisions its credential. Runtime uses an unprivileged dynamic user with read-only system access.","installation":"manual","bundle":"collector/llama-monitor-collector.tar.gz","guide":"collector/README.md"};
+    const installed=pkg({enabled:false,manifest:{...pkg({}).manifest,companions:[companion]}});
+    await page.route(/\/api\/plugin-packages(\/.*)?$/, async route => {
+      const path=new URL(route.request().url()).pathname;
+      if(path.endsWith('/bundle'))return route.fulfill({body:'reviewed bundle',contentType:'application/gzip'});
+      if(path.endsWith('/bundled'))return json(route,200,[]);
+      if(path.endsWith('/sandbox'))return json(route,200,{summary:'active runner bwrap'});
+      return json(route,200,[installed]);
+    });
+    await page.goto('/admin/plugins');
+    const section=page.getByTestId('companion-services');
+    await expect(section).toContainText('Host telemetry collector · Optional');
+    await expect(section).toContainText('does not start, update or remove');
+    await expect(section).toContainText('CPU and RAM counters');
+    const download=page.waitForEvent('download');
+    await section.getByRole('button',{name:'Download Host telemetry collector bundle'}).click();
+    const result=await download;
+    expect(result.suggestedFilename()).toBe('llama-monitor-collector.tar.gz');
+    expect(await result.failure()).toBeNull();
+  });
+
   test('the page says which sandbox plugin servers get: an active runner, or unavailable and why', async ({ authenticatedPage: page }) => {
     let sandbox = { setting: 'required', runner: 'bwrap', unavailable: null as string | null, platform: 'linux', summary: 'active runner bwrap' };
     await stubAllDefaults(page);

@@ -33,6 +33,7 @@ import { PLUGIN_MANIFEST_FILE, type PluginManifest } from '@/shared/plugin-packa
 import { hashPackageContent, LISTING_FILE } from './integrity';
 import { parseManifest } from './manifest';
 import { checkPackageTree } from './tree';
+import { companionFilesProblems } from './companions';
 
 const BLOCK = 512;
 /** The deflate level: fixed, so the compressed bytes depend only on the input. */
@@ -173,6 +174,8 @@ export interface PackResult {
 export async function packPackage(dir: string): Promise<PackResult> {
   await checkPackageTree(dir);
   const manifest = parseManifest(JSON.parse(await readFile(join(dir, PLUGIN_MANIFEST_FILE), 'utf8')));
+  const problems = await companionFilesProblems(manifest, dir);
+  if (problems.length) throw new Error(problems.join('; '));
   const root = `${manifest.name}-${manifest.version}`;
   const blocks: Buffer[] = [...entryBlocks(`${root}/`, { mode: 0o755, type: '5' })];
   for (const entry of await packEntries(dir)) {

@@ -49,7 +49,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   // Full-bleed pages manage their own layout/scroll edge-to-edge (no page
   // padding, no entrance wrapper) — chat, rooms and the notes workspace.
-  const fullBleed = pathname === '/chat' || pathname === '/rooms' || pathname.startsWith('/notes');
+  const fullBleed = pathname === '/chat' || pathname === '/rooms' || pathname.startsWith('/notes') || pathname.startsWith('/plugins/');
 
   return (
     <div className="flex flex-col h-screen bg-background text-on-surface overflow-hidden font-sans">

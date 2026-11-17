@@ -13,7 +13,7 @@ export const PLUGIN_MANIFEST_FILE = 'octipus-plugin.json';
 export const MAX_PLUGIN_SECRET_LENGTH = 10_000;
 
 /** The manifest contract this host reads (`apiVersion`, same MAJOR, MINOR not newer). */
-export const PLUGIN_PACKAGE_API_VERSION = '1.0.0';
+export const PLUGIN_PACKAGE_API_VERSION = '1.1.0';
 
 /**
  * What a tool does, as its package declares it. The host decides the
@@ -101,6 +101,23 @@ export interface PluginManifest extends PluginManifestContributions {
    * each widget's data is what one of the package's `read` tools returns.
    */
   dashboards?: PluginDashboardDecl[];
+  /** Downloadable services installed manually outside the plugin sandbox. */
+  companions?: PluginCompanionDecl[];
+}
+
+export interface PluginCompanionDecl {
+  id: string;
+  title: string;
+  description: string;
+  optional: boolean;
+  runsOn: string;
+  platforms: Array<'linux' | 'macos' | 'windows'>;
+  requirements: string[];
+  dataAccess: string[];
+  privileges: string;
+  installation: 'manual';
+  bundle: string;
+  guide: string;
 }
 
 // ── Dashboards (docs/PLUGIN-PACKAGES.md#dashboards) ─────────────────────────
@@ -464,10 +481,19 @@ export interface PluginContributionsView {
  * it counts as network. `calendar:read` lists the connected calendars' events
  * in a window; `calendar:write` creates events and changes the ones the
  * package created.
+ *
+ * `repos:collect` has the host gather read-only evidence in the background
+ * from Git repositories of the caller's execution environment (fixed Git read
+ * operations, fetches into an audit-only ref namespace through an approved
+ * connection) and paginated GETs of approved connections, inside folders and
+ * connections an admin approved for the package; the package holds only the
+ * run id (src/plugins/packages/host-collector.ts). Starting needs a `write`
+ * or `external` tool (`PLUGIN_HOST_START_SCOPES`).
  */
 export const PLUGIN_HOST_SCOPES = [
   'notes:read', 'notes:write', 'tasks:read', 'tasks:write', 'documents:read', 'documents:write', 'notify', 'web:read', 'model:complete',
   'agent:run', 'store:read', 'store:write', 'mail:read', 'mail:draft', 'mail:send', 'calendar:read', 'calendar:write',
+  'connections:read', 'repos:collect',
 ] as const;
 export type PluginHostScope = (typeof PLUGIN_HOST_SCOPES)[number];
 
@@ -484,7 +510,7 @@ export const PLUGIN_HOST_EXTERNAL_SCOPES: readonly PluginHostScope[] = ['mail:se
  * a `write` or `external` tool: `agent:run` (a read tool polls a run, a write
  * tool starts one).
  */
-export const PLUGIN_HOST_START_SCOPES: readonly PluginHostScope[] = ['agent:run'];
+export const PLUGIN_HOST_START_SCOPES: readonly PluginHostScope[] = ['agent:run', 'repos:collect'];
 
 /** One page a package adds to the web app. */
 export interface PluginUiPage {
@@ -805,6 +831,8 @@ export interface PluginPermissionsSummary {
   dashboards: PluginPermissionsDashboard[];
   trustedInput: boolean;
   maxProtection: 1 | 2 | 3 | 4;
+  /** Omitted for older packages; declarations, not lifecycle permissions. */
+  companions?: PluginCompanionDecl[];
 }
 
 /** A dashboard in a permissions summary. */
@@ -832,7 +860,7 @@ export interface PluginPermissionsContributions {
 
 /** One change between two permission summaries (`PluginUpdateView.diff`). */
 export interface PluginPermissionChange {
-  kind: 'runtime' | 'apiVersion' | 'host' | 'network' | 'secrets' | 'settings' | 'store' | 'tool' | 'contribution' | 'pages' | 'dashboards' | 'trustedInput' | 'maxProtection';
+  kind: 'runtime' | 'apiVersion' | 'host' | 'network' | 'secrets' | 'settings' | 'store' | 'tool' | 'contribution' | 'pages' | 'dashboards' | 'companions' | 'trustedInput' | 'maxProtection';
   change: 'added' | 'removed' | 'wider' | 'narrower' | 'changed';
   /** In words, e.g. "host API scope notes:write". */
   text: string;

@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, ExternalLink, Package, Search, X } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { CompanionServices } from '@/components/plugins/companion-services';
 import { ConsentDialog } from '@/components/plugins/consent-dialog';
 import { AuthedImage } from '@/components/ui/authed-image';
 import { Markdown } from '@/components/ui/markdown-renderer';
@@ -204,6 +205,7 @@ function Detail({ p, onClose, onInstall }: { p: MarketplacePluginView; onClose: 
                 <p className="mt-1 text-xs text-on-surface-variant">Installing shows each item again, to agree to one by one; the host checks the download says exactly this.</p>
               </section>
             )}
+            <CompanionServices companions={p.permissions?.companions} />
             {p.screenshots.length > 0 && (
               <section aria-label="Screenshots" className="flex gap-2 overflow-x-auto [&_img]:max-h-48 [&_img]:rounded-md" data-testid="detail-screenshots">
                 {p.screenshots.map((s, i) => <AuthedImage key={s} src={s} alt={`Screenshot ${i + 1}`} />)}

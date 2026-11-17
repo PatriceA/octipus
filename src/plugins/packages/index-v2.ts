@@ -26,6 +26,7 @@ import { z } from 'zod';
 import { PLUGIN_RUNTIMES, PLUGIN_STORE_MAX_QUOTA_BYTES, PLUGIN_STORE_MIN_QUOTA_BYTES, PLUGIN_TOOL_EFFECTS, PLUGIN_WIDGET_TYPES, type PluginPermissionsSummary } from '@/shared/plugin-package';
 import { isoTime, line, markdown, safeText } from './listing-text';
 import { manifestSchema } from './manifest';
+import { companionsSchema } from './manifest-companions';
 import { inputTextClean } from './manifest-dashboards';
 import { normalizeSha256, parseRegistryIndex } from './remote';
 import { lifetimeProblem } from './marketplace-keys-format';
@@ -101,6 +102,7 @@ export const indexPermissionsSchema = z.object({
   }).strict()).max(10).default([]),
   trustedInput: z.boolean(),
   maxProtection: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
+  companions: companionsSchema.optional(),
 }).strict().refine((p) => sortedUnique(p.host) && sortedUnique(p.network) && sortedUnique(p.secrets) && sortedUnique(p.settings),
   'host, network, secrets and settings are sorted lists without repeats');
 

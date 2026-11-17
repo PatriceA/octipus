@@ -13,6 +13,7 @@ import { MODEL_FIELDS, modelProblems } from './manifest-model';
 import { STORE_FIELDS, storeProblems } from './manifest-store';
 import { DASHBOARD_FIELDS, dashboardProblems } from './manifest-dashboards';
 import { UI_HOST_FIELDS } from './manifest-ui-host';
+import { COMPANION_FIELDS } from './manifest-companions';
 import {
   PLUGIN_PACKAGE_API_VERSION,
   PLUGIN_TOOL_EFFECTS,
@@ -72,8 +73,10 @@ export const manifestSchema = z.object({
   ...MODEL_FIELDS,
   ...STORE_FIELDS,
   ...DASHBOARD_FIELDS,
+  ...COMPANION_FIELDS,
 }).strict().superRefine((m, ctx) => {
   refineRuntime(m, ctx);
+  if (m.companions && Number(m.apiVersion.split('.')[1]) < 1) ctx.addIssue({ code: 'custom', message: 'companions requires apiVersion 1.1.0 or newer' });
   // Pages call the plugin's own sandboxed tools, and the host API token rides
   // those tool calls: both need the package runtime.
   if (m.runtime === 'in-process' && (m.ui || m.host?.length || m.dashboards?.length)) {

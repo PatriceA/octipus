@@ -150,19 +150,19 @@ describe('headers and CSP', () => {
     expect(uiContentType('a')).toBeNull();
   });
 
-  test('the base URL: the public URL when configured, else the request; forwarded headers only from a trusted proxy', () => {
+  test('the asset base follows the serving origin; forwarded headers only from a trusted proxy', () => {
     const req = (headers: Record<string, string> = {}) => new Request('http://localhost:3005/api/plugin-ui/acme/index.html', { headers });
     const fwd = { 'x-forwarded-host': 'evil.example', 'x-forwarded-proto': 'https' };
-    expect(uiBaseUrl(req(), 'acme', undefined, '')).toBe('http://localhost:3005/api/plugin-ui/acme/');
+    expect(uiBaseUrl(req(), 'acme', undefined)).toBe('http://localhost:3005/api/plugin-ui/acme/');
     // From an untrusted peer the forwarded headers are ignored.
-    expect(uiBaseUrl(req(fwd), 'acme', '203.0.113.9', '')).toBe('http://localhost:3005/api/plugin-ui/acme/');
+    expect(uiBaseUrl(req(fwd), 'acme', '203.0.113.9')).toBe('http://localhost:3005/api/plugin-ui/acme/');
     trusted.add('10.0.0.2');
-    expect(uiBaseUrl(req(fwd), 'acme', '10.0.0.2', '')).toBe('https://evil.example/api/plugin-ui/acme/');
-    expect(uiBaseUrl(req({ 'x-forwarded-host': "evil; script-src 'unsafe-inline'" }), 'acme', '10.0.0.2', '')).toBeNull();
+    expect(uiBaseUrl(req(fwd), 'acme', '10.0.0.2')).toBe('https://evil.example/api/plugin-ui/acme/');
+    expect(uiBaseUrl(req({ 'x-forwarded-host': "evil; script-src 'unsafe-inline'" }), 'acme', '10.0.0.2')).toBeNull();
     trusted.clear();
-    // The configured public URL wins over anything the request says.
-    expect(uiBaseUrl(req(fwd), 'acme', '10.0.0.2', 'https://octi.example/')).toBe('https://octi.example/api/plugin-ui/acme/');
-    expect(uiBaseUrl(req(), 'acme', undefined, 'javascript:alert(1)')).toBeNull();
+    // Public link configuration cannot break local or LAN asset loading.
+    expect(uiBaseUrl(new Request('http://192.168.1.129:3007/api/plugin-ui/acme/index.html'), 'acme')).toBe('http://192.168.1.129:3007/api/plugin-ui/acme/');
+    expect(uiBaseUrl(new Request('https://octi.example/api/plugin-ui/acme/index.html'), 'acme')).toBe('https://octi.example/api/plugin-ui/acme/');
     expect(uiFileUrl('acme', 'a b/c.html')).toBe('/api/plugin-ui/acme/a%20b/c.html');
   });
 

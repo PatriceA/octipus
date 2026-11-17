@@ -17,7 +17,6 @@ import { DEFAULT_REQUEST_TIMEOUT_MS, MCP_PROTOCOL_VERSION } from '@/mcp/protocol
 import { MINIMAL_ENV_NAMES } from '@/security/child-env';
 import { proxyEnv } from '@/security/egress-proxy';
 import { activeSandboxRunner, getSandboxMode } from '@/security/shell-sandbox';
-import { pluginSandboxView } from '../sandbox-policy';
 import { MAX_MODEL_TRUST_REASON_CHARS, MAX_PLUGIN_SECRET_LENGTH, PLUGIN_HOST_ALIAS, PLUGIN_HOST_META_KEY, PLUGIN_HOST_START_SCOPES, PLUGIN_HOST_WRITE_SCOPES, PLUGIN_MANIFEST_FILE, PLUGIN_MODEL_CLI_TOOLS_APPROVAL, PLUGIN_PACKAGE_API_VERSION, PLUGIN_STORE_DEFAULT_QUOTA_BYTES, PLUGIN_STORE_MAX_ENTRIES, PLUGIN_STORE_MAX_LIST, PLUGIN_STORE_MAX_QUOTA_BYTES, PLUGIN_STORE_MAX_VALUE_BYTES, type PluginEventType, type PluginHostScope, type PluginManifest, type PluginRuntime, type PluginToolEffect } from '@/shared/plugin-package';
 import { MAX_RESULT_CHARS } from '../contributions/call';
 import { CONTEXT_TIMEOUT_MS, MAX_CONTEXT_CHARS } from '../contributions/context';
@@ -25,14 +24,15 @@ import { CRON_FIELDS } from '../contributions/cron';
 import { MAX_IN_FLIGHT, RATE_PER_MINUTE } from '../contributions/events';
 import { MAX_PROMPT_CHARS } from '../contributions/prompt';
 import { MAX_CONCURRENT_RUNS } from '../contributions/schedules';
-import { SIGNATURE_FILE } from '../integrity';
-import { manifestSchema, settingEnvName } from '../manifest';
-import { defaultMaxProtection } from '../service';
-import { MAX_CONTRIBUTION_INPUT_CHARS } from '../manifest-contributions';
-import { MAX_TOKEN_TTL_MS } from '../host-api';
 import { DEFAULT_RUN_ROLE, MAX_RUN_OUTPUT_CHARS, MAX_RUNS_IN_FLIGHT, PLUGIN_RUN_TOOL_IDS, RUN_BURST, RUN_TIMEOUT_MS, RUNS_PER_HOUR } from '../host-agent';
+import { MAX_TOKEN_TTL_MS } from '../host-api';
 import { MAX_DOCUMENT_CHARS } from '../host-documents';
 import { MODEL_CALLS_PER_MINUTE } from '../host-model';
+import { SIGNATURE_FILE } from '../integrity';
+import { manifestSchema, settingEnvName } from '../manifest';
+import { MAX_CONTRIBUTION_INPUT_CHARS } from '../manifest-contributions';
+import { pluginSandboxView } from '../sandbox-policy';
+import { defaultMaxProtection } from '../service';
 import { MAX_PACKAGE_BYTES, MAX_PACKAGE_FILES } from '../tree';
 import { pluginDevToolName } from './names';
 import { listTemplates } from './templates';
@@ -58,6 +58,7 @@ const EVENTS: Record<PluginEventType, string> = {
  * constant: a new scope does not compile until it is described here.
  */
 const HOST_SCOPES: Record<PluginHostScope, string> = {
+  'connections:read': 'POST /api/plugin-host/connections/get { connection, path } performs GET only through the calling user\'s approved named connection. The plugin admin must set connection_grants (JSON object mapping connection names to exact allowed origin-relative paths) in package settings. No request headers, body, query overrides, redirects or credentials returned; personal workspace and level 1 only. Responses capped at 1 MiB, 10 seconds.',
   'notes:read': 'GET /api/plugin-host/notes?limit=&tag= → { notes }: the user\'s notes in the call\'s workspace (at most 100), bodies included.',
   'notes:write': 'POST /api/plugin-host/notes { title, body?, tags? } → { id, slug }: creates a note; never overwrites (409 exists).',
   'tasks:read': 'GET /api/plugin-host/tasks?status= → { tasks, withheld }: the user\'s own tasks; those above maxProtection are left out.',
@@ -81,6 +82,10 @@ const HOST_SCOPES: Record<PluginHostScope, string> = {
   'calendar:write': 'POST /api/plugin-host/calendar/events { provider: "google"|"microsoft", title, start, end, allDay, location?, description? } → { id, provider }: creates an event (no attendees: nobody is invited). PUT /api/plugin-host/calendar/events/:id { the same } changes an event this package created (403 not_created_by_plugin otherwise; 409 has_attendees once the user invited someone to it). '
     + 'start and end are ISO times with an offset, or dates for allDay (end exclusive). A call holding data above the calendar\'s level may not write (403 read_level). A write or external tool only; personal workspace only.',
   'agent:run': `POST /api/plugin-host/agent/runs { prompt, role?, title? } → 202 { id, status: "running", role }: a background run of the host's own agent as the user (role default "${DEFAULT_RUN_ROLE}", any role but general; its tools narrowed to ${PLUGIN_RUN_TOOL_IDS.join(', ')}), unattended, in a session of its own; starting needs a write or external tool. GET /api/plugin-host/agent/runs/:id → { id, status: running|done|error|interrupted, role, title, stage, output, withheld?, error, tokens, startedAt, finishedAt } for a run of this package and user (404 otherwise); output is the final text (at most ${MAX_RUN_OUTPUT_CHARS} characters), withheld above maxProtection. Bounds: ${RUN_BURST} starts in a burst and ${RUNS_PER_HOUR} an hour per package and user, ${MAX_RUNS_IN_FLIGHT} running at once, plugins.hostAgentRunTokens tokens a run (counted in the daily plugin allowance), the user's spend budgets, ${Math.round(RUN_TIMEOUT_MS / 60_000)} minutes. Personal workspaces only (409 space). The package keeps the id and polls with a later call: no token outlives its call.`,
+  'repos:collect': 'GET /api/plugin-host/collector/environments → { environments: [{ id, name, roots }], connections }: the caller\'s enabled host environments with the folders both the owner and the admin approved (package settings collector_roots, collector_connections; collector_protection_level 1-4 classifies the evidence). '
+  + 'POST /api/plugin-host/collector/runs { environmentId, title?, maxCommits?, repos: [{ key, path, fetch?: { connection, remotePath }, baseline: Ref, refs: [Ref] }], http: [{ id, connection, path, pagination, maxPages? }] } → 202 { id }: Ref is { name, branch } | { name, tag } | { name, sha } | { name, localRef }. '
+  + 'The host runs fixed Git reads only (refs, baseline..ref logs, ancestry, ahead/behind, tree equality, changed file names, git cherry patch equivalence); fetch writes only refs/remotes/octipus-audit/*; http is GET through the approved connection, pagination none|offset|token|page with JSON pointers; expand { projects, from: { source: commits } | { source: http, id, pointer }, batch? } repeats a path containing {keys} over PROJECT-NUMBER keys of those projects found in commit messages or an earlier response. A write or external tool starts. '
+  + 'GET /api/plugin-host/collector/runs/:id → { id, status, stage, evidence, withheld?, error }: evidence marks every incomplete part (shallow, failed fetch, unresolved ref, truncated range, page cap) as complete: false. DELETE cancels. Personal workspaces only; 1 run at once per package and user.',
 };
 
 const RUNTIMES: Record<PluginRuntime, string> = {
@@ -135,6 +140,7 @@ export async function pluginApiContract(opts: {
     manifestFile: PLUGIN_MANIFEST_FILE,
     manifestSchema: manifestJsonSchema(),
     manifestRules: [
+      'companions (apiVersion 1.1.0): manual-install services, never automatically installed or started. Declare id, title, description, optional, runsOn, platforms, requirements, dataAccess, privileges, installation: manual, bundle (.tar.gz) and guide (.md). Files are package-relative, pinned and downloadable by admins even while disabled. Archive links, traversal, duplicates and oversized contents are refused.',
       `apiVersion: the same MAJOR as ${PLUGIN_PACKAGE_API_VERSION} and a MINOR no newer.`,
       'runtime "package" (the default) requires server and tools; entry is only for "in-process".',
       'name: not octipus, mcp, system or plugin.',
