@@ -1,10 +1,11 @@
 'use client';
 
-import { Archive, FileText, ListPlus, Loader2, Mail, Plus, RefreshCw, Send, Sparkles, Tags, Trash2, X } from 'lucide-react';
+import { Archive, ClipboardCheck, FileText, ListPlus, Loader2, Mail, Plus, RefreshCw, Send, Sparkles, Tags, Trash2, X } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import { MailWorkspace } from '@/components/mail/mail-workspace';
+import { TriageReview } from '@/components/mail/triage-review';
 
 interface Addr { name?: string; email: string }
 interface Triage { priority: 'high' | 'normal' | 'low'; category?: string; reason?: string }
@@ -64,6 +65,7 @@ function OAuthInbox() {
   // Category editor: rows while editing, null when closed.
   const [catRows, setCatRows] = useState<Array<{ name: string; description: string }> | null>(null);
   const [catDefaults, setCatDefaults] = useState<Record<string, string>>({});
+  const [reviewOpen, setReviewOpen] = useState(false);
   // Auto-archive low-priority spam/marketing on triage. Per-browser preference;
   // archive is reversible (All Mail / Archive folder) and the last batch has Undo.
   const [autoArchiveOn, setAutoArchiveOn] = useState(() => {
@@ -306,6 +308,9 @@ function OAuthInbox() {
           <button onClick={() => (catRows ? setCatRows(null) : openCategories())} title="Edit triage categories" className="px-3 py-2 text-sm border border-outline-variant/20 rounded-full hover:bg-surface-container-high inline-flex items-center gap-1.5 text-on-surface">
             <Tags className="w-4 h-4" /> Categories
           </button>
+          <button onClick={() => setReviewOpen(!reviewOpen)} title="Check the triage the decision model was unsure of; your labels win and calibrate it" className="px-3 py-2 text-sm border border-outline-variant/20 rounded-full hover:bg-surface-container-high inline-flex items-center gap-1.5 text-on-surface">
+            <ClipboardCheck className="w-4 h-4" /> Review
+          </button>
           <label className="text-xs text-on-surface-variant inline-flex items-center gap-1.5 cursor-pointer" title="On triage, archive mail rated low priority AND spam or marketing. Archived mail is not deleted — it stays in All Mail / Archive, and the last batch can be undone.">
             <input type="checkbox" checked={autoArchiveOn} onChange={(e) => toggleAutoArchive(e.target.checked)} className="w-3.5 h-3.5 rounded border-outline-variant text-primary" />
             auto-archive spam &amp; marketing
@@ -334,6 +339,8 @@ function OAuthInbox() {
           <button onClick={() => setNotice('')} className="ml-2 underline">dismiss</button>
         </div>
       )}
+
+      {reviewOpen && <TriageReview onClose={() => setReviewOpen(false)} />}
 
       {catRows && (
         <div className="rounded-xs border border-outline-variant/10 bg-surface p-4 space-y-2">

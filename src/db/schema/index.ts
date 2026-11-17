@@ -18,6 +18,7 @@ export * from './compaction-entries';
 export * from './contacts';
 export * from './documents';
 export * from './email-handled';
+export * from './email-triage-labels';
 export * from './context-hooks';
 export * from './embeddings';
 export * from './index-backlog';
