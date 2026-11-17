@@ -74,7 +74,7 @@ describe('triageInbox with a decision model (live)', () => {
     };
     await triageInbox('u', [{ ...item, subject: 'PRIVATE_SUBJECT', snippet: 'PRIVATE_SNIPPET' }]);
     const logs = vi.mocked(recordShadow).mock.calls.filter(([, kind]) => kind === 'email-evaluation').map(([entry]) => entry);
-    expect(logs.find(e => e.event === 'decision')).toMatchObject({ messageId: 'm1', threshold: 0.8,
+    expect(logs.find(e => e.event === 'decision')).toMatchObject({ messageId: 'm1', threshold: 0.7,
       decision: { model: 'local-clef', confident: false, priority: { value: 'low', confidence: 0.76 }, category: { value: 'promotion', confidence: 0.92 } } });
     expect(logs.find(e => e.event === 'comparison')).toMatchObject({ messageId: 'm1', referenceModel: 'chat-model', selectedSource: 'llm', reference: { priority: 'high', category: 'work' } });
     expect(new Set(logs.map(e => e.runId)).size).toBe(1);
@@ -105,7 +105,7 @@ describe('triageInbox with a decision model (live)', () => {
     if (questions.priority.type !== 'score') throw new Error('Expected ordered priority criteria');
     expect(referencePrompt).toContain(questions.priority.instructions);
     for (const criterion of questions.priority.criteria) expect(referencePrompt).toContain(criterion);
-    expect(vi.mocked(decide).mock.calls[0][0].minConfidence).toBe(0.8);
+    expect(vi.mocked(decide).mock.calls[0][0].minConfidence).toBe(0.7);
     const logs = vi.mocked(recordShadow).mock.calls.map(([entry]) => entry);
     expect(logs.find(e => e.event === 'comparison')).toMatchObject({ priorityRubric: 'action-required-v2', selectedSource: 'decision', reference: { priority: 'high', category: 'work' }, priorityAgreed: false, categoryAgreed: false });
   });

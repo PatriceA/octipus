@@ -382,7 +382,7 @@ export function triageEntries(parsed: unknown): Array<[string, Record<string, un
  * Live decision-model triage (docs/plans/decision-models.md, site 1).
  * Confident decisions win; unanswered items retain the existing LLM path.
  */
-const TRIAGE_SITE: DecisionSite = { id: 'email.triage', sensitivity: 'personal', minConfidence: 0.8 };
+const TRIAGE_SITE: DecisionSite = { id: 'email.triage', sensitivity: 'personal', minConfidence: 0.7 };
 const TRIAGE_LIVE = true;
 const PRIORITIES = ['low', 'normal', 'high'] as const;
 
