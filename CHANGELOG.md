@@ -7,6 +7,14 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Fixed: CLI runs on a host-identity environment no longer lose characters
+  from their output.** Inherited variables with a credential-like name but a
+  short value (a flag set to `1`, a token count) were masked everywhere in the
+  vendor's output, so every `1` became `[REDACTED_CREDENTIAL]`. Antigravity
+  runs failed their isolation check on the corrupted hashed path; other CLIs
+  returned altered ids and paths. Values under 8 characters are no longer
+  masked; vault bindings still are.
+
 - **MCP servers go through the codemode executor by default; CLI agents get
   it too.** A server that sets no `exposure` is now `codemode`: agents call its
   tools from one script and only the script's output enters the conversation.
