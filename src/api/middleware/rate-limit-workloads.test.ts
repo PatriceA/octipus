@@ -17,9 +17,14 @@ import { apiRateWorkload, rateLimitMiddleware } from './rate-limit';
 
 const admin: Principal = { kind: 'user', userId: 'owner', username: 'owner', isAdmin: true };
 const indexing = '/api/code-index/cocoindex/document/embeddings';
+const connectorIndexing = '/api/connectors/cocoindex/document/embeddings';
 function app(principal: Principal = admin) {
   return new Elysia().derive(() => ({ principal })).use(rateLimitMiddleware)
     .post(indexing, ({ set }) => {
+      if (principal.kind === 'anonymous') { set.status = 401; return { error: 'Not authenticated' }; }
+      return { ok: true };
+    })
+    .post(connectorIndexing, ({ set }) => {
       if (principal.kind === 'anonymous') { set.status = 401; return { error: 'Not authenticated' }; }
       return { ok: true };
     })
@@ -46,6 +51,14 @@ describe('indexing and interactive API limits', () => {
     expect((await call(server, '/api/companion/settings')).status).toBe(200);
   });
 
+  test('legacy connector traffic shares the indexing cap and cannot consume the UI budget', async () => {
+    const indexer = app(ANONYMOUS_PRINCIPAL);
+    const browser = app();
+    for (let i = 0; i < 600; i++) expect((await call(indexer, connectorIndexing, 'POST')).status).toBe(401);
+    expect((await call(indexer, indexing, 'POST')).status).toBe(429);
+    expect((await call(browser, '/api/companion/settings')).status).toBe(200);
+  });
+
   test('both workloads enforce the owner quota independently', async () => {
     state.quota = 1;
     const server = app();
@@ -57,6 +70,9 @@ describe('indexing and interactive API limits', () => {
 
   test('untrusted requests cannot choose or multiply workload buckets', () => {
     expect(apiRateWorkload(indexing, 'POST')).toBe('indexing');
+    expect(apiRateWorkload(connectorIndexing, 'POST')).toBe('indexing');
+    expect(apiRateWorkload('/api/connectors/cocoindex/query/embeddings', 'POST')).toBe('indexing');
+    expect(apiRateWorkload(`${connectorIndexing}/anything`, 'POST')).toBe('api');
     expect(apiRateWorkload(indexing, 'GET')).toBe('api');
     expect(apiRateWorkload(`${indexing}/anything`, 'POST')).toBe('api');
     expect(apiRateWorkload('/api/models', 'POST')).toBe('api');
