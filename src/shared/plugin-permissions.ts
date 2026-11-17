@@ -33,6 +33,7 @@ export const HOST_SCOPE_WORDS: Record<string, string> = {
   'calendar:read': 'Reads your calendar',
   'connections:read': 'Reads exact API paths from admin-approved named connections; credentials stay in the trusted client',
   'calendar:write': 'Adds events to your calendar and changes the ones it added',
+  'repos:collect': 'Reads Git history and approved connections in the background, within folders and connections an admin approved',
 };
 
 /** The store in words: "Keeps up to 5 MB of its own data per user". */

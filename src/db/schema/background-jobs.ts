@@ -1,6 +1,6 @@
 import { bigserial, index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-import { users } from './users';
 import { workspaces } from './organizations';
+import { users } from './users';
 
 /**
  * One row per unit of background work the process runs outside a request:
@@ -27,7 +27,7 @@ import { workspaces } from './organizations';
  * module is removed; plugins/research runs through `agent`). `agent`: a
  * plugin's background agent run (host scope `agent:run`, src/plugins/packages/host-agent.ts).
  */
-export type BackgroundJobKind = 'research' | 'document' | 'learning' | 'agent';
+export type BackgroundJobKind = 'research' | 'document' | 'learning' | 'agent' | 'collector';
 /** `cancelled`: the thing the job was for went away (a document deleted mid-run) — not news, not a failure. */
 export type BackgroundJobStatus = 'queued' | 'running' | 'done' | 'error' | 'interrupted' | 'cancelled';
 

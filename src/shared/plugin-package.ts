@@ -481,11 +481,19 @@ export interface PluginContributionsView {
  * it counts as network. `calendar:read` lists the connected calendars' events
  * in a window; `calendar:write` creates events and changes the ones the
  * package created.
+ *
+ * `repos:collect` has the host gather read-only evidence in the background
+ * from Git repositories of the caller's execution environment (fixed Git read
+ * operations, fetches into an audit-only ref namespace through an approved
+ * connection) and paginated GETs of approved connections, inside folders and
+ * connections an admin approved for the package; the package holds only the
+ * run id (src/plugins/packages/host-collector.ts). Starting needs a `write`
+ * or `external` tool (`PLUGIN_HOST_START_SCOPES`).
  */
 export const PLUGIN_HOST_SCOPES = [
   'notes:read', 'notes:write', 'tasks:read', 'tasks:write', 'documents:read', 'documents:write', 'notify', 'web:read', 'model:complete',
   'agent:run', 'store:read', 'store:write', 'mail:read', 'mail:draft', 'mail:send', 'calendar:read', 'calendar:write',
-  'connections:read',
+  'connections:read', 'repos:collect',
 ] as const;
 export type PluginHostScope = (typeof PLUGIN_HOST_SCOPES)[number];
 
@@ -502,7 +510,7 @@ export const PLUGIN_HOST_EXTERNAL_SCOPES: readonly PluginHostScope[] = ['mail:se
  * a `write` or `external` tool: `agent:run` (a read tool polls a run, a write
  * tool starts one).
  */
-export const PLUGIN_HOST_START_SCOPES: readonly PluginHostScope[] = ['agent:run'];
+export const PLUGIN_HOST_START_SCOPES: readonly PluginHostScope[] = ['agent:run', 'repos:collect'];
 
 /** One page a package adds to the web app. */
 export interface PluginUiPage {

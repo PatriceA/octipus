@@ -22,21 +22,21 @@ import { and, eq } from 'drizzle-orm';
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
 import { checkRateLimit } from '@/core/artifacts/rate-limit';
-import { NoteExistsError, getNoteService } from '@/core/knowledge/notes';
+import { getNoteService, NoteExistsError } from '@/core/knowledge/notes';
 import { loadSessionLevel, raiseSessionLevel, sessionProtectionLevel } from '@/core/protection/session-level';
 import { auditTaskMutation } from '@/core/tasks/audit';
 import { observeTaskProvenance, taskProvenance } from '@/core/tasks/provenance';
 import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { contentRepos } from '@/db/repositories/content';
+import type { StoreScope } from '@/db/repositories/plugin-store-repository';
 import { users } from '@/db/schema/users';
 import { pluginPackages } from '@/db/schema/plugin-packages';
 import { pluginConnectionGet } from '@/plugins/packages/host-connections';
 import { type HostTokenGrant, noteHostRead, verifyHostToken } from '@/plugins/packages/host-api';
 import { readLevelOf } from '@/plugins/packages/read-level';
+import { type StoreOutcome, storeDelete, storeGet, storeKeyFromPath, storeList, storePut, storeWriteLimit } from '@/plugins/packages/store';
 import { STORE_AUDIT_WINDOW_MS, storeAuditAggregator } from '@/plugins/packages/store-audit';
-import { storeDelete, storeGet, storeKeyFromPath, storeList, storePut, type StoreOutcome, storeWriteLimit } from '@/plugins/packages/store';
-import type { StoreScope } from '@/db/repositories/plugin-store-repository';
 import { clientIp } from '@/security/client-ip';
 import { egressStampValid, HOST_API_EGRESS_HEADER, HOST_API_EGRESS_KEY_HEADER } from '@/security/egress-proxy';
 import type { Principal } from '@/security/principal';
@@ -590,6 +590,56 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
     detail: { tags: ['plugin-host'] },
   })
 
+  // Repository evidence (src/plugins/packages/host-collector.ts): the caller's
+  // environments and approved folders/connections, a background run of fixed
+  // Git reads and paginated GETs, read back and cancelled by id. Starting needs
+  // a write or external tool; the body is validated by the collector's schema.
+  .get('/collector/environments', (ctx) => run(ctx, 'collector.options', 'repos:collect', async ({ grant, principal }, details) => {
+    const { collectorOptions } = await import('@/plugins/packages/host-collector');
+    const outcome = await collectorOptions(grant, principal);
+    if (!outcome.ok) { ctx.set.status = outcome.status; details.code = outcome.code; return { error: outcome.error, code: outcome.code }; }
+    return outcome.value;
+  }), { detail: { tags: ['plugin-host'] } })
+
+  .post('/collector/runs', (ctx) => run(ctx, 'collector.start', 'repos:collect', async ({ grant, principal }, details) => {
+    const { startCollectorRun } = await import('@/plugins/packages/host-collector');
+    const outcome = await startCollectorRun(grant, principal, ctx.body);
+    if (!outcome.ok) {
+      ctx.set.status = outcome.status;
+      if (outcome.retryAfter) ctx.set.headers['retry-after'] = String(outcome.retryAfter);
+      details.code = outcome.code;
+      return { error: outcome.error, code: outcome.code };
+    }
+    ctx.set.status = 202;
+    details.runId = outcome.value.id;
+    return outcome.value;
+  }), {
+    body: t.Unknown(),
+    detail: { tags: ['plugin-host'] },
+  })
+
+  .get('/collector/runs/:id', (ctx) => run(ctx, 'collector.read', 'repos:collect', async ({ grant, principal }, details) => {
+    details.runId = ctx.params.id;
+    const { readCollectorRun } = await import('@/plugins/packages/host-collector');
+    const outcome = await readCollectorRun(grant, principal, ctx.params.id);
+    if (!outcome.ok) { ctx.set.status = outcome.status; details.code = outcome.code; return { error: outcome.error, code: outcome.code }; }
+    return outcome.value;
+  }), {
+    params: t.Object({ id: t.String({ maxLength: 64 }) }),
+    detail: { tags: ['plugin-host'] },
+  })
+
+  .delete('/collector/runs/:id', (ctx) => run(ctx, 'collector.cancel', 'repos:collect', async ({ grant, principal }, details) => {
+    details.runId = ctx.params.id;
+    const { cancelCollectorRun } = await import('@/plugins/packages/host-collector');
+    const outcome = await cancelCollectorRun(grant, principal, ctx.params.id);
+    if (!outcome.ok) { ctx.set.status = outcome.status; details.code = outcome.code; return { error: outcome.error, code: outcome.code }; }
+    return outcome.value;
+  }), {
+    params: t.Object({ id: t.String({ maxLength: 64 }) }),
+    detail: { tags: ['plugin-host'] },
+  })
+
   // One public web page, fetched by the host through its SSRF guard and turned
   // into a clean article (src/core/web-read): the package never touches
   // the network itself. Size and time are capped by the fetcher (5 MB, 15 s);
@@ -850,4 +900,8 @@ export const PLUGIN_HOST_ENDPOINTS: ReadonlyArray<{ method: string; path: string
   { method: 'GET', path: '/api/plugin-host/calendar/events', scope: 'calendar:read' },
   { method: 'POST', path: '/api/plugin-host/calendar/events', scope: 'calendar:write' },
   { method: 'PUT', path: '/api/plugin-host/calendar/events/:id', scope: 'calendar:write' },
+  { method: 'GET', path: '/api/plugin-host/collector/environments', scope: 'repos:collect' },
+  { method: 'POST', path: '/api/plugin-host/collector/runs', scope: 'repos:collect' },
+  { method: 'GET', path: '/api/plugin-host/collector/runs/:id', scope: 'repos:collect' },
+  { method: 'DELETE', path: '/api/plugin-host/collector/runs/:id', scope: 'repos:collect' },
 ];
