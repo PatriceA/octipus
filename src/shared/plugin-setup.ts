@@ -26,6 +26,7 @@ export interface PluginSetupConfiguration {
   check: PluginSetupDecl['check'] | null;
   installed: boolean;
   enabled: boolean;
+  open?: { href: string; label: string };
   companions?: PluginCompanionDecl[];
 }
 export interface PluginSetupResources {

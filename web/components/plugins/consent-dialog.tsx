@@ -345,6 +345,7 @@ export function ConsentDialog({ source, onClose, onDone, enableByDefault }: {
             >
               <CircleCheck className="h-3.5 w-3.5" aria-hidden /> {action}
             </button></>}
+            {stage === 'ready' && receipt?.enabled && data?.configuration?.open && <a href={data.configuration.open.href} onClick={() => onDone(receipt)} className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-on-primary">{data.configuration.open.label}</a>}
             {stage === 'ready' && receipt && <button type="button" onClick={() => onDone(receipt)} className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-on-primary">Done</button>}
           </div>
         </div>

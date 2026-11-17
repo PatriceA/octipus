@@ -10,6 +10,7 @@ export function setupConfiguration(manifest: PluginManifest, settings: RecordDat
   return { fields: manifest.settings ?? [], secrets: (manifest.secrets ?? []).map(s => ({ ...s, configured: secrets.includes(s.key) })),
     resources: manifest.setup?.resources ?? [], settings: { ...manifest.setup?.defaults, ...settings }, maxProtection: effectiveMaxProtection(manifest, manifest.host ?? []),
     environmentBackends: manifest.host?.includes('repos:collect') ? ['host'] : undefined,
+    open: manifest.ui?.pages?.[0] ? { href: `/plugins/${encodeURIComponent(manifest.name)}/${encodeURIComponent(manifest.ui.pages[0].path)}`, label: 'Open plugin' } : manifest.dashboards?.length ? { href: '/dashboards', label: 'Open dashboards' } : { href: '/agents', label: 'Use in a session' },
     check: manifest.setup?.check ?? null, companions: manifest.companions, installed, enabled };
 }
 
