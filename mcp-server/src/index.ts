@@ -9,16 +9,19 @@
  * Usage:
  *   node dist/index.js                          # stdio transport (default)
  *   node dist/index.js --transport http --port 3010  # HTTP transport
+ *   node dist/index.js --toolset compact             # 3 tools that search, describe and call the rest
  *
  * Environment:
  *   OCTIPUS_URL      - Octipus backend URL (default: http://localhost:3005)
  *   OCTIPUS_API_KEY   - API key or JWT for authentication
  *   OCTIPUS_USER      - Username for auto-login (alternative to API key)
  *   OCTIPUS_PASSWORD  - Password for auto-login
+ *   OCTIPUS_MCP_TOOLSET - "full" (default) or "compact"; --toolset wins
  */
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createServer } from './server.js';
+import { parseToolset } from './compact.js';
 import { createAgentBridgeServer } from './agent-bridge.js';
 import { createHttpBridge } from './http.js';
 
@@ -33,11 +36,12 @@ const transport = getArg('transport') || 'stdio';
 const port = Number(getArg('port') || '3010');
 const host = getArg('host') || process.env.MCP_HOST || '127.0.0.1';
 const octiUrl = process.env.OCTIPUS_URL || 'http://localhost:3005';
+const toolset = parseToolset(getArg('toolset') ?? process.env.OCTIPUS_MCP_TOOLSET);
 
 async function main(): Promise<void> {
   if (transport === 'stdio') {
     const scoped = process.env.OCTIPUS_AGENT_URL || process.env.OCTIPUS_AGENT_KEY;
-    const server = scoped ? createAgentBridgeServer() : createServer(octiUrl);
+    const server = scoped ? createAgentBridgeServer() : createServer(octiUrl, { toolset });
     const stdioTransport = new StdioServerTransport();
     await server.connect(stdioTransport);
     // Server runs until stdin closes
@@ -45,6 +49,7 @@ async function main(): Promise<void> {
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid HTTP port');
     const bridge = createHttpBridge({
       backendUrl: octiUrl,
+      toolset,
       apiKey: process.env.MCP_API_KEY || '',
       allowedOrigins: (process.env.CORS_ORIGINS || 'http://localhost:3007').split(','),
     });

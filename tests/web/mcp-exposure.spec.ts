@@ -40,20 +40,21 @@ async function stubServer(page: import('@playwright/test').Page, initial: { expo
 test('server and per-tool exposure are saved and shown', async ({ authenticatedPage: page }) => {
   const writes = await stubServer(page, {});
   await page.goto('/mcp');
-  // A server saved before exposure existed reads as the default, with no badge.
+  // A server that sets no exposure reads as the default (codemode), with no badge.
   await page.getByRole('button', { name: 'Tools and permissions for GitHub' }).click();
   const server = page.getByRole('combobox', { name: 'Exposure for GitHub' });
   const search = page.getByRole('combobox', { name: 'Exposure for gh / search_issues' });
-  await expect(server).toHaveValue('deferred');
-  await expect(search).toHaveValue('INHERIT');
-  await expect(search.locator('option:checked')).toHaveText('Server default (deferred)');
-
-  await server.selectOption('codemode');
   await expect(server).toHaveValue('codemode');
-  expect(writes[0]).toEqual({ exposure: 'codemode' });
+  await expect(search).toHaveValue('INHERIT');
   await expect(search.locator('option:checked')).toHaveText('Server default (codemode)');
+  await expect(page.getByText('deferred', { exact: true })).toHaveCount(0);
+
+  await server.selectOption('deferred');
+  await expect(server).toHaveValue('deferred');
+  expect(writes[0]).toEqual({ exposure: 'deferred' });
+  await expect(search.locator('option:checked')).toHaveText('Server default (deferred)');
   // The header shows a non-default exposure.
-  await expect(page.getByText('codemode', { exact: true })).toBeVisible();
+  await expect(page.getByText('deferred', { exact: true })).toBeVisible();
 
   await search.selectOption('direct');
   await expect(search).toHaveValue('direct');
@@ -93,9 +94,11 @@ test('a new server is added with the chosen exposure', async ({ authenticatedPag
   const dialog = page.getByRole('dialog');
   await dialog.getByPlaceholder('e.g., Brave Search').fill('Docs');
   await dialog.getByPlaceholder('https://n8n.example.com/mcp-server/http').fill('https://docs.example.com/mcp');
-  await dialog.getByLabel('Tool exposure').selectOption('codemode');
+  // Pick something other than the default, so the choice is what gets sent.
+  await expect(dialog.getByLabel('Tool exposure')).toHaveValue('codemode');
+  await dialog.getByLabel('Tool exposure').selectOption('deferred');
   await dialog.getByRole('button', { name: 'Add & Connect' }).click();
-  await expect.poll(() => posted?.exposure).toBe('codemode');
+  await expect.poll(() => posted?.exposure).toBe('deferred');
 });
 
 test('a server description is saved from the expanded server', async ({ authenticatedPage: page }) => {

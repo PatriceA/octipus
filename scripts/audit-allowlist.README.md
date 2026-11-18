@@ -1,12 +1,40 @@
-# Audit allowlist format
+# Audit exceptions and the legacy allowlist
+
+## CI: `scripts/audit-exceptions.json`
 
 CI runs `npm run audit:all` in `.github/workflows/dependency-audit.yml` on pull
 requests, pushes to main, and daily. It checks all three npm lockfiles, including
-development dependencies, and fails on any reported vulnerability or audit error.
-It does not consult an allowlist.
+development dependencies, and fails on any reported vulnerability or audit error
+that `scripts/audit-exceptions.json` does not accept (`scripts/audit-exceptions.mjs`
+decides). Each entry:
+
+```jsonc
+{
+  "folder": "web",                       // ".", "web" or "mcp-server"
+  "advisory": "GHSA-fc5q-39xc-vjpf",     // one advisory
+  "package": "picomatch",                // the one package it is in
+  "hoisted": true,                       // optional, see below
+  "under": ["vite", "tinyglobby"],       // the only packages it may sit under / be pulled in by
+  "reason": "…why it does not affect us, and what removes the entry…",
+  "reviewBy": "2026-11-24"               // the audit fails again after this day
+}
+```
+
+- Without `hoisted`, every copy of the package must sit nested under a listed
+  parent (`node_modules/<parent>/node_modules/<package>`).
+- With `hoisted: true`, a top-level copy (`node_modules/<package>`) is also
+  accepted, as long as the package is not a direct dependency and every package
+  the report flags as depending on it is listed in `under`. When no fixed
+  version exists every dependent is flagged, so a new consumer fails the audit.
+- Packages flagged only because they depend on accepted ones are accepted when
+  listed in `under`, cycles between them included.
+- Another advisory on the same package, another folder, or a past `reviewBy`
+  fails the audit. Keep review dates days or weeks away, not months.
+
+## Legacy local diagnostic: `scripts/audit-allowlist.json`
 
 `scripts/audit-allowlist.json` is used only by the legacy local diagnostic
-`scripts/audit-check.ts`:
+`scripts/audit-check.ts`, which CI does not run:
 
 ```
 npx tsx scripts/audit-check.ts

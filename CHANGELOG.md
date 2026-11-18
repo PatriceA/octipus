@@ -7,6 +7,38 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Accepted for one week: picomatch ReDoS (GHSA-fc5q-39xc-vjpf).** No fixed
+  `picomatch` release exists yet (4.0.7 is the latest and affected). It is
+  reached only through build and test tooling (vitest, vite, ESLint); the
+  served backend and web app do not run it. The dependency audit accepts it
+  until 2026-11-24 and fails again after that, so it is revisited. The audit
+  exceptions can now accept a hoisted package by naming everything that pulls
+  it in ([scripts/audit-allowlist.README.md](scripts/audit-allowlist.README.md)).
+
+- **Fixed: CLI runs on a host-identity environment no longer lose characters
+  from their output.** Inherited variables with a credential-like name but a
+  short value (a flag set to `1`, a token count) were masked everywhere in the
+  vendor's output, so every `1` became `[REDACTED_CREDENTIAL]`. Antigravity
+  runs failed their isolation check on the corrupted hashed path; other CLIs
+  returned altered ids and paths. Values under 8 characters are no longer
+  masked; vault bindings still are.
+
+- **MCP servers go through the codemode executor by default; CLI agents get
+  it too.** A server that sets no `exposure` is now `codemode`: agents call its
+  tools from one script and only the script's output enters the conversation.
+  Agents without codemode (small models, remote rooms) still reach the same
+  tools through `mcp_list_tools` / `mcp_call_tool`. Servers saved as
+  `deferred` (the MCP page saved every new server that way) keep it; change
+  them on the MCP page. Plugin packages' declared tools follow the default.
+  CLI workers (Claude Code, Codex, Grok Build, Muse Code, Antigravity, Vibe)
+  now get the `codemode` tool over their Octipus MCP connection; its calls
+  pass the worker's normal permission pipeline. The standalone MCP server has
+  a compact toolset (`--toolset compact` / `OCTIPUS_MCP_TOOLSET=compact`):
+  three tools that search, describe and call its 87. See
+  [Tool exposure](docs/MCP-INTEGRATION.md#tool-exposure),
+  [Codemode in CLI runs](docs/CLI-AGENTS.md#codemode-in-cli-runs) and
+  [Compact toolset](docs/MCP-SERVER.md#compact-toolset---toolset-compact).
+
 - **Learned skills can be repaired, owner-edited skills are locked.** A
   learning check may propose a patch to a learned skill whose body the session
   loaded: one passage, matched exactly once, PII-checked, made against a

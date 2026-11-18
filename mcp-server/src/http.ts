@@ -2,9 +2,12 @@ import { timingSafeEqual } from 'node:crypto';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { createServer } from './server.js';
+import type { Toolset } from './compact.js';
 
 export interface HttpBridgeOptions {
   backendUrl: string;
+  /** Tools each session sees (compact.ts); full by default. */
+  toolset?: Toolset;
   apiKey: string;
   allowedOrigins: string[];
 }
@@ -65,7 +68,7 @@ export function createHttpBridge(options: HttpBridgeOptions) {
       return;
     }
 
-    const server = createServer(options.backendUrl);
+    const server = createServer(options.backendUrl, { toolset: options.toolset });
     const transport = new SSEServerTransport('/messages', res);
     sessions.set(transport.sessionId, { server, transport });
     res.once('close', () => sessions.delete(transport.sessionId));

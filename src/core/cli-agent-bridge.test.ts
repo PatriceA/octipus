@@ -183,6 +183,47 @@ describe.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('CLI worker with actual subproce
     worker.stop();
     expect(worker.getStatus()).toBe('completed');
   });
+  it('serves codemode over the bridge: scripts call tools through the worker pipeline and only their output returns', async () => {
+    writeFileSync(fixture.script, `
+      import { createInterface } from 'node:readline';
+      createInterface({input:process.stdin}).on('line', line => {
+        const event = JSON.parse(line);
+        if (event.type === 'control_request') console.log(JSON.stringify({type:'control_response',response:{subtype:'success',request_id:event.request_id,response:{}}}));
+      });
+      const auth = {Authorization:'Bearer ' + process.env.OCTIPUS_AGENT_KEY};
+      const listed = await (await fetch(process.env.OCTIPUS_AGENT_URL + '/tools', {headers: auth})).json();
+      const call = async (name, args = {}) => (await fetch(process.env.OCTIPUS_AGENT_URL + '/call', {method:'POST', headers: auth, body: JSON.stringify({name, arguments:args})})).json();
+      const script = await call('codemode', {code: [
+        'const logs = await Promise.all(["a", "b"].map((id) => tools.notes__read({ id })));',
+        'let refused = "";',
+        'try { await tools.denied__write({}); } catch (e) { refused = "refused"; }',
+        'return { errors: logs.filter((l) => l.includes("ERROR")), refused };',
+      ].join("\\n")});
+      console.log(JSON.stringify({type:'result',subtype:'success',result:JSON.stringify({names: (listed.tools ?? listed).map(t => t.name), script}),num_turns:1}));
+    `);
+    const context: AgentContext = { space: null, trigger: 'user', funding: 'own', id: 'a', sessionId: 's', userId: 'u', workspaceId: 'w', root: true, codemode: true,
+      model: 'cli/claude-code', role: 'general', topic: 'general', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} };
+    const worker = new CLIAgentWorker(context, { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000, codemode: true });
+    const NOTES: Record<string, string> = { a: 'ok\nERROR disk full', b: 'ok\nok' };
+    const read = vi.fn(async (args: Record<string, unknown>) => NOTES[String(args.id)]);
+    worker.registerTool({ name: 'notes__read', toolId: 'notes', permissionAction: 'read', description: 'Read a note', parameters: { type: 'object', properties: { id: { type: 'string' } } }, execute: read });
+    const denied = vi.fn();
+    worker.registerTool({ name: 'denied__write', toolId: 'denied', description: '', parameters: { type: 'object' }, execute: denied });
+    const result = JSON.parse(await worker.run('Find the errors'));
+    expect(result.names).toContain('codemode');
+    const text = result.script.content[0].text as string;
+    expect(result.script.isError).not.toBe(true);
+    expect(text).toContain('Script completed');
+    expect(text).toContain('ERROR disk full');
+    expect(text).toContain('"refused": "refused"');
+    expect(text).not.toContain('ok\nok');
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(denied).not.toHaveBeenCalled();
+    // Each script call is checked like a direct one, as the run's own identity.
+    expect(fixture.check).toHaveBeenCalledWith('u', 'notes', 'read', { id: 'a' }, expect.objectContaining({ id: 'a', sessionId: 's', workspaceId: 'w' }), expect.anything());
+    expect(fixture.check).toHaveBeenCalledWith('u', 'denied', expect.anything(), {}, expect.anything(), expect.anything());
+    worker.stop();
+  });
 });
 
 

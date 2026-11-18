@@ -143,7 +143,9 @@ API state, or other independent evidence. Test both that a guard rejects its
 failure case and that the shipping execution path actually reaches it.
 
 Current CI includes unit tests, database integration, and browser tests with
-stubbed API calls. The red-team workflow runs a **dry-run** that checks test-case
+stubbed API calls, plus static analysis (CodeQL, Semgrep, zizmor for the
+workflows), dependency audit and review, install smoke tests on Linux, macOS
+and Windows, and desktop builds. None of these call a live model. The red-team workflow runs a **dry-run** that checks test-case
 generation without calling a model. It does not establish adversarial model
 performance, and it is not a live-model regression gate. See
 [Testing](docs/TESTING.md) for the boundaries of each suite.

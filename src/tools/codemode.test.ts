@@ -7,7 +7,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import type { ToolHandler } from '@/core/agent-base';
 import type { AgentContext, ToolCall, ToolResult } from '@/core/types';
-import { buildCodemodeHandler, type CodemodeHost, scriptableTools } from './codemode';
+import { buildCodemodeHandler, type CodemodeHost, scriptableTools, scriptTimeoutMs } from './codemode';
 
 // No embedding provider in the unit lane: searchTools falls back to keywords.
 vi.mock('@/core/rag/embeddings', () => ({
@@ -201,5 +201,23 @@ describe('routed script tools', () => {
   test('without the handler it routes through, a routed tool does not exist', async () => {
     const out = await run(host({ routedTools: () => routed }), `return "mcp__gh__get_pr" in tools;`);
     expect(out).toContain('false');
+  });
+});
+
+describe('codemode execution budget', () => {
+  // The CLI bridge bounds each call by the handler's executionTimeoutMs; a
+  // budget shorter than the script's would abandon it while its calls go on.
+  const budget = (code: unknown) => (buildCodemodeHandler(host()).executionTimeoutMs as (args: Record<string, unknown>) => number)({ code });
+
+  test('follows the script timeout_ms option', () => {
+    expect(budget('// @options: {"timeout_ms": 45000}\nreturn 1;')).toBe(45_000);
+    expect(scriptTimeoutMs('// @options: {"timeout_ms": 45000}\nreturn 1;')).toBe(45_000);
+  });
+
+  test('is the maximum without an option, past the cap, or for source the parser rejects', () => {
+    expect(budget('return 1;')).toBe(300_000);
+    expect(budget('// @options: {"timeout_ms": 900000}\nreturn 1;')).toBe(300_000);
+    expect(budget('// @options: {not json}\nreturn 1;')).toBe(300_000);
+    expect(budget(42)).toBe(300_000);
   });
 });

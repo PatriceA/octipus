@@ -82,11 +82,54 @@ test('an exception past its review date fails until it is looked at again', () =
   assert.equal(open.length, 3);
 });
 
+// The shape of GHSA-fc5q-39xc-vjpf: picomatch hoisted to the top level, pulled in by build/test tooling.
+const hoistedPicomatch = (extra = {}) => ({
+  vulnerabilities: {
+    picomatch: { severity: 'high', isDirect: false, via: [{ url: 'https://github.com/advisories/GHSA-fc5q-39xc-vjpf', title: 'picomatch ReDoS' }], nodes: ['node_modules/picomatch'] },
+    fdir: { severity: 'high', isDirect: false, via: ['picomatch'], nodes: ['node_modules/fdir'] },
+    tinyglobby: { severity: 'high', isDirect: false, via: ['fdir', 'picomatch'], nodes: ['node_modules/tinyglobby'] },
+    vite: { severity: 'high', isDirect: false, via: ['picomatch', 'tinyglobby'], nodes: ['node_modules/vite'] },
+    vitest: { severity: 'high', isDirect: true, via: ['picomatch', 'tinyglobby', 'vite'], nodes: ['node_modules/vitest'] },
+    ...extra,
+  },
+});
+const hoisted = { folder: '.', advisory: 'GHSA-fc5q-39xc-vjpf', package: 'picomatch', hoisted: true, under: ['fdir', 'tinyglobby', 'vite', 'vitest'], reason: 'test', reviewBy: '2026-11-24' };
+
+test('a hoisted exception accepts the top-level package when only its named dependents pull it in', () => {
+  const { open, accepted } = auditFindings(hoistedPicomatch(), [hoisted], '.', '2026-11-17');
+  assert.deepEqual(open, []);
+  assert.deepEqual(accepted.sort(), ['fdir', 'picomatch', 'tinyglobby', 'vite', 'vitest']);
+});
+
+test('a hoisted exception fails on a new dependent, a direct dependency, or without hoisted', () => {
+  const newDependent = hoistedPicomatch({ micromatch: { severity: 'high', isDirect: false, via: ['picomatch'], nodes: ['node_modules/micromatch'] } });
+  assert.ok(auditFindings(newDependent, [hoisted], '.', '2026-11-17').open.some((v) => v.name === 'picomatch'));
+  const direct = hoistedPicomatch();
+  direct.vulnerabilities.picomatch.isDirect = true;
+  assert.ok(auditFindings(direct, [hoisted], '.', '2026-11-17').open.some((v) => v.name === 'picomatch'));
+  const { hoisted: _, ...nested } = hoisted;
+  assert.equal(auditFindings(hoistedPicomatch(), [nested], '.', '2026-11-17').open.length, 5);
+  assert.equal(auditFindings(hoistedPicomatch(), [hoisted], '.', '2026-11-25').expired.length, 1);
+});
+
+test('dependents that depend on each other are accepted together, but a cycle needs an accepted root', () => {
+  const cycle = hoistedPicomatch({ '@vitest/coverage-v8': { severity: 'high', isDirect: true, via: ['vitest'], nodes: ['node_modules/@vitest/coverage-v8'] } });
+  cycle.vulnerabilities.vitest.via.push('@vitest/coverage-v8');
+  const withCoverage = { ...hoisted, under: [...hoisted.under, '@vitest/coverage-v8'] };
+  assert.deepEqual(auditFindings(cycle, [withCoverage], '.', '2026-11-17').open, []);
+  // Without coverage-v8 in `under`, both it and vitest (which depends on it) stay open.
+  assert.deepEqual(auditFindings(cycle, [hoisted], '.', '2026-11-17').open.map((v) => v.name).sort(), ['@vitest/coverage-v8', 'vitest']);
+  // A pure cycle with no accepted advisory behind it is never accepted.
+  const rootless = { vulnerabilities: { a: { severity: 'high', via: ['b'], nodes: ['node_modules/a'] }, b: { severity: 'high', via: ['a'], nodes: ['node_modules/b'] } } };
+  assert.equal(auditFindings(rootless, [{ ...hoisted, under: ['a', 'b'] }], '.', '2026-11-17').open.length, 2);
+});
+
 test('the committed exceptions name an advisory, a package, its parents, a reason and a review date', () => {
   const committed = JSON.parse(readFileSync(new URL('./audit-exceptions.json', import.meta.url), 'utf8'));
   for (const e of committed) {
     assert.match(e.advisory, /^GHSA-/);
     assert.ok(e.package && Array.isArray(e.under) && e.under.length > 0 && e.reason, JSON.stringify(e));
     assert.match(e.reviewBy, /^\d{4}-\d{2}-\d{2}$/);
+    assert.ok(e.hoisted === undefined || e.hoisted === true, `hoisted is true or absent: ${JSON.stringify(e)}`);
   }
 });

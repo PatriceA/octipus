@@ -388,6 +388,13 @@ export class AgentManager {
     let worker: AnyAgentWorker;
 
     if (isCLI) {
+      // Codemode on every CLI worker that has tools: vendor CLIs drive
+      // frontier models, and a script keeps MCP and Octipus tool results out of
+      // the vendor's conversation as it does for a native worker. The tool is
+      // served over the run's bridge like any other Octipus tool (a CLI with
+      // its own code mode, e.g. Claude Code's REPL, calls it as one function).
+      workerConfig.codemode = (options.tools?.length ?? 0) > 0;
+      context.codemode = workerConfig.codemode;
       worker = new CLIAgentWorker(context, workerConfig, { parentSignal: options.parentSignal });
       agentLogger.info(
         { agentId, model: routedModel },

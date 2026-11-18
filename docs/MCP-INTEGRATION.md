@@ -1,6 +1,6 @@
 # MCP Integration (Client)
 
-Connect external MCP servers to Octipus so agents can use their tools. Unlike simple MCP integrations that expose all tools upfront (flooding the model context), Octipus uses **lazy tool discovery** — agents only see two meta-tools (`mcp_list_tools` and `mcp_call_tool`) and fetch tool details on demand.
+Connect external MCP servers to Octipus so agents can use their tools. Unlike simple MCP integrations that expose all tools upfront (flooding the model context), Octipus routes MCP servers through the **codemode executor** by default: the agent writes one script that finds and calls MCP tools (`searchTools()`, `tools.mcp__<server>__<tool>(args)`), and only the script's output enters the conversation. Agents that do not run codemode (small models, remote rooms) reach the same tools through two meta-tools (`mcp_list_tools` and `mcp_call_tool`) and fetch tool details on demand.
 
 ## How It Works
 
@@ -86,14 +86,24 @@ still passes the permission checks in [Execution permissions](#execution-permiss
 
 | `exposure` | What the model gets | Use it for |
 |---|---|---|
-| `deferred` (default) | Nothing up front. `mcp_list_tools` lists the tools; `mcp_call_tool` calls them. | Most servers. This is how every server behaved before exposure existed. |
+| `deferred` | Nothing up front. `mcp_list_tools` lists the tools; `mcp_call_tool` calls them. | Servers whose results the model should read in full, call by call. |
 | `direct` | Each tool declared as its own tool, `mcp__<server>__<tool>`, with its full schema, on every request. On first-party Claude with tool search (`agent.nativeToolSearch`) it is sent deferred: out of the prompt until the model searches for it. | A few tools the agent uses constantly. Each one costs prompt tokens on every request (except deferred under tool search). |
-| `codemode` | Left out of `mcp_list_tools`. Codemode scripts call each tool as `tools.mcp__<server>__<tool>(args)` and find it with `searchTools()`, so neither the schema nor the results enter the conversation. | Large servers, and tools whose results need filtering. |
+| `codemode` (default) | Left out of `mcp_list_tools`. Codemode scripts call each tool as `tools.mcp__<server>__<tool>(args)` and find it with `searchTools()`, so neither the schema nor the results enter the conversation. | Most servers: chains of calls, parallel calls, and results that need filtering. |
 | `hidden` | Nothing. The bridge refuses the call, from any path. A hidden server also offers no resources or prompts. | Servers or tools that must stay unavailable. |
 
 Codemode scripts can call `deferred` tools the same way. An agent that does
 not run codemode (a small model, or a room of a space on another install)
-treats `codemode` tools as `deferred`, so it can still reach them.
+treats `codemode` tools as `deferred`, so it can still reach them. CLI agents
+(Claude Code, Codex, Grok Build, Muse Code, Antigravity, Vibe) run codemode
+too: the run's Octipus MCP connection serves the `codemode` tool, and the
+script runs inside Octipus ([CLI agents](CLI-AGENTS.md#codemode-in-cli-runs)).
+
+`codemode` became the default in this release. A server whose configuration
+sets no `exposure` (for example one written by hand in `mcp-servers.json`)
+now goes through codemode; a server saved with `"exposure": "deferred"`,
+which the MCP page wrote for every server it added before, keeps it. Change it
+on the MCP page or with `PUT /api/mcp/servers/:id/exposure`. Plugin packages'
+declared tools follow the default.
 
 `toolExposure` overrides the server's exposure per tool. Keys are exact tool
 names or patterns where `*` matches any characters. An exact name wins over
@@ -245,11 +255,14 @@ GET /api/mcp/tools
 
 When an agent with MCP access needs external tools, it follows this pattern:
 
-1. **Discover** — calls `mcp_list_tools` to see available servers and tools with their parameter schemas
-2. **Call** — calls `mcp_call_tool` with `server_id`, `tool_name`, and `arguments`
+1. **Script** (`codemode` servers, the default) — one `codemode` call whose
+   script finds tools with `searchTools()` / `describeTool()`, calls them as
+   `tools.mcp__<server>__<tool>(args)`, and outputs only what matters
+2. **Discover** (`deferred` servers, or an agent without codemode) — calls
+   `mcp_list_tools` to see available servers and tools with their parameter schemas
+3. **Call** — calls `mcp_call_tool` with `server_id`, `tool_name`, and `arguments`
 
-`direct` tools skip both steps, and `codemode` tools are called from codemode
-scripts instead; see [Tool exposure](#tool-exposure).
+`direct` tools skip discovery; see [Tool exposure](#tool-exposure).
 
 The agent decides autonomously whether MCP tools are relevant. If no MCP servers are connected, the meta-tools are not injected at all (zero overhead).
 

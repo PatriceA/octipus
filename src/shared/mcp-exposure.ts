@@ -7,9 +7,9 @@
  * - `direct`   — declared to the model as its own tool (`mcp__<server>__<tool>`),
  *                with its full schema, on every request. For small, frequently
  *                used tool sets.
- * - `deferred` — the default: listed by `mcp_list_tools` and called through
+ * - `deferred` — listed by `mcp_list_tools` and called through
  *                `mcp_call_tool`. Nothing is declared until the model asks.
- * - `codemode` — kept out of `mcp_list_tools`; codemode scripts call it as
+ * - `codemode` — the default: kept out of `mcp_list_tools`; codemode scripts call it as
  *                `tools.mcp__<server>__<tool>(args)`, so neither its schema nor
  *                its results enter the conversation. A worker without codemode
  *                (small model, remote room) treats it as `deferred`.
@@ -22,8 +22,13 @@
 export const MCP_EXPOSURES = ['direct', 'deferred', 'codemode', 'hidden'] as const;
 export type McpExposure = (typeof MCP_EXPOSURES)[number];
 
-/** The exposure of a server that sets none. Unchanged from before exposure existed. */
-export const DEFAULT_MCP_EXPOSURE: McpExposure = 'deferred';
+/**
+ * The exposure of a server that sets none: every MCP server goes through the
+ * codemode executor, so its schemas and intermediate results stay out of the
+ * conversation. A worker without codemode (small model, remote room, codemode
+ * blocked) reaches the same tools as `deferred`, so nothing becomes unreachable.
+ */
+export const DEFAULT_MCP_EXPOSURE: McpExposure = 'codemode';
 
 export interface McpExposureConfig {
   exposure?: McpExposure;

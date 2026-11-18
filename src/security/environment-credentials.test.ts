@@ -33,3 +33,20 @@ it('masks inherited host CLI environment credentials too', async () => {
   try { const runtime = await environmentCredentialOptions(context, {}); expect(runtime.mask({ stdout: 'inherited-cli-secret' }).stdout).toBe('[REDACTED_CREDENTIAL]'); }
   finally { if (previous === undefined) delete process.env.AWS_SECRET_ACCESS_KEY; else process.env.AWS_SECRET_ACCESS_KEY = previous; }
 });
+
+it('does not mask short host values that only have a credential-like name', async () => {
+  configure(); getConfig().security.executionEnvironments[0].hostIdentity = true;
+  vault.getByNameAuthorized.mockResolvedValue('bound-secret');
+  const saved = { flag: process.env.EXAMPLE_KEYS_FACT, count: process.env.MAX_THINKING_TOKENS };
+  process.env.EXAMPLE_KEYS_FACT = '1';
+  process.env.MAX_THINKING_TOKENS = '31999';
+  try {
+    const runtime = await environmentCredentialOptions(context, {});
+    // A hashed path full of 1s and 31s comes through intact, and the bound secret is still masked.
+    const cwd = '/home/u/.octipus/antigravity/af10261fb8c6a2717fb31999e525/work';
+    expect(runtime.mask({ cwd, token: 'bound-secret' })).toEqual({ cwd, token: '[REDACTED_CREDENTIAL]' });
+  } finally {
+    if (saved.flag === undefined) delete process.env.EXAMPLE_KEYS_FACT; else process.env.EXAMPLE_KEYS_FACT = saved.flag;
+    if (saved.count === undefined) delete process.env.MAX_THINKING_TOKENS; else process.env.MAX_THINKING_TOKENS = saved.count;
+  }
+});

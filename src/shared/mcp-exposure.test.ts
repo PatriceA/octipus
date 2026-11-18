@@ -2,8 +2,8 @@ import { describe, expect, test } from 'vitest';
 import { exposureConfigError, ownToolExposure, resolveToolExposure } from './mcp-exposure';
 
 describe('resolveToolExposure', () => {
-  test('a server without settings keeps the pre-exposure behaviour (deferred)', () => {
-    expect(resolveToolExposure({}, 'search')).toBe('deferred');
+  test('a server without settings goes through the codemode executor', () => {
+    expect(resolveToolExposure({}, 'search')).toBe('codemode');
   });
 
   test('the server setting applies to every tool without an override', () => {
@@ -34,7 +34,7 @@ describe('resolveToolExposure', () => {
   test('regex characters in a pattern are literal', () => {
     const server = { toolExposure: { 'a.b*': 'hidden' as const } };
     expect(resolveToolExposure(server, 'a.bc')).toBe('hidden');
-    expect(resolveToolExposure(server, 'axbc')).toBe('deferred');
+    expect(resolveToolExposure(server, 'axbc')).toBe('codemode');
   });
 });
 

@@ -84,9 +84,12 @@ src/
   tui-pi/         terminal chat client (pi-tui)
   tui-editor/     TUI code editor
   services/ shared/ setup/   org services, shared types/diff, setup probes
-mcp-server/       standalone MCP server (83 tools across 23 groups)
-web/              Vite + React Router dashboard
+mcp-server/       standalone MCP server (87 tools across 24 groups; `--toolset compact` offers 3)
+plugin-sdk/       versioned plugin manifest contract + validation kit
 browser-extension/  companion browser extension
+native/           native helpers (windows-sandbox)
+tests/            integration, web (Playwright), tui suites + fixtures
+web/              Vite + React Router dashboard
 bin/              octi launcher CLI (bin/octi start|stop)
 personas/         persona YAML definitions
 plugins/          the example plugin package only (plugins/reader, plugins/README.md)
@@ -111,7 +114,9 @@ AGENT.md          canonical contributor guidance for coding agents
 | Integration      | `npm run test:integration` (Docker Postgres) |
 | E2E (API/WS)     | `npm run test:e2e`               |
 | Web E2E          | `npm run test:web`               |
-| Eval suite       | `npm run eval` (`eval:routing`, `eval:quality`) |
+| Eval suite       | `npm run eval` (`eval:routing`, `eval:quality`) — needs a live model |
+| Model-free evals | `npm run eval:decisions` (compared with a committed baseline) |
+| MCP server tests | `cd mcp-server && npm test` (builds first; not part of `npm test`) |
 | Architecture catalog | `npm run catalog` (check: `npm run catalog:check`) |
 | DB migrate       | `npm run db:migrate`             |
 | DB generate      | `npm run db:generate`            |
@@ -162,8 +167,10 @@ think you need to break one, open an issue first.
 
 ## Workflow expectations
 
-- **Branches:** `fix/...`, `feat/...`, `docs/...`, `refactor/...`. One logical
-  change per branch.
+- **Branches:** `fix/...`, `feat/...`, `docs/...`, `refactor/...`. A branch
+  your session was given (`claude/...`, `ccr-...`) keeps its name. One logical
+  change per PR; reuse a session branch for the next PR only after the
+  previous one merged.
 - **Commits:** imperative summary (`fix classifier crash`, not `fixed`), blank
   line, body explaining the *why*.
 - **One thing per PR.** Refactor + feature in the same PR = two PRs.
@@ -177,11 +184,23 @@ think you need to break one, open an issue first.
   (so the diff is only the new work) and land that one branch into `main`.
   Either way, **verify it actually landed**: `git cat-file -e origin/main:<a
   file from each PR>` after merging. (This has bitten us more than once.)
-- **Tests:** new code needs tests. Routing / prompt / tool-selection changes
-  must pass `npm run eval`.
+- **Tests:** new code needs tests; a bug fix needs a test that fails without
+  the fix. Routing / prompt / tool-selection changes must run the relevant
+  `npm run eval` suite and report its configuration and results, failures
+  included. It needs a live model: where none is available, say the eval was
+  not run instead of implying it passed.
 - **Before declaring done:** `npm run typecheck && npm run lint && npm test`
-  all green locally. For UI changes, exercise the feature in a browser — type
-  checks don't catch broken UX.
+  all green locally, plus `npm run catalog:check`, and `cd mcp-server && npm
+  test` when `mcp-server/` changed. Add a `## Unreleased` entry to
+  `CHANGELOG.md` for user- or operator-visible changes. For UI changes,
+  exercise the feature in a browser — type checks don't catch broken UX.
+- **PR description:** why, what changes (defaults and migrations included),
+  limits, and validation with exact commands and counts — see
+  [CONTRIBUTING.md](./CONTRIBUTING.md#pr-description).
+- **Fix what you find.** A failing test or bug met on the way is fixed in the
+  same session (its own commit), not left for later. If it is an environment
+  gap rather than a repo bug (a missing browser, a tool CI installs), say so
+  and show it passes once provided.
 - **Don't reformat** files you aren't otherwise touching. Biome's formatter is
   off on purpose.
 

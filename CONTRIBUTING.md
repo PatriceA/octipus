@@ -13,7 +13,7 @@ If anything in here is wrong, unclear, or out of date, that is itself a bug — 
 ## Before you start
 
 - **Read [DESIGN.md](./DESIGN.md).** Design principles are not decoration. Every PR runs through them. If a change fights one, it gets reshaped or dropped.
-- **Check the [roadmap](./ROADMAP.md) and open issues.** Someone may already be working on it. Ask first for large changes.
+- **Check the [roadmap](./ROADMAP.md), open issues and [`docs/plans/`](docs/plans/).** Someone may already be working on it; in-flight designs are written up in `docs/plans/` before they land. Ask first for large changes.
 - **Small changes: open a PR.** Typos, doc fixes, obvious bugs, missing error messages. Go.
 - **Medium / large changes: open an issue first.** Describe what and why. Wait for a thumbs up. Protects your time — no one likes closing a 500-line PR because the approach doesn't fit.
 
@@ -63,10 +63,18 @@ scripts/install-desktop-deps.sh    # Arch, Debian/Ubuntu, Fedora, openSUSE, macO
 npm run dev            # Backend with hot reload (tsx watch)
 npm run dev --prefix web  # Frontend (Vite + React Router)
 npm run typecheck      # TS strict check (backend)
-npm test               # Vitest (backend)
-npm run eval           # Agent evaluation harness
+npm test               # Vitest: unit, embedded-database and terminal projects
 npm run lint           # Biome
+npm run catalog:check  # Generated architecture catalog matches the source (CI gate)
+npm run eval           # Agent evaluation harness — needs a live model backend
+npm run eval:decisions # Model-free decision cases with a committed baseline
+(cd mcp-server && npm test)   # The standalone MCP server's own suite
+npm run test:integration      # Postgres-backed lane (Docker)
+npm run test:web              # Browser E2E with stubbed API calls (Playwright)
 ```
+
+`npm test` does not run the last three; CI does. See [Testing](docs/TESTING.md)
+and [Evaluations](docs/EVALUATIONS.md) for what each lane can and cannot show.
 
 ---
 
@@ -80,17 +88,26 @@ octipus/
 │   ├── core/
 │   │   ├── gateway/          # WebSocket entry + command registry
 │   │   ├── agent/            # Root turn, roles, pipelines, meta-tools
-│   │   ├── agent-manager.ts  # Worker lifecycle
+│   │   ├── agent-manager.ts  # Worker lifecycle (native and CLI workers)
 │   │   └── rag/              # Auto-indexer, hybrid search
 │   ├── db/                   # Drizzle schema, repositories, migrations
 │   ├── mcp/                  # MCP client bridge (external servers)
 │   ├── models/               # Provider clients, model registry, conformance
+│   ├── security/             # Auth, vault, permissions, sandboxes, environments
+│   ├── skills/               # Skill registry and filesystem discovery
+│   ├── tools/                # Built-in tools (one folder each, listed in discovery.ts)
 │   └── tui-pi/               # Terminal chat (pi-tui); editor in tui-editor/
-├── mcp-server/               # Standalone MCP server
-├── web/                      # Vite + React Router dashboard (chat, agents, eval, profiles)
-├── docs/                     # Architecture + API docs
-├── eval/                     # YAML test scenarios
+├── mcp-server/               # Standalone MCP server (published to npm)
+├── plugin-sdk/               # Versioned plugin manifest contract and validation kit
+├── browser-extension/        # Companion browser extension
+├── native/windows-sandbox/   # Native helper for the Windows shell sandbox
+├── web/                      # Vite + React Router dashboard; desktop app in web/src-tauri
+├── tests/                    # Integration, browser (web), terminal (tui) suites and fixtures
+├── docs/                     # Architecture, API and feature docs; plans/ and reports/
+├── eval/                     # YAML eval scenarios and the regression gate
+├── scripts/                  # Setup, migrate, release and test runners
 ├── DESIGN.md                 # Design principles
+├── AGENT.md                  # Instructions for coding agents (full layout, cheat sheet)
 ├── ROADMAP.md                # Directions
 └── bin/octi                  # CLI entry point
 ```
@@ -105,7 +122,7 @@ Octipus roles follow a **node-folder pattern** inspired by [Weft](https://github
 
 - `config.ts` — role metadata (role identity, tool allowlist via `toolIds`, and default topic)
 - `prompt.md` — system prompt (markdown, bundled at build time)
-- `prompt.lite.md` — optional compact system prompt for low-context-window models
+- `prompt.lite.md` — compact system prompt for small or low-context models (every shipped role has one, and the registry imports it)
 
 Register the folder in `src/core/agent/roles/index.ts` — three static
 import lines plus one row in the list. It used to be a runtime directory scan,
@@ -114,13 +131,19 @@ resolves inside `dist/`); static imports are what a bundler can see, and a
 missing role is now a compile error instead of a role that silently vanishes in
 production.
 
+A role that needs no code can be created from the **Topics** page instead: name,
+one-line description, prompt and tool list, with no restart (see
+[AGENT.md](./AGENT.md#adding-things-cheat-sheet)). A role with a blank
+description is never chosen, because agents pick roles by it.
+
 Before opening the PR:
 
 - [ ] Role works end-to-end: user message → the root agent delegates to it via `spawn_child` → worker spawned → reply
 - [ ] System prompt has a clear one-line description and deliverable template
 - [ ] Tool allowlist is minimal (principle of least privilege)
 - [ ] Classifier keywords added to `src/core/agent/classifier.ts` if the role has a distinct topic
-- [ ] `npm run typecheck`, `npm test`, `npm run eval` all pass
+- [ ] `npm run typecheck`, `npm run lint` and `npm test` pass
+- [ ] The relevant eval suite was run against a live model and its configuration and results are in the PR (see [Evaluations](docs/EVALUATIONS.md)); a run that could not happen is stated as not run
 
 ### Role design rules
 
@@ -155,31 +178,49 @@ Skills inject domain knowledge into a role's system prompt. There are two types:
 
 ## How to add an MCP tool
 
-The MCP server lives in `mcp-server/`. Each tool is one file in `mcp-server/src/tools/<tool>.ts` with:
+The MCP server lives in `mcp-server/`. Tools are grouped by area, one file per
+group in `mcp-server/src/tools/<group>.ts` (87 tools in 24 groups today). Each
+tool has:
 
 - A Zod schema for input
 - A handler function
 - A `server.tool()` registration call
 
-Register the module explicitly in `mcp-server/src/server.ts` by importing its
+Register a new group explicitly in `mcp-server/src/server.ts` by importing its
 `register…Tools` function and calling it from `createServer`. The server does
 not scan the tools directory at runtime; an unregistered module is absent from
-the published MCP server.
+the published MCP server. `createServer` bounds every handler with a deadline,
+and hides the tools of a module or capability that is off (wrap the group in
+`collect(...)` and list it in `byModule` / `byCapability`). The compact toolset
+(`--toolset compact`) picks up registered tools on its own. Run
+`cd mcp-server && npm test`; it builds first.
 
 ---
 
 ## Commit, branch, PR
 
-- **Branch naming:** `fix/short-desc`, `feat/short-desc`, `docs/short-desc`, `refactor/short-desc`. One branch per logical change.
-- **Commit messages:** short summary line 1 (imperative — "fix classifier crash" not "fixed"), blank line, body explaining the *why*.
-- **One thing per PR.** A refactor and a feature in the same PR is two PRs.
+- **Branch naming:** `fix/short-desc`, `feat/short-desc`, `docs/short-desc`, `refactor/short-desc`. Branches created by a coding-agent session (`claude/…`, `ccr-…`) keep their generated name. One logical change per PR; a branch reused for a follow-up PR starts after the previous one merged.
+- **Commit messages:** short imperative summary line ("Fix classifier crash on empty input", not "Fixed"), blank line, body explaining the *why*.
+- **One thing per PR.** A refactor and a feature in the same PR is two PRs. Stacked PRs: see [AGENT.md](./AGENT.md#workflow-expectations) for the merge order.
 - **Link the issue.** `Closes #123` in the PR body if applicable.
-- **No AI-generated slop.** If an AI wrote your PR, read it yourself first. Unreviewed AI output wastes reviewer time.
+- **AI-assisted work is welcome; you own it.** Most changes here are written with coding agents ([AGENT.md](./AGENT.md) is their guide). The person opening the PR reads the diff, runs the checks, and claims only what was verified. Keep the agent's attribution footer.
+
+### PR description
+
+There is no template; recent PRs follow this shape:
+
+- **Why** — the problem or gap, in a few sentences.
+- **What changes** — behavior, not a file list; include migration or default changes operators must know.
+- **Limits** — what is not covered, not run, or deliberately left out.
+- **Validation** — the exact commands and their counts (tests passed/skipped, eval scores including failures), browser or live checks, and anything CI could not run. "Eval not run: needs a live model" is a valid line; a silent omission is not.
 
 ### PR checklist
 
-- [ ] Code compiles and all tests pass locally
-- [ ] New code has tests
+- [ ] Code compiles and all tests pass locally (`npm run typecheck && npm run lint && npm test`)
+- [ ] New code has tests; a bug fix has a test that fails without it
+- [ ] `npm run catalog:check` passes (run `npm run catalog` when routes, module edges or gateway events changed)
+- [ ] User- or operator-visible changes have an entry under `## Unreleased` in `CHANGELOG.md`, and the affected docs are updated
+- [ ] Routing, prompt, role or tool-selection changes report their eval results (or say why none ran)
 - [ ] Public functions/types have one-line docs where useful (no essays)
 - [ ] No unrelated formatting churn
 - [ ] No commented-out code
