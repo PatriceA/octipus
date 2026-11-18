@@ -7,6 +7,8 @@ import type { PluginHostScope, PluginToolEffect } from './plugin-package';
  * servers an operator configures.
  */
 export interface PluginBinding {
+  /** Owner data-approval revision; never supplied by the plugin. */
+  dataApproval?: string;
   package: string;
   version: string;
   /** What each declared tool does; an undeclared tool is hidden and refused. */

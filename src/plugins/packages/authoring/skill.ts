@@ -40,6 +40,10 @@ export const PLUGIN_AUTHORING_SKILL_CONTENT = `Use this when the user wants a ne
 7. **Hand over one setup link.** Use the returned guided setup URL. The user selects existing resources, reviews access and checks readiness there. Do not hand them a list of CLI/PATCH commands, internal IDs or content hashes to copy. Local private use requires no signing key or marketplace publication. Keep marketplace publishing as a separate publisher-only task. You cannot enable or approve a plugin yourself.
 
 
+## Existing-plugin protection refusals
+
+Before proposing a code change, call plugin_api with installedPlugin set to the package name to inspect current data access (admins only); other users can read the bundled guide with knowledge.search_product_docs and knowledge.read_product_doc. Then guide the owner to Administration → Plugin packages → Data access (direct link: /admin/plugins?dataAccess=<name>). Keep the true classification and the existing conversation. The owner can approve supported levels and trusted named destinations without editing or re-signing the package. Check the displayed maximum; direct network or broad outbound capabilities can still make a higher level unsupported. Protected results use Octipus’s native tools view, not arbitrary plugin browser code. After an upgrade, renew a stale content-bound approval rather than deleting saved data. Retry only unfinished work after checking receipts. The full user/agent procedure is docs/PLUGIN-DATA-ACCESS.md. Never tell the owner to relabel Internal data Public or promise an approval that the capability limit does not allow.
+
 ## Rules
 
 - Never claim the plugin works or is active before an admin enabled it.

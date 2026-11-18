@@ -1,3 +1,4 @@
+vi.mock('@/db/repositories/plugin-protection-repository',()=>({pluginProtectionRepository:{get:async()=>null}}));
 /**
  * Serving plugin pages (docs/PLUGIN-PACKAGES.md#pages): only files under the
  * package's UI directory, of a known type, while it is enabled, its files

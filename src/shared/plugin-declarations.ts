@@ -87,7 +87,7 @@ export const IN_PROCESS_NOTE = 'Runs in the server process: no sandbox, so it ha
 
 /** A page's egress: it can navigate its frame anywhere, with what it shows in the URL. */
 export const PAGE_EGRESS_NOTE = 'A page can send what it shows to any website: it can navigate to any address with that data in the URL. '
-  + 'A package with pages is limited to data at protection level 1, whatever it declares.';
+  + 'Custom plugin pages receive Public data only. Owner-approved higher levels use chat or the Octipus protected view.';
 
 /**
  * The warning when a package can send data out (`web:read`, `model:complete`,
@@ -100,7 +100,7 @@ export function egressReadWarning(scopes: readonly string[], opts: { pages?: boo
   const reads = scopes.filter((s) => s.endsWith(':read') && s !== 'web:read' && s !== 'store:read');
   if (out.length === 0 || reads.length === 0) return null;
   return `With ${out.join(' and ')} and ${reads.join(', ')} together, this package can send what it reads anywhere. `
-    + 'It is limited to data at protection level 1.';
+    + (scopes.some(s=>['web:read','model:complete','agent:run','mail:send'].includes(s)) ? 'These outbound capabilities limit it to protection level 1.' : 'By default it is limited to protection level 1. Named connections can support owner-approved Internal data through Data access and the protected view.');
 }
 
 /** The guidance notes a permissions summary calls for, as structured warnings. */

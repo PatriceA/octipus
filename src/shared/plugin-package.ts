@@ -535,6 +535,8 @@ export interface PluginUiDecl {
 
 /** A page of an enabled package, as the sidebar lists it (`GET /api/plugin-ui`). */
 export interface PluginPageLink {
+  /** Native host renderer, with no plugin JavaScript. */
+  protected?: boolean;
   plugin: string;
   /** The package's title. */
   pluginTitle: string;

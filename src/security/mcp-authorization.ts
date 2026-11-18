@@ -69,17 +69,30 @@ async function pluginEffectOf(action: string): Promise<PluginToolEffect | 'undec
  */
 export async function pluginProtectionRefusal(sessionId: string | undefined, serverId: string): Promise<string | undefined> {
   const { getMCPBridge } = await import('@/mcp/bridge');
-  const max = getMCPBridge().pluginMaxProtection(serverId);
+  const bridge=getMCPBridge();
+  let max = bridge.pluginMaxProtection(serverId);
+  if(max!==null && serverId.startsWith('plugin-')) {
+    const { pluginProtectionRepository }=await import('@/db/repositories/plugin-protection-repository');
+    const { protectionApprovalStamp }=await import('@/plugins/packages/protection-policy');
+    const current=await pluginProtectionRepository.get(serverId.slice('plugin-'.length));
+    const bound=bridge.getServerConfigs?.().find(s=>s.id===serverId)?.plugin?.dataApproval;
+    if(bound!==protectionApprovalStamp(current)) {
+      const { syncPluginServers }=await import('@/plugins/packages/service');
+      await syncPluginServers();
+      max=bridge.pluginMaxProtection(serverId);
+      if(max===null)return 'the plugin is no longer available after its data access changed';
+    }
+  }
   if (max === null) return undefined;
   const { carriedLevel } = await import('@/core/protection/routing');
   const level = await carriedLevel(sessionId);
   if (level === undefined || level <= max) return undefined;
-  return `this conversation holds protection level ${level} content, and the plugin package may see up to level ${max}`;
+  return `this conversation holds protection level ${level} content, and this plugin is currently allowed up to level ${max}. An admin can open Administration → Plugin packages → Data access (/admin/plugins?dataAccess=${encodeURIComponent(serverId.replace(/^plugin-/,''))}) to approve a compatible level and trusted connections; capabilities that send data beyond those connections may require a different plugin. Do not lower the conversation classification`;
 }
 
 async function assertPluginMayReceive(context: AgentContext, action: string): Promise<void> {
   const refusal = await pluginProtectionRefusal(context.sessionId, action.slice(0, action.indexOf('.')));
   if (refusal) {
-    throw new Error(`Permission denied for mcp.${action}: ${refusal}. Do NOT retry this call; tell the user it needs a new conversation, or a package allowed this level.`);
+    throw new Error(`Permission denied for mcp.${action}: ${refusal}. Do NOT retry this call; explain the Data access setting and any capability limit; do not tell the user to relabel internal data as public.`);
   }
 }

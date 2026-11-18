@@ -1,3 +1,5 @@
+import { pluginProtectionRepository } from '@/db/repositories/plugin-protection-repository';
+import { packageProtectionLevel } from './protection-policy';
 /**
  * One install consent, item by item, bound to the content
  * (docs/PLUGIN-PACKAGES.md#installing-and-managing).
@@ -312,7 +314,7 @@ export async function previewInstall(source: PreviewSource, actorUserId: string)
     ...modelTrustWarnings(manifest).map((message) => ({ code: 'model_cli_tools', message })),
   ];
   const view: PluginInstallPreview = {
-    configuration: setupConfiguration(manifest, current?.settings ?? {}, current ? await secretsSet(current) : [], current?.contentHash === contentHash, current?.enabled ?? false),
+    configuration: setupConfiguration(manifest, current?.settings ?? {}, current ? await secretsSet(current) : [], current?.contentHash === contentHash, current?.enabled ?? false, current?.contentHash===contentHash?await packageProtectionLevel(current):undefined, !!current && !!await pluginProtectionRepository.get(current.name)),
     previewId: id, name: manifest.name, version: manifest.version, title: manifest.title, contentHash, signedBy: signature.signedBy, origin,
     declarations: items, guidance, diff, upgradeFrom: current?.version ?? null, expiresAt: new Date(expiresAt).toISOString(),
   };
@@ -445,7 +447,7 @@ export async function consentView(name: string): Promise<PluginConsentView> {
   const permissions = await packagePermissions(row.manifest, dir);
   const covered = contentHash === row.contentHash ? await coveredBy(row) : () => false;
   return {
-    configuration: setupConfiguration(row.manifest, row.settings, await secretsSet(row), true, row.enabled),
+    configuration: setupConfiguration(row.manifest, row.settings, await secretsSet(row), true, row.enabled, await packageProtectionLevel(row), !!await pluginProtectionRepository.get(row.name)),
     name, version: row.version, title: row.manifest.title, contentHash, signedBy: row.signedBy, origin: row.origin ?? null, enabled: row.enabled,
     // What its consent already covers for exactly these files (approved scopes, contributions, in-process) is carried.
     declarations: (() => {

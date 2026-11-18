@@ -28,6 +28,7 @@
  *   write limit with the package's tools. Writes and deletes are audited in
  *   aggregate.
  */
+import { pluginProtectionRepository } from '@/db/repositories/plugin-protection-repository';
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
 import { buildAgentContext, fundingFor } from '@/core/agent/context';
@@ -91,6 +92,7 @@ async function pageStoreGate(ctx: StoreCtx, name: string, scope: PluginHostScope
     ctx.set.status = 404;
     return { error: 'No such plugin page', code: 'not_found' };
   }
+  if (await pluginProtectionRepository.get(name)) { ctx.set.status=403;return {error:'Use the protected plugin view for this package.',code:'protected_view_required'}; }
   const granted = grantedHostScopes(row);
   if (!granted.includes(scope)) {
     ctx.set.status = 403;
@@ -185,6 +187,7 @@ export const pluginCallRoutes = new Elysia({ prefix: '/plugins' })
       set.status = 404;
       return { error: 'No such plugin page', code: 'not_found' };
     }
+    if (await pluginProtectionRepository.get(row.name)) { set.status=403;return {error:'This package uses protected tools. Open its Octipus protected view.',code:'protected_view_required'}; }
     // Its own declared tools only; another package's tool is not addressable from here.
     const decl = Object.hasOwn(row.manifest.tools ?? {}, params.tool) ? row.manifest.tools?.[params.tool] : undefined;
     if (!decl) {

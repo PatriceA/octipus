@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-714 mounted routes across 88 route files. The path is the full one, group prefix included — what a client actually calls.
+718 mounted routes across 89 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -461,6 +461,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/plugin-packages/:name/companions/:id/:file` | `src/api/routes/plugin-packages.ts` |
 | GET | `/api/plugin-packages/:name/consent` | `src/api/routes/plugin-packages.ts` |
 | POST | `/api/plugin-packages/:name/consent` | `src/api/routes/plugin-packages.ts` |
+| GET | `/api/plugin-packages/:name/protection` | `src/api/routes/plugin-protection.ts` |
+| PUT | `/api/plugin-packages/:name/protection` | `src/api/routes/plugin-protection.ts` |
 | GET | `/api/plugin-packages/:name/runs` | `src/api/routes/plugin-packages.ts` |
 | DELETE | `/api/plugin-packages/:name/runs/:id` | `src/api/routes/plugin-packages.ts` |
 | PUT | `/api/plugin-packages/:name/secrets/:key` | `src/api/routes/plugin-packages.ts` |
@@ -492,6 +494,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/plugins/:name/call/:tool` | `src/api/routes/plugin-ui.ts` |
 | GET | `/api/plugins/:name/dashboards/:id` | `src/api/routes/plugin-ui.ts` |
 | POST | `/api/plugins/:name/dashboards/:id/widgets/:widget` | `src/api/routes/plugin-ui.ts` |
+| GET | `/api/plugins/:name/protected` | `src/api/routes/plugin-protection.ts` |
+| POST | `/api/plugins/:name/protected/call/:tool` | `src/api/routes/plugin-protection.ts` |
 | POST | `/api/plugins/:name/reload` | `src/api/routes/plugins.ts` |
 | GET | `/api/plugins/:name/store` | `src/api/routes/plugin-ui.ts` |
 | DELETE | `/api/plugins/:name/store/*` | `src/api/routes/plugin-ui.ts` |
@@ -751,19 +755,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 27 |
-| `api` | `core` | 212 |
-| `api` | `db` | 143 |
+| `api` | `core` | 214 |
+| `api` | `db` | 146 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 9 |
-| `api` | `mcp` | 6 |
+| `api` | `mcp` | 7 |
 | `api` | `models` | 42 |
-| `api` | `plugins` | 63 |
-| `api` | `security` | 179 |
+| `api` | `plugins` | 70 |
+| `api` | `security` | 182 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 28 |
 | `api` | `skills` | 7 |
 | `api` | `tools` | 6 |
-| `api` | `utils` | 77 |
+| `api` | `utils` | 78 |
 | `api` | `voice` | 19 |
 | `capabilities` | `config` | 1 |
 | `capabilities` | `db` | 2 |
@@ -848,8 +852,8 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `models` | `shared` | 5 |
 | `models` | `utils` | 47 |
 | `plugins` | `config` | 12 |
-| `plugins` | `core` | 57 |
-| `plugins` | `db` | 64 |
+| `plugins` | `core` | 58 |
+| `plugins` | `db` | 69 |
 | `plugins` | `extensions` | 2 |
 | `plugins` | `mcp` | 7 |
 | `plugins` | `models` | 2 |
@@ -860,8 +864,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `api` | 1 |
 | `security` | `config` | 20 |
 | `security` | `core` | 39 |
-| `security` | `db` | 87 |
+| `security` | `db` | 88 |
 | `security` | `mcp` | 2 |
+| `security` | `plugins` | 2 |
 | `security` | `shared` | 8 |
 | `security` | `tools` | 7 |
 | `security` | `utils` | 34 |
@@ -895,7 +900,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 13 |
-| `tools` | `plugins` | 7 |
+| `tools` | `plugins` | 9 |
 | `tools` | `security` | 87 |
 | `tools` | `services` | 1 |
 | `tools` | `shared` | 8 |
@@ -958,6 +963,7 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - mcp <-> security
 - models <-> services
 - models <-> utils
+- plugins <-> security
 - plugins <-> tools
 - security <-> tools
 - security <-> utils

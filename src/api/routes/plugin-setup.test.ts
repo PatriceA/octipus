@@ -11,7 +11,7 @@ vi.mock('@/plugins/packages/consent', () => ({ setupPreview: () => null }));
 vi.mock('@/plugins/packages/service', async original => ({ ...await original<typeof import('@/plugins/packages/service')>(), findRow: async () => { fixture.calls++; return { name: 'demo', enabled: true, contentHash: `sha256:${'a'.repeat(64)}`, manifest: fixture.check ? { setup: { check: { tool: 'health' } }, tools: { health: { effect: 'read' } } } : {} }; } }));
 vi.mock('@/db/repositories/plugin-setup-repository', () => ({ pluginSetupRepository: { get: async () => { fixture.calls++; return null; }, save: async () => { fixture.calls++; return {}; } } }));
 import { hostCallKind } from '@/plugins/packages/host-api';
-vi.mock('@/mcp/bridge', () => ({ PLUGIN_SERVER_PREFIX: 'plugin-', getMCPBridge: () => ({ callTool: async (_server: string, _tool: string, _args: unknown, context: Parameters<typeof hostCallKind>[0]) => { expect(hostCallKind(context)).toBe('page'); return { isError: true, content: [{ type: 'text', text: 'Service is unavailable' }] }; } }) }));
+vi.mock('@/mcp/bridge', () => ({ PLUGIN_SERVER_PREFIX: 'plugin-', getMCPBridge: () => ({ callTool: async (_server: string, _tool: string, _args: unknown, context: Parameters<typeof hostCallKind>[0]) => { expect(hostCallKind(context)).toBe('native'); return { isError: true, content: [{ type: 'text', text: 'Service is unavailable' }] }; } }) }));
 import { pluginSetupRoutes } from './plugin-setup';
 const app = new App().use(pluginSetupRoutes);
 const hash = `sha256:${'b'.repeat(64)}`;
@@ -40,7 +40,7 @@ test('a missing declared readiness check cannot dispatch an arbitrary plugin too
   expect(await response.json()).toMatchObject({ error: expect.stringContaining('read-only') });
 });
 
-test('manual readiness calls receive page host capabilities and show plain tool failures without JSON errors', async () => {
+test('manual readiness calls receive native host capabilities and show plain tool failures without JSON errors', async () => {
   fixture.check = true;
   const response = await request('demo/check', { contentHash: `sha256:${'a'.repeat(64)}` });
   expect(response.status).toBe(200);

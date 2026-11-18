@@ -730,3 +730,37 @@ describe('deleting', () => {
     expect((await rows(`package_name = 'vault'`)).length).toBeGreaterThan(0);
   });
 });
+
+test('owner data access supports Internal without editing plugin bytes and never downgrades saved evidence', async () => {
+ const { getDb }=await import('@/db/postgres');
+ const { pluginPackages,pluginStore }=await import('@/db/schema/plugin-packages');
+ const { eq }=await import('drizzle-orm');
+ const { pluginProtectionRepository }=await import('@/db/repositories/plugin-protection-repository');
+ const { protectionApprovalStamp }=await import('./protection-policy');
+ const { packageDir,findRow,serverFor,checkPackageBeforeStart }=await import('./service');
+ const name='owner-data-access',m=manifest(name,{ui:PAGES,store:{},host:['store:read','store:write'],maxProtection:1});
+ await getDb().insert(pluginPackages).values({name,version:'1.0.0',manifest:m as never,enabled:true,approvedHostScopes:['store:read','store:write']});
+ const dir=packageDir(name);mkdirSync(join(dir,'ui'),{recursive:true});
+ writeFileSync(join(dir,'octipus-plugin.json'),JSON.stringify(m));writeFileSync(join(dir,'server.mjs'),'// fixture\n');writeFileSync(join(dir,'ui','index.html'),'<!doctype html>');
+ expect(await checkPackageBeforeStart(name)).toBeNull();
+ const row=(await findRow(name))!;
+ onTestFinished(async()=>{await getDb().delete(pluginPackages).where(eq(pluginPackages.name,name));await pluginProtectionRepository.delete(name);});
+ await getDb().insert(pluginStore).values({packageName:name,userId:ALICE.id,key:'report',value:{message:'Internal evidence'},sizeBytes:40,protectionLevel:1});
+ const approval={contentHash:row.contentHash!,level:2 as const,connections:[],approvedBy:ADMIN.id,approvedAt:new Date().toISOString()};
+ await pluginProtectionRepository.put(name,approval);
+ expect((await serverFor(row)).plugin?.maxProtection).toBe(2);
+ expect((await findRow(name))?.manifest.maxProtection).toBe(1);
+ expect((await findRow(name))?.contentHash).toBe(row.contentHash);
+ const tok=mintToken({plugin:name,userId:ALICE.id,workspaceId:null,sessionId:null,scopes:['store:read'],maxProtection:2,tool:'load',effect:'read',dataApproval:protectionApprovalStamp(approval)});
+ expect(await host('GET','/store/report',tok,name)).toMatchObject({status:200,body:{value:{message:'Internal evidence'}}});
+ fixture.user=ALICE;
+ const legacy=await app.handle(new Request(`http://localhost/api/plugins/${name}/store/report`));
+ expect(legacy.status).toBe(403);
+ const low={...approval,level:1 as const,approvedAt:new Date(Date.now()+1000).toISOString()};
+ await pluginProtectionRepository.put(name,low);
+ expect((await rows(`package_name = '${name}'`))[0].protection_level).toBe(2);
+ // A token from before the policy reduction cannot run on another instance either.
+ expect(await host('GET','/store/report',tok,name)).toMatchObject({status:403,body:{code:'data_approval_changed'}});
+ const lowToken=mintToken({plugin:name,userId:ALICE.id,workspaceId:null,sessionId:null,scopes:['store:read'],maxProtection:1,tool:'load',effect:'read',dataApproval:protectionApprovalStamp(low)});
+ expect((await host('GET','/store/report',lowToken,name)).status).toBe(404);
+});

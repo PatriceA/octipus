@@ -1,5 +1,6 @@
 'use client';
 
+import { ProtectedPluginView } from '@/components/plugins/protected-view';
 import { Loader2, ShieldAlert } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
@@ -41,6 +42,7 @@ export default function PluginPage() {
     ?? (path === '' ? (pages.data ?? []).find((p) => p.plugin === name) : undefined)
     ?? null;
 
+  if (path === '_protected' || page?.protected) return <ProtectedPluginView key={name} name={name}/>;
   if (pages.isLoading) {
     return <main className="flex h-full items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-on-surface-variant" /></main>;
   }

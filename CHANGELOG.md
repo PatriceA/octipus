@@ -7,6 +7,8 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Plugin Data access:** admins can approve Internal data for an installed package and its selected named connections without editing or re-signing plugin code. The content-bound approval uses a protected Octipus-rendered tools view, preserves saved records when access changes, and requires review after a package or connection destination changes. Agent guidance is in `docs/PLUGIN-DATA-ACCESS.md`.
+
 - **Accepted for one week: picomatch ReDoS (GHSA-fc5q-39xc-vjpf).** No fixed
   `picomatch` release exists yet (4.0.7 is the latest and affected). It is
   reached only through build and test tooling (vitest, vite, ESLint); the

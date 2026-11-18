@@ -1,16 +1,18 @@
+import { isDeepStrictEqual } from 'node:util';
+import { packageProtectionLevel } from './protection-policy';
 import { validateRecordData } from '@/core/records/fields';
 import { configuredExecutionEnvironments, pathInEnvironment } from '@/security/execution-environments';
 import { readAvailableConnectionProfiles, connectionUrl, type ConnectionPrincipal } from '@/security/credential-connections';
 import type { PluginManifest } from '@/shared/plugin-package';
 import type { PluginSetupConfiguration, PluginSetupResources } from '@/shared/plugin-setup';
 import type { RecordData } from '@/shared/record-fields';
-import { effectiveMaxProtection, PluginPackageError } from './service';
+import { effectiveMaxProtection, findRow, PluginPackageError } from './service';
 
-export function setupConfiguration(manifest: PluginManifest, settings: RecordData = {}, secrets: readonly string[] = [], installed = false, enabled = false): PluginSetupConfiguration {
+export function setupConfiguration(manifest: PluginManifest, settings: RecordData = {}, secrets: readonly string[] = [], installed = false, enabled = false, approvedLevel?:number, protectedView = false): PluginSetupConfiguration {
   return { fields: manifest.settings ?? [], secrets: (manifest.secrets ?? []).map(s => ({ ...s, configured: secrets.includes(s.key) })),
-    resources: manifest.setup?.resources ?? [], settings: { ...manifest.setup?.defaults, ...settings }, maxProtection: effectiveMaxProtection(manifest, manifest.host ?? []),
+    resources: manifest.setup?.resources ?? [], settings: { ...manifest.setup?.defaults, ...settings }, maxProtection: approvedLevel ?? effectiveMaxProtection(manifest, manifest.host ?? []),
     environmentBackends: manifest.host?.includes('repos:collect') ? ['host'] : undefined,
-    open: manifest.ui?.pages?.[0] ? { href: `/plugins/${encodeURIComponent(manifest.name)}/${encodeURIComponent(manifest.ui.pages[0].path)}`, label: 'Open plugin' } : manifest.dashboards?.length ? { href: '/dashboards', label: 'Open dashboards' } : { href: '/agents', label: 'Use in a session' },
+    open: protectedView ? { href: `/plugins/${encodeURIComponent(manifest.name)}/_protected`, label: 'Open protected view' } : manifest.ui?.pages?.[0] ? { href: `/plugins/${encodeURIComponent(manifest.name)}/${encodeURIComponent(manifest.ui.pages[0].path)}`, label: 'Open plugin' } : manifest.dashboards?.length ? { href: '/dashboards', label: 'Open dashboards' } : { href: '/agents', label: 'Use in a session' },
     check: manifest.setup?.check ?? null, companions: manifest.companions, installed, enabled };
 }
 
@@ -28,6 +30,8 @@ const valuesOf = (v: unknown) => typeof v === 'string' ? v.split(/[\n,]/).map(x 
 export async function validateSetupSettings(manifest: PluginManifest, input: unknown, caller: ConnectionPrincipal): Promise<RecordData> {
   const values = validateRecordData(manifest.settings ?? [], input);
   if (!manifest.setup?.resources?.length) return values;
+  const current = await findRow(manifest.name);
+  const cap = current && isDeepStrictEqual(current.manifest,manifest) ? await packageProtectionLevel(current) : effectiveMaxProtection(manifest,manifest.host??[]);
   const options = await setupResources(caller);
   if (manifest.host?.includes('repos:collect')) options.environments = options.environments.filter(e => e.backend === 'host');
   const fail = (message: string): never => { throw new PluginPackageError('invalid', message); };
@@ -37,7 +41,7 @@ export async function validateSetupSettings(manifest: PluginManifest, input: unk
     if (resource.kind === 'environment' && chosen.some(id => !options.environments.some(e => e.id === id))) fail('The selected environment is no longer available. Choose it again.');
     if (resource.kind === 'folder' && chosen.some(path => !options.environments.some(e => e.roots.some(root => pathInEnvironment(root, path))))) fail('The selected folder is outside your environments. Open Environments & Access to add it.');
     if (resource.kind === 'connection' && chosen.some(id => !options.connections.some(c => c.id === id && (resource.connectionKind !== 'git' || c.git)))) fail('A selected connection is no longer available. Choose an existing connection or connect it in Secrets & Credentials.');
-    if (resource.kind === 'protection' && chosen.some(level => !/^[1-4]$/.test(level) || Number(level) > effectiveMaxProtection(manifest, manifest.host ?? []))) fail('This plugin cannot display evidence at the chosen protection level. Keep that classification and choose a compatible plugin or interface.');
+    if (resource.kind === 'protection' && chosen.some(level => !/^[1-4]$/.test(level) || Number(level) > cap)) fail('This plugin cannot display evidence at the chosen protection level. Keep that classification and choose a compatible plugin or interface.');
     if (resource.kind === 'http-grants') {
       let grants: unknown;
       try { grants = JSON.parse(String(values[resource.setting])); } catch { fail('Choose a connection and the paths it may read.'); }
