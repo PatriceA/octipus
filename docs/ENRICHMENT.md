@@ -116,6 +116,7 @@ Batch, per-email AI classification and actions over Gmail / Microsoft 365.
 - Core: `src/core/email/` (send/normalize)
 - Route: `src/api/routes/email.ts` (send is gated)
 - Web: `web/app/email/page.tsx`
+- Small decision model, calibration and the Review panel: [EMAIL-TRIAGE.md](EMAIL-TRIAGE.md)
 
 ## Hardware-aware onboarding (hwfit)
 
