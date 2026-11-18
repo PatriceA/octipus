@@ -177,6 +177,12 @@ a tool gets the real e-mail address, not `[EMAIL_1]`.
 
 ## Plugin calls (C6d)
 
+An administrator can manage an installed package’s supported data level and trusted
+named destinations in **Administration → Plugin packages → Data access**, without
+editing signed package files. Protected data uses chat and the host-rendered view;
+custom plugin pages stay Public-only. See [Plugin data access](PLUGIN-DATA-ACCESS.md)
+for the user and agent procedure, limits and update review.
+
 Every plugin package declares the highest level it may see (`maxProtection`,
 see [PLUGIN-PACKAGES.md](PLUGIN-PACKAGES.md)). While the `protection` module
 is on, a call to one of its tools, resources or prompts from a conversation

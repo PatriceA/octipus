@@ -17,6 +17,7 @@ vi.mock('@/security/permissions', () => ({
 // What a package read is kept per package and user (./read-level.ts); here only the calls are noted.
 const recorded = vi.hoisted(() => [] as Array<[string, string, number]>);
 vi.mock('./read-level', () => ({ recordReadLevel: async (pkg: string, userId: string, level: number) => { recorded.push([pkg, userId, level]); } }));
+vi.mock('@/core/protection/routing',()=>({carriedLevel:async()=>1}));
 vi.mock('@/core/modules/registry', () => ({ isToolOn: (toolId: string) => !held.off.has(toolId) }));
 
 const {

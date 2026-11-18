@@ -1,3 +1,4 @@
+import { pluginProtectionRepository } from '@/db/repositories/plugin-protection-repository';
 /**
  * Plugin package pages (docs/PLUGIN-PACKAGES.md#pages): which pages the
  * enabled packages add, and serving their static files.
@@ -218,11 +219,16 @@ export async function listEnabledPages(): Promise<PluginPageLink[]> {
   const out: PluginPageLink[] = [];
   for (const row of rows) {
     const ui = row.manifest.ui;
-    if (!ui || row.contentHash === null) continue;
+    const dataApproval = await pluginProtectionRepository.get(row.name);
+    if ((!ui && !dataApproval) || row.contentHash === null) continue;
     // A package whose files changed is not started; its pages are not offered either.
     if (bridge.pluginProblem(`${PLUGIN_SERVER_PREFIX}${row.name}`) === CONTENT_MISMATCH_PROBLEM) continue;
     if (await packageRunProblem(row.name) !== null) continue;
-    for (const page of ui.pages) {
+    if (dataApproval) {
+      out.push({plugin:row.name,pluginTitle:row.manifest.title,path:ui?.pages[0]?.path??'_protected',title:ui?.pages[0]?.title??row.manifest.title,icon:ui?.pages[0]?.icon??null,src:'',protected:true});
+      continue;
+    }
+    for (const page of ui!.pages) {
       out.push({
         plugin: row.name,
         pluginTitle: row.manifest.title,

@@ -2,6 +2,7 @@ import { beforeEach, expect, test, vi } from 'vitest';
 const state = vi.hoisted(() => ({ environments: [{ id: 'env', name: 'Workstation', enabled: true, backend: 'host', userId: 'owner', workspaceId: null, roots: ['/projects'], pathDirectories: [] }], connections: [{ id: 'tracker', userId: 'owner', workspaceId: null, credential: 'vault-ref', http: { origin: 'https://example.com', pathPrefix: '/api', git: false }, stdio: [] }] }));
 vi.mock('@/security/execution-environments', async original => ({ ...await original<typeof import('@/security/execution-environments')>(), configuredExecutionEnvironments: () => state.environments }));
 vi.mock('@/security/credential-connections', async original => ({ ...await original<typeof import('@/security/credential-connections')>(), readAvailableConnectionProfiles: async () => state.connections }));
+vi.mock('./service',async original=>({...await original<typeof import('./service')>(),findRow:async()=>null}));
 import { parseManifest } from './manifest';
 import { setupConfiguration, setupResources, validateSetupSettings } from './setup';
 import { pluginCapabilityPreflight } from './authoring/preflight';
@@ -16,6 +17,7 @@ test('declarations reject write tests, unknown resources and publisher-chosen cl
 test('compatibility is checked before building without changing the requested level', () => {
  expect(pluginCapabilityPreflight({ protectionLevel: 2, interface: 'page', host: [] })).toMatchObject({ compatible: false, requestedProtection: 2, supportedProtection: 1 });
  expect(pluginCapabilityPreflight({ protectionLevel: 3, interface: 'tools', host: ['store:read'] })).toMatchObject({ compatible: true });
+ expect(pluginCapabilityPreflight({protectionLevel:2,interface:'protected',host:['repos:collect']})).toMatchObject({compatible:true,requiresOwnerApproval:true});
 });
 test('discovery returns public metadata only and disabled environments disappear', async () => {
  const caller = { userId: 'owner', workspaceId: null };

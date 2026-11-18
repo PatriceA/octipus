@@ -51,6 +51,7 @@ export const MAX_TOKEN_TTL_MS = 30_000;
 const MAX_LIVE_TOKENS = 10_000;
 
 export interface HostTokenGrant {
+  dataApproval?: string;
   plugin: string;
   userId: string;
   /** The workspace the call ran in (a space, or the user's own); null: the user's default. */
@@ -286,7 +287,7 @@ export function hostApiTarget(): { host: string; port: number } {
 }
 
 /** The calls that may carry a host API token: each one started by the user it acts for. */
-export type HostCallKind = 'agent' | 'command' | 'page' | 'dashboard';
+export type HostCallKind = 'agent' | 'command' | 'page' | 'dashboard' | 'native';
 
 /**
  * What started a call, when it is one a user started themselves, or null:
@@ -308,6 +309,7 @@ export type HostCallKind = 'agent' | 'command' | 'page' | 'dashboard';
 export function hostCallKind(context: Pick<AgentContext, 'trigger' | 'sessionId' | 'metadata'>): HostCallKind | null {
   const source = context.metadata?.source;
   if (source === 'plugin-page') return 'page';
+  if (source === 'plugin-native') return 'native';
   // A dashboard the signed-in user opened: its widget's read tool, as that user.
   if (source === 'plugin-dashboard') return 'dashboard';
   if (source === 'plugin-contribution') return context.metadata?.contribution === 'command' ? 'command' : null;
@@ -346,6 +348,12 @@ export async function issueHostCallMeta(
   const candidates = grantableScopes(binding.hostScopes, binding.hostScopes, effect).filter((s) => !dashboard || s === 'store:read');
   const scopes = await userHeldScopes(context.userId, candidates, { sessionId: context.sessionId, workspaceId: context.workspaceId ?? null });
   if (scopes.length === 0) return null;
+  const { carriedLevel } = await import('@/core/protection/routing');
+  const initialLevel = Math.max(await carriedLevel(context.sessionId) ?? 1, hostCallKind(context)==='native'?binding.maxProtection:1);
+  if(initialLevel>1) {
+    const { recordReadLevel } = await import('./read-level');
+    await recordReadLevel(binding.package,context.userId,initialLevel);
+  }
   const ttl = Math.min(server.requestTimeoutMs ?? MAX_TOKEN_TTL_MS, MAX_TOKEN_TTL_MS);
   const { token, expiresAt } = mintHostToken({
     plugin: binding.package,
@@ -354,6 +362,8 @@ export async function issueHostCallMeta(
     sessionId: context.sessionId || null,
     scopes,
     maxProtection: binding.maxProtection,
+    dataApproval: binding.dataApproval,
+    readLevel: initialLevel,
     tool: toolName,
     effect,
     ...(binding.modelCliTools && scopes.includes('model:complete') ? { modelCliTools: true as const } : {}),

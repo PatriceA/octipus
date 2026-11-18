@@ -1,3 +1,5 @@
+import { protectionView } from '@/plugins/packages/protection-policy';
+import { findRow } from '@/plugins/packages/service';
 /**
  * plugin_dev — creator mode, sandboxed (docs/plans/plugins-everything.md
  * phase 4, docs/PLUGIN-PACKAGES.md#writing-a-plugin-with-an-agent): an agent
@@ -111,7 +113,7 @@ export class PluginDevTool extends BaseTool {
         { action: 'write', description: 'Install a plugin package from your workspace, disabled, for an admin to review and enable', defaultLevel: 'ASK', dangerous: true },
       ],
       tools: [
-        { name: PLUGIN_DEV_TOOLS.api, description: 'The live plugin package contract', parameters: { needs: { type: 'object', description: 'Requested protectionLevel, interface and host scopes: compatibility before building' } }, returns: 'Manifest JSON schema, events, effects, limits, MCP contract, environment, sandbox, templates' },
+        { name: PLUGIN_DEV_TOOLS.api, description: 'The live plugin package contract', parameters: { installedPlugin: { type:'string',description:'Inspect current owner data approval for this installed package (admins only)' }, needs: { type: 'object', description: 'Requested protectionLevel, interface and host scopes: compatibility before building' } }, returns: 'Manifest JSON schema, events, effects, limits, MCP contract, environment, sandbox, templates' },
         { name: PLUGIN_DEV_TOOLS.template, description: 'List the plugin templates, or return one template\'s files', parameters: { name: { type: 'string', description: 'Template name' } }, returns: 'Templates, or one template\'s files' },
         { name: PLUGIN_DEV_TOOLS.validate, description: 'Validate a plugin directory in your workspace without installing it', parameters: { path: { type: 'string', description: 'Plugin directory', required: true } }, returns: 'ok, problems, warnings, content hash' },
         { name: PLUGIN_DEV_TOOLS.install, description: 'Install a plugin package from your workspace, disabled (admins only, asks first)', parameters: { path: { type: 'string', description: 'Plugin directory', required: true } }, returns: 'The installed package, its content hash and how an admin enables it' },
@@ -125,13 +127,22 @@ export class PluginDevTool extends BaseTool {
       'The live contract for writing an Octipus plugin package: the manifest JSON schema, rules the schema cannot express, '
         + 'tool effects, contribution kinds (commands, schedules with cron syntax, events, prompt, context), limits, the MCP stdio '
         + 'contract, the environment variables a package gets, the sandbox and network rules on this host, the templates, and '
-        + 'whether you may install (youCanInstall). Read it before writing a plugin.',
-      createParameterSchema({ needs: { type: 'object', description: 'Before building: {protectionLevel:1..4, interface:page|dashboard|tools, host:[required host scopes]}. Checks compatibility without lowering classification.' } }),
-      async (args, context) => ({ ...await pluginApiContract({
-        canInstall: await isActiveAdmin(context.userId),
+        + 'whether you may install (youCanInstall). With installedPlugin, inspect its current data access before recommending a code change.',
+      createParameterSchema({ installedPlugin: { type: 'string', description: 'Installed package name: admins can inspect current data approval, supported maximum and the user guidance link.' }, needs: { type: 'object', description: 'Before building: {protectionLevel:1..4, interface:page|dashboard|tools|protected, host:[required host scopes]}. Checks compatibility without lowering classification.' } }),
+      async (args, context) => {
+        const canInstall=await isActiveAdmin(context.userId);
+        let dataAccess:unknown={guide:'docs/PLUGIN-DATA-ACCESS.md',settings:'/admin/plugins',instruction:'Check Data access before proposing package changes. Keep the real classification and existing conversation.'};
+        if(args.installedPlugin!==undefined) {
+          if(typeof args.installedPlugin!=='string'||!/^[a-z][a-z0-9-]{1,49}$/.test(args.installedPlugin))throw new Error('installedPlugin must be an installed package name.');
+          if(!canInstall) dataAccess={guide:'docs/PLUGIN-DATA-ACCESS.md',instruction:'An administrator can inspect and change this package’s Data access. Do not self-approve.'};
+          else {const row=await findRow(args.installedPlugin);if(!row)throw new Error('This plugin is not installed.');dataAccess={...await protectionView(row),guide:'docs/PLUGIN-DATA-ACCESS.md',settings:`/admin/plugins?dataAccess=${encodeURIComponent(row.name)}`};}
+        }
+        return { dataAccess, ...await pluginApiContract({
+        canInstall,
         network: (m) => networkStatus(m),
         adminPage: adminPluginsPage(),
-      }), ...(args.needs !== undefined ? { preflight: pluginCapabilityPreflight(args.needs) } : {}) }),
+      }), ...(args.needs !== undefined ? { preflight: pluginCapabilityPreflight(args.needs) } : {}) };
+      },
       { permissionAction: 'read', readOnly: true },
     );
 

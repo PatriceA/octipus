@@ -1,3 +1,4 @@
+vi.mock('@/db/repositories/plugin-protection-repository',()=>({pluginProtectionRepository:{get:async()=>null}}));
 /**
  * The host API through the egress proxy (docs/PLUGIN-PACKAGES.md#host-api):
  * `http://octipus-host.internal/api/plugin-host/…` reaches the host's own API

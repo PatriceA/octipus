@@ -91,6 +91,8 @@ import { CONTENT_MISMATCH_PROBLEM, hashPackageContent, isContentHash, LISTING_FI
 import { ManifestError, parseManifest, settingEnvName } from './manifest';
 import { defaultMaxProtection, packagePermissions } from './permissions';
 import { checkSignatureOnDisk, keyFingerprint, parsePublicKey, readSignatureFile, SIGNATURE_FILE, type SignatureCheck, SignatureError, type TrustedPublisher } from './signature';
+import { approvedProtectionLevel, protectionApprovalStamp } from './protection-policy';
+import { pluginProtectionRepository } from '@/db/repositories/plugin-protection-repository';
 import { resetReadLevels } from './read-level';
 import { forgetRunChecks } from './run-check';
 import { keyRevocation, packageRevocation, revokedKeyIds } from './revocations';
@@ -619,8 +621,10 @@ async function upgradeStore(tx: Tx, row: PluginPackageRow, handover: 'keep' | 'd
     if (gone.entries === 0) return {};
     return { storeDeleted: { reason: handover === 'delete' ? 'publisher_changed' : 'store_removed', entries: gone.entries, users: gone.users } };
   }
-  const cap = effectiveMaxProtection(row.manifest, grantedHostScopes(row));
-  const above = await pluginStoreRepository.deleteAbove(row.name, cap, tx);
+  const dataApproval = await pluginProtectionRepository.get(row.name,tx);
+  const cap = approvedProtectionLevel(row,dataApproval);
+  // A data approval may need renewal after an upgrade; keep protected records withheld, never delete them for that review.
+  const above = dataApproval ? {entries:0,users:0} : await pluginStoreRepository.deleteAbove(row.name, cap, tx);
   const kept = handover === 'keep' ? await pluginStoreRepository.usage(row.name, undefined, tx) : null;
   return {
     ...(above.entries > 0 ? { storeDeleted: { reason: 'above_max_protection', maxProtection: cap, entries: above.entries, users: above.users } } : {}),
@@ -903,6 +907,7 @@ export async function uninstall(name: string, actorUserId: string): Promise<void
   // Every user's store entries go with it (docs/PLUGIN-PACKAGES.md#store; the row's delete cascades too).
   const { pluginStoreRepository } = await import('@/db/repositories/plugin-store-repository');
   const storeEntries = (await pluginStoreRepository.deletePackage(name)).entries;
+  await pluginProtectionRepository.delete(name);
   await getDb().delete(pluginPackages).where(eq(pluginPackages.name, name));
   await rm(packageDir(name), { recursive: true, force: true });
   await rm(pluginDataDir(name), { recursive: true, force: true });
@@ -1128,13 +1133,14 @@ export async function configure(
   // An approval that lowers the level the package may see (an egress scope
   // approved) takes the store entries above it away, with the row
   // (docs/PLUGIN-PACKAGES.md#store): what it could no longer read stays out of reach.
+  const dataApproval = await pluginProtectionRepository.get(name);
   const capBefore = effectiveMaxProtection(row.manifest, grantedHostScopes(row));
   const capAfter = effectiveMaxProtection(row.manifest, grantedHostScopes({ manifest: row.manifest, approvedHostScopes }));
   const { updated, storeAbove } = await getDb().transaction(async (tx) => {
     const [next] = await tx.update(pluginPackages)
       .set({ settings, enabled, contentHash, signatureHash, signedBy, approvedHostScopes, approvedContributionsHash, ...inProcessApproval, updatedAt: new Date() })
       .where(eq(pluginPackages.name, name)).returning();
-    if (capAfter >= capBefore || !row.manifest.store) return { updated: next, storeAbove: null };
+    if (capAfter >= capBefore || !row.manifest.store || dataApproval) return { updated: next, storeAbove: null };
     const { pluginStoreRepository } = await import('@/db/repositories/plugin-store-repository');
     return { updated: next, storeAbove: await pluginStoreRepository.deleteAbove(name, capAfter, tx) };
   });
@@ -1509,6 +1515,7 @@ export function effectiveMaxProtection(
 
 /** The MCP server an installed package runs as. */
 export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
+  const dataApproval=await pluginProtectionRepository.get(row.name);
   const m = row.manifest;
   if (!m.server || !m.tools) throw new Error(`${row.name} runs in the server process; it has no MCP server`);
   const tools = m.tools;
@@ -1565,7 +1572,8 @@ export async function serverFor(row: PluginPackageRow): Promise<MCPServer> {
       // What the model is told each tool does: the manifest's words the admin agreed to, never the running server's.
       descriptions: Object.fromEntries(Object.entries(tools).flatMap(([t, d]) => (d.description?.trim() ? [[t, d.description.trim()]] : []))),
       // Undeclared: see defaultMaxProtection; clamped by egress scopes (effectiveMaxProtection).
-      maxProtection: effectiveMaxProtection(m, hostScopes),
+      maxProtection: approvedProtectionLevel(row,dataApproval),
+      dataApproval: protectionApprovalStamp(dataApproval),
       ...(hostScopes.length > 0 ? { hostScopes } : {}),
       // Its model calls may run on a CLI lane: declared and approved (docs/PLUGIN-PACKAGES.md#model-calls-on-cli-lanes).
       ...(modelCliToolsGranted(row) ? { modelCliTools: true as const } : {}),

@@ -1,3 +1,5 @@
+import { pluginProtectionRepository } from '@/db/repositories/plugin-protection-repository';
+import { trustedProtectionConnection, protectionApprovalStamp } from './protection-policy';
 /**
  * `repos:collect` of the plugin host API (docs/PLUGIN-PACKAGES.md#repository-evidence-collector):
  * a package asks the host to gather read-only evidence from Git repositories
@@ -261,7 +263,10 @@ export async function resolvePolicy(plugin: string, caller: ReturnType<typeof ca
   const row = await findRow(plugin);
   if (!row?.enabled) throw new CollectorError('The plugin is not enabled', 'plugin_disabled', 403);
   const levelText = row.settings[COLLECTOR_SETTING_LEVEL];
-  const level = Number(levelText);
+  let level = Number(levelText);
+  const dataApproval = await pluginProtectionRepository.get(plugin);
+  if (dataApproval && dataApproval.contentHash !== row.contentHash) throw new CollectorError('Review this plugin’s data access after its update in Administration → Plugin packages → Data access','data_approval_stale',403);
+  if (dataApproval) level = Math.max(level,dataApproval.level);
   if (![1, 2, 3, 4].includes(level)) {
     throw new CollectorError(`An admin has not classified the collected evidence (setting ${COLLECTOR_SETTING_LEVEL}: 1-4)`, 'not_configured', 403);
   }
@@ -271,7 +276,7 @@ export async function resolvePolicy(plugin: string, caller: ReturnType<typeof ca
     environment,
     // A folder counts when both the admin and the environment's owner allowed it.
     roots: adminRoots.filter((a) => envRoots.some((e) => pathInEnvironment(e, a))).concat(envRoots.filter((e) => adminRoots.some((a) => pathInEnvironment(a, e)))),
-    connections: new Set(listSetting(row.settings[COLLECTOR_SETTING_CONNECTIONS])),
+    connections: new Set(listSetting(row.settings[COLLECTOR_SETTING_CONNECTIONS]).filter(id => !dataApproval || dataApproval.level===1 || dataApproval.connections.some(c=>c.id===id))),
     level: level as 1 | 2 | 3 | 4,
   };
 }
@@ -381,6 +386,7 @@ async function collectRepo(ctx: RepoContext, repo: CollectorRequest['repos'][num
         if (!policy.connections.has(repo.fetch.connection)) throw new CollectorError(`Connection ${repo.fetch.connection} is not approved for this plugin`, 'connection_not_approved', 403);
         if (await denied(ctx.grant.userId, ctx.workspaceId, 'connections', 'fetch')) throw new Error('Your rules deny connections.fetch');
         const profile = await connectionFor(repo.fetch.connection, caller);
+        await assertInternalConnection(ctx.grant,profile);
         await authenticatedGit(profile, caller, { operation: 'fetch', path: cwd, remotePath: repo.fetch.remotePath, refspecs: [refspec], timeout: COLLECTOR_FETCH_TIMEOUT_MS }, ctx.signal);
         fetched.set(mapped.dest, true);
         out.fetches.push({ ref: input.name, refspec, ok: true, at });
@@ -557,6 +563,7 @@ async function fetchPages(ctx: RepoContext, spec: CollectorRequest['http'][numbe
     if (!policy.connections.has(spec.connection)) throw new CollectorError(`Connection ${spec.connection} is not approved for this plugin`, 'connection_not_approved', 403);
     if (await denied(ctx.grant.userId, ctx.workspaceId, 'connections', 'read')) throw new CollectorError('Your rules deny connections.read', 'connection_denied', 403);
     const profile = await connectionFor(spec.connection, caller);
+    await assertInternalConnection(ctx.grant,profile);
     const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(COLLECTOR_HTTP_TIMEOUT_MS)]);
     // The read itself is bounded by what is left of the run's budget, not only by the page bound.
     const limit = Math.min(COLLECTOR_MAX_PAGE_BYTES, ctx.budget.bytes);
@@ -571,6 +578,14 @@ async function fetchPages(ctx: RepoContext, spec: CollectorRequest['http'][numbe
   }, ctx.budget);
   if (ctx.signal.aborted) throw new CollectorError('Cancelled', 'cancelled', 409);
   return out;
+}
+
+
+/** A connection edit cannot silently move Internal evidence to a different destination. */
+async function assertInternalConnection(grant:HostTokenGrant,profile:Parameters<typeof trustedProtectionConnection>[1]):Promise<void> {
+  const approval=await pluginProtectionRepository.get(grant.plugin);
+  if(grant.dataApproval!==protectionApprovalStamp(approval))throw new CollectorError('The plugin data approval changed during collection; review the result before starting another run.','data_approval_changed',403);
+  if(approval && approval.level>1 && !trustedProtectionConnection(approval,profile))throw new CollectorError('The connection destination changed or is not trusted for this data level. Review Data access in the plugin settings.','connection_trust',403);
 }
 
 // ── Runs ───────────────────────────────────────────────────────────────────

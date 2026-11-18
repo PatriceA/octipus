@@ -2893,3 +2893,15 @@ raw vault credentials. `GET /api/plugin-host/connections` returns only metadata 
 connections; `GET /api/plugin-host/collector/repositories` discovers allowed local repositories
 and refs. Custom profile screens can use these APIs through declared read tools instead of
 asking users to copy environment IDs or write JSON.
+
+
+## Owner-managed data access
+
+For an installed plugin, open **Administration → Plugin packages → Data access**.
+This configures the allowed classification and trusted named connection destinations
+without modifying signed package files. The protected host view and the existing chat
+can handle approved Internal data while the custom browser-page bridge remains blocked.
+See [the user and agent guide](PLUGIN-DATA-ACCESS.md) for the complete workflow,
+capability limits, update review and recovery. Approval is bound to package bytes;
+changing source does not silently inherit approval. Protected saved data is retained
+while approval is renewed.

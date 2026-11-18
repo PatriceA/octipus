@@ -1,3 +1,5 @@
+import { pluginProtectionRepository } from '@/db/repositories/plugin-protection-repository';
+import { trustedProtectionConnection, protectionApprovalStamp } from '@/plugins/packages/protection-policy';
 /**
  * The host API of plugin packages (docs/PLUGIN-PACKAGES.md#host-api):
  * `/api/plugin-host/*`, a narrow surface a package's tool calls back into
@@ -151,6 +153,8 @@ async function authorize(ctx: HostCtx, op: string, scope: PluginHostScope | null
   // read for this user in any call (src/plugins/packages/read-level.ts), and
   // what the calling session holds. A tool runs inside a conversation that
   // may hold content above level 1; whatever it writes may carry that.
+  const dataApproval=await pluginProtectionRepository.get(grant.plugin);
+  if(grant.dataApproval!==protectionApprovalStamp(dataApproval))return refuse(403,'The plugin data approval changed; use a fresh call.','data_approval_changed',grant);
   const kept = await readLevelOf(grant.plugin, grant.userId);
   grant.readLevel = Math.max(grant.readLevel ?? 1, kept, await sessionLevelOf(grant.sessionId));
   return { grant, principal };
@@ -318,7 +322,7 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
   .use(apiContext)
 
   .get('/connections', (ctx) => run(ctx, 'connections.options', 'connections:read', async ({ grant, principal }) => {
-    if (principal.workspaceKind === 'shared' || (grant.readLevel ?? 1) > 1) { ctx.set.status = 403; return { error: 'Connections require a personal workspace at protection level 1', code: 'connection_context' }; }
+    if (principal.workspaceKind === 'shared') { ctx.set.status = 403; return { error: 'Connections require a personal workspace at protection level 1', code: 'connection_context' }; }
     const { findRow } = await import('@/plugins/packages/service');
     const { readAvailableConnectionProfiles } = await import('@/security/credential-connections');
     const row = await findRow(grant.plugin);
@@ -326,18 +330,33 @@ export const pluginHostRoutes = new Elysia({ prefix: '/plugin-host' })
     try { grants = JSON.parse(String(row?.settings.connection_grants ?? '{}')); } catch { ctx.set.status = 409; return { error: 'Review the plugin’s connection access in setup.' }; }
     if (!grants || typeof grants !== 'object' || Array.isArray(grants)) { ctx.set.status = 409; return { error: 'Review the plugin’s connection access in setup.' }; }
     const connections = await readAvailableConnectionProfiles({ userId: grant.userId, workspaceId: principal.workspaceId });
-    return { connections: connections.filter(c => c.http && Object.hasOwn(grants, c.id)).map(c => ({ id: c.id, origin: c.http!.origin, pathPrefix: c.http!.pathPrefix, paths: (grants as Record<string, unknown>)[c.id] })) };
+    const dataApproval = await pluginProtectionRepository.get(grant.plugin);
+    if((grant.readLevel??1)>1 && (!dataApproval || dataApproval.contentHash!==row?.contentHash || (grant.readLevel??1)>dataApproval.level)){ctx.set.status=403;return {error:'Review plugin Data access for this classification.',code:'connection_context'};}
+    return { connections: connections.filter(c => c.http && Object.hasOwn(grants, c.id) && ((grant.readLevel??1)<=1 || !!dataApproval && dataApproval.contentHash===row?.contentHash && trustedProtectionConnection(dataApproval,c))).map(c => ({ id: c.id, origin: c.http!.origin, pathPrefix: c.http!.pathPrefix, paths: (grants as Record<string, unknown>)[c.id] })) };
   }), { detail: { tags: ['plugin-host'] } })
 
   .post('/connections/get', (ctx) => run(ctx, 'connections.get', 'connections:read', async ({ grant, principal }, details) => {
-    if (principal.workspaceKind === 'shared' || (grant.readLevel ?? 1) > 1) {
+    if (principal.workspaceKind === 'shared') {
       ctx.set.status = 403;
       details.code = 'connection_context';
       return { error: 'Connections require a personal workspace at protection level 1', code: 'connection_context' };
     }
     const [row] = await getDb().select({ settings: pluginPackages.settings }).from(pluginPackages)
       .where(eq(pluginPackages.name, grant.plugin)).limit(1);
-    const out = await pluginConnectionGet({ userId: grant.userId, workspaceId: grant.workspaceId }, row?.settings ?? {}, ctx.body);
+    let request = ctx.body;
+    if ((grant.readLevel??1)>1) {
+      const { findRow } = await import('@/plugins/packages/service');
+      const { connectionFor } = await import('@/security/credential-connections');
+      const pkg=await findRow(grant.plugin),approval=await pluginProtectionRepository.get(grant.plugin);
+      if(!approval || approval.contentHash!==pkg?.contentHash || (grant.readLevel??1)>approval.level){ctx.set.status=403;return {error:'Review plugin Data access for this classification.',code:'connection_context'};}
+      const profile=await connectionFor(ctx.body.connection,{userId:grant.userId,workspaceId:grant.workspaceId});
+      const target=approval.connections.find(c=>c.id===ctx.body.connection);
+      if(!approval || approval.contentHash!==pkg?.contentHash || (grant.readLevel??1)>approval.level || !target || !trustedProtectionConnection(approval,profile) || !(new URL(ctx.body.path,'http://connection.invalid').pathname===target.pathPrefix || new URL(ctx.body.path,'http://connection.invalid').pathname.startsWith(target.pathPrefix.replace(/\/$/,'')+'/'))) {
+        ctx.set.status=403;return {error:'This connection is not approved for Internal data. Review plugin Data access.',code:'connection_trust'};
+      }
+      request={...ctx.body,expectedOrigin:target.origin};
+    }
+    const out = await pluginConnectionGet({ userId: grant.userId, workspaceId: grant.workspaceId }, row?.settings ?? {}, request);
     if ('error' in out) { ctx.set.status = out.status; details.code = out.code; }
     return out;
   }), {

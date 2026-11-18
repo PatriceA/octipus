@@ -71,7 +71,7 @@ export const pluginSetupRoutes = new Elysia({ prefix: '/plugin-packages/setup' }
       if (!check || row.manifest.tools?.[check.tool]?.effect !== 'read') throw new PluginPackageError('invalid', 'This plugin does not declare a read-only connection test.');
       const workspaceId = ctx.principal.workspaceId ?? null;
       const context = buildAgentContext({ id: `plugin-setup-${crypto.randomUUID()}`, sessionId: '', userId: ctx.principal.userId,
-        scope: { workspaceId, space: null, trigger: 'user', funding: fundingFor('user', null) }, topic: 'plugin-setup', model: 'plugin-setup', role: 'general', attended: false, status: 'running', metadata: { source: 'plugin-page', plugin: row.name, setup: true } });
+        scope: { workspaceId, space: null, trigger: 'user', funding: fundingFor('user', null) }, topic: 'plugin-setup', model: 'plugin-setup', role: 'general', attended: false, status: 'running', metadata: { source: 'plugin-native', plugin: row.name, setup: true } });
       const server = `${PLUGIN_SERVER_PREFIX}${row.name}`;
       const result = await getMCPBridge().callTool(server, check.tool, check.input ?? {}, context, { server_id: server, tool_name: check.tool, arguments: check.input ?? {} });
       const envelope = result as { isError?: boolean; content?: Array<{ type: string; text?: string }>; structuredContent?: unknown };

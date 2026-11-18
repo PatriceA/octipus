@@ -10,10 +10,12 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
+import type { PluginProtectionApproval } from '@/shared/plugin-protection';
 import type { HostTokenGrant } from './host-api';
 
 const h = vi.hoisted(() => ({
   environments: [] as Array<Record<string, unknown>>,
+  approval: null as PluginProtectionApproval|null,
   settings: {} as Record<string, string>,
   enabled: true,
   deny: new Set<string>(),
@@ -35,7 +37,8 @@ vi.mock('@/security/execution-environments', async (orig) => {
   };
   return { ...real, executionEnvironmentFor: forCaller, configuredExecutionEnvironments: () => h.environments };
 });
-vi.mock('./service', () => ({ findRow: async () => ({ enabled: h.enabled, settings: h.settings }) }));
+vi.mock('@/db/repositories/plugin-protection-repository',()=>({pluginProtectionRepository:{get:async()=>h.approval}}));
+vi.mock('./service', () => ({ findRow: async () => ({ enabled: h.enabled, settings: h.settings, contentHash:`sha256:${'a'.repeat(64)}` }) }));
 vi.mock('@/security/permissions', () => ({
   getPermissionManager: () => ({ check: async (_u: string, tool: string, action: string) => ({ level: h.deny.has(`${tool}.${action}`) ? 'DENY' : 'ALLOW' }) }),
 }));
@@ -59,7 +62,7 @@ vi.mock('@/db/repositories/background-job-repository', () => ({
   },
 }));
 vi.mock('@/security/credential-connections', () => ({
-  connectionFor: async (id: string) => ({ id }),
+  connectionFor: async (id: string) => ({ id, http:{origin:'https://example.com',pathPrefix:'/api'} }),
   readBoundedResponse: async (r: { text: string }, max: number) => {
     if (Buffer.byteLength(r.text, 'utf8') > max) throw new Error('Connection response exceeded the supported size');
     return r.text;
@@ -142,6 +145,7 @@ beforeEach(() => {
   ];
   h.settings = { collector_roots: root, collector_connections: 'forge, tracker', collector_protection_level: '1' };
   h.enabled = true;
+  h.approval = null;
   h.deny.clear();
   h.pages.clear();
   h.fetchCalls.length = 0;
@@ -446,4 +450,28 @@ describe('pagination', () => {
     const ok = await collectEvidence(grant(), 'ws-a', collectorRequestSchema.parse({ environmentId: 'env-a', http: [{ id: 'h', connection: 'tracker', path: '/api/x', pagination: { type: 'none', itemsPointer: '' } }] }), new AbortController().signal);
     expect(ok.http[0]).toMatchObject({ complete: true, items: [{ key: 'ABC-1' }] });
   });
+});
+
+describe('owner-configured Internal destinations',()=>{
+ const approval=():PluginProtectionApproval=>({contentHash:`sha256:${'a'.repeat(64)}`,level:2,connections:['forge','tracker'].map(id=>({id,origin:'https://example.com',pathPrefix:'/api'})),approvedBy:'owner',approvedAt:'2026-11-18T00:00:00Z'});
+ test('the classification floor and real evidence collection follow approval without changing the package',async()=>{
+  const {resolvePolicy,callerOf}=await import('./host-collector');
+  const {protectionApprovalStamp}=await import('./protection-policy');
+  h.approval=approval();
+  expect((await resolvePolicy('release-reconcile',callerOf(grant(),'ws-a','env-a'))).level).toBe(2);
+  expect((await collect(request(),grant({dataApproval:protectionApprovalStamp(h.approval),maxProtection:2}))).complete).toBe(true);
+ });
+ test('a reused connection name with a changed destination never reaches the broker',async()=>{
+  const {protectionApprovalStamp}=await import('./protection-policy');
+  h.approval=approval();h.approval.connections[0].origin='https://different.example.com';
+  const result=await collect(request(),grant({dataApproval:protectionApprovalStamp(h.approval),maxProtection:2}));
+  expect(result.complete).toBe(false);expect(h.fetchCalls).toHaveLength(0);
+ });
+ test('withdrawing Internal approval during a run stops later authenticated fetches',async()=>{
+  const {protectionApprovalStamp}=await import('./protection-policy');
+  h.approval=approval();const tokenStamp=protectionApprovalStamp(h.approval);
+  h.afterFetch=()=>{h.approval={...approval(),level:1};};
+  const result=await collect(request(),grant({dataApproval:tokenStamp,maxProtection:2}));
+  expect(result.complete).toBe(false);expect(h.fetchCalls).toHaveLength(1);
+ });
 });

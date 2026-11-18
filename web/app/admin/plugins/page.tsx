@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { BarChart3, CircleCheck, Cpu, Power, Settings2, ShieldAlert, ShieldOff, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { CompanionServices } from '@/components/plugins/companion-services';
+import { PluginDataAccess } from '@/components/plugins/data-access';
 import { ConsentDialog, type ConsentSource } from '@/components/plugins/consent-dialog';
 import { FieldInputs, type FieldValues, fromFieldValues, problemsOf, toFieldValues } from '@/components/business/common';
 import { api } from '@/lib/api';
@@ -628,9 +629,11 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [configuring, setConfiguring] = useState(false);
+  const [dataAccess,setDataAccess] = useState(()=>typeof window!=='undefined'&&new URLSearchParams(window.location.search).get('dataAccess')===pkg.name);
   const [consenting, setConsenting] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('setup') === pkg.name);
   useEffect(() => {
     const url = new URL(window.location.href);
+    if(url.searchParams.get('dataAccess')===pkg.name){url.searchParams.delete('dataAccess');window.history.replaceState(window.history.state,'',url);}
     if (url.searchParams.get('setup') === pkg.name) { url.searchParams.delete('setup'); window.history.replaceState(window.history.state, '', url); }
   }, [pkg.name]);
   const [showUsage, setShowUsage] = useState(false);
@@ -694,6 +697,7 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
         >
           <BarChart3 className="w-3.5 h-3.5" /> usage
         </button>
+        {!inProcess && <button type="button" aria-label={`Data access for ${pkg.name}`} aria-expanded={dataAccess} onClick={()=>setDataAccess(v=>!v)} className="text-xs text-primary">Data access</button>}
         {!inProcess && <button
           type="button"
           onClick={() => setConfiguring((c) => !c)}
@@ -748,6 +752,7 @@ function PackageRow({ pkg }: { pkg: PluginPackageView }) {
       )}
       <ContentReview pkg={pkg} />
       <InProcessApproval pkg={pkg} />
+      {dataAccess && <PluginDataAccess pkg={pkg}/>}
       {configuring && <PackageConfig pkg={pkg} />}
       {showUsage && <UsagePanel pkg={pkg} />}
       {consenting && (

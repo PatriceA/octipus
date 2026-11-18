@@ -1,3 +1,4 @@
+vi.mock('@/db/repositories/plugin-protection-repository',()=>({pluginProtectionRepository:{get:async()=>null}}));
 /**
  * Per-host network for plugin packages (docs/PLUGIN-PACKAGES.md#network):
  * the egress proxy lets through only declared hosts, the server is pointed at
