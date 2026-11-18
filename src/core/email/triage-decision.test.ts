@@ -1,5 +1,5 @@
 /** Live decisions retain precedence while references are recorded for calibration. */
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 // Not under test here: the install-model gate (install-access.isolation.test.ts) lets these fake ids through.
 vi.mock('@/models/install-access', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/models/install-access')>()),
@@ -59,6 +59,7 @@ const { saveModelLabels, saveObservations } = await import('./triage-labels');
 const item: InboxItem = { id: 'm1', provider: 'google', from: { email: 'a@b.c' }, subject: 's', snippet: 'x', receivedAt: '', unread: true };
 
 describe('triageInbox with a decision model (live)', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
   beforeEach(() => { primary = { modelId: 'chat-model', name: 'chat-model' }; backup = null; answers = null; owner = {}; llmCalls = 0; llmFails = false; referencePrompt = ''; vi.mocked(recordShadow).mockClear(); vi.mocked(decide).mockClear(); vi.mocked(saveModelLabels).mockClear(); vi.mocked(saveObservations).mockClear(); });
 
   test('120 mails are triaged in batches of 30, all of them', async () => {
@@ -98,7 +99,7 @@ describe('triageInbox with a decision model (live)', () => {
     expect(new Set(logs.map(e => e.runId)).size).toBe(1);
     expect(JSON.stringify(logs)).not.toMatch(/PRIVATE_SUBJECT|PRIVATE_SNIPPET|a@b.c|"reason"/);
     // The training set gets Clef's answer and the reference label.
-    expect(vi.mocked(saveObservations).mock.calls[0][3]).toMatchObject({ m1: { priority: 'low', category: 'promotion', rubric: 'action-split-v3' } });
+    expect(vi.mocked(saveObservations).mock.calls[0][3]).toMatchObject({ m1: { priority: 'low', category: 'promotion', rubric: 'action-split-v4' } });
     expect(vi.mocked(saveModelLabels).mock.calls[0][3]).toMatchObject({ m1: { priority: 'high', category: 'work' } });
     await triageInbox('u', [item]);
     expect(new Set(vi.mocked(recordShadow).mock.calls.map(([e]) => e.runId)).size).toBe(2);
@@ -107,6 +108,7 @@ describe('triageInbox with a decision model (live)', () => {
   test('retains decision records and live answers when reference-only evaluation fails', async () => {
     answers = clef(0.05, 0.05, 'promotion', 0.9);
     llmFails = true;
+    vi.spyOn(Math, 'random').mockReturnValue(0); // audited
     expect((await triageInbox('u', [item])).m1.priority).toBe('low');
     expect(vi.mocked(recordShadow).mock.calls.some(([e]) => e.event === 'reference_failed')).toBe(true);
     answers = null;
@@ -115,13 +117,17 @@ describe('triageInbox with a decision model (live)', () => {
 
   test('confident decisions replace the LLM result; the gate is per question', async () => {
     answers = clef(0.9, 0.2, 'promotion', 0.9);
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    expect((await triageInbox('u', [item])).m1).toEqual({ priority: 'normal', category: 'promotion' });
+    expect(llmCalls).toBe(0); // decided, not audited: no LLM call
+    random.mockReturnValue(0); // audited: the LLM labels it, the decision still wins
     expect((await triageInbox('u', [item])).m1).toEqual({ priority: 'normal', category: 'promotion' });
     expect(llmCalls).toBe(1);
     const questions = vi.mocked(decide).mock.calls[0][2];
     expect(Object.keys(questions)).toEqual(['action', 'today', 'category']);
     expect(vi.mocked(decide).mock.calls[0][1]).toMatchObject({ mail: { subject: 's' } });
     const logs = vi.mocked(recordShadow).mock.calls.map(([entry]) => entry);
-    expect(logs.find(e => e.event === 'comparison')).toMatchObject({ priorityRubric: 'action-split-v3', selectedSource: 'decision', priorityAgreed: false, categoryAgreed: false });
+    expect(logs.find(e => e.event === 'comparison')).toMatchObject({ priorityRubric: 'action-split-v4', selectedSource: 'decision', priorityAgreed: false, categoryAgreed: false });
     // One answer under its threshold → the LLM's answer.
     answers = { ...clef(0.9, 0.2, 'promotion', 0.9), today: { type: 'noul', p: 0.4, confidence: 0.5 } };
     expect((await triageInbox('u', [item])).m1).toMatchObject({ priority: 'high', category: 'work' });

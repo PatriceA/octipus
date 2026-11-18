@@ -7,7 +7,7 @@
  * triage run, and the bulk labelling run). A user label wins everywhere: it is
  * never overwritten, and triage returns it instead of asking any model.
  */
-import { and, desc, eq, inArray, isNotNull, ne, or, sql } from 'drizzle-orm';
+import { type AnyColumn, and, desc, eq, inArray, isNotNull, ne, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { type ClefObservation, type EmailTriageLabel, emailTriageLabels } from '@/db/schema/email-triage-labels';
 import type { EmailProvider, EmailTriage, InboxItem } from './types';
@@ -93,15 +93,27 @@ const base = (userId: string, provider: EmailProvider, it: InboxItem) => ({
   subject: it.subject.slice(0, 500), snippet: it.snippet.slice(0, SNIPPET_CHARS),
 });
 
-/** Record Clef's answers; a mail seen again gets its latest answer. */
+/**
+ * Record Clef's answers; a mail seen again gets its latest answer. A model
+ * label from an older rubric answered a different question, so it is dropped
+ * with the old answer; the owner's label stands.
+ */
 export async function saveObservations(userId: string, provider: EmailProvider, items: InboxItem[], clef: Record<string, ClefObservation>): Promise<void> {
   const rows = items.filter(it => clef[it.id]).map(it => ({ ...base(userId, provider, it), clef: clef[it.id] }));
   if (!rows.length) return;
   await getDb().insert(emailTriageLabels).values(rows).onConflictDoUpdate({
     target: [emailTriageLabels.userId, emailTriageLabels.provider, emailTriageLabels.messageId],
-    set: { clef: sql`excluded.clef` },
+    set: {
+      clef: sql`excluded.clef`,
+      labelPriority: staleModelLabel(emailTriageLabels.labelPriority),
+      labelCategory: staleModelLabel(emailTriageLabels.labelCategory),
+      labelSource: staleModelLabel(emailTriageLabels.labelSource),
+      labelModel: staleModelLabel(emailTriageLabels.labelModel),
+      labeledAt: staleModelLabel(emailTriageLabels.labeledAt),
+    },
   });
 }
+const staleModelLabel = (column: AnyColumn) => sql`CASE WHEN ${emailTriageLabels.labelSource} = 'model' AND ${emailTriageLabels.clef}->>'rubric' IS DISTINCT FROM excluded.clef->>'rubric' THEN NULL ELSE ${column} END`;
 
 /** Record a reference model's labels; an owner label is left alone. */
 export async function saveModelLabels(userId: string, provider: EmailProvider, items: InboxItem[], labels: Record<string, EmailTriage>, model: string): Promise<void> {

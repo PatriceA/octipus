@@ -81,5 +81,9 @@ describe('label store', () => {
     // b and c: confident and agreeing (default threshold 0.7); a: owner-labelled; d: unsure.
     expect(review.items.map(i => i.messageId)).toEqual(['d']);
     expect(review.stats).toMatchObject({ labelledByOwner: 1, labelledByModel: 3 });
+
+    // A new rubric drops model labels from the old one; the owner's stays.
+    await store.saveObservations(owner, 'google', [a, b], { a: { ...clef('high', 0.9), rubric: 'r2' }, b: { ...clef('low', 0.9), rubric: 'r2' } });
+    expect((await store.reviewQueue(owner, 'r2')).stats).toMatchObject({ labelledByOwner: 1, labelledByModel: 2 });
   });
 });
