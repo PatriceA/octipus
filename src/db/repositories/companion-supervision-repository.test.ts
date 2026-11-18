@@ -329,15 +329,22 @@ test('input contracts reject hidden scope changes, forged origin and credential 
 
 test('starting a session and retrying the request creates one session, link and action', async () => {
   const goal = await service().createGoal(request());
-  const input = { requestKey: randomUUID(), expectedRevision: 0, modelName: 'fixture-model' };
+  const input = { requestKey: randomUUID(), expectedRevision: 0 };
   const [a, b] = await Promise.all([service().startSession(goal.id, input), service().startSession(goal.id, input)]);
   expect(a.id).toBe(b.id);
   expect(a.sessionId).toBe(b.sessionId);
   expect((await service().readGoal(goal.id)).links).toMatchObject([{ sessionId: a.sessionId, origin: 'created' }]);
   expect(await service().actions(goal.id)).toHaveLength(1);
   const session = await pg.query('SELECT context FROM sessions WHERE id=$1', [a.sessionId]);
-  expect(session.rows).toMatchObject([{ context: { companion: { modelName: 'fixture-model', goalId: goal.id } } }]);
-  await expect(service().startSession(goal.id, { ...input, modelName: 'other-model' })).rejects.toMatchObject({ code: 'conflict' });
+  // Project sessions route by the owner's topic lanes: no model is chosen or stored.
+  expect(session.rows).toMatchObject([{ context: { companion: { goalId: goal.id } } }]);
+  expect((session.rows[0] as { context: { companion: { modelName?: string } } }).context.companion.modelName).toBeUndefined();
+  await expect(service().startSession(goal.id, { ...input, projectPath: '/elsewhere' })).rejects.toMatchObject({ code: 'conflict' });
+  // A model name from an older client is ignored: the retry returns the same receipt.
+  expect((await service().startSession(goal.id, { ...input, modelName: 'fixture-model' })).id).toBe(a.id);
+  // A maintenance start may not reuse a project start's request key, or the reverse.
+  await expect(repository().startSession(goal.id, input, true, 'binding', undefined, 'fixture-model')).rejects.toMatchObject({ code: 'conflict' });
+  await expect(repository().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 1 }, true, 'binding')).rejects.toMatchObject({ code: 'conflict' });
 });
 
 test('source privacy survives goal creation, source deletion and later session creation', async () => {
@@ -346,7 +353,7 @@ test('source privacy survives goal creation, source deletion and later session c
   expect(goal).toMatchObject({ protectionLevel: 4, flowLabel: { secret: 'source-env' } });
   await pg.query('DELETE FROM pipelines WHERE id=$1', [pipelineId]);
   await pg.query('DELETE FROM sessions WHERE id=$1', [sessionId]);
-  const action = await service().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0, modelName: 'fixture-model' });
+  const action = await service().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0 });
   expect(action).toMatchObject({ protectionLevel: 4, flowLabel: { secret: 'source-env' } });
   expect((await pg.query('SELECT protection_level,flow_label FROM sessions WHERE id=$1', [action.sessionId])).rows)
     .toMatchObject([{ protection_level: 4, flow_label: { secret: 'source-env' } }]);
@@ -390,7 +397,7 @@ async function waitAction(id: string, status: string) {
 
 test('two dispatchers claim one action once and save its result with source provenance', async () => {
   const goal = await service().createGoal(request());
-  const action = await service().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0, modelName: 'fixture-model' });
+  const action = await service().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0 });
   await Promise.all([new CompanionDispatcher().tick(), new CompanionDispatcher().tick()]);
   await waitAction(action.id, 'completed');
   expect(runtime.handle).toHaveBeenCalledTimes(1);
@@ -399,7 +406,7 @@ test('two dispatchers claim one action once and save its result with source prov
 
 test('clearing a target conversation cancels queued work instead of replaying it into the new generation', async () => {
   const goal = await service().createGoal(request());
-  const action = await service().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0, modelName: 'fixture-model' });
+  const action = await service().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0 });
   await pg.query('UPDATE sessions SET context=$1 WHERE id=$2', [JSON.stringify({ conversationGeneration: randomUUID() }), action.sessionId]);
   await new CompanionDispatcher().tick();
   await waitAction(action.id, 'cancelled');
@@ -408,7 +415,7 @@ test('clearing a target conversation cancels queued work instead of replaying it
 
 test('expired execution receipts become unknown and block later turns in the same session', async () => {
   const goal = await service().createGoal(request());
-  const first = await service().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0, modelName: 'fixture-model' });
+  const first = await service().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0 });
   await pg.query("UPDATE companion_actions SET status='running',lease_until=now()-interval '1 minute' WHERE id=$1", [first.id]);
   const next = await service().messageSession(goal.id, { requestKey: randomUUID(), sessionId: first.sessionId, message: 'Continue' });
   await new CompanionDispatcher().tick();
@@ -419,9 +426,9 @@ test('expired execution receipts become unknown and block later turns in the sam
 
 test('live steering is delivered even when both execution slots are occupied', async () => {
   const goal = await service().createGoal(request());
-  const first = await service().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0, modelName: 'fixture-model' });
+  const first = await service().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0 });
   const other = await service().createGoal(request());
-  const second = await service().startSession(other.id, { requestKey: randomUUID(), expectedRevision: 0, modelName: 'fixture-model' });
+  const second = await service().startSession(other.id, { requestKey: randomUUID(), expectedRevision: 0 });
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
   runtime.handle.mockImplementation(async (_session, _user, _message, _channel, _files, _mode, beforeStart) => { await beforeStart(); await held; return { outcome: 'success', response: 'Done' }; });
@@ -462,7 +469,7 @@ test('adopted sessions expose bounded history and live status only within their 
 
 test('completion cannot release work with pending actions or live workers', async () => {
   const goal = await service().createGoal(request());
-  const action = await service().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0, modelName: 'fixture-model' });
+  const action = await service().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0 });
   const evidenceId = randomUUID();
   await pg.query('INSERT INTO verification_evidence(id,session_id,passed) VALUES ($1,$2,true)', [evidenceId, action.sessionId]);
   const complete = () => service().updateGoal(goal.id, { expectedRevision: 1, state: 'completed', evidence: [{ criterionIndex: 0, evidenceId, summary: 'Checked' }] });
@@ -555,7 +562,7 @@ test('automatic coordination cannot reactivate or replace deliberately paused wo
   await recordCompanionOwnerStop(sessionId, userId);
   expect((await pg.query('SELECT status FROM sessions WHERE id=$1', [sessionId])).rows).toEqual([{ status: 'paused' }]);
   await expect(repository().controlSession(goal.id, sessionId, 'active', true)).rejects.toMatchObject({ code: 'conflict' });
-  await expect(repository().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 1, modelName: 'api' }, true)).rejects.toMatchObject({ code: 'conflict' });
+  await expect(repository().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 1 }, true)).rejects.toMatchObject({ code: 'conflict' });
   await repository().controlSession(goal.id, sessionId, 'active', false);
   expect((await pg.query('SELECT status FROM sessions WHERE id=$1', [sessionId])).rows).toEqual([{ status: 'active' }]);
 });
@@ -607,7 +614,7 @@ test('revoked automatic delegation cancels queued work without cancelling owner 
   const settings = await repository().saveSettings({ enabled: true, modelName: 'local', autonomy: 'coordinate' }, 0);
   const auto = new CompanionSupervisionRepository({ userId, workspaceId }, connection, { settingsId: settings.settingsId, revision: settings.revision });
   const goal = await service().createGoal(request());
-  const action = await auto.startSession(goal.id, { expectedRevision: 0, requestKey: randomUUID(), modelName: 'fixture-model' }, true);
+  const action = await auto.startSession(goal.id, { expectedRevision: 0, requestKey: randomUUID() }, true);
   await repository().saveSettings({ enabled: false }, settings.revision);
   await expect(auto.queueMessage(goal.id, { sessionId: action.sessionId, requestKey: randomUUID(), message: 'continue' })).rejects.toMatchObject({ code: 'conflict' });
   await new CompanionDispatcher().tick();
@@ -661,7 +668,7 @@ test('interrupted supervisor wake reconciles without replaying an active root', 
 
 test('unknown effects are inspected and reconciled before later session work can dispatch', async () => {
   const goal = await service().createGoal(request());
-  const action = await repository().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0, modelName: 'fixture-model' });
+  const action = await repository().startSession(goal.id, { requestKey: randomUUID(), expectedRevision: 0 });
   await pg.query("UPDATE companion_actions SET status='unknown' WHERE id=$1", [action.id]);
   const incident = (await service().detectIncident(goal.id, action.sessionId))!;
   const evidence = randomUUID();
@@ -693,8 +700,8 @@ test('goal dependencies reject cycles and block only dependent work', async () =
   await service().updateGoal(dependent.id,{expectedRevision:0,dependencies:[prerequisite.id]});
   expect((await service().readGoal(dependent.id)).goal.dependencies).toEqual([prerequisite.id]);
   await expect(service().updateGoal(prerequisite.id,{expectedRevision:0,dependencies:[dependent.id]})).rejects.toMatchObject({code:'conflict'});
-  await repository().startSession(dependent.id,{expectedRevision:1,requestKey:randomUUID(),modelName:'fixture-model'});
-  const action=await repository().startSession(independent.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model'});
+  await repository().startSession(dependent.id,{expectedRevision:1,requestKey:randomUUID()});
+  const action=await repository().startSession(independent.id,{expectedRevision:0,requestKey:randomUUID()});
   await new CompanionDispatcher().tick();await vi.waitFor(()=>expect(runtime.handle).toHaveBeenCalledTimes(1));
   expect(runtime.handle.mock.calls[0][0]).toBe(action.sessionId);
   expect((await service().actions(dependent.id))[0]).toMatchObject({status:'queued',result:expect.stringContaining('prerequisite')});
@@ -702,7 +709,7 @@ test('goal dependencies reject cycles and block only dependent work', async () =
 
 test('billable token budget preserves queued state without starting another worker',async()=>{
   await repository().saveSettings({enabled:false,dailyTokenBudget:1000},0);
-  const goal=await service().createGoal(request({tokenBudget:1000}));const action=await repository().startSession(goal.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model'});
+  const goal=await service().createGoal(request({tokenBudget:1000}));const action=await repository().startSession(goal.id,{expectedRevision:0,requestKey:randomUUID()});
   await pg.query("INSERT INTO agents(id,session_id,user_id,workspace_id,status,total_tokens,billable_tokens) VALUES('spent',$1,$2,$3,'completed',200000,1000)",[action.sessionId,userId,workspaceId]);
   await new CompanionDispatcher().tick();expect(runtime.handle).not.toHaveBeenCalled();
   expect((await service().actions(goal.id))[0]).toMatchObject({status:'queued',result:expect.stringContaining('budget exhausted')});
@@ -713,8 +720,8 @@ test('checkout claims serialize supervised writers and release after known compl
   const {mkdirSync}=await import('node:fs');mkdirSync(join(checkout,'.git'));
   try {
     const first=await service().createGoal(request()),second=await service().createGoal(request());
-    const a=await repository().startSession(first.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model',projectPath:checkout});
-    await repository().startSession(second.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model',projectPath:checkout});
+    const a=await repository().startSession(first.id,{expectedRevision:0,requestKey:randomUUID(),projectPath:checkout});
+    await repository().startSession(second.id,{expectedRevision:0,requestKey:randomUUID(),projectPath:checkout});
     let finish!:()=>void;const blocked=new Promise<void>(resolve=>{finish=resolve;});
     runtime.handle.mockImplementationOnce(async(_s,_u,_m,_c,_f,_o,before)=>{await before();await blocked;return{outcome:'success',response:'done'};});
     const dispatcher=new CompanionDispatcher();await dispatcher.tick();await vi.waitFor(()=>expect(runtime.handle).toHaveBeenCalledTimes(1));
@@ -736,8 +743,8 @@ test('quiet hours delay app feedback and durable notification IDs prevent duplic
 
 test('running goal reservations prevent a second worker exceeding the goal cap',async()=>{
  const goal=await service().createGoal(request({tokenBudget:1000}));
- const first=await repository().startSession(goal.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model'});
- await repository().startSession(goal.id,{expectedRevision:1,requestKey:randomUUID(),modelName:'fixture-model'});
+ const first=await repository().startSession(goal.id,{expectedRevision:0,requestKey:randomUUID()});
+ await repository().startSession(goal.id,{expectedRevision:1,requestKey:randomUUID()});
  let finish!:()=>void;const blocked=new Promise<void>(resolve=>{finish=resolve;});
  runtime.handle.mockImplementationOnce(async(_s,_u,_m,_c,_f,_o,before)=>{await before();await blocked;return{outcome:'success',response:'done'};});
  await new CompanionDispatcher().tick();await vi.waitFor(()=>expect(runtime.handle).toHaveBeenCalledTimes(1));
@@ -750,14 +757,14 @@ test('adopted active pipelines hold their checkout before a new dispatch claim e
  const checkout=mkdtempSync(join(tmpdir(),'companion-adopted-'));try{
   const original=await service().createGoal(request());await service().adoptExecution(original.id,adoption());
   await pg.query('UPDATE sessions SET context=$1 WHERE id=$2',[JSON.stringify({devMode:true,projectPath:checkout}),sessionId]);
-  const next=await service().createGoal(request());await repository().startSession(next.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model',projectPath:checkout});
+  const next=await service().createGoal(request());await repository().startSession(next.id,{expectedRevision:0,requestKey:randomUUID(),projectPath:checkout});
   await new CompanionDispatcher().tick();expect(runtime.handle).not.toHaveBeenCalled();
   expect((await service().actions(next.id))[0]).toMatchObject({status:'queued',result:expect.stringContaining('checkout')});
  }finally{rmSync(checkout,{recursive:true,force:true});}
 });
 
 test('daily token accounting charges today’s usage from a worker started yesterday',async()=>{
- const goal=await service().createGoal(request());const action=await repository().startSession(goal.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model'});
+ const goal=await service().createGoal(request());const action=await repository().startSession(goal.id,{expectedRevision:0,requestKey:randomUUID()});
  await pg.query("INSERT INTO agents(id,session_id,user_id,workspace_id,status,created_at,billable_tokens) VALUES('overnight',$1,$2,$3,'running',now()-interval '1 day',9000)",[action.sessionId,userId,workspaceId]);
  await pg.query("INSERT INTO cost_log(user_id,workspace_id,agent_id,session_id,input_tokens,output_tokens,cached_input_tokens) VALUES($1,$2,'overnight',$3,500,500,100)",[userId,workspaceId,action.sessionId]);
  const {companionSpend}=await import('@/core/companion/scheduling');expect(await companionSpend({userId,workspaceId},goal.id)).toBe(900);
@@ -767,7 +774,7 @@ test('interactive controller chats do not exhaust the unattended dispatch pool',
   const settings = await repository().saveSettings({ enabled:true,modelName:'local',autonomy:'coordinate',dailyTokenBudget:1000,turnTokenBudget:1000 },0);
   await pg.query('INSERT INTO cost_log(user_id,workspace_id,session_id,input_tokens,output_tokens) VALUES($1,$2,$3,500000,500000)',[userId,workspaceId,settings.supervisorSessionId]);
   const goal=await service().createGoal(request());
-  const action=await repository().startSession(goal.id,{expectedRevision:0,requestKey:randomUUID(),modelName:'fixture-model'});
+  const action=await repository().startSession(goal.id,{expectedRevision:0,requestKey:randomUUID()});
   const {companionSpend,prepareCompanionDispatch}=await import('@/core/companion/scheduling');
   expect(await companionSpend({userId,workspaceId})).toBe(0);
   expect(await db.transaction(tx=>prepareCompanionDispatch(tx as never,action,{userId,workspaceId}))).toEqual({tokenCap:null});
@@ -837,7 +844,7 @@ test('protected document refs survive delegation and permit the exact source fil
   await pg.query('UPDATE sessions SET context=$1,protection_level=4,flow_label=$2 WHERE id=$3',[JSON.stringify({devMode:true,projectPath:source}),JSON.stringify({secret:'protected document'}),sessionId]);
   const input=request({sourceSessionId:sessionId,attachments:[{path:'brief.pdf',protectionLevel:4}]});
   const goal=await service().createGoal(input);expect((await service().createGoal(input)).id).toBe(goal.id);
-  const action=await repository().startSession(goal.id,{requestKey:randomUUID(),expectedRevision:0,modelName:'fixture-model',projectPath:target});
+  const action=await repository().startSession(goal.id,{requestKey:randomUUID(),expectedRevision:0,projectPath:target});
   expect(action.attachments).toEqual([{path,protectionLevel:4}]);expect(action.protectionLevel).toBe(4);
   const row=(await pg.query<{context:Record<string,unknown>}>('SELECT context FROM sessions WHERE id=$1',[action.sessionId])).rows[0];
   const {WorkspaceFS}=await import('@/security/workspace-fs');
@@ -1151,6 +1158,6 @@ test('choosing an interactive Companion model creates its chat without enabling 
 test('Companion does not request introductory briefings for sessions it created',async()=>{
  await repository().saveSettings({enabled:true,modelName:'api',autonomy:'coordinate'},0);
  const goal=await service().createGoal(request());
- const created=await repository().startSession(goal.id,{requestKey:randomUUID(),modelName:'api',expectedRevision:goal.revision});
+ const created=await repository().startSession(goal.id,{requestKey:randomUUID(),expectedRevision:goal.revision});
  await expect(repository().requestBriefing(goal.id,{sessionId:created.sessionId,requestKey:randomUUID()})).rejects.toThrow('already has its starting context');
 });

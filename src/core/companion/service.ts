@@ -2,7 +2,7 @@ import { CompanionSupervisionRepository } from '@/db/repositories/companion-supe
 import type { CompanionBasisRecord, CompanionScope } from '@/shared/companion-supervision';
 import { CompanionSupervisionError, startCompanionSessionSchema } from '@/shared/companion-supervision';
 import { resolveModel } from '@/models/resolve-model';
-import { canServeText } from '@/models/topics';
+import { isCompanionControllerModel } from './model-binding';
 
 /** Durable responsibility only. Starting/stopping execution requires the M2 dispatcher. */
 export class CompanionService {
@@ -17,28 +17,31 @@ export class CompanionService {
   readGoal(id: string) { return this.repo.read(id); }
   adoptExecution(id: string, input: unknown) { return this.repo.adopt(id, input); }
   updateGoal(id: string, input: unknown) { return this.repo.update(id, input); }
+  /** Project sessions route their model by the owner's topic lanes, like any session they start. */
   async startSession(id: string, input: unknown, automatic = false, basis?: CompanionBasisRecord) {
-    const data = startCompanionSessionSchema.parse(input);
-    const model = await resolveModel({ userId: this.repo.scope.userId, name: data.modelName });
-    if (!model || !canServeText(model) || !(model.supportsTools || model.provider === 'cli') || /reasoner|thinking/.test(model.modelId)) throw new CompanionSupervisionError('conflict', 'Choose an available text model with tools for this session');
-    return this.repo.startSession(id, { ...data, modelName: model.name }, automatic, undefined, basis);
+    return this.repo.startSession(id, startCompanionSessionSchema.parse(input), automatic, undefined, basis);
   }
   async startMaintenance(id: string, input: unknown, basis?: CompanionBasisRecord) {
     const runtime = (await import('./maintenance')).maintenanceRuntime(this.repo.scope);
     const data = startCompanionSessionSchema.parse(input);
     const settings = await this.repo.readSettings();
     if (!settings.enabled || settings.autonomy !== 'repair') throw new CompanionSupervisionError('conflict', 'Enable repair autonomy before starting maintenance');
+    // The restricted maintenance toolbox is enforced only on API/local models, so maintenance
+    // runs on the owner's Companion model (Models → Companion model), never a topic lane that
+    // may resolve to a native CLI. Checked first: it needs only the settings.
+    const model = settings.modelName.trim() ? await resolveModel({ userId: this.repo.scope.userId, name: settings.modelName }) : null;
+    if (!model || !isCompanionControllerModel(model))
+      throw new CompanionSupervisionError('conflict', 'Maintenance runs on the Companion model; set an API or local tool-capable Companion model under Models');
+    // A retry after a lost response gets its own receipt back (the repository's request-key
+    // check), not the reuse refusal below.
+    const retried = (await this.repo.actions(id)).find(action => action.requestKey === data.requestKey);
+    if (retried) return this.repo.startSession(id, { ...data, projectPath: undefined }, true, runtime.binding, basis, model.name);
     const detail = await this.repo.read(id);
-    for (const link of detail.links) {
-      const { sessionRepository } = await import('@/db/repositories/session-repository');
-      const existing=link.active?(await sessionRepository.findById(link.sessionId))?.context?.companionMaintenance:undefined;
-      if (existing?.binding===runtime.binding && existing.authorityRevision===settings.revision)
-        throw new CompanionSupervisionError('conflict', 'Reuse the existing maintenance session');
-    }
-    const model = await resolveModel({ userId: this.repo.scope.userId, name: data.modelName });
-    if (!model || model.provider === 'cli' || !model.supportsTools || !canServeText(model) || /reasoner|thinking/.test(model.modelId))
-      throw new CompanionSupervisionError('conflict', 'Choose an API or local tool-capable model for scoped maintenance');
-    return this.repo.startSession(id, { ...data, modelName: model.name, projectPath: undefined }, true, runtime.binding, basis);
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const linked = await Promise.all(detail.links.filter(link => link.active).map(link => sessionRepository.findById(link.sessionId)));
+    if (linked.some(session => session?.context?.companionMaintenance?.binding === runtime.binding && session.context.companionMaintenance.authorityRevision === settings.revision))
+      throw new CompanionSupervisionError('conflict', 'Reuse the existing maintenance session');
+    return this.repo.startSession(id, { ...data, projectPath: undefined }, true, runtime.binding, basis, model.name);
   }
   markBriefingStart(id:string,actionId:string){return this.repo.markBriefingStart(id,actionId);}
   requestBriefing(id:string,input:{sessionId:string;requestKey:string;refresh?:boolean}){return this.repo.requestBriefing(id,input);}
@@ -61,8 +64,8 @@ export class CompanionService {
     const data = companionSettingsSchema.parse(input);
     if (data.enabled || data.modelName.trim()) {
       const model = await resolveModel({ userId: this.repo.scope.userId, name: data.modelName });
-      if (!model || model.provider === 'cli' || !model.supportsTools || !canServeText(model) || /reasoner|thinking/.test(model.modelId))
-        throw new CompanionSupervisionError('conflict', 'Choose an API or local text model with tools for the supervisor. Project sessions can use CLI models.');
+      if (!model || !isCompanionControllerModel(model))
+        throw new CompanionSupervisionError('conflict', 'Choose an API or local text model with tools for the supervisor. Project sessions use your topic routing.');
       data.modelName = model.name;
     }
     return this.repo.saveSettings(data, expectedRevision);

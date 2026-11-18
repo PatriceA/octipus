@@ -57,12 +57,20 @@ export const companionSettingsSchema = z.object({
 }).strict();
 export type CompanionSettingsInput = z.infer<typeof companionSettingsSchema>;
 
-export const startCompanionSessionSchema = z.object({
+/**
+ * A project session Companion starts routes its model by the owner's topic
+ * lanes on every turn, exactly like a session the owner starts: there is no
+ * model to choose here.
+ */
+const startCompanionSessionFields = z.object({
   requestKey: z.uuid(), expectedRevision: z.number().int().min(0),
-  modelName: z.string().trim().min(1).max(200),
   projectPath: z.string().min(1).max(2000).optional(),
   sourceSessionId: z.uuid().optional(),
 }).strict();
+/** A `modelName` from an older client or an earlier turn is dropped, so retries and stale tabs keep working. */
+export const startCompanionSessionSchema = z.preprocess(
+  value => value && typeof value === 'object' && 'modelName' in value ? (({ modelName: _ignored, ...rest }) => rest)(value as Record<string, unknown>) : value,
+  startCompanionSessionFields);
 export const companionSessionMessageSchema = z.object({
   requestKey: z.uuid(), sessionId: z.uuid(),
   briefingId: z.uuid().optional().describe("Completed session briefing receipt. Read its full report before sending project instructions."),
