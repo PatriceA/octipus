@@ -26,7 +26,6 @@ function CompanionWorkspacePage() {
   const [selected, setSelected] = useState<string | null>(() => { const id = new URLSearchParams(window.location.search).get('goal'); return id && /^[0-9a-f-]{36}$/i.test(id) ? id : null; });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [modelName, setModelName] = useState('');
   const [projectPath, setProjectPath] = useState('');
   const [sessionId, setSessionId] = useState('');
   const [message, setMessage] = useState('');
@@ -103,12 +102,12 @@ function CompanionWorkspacePage() {
           </div>)}</div>
           {editable && goal.state !== 'paused' && <>
             <form className="space-y-2" onSubmit={event => { event.preventDefault(); void change(() => postIntent(`/companion/goals/${goal.id}/sessions`, {
-              expectedRevision: goal.revision, modelName, ...(projectPath ? { projectPath } : {}),
-            }, ['start', goal.id, modelName, projectPath])); }}>
+              expectedRevision: goal.revision, ...(projectPath ? { projectPath } : {}),
+            }, ['start', goal.id, projectPath])); }}>
               <h3>Start a project session</h3>
-              <label className="block">Model<select className={field} value={modelName} onChange={event => setModelName(event.target.value)} required><option value="">Choose a model</option>{models.data?.models.filter(model => model.isEnabled && (model.supportsTools || model.provider === 'cli') && !/ocr|embed|reasoner|thinking/i.test(model.modelId)).map(model => <option key={model.name} value={model.name}>{model.name}</option>)}</select></label>
+              <p className="text-sm text-on-surface-variant">The session uses your topic routing, like any session you start.</p>
               <label className="block">Project directory (optional)<input className={field} value={projectPath} onChange={event => setProjectPath(event.target.value)} /></label>
-              <button className={button} disabled={busy || !modelName}>Start session</button>
+              <button className={button} disabled={busy}>Start session</button>
             </form>
             <form className="space-y-2" onSubmit={event => { event.preventDefault(); void change(() => api.post(`/companion/goals/${goal.id}/adopt`, { expectedRevision: goal.revision, sessionId, purpose: goal.outcome })); }}>
               <label className="block">Adopt an existing session<select className={field} value={sessionId} onChange={event => setSessionId(event.target.value)} required><option value="">Choose a session</option>{sessions.data?.sessions.map(item => <option key={item.id} value={item.id}>{item.title || item.id}</option>)}</select></label>

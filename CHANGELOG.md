@@ -7,6 +7,14 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Companion's project sessions follow your topic routing.** Companion no
+  longer picks a model by name when it starts a project session (it had no
+  list to choose from and could land on any enabled model, a test model
+  included). The session routes by your topic lanes on every turn, like one you
+  start yourself; the Companion page's start form no longer asks for a model.
+  Maintenance sessions run on the Companion model. Sessions Companion started
+  earlier switch to topic routing on their next turn.
+
 - **Plugin Data access:** admins can approve Internal data for an installed package and its selected named connections without editing or re-signing plugin code. The content-bound approval uses a protected Octipus-rendered tools view, preserves saved records when access changes, and requires review after a package or connection destination changes. Agent guidance is in `docs/PLUGIN-DATA-ACCESS.md`.
 
 - **Accepted for one week: picomatch ReDoS (GHSA-fc5q-39xc-vjpf).** No fixed

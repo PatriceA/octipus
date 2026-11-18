@@ -283,9 +283,12 @@ export class CompanionSupervisionRepository {
     });
   }
 
-  async startSession(id: string, input: unknown, automatic = false, maintenanceBinding?: string, basis?: CompanionBasisRecord) {
+  /** `maintenanceModel` binds a maintenance session to the Companion model; project sessions route by topic. */
+  async startSession(id: string, input: unknown, automatic = false, maintenanceBinding?: string, basis?: CompanionBasisRecord, maintenanceModel?: string) {
     const data = startCompanionSessionSchema.parse(input);
     assertNoCredentialTemplates(data);
+    // A maintenance session always carries the Companion model; a project session never does.
+    if (!!maintenanceBinding !== !!maintenanceModel) return fail('conflict', 'A maintenance session needs its Companion model, and only maintenance sessions take one');
     return this.db().transaction(async tx => {
       await this.assertScope(tx);
       await this.assertAuthority(tx);
@@ -295,7 +298,7 @@ export class CompanionSupervisionRepository {
       const [existing] = await tx.select().from(companionActions).where(and(eq(companionActions.goalId, id), eq(companionActions.requestKey, data.requestKey)));
       if (existing) {
         const [session] = await tx.select({ context: sessions.context }).from(sessions).where(eq(sessions.id, existing.sessionId));
-        if (existing.kind !== 'start_session' || session?.context?.companion?.modelName !== data.modelName || session.context.projectPath !== data.projectPath)
+        if (existing.kind !== 'start_session' || session?.context?.projectPath !== data.projectPath || !!session?.context?.companionMaintenance !== !!maintenanceBinding)
           return fail('conflict', 'Request key belongs to a different session action');
         return existing;
       }
@@ -323,7 +326,7 @@ export class CompanionSupervisionRepository {
       const level = Math.max(goal.protectionLevel, sourceLabels?.protectionLevel ?? 1);
       await tx.insert(sessions).values({ id: sessionId, ...this.scope, title: goal.title, channelType: 'webchat', channelId: `companion:${goal.id}`,
         pinned: true,
-        protectionLevel: level, flowLabel: { ...goal.flowLabel, ...sourceLabels?.flowLabel }, context: { companion: { goalId: goal.id, modelName: data.modelName, sourceFiles:goal.attachments },
+        protectionLevel: level, flowLabel: { ...goal.flowLabel, ...sourceLabels?.flowLabel }, context: { companion: { goalId: goal.id, ...(maintenanceBinding && maintenanceModel ? { modelName: maintenanceModel } : {}), sourceFiles:goal.attachments },
           ...(maintenanceBinding ? { companionMaintenance: { binding: maintenanceBinding, authorityRevision: maintenanceSettings!.revision, ...repair } } : {}),
           ...(data.projectPath ? { devMode: true, projectPath: data.projectPath } : {}) } });
       await tx.insert(companionSessionLinks).values({ goalId: id, sessionId, origin: 'created', ownership: 'owner', purpose: goal.outcome });

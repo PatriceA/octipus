@@ -32,7 +32,7 @@ beforeAll(async()=>{
  await repo.saveSettings({enabled:true,modelName:'fixture-local',autonomy:'repair',quietHoursStart:0,quietHoursEnd:0},0);
  const goal=await repo.create({requestKey:randomUUID(),title:'Repair a runtime',request:'Repair and verify the configured runtime',outcome:'The affected runtime works',acceptanceCriteria:['Fresh gate passes']});goalId=goal.id;
  const {maintenanceRuntime}=await import('./maintenance');
- const action=await repo.startSession(goal.id,{requestKey:randomUUID(),expectedRevision:0,modelName:'fixture-local'},true,maintenanceRuntime({userId,workspaceId}).binding);sessionId=action.sessionId;
+ const action=await repo.startSession(goal.id,{requestKey:randomUUID(),expectedRevision:0},true,maintenanceRuntime({userId,workspaceId}).binding,undefined,'fixture-local');sessionId=action.sessionId;
  context={id:'maintenance-fixture',sessionId,userId,workspaceId,root:true,role:'general',topic:'general',model:'fixture-local',space:null,trigger:'monitor',funding:'own',status:'running',createdAt:new Date(),updatedAt:new Date(),metadata:{}};
  const {agents}=await import('@/db/schema/agents');await getDb().insert(agents).values({id:context.id,sessionId,userId,workspaceId,role:'general',status:'running'});
  execFileSync('git',['init','-q',root]);writeFileSync(join(root,'source.txt'),'source-v1');
@@ -68,7 +68,7 @@ test.skipIf(!sandboxAvailable)('a runtime blocker survives restart, is repaired,
  const {CompanionSupervisionRepository}=await import('@/db/repositories/companion-supervision-repository');
  let repo=new CompanionSupervisionRepository({userId,workspaceId});
  const detail=await repo.read(goalId);
- const project=await repo.startSession(goalId,{expectedRevision:detail.goal.revision,requestKey:randomUUID(),modelName:'fixture-local',projectPath:root});
+ const project=await repo.startSession(goalId,{expectedRevision:detail.goal.revision,requestKey:randomUUID(),projectPath:root});
  await repo.authorizeGoal(goalId,{executionScope:'run',repoPath:root,overnight:true},(await repo.read(goalId)).goal.revision);
  const {agents}=await import('@/db/schema/agents');
  await getDb().insert(agents).values({id:'failed-sdk-gate',sessionId:project.sessionId,userId,workspaceId,role:'qa',status:'failed',error:'SDK location not found: required runtime-sdk is missing'});
@@ -126,12 +126,12 @@ test.skipIf(!sandboxAvailable)('engine observes a persisted blocker after restar
    if(sid===settings.supervisorSessionId){
     const detail=await repo.read(goal.id);const actions=await repo.actions(goal.id);
     const original=detail.links.find(link=>link.purpose===goal.outcome && link.origin==='created' && !actions.some(action=>action.sessionId===link.sessionId&&action.incidentId));
-    if(!detail.links.length){await call('start_session',{id:goal.id,input:{requestKey:randomUUID(),expectedRevision:detail.goal.revision,modelName:'fixture-local',projectPath:projectRoot},basis:{source:'goal',quote:'Finish the milestone'}});}
+    if(!detail.links.length){await call('start_session',{id:goal.id,input:{requestKey:randomUUID(),expectedRevision:detail.goal.revision,projectPath:projectRoot},basis:{source:'goal',quote:'Finish the milestone'}});}
     else if(original&&actions.some(action=>action.status==='failed')){
      const incident=await repo.detectIncident(goal.id,original.sessionId);
      if(incident?.state==='observed'){
       await call('advance_incident',{id:goal.id,incidentId:incident.id,expectedRevision:incident.revision,strategy:'Restore the runtime prerequisite through configured maintenance and verify the original sandbox'});
-      await call('start_maintenance',{id:goal.id,input:{requestKey:randomUUID(),expectedRevision:(await repo.read(goal.id)).goal.revision,modelName:'fixture-local'},basis:{source:'goal',quote:'Finish the milestone'}});
+      await call('start_maintenance',{id:goal.id,input:{requestKey:randomUUID(),expectedRevision:(await repo.read(goal.id)).goal.revision},basis:{source:'goal',quote:'Finish the milestone'}});
      }else if(incident?.state==='repairing'&&actions.some(action=>action.incidentId===incident.id&&action.status==='completed')){
       const proof=await call('verify_incident',{id:goal.id,incidentId:incident.id,command:'test -f engine-sdk',cwd:projectRoot}) as {evidenceId:string;passed:boolean};expect(proof.passed).toBe(true);
       await call('advance_incident',{id:goal.id,incidentId:incident.id,expectedRevision:incident.revision+1,evidenceId:proof.evidenceId});
@@ -164,6 +164,10 @@ test.skipIf(!sandboxAvailable)('engine observes a persisted blocker after restar
  await vi.waitFor(async()=>{await dispatcher.tick();expect((await repo.read(goal.id)).goal.state).toBe('completed');},{timeout:15000,interval:30});
  expect(continuations).toBe(1);expect((await repo.incidents(goal.id))[0].state).toBe('resolved');
  expect((await repo.read(goal.id)).links).toHaveLength(2);
+ const linked=await Promise.all((await repo.read(goal.id)).links.map(async link=>(await getDb().select({context:sessions.context}).from(sessions).where(eq(sessions.id,link.sessionId)))[0].context));
+ // Project work routes by topic; only maintenance runs on the Companion model.
+ expect(linked.filter(context=>!context?.companionMaintenance).map(context=>context?.companion?.modelName)).toEqual([undefined]);
+ expect(linked.filter(context=>context?.companionMaintenance).map(context=>context?.companion?.modelName)).toEqual(['fixture-local']);
  await vi.waitFor(()=>expect(agentBoundary.publish).toHaveBeenCalledTimes(1),{timeout:5000,interval:30});
  agentBoundary.handle.mockReset();
 });
@@ -172,9 +176,9 @@ test('activation completion atomically retains captured resume intent across ano
  const {getDb,closeDb,initializeDb}=await import('@/db/postgres');const {eq}=await import('drizzle-orm');
  const {CompanionSupervisionRepository}=await import('@/db/repositories/companion-supervision-repository');const repo=new CompanionSupervisionRepository({userId,workspaceId});
  const goal=await repo.create({requestKey:randomUUID(),title:'Activation recovery',request:'Preserve and continue the captured pipeline',outcome:'Captured work continued',acceptanceCriteria:['Run complete']});
- const work=await repo.startSession(goal.id,{requestKey:randomUUID(),expectedRevision:0,modelName:'fixture-local',projectPath:root});
+ const work=await repo.startSession(goal.id,{requestKey:randomUUID(),expectedRevision:0,projectPath:root});
  const settings=await repo.readSettings();const {maintenanceRuntime}=await import('./maintenance');const binding=maintenanceRuntime({userId,workspaceId}).binding;
- const maintenance=await repo.startSession(goal.id,{requestKey:randomUUID(),expectedRevision:1,modelName:'fixture-local'},true,binding);
+ const maintenance=await repo.startSession(goal.id,{requestKey:randomUUID(),expectedRevision:1},true,binding,undefined,'fixture-local');
  const {pipelineRepository}=await import('@/db/repositories/pipeline-repository');
  const run=await pipelineRepository.create({userId,workspaceId,sessionId:work.sessionId,rootAgentId:'activation-fixture',title:'Captured run',type:'development',status:'paused'});
  const {companionActivations,companionActions}=await import('@/db/schema/companion-supervision');const id=randomUUID();

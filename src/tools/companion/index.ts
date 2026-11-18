@@ -171,7 +171,7 @@ export class CompanionTool extends BaseTool {
         const input = z.object({ requestKey: z.uuid(), root: z.string().min(1) }).parse(args);
         return (await import('@/core/companion/activation')).queueCompanionActivation(context, input);
       }, { permissionAction: 'execute', injectSecrets: false });
-    this.registerTool('start_maintenance', 'Start one linked maintenance session using the owner-configured maintenance runtime. Reuse existing maintenance work. Choose an API or local text model; native CLI sessions cannot enforce this restricted toolbox.',
+    this.registerTool('start_maintenance', 'Start one linked maintenance session using the owner-configured maintenance runtime. Reuse existing maintenance work. It runs on the Companion model (an API or local model), because native CLI sessions cannot enforce this restricted toolbox.',
       z.toJSONSchema(z.object({ id: z.uuid(), input: startCompanionSessionSchema, basis: companionBasisSchema }), { io: 'input' }), async (args, context) => {
         const input = z.object({ id: z.uuid(), input: startCompanionSessionSchema, basis: z.unknown() }).parse(args);
         const s = await mutationService(context, input.id); const detail = await carry(s, input.id, context);

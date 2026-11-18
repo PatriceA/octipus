@@ -1,4 +1,5 @@
 import { getModelRegistry } from '@/models/model-registry';
+import { isCompanionControllerModel } from '@/core/companion/model-binding';
 import { canServeText } from '@/models/topics';
 import type { ModelConfigEntry } from '@/db/schema/models';
 import type { SpaceRole } from '@/db/schema/organizations';
@@ -163,7 +164,7 @@ export class ModelSelector {
     if(routing?.fixedBinding){
       if(!requester.userId||!routing.boundModelName)throw new Error('An authenticated fixed supervisor binding is required');
       const bound=await resolveModel({userId:requester.userId,name:routing.boundModelName,inSpace:requester.inSpace,spaceRole:requester.spaceRole,sponsor:requester.sponsor});
-      if(!bound||bound.provider==='cli'||!canServeText(bound)||!bound.supportsTools||/reasoner|thinking/.test(bound.modelId))throw new Error('The fixed supervisor model must be an eligible API/local text model');
+      if(!bound||!isCompanionControllerModel(bound))throw new Error('The fixed supervisor model must be an eligible API/local text model');
       return {modelId:bound.modelId,name:bound.name};
     }
 

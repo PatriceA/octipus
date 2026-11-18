@@ -318,8 +318,8 @@ export async function runRootAgent(
   const isBriefing=getRunContext()?.companionBriefing===true;
   const briefingModel=isBriefing?getRunContext()?.companionBriefingModel:undefined;
   if(isBriefing&&!briefingModel?.trim())throw new Error('A configured API/local text model is required for a read-only session briefing');
-  const boundModelName = briefingModel ?? planSessionCtx?.companion?.modelName ?? planSessionCtx?.companionSupervisor?.modelName;
-  const chosenModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification, laneChoice, conversation, boundModelName, fixedBinding:!!(briefingModel||supervisor) }, requester);
+  const boundModelName = briefingModel ?? (await import('@/core/companion/model-binding')).companionBoundModel(planSessionCtx);
+  const chosenModel = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification, laneChoice, conversation, boundModelName, fixedBinding:!!(briefingModel||supervisor||planSessionCtx?.companionMaintenance) }, requester);
   const chosenMeta = await getModelRegistry().getModel(chosenModel.name);
   if ((supervisor||briefingModel) && chosenMeta?.provider === 'cli') throw new Error('The Companion supervisor requires an API or local text model; CLI models are available for project sessions.');
   const modelMeta = await localRowInstead(chosenMeta, sessionId, 'tools', () => modelCandidates(requester), PSEUDONYMIZED);

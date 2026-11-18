@@ -103,11 +103,15 @@ test('long requests keep their full content with separately bounded outcome and 
 test('unknown start receipts keep their key across unrelated saves, while acknowledged new starts get fresh keys', async ({ authenticatedPage: page }) => {
   await setup(page);
   const keys: string[] = [];
+  const bodies: Record<string, unknown>[] = [];
   await page.route('**/api/companion/goals/goal-one/sessions', route => {
+    bodies.push(route.request().postDataJSON());
     keys.push(route.request().postDataJSON().requestKey);
     return json(route, keys.length === 1 ? 502 : 200, keys.length === 1 ? { error: 'Receipt lost' } : { id: 'action', sessionId: 'existing-session' });
   });
-  await page.getByRole('combobox', { name: 'Model', exact: true }).selectOption('Codex');
+  // Project sessions use the owner's topic routing: the form offers no model to pick.
+  await expect(page.getByRole('combobox', { name: 'Model', exact: true })).toHaveCount(0);
+  await expect(page.getByText('The session uses your topic routing')).toBeVisible();
   await page.getByRole('button', { name: 'Start session', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('Receipt lost');
   await page.getByLabel('Priority').selectOption('2');
@@ -118,6 +122,7 @@ test('unknown start receipts keep their key across unrelated saves, while acknow
   await page.getByRole('button', { name: 'Start session', exact: true }).click();
   await expect.poll(() => keys.length).toBe(3);
   expect(keys[2]).not.toBe(keys[1]);
+  expect(bodies.every(body => !('modelName' in body))).toBe(true);
 });
 
 test('repeated intentional instructions get distinct action keys after successful acknowledgement', async ({ authenticatedPage: page }) => {
