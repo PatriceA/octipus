@@ -7,7 +7,7 @@
  * triage run, and the bulk labelling run). A user label wins everywhere: it is
  * never overwritten, and triage returns it instead of asking any model.
  */
-import { type AnyColumn, and, desc, eq, inArray, isNotNull, ne, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, ne, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { type ClefObservation, type EmailTriageLabel, emailTriageLabels } from '@/db/schema/email-triage-labels';
 import type { EmailProvider, EmailTriage, InboxItem } from './types';
@@ -93,39 +93,27 @@ const base = (userId: string, provider: EmailProvider, it: InboxItem) => ({
   subject: it.subject.slice(0, 500), snippet: it.snippet.slice(0, SNIPPET_CHARS),
 });
 
-/**
- * Record Clef's answers; a mail seen again gets its latest answer. A model
- * label from an older rubric answered a different question, so it is dropped
- * with the old answer; the owner's label stands.
- */
+/** Record Clef's answers; a mail seen again gets its latest answer. */
 export async function saveObservations(userId: string, provider: EmailProvider, items: InboxItem[], clef: Record<string, ClefObservation>): Promise<void> {
   const rows = items.filter(it => clef[it.id]).map(it => ({ ...base(userId, provider, it), clef: clef[it.id] }));
   if (!rows.length) return;
   await getDb().insert(emailTriageLabels).values(rows).onConflictDoUpdate({
     target: [emailTriageLabels.userId, emailTriageLabels.provider, emailTriageLabels.messageId],
-    set: {
-      clef: sql`excluded.clef`,
-      labelPriority: staleModelLabel(emailTriageLabels.labelPriority),
-      labelCategory: staleModelLabel(emailTriageLabels.labelCategory),
-      labelSource: staleModelLabel(emailTriageLabels.labelSource),
-      labelModel: staleModelLabel(emailTriageLabels.labelModel),
-      labeledAt: staleModelLabel(emailTriageLabels.labeledAt),
-    },
+    set: { clef: sql`excluded.clef` },
   });
 }
-const staleModelLabel = (column: AnyColumn) => sql`CASE WHEN ${emailTriageLabels.labelSource} = 'model' AND ${emailTriageLabels.clef}->>'rubric' IS DISTINCT FROM excluded.clef->>'rubric' THEN NULL ELSE ${column} END`;
 
-/** Record a reference model's labels; an owner label is left alone. */
-export async function saveModelLabels(userId: string, provider: EmailProvider, items: InboxItem[], labels: Record<string, EmailTriage>, model: string): Promise<void> {
+/** Record a reference model's labels under the rubric it was given; an owner label is left alone. */
+export async function saveModelLabels(userId: string, provider: EmailProvider, items: InboxItem[], labels: Record<string, EmailTriage>, model: string, rubric: string): Promise<void> {
   const now = new Date();
   const rows = items.filter(it => labels[it.id]).map(it => ({
     ...base(userId, provider, it), labelPriority: labels[it.id].priority, labelCategory: labels[it.id].category,
-    labelSource: 'model' as const, labelModel: model, labeledAt: now,
+    labelSource: 'model' as const, labelModel: model, labelRubric: rubric, labeledAt: now,
   }));
   if (!rows.length) return;
   await getDb().insert(emailTriageLabels).values(rows).onConflictDoUpdate({
     target: [emailTriageLabels.userId, emailTriageLabels.provider, emailTriageLabels.messageId],
-    set: { labelPriority: sql`excluded.label_priority`, labelCategory: sql`excluded.label_category`, labelSource: sql`excluded.label_source`, labelModel: sql`excluded.label_model`, labeledAt: sql`excluded.labeled_at` },
+    set: { labelPriority: sql`excluded.label_priority`, labelCategory: sql`excluded.label_category`, labelSource: sql`excluded.label_source`, labelModel: sql`excluded.label_model`, labelRubric: sql`excluded.label_rubric`, labeledAt: sql`excluded.labeled_at` },
     setWhere: sql`${emailTriageLabels.labelSource} IS DISTINCT FROM 'user'`,
   });
 }
@@ -133,7 +121,7 @@ export async function saveModelLabels(userId: string, provider: EmailProvider, i
 /** The owner's label. Only for a mail triage has already seen (the row holds its sender and subject). */
 export async function setUserLabel(userId: string, messageId: string, label: { priority: Priority; category: string }, provider?: EmailProvider): Promise<boolean> {
   const rows = await getDb().update(emailTriageLabels)
-    .set({ labelPriority: label.priority, labelCategory: label.category, labelSource: 'user', labelModel: null, labeledAt: new Date() })
+    .set({ labelPriority: label.priority, labelCategory: label.category, labelSource: 'user', labelModel: null, labelRubric: null, labeledAt: new Date() })
     .where(and(eq(emailTriageLabels.userId, userId), eq(emailTriageLabels.messageId, messageId), provider ? eq(emailTriageLabels.provider, provider) : undefined))
     .returning({ id: emailTriageLabels.id });
   return rows.length > 0;
@@ -141,8 +129,10 @@ export async function setUserLabel(userId: string, messageId: string, label: { p
 
 async function labelledObservations(userId: string, rubric: string): Promise<EmailTriageLabel[]> {
   return getDb().select().from(emailTriageLabels).where(and(
-    eq(emailTriageLabels.userId, userId), isNotNull(emailTriageLabels.clef), isNotNull(emailTriageLabels.labelSource),
+    eq(emailTriageLabels.userId, userId), isNotNull(emailTriageLabels.clef),
     sql`${emailTriageLabels.clef}->>'rubric' = ${rubric}`,
+    // A model label given under another rubric answered a different question.
+    or(eq(emailTriageLabels.labelSource, 'user'), eq(emailTriageLabels.labelRubric, rubric)),
   ));
 }
 
@@ -174,8 +164,9 @@ export interface ReviewItem {
 export async function reviewQueue(userId: string, rubric: string, limit = 50): Promise<{ items: ReviewItem[]; pending: number; stats: { labelledByOwner: number; labelledByModel: number; fit: ReturnType<typeof fitAll> } }> {
   const rows = await getDb().select().from(emailTriageLabels).where(eq(emailTriageLabels.userId, userId));
   const current = rows.filter(r => r.clef?.rubric === rubric);
-  const fit = fitAll(current.filter(r => r.labelSource));
-  const disagrees = (r: EmailTriageLabel) => !!r.labelSource && !!r.clef && (r.clef.priority !== r.labelPriority || r.clef.category !== r.labelCategory);
+  const labelled = (r: EmailTriageLabel) => r.labelSource === 'user' || (r.labelSource === 'model' && r.labelRubric === rubric);
+  const fit = fitAll(current.filter(labelled));
+  const disagrees = (r: EmailTriageLabel) => labelled(r) && !!r.clef && (r.clef.priority !== r.labelPriority || r.clef.category !== r.labelCategory);
   const rejected = (r: EmailTriageLabel) => !r.clef || r.clef.priorityConfidence < fit.priority.threshold || r.clef.categoryConfidence < fit.category.threshold;
   const waiting = current.filter(r => r.labelSource !== 'user' && (disagrees(r) || rejected(r)))
     .sort((a, b) => Number(disagrees(b)) - Number(disagrees(a))
@@ -184,9 +175,9 @@ export async function reviewQueue(userId: string, rubric: string, limit = 50): P
     pending: waiting.length,
     items: waiting.slice(0, limit).map(r => ({
       messageId: r.messageId, from: r.fromEmail, subject: r.subject, snippet: r.snippet, clef: r.clef,
-      label: r.labelSource ? { priority: r.labelPriority!, category: r.labelCategory!, source: r.labelSource, model: r.labelModel } : null,
+      label: labelled(r) ? { priority: r.labelPriority!, category: r.labelCategory!, source: r.labelSource!, model: r.labelModel } : null,
       disagreement: disagrees(r),
     })),
-    stats: { labelledByOwner: rows.filter(r => r.labelSource === 'user').length, labelledByModel: rows.filter(r => r.labelSource === 'model').length, fit },
+    stats: { labelledByOwner: rows.filter(r => r.labelSource === 'user').length, labelledByModel: rows.filter(r => r.labelSource === 'model' && r.labelRubric === rubric).length, fit },
   };
 }

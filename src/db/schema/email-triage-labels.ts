@@ -38,6 +38,8 @@ export const emailTriageLabels = pgTable('email_triage_labels', {
   labelSource: text('label_source').$type<'user' | 'model'>(),
   /** The reference model's row name, for `model` labels. */
   labelModel: text('label_model'),
+  /** The priority rubric a `model` label was given; only labels under the current rubric count. */
+  labelRubric: text('label_rubric'),
   labeledAt: timestamp('labeled_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [

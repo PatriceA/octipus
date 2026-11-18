@@ -64,11 +64,11 @@ describe('label store', () => {
     await store.saveModelLabels(owner, 'google', [a, b, c, d], {
       a: { priority: 'normal', category: 'work' }, b: { priority: 'low', category: 'work' },
       c: { priority: 'normal', category: 'work' }, d: { priority: 'low', category: 'promotion' },
-    }, 'ref-model');
+    }, 'ref-model', 'r1');
     expect(await store.setUserLabel(owner, 'a', { priority: 'high', category: 'work' })).toBe(true);
     expect(await store.setUserLabel(owner, 'unseen', { priority: 'high', category: 'work' })).toBe(false);
     // A later model run must not overwrite the owner.
-    await store.saveModelLabels(owner, 'google', [a], { a: { priority: 'low', category: 'spam' } }, 'ref-model');
+    await store.saveModelLabels(owner, 'google', [a], { a: { priority: 'low', category: 'spam' } }, 'ref-model', 'r1');
     expect(await store.userLabels(owner, 'google', ['a', 'b'])).toEqual({ a: { priority: 'high', category: 'work' } });
 
     const examples = await store.examplesFor(owner, mail('new', 'boss@acme.com'));
@@ -82,8 +82,11 @@ describe('label store', () => {
     expect(review.items.map(i => i.messageId)).toEqual(['d']);
     expect(review.stats).toMatchObject({ labelledByOwner: 1, labelledByModel: 3 });
 
-    // A new rubric drops model labels from the old one; the owner's stays.
-    await store.saveObservations(owner, 'google', [a, b], { a: { ...clef('high', 0.9), rubric: 'r2' }, b: { ...clef('low', 0.9), rubric: 'r2' } });
-    expect((await store.reviewQueue(owner, 'r2')).stats).toMatchObject({ labelledByOwner: 1, labelledByModel: 2 });
+    // Under a new rubric only the owner's label and labels given under it count.
+    await store.saveObservations(owner, 'google', [a, b, c], { a: { ...clef('high', 0.9), rubric: 'r2' }, b: { ...clef('low', 0.9), rubric: 'r2' }, c: { ...clef('normal', 0.9), rubric: 'r2' } });
+    await store.saveModelLabels(owner, 'google', [c], { c: { priority: 'normal', category: 'work' } }, 'ref-model', 'r2');
+    expect((await store.reviewQueue(owner, 'r2')).stats.fit.priority.labelled).toBe(2); // a (owner), c (r2); b's r1 label is ignored
+    // Labels written before the new answer survive it (the backlog labels first).
+    expect((await store.reviewQueue(owner, 'r2')).items.find(i => i.messageId === 'c')).toBeUndefined();
   });
 });

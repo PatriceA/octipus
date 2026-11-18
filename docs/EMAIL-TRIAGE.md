@@ -66,10 +66,11 @@ are labelled mails from the same sender or domain, and that the owner's labels
 
 **Rubric version.** `PRIORITY_RUBRIC_VERSION` (currently `action-split-v4`) is
 stored with every answer. Change it whenever you change a question or a
-criterion. Calibration uses only answers from the current version. A model
-label from an older version is dropped when the mail gets a new answer, so an
-answer is never scored against a label for a different question. Owner labels
-are kept across versions.
+criterion. Calibration uses only answers from the current version. Each model
+label records the version it was given under (`label_rubric`), and a label from
+an older version is ignored until the mail is labelled again, so an answer is
+never scored against a label for a different question. Owner labels count
+across versions.
 
 ## Setup
 
@@ -85,8 +86,9 @@ are kept across versions.
    cannot. In that case triage uses the lane's install backup and otherwise
    tells you what to bind. A personal model row (one you own) never falls back
    to the backup.
-4. **Run the migrations.** Migration `0192_email_triage_labels` creates the
-   training set and runs when the backend starts.
+4. **Run the migrations.** Migrations `0192_email_triage_labels` and
+   `0193_email_triage_label_rubric` create the training set and run when the
+   backend starts.
 
 Without a model on the `decision` lane, triage is LLM-only, as it was before.
 

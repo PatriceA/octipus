@@ -1352,6 +1352,13 @@
       "when": 1794456000000,
       "tag": "0192_email_triage_labels",
       "breakpoints": true
+    },
+    {
+      "idx": 193,
+      "version": "7",
+      "when": 1794542400000,
+      "tag": "0193_email_triage_label_rubric",
+      "breakpoints": true
     }
   ]
 }

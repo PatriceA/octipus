@@ -571,7 +571,7 @@ export async function triageInbox(userId: string, items: InboxItem[]): Promise<R
     const referenced = todo.filter(it => !decided[it.id] || Math.random() < AUDIT_RATE);
     const llm = referenced.length === 0 ? {} : await llmTriage(userId, referenced, categories, (batch, model, batchIds) => {
       const ids = new Set(batchIds);
-      saves.push(saveModelLabels(userId, provider, todo.filter(it => ids.has(it.id)), batch, model).catch(keepGoing('saving reference labels')));
+      saves.push(saveModelLabels(userId, provider, todo.filter(it => ids.has(it.id)), batch, model, PRIORITY_RUBRIC_VERSION).catch(keepGoing('saving reference labels')));
       for (const messageId of batchIds) {
         const answer = batch[messageId];
         const c = clef[messageId];
@@ -652,7 +652,7 @@ export async function startLabelBacklog(userId: string, modelName: string, limit
     // Labels first, so the decision run below already sees worked examples.
     for (let i = 0; i < items.length; i += TRIAGE_BATCH) {
       const batch = items.slice(i, i + TRIAGE_BATCH);
-      await saveModelLabels(userId, provider, batch, await llmTriageBatch(userId, batch, categories, undefined, reference), row!.name);
+      await saveModelLabels(userId, provider, batch, await llmTriageBatch(userId, batch, categories, undefined, reference), row!.name, PRIORITY_RUBRIC_VERSION);
       run.labelled += batch.length;
     }
     const thresholds = { priority: DEFAULT_THRESHOLD, category: DEFAULT_THRESHOLD };
