@@ -153,7 +153,7 @@ export const STALE_CALL_MS = 24 * 3_600_000;
 export class CallManager extends EventEmitter<{ status: [CallSession] }> {
   private calls = new Map<string, CallSession>();
 
-  constructor(private readonly now: () => number = Date.now) {
+  constructor(private readonly now: () => number = () => Date.now()) {
     super();
     // One listener per waiting `make_call`: no fixed number is a leak.
     this.setMaxListeners(0);

@@ -298,7 +298,31 @@ removed — nothing on the server listened for one.
 
 ## Phone Calls
 
-Make and receive actual phone calls through telephony providers. Octipus uses the existing STT/TTS pipeline for audio processing and routes conversations through the configured `voice` model topic for fast, direct LLM responses.
+Make and receive phone calls through Twilio, Telnyx or Plivo. A call is a
+conversation with the model mapped to the **`voice` topic**, called directly
+(no root agent, no tools) with the phone prompt, and spoken in the install's
+Speech engine and active voice profile when one is available.
+
+Two ways a call runs:
+
+- **Live media stream** (Twilio, `voice.streaming` on, `voice.publicUrl`
+  reachable over wss): the carrier streams the call's audio both ways and
+  Octipus runs the same pipeline as the web conversation
+  (`src/voice/telephony/media-call.ts`): its endpointer ends the caller's turn,
+  the Transcription lane hears it, the reply is spoken sentence by sentence
+  while the model writes it (μ-law, 20 ms frames, paced in real time), and
+  talking over a reply stops it.
+- **Turn by turn** (every provider; the default): the carrier gathers the
+  caller's speech and sends it as text; the reply is played from the install's
+  Speech engine (`<Play>` of a short-lived clip under
+  `/api/voice/webhook/audio/:id`) when one is bound and `voice.publicUrl` is
+  set, else read by the carrier's own voice in `voice.language`.
+
+Both use one reply implementation (`src/voice/telephony/reply.ts`). The prompt
+is the call's own (`make_call`'s `instructions`), else `voice.expertPrompt`,
+else a phone prompt built on the spoken-reply directive. The model ends a call
+with `[END_CALL]` after a farewell. Calls in progress and those ended in the
+last hour are listed at `GET /api/voice/calls`.
 
 ### Supported Providers
 
@@ -357,7 +381,7 @@ curl -X PUT http://localhost:3005/api/settings/voice.publicUrl \
 
 #### 3. Assign a model to the "voice" topic
 
-In the **Models** page, assign a fast model to the `voice` topic. Local models (Ollama) give the lowest latency since there's no network round-trip.
+On the **Topics** page, assign a fast model to the `voice` topic. Local models (Ollama) give the lowest latency since there's no network round-trip.
 
 That's it. The direct call path uses the configured voice prompt and the model
 bound to the `voice` topic.
@@ -420,51 +444,18 @@ curl -X PUT http://localhost:3005/api/settings/voice.language \
 
 ### How Calls Work
 
-**Outbound calls** are initiated by agents via the `voice_call` tool:
+**Outbound calls** are made by an agent with the `make_call` tool (it needs
+your approval, and is on the communication role):
 
-```
-Agent: "Call +1234567890 and tell them the deployment is complete"
-→ Tool: initiate_call(to: "+1234567890", message: "...", mode: "notify")
-→ Twilio dials the number
-→ Person answers → TTS speaks the message → Hangup
-```
+| Argument | |
+|---|---|
+| `to` | the number to call (E.164) |
+| `message` | what is said when the call is answered |
+| `mode` | `notify` — say the message and hang up; `conversation` — then talk |
+| `instructions` | conversation: who the assistant is on this call and what the call is for (replaces the phone prompt for this call) |
 
-**Conversation mode** enables interactive voice exchange:
-
-```
-Agent: "Call the client and discuss the project timeline"
-→ Tool: initiate_call(to: "+1234567890", message: "Hello, I'm calling about...", mode: "conversation")
-→ Twilio dials → Person answers → TTS speaks greeting
-→ Person speaks → Provider STT transcribes → Direct LLM response → TTS speaks back
-→ Repeat until hangup
-```
-
-**The conversation loop uses a shorter path** — it bypasses the root agent entirely:
-
-```
-Caller speaks → Provider STT (~1s) → Direct LLM call (~1-3s) → Provider TTS (~0.5s)
-Total: ~2-5 seconds per turn
-```
-
-No classification, no worker spawning, no tool execution. The model assigned to
-the `voice` topic is called directly with the phone conversation prompt.
-
-### Call Modes
-
-| Mode | Description | Use Case |
-|------|-------------|----------|
-| **notify** | Speak a message and hang up | Alerts, reminders, status updates |
-| **conversation** | Interactive voice exchange | Discussions, Q&A, support calls |
-
-### Tool Actions
-
-| Action | Description |
-|--------|-------------|
-| `initiate_call` | Start a call (requires permission approval) |
-| `continue_call` | Send next message in active conversation |
-| `end_call` | Hang up |
-| `get_status` | Check call state |
-| `list_calls` | List active calls |
+The tool waits for the call to end and reports whether it was answered and
+what was said; `end_call` hangs up a call in progress.
 
 ### Inbound Calls
 
@@ -488,26 +479,29 @@ https://your-public-url/api/voice/webhook/twilio
 
 ### API Endpoints
 
+Speech routes are listed under [API](#api) above. Telephony:
+
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/voice/transcribe` | Transcribe audio (local or cloud STT) |
-| POST | `/api/voice/speak` | Synthesize text to speech (TTS) and return audio |
-| GET | `/api/voice/status` | Voice subsystem status and availability |
-| POST | `/api/voice/install` | Download and install Whisper model |
-| POST | `/api/voice/webhook/:provider` | Telephony webhook (call events) |
-| POST | `/api/voice/webhook/:provider/status` | Telephony status callback |
-| GET | `/api/voice/calls` | List active phone calls |
-| GET | `/api/voice/telephony/health` | Provider connection health |
+| POST | `/api/voice/webhook/:provider` | Call events from the carrier (signature-checked) |
+| POST | `/api/voice/webhook/:provider/status` | Status callbacks |
+| GET | `/api/voice/webhook/audio/:id` | A reply clip the carrier plays (unauthenticated, random id, expires within minutes) |
+| GET | `/api/voice/calls` | Calls in progress and ended in the last hour (admin) |
+| GET | `/api/voice/telephony/health` | Provider connection health (admin) |
 
 ### Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `voice.ttsVoice` | — | Voice for spoken replies and calls; empty = the bound engine's default |
-| `voice.telephonyProvider` | `disabled` | Provider: twilio, telnyx, plivo |
-| `voice.publicUrl` | — | Webhook URL (ngrok etc.) |
-| `voice.inboundPolicy` | `disabled` | Inbound: disabled, allowlist, open |
-| `voice.inboundAllowFrom` | — | Allowed inbound numbers (E.164) |
+| `voice.telephonyProvider` | `disabled` | twilio, telnyx, plivo |
+| `voice.phoneNumber` | — | caller id for outbound calls |
+| `voice.publicUrl` | — | your public base URL (ngrok, Cloudflare Tunnel, …) |
+| `voice.streaming` | `false` | Twilio: answer incoming calls as a live media stream |
+| `voice.expertPrompt` | — | how Octipus behaves on calls |
+| `voice.inboundPolicy` | `disabled` | disabled, allowlist, open |
+| `voice.inboundAllowFrom` | — | allowed inbound numbers (E.164) |
+
+Calls are spoken in the active voice profile (`voice.profile`, see [Voices](#voices)).
 
 ### Vault Keys
 
@@ -518,7 +512,7 @@ https://your-public-url/api/voice/webhook/twilio
 | `twilio_phone_number` | Twilio | No (auto-detected) |
 | `telnyx_api_key` | Telnyx | Yes |
 | `telnyx_connection_id` | Telnyx | Yes |
-| `telnyx_public_key` | Telnyx | No (webhook verification) |
+| `telnyx_public_key` | Telnyx | Yes — every webhook is refused without it |
 | `plivo_auth_id` | Plivo | Yes |
 | `plivo_auth_token` | Plivo | Yes |
 

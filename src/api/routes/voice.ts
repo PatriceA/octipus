@@ -630,16 +630,26 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
     }
   )
 
-  // Active calls list. Admin-only: calls carry no owning user, so the list is
-  // every caller's phone numbers on the install.
+  // Phone calls: those in progress and those that ended within the last hour
+  // (`status` tells them apart). Admin-only: calls carry no owning user, so
+  // the list is every caller's phone numbers on the install.
   .get(
     '/calls',
     async ({ user, principal, set }) => {
       const denied = adminDenied({ set, user, principal });
       if (denied) return denied;
       const { getCallManager } = await import('@/voice/telephony');
-      const calls = getCallManager().getActive();
-      return { calls: calls.map(c => ({ id: c.id, status: c.status, direction: c.direction, from: c.from, to: c.to, provider: c.provider, startedAt: c.startedAt.toISOString() })) };
+      const calls = getCallManager().list();
+      return {
+        calls: calls.map(c => ({
+          id: c.id, status: c.status, direction: c.direction, from: c.from, to: c.to, provider: c.provider,
+          startedAt: c.startedAt.toISOString(),
+          answeredAt: c.answeredAt?.toISOString() ?? null,
+          endedAt: c.endedAt?.toISOString() ?? null,
+          streaming: c.metadata.streaming === true,
+          turns: Array.isArray(c.metadata.conversationHistory) ? c.metadata.conversationHistory.length : 0,
+        })),
+      };
     },
     { detail: { tags: ['voice'] } }
   )

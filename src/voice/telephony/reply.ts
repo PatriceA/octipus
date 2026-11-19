@@ -40,8 +40,8 @@ const END_CALL_RULE =
   `When the caller says goodbye or clearly wants to hang up, answer with a brief farewell and end your reply with the exact marker ${END_CALL_MARKER}. Never say the marker in any other reply.`;
 
 /**
- * The system prompt of a phone turn: the call's own prompt when it has one
- * (`session.metadata.expertPrompt`, from `voice.expertPrompt`), else the
+ * The system prompt of a phone turn: the call's prompt when it has one
+ * (`callPrompt`: its own, else `voice.expertPrompt`), else the
  * shared spoken-reply directive with what is particular to a phone line —
  * and, either way, how to end the call.
  */
@@ -84,6 +84,20 @@ export function recordAssistantTurn(call: PhoneCall, text: string): void {
   capHistory(history);
 }
 
+/**
+ * The prompt a call answers with: its own (`metadata.expertPrompt`, set by
+ * whoever placed it), else the operator's phone prompt (`voice.expertPrompt`,
+ * read on every turn so a change applies to calls in progress), else none —
+ * the shared phone prompt then applies.
+ */
+async function callPrompt(call: PhoneCall): Promise<string | null> {
+  const own = call.metadata.expertPrompt;
+  if (typeof own === 'string' && own.trim()) return own;
+  const { getSettingsService } = await import('@/config/settings-service');
+  const configured = await getSettingsService().get('voice.expertPrompt');
+  return typeof configured === 'string' && configured.trim() ? configured : null;
+}
+
 /** The model call of a phone turn: the `voice` topic's model, its parameters, the prompt and the history. */
 async function phoneCompletion(call: PhoneCall): Promise<CompletionOptions> {
   const { ModelSelector } = await import('@/core/agent/model-selector');
@@ -105,7 +119,7 @@ async function phoneCompletion(call: PhoneCall): Promise<CompletionOptions> {
   const { applyTopicParamOverrides, getTopicConfig } = await import('@/models/topic-config');
   const params = applyTopicParamOverrides({ temperature: 0.7, maxTokens: 256 }, getTopicConfig('voice'));
 
-  const expertPrompt = typeof call.metadata.expertPrompt === 'string' ? call.metadata.expertPrompt : undefined;
+  const expertPrompt = await callPrompt(call);
   const messages: AgentMessage[] = [
     { role: 'system', content: phoneSystemPrompt(expertPrompt), timestamp: new Date() },
     ...phoneHistory(call).map((turn) => ({ role: turn.role, content: turn.content, timestamp: new Date() })),

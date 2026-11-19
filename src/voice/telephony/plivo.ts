@@ -40,7 +40,8 @@ export class PlivoProvider implements TelephonyProvider {
 
     const body = {
       from,
-      to: `<${options.to}>`,
+      // One number: `<` separates the numbers of a bulk call.
+      to: options.to,
       answer_url: options.webhookUrl,
       answer_method: 'POST',
       hangup_url: `${options.webhookUrl}/status`,
@@ -83,9 +84,11 @@ export class PlivoProvider implements TelephonyProvider {
    * Plivo posts form fields. Every callback names the call by `CallUUID`,
    * the id its REST API takes; an outbound call's callbacks also carry the
    * `RequestUUID` the Make Call API returned, which is all we know the call by
-   * until its first callback. `Event` is `Ring`, `StartApp` (the answer URL)
-   * or `Hangup`; a `<GetInput>` action posts `Speech`.
-   * https://www.plivo.com/docs/voice/api/calls (callbacks), …/xml/request, …/xml/getinput
+   * until its first callback. An outbound call's callbacks carry `Event`:
+   * `Ring`, `StartApp` (the answer URL) or `Hangup`. The answer URL of an
+   * inbound call carries no `Event`: `Direction=inbound`, `CallStatus=ringing`.
+   * A `<GetInput>` action posts `Speech`.
+   * https://www.plivo.com/docs/voice/api/call/make-a-call (callbacks), …/xml/request, …/xml/getinput
    */
   parseWebhook(fields: Record<string, unknown>): TelephonyWebhookEvent {
     const field = (name: string) => (typeof fields[name] === 'string' ? fields[name] as string : '');
@@ -104,6 +107,8 @@ export class PlivoProvider implements TelephonyProvider {
     if (speech) return { ...event, type: 'speech', speech };
     if (happened === 'Hangup' || status in FINAL_STATUS) return { ...event, type: 'hangup', status: FINAL_STATUS[status] ?? 'ended' };
     if (happened === 'Ring') return { ...event, type: 'ringing' };
+    // The answer URL of an inbound call: it waits for its XML.
+    if (!happened && event.direction === 'inbound' && status === 'ringing') return { ...event, type: 'incoming' };
     if (happened === 'StartApp') {
       // The answer URL: an inbound call waits for its XML, an outbound call was picked up.
       return { ...event, type: event.direction === 'outbound' ? 'answered' : 'incoming' };

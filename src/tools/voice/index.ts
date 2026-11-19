@@ -58,6 +58,7 @@ export class VoiceCallTool extends BaseTool {
           message: { type: 'string', description: 'Message to speak when the call is answered' },
           mode: { type: 'string', enum: ['notify', 'conversation'], description: 'notify = one-way message then hangup, conversation = interactive back-and-forth' },
           timeout: { type: 'number', description: 'Max seconds to wait for the call to complete (default: 120)' },
+          instructions: { type: 'string', description: 'conversation mode: who you are on this call and what it is for. Replaces the configured phone prompt for this call only.' },
         },
         required: ['to', 'message'],
       },
@@ -76,10 +77,6 @@ export class VoiceCallTool extends BaseTool {
         const publicUrl = (await settings.get('voice.publicUrl') as string) || `http://localhost:${process.env.API_PORT || 3005}`;
         const webhookUrl = `${publicUrl}/api/voice/webhook/${provider.name}`;
 
-        // The persona for phone calls, when the operator set one; without it
-        // the shared phone prompt applies (src/voice/telephony/reply.ts).
-        const expertPrompt = (await settings.get('voice.expertPrompt')) as string | null;
-
         try {
           const session = await provider.initiateCall({
             to, message,
@@ -88,7 +85,8 @@ export class VoiceCallTool extends BaseTool {
           });
 
           session.metadata.pendingMessage = message;
-          if (expertPrompt) session.metadata.expertPrompt = expertPrompt;
+          // This call's own prompt; without it the phone prompt applies (src/voice/telephony/reply.ts).
+          if (typeof args.instructions === 'string' && args.instructions.trim()) session.metadata.expertPrompt = args.instructions.trim();
           session.metadata.conversationHistory = [];
 
           const callManager = getCallManager();
@@ -107,7 +105,8 @@ export class VoiceCallTool extends BaseTool {
           const recipientResponses = history.filter(m => m.role === 'user').map(m => m.content);
           const durationMs = current?.endedAt ? current.endedAt.getTime() - current.startedAt.getTime() : Date.now() - startTime;
 
-          const answered = finalStatus === 'ended' || finalStatus === 'active';
+          // Picked up at some point: a call that rang out also ends.
+          const answered = !!current?.answeredAt || finalStatus === 'active' || finalStatus === 'answered';
           const hasResponse = recipientResponses.length > 0;
 
           log.info({ callId: session.id, finalStatus, answered, hasResponse, responses: recipientResponses.length, durationMs }, 'Call completed');

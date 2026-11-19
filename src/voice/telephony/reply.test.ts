@@ -14,7 +14,10 @@ const model = vi.hoisted(() => ({
   answer: 'Sure.',
   chunks: [] as string[],
   streamError: null as Error | null,
+  settings: {} as Record<string, unknown>,
 }));
+
+vi.mock('@/config/settings-service', () => ({ getSettingsService: () => ({ get: async (key: string) => model.settings[key] ?? null }) }));
 
 vi.mock('@/core/agent/model-selector', () => ({
   ModelSelector: class { async selectForWorker(topic: string) { expect(topic).toBe('voice'); return model.routing; } },
@@ -57,6 +60,7 @@ beforeEach(() => {
   model.answer = 'Sure.';
   model.chunks = [];
   model.streamError = null;
+  model.settings = {};
 });
 
 describe('phoneSystemPrompt', () => {
@@ -98,6 +102,22 @@ describe('generatePhoneReply', () => {
   test("the call's expert prompt is the system prompt", async () => {
     await generatePhoneReply(call({ expertPrompt: 'You are the front desk.' }), 'Hello');
     expect(sent().messages[0].content).toBe(phoneSystemPrompt('You are the front desk.'));
+  });
+
+  test("without a prompt of its own the call answers with the operator's phone prompt (voice.expertPrompt), read on every turn", async () => {
+    model.settings['voice.expertPrompt'] = 'You are the reception of Dr. Weber.';
+    const c = call();
+    await generatePhoneReply(c, 'Hello');
+    expect(sent().messages[0].content).toBe(phoneSystemPrompt('You are the reception of Dr. Weber.'));
+    model.settings['voice.expertPrompt'] = 'You are the night line.';
+    await generatePhoneReply(c, 'Still there?');
+    expect(sent().messages[0].content).toBe(phoneSystemPrompt('You are the night line.'));
+    // The call's own prompt comes first; a blank setting is no prompt.
+    await generatePhoneReply(call({ expertPrompt: 'You are the front desk.' }), 'Hello');
+    expect(sent().messages[0].content).toBe(phoneSystemPrompt('You are the front desk.'));
+    model.settings['voice.expertPrompt'] = '   ';
+    await generatePhoneReply(call(), 'Hello');
+    expect(sent().messages[0].content).toBe(phoneSystemPrompt());
   });
 
   test("the voice topic's temperature and max tokens override the phone defaults", async () => {

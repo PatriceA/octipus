@@ -192,7 +192,8 @@ export class TelnyxProvider implements TelephonyProvider {
     if (instruction.opening && instruction.then === 'listen') {
       await this.command(providerCallId, 'transcription_start', {
         transcription_engine: 'Google',
-        transcription_engine_config: { language },
+        // The config names its engine too (it is the discriminator); Google takes a bare language (`de`, not `de-DE`).
+        transcription_engine_config: { transcription_engine: 'Google', language },
         transcription_tracks: 'inbound',
       });
     }

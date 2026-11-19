@@ -38,6 +38,15 @@ labels reflect blast radius, not contract guarantees.
     choice registered engines without installing them.
   - **Removed:** the server-side wake-word detector and `voice.wakeWord`
     (nothing called it), and the unread `sttEnabled` / `ttsEnabled` flags.
+  - **Phone calls.** One reply implementation for both call paths; calls are
+    spoken in the install's Speech engine and voice (or the carrier's voice in
+    `voice.language`); Twilio's live media stream runs the shared pipeline
+    (sentence-by-sentence replies, barge-in, no temp files or ffmpeg).
+    Fixed: incoming Plivo calls were never answered, Telnyx webhooks were read
+    at the wrong level and its speech recognition was not started, ended
+    calls were never removed. `make_call` takes `instructions`, reports a
+    call that rang out as not answered, and `voice.expertPrompt` can be set.
+    Telnyx now needs `telnyx_public_key`. Not yet run against a live carrier.
   - Operators: new settings `voice.profile`, `voice.endpointSilenceMs`,
     `voice.bargeIn`; new routes under `/api/voice/` (`engines`, `voices`,
     `profiles`); `chat.send` takes `spoken`. See `docs/VOICE.md`.

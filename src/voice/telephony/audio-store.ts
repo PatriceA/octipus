@@ -30,7 +30,7 @@ export class CallAudioStore {
   private bytes = 0;
 
   constructor(
-    private readonly now: () => number = Date.now,
+    private readonly now: () => number = () => Date.now(),
     private readonly ttlMs = CALL_AUDIO_TTL_MS,
     private readonly maxBytes = CALL_AUDIO_MAX_BYTES,
   ) {}
@@ -101,10 +101,10 @@ export async function prepareSpokenLine(text: string, audioBaseUrl: string | nul
   const line: SpokenLine = { text: forSpeech(text) || text.trim() };
   if (!audioBaseUrl || !line.text) return line;
   const base = audioBaseUrl.replace(/\/+$/, '');
-  const held = stock ? stockClips.get(line.text) : undefined;
-  if (held && getCallAudioStore().remainingMs(held) > CALL_AUDIO_TTL_MS / 2) return { ...line, audioUrl: `${base}/${held}` };
   const { speechStatus, synthesizeWithLane } = await import('../resolve');
   if (!(await speechStatus('tts')).available) return line;
+  const held = stock ? stockClips.get(line.text) : undefined;
+  if (held && getCallAudioStore().remainingMs(held) > CALL_AUDIO_TTL_MS / 2) return { ...line, audioUrl: `${base}/${held}` };
   try {
     const spoken = await synthesizeWithLane(line.text, { format: 'mp3' });
     if (!PLAYABLE.has(spoken.format)) {

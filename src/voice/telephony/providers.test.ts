@@ -81,8 +81,23 @@ describe('Twilio', () => {
 describe('Plivo', () => {
   test('an inbound call is known by its CallUUID (there is no RequestUUID)', () => {
     // https://www.plivo.com/docs/voice/xml/request — the answer URL of an inbound call.
-    const event = plivo.parseWebhook({ CallUUID: 'c-uuid-1', From: '15551112222', To: '15550000000', CallStatus: 'ringing', Direction: 'inbound', Event: 'StartApp' });
+    // The documented answer-URL parameters: no Event, no RequestUUID.
+    const event = plivo.parseWebhook({ CallUUID: 'c-uuid-1', From: '15551112222', To: '15550000000', CallStatus: 'ringing', Direction: 'inbound' });
     expect(event).toMatchObject({ type: 'incoming', callId: 'c-uuid-1', aliases: [], direction: 'inbound', from: '15551112222', to: '15550000000' });
+    // Its hangup callback.
+    expect(plivo.parseWebhook({ CallUUID: 'c-uuid-1', Direction: 'inbound', CallStatus: 'completed', Event: 'Hangup' })).toMatchObject({ type: 'hangup', status: 'ended' });
+  });
+
+  test('placing a call: one number, the webhook as answer URL and its /status as hangup URL; known by its request id', async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal('fetch', async (url: string | URL, init: RequestInit = {}) => {
+      calls.push({ url: String(url), body: JSON.parse(String(init.body)) as Record<string, unknown> });
+      return new Response(JSON.stringify({ message: 'call fired', request_uuid: 'req-9', api_id: 'a' }), { status: 201 });
+    });
+    const session = await plivo.initiateCall({ to: '+15551112222', webhookUrl: 'https://x.example/api/voice/webhook/plivo', mode: 'conversation' });
+    expect(calls[0].url).toBe('https://api.plivo.com/v1/Account/MA1/Call/');
+    expect(calls[0].body).toMatchObject({ to: '+15551112222', answer_url: 'https://x.example/api/voice/webhook/plivo', hangup_url: 'https://x.example/api/voice/webhook/plivo/status' });
+    expect(session).toMatchObject({ providerCallId: 'req-9', direction: 'outbound', metadata: { mode: 'conversation' } });
   });
 
   test("an outbound call's callbacks carry the request id it was created with, next to the CallUUID", () => {
@@ -179,7 +194,7 @@ describe('Telnyx', () => {
     const reply = await telnyx.instruct('v3:abc', { ...listen, opening: true });
     expect(reply).toEqual({ contentType: 'application/json', body: '{}' });
     expect(calls.map((c) => c.url.split('/actions/')[1])).toEqual(['transcription_start', 'speak']);
-    expect(calls[0].body).toEqual({ transcription_engine: 'Google', transcription_engine_config: { language: 'de' }, transcription_tracks: 'inbound' });
+    expect(calls[0].body).toEqual({ transcription_engine: 'Google', transcription_engine_config: { transcription_engine: 'Google', language: 'de' }, transcription_tracks: 'inbound' });
     expect(calls[1].body).toMatchObject({ payload: 'Hello & welcome', voice: 'AWS.Polly.Vicki', language: 'de-DE' });
 
     // Later turns only speak: transcription is already running.

@@ -125,8 +125,6 @@ async function acceptOrReject(event: TelephonyWebhookEvent, ctx: CallFlowContext
     }
   }
 
-  // The persona an operator set for phone calls applies to callers too, not only to calls the agent places.
-  const expertPrompt = (await settings.get('voice.expertPrompt')) as string | null;
   const session: CallSession = {
     id: `inbound-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     provider: provider.name,
@@ -140,7 +138,6 @@ async function acceptOrReject(event: TelephonyWebhookEvent, ctx: CallFlowContext
       mode: 'conversation',
       conversationHistory: [],
       pendingMessage: phonePhrase('greeting', language),
-      ...(expertPrompt ? { expertPrompt } : {}),
     },
   };
   callManager.create(session);
