@@ -1887,7 +1887,10 @@ export default function ChatPage() {
       .then((s) => setVoiceAvailable(!!s?.sttAvailable))
       // 404: the Voice module is off, so the server cannot hear. Any other
       // failure leaves it unknown: no microphone control is offered then.
-      .catch((error: unknown) => { if (error instanceof ApiError && error.status === 404) setVoiceAvailable(false); });
+      .catch((error: unknown) => {
+        if (error instanceof ApiError && error.status === 404) setVoiceAvailable(false);
+        else console.warn('Voice: could not read whether the server can hear; dictation and voice conversation stay hidden', error);
+      });
   }, []);
 
   // Voice conversation (hands-free): the server hears the microphone and

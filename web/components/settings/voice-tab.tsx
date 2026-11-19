@@ -61,7 +61,8 @@ function VoiceOff({ isAdmin }: { isAdmin: boolean }) {
     setBusy(true);
     setError(null);
     try {
-      qc.setQueryData(modulesKey, await api.put<ModulesResponse>('/modules/voice', { on: true }));
+      // Turns on what voice depends on too, and nothing that is on goes off.
+      qc.setQueryData(modulesKey, await api.post<ModulesResponse>('/modules/enable', { ids: ['voice'] }));
     } catch (err) {
       setError(errorText(err));
     } finally {

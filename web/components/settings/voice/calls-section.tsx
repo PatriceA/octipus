@@ -7,7 +7,7 @@ import { useState } from 'react';
 import { api } from '@/lib/api';
 import { useWorkspaceId } from '@/lib/workspace-context';
 import { SecretsRedirectBanner, type SettingItem } from '../setting-field';
-import { SelectSetting, type SettingSaver, settingValue, TextSetting, ToggleSetting } from './setting-controls';
+import { SelectSetting, type SettingSaver, settingValue, TextAreaSetting, TextSetting, ToggleSetting } from './setting-controls';
 import { Busy, errorText, InlineError, primaryBtn, quietBtn, Section, SubHeading } from './ui';
 
 const PROVIDERS = [
@@ -22,9 +22,14 @@ const INBOUND = [
   { value: 'open', label: 'Anyone' },
 ];
 /** The secrets each provider's account is read from. */
-const PROVIDER_SECRETS: Record<string, Array<{ name: string; label: string }>> = {
+const PROVIDER_SECRETS: Record<string, Array<{ name: string; label: string; note?: string }>> = {
   twilio: [{ name: 'twilio_account_sid', label: 'Account SID' }, { name: 'twilio_auth_token', label: 'Auth Token' }],
-  telnyx: [{ name: 'telnyx_api_key', label: 'API Key' }, { name: 'telnyx_connection_id', label: 'Connection ID' }],
+  telnyx: [
+    { name: 'telnyx_api_key', label: 'API Key' },
+    { name: 'telnyx_connection_id', label: 'Connection ID' },
+    // Telnyx signs its webhooks with Ed25519; without the account's public key every incoming call is refused.
+    { name: 'telnyx_public_key', label: 'Public Key', note: 'Required for incoming calls: without it, every call Telnyx announces is refused.' },
+  ],
   plivo: [{ name: 'plivo_auth_id', label: 'Auth ID' }, { name: 'plivo_auth_token', label: 'Auth Token' }],
 };
 
@@ -130,13 +135,26 @@ export function CallsSection({ settings, saver }: { settings: SettingItem[]; sav
         saver={saver}
       />
 
+      <TextAreaSetting
+        settingKey="voice.expertPrompt"
+        label="How Octipus behaves on calls"
+        hint="Who it is on the phone, what it may and may not do, how it greets a caller. Empty: a general assistant that keeps its answers short."
+        value={text(settingValue(settings, 'voice.expertPrompt'))}
+        placeholder="You answer the phone for a small bakery. Take orders for pickup, tell callers the opening hours, and never promise a delivery."
+        saver={saver}
+        maxLength={4000}
+      />
+
       {on && secrets && (
         <div className="space-y-2" data-testid="call-credentials">
           <SubHeading>{providerName} account</SubHeading>
           <ul className="space-y-1.5">
             {secrets.map((secret) => (
               <li key={secret.name} className="flex items-center justify-between gap-3 text-sm">
-                <span className="text-on-surface-variant">{secret.label} <code className="text-xs">{secret.name}</code></span>
+                <span className="text-on-surface-variant">
+                  {secret.label} <code className="text-xs">{secret.name}</code>
+                  {secret.note && <span className="block text-xs" data-testid={`secret-note-${secret.name}`}>{secret.note}</span>}
+                </span>
                 {stored.has(secret.name)
                   ? <span className="flex items-center gap-1 text-tertiary text-xs"><CheckCircle className="w-3 h-3" aria-hidden /> Stored</span>
                   : <span className="flex items-center gap-1 text-warning text-xs"><XCircle className="w-3 h-3" aria-hidden /> Missing</span>}

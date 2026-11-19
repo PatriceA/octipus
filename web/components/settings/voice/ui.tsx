@@ -1,7 +1,7 @@
 'use client';
 
 import { Loader2 } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { cloneElement, type ReactElement, type ReactNode, useId } from 'react';
 
 /** The small pieces every section of the Voice page is built from. */
 
@@ -42,13 +42,20 @@ export function InlineError({ message, testId }: { message: string | null | unde
   );
 }
 
-export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+/**
+ * A labelled control. The label names the control and nothing else (the hint
+ * describes it), so a select's chosen option or a hint never becomes part of
+ * the control's name.
+ */
+export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactElement<{ id?: string; 'aria-describedby'?: string }> }) {
+  const id = useId();
+  const hintId = `${id}-hint`;
   return (
-    <label className="block space-y-1">
-      <span className="block text-xs font-medium text-on-surface">{label}</span>
-      {children}
-      {hint && <span className="block text-xs text-on-surface-variant">{hint}</span>}
-    </label>
+    <div className="space-y-1">
+      <label htmlFor={id} className="block text-xs font-medium text-on-surface">{label}</label>
+      {cloneElement(children, { id, ...(hint ? { 'aria-describedby': hintId } : {}) })}
+      {hint && <span id={hintId} className="block text-xs text-on-surface-variant">{hint}</span>}
+    </div>
   );
 }
 

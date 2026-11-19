@@ -151,7 +151,7 @@ function TopicCard({
     'bg-surface-container-low border border-outline-variant/10 rounded text-xs pl-2 pr-1.5 py-1 text-on-surface w-28 disabled:opacity-50';
 
   return (
-    <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-4">
+    <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-4" data-testid={`topic-${topic.value}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">

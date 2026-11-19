@@ -156,7 +156,7 @@ test.describe('Settings → Voice', () => {
     await expect(form.getByLabel('Model id')).toHaveValue('openai/whisper-large-v3-turbo');
 
     await form.getByLabel('Endpoint URL').fill('http://localhost:8000/v1');
-    await form.getByLabel('Name (optional)').fill('Whisper turbo');
+    await form.getByLabel('Name (optional)', { exact: true }).fill('Whisper turbo');
     await form.getByLabel('API key name (optional)').fill('env:SPEECH_KEY');
     await form.getByRole('button', { name: 'Add server' }).click();
     await expect(form.getByRole('status')).toHaveText('Whisper turbo is now the primary.');
@@ -332,6 +332,25 @@ test.describe('Settings → Voice', () => {
     await expect.poll(() => puts).toContainEqual({ key: 'voice.endpointSilenceMs', body: { value: 1200 } });
     await page.getByLabel('Incoming calls').selectOption('allowlist');
     await expect.poll(() => puts).toContainEqual({ key: 'voice.inboundPolicy', body: { value: 'allowlist' } });
+    const prompt = page.getByLabel('How Octipus behaves on calls');
+    await prompt.fill('  You answer the phone for a bakery.  ');
+    await prompt.locator('xpath=..').getByRole('button', { name: 'Save' }).click();
+    await expect.poll(() => puts).toContainEqual({ key: 'voice.expertPrompt', body: { value: 'You answer the phone for a bakery.' } });
+  });
+
+  test('for Telnyx the call account lists the public key incoming webhooks are verified with', async ({ authenticatedPage: page }) => {
+    await stubVoice(page, { overview: overviewOf() });
+    await page.route('**/api/settings', (route) => json(route, 200, {
+      categories: ['voice'],
+      settings: { voice: [{ key: 'voice.telephonyProvider', value: 'telnyx', valueType: 'string', defaultValue: 'disabled', description: 'provider', isSecret: false, category: 'voice' }] },
+    }));
+    await page.route('**/api/vault', (route) => json(route, 200, { credentials: [{ name: 'telnyx_api_key' }, { name: 'telnyx_connection_id' }] }));
+    await page.goto('/settings?tab=voice');
+    const account = page.getByTestId('call-credentials');
+    await expect(account.getByRole('listitem')).toHaveCount(3);
+    const publicKey = account.getByRole('listitem').filter({ hasText: 'telnyx_public_key' });
+    await expect(publicKey).toContainText('Missing');
+    await expect(publicKey.getByTestId('secret-note-telnyx_public_key')).toHaveText('Required for incoming calls: without it, every call Telnyx announces is refused.');
   });
 
   test('with the Voice module off, an admin still reaches the page and turns voice on from it', async ({ authenticatedPage: page }) => {
@@ -342,7 +361,7 @@ test.describe('Settings → Voice', () => {
     };
     await page.route('**/api/modules', (route) => json(route, 200, answer(false)));
     let turnedOn: unknown;
-    await page.route('**/api/modules/voice', (route) => {
+    await page.route('**/api/modules/enable', (route) => {
       turnedOn = route.request().postDataJSON();
       return json(route, 200, answer(true));
     });
@@ -353,7 +372,7 @@ test.describe('Settings → Voice', () => {
     const off = page.getByTestId('voice-off');
     await expect(off.getByRole('heading', { name: 'Voice is switched off' })).toBeVisible();
     await off.getByRole('button', { name: 'Turn it on' }).click();
-    await expect.poll(() => turnedOn).toEqual({ on: true });
+    await expect.poll(() => turnedOn).toEqual({ ids: ['voice'] });
     await expect(page.getByTestId('voice-status-stt')).toBeVisible();
   });
 

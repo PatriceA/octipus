@@ -121,13 +121,10 @@ export function useVoiceRealtime({ enabled, sessionId, isTurnActive, onUtterance
     };
 
     const stopPlayback = () => {
+      // Every source in the set was started (`schedule`), so stopping it is valid even before its start time.
       for (const source of sources) {
         source.onended = null;
-        try {
-          source.stop();
-        } catch {
-          /* not started yet: disconnecting it below is enough */
-        }
+        source.stop();
         source.disconnect();
       }
       sources.clear();
@@ -143,17 +140,13 @@ export function useVoiceRealtime({ enabled, sessionId, isTurnActive, onUtterance
         ws.onclose = null;
         ws.onerror = null;
         ws.onmessage = null;
-        try {
-          send({ type: 'stop' });
-          // close() is valid while still connecting (it aborts the handshake).
-          ws.close();
-        } catch {
-          /* already closed */
-        }
+        send({ type: 'stop' });
+        // close() is valid while still connecting (it aborts the handshake) and once closed.
+        ws.close();
       }
       mediaStream?.getTracks().forEach((track) => track.stop());
-      void captureCtx?.close().catch(() => {});
-      void playCtx?.close().catch(() => {});
+      void captureCtx?.close().catch((err: unknown) => console.warn('Voice: the microphone audio context did not close', err));
+      void playCtx?.close().catch((err: unknown) => console.warn('Voice: the playback audio context did not close', err));
     };
 
     /** The conversation cannot go on: say why, and let go of the microphone. */
@@ -169,14 +162,15 @@ export function useVoiceRealtime({ enabled, sessionId, isTurnActive, onUtterance
       if (playCtx && playCtx.sampleRate === sampleRate) return playCtx;
       if (playCtx) {
         stopPlayback();
-        void playCtx.close().catch(() => {});
+        void playCtx.close().catch((err: unknown) => console.warn('Voice: the playback audio context did not close', err));
       }
       try {
         // At the audio's own rate nothing is resampled frame by frame, so
         // consecutive frames join sample-exactly.
         playCtx = newAudioContext(sampleRate);
-      } catch {
+      } catch (err) {
         // A rate this browser's output cannot run at: its default, resampled per frame.
+        console.warn(`Voice: no audio output at ${sampleRate} Hz, playing at the browser's own rate`, err);
         playCtx = newAudioContext();
       }
       return playCtx;
@@ -190,7 +184,11 @@ export function useVoiceRealtime({ enabled, sessionId, isTurnActive, onUtterance
 
     const schedule = (ctx: AudioContext, buffer: AudioBuffer) => {
       if (ctx !== playCtx || released) return;
-      if (ctx.state === 'suspended') void ctx.resume().catch(() => {});
+      if (ctx.state === 'suspended') {
+        void ctx.resume().catch((err: unknown) => {
+          if (!cancelled) setError(`The browser would not play the spoken reply: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
       const source = ctx.createBufferSource();
       source.buffer = buffer;
       source.connect(ctx.destination);

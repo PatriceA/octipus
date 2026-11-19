@@ -61,6 +61,31 @@ export function TextSetting({ settingKey, label, hint, value, placeholder, saver
   );
 }
 
+/** Several lines of text, saved with its button. Empty is stored as empty. */
+export function TextAreaSetting({ settingKey, label, hint, value, placeholder, saver, rows = 4, maxLength }: {
+  settingKey: string; label: string; hint?: ReactNode; value: string; placeholder?: string; saver: SettingSaver; rows?: number; maxLength?: number;
+}) {
+  const [draft, setDraft] = useState(value);
+  // The stored value changed (a save, a refetch): the field follows it.
+  const [seenValue, setSeenValue] = useState(value);
+  if (value !== seenValue) {
+    setSeenValue(value);
+    setDraft(value);
+  }
+  const dirty = draft !== value;
+  return (
+    <Row label={label} hint={hint}>
+      <form className="space-y-2" onSubmit={(event) => { event.preventDefault(); if (dirty) saver.save(settingKey, draft.trim()); }}>
+        <textarea className={inputCls} aria-label={label} rows={rows} maxLength={maxLength} value={draft} placeholder={placeholder} onChange={(event) => setDraft(event.target.value)} />
+        <div className="flex items-center gap-2">
+          <button type="submit" className={quietBtn} disabled={!dirty || saver.saving === settingKey}>Save</button>
+          <SavedMark settingKey={settingKey} saver={saver} />
+        </div>
+      </form>
+    </Row>
+  );
+}
+
 /** A choice, saved when it is made. */
 export function SelectSetting({ settingKey, label, hint, value, options, saver }: {
   settingKey: string; label: string; hint?: ReactNode; value: string; options: Array<{ value: string; label: string }>; saver: SettingSaver;
