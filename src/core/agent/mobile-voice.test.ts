@@ -57,6 +57,26 @@ test('ordinary mobile text still executes without requiring voice confirmation',
   expect(fixture.root).toHaveBeenCalledTimes(1);
 });
 
+// The 12th argument of runRootAgent (after the service and its deps) is the per-turn extras; `spoken` there adds the spoken-reply directive.
+const spokenOf = (call: unknown[]) => (call[11] as { spoken?: boolean } | undefined)?.spoken === true;
+
+test('a reply read aloud is asked for in spoken style: mobile voice, and a message marked spoken — once', async () => {
+  const service = new AgentService();
+  await service.handleMessage('session', 'user', 'what time is it', 'mobile-voice');
+  expect(spokenOf(fixture.root.mock.calls[0])).toBe(true);
+
+  // A mark covers the next turn of that session and user only.
+  service.markSpokenTurn('session', 'user');
+  await service.handleMessage('session', 'user', 'what time is it', 'webchat');
+  expect(spokenOf(fixture.root.mock.calls[1])).toBe(true);
+  await service.handleMessage('session', 'user', 'and tomorrow?', 'webchat');
+  expect(spokenOf(fixture.root.mock.calls[2])).toBe(false);
+
+  service.markSpokenTurn('session', 'someone-else');
+  await service.handleMessage('session', 'user', 'typed', 'webchat');
+  expect(spokenOf(fixture.root.mock.calls[3])).toBe(false);
+});
+
 // A worker identifier exists on failures too; callers must use the explicit outcome.
 test.each(['success', 'failed', 'cancelled'] as const)('preserves the root turn outcome: %s', async outcome => {
   fixture.root.mockResolvedValueOnce({ response: 'Root result', agentId: 'agent', sources: [], outcome });
