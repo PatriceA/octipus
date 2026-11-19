@@ -6,8 +6,10 @@
 import { coreLogger } from '@/utils/logger';
 import type { TelephonyProvider } from './interface';
 
-export type { CallDirection, CallEvent, CallSession, CallStatus, InitiateCallOptions, TelephonyProvider } from './interface';
-export { CallManager, getCallManager } from './interface';
+export type {
+  CallDirection, CallInstruction, CallSession, CallStatus, InitiateCallOptions, SpokenLine, TelephonyProvider, TelephonyWebhookEvent, WebhookReply,
+} from './interface';
+export { CallManager, getCallManager, isFinalCallStatus } from './interface';
 
 let cachedProvider: TelephonyProvider | null = null;
 let cachedProviderName: string | null = null;
@@ -45,7 +47,9 @@ export async function getTelephonyProvider(providerName?: string): Promise<Telep
         const userVal = await vault.getByName(admin.id, key);
         if (userVal) return userVal;
       }
-    } catch { /* fallback failed */ }
+    } catch (err) {
+      coreLogger.warn({ err, key }, 'Telephony credential lookup in the admin vault failed');
+    }
     return null;
   }
 
@@ -58,13 +62,8 @@ export async function getTelephonyProvider(providerName?: string): Promise<Telep
       const fromNumber = (await settings.get('voice.phoneNumber') as string | null)
         || await getSecret('twilio_phone_number') || '';
 
-      // Map short language codes to Twilio BCP-47 locale
-      const langSetting = (await settings.get('voice.language') as string | null) || 'en';
-      const langMap: Record<string, string> = { en: 'en-US', de: 'de-DE', fr: 'fr-FR', es: 'es-ES', it: 'it-IT', pt: 'pt-BR', nl: 'nl-NL', ja: 'ja-JP', ko: 'ko-KR', zh: 'zh-CN' };
-      const language = langMap[langSetting] || (langSetting.includes('-') ? langSetting : 'en-US');
-
       const { TwilioProvider } = await import('./twilio');
-      cachedProvider = new TwilioProvider({ accountSid, authToken, fromNumber, language });
+      cachedProvider = new TwilioProvider({ accountSid, authToken, fromNumber });
       break;
     }
 

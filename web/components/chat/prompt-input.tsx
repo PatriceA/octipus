@@ -14,19 +14,41 @@ import {
 import { type Ref, useCallback, useEffect, useId, useImperativeHandle, useRef, useState, useSyncExternalStore } from 'react';
 import type { RealtimeState } from '@/hooks/useVoiceRealtime';
 import { api } from '@/lib/api';
+import type { TranscribeAnswer } from '@/lib/types/voice';
 import { cn } from '@/lib/utils';
+import { audioFormatOf, blobToBase64, microphoneError, startClipRecorder } from '@/lib/voice-audio';
 import { PROTECTION_LEVELS, PROTECTION_LEVEL_LABELS, type ProtectionLevel } from '../../../src/shared/protection';
 import { AudioWaveform } from './audio-waveform';
 
-const subscribeNoop = () => () => {};
-const hasNativeSpeech = () =>
-  !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
-const getVoiceSupport = () => {
-  if (hasNativeSpeech()) return 'native';
-  if (typeof MediaRecorder !== 'undefined') return 'server';
-  return 'none';
+/** The browser's own speech recognition (Chrome, Edge, Safari). What it hears goes to the browser vendor. */
+interface BrowserRecognition {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null;
+  onerror: ((event: { error: string }) => void) | null;
+  onend: (() => void) | null;
+  start(): void;
+  stop(): void;
+}
+type BrowserRecognitionCtor = new () => BrowserRecognition;
+const browserRecognition = (): BrowserRecognitionCtor | undefined => {
+  const w = window as unknown as { SpeechRecognition?: BrowserRecognitionCtor; webkitSpeechRecognition?: BrowserRecognitionCtor };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition;
 };
-const getVoiceSupportServer = () => 'none' as const;
+
+const subscribeNoop = () => () => {};
+/** What this browser can do for dictation: record a clip for the server, recognise speech itself, both or neither. */
+const getDictationAbilities = () => {
+  const record = typeof MediaRecorder !== 'undefined';
+  const recognise = !!browserRecognition();
+  return record && recognise ? 'both' : record ? 'record' : recognise ? 'browser' : 'none';
+};
+const getDictationAbilitiesServer = () => 'none' as const;
+
+const BROWSER_DICTATION_LABEL = "Dictate with your browser's speech recognition (audio is sent to the browser vendor)";
+/** A dictated clip is cut here. */
+const DICTATION_MAX_MS = 120_000;
 
 export interface Attachment {
   id: string;
@@ -51,16 +73,24 @@ interface PromptInputProps {
   /** The conversation dictated into: its protection level decides which engines may hear it. */
   sessionId?: string | null;
   placeholder?: string;
-  /** Reason voice is unavailable (no STT engine / no cloud key) — for the tooltip. */
+  /** Why the voice conversation could not start, shown under the input. */
   voiceError?: string | null;
-  /** False when voice is unavailable — disables the conversation toggle. */
-  voiceAvailable?: boolean;
-  /** Hands-free voice conversation (streaming talk ↔ spoken reply). */
+  /**
+   * Whether the server can hear (a speech-to-text engine runs): dictation is
+   * transcribed there and the conversation toggle is offered. `null` = not
+   * known yet, so nothing is offered that might send audio elsewhere.
+   */
+  voiceAvailable?: boolean | null;
+  /** Hands-free voice conversation: talk, and the reply is spoken. */
   realtimeMode?: boolean;
   realtimeState?: RealtimeState;
   realtimePartial?: string;
   realtimeError?: string | null;
+  /** Whether replies are spoken; false = no speech engine, replies are only shown. */
+  realtimeSpeaks?: boolean | null;
   onToggleRealtimeMode?: () => void;
+  /** Stop the reply being spoken. */
+  onInterruptRealtime?: () => void;
 }
 
 function getAttachmentType(file: File): Attachment['type'] {
@@ -101,7 +131,6 @@ const REALTIME_STATE_LABEL: Record<RealtimeState, string> = {
   listening: 'listening',
   thinking: 'thinking',
   speaking: 'speaking',
-  error: 'mic error',
 };
 
 export default function PromptInput({
@@ -113,9 +142,11 @@ export default function PromptInput({
   realtimeState = 'idle',
   realtimePartial = '',
   realtimeError = null,
+  realtimeSpeaks = null,
   onToggleRealtimeMode,
+  onInterruptRealtime,
   voiceError = null,
-  voiceAvailable = true,
+  voiceAvailable = null,
   composerRef,
   sessionId = null,
 }: PromptInputProps) {
@@ -145,6 +176,8 @@ export default function PromptInput({
   const [isDragging, setIsDragging] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  /** Why dictation did not work, shown under the input until the next attempt. */
+  const [dictationError, setDictationError] = useState<string | null>(null);
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -152,7 +185,7 @@ export default function PromptInput({
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const recognitionRef = useRef<any>(null);
+  const recognitionRef = useRef<{ stop(): void } | null>(null);
   const dragCounterRef = useRef(0);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -386,139 +419,107 @@ export default function PromptInput({
     [addFiles]
   );
 
-  // Voice input supported if browser has SpeechRecognition OR MediaRecorder (fallback to server STT)
-  const voiceSupport = useSyncExternalStore(subscribeNoop, getVoiceSupport, getVoiceSupportServer);
-  // The browser's own recognition needs no model here; recording for the
-  // server's transcription is offered only when speech to text is configured
-  // (not configured = not shown, docs/MODULES.md → Capability gates).
-  const speechSupported = voiceSupport === 'native' || (voiceSupport === 'server' && voiceAvailable);
-  const useServerSTT = voiceSupport === 'server';
+  // Dictation. When the server can hear, the clip is recorded here and
+  // transcribed there, by the engine the install chose (which may be a
+  // private one). The browser's own recognition sends the audio to the
+  // browser vendor, so it is used only when the server has no engine at all,
+  // and the button says so.
+  const dictationAbilities = useSyncExternalStore(subscribeNoop, getDictationAbilities, getDictationAbilitiesServer);
+  const canRecord = dictationAbilities === 'both' || dictationAbilities === 'record';
+  const canRecognise = dictationAbilities === 'both' || dictationAbilities === 'browser';
+  const dictation: 'server' | 'browser' | 'none' =
+    voiceAvailable === true ? (canRecord ? 'server' : 'none')
+      : voiceAvailable === false && canRecognise ? 'browser'
+        : 'none';
 
-  // Voice input via Web Speech API
-  const toggleVoice = useCallback(async () => {
-    if (isListening) {
-      recognitionRef.current?.stop();
+  const dictateWithServer = useCallback(async () => {
+    let recorder: Awaited<ReturnType<typeof startClipRecorder>>;
+    try {
+      recorder = await startClipRecorder(DICTATION_MAX_MS);
+    } catch (err) {
+      setDictationError(microphoneError(err));
+      return;
+    }
+    setMediaStream(recorder.stream);
+    setIsListening(true);
+    recognitionRef.current = recorder;
+    try {
+      const clip = await recorder.done;
+      setMediaStream(null);
       setIsListening(false);
-      return;
-    }
-
-    // MediaRecorder + server-side STT (/api/voice/transcribe)
-    // UX: tap mic → waveform + stop button → tap stop → transcribing → result in input
-    if (useServerSTT) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        setMediaStream(stream);
-        const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm'
-          : MediaRecorder.isTypeSupported('audio/ogg') ? 'audio/ogg'
-          : '';
-        const mediaRecorder = mimeType
-          ? new MediaRecorder(stream, { mimeType })
-          : new MediaRecorder(stream);
-        const format = mimeType.split('/')[1] || 'wav';
-        const chunks: Blob[] = [];
-
-        mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-
-        mediaRecorder.onstop = async () => {
-          stream.getTracks().forEach(t => t.stop());
-          setMediaStream(null);
-          setIsListening(false);
-
-          if (chunks.length === 0) return;
-
-          // Phase: transcribing
-          setIsTranscribing(true);
-          const blob = new Blob(chunks, { type: mimeType || 'audio/wav' });
-          const buffer = await blob.arrayBuffer();
-          const bytes = new Uint8Array(buffer);
-          let binary = '';
-          for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-          const base64 = btoa(binary);
-
-          try {
-            const res = await fetch('/api/voice/transcribe', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ audio: base64, format, ...(sessionId ? { sessionId } : {}) }),
-              credentials: 'include',
-            });
-            const data = await res.json();
-            if (data.text) {
-              setText((prev: string) => prev ? prev + ' ' + data.text : data.text);
-            } else if (data.error) {
-              console.error('Transcription error:', data.error);
-            }
-          } catch (err) {
-            console.error('Server STT failed:', err);
-          }
-          setIsTranscribing(false);
-        };
-
-        recognitionRef.current = { stop: () => { if (mediaRecorder.state === 'recording') mediaRecorder.stop(); } };
-        mediaRecorder.start();
-        setIsListening(true);
-
-        // Safety limit: 2 minutes max
-        setTimeout(() => { if (mediaRecorder.state === 'recording') mediaRecorder.stop(); }, 120_000);
-      } catch (_err) {
-        alert('Microphone access denied. Check browser permissions.');
-        setIsListening(false);
-        setMediaStream(null);
+      if (clip.size === 0) {
+        setDictationError('Nothing was recorded.');
+        return;
       }
+      setIsTranscribing(true);
+      const answer = await api.post<TranscribeAnswer>('/voice/transcribe', {
+        audio: await blobToBase64(clip),
+        format: audioFormatOf(clip.type),
+        ...(sessionId ? { sessionId } : {}),
+      });
+      // A transcription that failed answers 200 with `error`.
+      if (answer.error) setDictationError(`Dictation failed: ${answer.error}`);
+      else if (answer.text) setText((prev) => (prev ? `${prev} ${answer.text}` : answer.text ?? ''));
+      else setDictationError('No speech was heard in the recording.');
+    } catch (err) {
+      setDictationError(`Dictation failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setMediaStream(null);
+      setIsListening(false);
+      setIsTranscribing(false);
+    }
+  }, [sessionId]);
+
+  const dictateWithBrowser = useCallback(() => {
+    const Recognition = browserRecognition();
+    if (!Recognition) {
+      setDictationError('This browser has no speech recognition.');
       return;
     }
-
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert('Speech recognition is not supported in this browser. Use Chrome or Edge.');
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
+    const recognition = new Recognition();
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = navigator.language || 'en-US';
 
     let finalTranscript = text;
-
-    recognition.onresult = (event: any) => {
+    recognition.onresult = (event) => {
       let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          finalTranscript += transcript;
-        } else {
-          interim += transcript;
-        }
+        if (event.results[i].isFinal) finalTranscript += transcript;
+        else interim += transcript;
       }
       setText(finalTranscript + interim);
     };
-
-    recognition.onerror = (event: any) => {
+    recognition.onerror = (event) => {
       setIsListening(false);
-      if (event.error === 'not-allowed') {
-        alert('Microphone access denied. Allow microphone permissions in your browser settings.');
-      } else if (event.error === 'no-speech') {
-        // Silent timeout — not an error worth showing
-      } else {
-        console.error('Speech recognition error:', event.error);
-      }
+      // 'no-speech' is the recogniser's own timeout after silence, and 'aborted' is the stop button.
+      if (event.error === 'no-speech' || event.error === 'aborted') return;
+      setDictationError(event.error === 'not-allowed' || event.error === 'service-not-allowed'
+        ? 'The microphone is blocked. Allow it for this site in the browser, then try again.'
+        : `The browser's speech recognition failed: ${event.error}`);
     };
-
-    recognition.onend = () => {
-      setIsListening(false);
-    };
+    recognition.onend = () => setIsListening(false);
 
     recognitionRef.current = recognition;
     try {
       recognition.start();
       setIsListening(true);
     } catch (err) {
-      console.error('Failed to start speech recognition:', err);
       setIsListening(false);
+      setDictationError(`The browser's speech recognition could not start: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [isListening, text, useServerSTT, sessionId]);
+  }, [text]);
+
+  const toggleVoice = useCallback(() => {
+    if (isListening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+    setDictationError(null);
+    if (dictation === 'server') void dictateWithServer();
+    else if (dictation === 'browser') dictateWithBrowser();
+  }, [isListening, dictation, dictateWithServer, dictateWithBrowser]);
 
   // Cleanup speech recognition on unmount
   useEffect(() => {
@@ -682,13 +683,16 @@ export default function PromptInput({
           <Paperclip className="h-4 w-4" />
         </button>
 
-        {/* Voice input — mic button / waveform+stop / transcribing */}
-        {speechSupported && !isListening && !isTranscribing && (
+        {/* Dictation — mic button / waveform+stop / transcribing */}
+        {dictation !== 'none' && !isListening && !isTranscribing && (
           <button
             type="button"
             onClick={toggleVoice}
             className="rounded-lg p-2 text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-on-surface"
-            title="Voice input"
+            title={dictation === 'browser' ? BROWSER_DICTATION_LABEL : 'Dictate'}
+            aria-label={dictation === 'browser' ? BROWSER_DICTATION_LABEL : 'Dictate'}
+            data-testid="dictate-button"
+            data-dictation={dictation}
           >
             <Mic className="h-4 w-4" />
           </button>
@@ -712,7 +716,7 @@ export default function PromptInput({
           </div>
         )}
 
-        {/* Browser SpeechRecognition active (Chrome) — simpler indicator */}
+        {/* The browser's own recognition is listening — simpler indicator */}
         {isListening && !mediaStream && (
           <button
             type="button"
@@ -733,40 +737,51 @@ export default function PromptInput({
           </div>
         )}
 
-        {/* Voice conversation toggle (hands-free, streaming) */}
-        {onToggleRealtimeMode && voiceAvailable && (
+        {/* Voice conversation toggle (hands-free) — offered when the server can hear */}
+        {onToggleRealtimeMode && (voiceAvailable === true || realtimeMode) && (
           <button
             type="button"
-            onClick={voiceAvailable ? onToggleRealtimeMode : undefined}
-            disabled={!voiceAvailable}
+            onClick={onToggleRealtimeMode}
             className={cn(
               'rounded-lg p-2 transition-colors',
-              !voiceAvailable
-                ? 'text-on-surface-variant/40 cursor-not-allowed'
-                : realtimeMode
-                  ? 'bg-primary/15 text-primary hover:bg-primary/25'
-                  : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'
+              realtimeMode
+                ? 'bg-primary/15 text-primary hover:bg-primary/25'
+                : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'
             )}
-            title={
-              !voiceAvailable
-                ? voiceError || 'Voice unavailable — run `octi setup` to enable voice'
-                : realtimeMode
-                  ? 'Exit voice conversation'
-                  : 'Start voice conversation'
-            }
+            title={realtimeMode ? 'Exit voice conversation' : 'Start voice conversation'}
+            aria-label={realtimeMode ? 'Exit voice conversation' : 'Start voice conversation'}
+            aria-pressed={realtimeMode}
           >
             <AudioLines className="h-4 w-4" />
           </button>
         )}
 
-        {/* Realtime voice state + live partial transcript (or error) */}
+        {/* Voice conversation: its state and what is being said, or what went wrong */}
         {realtimeMode && (
-          <div className={cn('flex items-start gap-1.5 rounded-lg px-3 py-2 max-w-[32rem]', realtimeError ? 'bg-error/10' : 'bg-primary/10')}>
-            <span className={cn('dot dot-live h-1.5 w-1.5 mt-1.5 shrink-0', realtimeState === 'error' || realtimeError ? 'text-error bg-error' : 'text-primary bg-primary')} />
-            <span className={cn('text-sm leading-snug line-clamp-4 break-words', realtimeError ? 'text-error' : 'text-accent')} title={realtimeError || realtimePartial || undefined}>
-              {realtimeError || realtimePartial || REALTIME_STATE_LABEL[realtimeState]}
+          <div
+            role="status"
+            data-testid="voice-conversation-status"
+            data-state={realtimeState}
+            className={cn('flex items-start gap-1.5 rounded-lg px-3 py-2 max-w-[32rem]', realtimeError ? 'bg-error/10' : 'bg-primary/10')}
+          >
+            <span className={cn('dot dot-live h-1.5 w-1.5 mt-1.5 shrink-0', realtimeError ? 'text-error bg-error' : 'text-primary bg-primary')} />
+            <span className={cn('text-sm leading-snug line-clamp-4 break-words', realtimeError ? 'text-error' : 'text-accent')}>
+              {realtimeError
+                || realtimePartial
+                || (realtimeState === 'listening' && realtimeSpeaks === false ? 'Listening only — no speech engine' : REALTIME_STATE_LABEL[realtimeState])}
               {!realtimeError && <span className="term-caret" />}
             </span>
+            {realtimeState === 'speaking' && onInterruptRealtime && (
+              <button
+                type="button"
+                onClick={onInterruptRealtime}
+                className="shrink-0 rounded p-1 text-primary hover:bg-primary/15"
+                title="Stop speaking"
+                aria-label="Stop speaking"
+              >
+                <Square className="h-3 w-3 fill-current" />
+              </button>
+            )}
           </div>
         )}
 
@@ -786,6 +801,15 @@ export default function PromptInput({
           <Send className="h-4 w-4" />
         </button>
       </div>
+
+      {(dictationError || voiceError) && (
+        <p role="alert" data-testid="composer-voice-error" className="mt-2 flex items-start gap-2 text-xs text-error">
+          <span className="min-w-0 break-words">{dictationError || voiceError}</span>
+          {dictationError && (
+            <button type="button" onClick={() => setDictationError(null)} className="shrink-0 underline" aria-label="Dismiss the dictation error">dismiss</button>
+          )}
+        </p>
+      )}
     </div>
   );
 }

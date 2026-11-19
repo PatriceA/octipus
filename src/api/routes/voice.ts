@@ -59,13 +59,14 @@ function signedWebhookUrl(publicBase: string, rawUrl: string): string {
   return `${publicBase.replace(/\/+$/, '')}${u.pathname}${u.search}`;
 }
 
-/** The webhook's fields: form-encoded (Twilio, Plivo) or JSON (Telnyx). */
+/** The webhook's fields: form-encoded (Twilio, Plivo) or JSON (Telnyx). A body that is neither has none. */
 function webhookFields(raw: string, contentType: string): Record<string, unknown> {
   if (contentType.includes('x-www-form-urlencoded')) return Object.fromEntries(new URLSearchParams(raw).entries());
   try {
     const parsed: unknown = JSON.parse(raw);
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
+  } catch (err) {
+    apiLogger.warn({ err, contentType }, 'Voice webhook body is neither a form nor JSON');
     return {};
   }
 }
@@ -81,7 +82,7 @@ async function handleVoiceWebhook(
   provider: string,
   raw: string,
   request: Request,
-): Promise<{ status: 403 } | { status: 200; xml: string }> {
+): Promise<{ status: 403 } | { status: 200; reply: import('@/voice/telephony').WebhookReply }> {
   const headers: Record<string, string> = {};
   request.headers.forEach((v, k) => { headers[k] = v; });
   const { getSettingsService } = await import('@/config/settings-service');
@@ -92,7 +93,7 @@ async function handleVoiceWebhook(
   const telephonyProvider = await getTelephonyProvider(provider);
 
   if (!telephonyProvider) {
-    return { status: 200, xml: '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>' };
+    return { status: 200, reply: { contentType: 'application/xml', body: '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>' } };
   }
 
   if (!telephonyProvider.verifyWebhook(headers, raw, url)) {
@@ -100,235 +101,37 @@ async function handleVoiceWebhook(
     return { status: 403 };
   }
   const body = webhookFields(raw, headers['content-type'] ?? '');
-  return { status: 200, xml: await answerVoiceWebhook(provider, body, url, telephonyProvider, getCallManager(), publicBase) };
+  return { status: 200, reply: await answerVoiceWebhook(body, url, telephonyProvider, getCallManager(), publicBase) };
 }
 
-/** Act on a verified webhook; returns the provider's XML answer. */
+/**
+ * Act on a verified webhook: the provider reads it, the call flow
+ * (src/voice/telephony/call-flow.ts) decides, the provider answers.
+ */
 async function answerVoiceWebhook(
-  provider: string,
   body: Record<string, unknown>,
   url: string,
   telephonyProvider: import('@/voice/telephony').TelephonyProvider,
   callManager: import('@/voice/telephony').CallManager,
   publicBase: string,
-): Promise<string> {
-  const { getSettingsService } = await import('@/config/settings-service');
-  const settingsSvc = getSettingsService();
-  // Debug: log all webhook fields to diagnose speech recognition issues
-  apiLogger.info({ provider, bodyKeys: Object.keys(body), callStatus: body.CallStatus, speechResult: body.SpeechResult ? 'present' : 'absent', callSid: body.CallSid }, 'Voice webhook received');
-
-  const providerCallId = (body.CallSid || body.call_control_id || body.RequestUUID || '') as string;
-  let session = callManager.getByProviderCallId(providerCallId);
-
-  const callStatus = (body.CallStatus || body.event_type || body.Event || '') as string;
-  const callerNumber = (body.From || body.from || '') as string;
-
-  // ── Inbound call handling ───────────────────────────────────────
-  // When Twilio answers, the first webhook has CallStatus = "ringing" or "in-progress"
-  // with no existing session. Create one if the inbound policy allows it.
-  if (!session && providerCallId) {
-    const inboundPolicy = (await settingsSvc.get('voice.inboundPolicy') as string) || 'disabled';
-
-    if (inboundPolicy === 'disabled') {
-      apiLogger.info({ provider, caller: callerNumber }, 'Inbound call rejected (policy: disabled)');
-      return telephonyProvider.generateHangupResponse();
-    }
-
-    if (inboundPolicy === 'allowlist') {
-      const allowList = (await settingsSvc.get('voice.inboundAllowFrom') as string[] | null) || [];
-      if (!allowList.includes(callerNumber)) {
-        apiLogger.info({ provider, caller: callerNumber }, 'Inbound call rejected (not in allowlist)');
-        return telephonyProvider.generateHangupResponse();
-      }
-    }
-
-    // Policy is "open" or caller is in allowlist — create a session
-    const toNumber = (body.To || body.to || '') as string;
-    const inboundSession: import('@/voice/telephony').CallSession = {
-      id: `inbound-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      provider,
-      providerCallId,
-      direction: 'inbound',
-      from: callerNumber,
-      to: toNumber,
-      status: 'active',
-      startedAt: new Date(),
-      answeredAt: new Date(),
-      metadata: { mode: 'conversation', conversationHistory: [] },
-    };
-    callManager.create(inboundSession);
-    session = inboundSession;
-    apiLogger.info({ callId: session.id, provider, caller: callerNumber, policy: inboundPolicy }, 'Inbound call accepted');
-
-    // Realtime media-stream path (Phase 4d): if a public wss base is configured
-    // and streaming is enabled, hand the call to the bidirectional media socket
-    // (low-latency, barge-in) instead of the turn-based <Gather> loop. Requires
-    // voice.publicUrl (Twilio must reach a public wss); falls back to Gather.
-    const streamingSetting = await settingsSvc.get('voice.streaming');
-    const streamingEnabled = streamingSetting === true || streamingSetting === 'true';
-    // Only Twilio implements <Connect><Stream>; Plivo/Telnyx would greet-then-
-    // hangup, so keep them on the working <Gather> loop.
-    if (streamingEnabled && publicBase && provider === 'twilio') {
-      const wssBase = publicBase.replace(/^http/, 'ws');
-      const { mintMediaStreamToken } = await import('../voice-media-ws');
-      const token = mintMediaStreamToken(String(body.CallSid || session.id));
-      const streamUrl = `${wssBase}/voice/media/${provider}?token=${token}`;
-      apiLogger.info({ callId: session.id, streamUrl: streamUrl.replace(token, '***') }, 'Answering with media stream');
-      return telephonyProvider.generateAnswerResponse({
-        message: 'Hello, how can I help you?',
-        streamUrl,
-      });
-    }
-
-    // Answer with a greeting and start gathering speech
-    return telephonyProvider.generateAnswerResponse({
-      message: 'Hello, how can I help you?',
-      gatherSpeech: true,
-      callbackUrl: url,
-    });
-  }
-
-  // ── Speech gathered — MUST be checked before call-status handlers ──
-  // Twilio sends SpeechResult alongside CallStatus=in-progress on the Gather callback.
-  // FAST PATH: direct LLM call with expert system prompt, no root agent.
-  const speechResult = (body.SpeechResult || body.speech || body.Speech || '') as string;
-  if (speechResult && session) {
-    apiLogger.info({ callId: session.id, speech: speechResult.slice(0, 200) }, 'Voice speech received');
-
-    try {
-      const { getLiteLLMClient } = await import('@/models/litellm-client');
-      const { getModelRegistry } = await import('@/models/model-registry');
-      const client = getLiteLLMClient();
-      const registry = getModelRegistry();
-
-      // Model: voice topic routing → system default (ignore per-call overrides from LLM agents)
-      // A phone call has no signed-in requester: install lanes only (§8.2).
-      let voiceModelId: string | undefined;
-      let voiceModelName: string | undefined;
-      try {
-        const { ModelSelector } = await import('@/core/agent/model-selector');
-        const selector = new ModelSelector();
-        const routing = await selector.selectForWorker('voice', false);
-        voiceModelId = routing.model;
-        voiceModelName = routing.name || undefined;
-      } catch { /* fallback below */ }
-      if (!voiceModelId) {
-        const fallback = await registry.getDefaultModel();
-        voiceModelId = fallback?.modelId;
-        voiceModelName = fallback?.name;
-      }
-      if (!voiceModelId) {
-        throw new Error('No model configured for voice topic');
-      }
-
-      apiLogger.info({ callId: session.id, voiceModelId }, 'Voice LLM model selected');
-
-      // Build conversation history (kept in session metadata for speed — no DB round-trip)
-      const history = (session.metadata.conversationHistory || []) as Array<{ role: string; content: string }>;
-      history.push({ role: 'user', content: speechResult });
-
-      // Expert prompt: per-call override → expert assigned to "voice" topic → default
-      let expertPrompt = session.metadata.expertPrompt as string | undefined;
-      if (!expertPrompt) {
-      }
-      if (!expertPrompt) {
-        expertPrompt = 'You are a helpful voice assistant on a phone call. Keep responses short (1-3 sentences), natural, and conversational. No markdown, no lists, no code blocks.';
-      }
-      expertPrompt += '\n\nWhen the caller says goodbye, thanks you and wants to end the call, or clearly wants to hang up, respond with a brief farewell and include the exact marker [END_CALL] at the end of your response. Example: "Goodbye, have a great day! [END_CALL]"';
-
-      const startTime = Date.now();
-      // Honor the voice topic's configured temperature/maxTokens (Topics page)
-      // on top of the voice-tuned defaults — same override mechanism workers
-      // get via applyTopicParamOverrides in agent-worker.
-      const { applyTopicParamOverrides, getTopicConfig } = await import('@/models/topic-config');
-      const voiceParams = applyTopicParamOverrides(
-        { temperature: 0.7, maxTokens: 256 /* short responses for voice */ },
-        getTopicConfig('voice'),
-      );
-      const result = await client.complete({
-        model: voiceModelId,
-        modelConfigName: voiceModelName,
-        messages: [
-          { role: 'system', content: expertPrompt, timestamp: new Date() },
-          ...history.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content, timestamp: new Date() })),
-        ],
-        ...voiceParams,
-        // A phone call has no signed-in requester: the install's phone line pays.
-        funding: 'install',
-      });
-
-      let spoken = result.content || 'I didn\'t catch that.';
-      const shouldEndCall = spoken.includes('[END_CALL]');
-      spoken = spoken.replace(/\[END_CALL\]/g, '').trim();
-
-      history.push({ role: 'assistant', content: spoken });
-
-      // Keep last 20 turns to limit context size
-      if (history.length > 40) history.splice(0, history.length - 40);
-      session.metadata.conversationHistory = history;
-
-      apiLogger.info(
-        { callId: session.id, latencyMs: Date.now() - startTime, model: voiceModelId, tokens: result.usage.totalTokens, endCall: shouldEndCall },
-        'Voice LLM response (direct)',
-      );
-
-      if (shouldEndCall) {
-        // Speak farewell then hang up
-        return telephonyProvider.generateAnswerResponse({
-          message: spoken,
-          gatherSpeech: false,
-        });
-      }
-
-      return telephonyProvider.generateAnswerResponse({
-        message: spoken,
-        gatherSpeech: true,
-        callbackUrl: url,
-      });
-    } catch (error) {
-      apiLogger.error({ error, callId: session.id }, 'Voice LLM call failed');
-      return telephonyProvider.generateAnswerResponse({
-        message: 'I had trouble processing that. Could you repeat?',
-        gatherSpeech: true,
-        callbackUrl: url,
-      });
-    }
-  }
-
-  // ── Outbound call: ringing ──────────────────────────────────────
-  if (callStatus === 'ringing' || callStatus === 'initiated') {
-    if (session) callManager.updateStatus(session.id, 'ringing');
-    return '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
-  }
-
-  // ── Call answered (outbound with pending message) ───────────────
-  if (callStatus === 'in-progress' || callStatus === 'answered' || callStatus === 'call.answered') {
-    if (session) {
-      callManager.updateStatus(session.id, 'active');
-      const pending = session.metadata.pendingMessage as string | undefined;
-      if (pending) {
-        delete session.metadata.pendingMessage;
-        const mode = session.metadata.mode as string;
-        return telephonyProvider.generateAnswerResponse({
-          message: pending,
-          gatherSpeech: mode === 'conversation',
-          callbackUrl: mode === 'conversation' ? url : undefined,
-        });
-      }
-    }
-  }
-
-  // Call ended
-  if (callStatus === 'completed' || callStatus === 'call.hangup' || callStatus === 'busy' || callStatus === 'no-answer' || callStatus === 'failed') {
-    if (session) {
-      const status = callStatus === 'completed' || callStatus === 'call.hangup' ? 'ended' : callStatus as any;
-      callManager.updateStatus(session.id, status);
-      apiLogger.info({ callId: session.id, status: callStatus }, 'Voice call ended');
-    }
-    return telephonyProvider.generateHangupResponse();
-  }
-
-  return telephonyProvider.generateHangupResponse();
+): Promise<import('@/voice/telephony').WebhookReply> {
+  const [{ handleCallEvent }, { generatePhoneReply }, { prepareSpokenLine }, { getSettingsService }, { mintMediaStreamToken }] = await Promise.all([
+    import('@/voice/telephony/call-flow'), import('@/voice/telephony/reply'), import('@/voice/telephony/audio-store'),
+    import('@/config/settings-service'), import('../voice-media-ws'),
+  ]);
+  // Lines spoken by the install's engine are fetched by the carrier from the
+  // audio route next to this webhook — reachable only through a public URL.
+  const audioBase = publicBase ? url.replace(/\/webhook\/[^/?#]+(?:\/status)?(?:[?#].*)?$/, '/webhook/audio') : null;
+  return handleCallEvent(telephonyProvider.parseWebhook(body), {
+    provider: telephonyProvider,
+    callManager,
+    callbackUrl: url,
+    publicBase,
+    settings: getSettingsService(),
+    reply: (call, speech) => generatePhoneReply(call, speech),
+    line: (text, fixed) => prepareSpokenLine(text, audioBase, fixed),
+    mintStreamToken: mintMediaStreamToken,
+  });
 }
 
 export const voiceRoutes = new Elysia({ prefix: '/voice' })
@@ -762,6 +565,29 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
     }
   )
 
+  // A line of a phone call spoken by the install's Speech engine, for the
+  // carrier to play (src/voice/telephony/audio-store.ts). Unauthenticated: a
+  // carrier presents no credentials, so the random id is the secret, and it
+  // stops working within minutes.
+  .get(
+    '/webhook/audio/:id',
+    async ({ params, set }) => {
+      const { getCallAudioStore } = await import('@/voice/telephony/audio-store');
+      const clip = /^[0-9a-f]{32}$/.test(params.id) ? getCallAudioStore().get(params.id) : null;
+      if (!clip) {
+        set.status = 404;
+        return { error: 'Not found' };
+      }
+      return new Response(new Uint8Array(clip.audio), {
+        headers: { 'Content-Type': clip.contentType, 'Content-Length': String(clip.audio.length), 'Cache-Control': 'no-store' },
+      });
+    },
+    {
+      params: t.Object({ id: t.String({ maxLength: 64 }) }),
+      detail: { tags: ['voice'] },
+    }
+  )
+
   // Telephony webhook — receives call events from Twilio/Telnyx/Plivo.
   // The body stays raw text: the signature covers the exact bytes, and the
   // fields (form-urlencoded or JSON) are parsed only once it verifies.
@@ -773,8 +599,8 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
         set.status = 403;
         return { error: 'Webhook signature verification failed' };
       }
-      return new Response(out.xml, {
-        headers: { 'Content-Type': 'application/xml' },
+      return new Response(out.reply.body, {
+        headers: { 'Content-Type': out.reply.contentType },
       });
     },
     {

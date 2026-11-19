@@ -295,6 +295,25 @@ class ApiClient {
   }
 
   /**
+   * POST JSON and read bytes back, with the answer's headers (synthesised
+   * speech: `POST /voice/speak`). A refusal's JSON `error` is thrown as an
+   * `ApiError`, like every other call.
+   */
+  async postForBlob(path: string, body: unknown): Promise<{ blob: Blob; headers: Headers }> {
+    const res = await fetch(`${getApiUrl()}${path}`, {
+      method: 'POST',
+      headers: { ...this.authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({})) as Record<string, unknown>;
+      throw new ApiError(typeof error.error === 'string' ? error.error : `HTTP ${res.status}`, res.status, 0, error);
+    }
+    return { blob: await res.blob(), headers: res.headers };
+  }
+
+  /**
    * Fetch binary content with the caller's credentials.
    *
    * Needed because an `<img src>` cannot carry them everywhere octipus runs:

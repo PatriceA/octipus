@@ -1,8 +1,11 @@
 /**
- * Voice Call Tool — enables agents to make and manage phone calls.
+ * Voice Call Tool — lets agents place and end phone calls.
  *
- * Leverages the existing VoiceService for STT/TTS and adds telephony
- * provider integration for actual phone calls via Twilio, Telnyx, or Plivo.
+ * It only starts a call through the configured telephony provider (Twilio,
+ * Telnyx or Plivo) and waits for it to end. What happens on the call — the
+ * provider's webhooks, what is said, the conversation — is the call flow's
+ * (src/voice/telephony/call-flow.ts, reply.ts); the result is read from the
+ * call's record in `CallManager`.
  */
 
 import type { ToolManifest, } from '@/core/types';
@@ -38,8 +41,9 @@ export class VoiceCallTool extends BaseTool {
       if (!provider) return { available: false, reason: 'No telephony provider configured (voice.telephonyProvider)' };
       const health = await provider.checkHealth();
       return health.healthy ? { available: true } : { available: false, degraded: true, reason: health.error };
-    } catch {
-      return { available: false, reason: 'Telephony module not available' };
+    } catch (err) {
+      log.warn({ err }, 'Telephony availability check failed');
+      return { available: false, reason: `Telephony is not available: ${(err as Error).message}` };
     }
   }
 
@@ -72,11 +76,9 @@ export class VoiceCallTool extends BaseTool {
         const publicUrl = (await settings.get('voice.publicUrl') as string) || `http://localhost:${process.env.API_PORT || 3005}`;
         const webhookUrl = `${publicUrl}/api/voice/webhook/${provider.name}`;
 
-        let expertPrompt = 'You are a helpful voice assistant on a phone call. Keep responses short (1-3 sentences), natural, and conversational. No markdown, no lists, no code blocks.';
-        try {
-          const voiceExpertPrompt = await settings.get('voice.expertPrompt') as string | null;
-          if (voiceExpertPrompt) expertPrompt = voiceExpertPrompt;
-        } catch { /* use default */ }
+        // The persona for phone calls, when the operator set one; without it
+        // the shared phone prompt applies (src/voice/telephony/reply.ts).
+        const expertPrompt = (await settings.get('voice.expertPrompt')) as string | null;
 
         try {
           const session = await provider.initiateCall({
@@ -86,28 +88,18 @@ export class VoiceCallTool extends BaseTool {
           });
 
           session.metadata.pendingMessage = message;
-          session.metadata.expertPrompt = expertPrompt;
+          if (expertPrompt) session.metadata.expertPrompt = expertPrompt;
           session.metadata.conversationHistory = [];
 
           const callManager = getCallManager();
           callManager.create(session);
           log.info({ callId: session.id, to, mode }, 'Call initiated, waiting for completion');
 
-          // Wait for the call to complete instead of returning immediately.
-          // The webhook handler updates the session status as events arrive.
+          // Wait for the call to complete instead of returning immediately:
+          // the webhook handler updates the call's status as events arrive,
+          // and the wait ends with the status change that ends the call.
           const startTime = Date.now();
-          const pollInterval = 2000;
-          let finalStatus = session.status;
-
-          while (Date.now() - startTime < timeout) {
-            await new Promise(r => setTimeout(r, pollInterval));
-            const current = callManager.get(session.id);
-            if (!current) break;
-            finalStatus = current.status;
-            if (finalStatus === 'ended' || finalStatus === 'failed' || finalStatus === 'busy' || finalStatus === 'no-answer') {
-              break;
-            }
-          }
+          const finalStatus = (await callManager.waitForEnd(session.id, timeout)) ?? session.status;
 
           // Gather results
           const current = callManager.get(session.id);
@@ -158,11 +150,18 @@ export class VoiceCallTool extends BaseTool {
         if (!session) return { error: `Call ${args.call_id} not found` };
 
         const provider = await getTelephonyProvider();
+        let warning: string | undefined;
         if (provider) {
-          try { await provider.endCall(session.providerCallId); } catch { /* ignore */ }
+          try {
+            await provider.endCall(session.providerCallId);
+          } catch (err) {
+            // The call may already be over at the provider; it is ended here either way.
+            log.warn({ err, callId: session.id }, 'Provider could not end the call');
+            warning = (err as Error).message;
+          }
         }
         callManager.updateStatus(session.id, 'ended');
-        return { callId: session.id, status: 'ended' };
+        return { callId: session.id, status: 'ended', ...(warning ? { warning } : {}) };
       },
     );
   }

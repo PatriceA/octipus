@@ -23,7 +23,6 @@ const SERVER_CATEGORIES = new Set([
   'artifacts',
   'sessions',
   'gateway',
-  // 'voice' — has its own dedicated tab in Settings > Voice & Calls
 ]);
 
 /** Visual grouping of categories into sections */
@@ -60,12 +59,11 @@ const SECTIONS = [
   {
     id: 'server',
     title: 'Server',
-    description: 'API, logging, voice, and session settings',
+    description: 'API, logging, and session settings',
     icon: Server,
     subsections: [
       { category: 'api', label: 'API' },
       { category: 'logging', label: 'Logging' },
-      { category: 'voice', label: 'Voice' },
       { category: 'security', label: 'Security' },
       { category: 'sessions', label: 'Sessions' },
       { category: 'gateway', label: 'Gateway' },
