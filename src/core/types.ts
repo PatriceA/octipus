@@ -479,14 +479,6 @@ export interface MCPTool {
   exposure?: McpExposure;
 }
 
-// Voice Types
-export interface VoiceConfig {
-  sttModel: string;
-  ttsModel: string;
-  ttsVoice: string;
-  wakeWord?: string;
-  language: string;
-}
 
 export interface TranscriptionResult {
   text: string;

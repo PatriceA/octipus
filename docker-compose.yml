@@ -38,8 +38,11 @@ services:
       - octipus-workspace:/data/workspace
       - octipus-documents:/data/documents
       - octipus-extensions:/data/extensions
-      # Optional local embedding engine and models (docs/RAG.md → Local embeddings).
+      # Optional local embedding engine and models (docs/RAG.md → Local embeddings),
+      # and the local speech engines' models (docs/VOICE.md).
       - octipus-models:/data/models
+      # Voice profiles' reference clips (Settings → Voice → Voices).
+      - octipus-voices:/data/voices
       # Docker socket (OPT-IN — disabled by default): lets Octipus spawn
       # sibling containers for tools not installed in the main image.
       #
@@ -84,9 +87,35 @@ services:
       retries: 5
 
 
+  # Optional: a speech server of your own on a GPU (docs/VOICE.md → Your own
+  # speech server). Speaches serves Whisper models (and Kokoro/Piper voices)
+  # over the OpenAI-compatible API; start it with
+  #   docker compose --profile speech up -d
+  # then add it under Settings → Voice → Your own speech server with the
+  # endpoint http://octipus-speech:8000/v1 and the model id it serves, e.g.
+  # Systran/faster-whisper-large-v3-turbo. Larger models (VoxCPM2, Breeze-TTS)
+  # run the same way on vLLM-Omni: any server that speaks that API works.
+  # No NVIDIA GPU: use the image tag `latest-cpu` and remove `deploy`.
+  octipus-speech:
+    image: ghcr.io/speaches-ai/speaches:latest-cuda
+    container_name: octipus-speech
+    profiles: ["speech"]
+    restart: unless-stopped
+    volumes:
+      - octipus-speech-models:/home/ubuntu/.cache/huggingface/hub
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
 volumes:
   octipus-pgdata:
   octipus-workspace:
   octipus-documents:
   octipus-extensions:
   octipus-models:
+  octipus-voices:
+  octipus-speech-models:

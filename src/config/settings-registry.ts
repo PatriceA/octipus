@@ -898,16 +898,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'VOICE_LANGUAGE',
   },
-  {
-    key: 'voice.wakeWord',
-    category: 'voice',
-    valueType: 'string',
-    defaultValue: '',
-    description: 'Wake word for voice activation',
-    isSecret: false,
-    retired: 'Nothing on the server listens for a wake word; the mobile app has its own (Settings → Android assistant)',
-    envVar: 'WAKE_WORD',
-  },
 
   // ── Integrations ──
   {

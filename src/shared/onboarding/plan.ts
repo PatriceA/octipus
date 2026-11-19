@@ -298,13 +298,21 @@ function mediaSteps(plan: Plan, a: Answers, s: OnboardingState): void {
   // route is the Voice module's, turned on first (requiredModules).
   const after = [...deps, ...(plan.has('modules') ? ['modules'] : [])];
   const engines = VOICE_ENGINES[provider];
-  const where = provider === 'local' ? 'Runs on this server; needs `uv`, and the model downloads once.' : 'Uses your API key; billed by the provider.';
-  for (const [direction, lane, title] of [['stt', 'transcription', 'Hear you (speech to text)'], ['tts', 'speech', 'Speak replies (text to speech)']] as const) {
+  for (const [direction, title] of [['stt', 'Hear you (speech to text)'], ['tts', 'Speak replies (text to speech)']] as const) {
     const engine = direction === 'stt' ? engines.stt : engines.tts;
-    plan.api(`voice:${direction}`, `${title} with ${engine.name}`, {
-      method: 'POST', path: '/voice/engines/use',
-      body: { direction, engine: engine.engine, ...('size' in engine && engine.size ? { size: engine.size } : {}), makePrimary: true },
-    }, { dependsOn: after.length ? after : undefined, detail: `Binds the ${lane === 'transcription' ? 'Transcription' : 'Speech'} lane. ${where}` });
+    const size = 'size' in engine && engine.size ? { size: engine.size } : {};
+    // A local engine has to be downloaded before it can run: registering it
+    // alone left the lane "Off — not installed". The install runs on the
+    // server in the background and binds the engine when it is done.
+    const call: ApiCall = provider === 'local'
+      ? { method: 'POST', path: '/voice/engines/install', body: { engine: engine.engine, ...size, makePrimary: true } }
+      : { method: 'POST', path: '/voice/engines/use', body: { direction, engine: engine.engine, ...size, makePrimary: true } };
+    plan.api(`voice:${direction}`, `${title} with ${engine.name}`, call, {
+      dependsOn: after.length ? after : undefined,
+      detail: provider === 'local'
+        ? 'Downloads to this server in the background (needs `uv`); follow it under Settings → Voice.'
+        : 'Uses your API key; billed by the provider.',
+    });
   }
 }
 

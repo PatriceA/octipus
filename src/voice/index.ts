@@ -1,133 +1,33 @@
 export type { STTEngine, STTOptions, TranscriptionResult } from './stt';
-export { createSTTEngine, MistralSTTEngine, OpenAIRealtimeSTTEngine, SpeechToText, WhisperEngine } from './stt';
+export { MistralSTTEngine, OpenAIRealtimeSTTEngine, SpeechToText, WhisperEngine } from './stt';
 export type { TTSEngine, TTSOptions } from './tts';
-export { createTTSEngine, KokoroEngine, MistralTTSEngine, OpenAITTSEngine, PiperEngine, TextToSpeech } from './tts';
-export type { WakeWordDetection, WakeWordEngine, WakeWordOptions } from './wake-word';
-export {
-  createWakeWordEngine,
-  PicovoiceWakeWordEngine,
-  SherpaWakeWordEngine,
-  VADActivationEngine,
-  WakeWordDetector,
-} from './wake-word';
+export { KokoroEngine, MistralTTSEngine, OpenAITTSEngine, PiperEngine, TextToSpeech } from './tts';
 
 import { type ChildProcessHandle as Subprocess, spawnProcess } from '@/utils/proc';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { logger } from '../utils/logger';
-import { SpeechToText, } from './stt';
-import { TextToSpeech, } from './tts';
-import { WakeWordDetector, } from './wake-word';
+import type { SpeechToText } from './stt';
+import type { TextToSpeech } from './tts';
 import { fileAt, removeFile, writeFileAt } from '@/utils/fs-file';
 
-export interface VoiceServiceConfig {
-  stt?: {
-    type: 'whisper-cpp' | 'mistral' | 'openai';
-    model: string;
-    language?: string;
-  };
-  tts?: {
-    type: 'piper' | 'kokoro' | 'mistral' | 'openai';
-    voice?: string;
-    speed?: number;
-  };
-  wakeWord?: {
-    type: 'sherpa' | 'porcupine' | 'vad';
-    modelPath?: string;
-    accessKey?: string;
-    keywords?: string[];
-    sensitivity?: number;
-  };
-}
-
 /**
- * Unified voice service that combines STT, TTS, and wake word detection
+ * Voice on this machine, for a client process (the TUI): the microphone is
+ * recorded and the reply played here; the engines are whatever they are
+ * given — the TUI hands in ones that go through the server's speech lanes
+ * (src/voice/remote-engines.ts), so there is one configuration to speak of.
  */
 export class VoiceService {
   private stt: SpeechToText | null = null;
   private tts: TextToSpeech | null = null;
-  private wakeWord: WakeWordDetector | null = null;
   private log = logger.child({ component: 'voice-service' });
-  private listening = false;
   /** Push-to-talk capture, toggled by startRecording()/stopRecordingAndTranscribe(). */
   private recordProc: Subprocess | null = null;
   private recordPath: string | null = null;
 
-  constructor(
-    stt?: SpeechToText,
-    tts?: TextToSpeech,
-    wakeWord?: WakeWordDetector
-  ) {
+  constructor(stt?: SpeechToText, tts?: TextToSpeech) {
     this.stt = stt || null;
     this.tts = tts || null;
-    this.wakeWord = wakeWord || null;
-  }
-
-  static async create(config: VoiceServiceConfig): Promise<VoiceService> {
-    let stt: SpeechToText | undefined;
-    let tts: TextToSpeech | undefined;
-    let wakeWord: WakeWordDetector | undefined;
-
-    if (config.stt) {
-      stt = await SpeechToText.create(
-        config.stt.type,
-        config.stt.model,
-        { language: config.stt.language }
-      );
-    }
-
-    if (config.tts) {
-      tts = await TextToSpeech.create(
-        config.tts.type,
-        config.tts.voice,
-        { speed: config.tts.speed }
-      );
-    }
-
-    if (config.wakeWord) {
-      wakeWord = WakeWordDetector.create(config.wakeWord.type, {
-        modelPath: config.wakeWord.modelPath,
-        accessKey: config.wakeWord.accessKey,
-        keywords: config.wakeWord.keywords,
-        options: { sensitivity: config.wakeWord.sensitivity },
-      });
-    }
-
-    return new VoiceService(stt, tts, wakeWord);
-  }
-
-  /**
-   * Start listening for wake word
-   */
-  async startListening(onActivation: () => void): Promise<void> {
-    if (!this.wakeWord) {
-      throw new Error('Wake word detection not configured');
-    }
-
-    this.listening = true;
-    this.log.info('Starting voice listening');
-
-    this.wakeWord.onDetection(() => {
-      this.log.info('Wake word detected, activating');
-      onActivation();
-    });
-
-    this.wakeWord.onError((error) => {
-      this.log.error({ error }, 'Wake word error');
-    });
-
-    await this.wakeWord.start();
-  }
-
-  /**
-   * Stop listening for wake word
-   */
-  async stopListening(): Promise<void> {
-    if (this.wakeWord && this.listening) {
-      await this.wakeWord.stop();
-      this.listening = false;
-      this.log.info('Stopped voice listening');
-    }
   }
 
   /**
@@ -143,19 +43,6 @@ export class VoiceService {
   }
 
   /**
-   * Stream transcription from audio stream
-   */
-  async *streamTranscribe(audioStream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
-    if (!this.stt) {
-      throw new Error('Speech-to-text not configured');
-    }
-
-    for await (const text of this.stt.streamTranscribe(audioStream)) {
-      yield text;
-    }
-  }
-
-  /**
    * Synthesize text to audio
    */
   async speak(text: string): Promise<Buffer> {
@@ -164,29 +51,6 @@ export class VoiceService {
     }
 
     return this.tts.synthesize(text);
-  }
-
-  /**
-   * Stream synthesized audio
-   */
-  async *streamSpeak(text: string): AsyncGenerator<Buffer> {
-    if (!this.tts) {
-      throw new Error('Text-to-speech not configured');
-    }
-
-    for await (const chunk of this.tts.streamSynthesize(text)) {
-      yield chunk;
-    }
-  }
-
-  /**
-   * Get available TTS voices
-   */
-  async getVoices(): Promise<string[]> {
-    if (!this.tts) {
-      return [];
-    }
-    return this.tts.getVoices();
   }
 
   /** True while a push-to-talk capture is in progress. */
@@ -274,8 +138,6 @@ export class VoiceService {
    * Clean up resources
    */
   async dispose(): Promise<void> {
-    await this.stopListening();
-
     // Tear down an in-progress push-to-talk capture so quitting mid-record
     // doesn't orphan the arecord process or leak its temp WAV.
     if (this.recordProc) {

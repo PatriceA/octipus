@@ -311,8 +311,9 @@ describe('images and audio', () => {
   test('local voice: faster-whisper and Kokoro from the speech catalog, after the Voice module is on', () => {
     const steps = plan(['development'], { 'media.voice': 'local' }, fresh({ modules: { enabled: [], byUseCase: {} } }));
     expect(step(steps, 'modules')).toMatchObject({ call: { body: { ids: ['voice'] } } });
-    expect(step(steps, 'voice:stt')).toMatchObject({ call: { method: 'POST', path: '/voice/engines/use', body: { direction: 'stt', engine: 'fasterwhisper', size: 'small', makePrimary: true } }, dependsOn: ['modules'] });
-    expect(step(steps, 'voice:tts')).toMatchObject({ call: { body: { direction: 'tts', engine: 'kokoro', makePrimary: true } }, dependsOn: ['modules'] });
+    // Installed, not only registered: a local engine that was never downloaded leaves the lane off.
+    expect(step(steps, 'voice:stt')).toMatchObject({ call: { method: 'POST', path: '/voice/engines/install', body: { engine: 'fasterwhisper', size: 'small', makePrimary: true } }, dependsOn: ['modules'] });
+    expect(step(steps, 'voice:tts')).toMatchObject({ call: { method: 'POST', path: '/voice/engines/install', body: { engine: 'kokoro', makePrimary: true } }, dependsOn: ['modules'] });
     expect(requiredModulesFor(['development'], { 'media.voice': 'local' })).toContain('voice');
   });
 

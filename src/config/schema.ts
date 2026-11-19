@@ -218,8 +218,6 @@ export const whatsappConfigSchema = z.object({
  * install had; nothing else reads them.
  */
 export const voiceConfigSchema = z.object({
-  sttEnabled: z.boolean().default(false),
-  ttsEnabled: z.boolean().default(false),
   /**
    * Which engine transcribes speech on the realtime `/voice` socket.
    * `auto` picks the best available (cloud realtime if a key is set, else local
@@ -250,7 +248,6 @@ export const voiceConfigSchema = z.object({
   piperModelPath: z.string().optional(),
   /** Voice for spoken replies and calls; empty = the bound speech engine's default. */
   ttsVoice: z.string().optional(),
-  wakeWord: z.string().optional(),
   language: z.string().default('en'),
 });
 

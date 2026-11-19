@@ -1044,26 +1044,6 @@ export async function transcribeAudioBuffer(audio: Buffer, format = 'ogg', req: 
 }
 
 /**
- * Factory function to create STT engine
- */
-export function createSTTEngine(
-  type: 'whisper-cpp' | 'mistral' | 'openai' = 'whisper-cpp',
-  modelPathOrName: string,
-  options: STTOptions = {}
-): STTEngine {
-  switch (type) {
-    case 'whisper-cpp':
-      return new WhisperEngine(modelPathOrName, options);
-    case 'mistral':
-      return new MistralSTTEngine(modelPathOrName || MISTRAL_STT_MODEL, options);
-    case 'openai':
-      return new OpenAIRealtimeSTTEngine(modelPathOrName || OPENAI_STT_REALTIME_MODEL, options);
-    default:
-      throw new Error(`Unknown STT engine type: ${type}`);
-  }
-}
-
-/**
  * Speech-to-text service that manages STT engine
  */
 export class SpeechToText {
@@ -1072,15 +1052,6 @@ export class SpeechToText {
 
   constructor(engine: STTEngine) {
     this.engine = engine;
-  }
-
-  static async create(
-    type: 'whisper-cpp' | 'mistral' | 'openai' = 'whisper-cpp',
-    modelPathOrName: string = 'base',
-    options: STTOptions = {}
-  ): Promise<SpeechToText> {
-    const engine = createSTTEngine(type, modelPathOrName, options);
-    return new SpeechToText(engine);
   }
 
   async transcribe(audio: Buffer | string): Promise<TranscriptionResult> {

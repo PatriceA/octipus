@@ -2,7 +2,6 @@ import { describe, expect, test } from 'vitest';
 import { StreamingResampler } from './audio-codec';
 import {
   AsyncLineReader,
-  createSTTEngine,
   FasterWhisperEngine,
   isConformantWav,
   MistralSTTEngine,
@@ -93,16 +92,26 @@ describe('pcm16leResample', () => {
   });
 });
 
-describe('createSTTEngine', () => {
-  test('maps each provider to its engine class', () => {
-    expect(createSTTEngine('whisper-cpp', '/tmp/model.bin')).toBeInstanceOf(WhisperEngine);
-    expect(createSTTEngine('mistral', '')).toBeInstanceOf(MistralSTTEngine);
-    expect(createSTTEngine('openai', '')).toBeInstanceOf(OpenAIRealtimeSTTEngine);
+describe('a Transcription-lane row becomes its engine', () => {
+  const row = (provider: string, modelId: string, extra: Record<string, unknown> = {}) =>
+    ({ name: modelId, provider, modelId, endpoint: null, apiKeyRef: null, metadata: {}, ...extra }) as never;
+
+  test('each kind of row is driven by its engine class; any faster-whisper model name is taken', async () => {
+    const { sttEngineFor } = await import('./speech-rows');
+    const { CompatibleSTTEngine } = await import('./compatible');
+    expect(await sttEngineFor(row('local-audio', 'whisper.cpp:base', { metadata: { modelPath: '/tmp/model.bin' } }), { language: 'en' })).toBeInstanceOf(WhisperEngine);
+    expect(await sttEngineFor(row('mistral', 'voxtral-mini-latest'), { language: 'en' })).toBeInstanceOf(MistralSTTEngine);
+    expect(await sttEngineFor(row('openai', 'gpt-4o-transcribe'), { language: 'en' })).toBeInstanceOf(OpenAIRealtimeSTTEngine);
+    expect(await sttEngineFor(row('custom-openai', 'openai/whisper-large-v3-turbo', { endpoint: 'http://localhost:8000' }), { language: 'en' })).toBeInstanceOf(CompatibleSTTEngine);
+    // A resident worker, not started until it is asked to transcribe.
+    const turbo = await sttEngineFor(row('local-audio', 'faster-whisper:large-v3-turbo'), { language: 'en' });
+    expect(turbo.live).toBe(false);
+    await turbo.dispose();
   });
 
-  test('rejects removed/unknown engine types', () => {
-    // 'faster-whisper' was removed; anything off-enum must throw, not silently no-op.
-    expect(() => createSTTEngine('faster-whisper' as never, '')).toThrow();
+  test('a row that is no speech engine is refused by name', async () => {
+    const { sttEngineFor } = await import('./speech-rows');
+    await expect(sttEngineFor(row('anthropic', 'claude'), { language: 'en' })).rejects.toThrow(/not a speech-to-text engine/);
   });
 });
 

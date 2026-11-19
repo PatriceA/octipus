@@ -427,30 +427,6 @@ export class OpenAITTSEngine extends EventEmitter implements TTSEngine {
 }
 
 /**
- * Factory function to create TTS engine
- */
-export function createTTSEngine(
-  type: 'piper' | 'kokoro' | 'mistral' | 'openai' = 'mistral',
-  modelOrVoice?: string,
-  options: TTSOptions = {}
-): TTSEngine {
-  switch (type) {
-    case 'piper':
-      const modelPath = modelOrVoice || '~/.local/share/piper/voices/en_US-lessac-medium.onnx';
-      const configPath = modelPath.replace('.onnx', '.json');
-      return new PiperEngine(modelPath, configPath, options);
-    case 'kokoro':
-      return new KokoroEngine(modelOrVoice, options);
-    case 'mistral':
-      return new MistralTTSEngine(modelOrVoice, options);
-    case 'openai':
-      return new OpenAITTSEngine(modelOrVoice, options);
-    default:
-      throw new Error(`Unknown TTS engine type: ${type}`);
-  }
-}
-
-/**
  * Text-to-speech service that manages TTS engine
  */
 export class TextToSpeech {
@@ -459,15 +435,6 @@ export class TextToSpeech {
 
   constructor(engine: TTSEngine) {
     this.engine = engine;
-  }
-
-  static async create(
-    type: 'piper' | 'kokoro' | 'mistral' | 'openai' = 'mistral',
-    modelOrVoice?: string,
-    options: TTSOptions = {}
-  ): Promise<TextToSpeech> {
-    const engine = createTTSEngine(type, modelOrVoice, options);
-    return new TextToSpeech(engine);
   }
 
   async synthesize(text: string): Promise<Buffer> {
