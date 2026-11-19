@@ -1116,6 +1116,14 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
   },
   {
+    key: 'voice.expertPrompt',
+    category: 'voice',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'Phone calls: how Octipus should behave on a call (who it is, what it may and may not do). Empty = a general assistant that keeps answers short.',
+    isSecret: false,
+  },
+  {
     key: 'voice.telephonyProvider',
     category: 'voice',
     valueType: 'string',
@@ -1144,7 +1152,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'voice',
     valueType: 'boolean',
     defaultValue: false,
-    description: 'Answer calls with a bidirectional media stream (Phase 4d — low-latency STT/TTS + barge-in) instead of the turn-based <Gather> loop. Requires voice.publicUrl to be a public URL Twilio can reach over wss. Falls back to <Gather> if unset.',
+    description: 'Answer incoming Twilio calls as a live conversation over a media stream (your speech engines, lower latency, talking over a reply stops it) instead of the carrier\'s turn-by-turn speech gathering. Needs voice.publicUrl to be reachable by Twilio over wss.',
     isSecret: false,
   },
   {
