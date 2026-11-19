@@ -75,6 +75,21 @@ function languageParam(language: string | undefined): string | undefined {
   return language && language.toLowerCase() !== 'auto' ? language : undefined;
 }
 
+/**
+ * `fetch`, with a failure that says which server could not be reached and
+ * why: the bare "fetch failed" names neither, and this is the error someone
+ * setting up their own speech server reads.
+ */
+async function request(target: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(target, init);
+  } catch (err) {
+    const cause = (err as { cause?: { code?: string; message?: string } }).cause;
+    const host = new URL(target).host;
+    throw new Error(`The speech server at ${host} could not be reached: ${cause?.code || cause?.message || (err as Error).message}`);
+  }
+}
+
 async function failure(what: string, response: Response): Promise<Error> {
   const detail = await response.text().catch(() => '');
   return new Error(`${what} failed (${response.status}): ${detail.slice(0, 500) || response.statusText}`);
@@ -145,7 +160,7 @@ export class CompatibleSTTEngine extends EventEmitter implements STTEngine {
       form.append('response_format', format);
       const language = languageParam(this.options.language);
       if (language) form.append('language', language);
-      return fetch(url(this.endpoint, '/audio/transcriptions'), { method: 'POST', headers: this.endpoint.headers, body: form });
+      return request(url(this.endpoint, '/audio/transcriptions'), { method: 'POST', headers: this.endpoint.headers, body: form });
     };
     let response = await send('verbose_json');
     if (response.status === 400 || response.status === 422) {
@@ -263,7 +278,7 @@ export class CompatibleTTSEngine extends EventEmitter implements TTSEngine {
   }
 
   private async request(text: string, format: string, stream: boolean): Promise<Response> {
-    const response = await fetch(url(this.endpoint, '/audio/speech'), {
+    const response = await request(url(this.endpoint, '/audio/speech'), {
       method: 'POST',
       headers: { ...this.endpoint.headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...speechRequestBody(this.model, this.config, this.options, text, format), ...(stream ? { stream: true } : {}) }),

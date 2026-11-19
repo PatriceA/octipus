@@ -58,3 +58,41 @@ describe('writeFileAt', () => {
     await expect(removeFile(join(dir, 'never-existed'))).resolves.toBeUndefined();
   });
 });
+
+describe('writeFileAt with a download', () => {
+  test('a response body is streamed to the file; one from another realm (a proxy agent\'s fetch) is taken by its shape', async () => {
+    const { mkdtemp, readFile: read, readdir, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { writeFileAt } = await import('./fs-file');
+    const dir = await mkdtemp(join(tmpdir(), 'fsfile-'));
+    try {
+      await writeFileAt(join(dir, 'a.bin'), new Response('model bytes'));
+      expect((await read(join(dir, 'a.bin'))).toString()).toBe('model bytes');
+      // Not `instanceof Response`: only the shape of one.
+      const foreign = { body: new Response('from a proxy').body, arrayBuffer: async () => new ArrayBuffer(0) };
+      await writeFileAt(join(dir, 'b.bin'), foreign as unknown as Response);
+      expect((await read(join(dir, 'b.bin'))).toString()).toBe('from a proxy');
+      expect(await readdir(dir)).toEqual(['a.bin', 'b.bin']); // no .part left behind
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a download that breaks off leaves no file that looks installed', async () => {
+    const { mkdtemp, readdir, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { writeFileAt } = await import('./fs-file');
+    const dir = await mkdtemp(join(tmpdir(), 'fsfile-'));
+    try {
+      const broken = new ReadableStream<Uint8Array>({
+        start(c) { c.enqueue(new TextEncoder().encode('half of the mo')); c.error(new Error('connection reset')); },
+      });
+      await expect(writeFileAt(join(dir, 'model.onnx'), new Response(broken))).rejects.toThrow(/connection reset/);
+      expect(await readdir(dir)).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

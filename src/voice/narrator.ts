@@ -5,9 +5,10 @@
  * surface (the only thing that starts work is the user's spoken request).
  *
  * Wired in `src/core/gateway/event-bridge.ts`: each `AgentService.onEvent`
- * turn event is narrated as a `voice.speak` gateway event to the connection(s)
- * that put that session into voice mode (`voice.set`). `/voice` can't carry
- * this — it's half-duplex and closes after each utterance (voice-ws.ts).
+ * turn event is narrated as a `voice.speak` gateway event. A live
+ * conversation speaks it on the server (src/voice/session.ts, which hears it
+ * on the event bus); older web builds get it on the connection that put the
+ * session into voice mode (`voice.set`) and speak it themselves.
  *
  * Phase B swaps `narrate()` for an LLM on the assigned voice model; the wiring
  * and the `voice.speak` event stay the same.
@@ -21,6 +22,15 @@ export interface NarratableEvent {
 
 /** Roles that ARE the answer (spoken via the final reply), not worth announcing. */
 const SILENT_ROLES = new Set(['octipus', 'direct']);
+
+/**
+ * The root agent of the turn is the one answering: its own start and finish
+ * are not news. (It runs as the `general` role, so the role alone does not
+ * tell it from a spawned generalist — its events carry `root: true`.)
+ */
+function isRoot(data: unknown): boolean {
+  return !!data && typeof data === 'object' && (data as { root?: unknown }).root === true;
+}
 
 function field(data: unknown, key: string): string | undefined {
   if (data && typeof data === 'object' && key in data) {
@@ -43,12 +53,12 @@ export function narrate(event: NarratableEvent): string | null {
   switch (event.type) {
     case 'worker_spawned': {
       const role = field(event.data, 'role');
-      if (!role || SILENT_ROLES.has(role)) return null; // direct path = the answer itself
+      if (!role || SILENT_ROLES.has(role) || isRoot(event.data)) return null; // the answer itself
       return `On it — I've started the ${roleLabel(role)}. I'll let you know when it's done.`;
     }
     case 'worker_completed': {
       const role = field(event.data, 'role');
-      if (!role || SILENT_ROLES.has(role)) return null; // spoken via the final reply
+      if (!role || SILENT_ROLES.has(role) || isRoot(event.data)) return null; // spoken via the final reply
       return `The ${roleLabel(role)} just finished.`;
     }
     default:
@@ -73,6 +83,9 @@ export function demo(): void {
   eq(narrate({ type: 'chat_response', data: { response: 'Here is your answer.' } }), null, 'reply is NOT narrated (spoken from the chat_response message instead)');
   eq(narrate({ type: 'status_update', data: { message: 'thinking' } }), null, 'status updates are not narrated in Phase A');
   eq(narrate({ type: 'worker_spawned', data: {} }), null, 'missing role stays silent');
+  eq(narrate({ type: 'worker_spawned', data: { role: 'general', root: true } }), null, 'the root agent\'s own start stays silent');
+  eq(narrate({ type: 'worker_completed', data: { role: 'general', root: true } }), null, 'the root agent\'s own finish stays silent');
+  eq(narrate({ type: 'worker_spawned', data: { role: 'general' } }), 'On it — I\'ve started the general. I\'ll let you know when it\'s done.', 'a spawned generalist is announced');
   // eslint-disable-next-line no-console
   console.log('narrator demo: all assertions passed');
 }

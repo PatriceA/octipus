@@ -147,7 +147,9 @@ export class Endpointer {
       const onsetFrames = this.speaking ? Math.ceil(this.bargeMs / FRAME_MS) : 3;
       while (this.preroll.length > this.prerollFrames + onsetFrames) this.preroll.shift();
       if (this.speaking && !this.bargeIn) { this.onset = 0; return; }
-      this.onset = loud ? this.onset + 1 : 0;
+      // Speech is not one unbroken loud stretch: a gap between syllables takes
+      // a little back instead of starting the count again.
+      this.onset = loud ? this.onset + 1 : Math.max(0, this.onset - (this.speaking ? 0.5 : 1));
       if (this.onset < onsetFrames) return; // 60 ms of speech starts a turn; over-talk needs `bargeMs`
       if (this.speaking) {
         events.push({ type: 'barge_in' });
@@ -157,7 +159,7 @@ export class Endpointer {
       this.inSpeech = true;
       this.utterance = this.preroll;
       this.preroll = [];
-      this.voicedMs = this.onset * FRAME_MS;
+      this.voicedMs = Math.round(this.onset) * FRAME_MS;
       this.trailingSilenceMs = 0;
       this.onset = 0;
       return;

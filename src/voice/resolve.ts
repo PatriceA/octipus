@@ -82,7 +82,7 @@ export async function speechCandidates(direction: SpeechDirection, req: SpeechRe
       }
       rows = [named];
     }
-    if (rows.length === 0) throw new Error(`No ${req.override} engine is bound to the ${LANE[direction]} lane. Bind one on the Topics page.`);
+    if (rows.length === 0) throw new Error(`No ${req.override} engine is bound to the ${LANE[direction]} lane. Add one under Settings → Voice.`);
   }
   if (req.allowHosted === false) {
     // Local engines and speech servers on the owner's own network spend no hosted key.

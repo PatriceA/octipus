@@ -249,7 +249,10 @@ export class VoiceSession {
     if (event.sessionId !== this.options.sessionId || (event.userId && event.userId !== this.options.userId)) return;
     const payload = (event.payload ?? {}) as { delta?: unknown; iteration?: unknown; text?: unknown; response?: { response?: unknown } };
     if (event.type === 'voice.speak') {
-      if (typeof payload.text === 'string') this.say(payload.text);
+      // A narration line fills a silence ("On it — I've started the
+      // researcher"). Once the answer itself is being written or spoken it
+      // would only cut into it.
+      if (typeof payload.text === 'string' && !this.streamed.text && !this.queue.length) this.say(payload.text);
       return;
     }
     if (!this.awaitingReply) return;

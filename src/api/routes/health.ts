@@ -402,10 +402,10 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
         hint: "Assign an image model to the 'image_generation' topic" },
       { key: 'transcription', name: 'Speech to text', topic: 'transcription', required: false, need: 'hear',
         help: 'Voice notes, the microphone, phone calls and transcribe_audio. Without it voice input is off.',
-        hint: "Assign a transcription model or local engine to the 'transcription' topic" },
+        hint: 'Add a speech-to-text engine under Settings → Voice' },
       { key: 'speech', name: 'Text to speech', topic: 'speech', required: false, need: 'speak',
         help: 'Spoken replies, phone calls and speak. Without it spoken output is off.',
-        hint: "Assign a speech model or local engine to the 'speech' topic" },
+        hint: 'Add a text-to-speech engine under Settings → Voice' },
     ] as const;
 
     const registry = getModelRegistry();

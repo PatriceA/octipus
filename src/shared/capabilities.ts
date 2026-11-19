@@ -17,6 +17,8 @@ export interface CapabilityInfo {
   needs: string;
   /** Where it is set up (a web route). */
   setupHref: string;
+  /** That place in words; default: the Topics page. */
+  setupWhere?: string;
 }
 
 export const CAPABILITY_INFO: Readonly<Record<Capability, CapabilityInfo>> = {
@@ -42,13 +44,15 @@ export const CAPABILITY_INFO: Readonly<Record<Capability, CapabilityInfo>> = {
   },
   hear: {
     title: 'Speech to text',
-    needs: 'a transcription model',
-    setupHref: '/topics',
+    needs: 'a speech-to-text engine',
+    setupHref: '/settings?tab=voice',
+    setupWhere: 'Settings → Voice',
   },
   speak: {
     title: 'Text to speech',
-    needs: 'a speech model',
-    setupHref: '/topics',
+    needs: 'a text-to-speech engine',
+    setupHref: '/settings?tab=voice',
+    setupWhere: 'Settings → Voice',
   },
 };
 
@@ -86,5 +90,5 @@ export interface CapabilityView {
 /** The sentence an agent, an API caller or a page gets when a capability is off. */
 export function capabilityOffText(cap: Capability): string {
   const info = CAPABILITY_INFO[cap];
-  return `${info.title} is not configured on this install: it needs ${info.needs}. An admin sets it up on the Topics page.`;
+  return `${info.title} is not configured on this install: it needs ${info.needs}. An admin sets it up ${info.setupWhere ? `under ${info.setupWhere}` : 'on the Topics page'}.`;
 }

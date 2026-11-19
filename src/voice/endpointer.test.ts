@@ -68,6 +68,14 @@ describe('Endpointer', () => {
     expect(end.ms).toBeGreaterThanOrEqual(800);
   });
 
+  test('over-talk is recognised through the gaps between syllables', () => {
+    const ep = new Endpointer({ bargeRms: 0.04, bargeMs: 300 });
+    ep.setSpeaking(true);
+    // Speech as it is: bursts of sound with short dips, never 300 ms unbroken.
+    const syllables = Array.from({ length: 6 }, () => [audio(120, 0.4), audio(40, 0.005)]).flat();
+    expect(types(feed(ep, ...syllables))).toEqual(['barge_in', 'speech_start']);
+  });
+
   test('with barge-in off the microphone is ignored while a reply is spoken', () => {
     const ep = new Endpointer({ bargeIn: false });
     ep.setSpeaking(true);

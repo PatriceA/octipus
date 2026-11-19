@@ -248,6 +248,19 @@ describe('mouth', () => {
     expect(failing.sent.find((s) => s.message.type === 'error')?.message).toEqual({ type: 'error', message: 'Speech synthesis failed: vox: 503' });
   });
 
+  test('a narration line fills a silence; once the answer is being written it does not cut in', async () => {
+    const r = track(await rig());
+    await hear(r);
+    r.emit({ type: 'voice.speak', payload: { text: 'On it — the researcher has started.' } });
+    await r.wait(() => r.audioTexts().length === 1);
+    r.emit({ type: 'chat.delta', payload: { delta: 'The report is ready and has three sections. ', iteration: 1 } });
+    r.emit({ type: 'voice.speak', payload: { text: 'The researcher just finished.' } });
+    r.emit({ type: 'chat.response', payload: { response: { response: 'The report is ready and has three sections.' } } });
+    await r.wait(() => r.audioTexts().length === 2);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(r.audioTexts()).toEqual(['On it — the researcher has started.', 'The report is ready and has three sections.']);
+  });
+
   test('with speaking off the session only listens', async () => {
     const r = track(await rig({ speakEnabled: false }));
     await hear(r);

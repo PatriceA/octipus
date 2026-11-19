@@ -183,6 +183,17 @@ describe('text to speech', () => {
     expect(new CompatibleTTSEngine(await speechEndpointOf(plain), plain.modelId, speechConfigOf(plain), {}).streamPcm).toBeUndefined();
   });
 
+  test('a server that is not there is named, with the reason', async () => {
+    // A port nothing listens on: taken, then released.
+    const probe = createServer();
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const port = (probe.address() as AddressInfo).port;
+    await new Promise((resolve) => probe.close(resolve));
+    const gone = row('some/tts', { endpoint: `http://127.0.0.1:${port}` });
+    const engine = new CompatibleTTSEngine(await speechEndpointOf(gone), gone.modelId, speechConfigOf(gone), {});
+    await expect(engine.synthesize('hi')).rejects.toThrow(new RegExp(`speech server at 127\\.0\\.0\\.1:${port} could not be reached: ECONNREFUSED`));
+  });
+
   test('voices: the row\'s list, else what the server lists, else none', async () => {
     const breeze = row('BreezeBlue/Breeze-TTS-2');
     expect(await new CompatibleTTSEngine(await speechEndpointOf(breeze), breeze.modelId, speechConfigOf(breeze), {}).getVoices()).toContain('S0');
