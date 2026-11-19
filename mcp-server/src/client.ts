@@ -207,7 +207,7 @@ export class OctiClient {
   }
 
   /** The Speech lane's audio for `text`, with its media type. */
-  async speak(params: { text: string; voice_id?: string; format?: string }): Promise<{ base64: string; mimeType: string }> {
+  async speak(params: { text: string; voice?: string; instructions?: string; speed?: number; format?: string }): Promise<{ base64: string; mimeType: string }> {
     const res = await this.requestRaw('/api/voice/speak', { method: 'POST', body: JSON.stringify(params) });
     const mimeType = (res.headers.get('content-type') ?? 'audio/mpeg').split(';')[0].trim();
     return { base64: Buffer.from(await res.arrayBuffer()).toString('base64'), mimeType };

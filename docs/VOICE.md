@@ -1,228 +1,298 @@
 # Voice & Phone Calls
 
-Octipus includes voice capabilities at two levels:
+Octipus hears and speaks:
 
-1. **Local Voice I/O** — speech-to-text, text-to-speech, and wake word detection for hands-free local interaction
-2. **Phone Calls** — make and receive actual phone calls via Twilio, Telnyx, or Plivo with interactive voice conversations
+- **Hear** — speech to text: the microphone in the chat, a live conversation,
+  voice notes on Telegram / WhatsApp / Slack / Teams, audio files, phone calls.
+- **Speak** — text to speech: spoken replies in a conversation, voice-note
+  answers, the `speak` tool, phone calls.
 
-## Voice Data Flows — the three lines
-
-Three input pipelines, one brain, one mouth. They differ only in how audio gets
-*in* and back *out*; all transcribe at **16 kHz mono** (whisper's only input) and
-all speak back through the configured TTS engine (Voxtral by default; also OpenAI
-or local Piper). Detail for each stage is in the sections below.
-
-**Line 1 — Recorded input web** (`useVoiceConversation.ts`): record an utterance, POST it, get one reply.
-
-```text
-🎤 mic ──▶ MediaRecorder (webm/ogg)          AnalyserNode RMS VAD; stops after SILENCE_MS (2 s)
-   │
-   ▼  Web Audio decode + OfflineAudioContext  →  encodeWav16kMono
- WAV 16 kHz mono ──base64──▶ POST /api/voice/transcribe
-   │
-   ▼  whisper.cpp (ggml-small.bin)             transcribeAudioBuffer → else Voxtral / OpenAI; stripNonSpeech
- transcript ──▶ sendMessage() ──▶ 🧠 ROOT AGENT ──▶ chat.response (event over /gateway)
-                                                          │
-   ┌──────────────────────────────────────────────────────┘
-   ▼  /api/voice/speak (whole reply) → stripForSpeech
- Mistral TTS → mp3 ──▶ 🔊 <audio>
-```
-
-**Line 2 — Realtime streaming web** (`useVoiceRealtime.ts`): duplex socket, streaming transcript, barge-in.
-
-```text
-🎤 mic (echoCancellation)                      AudioContext @16 kHz → AudioWorklet (Float32→Int16)
-   │
-   ▼  binary PCM frames (16 kHz s16, while "listening")
- /voice  WebSocket  (engine = the Transcription lane's model; ?engine= picks one)
-   ├─ whisper : WhisperEngine.streamTranscribe → 2 s sliding window   (voice-ws.ts)
-   ├─ mistral : MistralSTTEngine → wss Mistral realtime
-   └─ openai  : OpenAIRealtimeSTTEngine → wss OpenAI realtime
-   │
-   ▼  {type:transcript} frames (running text) → client VAD dispatches delta on silence
- sendMessage() ──▶ 🧠 ROOT AGENT + voice-plan-gate ──▶ chat.response (event over /gateway)
-   │                        ╲___ narrator: voice.speak lifecycle events over /gateway,
-   │                             to the tab that sent voice.set {on:true} only
-   ▼  per-sentence /api/voice/speak → Mistral TTS ──▶ 🔊
-        ◀── barge-in: sustained over-talk (RMS) stops playback, reopens mic (pre-roll flush)
-```
-
-**Line 3 — Telephony / phone** (`voice-media-ws.ts` + `media-bridge.ts`): 8 kHz μ-law over a carrier, both ways.
-
-```text
-📞 caller ──▶ carrier ──▶ TwiML <Connect><Stream> ──▶ /voice/media/:provider
-   │  8 kHz μ-law base64 media frames
-   ▼  twilioMediaToPcm16k:  muLawDecode → 8 kHz PCM → resamplePcm16(8k→16k)   [StreamingResampler]
- 16 kHz PCM ──▶ per-utterance WhisperEngine.streamTranscribe ──▶ transcript
-   │
-   ▼  generatePhoneReply  (voice-topic model, short prompt — NOT the full root agent)
- reply ── Mistral TTS → mp3 → ffmpeg → 16 kHz PCM
-   │
-   ▼  pcm16kToTwilioMedia:  resamplePcm16(16k→8k) → muLawEncode → base64
- 8 kHz μ-law ──▶ carrier ──▶ 🔊 caller            paced real-time; RMS barge-in
-```
-
-**Where they converge**
-
-```text
- Lines 1 & 2 ─▶ AgentService.handleMessage (full pipeline + voice-plan-gate)
- Line 3      ─▶ generatePhoneReply (direct-LLM fast path)
-                        │
-        planning turns (web) + phone reply run on the  ► voice-topic model ◄  (Gemini Flash Lite)
-        heavy post-handoff work → normal routing
-                        │
-        Mouth: configured TTS (Voxtral en_paul_neutral by default).  STT floor: 16 kHz mono; telephony bridges 8↔16 kHz.
-```
-
-## Engines are models
-
-Speech to text and text to speech run on the models bound to the
-**Transcription** and **Speech** lanes (Topics page), like every other kind of
-model work. Every place that hears or speaks — channel voice notes, the web
-microphone, `/api/voice/transcribe`, `/api/voice/speak`, voice replies, phone
-calls, the TUI (through the API) and the audio tools — resolves its engine
-there (`src/voice/resolve.ts`):
-
-- **primary, then backup** — a primary that cannot run (not installed, no key)
-  or fails falls to the backup, logged with the reason;
-- **protection levels** — content that must stay local only reaches a local
-  engine: a cloud primary is skipped for it and a local backup takes it;
-- **accounting** — every call is recorded against its row (cost, spend budgets);
-- an account that may not use the install's hosted keys gets local engines only.
+Both are done by a **speech engine**: a model, bound to the **Transcription**
+lane (hear) or the **Speech** lane (speak) like every other kind of model
+work. You choose engines, test them and pick a voice under **Settings →
+Voice**; `octi setup` asks the same questions in the terminal.
 
 Nothing bound means speech is **off** (not broken): the microphone is hidden,
 a voice note gets one line asking to type, spoken replies stop
 ([MODULES.md → Capability gates](MODULES.md#capability-gates)).
 
+## One pipeline
+
+Every surface is a transport into the same pipeline. Where a turn ends, what
+of a reply is said aloud and how it is cut into sentences are decided on the
+server, once.
+
+```text
+ microphone ──▶ endpointer ──▶ speech to text ──▶ the turn's text ──▶ 🧠 root agent
+ (16 kHz PCM)   who is talking,   the Transcription                    (the same turn as typed
+                when they stop    lane's engine                         chat; `spoken` style)
+                                                                              │ text, as it is written
+ speaker   ◀── PCM, as it is ◀── text to speech ◀── sentence chunker ◀───────┘
+               generated          the Speech lane's   + text shaper (no markup,
+                                  engine + voice       code, links or sources)
+```
+
+| Surface | How audio gets in and out | What it uses of the pipeline |
+|---|---|---|
+| **Live conversation** (web chat, mobile app in *Octipus server* mode) | `/voice` WebSocket, `mode=conversation`: PCM up, PCM (or WAV clips) down | all of it — see [Live conversation](#live-conversation) |
+| **Dictation** (the composer's microphone) | a recording → `POST /api/voice/transcribe` | hear |
+| **Mobile app, *This phone* mode** | the phone's own recogniser and voice; only text reaches the server (`chat.send` with `spoken`) | the turn, the spoken style, the sentence chunker (ported) |
+| **Voice notes on channels** | the attachment → transcript → the turn; the reply goes back as text **and** audio | hear, shaper, speak |
+| **TUI push-to-talk** | records locally → `/api/voice/transcribe`, `/api/voice/speak` | hear, shaper, speak |
+| **`transcribe_audio` / `speak` tools** (and the MCP server's) | a workspace file in, an audio file out | hear / shaper + speak |
+| **Phone calls** | a carrier's media stream or its speech gathering | see [Phone Calls](#phone-calls) |
+
+## Engines are models
+
+Every place that hears or speaks resolves its engine from the lane
+(`src/voice/resolve.ts`):
+
+- **primary, then backup** — a primary that cannot run (not installed, no key,
+  the server is down) or fails falls to the backup, logged with the reason;
+- **protection levels** — content that must stay local only reaches a local
+  engine or a speech server at a private address: a cloud primary is skipped
+  for it and a local backup takes it;
+- **accounting** — every call is recorded against its row (cost, spend budgets);
+- an account that may not use the install's hosted keys gets local engines
+  (and private-address speech servers) only.
+
 | Engine | Lane | Row (provider / model id) | Notes |
 |--------|------|-----|-------|
-| whisper.cpp | Transcription | `local-audio` / `whisper.cpp:base` | Offline, no key. Model file: the row's *Model file*, else the installed `ggml-base.bin` (`octi setup`). Streaming windows ≥ 2 s. |
-| faster-whisper | Transcription | `local-audio` / `faster-whisper:<size>` | Offline, CTranslate2, ~4x faster than whisper.cpp; `small`/`medium` run in realtime on fast hardware. Needs `uv`. |
-| Voxtral | Transcription | `mistral` / `voxtral-mini-latest` | Realtime streaming via the row's `metadata.speech.streamingModel`. Mistral key (or the row's own key). |
-| OpenAI | Transcription | `openai` / `gpt-4o-transcribe` | Realtime streaming via `gpt-realtime-whisper`. OpenAI key. |
-| Kokoro | Speech | `local-audio` / `kokoro:<voice>` | Offline, leading open local TTS. Needs `uv` + model files (`octi setup`). WAV. |
-| Piper | Speech | `local-audio` / `piper:<voice>` | Offline, lightweight. The row's *Model file* is the `.onnx` voice. WAV. |
-| Voxtral | Speech | `mistral` / `voxtral-mini-tts-2603` | Mistral key. mp3/wav/opus/flac/pcm. |
-| OpenAI | Speech | `openai` / `gpt-4o-mini-tts` | OpenAI key. mp3/wav/opus/flac/pcm. |
-
-**Choosing one:** Topics page → Transcription / Speech → *Use:* (creates the
-row and binds it primary; the one it replaces becomes the backup), or bind any
-row like on any lane. `octi setup` does the same. `POST /api/voice/engines/use`
-`{ direction: 'stt'|'tts', engine, size?, makePrimary? }` is the API.
+| faster-whisper | Transcription | `local-audio` / `faster-whisper:<model>` | On this machine. `<model>` is a size (`small`), a release (`large-v3-turbo`, `distil-large-v3`) or a CTranslate2 repository on Hugging Face. Needs `uv` and ffmpeg. Uses a GPU when it finds one (`metadata.speech.device`). |
+| whisper.cpp | Transcription | `local-audio` / `whisper.cpp:base` | On this machine, no Python; built from source on install (git, cmake, a compiler). The row's *Model file* names another ggml model. |
+| Voxtral | Transcription | `mistral` / `voxtral-mini-latest` | Cloud; streams live. Mistral key (or the row's own key). |
+| OpenAI | Transcription | `openai` / `gpt-4o-transcribe` | Cloud; streams live (`gpt-realtime-whisper`). OpenAI key. |
+| Kokoro | Speech | `local-audio` / `kokoro:<voice>` | On this machine, 54 voices in nine languages. Needs `uv`. |
+| Piper | Speech | `local-audio` / `piper:<voice>` | On this machine, very small. You install the binary; the row's *Model file* is the `.onnx` voice. |
+| Voxtral | Speech | `mistral` / `voxtral-mini-tts-2603` | Cloud. Preset voices or a reference clip. |
+| OpenAI | Speech | `openai` / `gpt-4o-mini-tts` | Cloud. Preset voices, a style description, speed; streams. |
+| **Your own speech server** | either | a row with an `endpoint` (`custom-openai`) / any model id | Any OpenAI-compatible server — see below. |
 
 **Old engine names still work as requests:** `?engine=` on the `/voice`
 socket and `model` on `/api/voice/transcribe` accept a row name or `auto`,
 `local`, `whisper`, `whisper-cpp`, `fasterwhisper`, `mistral`/`voxtral-*`,
-`openai`/`whisper-1` — they pick the bound row of that engine. A row named
-directly must be an install speech engine of that direction.
+`openai`/`whisper-1` — they pick the bound row of that engine.
 
-**Settings that remain:** `voice.language`, `voice.ttsVoice` (the voice for
-replies and calls, given to the primary Speech engine; a backup speaks in its
-own default; empty = the engine's default), `voice.wakeWord` and the
-telephony keys. `voice.sttProvider`, `voice.fasterWhisperModel`,
-`voice.whisperModelPath`, `voice.ttsProvider` and `voice.piperModelPath` are
-**retired**: on the first boot after the upgrade they were turned into lane
-bindings once (explicit choices kept; `auto` became whisper.cpp first, as
-faster-whisper was only ever chosen by name; the default `mistral` speech
-was kept only when it had a key, else a local voice that runs; an engine of
-the other kind that can run became the backup; a model path carried over
-only when it was not the default and is on disk), and a lane someone bound
-is never touched.
+### Local engines
 
-### Wake Word Detection
+**Settings → Voice → Add an engine → Install** downloads and sets up
+faster-whisper, whisper.cpp or Kokoro on the server and follows the job on the
+page (`POST /api/voice/engines/install`); `octi setup` does the same in the
+terminal. An installed engine takes its lane when the lane is free.
 
-| Engine | Type | Notes |
-|--------|------|-------|
-| **Sherpa-ONNX** | Local | ONNX keyword spotting |
-| **Picovoice** | Cloud | High accuracy, requires API key |
-| **VAD** | Local | Voice Activity Detection fallback |
+- faster-whisper and Kokoro run in **resident workers**: the model is loaded
+  once and shared, and the worker stops after ten idle minutes. A first call
+  pays the load; the ones after it do not.
+- A GPU: faster-whisper uses one when CTranslate2 finds it, and falls back to
+  the CPU — saying so in the server log — when the GPU cannot load the model.
+  Set the engine's device to *GPU* (Settings → Voice → the engine → Edit) to
+  have the CUDA libraries installed with it and to fail instead of falling back.
+- Docker: the image carries ffmpeg and `uv`; models download into the
+  `octipus-models` volume. whisper.cpp is not buildable in the image (no
+  compiler) — use faster-whisper there.
 
----
+### Your own speech server
 
-## Realtime Web Voice Conversation
+Any model served over the OpenAI audio API — `POST /v1/audio/transcriptions`
+and `POST /v1/audio/speech` — is a speech engine: **Settings → Voice → Your
+own speech server**, with the server's URL, the model id as the server serves
+it, and optionally the name of the secret holding its key
+(`POST /api/voice/engines/server`). That covers
+[Speaches](https://github.com/speaches-ai/speaches), vLLM and vLLM-Omni,
+LocalAI, NVIDIA NeMo-Speech / NIM, and hosted ones such as Groq or DeepInfra.
+A server at a private address counts as local: protected content may use it.
 
-The web chat (`/chat`) has a live, hands-free voice mode: you speak, Octipus
-transcribes, runs the **same root agent pipeline as typed chat**, and speaks
-the reply back — with barge-in and per-sentence streaming TTS. Two mic modes
-share one owner (only one active at a time):
+`docker compose --profile speech up -d` starts a Speaches server on the GPU
+(`http://octipus-speech:8000/v1`) as a ready example.
 
-- **Recorded input** (`web/components/chat/prompt-input.tsx`): record an utterance →
-  `POST /api/voice/transcribe` → send as a chat turn → speak the reply.
-- **Realtime / streaming** (`web/hooks/useVoiceRealtime.ts`, Phase 4b): holds a
-  duplex WebSocket to `/voice` open, streams 16 kHz mono PCM off an AudioWorklet,
-  and receives a running transcript back. Client-side VAD segments utterances;
-  barge-in interrupts the spoken reply when you talk over it (Phase 4c).
+What differs between models rides on the row (`metadata.speech`, editable
+under the engine's *Advanced* settings). A row starts with what is known of
+its model id (`src/voice/speech-hints.ts`), so these work by naming them:
 
-### The speak-to-the-root agent loop
+| Model | Lane | What the row starts with |
+|---|---|---|
+| `openai/whisper-large-v3-turbo` (and any Whisper) | Transcription | plain transcription; live audio is transcribed one whole turn at a time |
+| `nvidia/nemotron-3.5-asr-streaming-0.6b`, Parakeet, Canary | Transcription | clips uploaded as 16 kHz WAV; live audio over NeMo-Speech's realtime socket |
+| `openbmb/VoxCPM2` | Speech | a voice description is passed as VoxCPM's `(…)` text prefix; reference clip for cloning; streams; 48 kHz |
+| `BreezeBlue/Breeze-TTS-2` | Speech | speaker tags `S0`–`S9`; `instructions` for voice design; reference clip; streams; 24 kHz |
 
-A spoken turn runs the *same* path as text — classification, memory, agent
-spawning — so nothing downstream is voice-specific. What differs is a
-**voice-only conversation layer** inside the root agent:
+Settings a row can carry: how a voice description is passed (`instructions`:
+`field` / `prefix` / `none`), whether a reference clip is taken (`cloning`),
+whether audio streams (`streams`), whether `speed` is taken, `sampleRate`,
+extra request fields sent as they are (`extraBody`, e.g. `cfg_value`,
+`inference_timesteps`, `seed`), `upload` (`wav` = transcode clips first), and
+the server's realtime transcription socket (`realtime`: the OpenAI realtime
+protocol as Speaches and NIM speak it, or NeMo-Speech's).
 
-**Propose-then-confirm gate** (`src/core/agent/voice-plan-gate.ts`, wired
-in `src/core/agent/service.ts` `handleMessageInner`). With the mic on, a
-work request is **not dispatched immediately**. Octipus proposes an approach out
-loud — or asks one short clarifying question when the request is vague — and
-waits for your go:
+Changing model is changing the row: add the other model, make it primary; the
+one it replaces stays as the backup.
 
-- work **or ambiguous** turn → **propose** (on the fast voice model)
-- "yes / go / do it" → **execute** the stored plan via the normal work path
-- "no / cancel / stop" → drop the plan, keep chatting
-- anything else → **refine**: fold the new guidance in and re-propose
+> **Checked against:** faster-whisper (tiny and large-v3-turbo) and Kokoro,
+> installed through the API and driven end to end; and an OpenAI-compatible
+> server holding the real large-v3-turbo weights. The request shapes for
+> VoxCPM2 and Breeze-TTS-2 follow vLLM-Omni's speech API documentation and
+> the NeMo-Speech realtime socket follows NVIDIA's `docs/api.md`; neither was
+> run against the real model here (both need a GPU server).
 
-Pending-plan state is per-session and in-memory. Affirmation vs. cancellation is
-decided by wording, because the classifier tags both "yes" and "no" as
-`approval`. The gate is **read-only over the root agent** — it can't spawn
-anything itself, so there's no runaway; the only thing that starts work is your
-spoken confirmation. Typed chat is unaffected (gated on a per-session voice
-flag set by the mic toggle with the gateway's `voice.set` message; the flag is
-cleared when that tab's connection closes).
+## Voices
 
-**Backend narrator** (`src/voice/narrator.ts`, wired in
-`src/core/gateway/event-bridge.ts`). Long agent turns are narrated as they
-happen instead of read back stale: root agent lifecycle events
-(`worker_spawned`, `worker_completed`) become `voice.speak` gateway events
-("On it — I've started the researcher…") sent only to the connection that put
-that session into voice mode. The actual reply is spoken from the
-`chat.response` event, **fresh per turn** — so voice is decoupled from turn
-timing and attempts to discard stale speech events.
+A **voice profile** (Settings → Voice → Voices) is a named way of speaking:
 
-**Fast voice model.** Interactive planning turns run on whatever model is mapped
-to the **`voice` topic** (e.g. a flash-tier model) so they stay snappy; the heavy
-work after handoff uses normal routing. Map it on the Models/Topics page, or
-`registry.updateModel(name, { topicRoles: { voice: 'primary' } })`.
+- a voice the engine offers (`af_sarah`, `alloy`, `S3`),
+- a description in words — "a calm woman in her forties, slight Scottish
+  accent" — for engines that design a voice from text,
+- a reference clip with its transcript, for engines that clone.
 
-### STT engine for the realtime loop
+A described voice is generated anew for every sentence and drifts; *Keep this
+exact voice* saves a preview as the profile's reference clip, so an engine
+that clones repeats it. The **active** profile (`voice.profile`) is what
+replies, voice notes and phone calls are spoken in; `/api/voice/speak`, the
+`speak` tool (`voice`, `style`, `speed`) and the MCP `octipus_speak` tool may
+name another. A profile made for one engine is handed to that engine only — a
+preset id means nothing to another — and the backup speaks in its own default.
+Reference clips are files under `~/.octipus/voices` (`OCTIPUS_VOICES_DIR`).
 
-The engine is the model bound to the Transcription lane (see *Engines are
-models*). The `/voice` WebSocket accepts `?engine=` to pick one of the bound
-engines. Cloud engines stream natively (low latency); whisper.cpp streams
-2 s windows (1 s windows return empty on the base model).
+`voice.ttsVoice` (a bare voice id for the primary engine) is still honoured
+when no profile is active.
 
-### Tuning knobs (web)
+## Live conversation
 
-- **`SILENCE_MS`** in both voice hooks — trailing silence that ends an utterance.
-  Raise if a thinking pause splits your sentence into two turns; lower if replies
-  feel laggy. (Currently 2000 ms.)
-- **Barge-in RMS / duration** thresholds in `useVoiceRealtime.ts` — the mic still
-  hears residual TTS (browser AEC cancels most, not all), so these keep the
-  assistant's own voice from self-interrupting.
+A hands-free conversation: you talk, Octipus answers aloud while it is still
+writing, and talking over it stops it. The web chat's conversation button and
+the mobile app's *Octipus server* mode both use it.
 
-### Key files
+The client opens `/voice?mode=conversation&session=<chat session>&token=<ws
+ticket>` and is a transport: it streams the microphone as 16 kHz mono PCM —
+all the time, with echo cancellation — and plays the audio it is sent. The
+server (`src/voice/session.ts`):
+
+1. **Ends the turn** (`src/voice/endpointer.ts`): speech starts after 60 ms of
+   sound above the room's own level, and ends after a pause of
+   `voice.endpointSilenceMs` (700 ms). A click or a cough is not a turn.
+2. **Transcribes it**: a streaming engine hears continuously and its text is
+   cut where the turn ended; any other engine transcribes the whole utterance
+   once — no fixed windows cutting words in half.
+3. Sends `{"type":"utterance","text":…}`; the client sends it as the chat
+   message (`chat.send` with `spoken: true`), so the turn is the same one a
+   typed message starts — memory, tools, agents, approvals.
+4. **Speaks the reply as it is written**: the root agent's text deltas go
+   through the sentence chunker; each sentence is synthesised as soon as it is
+   complete, the next one while the current one plays. Markup, code, links
+   and the sources footer are never read out
+   (`src/shared/speech-text.ts`, shared with the web).
+5. **Stops when talked over** (`voice.bargeIn`): sustained speech above the
+   reply's own echo cancels what is queued and becomes the next turn.
+
+A turn whose reply is read aloud gets one **spoken-reply directive** in its
+system prompt (`SPOKEN_REPLY_DIRECTIVE`): answer first, short sentences, no
+markup, offer anything long in writing. It applies wherever the reply is
+heard — a `chat.send` marked `spoken`, the mobile voice channel, a session in
+web voice mode — and the phone prompt is built on the same text.
+
+Measured on a 4-core machine without a GPU (faster-whisper tiny, Kokoro, a
+model writing eight words a second): the turn's text 1.1 s after the last
+word (0.7 s of it the pause), the first audio 2.6 s after it — before the
+model had finished the reply.
+
+### Socket protocol
+
+`mode` omitted is the older dictation protocol (PCM in, a running
+`transcript` out), unchanged.
+
+| Client → server | |
+|---|---|
+| binary frames | 16 kHz mono s16le PCM |
+| `{"type":"interrupt"}` | stop speaking |
+| `{"type":"expect_reply"}` | speak the next reply although it was typed |
+| `{"type":"say","text":…}` | read this aloud |
+| `{"type":"playback","state":"ended"}` | everything sent has been played |
+| `{"type":"stop"}` | end |
+
+| Server → client | |
+|---|---|
+| `{"type":"ready","mode":"conversation","engine":…,"live":bool,"speak":bool}` | `speak:false`: no speech engine — replies are shown only |
+| `{"type":"speech_start"}`, `{"type":"transcript","text":…,"final":false}` | someone is talking; what they have said so far |
+| `{"type":"utterance","text":…}` | the finished turn |
+| `{"type":"audio","seq":n,"format":"pcm"\|"wav","sampleRate":hz,"ms":n,"text"?:…}` + one binary frame | reply audio: ~200 ms PCM frames, or (`&audio=wav`) one WAV per sentence |
+| `{"type":"speaking","on":bool}`, `{"type":"barge_in"}` | the reply started / ended; drop queued audio now |
+| `{"type":"error","message":…}` | |
+
+Query: `speak=0` (listen only), `audio=wav`, `silence=<ms>`, `engine=<row>`.
+
+### The propose-then-confirm gate and the narrator (web)
+
+Unchanged, and on top of the pipeline. With the web's voice mode on
+(`voice.set`), a work request is not dispatched at once: Octipus proposes an
+approach out loud — or asks one clarifying question — and waits for "yes"
+(`src/core/agent/voice-plan-gate.ts`). Long turns are narrated
+(`src/voice/narrator.ts`): an agent the root agent starts is announced, and
+its finish too, unless the answer is already being spoken. The root agent's
+own start is not announced. Interactive planning turns run on the model mapped
+to the **`voice` topic**.
+
+## Other surfaces
+
+- **Dictation.** The composer's microphone records and sends the clip to the
+  server's engine. Only when the server has none does it fall back to the
+  browser's own recognition, and says so (that audio goes to the browser
+  vendor).
+- **Voice notes on channels.** A voice note is transcribed and answered in
+  text and in voice (Telegram and WhatsApp as a voice note, Slack as a file;
+  Teams gets text and a link). The spoken part is the reply as it would be
+  said, cut at a sentence within 2000 characters.
+- **Tools.** `transcribe_audio` (long recordings are cut into parts and
+  stitched; `timestamps` returns segments) and `speak` (`voice`, `style`,
+  `speed`) are on the general role, gated on the lanes.
+- **TUI.** Alt+T / F8: push-to-talk, recorded and played on the terminal's
+  machine, heard and spoken by the server's engines.
+
+## API
+
+| Method | Path | |
+|--------|------|---|
+| GET | `/api/voice/status` | whether hear / speak are available, and why not |
+| POST | `/api/voice/transcribe` | `{audio (base64), format?, model?, sessionId?}` → `{text, model, language, duration}` |
+| POST | `/api/voice/speak` | `{text, voice?, profile?, instructions?, speed?, format?, raw?, model? (admin), sessionId?}` → the audio; `X-Speech-Model` names the engine. Text is shaped for speech unless `raw`. |
+| GET | `/api/voice/voices` | the engine's voices, the profiles, the active one |
+| PUT / DELETE | `/api/voice/profiles/:name` | create or replace / remove a voice profile (admin) |
+| POST | `/api/voice/profiles/active` | which profile speaks (admin) |
+| GET | `/api/voice/engines` | everything the Voice page shows (admin) |
+| POST | `/api/voice/engines/install` | download and set up a local engine in the background (admin) |
+| POST | `/api/voice/engines/use` | register a built-in engine and bind it (admin) |
+| POST | `/api/voice/engines/server` | add a model on your own speech server (admin) |
+| PATCH / DELETE | `/api/voice/engines/:name` | an engine's own settings / remove it (admin) |
+
+Binding a lane by hand is still `PUT /api/topics/<transcription\|speech>/binding`;
+a model that is not a speech engine of that direction is refused.
+
+## Settings
+
+| Setting | Default | |
+|---------|---------|---|
+| `voice.language` | `en` | the language spoken (`auto` lets the engine detect it) |
+| `voice.profile` | — | the active voice profile; empty = the engine's default voice |
+| `voice.endpointSilenceMs` | `700` | live conversation: the pause that ends your turn |
+| `voice.bargeIn` | `true` | live conversation: talking over a reply stops it |
+| `voice.ttsVoice` | — | older: a bare voice id for the primary engine, used when no profile is active |
+
+`voice.sttProvider`, `voice.fasterWhisperModel`, `voice.whisperModelPath`,
+`voice.ttsProvider` and `voice.piperModelPath` are retired (turned into lane
+bindings once, on the first boot after that upgrade); `voice.wakeWord` is
+removed — nothing on the server listened for one.
+
+## Key files
 
 | Area | File |
 |------|------|
-| Realtime STT WebSocket (`/voice`) | `src/api/voice-ws.ts` |
-| Backend narrator + `speak` frames | `src/voice/narrator.ts`, `src/api/websocket.ts` |
-| Propose-then-confirm gate | `src/core/agent/voice-plan-gate.ts`, `src/core/agent/service.ts` |
-| Telephony media stream (`/voice/media/:provider`) | `src/api/voice-media-ws.ts` |
-| Web hooks | `web/hooks/useVoiceRealtime.ts`, `web/components/chat/prompt-input.tsx` |
-| Audio codec (μ-law / resample) | `src/voice/audio-codec.ts` |
-
-> **Known gap:** streaming TTS synthesizes and plays one sentence at a time, so
-> there's an audible pause between sentences (the next sentence's synth
-> round-trip). Prefetching the next clip while the current one plays would close
-> it.
+| Lane resolution: primary/backup, protection, accounting, voices, PCM streams | `src/voice/resolve.ts` |
+| Engines as model rows; your own speech server | `src/voice/speech-rows.ts`, `src/voice/compatible.ts`, `src/voice/speech-hints.ts` |
+| Engine adapters (subprocess and socket plumbing) | `src/voice/stt.ts`, `src/voice/tts.ts`, `src/voice/resident-worker.ts`, `*_worker.py` |
+| Voice profiles | `src/voice/profiles.ts` |
+| The conversation: endpointing, the session, the socket | `src/voice/endpointer.ts`, `src/voice/session.ts`, `src/api/voice-ws.ts` |
+| Text shaping, sentence chunking, the spoken-reply directive | `src/shared/speech-text.ts` |
+| Installing local engines; the Voice page's data | `src/voice/install-jobs.ts`, `src/voice/provision.ts`, `src/voice/whisper.ts`, `src/voice/overview.ts` |
+| Routes | `src/api/routes/voice.ts` |
+| Web | `web/components/settings/voice-tab.tsx`, `web/hooks/useVoiceRealtime.ts`, `web/components/chat/prompt-input.tsx` |
 
 ---
 

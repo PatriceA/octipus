@@ -79,7 +79,7 @@ src/
   plugins/        plugin loader + plugin-as-tool wrapper; packages/ (plugin packages)
   hooks/          event hook manager (triggers, actions, suggestions)
   capabilities/   optional hardware/capability installers (hwfit)
-  voice/          STT / TTS / wake-word / telephony
+  voice/          speech engines, the conversation pipeline, voice profiles, telephony
   visual/         screenshot capture + analysis
   tui-pi/         terminal chat client (pi-tui)
   tui-editor/     TUI code editor
@@ -252,24 +252,37 @@ think you need to break one, open an issue first.
 
 ## Voice integration architecture
 
-Octipus has a voice subsystem (`src/voice/`) divided into three execution paths.
+Octipus hears (speech to text) and speaks (text to speech) through **speech
+engines**: model rows bound to the **Transcription** and **Speech** lanes.
+`docs/VOICE.md` is the reference; the shape in one screen:
 
-1. **Batch Processing (REST API)**
-   - **Endpoints:** `/api/voice/transcribe` and `/api/voice/speak` (in `src/api/routes/voice.ts`).
-   - **Engines:** Supports cloud providers (OpenAI Whisper, Mistral Voxtral) and local engines (Whisper.cpp, Piper, Edge TTS, Coqui) interchangeably.
-   - **Usage:** Standard HTTP requests for one-off transcription or synthesis. Implements strict limits (e.g., max 5000 chars for TTS) to prevent billing abuse.
+1. **One resolver.** Every caller — routes, tools, channels, the conversation
+   socket, phone calls — goes through `src/voice/resolve.ts` (primary then
+   backup, protection levels, accounting). Never call an engine adapter
+   (`stt.ts` / `tts.ts` / `compatible.ts`) directly, and never hardcode a
+   speech model: an engine is built from its row in `speech-rows.ts`.
+2. **The engine set is open.** Built-in families (faster-whisper, whisper.cpp,
+   Kokoro, Piper, Mistral, OpenAI) plus any model on an OpenAI-compatible
+   speech server (`compatible.ts`). What differs between models rides on the
+   row's `metadata.speech`, with defaults read off the model id in
+   `speech-hints.ts` — add a hint there, not a new engine class, when a model
+   only differs in request shape.
+3. **One conversation pipeline.** `src/voice/session.ts` (endpointing in
+   `endpointer.ts`, sentence chunking and text shaping in
+   `src/shared/speech-text.ts`) behind the `/voice` socket's conversation
+   mode. Clients are transports: no per-client VAD, sentence splitting,
+   markup stripping or spoken-style prompt. Text on its way to being spoken
+   goes through `forSpeech`; a turn whose reply is read aloud carries
+   `SPOKEN_REPLY_DIRECTIVE`.
+4. **Voices are profiles** (`profiles.ts`): a preset id, a description, or a
+   reference clip — not a bare voice string.
+5. **Phone calls** (`src/voice/telephony/`): Twilio, Telnyx, Plivo. The
+   conversation runs on the `voice` topic's model directly (no root agent),
+   on the same endpointer, chunker and speech lanes.
 
-2. **Live Voice (Push-to-Talk & Wake Word)**
-   - **Implementation:** `VoiceService` (`src/voice/index.ts`).
-   - **Features:** Supports wake-word detection (Sherpa, Picovoice Porcupine, VAD) via `startListening()`.
-   - **Limitations:** Push-to-Talk (`startRecording()`) currently hardcodes the `arecord` binary, restricting mic capture strictly to Linux/ALSA environments.
-   - **Streaming:** Supports `streamTranscribe()` and `streamSpeak()` generators for real-time WebSocket clients.
-
-3. **Telephony (Phone Calls)**
-   - **Providers:** Twilio, Telnyx, Plivo (`src/voice/telephony/`).
-   - **Standard Path:** Turn-based conversation using webhooks (`/api/voice/webhook/:provider`) and TwiML `<Gather>`.
-   - **Fast Path:** Bypasses the standard multi-agent root-agent routing to ensure low-latency responses (a direct LiteLLM call with a short-response voice prompt).
-   - **Media Stream Path (Phase 4d):** For Twilio, an optional WebSocket media bridge (`/api/voice-media-ws.ts`) handles bidirectional `<Connect><Stream>` payload (8kHz μ-law ↔ 16kHz PCM), enabling real-time streaming STT, VAD turn-taking, and caller barge-in.
+Local engines run as subprocesses (`uv run` workers kept resident; whisper.cpp
+built from source); the `VoiceService` in `src/voice/index.ts` is only the
+TUI's local record-and-play, wired to the server's lanes.
 
 ## Things to avoid
 

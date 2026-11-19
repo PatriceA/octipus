@@ -7,6 +7,41 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Voice, rebuilt around open engines and one pipeline.**
+  - **Any speech model.** A model on an OpenAI-compatible speech server
+    (Speaches, vLLM-Omni, LocalAI, NVIDIA NeMo-Speech, Groq, …) is a speech
+    engine: add it under **Settings → Voice → Your own speech server** with
+    its URL and model id. `openai/whisper-large-v3-turbo`, `openbmb/VoxCPM2`,
+    `BreezeBlue/Breeze-TTS-2` and `nvidia/nemotron-3.5-asr-streaming-0.6b`
+    start with the right request shape. faster-whisper takes any model name
+    (`large-v3-turbo`, a Hugging Face repository) and uses a GPU when present.
+    Binding a model that is not a speech engine to the Transcription or
+    Speech lane is now refused instead of failing on the first word.
+  - **One Voice page.** Engines are installed (with progress), tested and
+    switched under Settings → Voice; local engines no longer need the CLI.
+    The Docker image now carries ffmpeg and `uv`, and
+    `docker compose --profile speech up` starts a GPU speech server.
+  - **Voices.** Voice profiles replace the free-text voice id: a preset
+    voice, a voice described in words, or one cloned from a reference clip.
+    `voice.ttsVoice` is still honoured when no profile is active.
+  - **Live conversation.** The server now ends your turn (`voice.endpointSilenceMs`,
+    default 700 ms — was 1.5 s in the browser), speaks the reply while it is
+    still being written, and stops when talked over (`voice.bargeIn`). A
+    spoken turn is answered in spoken style, with no markup. Older clients on
+    the dictation protocol keep working.
+  - **Faster local speech.** faster-whisper and Kokoro keep their model loaded
+    between requests instead of reloading it for every clip and sentence.
+  - **Fixed:** installing Kokoro or the whisper.cpp model failed behind a
+    proxy and held the whole download in memory; every spoken turn began with
+    "On it — I've started the general"; Chrome dictation used the browser's
+    recognition even with a private engine bound; onboarding's local voice
+    choice registered engines without installing them.
+  - **Removed:** the server-side wake-word detector and `voice.wakeWord`
+    (nothing called it), and the unread `sttEnabled` / `ttsEnabled` flags.
+  - Operators: new settings `voice.profile`, `voice.endpointSilenceMs`,
+    `voice.bargeIn`; new routes under `/api/voice/` (`engines`, `voices`,
+    `profiles`); `chat.send` takes `spoken`. See `docs/VOICE.md`.
+
 - **Companion's project sessions follow your topic routing.** Companion no
   longer picks a model by name when it starts a project session (it had no
   list to choose from and could land on any enabled model, a test model
