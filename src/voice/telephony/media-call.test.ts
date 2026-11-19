@@ -154,13 +154,31 @@ describe('PhoneMediaCall', () => {
   });
 
   test('talking over the reply stops it: no more frames, the carrier buffer is cleared, the model and the speech are cancelled', async () => {
-    const h = harness({ speechMs: 4000, transcripts: ['What time is it?', 'Wait, stop.'] });
+    // Playback is held after a dozen frames, so the interruption lands mid-sentence
+    // however fast or loaded the machine is (virtual time would otherwise let
+    // the whole 4 s sentence out before the test gets to talk).
+    let now = 0;
+    let release = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const h = harness({
+      speechMs: 4000, transcripts: ['What time is it?', 'Wait, stop.'],
+      clock: {
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+          // `h` is only read once the call plays, long after it is assigned.
+          if (h.frames.length >= 12) await held;
+          else await new Promise((resolve) => setImmediate(resolve));
+        },
+      },
+    });
     await h.call.start();
     h.caller(true, 600);
     h.caller(false, 600);
-    await h.until(() => h.frames.length > 10, 'the reply to start playing');
+    await h.until(() => h.frames.length >= 12, 'the reply to start playing');
 
     h.caller(true, 400); // over the reply, loud and long enough to be an interruption
+    release();
     expect(h.log).toContain('clear');
     const sentAtBarge = h.frames.length;
     expect(h.signals[0].aborted).toBe(true);
