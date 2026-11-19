@@ -7,6 +7,8 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- Codemode now keeps ordinary tool definitions out of API and CLI prompts, including core tools and directly exposed MCP tools. Scripts discover schemas only when needed; coordination controls and existing permission checks are preserved. Models without codemode keep their existing tool advertisement.
+
 - **Voice, rebuilt around open engines and one pipeline.**
   - **Any speech model.** A model on an OpenAI-compatible speech server
     (Speaches, vLLM-Omni, LocalAI, NVIDIA NeMo-Speech, Groq, …) is a speech

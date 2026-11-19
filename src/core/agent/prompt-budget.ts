@@ -175,3 +175,6 @@ export function recordContextFill(
 export function getContextFill(sessionId: string): { promptTokens: number; contextWindow?: number } | undefined {
   return contextFills.get(sessionId);
 }
+
+/** A resumed CLI's input delta is not its occupied context. */
+export function clearContextFill(sessionId: string): void { contextFills.delete(sessionId); }

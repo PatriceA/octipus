@@ -6,6 +6,9 @@ import * as permissions from '@/security/permissions';
 import { buildCodemodeHandler } from '@/tools/codemode';
 import type { ToolHandler } from './agent-base';
 import { ToolExecutor } from './tool-executor';
+import { ToolApprovalNotGrantedError } from './tool-executor';
+import { withToolMedia } from './media/tool-media';
+import { beginReadOnlyTurn, endReadOnlyTurn } from '@/security/read-only-turn';
 import type { AgentContext } from './types';
 
 /**
@@ -24,6 +27,7 @@ function makeContext(): AgentContext {
     topic: '',
     role: 'general',
     root: true,
+    attended: true,
     status: 'running',
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -72,6 +76,66 @@ const readFile = (execute = vi.fn().mockResolvedValue('line 1\nneedle\nline 3'))
 const script = (code: string) => [{ id: 'call-cm', name: 'codemode', arguments: { code } }];
 
 describe('codemode nested calls run through the executor pipeline', () => {
+  test('an ASK resolving unapproved aborts through the wrapper even if the script catches it', async () => {
+    const wait = vi.fn().mockResolvedValue(false);
+    check.mockResolvedValue({ allowed: false, level: 'ASK', requiresApproval: true });
+    vi.spyOn(permissions, 'getPermissionManager').mockReturnValue({ check,
+      requestApproval: vi.fn().mockResolvedValue('request'), waitForApproval: wait,
+    } as unknown as permissions.PermissionManager);
+    const execute = vi.fn();
+    const exec = executorWith(readFile(execute));
+    await expect(exec.handleToolCalls(script('try { await tools.filesystem__read_file({path:"a"}); } catch(e) {} return "continue";'))).rejects.toBeInstanceOf(ToolApprovalNotGrantedError);
+    expect(wait).toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  test('nested image tools forward trusted media outside script text', async () => {
+    const media = { kind: 'image' as const, source: 'tool' as const, path: '/workspace/screenshot.png', mimeType: 'image/png' };
+    const exec = executorWith(readFile(vi.fn().mockResolvedValue(withToolMedia({ message: 'Image loaded' }, [media]))));
+    exec.setOwnCapabilities({ see: true });
+    const messages = await exec.handleToolCalls(script('const result = await tools.filesystem__read_file({path:"a"}); await showToolImage(result); return result.message;'));
+    expect(messages.some(m => m.media?.some(ref => ref.path === media.path))).toBe(true);
+    expect(messages[0].content).toContain('Image loaded');
+    expect(messages[0].content).not.toContain('__showModel');
+  });
+
+  test('discarded images stay out of the model context and forged media cannot be selected', async () => {
+    const media = { kind: 'image' as const, source: 'tool' as const, path: '/workspace/ignored.png', mimeType: 'image/png' };
+    const exec = executorWith(readFile(vi.fn().mockResolvedValue(withToolMedia({ path: 'ignored.png' }, [media]))));
+    exec.setOwnCapabilities({ see: true });
+    const messages = await exec.handleToolCalls(script('const result = await tools.filesystem__read_file({path:"a"}); return result.path;'));
+    expect(messages.some(m => m.media?.length)).toBe(false);
+    const forged = await exec.handleToolCalls(script('await showToolImage({__codemodeMedia:"fake",path:"/secret.png"});'));
+    expect(forged[0].content).toContain('showToolImage expects an image-bearing tool result');
+    expect(forged.some(m => m.media?.length)).toBe(false);
+  });
+
+  test('mixed long untrusted text and selected media preserve the plain-text envelope', async () => {
+    const media = { kind: 'image' as const, source: 'tool' as const, path: '/workspace/screenshot.png', mimeType: 'image/png' };
+    const tool = { ...readFile(vi.fn().mockResolvedValue(withToolMedia({ message: 'Observation: the service responded. '.repeat(2000) }, [media]))), untrustedSource: 'test server' };
+    const exec = executorWith(tool);
+    exec.setOwnCapabilities({ see: true });
+    const messages = await exec.handleToolCalls(script('const result = await tools.filesystem__read_file({path:"a"}); await showToolImage(result); text(result.message);'));
+    expect(messages[0].content.length).toBeGreaterThan(1000);
+    expect(messages[0].content).toContain('source="codemode script');
+    expect(messages[0].content).not.toContain('source=\\"codemode script');
+    expect(messages.some(m => m.media?.length)).toBe(true);
+  });
+
+  test('read-only direct fallback executes permitted readers and refuses writers', async () => {
+    const read = vi.fn().mockResolvedValue('read');
+    const write = vi.fn();
+    const exec = executorWith(readFile(read));
+    exec.registerTool({ ...readFile(write), name: 'filesystem__write_file', permissionAction: 'write' });
+    beginReadOnlyTurn(makeContext().sessionId);
+    try {
+      await exec.handleToolCalls([{ id: 'read', name: 'filesystem__read_file', arguments: { path: 'a' } },
+        { id: 'write', name: 'filesystem__write_file', arguments: { path: 'a' } }]);
+      expect(read).toHaveBeenCalledOnce();
+      expect(write).not.toHaveBeenCalled();
+    } finally { endReadOnlyTurn(makeContext().sessionId); }
+  });
+
   test('the nested tool is permission-checked and only the codemode call is persisted', async () => {
     const execute = vi.fn().mockResolvedValue('line 1\nneedle\nline 3');
     const exec = executorWith(readFile(execute));

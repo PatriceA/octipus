@@ -1,4 +1,5 @@
 import { getSettingsService } from '@/config/settings-service';
+import { withLiveCapabilitiesInventory } from '@/tools/self-report';
 import { executionEnvironmentFor, executionEnvironmentDescription } from '@/security/execution-environments';
 import { getConfig } from '@/config';
 import { ConcurrencyLimitError } from '@/core/errors/concurrency-limit';
@@ -442,7 +443,7 @@ export class AgentManager {
 
     // Register agent-specific tools for native and CLI workers
     if (options.tools) {
-      worker.registerTools(options.tools);
+      worker.registerTools(options.tools.map(tool => withLiveCapabilitiesInventory(tool, () => worker.getToolInventory())));
     }
 
     // Subscribe to events: buffer for polling + persist to DB + forward to manager handlers

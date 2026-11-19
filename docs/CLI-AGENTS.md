@@ -1107,6 +1107,21 @@ script makes goes through the worker's `ToolExecutor`: the same permission,
 approval, flow-guard and protection checks as a call the CLI makes itself, and
 a result withheld from a remote harness is withheld from the script too.
 
+The initial tool list is compact: codemode, discovery and coordination controls.
+Ordinary tool schemas (including core groups and direct MCP tools) stay registered
+inside Octipus. In a script, `searchTools(query)` finds authorized tools and
+`describeTool(name)` returns a signature on demand; `tools.<name>(args)` calls
+one. Use scripts for single calls too. This does not depend on the separate
+lazy-discovery setting. API workers with codemode use the same compact policy;
+small API models and other workers without codemode retain their existing policy.
+When a tool returns images, scripts select which ones to show with
+`await showToolImage(result)`; unselected images stay out of model context. Selected images
+use the usual media channel, preserving the script's plain-text output.
+Read-only briefings retain their permitted direct readers. If codemode becomes
+unavailable after repeated failures, the usual direct/discovery interface returns.
+Already retained schemas in a resumed vendor conversation are not erased by this
+change; a fresh CLI conversation is needed to reclaim that previous context.
+
 - External MCP servers with `codemode` exposure (the default) are reached only
   from scripts; `mcp_list_tools` reports how many tools each holds for them.
 - The bridge bounds a `codemode` call by the script's own `timeout_ms` (at most

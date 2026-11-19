@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
 import type { ToolHandler } from '@/core/agent-base';
-import { buildCapabilitiesHandler } from './self-report';
+import { buildCapabilitiesHandler, withLiveCapabilitiesInventory } from './self-report';
 
 /**
  * The agent has to be able to describe itself.
@@ -27,6 +27,17 @@ const handler = (name: string, toolId?: string): ToolHandler => ({
   parameters: {},
   toolId,
   execute: async () => null,
+});
+
+test('worker inventory replaces pre-worker counts and follows tools removed during execution', async () => {
+  const original = buildCapabilitiesHandler(ctx({ advertised: [handler('hidden', 'notes')] }));
+  const inventory = { advertised: [handler('codemode')], registered: [handler('codemode'), handler('hidden', 'notes')] };
+  const bound = withLiveCapabilitiesInventory(original, () => inventory);
+  expect(await bound.execute({ section: 'tools' }, {} as never)).toMatchObject({ tools: { advertised: 1, callable: 2 } });
+  inventory.advertised = [];
+  inventory.registered = [];
+  expect(await bound.execute({ section: 'tools' }, {} as never)).toMatchObject({ tools: { advertised: 0, callable: 0 } });
+  expect(await bound.execute({ section: 'skills' }, {} as never)).not.toHaveProperty('tools');
 });
 
 /** No DB and no MCP bridge in this suite — every remote section is expected to

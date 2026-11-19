@@ -18,8 +18,8 @@ const ctx: AgentContext = {
 const h = (name: string, toolId?: string): ToolHandler => ({ name, toolId, description: name, parameters: {}, execute: async () => null });
 const tools = [h('filesystem__read_file', 'filesystem'), h('shell__run', 'shell'), h('notes__search', 'notes'), h('websearch__search', 'websearch'), h('spawn_child'), h('list_tools', 'tool_discovery')];
 
-function worker(advertisement: AgentWorker['config']['toolAdvertisement']) {
-  const w = new AgentWorker(ctx, { maxIterations: 1, contextWindowSize: 100_000, timeout: 60_000, maxTokenBudget: 0, toolOutputSoftCap: 1000, toolAdvertisement: advertisement });
+function worker(advertisement: AgentWorker['config']['toolAdvertisement'], codemode = false) {
+  const w = new AgentWorker(ctx, { maxIterations: 1, contextWindowSize: 100_000, timeout: 60_000, maxTokenBudget: 0, toolOutputSoftCap: 1000, toolAdvertisement: advertisement, codemode });
   w.registerTools(tools);
   return w as unknown as { nativeToolSearchDeferrals(m: { provider?: string; modelId: string }): string[] | undefined };
 }
@@ -28,6 +28,15 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('native tool search deferrals', () => {
   const lazy = { mode: 'lazy' as const, coreToolIds: ['filesystem', 'shell', 'notes'] };
+
+  test('codemode avoids the entire alternate Claude catalog on an eligible lazy native Messages request', () => {
+    vi.spyOn(config, 'getConfig').mockReturnValue({ agent: { nativeToolSearch: true } } as never);
+    vi.stubEnv('ANTHROPIC_NATIVE_MESSAGES', '1');
+    try {
+      expect(worker(lazy).nativeToolSearchDeferrals({ provider: 'anthropic', modelId: 'claude-opus-5-5' })).toBeDefined();
+      expect(worker(lazy, true).nativeToolSearchDeferrals({ provider: 'anthropic', modelId: 'claude-opus-5-5' })).toBeUndefined();
+    } finally { vi.unstubAllEnvs(); }
+  });
 
   test('first-party Claude on the lazy path defers everything outside the fixed floor', () => {
     vi.spyOn(config, 'getConfig').mockReturnValue({ agent: { nativeToolSearch: true } } as never);

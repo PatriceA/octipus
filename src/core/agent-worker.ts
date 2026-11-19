@@ -45,7 +45,9 @@ import type { ToolHandler } from './agent-base';
 import { recordModelToolCall } from './agent/model-capability';
 import { ensureChildRelay } from './agent/output-guard';
 import { isLongTailHandler } from './agent/tool-split';
-import { buildCodemodeHandler, CODEMODE_TOOL_NAME } from '@/tools/codemode';
+import { buildCodemodeHandler, compactCodemodeTools, CODEMODE_TOOL_NAME } from '@/tools/codemode';
+import { isReadOnlyTurn } from '@/security/read-only-turn';
+import { recordContextFill } from './agent/prompt-budget';
 import { getMCPBridge } from '@/mcp/bridge';
 import { ClassifiedError, isFatalConnectionError, isTransientDnsError } from './errors/classification';
 import { formatCollectedResults } from './swarm/collect-tool';
@@ -663,6 +665,10 @@ export class AgentWorker extends BaseAgentWorker {
     this.toolExecutor.registerTools(tools);
   }
 
+  getToolInventory(): { advertised: ToolHandler[]; registered: ToolHandler[] } {
+    return { advertised: this.toolExecutor.toolsDisabled ? [] : this.getAdvertisedToolHandlers(), registered: [...this.toolExecutor.getTools().values()] };
+  }
+
   async loadHistory(): Promise<void> {
     // Only the root owns the session transcript; children receive a scoped task.
     if (!isRootAgent(this.context)) {
@@ -806,6 +812,7 @@ export class AgentWorker extends BaseAgentWorker {
       omitted,
     });
     recordLatestComposition(this.context.sessionId, { agentId: this.context.id, composition });
+    recordContextFill(this.context.sessionId, { promptTokens: composition.totals.tokens, contextWindow: composition.contextWindow });
     return composition;
   }
 
@@ -2474,6 +2481,9 @@ export class AgentWorker extends BaseAgentWorker {
    * never the sticky selection, which would change what is loaded mid-way.
    */
   private nativeToolSearchDeferrals(model: { provider?: string | null; modelId: string }): string[] | undefined {
+    // Codemode already discovers schemas inside the script; do not attach the
+    // full catalog again through a provider-specific discovery mechanism.
+    if (this.usesCompactCodemode()) return undefined;
     const advertisement = this.config.toolAdvertisement;
     if (advertisement?.mode !== 'lazy' || model.provider !== 'anthropic') return undefined;
     if (getConfig().agent?.nativeToolSearch === false || !supportsNativeToolSearch(model.modelId)) return undefined;
@@ -2539,10 +2549,17 @@ export class AgentWorker extends BaseAgentWorker {
 
   private advertisedToolsInCacheOrder(): { tools: ToolHandler[]; sharedCount: number } {
     const advertisement = this.config.toolAdvertisement ?? { mode: 'full' };
-    const registeredTools = Array.from(this.toolExecutor.getTools().values());
+    const readOnly = isReadOnlyTurn(this.context.sessionId) || this.context.metadata?.companionBriefing === true;
+    const registeredTools = Array.from(this.toolExecutor.getTools().values()).filter(tool => !readOnly || tool.name !== CODEMODE_TOOL_NAME);
+    if (this.usesCompactCodemode()) return orderForCache(compactCodemodeTools(registeredTools, advertisement.mode === 'lazy'), { lazy: false });
     if (advertisement.mode !== 'lazy') return orderForCache(registeredTools, { lazy: false });
     const advertised = registeredTools.filter((tool) => !isLongTailHandler(tool, advertisement.coreToolIds));
     return orderForCache(advertised, { lazy: true, groupOrder: advertisement.groupOrder });
+  }
+
+  private usesCompactCodemode(): boolean {
+    return this.config.codemode === true && this.toolExecutor.getTools().has(CODEMODE_TOOL_NAME)
+      && !isReadOnlyTurn(this.context.sessionId) && this.context.metadata?.companionBriefing !== true;
   }
 
   /**

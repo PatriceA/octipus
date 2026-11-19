@@ -18,13 +18,16 @@ describe('renderServersSection', () => {
   test('nothing to list: no section', () => {
     expect(renderServersSection([], { codemode: true })).toBeUndefined();
     // Declared and unreachable tools need no listing.
-    expect(renderServersSection([listing('a', ['direct']), listing('b', ['hidden'])], { codemode: true })).toBeUndefined();
+    expect(renderServersSection([listing('a', ['direct']), listing('b', ['hidden'])], { codemode: false })).toBeUndefined();
+    const compact = renderServersSection([listing('a', ['direct']), listing('b', ['hidden'])], { codemode: true });
+    expect(compact).toContain('- a (codemode)');
+    expect(compact).not.toContain('- b');
   });
 
   test('reach follows the agent: codemode servers are scripted only by an agent that runs codemode', () => {
     const servers = [listing('github', ['codemode']), listing('docs', ['deferred'])];
     const scripted = renderServersSection(servers, { codemode: true }) as string;
-    expect(scripted).toContain('- docs (mcp_list_tools)');
+    expect(scripted).toContain('- docs (codemode)');
     expect(scripted).toContain('- github (codemode)');
     expect(scripted).toContain('tools.mcp__<server>__<tool>(args)');
     const plain = renderServersSection(servers, { codemode: false }) as string;
@@ -105,7 +108,7 @@ describe('MCPBridge.serversSection', () => {
       .serversSection({ codemode: true });
     expect(warm).toBe(cold);
     expect(cold).toContain('- live (codemode): Live server');
-    expect(cold).toContain('- pending (mcp_list_tools): Not connected yet');
+    expect(cold).toContain('- pending (codemode): Not connected yet');
     // No exposure set: the default, codemode.
     expect(cold).toContain('- unset (codemode): No exposure set');
     expect(cold).not.toContain('- off');

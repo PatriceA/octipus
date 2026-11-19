@@ -32,7 +32,7 @@ type Reach = 'codemode' | 'mcp_list_tools';
 
 /** How this agent reaches the server's undeclared tools; undefined when it has none. */
 function reachOf(exposures: ReadonlySet<McpExposure>, codemode: boolean): Reach | undefined {
-  if (codemode && exposures.has('codemode')) return 'codemode';
+  if (codemode && ['codemode', 'deferred', 'direct'].some(exposure => exposures.has(exposure as McpExposure))) return 'codemode';
   // Without codemode, codemode-exposed tools are listed by mcp_list_tools.
   if (exposures.has('deferred') || exposures.has('codemode')) return 'mcp_list_tools';
   return undefined;

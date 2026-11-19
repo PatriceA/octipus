@@ -1,5 +1,6 @@
 import { codexContextReader, codexRuntimeInfo } from './cli-runtime-info';
 import { measureCliPayload } from './agent/cli-prompt-composition';
+import { clearContextFill, recordContextFill } from './agent/prompt-budget';
 import { takeStagedRootPrompt, recordAgentComposition, recordLatestComposition, withoutText, type StagedRootPrompt } from './agent/prompt-composition';
 import { applySessionCliSettings, configuredCliEffort } from './agent/session-cli-settings';
 import { agyIsolationError } from './agy-cli-runtime';
@@ -14,7 +15,7 @@ import { redactedCommand } from '@/utils/command-log';
 import { redactAgentDiagnostics } from '@/security/credential-redaction';
 import { createAgentActivityTools } from './agent/activity-tools';
 import { buildToolDiscoveryHandlers } from '@/tools/tool-discovery';
-import { buildCodemodeHandler, CODEMODE_TOOL_NAME } from '@/tools/codemode';
+import { buildCodemodeHandler, compactCodemodeTools, CODEMODE_TOOL_NAME } from '@/tools/codemode';
 import { getMCPBridge } from '@/mcp/bridge';
 import { providerResetAt } from '@/core/errors/provider-recovery';
 import { readSessionFile } from '@/core/session-files';
@@ -54,7 +55,7 @@ import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
 import { startCliToolBridge, type BridgeResult } from './cli-tool-bridge';
 import { PIPELINE_SHELL_TIMEOUT_FLOOR_MS } from '@/tools/shell';
 
-import { FILE_CHANGE_TOOLS, ToolExecutor } from './tool-executor';
+import { FILE_CHANGE_TOOLS, ToolApprovalNotGrantedError, ToolExecutor } from './tool-executor';
 import { answerCliPermissionRequest } from './cli-permissions';
 import { getPermissionManager } from '@/security/permissions';
 import { observeFlow } from '@/security/flow-guard';
@@ -451,6 +452,7 @@ When a task matches one of these skills, load it with get_skill before starting 
   private advertisedBridgeTools(): ToolHandler[] {
     const tools = this.availableBridgeTools();
     const advertisement = this.config.toolAdvertisement;
+    if (this.config.codemode && tools.some(tool => tool.name === CODEMODE_TOOL_NAME)) return compactCodemodeTools(tools, advertisement?.mode === 'lazy');
     return advertisement?.mode === 'lazy' ? tools.filter(t => !isLongTailHandler(t, advertisement.coreToolIds)) : tools;
   }
 
@@ -473,7 +475,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         // Preserve an existing user cancellation instead of reclassifying it.
         if (!this.aborted) {
           this.runError = error instanceof Error ? error.message : String(error);
-          if (this.runError.startsWith(`Permission denied for "${name}": the approval was not granted `)) {
+          if (error instanceof ToolApprovalNotGrantedError || this.runError.startsWith(`Permission denied for "${name}": the approval was not granted `)) {
             // Reject queued calls immediately, but flush the approval refusal
             // before stop() kills the subprocess. Other faults stay private.
             this.context.status = 'failed';
@@ -642,6 +644,10 @@ When a task matches one of these skills, load it with get_skill before starting 
   registerTool(tool: ToolHandler): void { this.toolExecutor.registerTool(tool); }
 
   registerTools(tools: ToolHandler[]): void { this.toolExecutor.registerTools(tools); }
+
+  getToolInventory(): { advertised: ToolHandler[]; registered: ToolHandler[] } {
+    return { advertised: this.advertisedBridgeTools(), registered: this.availableBridgeTools() };
+  }
 
   /** Active run time, so `AgentManager.list()` shows a duration while a CLI runs. */
   override getElapsedMs(): number { return this.runStartedAt ? this.elapsed() : 0; }
@@ -821,7 +827,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         `Use list_tools and describe_tool to discover authorized Octipus tools, then call_discovered_tool with their name and arguments. mcp_list_tools discovers external MCP servers; an empty external-server list does not mean the parent Octipus MCP connection is unavailable. For failed or already-collected child execution history use get_agent_activity.
 ` +
         (this.toolExecutor.getTools().has(CODEMODE_TOOL_NAME)
-          ? `For several Octipus or external MCP calls in a row, calls that can run in parallel, or results you only need part of, call the codemode tool once with a script instead of one call per step: only the script's output reaches you. MCP servers listed as (codemode) are reached only from codemode scripts.
+          ? `Ordinary Octipus tool schemas are intentionally omitted from your initial tool list. Use codemode for single calls as well as batches: searchTools(query) finds tools, describeTool(name) gives their signatures, and tools.<name>(args) calls them. Only print the results you need. Coordination tools remain directly available. MCP servers listed as (codemode) are reached only from codemode scripts.
 `
           : '') +
         `Delegate only through Octipus spawn_child and collect_children. Your CLI's native subagents are disabled: they live inside this CLI process, and background work is lost when the process exits.`);
@@ -1438,6 +1444,8 @@ When a task matches one of these skills, load it with get_skill before starting 
     await agentRepository.mergeMetadata(this.context.id, { promptComposition: withoutText(composition), cliRun }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'CLI prompt sizes could not be saved'));
     if (isRootAgent(this.context)) {
       recordLatestComposition(this.context.sessionId, { agentId: this.context.id, messageId: this.userCursor?.id, composition });
+      // Payload sizes exclude retained CLI history; wait for vendor telemetry.
+      clearContextFill(this.context.sessionId);
       if (this.userCursor?.id) await messageRepository.mergeMetadata(this.userCursor.id, this.context.id, { promptComposition: withoutText(composition) }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'CLI turn sizes could not be saved'));
     }
 
@@ -1484,6 +1492,10 @@ When a task matches one of these skills, load it with get_skill before starting 
       if (previous && Object.entries(observation).every(([key, value]) => previous[key] === value)) return;
       const cliContext = { ...previous, ...observation, at: observation.at ?? (observation.usedTokens !== undefined ? new Date().toISOString() : previous?.at ?? new Date().toISOString()) };
       this.context.metadata.cliContext = cliContext;
+      if (isRootAgent(this.context) && observation.usedTokens !== undefined) recordContextFill(this.context.sessionId, {
+        promptTokens: observation.usedTokens,
+        contextWindow: typeof cliContext.contextWindow === 'number' ? cliContext.contextWindow : undefined,
+      });
       if (observation.model) cliRun.model = observation.model;
       if (observation.effort) cliRun.effort = observation.effort;
       this.context.metadata.cliRun = cliRun;

@@ -34,6 +34,8 @@ import type { RoutedScriptTool, ToolHandler } from '@/core/agent-base';
 import { TOOL_DISCOVERY_TOOL_ID } from '@/core/agent/tool-split';
 import type { ToolCall, ToolResult } from '@/core/types';
 import { stripWorkStreamMeta } from '@/shared/work-stream';
+import { takeToolMedia, toolTextWithMedia } from '@/core/media/tool-media';
+import type { MediaRef } from '@/core/types';
 import { wrapUntrusted } from '@/security/untrusted-envelope';
 import { rankToolsByQuery, type ToolSummary } from '@/tools/tool-search';
 import { toolLogger } from '@/utils/logger';
@@ -65,12 +67,13 @@ export interface CodemodeHost {
 }
 
 const DESCRIPTION = [
-  'Run a JavaScript script that calls your tools. Only what the script outputs comes back to you, so use it to chain several calls, run independent calls in parallel (Promise.all), or filter and aggregate large results before reading them. For a single call, call the tool directly.',
+  'Run a JavaScript script that calls your tools. Tool definitions are loaded on demand: use searchTools and describeTool inside a script to find a tool and learn its arguments, then call it through tools. Use this for single calls too. Only what the script outputs comes back to you; chain calls, run independent calls in parallel (Promise.all), or filter large results before returning them.',
   '',
   '`code` is raw JavaScript (no markdown fence), run as the body of an async function in a sandbox with no network, filesystem, timers or modules — only these:',
-  '- `await tools.<name>(args)` calls any tool you can call directly, e.g. `tools.filesystem__read_file({ path })`. Resolves to the tool result; rejects with its error.',
+  '- `await tools.<name>(args)` calls a registered tool, including tools whose schemas are omitted from the initial list, e.g. `tools.filesystem__read_file({ path })`. Resolves to the tool result; rejects with its error.',
   '- `await searchTools(query)` → `[{ name, description }]`; `await describeTool(name)` → its TypeScript signature; `ALL_TOOLS` lists every callable tool.',
   '- `text(value)`, `console.log(...)` and `return value` produce the output.',
+  '- `await showToolImage(toolResult)` shows the images from a tool result, e.g. `await showToolImage(await tools.vision__view_image({path}))`. Images are not shown unless selected this way; text output does not select images.',
   '- `store(key, value)` / `load(key)` keep small JSON values across codemode calls in this run.',
   'Optional first line: `// @options: {"timeout_ms": 60000, "max_output_tokens": 2000}`.',
   'Tool calls are real and pass the normal permission checks; a failed script keeps the effects of the calls it already made.',
@@ -90,6 +93,14 @@ export function scriptableTools(handlers: ToolHandler[]): ToolHandler[] {
       h.toolId !== TOOL_DISCOVERY_TOOL_ID &&
       h.final !== true,
   );
+}
+
+/** Keep orchestration/final handlers and discovery visible; ordinary schemas
+ * stay in the executor and are described on demand inside codemode. This is
+ * independent of lazy discovery's core groups and provider capability hints. */
+export function compactCodemodeTools(handlers: ToolHandler[], lazy = false): ToolHandler[] {
+  const hidden = new Set(scriptableTools(handlers));
+  return handlers.filter((handler) => !hidden.has(handler) && !(lazy && handler.discoverOnly));
 }
 
 interface ScriptEntry {
@@ -211,6 +222,10 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
       // Envelope labels of what this script's calls read (ToolResult.untrustedSource):
       // its output, and its failure, may carry that content.
       const untrusted = new Set<string>();
+      // Keep trusted tool media out of JS text and forward it through the same
+      // typed channel the outer executor uses for direct tool calls.
+      const shownMedia: MediaRef[] = [];
+      const availableMedia = new Map<string, MediaRef[]>();
       const onHostAbort = () => abort.abort();
       host.signal?.addEventListener('abort', onHostAbort, { once: true });
 
@@ -237,12 +252,30 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
           }
           if (result.untrustedSource) untrusted.add(result.untrustedSource);
           if (result.error) throw new Error(result.error);
-          return stripWorkStreamMeta(result.result) ?? null;
+          const taken = takeToolMedia(result.result);
+          if (taken.media.length) {
+            const token = randomUUID();
+            availableMedia.set(token, taken.media);
+            const value = stripWorkStreamMeta(taken.result) ?? null;
+            return { ...(value && typeof value === 'object' ? value : { value }), __codemodeMedia: token };
+          }
+          return stripWorkStreamMeta(taken.result) ?? null;
         },
       }));
 
       const summaries = (): ToolSummary[] => entries.map((e) => ({ name: e.name, description: firstLine(e.description) }));
       const globals: CodemodeTool[] = [
+        {
+          name: 'showToolImage', description: 'Show images from a tool result. Only explicitly selected images reach the model.',
+          spread: true, signature: '(toolResult: unknown): Promise<void>',
+          execute: (args) => {
+            const [result] = args as [unknown];
+            const token = result && typeof result === 'object' && '__codemodeMedia' in result ? result.__codemodeMedia : undefined;
+            const media = typeof token === 'string' ? availableMedia.get(token) : undefined;
+            if (!media) throw new Error('showToolImage expects an image-bearing tool result from this script.');
+            shownMedia.push(...media);
+          },
+        },
         {
           name: 'searchTools',
           description: 'Tools ranked by relevance to what you want to do.',
@@ -321,7 +354,8 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
       }
       for (const key of result.storeWrites.delete) delete store[key];
       Object.assign(store, result.storeWrites.set);
-      return `Script completed (${header}).\n${wrapped(output)}`;
+      const message = `Script completed (${header}).\n${wrapped(output)}`;
+      return shownMedia.length ? toolTextWithMedia(message, shownMedia) : message;
     },
   };
 }

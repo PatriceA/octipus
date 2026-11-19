@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CLIAgentWorker } from './cli-agent-worker';
+import { getContextFill, recordContextFill } from './agent/prompt-budget';
 import { createWorkPlanTools } from './agent/work-plan-tools';
 import type { AgentContext } from './types';
 import { addPlanFeedback, type WorkPlanState } from '@/shared/work-plan';
@@ -194,6 +195,10 @@ describe.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('CLI worker with actual subproce
       const listed = await (await fetch(process.env.OCTIPUS_AGENT_URL + '/tools', {headers: auth})).json();
       const call = async (name, args = {}) => (await fetch(process.env.OCTIPUS_AGENT_URL + '/call', {method:'POST', headers: auth, body: JSON.stringify({name, arguments:args})})).json();
       const script = await call('codemode', {code: [
+        'const found = await searchTools("notes read");',
+        'if (!found.some(t => t.name === "notes__read")) throw new Error("Missing note tool");',
+        'const signature = await describeTool("notes__read");',
+        'if (!signature.includes("id")) throw new Error("Missing argument schema");',
         'const logs = await Promise.all(["a", "b"].map((id) => tools.notes__read({ id })));',
         'let refused = "";',
         'try { await tools.denied__write({}); } catch (e) { refused = "refused"; }',
@@ -209,8 +214,14 @@ describe.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('CLI worker with actual subproce
     worker.registerTool({ name: 'notes__read', toolId: 'notes', permissionAction: 'read', description: 'Read a note', parameters: { type: 'object', properties: { id: { type: 'string' } } }, execute: read });
     const denied = vi.fn();
     worker.registerTool({ name: 'denied__write', toolId: 'denied', description: '', parameters: { type: 'object' }, execute: denied });
+    for (let i = 0; i < 250; i++) worker.registerTool({ name: `catalog__entry_${i}`, toolId: 'catalog', description: 'An unrelated tool. '.repeat(100), parameters: { type: 'object' }, execute: async () => null });
     const result = JSON.parse(await worker.run('Find the errors'));
     expect(result.names).toContain('codemode');
+    expect(result.names).not.toContain('notes__read');
+    expect(result.names).not.toContain('denied__write');
+    expect(result.names).toContain('list_tools');
+    expect(result.names).toContain('describe_tool');
+    expect(result.names.length).toBeLessThan(12);
     const text = result.script.content[0].text as string;
     expect(result.script.isError).not.toBe(true);
     expect(text).toContain('Script completed');
@@ -566,6 +577,39 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI || process.platform === 'win32')('repor
   await expect(sampleWorker().run('sample')).rejects.toThrow('signal SIGTERM');
 });
 
+
+it.each([true, false])('CLI session fill uses vendor input observations, not launch payload: observed=%s', async observed => {
+  recordContextFill('s', { promptTokens: 40000, contextWindow: 100000 });
+  writeFileSync(fixture.script, `
+    ${observed ? 'console.log(JSON.stringify({type:"assistant",message:{id:"turn",content:[],usage:{input_tokens:80000,cache_read_input_tokens:10000,output_tokens:1}}}));' : ''}
+    console.log(JSON.stringify({type:'result',subtype:'success',result:'done',num_turns:1}));
+  `);
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own', id: 'a', sessionId: 's', userId: 'u', root: true,
+    model: 'cli/claude-code', role: 'general', topic: '', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+    { maxIterations: 5, maxTokenBudget: 1000000, timeout: 10000, contextWindowSize: 100000 });
+  await worker.run('short request');
+  if (observed) expect(getContextFill('s')?.promptTokens).toBe(90000);
+  else expect(getContextFill('s')).toBeUndefined();
+  worker.stop();
+});
+
+it('returns a nested approval refusal before stopping the CLI', async () => {
+  fixture.check.mockResolvedValue({ level: 'ASK', route: 'ask_human' });
+  fixture.requestApproval.mockResolvedValue('request');
+  fixture.wait.mockResolvedValue(false);
+  const worker = new CLIAgentWorker({ space: null, trigger: 'user', funding: 'own', id: 'a', sessionId: 's', userId: 'u', root: true, attended: true,
+    model: 'cli/claude-code', role: 'general', topic: '', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+    { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000, codemode: true });
+  worker.registerTool({ name: 'sample__write', toolId: 'sample', description: '', parameters: {}, execute: fixture.execute });
+  const stop = vi.spyOn(worker, 'stop');
+  const response = await (worker as unknown as { executeBridgedTool(name: string, args: Record<string, unknown>): Promise<{ isError: boolean; content: Array<{ text: string }> }> })
+    .executeBridgedTool('codemode', { code: 'await tools.sample__write({});' });
+  expect(response.isError).toBe(true);
+  expect(response.content[0].text).toContain('Permission denied for "sample__write": the approval was not granted');
+  expect(stop).not.toHaveBeenCalled();
+  expect(fixture.execute).not.toHaveBeenCalled();
+  worker.stop();
+});
 
 it.each([true, false])('accepts a delayed approval decision beyond the bridge base deadline: approved=%s', async approved => {
   const nativeTimeout = globalThis.setTimeout;
