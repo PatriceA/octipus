@@ -275,7 +275,12 @@ async function transcribeChannelAudio(audioAttachments: Attachment[], message: U
       const kept = await keepChannelFiles([new File([new Uint8Array(buf)], att.filename || `voice-note.${ext}`, { type: att.mimeType })], message.userId, sessionId)
         .catch((err: unknown) => { channelLogger.warn({ err }, 'Could not keep a voice note with the conversation'); return null; });
       // The session's protection level decides whether a cloud engine may hear it.
-      const text = (await transcribeAudioBuffer(buf, ext, { userId: message.userId, sessionId })).trim();
+      const { mayUseInstallModels } = await import('@/models/install-access');
+      const text = (await transcribeAudioBuffer(buf, ext, {
+        userId: message.userId, sessionId,
+        // As on every other surface: hosted engines only for an account the install's keys are for.
+        ...(message.userId ? { allowHosted: await mayUseInstallModels(message.userId) } : {}),
+      })).trim();
       if (text) parts.push(kept?.[0] ? `${text}\n[Voice note kept at ${kept[0]}]` : text);
     } catch (err) {
       channelLogger.error({ err, channel: message.channelType }, 'Voice note transcription failed');
@@ -320,10 +325,25 @@ async function synthesizeVoiceReply(text: string, userId?: string, sessionId?: s
   // Spoken replies follow the Speech lane: configured = on (docs/VOICE.md).
   if (!isCapabilityOn('speak')) return undefined;
   try {
+    // Said the way every other surface says it (markup, code and sources are
+    // not read out), and cut at a sentence so a long reply does not stop mid-word.
+    const { forSpeech, SentenceChunker } = await import('@/shared/speech-text');
+    const chunker = new SentenceChunker();
+    let said = '';
+    for (const sentence of [...chunker.push(text), ...chunker.flush()]) {
+      if (said && said.length + sentence.length + 1 > MAX_VOICE_REPLY_CHARS) break;
+      said = said ? `${said} ${sentence}` : sentence;
+    }
+    said = (said || forSpeech(text)).slice(0, MAX_VOICE_REPLY_CHARS);
+    if (!said) return undefined;
     // The engine bound to the Speech lane (src/voice/resolve.ts); its own
     // format, so the extension always matches the bytes.
     const { synthesizeWithLane } = await import('@/voice/resolve');
-    const spoken = await synthesizeWithLane(text.slice(0, 2000), { userId, sessionId, format: 'mp3' });
+    const { mayUseInstallModels } = await import('@/models/install-access');
+    const spoken = await synthesizeWithLane(said, {
+      userId, sessionId, format: 'mp3',
+      ...(userId ? { allowHosted: await mayUseInstallModels(userId) } : {}),
+    });
     const ext = spoken.format === 'opus' ? 'ogg' : spoken.format;
     return [{
       type: 'audio',
@@ -337,6 +357,9 @@ async function synthesizeVoiceReply(text: string, userId?: string, sessionId?: s
     return undefined;
   }
 }
+
+/** A spoken channel reply is capped: a long answer is read to here, the text carries the rest. */
+const MAX_VOICE_REPLY_CHARS = 2000;
 
 /**
  * Subscribe to document queue completions for a single channel message's attachments.
@@ -1329,7 +1352,7 @@ export async function initializeChannels(): Promise<void> {
         const media = await channelMediaAttachments(result.media ?? []);
         // Teams has no voice notes and no audio attachment: no spoken reply there.
         const spoken = voiceIn && !media.some((a) => a.voice) && message.channelType !== 'teams'
-          ? await synthesizeVoiceReply(content, message.userId, resolvedSessionId)
+          ? await synthesizeVoiceReply(result.response, message.userId, resolvedSessionId)
           : undefined;
         const attachments = [...media, ...(spoken ?? [])];
 

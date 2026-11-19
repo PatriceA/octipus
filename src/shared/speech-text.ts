@@ -36,6 +36,7 @@ export function stripSpeechSources(text: string): string {
  */
 export function forSpeech(text: string): string {
   const prose = stripSpeechSources(inlineUiSpeechText(text))
+    .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, ' ') // a model's reasoning is not part of the answer
     .replace(/(`{3,}|~{3,})[\s\S]*?(?:\1|$)/g, ' ') // code blocks are not read aloud (an unclosed one runs to the end)
     .replace(/`([^`]+)`/g, '$1') // inline code → its text
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1') // images → their label

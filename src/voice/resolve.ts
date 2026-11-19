@@ -323,12 +323,22 @@ export async function synthesizeWithLane(text: string, req: SpeechRequest & Spea
   throw new Error(`Speech synthesis failed: ${errors.join('; ')}`);
 }
 
+/**
+ * PCM as it is generated. `return()` always releases the engine and stops the
+ * request behind it — also for a stream nobody started reading (a sentence
+ * synthesised ahead and then dropped by an interruption), which a plain async
+ * generator would leave open.
+ */
+export interface SpeechChunks extends AsyncIterableIterator<Buffer> {
+  return(value?: unknown): Promise<IteratorResult<Buffer>>;
+}
+
 export interface SpeechStream {
   /** The model row that speaks. */
   model: string;
   sampleRate: number;
   /** Mono s16le PCM, as it is generated. */
-  chunks: AsyncGenerator<Buffer>;
+  chunks: SpeechChunks;
 }
 
 /**
@@ -371,20 +381,34 @@ export async function streamSpeechWithLane(text: string, req: SpeechRequest & Sp
       if (errors.length) log.warn({ using: row.name, failed: errors }, 'Speaking with the backup engine');
       const held = engine;
       engine = null;
-      const chunks = (async function* (): AsyncGenerator<Buffer> {
-        let failed = false;
-        try {
-          if (!first.done) yield first.value;
-          yield* source;
-        } catch (err) {
-          failed = true;
-          throw err;
-        } finally {
-          await source.return(undefined).catch(() => {});
-          await recordSpeechUsage(row, 'speech', req, { characters: failed ? 0 : text.length }, failed);
-          await held.dispose().catch(() => {});
-        }
-      })();
+      let pendingFirst: IteratorResult<Buffer> | null = first;
+      let finished = false;
+      const finish = async (failed: boolean): Promise<void> => {
+        if (finished) return;
+        finished = true;
+        await source.return(undefined).catch(() => {});
+        await recordSpeechUsage(row, 'speech', req, { characters: failed ? 0 : text.length }, failed);
+        await held.dispose().catch(() => {});
+      };
+      const chunks: SpeechChunks = {
+        [Symbol.asyncIterator]() { return this; },
+        async next() {
+          if (finished) return { done: true, value: undefined };
+          try {
+            const result = pendingFirst ?? await source.next();
+            pendingFirst = null;
+            if (result.done) await finish(false);
+            return result;
+          } catch (err) {
+            await finish(true);
+            throw err;
+          }
+        },
+        async return() {
+          await finish(false);
+          return { done: true, value: undefined };
+        },
+      };
       return { model: row.name, sampleRate, chunks };
     } catch (err) {
       await recordSpeechUsage(row, 'speech', req, { characters: 0 }, true);

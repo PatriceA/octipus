@@ -173,6 +173,26 @@ export class AgentService {
     }
   }
 
+  /**
+   * Turns whose reply will be spoken (docs/VOICE.md → One pipeline): the
+   * client marks the message it is about to send — the live conversation on
+   * the web, the mobile app's voice screen — and the turn that takes it gets
+   * the spoken-reply directive. One mark, one turn; a mark nobody takes
+   * expires, so a typed message later is answered as text.
+   */
+  private spokenMarks = new Map<string, number>();
+
+  markSpokenTurn(sessionId: string, userId: string): void {
+    this.spokenMarks.set(voiceKey(sessionId, userId), Date.now() + 30_000);
+  }
+
+  private takeSpokenMark(key: string): boolean {
+    const until = this.spokenMarks.get(key);
+    if (until === undefined) return false;
+    this.spokenMarks.delete(key);
+    return until > Date.now();
+  }
+
   /** The fast model mapped to the `voice` topic for this user, or undefined if none is mapped. */
   private async resolveVoiceModel(userId: string, space: AgentSpace | null, sponsor: AgentSponsor | null | undefined): Promise<SelectedModel | undefined> {
     try {
@@ -945,6 +965,9 @@ export class AgentService {
       // ambiguous and follow-ups such as "Yes, look it up online". Tool-level
       // approval policy still applies; the transport is not a planning mode.
       const voiceGateKey = voiceKey(resolvedSessionId, userId);
+      // Is this turn's reply read aloud? The mobile app's voice channel, a
+      // message the client marked as spoken, or a session in web voice mode.
+      const spokenTurn = !isRoom && (this.takeSpokenMark(voiceGateKey) || channel === 'mobile-voice' || this.voiceSessions.has(voiceGateKey));
       if (!isRoom && !bypassVoiceGate && !getRunContext()?.companionBriefing && channel !== 'mobile-voice' && this.voiceSessions.has(voiceGateKey)) {
         // Gate vague requests too, not just cleanly-scored 'task'. Spoken input is
         // usually under-specified → the classifier falls to 'ambiguous', which would
@@ -1116,6 +1139,7 @@ export class AgentService {
           ...(memoryBlock || contextHooks.blocks.length ? { repeatableContext: [memoryBlock, ...contextHooks.blocks].filter(Boolean) } : {}),
           ...(isRoom && postedMessageId ? { room: { postedMessageId, title: session.title ?? 'Room' } } : {}),
           ...(signal ? { signal } : {}),
+          ...(spokenTurn ? { spoken: true } : {}),
           turnContextParts: [
             { label: 'Long-term memory', text: memoryBlock },
             ...contextHooks.labelledBlocks,

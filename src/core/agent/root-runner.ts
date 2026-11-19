@@ -49,6 +49,7 @@ import { localRowInstead, ProtectionRoutingError, PSEUDONYMIZED } from '@/core/p
 import { prepareAttachmentProtection } from '@/core/protection/attachments';
 import { resolvePromptTier } from './prompt-tier';
 import { buildOutputDirective } from './output-directive';
+import { SPOKEN_REPLY_DIRECTIVE } from '@/shared/speech-text';
 import { getRoleConfig, getToolsForRole, SECURITY_PREAMBLE, OUTPUT_FORMATTING_RULES } from './roles';
 import delegationPrompt from './delegation-prompt.md';
 import COMPANION_CONTROLLER_PROMPT from '@/core/companion/controller-prompt.md';
@@ -242,6 +243,8 @@ export interface RootRunExtras {
    * to that string exactly.
    */
   turnContextParts?: ReadonlyArray<{ label: string; text: string }>;
+  /** The reply is read aloud (a live voice conversation, the mobile voice screen): the spoken-reply directive applies. */
+  spoken?: boolean;
 }
 
 /**
@@ -741,6 +744,8 @@ export async function runRootAgent(
   // Chat/work split (Thread 3): tell the root agent whether to deliver in
   // chat or as a file. Empty for the default-inline case, so unchanged.
   volatileParts.push(tagger.tag('volatile', 'turn', 'Output directive', buildOutputDirective(outputDirective.mode, outputDirective.forced)));
+  // A spoken turn: the same directive wherever the reply is heard (src/shared/speech-text.ts).
+  if (extras.spoken) volatileParts.push(tagger.tag('volatile', 'turn', 'Spoken reply', `\n\n${SPOKEN_REPLY_DIRECTIVE}`));
   // The owner's standing instructions for Companion, with their own words, in every controller turn.
   if (supervisor && session?.workspaceId) {
     const { activeCompanionInstructions, companionInstructionsBlock } = await import('@/core/companion/instructions');
