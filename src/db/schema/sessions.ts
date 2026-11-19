@@ -115,6 +115,9 @@ export interface CompactionState {
 }
 
 export interface SessionContext {
+  /** Owner-selected CLI model/effort overrides; inherited at each launch, never global. */
+  cliOverridesRevision?: number;
+  cliOverrides?: import('@/shared/session-model-controls').SessionCliOverride[];
   /** Owner-selected execution profile; validated again at every tool call. */
   executionEnvironmentId?: string;
   /** Dedicated controller session. Its model has only the scoped Companion toolbox. */

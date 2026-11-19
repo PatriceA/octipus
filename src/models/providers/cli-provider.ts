@@ -730,7 +730,7 @@ function makeAnthropicCompatCliConfig(spec: AnthropicCompatCliSpec): CLIToolConf
   const listModels = makeAnthropicCliModelCatalog(spec.name, credentialEnv);
   const buildEnv = async (settings?: CLIAgentConfig) => {
     const env = await credentialEnv();
-    let model = process.env[spec.modelEnv] || settings?.model || spec.defaultModel || env.ANTHROPIC_MODEL;
+    let model = (settings?.sessionModelOverride ? settings.model : undefined) || process.env[spec.modelEnv] || settings?.model || spec.defaultModel || env.ANTHROPIC_MODEL;
     if (!model) {
       const models = await listModels();
       if (models.length !== 1) throw new Error(`${spec.name}: select an account model in Models before running this CLI.`);

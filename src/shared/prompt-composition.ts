@@ -104,6 +104,9 @@ export interface PromptCompositionTotals {
 /** One measured request: sizes only, no prompt text. Stored with the turn's user message. */
 export interface PromptComposition {
   version: 1;
+  /** A CLI payload excludes vendor-owned instructions and retained context. */
+  source?: 'cli-payload';
+  resumed?: boolean;
   measuredAt: string;
   role: string;
   model: string;
@@ -146,6 +149,9 @@ export interface SessionContextResponse {
     /** False after a restart, or for a turn measured in another process: sizes only. */
     textAvailable: boolean;
   }) | null;
+  /** The selected agent; absent selects the latest root turn. */
+  agentId?: string;
+  cliContext?: { model?: string; usedTokens?: number; contextWindow?: number; at: string; source: string };
   turns: PromptTurnPoint[];
   usage: ProviderInputUsage | null;
   /**

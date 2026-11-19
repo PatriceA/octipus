@@ -25,6 +25,8 @@ import { isInside, spaceAccessOf, WorkspaceFS, isSharedWorkspaceId } from '@/sec
 import { storeChatUploads } from '@/core/chat-uploads';
 import { EXTERNAL_CHANNELS, loadNotifyScope, resolveTarget } from '@/channels/ownership';
 
+const sessionModelParams = t.Object({ id: t.String({ pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' }) });
+
 /** A path inside this host's `.octipus/media` or `.octipus/attachments` of `fs` (answer media in an SSH session). */
 function isLocalMedia(fs: WorkspaceFS, path: string): boolean {
   try {
@@ -231,16 +233,50 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
     }
   )
 
+  .get('/:id/model-controls/catalog', async ({ user, principal, params, query, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const session = await sessionRepository.findById(params.id);
+    if (!session || !await canActInSession(session, user.id, 'settings')) { set.status = 404; return { error: 'Session not found' }; }
+    const { readSessionCliCatalog } = await import('@/core/agent/session-model-controls');
+    return readSessionCliCatalog(query.modelName, user.id);
+  }, { params: sessionModelParams, query: t.Object({ modelName: t.String({ minLength: 1, maxLength: 200 }) }) })
+  .get('/:id/model-controls', async ({ user, principal, params, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const session = await sessionRepository.findById(params.id);
+    if (!session || !await canActInSession(session, user.id, 'settings')) { set.status = 404; return { error: 'Session not found' }; }
+    const { readSessionModelControls } = await import('@/core/agent/session-model-controls');
+    return readSessionModelControls(session.id, user.id);
+  }, { params: sessionModelParams })
+  .put('/:id/model-controls', async ({ user, principal, params, body, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    if (!requireScope(principal, API_SCOPES.CHAT)) { set.status = 403; return { error: 'Chat scope required' }; }
+    const session = await sessionRepository.findById(params.id);
+    if (!session || !await canActInSession(session, user.id, 'settings')) { set.status = 404; return { error: 'Session not found' }; }
+    if (session.context?.companionSupervisor || session.context?.companionMaintenance) { set.status = 400; return { error: 'Choose the Companion model in Companion settings' }; }
+    try {
+      const { validateSessionCliOverrides } = await import('@/core/agent/session-model-controls');
+      await validateSessionCliOverrides(body.overrides, user.id);
+    } catch (error) { set.status = 400; return { error: (error as Error).message }; }
+    const saved = await sessionRepository.setCliOverrides(session.id, user.id, body.revision, body.overrides);
+    if (!saved) { set.status = 409; return { error: 'Session model settings changed; refresh before saving' }; }
+    return { saved: true, applies: 'next-launch' };
+  }, { params: sessionModelParams, body: t.Object({ revision: t.Integer({ minimum: 0 }), overrides: t.Array(t.Object({
+    modelName: t.String({ minLength: 1, maxLength: 200 }), topic: t.String({ minLength: 1, maxLength: 100 }),
+    role: t.Optional(t.String({ minLength: 1, maxLength: 100 })),
+    model: t.Optional(t.String({ minLength: 1, maxLength: 200 })), effort: t.Optional(t.String({ minLength: 1, maxLength: 30 })),
+  }), { maxItems: 100 }) }) })
+
   // What the root agent's requests were made of, by category (Context
   // inspector). The prompt text is the owner's alone, as session usage is:
   // not a room member's, not an admin's.
-  .get('/:id/context', async ({ user, principal, params, set }) => {
+  .get('/:id/context', async ({ user, principal, params, query, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
     const session = await sessionRepository.findById(params.id);
     if (!(await canActInSession(session, user.id, 'settings'))) { set.status = 404; return { error: 'Session not found' }; }
     const { readSessionContext } = await import('@/core/agent/session-context');
-    return readSessionContext(params.id);
+    return readSessionContext(params.id, query.agentId);
   }, {
+    query: t.Object({ agentId: t.Optional(t.String({ minLength: 1, maxLength: 200 })) }),
     params: t.Object({ id: t.String({ pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' }) }),
     detail: { tags: ['sessions'] },
   })

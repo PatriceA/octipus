@@ -71,7 +71,7 @@ vi.mock('@/db/repositories/inline-ui-repository', () => ({ inlineUiRepository: {
   create: async (row: Record<string, unknown>) => ({ ...row, id: '11111111-1111-4111-8111-111111111111' }),
 } }));
 vi.mock('@/models/model-registry', () => ({
-  getModelRegistry: () => ({ getModel: async () => ({ metadata: { cliAgent: fixture.cliAgent } }), getModelByModelId: async () => ({}) }),
+  getModelRegistry: () => ({ getModel: async () => ({ name: 'registered-cli', metadata: { cliAgent: fixture.cliAgent } }), getModelByModelId: async () => ({}) }),
 }));
 vi.mock('@/models/quota-tracker', () => ({ cliQuotaKey: (provider: string) => provider, getQuotaTracker: () => ({
   getStatus: async () => ({ exhausted: fixture.quotaExhausted }),
@@ -122,6 +122,7 @@ vi.mock('@/db/repositories/session-repository', () => ({
 vi.mock('@/db/repositories/work-plan-repository', () => ({ workPlanRepository: { read: async () => ({ current: null, revision: 0, previous: [] }) } }));
 vi.mock('@/db/repositories/message-repository', () => ({
   messageRepository: {
+    mergeMetadata: async () => {},
     create: async (data: { content: string }) => {
       fixture.history.push(data.content);
       const index = fixture.history.length - 1;
@@ -138,7 +139,7 @@ vi.mock('@/db/repositories/message-repository', () => ({
     })),
   },
 }));
-vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: { updateStatus: async () => {} } }));
+vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: { updateStatus: async () => {}, mergeMetadata: async () => {} } }));
 vi.mock('@/db/repositories/audit-repository', () => ({ auditRepository: new Proxy({}, { get: () => async () => {} }) }));
 vi.mock('@/db/repositories/tool-action-repository', () => ({ toolActionRepository: { pending: async () => [], start: async () => {}, finish: async () => {} } }));
 vi.mock('@/models/cost-tracker', () => ({ getCostTracker: () => ({ logUsageWithCost: async () => {} }) }));
@@ -1286,4 +1287,24 @@ describe('Codex steering receipts', () => {
     await run('Deploy');
     expect(execute).toHaveBeenCalledTimes(1);
   });
+});
+
+
+it('session CLI settings reach a real launch, break reuse on change, and do not affect another session', async () => {
+  const first = makeCodexWorker({ sessionId: 'session-controls', model: 'configured-model' });
+  await first.run('first');
+  const initialFingerprint = first.fingerprint;
+  fixture.sessions.get('session-controls')!.context.cliOverrides = [{ modelName: 'registered-cli', topic: 'general', role: 'general', model: 'session-model', effort: 'high' }];
+  const second = makeCodexWorker({ sessionId: 'session-controls', model: 'configured-model' });
+  await second.run('second');
+  const args: string[] = JSON.parse(readFileSync(join(fixture.dir, 'codex-last-args.json'), 'utf8'));
+  expect(args).toContain('model="session-model"');
+  expect(args).toContain('model_reasoning_effort="high"');
+  expect(args).not.toContain('resume');
+  expect(second.fingerprint).not.toBe(initialFingerprint);
+  const other = makeCodexWorker({ sessionId: 'other-session', model: 'configured-model' });
+  await other.run('independent');
+  const otherArgs: string[] = JSON.parse(readFileSync(join(fixture.dir, 'codex-last-args.json'), 'utf8'));
+  expect(otherArgs).toContain('model="configured-model"');
+  expect(otherArgs).not.toContain('model_reasoning_effort="high"');
 });

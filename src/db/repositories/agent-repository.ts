@@ -61,6 +61,13 @@ export class AgentRepository {
     return result[0] ?? null;
   }
 
+  /** Owner-bound run history for one session's context/model inspector. */
+  async findSessionRuns(sessionId: string, userId: string): Promise<AgentRecord[]> {
+    // i2: exact session and owner; callers already passed the non-room session settings check.
+    return this.db.select().from(agents).where(and(eq(agents.sessionId, sessionId), eq(agents.userId, userId)))
+      .orderBy(desc(agents.createdAt), desc(agents.id)).limit(100);
+  }
+
   /** Legacy rows predate the explicit root marker; exclude known children. */
   async findLatestRootForSession(sessionId: string, userId: string): Promise<AgentRecord | null> {
     // i2: internal compaction lookup, restricted to the caller's exact session and owner.

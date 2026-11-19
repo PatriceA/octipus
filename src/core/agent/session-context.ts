@@ -9,6 +9,7 @@
  */
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
+import { agents } from '@/db/schema/agents';
 import { messages } from '@/db/schema/messages';
 import { costLog } from '@/db/schema/models';
 import {
@@ -18,7 +19,7 @@ import {
   tokensByCategory,
 } from '@/shared/prompt-composition';
 import { contextLimits } from '@/utils/context-compaction';
-import { getLatestComposition } from './prompt-composition';
+import { getAgentComposition, getLatestComposition } from './prompt-composition';
 
 /** Turns on the growth chart. */
 export const CONTEXT_TURNS_SHOWN = 40;
@@ -47,7 +48,19 @@ async function firstRequestUsage(agentId: string | null): Promise<ProviderInputU
     : null;
 }
 
-export async function readSessionContext(sessionId: string): Promise<SessionContextResponse> {
+export async function readSessionContext(sessionId: string, selectedAgentId?: string): Promise<SessionContextResponse> {
+  if (selectedAgentId) {
+    const [row] = await getDb().select().from(agents).where(and(eq(agents.id, selectedAgentId), eq(agents.sessionId, sessionId))).limit(1);
+    if (!row) return { latest: null, turns: [], usage: null, limits: null };
+    const rootMemory = getLatestComposition(sessionId);
+    const memory = getAgentComposition(row.id) ?? (rootMemory?.agentId === row.id ? rootMemory.composition : undefined);
+    const stored = row.metadata?.promptComposition;
+    const composition = memory ?? (isComposition(stored) ? stored : null);
+    const cliContext = row.metadata?.cliContext as SessionContextResponse['cliContext'];
+    return { agentId: row.id, latest: composition ? { ...composition, textAvailable: !!memory } : null,
+      turns: [], usage: composition?.source === 'cli-payload' ? null : await firstRequestUsage(row.id), limits: null,
+      ...(cliContext ? { cliContext } : {}) };
+  }
   const rows = await getDb()
     .select({
       id: messages.id,
@@ -65,7 +78,7 @@ export async function readSessionContext(sessionId: string): Promise<SessionCont
     .limit(CONTEXT_TURNS_SHOWN);
 
   const stored = rows.filter((r) => isComposition(r.composition)) as Array<typeof rows[number] & { composition: PromptComposition }>;
-  const turns = stored.slice().reverse().map((r) => ({
+  const turns = stored.filter(r => r.composition.source !== 'cli-payload').slice().reverse().map((r) => ({
     messageId: r.id,
     at: r.createdAt.toISOString(),
     totals: r.composition.totals,
@@ -93,5 +106,9 @@ export async function readSessionContext(sessionId: string): Promise<SessionCont
   }
 
   const limits = latest?.contextWindow ? contextLimits(latest.contextWindow) : null;
+  if (latest?.source === 'cli-payload' && agentId) {
+    const [row] = await getDb().select({ metadata: agents.metadata }).from(agents).where(and(eq(agents.id, agentId), eq(agents.sessionId, sessionId))).limit(1);
+    return { latest, turns, usage: null, limits: null, agentId, cliContext: row?.metadata?.cliContext as SessionContextResponse['cliContext'] };
+  }
   return { latest, turns, usage: await firstRequestUsage(agentId), limits };
 }

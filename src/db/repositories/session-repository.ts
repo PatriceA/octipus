@@ -213,6 +213,15 @@ export class SessionRepository {
     return withNativeConversation(result[0] ?? null);
   }
 
+  /** Save CLI controls without overwriting a concurrent owner edit or another context key. */
+  async setCliOverrides(id: string, userId: string, expectedRevision: number, entries: import('@/shared/session-model-controls').SessionCliOverride[]): Promise<boolean> {
+    const patch = JSON.stringify({ cliOverrides: entries, cliOverridesRevision: expectedRevision + 1 });
+    const result = await this.db.update(sessions).set({ context: sql`coalesce(${sessions.context}, '{}'::jsonb) || ${patch}::jsonb`, updatedAt: new Date() })
+      .where(and(eq(sessions.id, id), eq(sessions.userId, userId), sql`coalesce((${sessions.context}->>'cliOverridesRevision')::int, 0) = ${expectedRevision}`))
+      .returning({ id: sessions.id });
+    return result.length > 0;
+  }
+
   /**
    * Set (or, with `undefined`, delete) ONE key inside `context`, in the
    * database, without reading the row first.
