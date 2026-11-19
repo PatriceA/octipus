@@ -299,3 +299,16 @@ describe('the native conversation snapshot in its own column', () => {
     expect(raw.nativeConversation).toMatchObject({ messages: [{ content: 'turn 4' }] });
   });
 });
+
+test('CLI control revisions reject stale edits and preserve conversation/environment state', async () => {
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const session = await freshSession('cli-controls');
+  await sessionRepository.setContextKey(session.id, ['executionEnvironmentId'], 'host-profile');
+  const entries = [{ modelName: 'codex', topic: 'build', effort: 'high' }];
+  expect(await sessionRepository.setCliOverrides(session.id, userId, 0, entries)).toBe(true);
+  expect(await sessionRepository.setCliOverrides(session.id, userId, 0, [])).toBe(false);
+  expect(await sessionRepository.setCliOverrides(session.id, '55555555-5555-4555-8555-555555555555', 1, [])).toBe(false);
+  const saved = await sessionRepository.findById(session.id);
+  expect(saved?.context).toMatchObject({ cliOverrides: entries, cliOverridesRevision: 1, executionEnvironmentId: 'host-profile' });
+  expect(await sessionRepository.setCliOverrides(session.id, userId, 1, [])).toBe(true);
+});

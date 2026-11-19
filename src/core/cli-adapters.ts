@@ -919,10 +919,10 @@ export class CLIArgumentBuilder {
     // A run that is never resumed writes no session log (as codex --ephemeral).
     const args = ['serve', '--disable-request-user-input', '-c', 'run.reminder_roster=[]', ...(resume ? [] : ['--no-session-log'])];
     // Model override: env var > settings > the user's muse default (carried into the run's settings).
-    const model = process.env.MUSE_MODEL || settings.model;
+    const model = (settings.sessionModelOverride ? settings.model : undefined) || process.env.MUSE_MODEL || settings.model;
     // `--reasoning-effort` is the one scoped extra arg; MSP takes it per turn.
     const effortAt = settings.extraArgs?.indexOf('--reasoning-effort') ?? -1;
-    const effort = effortAt >= 0 ? settings.extraArgs![effortAt + 1] : undefined;
+    const effort = settings.effort ?? (effortAt >= 0 ? settings.extraArgs![effortAt + 1] : undefined);
     // Caller-minted session (CLI_RESUME), a UUIDv7 as MSP requires: the first
     // run starts it under that id, later runs resume it (an unknown id fails
     // with `sessionNotFound`, never silently starts over).
@@ -1005,7 +1005,8 @@ export class CLIArgumentBuilder {
     // Model override: env var > settings > vendor default. Vendor accepts an
     // alias ('sonnet', 'opus') or a full model id ('claude-sonnet-4-6').
     // https://code.claude.com/docs/en/cli-reference
-    const claudeModel = process.env.CLAUDE_MODEL || settings.model;
+    if (settings.effort) args.push('--effort', settings.effort);
+    const claudeModel = (settings.sessionModelOverride ? settings.model : undefined) || process.env.CLAUDE_MODEL || settings.model;
     if (claudeModel) {
       args.push('--model', claudeModel);
     }
@@ -1090,8 +1091,8 @@ export class CLIArgumentBuilder {
     if (settings.mcpConfigPath || settings.allowedTools?.length) throw new Error('Antigravity uses only this session’s Octipus tools; configure tools on the topic.');
     const launch = resolveOctipusMcpLaunch(connection);
     return { ...prepareAgyRuntime({ workspace: connection.workingDirectory ?? process.cwd(),
-      instructions: systemMessages.join('\n\n'), model: process.env.ANTIGRAVITY_MODEL || process.env.GEMINI_MODEL || settings.model,
-      extraArgs: settings.extraArgs, resume, apiKeyMode: settings.inheritApiKeys === true,
+      instructions: systemMessages.join('\n\n'), model: (settings.sessionModelOverride ? settings.model : undefined) || process.env.ANTIGRAVITY_MODEL || process.env.GEMINI_MODEL || settings.model,
+      extraArgs: settings.effort ? [...(settings.extraArgs ?? []), '--effort', settings.effort] : settings.extraArgs, resume, apiKeyMode: settings.inheritApiKeys === true,
       mcp: { runtime: launch.runtime, entry: launch.entry, url: launch.apiUrl, key: launch.apiKey } }),
       stdinPrompt: JSON.stringify({ event: 'user', message: { content: prompt } }) + '\n' };
   }
@@ -1127,7 +1128,7 @@ export class CLIArgumentBuilder {
     // ~/.codex/config.toml. Do NOT hardcode a default here — a stale guess
     // (e.g. a model the user's plan can't use) makes every codex spawn exit 1
     // server-side, which is exactly the failure this used to cause.
-    const modelOverride = process.env.CODEX_MODEL || settings?.model;
+    const modelOverride = (settings?.sessionModelOverride ? settings.model : undefined) || process.env.CODEX_MODEL || settings?.model;
     // Sandbox / approval policy: codex `exec` defaults to `--sandbox
     // read-only`, so spawned agents (e.g. pipeline architecture stages)
     // cannot write the ADRs / docs they produce. Mirror the write-enabled
@@ -1211,7 +1212,8 @@ export class CLIArgumentBuilder {
       baseArgs.push('--dangerously-bypass-hook-trust', '-c', `hooks.PreToolUse=[${hook}]`);
     }
     for (const image of connection?.images ?? []) baseArgs.push('--image', image.path);
-    if (modelOverride) baseArgs.push('-c', `model="${modelOverride}"`);
+    if (modelOverride) baseArgs.push('-c', `model=${JSON.stringify(modelOverride)}`);
+    if (settings?.effort) baseArgs.push('-c', `model_reasoning_effort=${JSON.stringify(settings.effort)}`);
     if (settings?.extraArgs?.length) baseArgs.push(...settings.extraArgs);
 
     if (systemPrompt) {
@@ -1231,6 +1233,8 @@ export class CLIArgumentBuilder {
 
 /** Callbacks the worker wires into the parser. */
 export interface CLIParserCallbacks {
+  /** Current-request context, never cumulative billing counters. */
+  onContext?: (observation: { model?: string; usedTokens?: number; contextWindow?: number; source: string }) => void;
   /** Public assistant text confirmed to precede further work, never reasoning. */
   onCommentary?: (text: string) => void;
   /**
@@ -1629,6 +1633,12 @@ export class CLIOutputParser {
           return { text: item.text, replace: true };
         }
         return null;
+      case 'session/contextUsage': {
+        const used = params.usedTokens, window = params.windowTokens;
+        if (typeof used === 'number' && Number.isFinite(used) && used >= 0) this.callbacks.onContext?.({ usedTokens: used,
+          ...(typeof window === 'number' && Number.isFinite(window) && window > 0 ? { contextWindow: window } : {}), source: 'CLI context event' });
+        return null;
+      }
       case 'session/tokenUsage': {
         const raw = params.usage as Record<string, unknown> | undefined;
         const usage = museUsage(raw ? [{ input_tokens: raw.inputTokens, cached_tokens: raw.cachedTokens, output_tokens: raw.outputTokens }] : undefined);
@@ -1667,6 +1677,7 @@ export class CLIOutputParser {
     if (type === 'system') {
       const subtype = event.subtype as string | undefined;
       if (subtype === 'init') {
+        if (typeof event.model === 'string') this.callbacks.onContext?.({ model: event.model, source: 'CLI initialization' });
         this.emit('thought', {
           status: 'running',
           vendorSessionId: event.session_id,
@@ -1689,6 +1700,7 @@ export class CLIOutputParser {
     if (type === 'assistant') {
       this.callbacks.onVendorReply?.();
       const message = event.message as Record<string, unknown> | undefined;
+      if (typeof message?.model === 'string') this.callbacks.onContext?.({ model: message.model, source: 'CLI request' });
       const content = (message?.content as Array<Record<string, unknown>>) || [];
 
       // A new assistant message = a new model turn (deduped by message id —
@@ -1770,6 +1782,14 @@ export class CLIOutputParser {
 
       // Extract token stats
       const usage = event.usage as Record<string, unknown> | undefined;
+      // Per-model billing sums are not context fill; only the declared window is usable here.
+      const modelUsage = event.modelUsage;
+      if (modelUsage && typeof modelUsage === 'object' && Object.keys(modelUsage).length === 1) {
+        const info = Object.values(modelUsage)[0] as { contextWindow?: unknown };
+        if (typeof info?.contextWindow === 'number' && Number.isFinite(info.contextWindow) && info.contextWindow > 0)
+          this.callbacks.onContext?.({ contextWindow: info.contextWindow, source: 'CLI model window' });
+      }
+
       const inputTokens = (usage?.input_tokens || 0) as number;
       const outputTokens = (usage?.output_tokens || 0) as number;
       const cacheRead = (usage?.cache_read_input_tokens || 0) as number;
@@ -1893,6 +1913,8 @@ export class CLIOutputParser {
     const cacheRead = (usage.cache_read_input_tokens || 0) as number;
     const cacheCreation = (usage.cache_creation_input_tokens || 0) as number;
     const output = (usage.output_tokens || 0) as number;
+    const input = freshInput + cacheRead + cacheCreation;
+    if (Number.isFinite(input) && input > 0) this.callbacks.onContext?.({ usedTokens: input, source: 'CLI latest request input' });
     const previous = messageId ? this.claudeUsageByMessage.get(messageId) : undefined;
     const freshInputDelta = Math.max(0, freshInput - (previous?.freshInput ?? 0));
     const cacheReadDelta = Math.max(0, cacheRead - (previous?.cacheRead ?? 0));

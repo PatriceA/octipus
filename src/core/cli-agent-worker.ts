@@ -1,3 +1,7 @@
+import { codexContextReader, codexRuntimeInfo } from './cli-runtime-info';
+import { measureCliPayload } from './agent/cli-prompt-composition';
+import { takeStagedRootPrompt, recordAgentComposition, recordLatestComposition, withoutText, type StagedRootPrompt } from './agent/prompt-composition';
+import { applySessionCliSettings, configuredCliEffort } from './agent/session-cli-settings';
 import { agyIsolationError } from './agy-cli-runtime';
 import { grokToolIsolationError } from './grok-cli-runtime';
 import { environmentCredentialOptions } from '@/security/environment-credentials';
@@ -444,6 +448,12 @@ When a task matches one of these skills, load it with get_skill before starting 
       !this.toolExecutor.toolsDisabled || tool.name === 'get_work_plan' || tool.name === 'update_work_plan' || tool.name === 'get_cli_run_context');
   }
 
+  private advertisedBridgeTools(): ToolHandler[] {
+    const tools = this.availableBridgeTools();
+    const advertisement = this.config.toolAdvertisement;
+    return advertisement?.mode === 'lazy' ? tools.filter(t => !isLongTailHandler(t, advertisement.coreToolIds)) : tools;
+  }
+
   private async executeBridgedTool(name: string, args: Record<string, unknown>): Promise<BridgeResult> {
     this.activeBridgeCalls++;
     const id = randomUUID();
@@ -750,11 +760,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         tools: () => this.availableBridgeTools(),
         registered: name => this.toolExecutor.getTools().has(name),
         blocked: name => this.toolExecutor.isToolBlocked(name),
-        advertisedTools: () => {
-          const tools = this.availableBridgeTools();
-          const advertisement = this.config.toolAdvertisement;
-          return advertisement?.mode === 'lazy' ? tools.filter(t => !isLongTailHandler(t, advertisement.coreToolIds)) : tools;
-        },
+        advertisedTools: () => this.advertisedBridgeTools(),
         active: () => this.context.status === 'running' && !this.aborted,
         execute: (name, args) => this.executeBridgedTool(name, args),
         abandoned: () => this.endApprovalWait(APPROVAL_DISCONNECT_REASON),
@@ -1117,6 +1123,8 @@ When a task matches one of these skills, load it with get_skill before starting 
     return stableFirst(systemParts).join('\n\n');
   }
 
+  private stagedComposition?: StagedRootPrompt;
+
   private async getCLISettings(): Promise<CLIAgentConfig> {
     // The row this agent was resolved to (`modelName`), never another user's
     // personal row reached by modelId (§8.1).
@@ -1131,7 +1139,12 @@ When a task matches one of these skills, load it with get_skill before starting 
     const { assertMayLeave } = await import('@/core/protection/routing');
     await assertMayLeave(model ?? { provider: 'cli', modelId: this.context.model, endpoint: null, metadata: null }, this.context.sessionId, 'cli');
     this.credentialOwner = await cliCredentialOwnerFor(model, this.context.userId);
-    return model?.metadata?.cliAgent || {};
+    const session = await sessionRepository.findById(this.context.sessionId);
+    const tool = getCLIToolConfig(this.context.model);
+    const settings = applySessionCliSettings(model?.metadata?.cliAgent ?? {}, session?.context?.cliOverrides ?? [], {
+      modelName: model?.name ?? '', topic: this.context.topic, role: this.context.role, adapter: tool?.adapter ?? tool?.name ?? '',
+    });
+    return settings;
   }
 
   private async executeCLI(opts?: { forceCold?: boolean; tightened?: boolean }): Promise<string> {
@@ -1307,7 +1320,7 @@ When a task matches one of these skills, load it with get_skill before starting 
     // What the vendor conversation held before this run, if it is resumed.
     let previouslyAcknowledged: { id: string; createdAt: string } | undefined;
     if (reuseSessions) {
-      const model = (adapterKey === 'Claude Code' ? process.env.CLAUDE_MODEL : adapterKey === 'Codex CLI' ? process.env.CODEX_MODEL
+      const model = (settings.sessionModelOverride ? settings.model : undefined) || (adapterKey === 'Claude Code' ? process.env.CLAUDE_MODEL : adapterKey === 'Codex CLI' ? process.env.CODEX_MODEL
         : adapterKey === 'Antigravity' ? process.env.ANTIGRAVITY_MODEL || process.env.GEMINI_MODEL : adapterKey === 'Muse Code' ? process.env.MUSE_MODEL : undefined) || settings.model;
       // Permission and plan mode are not fingerprinted: every invocation passes
       // them again, a resumed one too (Claude `--permission-mode`, Codex
@@ -1330,7 +1343,7 @@ When a task matches one of these skills, load it with get_skill before starting 
       const toolIdentity = root
         ? tools.map(tool => [tool.name, tool.description, tool.parameters]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
         : [this.context.role, [...new Set(tools.filter(tool => tool.toolId !== TOOL_DISCOVERY_TOOL_ID).map(tool => tool.toolId ?? tool.name))].sort()];
-      fingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, toolIdentity, credentialOwnerId ?? null]), instructions });
+      fingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.effort ? [...(settings.extraArgs ?? []), `effort:${settings.effort}`] : settings.extraArgs, providerEnv, toolIdentity, credentialOwnerId ?? null]), instructions });
       let existing = opts?.forceCold ? null : await loadCliSession(this.context.sessionId, storeKey!, fingerprint);
       // This metadata-only tool extension does not change the vendor conversation.
       // Accept exactly the previous schema fingerprint; other tool/prompt changes still reset.
@@ -1338,7 +1351,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         const legacyTools = tools.map(tool => [tool.name, tool.description,
           tool.name === 'get_cli_run_context' ? { type: 'object', properties: {} } : tool.parameters])
           .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
-        const legacyFingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, legacyTools, credentialOwnerId ?? null]), instructions });
+        const legacyFingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.effort ? [...(settings.extraArgs ?? []), `effort:${settings.effort}`] : settings.extraArgs, providerEnv, legacyTools, credentialOwnerId ?? null]), instructions });
         existing = await loadCliSession(this.context.sessionId, storeKey!, legacyFingerprint);
       }
       // A muse session muse no longer holds would fail the resume
@@ -1412,6 +1425,22 @@ When a task matches one of these skills, load it with get_skill before starting 
       throw err;
     }
     const { args, stdinPrompt, useShell } = built;
+    this.stagedComposition ??= takeStagedRootPrompt(this.context.id);
+    const configuredModel = (settings.sessionModelOverride ? settings.model : undefined)
+      || (adapterKey === 'Codex CLI' ? process.env.CODEX_MODEL : adapterKey === 'Claude Code' ? process.env.CLAUDE_MODEL
+        : adapterKey === 'Muse Code' ? process.env.MUSE_MODEL : adapterKey === 'Antigravity' ? process.env.ANTIGRAVITY_MODEL || process.env.GEMINI_MODEL : undefined)
+      || settings.model || providerEnv?.ANTHROPIC_MODEL;
+    const cliRun = { adapter: toolConfig.name, ...(configuredModel ? { model: configuredModel } : {}), effort: configuredCliEffort(settings, adapterKey), resumed: this.resuming };
+    this.context.metadata.cliRun = cliRun;
+    const composition = measureCliPayload({ staged: this.stagedComposition, system: resumedSystem ? resumedSystem.join('\n\n') : systemPrompt ?? '', prompt,
+      tools: this.advertisedBridgeTools(), role: this.context.role, model: configuredModel ?? this.context.model, resumed: this.resuming });
+    recordAgentComposition(this.context.id, composition);
+    await agentRepository.mergeMetadata(this.context.id, { promptComposition: withoutText(composition), cliRun }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'CLI prompt sizes could not be saved'));
+    if (isRootAgent(this.context)) {
+      recordLatestComposition(this.context.sessionId, { agentId: this.context.id, messageId: this.userCursor?.id, composition });
+      if (this.userCursor?.id) await messageRepository.mergeMetadata(this.userCursor.id, this.context.id, { promptComposition: withoutText(composition) }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'CLI turn sizes could not be saved'));
+    }
+
     this.launchCleanup = () => {
       if (muse) disposeMuseHome(muse.home, museEnv);
       const configIndex = args.indexOf('--mcp-config');
@@ -1449,6 +1478,27 @@ When a task matches one of these skills, load it with get_skill before starting 
         modelName: this.accountingModelName, credentialOwner: credentialOwnerId,
       })).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store CLI session id'));
     };
+    let contextWrites = Promise.resolve();
+    const observeContext = (observation: { model?: string; effort?: string; usedTokens?: number; contextWindow?: number; at?: string; source: string }) => {
+      const previous = this.context.metadata.cliContext as Record<string, unknown> | undefined;
+      if (previous && Object.entries(observation).every(([key, value]) => previous[key] === value)) return;
+      const cliContext = { ...previous, ...observation, at: observation.at ?? (observation.usedTokens !== undefined ? new Date().toISOString() : previous?.at ?? new Date().toISOString()) };
+      this.context.metadata.cliContext = cliContext;
+      if (observation.model) cliRun.model = observation.model;
+      if (observation.effort) cliRun.effort = observation.effort;
+      this.context.metadata.cliRun = cliRun;
+      contextWrites = contextWrites.then(() => agentRepository.mergeMetadata(this.context.id, { cliContext, cliRun: { ...cliRun } }))
+        .catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'CLI context observation could not be saved'));
+    };
+    let contextReader: ReturnType<typeof codexContextReader> | undefined;
+    let readingContext = false;
+    const refreshCliContext = async () => {
+      if (!contextReader || readingContext) return;
+      readingContext = true;
+      try { const reading = await contextReader(); if (reading) observeContext(reading); }
+      finally { readingContext = false; }
+    };
+    let contextTimer: ReturnType<typeof setInterval> | undefined;
     const parser = this.parser = new CLIOutputParser(
       this.context.id,
       this.context.model,
@@ -1473,6 +1523,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         this.emit(type, data);
       },
       {
+        onContext: observeContext,
         onCommentary: text => {
           if (!isRootAgent(this.context) || this.aborted) return;
           const generation = this.generation;
@@ -1542,6 +1593,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         // the cursor stays what the conversation held before this run: a
         // resume off this row re-sends this turn rather than skipping it.
         onVendorSession: (id) => {
+          if (adapterKey === 'Codex CLI') { contextReader = codexContextReader(id, env); void refreshCliContext().catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Initial CLI context reading unavailable')); }
           capturedVendorId = id;
           recordSession(id, previouslyAcknowledged);
         },
@@ -1605,6 +1657,7 @@ When a task matches one of these skills, load it with get_skill before starting 
     // removed with the context files.
     let toolHome: SpaceToolHome | null = null;
     const cleanupContextFiles = () => {
+      clearInterval(contextTimer);
       if (tempVibeHome && tempVibeHome.includes('octipus-cli')) {
         try { rmSync(tempVibeHome, { recursive: true, force: true }); } catch { /* already gone */ }
       }
@@ -1643,6 +1696,13 @@ When a task matches one of these skills, load it with get_skill before starting 
     const env = toolConfig.octipusToolsOnly
       ? { ...runtimeCredentials.options.env, ...built.env }
       : runtimeCredentials.options.env;
+    if (adapterKey === 'Codex CLI') {
+      const defaults = await codexRuntimeInfo(env, workspaceCwd);
+      observeContext({ ...(configuredModel || defaults.model ? { model: configuredModel ?? defaults.model } : {}),
+        ...(cliRun.effort || defaults.effort ? { effort: cliRun.effort ?? defaults.effort } : {}),
+        ...(defaults.contextWindow ? { contextWindow: defaults.contextWindow } : {}), source: 'CLI configuration' });
+      if (resume?.id) contextReader = codexContextReader(resume.id, env);
+    }
     return new Promise<string>((resolve, reject) => {
       if (this.aborted) { cleanupContextFiles(); reject(new Error('Agent was aborted before CLI spawn')); return; }
       try { assertWindowsCmdLineFits(binary, args, process.platform, useShellForSpawn); } catch (err) { cleanupContextFiles(); reject(err); return; }
@@ -1705,6 +1765,10 @@ When a task matches one of these skills, load it with get_skill before starting 
       }
 
       this.process = proc;
+      if (adapterKey === 'Codex CLI') {
+        contextTimer = setInterval(() => { void refreshCliContext().catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'CLI context refresh failed')); }, 5000);
+        contextTimer.unref();
+      }
       this.acceptsLiveGuidance = built.keepStdinOpen === true;
       this.liveTools.clear();
       this.seenLiveTools.clear();
@@ -1913,6 +1977,7 @@ When a task matches one of these skills, load it with get_skill before starting 
       });
 
       proc.on('close', async (code, signal) => {
+        clearInterval(contextTimer);
         stderr = runtimeCredentials.mask(stderr);
         rawStdout = runtimeCredentials.mask(rawStdout);
         if (this.executionDiagnostics) Object.assign(this.executionDiagnostics, { exitCode: code, signal });
@@ -1936,6 +2001,8 @@ When a task matches one of these skills, load it with get_skill before starting 
         // promise unsettled forever (agent stuck "running"). Wrap the whole
         // body so a DB/parse error rejects instead of hanging.
         try {
+          await refreshCliContext().catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Final CLI context reading unavailable'));
+          await contextWrites;
           cleanupContextFiles();
 
           // Buffer-at-end tools: parse the whole accumulated stdout via the

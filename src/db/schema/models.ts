@@ -74,6 +74,10 @@ export const userModelBindings = pgTable('user_model_bindings', {
 }));
 
 export interface CLIAgentConfig {
+  /** Typed reasoning control; adapters translate it without arbitrary CLI flags. */
+  effort?: string;
+  /** Session choices take priority over workstation model environment defaults. */
+  sessionModelOverride?: boolean;
   /** Explicitly allow server API-key environment variables into the CLI. Default: use CLI login/config. */
   inheritApiKeys?: boolean;
   /**

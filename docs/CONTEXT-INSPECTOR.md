@@ -1,7 +1,7 @@
 # Context inspector
 
-The **Context** panel in the web chat's right-hand column shows what the root
-agent's latest request was made of: how much of the model's context window it
+The **Context** panel in the web chat's right-hand column shows what the selected
+agent's latest measured request was made of: how much of the model's context window it
 used, which part took how much, and — for the latest turn — the text the model
 actually read.
 
@@ -88,13 +88,57 @@ shows it.
   process — the panel shows sizes and says the text is not available until the
   next message.
 
-`GET /api/sessions/:id/context` returns both. It follows the session-usage
+`GET /api/sessions/:id/context` returns both; `?agentId=...` selects one agent from the same session. It follows the session-usage
 rule: the session's owner only. A room member or an admin gets *not found*.
+
+## CLI models and multiple agents
+
+The default view is the latest coordinator turn. Open **Context → Context belongs
+to** to choose an individual run (the latest 100 are listed), including a pipeline
+stage or spawned child. Agents have independent contexts; their sizes are never
+added together. Selecting an older run shows its recorded measurement and time,
+not the live context of a newer agent. Compact conversation acts on the session's
+coordinator only and is unavailable while inspecting a child.
+
+New CLI launches record the known Octipus payload: role/instructions, selected
+skills, tool definitions and the input sent to the CLI. The estimate is characters
+÷ 4. It excludes vendor-owned instructions, internal tools and later tool results.
+For a resumed CLI this payload contains the new input, not the whole retained
+conversation. This is labelled **known tokens**, never a claim about full context.
+
+Where available, the panel shows a separate timestamped CLI reading:
+
+- **Codex:** bounded reads of the exact linked thread's rollout in its own
+  credential-scoped `CODEX_HOME/sessions`. Model and effort come from
+  `turn_context`; context size uses `last_token_usage` input plus output and the
+  reported `model_context_window`. Cumulative `total_token_usage` is ignored.
+  It refreshes during execution and once at exit. No extra model call is made.
+- **Claude Code and its compatible adapters:** model identity from initialization
+  and assistant messages; last-request input includes fresh tokens, cache reads
+  and cache creation. A reported per-model context window is retained separately.
+  Run-wide billing counters are not context occupancy.
+- **Muse:** the `session/contextUsage` machine event supplies occupancy and window.
+- **Other adapters:** known payload remains available; missing runtime telemetry
+  is explicitly unavailable, never zero or a made-up percentage.
+
+Interactive slash commands such as `/context` are not sent as ordinary headless
+work prompts. They are not a universal, read-only machine interface. This feature
+uses existing machine events and the linked session's telemetry instead.
+
+The growth chart covers API requests only: mixing resumed CLI input sizes with
+full requests would falsely suggest that retained context shrank.
+
+CLI context readings and sizes survive reload/restart in agent metadata, without
+storing prompt text there. Selected skills can be inspected in the known payload;
+this is a launch snapshot, not a reconstructed history of every skill loaded by
+the CLI later. Only the owner can read it, under the same rule as API context.
+
+For model and effort changes, see [Session model controls](SESSION-MODEL-CONTROLS.md).
 
 ## Not measured
 
-- Forked workers, seeded with their parent's conversation, and CLI-model workers.
-- CLI-model root turns, which build their own prompt, and casual direct replies
-  that skip the agent loop.
+- Forked native workers seeded with their parent's conversation.
+- Casual direct replies that skip the agent loop.
+- CLI runs created before this feature retain only the evidence originally recorded.
 
 A session with no measured turn says *Not measured yet* rather than showing zero.

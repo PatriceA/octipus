@@ -33,7 +33,7 @@ test('the owner reads the session context', async () => {
   const response = await get();
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ latest: null, turns: [], usage: null });
-  expect(fixture.read).toHaveBeenCalledWith(sessionId);
+  expect(fixture.read).toHaveBeenCalledWith(sessionId, undefined);
 });
 
 test('another user, or a room, gets not-found and nothing is read', async () => {
