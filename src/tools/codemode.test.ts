@@ -7,7 +7,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import type { ToolHandler } from '@/core/agent-base';
 import type { AgentContext, ToolCall, ToolResult } from '@/core/types';
-import { buildCodemodeHandler, type CodemodeHost, scriptableTools, scriptTimeoutMs } from './codemode';
+import { buildCodemodeHandler, compactCodemodeTools, type CodemodeHost, scriptableTools, scriptTimeoutMs } from './codemode';
 
 // No embedding provider in the unit lane: searchTools falls back to keywords.
 vi.mock('@/core/rag/embeddings', () => ({
@@ -16,6 +16,18 @@ vi.mock('@/core/rag/embeddings', () => ({
 }));
 
 const ctx = {} as AgentContext;
+
+test('compact schemas preserve coordination, discovery and final tools, not core or direct MCP tools', () => {
+  const tools = [handler('shell__run'), handler('mcp__server__read', { toolId: 'mcp' }),
+    handler('codemode', { toolId: undefined }), handler('spawn_child', { toolId: undefined }),
+    handler('list_tools', { toolId: 'tool_discovery' }), handler('describe_tool', { toolId: 'tool_discovery' }),
+    handler('submit', { toolId: 'review', final: true })];
+  expect(compactCodemodeTools(tools).map(t => t.name)).toEqual(['codemode', 'spawn_child', 'list_tools', 'describe_tool', 'submit']);
+  expect(tools).toHaveLength(7);
+  const pipeline = handler('create_pipeline', { toolId: undefined, discoverOnly: true });
+  expect(compactCodemodeTools([...tools, pipeline], true)).not.toContain(pipeline);
+  expect(compactCodemodeTools([...tools, pipeline])).toContain(pipeline);
+});
 
 function handler(name: string, extra: Partial<ToolHandler> = {}): ToolHandler {
   return {

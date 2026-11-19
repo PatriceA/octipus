@@ -22,16 +22,62 @@ vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: {
 } }));
 
 import { AgentWorker } from './agent-worker';
+import { beginReadOnlyTurn, endReadOnlyTurn } from '@/security/read-only-turn';
+import { getContextFill } from './agent/prompt-budget';
 import { _resetPromptCompositionForTesting, bindStagedRootPrompt, getAgentComposition, getLatestComposition, promptPart, stageAgentPrompt, stageRootPrompt } from './agent/prompt-composition';
 
 beforeEach(() => { fixture.rows = []; fixture.agentMeta = []; _resetPromptCompositionForTesting(); });
 
-function worker(id: string, root: boolean) {
+function worker(id: string, root: boolean, codemode = false) {
   return new AgentWorker({ space: null, trigger: 'user', funding: 'own', id, sessionId: 'session', userId: 'user', model: 'm', role: 'general', topic: 'test',
     status: 'idle', createdAt: new Date(), updatedAt: new Date(), root, metadata: {} },
-    { maxIterations: 3, maxTokenBudget: 1_000_000, contextWindowSize: 200_000, timeout: 30_000, toolOutputSoftCap: 100 });
+    { maxIterations: 3, maxTokenBudget: 1_000_000, contextWindowSize: 200_000, timeout: 30_000, toolOutputSoftCap: 100, codemode });
 }
 const history = (w: AgentWorker, messages: AgentMessage[]) => { (w as unknown as { messages: AgentMessage[] }).messages = messages; };
+
+test('codemode omits 250 ordinary schemas from API requests and context measurements', async () => {
+  stageAgentPrompt('compact', { parts: [], role: 'general', model: 'm' });
+  const w = worker('compact', false, true);
+  for (let i = 0; i < 250; i++) w.registerTool({ name: `notes__read_${i}`, toolId: 'notes', description: 'Read notes. '.repeat(100), parameters: { type: 'object' }, execute: async () => null });
+  w.registerTool({ name: 'spawn_child', description: 'Delegate work', parameters: { type: 'object' }, execute: async () => null });
+  await w.addUserMessage('Read a note');
+  const sections = getAgentComposition('compact')?.sections ?? [];
+  expect(sections.some(s => s.label.startsWith('notes__'))).toBe(false);
+  expect(sections.map(s => s.label)).toContain('codemode');
+  expect(sections.map(s => s.label)).toContain('spawn_child');
+  // Exercise the actual request assembly, including Anthropic's alternate
+  // tool-search path, rather than only the inspector's schema estimate.
+  const request = w as unknown as { requestTools(model: { provider: string; modelId: string }): { declarableTools: Array<{ function: { name: string } }>; deferredTools?: string[] } };
+  for (const provider of ['ollama', 'anthropic', 'openai']) {
+    const tools = request.requestTools({ provider, modelId: 'test' });
+    expect(tools.declarableTools.map(t => t.function.name)).toEqual(['codemode', 'spawn_child']);
+    expect(tools.deferredTools).toBeUndefined();
+  }
+});
+
+test('a blocked codemode restores direct tools and read-only turns retain readers', async () => {
+  const w = worker('fallback', false, true);
+  w.registerTool({ name: 'filesystem__read_file', toolId: 'filesystem', permissionAction: 'read', description: 'Read file', parameters: {}, execute: async () => 'ok' });
+  expect(w.getToolInventory().advertised.map(t => t.name)).not.toContain('filesystem__read_file');
+  beginReadOnlyTurn('session');
+  try { expect(w.getToolInventory().advertised.map(t => t.name)).toContain('filesystem__read_file'); }
+  finally { endReadOnlyTurn('session'); }
+  const executor = (w as unknown as { toolExecutor: { handleToolCalls(calls: Array<{ id: string; name: string; arguments: { code: string } }>): Promise<unknown> } }).toolExecutor;
+  for (let i = 0; i < 3; i++) await executor.handleToolCalls([{ id: `failure-${i}`, name: 'codemode', arguments: { code: 'throw new Error("bad script")' } }]);
+  const names = w.getToolInventory().advertised.map(t => t.name);
+  expect(names).not.toContain('codemode');
+  expect(names).toContain('filesystem__read_file');
+});
+
+test('root session context counter uses compact worker declarations', async () => {
+  stageRootPrompt('session', { parts: [], role: 'general', model: 'm' });
+  bindStagedRootPrompt('session', 'compact-root');
+  const w = worker('compact-root', true, true);
+  w.registerTool({ name: 'notes__read', toolId: 'notes', description: 'hidden '.repeat(30000), parameters: {}, execute: async () => null });
+  await w.addUserMessage('Read notes');
+  expect(getContextFill('session')?.promptTokens).toBe(getLatestComposition('session')?.composition.totals.tokens);
+  expect(getContextFill('session')!.promptTokens).toBeLessThan(3000);
+});
 
 test('the root turn stores its composition with the user message and keeps the text in memory', async () => {
   stageRootPrompt('session', { parts: [promptPart('static', 'role', 'general role prompt', 'You are Octipus. '.repeat(20))], role: 'general', model: 'm', contextWindow: 200_000 });

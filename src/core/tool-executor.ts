@@ -34,6 +34,10 @@ import { readOnlyNotifyAllowed, readOnlyRefusal } from '@/security/read-only-tur
 import { FORK_REFUSAL, FORK_REFUSED_TOOLS_KEY } from '@/core/swarm/fork';
 
 const MAX_CONSECUTIVE_TOOL_ERRORS = 3;
+
+/** A human approval that did not arrive terminates the run, including when
+ * the approved action was nested inside a codemode meta-tool. */
+export class ToolApprovalNotGrantedError extends Error {}
 /** Errors that describe a server's momentary state (down, restarting, cooling off), never a failure streak. */
 const TRANSIENT_TOOL_ERROR = /MCP server not connected|MCP server circuit open|MCP request timeout|not found or not connected/;
 
@@ -862,7 +866,7 @@ export class ToolExecutor {
           // If a final tool fails, propagate immediately — avoids a slow LLM round-trip
           // just to relay the error message to the user. Count it first so the
           // receipt records the failure (the normal branch counts it too).
-          if (tool.final) {
+          if (tool.final || error instanceof ToolApprovalNotGrantedError) {
             if (!isCancellationError(error)) this.counters.toolErrors++;
             throw error;
           }
@@ -1048,7 +1052,7 @@ export class ToolExecutor {
             // not be delivered to the caller's channel at all. Reporting a
             // refusal nobody made sent the model — and the operator reading the
             // answer — after the wrong problem.
-            throw new Error(
+            throw new ToolApprovalNotGrantedError(
               `Permission denied for "${toolCall.name}": the approval was not granted ` +
                 `(rejected, expired, or undeliverable on this channel).`,
             );

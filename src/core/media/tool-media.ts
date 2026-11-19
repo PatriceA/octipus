@@ -10,6 +10,12 @@
 import type { MediaRef } from '@/core/types';
 
 export const TOOL_MEDIA_KEY = '__showModel';
+const TOOL_TEXT_KEY = '__toolText';
+
+/** Trusted wrapper for a plain-text result that also carries tool media. */
+export function toolTextWithMedia(text: string, media: MediaRef[]): object {
+  return withToolMedia({ [TOOL_TEXT_KEY]: text }, media);
+}
 
 export function withToolMedia<T extends object>(result: T, media: MediaRef[]): T {
   return media.length ? { ...result, [TOOL_MEDIA_KEY]: media } : result;
@@ -20,7 +26,8 @@ export function takeToolMedia(result: unknown): { result: unknown; media: MediaR
   if (!result || typeof result !== 'object' || !(TOOL_MEDIA_KEY in result)) return { result, media: [] };
   const { [TOOL_MEDIA_KEY]: media, ...rest } = result as Record<string, unknown>;
   const refs = Array.isArray(media) ? media.filter((m): m is MediaRef => !!m && typeof (m as MediaRef).path === 'string') : [];
-  return { result: rest, media: refs.map((m) => ({ ...m, source: 'tool' as const })) };
+  return { result: Object.keys(rest).length === 1 && typeof rest[TOOL_TEXT_KEY] === 'string' ? rest[TOOL_TEXT_KEY] : rest,
+    media: refs.map((m) => ({ ...m, source: 'tool' as const })) };
 }
 
 /** The user message that shows a batch's images. */

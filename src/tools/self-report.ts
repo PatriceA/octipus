@@ -20,6 +20,19 @@ import { toolLogger } from '@/utils/logger';
 
 const SELF_REPORT_TOOL_ID = 'self_report';
 
+/** Bind the inventory after worker construction, so injected codemode tools,
+ * compact declarations and tools removed during execution are counted. */
+export function withLiveCapabilitiesInventory(handler: ToolHandler, inventory: () => Pick<SelfReportContext, 'advertised' | 'registered'>): ToolHandler {
+  if (handler.toolId !== SELF_REPORT_TOOL_ID || handler.name !== 'capabilities') return handler;
+  return { ...handler, execute: async (args, context) => {
+    const report = await handler.execute(args, context);
+    if (!report || typeof report !== 'object' || !('tools' in report) || !report.tools || typeof report.tools !== 'object') return report;
+    const current = inventory();
+    return { ...report, tools: { ...report.tools, advertised: current.advertised.length,
+      callable: current.registered.length, byToolbox: byToolbox(current.registered) } };
+  } };
+}
+
 /** Sections a caller can ask for. `all` is the default. */
 const SECTIONS = ['all', 'tools', 'mcp', 'skills', 'pipelines'] as const;
 type Section = (typeof SECTIONS)[number];
