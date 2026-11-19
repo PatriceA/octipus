@@ -102,8 +102,11 @@ communication, design, coding, review, qa):
   and stitched (segment times shifted); at most four hours per call. Only
   real audio/video containers are opened (never a playlist naming other
   files). Offered when a transcription engine is bound.
-- `speak({ text, voice?, output_path? })` — the Speech lane reads up to 5000
-  characters; the audio is saved in the workspace (default
+- `speak({ text, voice?, style?, speed?, output_path? })` — the Speech lane
+  reads up to 5000 characters, shaped for speech (markup and code are not
+  read out); `voice` is a voice profile or a voice of the engine, `style` a
+  description for engines that take one ([VOICE.md → Voices](VOICE.md#voices));
+  the audio is saved in the workspace (default
   `.octipus/media/speech/<id>.mp3`; an `output_path` must be a new file and,
   in a space, not a coding agent's configuration) and its path returned.
   Offered when a speech engine is bound.
