@@ -71,8 +71,8 @@ vi.mock('@/db/repositories/work-plan-repository', () => ({ workPlanRepository: {
     fixture.plan = structuredClone(next);
   },
 } }));
-vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: { create: async () => ({}), findBySession: async () => [], findContextMessages: async () => [] } }));
-vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: { updateStatus: fixture.status } }));
+vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: { mergeMetadata: async () => {}, create: async () => ({}), findBySession: async () => [], findContextMessages: async () => [] } }));
+vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: { updateStatus: fixture.status, mergeMetadata: async () => {} } }));
 vi.mock('@/db/repositories/audit-repository', () => ({ auditRepository: new Proxy({}, { get: (_target, property) => property === 'logAgentCompleted' ? fixture.audit : async () => {} }) }));
 vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ check: fixture.check, cancelWaits: fixture.cancel,
   requestApproval: fixture.requestApproval, waitForApproval: fixture.wait, onWaitStateChange: (listener: typeof fixture.waitListener) => { fixture.waitListener = listener; return () => { fixture.waitListener = undefined; }; } }) }));

@@ -162,6 +162,8 @@ const SPACE_ACTING = [
   // Home returns an empty scoped snapshot in shared workspaces, never personal fallback.
   'GET /api/sessions/desk',
   'GET /api/sessions/:id/context',
+  // Session CLI settings: exact owner only; room settings refused; saves require Chat scope.
+  'GET /api/sessions/:id/model-controls', 'GET /api/sessions/:id/model-controls/catalog', 'PUT /api/sessions/:id/model-controls',
   'GET /api/sessions/:id/execution-environment', 'PUT /api/sessions/:id/execution-environment',
   'GET /api/sessions/:id/plan', 'POST /api/sessions/:id/plan/feedback', 'POST /api/sessions', 'PATCH /api/sessions/:id',
   'DELETE /api/sessions/:id', 'GET /api/sessions/:id/messages', 'POST /api/sessions/:id/attachments', 'GET /api/sessions/:id/files',

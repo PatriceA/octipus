@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-718 mounted routes across 89 route files. The path is the full one, group prefix included — what a client actually calls.
+721 mounted routes across 89 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -582,6 +582,9 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/sessions/:id/learning` | `src/api/routes/sessions.ts` |
 | POST | `/api/sessions/:id/learning` | `src/api/routes/sessions.ts` |
 | GET | `/api/sessions/:id/messages` | `src/api/routes/sessions.ts` |
+| GET | `/api/sessions/:id/model-controls` | `src/api/routes/sessions.ts` |
+| PUT | `/api/sessions/:id/model-controls` | `src/api/routes/sessions.ts` |
+| GET | `/api/sessions/:id/model-controls/catalog` | `src/api/routes/sessions.ts` |
 | GET | `/api/sessions/:id/monitors` | `src/api/routes/sessions.ts` |
 | POST | `/api/sessions/:id/monitors/:monitorId/control` | `src/api/routes/sessions.ts` |
 | POST | `/api/sessions/:id/monitors/events` | `src/api/routes/sessions.ts` |
@@ -755,7 +758,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 27 |
-| `api` | `core` | 214 |
+| `api` | `core` | 217 |
 | `api` | `db` | 146 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 9 |
@@ -794,20 +797,20 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `capabilities` | 3 |
 | `core` | `channels` | 15 |
 | `core` | `config` | 73 |
-| `core` | `db` | 517 |
+| `core` | `db` | 520 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 7 |
 | `core` | `mcp` | 12 |
-| `core` | `models` | 145 |
+| `core` | `models` | 147 |
 | `core` | `modules` | 2 |
 | `core` | `plugins` | 8 |
 | `core` | `security` | 242 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
-| `core` | `shared` | 74 |
+| `core` | `shared` | 76 |
 | `core` | `skills` | 14 |
 | `core` | `tools` | 35 |
-| `core` | `utils` | 242 |
+| `core` | `utils` | 244 |
 | `core` | `voice` | 3 |
 | `db` | `config` | 4 |
 | `db` | `core` | 22 |

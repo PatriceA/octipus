@@ -177,6 +177,12 @@ export class MessageRepository {
       .limit(limit);
   }
 
+  /** Attach measured sizes to the exact originating agent/message, without replacing other metadata. */
+  async mergeMetadata(id: string, agentId: string, patch: Record<string, unknown>): Promise<void> {
+    await this.db.update(messages).set({ metadata: sql`coalesce(${messages.metadata}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb` })
+      .where(and(eq(messages.id, id), eq(messages.agentId, agentId)));
+  }
+
   /**
    * Insert a completed turn only if no clear invalidated the originating run.
    * Every insert path refuses a room's `user` row without its author (§6.3)

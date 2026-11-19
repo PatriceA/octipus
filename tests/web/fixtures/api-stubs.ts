@@ -524,6 +524,7 @@ export async function stubWorkspaces(page: Page): Promise<void> {
 }
 
 export async function stubAllDefaults(page: Page): Promise<void> {
+  await page.route('**/api/sessions/*/model-controls', route => json(route, 200, { revision: 0, bindings: [], overrides: [], runs: [] }));
   await page.route('**/api/heartbeat/me', route => json(route, 200, { enabled: false, intervalMinutes: null, watchEmail: false, watchEmailSince: null,
     server: { enabled: true, intervalMinutes: 60, quietHoursStart: 22, quietHoursEnd: 7, quietHoursTimezone: 'UTC', maxRunsPerDay: 24, probeEmail: true }, mailbox: null, standingInstructions: false, recentEmail: [] }));
   await stubWorkspaces(page);

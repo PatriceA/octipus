@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Modal } from '@/components/ui/modal';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { useSessionModelControls } from './session-model-controls';
 import {
   PROMPT_CATEGORIES,
   PROMPT_CATEGORY_INFO,
@@ -56,13 +57,15 @@ interface Props {
  */
 export default function ContextPanel({ sessionId, running, onCompact }: Props) {
   const [open, setOpen] = useState(false);
+  const [agentId, setAgentId] = useState('');
+  const models = useSessionModelControls(sessionId);
   const [selected, setSelected] = useState<PromptCategory | null>(null);
   const [reading, setReading] = useState<PromptSectionWithText | null>(null);
   const { data, isError, isFetching, errorUpdatedAt, dataUpdatedAt, refetch } = useQuery({
-    queryKey: ['session-context', sessionId],
+    queryKey: ['session-context', sessionId, agentId],
     enabled: !!sessionId,
     queryFn: async () => {
-      const response = await api.get<unknown>(`/sessions/${encodeURIComponent(sessionId!)}/context`);
+      const response = await api.get<unknown>(`/sessions/${encodeURIComponent(sessionId!)}/context${agentId ? `?agentId=${encodeURIComponent(agentId)}` : ''}`);
       if (!isContextResponse(response)) throw new Error('The server returned context data this version of the app cannot read.');
       return response;
     },
@@ -75,7 +78,7 @@ export default function ContextPanel({ sessionId, running, onCompact }: Props) {
 
   const latest = data?.latest ?? null;
   const unavailable = isError || errorUpdatedAt > dataUpdatedAt;
-  const contextWindow = latest?.contextWindow;
+  const contextWindow = data?.cliContext?.contextWindow ?? (latest?.source === 'cli-payload' ? undefined : latest?.contextWindow);
   const used = latest?.totals.tokens ?? 0;
   const byCategory = latest ? tokensByCategory(latest.sections) : {};
   const categories = PROMPT_CATEGORIES.filter((c) => (byCategory[c] ?? 0) > 0);
@@ -91,14 +94,16 @@ export default function ContextPanel({ sessionId, running, onCompact }: Props) {
         <span className="block text-sm font-semibold">
           {!sessionId ? 'What the model reads'
             : !data && !unavailable ? 'Loading context…'
+            : data?.cliContext?.usedTokens != null ? <>{compact(data.cliContext.usedTokens)}{data.cliContext.contextWindow ? ` of ${compact(data.cliContext.contextWindow)} · ${Math.round(data.cliContext.usedTokens / data.cliContext.contextWindow * 100)}% full` : ' tokens'} · CLI</>
             : !latest ? 'Not measured yet'
-            : <>~{compact(used)}{contextWindow ? <> of {compact(contextWindow)} · {pct}% full</> : ' tokens'}</>}
+            : <>~{compact(used)}{latest.source === 'cli-payload' ? ' known tokens · CLI total unavailable' : contextWindow ? <> of {compact(contextWindow)} · {pct}% full</> : ' tokens'}</>}
         </span>
       </span>
       <span className="text-xs text-primary shrink-0">{open ? 'Collapse' : 'Open'}</span>
     </button>
 
-    {latest && <CompositionBar sections={latest.sections} scale={scale} selected={selected} marks={marks} onSelect={(c) => { setOpen(true); setSelected(c === selected ? null : c); }} />}
+    {latest?.source === 'cli-payload' && <p className="text-[11px] text-on-surface-variant">Known Octipus input · breakdown of the payload, not total CLI context</p>}
+    {latest && <CompositionBar sections={latest.sections} scale={latest.source === 'cli-payload' ? used : scale} selected={selected} marks={marks} onSelect={(c) => { setOpen(true); setSelected(c === selected ? null : c); }} />}
     {latest && marks.length > 0 && <p className="text-[11px] text-on-surface-variant">
       {marks.map((m, i) => <span key={m.label}>{i > 0 && ' · '}<span aria-hidden>│ </span>~{compact(m.at)}: {m.label}{used > m.at ? ' (passed)' : ''}</span>)}
     </p>}
@@ -109,12 +114,23 @@ export default function ContextPanel({ sessionId, running, onCompact }: Props) {
     </div>}
 
     {open && <>
+      <label className="block text-xs text-on-surface-variant">Context belongs to
+        <select aria-label="Context agent" className="mt-1 w-full rounded-lg border border-outline-variant bg-surface-container p-2 text-on-surface" value={agentId} onChange={e => { setAgentId(e.target.value); setSelected(null); }}>
+          <option value="">Latest coordinator turn</option>{models.data?.runs.map(r => <option key={r.id} value={r.id}>{r.root ? 'Coordinator' : r.role} · {r.model ?? r.adapter} · {r.status} · {new Date(r.at).toLocaleTimeString()}</option>)}
+        </select>
+      </label>
+      <p className="text-xs text-on-surface-variant">Each agent has its own context. This view never adds multiple agents together.</p>
+      {data?.cliContext && <p className="text-xs text-on-surface-variant">{data.cliContext.model && <>CLI reports {data.cliContext.model}. </>}{data.cliContext.usedTokens != null && <>Latest CLI context reading: {compact(data.cliContext.usedTokens)} tokens{data.cliContext.contextWindow ? ` of ${compact(data.cliContext.contextWindow)}` : ''}. </>}{data.cliContext.source} · {new Date(data.cliContext.at).toLocaleTimeString()}</p>}
+
       {!sessionId && <p className="text-sm text-on-surface-variant">Send a message to see what Octipus puts in front of the model, and how much room each part takes.</p>}
-      {sessionId && data && !latest && <p className="text-sm text-on-surface-variant">No turn of this session has been measured yet. Measurement starts with the next message (direct replies and CLI models are not measured).</p>}
+      {sessionId && data && !latest && <p className="text-sm text-on-surface-variant">No measurement is available for this agent yet. New API and CLI launches record their known prompt sizes.</p>}
 
       {latest && <>
+        <p className="text-xs text-on-surface-variant break-words">{latest.role} · {data?.cliContext?.model ?? latest.model} · measured {new Date(latest.measuredAt).toLocaleString()}</p>
         <p className="text-xs text-on-surface-variant">
-          Estimated as characters ÷ 4 when the latest turn started.
+          {latest.source === 'cli-payload'
+            ? `Known Octipus payload, estimated as characters ÷ 4. ${latest.resumed ? 'This is new input to a resumed CLI, not its full retained context. ' : ''}Vendor instructions, internal tool definitions and later tool results may add more. These sizes are not a complete CLI context reading.`
+            : 'Estimated as characters ÷ 4 when the latest turn started.'}
           {data?.usage && <> The provider counted <span className="font-mono text-on-surface">{data.usage.inputTokens.toLocaleString('en-US')}</span> input tokens for that request{data.usage.cachedInputTokens > 0 && <>, <span className="font-mono text-on-surface">{data.usage.cachedInputTokens.toLocaleString('en-US')}</span> from cache</>}.</>}
           {!contextWindow && ' The model\'s context window is not known, so the bar shows shares of the request.'}
         </p>
@@ -156,11 +172,11 @@ export default function ContextPanel({ sessionId, running, onCompact }: Props) {
           })}
         </ul>
 
-        {data && data.turns.length > 1 && <GrowthChart turns={data.turns} />}
+        {data && latest.source !== 'cli-payload' && data.turns.length > 1 && <GrowthChart turns={data.turns} />}
 
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" disabled={running} onClick={onCompact} className="rounded-lg border border-outline-variant px-3 py-2 text-sm text-primary disabled:opacity-50">Compact conversation</button>
-          <span className="text-xs text-on-surface-variant">{running ? 'Available when the turn ends.' : 'Summarises older messages to free room.'}</span>
+          <button type="button" disabled={running || !!agentId} onClick={onCompact} className="rounded-lg border border-outline-variant px-3 py-2 text-sm text-primary disabled:opacity-50">Compact conversation</button>
+          <span className="text-xs text-on-surface-variant">{agentId ? 'Choose Latest coordinator turn to compact this session.' : running ? 'Available when the turn ends.' : 'Summarises older messages to free room.'}</span>
         </div>
       </>}
     </>}

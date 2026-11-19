@@ -66,6 +66,7 @@
   "docs/EXECUTION_ENVIRONMENTS.md": "docs/features/environments-and-access",
   "docs/AUTHENTICATED-CONNECTIONS.md": "docs/features/authenticated-connections",
   "docs/CONTEXT-HOOKS.md": "docs/features/context-hooks",
+  "docs/SESSION-MODEL-CONTROLS.md": "docs/features/session-model-controls",
   "docs/CONTEXT-INSPECTOR.md": "docs/features/context-inspector",
   "docs/MISSION-CONTROL.md": "docs/features/mission-control",
   "docs/ONBOARDING.md": "docs/getting-started/onboarding",

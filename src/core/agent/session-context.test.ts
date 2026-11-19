@@ -91,3 +91,22 @@ test('the in-memory latest turn carries its text; a newer stored turn wins over 
   await userRow(randomUUID(), 'agent-2', '2026-11-08T09:10:00Z', { promptComposition: composition(2_000, '2026-11-08T09:10:00Z') });
   expect((await readSessionContext(sessionId)).latest).toMatchObject({ textAvailable: false, totals: { tokens: 2_000 } });
 });
+
+test('an agent selector cannot cross sessions, and a child context is never the root context', async () => {
+  await pg.exec(`CREATE TABLE IF NOT EXISTS agents(id text PRIMARY KEY, session_id uuid NOT NULL, user_id text, workspace_id uuid, funding text DEFAULT 'own', role text DEFAULT 'general', model text DEFAULT '', topic text DEFAULT '', status text DEFAULT 'completed', iterations integer, total_tokens integer, billable_tokens integer, duration_ms integer, error text, tool_calls jsonb, metadata jsonb, parent_agent_id text, swarm_node_id text, source text, origin jsonb, created_at timestamptz DEFAULT now(), completed_at timestamptz); DELETE FROM agents;`);
+  const child = composition(750, '2026-11-08T09:00:00Z');
+  await pg.query('INSERT INTO agents(id,session_id,metadata) VALUES ($1,$2,$3)', ['child', sessionId, JSON.stringify({ promptComposition: child })]);
+  await pg.query('INSERT INTO agents(id,session_id,metadata) VALUES ($1,$2,$3)', ['foreign', randomUUID(), JSON.stringify({ promptComposition: composition(999999, '2026-11-08T09:00:00Z') })]);
+  const selected = await readSessionContext(sessionId, 'child');
+  expect(selected.agentId).toBe('child');
+  expect(selected.latest?.totals.tokens).toBe(750);
+  expect((await readSessionContext(sessionId, 'foreign')).latest).toBeNull();
+  expect((await readSessionContext(sessionId)).latest).toBeNull();
+});
+
+test('session run history binds both session and owner', async () => {
+  const { agentRepository } = await import('@/db/repositories/agent-repository');
+  await pg.query('INSERT INTO agents(id,session_id,user_id,created_at) VALUES ($1,$2,$3,$4), ($5,$2,$6,$4), ($7,$8,$3,$4)',
+    ['owned-run', sessionId, 'owner', '2026-11-19T10:00:00Z', 'other-user-run', 'other-user', 'other-session-run', randomUUID()]);
+  expect((await agentRepository.findSessionRuns(sessionId, 'owner')).map(r => r.id)).toEqual(['owned-run']);
+});

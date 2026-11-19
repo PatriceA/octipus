@@ -17,21 +17,24 @@ test.describe('chat page', () => {
         { ...common, id: 'finished-worker', role: 'review', model: 'older-review-model', status: 'completed', createdAt: '2026-11-12T10:01:00Z' },
       ] });
     });
+    await page.route('**/api/sessions/*/model-controls', route => {
+      const first = route.request().url().includes('/sess-1/');
+      return json(route, 200, { revision: 0, bindings: [], overrides: [], runs: [{ id: 'run', role: first ? 'coding' : 'general', root: !first, topic: 'build', status: first ? 'completed' : 'running', adapter: first ? 'Codex CLI' : 'openrouter', model: first ? 'actual-codex-model' : 'deepseek/project-model', at: '2026-11-12T10:01:00Z' }] });
+    });
     await page.goto('/chat');
     await selectChatSession(page, 'sess-1');
-    await expect(page.getByTestId('session-run-model')).toHaveText('cli/codex');
+    await expect(page.getByTestId('session-run-model')).toHaveText('actual-codex-model');
     await selectChatSession(page, 'sess-2');
     await expect(page.getByTestId('session-run-model')).toHaveText('deepseek/project-model');
-    await expect(page.getByText('current run model', { exact: true })).toBeVisible();
+    await expect(page.getByText('Coordinator · running', { exact: true })).toBeVisible();
     await selectChatSession(page, 'sess-1');
-    await expect(page.getByTestId('session-run-model')).toHaveText('cli/codex');
+    await expect(page.getByTestId('session-run-model')).toHaveText('actual-codex-model');
   });
 
   test('a session with no runs does not invent a model from the registry', async ({ authenticatedPage: page }) => {
     await page.goto('/chat');
     await selectChatSession(page, 'sess-1');
-    await expect(page.getByTestId('session-run-model')).toHaveText('No model recorded yet');
-    await expect(page.getByText('Models are chosen from topic and session settings when work starts.')).toBeVisible();
+    await expect(page.getByText('No model recorded yet.', { exact: true })).toBeVisible();
   });
 
   test.beforeEach(async ({ authenticatedPage: page }) => {

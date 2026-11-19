@@ -7,6 +7,15 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Inspect CLI context and choose session-only CLI models.** Context now records
+  known CLI prompt composition, selected skills and available current-context
+  telemetry. Select an individual coordinator, child or pipeline run instead of
+  mixing their contexts. Connection & model shows the underlying CLI model when
+  reported or configured, separately from its adapter. Expand session models to
+  override a topic's model/effort or one agent role; reset restores global defaults.
+  Changes take effect at the next CLI launch and invalidate its vendor context
+  fingerprint, without interrupting active work or changing permissions.
+
 - **Companion's project sessions follow your topic routing.** Companion no
   longer picks a model by name when it starts a project session (it had no
   list to choose from and could land on any enabled model, a test model

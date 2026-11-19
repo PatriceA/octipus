@@ -587,6 +587,7 @@ export class AgentManager {
         topic: routedTopic,
         metadata: {
           root: context.root === true,
+          modelName: modelEntry?.name,
           ...(options.contextMetadata?.companionBriefing===true?{companionBriefing:true}:{}),
           ...(options.contextMetadata?.delegationDispatchId ? { delegationDispatchId: options.contextMetadata.delegationDispatchId } : {}),
         },
