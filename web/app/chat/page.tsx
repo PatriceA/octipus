@@ -35,6 +35,7 @@ import ContextPanel from '@/components/chat/context-panel';
 import { GlobalPermissionBanner } from '@/components/global-permission-banner';
 import type { SwarmTreeEvent } from '@/components/swarm-tree';
 import { useVoiceRealtime } from '@/hooks/useVoiceRealtime';
+import type { VoiceStatus } from '@/lib/types/voice';
 import { fetchPersistedAgentEvents } from '@/hooks/useAgentEvents';
 import { api, ApiError, getApiUrl } from '@/lib/api';
 import { mediaFromAttachments, mediaFromResult } from '@/lib/turn-media';
@@ -219,7 +220,8 @@ export default function ChatPage() {
   // Real STT availability (whisper runs, or a cloud key is set) — the voice
   // feature disables itself when neither is present.
   const [voiceAvailable, setVoiceAvailable] = useState<boolean | null>(null);
-  const [voiceUnavailableReason, setVoiceUnavailableReason] = useState<string | null>(null);
+  /** Why the voice conversation could not start (shown under the composer). */
+  const [voiceStartError, setVoiceStartError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   /** Root reply text streamed so far for one session/iteration; superseded by chat_response. */
   const [streaming, setStreaming] = useState<{ sessionId: string; iteration: number; text: string } | null>(null);
@@ -751,7 +753,6 @@ export default function ChatPage() {
     const sid = pendingSendRef.current;
     if (!sid || !REFUSED_SEND_CODES.has(code)) return;
     pendingSendRef.current = null;
-    if (voiceTurnRef.current === sid) voiceTurnRef.current = null;
     if (sid === activeSessionId) {
       setIsLoading(loadingBeforeSendRef.current);
       if (!loadingBeforeSendRef.current) setStatusMessage(null);
@@ -879,13 +880,6 @@ export default function ChatPage() {
         });
         adoptOwnSession(replySessionId);
       }
-    }
-    // Speak the reply only for a spoken turn (typed turns stay silent even
-    // with the mic on), and only that turn's own session's reply. This is THE
-    // fresh, complete reply — no stale scan.
-    if (sid && voiceTurnRef.current === sid) {
-      voiceTurnRef.current = null;
-      if (typeof data.response === 'string') speakRef.current(data.response);
     }
   };
 
@@ -1048,8 +1042,6 @@ export default function ChatPage() {
           setStatusMessage(null);
         }
         setStreaming((prev) => (prev && prev.sessionId !== sid ? prev : null));
-        // A failed spoken turn — don't speak the next reply.
-        if (sid && voiceTurnRef.current === sid) voiceTurnRef.current = null;
         // The voice hook unsticks itself from 'thinking' on isLoading's falling edge.
         if (sid) {
           updateSessionState(sid, (prev) => ({
@@ -1088,16 +1080,6 @@ export default function ChatPage() {
         }));
         break;
       }
-
-      case 'voice.speak':
-        // Lifecycle narration for the session this tab put into voice mode —
-        // supplemental to the spoken reply.
-        // ponytail: shares the single Audio element with the reply, so a
-        // narration and reply arriving within ~seconds cut each other off. Fine
-        // in practice — the spawn ack plays immediately and the answer lands
-        // minutes later; add a small playback queue if fast tasks make it audible.
-        if (typeof payload.text === 'string') speakRef.current(payload.text);
-        break;
 
       case 'rootAgent.status':
         handleTurnEvent({ event: 'status_update', data: payload }, sid);
@@ -1668,8 +1650,31 @@ export default function ChatPage() {
     }
   };
 
+  /** Create a chat of this tab's own and open it. Returns its id (null when the server answered without one). */
+  const createOwnSession = async (title: string): Promise<string | null> => {
+    const result = await api.post<{ id: string; title: string; updatedAt: string; messageCount: number; status: string }>('/sessions', {
+      channelType: 'webchat',
+      channelId: `chat-${Date.now().toString(36)}`,
+      title,
+    });
+    if (!result?.id) return null;
+    ownSessionsRef.current.add(result.id);
+    const item: SessionInfo = {
+      id: result.id,
+      title: result.title || 'New Chat',
+      updatedAt: result.updatedAt || new Date().toISOString(),
+      messageCount: 0,
+      tokenCount: 0,
+      status: 'active',
+    };
+    setSessions(prev => [item, ...prev]);
+    setActiveSessionId(result.id);
+    updateSessionState(result.id, () => newSessionState());
+    return result.id;
+  };
+
   // Send message
-  const sendMessage = async (userInput: string, attachments?: Attachment[], options?: { voice?: boolean; inlineUiProvenance?: string; attachmentProtectionLevel?: 1 | 2 | 3 | 4 }) => {
+  const sendMessage = async (userInput: string, attachments?: Attachment[], options?: { spoken?: boolean; inlineUiProvenance?: string; attachmentProtectionLevel?: 1 | 2 | 3 | 4 }) => {
     let sid = activeSessionId;
     // Snapshot edit-and-continue attachments for this turn; cleared once sent.
     let fileRefs: Array<{ path: string; version?: string; protectionLevel?: 1 | 2 | 3 | 4 }> | undefined = attachedFiles.length ? attachedFiles : undefined;
@@ -1679,26 +1684,7 @@ export default function ChatPage() {
     // Auto-create a session if none is active
     if (!sid) {
       try {
-        const result = await api.post<{ id: string; title: string; updatedAt: string; messageCount: number; status: string }>('/sessions', {
-          channelType: 'webchat',
-          channelId: `chat-${Date.now().toString(36)}`,
-          title: userInput.slice(0, 100) || 'New Chat',
-        });
-        if (result?.id) {
-          sid = result.id;
-          ownSessionsRef.current.add(result.id);
-          const item: SessionInfo = {
-            id: result.id,
-            title: result.title || 'New Chat',
-            updatedAt: result.updatedAt || new Date().toISOString(),
-            messageCount: 0,
-            tokenCount: 0,
-            status: 'active',
-          };
-          setSessions(prev => [item, ...prev]);
-          setActiveSessionId(sid);
-          updateSessionState(sid, () => newSessionState());
-        }
+        sid = await createOwnSession(userInput.slice(0, 100) || 'New Chat');
       } catch (error) {
         console.error('Failed to create session:', error);
         return;
@@ -1754,6 +1740,9 @@ export default function ChatPage() {
       ...(activeWorkspace ? { workspaceId: activeWorkspace.id } : {}),
       ...(fileRefs ? { fileRefs } : {}),
       ...(outputModeOverride ? { outputMode: outputModeOverride } : {}),
+      // Said aloud in a voice conversation: the server speaks the reply, and
+      // the turn answers the way it would be said.
+      ...(options?.spoken ? { spoken: true } : {}),
       // This client renders interactive answers (D14).
       renders: ['inline_ui'],
       ...(inlineUiReports.length || options?.inlineUiProvenance
@@ -1782,7 +1771,6 @@ export default function ChatPage() {
       return;
     }
 
-    if (options?.voice) voiceTurnRef.current = sid;
     loadingBeforeSendRef.current = isLoading;
     setIsLoading(true);
 
@@ -1891,47 +1879,50 @@ export default function ChatPage() {
     setStatusMessage(null);
   };
 
-  // Probe real voice availability once so the toggle can disable itself when
-  // neither local whisper nor a cloud STT key is present.
+  // Whether the server can hear (a speech-to-text engine is bound and runs):
+  // the conversation toggle and server-side dictation are offered only then.
   useEffect(() => {
     api
-      .get<{ sttAvailable?: boolean; sttReason?: string | null }>('/voice/status')
-      .then((s) => {
-        setVoiceAvailable(!!s?.sttAvailable);
-        setVoiceUnavailableReason(s?.sttReason || null);
-      })
-      .catch(() => setVoiceAvailable(false));
+      .get<VoiceStatus>('/voice/status')
+      .then((s) => setVoiceAvailable(!!s?.sttAvailable))
+      // 404: the Voice module is off, so the server cannot hear. Any other
+      // failure leaves it unknown: no microphone control is offered then.
+      .catch((error: unknown) => {
+        if (error instanceof ApiError && error.status === 404) setVoiceAvailable(false);
+        else console.warn('Voice: could not read whether the server can hear; dictation and voice conversation stay hidden', error);
+      });
   }, []);
 
-  // Only replies to a spoken turn are read aloud: the session of the spoken
-  // turn awaiting its reply. sendTranscript (the voice hooks' path into
-  // sendMessage) sets it; a typed message leaves it null, so typing while the
-  // mic is on doesn't get the reply spoken back, nor does another session's.
-  const voiceTurnRef = useRef<string | null>(null);
-
-  // Voice conversation (hands-free, streaming): transcribe → sendMessage (same
-  // pipeline as text, so agents spawn as usual). The reply is spoken when its
-  // chat_response arrives (see speakRef below + the chat_response/speak WS cases)
-  // — decoupled from turn timing, so no stale-reply reads.
+  // Voice conversation (hands-free): the server hears the microphone and
+  // sends each finished turn back as text; it goes through sendMessage like a
+  // typed message (so agents spawn as usual), marked `spoken`. The server
+  // speaks the reply through the same socket: nothing is synthesised here.
+  // The socket belongs to one chat, so the conversation needs an open one.
+  const voiceActive = realtimeMode && !!activeSessionId;
   const realtime = useVoiceRealtime({
-    enabled: realtimeMode,
+    enabled: voiceActive,
     sessionId: activeSessionId,
-    // Engine is the model bound to the Transcription lane (Topics page);
-    // omitting it here lets the backend honor that choice ('auto' by default).
     isTurnActive: isLoading,
-    sendTranscript: (t) => { void sendMessage(t, undefined, { voice: true }); },
+    onUtterance: (text) => { void sendMessage(text, undefined, { spoken: true }); },
   });
 
-  // Route spoken output to whichever voice mode owns the mic. Held in a ref so
-  // the WS message handler (a stale closure captured in an effect) always calls
-  // the current speak(); a no-op when voice is off.
-  const speakRef = useRef<(text: string) => void>(() => {});
-  useEffect(() => {
-    speakRef.current = (text: string) => {
-      if (!text || !text.trim()) return;
-      if (realtimeMode) realtime.speak?.(text);
-    };
-  });
+  const toggleRealtimeMode = async () => {
+    setVoiceStartError(null);
+    if (voiceActive) {
+      setRealtimeMode(false);
+      return;
+    }
+    // No chat open yet: the conversation starts one.
+    if (!activeSessionId) {
+      try {
+        await createOwnSession('Voice conversation');
+      } catch (error) {
+        setVoiceStartError(`The voice conversation could not start: ${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+    }
+    setRealtimeMode(true);
+  };
 
   // Tell the backend when this session enters/leaves voice mode, so the
   // root agent's propose-then-confirm gate + lifecycle narration apply. On a
@@ -2165,7 +2156,7 @@ export default function ChatPage() {
             companionAppearance={companionPersona?.appearance}
             connected={connectionStatus === 'connected'}
             waitingForInput={!!activeSessionId && [...permissions, ...approvals].some((request) => request.sessionId === activeSessionId)}
-            listening={realtimeMode && realtime.state === 'listening'}
+            listening={voiceActive && realtime.state === 'listening'}
             statusMessage={statusMessage}
             streamingText={isLoading && streaming?.sessionId === activeSessionId ? streaming.text : null}
             onOpenFile={setOpenFilePath}
@@ -2235,14 +2226,16 @@ export default function ChatPage() {
                block: the server delivers the message to it as guidance. */
             disabled={showNewSessionDialog}
             placeholder={showNewSessionDialog ? 'Choose a session type first...' : isCompanionChat ? 'Plan work, check progress, or park an idea...' : activeSessionId ? 'Send a message or change direction...' : 'Create a session to start chatting'}
-            voiceError={realtime.error || voiceUnavailableReason}
-            voiceAvailable={voiceAvailable === true}
-            realtimeMode={realtimeMode}
+            voiceError={voiceStartError}
+            voiceAvailable={voiceAvailable}
+            realtimeMode={voiceActive}
             realtimeState={realtime.state}
             realtimePartial={realtime.partial}
             realtimeError={realtime.error}
+            realtimeSpeaks={realtime.speaks}
+            onInterruptRealtime={realtime.interrupt}
             // Voice is the `voice` module's (docs/MODULES.md): off, no toggle.
-            onToggleRealtimeMode={voiceOn ? () => setRealtimeMode((v) => !v) : undefined}
+            onToggleRealtimeMode={voiceOn ? () => { void toggleRealtimeMode(); } : undefined}
           />
         </div>
       </div>

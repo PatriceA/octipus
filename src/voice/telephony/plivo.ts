@@ -3,13 +3,25 @@
  */
 
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
+import { fetchWithTimeout } from '@/utils/http';
 import { logger } from '@/utils/logger';
-import type { CallSession, CallStatus, InitiateCallOptions, TelephonyProvider } from './interface';
+import type {
+  CallInstruction, CallSession, CallStatus, InitiateCallOptions, SpokenLine, TelephonyProvider, TelephonyWebhookEvent, WebhookReply,
+} from './interface';
 
 const log = logger.child({ component: 'plivo-provider' });
 
+const XML = 'application/xml';
+const XML_HEAD = '<?xml version="1.0" encoding="UTF-8"?>\n';
+
+/** Plivo's `CallStatus` values for a call that is over → how it ended. */
+const FINAL_STATUS: Record<string, CallStatus> = {
+  completed: 'ended', busy: 'busy', failed: 'failed', timeout: 'no-answer', 'no-answer': 'no-answer',
+};
+
 export class PlivoProvider implements TelephonyProvider {
   readonly name = 'plivo';
+  readonly mediaStream = false;
 
   private authId: string;
   private authToken: string;
@@ -28,7 +40,8 @@ export class PlivoProvider implements TelephonyProvider {
 
     const body = {
       from,
-      to: `<${options.to}>`,
+      // One number: `<` separates the numbers of a bulk call.
+      to: options.to,
       answer_url: options.webhookUrl,
       answer_method: 'POST',
       hangup_url: `${options.webhookUrl}/status`,
@@ -36,7 +49,7 @@ export class PlivoProvider implements TelephonyProvider {
       ...(options.timeout ? { ring_timeout: options.timeout } : {}),
     };
 
-    const response = await fetch(`${this.baseUrl}/Account/${this.authId}/Call/`, {
+    const response = await fetchWithTimeout(`${this.baseUrl}/Account/${this.authId}/Call/`, {
       method: 'POST',
       headers: {
         'Authorization': `Basic ${Buffer.from(`${this.authId}:${this.authToken}`).toString('base64')}`,
@@ -67,56 +80,95 @@ export class PlivoProvider implements TelephonyProvider {
     };
   }
 
-  generateAnswerResponse(options: {
-    message: string;
-    voice?: string;
-    gatherSpeech?: boolean;
-    gatherTimeout?: number;
-    callbackUrl?: string;
-  }): string {
-    const voice = options.voice || 'WOMAN';
-    let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n';
+  /**
+   * Plivo posts form fields. Every callback names the call by `CallUUID`,
+   * the id its REST API takes; an outbound call's callbacks also carry the
+   * `RequestUUID` the Make Call API returned, which is all we know the call by
+   * until its first callback. An outbound call's callbacks carry `Event`:
+   * `Ring`, `StartApp` (the answer URL) or `Hangup`. The answer URL of an
+   * inbound call carries no `Event`: `Direction=inbound`, `CallStatus=ringing`.
+   * A `<GetInput>` action posts `Speech`.
+   * https://www.plivo.com/docs/voice/api/call/make-a-call (callbacks), …/xml/request, …/xml/getinput
+   */
+  parseWebhook(fields: Record<string, unknown>): TelephonyWebhookEvent {
+    const field = (name: string) => (typeof fields[name] === 'string' ? fields[name] as string : '');
+    const direction = field('Direction');
+    const status = field('CallStatus');
+    const happened = field('Event');
+    const event: TelephonyWebhookEvent = {
+      type: 'other',
+      callId: field('CallUUID'),
+      aliases: [field('RequestUUID'), field('ALegRequestUUID')].filter(Boolean),
+      direction: direction === 'inbound' ? 'inbound' : direction === 'outbound' ? 'outbound' : undefined,
+      from: field('From'),
+      to: field('To'),
+    };
+    const speech = field('Speech').trim();
+    if (speech) return { ...event, type: 'speech', speech };
+    if (happened === 'Hangup' || status in FINAL_STATUS) return { ...event, type: 'hangup', status: FINAL_STATUS[status] ?? 'ended' };
+    if (happened === 'Ring') return { ...event, type: 'ringing' };
+    // The answer URL of an inbound call: it waits for its XML.
+    if (!happened && event.direction === 'inbound' && status === 'ringing') return { ...event, type: 'incoming' };
+    if (happened === 'StartApp') {
+      // The answer URL: an inbound call waits for its XML, an outbound call was picked up.
+      return { ...event, type: event.direction === 'outbound' ? 'answered' : 'incoming' };
+    }
+    return event;
+  }
 
-    if (options.gatherSpeech && options.callbackUrl) {
-      xml += `  <GetInput action="${this.escapeXml(options.callbackUrl)}" inputType="speech" `;
-      xml += `executionTimeout="${options.gatherTimeout || 10}">\n`;
-      xml += `    <Speak voice="${voice}">${this.escapeXml(options.message)}</Speak>\n`;
-      xml += '  </GetInput>\n';
+  /** The XML answering the webhook is the answer. */
+  async acceptIncoming(): Promise<boolean> {
+    return true;
+  }
+
+  async rejectIncoming(): Promise<WebhookReply> {
+    return { contentType: XML, body: `${XML_HEAD}<Response>\n  <Hangup reason="rejected"/>\n</Response>` };
+  }
+
+  acknowledge(): WebhookReply {
+    return { contentType: XML, body: `${XML_HEAD}<Response></Response>` };
+  }
+
+  /** A line as Plivo XML: the install's own voice when synthesised (`<Play>`), else `<Speak>` in the call's language. */
+  private line(line: SpokenLine, locale: string): string {
+    if (line.audioUrl) return `<Play>${this.escapeXml(line.audioUrl)}</Play>`;
+    return `<Speak language="${this.escapeXml(locale)}">${this.escapeXml(line.text)}</Speak>`;
+  }
+
+  async instruct(_providerCallId: string, instruction: CallInstruction): Promise<WebhookReply> {
+    const { say, locale } = instruction;
+    let xml = `${XML_HEAD}<Response>\n`;
+
+    if (instruction.then === 'listen') {
+      if (!instruction.callbackUrl) throw new Error('Plivo needs a callback URL to listen for speech.');
+      const getInput = `<GetInput action="${this.escapeXml(instruction.callbackUrl)}" method="POST" inputType="speech" language="${this.escapeXml(locale)}" executionTimeout="10">`;
+      xml += say ? `  ${getInput}\n    ${this.line(say, locale)}\n  </GetInput>\n` : `  ${getInput}</GetInput>\n`;
+      // Without input the XML runs on: re-prompt once, then hang up.
+      if (instruction.reprompt) {
+        xml += `  ${this.line(instruction.reprompt.stillThere, locale)}\n`;
+        xml += `  ${getInput}\n    ${this.line(instruction.reprompt.listening, locale)}\n  </GetInput>\n`;
+      }
+      xml += '  <Hangup/>\n';
+    } else if (instruction.then === 'stream') {
+      throw new Error('Plivo calls are not connected to the media stream.');
     } else {
-      xml += `  <Speak voice="${voice}">${this.escapeXml(options.message)}</Speak>\n`;
+      if (say) xml += `  ${this.line(say, locale)}\n`;
       xml += '  <Hangup/>\n';
     }
 
     xml += '</Response>';
-    return xml;
+    return { contentType: XML, body: xml };
   }
 
-  generateHangupResponse(): string {
-    return '<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Hangup/>\n</Response>';
-  }
-
+  /** `providerCallId` is the call's `CallUUID` (the request id only cancels a call still queued). */
   async endCall(providerCallId: string): Promise<void> {
-    await fetch(`${this.baseUrl}/Account/${this.authId}/Call/${providerCallId}/`, {
+    const response = await fetchWithTimeout(`${this.baseUrl}/Account/${this.authId}/Call/${providerCallId}/`, {
       method: 'DELETE',
       headers: {
         'Authorization': `Basic ${Buffer.from(`${this.authId}:${this.authToken}`).toString('base64')}`,
       },
     });
-  }
-
-  async getCallStatus(providerCallId: string): Promise<CallStatus> {
-    const response = await fetch(`${this.baseUrl}/Account/${this.authId}/Call/${providerCallId}/`, {
-      headers: {
-        'Authorization': `Basic ${Buffer.from(`${this.authId}:${this.authToken}`).toString('base64')}`,
-      },
-    });
-    if (!response.ok) return 'failed';
-    const data = await response.json() as { call_status: string };
-    const map: Record<string, CallStatus> = {
-      'machine-not-sure': 'answered', ringing: 'ringing', 'in-progress': 'active',
-      completed: 'ended', busy: 'busy', 'no-answer': 'no-answer', failed: 'failed',
-    };
-    return map[data.call_status] || 'failed';
+    if (!response.ok) throw new Error(`Plivo could not end call ${providerCallId} (HTTP ${response.status})`);
   }
 
   /**

@@ -133,8 +133,11 @@ MCP_SERVERS_CONFIG=./mcp-servers.json     # Path to MCP client server config (se
 SKIP_MIGRATIONS=false                  # Use true only if migrations are applied separately before deployment
 
 # ─── Voice (optional) ────────────────────────────────────────
-WHISPER_MODEL_PATH=
-PIPER_MODEL_PATH=
+# Speech engines are chosen under Settings → Voice (docs/VOICE.md), not here.
+# WHISPER_MODEL_PATH / PIPER_MODEL_PATH are read once, by the migration of an
+# older install's voice settings.
+KOKORO_MODEL_DIR=                      # Where Kokoro's model files live (default ~/.local/share/kokoro)
+OCTIPUS_VOICES_DIR=                    # Voice profiles' reference clips (default ~/.octipus/voices)
 
 # ─── Observability / Opt-outs ────────────────────────────────
 TRAJECTORY_LOGGING=true                # Record one JSONL line per handleMessage run (default on)

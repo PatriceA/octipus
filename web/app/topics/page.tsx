@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Image as ImageIcon, Layers, Loader2, Save, Tags } from 'lucide-react';
+import Link from 'next/link';
 import { useState } from 'react';
 import { RootModelNote } from '@/components/models/root-model-note';
 import { LaneRoles, type RoleRow, type ToolOption } from '@/components/topics/lane-roles';
@@ -9,6 +10,8 @@ import { LocalEmbeddingPanel } from '@/components/topics/local-embedding';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { useModuleOn } from '@/lib/modules';
+import type { SpeechDirection, SpeechEngineRow, SpeechOverview } from '@/lib/types/voice';
 import { cn } from '@/lib/utils';
 
 interface TopicRow {
@@ -53,59 +56,14 @@ function numOrNull(v: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-const SPEECH_ENGINES: Record<'stt' | 'tts', Array<{ engine: string; label: string }>> = {
-  stt: [
-    { engine: 'fasterwhisper', label: 'faster-whisper (local)' },
-    { engine: 'whisper', label: 'whisper.cpp (local)' },
-    { engine: 'mistral', label: 'Voxtral (Mistral)' },
-    { engine: 'openai', label: 'OpenAI' },
-  ],
-  tts: [
-    { engine: 'kokoro', label: 'Kokoro (local)' },
-    { engine: 'piper', label: 'Piper (local)' },
-    { engine: 'mistral', label: 'Voxtral (Mistral)' },
-    { engine: 'openai', label: 'OpenAI' },
-  ],
-};
-
-/**
- * One click to make a speech engine the lane's model (POST /voice/engines/use):
- * the row is created if needed and bound primary, and the engine it replaces
- * stays as the backup. Whether it can run (installed, key set) shows as the
- * lane's effective model.
- */
-function SpeechEngineButtons({ direction, onUsed }: { direction: 'stt' | 'tts'; onUsed: () => void }) {
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState('');
-  const use = async (engine: string) => {
-    setBusy(engine);
-    setError('');
-    try {
-      await api.post('/voice/engines/use', { direction, engine, makePrimary: true });
-      onUsed();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not use that engine');
-    } finally {
-      setBusy(null);
-    }
-  };
-  return (
-    <div className="flex flex-wrap items-center gap-1.5 mt-1.5" data-testid={`speech-engines-${direction}`}>
-      <span className="text-[11px] text-on-surface-variant">Use:</span>
-      {SPEECH_ENGINES[direction].map(({ engine, label }) => (
-        <button key={engine} type="button" disabled={busy !== null} onClick={() => use(engine)}
-          className="px-2 py-0.5 text-[11px] rounded bg-surface-container-high text-on-surface-variant hover:text-on-surface disabled:opacity-50 cursor-pointer">
-          {busy === engine ? '…' : label}
-        </button>
-      ))}
-      {error && <span className="text-[11px] text-error">{error}</span>}
-    </div>
-  );
-}
+/** The speech lanes and the direction of the engines that can serve each. */
+const SPEECH_DIRECTION: Partial<Record<TopicRow['kind'], SpeechDirection>> = { transcription: 'stt', speech: 'tts' };
 
 function TopicCard({
   topic,
   models,
+  speechEngines,
+  speechEnginesError,
   roles,
   lanes,
   tools,
@@ -114,6 +72,10 @@ function TopicCard({
 }: {
   topic: TopicRow;
   models: ModelOption[];
+  /** Every registered speech engine: the Transcription and Speech lanes offer those of their direction, never a chat model. */
+  speechEngines: SpeechEngineRow[];
+  /** Why the speech engines could not be read, if they could not. */
+  speechEnginesError: string | null;
   /** The roles whose work runs on this lane — see `LaneRoles`. */
   roles: RoleRow[];
   lanes: { value: string; label: string }[];
@@ -129,6 +91,7 @@ function TopicCard({
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState(0);
   const [saveError, setSaveError] = useState('');
+  const speechDirection = SPEECH_DIRECTION[topic.kind];
 
   // Local form state is seeded from props once. The parent gives each card a
   // `key` derived from the server values, so a save→refetch that changes them
@@ -152,11 +115,14 @@ function TopicCard({
           backupModel: backup || null,
         });
       }
-      await api.patch(`/topics/${topic.value}/config`, {
-        executorModel: executor || null,
-        temperature: numOrNull(temperature),
-        maxTokens: numOrNull(maxTokens),
-      });
+      // A speech lane has no executor, temperature or token limit to save.
+      if (!speechDirection) {
+        await api.patch(`/topics/${topic.value}/config`, {
+          executorModel: executor || null,
+          temperature: numOrNull(temperature),
+          maxTokens: numOrNull(maxTokens),
+        });
+      }
       setSavedAt(Date.now());
       onSaved();
     } catch (err) {
@@ -169,7 +135,9 @@ function TopicCard({
     }
   };
 
-  const modelNames = models.map((m) => m.name);
+  const modelNames = speechDirection
+    ? speechEngines.filter((engine) => engine.direction === speechDirection).map((engine) => engine.name)
+    : models.map((m) => m.name);
   // Include any currently-bound model even if it's now disabled/missing, so the
   // selector shows the real value rather than silently resetting it.
   const optionsFor = (current: string) =>
@@ -183,7 +151,7 @@ function TopicCard({
     'bg-surface-container-low border border-outline-variant/10 rounded text-xs pl-2 pr-1.5 py-1 text-on-surface w-28 disabled:opacity-50';
 
   return (
-    <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-4">
+    <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-4" data-testid={`topic-${topic.value}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -194,8 +162,11 @@ function TopicCard({
             </span>
           </div>
           <p className="text-xs text-on-surface-variant mt-0.5">{topic.description}</p>
-          {(topic.kind === 'transcription' || topic.kind === 'speech') && canEdit && (
-            <SpeechEngineButtons direction={topic.kind === 'transcription' ? 'stt' : 'tts'} onUsed={onSaved} />
+          {speechDirection && canEdit && (
+            <p className="text-xs mt-1" data-testid={`speech-engines-${speechDirection}`}>
+              <Link href="/settings?tab=voice" className="text-primary hover:underline">Manage speech engines on the Voice page</Link>
+              {speechEnginesError && <span className="text-error"> · The speech engines could not be read: {speechEnginesError}</span>}
+            </p>
           )}
           {topic.kind === 'embedding' && canEdit && <LocalEmbeddingPanel onChanged={onSaved} />}
           {topic.effectiveModel !== undefined && (
@@ -237,6 +208,7 @@ function TopicCard({
             ))}
           </select>
         </label>
+        {!speechDirection && (<>
         <label className="flex items-center gap-1.5" title="Planner→executor split (W9): a swarm child for this topic runs on this model. Empty = same as primary.">
           <span className="text-on-surface-variant w-16">Executor</span>
           <select className={selectCls} value={executor} disabled={!canEdit} onChange={(e) => setExecutor(e.target.value)}>
@@ -256,10 +228,11 @@ function TopicCard({
           <input className={inputCls} type="number" step="256" min="1" value={maxTokens} disabled={!canEdit}
             placeholder="default" onChange={(e) => setMaxTokens(e.target.value)} />
         </label>
+        </>)}
       </div>
 
       {saveError && (
-        <p className="mt-2 text-xs text-error bg-error/10 px-2 py-1 rounded">{saveError}</p>
+        <p role="alert" data-testid={`save-error-${topic.value}`} className="mt-2 text-xs text-error bg-error/10 px-2 py-1 rounded">{saveError}</p>
       )}
 
       {topic.kind === 'text' && (
@@ -360,6 +333,17 @@ export default function TopicsPage() {
     enabled: canEdit,
   });
 
+  // The Transcription and Speech lanes are bound to speech engines (Settings →
+  // Voice), not to chat models. The Voice module's route: not asked while it is off.
+  const voiceOn = useModuleOn('voice');
+  const speechEnginesQuery = useQuery({
+    queryKey: ['voice-engines'],
+    queryFn: () => api.get<SpeechOverview>('/voice/engines'),
+    enabled: canEdit && voiceOn,
+  });
+  const speechEngines = speechEnginesQuery.data?.engines ?? [];
+  const speechEnginesError = speechEnginesQuery.error instanceof Error ? speechEnginesQuery.error.message : null;
+
   const topics = topicsData?.topics || [];
   const models = (modelsData?.models || []).filter((m) => m.isEnabled);
   const allRoles = rolesData?.roles || [];
@@ -373,6 +357,8 @@ export default function TopicsPage() {
       key={`${topic.value}:${topic.primaryModel}:${topic.backupModel}:${topic.executorModel}:${topic.temperature}:${topic.maxTokens}`}
       topic={topic}
       models={models}
+      speechEngines={speechEngines}
+      speechEnginesError={speechEnginesError}
       roles={allRoles.filter((r) => r.lane === topic.value)}
       lanes={lanes}
       tools={tools}

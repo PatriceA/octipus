@@ -152,10 +152,37 @@ export interface ModelMetadata {
    * what it streams with, the voices it offers, the formats it writes.
    */
   speech?: {
+    /** Which way the engine works, when the engine family does not say (an OpenAI-compatible endpoint). */
+    direction?: 'stt' | 'tts';
     /** The realtime model the live microphone streams to, when it differs from `modelId`. */
     streamingModel?: string;
     voices?: string[];
     formats?: Array<'mp3' | 'wav' | 'opus' | 'ogg' | 'pcm' | 'flac'>;
+    /** Speech: the sample rate of the PCM/WAV the engine writes (Hz). */
+    sampleRate?: number;
+    /** Speech: the engine's own default voice (a preset id), used when no voice profile names one. */
+    voice?: string;
+    /**
+     * Speech: how a voice or style description reaches the engine — the
+     * request's `instructions` field, a `(description)` prefix on the text
+     * (VoxCPM), or not at all.
+     */
+    instructions?: 'field' | 'prefix' | 'none';
+    /** Speech: takes a reference clip (`ref_audio`, with `ref_text`) to speak in that voice. */
+    cloning?: boolean;
+    /** Speech: answers `stream: true` with audio as it is generated. */
+    streams?: boolean;
+    /** Speech: takes `speed`. */
+    speed?: boolean;
+    /** Extra request fields, sent as they are (`cfg_value`, `inference_timesteps`, …). */
+    extraBody?: Record<string, unknown>;
+    /** Transcription: what a clip is uploaded as — as recorded, or transcoded to 16 kHz WAV first. */
+    upload?: 'any' | 'wav';
+    /** Transcription: the server's realtime websocket, when it has one. */
+    realtime?: { protocol: 'openai' | 'nemo'; url?: string; sampleRate?: number };
+    /** faster-whisper: where the model runs, and its CTranslate2 compute type. */
+    device?: 'auto' | 'cpu' | 'cuda';
+    computeType?: string;
   };
   /** An Image generation lane row: whether it takes reference images (edits); detected from the model id when unset. */
   imageGeneration?: { references?: boolean };

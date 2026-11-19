@@ -27,7 +27,7 @@ octipus/
 │   ├── skills/             # Domain knowledge registry (DB-backed)
 │   ├── tools/              # Built-in tool modules (filesystem, shell, git, browser, browser-ext, documents, messaging, knowledge, etc.)
 │   ├── visual/             # Playwright visual debugger
-│   └── voice/              # STT, TTS, wake word
+│   └── voice/              # speech engines, conversation pipeline, telephony
 ├── mcp-server/             # MCP server bridge for CLI models
 ├── web/                    # Vite + React Router web UI
 ├── browser-extension/      # Chrome extension for real browser control

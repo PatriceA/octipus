@@ -2,73 +2,44 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createAuthenticatedWebSocket } from '@/lib/api';
-import { stripForSpeech } from '@/lib/voice-speech';
+import type { VoiceClientMessage, VoiceServerMessage } from '@/lib/types/voice';
 
 /**
- * Voice conversation loop for web chat — hands-free, streaming (the single
- * conversation mode; the older turn-based POST /transcribe hook was retired).
+ * The browser's end of a live voice conversation (docs/VOICE.md → One
+ * pipeline). It is a transport: the microphone goes up the `/voice` socket
+ * in conversation mode as 16 kHz PCM, all the time, and the audio that comes
+ * back is played. Where a turn ends, what is said aloud and when talking over
+ * a reply stops it are decided on the server (src/voice/session.ts), the same
+ * for every client.
  *
- * It holds one WebSocket to
- * `/voice` open for the whole session and streams 16 kHz mono s16le PCM frames
- * off an AudioWorklet. The server runs streaming STT (local whisper by default,
- * Mistral when engine='mistral') and pushes back a *running full transcript*.
- *
- * Utterance segmentation is client-side: the same RMS VAD as the turn hook marks
- * end-of-utterance on trailing silence; at that point the transcript delta since
- * the last dispatch is fed into the normal chat turn (sendTranscript = the text
- * composer's sendMessage), so spawn-vs-answer, memory and background agents come
- * free — exactly as for typed input.
- *
- * Half-duplex: PCM frames stream only while `listening`, so the assistant's own
- * spoken reply can't be picked up and transcribed. Barge-in is Phase 4c.
- *
+ * What the server hears as a finished turn arrives as `utterance`; the page
+ * sends it as the chat message (`chat.send` with `spoken: true`), so the turn
+ * runs exactly like a typed one. The reply's speech then arrives here as PCM
+ * frames. Nothing is synthesised in the browser.
  */
 
-export type RealtimeState = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'error';
+export type RealtimeState = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking';
 
 interface UseVoiceRealtimeArgs {
   enabled: boolean;
-  /**
-   * Force a transcription engine: 'whisper' (local), 'mistral' (Voxtral cloud),
-   * or 'openai'. Omit or 'auto' to let the server's Transcription lane binding
-   * decide.
-   */
-  engine?: 'auto' | 'whisper' | 'mistral' | 'openai';
-  /** The conversation spoken into and read aloud: its protection level decides which engines may be used. */
-  sessionId?: string | null;
-  /** True while a chat turn is in flight. On its falling edge, if still
-   * 'thinking' (no reply spoken — e.g. an error), the mic is unstuck to
-   * 'listening'. NOT the speak trigger; that's the page. */
+  /** The chat whose replies are spoken. The socket is opened for it, and reopened when it changes. */
+  sessionId: string | null;
+  /** True while a chat turn is in flight. On its falling edge a turn that was not spoken (an error, no speech engine) goes back to listening. */
   isTurnActive: boolean;
-  sendTranscript: (text: string) => void;
+  /** A finished turn, as text: the page sends it as the chat message. */
+  onUtterance: (text: string) => void;
 }
 
-// VAD tuning — same knobs as the turn hook (real mics/rooms vary).
-const RMS_SPEAKING = 0.015;
-// Trailing silence that ends an utterance. Short windows split a sentence on a
-// thinking pause and feed its tail into the next turn. 1500 ms trades a little
-// pause-tolerance for snappier turn-taking. ponytail: calibration knob — raise
-// if it still cuts you off, lower if replies feel laggy.
-const SILENCE_MS = 1500;
-const MIN_SPEECH_MS = 350;
-const MAX_TTS_CHARS = 5000;
-// TTS playback speed. The voices synthesize a touch slow; 1.2× reads naturally
-// with preservesPitch on (no chipmunk). ponytail: calibration knob.
-const SPEECH_RATE = 1.2;
-// Fallback flush when STT emits nothing after silence; > the 2 s whisper window
-// so the real tail transcript (fast path) still wins in the common case.
-const DISPATCH_GRACE_MS = 3500;
-// Barge-in: interrupt the assistant's spoken reply when the user talks over it.
-// Threshold is higher than RMS_SPEAKING and requires sustained speech, because
-// the mic still hears residual TTS (browser AEC cancels most, not all) — this
-// margin keeps the assistant's own voice from self-interrupting.
-const RMS_BARGE_IN = 0.04;
-const BARGE_IN_MS = 300;
+/** Started this far ahead when nothing is queued, so the next frame's arrival jitter is not heard as a gap. */
+const PLAYBACK_LEAD_S = 0.08;
+/** A dropped connection is reopened once; a second drop within this long ends the conversation instead of looping. */
+const RECONNECT_ONCE_PER_MS = 30_000;
+/** Close codes the server uses to refuse: signing in again or choosing an engine fixes them, a retry does not. */
+const REFUSED = new Set([4001, 4002]);
 
-// AudioWorklet processor: native-rate Float32 frames → Int16 PCM, posted to the
-// main thread. The AudioContext is forced to 16 kHz, so the browser resamples
-// the mic for us and no client-side resampler is needed (that's the server's job
-// for telephony). Loaded from an inline Blob URL — no public asset, no build step.
+// AudioWorklet processor: Float32 frames → Int16 PCM, posted to the main
+// thread. The capture AudioContext runs at 16 kHz, so the browser resamples
+// the microphone. Loaded from an inline Blob URL: no public asset.
 const WORKLET_CODE = `
 class PCMWorklet extends AudioWorkletProcessor {
   process(inputs) {
@@ -87,394 +58,323 @@ class PCMWorklet extends AudioWorkletProcessor {
 registerProcessor('pcm-worklet', PCMWorklet);
 `;
 
-export function useVoiceRealtime({ enabled, engine = 'auto', sessionId, isTurnActive, sendTranscript }: UseVoiceRealtimeArgs) {
-  const sessionIdRef = useRef(sessionId);
-  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+type AudioHeader = Extract<VoiceServerMessage, { type: 'audio' }>;
+
+function newAudioContext(sampleRate?: number): AudioContext {
+  const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  return new Ctor(sampleRate ? { sampleRate } : undefined);
+}
+
+export function useVoiceRealtime({ enabled, sessionId, isTurnActive, onUtterance }: UseVoiceRealtimeArgs) {
   const [state, setState] = useState<RealtimeState>('idle');
   const [error, setError] = useState<string | null>(null);
-  const [partial, setPartial] = useState(''); // live in-progress utterance text
+  const [partial, setPartial] = useState('');
+  /** Whether replies are spoken (`ready.speak`); null until the server has said. */
+  const [speaks, setSpeaks] = useState<boolean | null>(null);
 
   const stateRef = useRef<RealtimeState>('idle');
-  const sendRef = useRef(sendTranscript);
+  const onUtteranceRef = useRef(onUtterance);
   const prevTurnRef = useRef(false);
-  const audioElRef = useRef<HTMLAudioElement | null>(null);
-  const audioUrlRef = useRef<string | null>(null);
-  const playbackIdRef = useRef(0); // bumped to cancel in-flight TTS playback (barge-in / new turn)
-
-  // Running transcript bookkeeping (whole session).
-  const fullRef = useRef(''); // latest server full transcript
-  const dispatchedLenRef = useRef(0); // how much of `full` we've already sent as turns
-  const awaitingFinalRef = useRef(false); // silence detected; waiting for STT to catch up
+  const interruptRef = useRef<() => void>(() => {});
 
   useEffect(() => {
-    sendRef.current = sendTranscript;
+    onUtteranceRef.current = onUtterance;
   });
 
-  const setPhase = useCallback((s: RealtimeState) => {
-    stateRef.current = s;
-    setState(s);
+  const setPhase = useCallback((next: RealtimeState) => {
+    stateRef.current = next;
+    setState(next);
   }, []);
 
-  // Dispatch the transcript delta since the last utterance as a chat turn.
-  const dispatchUtterance = useCallback(() => {
-    const delta = fullRef.current.slice(dispatchedLenRef.current).trim();
-    awaitingFinalRef.current = false;
-    if (!delta) {
-      setPhase('listening');
-      return;
-    }
-    dispatchedLenRef.current = fullRef.current.length;
-    setPartial('');
-    setError(null);
-    // Reply is spoken when the page receives the chat_response and calls speak()
-    // — decoupled from turn timing, so no stale-reply reads.
-    setPhase('thinking');
-    sendRef.current(delta);
-  }, [setPhase]);
-
-  // Stop any in-flight TTS playback and invalidate its speak() loop. Used by
-  // barge-in (user speaks over the reply) and when a new turn supersedes an old
-  // one. Bumping the token makes the running speak() bail at its next check.
-  const stopPlayback = useCallback(() => {
-    playbackIdRef.current++;
-    const a = audioElRef.current;
-    if (a) {
-      a.pause();
-      a.src = '';
-    }
-    if (audioUrlRef.current) {
-      URL.revokeObjectURL(audioUrlRef.current);
-      audioUrlRef.current = null;
-    }
-  }, []);
-
-  // Speak the reply, streaming per sentence so time-to-first-audio is one
-  // sentence, not the whole reply. `/speak` is called per sentence (no new
-  // endpoint). The NEXT sentence is synthesized while the current one plays, so
-  // there's no synth-latency gap between sentences; at most two blob URLs are
-  // alive at once and every exit path (barge-in, superseding turn, synth error)
-  // drains the in-flight prefetch so nothing leaks. Barge-in or a new turn bumps
-  // playbackIdRef, and every await re-checks it to bail promptly.
-  const speak = useCallback(
-    async (text: string) => {
-      const myId = ++playbackIdRef.current;
-      setPhase('speaking');
-      const clipped = stripForSpeech(text).slice(0, MAX_TTS_CHARS);
-      if (!clipped) {
-        setPhase('listening');
-        return;
-      }
-      const sentences = clipped.match(/[^.!?]+[.!?]*/g)?.map((s) => s.trim()).filter(Boolean) || [clipped];
-      const audio = audioElRef.current ?? new Audio();
-      audioElRef.current = audio;
-
-      const synth = async (sentence: string): Promise<string | null> => {
-        const res = await fetch('/api/voice/speak', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: sentence, ...(sessionIdRef.current ? { sessionId: sessionIdRef.current } : {}) }),
-          credentials: 'include',
-        });
-        if (!res.ok) {
-          if (res.status === 409) setError('Spoken replies are off: no Speech engine is bound (Topics page).');
-          return null; // caller stops the reply rather than POSTing every sentence
-        }
-        const buf = await res.arrayBuffer();
-        const type = res.headers.get('Content-Type') || 'audio/mpeg';
-        return URL.createObjectURL(new Blob([buf], { type }));
-      };
-
-      // Resolves true if the clip played to completion, false on autoplay block /
-      // decode error (caller then stops rather than silently churning sentences).
-      const play = (url: string) =>
-        new Promise<boolean>((resolve) => {
-          audioUrlRef.current = url;
-          audio.src = url;
-          audio.playbackRate = SPEECH_RATE; // preservesPitch defaults true → no pitch shift
-          audio.onended = () => resolve(true);
-          audio.onerror = () => resolve(false);
-          void audio.play().then(undefined, () => resolve(false));
-        });
-
-      // Prefetch pipeline: hold the next sentence's synth in flight while the
-      // current one plays. `pending` is always the not-yet-played clip.
-      let pending = synth(sentences[0]).catch(() => null);
-      const drain = async () => { const u = await pending; if (u) URL.revokeObjectURL(u); };
-      try {
-        for (let i = 0; i < sentences.length; i++) {
-          const url = await pending;
-          // Kick off the next synth now, so it overlaps this sentence's playback.
-          pending = i + 1 < sentences.length ? synth(sentences[i + 1]).catch(() => null) : Promise.resolve(null);
-          if (playbackIdRef.current !== myId) {
-            if (url) URL.revokeObjectURL(url); // cancelled between synth and play
-            await drain();
-            return;
-          }
-          if (!url) break; // synth failed (503/error) — stop, don't hammer /speak
-          const ok = await play(url);
-          if (playbackIdRef.current !== myId) { await drain(); return; } // barged
-          URL.revokeObjectURL(url); // done with this clip — revoke immediately
-          if (audioUrlRef.current === url) audioUrlRef.current = null;
-          if (!ok) break; // autoplay blocked / decode error — stop the reply
-        }
-        await drain(); // revoke any prefetched-but-unplayed clip
-      } finally {
-        // Only advance if we're still the active playback (not barged/superseded).
-        if (playbackIdRef.current === myId && stateRef.current === 'speaking') setPhase('listening');
-      }
-    },
-    [setPhase],
-  );
-
-  // Safety net: unstick from 'thinking' on a turn that ends without a spoken
-  // reply (chat_error / empty response). speak() moves us to 'speaking' first,
-  // so this only fires when nothing was spoken.
+  // A turn that ended without being spoken (it failed, or there is no speech
+  // engine): back to listening. A spoken reply has moved on to 'speaking'.
   useEffect(() => {
     const was = prevTurnRef.current;
     prevTurnRef.current = isTurnActive;
     if (was && !isTurnActive && stateRef.current === 'thinking') setPhase('listening');
   }, [isTurnActive, setPhase]);
 
-  // ── Mic + worklet + WS lifecycle ─────────────────────────────────────────────
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !sessionId) return;
+    const session = sessionId;
     let cancelled = false;
+    let released = false;
     let mediaStream: MediaStream | null = null;
-    let ctx: AudioContext | null = null;
+    let captureCtx: AudioContext | null = null;
+    let playCtx: AudioContext | null = null;
     let ws: WebSocket | null = null;
-    let raf: number | null = null;
-    let analyser: AnalyserNode | null = null;
-    let vadBuf: Uint8Array<ArrayBuffer> | null = null;
-    let speechStart = 0;
-    let lastVoice = 0;
-    let hadSpeech = false;
-    let awaitingSince = 0; // when trailing silence began waiting for the STT tail
-    let bargeStart = 0; // when sustained over-talk began during playback
-    // Pre-roll: while not listening, keep the last ~0.5 s of mic frames so a
-    // barge-in doesn't lose its opening words (they're spoken before the state
-    // flips to listening). Flushed to STT on barge-in.
-    const PREROLL_MAX_BYTES = 16000; // ~0.5 s of 16 kHz s16le
-    let preRoll: ArrayBuffer[] = [];
-    let preRollBytes = 0;
+    let lastReconnectAt = 0;
 
-    const tick = () => {
-      if (cancelled || !analyser || !vadBuf) return;
-      analyser.getByteTimeDomainData(vadBuf);
-      let sumSq = 0;
-      for (let i = 0; i < vadBuf.length; i++) {
-        const v = (vadBuf[i] - 128) / 128;
-        sumSq += v * v;
+    // Playback: frames are scheduled back to back on the playback context.
+    const sources = new Set<AudioBufferSourceNode>();
+    let nextStart = 0;
+    let pendingAudio: AudioHeader | null = null;
+    /** The server is still sending this reply (`speaking` on). */
+    let serverSpeaking = false;
+    /** After a tap on stop: frames already on their way are dropped until the server confirms it stopped. */
+    let dropUntilQuiet = false;
+    /** WAV clips decode asynchronously; this keeps them in the order they arrived. */
+    let decoding: Promise<void> = Promise.resolve();
+
+    const send = (message: VoiceClientMessage) => {
+      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+    };
+
+    const stopPlayback = () => {
+      // Every source in the set was started (`schedule`), so stopping it is valid even before its start time.
+      for (const source of sources) {
+        source.onended = null;
+        source.stop();
+        source.disconnect();
       }
-      const rms = Math.sqrt(sumSq / vadBuf.length);
-      const now = performance.now();
+      sources.clear();
+      nextStart = 0;
+      pendingAudio = null;
+    };
 
-      if (stateRef.current === 'listening') {
-        if (rms >= RMS_SPEAKING) {
-          if (!hadSpeech) speechStart = now;
-          hadSpeech = true;
-          lastVoice = now;
-          awaitingFinalRef.current = false;
-          awaitingSince = 0;
-        } else if (hadSpeech && now - lastVoice >= SILENCE_MS) {
-          // End of utterance — but only if it was long enough to be real speech.
-          if (now - speechStart >= MIN_SPEECH_MS) {
-            hadSpeech = false;
-            awaitingFinalRef.current = true; // wait for STT to emit the tail
-            awaitingSince = now;
+    const release = () => {
+      if (released) return;
+      released = true;
+      stopPlayback();
+      if (ws) {
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.onmessage = null;
+        send({ type: 'stop' });
+        // close() is valid while still connecting (it aborts the handshake) and once closed.
+        ws.close();
+      }
+      mediaStream?.getTracks().forEach((track) => track.stop());
+      void captureCtx?.close().catch((err: unknown) => console.warn('Voice: the microphone audio context did not close', err));
+      void playCtx?.close().catch((err: unknown) => console.warn('Voice: the playback audio context did not close', err));
+    };
+
+    /** The conversation cannot go on: say why, and let go of the microphone. */
+    const fail = (message: string) => {
+      if (cancelled) return;
+      release();
+      setError((previous) => previous ?? message);
+      setPartial('');
+      setPhase('idle');
+    };
+
+    const playbackContext = (sampleRate: number): AudioContext => {
+      if (playCtx && playCtx.sampleRate === sampleRate) return playCtx;
+      if (playCtx) {
+        stopPlayback();
+        void playCtx.close().catch((err: unknown) => console.warn('Voice: the playback audio context did not close', err));
+      }
+      try {
+        // At the audio's own rate nothing is resampled frame by frame, so
+        // consecutive frames join sample-exactly.
+        playCtx = newAudioContext(sampleRate);
+      } catch (err) {
+        // A rate this browser's output cannot run at: its default, resampled per frame.
+        console.warn(`Voice: no audio output at ${sampleRate} Hz, playing at the browser's own rate`, err);
+        playCtx = newAudioContext();
+      }
+      return playCtx;
+    };
+
+    const onDrained = () => {
+      // Lets the server stop treating the microphone as over-talk early.
+      send({ type: 'playback', state: 'ended' });
+      if (!serverSpeaking && stateRef.current === 'speaking') setPhase('listening');
+    };
+
+    const schedule = (ctx: AudioContext, buffer: AudioBuffer) => {
+      if (ctx !== playCtx || released) return;
+      if (ctx.state === 'suspended') {
+        void ctx.resume().catch((err: unknown) => {
+          if (!cancelled) setError(`The browser would not play the spoken reply: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      const now = ctx.currentTime;
+      const at = nextStart > now ? nextStart : now + PLAYBACK_LEAD_S;
+      source.start(at);
+      nextStart = at + buffer.duration;
+      sources.add(source);
+      source.onended = () => {
+        sources.delete(source);
+        source.disconnect();
+        if (sources.size === 0) onDrained();
+      };
+      if (stateRef.current !== 'speaking') setPhase('speaking');
+    };
+
+    const play = (header: AudioHeader, data: ArrayBuffer) => {
+      if (dropUntilQuiet) return;
+      const ctx = playbackContext(header.sampleRate);
+      if (header.format === 'pcm') {
+        const pcm = new Int16Array(data, 0, data.byteLength >> 1);
+        if (pcm.length === 0) return;
+        const buffer = ctx.createBuffer(1, pcm.length, header.sampleRate);
+        const channel = buffer.getChannelData(0);
+        for (let i = 0; i < pcm.length; i++) channel[i] = pcm[i] / 32768;
+        schedule(ctx, buffer);
+        return;
+      }
+      decoding = decoding
+        .then(() => ctx.decodeAudioData(data))
+        .then((buffer) => {
+          if (!dropUntilQuiet) schedule(ctx, buffer);
+        })
+        .catch((err: unknown) => {
+          if (!cancelled) setError(`A spoken reply could not be played: ${err instanceof Error ? err.message : String(err)}`);
+        });
+    };
+
+    const onMessage = (event: MessageEvent) => {
+      if (cancelled) return;
+      if (typeof event.data !== 'string') {
+        const header = pendingAudio;
+        pendingAudio = null;
+        if (header && event.data instanceof ArrayBuffer) play(header, event.data);
+        return;
+      }
+      let message: VoiceServerMessage;
+      try {
+        message = JSON.parse(event.data) as VoiceServerMessage;
+      } catch {
+        setError('The voice connection sent something this page does not understand.');
+        return;
+      }
+      switch (message.type) {
+        case 'ready':
+          setSpeaks(message.speak);
+          if (stateRef.current === 'connecting') setPhase('listening');
+          break;
+        case 'speech_start':
+          setError(null);
+          setPartial('');
+          break;
+        case 'transcript':
+          setPartial(message.text);
+          break;
+        case 'utterance':
+          setPartial('');
+          setError(null);
+          setPhase('thinking');
+          onUtteranceRef.current(message.text);
+          break;
+        case 'audio':
+          pendingAudio = message;
+          break;
+        case 'speaking':
+          serverSpeaking = message.on;
+          if (message.on) {
+            if (!dropUntilQuiet) setPhase('speaking');
           } else {
-            hadSpeech = false; // too short — a click; ignore
+            dropUntilQuiet = false;
+            if (sources.size === 0 && stateRef.current === 'speaking') setPhase('listening');
           }
-        }
-        // Fast path is ws.onmessage (dispatch as soon as the tail transcript
-        // lands). Fallback: if STT emits nothing after silence (Mistral goes
-        // quiet, or a whisper window never updates), flush anyway so the turn
-        // can't hang. Grace > the 2 s whisper window so we don't cut the tail.
-        if (awaitingFinalRef.current && awaitingSince && now - awaitingSince >= DISPATCH_GRACE_MS) {
-          awaitingSince = 0;
-          dispatchUtterance();
-        }
-      } else if (stateRef.current === 'speaking') {
-        // Barge-in: sustained over-talk interrupts the reply and reopens the mic.
-        if (rms >= RMS_BARGE_IN) {
-          if (!bargeStart) bargeStart = now;
-          if (now - bargeStart >= BARGE_IN_MS) {
-            bargeStart = 0;
-            hadSpeech = false; // let the new utterance segment cleanly
-            stopPlayback();
-            setPhase('listening');
-            // Flush the pre-roll so the interruption's opening words (spoken
-            // during 'speaking', before this flip) actually reach STT.
-            if (ws?.readyState === WebSocket.OPEN) for (const b of preRoll) ws.send(b);
-            preRoll = [];
-            preRollBytes = 0;
-          }
-        } else {
-          bargeStart = 0;
-        }
-      } else {
-        bargeStart = 0;
+          break;
+        case 'barge_in':
+          // The person talked over the reply: nothing of it is played any more.
+          stopPlayback();
+          setPhase('listening');
+          break;
+        case 'error':
+          setError(message.message);
+          break;
       }
-      raf = requestAnimationFrame(tick);
+    };
+
+    const connect = async () => {
+      const socket = await createAuthenticatedWebSocket('/voice', { mode: 'conversation', session });
+      if (cancelled || released) {
+        socket.close();
+        return;
+      }
+      ws = socket;
+      socket.binaryType = 'arraybuffer';
+      socket.onmessage = onMessage;
+      socket.onclose = (event) => {
+        if (cancelled || released || ws !== socket) return;
+        stopPlayback();
+        serverSpeaking = false;
+        dropUntilQuiet = false;
+        const why = event.reason || 'The voice connection closed.';
+        if (REFUSED.has(event.code) || Date.now() - lastReconnectAt < RECONNECT_ONCE_PER_MS) {
+          fail(why);
+          return;
+        }
+        lastReconnectAt = Date.now();
+        setPartial('');
+        setPhase('connecting');
+        connect().catch((err: unknown) => fail(err instanceof Error ? err.message : why));
+      };
+    };
+
+    interruptRef.current = () => {
+      if (released) return;
+      dropUntilQuiet = serverSpeaking;
+      send({ type: 'interrupt' });
+      stopPlayback();
+      if (stateRef.current === 'speaking') setPhase('listening');
     };
 
     (async () => {
       try {
-        // 16 kHz context → browser resamples the mic; worklet gets 16 kHz frames.
-        const AudioCtx =
-          window.AudioContext ||
-          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-        ctx = new AudioCtx({ sampleRate: 16000 });
-        // echoCancellation lets barge-in work — the browser AEC subtracts the
-        // assistant's own TTS playback from the mic so it can't self-interrupt.
-        const s = await navigator.mediaDevices.getUserMedia({
+        setError(null);
+        setSpeaks(null);
+        setPhase('connecting');
+        // 16 kHz context: the browser resamples the microphone for the worklet.
+        captureCtx = newAudioContext(16000);
+        // Echo cancellation keeps the reply being played out of the microphone:
+        // frames go up while it plays, and the server listens for over-talk.
+        const stream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         });
         if (cancelled) {
-          s.getTracks().forEach((t) => t.stop());
+          stream.getTracks().forEach((track) => track.stop());
           return;
         }
-        mediaStream = s;
-        setError(null);
-        setPhase('connecting');
+        mediaStream = stream;
 
-        // WebSocket first, so we're ready to stream the moment speech starts.
-        const params: Record<string, string> = {};
-        if (engine && engine !== 'auto') params.engine = engine;
-        if (sessionIdRef.current) params.session = sessionIdRef.current;
-        ws = await createAuthenticatedWebSocket('/voice', Object.keys(params).length ? params : undefined);
-        ws.binaryType = 'arraybuffer';
-        ws.onmessage = (e) => {
-          if (cancelled) return;
-          try {
-            const msg = JSON.parse(typeof e.data === 'string' ? e.data : '') as {
-              type: string;
-              text?: string;
-              message?: string;
-            };
-            if (msg.type === 'transcript') {
-              fullRef.current = msg.text || '';
-              // Show the in-progress delta live.
-              const delta = fullRef.current.slice(dispatchedLenRef.current).trim();
-              if (stateRef.current === 'listening' || stateRef.current === 'connecting') setPartial(delta);
-              // If we're waiting on the STT tail after silence, dispatch now.
-              if (awaitingFinalRef.current && stateRef.current === 'listening') {
-                dispatchUtterance();
-              } else if (delta && stateRef.current === 'listening' && !hadSpeech && !awaitingSince) {
-                // Orphaned STT tail: whisper's last 2 s window landed AFTER we
-                // dispatched and the user has gone silent, so no speech→silence
-                // transition follows to flush it — it would hang in `partial`
-                // forever. Arm the same grace timer the silence path uses so the
-                // tail flushes as its own turn instead of stalling.
-                awaitingFinalRef.current = true;
-                awaitingSince = performance.now();
-              }
-            } else if (msg.type === 'error') {
-              setError(msg.message || 'Voice stream error');
-            }
-          } catch {
-            /* non-JSON frame — ignore */
-          }
-        };
-        ws.onerror = () => {
-          if (!cancelled) setError('Voice connection failed.');
-        };
-        ws.onclose = (e) => {
-          // Server-initiated close (STT ended/errored, token expired, no engine).
-          // Without this the mic would keep capturing into a dead socket forever.
-          if (cancelled || stateRef.current === 'idle') return;
-          setError((prev) => prev ?? (e.reason || 'Voice connection closed.'));
-          setPhase('error');
-        };
-        await new Promise<void>((resolve, reject) => {
-          if (!ws) return reject(new Error('no socket'));
-          if (ws.readyState === WebSocket.OPEN) return resolve();
-          ws.addEventListener('open', () => resolve(), { once: true });
-          ws.addEventListener('error', () => reject(new Error('ws failed to open')), { once: true });
-        });
+        await connect();
         if (cancelled) return;
 
-        // Worklet capture.
         const workletUrl = URL.createObjectURL(new Blob([WORKLET_CODE], { type: 'application/javascript' }));
         try {
-          await ctx.audioWorklet.addModule(workletUrl);
+          await captureCtx.audioWorklet.addModule(workletUrl);
         } finally {
           URL.revokeObjectURL(workletUrl);
         }
-        if (cancelled) return;
-        const src = ctx.createMediaStreamSource(s);
-        const node = new AudioWorkletNode(ctx, 'pcm-worklet');
-        node.port.onmessage = (e) => {
-          const frame = e.data as ArrayBuffer;
-          // Stream frames only while listening (half-duplex). While not
-          // listening, keep a short pre-roll so barge-in can recover its opening
-          // words (see the barge-in flush in tick).
-          if (stateRef.current === 'listening') {
-            if (ws?.readyState === WebSocket.OPEN) ws.send(frame);
-          } else {
-            preRoll.push(frame);
-            preRollBytes += frame.byteLength;
-            while (preRollBytes > PREROLL_MAX_BYTES && preRoll.length) {
-              preRollBytes -= preRoll.shift()!.byteLength;
-            }
-          }
+        if (cancelled || released) return;
+        const source = captureCtx.createMediaStreamSource(stream);
+        const node = new AudioWorkletNode(captureCtx, 'pcm-worklet');
+        node.port.onmessage = (event) => {
+          // Continuously, also while a reply plays. Frames from before the
+          // socket is open (or while it reconnects) are not kept.
+          if (ws?.readyState === WebSocket.OPEN) ws.send(event.data as ArrayBuffer);
         };
-        src.connect(node);
-        // Worklet needs a sink to pull audio through it, but we don't want to hear
-        // the mic — route through a muted gain node to the destination.
-        const mute = ctx.createGain();
+        source.connect(node);
+        // The worklet needs a sink to be pulled; a muted gain keeps the microphone out of the speakers.
+        const mute = captureCtx.createGain();
         mute.gain.value = 0;
-        node.connect(mute).connect(ctx.destination);
-
-        // VAD analyser off the same source.
-        analyser = ctx.createAnalyser();
-        analyser.fftSize = 2048;
-        vadBuf = new Uint8Array(analyser.fftSize);
-        src.connect(analyser);
-
-        setPhase('listening');
-        raf = requestAnimationFrame(tick);
+        node.connect(mute).connect(captureCtx.destination);
       } catch (err) {
-        console.error('Realtime voice init failed:', err);
-        // Release the mic/socket/context we may have already acquired — the effect
-        // cleanup won't run while `enabled` stays true, so a failure here would
-        // otherwise leave the mic hot and the socket half-open.
-        try {
-          ws?.close();
-        } catch {
-          /* not open */
-        }
-        mediaStream?.getTracks().forEach((t) => t.stop());
-        ctx?.close().catch(() => {});
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Microphone or connection failed.');
-          setPhase('error');
-        }
+        fail(err instanceof Error ? err.message : 'The microphone or the voice connection could not be opened.');
       }
     })();
 
     return () => {
       cancelled = true;
-      if (raf != null) cancelAnimationFrame(raf);
-      try {
-        if (ws) {
-          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'stop' }));
-          // close() unconditionally — valid on CONNECTING too (aborts the
-          // handshake), so a rapid on/off can't leak a socket + server STT session.
-          ws.close();
-        }
-      } catch {
-        /* already closed */
-      }
-      stopPlayback(); // pause audio, revoke url, and bail any in-flight speak() loop
-      ctx?.close().catch(() => {});
-      mediaStream?.getTracks().forEach((t) => t.stop());
-      fullRef.current = '';
-      dispatchedLenRef.current = 0;
-      awaitingFinalRef.current = false;
+      interruptRef.current = () => {};
+      release();
       setPartial('');
+      setError(null);
+      setSpeaks(null);
       setPhase('idle');
     };
-  }, [enabled, engine, setPhase, dispatchUtterance, stopPlayback]);
+  }, [enabled, sessionId, setPhase]);
 
-  return { state, error, partial, speak };
+  /** Stop the reply being spoken now (the stop button). */
+  const interrupt = useCallback(() => interruptRef.current(), []);
+
+  return { state, error, partial, speaks, interrupt };
 }

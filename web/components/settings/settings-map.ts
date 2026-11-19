@@ -1,12 +1,16 @@
 /** Canonical destinations; search and overview cards share this list. Legacy tab URLs stay valid. */
-export interface SettingsEntry { title: string; tab?: string; href?: string; keywords: string; admin?: boolean; module?: string }
+export interface SettingsEntry {
+  title: string; tab?: string; href?: string; keywords: string; admin?: boolean; module?: string;
+  /** While its module is off an admin still sees the entry: its panel says the module is off and turns it on. */
+  adminWhenOff?: boolean;
+}
 export const settingsGroups: Array<{ name: string; description: string; icon: string; entries: SettingsEntry[] }> = [
   { name: 'You & your workspace', description: 'Your profile, preferences, and devices.', icon: 'user', entries: [
     { title: 'Appearance', tab: 'appearance', keywords: 'theme dark light mode display colors' },
     { title: 'Profile', tab: 'general', keywords: 'account username email' },
     { title: 'Companion appearance', href: '/persona', keywords: 'name persona personality instructions' },
     { title: 'Notifications', tab: 'notifications', keywords: 'alerts sound' },
-    { title: 'Voice & Calls', tab: 'voice', keywords: 'speech microphone', module: 'voice' },
+    { title: 'Voice & Calls', tab: 'voice', keywords: 'speech microphone dictation transcription hear speak engine whisper kokoro voices phone telephony', module: 'voice', adminWhenOff: true },
     { title: 'Mobile App', tab: 'mobile', keywords: 'phone android' },
     { title: 'People & profiles', href: '/profiles', keywords: 'people contacts profiles' },
     { title: 'Spaces on other installs', tab: 'remote-spaces', keywords: 'remote federation team' },

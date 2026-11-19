@@ -241,6 +241,8 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
       }
       try {
         const renders = body.renders?.filter((r: string) => r === 'inline_ui');
+        // A message whose reply is read aloud (as `chat.send` `spoken` on the gateway).
+        if (body.spoken) rootAgent.markSpokenTurn(sessionId, user.id);
         const result = await rootAgent.handleMessage(
           sessionId,
           user.id,
@@ -318,6 +320,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
         outputMode: t.Optional(t.Union([t.Literal('inline'), t.Literal('file')])),
         // What the client renders beyond text (`inline_ui`: interactive answers, docs/plans/inline-ui-spec.md D14).
         renders: t.Optional(t.Array(t.String({ maxLength: 32 }), { maxItems: 4 })),
+        spoken: t.Optional(t.Boolean({ description: 'The reply will be read aloud: answer in spoken style' })),
       }),
       detail: { tags: ['chat'] },
     },

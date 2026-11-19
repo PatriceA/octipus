@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { twilioMediaToPcm16k, pcm16kToTwilioMedia, TwilioInboundDecoder } from './media-bridge';
-import { muLawEncode } from '../audio-codec';
+import { muLawDecode, muLawEncode } from '../audio-codec';
+import { TELEPHONY_FRAME_BYTES, TelephonyOutboundEncoder, TwilioInboundDecoder } from './media-bridge';
 
 function sine(samples: number, freq: number, rate: number, amp = 12000): Int16Array {
   const out = new Int16Array(samples);
@@ -8,47 +8,20 @@ function sine(samples: number, freq: number, rate: number, amp = 12000): Int16Ar
   return out;
 }
 
-describe('twilioMediaToPcm16k', () => {
-  test('8 kHz μ-law payload decodes to ~2× samples at 16 kHz', () => {
-    const pcm8k = sine(160, 300, 8000); // 20 ms @ 8 kHz
-    const payload = Buffer.from(muLawEncode(pcm8k)).toString('base64');
-    const pcm16k = twilioMediaToPcm16k(payload);
-    // Upsampled 8k→16k ≈ 2× length (±1 for fractional tail).
-    expect(pcm16k.length).toBeGreaterThanOrEqual(319);
-    expect(pcm16k.length).toBeLessThanOrEqual(321);
-  });
-});
+const bytesOf = (pcm: Int16Array) => new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength);
 
-describe('pcm16kToTwilioMedia', () => {
-  test('16 kHz PCM encodes to base64 μ-law of ~half the samples', () => {
-    const pcm16k = sine(320, 300, 16000); // 20 ms @ 16 kHz
-    const payload = pcm16kToTwilioMedia(pcm16k);
-    const bytes = Buffer.from(payload, 'base64');
-    // 16k→8k halves the sample count; μ-law is 1 byte/sample.
-    expect(bytes.length).toBeGreaterThanOrEqual(159);
-    expect(bytes.length).toBeLessThanOrEqual(161);
-  });
-});
+function concat(frames: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(frames.reduce((n, f) => n + f.length, 0));
+  let at = 0;
+  for (const f of frames) { out.set(f, at); at += f.length; }
+  return out;
+}
 
-describe('round-trip 16k → telephony → 16k', () => {
-  test('preserves a 300 Hz tone (sign + rough magnitude) despite μ-law + resample loss', () => {
-    const original = sine(1600, 300, 16000, 12000); // 100 ms, well under the 4 kHz telephony Nyquist
-    const payload = pcm16kToTwilioMedia(original);
-    // Decode back (payload is 8 kHz μ-law; twilioMediaToPcm16k upsamples to 16 kHz).
-    const back = twilioMediaToPcm16k(payload);
-    expect(Math.abs(back.length - original.length)).toBeLessThanOrEqual(2);
-    // Compare the loud interior samples: same sign, magnitude in the right ballpark.
-    let checked = 0;
-    const n = Math.min(back.length, original.length);
-    for (let i = 100; i < n - 100; i++) {
-      if (Math.abs(original[i]) > 4000) {
-        expect(Math.sign(back[i])).toBe(Math.sign(original[i]));
-        checked++;
-      }
-    }
-    expect(checked).toBeGreaterThan(50); // actually exercised the tone
-  });
-});
+function rms(samples: Int16Array): number {
+  let sum = 0;
+  for (const s of samples) sum += s * s;
+  return Math.sqrt(sum / samples.length);
+}
 
 describe('TwilioInboundDecoder (streaming)', () => {
   test('emits little-endian s16 bytes, ~2× the input μ-law length', () => {
@@ -71,5 +44,86 @@ describe('TwilioInboundDecoder (streaming)', () => {
     // 5 × 160 μ-law samples → ~1600 s16 samples → ~3200 bytes (±a few for carry).
     expect(total / 2).toBeGreaterThanOrEqual(1598);
     expect(total / 2).toBeLessThanOrEqual(1602);
+  });
+
+  test('raw μ-law bytes and base64 decode the same', () => {
+    const mulaw = muLawEncode(sine(160, 300, 8000));
+    const fromBytes = new TwilioInboundDecoder().push(mulaw);
+    const fromBase64 = new TwilioInboundDecoder().push(Buffer.from(mulaw).toString('base64'));
+    expect(Buffer.from(fromBytes).equals(Buffer.from(fromBase64))).toBe(true);
+  });
+});
+
+describe('TelephonyOutboundEncoder', () => {
+  // A second of a 440 Hz tone at 24 kHz, as a speech engine would generate it.
+  const tone = bytesOf(sine(24000, 440, 24000));
+
+  test('audio fed in arbitrary chunks encodes exactly as the same audio fed at once (no discontinuity at joins)', () => {
+    const whole = new TelephonyOutboundEncoder();
+    const oneShot = concat([...whole.push(tone, 24000), whole.flush() ?? new Uint8Array(0)]);
+
+    const chunked = new TelephonyOutboundEncoder();
+    const frames: Uint8Array[] = [];
+    // Odd sizes: chunks end mid-sample, mid-frame and off the 3:1 resampling grid.
+    const sizes = [1, 333, 4096, 7, 1001, 2048, 5];
+    for (let at = 0, i = 0; at < tone.length; i++) {
+      const size = sizes[i % sizes.length];
+      frames.push(...chunked.push(tone.subarray(at, at + size), 24000));
+      at += size;
+    }
+    const tail = chunked.flush();
+    if (tail) frames.push(tail);
+    const streamed = concat(frames);
+
+    expect(streamed.length).toBe(oneShot.length);
+    expect(Buffer.from(streamed).equals(Buffer.from(oneShot))).toBe(true);
+  });
+
+  test('a fresh resampler per chunk would not: the join is where it differs', () => {
+    // The old path encoded every 20 ms chunk on its own. Against the stateful
+    // encoder, the samples differ — which is the click this replaces.
+    const stateful = new TelephonyOutboundEncoder();
+    const good = concat(stateful.push(tone.subarray(0, 9600), 24000));
+    const restarted = concat([0, 960 * 2, 960 * 4, 960 * 6, 960 * 8].flatMap((at) => new TelephonyOutboundEncoder().push(tone.subarray(at, at + 960 * 2), 24000)));
+    expect(restarted.length).toBe(good.length);
+    expect(Buffer.from(restarted).equals(Buffer.from(good))).toBe(false);
+  });
+
+  test('every frame is 20 ms of 8 kHz μ-law; a second of audio is 50 frames', () => {
+    const encoder = new TelephonyOutboundEncoder();
+    const frames = encoder.push(tone, 24000);
+    const tail = encoder.flush();
+    for (const frame of frames) expect(frame.length).toBe(TELEPHONY_FRAME_BYTES);
+    expect(frames.length + (tail ? 1 : 0)).toBe(50);
+  });
+
+  test('the tail is padded with silence to a whole frame, and flush is empty afterwards', () => {
+    const encoder = new TelephonyOutboundEncoder();
+    // 30 ms at 8 kHz: one whole frame and half of the next.
+    const frames = encoder.push(bytesOf(sine(240, 300, 8000)), 8000);
+    expect(frames).toHaveLength(1);
+    const tail = encoder.flush();
+    expect(tail).toHaveLength(TELEPHONY_FRAME_BYTES);
+    expect([...(tail as Uint8Array).subarray(80)].every((b) => b === 0xff)).toBe(true);
+    expect(encoder.flush()).toBeNull();
+  });
+
+  test('a tone the line can carry survives; what lies above 4 kHz is taken out instead of folding back', () => {
+    const through = (freq: number) => {
+      const encoder = new TelephonyOutboundEncoder();
+      const mulaw = concat(encoder.push(bytesOf(sine(24000, freq, 24000)), 24000));
+      return rms(muLawDecode(mulaw).subarray(800)); // past the filter's settling
+    };
+    const voice = through(1000);
+    const hiss = through(6000); // would alias to 2 kHz at 8 kHz
+    expect(voice).toBeGreaterThan(7000); // a 12000-peak sine has an RMS of ~8485
+    expect(hiss).toBeLessThan(voice / 5);
+  });
+
+  test('8 kHz audio passes through without resampling', () => {
+    const encoder = new TelephonyOutboundEncoder();
+    const pcm = sine(160, 300, 8000);
+    const [frame] = encoder.push(bytesOf(pcm), 8000);
+    expect(Buffer.from(frame).equals(Buffer.from(muLawEncode(pcm)))).toBe(true);
   });
 });

@@ -99,33 +99,9 @@ export interface LiteLLMModel {
 }
 
 /**
- * Topics used by the root agent for role-based model routing.
- *
- * KEEP IN SYNC with src/models/topics.ts (TOPICS) — single source of truth.
- * web cannot import backend src (its tsconfig only maps @/* to the web root),
- * so this literal is mirrored by hand. Adding a topic to TOPICS without
- * mirroring it here makes the topic invisible in the model editor AND (until
- * the edit-model-modal fix) silently strips it from any model bound to it.
- */
-export const AVAILABLE_TOPICS = [
-  // model lanes (text)
-  { value: 'agents', label: 'Agents', description: 'All expert/worker agents — the main text lane. Every specialist resolves its model here unless the expert pins its own model or lane.' },
-  { value: 'writing', label: 'Writing', description: 'Long-form text roles — Writer, Project Manager, Communication. Split from Agents so this work can run on a cheaper/faster model. Unbound = these roles fail loud; bind a model or leave them on Agents.' },
-  { value: 'research', label: 'Research', description: 'Investigation and deep research — the highest-token work in the system, since a researcher fans out into children that each re-send a growing context. Its own lane so it can be pinned to a local or cheap model. Unbound = research fails loud.' },
-  { value: 'chat', label: 'Chat', description: 'Casual conversations and direct replies. Also preferred by the rootAgent when bound; unbound = rootAgent uses the default model.' },
-  { value: 'voice', label: 'Voice', description: 'Phone call conversations (Twilio/Telnyx/Plivo) — bind a fast model for low latency. Unbound = falls back to the default model.' },
-  // automated background text tasks (one lane)
-  { value: 'background', label: 'Background', description: 'Automated background tasks: memory extraction, knowledge-base review, evaluation, chunk summarization, tool-call translation. Bind a cheap/local model. Unbound = these features stay off.' },
-  // non-text model classes
-  { value: 'ocr', label: 'OCR', description: 'Text extraction from images and scanned documents' },
-  { value: 'vision', label: 'Vision', description: 'Image understanding, description, and analysis' },
-  { value: 'embedding', label: 'Embedding', description: 'Vector embeddings' },
-] as const;
-
-/**
  * Worker roles (tool bundles + base prompts) — used where the UI picks WHO
- * does the work (e.g. pipeline stages), as opposed to AVAILABLE_TOPICS above,
- * which are model lanes (WHICH model serves it). Pipeline `step.topic`
+ * does the work (e.g. pipeline stages), as opposed to the model lanes of the
+ * Topics page (WHICH model serves it; `GET /topics`). Pipeline `step.topic`
  * historically carries the role name; the backend canonicalizes it to the
  * 'agents' lane for model resolution.
  *

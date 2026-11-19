@@ -1,220 +1,170 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
-import {
-  CheckCircle,
-  Loader2,
-  Phone,
-  XCircle,
-} from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { CheckCircle, Loader2, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import {
-  SecretsRedirectBanner,
-  type SettingItem,
-  SettingsGroup,
-  useSettingActions,
-} from './setting-field';
-import { useWorkspaceId } from '@/lib/workspace-context';
+import { type ModulesResponse, modulesKey, useModules } from '@/lib/modules';
+import type { SpeechOverview, VoicesAnswer, VoiceStatus } from '@/lib/types/voice';
+import { type SettingItem, useSettingActions } from './setting-field';
+import { CallsSection } from './voice/calls-section';
+import { ConversationSection } from './voice/conversation-section';
+import { EnginesSection } from './voice/engines-section';
+import { Busy, errorText, InlineError, primaryBtn, quietBtn } from './voice/ui';
+import { VoicesSection } from './voice/voices-section';
 
-const PROVIDER_VAULT_KEYS: Record<string, { keys: string[]; labels: string[] }> = {
-  twilio: {
-    keys: ['twilio_account_sid', 'twilio_auth_token'],
-    labels: ['Account SID', 'Auth Token'],
-  },
-  telnyx: {
-    keys: ['telnyx_api_key', 'telnyx_connection_id'],
-    labels: ['API Key', 'Connection ID'],
-  },
-  plivo: {
-    keys: ['plivo_auth_id', 'plivo_auth_token'],
-    labels: ['Auth ID', 'Auth Token'],
-  },
-};
+/** How often the page looks again while an engine is being installed on the server. */
+const INSTALL_POLL_MS = 1500;
 
+/**
+ * Settings → Voice: everything about speech in one place (docs/VOICE.md).
+ * Hear and Speak (what turns speech into text and text into speech, and
+ * adding, installing and trying an engine), Voices, how a conversation
+ * behaves, and phone calls.
+ */
 export function VoiceTab() {
-  const workspaceId = useWorkspaceId();
-  // The telephony health check is an admin-only route.
   const isAdmin = !!useAuth().user?.isAdmin;
-  const { handleSave, handleReset, saving, saved } = useSettingActions();
-  const [testingHealth, setTestingHealth] = useState(false);
-  const [healthResult, setHealthResult] = useState<{ healthy: boolean; error?: string; provider?: string } | null>(null);
+  const modules = useModules();
 
-  const { data: settingsData } = useQuery({
-    queryKey: ['settings'],
-    queryFn: () => api.get<{ settings: Record<string, SettingItem[]>; categories: string[] }>('/settings'),
-  });
-
-  const { data: vaultData } = useQuery({
-    queryKey: ['vault', workspaceId],
-    queryFn: () => api.get<{ credentials: Array<{ name: string }> }>('/vault'),
-  });
-
-  // What serves speech now: the models bound to the Transcription and Speech
-  // lanes (docs/VOICE.md). They are chosen on the Topics page, not here.
-  const { data: voiceStatus } = useQuery({
-    queryKey: ['voice-status'],
-    queryFn: () => api.get<{ sttAvailable: boolean; sttReason: string | null; sttModel?: string | null; ttsAvailable: boolean; ttsReason: string | null; ttsModel?: string | null }>('/voice/status'),
-  });
-
-  const voiceSettings = settingsData?.settings?.voice || [];
-  const currentProvider = voiceSettings.find(s => s.key === 'voice.telephonyProvider')?.value as string || 'disabled';
-  const publicUrl = voiceSettings.find(s => s.key === 'voice.publicUrl')?.value as string || '';
-
-  const existingVaultKeys = new Set((vaultData?.credentials || []).map(c => c.name));
-  const providerConfig = PROVIDER_VAULT_KEYS[currentProvider];
-
-  const testConnection = async () => {
-    setTestingHealth(true);
-    setHealthResult(null);
-    try {
-      const result = await api.get<{ configured?: boolean; provider?: string; healthy?: boolean; error?: string }>('/voice/telephony/health');
-      if (!result.configured) {
-        setHealthResult({ healthy: false, error: `Provider "${currentProvider}" not configured. Check vault credentials.` });
-      } else if (!result.healthy) {
-        setHealthResult({ healthy: false, error: result.error || `Connection to ${result.provider || currentProvider} failed. Verify credentials are correct.`, provider: result.provider });
-      } else {
-        setHealthResult({ healthy: true, provider: result.provider });
-      }
-    } catch (err) {
-      const msg = (err as Error).message;
-      setHealthResult({ healthy: false, error: msg.includes('401') ? 'Authentication failed — check your API credentials in the vault.' : msg });
-    }
-    setTestingHealth(false);
-  };
-
-  const webhookUrl = publicUrl ? `${publicUrl}/api/voice/webhook/${currentProvider}` : '';
+  if (modules.error) return <InlineError message={`Could not tell whether voice is on: ${errorText(modules.error)}`} />;
+  if (!modules.data) return <Loading />;
+  if (!modules.data.enabled.includes('voice')) return <VoiceOff isAdmin={isAdmin} />;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="voice-page">
       <div>
-        <h2 className="text-lg font-bold text-on-surface mb-1">Voice & Phone Calls</h2>
+        <h2 className="text-lg font-bold text-on-surface mb-1">Voice</h2>
         <p className="text-sm text-on-surface-variant">
-          Configure telephony providers for making and receiving phone calls.
+          Talk to your assistant and have replies read aloud: in the chat, in the mobile app and on phone calls.
         </p>
       </div>
-
-      {/* Speech engines (lanes) */}
-      <div className="bg-surface-container rounded-xl p-4 space-y-2" data-testid="voice-engines">
-        <h3 className="text-sm font-semibold text-on-surface">Speech engines</h3>
-        {([
-          ['Speech to text', voiceStatus?.sttAvailable, voiceStatus?.sttModel, voiceStatus?.sttReason],
-          ['Text to speech', voiceStatus?.ttsAvailable, voiceStatus?.ttsModel, voiceStatus?.ttsReason],
-        ] as const).map(([label, available, model, reason]) => (
-          <div key={label} className="flex items-center justify-between text-sm gap-3">
-            <span className="text-on-surface-variant">{label}</span>
-            {available ? (
-              <span className="flex items-center gap-1 text-tertiary text-xs"><CheckCircle className="w-3 h-3" /> {model ?? 'configured'}</span>
-            ) : (
-              <span className="flex items-center gap-1 text-on-surface-variant text-xs" title={reason ?? undefined}><XCircle className="w-3 h-3" /> off</span>
-            )}
-          </div>
-        ))}
-        {isAdmin && (
-          <p className="text-xs text-on-surface-variant">
-            Engines are models on the Transcription and Speech lanes: change them on the <a href="/topics" className="text-primary hover:underline">Topics page</a>.
-          </p>
-        )}
-      </div>
-
-      {/* Provider Settings */}
-      {voiceSettings.length > 0 && (
-        <SettingsGroup
-          settings={voiceSettings}
-          onSave={handleSave}
-          onReset={handleReset}
-          saving={saving}
-          saved={saved}
-        />
-      )}
-
-      {/* Credential Status */}
-      {currentProvider !== 'disabled' && providerConfig && (
-        <div className="bg-surface-container rounded-xl p-4 space-y-3">
-          <h3 className="text-sm font-semibold text-on-surface flex items-center gap-2">
-            <Phone className="w-4 h-4" />
-            {currentProvider.charAt(0).toUpperCase() + currentProvider.slice(1)} Credentials
-          </h3>
-          <p className="text-xs text-on-surface-variant">
-            Store these in <a href="/secrets" className="text-primary hover:underline">Settings &gt; Secrets</a> (Vault):
-          </p>
-          <div className="space-y-2">
-            {providerConfig.keys.map((key, i) => (
-              <div key={key} className="flex items-center justify-between text-sm">
-                <span className="text-on-surface-variant">{providerConfig.labels[i]} <code className="text-xs bg-[#111] px-1.5 py-0.5 rounded">{key}</code></span>
-                {existingVaultKeys.has(key) ? (
-                  <span className="flex items-center gap-1 text-tertiary text-xs"><CheckCircle className="w-3 h-3" /> Stored</span>
-                ) : (
-                  <span className="flex items-center gap-1 text-warning text-xs"><XCircle className="w-3 h-3" /> Missing</span>
-                )}
-              </div>
-            ))}
-          </div>
-          <SecretsRedirectBanner />
-        </div>
-      )}
-
-      {/* Webhook URL */}
-      {currentProvider !== 'disabled' && publicUrl && (
-        <div className="bg-surface-container rounded-xl p-4 space-y-2">
-          <h3 className="text-sm font-semibold text-on-surface">Webhook URL</h3>
-          <p className="text-xs text-on-surface-variant">
-            Configure this in your {currentProvider.charAt(0).toUpperCase() + currentProvider.slice(1)} console as the voice webhook URL:
-          </p>
-          <div className="flex items-center gap-2">
-            <code className="flex-1 text-xs bg-[#111] px-3 py-2 rounded-lg text-primary break-all">
-              {webhookUrl}
-            </code>
-            <button
-              onClick={() => navigator.clipboard.writeText(webhookUrl)}
-              className="px-3 py-2 text-xs bg-primary/10 text-primary rounded-lg hover:bg-primary/20"
-            >
-              Copy
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Test Connection */}
-      {currentProvider !== 'disabled' && !isAdmin && (
-        <p className="text-xs text-on-surface-variant">An administrator can test the telephony connection.</p>
-      )}
-      {currentProvider !== 'disabled' && isAdmin && (
-        <div className="bg-surface-container rounded-xl p-4 space-y-3">
-          <h3 className="text-sm font-semibold text-on-surface">Connection Test</h3>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={testConnection}
-              disabled={testingHealth}
-              className="px-4 py-2 bg-primary text-on-primary rounded-lg text-sm font-medium hover:bg-primary-dim disabled:opacity-50"
-            >
-              {testingHealth ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Test Connection'}
-            </button>
-            {healthResult && (
-              <div className={`flex items-start gap-2 text-sm ${healthResult.healthy ? 'text-tertiary' : 'text-error'}`}>
-                {healthResult.healthy ? <CheckCircle className="w-4 h-4 mt-0.5 shrink-0" /> : <XCircle className="w-4 h-4 mt-0.5 shrink-0" />}
-                <span className="break-all">
-                  {healthResult.healthy ? `Connected to ${healthResult.provider}` : healthResult.error || 'Connection failed — unknown error'}
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Setup Guide */}
-      <div className="bg-surface-container rounded-xl p-4 space-y-2">
-        <h3 className="text-sm font-semibold text-on-surface">Setup Guide</h3>
-        <ol className="text-xs text-on-surface-variant space-y-1.5 list-decimal list-inside">
-          <li>Choose a provider above (Twilio, Telnyx, or Plivo)</li>
-          <li>Store the provider credentials in <a href="/secrets" className="text-primary hover:underline">Secrets (Vault)</a></li>
-          <li>Set your public webhook URL (e.g., ngrok or Cloudflare Tunnel URL)</li>
-          <li>Assign a fast model to the <strong>voice</strong> topic in the <a href="/models" className="text-primary hover:underline">Models</a> page</li>
-          <li>Click &quot;Test Connection&quot; to verify</li>
-          <li>Phone number is auto-detected from your provider account</li>
-        </ol>
-      </div>
+      {isAdmin ? <AdminVoice /> : <MemberVoice />}
     </div>
+  );
+}
+
+function Loading() {
+  return (
+    <div className="flex items-center justify-center py-12" role="status" aria-label="Loading">
+      <Loader2 className="w-6 h-6 animate-spin text-on-surface-variant" />
+    </div>
+  );
+}
+
+/** The Voice module is off: say so, and let an admin turn it on from here. */
+function VoiceOff({ isAdmin }: { isAdmin: boolean }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const turnOn = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      // Turns on what voice depends on too, and nothing that is on goes off.
+      qc.setQueryData(modulesKey, await api.post<ModulesResponse>('/modules/enable', { ids: ['voice'] }));
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="bg-surface-container rounded-xl p-4 space-y-3" data-testid="voice-off">
+      <h2 className="text-lg font-bold text-on-surface">Voice is switched off</h2>
+      <p className="text-sm text-on-surface-variant">
+        Dictation, voice conversations, spoken replies and phone calls are all off, for everyone. Nothing that was set up is lost.
+      </p>
+      {isAdmin
+        ? <button type="button" className={primaryBtn} disabled={busy} onClick={turnOn}><Busy on={busy} /> Turn it on</button>
+        : <p className="text-sm text-on-surface-variant">An admin can turn it on.</p>}
+      <InlineError message={error} />
+    </div>
+  );
+}
+
+function StatusLine({ label, available, detail }: { label: string; available: boolean; detail: string | null | undefined }) {
+  return (
+    <p className="flex items-start gap-1.5 text-sm">
+      {available
+        ? <CheckCircle className="w-4 h-4 mt-0.5 shrink-0 text-tertiary" aria-hidden />
+        : <XCircle className="w-4 h-4 mt-0.5 shrink-0 text-on-surface-variant" aria-hidden />}
+      <span className={available ? 'text-on-surface' : 'text-on-surface-variant'}>
+        <strong>{label}</strong>: {available ? 'on' : 'off'}{!available && detail ? ` — ${detail}` : ''}
+      </span>
+    </p>
+  );
+}
+
+/** Someone who is not an admin: whether voice works, and who sets it up. */
+function MemberVoice() {
+  const status = useQuery({ queryKey: ['voice-status'], queryFn: () => api.get<VoiceStatus>('/voice/status') });
+  if (status.error) return <InlineError message={`Could not read the voice status: ${errorText(status.error)}`} />;
+  if (!status.data) return <Loading />;
+  return (
+    <div className="bg-surface-container rounded-xl p-4 space-y-2" data-testid="voice-member">
+      <StatusLine label="Hear (speech to text)" available={status.data.sttAvailable} detail={status.data.sttReason} />
+      <StatusLine label="Speak (text to speech)" available={status.data.ttsAvailable} detail={status.data.ttsReason} />
+      <p className="text-sm text-on-surface-variant">An admin sets up voice.</p>
+    </div>
+  );
+}
+
+function AdminVoice() {
+  const qc = useQueryClient();
+  const { handleSave, saving, saved, error: settingError } = useSettingActions();
+
+  const overview = useQuery({
+    queryKey: ['voice-engines'],
+    queryFn: () => api.get<SpeechOverview>('/voice/engines'),
+    // An install runs on the server: follow it until it ends.
+    refetchInterval: (query) => (query.state.data?.jobs.some((job) => job.stage === 'running') ? INSTALL_POLL_MS : false),
+  });
+  // The voices are the primary Speak engine's: read again when another engine takes its place.
+  const speakModel = overview.data?.speak.model ?? null;
+  const voices = useQuery({
+    queryKey: ['voice-voices', speakModel],
+    queryFn: () => api.get<VoicesAnswer>('/voice/voices'),
+    enabled: !!overview.data,
+  });
+  const settings = useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api.get<{ settings?: Record<string, SettingItem[]> }>('/settings'),
+  });
+
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ['voice-engines'] });
+    void qc.invalidateQueries({ queryKey: ['voice-voices'] });
+  };
+
+  if (overview.error) {
+    return (
+      <div className="space-y-2">
+        <InlineError message={`Could not read the speech engines: ${errorText(overview.error)}`} testId="voice-overview-error" />
+        <button type="button" className={quietBtn} onClick={() => void overview.refetch()}>Try again</button>
+      </div>
+    );
+  }
+  if (!overview.data) return <Loading />;
+
+  const data = overview.data;
+  const voiceSettings = settings.data?.settings?.voice ?? [];
+  const saver = { save: (key: string, value: unknown) => { void handleSave(key, value); }, saving, saved };
+  const speakEngine = data.engines.find((engine) => engine.direction === 'tts' && engine.role === 'primary');
+
+  return (
+    <>
+      <EnginesSection direction="stt" overview={data} onChanged={refresh} />
+      <EnginesSection direction="tts" overview={data} profiles={voices.data?.profiles} onChanged={refresh} />
+
+      {voices.error
+        ? <InlineError message={`Could not read the voices: ${errorText(voices.error)}`} testId="voice-voices-error" />
+        : voices.data && <VoicesSection voices={voices.data} engine={speakEngine} onChanged={refresh} />}
+
+      {settings.error && <InlineError message={`Could not read the settings: ${errorText(settings.error)}`} />}
+      <InlineError message={settingError || null} testId="voice-setting-error" />
+      <ConversationSection settings={voiceSettings} saver={saver} />
+      <CallsSection settings={voiceSettings} saver={saver} />
+    </>
   );
 }

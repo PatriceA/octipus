@@ -6,10 +6,11 @@
  * keeps that shape while the implementation underneath is plain `node:fs`,
  * which is the whole of it: there is no caching, no pooling and no lifecycle.
  */
-import { createReadStream, existsSync, statSync } from 'node:fs';
-import { glob, mkdir, open, readFile, unlink, writeFile } from 'node:fs/promises';
+import { createReadStream, createWriteStream, existsSync, statSync } from 'node:fs';
+import { glob, mkdir, open, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, sep } from 'node:path';
 import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 export interface FileHandle {
   readonly path: string;
@@ -63,19 +64,34 @@ export function fileAt(path: string): FileHandle {
 
 /**
  * Write a file, creating its directory. Accepts a `Response` because several
- * download paths stream a fetch straight to disk.
+ * download paths stream a fetch straight to disk: its body goes to a
+ * temporary file beside the target as it arrives (a model is hundreds of
+ * megabytes — never held in memory) and takes the target's name only once it
+ * is complete, so an interrupted download never leaves a file that looks
+ * installed.
+ *
+ * A response is recognised by its shape, not `instanceof Response`: a fetch
+ * that goes through a proxy agent answers with another realm's class.
  */
 export async function writeFileAt(
   path: string,
   data: string | Uint8Array | ArrayBuffer | ArrayBufferView | Blob | Response,
 ): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  if (data instanceof Response) {
-    await writeFile(path, Buffer.from(await data.arrayBuffer()));
+  const body = (data as Partial<Response> | null)?.body;
+  if (body && typeof (body as ReadableStream<Uint8Array>).getReader === 'function') {
+    const partial = `${path}.${process.pid}.part`;
+    try {
+      await pipeline(Readable.fromWeb(body as never), createWriteStream(partial));
+      await rename(partial, path);
+    } catch (err) {
+      await unlink(partial).catch(() => {});
+      throw err;
+    }
     return;
   }
-  if (data instanceof Blob) {
-    await writeFile(path, Buffer.from(await data.arrayBuffer()));
+  if (typeof (data as Blob | Response).arrayBuffer === 'function' && !ArrayBuffer.isView(data)) {
+    await writeFile(path, Buffer.from(await (data as Blob | Response).arrayBuffer()));
     return;
   }
   if (data instanceof ArrayBuffer) {

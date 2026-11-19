@@ -24,7 +24,7 @@ import { boundTo } from '@/models/media-resolver';
 import { logger } from '@/utils/logger';
 import {
   engineKindOf, isLocalSpeechRow, type SpeechDirection, speechDirectionOf, type SpeechEngineKind, type SpeechFormat,
-  speechFormats, speechRowAvailable, sttEngineFor, ttsEngineFor,
+  speechFormats, speechRowAvailable, speechStaysLocal, type SpeechVoice, sttEngineFor, ttsEngineFor,
 } from './speech-rows';
 import type { STTEngine, TranscriptionResult } from './stt';
 import type { TTSEngine } from './tts';
@@ -82,9 +82,13 @@ export async function speechCandidates(direction: SpeechDirection, req: SpeechRe
       }
       rows = [named];
     }
-    if (rows.length === 0) throw new Error(`No ${req.override} engine is bound to the ${LANE[direction]} lane. Bind one on the Topics page.`);
+    if (rows.length === 0) throw new Error(`No ${req.override} engine is bound to the ${LANE[direction]} lane. Add one under Settings → Voice.`);
   }
-  if (req.allowHosted === false) rows = rows.filter(isLocalSpeechRow);
+  if (req.allowHosted === false) {
+    // Local engines and speech servers on the owner's own network spend no hosted key.
+    const local = await Promise.all(rows.map((r) => speechStaysLocal(r)));
+    rows = rows.filter((_, i) => local[i]);
+  }
   return rows;
 }
 
@@ -237,25 +241,61 @@ const CONTENT_TYPES: Record<SpeechFormat, string> = {
   mp3: 'audio/mpeg', wav: 'audio/wav', opus: 'audio/ogg', ogg: 'audio/ogg', pcm: 'audio/L16', flac: 'audio/flac',
 };
 
+/** How a request wants to be spoken. */
+export interface SpeakOptions {
+  /** A voice profile by name, or a voice the engine offers (a preset id). */
+  voice?: string;
+  /** A voice profile by name (wins over `voice`). */
+  profile?: string;
+  /** How the voice should sound or the line be delivered, on top of the profile. */
+  instructions?: string;
+  speed?: number;
+}
+
+/**
+ * The voice `row` speaks this request in. A voice belongs to an engine, so:
+ * a profile named by the request, then a preset id named by the request (for
+ * the engine it asked for — the first tried), then the active profile, then
+ * the old `voice.ttsVoice` for the lane's primary. A profile made for another
+ * engine is not handed to this one: it speaks in its own default.
+ */
+async function voiceForRow(row: ModelConfigEntry, index: number, req: SpeakOptions): Promise<SpeechVoice> {
+  const { activeVoiceProfileName, getVoiceProfile, profileVoiceFor } = await import('./profiles');
+  const overrides = (voice: SpeechVoice): SpeechVoice => ({
+    ...voice,
+    ...(req.instructions ? { instructions: voice.instructions ? `${voice.instructions}. ${req.instructions}` : req.instructions } : {}),
+    ...(req.speed ? { speed: req.speed } : {}),
+  });
+  const named = req.profile ?? req.voice;
+  if (named) {
+    const profile = await getVoiceProfile(named);
+    if (req.profile && !profile) throw new Error(`No voice profile named "${req.profile}".`);
+    if (profile) return overrides((await profileVoiceFor(profile, row)) ?? {});
+    return overrides(index === 0 ? { voice: req.voice } : {});
+  }
+  const active = await activeVoiceProfileName();
+  if (active) {
+    const profile = await getVoiceProfile(active);
+    const voice = profile ? await profileVoiceFor(profile, row) : undefined;
+    if (voice) return overrides(voice);
+  }
+  const { getConfig } = await import('@/config');
+  const legacy = row.topicRoles?.speech === 'primary' ? (getConfig().voice.ttsVoice || undefined) : undefined;
+  return overrides(legacy ? { voice: legacy } : {});
+}
+
 /**
  * Speak `text`. `format` is a preference: an engine that writes only another
  * format answers in that one (the result says which), unless `strictFormat`.
  */
-export async function synthesizeWithLane(text: string, req: SpeechRequest & { voice?: string; format?: SpeechFormat; strictFormat?: boolean } = {}): Promise<SpokenAudio> {
+export async function synthesizeWithLane(text: string, req: SpeechRequest & SpeakOptions & { format?: SpeechFormat; strictFormat?: boolean } = {}): Promise<SpokenAudio> {
   const rows = await speechCandidates('tts', req);
   if (rows.length === 0) {
     if (req.allowHosted === false) throw new Error('Speech synthesis here uses the install\'s keys, which this account may not use; bind a local engine for it.');
     throw new CapabilityNotConfiguredError('speak');
   }
-  const { getConfig } = await import('@/config');
   const errors: string[] = [];
   for (const [index, row] of rows.entries()) {
-    // A voice id belongs to one engine. The caller's voice goes to the engine
-    // it asked for (the first tried); `voice.ttsVoice` is the voice of the
-    // lane's primary and goes to it alone. Any other engine speaks in its own default.
-    const voice = req.voice
-      ? (index === 0 ? req.voice : undefined)
-      : (row.topicRoles?.speech === 'primary' ? (getConfig().voice.ttsVoice || undefined) : undefined);
     const available = await speechRowAvailable(row);
     if (!available.ok) { errors.push(`${row.name}: ${available.reason}`); continue; }
     const formats = speechFormats(row);
@@ -266,8 +306,9 @@ export async function synthesizeWithLane(text: string, req: SpeechRequest & { vo
     }
     const refused = await refusalFor(row, req);
     if (refused) { errors.push(`${row.name}: ${refused}`); continue; }
-    const engine: TTSEngine = await ttsEngineFor(row, { voice, format });
+    let engine: TTSEngine | null = null;
     try {
+      engine = await ttsEngineFor(row, { ...(await voiceForRow(row, index, req)), format });
       const audio = await engine.synthesize(text);
       await recordSpeechUsage(row, 'speech', req, { characters: text.length });
       if (errors.length) log.warn({ using: row.name, failed: errors }, 'Spoke with the backup engine');
@@ -276,17 +317,144 @@ export async function synthesizeWithLane(text: string, req: SpeechRequest & { vo
       await recordSpeechUsage(row, 'speech', req, { characters: 0 }, true);
       errors.push(`${row.name}: ${(err as Error).message}`);
     } finally {
-      await engine.dispose().catch(() => {});
+      await engine?.dispose().catch(() => {});
     }
   }
   throw new Error(`Speech synthesis failed: ${errors.join('; ')}`);
+}
+
+/**
+ * PCM as it is generated. `return()` always releases the engine and stops the
+ * request behind it — also for a stream nobody started reading (a sentence
+ * synthesised ahead and then dropped by an interruption), which a plain async
+ * generator would leave open.
+ */
+export interface SpeechChunks extends AsyncIterableIterator<Buffer> {
+  return(value?: unknown): Promise<IteratorResult<Buffer>>;
+}
+
+export interface SpeechStream {
+  /** The model row that speaks. */
+  model: string;
+  sampleRate: number;
+  /** Mono s16le PCM, as it is generated. */
+  chunks: SpeechChunks;
+}
+
+/**
+ * Speak `text` as PCM that can be played while the rest is still being
+ * generated — what a live conversation and a phone line play. An engine that
+ * streams is read as it generates; any other writes a WAV, whose samples are
+ * handed over in one piece. Primary, then backup: an engine that fails before
+ * its first audio is skipped (with the reason), after it the stream fails.
+ */
+export async function streamSpeechWithLane(text: string, req: SpeechRequest & SpeakOptions = {}): Promise<SpeechStream> {
+  const rows = await speechCandidates('tts', req);
+  if (rows.length === 0) {
+    if (req.allowHosted === false) throw new Error('Speech synthesis here uses the install\'s keys, which this account may not use; bind a local engine for it.');
+    throw new CapabilityNotConfiguredError('speak');
+  }
+  const errors: string[] = [];
+  for (const [index, row] of rows.entries()) {
+    const available = await speechRowAvailable(row);
+    if (!available.ok) { errors.push(`${row.name}: ${available.reason}`); continue; }
+    const refused = await refusalFor(row, req);
+    if (refused) { errors.push(`${row.name}: ${refused}`); continue; }
+    let engine: TTSEngine | null = null;
+    try {
+      const formats = speechFormats(row);
+      engine = await ttsEngineFor(row, { ...(await voiceForRow(row, index, req)), format: formats.includes('wav') ? 'wav' : formats[0] });
+      let sampleRate: number;
+      let source: AsyncGenerator<Buffer>;
+      if (engine.streamPcm && engine.pcmSampleRate) {
+        sampleRate = engine.pcmSampleRate;
+        source = engine.streamPcm(text);
+      } else {
+        if (!formats.includes('wav')) throw new Error(`writes ${formats.join('/')} only; a live voice needs WAV or a PCM stream`);
+        const { parseWav } = await import('./wav');
+        const wav = parseWav(await engine.synthesize(text));
+        sampleRate = wav.sampleRate;
+        source = (async function* () { yield wav.pcm; })();
+      }
+      // The first audio decides: a failure before it falls to the backup.
+      const first = await source.next();
+      if (errors.length) log.warn({ using: row.name, failed: errors }, 'Speaking with the backup engine');
+      const held = engine;
+      engine = null;
+      let pendingFirst: IteratorResult<Buffer> | null = first;
+      let finished = false;
+      const finish = async (failed: boolean): Promise<void> => {
+        if (finished) return;
+        finished = true;
+        await source.return(undefined).catch(() => {});
+        await recordSpeechUsage(row, 'speech', req, { characters: failed ? 0 : text.length }, failed);
+        await held.dispose().catch(() => {});
+      };
+      const chunks: SpeechChunks = {
+        [Symbol.asyncIterator]() { return this; },
+        async next() {
+          if (finished) return { done: true, value: undefined };
+          try {
+            const result = pendingFirst ?? await source.next();
+            pendingFirst = null;
+            if (result.done) await finish(false);
+            return result;
+          } catch (err) {
+            await finish(true);
+            throw err;
+          }
+        },
+        async return() {
+          await finish(false);
+          return { done: true, value: undefined };
+        },
+      };
+      return { model: row.name, sampleRate, chunks };
+    } catch (err) {
+      await recordSpeechUsage(row, 'speech', req, { characters: 0 }, true);
+      errors.push(`${row.name}: ${(err as Error).message}`);
+    } finally {
+      await engine?.dispose().catch(() => {});
+    }
+  }
+  throw new Error(`Speech synthesis failed: ${errors.join('; ')}`);
+}
+
+/**
+ * Load the Transcription lane's model ahead of use, when it is a local engine
+ * that loads on first use (faster-whisper, whisper.cpp): a quarter second of
+ * silence through it. Cloud engines and speech servers are left alone — a
+ * request there costs money or loads someone else's server for nothing.
+ * Nothing is recorded: no one spoke.
+ */
+export async function warmSpeechEngines(req: SpeechRequest = {}): Promise<void> {
+  const row = await pickSpeechRow('stt', req).catch(() => null);
+  if (!row || !isLocalSpeechRow(row)) return;
+  const { pcm16kMonoToWav } = await import('./stt');
+  const engine = await sttEngineFor(row, { language: await language() });
+  try {
+    await engine.transcribe(pcm16kMonoToWav(new Uint8Array(8000)));
+  } finally {
+    await engine.dispose().catch(() => {});
+  }
+}
+
+/** The voices the engine bound to the Speech lane offers (its primary, or the named row). */
+export async function speechVoices(req: SpeechRequest = {}): Promise<{ model: string; voices: string[] }> {
+  const row = await pickSpeechRow('tts', req);
+  const engine = await ttsEngineFor(row, { format: speechFormats(row)[0] });
+  try {
+    return { model: row.name, voices: await engine.getVoices() };
+  } finally {
+    await engine.dispose().catch(() => {});
+  }
 }
 
 /** What serves each direction now, for `/voice/status`, the Voice tab and the capability gates. */
 export async function speechStatus(direction: SpeechDirection, req: SpeechRequest = {}): Promise<{ available: boolean; model: string | null; engine: SpeechEngineKind | null; local: boolean; reason: string | null }> {
   try {
     const row = await pickSpeechRow(direction, req);
-    return { available: true, model: row.name, engine: engineKindOf(row) ?? null, local: isLocalSpeechRow(row), reason: null };
+    return { available: true, model: row.name, engine: engineKindOf(row) ?? null, local: await speechStaysLocal(row), reason: null };
   } catch (err) {
     return { available: false, model: null, engine: null, local: false, reason: (err as Error).message };
   }

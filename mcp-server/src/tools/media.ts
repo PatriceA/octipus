@@ -104,12 +104,14 @@ export function registerMediaTools(server: McpServer, client: OctiClient): Media
     'Read text aloud with Octipus\'s Speech model. Returns the audio.',
     {
       text: z.string().min(1).max(5000).describe('What to say (at most 5000 characters)'),
-      voice: z.string().optional().describe('Voice id (provider-specific; default: the engine\'s voice)'),
+      voice: z.string().optional().describe('A voice profile by name, or a voice id of the engine (default: the configured voice)'),
+      style: z.string().max(1000).optional().describe('How it should sound, in words ("calm and slow"); used by engines that take a voice description'),
+      speed: z.number().min(0.5).max(2).optional().describe('Speaking rate (default 1)'),
       format: z.enum(['mp3', 'wav', 'pcm', 'flac', 'opus']).optional().describe('Audio format (default: the engine\'s own)'),
     },
-    async ({ text, voice, format }) => {
+    async ({ text, voice, style, speed, format }) => {
       try {
-        const audio = await client.speak({ text, voice_id: voice, format });
+        const audio = await client.speak({ text, voice, instructions: style, speed, format });
         return {
           content: [
             { type: 'audio' as const, data: audio.base64, mimeType: audio.mimeType },

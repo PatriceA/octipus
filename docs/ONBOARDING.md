@@ -108,7 +108,8 @@ last run did counts as done.
   - `development`: none, so a developer gets the core only.
   - A chat picked to talk to Octipus from (Telegram, Slack, …) turns on the
     chat channels. Voice no use case brings: choosing voice under Images &
-    audio turns it on (its engines are set through `POST /api/voice/engines/use`),
+    audio turns it on (local engines are installed through `POST /api/voice/engines/install`,
+    cloud ones bound through `POST /api/voice/engines/use`),
     or tick it in the picker below, or turn it on in Settings → Modules. Only an admin's run has this step.
   It only turns modules on, never off, so running the guide again with fewer
   use cases changes nothing that is on. It calls `POST /api/modules/enable`.

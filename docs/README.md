@@ -23,7 +23,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 |-----|----------------|
 | [CHANNELS.md](CHANNELS.md) | Telegram, Slack, Teams, WhatsApp, and WebChat setup — where each setting lives (vault / DB / `.env`-seed), account linking, and troubleshooting. |
 | [WEBHOOKS.md](WEBHOOKS.md) | Receiving inbound events (GitHub, GitLab, generic) via HMAC-verified webhooks and reacting with agents. |
-| [VOICE.md](VOICE.md) | Local STT/TTS/wake-word and phone calls via Twilio / Telnyx / Plivo. |
+| [VOICE.md](VOICE.md) | Hearing and speaking: speech engines (local, cloud, your own server), voices, the live conversation pipeline, and phone calls via Twilio / Telnyx / Plivo. |
 | [BROWSER-EXTENSION.md](BROWSER-EXTENSION.md) | The companion browser extension for real-browser control. |
 
 ## Providers & Models

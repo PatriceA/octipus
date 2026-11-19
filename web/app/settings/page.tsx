@@ -38,7 +38,7 @@ export default function SettingsPage() {
   const modules = useModules();
   const pageOn = usePageOn();
   const [search, setSearch] = useState('');
-  const permitted = settingsGroups.map(group => ({ ...group, entries: group.entries.filter(entry => (!entry.admin || user?.isAdmin) && (!entry.module || modules.data?.enabled.includes(entry.module)) && (!entry.href || pageOn(entry.href))) }));
+  const permitted = settingsGroups.map(group => ({ ...group, entries: group.entries.filter(entry => (!entry.admin || user?.isAdmin) && (!entry.module || modules.data?.enabled.includes(entry.module) || (!!entry.adminWhenOff && !!user?.isAdmin && !!modules.data)) && (!entry.href || pageOn(entry.href))) }));
   const entry = permitted.flatMap(group => group.entries).find(item => item.tab === tab);
   const group = permitted.find(group => group.entries.includes(entry!));
   const terms = search.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);

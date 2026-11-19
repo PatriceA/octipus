@@ -16,6 +16,9 @@ const state = vi.hoisted(() => ({
   usage: vi.fn(async () => {}),
   mayLeave: vi.fn(async () => {}),
   voices: [] as Array<string | undefined>,
+  profiles: [] as Array<{ name: string; voice?: string; instructions?: string; model?: string }>,
+  activeProfile: '',
+  spoken: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock('@/models/model-registry', () => ({
@@ -31,6 +34,13 @@ vi.mock('@/core/protection/routing', () => {
   return { assertMayLeave: state.mayLeave, ProtectionRoutingError, runsLocally: async (r: { provider: string }) => r.provider === 'local-audio' };
 });
 vi.mock('@/config', () => ({ getConfig: () => ({ voice: { ttsVoice: 'configured-voice' } }) }));
+// Profiles live in the settings store; here they are a list.
+vi.mock('./profiles', () => ({
+  activeVoiceProfileName: async () => state.activeProfile,
+  getVoiceProfile: async (name: string) => state.profiles.find((p) => p.name.toLowerCase() === name.toLowerCase()),
+  profileVoiceFor: async (p: { voice?: string; instructions?: string; model?: string }, row: { name: string }) =>
+    (p.model && p.model !== row.name ? undefined : { voice: p.voice, instructions: p.instructions }),
+}));
 // The clip's length (ffprobe), never the engine's processing time.
 vi.mock('./ffmpeg', () => ({ probeBufferSeconds: async () => 42 }));
 vi.mock('./speech-rows', async (orig) => {
@@ -43,7 +53,7 @@ vi.mock('./speech-rows', async (orig) => {
       streamTranscribe: async function* () {},
       dispose: async () => {},
     }),
-    ttsEngineFor: async (_row: unknown, opts: { voice?: string }) => (state.voices.push(opts.voice), { synthesize: state.synthesize, streamSynthesize: async function* () {}, getVoices: async () => [], dispose: async () => {} }),
+    ttsEngineFor: async (_row: unknown, opts: { voice?: string }) => (state.voices.push(opts.voice), state.spoken.push(opts as Record<string, unknown>), { synthesize: state.synthesize, streamSynthesize: async function* () {}, getVoices: async () => ['v1', 'v2'], dispose: async () => {} }),
   };
 });
 
@@ -56,6 +66,7 @@ const ok = (text: string) => async () => ({ text, segments: [], language: 'en', 
 
 beforeEach(() => {
   state.primary = null; state.backup = null; state.named = {}; state.available = {}; state.transcribe = {}; state.voices = [];
+  state.profiles = []; state.activeProfile = ''; state.spoken = [];
   vi.clearAllMocks();
 });
 
@@ -167,6 +178,102 @@ describe('speech resolution', () => {
     await expect(resolve.synthesizeWithLane('hi', { format: 'mp3' })).resolves.toMatchObject({ format: 'wav', contentType: 'audio/wav', model: 'local kokoro' });
     await expect(resolve.synthesizeWithLane('hi', { format: 'mp3', strictFormat: true })).rejects.toThrow(/writes wav only/);
     expect(state.usage).toHaveBeenCalledWith(expect.objectContaining({ requestType: 'speech', accountingMetadata: { characters: 2 } }), 'local-audio', expect.anything(), false);
+  });
+});
+
+describe('an OpenAI-compatible speech server is a speech engine', () => {
+  const server = (name: string, modelId: string, lane: string, endpoint: string, speech: Record<string, unknown> = {}) =>
+    ({ ...row(name, 'custom-openai', modelId, lane), endpoint, metadata: { speech } }) as unknown as ModelConfigEntry;
+
+  test('a row with an endpoint is bound and used like any other; a chat row without a direction is not', async () => {
+    state.primary = server('turbo', 'openai/whisper-large-v3-turbo', 'transcription', 'http://localhost:8000');
+    state.transcribe = { turbo: ok('from my server') };
+    await expect(resolve.transcribeWithLane(Buffer.from('x'))).resolves.toMatchObject({ text: 'from my server', model: 'turbo' });
+    state.named['chat'] = server('chat', 'llama-3.3-70b', 'default', 'http://localhost:8000');
+    await expect(resolve.speechCandidates('stt', { override: 'chat' })).rejects.toThrow(/not a speech-to-text engine/);
+    state.named['nemotron'] = server('nemotron', 'nvidia/nemotron-3.5-asr-streaming-0.6b', 'x', 'http://localhost:8080');
+    expect((await resolve.speechCandidates('stt', { override: 'nemotron' })).map((r) => r.name)).toEqual(['nemotron']);
+  });
+
+  test('a server on the owner\'s own network needs none of the install\'s hosted keys; a hosted one does', async () => {
+    const mine = { ...server('mine', 'openai/whisper-large-v3-turbo', 'transcription', 'http://192.168.1.20:8000'), provider: 'custom-openai' };
+    state.primary = mine;
+    // runsLocally is stubbed on the provider name here; the real one reads the row's data policy.
+    expect(await resolve.speechCandidates('stt', { allowHosted: false })).toEqual([]);
+    const { speechStaysLocal } = await import('./speech-rows');
+    await expect(speechStaysLocal(row('local fw', 'local-audio', 'faster-whisper:small', 'transcription'))).resolves.toBe(true);
+    await expect(speechStaysLocal(row('openai stt', 'openai', 'gpt-4o-transcribe', 'transcription'))).resolves.toBe(false);
+  });
+});
+
+describe('voices', () => {
+  test('the active profile speaks; one made for another engine is not handed over; a request may name a profile or a preset', async () => {
+    state.primary = row('vox', 'custom-openai', 'openbmb/VoxCPM2', 'speech');
+    (state.primary as { endpoint: string }).endpoint = 'http://localhost:8091';
+    state.profiles = [
+      { name: 'Narrator', instructions: 'a calm older man' },
+      { name: 'Kokoro only', voice: 'af_sarah', model: 'local kokoro' },
+    ];
+    state.activeProfile = 'Narrator';
+    await resolve.synthesizeWithLane('hi');
+    expect(state.spoken.at(-1)).toMatchObject({ instructions: 'a calm older man' });
+
+    // A profile made for another row: this engine speaks in its own default, and the old setting still applies to the primary.
+    state.activeProfile = 'Kokoro only';
+    await resolve.synthesizeWithLane('hi');
+    expect(state.spoken.at(-1)).toMatchObject({ voice: 'configured-voice' });
+    expect(state.spoken.at(-1)?.instructions).toBeUndefined();
+
+    // Named by the request: a profile by name, a preset id otherwise; extra direction is added to the profile's.
+    await resolve.synthesizeWithLane('hi', { voice: 'narrator', instructions: 'whispering' });
+    expect(state.spoken.at(-1)).toMatchObject({ instructions: 'a calm older man. whispering' });
+    await resolve.synthesizeWithLane('hi', { voice: 'S3', speed: 1.2 });
+    expect(state.spoken.at(-1)).toMatchObject({ voice: 'S3', speed: 1.2 });
+    await expect(resolve.synthesizeWithLane('hi', { profile: 'nobody' })).rejects.toThrow(/No voice profile named "nobody"/);
+  });
+
+  test('the bound engine lists its voices', async () => {
+    state.primary = row('local kokoro', 'local-audio', 'kokoro:af_sarah', 'speech');
+    await expect(resolve.speechVoices()).resolves.toEqual({ model: 'local kokoro', voices: ['v1', 'v2'] });
+  });
+});
+
+describe('speech as a stream of PCM', () => {
+  const wav = async (samples: number[], rate: number) => (await import('./wav')).pcmToWav(new Uint8Array(new Int16Array(samples).buffer), rate);
+
+  test('an engine that writes a file is read through its WAV: the samples and their rate', async () => {
+    state.primary = row('local kokoro', 'local-audio', 'kokoro:af_sarah', 'speech');
+    state.synthesize.mockResolvedValueOnce(Buffer.from(await wav([1, 2, 3, 4], 24000)));
+    const stream = await resolve.streamSpeechWithLane('hi there');
+    expect(stream).toMatchObject({ model: 'local kokoro', sampleRate: 24000 });
+    const parts: Buffer[] = [];
+    for await (const chunk of stream.chunks) parts.push(chunk);
+    expect(new Int16Array(new Uint8Array(Buffer.concat(parts)).buffer)).toEqual(new Int16Array([1, 2, 3, 4]));
+    expect(state.usage).toHaveBeenCalledWith(expect.objectContaining({ requestType: 'speech', accountingMetadata: { characters: 8 } }), 'local-audio', expect.anything(), false);
+  });
+
+  test('a primary that fails before its first audio falls to the backup', async () => {
+    state.primary = row('mistral tts', 'mistral', 'voxtral-mini-tts-2603', 'speech');
+    state.backup = row('local kokoro', 'local-audio', 'kokoro:af_sarah', 'speech', 'backup');
+    state.synthesize.mockRejectedValueOnce(new Error('503')).mockResolvedValueOnce(Buffer.from(await wav([9], 22050)));
+    const stream = await resolve.streamSpeechWithLane('hi');
+    expect(stream).toMatchObject({ model: 'local kokoro', sampleRate: 22050 });
+    for await (const _ of stream.chunks) { /* drain */ }
+  });
+});
+
+describe('warming the Transcription engine', () => {
+  test('a local engine is run once on silence; a cloud one is never asked', async () => {
+    state.primary = row('local fw', 'local-audio', 'faster-whisper:small', 'transcription');
+    let calls = 0;
+    state.transcribe = { 'local fw': async () => { calls += 1; return { text: '', segments: [], language: 'en', duration: 0 }; } };
+    await resolve.warmSpeechEngines();
+    expect(calls).toBe(1);
+    expect(state.usage).not.toHaveBeenCalled(); // nobody spoke: nothing to count
+
+    state.primary = row('openai stt', 'openai', 'gpt-4o-transcribe', 'transcription');
+    state.transcribe = { 'openai stt': async () => { throw new Error('a cloud engine must not be warmed'); } };
+    await expect(resolve.warmSpeechEngines()).resolves.toBeUndefined();
   });
 });
 

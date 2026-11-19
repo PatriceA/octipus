@@ -27,7 +27,7 @@ export function stripNonSpeech(text: string): string {
 }
 
 /** Wrap raw 16 kHz mono s16 PCM in a 44-byte WAV header so whisper.cpp accepts it. */
-function pcm16kMonoToWav(pcm: Uint8Array): Buffer {
+export function pcm16kMonoToWav(pcm: Uint8Array): Buffer {
   const header = Buffer.alloc(44);
   header.write('RIFF', 0);
   header.writeUInt32LE(36 + pcm.length, 4);
@@ -74,7 +74,7 @@ export async function isConformantWav(path: string): Promise<boolean> {
  * downmixes deterministically. Returns the source path unchanged when it is
  * already conformant (no ffmpeg needed), otherwise a new temp path.
  */
-async function toWhisperWav(sourcePath: string): Promise<string> {
+export async function toWhisperWav(sourcePath: string): Promise<string> {
   if (await isConformantWav(sourcePath)) return sourcePath;
   const out = tmpPath('-16k.wav');
   // Only a local audio/video container is read (voice/ffmpeg.ts): never a
@@ -89,7 +89,15 @@ async function toWhisperWav(sourcePath: string): Promise<string> {
 }
 
 export interface STTOptions {
-  model?: 'tiny' | 'base' | 'small' | 'medium' | 'large';
+  /**
+   * faster-whisper: a size (`small`), a release name (`large-v3-turbo`,
+   * `turbo`, `distil-large-v3`) or a CTranslate2 repository on Hugging Face.
+   */
+  model?: string;
+  /** faster-whisper: where the model runs. `auto` uses a GPU when CTranslate2 finds one. */
+  device?: 'auto' | 'cpu' | 'cuda';
+  /** faster-whisper: the CTranslate2 compute type; unset = int8 on CPU, float16 on a GPU. */
+  computeType?: string;
   language?: string;
   translate?: boolean;
   vadEnabled?: boolean;
@@ -122,6 +130,13 @@ export interface TranscriptionResult {
 }
 
 export interface STTEngine {
+  /**
+   * True when `streamTranscribe` is a real stream (text arrives while the
+   * person is still talking). False or unset: it re-transcribes fixed windows,
+   * and a caller that knows where an utterance ends does better transcribing
+   * the whole utterance once (src/voice/session.ts).
+   */
+  readonly live?: boolean;
   transcribe(audio: Buffer | string): Promise<TranscriptionResult>;
   streamTranscribe(stream: ReadableStream<Uint8Array>): AsyncGenerator<string>;
   dispose(): Promise<void>;
@@ -360,9 +375,14 @@ export class FasterWhisperEngine extends EventEmitter implements STTEngine {
     const proc = spawn({
       command: 'uv',
       args: [
-        'run', '--python', '3.12', '--with', 'faster-whisper', worker,
+        'run', '--python', '3.12', '--with', 'faster-whisper',
+        // A GPU needs cuBLAS and cuDNN beside CTranslate2; asked for only when the row says `cuda`.
+        ...(this.options.device === 'cuda' ? ['--with', 'nvidia-cublas-cu12', '--with', 'nvidia-cudnn-cu12'] : []),
+        worker,
         '--model', this.options.model || 'small',
         '--language', this.options.language || 'en',
+        '--device', this.options.device || 'auto',
+        ...(this.options.computeType ? ['--compute-type', this.options.computeType] : []),
       ],
       stdin: 'pipe',
       stdout: 'pipe',
@@ -380,18 +400,31 @@ export class FasterWhisperEngine extends EventEmitter implements STTEngine {
 
   /** Send one PCM window (16 kHz mono s16le) and await its transcript. Serialised. */
   private send(pcm: Uint8Array): Promise<string> {
-    const run = async (): Promise<string> => {
-      await this.ensureWorker();
-      const header = new Uint8Array(4);
-      new DataView(header.buffer).setUint32(0, pcm.length, false); // big-endian
-      this.sink!.write(header);
-      this.sink!.write(pcm);
-      // A stream writer has no flush; awaiting `ready` is the same guarantee
-      // — the worker has taken everything written above.
-      await this.sink!.ready;
-      const line = await this.lines!.next();
-      if (line == null) throw new Error('faster-whisper worker closed unexpectedly');
-      return ((JSON.parse(line) as { text?: string }).text || '');
+    return this.sendDetailed(pcm).then((r) => r.text);
+  }
+
+  /** As `send`, with the segment times and the language the worker reports. */
+  private sendDetailed(pcm: Uint8Array): Promise<FasterWhisperReply> {
+    const run = async (): Promise<FasterWhisperReply> => {
+      try {
+        await this.ensureWorker();
+        const header = new Uint8Array(4);
+        new DataView(header.buffer).setUint32(0, pcm.length, false); // big-endian
+        this.sink!.write(header);
+        this.sink!.write(pcm);
+        // A stream writer has no flush; awaiting `ready` is the same guarantee
+        // — the worker has taken everything written above.
+        await this.sink!.ready;
+        const line = await this.lines!.next();
+        if (line == null) throw new Error('faster-whisper worker closed unexpectedly');
+        const reply = JSON.parse(line) as Partial<FasterWhisperReply> & { error?: string };
+        if (reply.error) throw new Error(`faster-whisper: ${reply.error}`);
+        return { text: reply.text || '', segments: reply.segments ?? [], language: reply.language };
+      } catch (err) {
+        // A worker that died stays dead: drop it, so the next request starts a new one.
+        await this.dispose();
+        throw err;
+      }
     };
     const p = this.chain.then(run, run);
     this.chain = p.catch(() => {}); // keep the chain alive past a failed request
@@ -417,17 +450,30 @@ export class FasterWhisperEngine extends EventEmitter implements STTEngine {
       if (typeof audio !== 'string') await rm(source, { force: true });
     }
     const pcm = stripWavHeader(new Uint8Array(raw)); // 16 kHz mono s16 now
-    const text = stripNonSpeech(await this.send(pcm)).trim();
+    const reply = await this.sendDetailed(pcm);
+    const text = stripNonSpeech(reply.text).trim();
     const duration = (Date.now() - start) / 1000;
+    const segments = reply.segments
+      .map((s) => ({ start: s.start, end: s.end, text: stripNonSpeech(s.text).trim(), confidence: 1.0 }))
+      .filter((s) => s.text);
     return {
       text,
-      segments: text ? [{ start: 0, end: duration, text, confidence: 1.0 }] : [],
-      language: this.options.language!,
+      segments: segments.length ? segments : text ? [{ start: 0, end: pcm.length / 32000, text, confidence: 1.0 }] : [],
+      language: reply.language || this.options.language!,
       duration,
     };
   }
 
   async *streamTranscribe(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+    try {
+      yield* this.streamWindows(stream);
+    } finally {
+      await this.dispose();
+    }
+  }
+
+  /** `streamTranscribe` without stopping the worker afterwards (a resident engine keeps its model loaded). */
+  async *streamWindows(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
     // Same sliding-window scheme as WhisperEngine, but each window streams to the
     // resident worker (raw PCM — the realtime socket feeds headerless frames).
     const cfg = this.options.streamWindowSeconds;
@@ -449,7 +495,7 @@ export class FasterWhisperEngine extends EventEmitter implements STTEngine {
         if (text) yield text;
       }
     } finally {
-      await this.dispose();
+      reader.releaseLock();
     }
   }
 
@@ -465,6 +511,62 @@ export class FasterWhisperEngine extends EventEmitter implements STTEngine {
       this.proc.kill();
       this.proc = null;
     }
+  }
+}
+
+interface FasterWhisperReply {
+  text: string;
+  segments: Array<{ start: number; end: number; text: string }>;
+  language?: string;
+}
+
+/**
+ * Resident faster-whisper workers. Loading a model takes seconds (large-v3-turbo
+ * is 1.6 GB), so a worker is kept with its model loaded and shared by every
+ * request for the same model, device and language; it is stopped after ten
+ * idle minutes. Requests on one worker run one at a time.
+ */
+const RESIDENT_IDLE_MS = 10 * 60_000;
+const residents = new Map<string, { engine: FasterWhisperEngine; leases: number; idle: ReturnType<typeof setTimeout> | null }>();
+
+export function residentFasterWhisper(options: STTOptions): STTEngine {
+  const key = JSON.stringify([options.model || 'small', options.language || 'en', options.device || 'auto', options.computeType || '']);
+  let entry = residents.get(key);
+  if (!entry) {
+    entry = { engine: new FasterWhisperEngine(options), leases: 0, idle: null };
+    residents.set(key, entry);
+  }
+  if (entry.idle) { clearTimeout(entry.idle); entry.idle = null; }
+  entry.leases += 1;
+  const held = entry;
+  let released = false;
+  return {
+    live: false,
+    transcribe: (audio) => held.engine.transcribe(audio),
+    streamTranscribe: (stream) => held.engine.streamWindows(stream),
+    async dispose() {
+      if (released) return;
+      released = true;
+      held.leases -= 1;
+      if (held.leases > 0) return;
+      held.idle = setTimeout(() => {
+        if (residents.get(key) === held && held.leases === 0) {
+          residents.delete(key);
+          void held.engine.dispose();
+        }
+      }, RESIDENT_IDLE_MS);
+      held.idle.unref?.();
+    },
+  };
+}
+
+/** Stop every resident worker (shutdown, tests). */
+export async function stopResidentSpeechWorkers(): Promise<void> {
+  const all = [...residents.values()];
+  residents.clear();
+  for (const r of all) {
+    if (r.idle) clearTimeout(r.idle);
+    await r.engine.dispose();
   }
 }
 
@@ -506,7 +608,7 @@ export function stripWavHeader(chunk: Uint8Array): Uint8Array {
  * providers; this captures those so the websocket plumbing (queue/pump/consume,
  * WAV-header stripping, connect + teardown) lives in one place.
  */
-interface RealtimeWsProtocol {
+export interface RealtimeWsProtocol {
   url: string;
   headers: Record<string, string>;
   /** Provider name, used in error messages. */
@@ -544,7 +646,7 @@ interface RealtimeWsProtocol {
  * transcript deltas down. Shared by the Mistral and OpenAI engines — see
  * {@link RealtimeWsProtocol} for the per-provider differences.
  */
-async function* streamRealtimeWs(
+export async function* streamRealtimeWs(
   protocol: RealtimeWsProtocol,
   stream: ReadableStream<Uint8Array>,
 ): AsyncGenerator<string> {
@@ -659,6 +761,7 @@ async function* streamRealtimeWs(
  *   a JSON event protocol carrying base64 PCM frames.
  */
 export class MistralSTTEngine extends EventEmitter implements STTEngine {
+  readonly live = true;
   private model: string;
   private options: STTOptions & { diarize?: boolean; contextBias?: string[] };
 
@@ -762,6 +865,94 @@ export function pcm16leResample(pcm: Uint8Array, resampler: StreamingResampler):
 }
 
 /**
+ * The OpenAI realtime transcription protocol (GA), for OpenAI itself and for
+ * servers that speak it (Speaches, NVIDIA NIM): a `session.update` selects the
+ * model and PCM format, `input_audio_buffer.append` frames carry the audio,
+ * and `conversation.item.input_audio_transcription.delta` events carry text.
+ * `sampleRate` is what the server wants; 16 kHz input is resampled to it.
+ */
+export function openAiRealtimeProtocol(opts: {
+  url: string; headers: Record<string, string>; name: string; model: string; language?: string; sampleRate: number;
+}): RealtimeWsProtocol {
+  // A streaming (click-free across frames) resampler, scoped to this one stream.
+  const resampler = opts.sampleRate === REALTIME_SAMPLE_RATE ? null : new StreamingResampler(REALTIME_SAMPLE_RATE, opts.sampleRate);
+  return {
+    url: opts.url,
+    headers: opts.headers,
+    name: opts.name,
+    // GA `session.update`: config lives under session.audio.input. server_vad
+    // is essential: the client streams continuously and never sends a manual
+    // commit, so the server must segment and transcribe on its own VAD; with
+    // turn_detection off nothing is ever transcribed.
+    onOpen: (ws) => ws.send(JSON.stringify({
+      type: 'session.update',
+      session: {
+        type: 'transcription',
+        audio: {
+          input: {
+            format: { type: 'audio/pcm', rate: opts.sampleRate },
+            transcription: { model: opts.model, ...(opts.language ? { language: opts.language } : {}) },
+            turn_detection: { type: 'server_vad' },
+          },
+        },
+      },
+    })),
+    ...(resampler ? { transformPcm: (pcm: Uint8Array) => pcm16leResample(pcm, resampler) } : {}),
+    appendMessage: (audio) => ({ type: 'input_audio_buffer.append', audio }),
+    // server_vad auto-commits each detected utterance — no manual commit.
+    finalMessages: [],
+    delta: (e) => (e.type === 'conversation.item.input_audio_transcription.delta' ? String(e.delta ?? '') : null),
+    // `.completed` is a per-utterance boundary, NOT the end of the session —
+    // keep the connection open across utterances and end only when the mic
+    // stops (finishOnInputEnd).
+    isDone: () => false,
+    finishOnInputEnd: true,
+    error: (e) => (e.type === 'error' ? (e.error as { message?: string } | undefined)?.message || String(e.message ?? 'unknown error') : null),
+  };
+}
+
+/**
+ * NVIDIA NeMo-Speech.cpp's realtime transcription socket
+ * (`/v1/audio/transcriptions/realtime`, its docs/api.md): one `session.update`
+ * before any audio, base64 PCM16 in `input_audio_buffer.append`, a `commit`
+ * at the end. The server endpoints on its own and sends each finished
+ * utterance as a `.completed` event; those are what is yielded (its `.delta`
+ * events are partials of the same utterance, so adding them up would repeat words).
+ */
+export function nemoRealtimeProtocol(opts: {
+  url: string; headers: Record<string, string>; language?: string; sampleRate?: number; endpointingMs?: number;
+}): RealtimeWsProtocol {
+  let first = true;
+  return {
+    url: opts.url,
+    headers: opts.headers,
+    name: 'NeMo',
+    onOpen: (ws) => ws.send(JSON.stringify({
+      type: 'session.update',
+      session: {
+        sample_rate: opts.sampleRate ?? REALTIME_SAMPLE_RATE,
+        ...(opts.language ? { language: opts.language } : {}),
+        ...(opts.endpointingMs ? { endpointing_ms: opts.endpointingMs } : {}),
+      },
+    })),
+    appendMessage: (audio) => ({ type: 'input_audio_buffer.append', audio }),
+    finalMessages: [{ type: 'input_audio_buffer.commit' }],
+    delta: (e) => {
+      if (e.type !== 'conversation.item.input_audio_transcription.completed') return null;
+      const text = String(e.transcript ?? e.text ?? '').trim();
+      if (!text) return '';
+      const piece = first ? text : ` ${text}`;
+      first = false;
+      return piece;
+    },
+    // The commit's answer ends the stream: everything sent has been transcribed.
+    isDone: (e) => e.type === 'input_audio_buffer.committed',
+    finishOnInputEnd: false,
+    error: (e) => (e.type === 'error' ? String(e.message ?? (e.error as { message?: string } | undefined)?.message ?? 'unknown error') : null),
+  };
+}
+
+/**
  * OpenAI realtime speech-to-text over `wss://api.openai.com/v1/realtime?intent=transcription`.
  *
  * Same push/pull websocket shape as {@link MistralSTTEngine}, but OpenAI's GA
@@ -774,6 +965,7 @@ export function pcm16leResample(pcm: Uint8Array, resampler: StreamingResampler):
  * `transcribe()` (batch) uses the plain `/v1/audio/transcriptions` endpoint.
  */
 export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
+  readonly live = true;
   private model: string;
   private options: STTOptions;
 
@@ -821,47 +1013,17 @@ export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
   }
 
   async *streamTranscribe(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
-    const model = this.model;
-    const language = this.options.language;
-    // OpenAI's realtime input requires >= 24 kHz; our pipeline is 16 kHz, so
-    // upsample each frame with a streaming (click-free across frames) resampler.
-    const resampler = new StreamingResampler(REALTIME_SAMPLE_RATE, OPENAI_REALTIME_RATE);
-    yield* streamRealtimeWs({
+    yield* streamRealtimeWs(openAiRealtimeProtocol({
       url: 'wss://api.openai.com/v1/realtime?intent=transcription',
       // GA API: the old `OpenAI-Beta: realtime=v1` header is gone (sending it now
       // errors "Realtime Beta API is no longer supported").
       headers: { Authorization: `Bearer ${await this.apiKey()}` },
       name: 'OpenAI',
-      // GA `session.update`: config moved under session.audio.input. Select the
-      // transcription model + 24 kHz PCM. server_vad is essential here: the
-      // client streams continuously and never sends a manual commit, so OpenAI
-      // must segment + transcribe on its own VAD (matching Voxtral's continuous
-      // deltas); with turn_detection off nothing is ever transcribed.
-      onOpen: (ws) => ws.send(JSON.stringify({
-        type: 'session.update',
-        session: {
-          type: 'transcription',
-          audio: {
-            input: {
-              format: { type: 'audio/pcm', rate: OPENAI_REALTIME_RATE },
-              transcription: { model, language },
-              turn_detection: { type: 'server_vad' },
-            },
-          },
-        },
-      })),
-      transformPcm: (pcm) => pcm16leResample(pcm, resampler),
-      appendMessage: (audio) => ({ type: 'input_audio_buffer.append', audio }),
-      // server_vad auto-commits each detected utterance — no manual commit.
-      finalMessages: [],
-      delta: (e) => (e.type === 'conversation.item.input_audio_transcription.delta' ? String(e.delta ?? '') : null),
-      // `.completed` is a per-utterance boundary, NOT the end of the session —
-      // keep the connection open across utterances (the client never reconnects)
-      // and end only when the mic stops (finishOnInputEnd).
-      isDone: () => false,
-      finishOnInputEnd: true,
-      error: (e) => (e.type === 'error' ? (e.error as { message?: string } | undefined)?.message || 'unknown error' : null),
-    }, stream);
+      model: this.model,
+      language: this.options.language,
+      // OpenAI's realtime input requires >= 24 kHz; our pipeline is 16 kHz.
+      sampleRate: OPENAI_REALTIME_RATE,
+    }), stream);
   }
 
   async dispose(): Promise<void> {
@@ -882,26 +1044,6 @@ export async function transcribeAudioBuffer(audio: Buffer, format = 'ogg', req: 
 }
 
 /**
- * Factory function to create STT engine
- */
-export function createSTTEngine(
-  type: 'whisper-cpp' | 'mistral' | 'openai' = 'whisper-cpp',
-  modelPathOrName: string,
-  options: STTOptions = {}
-): STTEngine {
-  switch (type) {
-    case 'whisper-cpp':
-      return new WhisperEngine(modelPathOrName, options);
-    case 'mistral':
-      return new MistralSTTEngine(modelPathOrName || MISTRAL_STT_MODEL, options);
-    case 'openai':
-      return new OpenAIRealtimeSTTEngine(modelPathOrName || OPENAI_STT_REALTIME_MODEL, options);
-    default:
-      throw new Error(`Unknown STT engine type: ${type}`);
-  }
-}
-
-/**
  * Speech-to-text service that manages STT engine
  */
 export class SpeechToText {
@@ -910,15 +1052,6 @@ export class SpeechToText {
 
   constructor(engine: STTEngine) {
     this.engine = engine;
-  }
-
-  static async create(
-    type: 'whisper-cpp' | 'mistral' | 'openai' = 'whisper-cpp',
-    modelPathOrName: string = 'base',
-    options: STTOptions = {}
-  ): Promise<SpeechToText> {
-    const engine = createSTTEngine(type, modelPathOrName, options);
-    return new SpeechToText(engine);
   }
 
   async transcribe(audio: Buffer | string): Promise<TranscriptionResult> {

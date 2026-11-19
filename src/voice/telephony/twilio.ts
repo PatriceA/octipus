@@ -3,7 +3,7 @@
  *
  * Supports:
  * - Outbound calls (notify + conversation mode)
- * - TwiML generation for call flow control
+ * - Webhooks read into the shared event shape, answered with TwiML
  * - Media Streams (WebSocket) for real-time audio
  * - Webhook signature verification
  */
@@ -11,24 +11,33 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { fetchWithTimeout } from '@/utils/http';
 import { logger } from '@/utils/logger';
-import type { CallSession, CallStatus, InitiateCallOptions, TelephonyProvider } from './interface';
+import type {
+  CallInstruction, CallSession, CallStatus, InitiateCallOptions, SpokenLine, TelephonyProvider, TelephonyWebhookEvent, WebhookReply,
+} from './interface';
 
 const log = logger.child({ component: 'twilio-provider' });
 
+const XML = 'application/xml';
+const XML_HEAD = '<?xml version="1.0" encoding="UTF-8"?>\n';
+
+/** Twilio's `CallStatus` values for a call that is over → how it ended. */
+const FINAL_STATUS: Record<string, CallStatus> = {
+  completed: 'ended', canceled: 'ended', busy: 'busy', 'no-answer': 'no-answer', failed: 'failed',
+};
+
 export class TwilioProvider implements TelephonyProvider {
   readonly name = 'twilio';
+  readonly mediaStream = true;
 
   private accountSid: string;
   private authToken: string;
   private fromNumber: string;
-  private language: string;
   private baseUrl = 'https://api.twilio.com/2010-04-01';
 
-  constructor(config: { accountSid: string; authToken: string; fromNumber: string; language?: string }) {
+  constructor(config: { accountSid: string; authToken: string; fromNumber: string }) {
     this.accountSid = config.accountSid;
     this.authToken = config.authToken;
     this.fromNumber = config.fromNumber;
-    this.language = config.language || 'en-US';
   }
 
   async initiateCall(options: InitiateCallOptions): Promise<CallSession> {
@@ -46,11 +55,6 @@ export class TwilioProvider implements TelephonyProvider {
 
     if (options.timeout) {
       params.set('Timeout', String(options.timeout));
-    }
-
-    // If media streaming is requested, add stream URL
-    if (options.streamUrl) {
-      params.set('Url', options.webhookUrl); // TwiML will be served from webhook
     }
 
     const response = await fetchWithTimeout(
@@ -87,48 +91,85 @@ export class TwilioProvider implements TelephonyProvider {
     };
   }
 
-  generateAnswerResponse(options: {
-    message: string;
-    voice?: string;
-    gatherSpeech?: boolean;
-    gatherTimeout?: number;
-    callbackUrl?: string;
-    streamUrl?: string;
-  }): string {
-    const voice = options.voice || 'Polly.Amy';
-    let twiml = '<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n';
+  /**
+   * Twilio posts form fields: `CallSid`, `CallStatus`, `Direction`
+   * (`inbound`, `outbound-api`, …), `From`, `To`, and `SpeechResult` on the
+   * callback of a `<Gather>`.
+   */
+  parseWebhook(fields: Record<string, unknown>): TelephonyWebhookEvent {
+    const field = (name: string) => (typeof fields[name] === 'string' ? fields[name] as string : '');
+    const status = field('CallStatus');
+    const direction = field('Direction');
+    const event: TelephonyWebhookEvent = {
+      type: 'other',
+      callId: field('CallSid'),
+      aliases: [],
+      direction: direction ? (direction.startsWith('outbound') ? 'outbound' : 'inbound') : undefined,
+      from: field('From'),
+      to: field('To'),
+    };
+    const speech = field('SpeechResult').trim();
+    // A Gather callback carries CallStatus=in-progress too: speech comes first.
+    if (speech) return { ...event, type: 'speech', speech };
+    if (status in FINAL_STATUS) return { ...event, type: 'hangup', status: FINAL_STATUS[status] };
+    if (status === 'in-progress') return { ...event, type: 'answered' };
+    if (status === 'ringing') return { ...event, type: event.direction === 'outbound' ? 'ringing' : 'incoming' };
+    if (status === 'queued' || status === 'initiated') return { ...event, type: 'ringing' };
+    return event;
+  }
 
-    if (options.gatherSpeech && options.callbackUrl) {
-      // Interactive mode: speak, then gather speech input
-      const lang = this.language || 'en-US';
-      twiml += `  <Gather input="speech" action="${this.escapeXml(options.callbackUrl)}" `;
-      twiml += `speechTimeout="${options.gatherTimeout || 'auto'}" language="${lang}" enhanced="true">\n`;
-      twiml += `    <Say voice="${voice}">${this.escapeXml(options.message)}</Say>\n`;
-      twiml += '  </Gather>\n';
-      // Fallback if no speech detected — re-prompt instead of hanging up
-      twiml += `  <Say voice="${voice}">I didn't catch that. Are you still there?</Say>\n`;
-      twiml += `  <Gather input="speech" action="${this.escapeXml(options.callbackUrl)}" speechTimeout="auto" language="${lang}" enhanced="true">\n`;
-      twiml += `    <Say voice="${voice}">Go ahead, I'm listening.</Say>\n`;
-      twiml += '  </Gather>\n';
+  /** The TwiML answering the webhook is the answer. */
+  async acceptIncoming(): Promise<boolean> {
+    return true;
+  }
+
+  async rejectIncoming(): Promise<WebhookReply> {
+    return { contentType: XML, body: `${XML_HEAD}<Response>\n  <Reject/>\n</Response>` };
+  }
+
+  acknowledge(): WebhookReply {
+    return { contentType: XML, body: `${XML_HEAD}<Response></Response>` };
+  }
+
+  /**
+   * A line as TwiML: the install's own voice when it was synthesised
+   * (`<Play>`), else `<Say>` in the call's language. No `voice` attribute:
+   * Twilio then uses the voice the account has set for that language
+   * (Console → Voice → Settings → Text-to-speech).
+   */
+  private line(line: SpokenLine, locale: string): string {
+    if (line.audioUrl) return `<Play>${this.escapeXml(line.audioUrl)}</Play>`;
+    return `<Say language="${this.escapeXml(locale)}">${this.escapeXml(line.text)}</Say>`;
+  }
+
+  async instruct(_providerCallId: string, instruction: CallInstruction): Promise<WebhookReply> {
+    const { say, locale } = instruction;
+    let twiml = `${XML_HEAD}<Response>\n`;
+
+    if (instruction.then === 'listen') {
+      if (!instruction.callbackUrl) throw new Error('Twilio needs a callback URL to listen for speech.');
+      const gather = `<Gather input="speech" action="${this.escapeXml(instruction.callbackUrl)}" speechTimeout="auto" language="${this.escapeXml(locale)}" enhanced="true">`;
+      // Speak, then gather speech input
+      twiml += say ? `  ${gather}\n    ${this.line(say, locale)}\n  </Gather>\n` : `  ${gather}</Gather>\n`;
+      // No speech detected — re-prompt once instead of hanging up
+      if (instruction.reprompt) {
+        twiml += `  ${this.line(instruction.reprompt.stillThere, locale)}\n`;
+        twiml += `  ${gather}\n    ${this.line(instruction.reprompt.listening, locale)}\n  </Gather>\n`;
+      }
       twiml += '  <Hangup/>\n';
-    } else if (options.streamUrl) {
-      // Media streaming mode: speak greeting, then start bidirectional stream
-      twiml += `  <Say voice="${voice}">${this.escapeXml(options.message)}</Say>\n`;
-      twiml += `  <Connect>\n`;
-      twiml += `    <Stream url="${this.escapeXml(options.streamUrl)}" />\n`;
-      twiml += `  </Connect>\n`;
+    } else if (instruction.then === 'stream') {
+      if (!instruction.streamUrl) throw new Error('Twilio needs a stream URL to connect a media stream.');
+      // Speak the greeting, then hand the call to the bidirectional stream
+      if (say) twiml += `  ${this.line(say, locale)}\n`;
+      twiml += `  <Connect>\n    <Stream url="${this.escapeXml(instruction.streamUrl)}" />\n  </Connect>\n`;
     } else {
-      // Notify mode: speak and hang up
-      twiml += `  <Say voice="${voice}">${this.escapeXml(options.message)}</Say>\n`;
+      // Speak and hang up
+      if (say) twiml += `  ${this.line(say, locale)}\n`;
       twiml += '  <Hangup/>\n';
     }
 
     twiml += '</Response>';
-    return twiml;
-  }
-
-  generateHangupResponse(): string {
-    return '<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Hangup/>\n</Response>';
+    return { contentType: XML, body: twiml };
   }
 
   async endCall(providerCallId: string): Promise<void> {
@@ -145,29 +186,8 @@ export class TwilioProvider implements TelephonyProvider {
     );
 
     if (!response.ok) {
-      log.error({ providerCallId, status: response.status }, 'Failed to end Twilio call');
+      throw new Error(`Twilio could not end call ${providerCallId} (HTTP ${response.status})`);
     }
-  }
-
-  async getCallStatus(providerCallId: string): Promise<CallStatus> {
-    const response = await fetchWithTimeout(
-      `${this.baseUrl}/Accounts/${this.accountSid}/Calls/${providerCallId}.json`,
-      {
-        headers: {
-          'Authorization': `Basic ${Buffer.from(`${this.accountSid}:${this.authToken}`).toString('base64')}`,
-        },
-      },
-    );
-
-    if (!response.ok) return 'failed';
-
-    const data = await response.json() as { status: string };
-    const statusMap: Record<string, CallStatus> = {
-      queued: 'initiated', ringing: 'ringing', 'in-progress': 'active',
-      completed: 'ended', busy: 'busy', 'no-answer': 'no-answer',
-      canceled: 'ended', failed: 'failed',
-    };
-    return statusMap[data.status] || 'failed';
   }
 
   verifyWebhook(headers: Record<string, string>, body: string, url: string): boolean {

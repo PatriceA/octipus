@@ -29,6 +29,7 @@ export const FASTER_WHISPER_MODELS = [
   { id: 'base', download: '~145 MB', ram: '~1 GB', note: 'fast, low accuracy' },
   { id: 'small', download: '~480 MB', ram: '~2 GB', note: 'recommended — big accuracy jump, realtime on CPU' },
   { id: 'medium', download: '~1.5 GB', ram: '~5 GB', note: 'near-best; realtime only on a fast multi-core CPU' },
+  { id: 'large-v3-turbo', download: '~1.6 GB', ram: '~6 GB', note: 'near large-v3 accuracy at several times the speed; best with a GPU' },
   { id: 'large', download: '~3 GB', ram: '~10 GB', note: 'best; needs a GPU or very fast CPU for realtime' },
 ] as const;
 
@@ -39,15 +40,17 @@ export type FasterWhisperModel = (typeof FASTER_WHISPER_MODELS)[number]['id'];
  * HF cache so the first real turn isn't slow. Throws if uv is missing or the
  * download fails.
  */
-export async function installFasterWhisper(model: FasterWhisperModel, onProgress: ProgressFn = () => {}): Promise<void> {
+export async function installFasterWhisper(model: string, onProgress: ProgressFn = () => {}): Promise<void> {
   if (!hasUv()) throw new Error(`faster-whisper needs uv. ${UV_INSTALL_HINT}`);
-  onProgress(`Downloading faster-whisper "${model}" (int8) …`);
+  onProgress(`Downloading faster-whisper "${model}" …`);
   const proc = spawn({
     command: 'uv',
     args: [
       'run', '--python', '3.12', '--with', 'faster-whisper',
+      // The model name is an argument, never part of the program text.
       'python', '-c',
-      `from faster_whisper import WhisperModel; WhisperModel("${model}", device="cpu", compute_type="int8"); print("ok")`,
+      'import sys; from faster_whisper import WhisperModel; WhisperModel(sys.argv[1], device="cpu", compute_type="int8"); print("ok")',
+      model,
     ],
     stdout: 'pipe',
     stderr: 'pipe',
@@ -55,7 +58,7 @@ export async function installFasterWhisper(model: FasterWhisperModel, onProgress
   // Surface uv/model-download progress (stderr) line by line.
   void streamLines(proc.stderr!, onProgress);
   const code = await proc.exited;
-  if (code !== 0) throw new Error(`faster-whisper prewarm failed (exit ${code}); check that uv can reach the network.`);
+  if (code !== 0) throw new Error(`faster-whisper could not load "${model}" (exit ${code}); check the model name and that uv can reach the network.`);
   onProgress(`faster-whisper "${model}" ready.`);
 }
 

@@ -347,6 +347,11 @@ export const ChatSendSchema = z.object({
   })).max(10).optional(),
   /** Session files to inline (current version) into this turn's context. */
   fileRefs: z.array(FileRefSchema).max(10).optional(),
+  /**
+   * The reply to this message will be read aloud (a live voice conversation,
+   * the mobile voice screen): the turn answers the way it would be said.
+   */
+  spoken: z.boolean().optional(),
   /** Chat/work split (Thread 3): force the deliverable mode for this message. */
   outputMode: z.enum(['inline', 'file']).optional(),
   /**

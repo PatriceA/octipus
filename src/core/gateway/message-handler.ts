@@ -502,6 +502,9 @@ async function handleChatSend(
       deliver('queued', { ahead, ...(reason ? { reason } : {}) });
     }
 
+    // A message whose reply is read aloud: the turn that takes it answers in speech.
+    if (message.spoken) rootAgent.markSpokenTurn(message.sessionId, userId);
+
     // Route through root agent
     const result = await rootAgent.handleMessage(
       message.sessionId, userId, message.content, context.clientType, message.fileRefs, message.outputMode,

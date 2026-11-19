@@ -16,7 +16,8 @@ const MISSING_MAX = 1000;
  * nothing reads it, and a stale row would only mislead whoever finds it.
  * Workspaces are always on: the first entry used to switch them off.
  */
-export const REMOVED_SETTING_KEYS: readonly string[] = ['multiuser.orgWorkspaces'];
+// `voice.wakeWord`: nothing on the server ever listened for a wake word (the detector had no caller).
+export const REMOVED_SETTING_KEYS: readonly string[] = ['multiuser.orgWorkspaces', 'voice.wakeWord'];
 
 export interface SettingChangeEvent {
   key: string;

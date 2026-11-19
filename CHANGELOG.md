@@ -7,6 +7,50 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Voice, rebuilt around open engines and one pipeline.**
+  - **Any speech model.** A model on an OpenAI-compatible speech server
+    (Speaches, vLLM-Omni, LocalAI, NVIDIA NeMo-Speech, Groq, …) is a speech
+    engine: add it under **Settings → Voice → Your own speech server** with
+    its URL and model id. `openai/whisper-large-v3-turbo`, `openbmb/VoxCPM2`,
+    `BreezeBlue/Breeze-TTS-2` and `nvidia/nemotron-3.5-asr-streaming-0.6b`
+    start with the right request shape. faster-whisper takes any model name
+    (`large-v3-turbo`, a Hugging Face repository) and uses a GPU when present.
+    Binding a model that is not a speech engine to the Transcription or
+    Speech lane is now refused instead of failing on the first word.
+  - **One Voice page.** Engines are installed (with progress), tested and
+    switched under Settings → Voice; local engines no longer need the CLI.
+    The Docker image now carries ffmpeg and `uv`, and
+    `docker compose --profile speech up` starts a GPU speech server.
+  - **Voices.** Voice profiles replace the free-text voice id: a preset
+    voice, a voice described in words, or one cloned from a reference clip.
+    `voice.ttsVoice` is still honoured when no profile is active.
+  - **Live conversation.** The server now ends your turn (`voice.endpointSilenceMs`,
+    default 700 ms — was 1.5 s in the browser), speaks the reply while it is
+    still being written, and stops when talked over (`voice.bargeIn`). A
+    spoken turn is answered in spoken style, with no markup. Older clients on
+    the dictation protocol keep working.
+  - **Faster local speech.** faster-whisper and Kokoro keep their model loaded
+    between requests instead of reloading it for every clip and sentence.
+  - **Fixed:** installing Kokoro or the whisper.cpp model failed behind a
+    proxy and held the whole download in memory; every spoken turn began with
+    "On it — I've started the general"; Chrome dictation used the browser's
+    recognition even with a private engine bound; onboarding's local voice
+    choice registered engines without installing them.
+  - **Removed:** the server-side wake-word detector and `voice.wakeWord`
+    (nothing called it), and the unread `sttEnabled` / `ttsEnabled` flags.
+  - **Phone calls.** One reply implementation for both call paths; calls are
+    spoken in the install's Speech engine and voice (or the carrier's voice in
+    `voice.language`); Twilio's live media stream runs the shared pipeline
+    (sentence-by-sentence replies, barge-in, no temp files or ffmpeg).
+    Fixed: incoming Plivo calls were never answered, Telnyx webhooks were read
+    at the wrong level and its speech recognition was not started, ended
+    calls were never removed. `make_call` takes `instructions`, reports a
+    call that rang out as not answered, and `voice.expertPrompt` can be set.
+    Telnyx now needs `telnyx_public_key`. Not yet run against a live carrier.
+  - Operators: new settings `voice.profile`, `voice.endpointSilenceMs`,
+    `voice.bargeIn`; new routes under `/api/voice/` (`engines`, `voices`,
+    `profiles`); `chat.send` takes `spoken`. See `docs/VOICE.md`.
+
 - **Inspect CLI context and choose session-only CLI models.** Context now records
   known CLI prompt composition, selected skills and available current-context
   telemetry. Select an individual coordinator, child or pipeline run instead of

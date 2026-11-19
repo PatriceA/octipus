@@ -145,7 +145,7 @@ multi-user platform; OpenClaw's is better for a personal assistant.
 | Desktop app | Yes (native macOS menu-bar app) | Yes (Tauri, cross-platform) |
 | iOS / Android | Yes (native node apps) | No (roadmap) |
 | Windows companion | Yes (Windows Hub) | Partial (Tauri desktop runs on Windows) |
-| Voice wake / talk mode | Yes (on-device on 3 platforms) | Yes (server-side wake-word, STT/TTS, telephony) |
+| Voice wake / talk mode | Yes (on-device on 3 platforms) | Yes (live conversation with any speech model, voice profiles, telephony; wake word in the Android app) |
 | Live visual canvas | Yes | Partial (interactive answers in the web chat, Live Artifacts BETA) |
 
 ## Auth, multi-user, security

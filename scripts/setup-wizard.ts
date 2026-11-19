@@ -669,6 +669,25 @@ const cloudKeyHint = (provider: 'Mistral' | 'OpenAI') =>
   gray(`  → Add your ${provider} API key in the vault (web: Settings → Secrets) so voice can use it.`);
 
 /**
+ * A model on the user's own OpenAI-compatible speech server: asks for the
+ * endpoint, the model id and an optional key name, registers it as a model
+ * row and binds it to its lane (POST /voice/engines/server).
+ */
+async function useSpeechServer(api: ApiClient, direction: 'stt' | 'tts', exampleModel: string): Promise<void> {
+  const endpoint = (await textStep(null, 'Speech server', 'Endpoint URL of the server (with or without /v1):', 'http://localhost:8000/v1')).trim();
+  const modelId = (await textStep(null, 'Speech server', 'Model id, as the server serves it:', exampleModel)).trim();
+  const apiKeyRef = (await textStep(null, 'Speech server', 'Name of the secret holding its API key (a vault secret name or env:NAME; empty for none):', '')).trim();
+  if (!endpoint || !modelId) { warn('Skipped: an endpoint and a model id are both needed.'); return; }
+  try {
+    await api.post('/api/modules/enable', { ids: ['voice'] });
+    const used = await api.post<{ model: string }>('/api/voice/engines/server', { direction, endpoint, modelId, ...(apiKeyRef ? { apiKeyRef } : {}), makePrimary: true });
+    ok(`${direction === 'stt' ? 'Speech-to-text' : 'Spoken replies'} set to ${modelId} on ${endpoint} ("${used.model}").`);
+  } catch (err) {
+    warn(`Could not add the speech server: ${(err as Error).message}`);
+  }
+}
+
+/**
  * Configure voice end to end: whether the user wants it, then per-direction
  * (speech-in / spoken-replies) local vs cloud, model choice, provisioning, and
  * wiring the config. Local engines are provisioned in-process (downloads take
@@ -834,11 +853,12 @@ async function pickVoice(api: ApiClient): Promise<void> {
   if (want !== 'y') return;
 
   // ── Speech-to-text ──
-  const stt = await selectStep<'local' | 'mistral' | 'openai' | 'skip'>(
+  const stt = await selectStep<'local' | 'server' | 'mistral' | 'openai' | 'skip'>(
     null,
     'Speech-to-text — how should Octipus hear you?',
     [
       { value: 'local', label: 'On this machine (faster-whisper)', description: 'Offline, free, private. Needs `uv`. You pick the model size next.' },
+      { value: 'server', label: 'My own speech server', description: 'Any model on an OpenAI-compatible endpoint (Speaches, vLLM, NeMo-Speech, Groq, …).' },
       { value: 'mistral', label: 'Voxtral (Mistral cloud)', description: 'Low latency. Needs a Mistral API key.' },
       { value: 'openai', label: 'OpenAI (cloud)', description: 'Low latency. Needs an OpenAI API key.' },
       { value: 'skip', label: 'Skip speech-to-text' },
@@ -868,6 +888,8 @@ async function pickVoice(api: ApiClient): Promise<void> {
         ok(`Speech-to-text ready (faster-whisper ${model}).`);
       } catch (err) { warn(`faster-whisper download failed: ${(err as Error).message}`); }
     }
+  } else if (stt === 'server') {
+    await useSpeechServer(api, 'stt', 'openai/whisper-large-v3-turbo');
   } else if (stt === 'mistral' || stt === 'openai') {
     await useVoiceEngine(api, 'stt', stt);
     ok(`Speech-to-text set to ${stt === 'mistral' ? 'Voxtral (Mistral)' : 'OpenAI'} (cloud).`);
@@ -875,12 +897,13 @@ async function pickVoice(api: ApiClient): Promise<void> {
   }
 
   // ── Text-to-speech ──
-  const tts = await selectStep<'kokoro' | 'piper' | 'mistral' | 'openai' | 'skip'>(
+  const tts = await selectStep<'kokoro' | 'piper' | 'server' | 'mistral' | 'openai' | 'skip'>(
     null,
     'Spoken replies — how should Octipus talk back?',
     [
       { value: 'kokoro', label: 'On this machine (Kokoro)', description: `Best local voice; great for conversation. ${KOKORO_SIZE_NOTE}. Needs \`uv\`.` },
       { value: 'piper', label: 'On this machine (Piper)', description: 'Tiny/low-end fallback; more robotic. You install the binary + voice.' },
+      { value: 'server', label: 'My own speech server', description: 'Any model on an OpenAI-compatible endpoint (vLLM-Omni with VoxCPM2, Speaches, LocalAI, …).' },
       { value: 'mistral', label: 'Voxtral (Mistral cloud)', description: 'Needs a Mistral API key.' },
       { value: 'openai', label: 'OpenAI (cloud)', description: 'Needs an OpenAI API key.' },
       { value: 'skip', label: 'Skip spoken replies' },
@@ -902,14 +925,16 @@ async function pickVoice(api: ApiClient): Promise<void> {
   } else if (tts === 'piper') {
     await useVoiceEngine(api, 'tts', 'piper');
     ok('Spoken replies set to Piper.');
-    gray('  → Install the Piper binary + a .onnx voice, then set its path on the "local piper" model (Models page).');
+    gray('  → Install the Piper binary + a .onnx voice, then set its path on the "local piper" engine (web: Settings → Voice).');
+  } else if (tts === 'server') {
+    await useSpeechServer(api, 'tts', 'openbmb/VoxCPM2');
   } else if (tts === 'mistral' || tts === 'openai') {
     await useVoiceEngine(api, 'tts', tts);
     ok(`Spoken replies set to ${tts === 'mistral' ? 'Voxtral (Mistral)' : 'OpenAI'} (cloud).`);
     cloudKeyHint(tts === 'mistral' ? 'Mistral' : 'OpenAI');
   }
 
-  gray('Voice configured (Topics page → Transcription / Speech). Toggle it per chat with the mic / conversation buttons.');
+  gray('Voice configured (web: Settings → Voice, where you can also test it and choose a voice). Toggle it per chat with the mic / conversation buttons.');
 }
 
 // ── Main ───────────────────────────────────────────────────────────

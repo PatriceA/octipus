@@ -38,6 +38,9 @@ WORKDIR /app
 # Archives: zip, unzip
 # Remote access: openssh-client
 # Scripting: python3 (full stdlib — python3-minimal has no unittest)
+# Speech: ffmpeg — local speech-to-text converts recordings and voice notes
+#   with it (docs/VOICE.md); `uv` (copied in below) runs the local speech
+#   engines without a global Python install.
 # Sandbox: bubblewrap — plugin package servers never start without a working
 #   sandbox runner (plugins.sandbox: required, docs/PLUGIN-PACKAGES.md#the-sandbox).
 #   bwrap needs unprivileged user namespaces; check in the container with
@@ -45,6 +48,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bubblewrap \
     curl \
+    ffmpeg \
     ca-certificates \
     git \
     jq \
@@ -63,6 +67,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
+
+# uv (astral.sh/uv): runs faster-whisper and Kokoro in their own Python
+# environments on first use — what Settings → Voice installs local engines with.
+COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /uvx /usr/local/bin/
 
 # Copy built app
 COPY --from=build /app/node_modules ./node_modules
@@ -91,7 +99,17 @@ COPY plugins/ plugins/
 COPY plugin-sdk/ plugin-sdk/
 
 # Create data directories
-RUN mkdir -p /data/workspace /data/documents /data/extensions /data/models
+RUN mkdir -p /data/workspace /data/documents /data/extensions /data/models /data/voices
+
+# Local speech engines (docs/VOICE.md) keep everything they download in the
+# models volume, and voice profiles' reference clips in their own, so both
+# outlive the container: Python and its packages (uv), the faster-whisper
+# models (the Hugging Face cache) and Kokoro's model files.
+ENV UV_CACHE_DIR=/data/models/uv/cache \
+    UV_PYTHON_INSTALL_DIR=/data/models/uv/python \
+    HF_HOME=/data/models/huggingface \
+    KOKORO_MODEL_DIR=/data/models/kokoro \
+    OCTIPUS_VOICES_DIR=/data/voices
 
 # Optional local embedding engine (docs/RAG.md → Local embeddings): llama.cpp
 # and a small embedding model live in /data/models (a volume). Off by
