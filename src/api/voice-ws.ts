@@ -171,6 +171,9 @@ async function openConversation(ws: VoiceSocket, url: URL, userId: string, mark:
         return { engine, name };
       },
       transcribe: async (wav) => (await resolve.transcribeWithLane(wav, { ...request, format: 'wav' })).text,
+      // A quarter second of silence through the lane: loads a local engine's
+      // model (resident afterwards). Not counted: nobody said anything.
+      warmUp: async () => { await resolve.warmSpeechEngines(request); },
       speak: (text) => resolve.streamSpeechWithLane(text, request),
       subscribe: (handler) => {
         const bus = getGatewayHub().eventBus;

@@ -128,6 +128,21 @@ describe('ears', () => {
     expect(r.sent.filter((s) => s.message.type === 'utterance')[1].message).toEqual({ type: 'utterance', text: 'and close the door' });
   });
 
+  test('an engine that transcribes whole turns is warmed when the conversation opens, before anyone speaks', async () => {
+    const warm = vi.fn(async () => {});
+    const session = new VoiceSession(
+      { userId: 'u1', sessionId: SESSION, speak: false, audio: 'pcm', partials: false },
+      {
+        resolveStt: async () => ({ engine: { live: false, transcribe: async () => ({ text: '', segments: [], language: 'en', duration: 0 }), streamTranscribe: async function* () {}, dispose: async () => {} }, name: 'batch' }),
+        transcribe: async () => '', speak: async () => { throw new Error('unused'); }, subscribe: () => () => {}, warmUp: warm,
+      },
+      () => {},
+    );
+    open.push(session);
+    await session.start();
+    expect(warm).toHaveBeenCalledTimes(1);
+  });
+
   test('silence and a turn nothing was heard in produce no utterance', async () => {
     const r = track(await rig({ transcribe: async () => '   ' }));
     r.session.pushAudio(audio(1500, 0));

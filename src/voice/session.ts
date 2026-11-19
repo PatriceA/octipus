@@ -57,6 +57,8 @@ export interface VoiceSessionDeps {
   speak(text: string): Promise<SpeechStream>;
   /** The turn's events (`chat.delta`, `chat.response`, `voice.speak`). Returns the unsubscribe. */
   subscribe(handler: (event: VoiceTurnEvent) => void): () => void;
+  /** Load the engines' models ahead of the first turn (local engines load on first use). */
+  warmUp?(): Promise<void>;
   /** Seconds of audio a live engine heard, for accounting. */
   recordHeard?(seconds: number): Promise<void> | void;
 }
@@ -134,6 +136,9 @@ export class VoiceSession {
     } else {
       // Each utterance goes through the lane whole (primary, then backup, accounted there).
       await engine.dispose().catch(() => {});
+      // A local engine loads its model on first use, which would otherwise land
+      // on the person's first sentence: start it while they are still drawing breath.
+      if (this.deps.warmUp) void this.deps.warmUp().catch((err: unknown) => log.debug({ err }, 'Speech warm-up failed; the first turn pays the load'));
     }
     this.unsubscribe = this.deps.subscribe((event) => this.onTurnEvent(event));
     this.send({ type: 'ready', mode: 'conversation', engine: name, live: !!engine.live, speak: this.options.speak });

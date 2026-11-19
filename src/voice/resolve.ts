@@ -420,6 +420,25 @@ export async function streamSpeechWithLane(text: string, req: SpeechRequest & Sp
   throw new Error(`Speech synthesis failed: ${errors.join('; ')}`);
 }
 
+/**
+ * Load the Transcription lane's model ahead of use, when it is a local engine
+ * that loads on first use (faster-whisper, whisper.cpp): a quarter second of
+ * silence through it. Cloud engines and speech servers are left alone — a
+ * request there costs money or loads someone else's server for nothing.
+ * Nothing is recorded: no one spoke.
+ */
+export async function warmSpeechEngines(req: SpeechRequest = {}): Promise<void> {
+  const row = await pickSpeechRow('stt', req).catch(() => null);
+  if (!row || !isLocalSpeechRow(row)) return;
+  const { pcm16kMonoToWav } = await import('./stt');
+  const engine = await sttEngineFor(row, { language: await language() });
+  try {
+    await engine.transcribe(pcm16kMonoToWav(new Uint8Array(8000)));
+  } finally {
+    await engine.dispose().catch(() => {});
+  }
+}
+
 /** The voices the engine bound to the Speech lane offers (its primary, or the named row). */
 export async function speechVoices(req: SpeechRequest = {}): Promise<{ model: string; voices: string[] }> {
   const row = await pickSpeechRow('tts', req);

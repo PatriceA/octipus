@@ -262,6 +262,21 @@ describe('speech as a stream of PCM', () => {
   });
 });
 
+describe('warming the Transcription engine', () => {
+  test('a local engine is run once on silence; a cloud one is never asked', async () => {
+    state.primary = row('local fw', 'local-audio', 'faster-whisper:small', 'transcription');
+    let calls = 0;
+    state.transcribe = { 'local fw': async () => { calls += 1; return { text: '', segments: [], language: 'en', duration: 0 }; } };
+    await resolve.warmSpeechEngines();
+    expect(calls).toBe(1);
+    expect(state.usage).not.toHaveBeenCalled(); // nobody spoke: nothing to count
+
+    state.primary = row('openai stt', 'openai', 'gpt-4o-transcribe', 'transcription');
+    state.transcribe = { 'openai stt': async () => { throw new Error('a cloud engine must not be warmed'); } };
+    await expect(resolve.warmSpeechEngines()).resolves.toBeUndefined();
+  });
+});
+
 describe('speech cost', () => {
   test('per minute of audio for transcription and per million characters for speech; local or free costs nothing; unknown is unknown', async () => {
     const cloud = row('openai stt', 'openai', 'gpt-4o-transcribe', 'transcription');
