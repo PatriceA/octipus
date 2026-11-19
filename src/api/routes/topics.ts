@@ -198,6 +198,23 @@ export const topicRoutes = new Elysia({ prefix: '/topics' })
         }
       }
 
+      // A speech lane takes speech engines of its own direction only: a chat
+      // model bound there used to save and then fail on the first word.
+      if (topic === 'transcription' || topic === 'speech') {
+        const { speechDirectionOf } = await import('@/voice/speech-rows');
+        const wanted = topic === 'transcription' ? 'stt' : 'tts';
+        for (const name of [body.primaryModel, body.backupModel]) {
+          if (!name) continue;
+          if (speechDirectionOf(byName.get(name)!) !== wanted) {
+            set.status = 400;
+            return {
+              error: `Model "${name}" is not a ${wanted === 'stt' ? 'speech-to-text' : 'text-to-speech'} engine, so it cannot serve the ${topic === 'transcription' ? 'Transcription' : 'Speech'} lane. ` +
+                'Add a speech engine or your own speech server on the Voice page (Settings → Voice).',
+            };
+          }
+        }
+      }
+
       // Compute each model's new role for this topic, then write only the rows
       // that actually change. Only the role(s) the request addresses are
       // mutated: omitting primaryModel leaves existing 'primary' holders alone,

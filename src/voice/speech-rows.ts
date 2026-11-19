@@ -6,10 +6,13 @@
  * engine adapters in `stt.ts` / `tts.ts` stay what they are — subprocess and
  * socket plumbing — but are only ever built from a row, here:
  *
- *   provider `local-audio`   whisper.cpp:<model> · faster-whisper:<size>   (Transcription)
+ *   provider `local-audio`   whisper.cpp:<model> · faster-whisper:<model>  (Transcription)
  *                            kokoro:<voice> · piper:<voice>                (Speech)
  *   provider `mistral`       voxtral-* (both lanes)
  *   provider `openai`        gpt-4o-transcribe / whisper-1 · gpt-4o-mini-tts
+ *   any row with an endpoint an OpenAI-compatible speech server: Speaches,
+ *   (`custom-openai`, or     vLLM / vLLM-Omni, LocalAI, NeMo-Speech, NIM, Groq, …
+ *   `openai` + endpoint)     (src/voice/compatible.ts) — any model it serves
  *
  * The model id, key (`apiKeyRef`) and streaming model come from the row, never
  * from a constant. `SPEECH_ENGINE_CATALOG` is the curated list of engines the
@@ -17,8 +20,9 @@
  * choice: nothing is used until it is bound to a lane.
  */
 import type { ModelConfigEntry, NewModelConfigEntry } from '@/db/schema/models';
+import { speechConfigOf } from './speech-hints';
 import type { STTEngine } from './stt';
-import type { TTSEngine } from './tts';
+import type { TTSEngine, TTSOptions } from './tts';
 
 export const LOCAL_AUDIO_PROVIDER = 'local-audio';
 
@@ -40,7 +44,7 @@ export function audioExtensionFor(mimeType: string | undefined, fallback = 'ogg'
 }
 
 /** The engine families a row can be, and their old `voice.*Provider` names (kept as request aliases). */
-export type SpeechEngineKind = 'whisper' | 'fasterwhisper' | 'kokoro' | 'piper' | 'mistral' | 'openai';
+export type SpeechEngineKind = 'whisper' | 'fasterwhisper' | 'kokoro' | 'piper' | 'mistral' | 'openai' | 'compatible';
 
 export interface SpeechEngineEntry {
   kind: SpeechEngineKind;
@@ -61,14 +65,24 @@ export const SPEECH_ENGINE_CATALOG: readonly SpeechEngineEntry[] = [
   { kind: 'openai', direction: 'tts', row: { name: 'openai gpt-4o-mini-tts', provider: 'openai', modelId: 'gpt-4o-mini-tts', metadata: { speech: { formats: ['mp3', 'wav', 'opus', 'flac', 'pcm'] } } } },
 ];
 
+/**
+ * A faster-whisper model: a size, a release name (`large-v3-turbo`, `turbo`,
+ * `distil-large-v3`) or a CTranslate2 repository on Hugging Face (`owner/name`).
+ * The name becomes a process argument, so it is held to that shape.
+ */
+const FASTER_WHISPER_MODEL = /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*)?$/;
+
 export function catalogEntry(kind: SpeechEngineKind, direction: SpeechDirection, size?: string): SpeechEngineEntry | undefined {
   const entry = SPEECH_ENGINE_CATALOG.find((e) => e.kind === kind && e.direction === direction);
   if (!entry || !size || kind !== 'fasterwhisper') return entry;
-  return { ...entry, row: { ...entry.row, name: `local faster-whisper ${size}`, modelId: `faster-whisper:${size}` } };
+  if (!FASTER_WHISPER_MODEL.test(size)) throw new Error(`"${size}" is not a faster-whisper model name (a size such as small, a release such as large-v3-turbo, or owner/name on Hugging Face).`);
+  return { ...entry, row: { ...entry.row, name: `local faster-whisper ${size.replace('/', ' ')}`, modelId: `faster-whisper:${size}` } };
 }
 
+type KindRow = Pick<ModelConfigEntry, 'provider' | 'modelId'> & Partial<Pick<ModelConfigEntry, 'endpoint'>>;
+
 /** Which engine family a row is (undefined: not a speech engine this build drives). */
-export function engineKindOf(row: Pick<ModelConfigEntry, 'provider' | 'modelId'>): SpeechEngineKind | undefined {
+export function engineKindOf(row: KindRow): SpeechEngineKind | undefined {
   if (row.provider === LOCAL_AUDIO_PROVIDER) {
     if (row.modelId.startsWith('whisper.cpp:')) return 'whisper';
     if (row.modelId.startsWith('faster-whisper:')) return 'fasterwhisper';
@@ -77,16 +91,29 @@ export function engineKindOf(row: Pick<ModelConfigEntry, 'provider' | 'modelId'>
     return undefined;
   }
   if (row.provider === 'mistral') return 'mistral';
+  // An endpoint of its own makes the row an OpenAI-compatible speech server,
+  // whatever it is called; OpenAI itself is the row without one.
+  if (row.endpoint && (row.provider === 'custom-openai' || row.provider === 'openai')) return 'compatible';
   if (row.provider === 'openai') return 'openai';
   return undefined;
 }
 
-/** Which way a speech row works: transcription (stt) or speech (tts); undefined = not a speech engine. */
-export function speechDirectionOf(row: Pick<ModelConfigEntry, 'provider' | 'modelId'>): SpeechDirection | undefined {
+type DirectionRow = KindRow & Partial<Pick<ModelConfigEntry, 'metadata' | 'topicRoles' | 'topics'>>;
+
+/**
+ * Which way a speech row works: transcription (stt) or speech (tts);
+ * undefined = not a speech engine. A local engine is what it is; any other
+ * row says so (`metadata.speech.direction`), or is known by its model id
+ * (`speech-hints.ts`). A chat model on a speech provider has neither.
+ */
+export function speechDirectionOf(row: DirectionRow): SpeechDirection | undefined {
   const kind = engineKindOf(row);
   if (!kind) return undefined;
   if (kind === 'whisper' || kind === 'fasterwhisper') return 'stt';
   if (kind === 'kokoro' || kind === 'piper') return 'tts';
+  const declared = row.metadata?.speech?.direction;
+  if (declared) return declared;
+  if (kind === 'compatible') return speechConfigOf(row).direction;
   const id = row.modelId.toLowerCase();
   if (/tts|speech/.test(id)) return 'tts';
   if (/transcri|whisper|voxtral/.test(id)) return 'stt';
@@ -98,12 +125,27 @@ export function isLocalSpeechRow(row: Pick<ModelConfigEntry, 'provider'>): boole
   return row.provider === LOCAL_AUDIO_PROVIDER;
 }
 
+/**
+ * Does speech on this row stay on the owner's machine or network — a local
+ * engine, or a speech server at a private address? Such a row spends none of
+ * the install's hosted keys, so an account that may not use those may use it.
+ */
+export async function speechStaysLocal(row: Pick<ModelConfigEntry, 'provider' | 'modelId' | 'endpoint' | 'metadata'>): Promise<boolean> {
+  if (isLocalSpeechRow(row)) return true;
+  if (engineKindOf(row) !== 'compatible') return false;
+  const { runsLocally } = await import('@/core/protection/routing');
+  return runsLocally(row);
+}
+
 /** What a row writes; the first is its default. */
-export function speechFormats(row: Pick<ModelConfigEntry, 'provider' | 'modelId' | 'metadata'>): SpeechFormat[] {
-  const declared = row.metadata?.speech?.formats;
+export function speechFormats(row: Pick<ModelConfigEntry, 'provider' | 'modelId' | 'metadata'> & Partial<Pick<ModelConfigEntry, 'endpoint'>>): SpeechFormat[] {
+  const declared = speechConfigOf(row).formats;
   if (declared?.length) return declared;
   const kind = engineKindOf(row);
-  return kind === 'kokoro' || kind === 'piper' ? ['wav'] : ['mp3', 'wav', 'opus', 'flac', 'pcm'];
+  if (kind === 'kokoro' || kind === 'piper') return ['wav'];
+  // Every speech server writes WAV; the rest is not promised by the protocol.
+  if (kind === 'compatible') return ['wav', 'mp3', 'opus', 'flac', 'pcm'];
+  return ['mp3', 'wav', 'opus', 'flac', 'pcm'];
 }
 
 /**
@@ -132,8 +174,18 @@ export async function sttEngineFor(row: ModelConfigEntry, opts: { language: stri
       return new stt.WhisperEngine(row.metadata?.modelPath || whisperModelPath(), { language: opts.language, streamWindowSeconds: opts.streamWindowSeconds });
     }
     case 'fasterwhisper': {
-      const size = row.modelId.slice('faster-whisper:'.length) as 'tiny' | 'base' | 'small' | 'medium' | 'large';
-      return new stt.FasterWhisperEngine({ language: opts.language, model: size || 'small' });
+      // Resident: the model stays loaded between requests (stt.ts residentFasterWhisper).
+      const speech = row.metadata?.speech;
+      return stt.residentFasterWhisper({
+        language: opts.language, model: row.modelId.slice('faster-whisper:'.length) || 'small',
+        streamWindowSeconds: opts.streamWindowSeconds, device: speech?.device, computeType: speech?.computeType,
+      });
+    }
+    case 'compatible': {
+      const { CompatibleSTTEngine, speechEndpointOf } = await import('./compatible');
+      return new CompatibleSTTEngine(await speechEndpointOf(row), row.modelId, speechConfigOf(row), {
+        language: opts.language, streamWindowSeconds: opts.streamWindowSeconds,
+      });
     }
     case 'mistral':
       return new stt.MistralSTTEngine(row.modelId, { language: opts.language, apiKey: await rowApiKey(row), streamingModel: row.metadata?.speech?.streamingModel });
@@ -146,23 +198,45 @@ export async function sttEngineFor(row: ModelConfigEntry, opts: { language: stri
   }
 }
 
+/** What one request asks of the engine, beyond the text. */
+export interface SpeechVoice {
+  /** A voice the engine offers (a preset id). */
+  voice?: string;
+  /** How the voice should sound, in words. */
+  instructions?: string;
+  /** A reference clip to speak in the voice of, and what is said in it. */
+  refAudio?: { data: Buffer; mimeType: string };
+  refText?: string;
+  speed?: number;
+}
+
 /** The text-to-speech adapter for `row`, writing `format` (validated against `speechFormats`). */
-export async function ttsEngineFor(row: ModelConfigEntry, opts: { voice?: string; format: SpeechFormat }): Promise<TTSEngine> {
+export async function ttsEngineFor(row: ModelConfigEntry, opts: SpeechVoice & { format: SpeechFormat }): Promise<TTSEngine> {
   const tts = await import('./tts');
   const kind = engineKindOf(row);
   const format = opts.format as 'mp3' | 'wav' | 'opus' | 'flac' | 'pcm';
+  const config = speechConfigOf(row);
+  const voice = opts.voice || config.voice;
+  const options: TTSOptions = {
+    outputFormat: format, model: row.modelId, speed: opts.speed, instructions: opts.instructions,
+    refAudio: opts.refAudio, refText: opts.refText, extraBody: config.extraBody,
+  };
   switch (kind) {
     case 'kokoro':
       // The row names its voice (kokoro:<voice>); a voice asked for explicitly wins.
-      return new tts.KokoroEngine(opts.voice || row.modelId.slice('kokoro:'.length) || undefined, { outputFormat: 'wav' });
+      return new tts.KokoroEngine(voice || row.modelId.slice('kokoro:'.length) || undefined, { outputFormat: 'wav', ...(opts.speed ? { speed: opts.speed } : {}) });
     case 'piper': {
       const modelPath = row.metadata?.modelPath || `~/.local/share/piper/voices/${row.modelId.slice('piper:'.length)}.onnx`;
-      return new tts.PiperEngine(modelPath, modelPath.replace(/\.onnx$/, '.json'), { outputFormat: 'wav' });
+      return new tts.PiperEngine(modelPath, modelPath.replace(/\.onnx$/, '.json'), { outputFormat: 'wav', ...(opts.speed ? { speed: opts.speed } : {}) });
     }
     case 'mistral':
-      return new tts.MistralTTSEngine(opts.voice, { outputFormat: format, model: row.modelId, apiKey: await rowApiKey(row) });
+      return new tts.MistralTTSEngine(voice, { ...options, apiKey: await rowApiKey(row) });
     case 'openai':
-      return new tts.OpenAITTSEngine(opts.voice, { outputFormat: format, model: row.modelId, apiKey: await rowApiKey(row) });
+      return new tts.OpenAITTSEngine(voice, { ...options, apiKey: await rowApiKey(row) });
+    case 'compatible': {
+      const { CompatibleTTSEngine, speechEndpointOf } = await import('./compatible');
+      return new CompatibleTTSEngine(await speechEndpointOf(row), row.modelId, config, { ...options, voice });
+    }
     default:
       throw new Error(`Model "${row.name}" (${row.provider}/${row.modelId}) is not a text-to-speech engine this install can run.`);
   }
@@ -178,20 +252,20 @@ async function ffmpegMissing(): Promise<string | null> {
  * Can this row run here, now? Local engines are probed (binary runs, model
  * present); cloud engines need a key. The reason says what to do.
  */
-export async function speechRowAvailable(row: Pick<ModelConfigEntry, 'provider' | 'modelId' | 'apiKeyRef' | 'metadata'>): Promise<{ ok: true } | { ok: false; reason: string }> {
+export async function speechRowAvailable(row: Pick<ModelConfigEntry, 'provider' | 'modelId' | 'apiKeyRef' | 'metadata'> & Partial<Pick<ModelConfigEntry, 'endpoint'>>): Promise<{ ok: true } | { ok: false; reason: string }> {
   const kind = engineKindOf(row);
   switch (kind) {
     case 'whisper': {
       const { probeWhisper } = await import('./whisper');
       const probe = await probeWhisper();
-      if (!probe.binaryOk) return { ok: false, reason: `${probe.binaryReason ?? 'Local whisper is not installed'}. Run \`octi setup\` or install it from the Topics page.` };
+      if (!probe.binaryOk) return { ok: false, reason: `${probe.binaryReason ?? 'Local whisper is not installed'}. Install it on the Voice page (Settings → Voice), or run \`octi setup\`.` };
       const noFfmpeg = await ffmpegMissing();
       if (noFfmpeg) return { ok: false, reason: noFfmpeg };
       if (row.metadata?.modelPath) {
         const { fileAt } = await import('@/utils/fs-file');
         if (!(await fileAt(row.metadata.modelPath).exists())) return { ok: false, reason: `The whisper model file ${row.metadata.modelPath} is missing.` };
       } else if (!probe.modelOk) {
-        return { ok: false, reason: 'The whisper model file is missing. Run `octi setup` to download it.' };
+        return { ok: false, reason: 'The whisper model file is missing. Install it on the Voice page (Settings → Voice), or run `octi setup`.' };
       }
       return { ok: true };
     }
@@ -199,11 +273,14 @@ export async function speechRowAvailable(row: Pick<ModelConfigEntry, 'provider' 
     case 'kokoro': {
       const { hasUv, kokoroModelsPresent, UV_INSTALL_HINT } = await import('./provision');
       if (!hasUv()) return { ok: false, reason: `\`uv\` is not installed. ${UV_INSTALL_HINT}` };
+      if (kind === 'fasterwhisper' && !FASTER_WHISPER_MODEL.test(row.modelId.slice('faster-whisper:'.length))) {
+        return { ok: false, reason: `"${row.modelId.slice('faster-whisper:'.length)}" is not a faster-whisper model name.` };
+      }
       if (kind === 'fasterwhisper') {
         const noFfmpeg = await ffmpegMissing();
         if (noFfmpeg) return { ok: false, reason: noFfmpeg };
       }
-      if (kind === 'kokoro' && !(await kokoroModelsPresent())) return { ok: false, reason: 'Kokoro model files are missing. Run `octi setup` to download them.' };
+      if (kind === 'kokoro' && !(await kokoroModelsPresent())) return { ok: false, reason: 'Kokoro model files are missing. Install Kokoro on the Voice page (Settings → Voice), or run `octi setup`.' };
       return { ok: true };
     }
     case 'piper': {
@@ -222,8 +299,15 @@ export async function speechRowAvailable(row: Pick<ModelConfigEntry, 'provider' 
         : !!(await (await import('@/models/providers/openai-provider')).getOpenAIApiKey());
       return has ? { ok: true } : { ok: false, reason: `No ${kind === 'mistral' ? 'Mistral' : 'OpenAI'} API key is configured.` };
     }
+    case 'compatible': {
+      // The server is asked when it is used: a probe on every status poll would
+      // hammer it, and a failure at call time falls to the backup, with the reason.
+      if (!row.apiKeyRef) return { ok: true };
+      const { resolveCustomApiKey } = await import('@/services/provider-service');
+      return (await resolveCustomApiKey(row.apiKeyRef)) ? { ok: true } : { ok: false, reason: `The model's key "${row.apiKeyRef}" is not set.` };
+    }
     default:
-      return { ok: false, reason: `${row.provider}/${row.modelId} is not a speech engine this install can run.` };
+      return { ok: false, reason: `${row.provider}/${row.modelId} is not a speech engine this install can run. Add it as a speech server (its endpoint URL and model id) on the Voice page.` };
   }
 }
 
@@ -256,19 +340,91 @@ export async function useSpeechEngine(
       metadata: { ...(entry.row.metadata ?? {}), ...(opts.modelPath ? { modelPath: opts.modelPath } : {}), capabilitiesDetectedAt: new Date().toISOString() },
     } as NewModelConfigEntry);
   }
+  return bindSpeechRow(row, lane, opts.makePrimary);
+}
+
+/**
+ * Bind a speech row to its lane: primary when the lane is free or
+ * `makePrimary`. The engine it replaces becomes the one backup, so nothing
+ * that worked stops working; an older backup steps down.
+ */
+async function bindSpeechRow(
+  row: ModelConfigEntry, lane: 'transcription' | 'speech', makePrimary?: boolean,
+): Promise<{ row: ModelConfigEntry; bound: 'primary' | 'already-bound' | 'not-bound'; lane: 'transcription' | 'speech' }> {
+  const { getModelRegistry } = await import('@/models/model-registry');
+  const registry = getModelRegistry();
   const current = await registry.getModelForTopic(lane);
-  if (current?.name === row.name) return { row, bound: 'already-bound', lane };
-  if (current && !opts.makePrimary) return { row, bound: 'not-bound', lane };
-  if (current) {
-    // The engine it replaces becomes the one backup, so nothing that worked
-    // stops working; an older backup steps down.
+  const currentBound = current && (current.topics?.includes(lane) || (current.topicRoles && lane in current.topicRoles)) ? current : null;
+  if (currentBound?.name === row.name) return { row, bound: 'already-bound', lane };
+  if (currentBound && !makePrimary) return { row, bound: 'not-bound', lane };
+  if (currentBound) {
     const backup = await registry.getBackupModelForTopic(lane);
-    if (backup && backup.name !== current.name && backup.name !== row.name && backup.topicRoles?.[lane]) {
+    if (backup && backup.name !== currentBound.name && backup.name !== row.name && backup.topicRoles?.[lane]) {
       const { [lane]: _dropped, ...rest } = backup.topicRoles;
       await registry.updateModel(backup.name, { topicRoles: rest });
     }
-    await registry.updateModel(current.name, { topicRoles: { ...(current.topicRoles ?? {}), [lane]: 'backup' } });
+    await registry.updateModel(currentBound.name, { topicRoles: { ...(currentBound.topicRoles ?? {}), [lane]: 'backup' } });
   }
-  row = await registry.updateModel(row.name, { topicRoles: { ...(row.topicRoles ?? {}), [lane]: 'primary' } }) ?? row;
-  return { row, bound: 'primary', lane };
+  const bound = await registry.updateModel(row.name, { topicRoles: { ...(row.topicRoles ?? {}), [lane]: 'primary' } }) ?? row;
+  return { row: bound, bound: 'primary', lane };
+}
+
+export interface SpeechServerInput {
+  direction: SpeechDirection;
+  /** The server's base URL, with or without `/v1`. */
+  endpoint: string;
+  /** The model id the server serves it under (`openai/whisper-large-v3-turbo`, `openbmb/VoxCPM2`). */
+  modelId: string;
+  /** Shown in the lists; defaults to the model id. */
+  name?: string;
+  /** A vault secret name or `env:NAME`; none for a keyless local server. */
+  apiKeyRef?: string;
+  /** What this model takes, where it differs from what its id is known for. */
+  speech?: NonNullable<ModelConfigEntry['metadata']>['speech'];
+  makePrimary?: boolean;
+}
+
+/**
+ * Register a model on an OpenAI-compatible speech server as a model row and
+ * bind it to its lane (docs/VOICE.md → Your own speech server). The row
+ * starts with what is known of the model (`speech-hints.ts`), so a model
+ * someone names by id works without a list of its quirks; a server at a
+ * private address is marked as staying local, so protected content may use it.
+ */
+export async function useSpeechServer(input: SpeechServerInput): Promise<{ row: ModelConfigEntry; bound: 'primary' | 'already-bound' | 'not-bound'; lane: 'transcription' | 'speech' }> {
+  const modelId = input.modelId.trim();
+  if (!modelId) throw new Error('A model id is required (what the server serves the model as).');
+  let endpoint: URL;
+  try { endpoint = new URL(input.endpoint.trim()); } catch { throw new Error(`"${input.endpoint}" is not a URL (for example http://localhost:8000/v1).`); }
+  if (endpoint.protocol !== 'http:' && endpoint.protocol !== 'https:') throw new Error('The endpoint must be an http or https URL.');
+  const { getModelRegistry } = await import('@/models/model-registry');
+  const { isPrivateEndpoint } = await import('@/models/decision');
+  const { speechHintsFor } = await import('./speech-hints');
+  const registry = getModelRegistry();
+  const lane = input.direction === 'stt' ? 'transcription' as const : 'speech' as const;
+  const name = (input.name?.trim() || `${input.direction === 'stt' ? 'transcribe' : 'speech'} ${modelId}`).slice(0, 120);
+  const url = endpoint.toString().replace(/\/+$/, '');
+  // A value sent as null means "not set": the model's known default applies.
+  const given = Object.fromEntries(Object.entries(input.speech ?? {}).filter(([, v]) => v !== null && v !== undefined));
+  const speech = { ...speechHintsFor(modelId), ...given, direction: input.direction };
+  const metadata: NewModelConfigEntry['metadata'] = {
+    customProvider: { auth: { type: 'bearer' } },
+    speech,
+    ...(isPrivateEndpoint(url) ? { dataPolicy: { hosting: 'local' as const, retention: 'none' as const, trainsOnInput: false } } : {}),
+    capabilitiesDetectedAt: new Date().toISOString(),
+  };
+  const existing = await registry.getModel(name);
+  if (existing && (existing.ownerUserId || speechDirectionOf(existing) !== input.direction)) {
+    throw new Error(`A model named "${name}" already exists and is not a ${input.direction === 'stt' ? 'speech-to-text' : 'text-to-speech'} engine. Choose another name.`);
+  }
+  const row = existing
+    ? (await registry.updateModel(name, {
+      endpoint: url, modelId, apiKeyRef: input.apiKeyRef?.trim() || null,
+      metadata: { ...(existing.metadata ?? {}), ...metadata, customProvider: existing.metadata?.customProvider ?? metadata.customProvider },
+    })) ?? existing
+    : await registry.registerModel({
+      name, provider: 'custom-openai', modelId, endpoint: url, apiKeyRef: input.apiKeyRef?.trim() || null,
+      supportsTools: false, supportsStreaming: false, supportsVision: false, metadata,
+    } as NewModelConfigEntry);
+  return bindSpeechRow(row, lane, input.makePrimary);
 }

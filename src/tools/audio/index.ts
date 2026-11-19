@@ -99,7 +99,9 @@ export class AudioTool extends BaseTool {
           description: 'Read text out loud; the audio file is saved in the workspace.',
           parameters: {
             text: { type: 'string', description: 'What to say', required: true },
-            voice: { type: 'string', description: 'A voice of the Speech engine (default: the configured one)' },
+            voice: { type: 'string', description: 'A voice profile by name, or a voice of the Speech engine (default: the configured one)' },
+            style: { type: 'string', description: 'How it should sound, in words ("calm, slow, warm"); used by engines that take a description' },
+            speed: { type: 'number', description: 'Speaking rate, 0.5–2 (default 1)' },
             output_path: { type: 'string', description: 'Where to save it in the workspace (default .octipus/media/speech/…)' },
           },
           returns: '{ path, mimeType, model }',
@@ -126,7 +128,9 @@ export class AudioTool extends BaseTool {
       'Read text out loud with the Speech engine. The audio is saved in the workspace, its path returned, and the person gets it with your answer (a player in the chat, a voice note on a channel).',
       createParameterSchema({
         text: { type: 'string', description: `What to say (at most ${MAX_SPEAK_CHARS} characters)`, required: true },
-        voice: { type: 'string', description: 'A voice id of the Speech engine; default: the configured voice' },
+        voice: { type: 'string', description: 'A voice profile by name, or a voice id of the Speech engine; default: the configured voice' },
+        style: { type: 'string', description: 'How it should sound, in words ("calm and slow", "an excited sports commentator"). Only engines that take a voice description use it; others ignore it.' },
+        speed: { type: 'number', description: 'Speaking rate from 0.5 to 2; default 1' },
         output_path: { type: 'string', description: 'Workspace path to save to; default .octipus/media/speech/<id>.<ext>' },
       }),
       async (args, context) => this.speak(args, context),
@@ -226,11 +230,17 @@ export class AudioTool extends BaseTool {
     }
     const { synthesizeWithLane } = await import('@/voice/resolve');
     const { mayUseInstallModels } = await import('@/models/install-access');
-    const spoken = await synthesizeWithLane(text, {
+    const { forSpeech } = await import('@/shared/speech-text');
+    // Spoken as it would be said: markup and code are not read out.
+    const said = forSpeech(text);
+    if (!said) throw new ToolNotExecutedError(this.id, 'text holds nothing to say (only markup, code or sources).');
+    const spoken = await synthesizeWithLane(said, {
       userId: context.userId,
       sessionId: context.sessionId,
       allowHosted: await mayUseInstallModels(context.userId),
       voice: typeof args.voice === 'string' && args.voice.trim() ? args.voice.trim() : undefined,
+      instructions: typeof args.style === 'string' && args.style.trim() ? args.style.trim().slice(0, 1000) : undefined,
+      speed: typeof args.speed === 'number' && args.speed >= 0.5 && args.speed <= 2 ? args.speed : undefined,
       format: 'mp3',
     });
     const ext = spoken.format === 'opus' ? 'ogg' : spoken.format;

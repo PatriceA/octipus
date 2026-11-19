@@ -56,7 +56,7 @@ describe('FasterWhisperEngine', () => {
       expect(spawnSync('ffmpeg', ['-nostdin', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1:sample_rate=48000', '-ac', '2', '-c:a', 'libvorbis', ogg]).status).toBe(0);
       const engine = new FasterWhisperEngine();
       let sent: Uint8Array | null = null;
-      (engine as unknown as { send: (pcm: Uint8Array) => Promise<string> }).send = async (pcm) => { sent = pcm; return 'hello'; };
+      (engine as unknown as { sendDetailed: (pcm: Uint8Array) => Promise<{ text: string; segments: never[] }> }).sendDetailed = async (pcm) => { sent = pcm; return { text: 'hello', segments: [] }; };
       await expect(engine.transcribe(readFileSync(ogg))).resolves.toMatchObject({ text: 'hello' });
       expect(sent).not.toBeNull();
       // 16 kHz mono s16: ~32 000 bytes for one second, and no Ogg container bytes.
