@@ -11,6 +11,34 @@ labels reflect blast radius, not contract guarantees.
 
 - Codemode now keeps ordinary tool definitions out of API and CLI prompts, including core tools and directly exposed MCP tools. Scripts discover schemas only when needed; coordination controls and existing permission checks are preserved. Models without codemode keep their existing tool advertisement.
 
+- **Voice fixes after review.**
+  - **Spoken replies no longer mix.** `spoken` is now part of the message
+    (`chat.send`, REST `/api/chat`) instead of a 30-second mark another turn
+    could take. A live conversation follows one turn at a time: talking over
+    a reply or saying something new before it ends no longer replays or drops
+    replies, a failed turn ends there, and a typed message is not read aloud
+    unless the client sends `expect_reply`.
+  - **Protection.** A speech server moved to a public address no longer
+    counts as local, and a conversation opened on a chat that did not exist
+    yet applies that chat's protection level once it does. Choosing an engine
+    by name (`/voice/transcribe` `model`, `?engine=`/`?tts=` on `/voice`) is
+    admin-only.
+  - **Engines.** Changing a speech server's model no longer keeps the old
+    model's settings (switching VoxCPM2 to Breeze-TTS-2 used to keep 48 kHz).
+    The live protocol can be turned off. Language codes such as `en-US` and
+    `auto` work on every engine. Voice clips are stored as WAV, so cloning
+    servers can read browser recordings. A missing clip file no longer stops
+    all speech. Interrupted speech requests are cancelled. Background speech
+    workers stop with the server. **Removed:** `POST /api/voice/install`
+    (use `POST /api/voice/engines/install`).
+  - **Phone calls.** Telnyx and Plivo stream live audio like Twilio, with
+    interruption. Plivo webhooks are checked with V3 signatures, which cover
+    the request body, and a replayed nonce is refused. New
+    `voice.callAssistant` (off by default) gives calls from your own listed
+    number, verified by the carrier (STIR/SHAKEN A), the full assistant with
+    its tools. Everyone else, and every outbound call, stays on the
+    restricted phone reply.
+
 - **Voice, rebuilt around open engines and one pipeline.**
   - **Any speech model.** A model on an OpenAI-compatible speech server
     (Speaches, vLLM-Omni, LocalAI, NVIDIA NeMo-Speech, Groq, …) is a speech
