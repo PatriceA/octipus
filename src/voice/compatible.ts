@@ -19,12 +19,13 @@ import type { ModelConfigEntry } from '@/db/schema/models';
 import { fileAt, writeFileAt } from '@/utils/fs-file';
 import { logger } from '@/utils/logger';
 import { FrameAccumulator } from './audio-codec';
-import type { SpeechConfig } from './speech-hints';
+import { liveRealtime, type SpeechConfig } from './speech-hints';
+import { speechLanguage } from './speech-language';
 import {
-  nemoRealtimeProtocol, openAiRealtimeProtocol, pcm16kMonoToWav, type STTEngine, type STTOptions, streamRealtimeWs,
+  nemoEndpointingMs, nemoRealtimeProtocol, openAiRealtimeProtocol, pcm16kMonoToWav, type STTEngine, type STTOptions, streamRealtimeWs,
   stripNonSpeech, toWhisperWav, type TranscriptionResult,
 } from './stt';
-import { bodyChunks, evenPcm, type TTSEngine, type TTSOptions } from './tts';
+import { bodyChunks, clipDataUri, evenPcm, InFlight, type TTSEngine, type TTSOptions } from './tts';
 
 const log = logger.child({ component: 'speech-compatible' });
 
@@ -70,11 +71,6 @@ function url(endpoint: SpeechEndpoint, path: string, scheme?: 'ws'): string {
   return full.toString();
 }
 
-/** Languages are stored as `en` or `en-US`; `auto` and empty mean "let the model detect it". */
-function languageParam(language: string | undefined): string | undefined {
-  return language && language.toLowerCase() !== 'auto' ? language : undefined;
-}
-
 /**
  * `fetch`, with a failure that says which server could not be reached and
  * why: the bare "fetch failed" names neither, and this is the error someone
@@ -115,7 +111,7 @@ export class CompatibleSTTEngine extends EventEmitter implements STTEngine {
     private readonly options: STTOptions = {},
   ) {
     super();
-    this.live = !!config.realtime;
+    this.live = !!liveRealtime(config);
   }
 
   async transcribe(audio: Buffer | string): Promise<TranscriptionResult> {
@@ -158,7 +154,7 @@ export class CompatibleSTTEngine extends EventEmitter implements STTEngine {
       form.append('model', this.model);
       form.append('file', new Blob([new Uint8Array(bytes)]), fileName);
       form.append('response_format', format);
-      const language = languageParam(this.options.language);
+      const language = speechLanguage(this.options.language);
       if (language) form.append('language', language);
       return request(url(this.endpoint, '/audio/transcriptions'), { method: 'POST', headers: this.endpoint.headers, body: form });
     };
@@ -174,13 +170,14 @@ export class CompatibleSTTEngine extends EventEmitter implements STTEngine {
   }
 
   async *streamTranscribe(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
-    const realtime = this.config.realtime;
+    const realtime = liveRealtime(this.config);
     if (realtime?.protocol === 'nemo') {
       yield* streamRealtimeWs(nemoRealtimeProtocol({
         url: realtime.url || url(this.endpoint, '/audio/transcriptions/realtime', 'ws'),
         headers: this.endpoint.headers,
-        language: languageParam(this.options.language),
+        language: this.options.language,
         sampleRate: 16000,
+        endpointingMs: nemoEndpointingMs(this.options.endpointSilenceMs),
       }), stream);
       return;
     }
@@ -193,7 +190,7 @@ export class CompatibleSTTEngine extends EventEmitter implements STTEngine {
         headers: this.endpoint.headers,
         name: 'Speech server',
         model: this.config.streamingModel || this.model,
-        language: languageParam(this.options.language),
+        language: this.options.language,
         sampleRate: realtime.sampleRate ?? 24000,
       }), stream);
       return;
@@ -229,11 +226,6 @@ export class CompatibleSTTEngine extends EventEmitter implements STTEngine {
 
 // ── Text to speech ───────────────────────────────────────────────────────────
 
-/** A reference clip as the data URI speech servers take in `ref_audio`. */
-function dataUri(clip: { data: Buffer; mimeType: string }): string {
-  return `data:${clip.mimeType};base64,${clip.data.toString('base64')}`;
-}
-
 /**
  * The request body for one piece of text: the OpenAI fields, then what this
  * model takes on top (a voice description as a field or a text prefix, a
@@ -254,7 +246,8 @@ export function speechRequestBody(model: string, config: SpeechConfig, options: 
   };
   if (describe && mode === 'field') body.instructions = describe;
   if (options.refAudio && config.cloning !== false) {
-    body.ref_audio = dataUri(options.refAudio);
+    // A data URI, encoded once per clip: a live reply sends it with every sentence.
+    body.ref_audio = clipDataUri(options.refAudio);
     if (options.refText) body.ref_text = options.refText;
   }
   if (options.speed && options.speed !== 1 && config.speed !== false) body.speed = options.speed;
@@ -265,6 +258,8 @@ export class CompatibleTTSEngine extends EventEmitter implements TTSEngine {
   readonly pcmSampleRate: number;
   /** Set only when the server streams: a caller without it reads a whole WAV. */
   streamPcm?: (text: string) => AsyncGenerator<Buffer>;
+  /** Requests still running: an interrupted sentence stops its own, `dispose` all of them. */
+  private readonly inFlight = new InFlight();
 
   constructor(
     private readonly endpoint: SpeechEndpoint,
@@ -277,18 +272,19 @@ export class CompatibleTTSEngine extends EventEmitter implements TTSEngine {
     if (config.streams) this.streamPcm = (text) => this.pcmStream(text);
   }
 
-  private async request(text: string, format: string, stream: boolean): Promise<Response> {
+  private async request(text: string, format: string, stream: boolean, signal: AbortSignal): Promise<Response> {
     const response = await request(url(this.endpoint, '/audio/speech'), {
       method: 'POST',
       headers: { ...this.endpoint.headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...speechRequestBody(this.model, this.config, this.options, text, format), ...(stream ? { stream: true } : {}) }),
+      signal,
     });
     if (!response.ok) throw await failure('Speech synthesis', response);
     return response;
   }
 
   async synthesize(text: string): Promise<Buffer> {
-    return Buffer.from(await (await this.request(text, this.options.outputFormat || 'wav', false)).arrayBuffer());
+    return this.inFlight.run(async (signal) => Buffer.from(await (await this.request(text, this.options.outputFormat || 'wav', false, signal)).arrayBuffer()));
   }
 
   async *streamSynthesize(text: string): AsyncGenerator<Buffer> {
@@ -300,8 +296,14 @@ export class CompatibleTTSEngine extends EventEmitter implements TTSEngine {
    * are generated, or with server-sent `speech.audio.delta` events carrying
    * them in base64; both are read here.
    */
-  private async *pcmStream(text: string): AsyncGenerator<Buffer> {
-    const response = await this.request(text, 'pcm', true);
+  private pcmStream(text: string): AsyncGenerator<Buffer> {
+    // Ended early (an interruption calls return()): the request stops with it,
+    // so the server does not go on generating a sentence nobody will hear.
+    return this.inFlight.stream((signal) => this.pcmFrom(text, signal));
+  }
+
+  private async *pcmFrom(text: string, signal: AbortSignal): AsyncGenerator<Buffer> {
+    const response = await this.request(text, 'pcm', true, signal);
     if (!(response.headers.get('content-type') || '').includes('text/event-stream')) {
       yield* evenPcm(bodyChunks(response));
       return;
@@ -323,7 +325,7 @@ export class CompatibleTTSEngine extends EventEmitter implements TTSEngine {
   }
 
   async dispose(): Promise<void> {
-    // Stateless.
+    this.inFlight.abortAll();
   }
 }
 

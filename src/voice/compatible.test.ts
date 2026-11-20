@@ -63,6 +63,8 @@ describe('which rows are speech engines', () => {
   test('what a model is known for is the default; the row overrides it', () => {
     expect(speechHintsFor('openbmb/VoxCPM2')).toMatchObject({ instructions: 'prefix', cloning: true, sampleRate: 48000, streams: true });
     expect(speechHintsFor('BreezeBlue/Breeze-TTS-2')).toMatchObject({ instructions: 'field', sampleRate: 24000 });
+    // Breeze knows speakers S0–S9 and no "default": a request without a voice gets S0.
+    expect(speechRequestBody('BreezeBlue/Breeze-TTS-2', speechHintsFor('BreezeBlue/Breeze-TTS-2'), {}, 'hi', 'wav').voice).toBe('S0');
     expect(speechHintsFor('nvidia/nemotron-3.5-asr-streaming-0.6b')).toMatchObject({ upload: 'wav', realtime: { protocol: 'nemo' } });
     expect(speechHintsFor('something-else')).toEqual({});
     expect(speechConfigOf(row('openbmb/VoxCPM2', { metadata: { speech: { sampleRate: 24000, streams: false } } }))).toMatchObject({ instructions: 'prefix', sampleRate: 24000, streams: false });
@@ -88,7 +90,8 @@ describe('speech to text', () => {
   test('a clip is posted as multipart with the model and language; segment times come back', async () => {
     respond = () => ({ body: JSON.stringify({ text: ' Hello there. ', language: 'en', segments: [{ start: 0, end: 1.2, text: ' Hello there.' }] }) });
     const r = row('openai/whisper-large-v3-turbo', { apiKeyRef: 'k' });
-    const engine = new CompatibleSTTEngine(await speechEndpointOf(r), r.modelId, speechConfigOf(r), { language: 'en' });
+    // A locale in the setting reaches the server as its two-letter code.
+    const engine = new CompatibleSTTEngine(await speechEndpointOf(r), r.modelId, speechConfigOf(r), { language: 'en-US' });
     await expect(engine.transcribe(Buffer.from('not really audio'))).resolves.toMatchObject({
       text: 'Hello there.', language: 'en', segments: [{ start: 0, end: 1.2, text: 'Hello there.' }],
     });
@@ -129,6 +132,19 @@ describe('speech to text', () => {
     for await (const text of engine.streamTranscribe(stream)) out.push(text);
     expect(out).toEqual(['window 1', 'window 2']);
     expect(seen[0].body.includes(Buffer.from('RIFF'))).toBe(true);
+  });
+
+  test('a row that turned off the realtime socket its model is known for streams nothing live', async () => {
+    const nemo = row('nvidia/nemotron-3.5-asr-streaming-0.6b');
+    expect(new CompatibleSTTEngine(await speechEndpointOf(nemo), nemo.modelId, speechConfigOf(nemo)).live).toBe(true);
+    const off = row('nvidia/nemotron-3.5-asr-streaming-0.6b', { metadata: { speech: { realtime: { protocol: 'off', url: 'ws://10.0.0.5/rt' } } } });
+    const engine = new CompatibleSTTEngine(await speechEndpointOf(off), off.modelId, speechConfigOf(off), { streamWindowSeconds: 1 });
+    expect(engine.live).toBe(false);
+    respond = () => ({ body: JSON.stringify({ text: 'whole' }) });
+    const stream = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new Uint8Array(32000)); c.close(); } });
+    const out: string[] = [];
+    for await (const text of engine.streamTranscribe(stream)) out.push(text);
+    expect(out).toEqual(['whole']);
   });
 });
 

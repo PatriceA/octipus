@@ -17,7 +17,8 @@ Protocol over stdio, one window at a time (parent serialises requests):
 --model is a size (small), a release name (large-v3-turbo, turbo,
 distil-large-v3) or a CTranslate2 repository on Hugging Face. --device auto
 uses a GPU when CTranslate2 finds one and falls back to the CPU, saying so on
-stderr, when the GPU cannot load the model.
+stderr, when the GPU cannot load the model or decode a test second of
+silence with it. The ready line says which device it ended on.
 
 Run via `uv run --with faster-whisper` so no global install is needed; the model
 itself is auto-downloaded to the HF cache on first use.
@@ -64,6 +65,14 @@ def preload_cuda_libs():
                     print(f"faster-whisper: could not preload {lib}: {err}", file=sys.stderr)
 
 
+def check_decode(model):
+    """Decode a second of silence. A model can load on the GPU and still fail
+    on its first real window when cuBLAS / cuDNN are missing or mismatched; this
+    finds that out while the CPU is still an option."""
+    segments, _ = model.transcribe(np.zeros(16000, dtype=np.float32), language="en", vad_filter=False)
+    list(segments)  # the generator decodes lazily
+
+
 def load_model(name, device, compute_type):
     """The model on the asked device; `auto` tries a GPU first, then the CPU (loudly)."""
     import ctranslate2
@@ -73,11 +82,13 @@ def load_model(name, device, compute_type):
     want_gpu = device == "cuda" or (device == "auto" and ctranslate2.get_cuda_device_count() > 0)
     if want_gpu:
         try:
-            return WhisperModel(name, device="cuda", compute_type=compute_type or "float16"), "cuda"
-        except Exception as err:  # noqa: BLE001 — any GPU load failure falls back, loudly
+            model = WhisperModel(name, device="cuda", compute_type=compute_type or "float16")
+            check_decode(model)
+            return model, "cuda"
+        except Exception as err:  # noqa: BLE001 — any GPU failure falls back, loudly
             if device == "cuda":
                 raise
-            print(f"faster-whisper: GPU could not load {name} ({err}); using the CPU", file=sys.stderr)
+            print(f"faster-whisper: the GPU could not run {name} ({err}); using the CPU", file=sys.stderr)
     return WhisperModel(name, device="cpu", compute_type=compute_type or "int8"), "cpu"
 
 
@@ -92,8 +103,8 @@ def main():
     model, device = load_model(a.model, a.device, a.compute_type)
     emit({"ready": True, "device": device})
 
-    # "en-US" → "en"; "auto" or empty → let the model detect the language.
-    language = (a.language or "").split("-")[0].lower()
+    # "en-US" / "de_DE" → "en" / "de"; "auto" or empty → let the model detect the language.
+    language = (a.language or "").replace("_", "-").split("-")[0].lower()
     if language in ("", "auto"):
         language = None
 

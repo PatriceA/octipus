@@ -41,7 +41,7 @@ export interface TTSEngine {
   dispose(): Promise<void>;
 }
 
-/** Read a response body as it arrives. */
+/** Read a response body as it arrives. Stopped early, the body is cancelled: the connection is not left half-read. */
 export async function* bodyChunks(response: Response): AsyncGenerator<Buffer> {
   if (!response.body) return;
   const reader = response.body.getReader();
@@ -52,8 +52,64 @@ export async function* bodyChunks(response: Response): AsyncGenerator<Buffer> {
       if (value?.length) yield Buffer.from(value);
     }
   } finally {
-    reader.releaseLock();
+    await reader.cancel().catch(() => {});
   }
+}
+
+/**
+ * The synthesis requests of one engine still running, each with its own
+ * AbortController: a stream that is ended early (an interrupted sentence)
+ * aborts its request, and `abortAll` (the engine's dispose) every one.
+ */
+export class InFlight {
+  private readonly controllers = new Set<AbortController>();
+
+  async run<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    this.controllers.add(controller);
+    try {
+      return await fn(controller.signal);
+    } finally {
+      this.controllers.delete(controller);
+    }
+  }
+
+  async *stream<T>(fn: (signal: AbortSignal) => AsyncGenerator<T>): AsyncGenerator<T> {
+    const controller = new AbortController();
+    this.controllers.add(controller);
+    try {
+      yield* fn(controller.signal);
+    } finally {
+      // Finished, failed or returned early: either way nothing more is read.
+      controller.abort();
+      this.controllers.delete(controller);
+    }
+  }
+
+  abortAll(): void {
+    for (const controller of this.controllers) controller.abort();
+    this.controllers.clear();
+  }
+}
+
+/** Base64 of a reference clip, encoded once per clip (a live reply sends it with every sentence). */
+const encodedClips = new WeakMap<Buffer, { base64: string; dataUri?: string }>();
+
+export function clipBase64(clip: { data: Buffer }): string {
+  let encoded = encodedClips.get(clip.data);
+  if (!encoded) {
+    encoded = { base64: clip.data.toString('base64') };
+    encodedClips.set(clip.data, encoded);
+  }
+  return encoded.base64;
+}
+
+/** A reference clip as the data URI speech servers take in `ref_audio`. */
+export function clipDataUri(clip: { data: Buffer; mimeType: string }): string {
+  const base64 = clipBase64(clip);
+  const encoded = encodedClips.get(clip.data)!;
+  if (!encoded.dataUri?.startsWith(`data:${clip.mimeType};`)) encoded.dataUri = `data:${clip.mimeType};base64,${base64}`;
+  return encoded.dataUri;
 }
 
 /**
@@ -291,9 +347,16 @@ export class MistralTTSEngine extends EventEmitter implements TTSEngine {
     return key;
   }
 
+  private readonly inFlight = new InFlight();
+
   async synthesize(text: string): Promise<Buffer> {
+    return this.inFlight.run((signal) => this.synthesizeOnce(text, signal));
+  }
+
+  private async synthesizeOnce(text: string, signal: AbortSignal): Promise<Buffer> {
     const response = await fetch('https://api.mistral.ai/v1/audio/speech', {
       method: 'POST',
+      signal,
       headers: {
         Authorization: `Bearer ${await this.apiKey()}`,
         'Content-Type': 'application/json',
@@ -304,7 +367,7 @@ export class MistralTTSEngine extends EventEmitter implements TTSEngine {
         response_format: this.options.outputFormat || 'mp3',
         // A reference clip speaks in that voice instead of a preset one.
         ...(this.options.refAudio
-          ? { ref_audio: this.options.refAudio.data.toString('base64') }
+          ? { ref_audio: clipBase64(this.options.refAudio) }
           : this.options.voice ? { voice_id: this.options.voice } : {}),
         ...(this.options.extraBody ?? {}),
       }),
@@ -339,7 +402,7 @@ export class MistralTTSEngine extends EventEmitter implements TTSEngine {
   }
 
   async dispose(): Promise<void> {
-    // Stateless.
+    this.inFlight.abortAll();
   }
 }
 
@@ -372,10 +435,12 @@ export class OpenAITTSEngine extends EventEmitter implements TTSEngine {
 
   /** OpenAI writes 24 kHz mono s16le for `response_format: 'pcm'`. */
   readonly pcmSampleRate = 24000;
+  private readonly inFlight = new InFlight();
 
-  private async request(text: string, format: string): Promise<Response> {
+  private async request(text: string, format: string, signal: AbortSignal): Promise<Response> {
     const response = await fetch('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
+      signal,
       headers: {
         Authorization: `Bearer ${await this.apiKey()}`,
         'Content-Type': 'application/json',
@@ -399,12 +464,16 @@ export class OpenAITTSEngine extends EventEmitter implements TTSEngine {
   }
 
   async synthesize(text: string): Promise<Buffer> {
-    return Buffer.from(await (await this.request(text, this.options.outputFormat || 'mp3')).arrayBuffer());
+    return this.inFlight.run(async (signal) => Buffer.from(await (await this.request(text, this.options.outputFormat || 'mp3', signal)).arrayBuffer()));
   }
 
-  /** The body is sent as it is generated: read it as it arrives. */
-  async *streamPcm(text: string): AsyncGenerator<Buffer> {
-    yield* evenPcm(bodyChunks(await this.request(text, 'pcm')));
+  /** The body is sent as it is generated: read it as it arrives. Ended early, the request is aborted. */
+  streamPcm(text: string): AsyncGenerator<Buffer> {
+    return this.inFlight.stream((signal) => this.pcmFrom(text, signal));
+  }
+
+  private async *pcmFrom(text: string, signal: AbortSignal): AsyncGenerator<Buffer> {
+    yield* evenPcm(bodyChunks(await this.request(text, 'pcm', signal)));
   }
 
   async *streamSynthesize(text: string): AsyncGenerator<Buffer> {
@@ -422,7 +491,7 @@ export class OpenAITTSEngine extends EventEmitter implements TTSEngine {
   }
 
   async dispose(): Promise<void> {
-    // Stateless.
+    this.inFlight.abortAll();
   }
 }
 
