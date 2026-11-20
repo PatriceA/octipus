@@ -115,10 +115,11 @@ async function answerVoiceWebhook(
   callManager: import('@/voice/telephony').CallManager,
   publicBase: string,
 ): Promise<import('@/voice/telephony').WebhookReply> {
-  const [{ handleCallEvent }, { generatePhoneReply }, { prepareSpokenLine }, { getSettingsService }, { mintMediaStreamToken }] = await Promise.all([
+  const [{ handleCallEvent }, { generatePhoneReply }, { prepareSpokenLine }, { getSettingsService }, { mintMediaStreamToken }, { callAssistantUser }] = await Promise.all([
     import('@/voice/telephony/call-flow'), import('@/voice/telephony/reply'), import('@/voice/telephony/audio-store'),
-    import('@/config/settings-service'), import('../voice-media-ws'),
+    import('@/config/settings-service'), import('../voice-media-ws'), import('@/voice/telephony/assistant'),
   ]);
+  const settings = getSettingsService();
   // Lines spoken by the install's engine are fetched by the carrier from the
   // audio route next to this webhook — reachable only through a public URL.
   const audioBase = publicBase ? url.replace(/\/webhook\/[^/?#]+(?:\/status)?(?:[?#].*)?$/, '/webhook/audio') : null;
@@ -127,10 +128,20 @@ async function answerVoiceWebhook(
     callManager,
     callbackUrl: url,
     publicBase,
-    settings: getSettingsService(),
+    settings,
     reply: (call, speech) => generatePhoneReply(call, speech),
     line: (text, fixed) => prepareSpokenLine(text, audioBase, fixed),
     mintStreamToken: mintMediaStreamToken,
+    // A listed number with a carrier-verified caller ID reaches its owner's full assistant.
+    assistantUser: (event) => callAssistantUser(event, {
+      settings,
+      findUserId: async (username) => {
+        const { userRepository } = await import('@/db/repositories/user-repository');
+        const owner = await userRepository.findByUsername(username);
+        // A deactivated account has no assistant to reach.
+        return owner?.isActive ? owner.id : null;
+      },
+    }),
   });
 }
 

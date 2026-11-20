@@ -4,14 +4,15 @@
  * and carries out the `CallInstruction` this returns; nothing here knows a
  * provider's field names or whether it is driven by XML or by API commands.
  *
- *   incoming  → inbound policy → answer → greet → listen (or the media stream)
+ *   incoming  → inbound policy → full assistant or phone reply → answer → greet → listen (or the media stream)
  *   answered  → say the pending message → listen (conversation) or hang up (notify)
  *   speech    → the phone reply (`reply.ts`) → say it → listen, or hang up on a farewell
- *   spoken    → a line that asked for it has ended: hang up
+ *   spoken    → a line that asked for it has ended: hang up, or connect the media stream
  *   hangup    → the call is over
  */
+import { randomUUID } from 'node:crypto';
 import { logger } from '@/utils/logger';
-import type { CallInstruction, CallManager, CallSession, SpokenLine, TelephonyProvider, TelephonyWebhookEvent, WebhookReply } from './interface';
+import { type CallInstruction, type CallManager, type CallSession, isFinalCallStatus, type SpokenLine, type TelephonyProvider, type TelephonyWebhookEvent, type WebhookReply } from './interface';
 import { phonePhrase, telephonyLocale } from './phrases';
 import type { PhoneReply } from './reply';
 
@@ -34,6 +35,12 @@ export interface CallFlowContext {
   line(text: string, fixed?: boolean): Promise<SpokenLine>;
   /** A one-call token for the media socket's URL. */
   mintStreamToken(providerCallId: string): string;
+  /**
+   * The user whose full assistant answers this inbound call, or null for the
+   * restricted phone reply (assistant.ts: `callAssistantUser`). Omitted:
+   * every call gets the restricted reply.
+   */
+  assistantUser?(event: TelephonyWebhookEvent): Promise<string | null>;
 }
 
 export async function handleCallEvent(event: TelephonyWebhookEvent, ctx: CallFlowContext): Promise<WebhookReply> {
@@ -97,6 +104,8 @@ export async function handleCallEvent(event: TelephonyWebhookEvent, ctx: CallFlo
 
     case 'spoken':
       if (event.after === 'hangup') await provider.endCall(session.providerCallId);
+      // The greeting of a streamed call has been said (Telnyx): connect the stream now.
+      if (event.after === 'stream' && ctx.publicBase && !isFinalCallStatus(session.status)) return provider.instruct(session.providerCallId, streamInstruction(session, ctx, locale));
       return provider.acknowledge();
 
     case 'hangup':
@@ -140,8 +149,17 @@ async function acceptOrReject(event: TelephonyWebhookEvent, ctx: CallFlowContext
       pendingMessage: phonePhrase('greeting', language),
     },
   };
+  // The full assistant only for a listed number whose caller ID the carrier
+  // verified (assistant.ts); every other caller gets the restricted reply.
+  let assistantUser: string | null = null;
+  try {
+    assistantUser = (await ctx.assistantUser?.(event)) ?? null;
+  } catch (err) {
+    log.error({ err, provider: provider.name }, 'Could not decide whether the call reaches the full assistant; it gets the phone reply');
+  }
+  if (assistantUser) session.metadata.assistant = { userId: assistantUser, sessionId: randomUUID() };
   callManager.create(session);
-  log.info({ callId: session.id, provider: provider.name, caller: event.from, policy }, 'Inbound call accepted');
+  log.info({ callId: session.id, provider: provider.name, caller: event.from, policy, assistant: !!assistantUser }, 'Inbound call accepted');
 
   let answered: boolean;
   try {
@@ -171,16 +189,21 @@ async function opening(session: CallSession, ctx: CallFlowContext, locale: strin
   // of the turn-based loop. Providers without one stay on the loop.
   const streaming = await settings.get('voice.streaming');
   if (session.direction === 'inbound' && conversation && provider.mediaStream && ctx.publicBase && (streaming === true || streaming === 'true')) {
-    const token = ctx.mintStreamToken(session.providerCallId);
-    const streamUrl = `${ctx.publicBase.replace(/\/+$/, '').replace(/^http/, 'ws')}/voice/media/${provider.name}?token=${token}`;
-    log.info({ callId: session.id }, 'Answering with the media stream');
-    return provider.instruct(session.providerCallId, { say, then: 'stream', streamUrl, locale, opening: true });
+    log.info({ callId: session.id, assistant: !!session.metadata.assistant }, 'Answering with the media stream');
+    return provider.instruct(session.providerCallId, { ...streamInstruction(session, ctx, locale), say, opening: true });
   }
 
   if (!conversation) return provider.instruct(session.providerCallId, { say, then: 'hangup', locale, opening: true });
   return provider.instruct(session.providerCallId, {
     say, then: 'listen', callbackUrl: ctx.callbackUrl, locale, reprompt: await reprompt(ctx, language), opening: true,
   });
+}
+
+/** Hand the call to the media socket, at a URL carrying a fresh one-call token. */
+function streamInstruction(session: CallSession, ctx: CallFlowContext, locale: string): CallInstruction {
+  const token = ctx.mintStreamToken(session.providerCallId);
+  const streamUrl = `${ctx.publicBase.replace(/\/+$/, '').replace(/^http/, 'ws')}/voice/media/${ctx.provider.name}?token=${token}`;
+  return { then: 'stream', streamUrl, locale };
 }
 
 /** What is said when the caller stays silent. Stock lines: their audio is made once and reused. */

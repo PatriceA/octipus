@@ -21,10 +21,10 @@ const MULAW_SILENCE = 0xff;
  * Inbound, one per call: μ-law frames → 16 kHz s16le PCM bytes for the
  * endpointer and the recogniser.
  */
-export class TwilioInboundDecoder {
+export class TelephonyInboundDecoder {
   private readonly resampler = new StreamingResampler(TELEPHONY_RATE, LISTEN_RATE);
 
-  /** A μ-law frame (raw bytes, or base64 as Twilio sends it) → 16 kHz s16le PCM bytes (little-endian). */
+  /** A μ-law frame (raw bytes, or base64 as carriers send it) → 16 kHz s16le PCM bytes (little-endian). */
   push(payload: string | Uint8Array): Uint8Array {
     const mulaw = typeof payload === 'string' ? Uint8Array.from(Buffer.from(payload, 'base64')) : payload;
     const pcm8k = muLawDecode(mulaw);

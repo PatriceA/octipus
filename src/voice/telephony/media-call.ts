@@ -30,7 +30,7 @@ import { type EndpointEvent, Endpointer, type EndpointerOptions } from '../endpo
 import type { SpeechStream } from '../resolve';
 import type { STTEngine } from '../stt';
 import { pcmToWav } from '../wav';
-import { TELEPHONY_FRAME_MS, TelephonyOutboundEncoder, TwilioInboundDecoder } from './media-bridge';
+import { TELEPHONY_FRAME_MS, TelephonyOutboundEncoder, TelephonyInboundDecoder } from './media-bridge';
 import type { PhoneReplyStream } from './reply';
 
 const log = logger.child({ component: 'phone-media-call' });
@@ -113,7 +113,7 @@ const realClock = { now: () => Date.now(), sleep: (ms: number) => new Promise<vo
 
 export class PhoneMediaCall {
   private readonly endpointer: Endpointer;
-  private readonly decoder = new TwilioInboundDecoder();
+  private readonly decoder = new TelephonyInboundDecoder();
   private readonly clock: NonNullable<PhoneMediaDeps['clock']>;
   private live: { engine: STTEngine; controller: ReadableStreamDefaultController<Uint8Array> | null; full: string; mark: number; lastPieceAt: number; heardBytes: number } | null = null;
   /** Audio heard before the engine was ready; fed to a live engine when it is. Null once it is. */
