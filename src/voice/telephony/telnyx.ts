@@ -31,12 +31,15 @@ const HANGUP_STATUS: Record<string, CallStatus> = {
   user_busy: 'busy', busy: 'busy', timeout: 'no-answer', no_answer: 'no-answer', call_rejected: 'failed', not_found: 'failed', unspecified: 'failed',
 };
 
+type After = 'listen' | 'hangup' | 'stream';
+const AFTER: readonly After[] = ['listen', 'hangup', 'stream'];
+
 /** What a spoken line asked for, carried through Telnyx as the command's `client_state` (base64). */
-const stateOf = (after: 'listen' | 'hangup') => Buffer.from(`octipus:${after}`).toString('base64');
-function afterOf(clientState: unknown): 'listen' | 'hangup' | undefined {
+const stateOf = (after: After) => Buffer.from(`octipus:${after}`).toString('base64');
+function afterOf(clientState: unknown): After | undefined {
   if (typeof clientState !== 'string' || !clientState) return undefined;
   const decoded = Buffer.from(clientState, 'base64').toString('utf8');
-  return decoded === 'octipus:hangup' ? 'hangup' : decoded === 'octipus:listen' ? 'listen' : undefined;
+  return AFTER.find((after) => decoded === `octipus:${after}`);
 }
 
 /** Largest distance, either way, between a webhook's `telnyx-timestamp` and now, in seconds. */
@@ -44,7 +47,7 @@ export const TELNYX_WEBHOOK_TOLERANCE_SECONDS = 300;
 
 export class TelnyxProvider implements TelephonyProvider {
   readonly name = 'telnyx';
-  readonly mediaStream = false;
+  readonly mediaStream = true;
 
   private apiKey: string;
   private connectionId: string;
@@ -107,9 +110,12 @@ export class TelnyxProvider implements TelephonyProvider {
    * Call Control v2 webhooks are JSON, with everything under `data`:
    * `data.event_type` and `data.payload` (`call_control_id`, `from`, `to`,
    * `direction` — `incoming` / `outgoing` —, `client_state`, and per event
-   * `hangup_cause` or `transcription_data`).
+   * `hangup_cause` or `transcription_data`). `call.initiated` of an inbound
+   * call carries `shaken_stir_attestation` (`A`/`B`/`C`) and
+   * `shaken_stir_validated` (the signature checked out).
    * https://developers.telnyx.com/docs/voice/programmable-voice/receiving-webhooks
    * https://developers.telnyx.com/docs/voice/programmable-voice/speech-to-text
+   * https://developers.telnyx.com/api-reference/callbacks/call-initiated
    */
   parseWebhook(fields: Record<string, unknown>): TelephonyWebhookEvent {
     const data = isRecord(fields.data) ? fields.data : {};
@@ -124,6 +130,7 @@ export class TelnyxProvider implements TelephonyProvider {
       direction: direction === 'incoming' ? 'inbound' : direction === 'outgoing' ? 'outbound' : undefined,
       from: text(payload.from),
       to: text(payload.to),
+      callerVerified: payload.shaken_stir_attestation === 'A' && payload.shaken_stir_validated === true,
     };
     switch (happened) {
       case 'call.initiated':
@@ -184,11 +191,31 @@ export class TelnyxProvider implements TelephonyProvider {
    * `call.transcription` is a turn. A line is played from the install's
    * engine (`playback_start`) or spoken by Telnyx (`speak`); what follows it
    * travels as `client_state` and comes back on `call.speak.ended` /
-   * `call.playback.ended`.
+   * `call.playback.ended`. A streamed call is handed to the media socket
+   * with `streaming_start` (after its greeting, if it has one).
    */
   async instruct(providerCallId: string, instruction: CallInstruction): Promise<WebhookReply> {
-    if (instruction.then === 'stream') throw new Error('Telnyx calls are not connected to the media stream.');
     const language = instruction.locale.split('-')[0].toLowerCase();
+    if (instruction.then === 'stream') {
+      if (!instruction.streamUrl) throw new Error('Telnyx needs a stream URL to connect a media stream.');
+      // A greeting first: the stream is connected once it has ended
+      // (`after: 'stream'`), with a fresh URL — as Twilio says, then connects.
+      if (!instruction.say) {
+        // Bidirectional RTP in PCMU: 8 kHz μ-law both ways, what the media
+        // bridge speaks. No reconnect: a reconnect would present the same
+        // single-use token again and be refused.
+        // https://developers.telnyx.com/api-reference/call-commands/streaming-start
+        // https://developers.telnyx.com/docs/voice/programmable-voice/media-streaming
+        await this.command(providerCallId, 'streaming_start', {
+          stream_url: instruction.streamUrl,
+          stream_track: 'inbound_track',
+          stream_bidirectional_mode: 'rtp',
+          stream_bidirectional_codec: 'PCMU',
+          enable_reconnect: false,
+        });
+        return ACK;
+      }
+    }
     if (instruction.opening && instruction.then === 'listen') {
       await this.command(providerCallId, 'transcription_start', {
         transcription_engine: 'Google',

@@ -768,8 +768,8 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 29 |
-| `api` | `core` | 218 |
-| `api` | `db` | 147 |
+| `api` | `core` | 219 |
+| `api` | `db` | 149 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 9 |
 | `api` | `mcp` | 7 |
@@ -781,7 +781,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `skills` | 7 |
 | `api` | `tools` | 6 |
 | `api` | `utils` | 76 |
-| `api` | `voice` | 35 |
+| `api` | `voice` | 39 |
 | `capabilities` | `config` | 1 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 4 |
@@ -935,13 +935,13 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `visual` | `utils` | 2 |
 | `voice` | `capabilities` | 1 |
 | `voice` | `config` | 8 |
-| `voice` | `core` | 6 |
+| `voice` | `core` | 8 |
 | `voice` | `db` | 2 |
 | `voice` | `models` | 18 |
-| `voice` | `security` | 1 |
+| `voice` | `security` | 2 |
 | `voice` | `services` | 4 |
 | `voice` | `shared` | 6 |
-| `voice` | `utils` | 41 |
+| `voice` | `utils` | 42 |
 
 ### Mutual imports
 
@@ -1061,4 +1061,4 @@ The contract promises these and no code emits them. Each is either a type to ret
 - `task.changed` — subscribed by `src/core/monitors/service.ts`
 - `test.event` — subscribed by `src/core/monitors/service.ts`
 
-2 publish/subscribe site(s) use a non-literal event type and are counted here rather than dropped.
+3 publish/subscribe site(s) use a non-literal event type and are counted here rather than dropped.

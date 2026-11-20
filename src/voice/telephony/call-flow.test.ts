@@ -148,4 +148,50 @@ describe('handleCallEvent', () => {
     expect(fake.told).toEqual([{ callId: 'P-1', instruction: { then: 'hangup', locale: 'de-DE' } }]);
     expect(line).not.toHaveBeenCalled();
   });
+
+  test('a greeting spoken by command (Telnyx) is followed by the stream, on a fresh token, once it has ended', async () => {
+    fake = fakeProvider({ mediaStream: true, answersInline: false });
+    settings['voice.streaming'] = true;
+    let minted = 0;
+    const ctx = context({ mintStreamToken: () => `tok${++minted}` });
+    await handleCallEvent(event('incoming'), ctx);
+    await handleCallEvent(event('answered'), ctx);
+    expect(fake.told[0].instruction).toMatchObject({ then: 'stream', say: { text: phonePhrase('greeting', 'de') } });
+    await handleCallEvent(event('spoken', { after: 'stream' }), ctx);
+    expect(fake.told[1].instruction).toEqual({ then: 'stream', streamUrl: 'wss://x.example/voice/media/fake?token=tok2', locale: 'de-DE' });
+    // Over before its greeting ended: nothing to connect.
+    await handleCallEvent(event('hangup', { status: 'ended' }), ctx);
+    await handleCallEvent(event('spoken', { after: 'stream' }), ctx);
+    expect(fake.told).toHaveLength(2);
+  });
+});
+
+describe('the full assistant on a call', () => {
+  test("only a caller the gate names gets it; the gate sees the carrier's verification", async () => {
+    const seen: TelephonyWebhookEvent[] = [];
+    const assistantUser = async (e: TelephonyWebhookEvent) => { seen.push(e); return e.callerVerified ? 'user-1' : null; };
+    await handleCallEvent(event('incoming', { callId: 'P-v', callerVerified: true }), context({ assistantUser }));
+    await handleCallEvent(event('incoming', { callId: 'P-u', callerVerified: false }), context({ assistantUser }));
+    expect(calls.getByProviderCallId('P-v')?.metadata.assistant).toMatchObject({ userId: 'user-1', sessionId: expect.stringMatching(/^[0-9a-f-]{36}$/) });
+    expect(calls.getByProviderCallId('P-u')?.metadata.assistant).toBeUndefined();
+    expect(seen.map((e) => e.callerVerified)).toEqual([true, false]);
+  });
+
+  test('a gate that fails leaves the call on the restricted reply instead of dropping it', async () => {
+    await handleCallEvent(event('incoming'), context({ assistantUser: async () => { throw new Error('db down'); } }));
+    const [call] = calls.list();
+    expect(call.status).toBe('active');
+    expect(call.metadata.assistant).toBeUndefined();
+  });
+
+  test('an outbound call never asks the gate', async () => {
+    const assistantUser = vi.fn(async () => 'user-1');
+    calls.create({
+      id: 'out-2', provider: 'fake', providerCallId: 'P-out', direction: 'outbound', from: '+1', to: '+2', status: 'initiated',
+      startedAt: new Date(), metadata: { mode: 'conversation', pendingMessage: 'Hi' },
+    });
+    await handleCallEvent(event('answered', { callId: 'P-out', direction: 'outbound', callerVerified: true }), context({ assistantUser }));
+    expect(assistantUser).not.toHaveBeenCalled();
+    expect(calls.get('out-2')?.metadata.assistant).toBeUndefined();
+  });
 });

@@ -47,7 +47,7 @@ export interface InitiateCallOptions {
  *   ringing    an outbound call is ringing
  *   answered   the call is connected (outbound picked up; inbound answered out of band)
  *   speech     the caller said something (`speech`)
- *   spoken     the provider finished saying a line (`after`: what the line asked for)
+ *   spoken     the provider finished saying a line (`after`: what the line asked for; `stream` = connect the media stream now)
  *   hangup     the call is over (`status`: how it ended)
  *   other      nothing the call flow acts on
  */
@@ -62,7 +62,13 @@ export interface TelephonyWebhookEvent {
   to: string;
   speech?: string;
   status?: CallStatus;
-  after?: 'listen' | 'hangup';
+  after?: 'listen' | 'hangup' | 'stream';
+  /**
+   * The carrier verified the caller ID with full STIR/SHAKEN attestation (A):
+   * the calling number really belongs to whoever placed the call. Anything
+   * less — B, C, a failed or missing check — is false.
+   */
+  callerVerified?: boolean;
 }
 
 /** A line for the caller: its text, and the same line in the install's voice when one could speak it. */

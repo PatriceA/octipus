@@ -178,20 +178,53 @@ describe('Plivo webhook', () => {
   const raw = new URLSearchParams(form).toString();
   const formType = { 'content-type': 'application/x-www-form-urlencoded' };
   const v2 = (url: string, nonce: string) => createHmac('sha256', PLIVO_TOKEN).update(url + nonce).digest('base64');
+  /**
+   * V3 built by hand, as Plivo documents it (not with the code under test):
+   * `<url>?<query>.` + sorted name+value pairs + `.` + nonce, HMAC-SHA256.
+   * https://www.plivo.com/docs/voice/concepts/signature-validation
+   */
+  const v3 = (base: string, params: Record<string, string>, nonce: string) =>
+    createHmac('sha256', PLIVO_TOKEN).update(`${base}${Object.keys(params).sort().map((k) => k + params[k]).join('')}.${nonce}`).digest('base64');
+  let nonceSeq = 0;
+  const signed = (path: string, params: Record<string, string>, nonce = `nonce-${Date.now()}-${++nonceSeq}`, base = `${PUBLIC}${path}?`) =>
+    ({ ...formType, 'x-plivo-signature-v3': v3(base, params, nonce), 'x-plivo-signature-v3-nonce': nonce });
 
-  test('unsigned, legacy-only or nonce-less → 403', async () => {
+  test('unsigned, V2-only or nonce-less → 403', async () => {
     expect((await post('/voice/webhook/plivo', raw, formType)).status).toBe(403);
-    const sig = v2(`${PUBLIC}/voice/webhook/plivo`, '');
-    expect((await post('/voice/webhook/plivo', raw, { ...formType, 'x-plivo-signature': sig })).status).toBe(403);
-    expect((await post('/voice/webhook/plivo', raw, { ...formType, 'x-plivo-signature-v2': sig })).status).toBe(403);
+    // V2 covers only the URL and the nonce: it is not accepted any more.
+    const nonce = '12345678901234567890';
+    expect((await post('/voice/webhook/plivo', raw, { ...formType, 'x-plivo-signature-v2': v2(`${PUBLIC}/voice/webhook/plivo`, nonce), 'x-plivo-signature-v2-nonce': nonce })).status).toBe(403);
+    const { 'x-plivo-signature-v3': sig } = signed('/voice/webhook/plivo', form);
+    expect((await post('/voice/webhook/plivo', raw, { ...formType, 'x-plivo-signature-v3': sig })).status).toBe(403);
+    expect(inboundCalls()).toEqual([]);
   });
 
-  test('a V2 signature over the URL (query excluded) and nonce → accepted', async () => {
-    const nonce = '12345678901234567890';
-    const sig = v2(`${PUBLIC}/voice/webhook/plivo`, nonce);
-    const res = await post('/voice/webhook/plivo?x=1', raw, { ...formType, 'x-plivo-signature-v2': sig, 'x-plivo-signature-v2-nonce': nonce });
+  test('a V3 signature over the URL, the posted parameters and the nonce → accepted', async () => {
+    const res = await post('/voice/webhook/plivo', raw, signed('/voice/webhook/plivo', form));
     expect(res.status).toBe(200);
     expect(inboundCalls().map((c) => c.providerCallId)).toEqual(['plivo-1']);
+  });
+
+  test('the query string is signed too (sorted, then a dot before the parameters); one of several signatures is enough', async () => {
+    const call = { ...form, CallUUID: 'plivo-q' };
+    const headers = signed('/voice/webhook/plivo?b=2&a=1', call, 'nonce-q', `${PUBLIC}/voice/webhook/plivo?a=1&b=2.`);
+    headers['x-plivo-signature-v3'] = `c2lnbmVkLXdpdGgtYW4tb2xkLXRva2Vu,${headers['x-plivo-signature-v3']}`;
+    expect((await post('/voice/webhook/plivo?b=2&a=1', new URLSearchParams(call).toString(), headers)).status).toBe(200);
+  });
+
+  test('a tampered body → 403: the signature covers what was posted', async () => {
+    const headers = signed('/voice/webhook/plivo', form);
+    const tampered = new URLSearchParams({ ...form, From: '+15559999999' }).toString();
+    expect((await post('/voice/webhook/plivo', tampered, headers)).status).toBe(403);
+    expect(inboundCalls()).toEqual([]);
+  });
+
+  test('the same signed request posted again (a replayed nonce) → 403', async () => {
+    const call = { ...form, CallUUID: 'plivo-replay' };
+    const body = new URLSearchParams(call).toString();
+    const headers = signed('/voice/webhook/plivo', call);
+    expect((await post('/voice/webhook/plivo', body, headers)).status).toBe(200);
+    expect((await post('/voice/webhook/plivo', body, headers)).status).toBe(403);
   });
 });
 

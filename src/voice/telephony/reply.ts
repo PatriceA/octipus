@@ -4,7 +4,9 @@
  * (`media-call.ts`).
  *
  * A phone turn goes straight to the model bound to the `voice` topic with a
- * spoken-reply prompt: no root agent, no tools, for latency. The conversation
+ * spoken-reply prompt: no root agent, no tools, for latency and because a
+ * caller can be anyone (the owner's verified number may reach the full
+ * assistant instead: assistant.ts). The conversation
  * is kept on the call (`session.metadata.conversationHistory`), so
  * `/api/voice/calls`, `make_call` and both reply paths see the same history.
  * The model ends the call by writing `[END_CALL]`, which is never spoken.

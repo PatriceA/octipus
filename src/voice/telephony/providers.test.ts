@@ -4,9 +4,10 @@
  * document (the sources are named at each `parseWebhook`); none of this has
  * run against a live carrier.
  */
+import { createHmac } from 'node:crypto';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { CallInstruction } from './interface';
-import { PlivoProvider } from './plivo';
+import { PlivoProvider, plivoV3Signature, SeenNonces } from './plivo';
 import { TelnyxProvider } from './telnyx';
 import { TwilioProvider } from './twilio';
 
@@ -130,11 +131,40 @@ describe('Plivo', () => {
     expect(played.trim().endsWith('<Hangup/>\n</Response>')).toBe(true);
   });
 
-  test('hang up after a line, reject, no media stream', async () => {
+  test('hang up after a line, reject', async () => {
     expect((await plivo.instruct('c', { say: { text: 'Bye' }, then: 'hangup', locale: 'en-US' })).body).toMatch(/<Speak language="en-US">Bye<\/Speak>\s*<Hangup\/>/);
     expect((await plivo.rejectIncoming()).body).toContain('<Hangup reason="rejected"/>');
-    expect(plivo.mediaStream).toBe(false);
-    await expect(plivo.instruct('c', { then: 'stream', streamUrl: 'wss://x', locale: 'en-US' })).rejects.toThrow(/media stream/);
+  });
+
+  test('stream: the greeting, then a bidirectional 8 kHz μ-law <Stream> that keeps the call up', async () => {
+    expect(plivo.mediaStream).toBe(true);
+    const { body } = await plivo.instruct('c', { say: { text: 'Hi' }, then: 'stream', streamUrl: 'wss://x.example/voice/media/plivo?token=t&x=1', locale: 'en-US', opening: true });
+    expect(body).toMatch(/<Speak language="en-US">Hi<\/Speak>\s*<Stream bidirectional="true" keepCallAlive="true" contentType="audio\/x-mulaw;rate=8000">wss:\/\/x.example\/voice\/media\/plivo\?token=t&amp;x=1<\/Stream>\s*<\/Response>/);
+    await expect(plivo.instruct('c', { then: 'stream', locale: 'en-US' })).rejects.toThrow(/stream URL/);
+  });
+
+  test('a nonce is refused while it is remembered, and forgotten after the window', () => {
+    const seen = new SeenNonces(1000);
+    expect(seen.claim('n1', 0)).toBe(true);
+    expect(seen.claim('n1', 999)).toBe(false);
+    expect(seen.claim('n2', 500)).toBe(true);
+    expect(seen.claim('n1', 1001)).toBe(true);
+    expect(seen.claim('n2', 1200)).toBe(false);
+  });
+
+  test('V3 base string: the posted parameters follow `?` (no query) and repeated names are each signed', () => {
+    const params = new URLSearchParams('To=%2B1&From=%2B2&From=%2B0');
+    const expected = createHmac('sha256', 'tok').update('https://x.example/hook?From+0From+2To+1.n').digest('base64');
+    expect(plivoV3Signature('tok', 'https://x.example/hook', params, 'n')).toBe(expected);
+  });
+
+  test('a caller ID is verified only when Plivo says Verified (attestation A)', () => {
+    const inbound = { CallUUID: 'c', From: '15551112222', To: '15550000000', CallStatus: 'ringing', Direction: 'inbound' };
+    expect(plivo.parseWebhook({ ...inbound, StirVerification: 'Verified' }).callerVerified).toBe(true);
+    expect(plivo.parseWebhook({ ...inbound, STIRVerification: 'Verified' }).callerVerified).toBe(true);
+    expect(plivo.parseWebhook({ ...inbound, StirVerification: 'Not Verified' }).callerVerified).toBe(false);
+    expect(plivo.parseWebhook({ ...inbound, StirVerification: 'Not Applicable' }).callerVerified).toBe(false);
+    expect(plivo.parseWebhook(inbound).callerVerified).toBe(false);
   });
 
   test('ending a call addresses it by CallUUID and fails loud', async () => {
@@ -231,6 +261,41 @@ describe('Telnyx', () => {
     expect(calls.map((c) => c.url.split('/actions/')[1])).toEqual(['hangup']);
     stubFetch(422);
     await expect(telnyx.instruct('v3:abc', listen)).rejects.toThrow(/Telnyx speak failed \(HTTP 422\)/);
-    await expect(telnyx.instruct('v3:abc', { then: 'stream', streamUrl: 'wss://x', locale: 'en-US' })).rejects.toThrow(/media stream/);
+    await expect(telnyx.instruct('v3:abc', { then: 'stream', locale: 'en-US' })).rejects.toThrow(/stream URL/);
+  });
+
+  test('stream: a greeting is spoken first and asks for the stream when it ends; without one the stream starts at once', async () => {
+    expect(telnyx.mediaStream).toBe(true);
+    const calls = stubFetch();
+    await telnyx.instruct('v3:abc', { say: { text: 'Hi' }, then: 'stream', streamUrl: 'wss://x.example/voice/media/telnyx?token=t1', locale: 'en-US', opening: true });
+    expect(calls.map((c) => c.url.split('/actions/')[1])).toEqual(['speak']);
+    const state = calls[0].body.client_state as string;
+    expect(telnyx.parseWebhook(webhook('call.speak.ended', { client_state: state }))).toMatchObject({ type: 'spoken', after: 'stream' });
+
+    await telnyx.instruct('v3:abc', { then: 'stream', streamUrl: 'wss://x.example/voice/media/telnyx?token=t2', locale: 'en-US' });
+    expect(calls[1].url).toBe('https://api.telnyx.com/v2/calls/v3%3Aabc/actions/streaming_start');
+    expect(calls[1].body).toEqual({
+      stream_url: 'wss://x.example/voice/media/telnyx?token=t2', stream_track: 'inbound_track',
+      stream_bidirectional_mode: 'rtp', stream_bidirectional_codec: 'PCMU', enable_reconnect: false,
+    });
+  });
+
+  test('a caller ID is verified only with attestation A that Telnyx validated', () => {
+    const initiated = (extra: Record<string, unknown>) => telnyx.parseWebhook(webhook('call.initiated', { direction: 'incoming', ...extra })).callerVerified;
+    expect(initiated({ shaken_stir_attestation: 'A', shaken_stir_validated: true })).toBe(true);
+    expect(initiated({ shaken_stir_attestation: 'A', shaken_stir_validated: false })).toBe(false);
+    expect(initiated({ shaken_stir_attestation: 'B', shaken_stir_validated: true })).toBe(false);
+    expect(initiated({})).toBe(false);
+  });
+});
+
+describe('Twilio caller verification', () => {
+  test('only StirVerstat TN-Validation-Passed-A counts as verified', () => {
+    const inbound = { CallSid: 'CA1', From: '+15551112222', To: '+15550000000', CallStatus: 'ringing', Direction: 'inbound' };
+    expect(twilio.parseWebhook({ ...inbound, StirVerstat: 'TN-Validation-Passed-A' }).callerVerified).toBe(true);
+    expect(twilio.parseWebhook({ ...inbound, StirVerstat: 'TN-Validation-Passed-B' }).callerVerified).toBe(false);
+    expect(twilio.parseWebhook({ ...inbound, StirVerstat: 'TN-Validation-Failed-A' }).callerVerified).toBe(false);
+    expect(twilio.parseWebhook({ ...inbound, StirVerstat: 'No-TN-Validation' }).callerVerified).toBe(false);
+    expect(twilio.parseWebhook(inbound).callerVerified).toBe(false);
   });
 });

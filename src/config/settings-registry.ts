@@ -1152,7 +1152,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'voice',
     valueType: 'boolean',
     defaultValue: false,
-    description: 'Answer incoming Twilio calls as a live conversation over a media stream (your speech engines, lower latency, talking over a reply stops it) instead of the carrier\'s turn-by-turn speech gathering. Needs voice.publicUrl to be reachable by Twilio over wss.',
+    description: 'Answer incoming calls (Twilio, Telnyx, Plivo) as a live conversation over a media stream (your speech engines, lower latency, talking over a reply stops it) instead of the carrier\'s turn-by-turn speech gathering. Needs voice.publicUrl to be reachable by the carrier over wss.',
+    isSecret: false,
+  },
+  {
+    key: 'voice.callAssistant',
+    category: 'voice',
+    valueType: 'json',
+    defaultValue: null,
+    description: 'Numbers whose calls reach the full assistant (the root agent with its tools, on a new chat of the named user) instead of the restricted phone reply: [{"number":"+14155551234","user":"alice"}]. Only when the carrier verified the caller ID with full STIR/SHAKEN attestation (A) and live audio (voice.streaming) is on; every other call, and every outbound call, gets the restricted reply. Empty: off.',
     isSecret: false,
   },
   {
