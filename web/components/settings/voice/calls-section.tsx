@@ -35,6 +35,23 @@ const PROVIDER_SECRETS: Record<string, Array<{ name: string; label: string; note
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '');
 
+/** `voice.callAssistant` as typed: `+14155551234: alice, +442071234567: bob`. */
+function assistantText(value: unknown): string {
+  if (!Array.isArray(value)) return '';
+  return value
+    .filter((entry): entry is { number: string; user: string } => !!entry && typeof entry.number === 'string' && typeof entry.user === 'string')
+    .map((entry) => `${entry.number}: ${entry.user}`)
+    .join(', ');
+}
+
+/** What was typed → the setting's entries. A piece without a number and a user is dropped. */
+function assistantEntries(typed: string): Array<{ number: string; user: string }> {
+  return typed.split(',').flatMap((piece) => {
+    const match = /^\s*([+\d][\d\s()+-]*?)\s*:\s*(\S+)\s*$/.exec(piece);
+    return match ? [{ number: match[1].replace(/[\s()-]/g, ''), user: match[2] }] : [];
+  });
+}
+
 /** Phone calls through a telephony provider: the account, the numbers, who may call in. */
 export function CallsSection({ settings, saver }: { settings: SettingItem[]; saver: SettingSaver }) {
   const workspaceId = useWorkspaceId();
@@ -130,10 +147,35 @@ export function CallsSection({ settings, saver }: { settings: SettingItem[]; sav
       <ToggleSetting
         settingKey="voice.streaming"
         label="Live audio on calls"
-        hint="The call is heard and answered as it happens: replies come sooner and the caller can interrupt. It needs the public address above. Off: caller and assistant take turns."
+        hint="The call is heard and answered as it happens, with your own speech engines: replies come sooner and the caller can interrupt. Works with Twilio, Telnyx and Plivo, and needs the public address above. Off: caller and assistant take turns."
         checked={settingValue(settings, 'voice.streaming') === true}
         saver={saver}
       />
+
+      <div className="space-y-1.5" data-testid="call-assistant">
+        <TextSetting
+          settingKey="voice.callAssistant"
+          label="Your full assistant on the phone"
+          hint={
+            <>
+              Callers normally talk to a phone assistant that has no tools, because anyone can call. A number listed here, with the user it
+              belongs to, reaches that user&apos;s full assistant instead: tools, files, mail, on a new chat of theirs. Write it as
+              number: username, separated by commas. Questions the assistant would ask on screen (may I use this tool?) are asked
+              aloud: a plain yes allows, anything else refuses. Calls placed by the assistant never get it.
+            </>
+          }
+          value={assistantText(settingValue(settings, 'voice.callAssistant'))}
+          placeholder="+14155551234: alice"
+          saver={saver}
+          toValue={assistantEntries}
+        />
+        <p className="text-xs text-on-surface-variant" data-testid="call-assistant-caveat">
+          A caller ID can be faked, so the number alone is not enough: the provider must also report it as verified with full STIR/SHAKEN
+          attestation (A). Twilio, Telnyx and Plivo all report it, but only for calls on US and Canadian networks; from anywhere else, and
+          whenever the check is weaker or missing, the caller gets the phone assistant without tools. It also needs live audio (above)
+          and incoming calls that let the number in.
+        </p>
+      </div>
 
       <TextAreaSetting
         settingKey="voice.expertPrompt"

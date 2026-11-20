@@ -301,17 +301,25 @@ removed — nothing on the server listened for one.
 Make and receive phone calls through Twilio, Telnyx or Plivo. A call is a
 conversation with the model mapped to the **`voice` topic**, called directly
 (no root agent, no tools) with the phone prompt, and spoken in the install's
-Speech engine and active voice profile when one is available.
+Speech engine and active voice profile when one is available. Only calls from
+your own, verified number can reach the full assistant — see
+[The full assistant on your own number](#the-full-assistant-on-your-own-number).
 
 Two ways a call runs:
 
-- **Live media stream** (Twilio, `voice.streaming` on, `voice.publicUrl`
-  reachable over wss): the carrier streams the call's audio both ways and
-  Octipus runs the same pipeline as the web conversation
+- **Live media stream** (any of the three carriers, `voice.streaming` on,
+  `voice.publicUrl` reachable over wss): the carrier streams the call's audio
+  both ways and Octipus runs the same pipeline as the web conversation
   (`src/voice/telephony/media-call.ts`): its endpointer ends the caller's turn,
   the Transcription lane hears it, the reply is spoken sentence by sentence
   while the model writes it (μ-law, 20 ms frames, paced in real time), and
-  talking over a reply stops it.
+  talking over a reply stops it. The carriers differ only in how the stream
+  is started and in their frame format (`src/voice/telephony/media-wire.ts`):
+  Twilio `<Connect><Stream>`; Telnyx `streaming_start` with bidirectional RTP
+  in PCMU (after the greeting has been spoken); Plivo `<Stream
+  bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">`.
+  The socket (`/voice/media/:provider`) is opened with a single-use token the
+  webhook minted for that call, and the stream must be for that call.
 - **Turn by turn** (every provider; the default): the carrier gathers the
   caller's speech and sends it as text; the reply is played from the install's
   Speech engine (`<Play>` of a short-lived clip under
@@ -329,8 +337,12 @@ last hour are listed at `GET /api/voice/calls`.
 | Provider | Protocol | Credentials Needed |
 |----------|----------|-------------------|
 | **Twilio** | Programmable Voice + Media Streams | `twilio_account_sid`, `twilio_auth_token` |
-| **Telnyx** | Call Control v2 | `telnyx_api_key`, `telnyx_connection_id` |
-| **Plivo** | Voice API + XML | `plivo_auth_id`, `plivo_auth_token` |
+| **Telnyx** | Call Control v2 + media streaming (bidirectional RTP) | `telnyx_api_key`, `telnyx_connection_id`, `telnyx_public_key` |
+| **Plivo** | Voice API + XML + audio streaming | `plivo_auth_id`, `plivo_auth_token` |
+
+All three carry live audio (`voice.streaming`) and report a STIR/SHAKEN
+caller-ID verification, so the full assistant works on each — for calls on
+US and Canadian networks, where STIR/SHAKEN applies.
 
 ### Setup (3 steps)
 
@@ -477,6 +489,67 @@ Configure your provider's phone number to point webhooks at:
 https://your-public-url/api/voice/webhook/twilio
 ```
 
+### The full assistant on your own number
+
+By default every caller — including you — talks to the restricted phone
+assistant: the `voice` topic's model, no tools. Anyone can dial a number, and
+a caller ID is easy to fake, so that is the safe default.
+
+`voice.callAssistant` (Settings → Voice → Calls, "Your full assistant on the
+phone") lists numbers whose calls reach a user's **full assistant**: the root
+agent with its tools, on a new chat of that user made for the call (channel
+`phone`), answering in spoken style. Each entry names the number and the user
+it belongs to; an admin sets it, since only an admin can vouch for whose phone
+a number is:
+
+```bash
+curl -X PUT http://localhost:3005/api/settings/voice.callAssistant \
+  -H "Authorization: Bearer $OCTIPUS_API_TOKEN" \
+  -d '{"value": [{"number": "+14155551234", "user": "alice"}]}'
+```
+
+A listed number is not enough. The call gets the full assistant only when, in
+addition, the carrier reports the caller ID as **verified with full STIR/SHAKEN
+attestation (A)**:
+
+| Carrier | Webhook field | Counts as verified |
+|---|---|---|
+| Twilio | `StirVerstat` | `TN-Validation-Passed-A` |
+| Telnyx | `shaken_stir_attestation`, `shaken_stir_validated` (on `call.initiated`) | `A` and `true` |
+| Plivo | `StirVerification` | `Verified` (Plivo: "equivalent to attestation level A") |
+
+Anything less — attestation B or C, a failed check, a call from a network
+STIR/SHAKEN does not cover (outside the US and Canada, most VoIP and SIP
+calls) — and the caller gets the restricted assistant, even from a listed
+number; the log says why. Attestation A means the originating carrier vouches
+that its customer may use the number, which makes spoofing it far harder but
+not impossible (a compromised carrier, a SIM swap): list only numbers you
+control, and keep tool permissions that matter on ASK.
+
+It also needs:
+
+- **Live audio** (`voice.streaming`): a turn with tools can take longer than a
+  carrier waits for a webhook's reply, so the turn-by-turn path always uses the
+  restricted assistant.
+- **An inbound policy that lets the number in** (`voice.inboundPolicy` open, or
+  the number in `voice.inboundAllowFrom`).
+
+Calls the assistant places (`make_call`) never get it, whoever answers.
+
+On the call, each thing you say is sent to the root agent as a spoken turn and
+its reply is read as it is written; you can talk over it. A tool that needs
+your permission, or an approval the agent asks for, cannot be shown on a
+phone, so it is asked aloud ("I need your permission to use … Say yes to allow
+it, or no."): only a plain yes (yes, okay, go ahead, ja) allows it; anything
+else refuses it, and whatever you said beyond a plain no is then your next
+request. A question still open when you hang up is refused. The request also
+shows in the web and mobile apps as usual, and answering it there works too.
+If you talk over a reply, the turn still finishes; its answer is in the chat.
+
+Code: `src/voice/telephony/assistant.ts` (who gets it, the conversation with
+the root agent), the gate in `call-flow.ts`, the wiring in
+`src/api/voice-media-ws.ts`.
+
 ### API Endpoints
 
 Speech routes are listed under [API](#api) above. Telephony:
@@ -496,10 +569,11 @@ Speech routes are listed under [API](#api) above. Telephony:
 | `voice.telephonyProvider` | `disabled` | twilio, telnyx, plivo |
 | `voice.phoneNumber` | — | caller id for outbound calls |
 | `voice.publicUrl` | — | your public base URL (ngrok, Cloudflare Tunnel, …) |
-| `voice.streaming` | `false` | Twilio: answer incoming calls as a live media stream |
+| `voice.streaming` | `false` | answer incoming calls as a live media stream (Twilio, Telnyx, Plivo) |
 | `voice.expertPrompt` | — | how Octipus behaves on calls |
 | `voice.inboundPolicy` | `disabled` | disabled, allowlist, open |
 | `voice.inboundAllowFrom` | — | allowed inbound numbers (E.164) |
+| `voice.callAssistant` | — | `[{number, user}]`: numbers whose verified calls reach that user's full assistant |
 
 Calls are spoken in the active voice profile (`voice.profile`, see [Voices](#voices)).
 
@@ -518,9 +592,11 @@ Calls are spoken in the active voice profile (`voice.profile`, see [Voices](#voi
 
 ### Security
 
-- **Webhook signature verification** for all providers (Twilio HMAC-SHA1, Telnyx Ed25519, Plivo HMAC-SHA256)
+- **Webhook signature verification** for all providers, over the exact bytes received: Twilio HMAC-SHA1 (URL + sorted parameters), Telnyx Ed25519 (timestamp + body, ±300 s), Plivo V3 HMAC-SHA256 (URL + sorted POST parameters + nonce; each nonce accepted once within 30 minutes). Plivo's V2 signature is refused: it covers only the URL and nonce, so it would verify any body.
+- **Media socket** — a single-use token, minted by the webhook for one call and valid for two minutes, in the stream URL; the stream must be for that call
 - **Permission gating** — `initiate_call` requires user approval (ASK level)
-- **Inbound filtering** — allowlist-based caller ID filtering
+- **Inbound filtering** — allowlist-based caller ID filtering (caller ID can be spoofed: it only decides who may talk to the restricted assistant)
+- **Full assistant** — only for a listed number with a carrier-verified caller ID (STIR/SHAKEN A); see above
 - **Call session tracking** — all calls tracked with status, duration, metadata
 
 ---
@@ -552,6 +628,7 @@ The patterns established with Twilio apply to other providers, but each has prot
 | **Say/Speak** | `<Say>` TwiML verb | `speak` command in JSON |
 | **Webhook verification** | HMAC-SHA1 | Ed25519 signature |
 | **Unique requirement** | — | Connection ID required |
+| **Media stream** | `<Connect><Stream>` | `streaming_start` (RTP, PCMU, no reconnect); `media` / `clear` / `mark` |
 | **Health check** | Queries `/Accounts/{sid}` | Queries `/phone_numbers` endpoint |
 
 ### Plivo Differences
@@ -563,7 +640,8 @@ The patterns established with Twilio apply to other providers, but each has prot
 | **Gather speech** | `<Gather>` | `<GetInput>` |
 | **Say** | `<Say>` | `<Speak>` (same) |
 | **End call** | POST with `Status=completed` | DELETE request |
-| **Webhook verification** | HMAC-SHA1 | HMAC-SHA256 with nonce |
+| **Webhook verification** | HMAC-SHA1 | V3: HMAC-SHA256 over URL, parameters and nonce |
+| **Media stream** | `<Connect><Stream>` | `<Stream bidirectional keepCallAlive>`; `playAudio` / `clearAudio` / `checkpoint` |
 | **Health check** | Queries `/Accounts/{sid}` | Queries `/Account/{authId}/` |
 
 ### Common Patterns (All Providers)
