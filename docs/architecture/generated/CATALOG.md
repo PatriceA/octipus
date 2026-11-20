@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-732 mounted routes across 89 route files. The path is the full one, group prefix included — what a client actually calls.
+731 mounted routes across 89 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -716,7 +716,6 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/voice/engines/install` | `src/api/routes/voice.ts` |
 | POST | `/api/voice/engines/server` | `src/api/routes/voice.ts` |
 | POST | `/api/voice/engines/use` | `src/api/routes/voice.ts` |
-| POST | `/api/voice/install` | `src/api/routes/voice.ts` |
 | DELETE | `/api/voice/profiles/:name` | `src/api/routes/voice.ts` |
 | PUT | `/api/voice/profiles/:name` | `src/api/routes/voice.ts` |
 | GET | `/api/voice/profiles/:name/clip` | `src/api/routes/voice.ts` |
@@ -765,7 +764,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `skills` | 1 |
 | `(root)` | `tools` | 5 |
 | `(root)` | `utils` | 1 |
-| `(root)` | `voice` | 1 |
+| `(root)` | `voice` | 3 |
 | `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 29 |
@@ -774,7 +773,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 9 |
 | `api` | `mcp` | 7 |
-| `api` | `models` | 42 |
+| `api` | `models` | 43 |
 | `api` | `plugins` | 70 |
 | `api` | `security` | 182 |
 | `api` | `services` | 5 |
@@ -782,7 +781,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `skills` | 7 |
 | `api` | `tools` | 6 |
 | `api` | `utils` | 76 |
-| `api` | `voice` | 38 |
+| `api` | `voice` | 35 |
 | `capabilities` | `config` | 1 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 4 |
@@ -935,14 +934,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `visual` | `models` | 1 |
 | `visual` | `utils` | 2 |
 | `voice` | `capabilities` | 1 |
-| `voice` | `config` | 7 |
+| `voice` | `config` | 8 |
 | `voice` | `core` | 6 |
 | `voice` | `db` | 2 |
-| `voice` | `models` | 19 |
+| `voice` | `models` | 18 |
 | `voice` | `security` | 1 |
 | `voice` | `services` | 4 |
-| `voice` | `shared` | 5 |
-| `voice` | `utils` | 39 |
+| `voice` | `shared` | 6 |
+| `voice` | `utils` | 41 |
 
 ### Mutual imports
 

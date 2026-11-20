@@ -83,10 +83,16 @@ terminal. An installed engine takes its lane when the lane is free.
 - faster-whisper and Kokoro run in **resident workers**: the model is loaded
   once and shared, and the worker stops after ten idle minutes. A first call
   pays the load; the ones after it do not.
-- A GPU: faster-whisper uses one when CTranslate2 finds it, and falls back to
-  the CPU — saying so in the server log — when the GPU cannot load the model.
-  Set the engine's device to *GPU* (Settings → Voice → the engine → Edit) to
-  have the CUDA libraries installed with it and to fail instead of falling back.
+- A GPU: faster-whisper uses one when CTranslate2 finds it. On *Automatic* the
+  CUDA libraries (cuBLAS, cuDNN) are installed with it when the host has an
+  NVIDIA driver (a CPU-only host never downloads them), and the worker decodes
+  a second of silence on the GPU before it is used: when the GPU cannot load
+  or run the model, it falls back to the CPU and says so in the server log,
+  which also names the device the model ended on. Set the engine's device to
+  *GPU* (Settings → Voice → the engine → Edit) to fail instead of falling back.
+- A worker that answers one request with an error keeps running with its
+  model loaded; one that exits or stops answering is replaced on the next
+  request (also one that died while idle). Shutting the server down stops them.
 - Docker: the image carries ffmpeg and `uv`; models download into the
   `octipus-models` volume. whisper.cpp is not buildable in the image (no
   compiler) — use faster-whisper there.
@@ -106,15 +112,16 @@ A server at a private address counts as local: protected content may use it.
 (`http://octipus-speech:8000/v1`) as a ready example.
 
 What differs between models rides on the row (`metadata.speech`, editable
-under the engine's *Advanced* settings). A row starts with what is known of
-its model id (`src/voice/speech-hints.ts`), so these work by naming them:
+under the engine's *Advanced* settings). What is known of its model id
+(`src/voice/speech-hints.ts`) applies without being stored, so these work by
+naming them:
 
 | Model | Lane | What the row starts with |
 |---|---|---|
 | `openai/whisper-large-v3-turbo` (and any Whisper) | Transcription | plain transcription; live audio is transcribed one whole turn at a time |
 | `nvidia/nemotron-3.5-asr-streaming-0.6b`, Parakeet, Canary | Transcription | clips uploaded as 16 kHz WAV; live audio over NeMo-Speech's realtime socket |
 | `openbmb/VoxCPM2` | Speech | a voice description is passed as VoxCPM's `(…)` text prefix; reference clip for cloning; streams; 48 kHz |
-| `BreezeBlue/Breeze-TTS-2` | Speech | speaker tags `S0`–`S9`; `instructions` for voice design; reference clip; streams; 24 kHz |
+| `BreezeBlue/Breeze-TTS-2` | Speech | speaker tags `S0`–`S9` (`S0` unless a voice is chosen); `instructions` for voice design; reference clip; streams; 24 kHz |
 
 Settings a row can carry: how a voice description is passed (`instructions`:
 `field` / `prefix` / `none`), whether a reference clip is taken (`cloning`),
@@ -122,7 +129,24 @@ whether audio streams (`streams`), whether `speed` is taken, `sampleRate`,
 extra request fields sent as they are (`extraBody`, e.g. `cfg_value`,
 `inference_timesteps`, `seed`), `upload` (`wav` = transcode clips first), and
 the server's realtime transcription socket (`realtime`: the OpenAI realtime
-protocol as Speaches and NIM speak it, or NeMo-Speech's).
+protocol as Speaches and NIM speak it, NeMo-Speech's, or `off` — no live
+socket even for a model known to have one; each turn is then transcribed
+whole). A NeMo socket is told to end an utterance (`endpointing_ms`) 200 ms
+before the conversation's own end-of-turn pause (`voice.endpointSilenceMs`),
+500 ms at most, so its transcript arrives before the turn ends; a caller of
+`resolveSttEngine` may pass its own `endpointSilenceMs`.
+
+A row stores only the settings chosen for it: the Voice page sends what was
+changed, `null` clears a setting (the model's default applies again), and
+`realtime` is merged into the stored one, so turning the socket off keeps its
+URL and rate. Changing the model id of a row starts again from what the new
+model is known for; the old model's defaults do not follow it (VoxCPM2's 48 kHz
+would play Breeze's 24 kHz audio at double speed), choices made for the row do.
+
+Where the endpoint is decides whether the row is local: at a private address
+it is, and moved to a public host it no longer is. A local row's realtime
+socket (`realtime.url`) must be at a private address too — a public one is
+refused, since live audio of protected conversations would go there.
 
 Changing model is changing the row: add the other model, make it primary; the
 one it replaces stays as the backup.
@@ -150,7 +174,13 @@ replies, voice notes and phone calls are spoken in; `/api/voice/speak`, the
 `speak` tool (`voice`, `style`, `speed`) and the MCP `octipus_speak` tool may
 name another. A profile made for one engine is handed to that engine only — a
 preset id means nothing to another — and the backup speaks in its own default.
-Reference clips are files under `~/.octipus/voices` (`OCTIPUS_VOICES_DIR`).
+Reference clips are files under `~/.octipus/voices` (`OCTIPUS_VOICES_DIR`),
+stored as mono 16-bit WAV at 24 kHz and cut to 20 seconds: a browser records
+WebM or Ogg, which servers that read clips with soundfile or librosa
+(vLLM-Omni, VoxCPM2, Breeze) cannot open. The conversion needs ffmpeg; without
+it a WAV upload is still taken and anything else is refused. *Remove clip* on
+the profile (or `clip: null`) removes it. A clip file that has gone missing is
+logged once and the profile speaks without it.
 
 `voice.ttsVoice` (a bare voice id for the primary engine) is still honoured
 when no profile is active.
@@ -251,13 +281,13 @@ to the **`voice` topic**.
 | Method | Path | |
 |--------|------|---|
 | GET | `/api/voice/status` | whether hear / speak are available, and why not |
-| POST | `/api/voice/transcribe` | `{audio (base64), format?, model?, sessionId?}` → `{text, model, language, duration}` |
-| POST | `/api/voice/speak` | `{text, voice?, profile?, instructions?, speed?, format?, raw?, model? (admin), sessionId?}` → the audio; `X-Speech-Model` names the engine. Text is shaped for speech unless `raw`. |
-| GET | `/api/voice/voices` | the engine's voices, the profiles, the active one |
+| POST | `/api/voice/transcribe` | `{audio (base64), format?, model? (admin; `auto`/`local` for anyone), sessionId?}` → `{text, model, language, duration}` |
+| POST | `/api/voice/speak` | `{text, voice?, profile?, instructions?, speed?, format?, raw?, model? (admin), sessionId?}` → the audio; `X-Speech-Model` names the engine. Text is shaped for speech unless `raw`; PCM comes as `audio/L16;rate=<hz>;channels=1`. |
+| GET | `/api/voice/voices` | the engine's voices, the profiles, the active one (a member sees each profile's name, note, voice and whether it has a clip) |
 | PUT / DELETE | `/api/voice/profiles/:name` | create or replace / remove a voice profile (admin) |
 | POST | `/api/voice/profiles/active` | which profile speaks (admin) |
 | GET | `/api/voice/engines` | everything the Voice page shows (admin) |
-| POST | `/api/voice/engines/install` | download and set up a local engine in the background (admin) |
+| POST | `/api/voice/engines/install` | download and set up a local engine in the background (admin); one job per engine and model |
 | POST | `/api/voice/engines/use` | register a built-in engine and bind it (admin) |
 | POST | `/api/voice/engines/server` | add a model on your own speech server (admin) |
 | PATCH / DELETE | `/api/voice/engines/:name` | an engine's own settings / remove it (admin) |
@@ -269,7 +299,7 @@ a model that is not a speech engine of that direction is refused.
 
 | Setting | Default | |
 |---------|---------|---|
-| `voice.language` | `en` | the language spoken (`auto` lets the engine detect it) |
+| `voice.language` | `en` | the language spoken (`auto` lets the engine detect it). A locale (`en-US`, `de_DE`) works too: engines are sent its two-letter code, a phone carrier the locale |
 | `voice.profile` | — | the active voice profile; empty = the engine's default voice |
 | `voice.endpointSilenceMs` | `700` | live conversation: the pause that ends your turn |
 | `voice.bargeIn` | `true` | live conversation: talking over a reply stops it |
@@ -285,7 +315,7 @@ removed — nothing on the server listened for one.
 | Area | File |
 |------|------|
 | Lane resolution: primary/backup, protection, accounting, voices, PCM streams | `src/voice/resolve.ts` |
-| Engines as model rows; your own speech server | `src/voice/speech-rows.ts`, `src/voice/compatible.ts`, `src/voice/speech-hints.ts` |
+| Engines as model rows; your own speech server; the language engines are sent | `src/voice/speech-rows.ts`, `src/voice/compatible.ts`, `src/voice/speech-hints.ts`, `src/voice/speech-language.ts` |
 | Engine adapters (subprocess and socket plumbing) | `src/voice/stt.ts`, `src/voice/tts.ts`, `src/voice/resident-worker.ts`, `*_worker.py` |
 | Voice profiles | `src/voice/profiles.ts` |
 | The conversation: endpointing, the session, the socket | `src/voice/endpointer.ts`, `src/voice/session.ts`, `src/api/voice-ws.ts` |
@@ -422,13 +452,16 @@ Your Octipus instance must be reachable from the public internet so Twilio can d
 
 #### Language Configuration
 
-Set the voice language in octipus settings (default: `en-US`):
+The call's language is `voice.language` (default: `en`). A two-letter code is
+enough: the carrier gets the matching locale (`en` → `en-US`). Set a locale
+only to choose a regional voice and recogniser (`en-GB`, `pt-BR`); the speech
+engines are sent its two-letter code either way:
 
 ```bash
 curl -X PUT http://localhost:3005/api/settings/voice.language \
   -H "Authorization: Bearer $OCTIPUS_API_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"value": "en-US"}'
+  -d '{"value": "de"}'
 ```
 
 #### Troubleshooting Twilio Connections
