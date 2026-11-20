@@ -108,6 +108,34 @@ it('lists only registered schemas, limits bodies, and closes idempotently', asyn
   await expect(a.close()).resolves.toBeUndefined();
 });
 
+it('returns a client error for malformed JSON and remains usable', async () => {
+  const a = await setup('A');
+  const response = await fetch(`${a.url}/call`, { method: 'POST', headers: { Authorization: `Bearer ${a.key}` }, body: '{broken json' });
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'Invalid JSON tool call' });
+  expect((await call(a.url, a.key)).status).toBe(200);
+});
+
+it('does not misclassify an execution SyntaxError after a valid request as a bad request', async () => {
+  let executed = false;
+  const bridge = await startCliToolBridge({ active: () => true, tools: () => [{ name: 'test', description: '', parameters: {}, execute: async () => null }],
+    execute: async () => { executed = true; throw new SyntaxError('invalid service response'); } });
+  bridges.push(bridge);
+  const response = await call(bridge.url, bridge.key, 'test');
+  expect(executed).toBe(true);
+  expect(response.status).toBe(500);
+  expect(await response.json()).toEqual({ error: 'Tool call failed' });
+});
+
+it.each([0, 1])('enforces the exact 1 MiB JSON request boundary: excess=%s', async excess => {
+  const a = await setup('A');
+  const base = JSON.stringify({ name: 'read_context', arguments: { value: '' } });
+  const body = JSON.stringify({ name: 'read_context', arguments: { value: 'x'.repeat(1024 * 1024 - Buffer.byteLength(base) + excess) } });
+  expect(Buffer.byteLength(body)).toBe(1024 * 1024 + excess);
+  const response = await fetch(`${a.url}/call`, { method: 'POST', headers: { Authorization: `Bearer ${a.key}` }, body });
+  expect(response.status).toBe(excess ? 413 : 200);
+});
+
 it('answers unqueued read-only tools while a queued call still blocks the worker', async () => {
   let release!: () => void;
   const blocked = new Promise<void>(resolve => { release = resolve; });

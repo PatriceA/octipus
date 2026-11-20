@@ -136,7 +136,10 @@ export async function startCliToolBridge(options: {
         if (size > 1024 * 1024) { reply(413, { error: 'Tool arguments exceed 1 MiB' }); return; }
         chunks.push(Buffer.from(chunk));
       }
-      const input = callSchema.parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      let parsed: unknown;
+      try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+      catch (error) { if (error instanceof SyntaxError) throw new BridgeError('Invalid JSON tool call'); throw error; }
+      const input = callSchema.parse(parsed);
       if (input.name === 'call_discovered_tool' && options.advertisedTools) {
         const target = callSchema.parse(input.arguments);
         input.name = target.name;

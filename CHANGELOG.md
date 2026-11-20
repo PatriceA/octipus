@@ -7,6 +7,8 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Codemode boundary hardening.** Bounded default and error output, fixed zero-output requests, rejected malformed arguments and misplaced options before dispatch, added a shared source-size limit, preserved prototype-like state keys, and aligned tool discovery aliases with descriptions and invocation. Invalid bridge JSON now returns a client error. Added live-smoke evidence and repeatable request/response, storage, concurrency, timeout and memory boundary tests.
+
 - Codemode now keeps ordinary tool definitions out of API and CLI prompts, including core tools and directly exposed MCP tools. Scripts discover schemas only when needed; coordination controls and existing permission checks are preserved. Models without codemode keep their existing tool advertisement.
 
 - **Voice, rebuilt around open engines and one pipeline.**

@@ -76,6 +76,12 @@ const readFile = (execute = vi.fn().mockResolvedValue('line 1\nneedle\nline 3'))
 const script = (code: string) => [{ id: 'call-cm', name: 'codemode', arguments: { code } }];
 
 describe('codemode nested calls run through the executor pipeline', () => {
+  test('worker output ceiling still applies after an explicit large script response budget', async () => {
+    const exec = executorWith(readFile(vi.fn().mockResolvedValue('A natural language observation. '.repeat(4000))));
+    const messages = await exec.handleToolCalls(script('// @options: {"max_output_tokens":32000}\nreturn await tools.filesystem__read_file({path:"fixture"});'));
+    expect(messages[0].content.length).toBeLessThan(51000);
+    expect(messages[0].content).toMatch(/truncated|saved|full output/i);
+  });
   test('an ASK resolving unapproved aborts through the wrapper even if the script catches it', async () => {
     const wait = vi.fn().mockResolvedValue(false);
     check.mockResolvedValue({ allowed: false, level: 'ASK', requiresApproval: true });
