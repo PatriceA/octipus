@@ -123,6 +123,21 @@ function compactChatReply(body: unknown): unknown {
  * WHAT a quiet turn is waiting for (your approval / a child / a long tool),
  * every ~20s — so the silence is legible even before the approval lands.
  */
+/**
+ * The end of a REST turn on the event bus, as the gateway publishes it for
+ * `chat.send` — for a spoken message, so a voice conversation on the chat
+ * speaks the reply's last words, or stops waiting when the turn failed.
+ * Best effort: the caller already has its answer.
+ */
+async function publishTurnEvent(type: 'chat.response' | 'chat.error', userId: string, sessionId: string, payload: Record<string, unknown>): Promise<void> {
+  try {
+    const { getGatewayHub } = await import('@/core/gateway/hub');
+    getGatewayHub().publishEvent({ type, source: 'rootAgent', userId, sessionId, payload });
+  } catch (err) {
+    apiLogger.debug({ err, sessionId }, 'Turn event not published');
+  }
+}
+
 export const chatRoutes = new Elysia({ prefix: '/chat' })
   .use(apiContext)
   .get('/commands', ({ user, principal, set }) => {
@@ -241,8 +256,6 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
       }
       try {
         const renders = body.renders?.filter((r: string) => r === 'inline_ui');
-        // A message whose reply is read aloud (as `chat.send` `spoken` on the gateway).
-        if (body.spoken) rootAgent.markSpokenTurn(sessionId, user.id);
         const result = await rootAgent.handleMessage(
           sessionId,
           user.id,
@@ -254,8 +267,13 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           undefined,
           undefined,
           renders?.length ? { renders } : undefined,
+          // A message whose reply is read aloud (as `chat.send` `spoken` on the gateway).
+          body.spoken ? { spoken: true } : undefined,
         );
         answered = true;
+        // A voice conversation open on this chat speaks the reply from the bus,
+        // as it does for a gateway turn (src/voice/session.ts).
+        if (body.spoken) await publishTurnEvent('chat.response', user.id, result.sessionId || sessionId, { response: result });
 
         return {
           // History has already retained the complete reply. At the transport
@@ -281,10 +299,12 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
         // session's running turn: it never ran and was never stored.
         if (isSessionTurnCancelled(error)) {
           apiLogger.info({ sessionId }, 'Queued chat request dropped by stop');
+          if (body.spoken) await publishTurnEvent('chat.error', user.id, sessionId, { error: error.message, cancelled: true });
           set.status = 409;
           return { error: error.message, cancelled: true, sessionId };
         }
         apiLogger.error({ error, sessionId }, 'Chat request failed');
+        if (body.spoken) await publishTurnEvent('chat.error', user.id, sessionId, { error: (error as Error).message });
         return {
           error: 'Failed to process message',
           details: (error as Error).message,

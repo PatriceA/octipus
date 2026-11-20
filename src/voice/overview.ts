@@ -8,7 +8,7 @@ import type { ModelConfigEntry } from '@/db/schema/models';
 import { type SpeechInstallJob, speechInstallJobs } from './install-jobs';
 import { FASTER_WHISPER_MODELS, hasUv, KOKORO_SIZE_NOTE } from './provision';
 import { speechStatus } from './resolve';
-import { speechConfigOf } from './speech-hints';
+import { liveRealtime, speechConfigOf } from './speech-hints';
 import {
   engineKindOf, SPEECH_ENGINE_CATALOG, type SpeechDirection, speechDirectionOf, type SpeechEngineKind, speechFormats, speechRowAvailable, speechStaysLocal,
 } from './speech-rows';
@@ -87,7 +87,8 @@ async function describe(row: ModelConfigEntry, direction: SpeechDirection): Prom
       streams: config.streams ?? (kind === 'openai' && direction === 'tts'),
       sampleRate: config.sampleRate ?? null,
       formats: direction === 'tts' ? speechFormats(row) : [],
-      realtime: direction === 'stt' ? (config.realtime?.protocol ?? (kind === 'mistral' || kind === 'openai' ? kind : null)) : null,
+      // The live socket in use: none when the row turned off the one its model is known for.
+      realtime: direction === 'stt' ? (liveRealtime(config)?.protocol ?? (kind === 'mistral' || kind === 'openai' ? kind : null)) : null,
       upload: config.upload ?? 'any',
       device: kind === 'fasterwhisper' ? (config.device ?? 'auto') : null,
     },

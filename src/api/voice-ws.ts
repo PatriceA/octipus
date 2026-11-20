@@ -16,7 +16,8 @@ import { trackUserSocket } from './user-sockets';
  * binary as PCM.
  *
  * Engine selection: the model bound to the Transcription lane (primary, then
- * backup); `?engine=` may name one (see resolveEngine).
+ * backup); an admin's `?engine=` may name one (see resolveEngine), and in a
+ * conversation `?tts=` names the Speech engine the same way.
  *
  * Two modes (`?mode=`):
  *
@@ -32,7 +33,9 @@ import { trackUserSocket } from './user-sockets';
  * `conversation` — a whole voice conversation (src/voice/session.ts): the
  * server decides where a turn ends and speaks the reply while it is written.
  * `?session=` names the chat whose replies are spoken, `?speak=0` listens
- * only, `?audio=wav` sends one clip per sentence instead of PCM frames.
+ * only, `?audio=wav` sends one clip per sentence instead of PCM frames,
+ * `?silence=<ms>` sets the pause that ends a turn, `?partials=0` turns off
+ * what is being said before the turn ends.
  *   Client → server:
  *     - binary frame  → 16 kHz mono s16le PCM, all the time (also while a reply plays)
  *     - {"type":"interrupt"}       stop speaking
@@ -67,6 +70,13 @@ function stateOf(ws: { data: unknown }): VoiceWsState {
   return ws.data as VoiceWsState;
 }
 
+/** An engine named on the socket's URL counts only for an admin; anyone else gets the lane's binding. */
+async function adminOverride(param: string | null, userId: string): Promise<string | null> {
+  if (!param) return null;
+  const { userRepository } = await import('@/db/repositories/user-repository');
+  return (await userRepository.findById(userId))?.isAdmin ? param : null;
+}
+
 /**
  * The engine for this connection: the model bound to the Transcription lane
  * (src/voice/resolve.ts — primary, then backup, protection levels applied).
@@ -90,7 +100,7 @@ async function resolveEngine(engineParam: string | null, userId: string, session
       sessionId = sessionParam;
     }
     const { engine, name, row } = await resolveSttEngine({
-      override: engineParam || null,
+      override: await adminOverride(engineParam, userId),
       userId,
       sessionId,
       allowHosted: await mayUseInstallModels(userId),
@@ -136,11 +146,29 @@ async function openConversation(ws: VoiceSocket, url: URL, userId: string, mark:
     import('@/voice/resolve'), import('@/voice/session'), import('@/config/settings-service'), import('@/core/gateway/hub'),
   ]);
   // i2: by id, used only when canActInSession says the caller may speak in it.
-  const existing = await sessionRepository.findById(sessionId);
-  if (existing && !(await canActInSession(existing, userId, 'voice'))) return refuse('Session not found');
+  const mayUse = async (session: Awaited<ReturnType<typeof sessionRepository.findById>>) => !session || canActInSession(session, userId, 'voice');
+  let existing = await sessionRepository.findById(sessionId);
+  if (!(await mayUse(existing))) return refuse('Session not found');
 
   const allowHosted = await mayUseInstallModels(userId);
-  const request = { userId, sessionId: existing ? sessionId : undefined, override: url.searchParams.get('engine') || null, allowHosted };
+  // The chat's protection level decides which engines may hear and speak it.
+  // A fresh chat is created by the first utterance, so its row is looked up
+  // again until it exists: from then on its level counts.
+  const request = { userId, sessionId: existing ? sessionId : undefined as string | undefined, allowHosted };
+  const current = async (): Promise<typeof request> => {
+    if (!request.sessionId) {
+      existing = await sessionRepository.findById(sessionId);
+      if (existing) {
+        if (!(await mayUse(existing))) throw new Error('Session not found');
+        request.sessionId = sessionId;
+      }
+    }
+    return request;
+  };
+  const sttOverride = await adminOverride(url.searchParams.get('engine'), userId);
+  const ttsOverride = await adminOverride(url.searchParams.get('tts'), userId);
+  const hearing = async () => ({ ...(await current()), override: sttOverride });
+  const speaking = async () => ({ ...(await current()), override: ttsOverride });
   const settings = getSettingsService();
   const number = async (key: string, fallback: number, min: number, max: number) => {
     const value = Number(await settings.get(key));
@@ -153,9 +181,10 @@ async function openConversation(ws: VoiceSocket, url: URL, userId: string, mark:
   const bargeIn = (await settings.get('voice.bargeIn')) !== false;
   // Speaking needs a Speech engine; without one the conversation still listens.
   const wantsSpeech = url.searchParams.get('speak') !== '0';
-  const speak = wantsSpeech && (await resolve.speechStatus('tts', request)).available;
+  const speak = wantsSpeech && (await resolve.speechStatus('tts', await speaking())).available;
 
   const st = stateOf(ws);
+  if (st.closed) return;
   st.userId = userId;
   const untrack = trackUserSocket(userId, ws as never, mark);
   if (!untrack) return;
@@ -166,22 +195,24 @@ async function openConversation(ws: VoiceSocket, url: URL, userId: string, mark:
     { userId, sessionId, speak, audio: url.searchParams.get('audio') === 'wav' ? 'wav' : 'pcm', endpointer: { silenceMs, bargeIn }, partials: url.searchParams.get('partials') !== '0' },
     {
       resolveStt: async () => {
-        const { engine, name, row } = await resolve.resolveSttEngine(request);
+        const { engine, name, row } = await resolve.resolveSttEngine({ ...(await hearing()), endpointSilenceMs: silenceMs });
         liveRow = row;
-        return { engine, name };
+        return { engine, name, local: await resolve.speechRowStaysLocal(row) };
       },
-      transcribe: async (wav) => (await resolve.transcribeWithLane(wav, { ...request, format: 'wav' })).text,
+      transcribe: async (wav, options) => (await resolve.transcribeWithLane(wav, { ...(await hearing()), format: 'wav', ...(options?.interim ? { interim: true } : {}) })).text,
+      // A cloud engine that streams heard the chat while its level allowed it; once the level is raised it stops.
+      mayKeepListening: async () => !liveRow || (await resolve.speechRowRefusal(liveRow, await hearing())) === null,
       // A quarter second of silence through the lane: loads a local engine's
       // model (resident afterwards). Not counted: nobody said anything.
-      warmUp: async () => { await resolve.warmSpeechEngines(request); },
-      speak: (text) => resolve.streamSpeechWithLane(text, request),
+      warmUp: async () => { await resolve.warmSpeechEngines(await hearing()); },
+      speak: async (text) => resolve.streamSpeechWithLane(text, await speaking()),
       subscribe: (handler) => {
         const bus = getGatewayHub().eventBus;
-        const offs = ['chat.delta', 'chat.response', 'voice.speak'].map((type) => bus.subscribe(type, handler as never));
+        const offs = ['chat.delta', 'chat.response', 'chat.error', 'chat.message', 'voice.speak'].map((type) => bus.subscribe(type, handler as never));
         return () => { for (const off of offs) off(); };
       },
       // A live engine is counted against its row by what it heard.
-      recordHeard: async (seconds) => { if (liveRow && seconds > 0) await resolve.recordSpeechUsage(liveRow, 'transcription', { userId, sessionId: request.sessionId }, { seconds }); },
+      recordHeard: async (seconds) => { if (liveRow && seconds > 0) await resolve.recordSpeechUsage(liveRow, 'transcription', await current(), { seconds }); },
     },
     (message, binary) => {
       if (st.closed) return;
@@ -197,7 +228,7 @@ async function openConversation(ws: VoiceSocket, url: URL, userId: string, mark:
     untrack();
     return refuse((err as Error).message);
   }
-  if (st.closed) { await conversation.close(); return; }
+  if (st.closed) { untrack(); await conversation.close(); return; }
   st.conversation = conversation;
   apiLogger.debug({ userId, sessionId, speak }, 'voice conversation opened');
 }

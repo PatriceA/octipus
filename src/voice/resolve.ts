@@ -26,6 +26,7 @@ import {
   engineKindOf, isLocalSpeechRow, type SpeechDirection, speechDirectionOf, type SpeechEngineKind, type SpeechFormat,
   speechFormats, speechRowAvailable, speechStaysLocal, type SpeechVoice, sttEngineFor, ttsEngineFor,
 } from './speech-rows';
+import { speechConfigOf } from './speech-hints';
 import type { STTEngine, TranscriptionResult } from './stt';
 import type { TTSEngine } from './tts';
 
@@ -132,6 +133,16 @@ async function refusalFor(row: ModelConfigEntry, req: SpeechRequest): Promise<st
   }
 }
 
+/** Why this request may not use `row` (the session's protection level), or null when it may. */
+export function speechRowRefusal(row: ModelConfigEntry, req: SpeechRequest): Promise<string | null> {
+  return refusalFor(row, req);
+}
+
+/** Does what `row` hears or says stay on this machine (or the local network)? */
+export async function speechRowStaysLocal(row: ModelConfigEntry): Promise<boolean> {
+  return (await import('./speech-rows')).speechStaysLocal(row);
+}
+
 /** Record one speech call against its row (cost, spend budgets). */
 /**
  * What a speech call costs: the row's `pricing.perAudioMinute` (transcription)
@@ -167,15 +178,33 @@ async function language(): Promise<string> {
   return getConfig().voice.language || 'en';
 }
 
-/** A live speech-to-text engine (the microphone socket, phone calls). The caller disposes it. */
-export async function resolveSttEngine(req: SpeechRequest & { streamWindowSeconds?: number } = {}): Promise<{ engine: STTEngine; row: ModelConfigEntry; name: SpeechEngineKind }> {
+/** `voice.endpointSilenceMs`, when it is set to something usable. */
+async function endpointSilence(): Promise<number | undefined> {
+  try {
+    const { getSettingsService } = await import('@/config/settings-service');
+    const value = Number(await getSettingsService().get('voice.endpointSilenceMs'));
+    return Number.isFinite(value) && value > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A live speech-to-text engine (the microphone socket, phone calls). The
+ * caller disposes it. `endpointSilenceMs` is the pause that ends the caller's
+ * turn (default: `voice.endpointSilenceMs`): an engine that ends utterances
+ * on its own server (NeMo) is told to end them sooner than that.
+ */
+export async function resolveSttEngine(req: SpeechRequest & { streamWindowSeconds?: number; endpointSilenceMs?: number } = {}): Promise<{ engine: STTEngine; row: ModelConfigEntry; name: SpeechEngineKind }> {
   const row = await pickSpeechRow('stt', req);
-  const engine = await sttEngineFor(row, { language: await language(), streamWindowSeconds: req.streamWindowSeconds });
+  const engine = await sttEngineFor(row, {
+    language: await language(), streamWindowSeconds: req.streamWindowSeconds, endpointSilenceMs: req.endpointSilenceMs ?? await endpointSilence(),
+  });
   return { engine, row, name: engineKindOf(row) as SpeechEngineKind };
 }
 
 /** Transcribe a whole clip. Primary, then backup when the primary fails at call time. */
-export async function transcribeWithLane(audio: Buffer, req: SpeechRequest & { format?: string; language?: string } = {}): Promise<TranscriptionResult & { model: string }> {
+export async function transcribeWithLane(audio: Buffer, req: SpeechRequest & { format?: string; language?: string; interim?: boolean } = {}): Promise<TranscriptionResult & { model: string }> {
   const rows = await speechCandidates('stt', req);
   if (rows.length === 0) {
     if (req.allowHosted === false) throw new Error('Hosted transcription uses the install\'s keys, which this account may not use; bind a local engine for it.');
@@ -196,8 +225,9 @@ export async function transcribeWithLane(audio: Buffer, req: SpeechRequest & { f
         : await transcribeAs(engine, audio, req.format);
       // Billed by the clip's length, never by how long the call took (the
       // engines' `duration` is processing time); unknown stays unknown.
-      const seconds = isLocalSpeechRow(row) ? (result.duration || 0) : await (await import('./ffmpeg')).probeBufferSeconds(audio, req.format);
-      await recordSpeechUsage(row, 'transcription', req, seconds !== null ? { seconds: Math.round(seconds) } : {});
+      const seconds = req.interim ? null : isLocalSpeechRow(row) ? (result.duration || 0) : await (await import('./ffmpeg')).probeBufferSeconds(audio, req.format);
+      // A look at a turn before it ends is heard again when it ends: counted once, then.
+      if (!req.interim) await recordSpeechUsage(row, 'transcription', req, seconds !== null ? { seconds: Math.round(seconds) } : {});
       if (errors.length) log.warn({ using: row.name, failed: errors }, 'Transcribed with the backup engine');
       return { ...result, model: row.name };
     } catch (err) {
@@ -240,6 +270,13 @@ export interface SpokenAudio {
 const CONTENT_TYPES: Record<SpeechFormat, string> = {
   mp3: 'audio/mpeg', wav: 'audio/wav', opus: 'audio/ogg', ogg: 'audio/ogg', pcm: 'audio/L16', flac: 'audio/flac',
 };
+
+/** Headerless PCM says nothing of itself: its rate (and channels) go in the type, or it plays at the wrong speed. */
+function contentTypeOf(format: SpeechFormat, row: ModelConfigEntry, engine: TTSEngine): string {
+  if (format !== 'pcm') return CONTENT_TYPES[format];
+  const rate = engine.pcmSampleRate ?? speechConfigOf(row).sampleRate ?? 24000;
+  return `audio/L16;rate=${rate};channels=1`;
+}
 
 /** How a request wants to be spoken. */
 export interface SpeakOptions {
@@ -312,7 +349,7 @@ export async function synthesizeWithLane(text: string, req: SpeechRequest & Spea
       const audio = await engine.synthesize(text);
       await recordSpeechUsage(row, 'speech', req, { characters: text.length });
       if (errors.length) log.warn({ using: row.name, failed: errors }, 'Spoke with the backup engine');
-      return { audio, format, contentType: CONTENT_TYPES[format], model: row.name };
+      return { audio, format, contentType: contentTypeOf(format, row, engine), model: row.name };
     } catch (err) {
       await recordSpeechUsage(row, 'speech', req, { characters: 0 }, true);
       errors.push(`${row.name}: ${(err as Error).message}`);

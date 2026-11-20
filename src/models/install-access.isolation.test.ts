@@ -190,7 +190,10 @@ describe('install-model access', () => {
   test('install-paid side doors: the eval judge and hosted voice are refused', async () => {
     const run = await call(carolId, false, 'POST', '/api/evaluations/eval/run', { model: OWN });
     expect(run.status).toBe(403);
-    const stt = await call(carolId, false, 'POST', '/api/voice/transcribe', { audio: 'AAAA', model: 'whisper-1' });
+    // Naming an engine is an admin's choice; the lane's binding is not the install's keys either.
+    const named = await call(carolId, false, 'POST', '/api/voice/transcribe', { audio: 'AAAA', model: 'whisper-1' });
+    expect(named.body.error).toMatch(/Only an admin may choose/);
+    const stt = await call(carolId, false, 'POST', '/api/voice/transcribe', { audio: 'AAAA' });
     expect(stt.body.error).toMatch(/install's keys/);
   });
 

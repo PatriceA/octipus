@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { muLawDecode, muLawEncode } from '../audio-codec';
-import { TELEPHONY_FRAME_BYTES, TelephonyOutboundEncoder, TwilioInboundDecoder } from './media-bridge';
+import { TELEPHONY_FRAME_BYTES, TelephonyOutboundEncoder, TelephonyInboundDecoder } from './media-bridge';
 
 function sine(samples: number, freq: number, rate: number, amp = 12000): Int16Array {
   const out = new Int16Array(samples);
@@ -23,9 +23,9 @@ function rms(samples: Int16Array): number {
   return Math.sqrt(sum / samples.length);
 }
 
-describe('TwilioInboundDecoder (streaming)', () => {
+describe('TelephonyInboundDecoder (streaming)', () => {
   test('emits little-endian s16 bytes, ~2× the input μ-law length', () => {
-    const dec = new TwilioInboundDecoder();
+    const dec = new TelephonyInboundDecoder();
     const pcm8k = sine(160, 300, 8000);
     const payload = Buffer.from(muLawEncode(pcm8k)).toString('base64');
     const out = dec.push(payload);
@@ -35,7 +35,7 @@ describe('TwilioInboundDecoder (streaming)', () => {
   });
 
   test('carries resampler state across frames (continuous, no per-frame restart)', () => {
-    const dec = new TwilioInboundDecoder();
+    const dec = new TelephonyInboundDecoder();
     let total = 0;
     for (let f = 0; f < 5; f++) {
       const pcm8k = sine(160, 300, 8000);
@@ -48,8 +48,8 @@ describe('TwilioInboundDecoder (streaming)', () => {
 
   test('raw μ-law bytes and base64 decode the same', () => {
     const mulaw = muLawEncode(sine(160, 300, 8000));
-    const fromBytes = new TwilioInboundDecoder().push(mulaw);
-    const fromBase64 = new TwilioInboundDecoder().push(Buffer.from(mulaw).toString('base64'));
+    const fromBytes = new TelephonyInboundDecoder().push(mulaw);
+    const fromBase64 = new TelephonyInboundDecoder().push(Buffer.from(mulaw).toString('base64'));
     expect(Buffer.from(fromBytes).equals(Buffer.from(fromBase64))).toBe(true);
   });
 });

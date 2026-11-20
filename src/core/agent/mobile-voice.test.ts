@@ -60,21 +60,45 @@ test('ordinary mobile text still executes without requiring voice confirmation',
 // The 12th argument of runRootAgent (after the service and its deps) is the per-turn extras; `spoken` there adds the spoken-reply directive.
 const spokenOf = (call: unknown[]) => (call[11] as { spoken?: boolean } | undefined)?.spoken === true;
 
-test('a reply read aloud is asked for in spoken style: mobile voice, and a message marked spoken — once', async () => {
+test('a reply read aloud is asked for in spoken style: mobile voice, and a message sent as spoken — that turn only', async () => {
   const service = new AgentService();
-  await service.handleMessage('session', 'user', 'what time is it', 'mobile-voice');
+  const first = await service.handleMessage('session', 'user', 'what time is it', 'mobile-voice');
   expect(spokenOf(fixture.root.mock.calls[0])).toBe(true);
+  expect(first.spoken).toBe(true);
 
-  // A mark covers the next turn of that session and user only.
-  service.markSpokenTurn('session', 'user');
-  await service.handleMessage('session', 'user', 'what time is it', 'webchat');
+  // The flag rides on the message: this turn, nothing before or after it.
+  const spoken = await service.handleMessage('session', 'user', 'what time is it', 'webchat', [], undefined, undefined, undefined, undefined, undefined, { spoken: true });
   expect(spokenOf(fixture.root.mock.calls[1])).toBe(true);
-  await service.handleMessage('session', 'user', 'and tomorrow?', 'webchat');
+  expect(spoken.spoken).toBe(true);
+  const typed = await service.handleMessage('session', 'user', 'and tomorrow?', 'webchat');
   expect(spokenOf(fixture.root.mock.calls[2])).toBe(false);
+  expect(typed.spoken).toBeUndefined();
+});
 
-  service.markSpokenTurn('session', 'someone-else');
-  await service.handleMessage('session', 'user', 'typed', 'webchat');
-  expect(spokenOf(fixture.root.mock.calls[3])).toBe(false);
+test('a typed message in a chat in web voice mode is answered in spoken style but not marked to be read aloud', async () => {
+  const service = new AgentService();
+  const extras = (call: unknown[]) => call[11] as { spoken?: boolean; readAloud?: boolean } | undefined;
+  service.setVoiceMode('session', 'user', true);
+  // The voice-mode gate proposes first; "go" runs it.
+  await service.handleMessage('session', 'user', 'what is two plus two', 'webchat');
+  const typed = fixture.root.mock.calls.at(-1);
+  if (typed) {
+    expect(extras(typed)?.readAloud).toBeUndefined();
+  }
+  service.setVoiceMode('session', 'user', false);
+  const said = await service.handleMessage('session', 'user', 'what is two plus two', 'webchat', [], undefined, undefined, undefined, undefined, undefined, { spoken: true });
+  expect(extras(fixture.root.mock.calls.at(-1)!)?.readAloud).toBe(true);
+  expect(said.spoken).toBe(true);
+});
+
+test('a spoken "yes" that answers an approval leaves nothing behind for the next typed message', async () => {
+  const service = new AgentService();
+  const approvals = (service as unknown as { approvalManager: { getPendingApprovals: () => unknown[] } }).approvalManager;
+  const pending = vi.spyOn(approvals, 'getPendingApprovals').mockReturnValueOnce([{ id: 'a1', sessionId: 'session' }]);
+  await service.handleMessage('session', 'user', 'yes', 'webchat', [], undefined, undefined, undefined, undefined, undefined, { spoken: true });
+  pending.mockRestore();
+  await service.handleMessage('session', 'user', 'typed afterwards', 'webchat');
+  expect(spokenOf(fixture.root.mock.calls.at(-1)!)).toBe(false);
 });
 
 // A worker identifier exists on failures too; callers must use the explicit outcome.

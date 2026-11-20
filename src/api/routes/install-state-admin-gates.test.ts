@@ -219,7 +219,6 @@ const GATED: Array<[string, string, unknown?]> = [
   ['GET', '/eval/results/run-1'],
   ['GET', '/eval/compare?ids=a,b'],
   ['GET', '/voice/calls'],
-  ['POST', '/voice/install', {}],
   ['POST', '/voice/engines/use', { engine: 'kokoro', direction: 'tts' }],
   ['GET', '/voice/telephony/health'],
   ['GET', '/local-engine'],
@@ -249,7 +248,7 @@ describe('install-state routes', () => {
     await call('POST', '/tools/reload', {});
     await call('POST', '/plugins/demo/reload', {});
     await call('POST', '/tools/github/tools/list_prs/execute', { args: {} });
-    await call('POST', '/voice/install', {});
+    await call('POST', '/voice/engines/install', { engine: 'whisper' });
     await call('POST', '/voice/engines/use', { engine: 'kokoro', direction: 'tts', makePrimary: true });
     await call('POST', '/local-engine/install', {});
     await call('DELETE', '/local-engine');

@@ -76,6 +76,8 @@ export interface TurnResult {
   response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata; outcome?: TurnOutcome;
   /** Images and speech the turn made for the person (src/core/media/turn-media.ts). */
   media?: import('@/core/media/turn-media').TurnMediaItem[];
+  /** The reply is read aloud: a voice conversation on this session speaks it. */
+  spoken?: boolean;
 }
 
 /** What `runTurn` needs once the entry gate (personal or room) let the turn in. */
@@ -173,26 +175,6 @@ export class AgentService {
     }
   }
 
-  /**
-   * Turns whose reply will be spoken (docs/VOICE.md → One pipeline): the
-   * client marks the message it is about to send — the live conversation on
-   * the web, the mobile app's voice screen — and the turn that takes it gets
-   * the spoken-reply directive. One mark, one turn; a mark nobody takes
-   * expires, so a typed message later is answered as text.
-   */
-  private spokenMarks = new Map<string, number>();
-
-  markSpokenTurn(sessionId: string, userId: string): void {
-    this.spokenMarks.set(voiceKey(sessionId, userId), Date.now() + 30_000);
-  }
-
-  private takeSpokenMark(key: string): boolean {
-    const until = this.spokenMarks.get(key);
-    if (until === undefined) return false;
-    this.spokenMarks.delete(key);
-    return until > Date.now();
-  }
-
   /** The fast model mapped to the `voice` topic for this user, or undefined if none is mapped. */
   private async resolveVoiceModel(userId: string, space: AgentSpace | null, sponsor: AgentSponsor | null | undefined): Promise<SelectedModel | undefined> {
     try {
@@ -280,8 +262,27 @@ export class AgentService {
        * turn). Consumed by this turn, or released if it returns without one.
        */
       queueReservation?: SessionTurnReservation;
+      /**
+       * The reply is read aloud (a live voice conversation, the mobile voice
+       * screen): the turn answers in spoken style, and its streamed text and
+       * result are marked so the conversation speaks this turn and no other
+       * (docs/VOICE.md → One pipeline).
+       */
+      spoken?: boolean;
     },
   ): Promise<TurnResult> {
+    const result = await this.handleMessageUnmarked(sessionId, userId, message, channel, attachedFiles, forcedOutputMode, beforeStart, groupTurn, trigger, inlineUi, internal);
+    // Read aloud: a message sent as spoken, or the mobile voice channel. (A
+    // typed message in a chat in web voice mode is answered in spoken style
+    // but read only when the client asks: `expect_reply`.)
+    const readAloud = !groupTurn && (internal?.spoken === true || channel === 'mobile-voice');
+    return readAloud ? { ...result, spoken: true } : result;
+  }
+
+  private async handleMessageUnmarked(
+    ...[sessionId, userId, message, channel, attachedFiles, forcedOutputMode, beforeStart, groupTurn, trigger, inlineUi, internal]: Parameters<AgentService['handleMessage']>
+  ): Promise<TurnResult> {
+    attachedFiles ??= [];
     const turnTrigger = trigger ?? triggerForChannel(channel, !!groupTurn);
     const reservation = internal?.queueReservation;
     let handedOver = false;
@@ -325,6 +326,7 @@ export class AgentService {
           ...(inlineUi?.renders?.length ? { renders: inlineUi.renders } : {}),
           ...(inlineUi?.notes?.length ? { inlineUiNotes: inlineUi.notes } : {}),
           ...(inlineUi?.provenanceId ? { inlineUiProvenance: inlineUi.provenanceId } : {}),
+          ...(internal?.spoken ? { spoken: true } : {}),
         },
         () => withProviderUsageContext({ userId }, () =>
           this.handleMessageInner(sessionId, userId, message, channel, attachedFiles, forcedOutputMode, false, groupTurn, turnTrigger)),
@@ -967,7 +969,7 @@ export class AgentService {
       const voiceGateKey = voiceKey(resolvedSessionId, userId);
       // Is this turn's reply read aloud? The mobile app's voice channel, a
       // message the client marked as spoken, or a session in web voice mode.
-      const spokenTurn = !isRoom && (this.takeSpokenMark(voiceGateKey) || channel === 'mobile-voice' || this.voiceSessions.has(voiceGateKey));
+      const spokenTurn = !isRoom && (getRunContext()?.spoken === true || channel === 'mobile-voice' || this.voiceSessions.has(voiceGateKey));
       if (!isRoom && !bypassVoiceGate && !getRunContext()?.companionBriefing && channel !== 'mobile-voice' && this.voiceSessions.has(voiceGateKey)) {
         // Gate vague requests too, not just cleanly-scored 'task'. Spoken input is
         // usually under-specified → the classifier falls to 'ambiguous', which would
@@ -1140,6 +1142,7 @@ export class AgentService {
           ...(isRoom && postedMessageId ? { room: { postedMessageId, title: session.title ?? 'Room' } } : {}),
           ...(signal ? { signal } : {}),
           ...(spokenTurn ? { spoken: true } : {}),
+          ...(!isRoom && (getRunContext()?.spoken === true || channel === 'mobile-voice') ? { readAloud: true } : {}),
           turnContextParts: [
             { label: 'Long-term memory', text: memoryBlock },
             ...contextHooks.labelledBlocks,

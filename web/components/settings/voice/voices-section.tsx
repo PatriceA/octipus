@@ -174,6 +174,8 @@ function ProfileForm({ profile, engine, engineVoices, onClose, onSaved }: FormPr
   const [clip, setClip] = useState<{ blob: Blob; from: 'file' | 'recording' | 'preview' } | null>(null);
   /** The last preview of the description, and the sentence it says. */
   const [preview, setPreview] = useState<{ blob: Blob; text: string } | null>(null);
+  /** The stored clip is to be removed on save. */
+  const [removeClip, setRemoveClip] = useState(false);
   const [recording, setRecording] = useState(false);
   const recorderRef = useRef<ClipRecorder | null>(null);
   const [busy, setBusy] = useState(false);
@@ -239,7 +241,8 @@ function ProfileForm({ profile, engine, engineVoices, onClose, onSaved }: FormPr
     }
   });
 
-  const hasClip = !!clip || !!profile?.hasClip;
+  const keepsStoredClip = !!profile?.hasClip && !removeClip;
+  const hasClip = !!clip || keepsStoredClip;
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
@@ -262,7 +265,8 @@ function ProfileForm({ profile, engine, engineVoices, onClose, onSaved }: FormPr
         ...(engine?.speech.speed && speed !== 1 ? { speed } : {}),
         // A voice id, a description and a clip belong to the engine they were made and heard with: the one in use.
         ...(engine ? { model: engine.name } : profile?.model ? { model: profile.model } : {}),
-        ...(clip ? { clip: { data: await blobToBase64(clip.blob), mimeType: clip.blob.type.split(';')[0] || 'audio/webm' } } : {}),
+        // A new clip replaces the stored one; `null` removes it.
+        ...(clip ? { clip: { data: await blobToBase64(clip.blob), mimeType: clip.blob.type.split(';')[0] || 'audio/webm' } } : profile?.hasClip && removeClip ? { clip: null } : {}),
         ...(makeActive ? { active: true } : {}),
       };
       await api.put(`/voice/profiles/${encodeURIComponent(trimmedName)}`, body);
@@ -357,7 +361,7 @@ function ProfileForm({ profile, engine, engineVoices, onClose, onSaved }: FormPr
         <div className="space-y-2">
           <p className="text-xs text-on-surface-variant">
             10 to 15 seconds of one person speaking clearly, with no music or noise behind them.
-            {profile?.hasClip && !clip && ' A clip is already stored for this voice; a new one replaces it.'}
+            {keepsStoredClip && !clip && ' A clip is already stored for this voice; a new one replaces it.'}
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <label className={quietBtn}>
@@ -386,6 +390,22 @@ function ProfileForm({ profile, engine, engineVoices, onClose, onSaved }: FormPr
           <Field label={`Speed: ${speed.toFixed(2)}×`}>
             <input type="range" className="w-full accent-primary" min={0.5} max={2} step={0.05} value={speed} onChange={(event) => setSpeed(Number(event.target.value))} />
           </Field>
+        </div>
+      )}
+
+      {profile?.hasClip && !clip && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-on-surface-variant" data-testid="voice-stored-clip">
+          {removeClip ? (
+            <>
+              <span>The stored reference clip is removed when you save.</span>
+              <button type="button" className={quietBtn} onClick={() => setRemoveClip(false)}>Keep it</button>
+            </>
+          ) : (
+            <>
+              <span>A reference clip is stored for this voice.</span>
+              <button type="button" className={quietBtn} onClick={() => setRemoveClip(true)}>Remove clip</button>
+            </>
+          )}
         </div>
       )}
 

@@ -20,7 +20,8 @@
  * choice: nothing is used until it is bound to a lane.
  */
 import type { ModelConfigEntry, NewModelConfigEntry } from '@/db/schema/models';
-import { speechConfigOf } from './speech-hints';
+import { isPrivateEndpoint, LOCAL_DATA_POLICY } from '@/shared/local-hosting';
+import { sameSetting, speechConfigOf, speechHintsFor } from './speech-hints';
 import type { STTEngine } from './stt';
 import type { TTSEngine, TTSOptions } from './tts';
 
@@ -165,7 +166,7 @@ async function rowApiKey(row: Pick<ModelConfigEntry, 'apiKeyRef' | 'name'>): Pro
  * The speech-to-text adapter for `row`. `stream` = the live socket (needs a
  * streaming engine); `batch` = a whole clip.
  */
-export async function sttEngineFor(row: ModelConfigEntry, opts: { language: string; streamWindowSeconds?: number }): Promise<STTEngine> {
+export async function sttEngineFor(row: ModelConfigEntry, opts: { language: string; streamWindowSeconds?: number; endpointSilenceMs?: number }): Promise<STTEngine> {
   const stt = await import('./stt');
   const kind = engineKindOf(row);
   switch (kind) {
@@ -184,7 +185,7 @@ export async function sttEngineFor(row: ModelConfigEntry, opts: { language: stri
     case 'compatible': {
       const { CompatibleSTTEngine, speechEndpointOf } = await import('./compatible');
       return new CompatibleSTTEngine(await speechEndpointOf(row), row.modelId, speechConfigOf(row), {
-        language: opts.language, streamWindowSeconds: opts.streamWindowSeconds,
+        language: opts.language, streamWindowSeconds: opts.streamWindowSeconds, endpointSilenceMs: opts.endpointSilenceMs,
       });
     }
     case 'mistral':
@@ -369,6 +370,57 @@ async function bindSpeechRow(
   return { row: bound, bound: 'primary', lane };
 }
 
+type SpeechSettings = NonNullable<NonNullable<ModelConfigEntry['metadata']>['speech']>;
+/** Speech settings as a request gives them: `null` clears one (the model's known default applies again). */
+export type SpeechSettingsPatch = { [K in keyof SpeechSettings]?: SpeechSettings[K] | null };
+
+/**
+ * A row's stored speech settings with `patch` applied: `null` removes a
+ * setting; `realtime` is merged into the stored one, so turning the live
+ * socket off or switching its protocol keeps its URL and rate (the Voice page
+ * does not show them); anything else replaces.
+ */
+export function mergeSpeechSettings(stored: SpeechSettings, patch: SpeechSettingsPatch): SpeechSettings {
+  const out: Record<string, unknown> = { ...stored };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    if (value === null) delete out[key];
+    else if (key === 'realtime' && stored.realtime) out.realtime = { ...stored.realtime, ...(value as object) };
+    else out[key] = value;
+  }
+  return out as SpeechSettings;
+}
+
+/**
+ * The choices among a row's stored speech settings: what is left once the
+ * values that are only its model's known defaults are dropped. Rows made
+ * before only choices were stored hold those defaults too, and they must not
+ * follow the row to another model (VoxCPM2's 48 kHz played Breeze's 24 kHz
+ * audio at double speed).
+ */
+function choicesOf(stored: SpeechSettings, modelId: string): SpeechSettings {
+  const defaults = speechHintsFor(modelId) as Record<string, unknown>;
+  return Object.fromEntries(Object.entries(stored).filter(([key, value]) => key !== 'direction' && !sameSetting(value, defaults[key]))) as SpeechSettings;
+}
+
+/**
+ * Why a row's live transcription socket may not be used as set, or null. A
+ * row that counts as local — protected audio may reach it, it is free, an
+ * account without hosted models may use it — must stream live audio to its
+ * own network too: a socket on a public host would send that audio out.
+ */
+export function realtimeUrlProblem(speech: SpeechSettings | undefined, dataPolicy: { hosting?: string } | null | undefined): string | null {
+  const target = speech?.realtime?.url;
+  if (!target) return null;
+  let parsed: URL;
+  try { parsed = new URL(target); } catch { return `"${target}" is not a URL (for example ws://localhost:8000/v1/realtime).`; }
+  if (!['ws:', 'wss:', 'http:', 'https:'].includes(parsed.protocol)) return 'The live transcription URL must be a ws:// or wss:// URL.';
+  if (dataPolicy?.hosting === 'local' && !isPrivateEndpoint(target)) {
+    return `This engine counts as running locally (its endpoint is on your own network), so its live transcription socket must be too, and ${parsed.host} is a public host. Use the server's private address, or move the endpoint to the public host as well.`;
+  }
+  return null;
+}
+
 export interface SpeechServerInput {
   direction: SpeechDirection;
   /** The server's base URL, with or without `/v1`. */
@@ -379,17 +431,20 @@ export interface SpeechServerInput {
   name?: string;
   /** A vault secret name or `env:NAME`; none for a keyless local server. */
   apiKeyRef?: string;
-  /** What this model takes, where it differs from what its id is known for. */
-  speech?: NonNullable<ModelConfigEntry['metadata']>['speech'];
+  /** What this model takes, where it differs from what its id is known for; `null` clears a setting. */
+  speech?: SpeechSettingsPatch;
   makePrimary?: boolean;
 }
 
 /**
  * Register a model on an OpenAI-compatible speech server as a model row and
- * bind it to its lane (docs/VOICE.md → Your own speech server). The row
- * starts with what is known of the model (`speech-hints.ts`), so a model
- * someone names by id works without a list of its quirks; a server at a
- * private address is marked as staying local, so protected content may use it.
+ * bind it to its lane (docs/VOICE.md → Your own speech server). The same
+ * name updates the row. What is known of the model (`speech-hints.ts`)
+ * applies without being stored, so a model someone names by id works without
+ * a list of its quirks; the row stores only the settings chosen for it, and
+ * those that were the old model's defaults are dropped when the model
+ * changes. A server at a private address is marked as staying local, so
+ * protected content may use it — and a row moved to a public address is not.
  */
 export async function useSpeechServer(input: SpeechServerInput): Promise<{ row: ModelConfigEntry; bound: 'primary' | 'already-bound' | 'not-bound'; lane: 'transcription' | 'speech' }> {
   const modelId = input.modelId.trim();
@@ -398,30 +453,32 @@ export async function useSpeechServer(input: SpeechServerInput): Promise<{ row: 
   try { endpoint = new URL(input.endpoint.trim()); } catch { throw new Error(`"${input.endpoint}" is not a URL (for example http://localhost:8000/v1).`); }
   if (endpoint.protocol !== 'http:' && endpoint.protocol !== 'https:') throw new Error('The endpoint must be an http or https URL.');
   const { getModelRegistry } = await import('@/models/model-registry');
-  const { isPrivateEndpoint } = await import('@/models/decision');
-  const { speechHintsFor } = await import('./speech-hints');
   const registry = getModelRegistry();
   const lane = input.direction === 'stt' ? 'transcription' as const : 'speech' as const;
   const name = (input.name?.trim() || `${input.direction === 'stt' ? 'transcribe' : 'speech'} ${modelId}`).slice(0, 120);
   const url = endpoint.toString().replace(/\/+$/, '');
-  // A value sent as null means "not set": the model's known default applies.
-  const given = Object.fromEntries(Object.entries(input.speech ?? {}).filter(([, v]) => v !== null && v !== undefined));
-  const speech = { ...speechHintsFor(modelId), ...given, direction: input.direction };
-  const metadata: NewModelConfigEntry['metadata'] = {
-    customProvider: { auth: { type: 'bearer' } },
-    speech,
-    ...(isPrivateEndpoint(url) ? { dataPolicy: { hosting: 'local' as const, retention: 'none' as const, trainsOnInput: false } } : {}),
-    capabilitiesDetectedAt: new Date().toISOString(),
-  };
   const existing = await registry.getModel(name);
   if (existing && (existing.ownerUserId || speechDirectionOf(existing) !== input.direction)) {
     throw new Error(`A model named "${name}" already exists and is not a ${input.direction === 'stt' ? 'speech-to-text' : 'text-to-speech'} engine. Choose another name.`);
   }
+  const kept = existing ? choicesOf(existing.metadata?.speech ?? {}, existing.modelId) : {};
+  const speech: SpeechSettings = { ...mergeSpeechSettings(kept, input.speech ?? {}), direction: input.direction };
+  // Local is where the endpoint is now: a local policy kept from a private
+  // address would send protected audio to a public one, record it as free,
+  // and let accounts without hosted models use it.
+  const { dataPolicy: previousPolicy, ...previous } = existing?.metadata ?? {};
+  const dataPolicy = isPrivateEndpoint(url) ? { ...LOCAL_DATA_POLICY } : previousPolicy?.hosting === 'local' ? undefined : previousPolicy;
+  const problem = realtimeUrlProblem(speech, dataPolicy);
+  if (problem) throw new Error(problem);
+  const metadata: NewModelConfigEntry['metadata'] = {
+    ...previous,
+    customProvider: previous.customProvider ?? { auth: { type: 'bearer' } },
+    speech,
+    ...(dataPolicy ? { dataPolicy } : {}),
+    capabilitiesDetectedAt: new Date().toISOString(),
+  };
   const row = existing
-    ? (await registry.updateModel(name, {
-      endpoint: url, modelId, apiKeyRef: input.apiKeyRef?.trim() || null,
-      metadata: { ...(existing.metadata ?? {}), ...metadata, customProvider: existing.metadata?.customProvider ?? metadata.customProvider },
-    })) ?? existing
+    ? (await registry.updateModel(name, { endpoint: url, modelId, apiKeyRef: input.apiKeyRef?.trim() || null, metadata })) ?? existing
     : await registry.registerModel({
       name, provider: 'custom-openai', modelId, endpoint: url, apiKeyRef: input.apiKeyRef?.trim() || null,
       supportsTools: false, supportsStreaming: false, supportsVision: false, metadata,

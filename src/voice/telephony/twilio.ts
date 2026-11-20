@@ -94,7 +94,10 @@ export class TwilioProvider implements TelephonyProvider {
   /**
    * Twilio posts form fields: `CallSid`, `CallStatus`, `Direction`
    * (`inbound`, `outbound-api`, …), `From`, `To`, and `SpeechResult` on the
-   * callback of a `<Gather>`.
+   * callback of a `<Gather>`. An inbound call's webhook carries `StirVerstat`
+   * when the carrier checked the caller ID: `TN-Validation-Passed-A` is full
+   * attestation.
+   * https://www.twilio.com/docs/voice/trusted-calling-with-shakenstir
    */
   parseWebhook(fields: Record<string, unknown>): TelephonyWebhookEvent {
     const field = (name: string) => (typeof fields[name] === 'string' ? fields[name] as string : '');
@@ -107,6 +110,7 @@ export class TwilioProvider implements TelephonyProvider {
       direction: direction ? (direction.startsWith('outbound') ? 'outbound' : 'inbound') : undefined,
       from: field('From'),
       to: field('To'),
+      callerVerified: field('StirVerstat') === 'TN-Validation-Passed-A',
     };
     const speech = field('SpeechResult').trim();
     // A Gather callback carries CallStatus=in-progress too: speech comes first.

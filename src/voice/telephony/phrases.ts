@@ -5,8 +5,9 @@
  * recogniser and voice expect.
  */
 
-export type PhonePhrase = 'greeting' | 'trouble' | 'didNotCatch' | 'stillThere' | 'listening';
+export type PhonePhrase = 'greeting' | 'trouble' | 'didNotCatch' | 'stillThere' | 'listening' | 'askPermission' | 'askApproval';
 
+/** `{tool}` / `{question}` are filled in by the caller of `phonePhrase`. */
 const PHRASES: Record<string, Record<PhonePhrase, string>> = {
   en: {
     greeting: 'Hello, how can I help you?',
@@ -14,6 +15,8 @@ const PHRASES: Record<string, Record<PhonePhrase, string>> = {
     didNotCatch: "I didn't catch that.",
     stillThere: "I didn't catch that. Are you still there?",
     listening: "Go ahead, I'm listening.",
+    askPermission: 'I need your permission to use {tool}. Say yes to allow it, or no.',
+    askApproval: '{question} Say yes or no.',
   },
   de: {
     greeting: 'Hallo, wie kann ich Ihnen helfen?',
@@ -21,6 +24,8 @@ const PHRASES: Record<string, Record<PhonePhrase, string>> = {
     didNotCatch: 'Das habe ich nicht verstanden.',
     stillThere: 'Das habe ich nicht verstanden. Sind Sie noch da?',
     listening: 'Bitte sprechen Sie, ich höre zu.',
+    askPermission: 'Ich brauche Ihre Erlaubnis für {tool}. Sagen Sie ja, um es zu erlauben, oder nein.',
+    askApproval: '{question} Sagen Sie ja oder nein.',
   },
 };
 

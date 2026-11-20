@@ -102,6 +102,11 @@ export class Endpointer {
     return this.inSpeech;
   }
 
+  /** How much of an utterance has been heard so far, in bytes, without copying it. */
+  get currentBytes(): number {
+    return this.inSpeech ? this.utterance.length * FRAME_BYTES : 0;
+  }
+
   /** The utterance so far, for a look at what is being said before it ends. */
   current(): Uint8Array {
     return concat(this.utterance);

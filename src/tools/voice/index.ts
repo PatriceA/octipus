@@ -6,6 +6,11 @@
  * provider's webhooks, what is said, the conversation — is the call flow's
  * (src/voice/telephony/call-flow.ts, reply.ts); the result is read from the
  * call's record in `CallManager`.
+ *
+ * A placed call is always answered by the restricted phone reply (reply.ts:
+ * the `voice` topic's model, no tools), whoever picks up: the full assistant
+ * is only for inbound calls from a verified, listed number
+ * (src/voice/telephony/assistant.ts), never for a call the agent placed.
  */
 
 import type { ToolManifest, } from '@/core/types';
