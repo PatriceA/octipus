@@ -81,7 +81,12 @@ export interface SpeechOverview {
   host: { uv: boolean; ffmpeg: boolean };
 }
 
-/** An engine row's own settings, as `POST /voice/engines/server` and `PATCH /voice/engines/:name` take them. `null` clears one. */
+/**
+ * An engine row's own settings, as `POST /voice/engines/server` and `PATCH
+ * /voice/engines/:name` take them: only those sent change. `null` clears one
+ * (what the model is known for applies again). `realtime` is merged into the
+ * stored one, so `{ protocol: 'off' }` keeps a stored URL and rate.
+ */
 export interface SpeechSettingsInput {
   sampleRate?: number | null;
   instructions?: VoiceDescriptionMode | null;
@@ -90,7 +95,7 @@ export interface SpeechSettingsInput {
   speed?: boolean | null;
   extraBody?: Record<string, unknown> | null;
   upload?: 'any' | 'wav' | null;
-  realtime?: { protocol: 'openai' | 'nemo' } | null;
+  realtime?: { protocol: 'openai' | 'nemo' | 'off'; url?: string; sampleRate?: number } | null;
   device?: 'auto' | 'cpu' | 'cuda' | null;
 }
 
@@ -101,6 +106,7 @@ export interface SpeechEngineBound {
   bound: 'primary' | 'already-bound' | 'not-bound';
 }
 
+/** A voice profile as `GET /voice/voices` lists it; a non-admin gets the name, note, voice and `hasClip` only. */
 export interface VoiceProfile {
   name: string;
   description?: string;

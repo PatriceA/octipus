@@ -1,5 +1,6 @@
-import { type ChildProcessHandle as Subprocess, spawnProcess as spawn } from '@/utils/proc';
+import { type ChildProcessHandle as Subprocess, spawnProcess as spawn, whichSync } from '@/utils/proc';
 import { EventEmitter } from 'events';
+import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
@@ -7,6 +8,7 @@ import { logger } from '../utils/logger';
 import { FrameAccumulator, StreamingResampler } from './audio-codec';
 import { resolveWhisperBinary, whisperSpawnEnv } from './whisper';
 import { runFfmpegTool, safeInput } from './ffmpeg';
+import { speechLanguage } from './speech-language';
 import { fileAt, writeFileAt } from '@/utils/fs-file';
 
 /** A unique temp path in the OS temp dir (cross-platform; collision-free). */
@@ -115,6 +117,13 @@ export interface STTOptions {
   batchModel?: string;
   /** Mistral: the realtime model for `streamTranscribe()` (the row's `metadata.speech.streamingModel`). */
   streamingModel?: string;
+  /**
+   * Live transcription: the silence that ends a turn of the conversation
+   * (`voice.endpointSilenceMs`). A server that ends utterances on its own
+   * (NeMo) is asked to end them sooner, so an utterance's transcript is in
+   * before the conversation decides the turn is over.
+   */
+  endpointSilenceMs?: number;
 }
 
 export interface TranscriptionResult {
@@ -202,7 +211,8 @@ export class WhisperEngine extends EventEmitter implements STTEngine {
       const args = [
         '-m', this.modelPath,
         '-f', audioPath,
-        '-l', this.options.language!,
+        // whisper.cpp takes a two-letter code or `auto`, never a locale.
+        '-l', speechLanguage(this.options.language) ?? 'auto',
         '--output-json',
       ];
 
@@ -357,6 +367,18 @@ export class AsyncLineReader {
  * realtime on CPU where whisper.cpp is capped at `base`. Self-provisions via
  * `uv run --with faster-whisper`; the model auto-downloads to the HF cache.
  */
+/** A reply of a resident worker that refused one request: the worker itself is fine. */
+export class WorkerReplyError extends Error {}
+
+let gpuSeen: boolean | null = null;
+/** An NVIDIA driver is installed (Linux, Windows): the CUDA wheels could be used. Never on a Mac. */
+function nvidiaGpuVisible(): boolean {
+  if (gpuSeen === null) gpuSeen = process.platform !== 'darwin' && (existsSync('/dev/nvidiactl') || whichSync('nvidia-smi') !== null);
+  return gpuSeen;
+}
+
+const fwLog = logger.child({ component: 'faster-whisper' });
+
 export class FasterWhisperEngine extends EventEmitter implements STTEngine {
   private options: STTOptions;
   private proc: Subprocess<'pipe', 'pipe', 'inherit'> | null = null;
@@ -370,18 +392,22 @@ export class FasterWhisperEngine extends EventEmitter implements STTEngine {
   }
 
   private async ensureWorker(): Promise<void> {
-    if (this.proc) return;
+    // A worker that exited between requests (killed, crashed) is replaced up front.
+    if (this.proc && this.proc.exitCode === null) return;
+    if (this.proc) await this.dispose();
     const worker = join(import.meta.dirname, 'faster_whisper_worker.py');
+    const device = this.options.device || 'auto';
     const proc = spawn({
       command: 'uv',
       args: [
         'run', '--python', '3.12', '--with', 'faster-whisper',
-        // A GPU needs cuBLAS and cuDNN beside CTranslate2; asked for only when the row says `cuda`.
-        ...(this.options.device === 'cuda' ? ['--with', 'nvidia-cublas-cu12', '--with', 'nvidia-cudnn-cu12'] : []),
+        // A GPU needs cuBLAS and cuDNN beside CTranslate2: for `cuda`, and for
+        // `auto` where an NVIDIA driver is installed. A CPU-only host never downloads them.
+        ...(device === 'cuda' || (device === 'auto' && nvidiaGpuVisible()) ? ['--with', 'nvidia-cublas-cu12', '--with', 'nvidia-cudnn-cu12'] : []),
         worker,
         '--model', this.options.model || 'small',
-        '--language', this.options.language || 'en',
-        '--device', this.options.device || 'auto',
+        '--language', speechLanguage(this.options.language) ?? 'auto',
+        '--device', device,
         ...(this.options.computeType ? ['--compute-type', this.options.computeType] : []),
       ],
       stdin: 'pipe',
@@ -392,10 +418,13 @@ export class FasterWhisperEngine extends EventEmitter implements STTEngine {
     this.sink = proc.stdin!.getWriter();
     this.lines = new AsyncLineReader(proc.stdout as ReadableStream<Uint8Array>);
     const first = await this.lines.next();
-    if (!first || !(JSON.parse(first) as { ready?: boolean }).ready) {
+    let ready: { ready?: boolean; device?: string } = {};
+    try { ready = first ? JSON.parse(first) as typeof ready : {}; } catch { /* not JSON: reported below */ }
+    if (!ready.ready) {
       await this.dispose();
-      throw new Error('faster-whisper worker failed to start (is `uv` installed?)');
+      throw new Error(`faster-whisper worker failed to start${first ? `: ${first.slice(0, 200)}` : ' (is `uv` installed?)'}`);
     }
+    fwLog.info({ model: this.options.model, asked: device, device: ready.device }, 'faster-whisper model loaded');
   }
 
   /** Send one PCM window (16 kHz mono s16le) and await its transcript. Serialised. */
@@ -410,19 +439,20 @@ export class FasterWhisperEngine extends EventEmitter implements STTEngine {
         await this.ensureWorker();
         const header = new Uint8Array(4);
         new DataView(header.buffer).setUint32(0, pcm.length, false); // big-endian
-        this.sink!.write(header);
-        this.sink!.write(pcm);
-        // A stream writer has no flush; awaiting `ready` is the same guarantee
-        // — the worker has taken everything written above.
-        await this.sink!.ready;
+        // Awaited: a worker that is gone fails the write here, not as an unhandled rejection.
+        await this.sink!.write(header);
+        await this.sink!.write(pcm);
         const line = await this.lines!.next();
         if (line == null) throw new Error('faster-whisper worker closed unexpectedly');
-        const reply = JSON.parse(line) as Partial<FasterWhisperReply> & { error?: string };
-        if (reply.error) throw new Error(`faster-whisper: ${reply.error}`);
+        let reply: Partial<FasterWhisperReply> & { error?: string };
+        try { reply = JSON.parse(line) as typeof reply; } catch { throw new Error(`faster-whisper worker answered with something that is not JSON: ${line.slice(0, 200)}`); }
+        if (reply.error) throw new WorkerReplyError(`faster-whisper: ${reply.error}`);
         return { text: reply.text || '', segments: reply.segments ?? [], language: reply.language };
       } catch (err) {
-        // A worker that died stays dead: drop it, so the next request starts a new one.
-        await this.dispose();
+        // A refused window leaves the worker running with its model loaded. A
+        // broken pipe, an exit or a garbled reply means it is gone: drop it, so
+        // the next request starts a new one.
+        if (!(err instanceof WorkerReplyError)) await this.dispose();
         throw err;
       }
     };
@@ -500,11 +530,8 @@ export class FasterWhisperEngine extends EventEmitter implements STTEngine {
   }
 
   async dispose(): Promise<void> {
-    try {
-      void this.sink?.close(); // EOF → worker shuts down
-    } catch {
-      /* already closed */
-    }
+    // EOF → the worker shuts down. A pipe that is already broken rejects: nothing to close then.
+    this.sink?.close().catch(() => {});
     this.sink = null;
     this.lines = null;
     if (this.proc) {
@@ -530,7 +557,7 @@ const RESIDENT_IDLE_MS = 10 * 60_000;
 const residents = new Map<string, { engine: FasterWhisperEngine; leases: number; idle: ReturnType<typeof setTimeout> | null }>();
 
 export function residentFasterWhisper(options: STTOptions): STTEngine {
-  const key = JSON.stringify([options.model || 'small', options.language || 'en', options.device || 'auto', options.computeType || '']);
+  const key = JSON.stringify([options.model || 'small', speechLanguage(options.language) ?? 'auto', options.device || 'auto', options.computeType || '']);
   let entry = residents.get(key);
   if (!entry) {
     entry = { engine: new FasterWhisperEngine(options), leases: 0, idle: null };
@@ -787,7 +814,8 @@ export class MistralSTTEngine extends EventEmitter implements STTEngine {
     const form = new FormData();
     form.append('model', this.model);
     form.append('file', new Blob([new Uint8Array(buffer)]), fileName);
-    if (this.options.language) form.append('language', this.options.language);
+    const language = speechLanguage(this.options.language);
+    if (language) form.append('language', language);
     if (this.options.diarize) form.append('diarize', 'true');
     for (const term of this.options.contextBias || []) form.append('context_bias', term);
     form.append('timestamp_granularities', 'segment');
@@ -874,6 +902,7 @@ export function pcm16leResample(pcm: Uint8Array, resampler: StreamingResampler):
 export function openAiRealtimeProtocol(opts: {
   url: string; headers: Record<string, string>; name: string; model: string; language?: string; sampleRate: number;
 }): RealtimeWsProtocol {
+  const language = speechLanguage(opts.language);
   // A streaming (click-free across frames) resampler, scoped to this one stream.
   const resampler = opts.sampleRate === REALTIME_SAMPLE_RATE ? null : new StreamingResampler(REALTIME_SAMPLE_RATE, opts.sampleRate);
   return {
@@ -891,7 +920,7 @@ export function openAiRealtimeProtocol(opts: {
         audio: {
           input: {
             format: { type: 'audio/pcm', rate: opts.sampleRate },
-            transcription: { model: opts.model, ...(opts.language ? { language: opts.language } : {}) },
+            transcription: { model: opts.model, ...(language ? { language } : {}) },
             turn_detection: { type: 'server_vad' },
           },
         },
@@ -912,6 +941,16 @@ export function openAiRealtimeProtocol(opts: {
 }
 
 /**
+ * The pause after which a NeMo server ends an utterance: shorter than the
+ * conversation's own end-of-turn silence (`endpointSilenceMs`, 700 ms unless
+ * set), so the utterance's `.completed` arrives before the turn is over —
+ * 500 ms at most, 100 ms at least.
+ */
+export function nemoEndpointingMs(endpointSilenceMs = 700): number {
+  return Math.max(100, Math.min(500, endpointSilenceMs - 200));
+}
+
+/**
  * NVIDIA NeMo-Speech.cpp's realtime transcription socket
  * (`/v1/audio/transcriptions/realtime`, its docs/api.md): one `session.update`
  * before any audio, base64 PCM16 in `input_audio_buffer.append`, a `commit`
@@ -923,6 +962,7 @@ export function nemoRealtimeProtocol(opts: {
   url: string; headers: Record<string, string>; language?: string; sampleRate?: number; endpointingMs?: number;
 }): RealtimeWsProtocol {
   let first = true;
+  const language = speechLanguage(opts.language);
   return {
     url: opts.url,
     headers: opts.headers,
@@ -931,7 +971,8 @@ export function nemoRealtimeProtocol(opts: {
       type: 'session.update',
       session: {
         sample_rate: opts.sampleRate ?? REALTIME_SAMPLE_RATE,
-        ...(opts.language ? { language: opts.language } : {}),
+        ...(language ? { language } : {}),
+        // How long a pause ends an utterance on the server (see nemoEndpointingMs).
         ...(opts.endpointingMs ? { endpointing_ms: opts.endpointingMs } : {}),
       },
     })),
@@ -992,7 +1033,8 @@ export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
     // this.model is the realtime (streaming-only) model; batch needs a file model.
     form.append('model', this.options.batchModel || OPENAI_STT_BATCH_MODEL);
     form.append('file', new Blob([new Uint8Array(buffer)]), fileName);
-    if (this.options.language) form.append('language', this.options.language);
+    const language = speechLanguage(this.options.language);
+    if (language) form.append('language', language);
 
     const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',

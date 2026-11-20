@@ -7,10 +7,10 @@ import type { SpeechEngineBound, SpeechEngineRow, SpeechSettingsInput, VoiceDesc
 import { Busy, Check, errorText, Field, InlineError, inputCls, primaryBtn } from './ui';
 
 type Device = 'auto' | 'cpu' | 'cuda';
-type Realtime = '' | 'openai' | 'nemo';
+type Realtime = 'off' | 'openai' | 'nemo';
 
 const asDevice = (value: string | null): Device => (value === 'cpu' || value === 'cuda' ? value : 'auto');
-const asRealtime = (value: string | null): Realtime => (value === 'openai' || value === 'nemo' ? value : '');
+const asRealtime = (value: string | null): Realtime => (value === 'openai' || value === 'nemo' ? value : 'off');
 
 /**
  * The settings of one engine that matter. Your own speech server: where it
@@ -93,11 +93,25 @@ function ServerEdit({ engine, onSaved }: { engine: SpeechEngineRow; onSaved: () 
       return;
     }
 
-    // Everything this form shows, so nothing it shows is lost when the server
-    // row is rewritten. `null` = not set: what the model is known for applies.
-    const speech: SpeechSettingsInput = speaks
-      ? { instructions, cloning, streams, speed, sampleRate: rate, ...(extra ? { extraBody: extra } : {}) }
-      : { upload: uploadWav ? 'wav' : 'any', realtime: realtime ? { protocol: realtime } : null, ...(extra ? { extraBody: extra } : {}) };
+    // Only what was changed here. The form shows what the engine does now,
+    // most of it what its model is known for; sending all of it back would
+    // pin those defaults to the row, and they would stay when the model id
+    // changes (a 48 kHz rate on a 24 kHz model plays at double speed).
+    // `null` = not set: what the model is known for applies.
+    const loaded = engine.speech;
+    const speech: SpeechSettingsInput = {};
+    if (speaks) {
+      if (instructions !== loaded.instructions) speech.instructions = instructions;
+      if (cloning !== loaded.cloning) speech.cloning = cloning;
+      if (streams !== loaded.streams) speech.streams = streams;
+      if (speed !== loaded.speed) speech.speed = speed;
+      if (rate !== loaded.sampleRate) speech.sampleRate = rate;
+    } else {
+      if (uploadWav !== (loaded.upload === 'wav')) speech.upload = uploadWav ? 'wav' : 'any';
+      // `off` keeps no socket even for a model known to have one; the server keeps a stored URL and rate.
+      if (realtime !== asRealtime(loaded.realtime)) speech.realtime = { protocol: realtime };
+    }
+    if (extra) speech.extraBody = extra;
 
     setBusy(true);
     try {
@@ -112,7 +126,7 @@ function ServerEdit({ engine, onSaved }: { engine: SpeechEngineRow; onSaved: () 
           ...(apiKeyRef.trim() ? { apiKeyRef: apiKeyRef.trim() } : {}),
           speech,
         });
-      } else {
+      } else if (Object.keys(speech).length > 0) {
         await api.patch(`/voice/engines/${encodeURIComponent(engine.name)}`, { speech });
       }
       onSaved();
@@ -141,7 +155,8 @@ function ServerEdit({ engine, onSaved }: { engine: SpeechEngineRow; onSaved: () 
         <summary className="cursor-pointer text-xs font-medium text-on-surface">Advanced</summary>
         <div className="mt-3 space-y-3">
           <p className="text-xs text-on-surface-variant">
-            These start from what the model is known for. Change one only when this server behaves differently.
+            These start from what the model is known for. Change one only when this server behaves differently: only what you change is saved,
+            and a new model id starts again from what that model is known for.
           </p>
           {speaks ? (
             <>
@@ -164,14 +179,14 @@ function ServerEdit({ engine, onSaved }: { engine: SpeechEngineRow; onSaved: () 
               <Check label="Upload recordings as WAV (for servers that read nothing else)" checked={uploadWav} onChange={setUploadWav} />
               <Field label="Live transcription protocol" hint="How the server takes audio while you are still talking. None: each turn is transcribed whole when it ends.">
                 <select className={inputCls} value={realtime} onChange={(event) => setRealtime(asRealtime(event.target.value))}>
-                  <option value="">None</option>
+                  <option value="off">None</option>
                   <option value="openai">OpenAI Realtime</option>
                   <option value="nemo">NVIDIA NeMo</option>
                 </select>
               </Field>
             </>
           )}
-          <Field label="Extra request fields (JSON)" hint="Sent with every request to this server. Empty: the stored ones stay. They are not shown here, and changing the endpoint, model id or key name in the same save resets them: enter them again then.">
+          <Field label="Extra request fields (JSON)" hint="Sent with every request to this server. Empty: the stored ones stay (they are not shown here).">
             <textarea className={`${inputCls} font-mono`} rows={3} value={extraBody} placeholder='{"temperature": 0.2}' onChange={(event) => setExtraBody(event.target.value)} />
           </Field>
         </div>

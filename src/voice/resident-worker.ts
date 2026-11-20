@@ -6,7 +6,7 @@
  * replaced when it dies.
  */
 import { type ChildProcessHandle as Subprocess, spawnProcess as spawn } from '@/utils/proc';
-import { AsyncLineReader } from './stt';
+import { AsyncLineReader, WorkerReplyError } from './stt';
 
 const IDLE_MS = 10 * 60_000;
 
@@ -17,10 +17,22 @@ export class ResidentWorker {
   private chain: Promise<unknown> = Promise.resolve();
   private idle: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(private readonly name: string, private readonly command: string, private readonly args: string[]) {}
+  constructor(
+    private readonly name: string,
+    private readonly command: string,
+    private readonly args: string[],
+    private readonly idleMs = IDLE_MS,
+  ) {}
+
+  /** The worker process is up (it may still be loading). */
+  get running(): boolean {
+    return !!this.proc && this.proc.exitCode === null;
+  }
 
   private async ensure(): Promise<void> {
-    if (this.proc) return;
+    // A worker that exited between requests is replaced before it is written to.
+    if (this.running) return;
+    if (this.proc) await this.stop();
     const proc = spawn({ command: this.command, args: this.args, stdin: 'pipe', stdout: 'pipe', stderr: 'inherit' });
     this.proc = proc;
     this.sink = proc.stdin!.getWriter();
@@ -51,8 +63,10 @@ export class ResidentWorker {
         if (!(err instanceof WorkerReplyError)) await this.stop();
         throw err;
       } finally {
-        this.idle = setTimeout(() => { void this.stop(); }, IDLE_MS);
-        this.idle.unref?.();
+        if (this.proc) {
+          this.idle = setTimeout(() => { void this.stop(); }, this.idleMs);
+          this.idle.unref?.();
+        }
       }
     };
     const p = this.chain.then(run, run);
@@ -62,7 +76,8 @@ export class ResidentWorker {
 
   async stop(): Promise<void> {
     if (this.idle) { clearTimeout(this.idle); this.idle = null; }
-    try { void this.sink?.close(); } catch { /* already closed */ }
+    // A pipe that is already broken rejects the close: nothing to close then.
+    this.sink?.close().catch(() => {});
     this.sink = null;
     this.lines = null;
     if (this.proc) {
@@ -71,5 +86,3 @@ export class ResidentWorker {
     }
   }
 }
-
-class WorkerReplyError extends Error {}

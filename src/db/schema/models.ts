@@ -178,8 +178,8 @@ export interface ModelMetadata {
     extraBody?: Record<string, unknown>;
     /** Transcription: what a clip is uploaded as — as recorded, or transcoded to 16 kHz WAV first. */
     upload?: 'any' | 'wav';
-    /** Transcription: the server's realtime websocket, when it has one. */
-    realtime?: { protocol: 'openai' | 'nemo'; url?: string; sampleRate?: number };
+    /** Transcription: the server's realtime websocket, when it has one; `off` turns off one the model is known for. */
+    realtime?: { protocol: 'openai' | 'nemo' | 'off'; url?: string; sampleRate?: number };
     /** faster-whisper: where the model runs, and its CTranslate2 compute type. */
     device?: 'auto' | 'cpu' | 'cuda';
     computeType?: string;

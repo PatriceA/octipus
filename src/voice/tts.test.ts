@@ -1,5 +1,63 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { KokoroEngine, MistralTTSEngine, OpenAITTSEngine, PiperEngine } from './tts';
+
+describe('an interrupted sentence stops its request', () => {
+  /** A speech server that sends one chunk and then goes on generating. */
+  const generating = () => {
+    const seen: { signal?: AbortSignal; cancelled: boolean } = { cancelled: false };
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      seen.signal = init?.signal ?? undefined;
+      const body = new ReadableStream<Uint8Array>({
+        start(c) { c.enqueue(new Uint8Array(4800)); },
+        cancel() { seen.cancelled = true; },
+      });
+      return new Response(body, { headers: { 'content-type': 'audio/pcm' } });
+    });
+    return { seen, spy };
+  };
+
+  const engines = async () => {
+    const { CompatibleTTSEngine } = await import('./compatible');
+    return [
+      ['OpenAI', new OpenAITTSEngine('alloy', { apiKey: 'k' })],
+      ['a speech server', new CompatibleTTSEngine({ baseUrl: 'http://localhost:8091/v1', headers: {}, query: {} }, 'openbmb/VoxCPM2', { streams: true, sampleRate: 48000 })],
+    ] as const;
+  };
+
+  test('returning the stream early aborts the request and cancels its body', async () => {
+    for (const [name, engine] of await engines()) {
+      const { seen, spy } = generating();
+      try {
+        const chunks = engine.streamPcm!('A sentence nobody will hear to the end.');
+        expect((await chunks.next()).value, name).toHaveLength(4800);
+        expect(seen.signal?.aborted, name).toBe(false);
+        await chunks.return(undefined);
+        expect(seen.signal?.aborted, name).toBe(true);
+        expect(seen.cancelled, name).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+    }
+  });
+
+  test('disposing the engine aborts a request still waiting for its answer', async () => {
+    for (const [name, engine] of await engines()) {
+      let signal: AbortSignal | undefined;
+      const spy = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+        signal = init?.signal ?? undefined;
+        signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      }));
+      try {
+        const pending = engine.synthesize('Hello.');
+        await vi.waitFor(() => expect(signal, name).toBeDefined());
+        await engine.dispose();
+        await expect(pending, name).rejects.toThrow(/abort/i);
+      } finally {
+        spy.mockRestore();
+      }
+    }
+  });
+});
 
 describe('a Speech-lane row becomes its engine', () => {
   const row = (provider: string, modelId: string, extra: Record<string, unknown> = {}) =>

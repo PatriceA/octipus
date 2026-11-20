@@ -38,8 +38,9 @@ const SPEECH_SETTINGS = t.Partial(t.Object({
   speed: t.Union([t.Null(), t.Boolean()]),
   extraBody: t.Union([t.Null(), t.Record(t.String(), t.Unknown())]),
   upload: t.Union([t.Null(), t.Literal('any'), t.Literal('wav')]),
+  // `off`: no live socket, also for a model known to have one (each turn is transcribed whole).
   realtime: t.Union([t.Null(), t.Object({
-    protocol: t.Union([t.Literal('openai'), t.Literal('nemo')]),
+    protocol: t.Union([t.Literal('openai'), t.Literal('nemo'), t.Literal('off')]),
     url: t.Optional(t.String({ maxLength: 2048 })),
     sampleRate: t.Optional(t.Number({ minimum: 8000, maximum: 48000 })),
   })]),
@@ -139,13 +140,19 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
 
   .post(
     '/transcribe',
-    async ({ user, body, set }) => {
+    async ({ user, principal, body, set }) => {
       if (!user) {
         return { error: 'Not authenticated' };
       }
 
       try {
         const { audio, format, model } = body;
+        // Naming an engine is install configuration: an admin trying one out.
+        // `auto` and `local` pick no row (older mobile builds send them).
+        if (model && model !== 'auto' && model !== 'local' && !isAdmin(principal)) {
+          set.status = 403;
+          return { error: 'Only an admin may choose the transcription engine.' };
+        }
         const sessionId = await speechSession(user.id, body.sessionId);
         if (sessionId === null) { set.status = 404; return { error: 'Session not found' }; }
         // The engine bound to the Transcription lane (primary, then backup);
@@ -174,7 +181,7 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
       body: t.Object({
         audio: t.String({ description: 'Base64-encoded audio data' }),
         format: t.Optional(t.String({ description: 'Audio format (webm, ogg, mp3, wav)' })),
-        model: t.Optional(t.String({ description: 'A Transcription-lane model row name, or an engine name ("local", "whisper", "fasterwhisper", "mistral"/"voxtral-*", "openai"/"whisper-1"); unset = the lane binding' })),
+        model: t.Optional(t.String({ description: 'A Transcription-lane model row name, or an engine name ("whisper", "fasterwhisper", "mistral"/"voxtral-*", "openai"/"whisper-1") (admin); "local" or "auto" for anyone; unset = the lane binding' })),
         sessionId: t.Optional(t.String({ maxLength: 100, description: 'The conversation the audio belongs to (its protection level applies)' })),
       }),
       detail: { tags: ['voice'] },
@@ -246,7 +253,9 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
   )
 
   // The voices to choose from: what the bound speech engine offers, and the
-  // install's voice profiles (the reference clips themselves stay with admins).
+  // install's voice profiles. How a profile is made (its description, the
+  // words of its clip, the engine it is for) is install configuration: a
+  // member sees its name, note, preset voice and whether it has a clip.
   .get(
     '/voices',
     async ({ user, principal, query, set }) => {
@@ -257,10 +266,13 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
       const engine = await speechVoices({ userId: user.id, allowHosted, override: isAdmin(principal) ? query.model || null : null })
         .catch((error: Error) => ({ model: null, voices: [] as string[], reason: error.message }));
       const profiles = await listVoiceProfiles();
+      const admin = isAdmin(principal);
       return {
         ...engine,
         active: await activeVoiceProfileName(),
-        profiles: profiles.map(({ refAudio, refAudioType: _type, ...p }) => ({ ...p, hasClip: !!refAudio })),
+        profiles: profiles.map(({ refAudio, refAudioType: _type, ...p }) => (admin
+          ? { ...p, hasClip: !!refAudio }
+          : { name: p.name, description: p.description, voice: p.voice, hasClip: !!refAudio })),
       };
     },
     { query: t.Object({ model: t.Optional(t.String({ maxLength: 200 })) }), detail: { tags: ['voice'] } }
@@ -391,40 +403,6 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
     { detail: { tags: ['voice'] } }
   )
 
-  .post(
-    '/install',
-    async ({ user, principal, set }) => {
-      // Builds and installs a host binary: an operator action.
-      const denied = adminDenied({ set, user, principal });
-      if (denied) return denied;
-      try {
-        const { installWhisper } = await import('@/voice/whisper');
-        const log: string[] = [];
-        await installWhisper((line) => {
-          log.push(line);
-          if (log.length > 200) log.shift(); // keep the tail, cap memory
-        });
-        // Installed is not enough: it becomes the Transcription engine when
-        // nothing else is bound there (never replacing one someone chose).
-        // The build worked either way: a binding that fails is a warning, not a failed install.
-        try {
-          const { useSpeechEngine } = await import('@/voice/speech-rows');
-          const used = await useSpeechEngine('whisper', 'stt');
-          return { ok: true, log, model: used.row.name, bound: used.bound };
-        } catch (bindError) {
-          apiLogger.warn({ err: bindError }, 'whisper.cpp installed but not bound to the Transcription lane');
-          return { ok: true, log, bound: false, warning: `Installed, but not added as a Transcription engine: ${(bindError as Error).message}. Add it on the Topics page.` };
-        }
-      } catch (error) {
-        const { ToolchainMissingError } = await import('@/voice/whisper');
-        set.status = error instanceof ToolchainMissingError ? 422 : 500;
-        apiLogger.error({ error }, 'Local whisper install failed');
-        return { ok: false, error: (error as Error).message };
-      }
-    },
-    { detail: { tags: ['voice'] } }
-  )
-
   // Everything the Voice page shows: what serves each lane, every speech
   // engine registered and whether it can run, what can be installed here,
   // and installs in progress.
@@ -511,12 +489,14 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
       const denied = adminDenied({ set, user, principal });
       if (denied) return denied;
       const { getModelRegistry } = await import('@/models/model-registry');
-      const { speechDirectionOf } = await import('@/voice/speech-rows');
+      const { mergeSpeechSettings, realtimeUrlProblem, speechDirectionOf } = await import('@/voice/speech-rows');
+      const { resolveDataPolicy } = await import('@/models/decision');
       const registry = getModelRegistry();
       const row = await registry.getModel(params.name);
       if (!row || row.ownerUserId || !speechDirectionOf(row)) { set.status = 404; return { error: 'No such speech engine' }; }
-      const speech = { ...(row.metadata?.speech ?? {}), ...(body.speech ?? {}) };
-      for (const key of Object.keys(speech) as Array<keyof typeof speech>) if (speech[key] === null) delete speech[key];
+      const speech = mergeSpeechSettings(row.metadata?.speech ?? {}, body.speech ?? {});
+      const problem = realtimeUrlProblem(speech, resolveDataPolicy(row));
+      if (problem) { set.status = 400; return { error: problem }; }
       const metadata = { ...(row.metadata ?? {}), speech, ...(body.modelPath !== undefined ? { modelPath: body.modelPath || undefined } : {}) };
       await registry.updateModel(row.name, { metadata });
       return { ok: true };

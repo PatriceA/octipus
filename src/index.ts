@@ -552,6 +552,11 @@ async function main() {
       stopRoleTurnLeaseClaims();
       // The local embedding engine is a child process: it goes with us.
       const engineStopped = import('@/capabilities/local-engine/engine-process').then(({ stopLocalEngine }) => stopLocalEngine()).catch(() => {});
+      // So do the resident speech workers (faster-whisper, Kokoro) holding their models.
+      const speechStopped = Promise.all([
+        import('@/voice/stt').then(({ stopResidentSpeechWorkers }) => stopResidentSpeechWorkers()),
+        import('@/voice/tts').then(({ stopKokoroWorkers }) => stopKokoroWorkers()),
+      ]).catch((err: unknown) => logger.warn({ err }, 'Stopping the speech workers failed'));
 
       // Stop all running agents (kills CLI child processes)
       try {
@@ -660,6 +665,7 @@ async function main() {
 
       // The engine was asked to stop at the start; it has had the whole shutdown to exit.
       await engineStopped;
+      await speechStopped;
 
       clearTimeout(forceExit);
       logger.info('Shutdown complete');

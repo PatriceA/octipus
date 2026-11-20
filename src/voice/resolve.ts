@@ -26,6 +26,7 @@ import {
   engineKindOf, isLocalSpeechRow, type SpeechDirection, speechDirectionOf, type SpeechEngineKind, type SpeechFormat,
   speechFormats, speechRowAvailable, speechStaysLocal, type SpeechVoice, sttEngineFor, ttsEngineFor,
 } from './speech-rows';
+import { speechConfigOf } from './speech-hints';
 import type { STTEngine, TranscriptionResult } from './stt';
 import type { TTSEngine } from './tts';
 
@@ -167,10 +168,28 @@ async function language(): Promise<string> {
   return getConfig().voice.language || 'en';
 }
 
-/** A live speech-to-text engine (the microphone socket, phone calls). The caller disposes it. */
-export async function resolveSttEngine(req: SpeechRequest & { streamWindowSeconds?: number } = {}): Promise<{ engine: STTEngine; row: ModelConfigEntry; name: SpeechEngineKind }> {
+/** `voice.endpointSilenceMs`, when it is set to something usable. */
+async function endpointSilence(): Promise<number | undefined> {
+  try {
+    const { getSettingsService } = await import('@/config/settings-service');
+    const value = Number(await getSettingsService().get('voice.endpointSilenceMs'));
+    return Number.isFinite(value) && value > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A live speech-to-text engine (the microphone socket, phone calls). The
+ * caller disposes it. `endpointSilenceMs` is the pause that ends the caller's
+ * turn (default: `voice.endpointSilenceMs`): an engine that ends utterances
+ * on its own server (NeMo) is told to end them sooner than that.
+ */
+export async function resolveSttEngine(req: SpeechRequest & { streamWindowSeconds?: number; endpointSilenceMs?: number } = {}): Promise<{ engine: STTEngine; row: ModelConfigEntry; name: SpeechEngineKind }> {
   const row = await pickSpeechRow('stt', req);
-  const engine = await sttEngineFor(row, { language: await language(), streamWindowSeconds: req.streamWindowSeconds });
+  const engine = await sttEngineFor(row, {
+    language: await language(), streamWindowSeconds: req.streamWindowSeconds, endpointSilenceMs: req.endpointSilenceMs ?? await endpointSilence(),
+  });
   return { engine, row, name: engineKindOf(row) as SpeechEngineKind };
 }
 
@@ -240,6 +259,13 @@ export interface SpokenAudio {
 const CONTENT_TYPES: Record<SpeechFormat, string> = {
   mp3: 'audio/mpeg', wav: 'audio/wav', opus: 'audio/ogg', ogg: 'audio/ogg', pcm: 'audio/L16', flac: 'audio/flac',
 };
+
+/** Headerless PCM says nothing of itself: its rate (and channels) go in the type, or it plays at the wrong speed. */
+function contentTypeOf(format: SpeechFormat, row: ModelConfigEntry, engine: TTSEngine): string {
+  if (format !== 'pcm') return CONTENT_TYPES[format];
+  const rate = engine.pcmSampleRate ?? speechConfigOf(row).sampleRate ?? 24000;
+  return `audio/L16;rate=${rate};channels=1`;
+}
 
 /** How a request wants to be spoken. */
 export interface SpeakOptions {
@@ -312,7 +338,7 @@ export async function synthesizeWithLane(text: string, req: SpeechRequest & Spea
       const audio = await engine.synthesize(text);
       await recordSpeechUsage(row, 'speech', req, { characters: text.length });
       if (errors.length) log.warn({ using: row.name, failed: errors }, 'Spoke with the backup engine');
-      return { audio, format, contentType: CONTENT_TYPES[format], model: row.name };
+      return { audio, format, contentType: contentTypeOf(format, row, engine), model: row.name };
     } catch (err) {
       await recordSpeechUsage(row, 'speech', req, { characters: 0 }, true);
       errors.push(`${row.name}: ${(err as Error).message}`);

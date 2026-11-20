@@ -195,6 +195,14 @@ describe('an OpenAI-compatible speech server is a speech engine', () => {
     expect((await resolve.speechCandidates('stt', { override: 'nemotron' })).map((r) => r.name)).toEqual(['nemotron']);
   });
 
+  test('PCM is labelled with its rate: headerless samples played at another rate are noise', async () => {
+    state.primary = server('vox', 'openbmb/VoxCPM2', 'speech', 'http://localhost:8091');
+    await expect(resolve.synthesizeWithLane('hi', { format: 'pcm' })).resolves.toMatchObject({ format: 'pcm', contentType: 'audio/L16;rate=48000;channels=1' });
+    state.primary = server('breeze', 'BreezeBlue/Breeze-TTS-2', 'speech', 'http://localhost:8092');
+    await expect(resolve.synthesizeWithLane('hi', { format: 'pcm' })).resolves.toMatchObject({ contentType: 'audio/L16;rate=24000;channels=1' });
+    await expect(resolve.synthesizeWithLane('hi', { format: 'wav' })).resolves.toMatchObject({ contentType: 'audio/wav' });
+  });
+
   test('a server on the owner\'s own network needs none of the install\'s hosted keys; a hosted one does', async () => {
     const mine = { ...server('mine', 'openai/whisper-large-v3-turbo', 'transcription', 'http://192.168.1.20:8000'), provider: 'custom-openai' };
     state.primary = mine;
