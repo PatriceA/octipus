@@ -21,7 +21,7 @@
  * Scripts find tools with `searchTools()` / `describeTool()` / `ALL_TOOLS`.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   type CodemodeTool,
   CodemodeSandbox,
@@ -29,6 +29,7 @@ import {
   type CodemodeJsonSchema,
   parseCodemodeSource,
   renderDeclarations,
+  toCodemodeIdentifier,
 } from '@earendil-works/pi-codemode';
 import type { RoutedScriptTool, ToolHandler } from '@/core/agent-base';
 import { TOOL_DISCOVERY_TOOL_ID } from '@/core/agent/tool-split';
@@ -49,6 +50,9 @@ const MAX_TIMEOUT_MS = 300_000;
 /** Matches the rough chars-per-token the rest of the codebase budgets with. */
 const CHARS_PER_TOKEN = 4;
 const SEARCH_LIMIT = 8;
+export const CODEMODE_DEFAULT_OUTPUT_TOKENS = 2_000;
+export const CODEMODE_MAX_OUTPUT_TOKENS = 32_000;
+export const CODEMODE_MAX_SOURCE_BYTES = 256 * 1024;
 
 /** What the codemode tool needs from the worker it runs in. */
 export interface CodemodeHost {
@@ -71,11 +75,13 @@ const DESCRIPTION = [
   '',
   '`code` is raw JavaScript (no markdown fence), run as the body of an async function in a sandbox with no network, filesystem, timers or modules — only these:',
   '- `await tools.<name>(args)` calls a registered tool, including tools whose schemas are omitted from the initial list, e.g. `tools.filesystem__read_file({ path })`. Resolves to the tool result; rejects with its error.',
-  '- `await searchTools(query)` → `[{ name, description }]`; `await describeTool(name)` → its TypeScript signature; `ALL_TOOLS` lists every callable tool.',
+  '- `ALL_TOOLS` is an array of objects `{name: string, description: string}`, NOT strings. Example: `ALL_TOOLS.filter(t => t.name.includes("calendar")).map(t => t.name)`. `await searchTools(query)` returns the same shape; `await describeTool(name)` returns its TypeScript signature or undefined. Describe tools before guessing argument names.',
   '- `text(value)`, `console.log(...)` and `return value` produce the output.',
   '- `await showToolImage(toolResult)` shows the images from a tool result, e.g. `await showToolImage(await tools.vision__view_image({path}))`. Images are not shown unless selected this way; text output does not select images.',
   '- `store(key, value)` / `load(key)` keep small JSON values across codemode calls in this run.',
   'Optional first line: `// @options: {"timeout_ms": 60000, "max_output_tokens": 2000}`.',
+  'Source limit: 256 KiB UTF-8. Text output defaults to 2000 estimated tokens (characters / 4), with an explicit maximum of 32000 before the worker\'s own result ceiling. Larger output is visibly truncated, including errors. `max_output_tokens: 0` suppresses successful text; errors retain a bounded diagnostic and selected images use the media channel. Time limit is at most 5 minutes; there are no timers, fetch, filesystem or imports in scripts.',
+  'Await every tool call. For parallel filtering, await Promise.all(items.map(async item => ...)) and filter the resolved values; Array.filter(async ...) does not wait. Promise.allSettled error reasons need `.message` to print usefully. A completed script does not prove domain success: inspect tool results for reported errors.',
   'Tool calls are real and pass the normal permission checks; a failed script keeps the effects of the calls it already made.',
 ].join('\n');
 
@@ -131,6 +137,7 @@ function keywordRank(tools: ToolSummary[], query: string, limit: number): ToolSu
 }
 
 function truncateMiddle(text: string, maxChars: number): string {
+  if (maxChars <= 0) return '';
   if (text.length <= maxChars) return text;
   const half = Math.floor(maxChars / 2);
   const omitted = text.length - 2 * half;
@@ -138,7 +145,7 @@ function truncateMiddle(text: string, maxChars: number): string {
 }
 
 function formatValue(value: unknown): string {
-  return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
 /**
@@ -158,7 +165,7 @@ export function scriptTimeoutMs(code: unknown): number {
 
 export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
   // Per worker: a run's scripts share state, a new run starts empty.
-  const store: Record<string, unknown> = {};
+  const store: Record<string, unknown> = Object.create(null);
 
   return {
     name: CODEMODE_TOOL_NAME,
@@ -175,14 +182,21 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
     // the script may run, or it abandons a script whose tool calls go on.
     executionTimeoutMs: (args) => scriptTimeoutMs(args.code),
     execute: async (args) => {
+      const extra = Object.keys(args).filter(key => key !== 'code');
+      if (extra.length) throw new Error(truncateMiddle(`codemode: unknown argument${extra.length === 1 ? '' : 's'} ${extra.join(', ')}. Pass only code; put timeout_ms and max_output_tokens in the first // @options: line.`, 1000));
       if (typeof args.code !== 'string') {
         throw new Error(`codemode: 'code' must be a string, got ${typeof args.code}.`);
       }
+      if (Buffer.byteLength(args.code, 'utf8') > CODEMODE_MAX_SOURCE_BYTES) {
+        throw new Error(`codemode: source exceeds ${CODEMODE_MAX_SOURCE_BYTES} bytes (256 KiB UTF-8). Keep data in tools or files and return a summary.`);
+      }
+      if (args.code.trimStart().startsWith('```')) throw new Error('codemode: provide raw JavaScript without Markdown fences.');
+      if (args.code.trimStart().startsWith('// @exec:')) throw new Error('codemode: use a first line // @options: with timeout_ms and max_output_tokens; @exec is not supported.');
       let source: ReturnType<typeof parseCodemodeSource>;
       try {
         source = parseCodemodeSource(args.code);
       } catch (err) {
-        if (err instanceof CodemodeSourceError) throw new Error(`codemode: ${err.message}`);
+        if (err instanceof CodemodeSourceError) throw new Error(truncateMiddle(`codemode: ${err.message}`, 1000));
         throw err;
       }
 
@@ -207,7 +221,21 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
             address: (input: Record<string, unknown>) => ({ name: r.via, arguments: r.wrap(input) }),
           })),
       ];
-      const byName = new Map(entries.map((e) => [e.name, e]));
+      const canonicalNames = new Set(entries.map(e => e.name));
+      const counts = new Map<string, number>();
+      for (const entry of entries) {
+        const name = toCodemodeIdentifier(entry.name);
+        counts.set(name, (counts.get(name) ?? 0) + 1);
+      }
+      const usedNames = new Set<string>();
+      const namedEntries = entries.map(entry => {
+        let jsName = toCodemodeIdentifier(entry.name);
+        if ((counts.get(jsName) ?? 0) > 1) jsName += `_${createHash('sha256').update(entry.name).digest('hex').slice(0, 12)}`;
+        while (usedNames.has(jsName) || (canonicalNames.has(jsName) && jsName !== entry.name)) jsName += '_';
+        usedNames.add(jsName);
+        return { ...entry, jsName };
+      });
+      const byName = new Map(namedEntries.flatMap(e => [[e.name, e], [e.jsName, e]] as Array<[string, typeof e]>));
       const runId = randomUUID().slice(0, 8);
       let seq = 0;
       // A call the pipeline THROWS on (a refused approval aborts the agent) must
@@ -229,14 +257,22 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
       const onHostAbort = () => abort.abort();
       host.signal?.addEventListener('abort', onHostAbort, { once: true });
 
-      const tools: CodemodeTool[] = entries.map((e) => ({
+      const tools: CodemodeTool[] = namedEntries.map((e) => ({
         name: e.name,
+        jsName: e.jsName,
         description: firstLine(e.description),
         inputSchema: e.parameters as CodemodeJsonSchema,
         execute: async (input) => {
+          if (input !== undefined && (input === null || typeof input !== 'object' || Array.isArray(input))) {
+            throw new TypeError(`${e.name} expects one argument object, not ${input === null ? 'null' : Array.isArray(input) ? 'an array' : typeof input}. Use describeTool("${e.name}") for its signature.`);
+          }
+          const args = (input ?? {}) as Record<string, unknown>;
+          const required = Array.isArray(e.parameters.required) ? e.parameters.required.filter((key): key is string => typeof key === 'string') : [];
+          const missing = required.filter(key => !Object.hasOwn(args, key));
+          if (missing.length) throw new TypeError(`${e.name} is missing required argument${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}. Use describeTool("${e.name}") for its signature.`);
           const call: ToolCall = {
             id: `codemode-${runId}-${++seq}`,
-            ...e.address((input ?? {}) as Record<string, unknown>),
+            ...e.address(args),
           };
           let result: ToolResult;
           const pending = host.call(call);
@@ -263,7 +299,7 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
         },
       }));
 
-      const summaries = (): ToolSummary[] => entries.map((e) => ({ name: e.name, description: firstLine(e.description) }));
+      const summaries = (): ToolSummary[] => namedEntries.map((e) => ({ name: e.jsName, description: firstLine(e.description) }));
       const globals: CodemodeTool[] = [
         {
           name: 'showToolImage', description: 'Show images from a tool result. Only explicitly selected images reach the model.',
@@ -298,7 +334,7 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
             const entry = typeof name === 'string' ? byName.get(name) : undefined;
             if (!entry) return undefined;
             return renderDeclarations({
-              tools: [{ name: entry.name, description: entry.description, inputSchema: entry.parameters as CodemodeJsonSchema, execute: () => undefined }],
+              tools: [{ name: entry.jsName, description: entry.description, inputSchema: entry.parameters as CodemodeJsonSchema, execute: () => undefined }],
             });
           },
         },
@@ -321,15 +357,13 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
       await Promise.all(inFlight.values());
       if (fatal !== undefined) throw fatal;
 
+      const outputBudget = Math.min(source.options.maxOutputTokens ?? CODEMODE_DEFAULT_OUTPUT_TOKENS, CODEMODE_MAX_OUTPUT_TOKENS) * CHARS_PER_TOKEN;
       const parts: string[] = [];
-      for (const item of result.output) {
-        parts.push(item.type === 'text' ? item.text : `[image ${item.mimeType} omitted — return a file path instead]`);
+      if (outputBudget > 0) {
+        for (const item of result.output) parts.push(item.type === 'text' ? item.text : `[image ${item.mimeType} omitted — return a file path instead]`);
+        if (result.ok && result.value !== undefined) parts.push(formatValue(result.value));
       }
-      if (result.ok && result.value !== undefined) parts.push(formatValue(result.value));
-      let output = parts.join('\n');
-      if (source.options.maxOutputTokens !== undefined) {
-        output = truncateMiddle(output, source.options.maxOutputTokens * CHARS_PER_TOKEN);
-      }
+      const output = truncateMiddle(parts.join('\n'), outputBudget);
       const calls = result.calls.length;
       const header = `${Date.now() - started}ms, ${calls} tool call${calls === 1 ? '' : 's'}`;
       // The script's own text goes in the untrusted envelope when one of its
@@ -349,7 +383,9 @@ export function buildCodemodeHandler(host: CodemodeHost): ToolHandler {
         const late = lateCalls.length > 0
           ? `\n${lateCalls.length} tool call${lateCalls.length === 1 ? ' was' : 's were'} still running when the script stopped and finished afterwards: their effects stand.`
           : '';
-        const detail = `${error}${output ? `\nOutput before the failure:\n${output}` : ''}`;
+        // Keep a bounded diagnostic even with output disabled. A thrown Error's
+        // message is output too; it must not bypass the response budget.
+        const detail = truncateMiddle(`${error}${output ? `\nOutput before the failure:\n${output}` : ''}`, Math.max(outputBudget, 1000));
         throw new Error(`Script failed (${result.error.kind}, ${calls} tool call${calls === 1 ? '' : 's'}): ${untrusted.size ? `\n${wrapped(detail)}` : detail}${late}`);
       }
       for (const key of result.storeWrites.delete) delete store[key];

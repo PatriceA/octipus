@@ -146,7 +146,7 @@ describe('codemode', () => {
     `);
     expect(out).toContain('filesystem__read_file(args');
     expect(out).toContain('"shell__run"');
-    expect(out).toContain('"missing": null');
+    expect(out).toMatch(/"missing":\s*null/);
   });
 
   test('store values survive between scripts of the same worker', async () => {

@@ -1098,6 +1098,16 @@ target, not a measured compatibility percentage or a promise of feature parity.
 
 ### Codemode in CLI runs
 
+Codemode uses raw JavaScript with a first-line `// @options:` directive when
+needed. `ALL_TOOLS` is an array of `{name, description}` objects. Tool names
+containing punctuation have JavaScript-safe aliases; describe and call the
+names returned by discovery. Pass one argument object and await each call.
+Script source is limited to 256 KiB UTF-8. Successful text output defaults to
+2,000 estimated tokens, with an explicit maximum of 32,000; truncation is marked.
+Errors retain a bounded diagnostic even with output disabled. See the
+[boundary test report](reports/codemode-boundaries-2026-11-20.md) for measured
+limits, async pitfalls, combined calls, storage and repeatable checks.
+
 Every CLI worker with tools also gets Octipus's `codemode` tool, served over the
 run's Octipus MCP connection like its other tools. The vendor model writes one
 JavaScript script; the script runs inside Octipus (QuickJS sandbox, no network

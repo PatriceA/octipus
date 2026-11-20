@@ -7,6 +7,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY scripts/check-node.mjs scripts/check-node.mjs
 COPY scripts/patch-botbuilder-zod4.mjs scripts/patch-botbuilder-zod4.mjs
+COPY scripts/patch-codemode-store.mjs scripts/patch-codemode-store.mjs
 RUN npm ci --include=dev
 
 # Copy source

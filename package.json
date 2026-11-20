@@ -59,7 +59,7 @@
     "lint": "biome lint",
     "lint:fix": "biome lint --write --unsafe",
     "preinstall": "node scripts/check-node.mjs",
-    "postinstall": "node scripts/patch-botbuilder-zod4.mjs",
+    "postinstall": "node scripts/patch-botbuilder-zod4.mjs && node scripts/patch-codemode-store.mjs",
     "audit:all": "node scripts/audit-all.mjs"
   },
   "dependencies": {

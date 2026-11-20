@@ -226,7 +226,7 @@ describe.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('CLI worker with actual subproce
     expect(result.script.isError).not.toBe(true);
     expect(text).toContain('Script completed');
     expect(text).toContain('ERROR disk full');
-    expect(text).toContain('"refused": "refused"');
+    expect(text).toMatch(/"refused":\s*"refused"/);
     expect(text).not.toContain('ok\nok');
     expect(read).toHaveBeenCalledTimes(2);
     expect(denied).not.toHaveBeenCalled();
