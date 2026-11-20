@@ -84,7 +84,7 @@ export async function connectEventBridge(hub: GatewayHub): Promise<() => void> {
             source: `agent:${event.agentId}`,
             userId: ctx.userId,
             sessionId: ctx.sessionId,
-            payload: { agentId: event.agentId, delta: data.delta, iteration: data.iteration ?? 0 },
+            payload: { agentId: event.agentId, delta: data.delta, iteration: data.iteration ?? 0, ...((ctx.metadata as { spoken?: unknown } | undefined)?.spoken === true ? { spoken: true } : {}) },
           });
           return;
         }

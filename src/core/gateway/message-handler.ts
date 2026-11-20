@@ -365,6 +365,8 @@ async function handleChatSend(
           sessionId: message.sessionId,
           payload: {
             role: 'user', content: message.content, injected: true,
+            // Said aloud: a voice conversation on this chat speaks what the running turn answers next.
+            ...(message.spoken ? { spoken: true } : {}),
             ...(inlineUiNotes.provenanceId ? { inlineUiProvenance: { id: inlineUiNotes.provenanceId } } : {}),
           },
         });
@@ -502,15 +504,13 @@ async function handleChatSend(
       deliver('queued', { ahead, ...(reason ? { reason } : {}) });
     }
 
-    // A message whose reply is read aloud: the turn that takes it answers in speech.
-    if (message.spoken) rootAgent.markSpokenTurn(message.sessionId, userId);
-
     // Route through root agent
     const result = await rootAgent.handleMessage(
       message.sessionId, userId, message.content, context.clientType, message.fileRefs, message.outputMode,
       undefined, undefined, undefined,
       { renders: message.renders, notes: inlineUiNotes.notes, provenanceId: inlineUiNotes.provenanceId },
-      reservation ? { queueReservation: reservation } : undefined,
+      // A message whose reply is read aloud: this turn answers in speech.
+      reservation || message.spoken ? { ...(reservation ? { queueReservation: reservation } : {}), ...(message.spoken ? { spoken: true } : {}) } : undefined,
     );
 
     // Send response back through gateway

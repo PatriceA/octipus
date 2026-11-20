@@ -49,6 +49,8 @@ export interface RunContext {
    * never treats it as evidence (src/core/memory/owner-messages.ts).
    */
   readonly syntheticUserMessage?: 'plan';
+  /** The reply is read aloud: the turn answers in spoken style (`handleMessage` `spoken`). */
+  readonly spoken?: boolean;
 }
 
 const storage = new AsyncLocalStorage<RunContext>();

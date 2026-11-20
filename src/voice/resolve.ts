@@ -132,6 +132,16 @@ async function refusalFor(row: ModelConfigEntry, req: SpeechRequest): Promise<st
   }
 }
 
+/** Why this request may not use `row` (the session's protection level), or null when it may. */
+export function speechRowRefusal(row: ModelConfigEntry, req: SpeechRequest): Promise<string | null> {
+  return refusalFor(row, req);
+}
+
+/** Does what `row` hears or says stay on this machine (or the local network)? */
+export async function speechRowStaysLocal(row: ModelConfigEntry): Promise<boolean> {
+  return (await import('./speech-rows')).speechStaysLocal(row);
+}
+
 /** Record one speech call against its row (cost, spend budgets). */
 /**
  * What a speech call costs: the row's `pricing.perAudioMinute` (transcription)
@@ -175,7 +185,7 @@ export async function resolveSttEngine(req: SpeechRequest & { streamWindowSecond
 }
 
 /** Transcribe a whole clip. Primary, then backup when the primary fails at call time. */
-export async function transcribeWithLane(audio: Buffer, req: SpeechRequest & { format?: string; language?: string } = {}): Promise<TranscriptionResult & { model: string }> {
+export async function transcribeWithLane(audio: Buffer, req: SpeechRequest & { format?: string; language?: string; interim?: boolean } = {}): Promise<TranscriptionResult & { model: string }> {
   const rows = await speechCandidates('stt', req);
   if (rows.length === 0) {
     if (req.allowHosted === false) throw new Error('Hosted transcription uses the install\'s keys, which this account may not use; bind a local engine for it.');
@@ -196,8 +206,9 @@ export async function transcribeWithLane(audio: Buffer, req: SpeechRequest & { f
         : await transcribeAs(engine, audio, req.format);
       // Billed by the clip's length, never by how long the call took (the
       // engines' `duration` is processing time); unknown stays unknown.
-      const seconds = isLocalSpeechRow(row) ? (result.duration || 0) : await (await import('./ffmpeg')).probeBufferSeconds(audio, req.format);
-      await recordSpeechUsage(row, 'transcription', req, seconds !== null ? { seconds: Math.round(seconds) } : {});
+      const seconds = req.interim ? null : isLocalSpeechRow(row) ? (result.duration || 0) : await (await import('./ffmpeg')).probeBufferSeconds(audio, req.format);
+      // A look at a turn before it ends is heard again when it ends: counted once, then.
+      if (!req.interim) await recordSpeechUsage(row, 'transcription', req, seconds !== null ? { seconds: Math.round(seconds) } : {});
       if (errors.length) log.warn({ using: row.name, failed: errors }, 'Transcribed with the backup engine');
       return { ...result, model: row.name };
     } catch (err) {

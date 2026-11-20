@@ -74,6 +74,12 @@ async function rig(opts: {
   return r;
 }
 
+/** A spoken turn's streamed text and result, as the gateway publishes them (agent `a1` unless said). */
+const delta = (text: string, iteration = 1, agentId = 'a1', spoken = true) =>
+  ({ type: 'chat.delta', payload: { agentId, delta: text, iteration, ...(spoken ? { spoken: true } : {}) } });
+const result = (text: string, agentId: string | undefined = 'a1', spoken = true) =>
+  ({ type: 'chat.response', payload: { response: { response: text, ...(agentId ? { agentId } : {}), ...(spoken ? { spoken: true } : {}) } } });
+
 const open: VoiceSession[] = [];
 afterEach(async () => { for (const s of open.splice(0)) await s.close(); vi.useRealTimers(); });
 const track = (r: Rig) => { open.push(r.session); return r; };
@@ -164,7 +170,7 @@ describe('mouth', () => {
   test('the reply is spoken sentence by sentence while it is still being written', async () => {
     const r = track(await rig());
     await hear(r);
-    r.emit({ type: 'chat.delta', payload: { delta: 'It is sunny in Berlin today. The high', iteration: 1 } });
+    r.emit(delta('It is sunny in Berlin today. The high', 1));
     // The first sentence is spoken before the reply is complete.
     await r.wait(() => r.audioTexts().length === 1);
     expect(r.audioTexts()).toEqual(['It is sunny in Berlin today.']);
@@ -172,8 +178,8 @@ describe('mouth', () => {
     expect(first.message).toMatchObject({ format: 'pcm', sampleRate: 16000, ms: 100, seq: 0 });
     expect(first.binary).toHaveLength(3200);
 
-    r.emit({ type: 'chat.delta', payload: { delta: ' is 24 degrees.', iteration: 1 } });
-    r.emit({ type: 'chat.response', payload: { response: { response: 'It is sunny in Berlin today. The high is 24 degrees.\n\n_Sources: weather_' } } });
+    r.emit(delta(' is 24 degrees.', 1));
+    r.emit(result('It is sunny in Berlin today. The high is 24 degrees.\n\n_Sources: weather_'));
     await r.wait(() => r.audioTexts().length === 2);
     // The final answer adds nothing to what streamed: nothing is said twice, and the sources are not read.
     await new Promise((resolve) => setTimeout(resolve, 30));
@@ -184,7 +190,7 @@ describe('mouth', () => {
   test('a reply that did not stream is spoken from its final text', async () => {
     const r = track(await rig());
     await hear(r);
-    r.emit({ type: 'chat.response', payload: { response: { response: '**Sure.** I can do that for you. Shall I start?' } } });
+    r.emit(result('**Sure.** I can do that for you. Shall I start?'));
     await r.wait(() => r.audioTexts().length === 2);
     expect(r.audioTexts()).toEqual(['Sure. I can do that for you.', 'Shall I start?']);
   });
@@ -192,15 +198,15 @@ describe('mouth', () => {
   test('what the model says before using a tool is spoken, then the answer; a later typed turn is not', async () => {
     const r = track(await rig());
     await hear(r);
-    r.emit({ type: 'chat.delta', payload: { delta: 'Let me look that up', iteration: 1 } });
-    r.emit({ type: 'chat.delta', payload: { delta: 'The train leaves at nine.', iteration: 2 } });
-    r.emit({ type: 'chat.response', payload: { response: { response: 'The train leaves at nine.' } } });
+    r.emit(delta('Let me look that up', 1));
+    r.emit(delta('The train leaves at nine.', 2));
+    r.emit(result('The train leaves at nine.'));
     await r.wait(() => r.audioTexts().length === 2);
     expect(r.audioTexts()).toEqual(['Let me look that up', 'The train leaves at nine.']);
 
     // Not a reply to something said: the person typed, and reads.
-    r.emit({ type: 'chat.delta', payload: { delta: 'A typed question gets a written answer. ', iteration: 1 } });
-    r.emit({ type: 'chat.response', payload: { response: { response: 'A typed question gets a written answer.' } } });
+    r.emit(delta('A typed question gets a written answer. ', 1, 'a2', false));
+    r.emit(result('A typed question gets a written answer.', 'a2', false));
     await new Promise((resolve) => setTimeout(resolve, 40));
     expect(r.audioTexts()).toHaveLength(2);
   });
@@ -208,8 +214,8 @@ describe('mouth', () => {
   test('another chat, and another user, are never spoken here', async () => {
     const r = track(await rig());
     await hear(r);
-    r.emit({ type: 'chat.response', sessionId: '99999999-2222-3333-4444-555555555555', payload: { response: { response: 'Not this conversation at all.' } } });
-    r.emit({ type: 'chat.response', userId: 'someone-else', payload: { response: { response: 'Not this person at all.' } } });
+    r.emit({ type: 'chat.response', sessionId: '99999999-2222-3333-4444-555555555555', payload: { response: { response: 'Not this conversation at all.', spoken: true } } });
+    r.emit({ type: 'chat.response', userId: 'someone-else', payload: { response: { response: 'Not this person at all.', spoken: true } } });
     await new Promise((resolve) => setTimeout(resolve, 40));
     expect(r.audioTexts()).toEqual([]);
   });
@@ -233,7 +239,7 @@ describe('mouth', () => {
       },
     }));
     await hear(r);
-    r.emit({ type: 'chat.response', payload: { response: { response: 'This is the first sentence. This is the second sentence. This is the third sentence.' } } });
+    r.emit(result('This is the first sentence. This is the second sentence. This is the third sentence.'));
     await r.wait(() => r.audioTexts().length === 1);
     expect(started).toEqual(['This is the first sentence.', 'This is the second sentence.']); // the next one already in flight
 
@@ -268,9 +274,9 @@ describe('mouth', () => {
     await hear(r);
     r.emit({ type: 'voice.speak', payload: { text: 'On it — the researcher has started.' } });
     await r.wait(() => r.audioTexts().length === 1);
-    r.emit({ type: 'chat.delta', payload: { delta: 'The report is ready and has three sections. ', iteration: 1 } });
+    r.emit(delta('The report is ready and has three sections. ', 1));
     r.emit({ type: 'voice.speak', payload: { text: 'The researcher just finished.' } });
-    r.emit({ type: 'chat.response', payload: { response: { response: 'The report is ready and has three sections.' } } });
+    r.emit(result('The report is ready and has three sections.'));
     await r.wait(() => r.audioTexts().length === 2);
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(r.audioTexts()).toEqual(['On it — the researcher has started.', 'The report is ready and has three sections.']);
@@ -279,10 +285,222 @@ describe('mouth', () => {
   test('with speaking off the session only listens', async () => {
     const r = track(await rig({ speakEnabled: false }));
     await hear(r);
-    r.emit({ type: 'chat.response', payload: { response: { response: 'This would have been spoken aloud.' } } });
+    r.emit(result('This would have been spoken aloud.'));
     r.session.say('Nor this.');
     await new Promise((resolve) => setTimeout(resolve, 40));
     expect(r.spokenTexts).toEqual([]);
+  });
+});
+
+describe('which reply is heard', () => {
+  /** A speech engine whose sentences each take a moment, so a reply is still playing when the person talks. */
+  const slow = (spokenTexts: string[], returned: string[] = []) => async (text: string): Promise<SpeechStream> => {
+    spokenTexts.push(text);
+    const source = (async function* () { yield Buffer.alloc(3200); await new Promise((resolve) => setTimeout(resolve, 40)); yield Buffer.alloc(3200); })();
+    const chunks: SpeechStream['chunks'] = {
+      [Symbol.asyncIterator]() { return this; },
+      next: () => source.next(),
+      return: async () => { returned.push(text); await source.return(undefined); return { done: true, value: undefined }; },
+    };
+    return { model: 'tts', sampleRate: 16000, chunks };
+  };
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 120));
+
+  test('two spoken turns in a row: each reply is heard once, in order', async () => {
+    const r = track(await rig());
+    r.emit(delta('Reply one. More of', 1, 'a1'));
+    r.emit(delta(' one.', 1, 'a1'));
+    r.emit(result('Reply one. More of one.', 'a1'));
+    r.emit(delta('Reply two.', 1, 'a2'));
+    r.emit(result('Reply two.', 'a2'));
+    await r.wait(() => r.audioTexts().length === 3);
+    await settle();
+    expect(r.audioTexts()).toEqual(['Reply one.', 'More of one.', 'Reply two.']);
+  });
+
+  test('talking over a reply, then the next turn: the rest of the old reply is never heard, the new one is', async () => {
+    const spokenTexts: string[] = [];
+    const r = track(await rig({ speak: slow(spokenTexts) }));
+    r.emit(delta('The weather is sunny today. It will be warm. ', 1, 'a1'));
+    await r.wait(() => r.audioTexts().length === 1);
+    r.session.pushAudio(audio(700, 0.5)); // over-talk
+    expect(r.types()).toContain('barge_in');
+    // The old turn goes on writing (its message was queued, not steered) and ends.
+    r.emit(delta('Tomorrow brings rain.', 1, 'a1'));
+    r.emit(result('The weather is sunny today. It will be warm. Tomorrow brings rain.', 'a1'));
+    // The turn for what was said over it.
+    r.emit(delta('Sure, here is the forecast for Monday.', 1, 'a2'));
+    r.emit(result('Sure, here is the forecast for Monday.', 'a2'));
+    r.session.pushAudio(audio(600, 0));
+    await r.wait(() => r.audioTexts().includes('Sure, here is the forecast for Monday.'));
+    await settle();
+    expect(r.audioTexts()).toEqual(['The weather is sunny today.', 'Sure, here is the forecast for Monday.']);
+  });
+
+  test('what was said over a reply is steered into the running turn: its next model call, which heard it, is spoken', async () => {
+    const spokenTexts: string[] = [];
+    const r = track(await rig({ speak: slow(spokenTexts) }));
+    r.emit(delta('The weather is sunny today. It will be warm. ', 1, 'a1'));
+    await r.wait(() => r.audioTexts().length === 1);
+    r.session.pushAudio(audio(700, 0.5));
+    r.session.pushAudio(audio(600, 0));
+    r.emit({ type: 'chat.message', payload: { role: 'user', content: 'what about Monday', injected: true, spoken: true } });
+    r.emit(delta('Tomorrow brings rain.', 1, 'a1')); // still the call that did not hear it
+    r.emit(delta('On Monday it clears up.', 2, 'a1'));
+    r.emit(result('On Monday it clears up.', 'a1'));
+    await r.wait(() => r.audioTexts().includes('On Monday it clears up.'));
+    await settle();
+    expect(r.audioTexts()).toEqual(['The weather is sunny today.', 'On Monday it clears up.']);
+  });
+
+  test('a spoken message steered into a typed turn makes the turn spoken from its next model call', async () => {
+    const r = track(await rig());
+    r.emit(delta('Here is a long written answer. ', 1, 'a1', false));
+    r.emit({ type: 'chat.message', payload: { role: 'user', content: 'read me the gist', injected: true, spoken: true } });
+    r.emit(delta('The gist is simple.', 2, 'a1', true));
+    r.emit(result('The gist is simple.', 'a1', true));
+    await r.wait(() => r.audioTexts().length === 1);
+    await settle();
+    expect(r.audioTexts()).toEqual(['The gist is simple.']);
+  });
+
+  test('a failed turn ends there: the next typed reply in the chat is not read aloud', async () => {
+    const r = track(await rig());
+    r.emit(delta('Let me check the calendar', 1, 'a1'));
+    r.emit({ type: 'chat.error', payload: { error: 'model unavailable' } });
+    r.emit(delta('A typed reply. ', 1, 'a2', false));
+    r.emit(result('A typed reply.', 'a2', false));
+    // A background reply nobody asked to hear is not read either.
+    r.emit(result('Your reminder fired.', undefined, false));
+    await r.wait(() => r.audioTexts().length === 1);
+    await settle();
+    expect(r.audioTexts()).toEqual(['Let me check the calendar']);
+  });
+
+  test('expect_reply speaks the next turn although it was typed, and only that one', async () => {
+    const r = track(await rig());
+    r.session.expectReply();
+    r.emit(delta('Read this one. ', 1, 'a1', false));
+    r.emit(result('Read this one.', 'a1', false));
+    r.emit(delta('Not this one. ', 1, 'a2', false));
+    r.emit(result('Not this one.', 'a2', false));
+    await r.wait(() => r.audioTexts().length === 1);
+    await settle();
+    expect(r.audioTexts()).toEqual(['Read this one.']);
+  });
+
+  test('the person starting to talk before a reply is heard drops it; a reply waits while they talk', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const started: string[] = [];
+    const r = track(await rig({ speak: async (text) => { started.push(text); await gate; return { model: 'tts', sampleRate: 16000, chunks: (async function* () { yield Buffer.alloc(3200); })() }; } }));
+    r.emit(delta('A reply still being synthesised. And more', 1, 'a1'));
+    await r.wait(() => started.length === 1);
+    r.session.pushAudio(audio(300, 0));
+    r.session.pushAudio(audio(300, 0.3)); // speech starts while the sentence is synthesised
+    expect(r.types()).toContain('barge_in');
+    release();
+    await settle();
+    expect(r.audioTexts()).toEqual([]);
+
+    // A new reply that is ready while the person still talks waits for them.
+    r.emit(delta('Spoken once you are done.', 1, 'a2'));
+    r.emit(result('Spoken once you are done.', 'a2'));
+    await settle();
+    expect(r.audioTexts()).toEqual([]);
+    r.session.pushAudio(audio(600, 0));
+    await r.wait(() => r.audioTexts().length === 1);
+    expect(r.audioTexts()).toEqual(['Spoken once you are done.']);
+  });
+
+  test('one failed sentence ends that reply: the rest is not tried again and again', async () => {
+    const tried: string[] = [];
+    const r = track(await rig({ speak: async (text) => { tried.push(text); throw new Error('vox: 503'); } }));
+    r.emit(delta('First sentence here. Second sentence here. ', 1, 'a1'));
+    await r.wait(() => r.types().includes('error'));
+    r.emit(delta('Third sentence here.', 1, 'a1'));
+    r.emit(result('First sentence here. Second sentence here. Third sentence here.', 'a1'));
+    await settle();
+    // The sentence that failed (and at most the one already in flight), never what came after.
+    expect(tried[0]).toBe('First sentence here.');
+    expect(tried).not.toContain('Third sentence here.');
+    expect(r.types().filter((t) => t === 'error')).toHaveLength(1);
+  });
+});
+
+describe('looks before the turn ends', () => {
+  const look = async (local: boolean) => {
+    const calls: Array<{ interim?: boolean } | undefined> = [];
+    const session = new VoiceSession(
+      { userId: 'u1', sessionId: SESSION, speak: false, audio: 'pcm', partials: true },
+      {
+        resolveStt: async () => ({ engine: { live: false, transcribe: async () => ({ text: '', segments: [], language: 'en', duration: 0 }), streamTranscribe: async function* () {}, dispose: async () => {} }, name: 'batch', local }),
+        transcribe: async (_wav, options) => { calls.push(options); return 'hello'; }, speak: async () => { throw new Error('unused'); }, subscribe: () => () => {},
+      },
+      () => {},
+    );
+    open.push(session);
+    await session.start();
+    session.pushAudio(audio(300, 0));
+    session.pushAudio(audio(2500, 0.3));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    return calls;
+  };
+
+  test('a local batch engine looks at the turn so far, uncounted; a hosted one is not asked until the turn ends', async () => {
+    const local = await look(true);
+    expect(local.length).toBeGreaterThan(0);
+    expect(local.every((options) => options?.interim === true)).toBe(true);
+    expect(await look(false)).toEqual([]);
+  });
+});
+
+describe('a live engine the chat no longer allows', () => {
+  test('is closed at the end of a turn, and later turns go through the lane', async () => {
+    let push: (text: string) => void = () => {};
+    let ended = false;
+    let allowed = true;
+    const transcribed: Buffer[] = [];
+    const sent: VoiceOut[] = [];
+    const engine: STTEngine = {
+      live: true,
+      transcribe: async () => ({ text: '', segments: [], language: 'en', duration: 0 }),
+      dispose: async () => {},
+      streamTranscribe: async function* (stream: ReadableStream<Uint8Array>) {
+        const queue: string[] = [];
+        push = (text) => queue.push(text);
+        const reader = stream.getReader();
+        void (async () => { for (;;) { const { done } = await reader.read(); if (done) { ended = true; return; } } })();
+        while (!ended) { while (queue.length) yield queue.shift()!; await new Promise((resolve) => setTimeout(resolve, 5)); }
+      },
+    };
+    const session = new VoiceSession(
+      { userId: 'u1', sessionId: SESSION, speak: false, audio: 'pcm', endpointer: { silenceMs: 400 }, partials: false },
+      {
+        resolveStt: async () => ({ engine, name: 'cloud-live' }),
+        transcribe: async (wav) => { transcribed.push(wav); return 'second turn'; },
+        speak: async () => { throw new Error('unused'); }, subscribe: () => () => {},
+        mayKeepListening: async () => allowed,
+      },
+      (message) => { sent.push(message); },
+    );
+    open.push(session);
+    await session.start();
+    allowed = false; // the chat's level was raised
+    session.pushAudio(audio(300, 0));
+    session.pushAudio(audio(700, 0.3));
+    push('first turn');
+    session.pushAudio(audio(600, 0));
+    for (let i = 0; i < 200 && !sent.some((m) => m.type === 'error'); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(sent.find((m) => m.type === 'error')).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(ended).toBe(true);
+
+    session.pushAudio(audio(700, 0.3));
+    session.pushAudio(audio(600, 0));
+    for (let i = 0; i < 200 && transcribed.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(transcribed).toHaveLength(1);
+    expect(sent.filter((m) => m.type === 'utterance').map((m) => (m as { text: string }).text)).toEqual(['first turn', 'second turn']);
   });
 });
 

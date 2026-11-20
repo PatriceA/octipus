@@ -1903,8 +1903,17 @@ export default function ChatPage() {
     enabled: voiceActive,
     sessionId: activeSessionId,
     isTurnActive: isLoading,
-    onUtterance: (text) => { void sendMessage(text, undefined, { spoken: true }); },
+    onUtterance: (text) => sendMessage(text, undefined, { spoken: true }),
   });
+
+  // The conversation could not go on (the microphone, the connection): the
+  // toggle is off again, and what went wrong stays on screen.
+  useEffect(() => {
+    if (voiceActive && realtime.error && realtime.state === 'idle') {
+      setVoiceStartError(realtime.error);
+      setRealtimeMode(false);
+    }
+  }, [voiceActive, realtime.error, realtime.state]);
 
   const toggleRealtimeMode = async () => {
     setVoiceStartError(null);

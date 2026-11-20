@@ -26,8 +26,8 @@ interface UseVoiceRealtimeArgs {
   sessionId: string | null;
   /** True while a chat turn is in flight. On its falling edge a turn that was not spoken (an error, no speech engine) goes back to listening. */
   isTurnActive: boolean;
-  /** A finished turn, as text: the page sends it as the chat message. */
-  onUtterance: (text: string) => void;
+  /** A finished turn, as text: the page sends it as the chat message (resolving once it was sent, or was not). */
+  onUtterance: (text: string) => void | Promise<unknown>;
 }
 
 /** Started this far ahead when nothing is queued, so the next frame's arrival jitter is not heard as a gap. */
@@ -75,6 +75,8 @@ export function useVoiceRealtime({ enabled, sessionId, isTurnActive, onUtterance
   const stateRef = useRef<RealtimeState>('idle');
   const onUtteranceRef = useRef(onUtterance);
   const prevTurnRef = useRef(false);
+  /** A chat turn started since the last utterance was handed over. */
+  const turnStartedRef = useRef(false);
   const interruptRef = useRef<() => void>(() => {});
 
   useEffect(() => {
@@ -91,6 +93,7 @@ export function useVoiceRealtime({ enabled, sessionId, isTurnActive, onUtterance
   useEffect(() => {
     const was = prevTurnRef.current;
     prevTurnRef.current = isTurnActive;
+    if (isTurnActive) turnStartedRef.current = true;
     if (was && !isTurnActive && stateRef.current === 'thinking') setPhase('listening');
   }, [isTurnActive, setPhase]);
 
@@ -258,7 +261,14 @@ export function useVoiceRealtime({ enabled, sessionId, isTurnActive, onUtterance
           setPartial('');
           setError(null);
           setPhase('thinking');
-          onUtteranceRef.current(message.text);
+          turnStartedRef.current = false;
+          // A message that was never sent (too long, no chat to send it to)
+          // starts no turn: back to listening instead of thinking for ever.
+          void Promise.resolve(onUtteranceRef.current(message.text)).catch(() => {}).finally(() => {
+            setTimeout(() => {
+              if (!cancelled && !turnStartedRef.current && stateRef.current === 'thinking') setPhase('listening');
+            }, 100);
+          });
           break;
         case 'audio':
           pendingAudio = message;

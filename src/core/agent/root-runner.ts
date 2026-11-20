@@ -245,6 +245,8 @@ export interface RootRunExtras {
   turnContextParts?: ReadonlyArray<{ label: string; text: string }>;
   /** The reply is read aloud (a live voice conversation, the mobile voice screen): the spoken-reply directive applies. */
   spoken?: boolean;
+  /** This turn's own message was said aloud: its streamed text is marked so a voice conversation on the chat speaks it. */
+  readAloud?: boolean;
 }
 
 /**
@@ -1014,6 +1016,8 @@ export async function runRootAgent(
       // auto-index or notification text (`contentStorageOffFor`).
       ...(remoteRoom ? { remoteRoom: true, [CONTENT_STORAGE_OFF_KEY]: true } : {}),
       ...(inlineUi ? { inlineUiOffered: true } : {}),
+      // Read aloud: its streamed text is marked so a voice conversation speaks it (event-bridge.ts).
+      ...(extras.readAloud ? { spoken: true } : {}),
       ...(fileChangesRefused ? { [FILE_CHANGES_REFUSED_KEY]: fileChangesRefused } : {}),
       ...(extras.repeatableContext?.length ? { [REPEATABLE_CONTEXT_KEY]: extras.repeatableContext } : {}),
     },
