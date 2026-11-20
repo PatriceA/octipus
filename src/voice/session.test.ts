@@ -245,7 +245,7 @@ describe('mouth', () => {
 
     // Loud, sustained speech while the reply plays.
     r.session.pushAudio(audio(700, 0.5));
-    expect(r.types()).toContain('barge_in');
+    expect(r.types().filter((t) => t === 'barge_in')).toHaveLength(1); // one interruption, said once
     release();
     r.session.pushAudio(audio(600, 0));
     await r.wait(() => r.types().filter((t) => t === 'utterance').length === 2);

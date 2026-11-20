@@ -248,7 +248,9 @@ export class VoiceSession {
       this.partialAt = 0;
       // A reply on its way but not yet heard (being synthesised): the person
       // spoke first, so it is dropped as if they had talked over it.
-      if (!this.speakingOn && (this.queue.length || this.pumping) && this.options.endpointer?.bargeIn !== false) {
+      // (The sentence being synthesised stays first in the queue until it is sent;
+      // a barge-in just now emptied it, so this is never said twice.)
+      if (!this.speakingOn && this.queue.length && this.options.endpointer?.bargeIn !== false) {
         this.interrupt();
         this.send({ type: 'barge_in' });
       }
