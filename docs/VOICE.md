@@ -181,7 +181,42 @@ server (`src/voice/session.ts`):
    and the sources footer are never read out
    (`src/shared/speech-text.ts`, shared with the web).
 5. **Stops when talked over** (`voice.bargeIn`): sustained speech above the
-   reply's own echo cancels what is queued and becomes the next turn.
+   reply's own echo cancels what is queued and becomes the next turn. Speech
+   that starts while a reply is still being synthesised (not yet heard) drops
+   it the same way, and a reply never starts while the person is talking.
+
+**Which replies are read.** `spoken` is part of the message (`chat.send`
+`spoken`, REST `/api/chat` `spoken`, the `mobile-voice` channel): the turn
+that answers it marks its streamed text (`chat.delta` `spoken`) and its
+result (`chat.response` `response.spoken`), both with the root agent's id.
+The conversation speaks those turns and follows one at a time by that id, so
+replies never mix:
+
+- Two utterances in a row: each reply is heard once, in order.
+- Talking over a reply silences the rest of the model call that was writing
+  it. If what was said is steered into the running turn, the turn's next
+  model call — the one that heard it — is spoken; if it was queued as its own
+  turn, that turn's reply is.
+- A failed or stopped turn (`chat.error`) ends there.
+- A typed message is answered in writing and not read aloud, also in web
+  voice mode, unless the client sent `expect_reply` first. A background reply
+  (a reminder, a finished task) is not read either.
+- A sentence the speech engine fails on ends that reply's speech (one error,
+  not one per sentence).
+
+Interim transcripts (`transcript`) come from a streaming engine, or from a
+batch engine on this machine, which looks at the turn so far every 1.5 s; a
+hosted batch engine is asked only once, when the turn ends, so it is never
+billed for the same audio twice. A streaming engine that only reports a
+finished segment (NeMo's realtime server) gets up to 1.5 s after the pause to
+report it.
+
+The chat's protection level decides which engines may hear and speak it. A
+conversation can be opened on a chat that does not exist yet (the first
+utterance creates it); from the moment it exists its level counts, and a
+hosted streaming engine the level no longer allows is closed at the end of
+the turn — later turns go through the lane, which picks a local engine or
+refuses.
 
 A turn whose reply is read aloud gets one **spoken-reply directive** in its
 system prompt (`SPOKEN_REPLY_DIRECTIVE`): answer first, short sentences, no
@@ -203,7 +238,7 @@ model had finished the reply.
 |---|---|
 | binary frames | 16 kHz mono s16le PCM |
 | `{"type":"interrupt"}` | stop speaking |
-| `{"type":"expect_reply"}` | speak the next reply although it was typed |
+| `{"type":"expect_reply"}` | speak the next turn's reply although it was typed (a "read that again") |
 | `{"type":"say","text":…}` | read this aloud |
 | `{"type":"playback","state":"ended"}` | everything sent has been played |
 | `{"type":"stop"}` | end |
@@ -217,7 +252,10 @@ model had finished the reply.
 | `{"type":"speaking","on":bool}`, `{"type":"barge_in"}` | the reply started / ended; drop queued audio now |
 | `{"type":"error","message":…}` | |
 
-Query: `speak=0` (listen only), `audio=wav`, `silence=<ms>`, `engine=<row>`.
+Query: `speak=0` (listen only), `audio=wav`, `silence=<ms>` (300–3000),
+`partials=0` (no interim transcripts), and, for an admin only, `engine=<row>`
+(the speech-to-text engine) and `tts=<row>` (the text-to-speech engine);
+anyone else gets the lanes' bindings.
 
 ### The propose-then-confirm gate and the narrator (web)
 
