@@ -195,7 +195,7 @@ async function openConversation(ws: VoiceSocket, url: URL, userId: string, mark:
     { userId, sessionId, speak, audio: url.searchParams.get('audio') === 'wav' ? 'wav' : 'pcm', endpointer: { silenceMs, bargeIn }, partials: url.searchParams.get('partials') !== '0' },
     {
       resolveStt: async () => {
-        const { engine, name, row } = await resolve.resolveSttEngine(await hearing());
+        const { engine, name, row } = await resolve.resolveSttEngine({ ...(await hearing()), endpointSilenceMs: silenceMs });
         liveRow = row;
         return { engine, name, local: await resolve.speechRowStaysLocal(row) };
       },
