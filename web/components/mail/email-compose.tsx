@@ -42,9 +42,12 @@ const TITLE: Record<ComposeMode, string> = { new: 'New message', reply: 'Reply',
  * The compose panel, docked at the bottom of the mail window. Sending is two
  * steps: "Send" shows who gets the mail, "Send now" delivers it.
  */
-export function EmailCompose({ draft, provider, onChange, onClose, onSent }: {
+export function EmailCompose({ draft, provider, accounts, onProvider, onChange, onClose, onSent }: {
   draft: ComposeDraft;
   provider: EmailProvider;
+  /** For a new message with several mailboxes connected: which one sends it. */
+  accounts?: Array<{ provider: EmailProvider; address?: string }>;
+  onProvider?: (provider: EmailProvider) => void;
   onChange: (draft: ComposeDraft) => void;
   onClose: () => void;
   onSent: (notice: string) => void;
@@ -110,6 +113,13 @@ export function EmailCompose({ draft, provider, onChange, onClose, onSent }: {
       </div>
       <fieldset disabled={busy === 'send'} className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3">
         {error && <p role="alert" className="rounded-md bg-error/10 px-2.5 py-1.5 text-sm text-error">{error}</p>}
+        {accounts && (
+          <label className="flex items-center gap-2 text-sm text-on-surface-variant">From
+            <select aria-label="From" value={provider} onChange={(e) => onProvider?.(e.target.value as EmailProvider)} className={field}>
+              {accounts.map((a) => <option key={a.provider} value={a.provider}>{a.address ?? (a.provider === 'google' ? 'Gmail' : 'Outlook')}</option>)}
+            </select>
+          </label>
+        )}
         <div className="flex items-center gap-2">
           <input aria-label="To" required placeholder="To" value={draft.to} onChange={(e) => set({ to: e.target.value })} className={field} />
           {!showCc && <button type="button" className={btnGhost} onClick={() => setShowCc(true)}>Cc/Bcc</button>}

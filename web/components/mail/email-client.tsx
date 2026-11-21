@@ -46,11 +46,15 @@ function Client() {
   const imap = useQuery({ queryKey: mailAccountsKey(workspace), enabled: mailOn, queryFn: () => api.get<MailAccountView[]>('/mail/accounts') });
   const [picked, setPicked] = useState('');
   const [manage, setManage] = useState(false);
-  const oauth = accounts.data?.accounts ?? [];
+  const oauth = useMemo(() => accounts.data?.accounts ?? [], [accounts.data]);
   const selection = picked || oauth[0]?.provider || imap.data?.[0]?.id || '';
-  const provider: EmailProvider | null = selection === 'google' || selection === 'microsoft' ? selection : null;
+  // "All inboxes" reads every connected Google / Microsoft mailbox as one list.
+  const all = selection === 'all' && oauth.length > 1;
+  const provider: EmailProvider | null = all ? oauth[0].provider : selection === 'google' || selection === 'microsoft' ? selection : null;
+  const providers = useMemo<EmailProvider[]>(() => (all ? oauth.map((a) => a.provider) : provider ? [provider] : []), [all, oauth, provider]);
+  const scope = all ? 'all' : provider;
   const imapAccount = imap.data?.find((a) => a.id === selection);
-  const self = oauth.find((a) => a.provider === provider)?.address;
+  const addressOf = (p: EmailProvider) => oauth.find((a) => a.provider === p)?.address;
   const settled = !accounts.isLoading && (!mailOn || !imap.isLoading);
 
   const [folder, setFolder] = useState<EmailFolder>('inbox');
@@ -66,22 +70,36 @@ function Client() {
   const [run, setRun] = useState<TriageRun | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const fresh = useRef(false);
+  const [composeFrom, setComposeFrom] = useState<EmailProvider | null>(null);
 
-  const listKey = useMemo(() => ['email-list', provider, folder, q, filter === 'unread'] as const, [provider, folder, q, filter]);
+  const listKey = useMemo(() => ['email-list', scope, folder, q, filter === 'unread'] as const, [scope, folder, q, filter]);
   const list = useInfiniteQuery({
     queryKey: listKey,
     enabled: !!provider,
     initialPageParam: undefined as string | undefined,
-    queryFn: async ({ pageParam }) => {
-      const params = new URLSearchParams({ folder, provider: provider!, limit: '30' });
-      if (q) params.set('q', q);
-      if (filter === 'unread') params.set('unread', 'true');
-      if (pageParam) params.set('pageToken', pageParam);
-      // Refresh asks the provider, past the server's short memory of this page.
-      if (fresh.current) params.set('refresh', 'true');
-      const res = await api.get<EmailListResponse & { error?: string }>(`/email/messages?${params}`);
-      if (res.error) throw new Error(res.error);
-      return res;
+    queryFn: async ({ pageParam }): Promise<EmailListResponse> => {
+      // One page per mailbox. With several, the page token carries each mailbox's own token.
+      const tokens: Partial<Record<EmailProvider, string>> = !pageParam ? {} : all ? JSON.parse(pageParam) : { [provider!]: pageParam };
+      const pages = await Promise.all(providers.filter((p) => !pageParam || tokens[p]).map(async (p) => {
+        const params = new URLSearchParams({ folder, provider: p, limit: '30' });
+        if (q) params.set('q', q);
+        if (filter === 'unread') params.set('unread', 'true');
+        if (tokens[p]) params.set('pageToken', tokens[p]);
+        // Refresh asks the provider, past the server's short memory of this page.
+        if (fresh.current) params.set('refresh', 'true');
+        const res = await api.get<EmailListResponse & { error?: string }>(`/email/messages?${params}`);
+        if (res.error) throw new Error(res.error);
+        return [p, res] as const;
+      }));
+      if (!all) return pages[0][1];
+      const next = Object.fromEntries(pages.filter(([, res]) => res.nextPageToken).map(([p, res]) => [p, res.nextPageToken]));
+      const counts = pages.map(([, res]) => res.unreadCount).filter((n): n is number => typeof n === 'number');
+      return {
+        provider: provider!,
+        items: pages.flatMap(([, res]) => res.items).sort((a, b) => b.receivedAt.localeCompare(a.receivedAt)),
+        ...(Object.keys(next).length ? { nextPageToken: JSON.stringify(next) } : {}),
+        ...(counts.length ? { unreadCount: counts.reduce((sum, n) => sum + n, 0) } : {}),
+      };
     },
     getNextPageParam: (last) => last.nextPageToken,
     // The last list stays on screen while the next one loads.
@@ -113,8 +131,8 @@ function Client() {
   const unreadCount = folder === 'inbox' ? list.data?.pages[0]?.unreadCount : undefined;
 
   const patchLists = useCallback((change: (items: InboxItem[]) => InboxItem[]) => {
-    client.setQueriesData<ListData>({ queryKey: ['email-list', provider] }, (data) => (data ? { ...data, pages: data.pages.map((p) => ({ ...p, items: change(p.items) })) } : data));
-  }, [client, provider]);
+    client.setQueriesData<ListData>({ queryKey: ['email-list', scope] }, (data) => (data ? { ...data, pages: data.pages.map((p) => ({ ...p, items: change(p.items) })) } : data));
+  }, [client, scope]);
 
   /** One mailbox action on some messages: shown at once, then sent; a failure reloads the truth. */
   const apply = useCallback(async (ids: string[], action: EmailBatchAction): Promise<boolean> => {
@@ -128,31 +146,39 @@ function Client() {
     } else if (action === 'read' || action === 'unread') patchLists((rows) => rows.map((it) => (hit.has(it.id) ? { ...it, unread: action === 'unread' } : it)));
     else patchLists((rows) => rows.map((it) => (hit.has(it.id) ? { ...it, starred: action === 'star' } : it)));
     try {
-      const res = await api.post<EmailBatchResponse & { error?: string }>('/email/messages/batch', { ids, action, provider });
-      if (res.error) throw new Error(res.error);
-      if (res.failed?.length) throw new Error(`${res.failed.length} of ${ids.length} could not be changed.`);
+      // Each message is changed in the mailbox it lives in.
+      const owner = new Map(items.map((it) => [it.id, it.provider]));
+      let failed = 0;
+      for (const p of providers) {
+        const own = ids.filter((id) => (owner.get(id) ?? provider) === p);
+        if (!own.length) continue;
+        const res = await api.post<EmailBatchResponse & { error?: string }>('/email/messages/batch', { ids: own, action, provider: p });
+        if (res.error) throw new Error(res.error);
+        failed += res.failed?.length ?? 0;
+      }
+      if (failed) throw new Error(`${failed} of ${ids.length} could not be changed.`);
       // Other folders now hold these messages: they reload when next shown.
-      if (moves) void client.invalidateQueries({ queryKey: ['email-list', provider], refetchType: 'none' });
+      if (moves) void client.invalidateQueries({ queryKey: ['email-list', scope], refetchType: 'none' });
       return true;
     } catch (err) {
       setError((err as Error).message);
-      void client.invalidateQueries({ queryKey: ['email-list', provider] });
+      void client.invalidateQueries({ queryKey: ['email-list', scope] });
       return false;
     }
-  }, [provider, patchLists, items, client]);
+  }, [provider, providers, scope, patchLists, items, client]);
 
   /** `apply`, and for a move a notice that can undo it. */
   const act = useCallback(async (ids: string[], action: EmailBatchAction, quiet = false) => {
     const ok = await apply(ids, action);
     if (!ok || quiet || !(action in MOVED_TEXT)) return;
     const inverse = INVERSE[action];
-    const undo = inverse ? { action: { label: 'Undo', run: () => { setNotice(null); void apply(ids, inverse).then(() => client.invalidateQueries({ queryKey: ['email-list', provider] })); } } } : {};
+    const undo = inverse ? { action: { label: 'Undo', run: () => { setNotice(null); void apply(ids, inverse).then(() => client.invalidateQueries({ queryKey: ['email-list', scope] })); } } } : {};
     setNotice({ text: `${ids.length === 1 ? 'Conversation' : `${ids.length} messages`} ${MOVED_TEXT[action]}.`, ...undo });
-  }, [apply, client, provider]);
+  }, [apply, client, scope]);
 
   const label = async (message: EmailMessage, value: { priority: EmailTriage['priority']; category: string }) => {
     try {
-      await api.put(`/email/triage/label/${encodeURIComponent(message.id)}?provider=${provider}`, { ...value, item: { from: message.from, subject: message.subject, snippet: message.snippet } });
+      await api.put(`/email/triage/label/${encodeURIComponent(message.id)}?provider=${message.provider}`, { ...value, item: { from: message.from, subject: message.subject, snippet: message.snippet } });
       const ids = new Set(open?.ids ?? [message.id]);
       patchLists((rows) => rows.map((it) => (ids.has(it.id) ? { ...it, triage: { ...value, source: 'owner' } } : it)));
     } catch (err) { setError((err as Error).message); }
@@ -239,6 +265,7 @@ function Client() {
         <h1 className="mr-1 text-base font-semibold text-on-surface">Email</h1>
         <select aria-label="Mailbox" value={selection} onChange={(e) => { setPicked(e.target.value); setOpenKey(null); setChecked(new Set()); setManage(false); }} className={`${field} w-auto max-w-56`}>
           {!selection && <option value="">{settled ? 'No mailbox connected' : 'Loading mailboxes…'}</option>}
+          {oauth.length > 1 && <option value="all">All inboxes</option>}
           {oauth.map((a) => <option key={a.provider} value={a.provider}>{providerLabel(a.provider)}{a.address ? ` — ${a.address}` : ''}</option>)}
           {imap.data?.map((a) => <option key={a.id} value={a.id}>{a.label} — {a.address}</option>)}
         </select>
@@ -251,7 +278,7 @@ function Client() {
         )}
         {!provider && <span className="flex-1" />}
         {provider && <button className={btnPrimary} onClick={() => setCompose(composeFor('new'))}><PenSquare className="h-4 w-4" /> Compose</button>}
-        {provider && folder === 'inbox' && (
+        {provider && !all && folder === 'inbox' && (
           <div className="inline-flex">
             <button className={`${btn} rounded-r-none`} onClick={triageNow} title={triageSummary}>
               {running ? <Loader2 className="h-4 w-4 animate-spin text-accent" /> : <Sparkles className="h-4 w-4 text-accent" />}
@@ -357,6 +384,7 @@ function Client() {
                         <span className="flex items-baseline gap-2">
                           {c.unread && <span aria-label="Unread" className="h-2 w-2 shrink-0 self-center rounded-full bg-primary" />}
                           <span className={`min-w-0 flex-1 truncate text-sm ${c.unread ? 'font-semibold text-on-surface' : 'text-on-surface'}`}>{person}{c.ids.length > 1 && <span className="ml-1.5 text-xs font-normal text-on-surface-variant">{c.ids.length}</span>}</span>
+                          {all && <span className="shrink-0 self-center rounded bg-surface-container-high px-1 text-[10px] text-on-surface-variant">{providerLabel(it.provider)}</span>}
                           {it.hasAttachments && <Paperclip aria-label="Has attachments" className="h-3.5 w-3.5 shrink-0 self-center text-on-surface-variant" />}
                           {c.starred && <Star aria-label="Starred" className="h-3.5 w-3.5 shrink-0 self-center fill-warning text-warning" />}
                           <time className={`shrink-0 text-xs ${c.unread ? 'font-medium text-on-surface' : 'text-on-surface-variant'}`}>{shortDate(it.receivedAt)}</time>
@@ -386,12 +414,12 @@ function Client() {
               <EmailReader
                 key={open.key}
                 conversation={open}
-                provider={provider}
+                provider={open.latest.provider}
                 categories={categories}
                 folder={folder}
                 onBack={() => setOpenKey(null)}
                 onAction={(ids, action) => void act(ids, action)}
-                onCompose={(mode: ComposeMode, source: EmailMessage) => setCompose(composeFor(mode, source, self))}
+                onCompose={(mode: ComposeMode, source: EmailMessage) => setCompose(composeFor(mode, source, addressOf(source.provider)))}
                 onLabel={label}
                 onNotice={(text) => setNotice({ text })}
               />
@@ -410,10 +438,12 @@ function Client() {
         <EmailCompose
           key={`${compose.mode}:${compose.source?.id ?? 'new'}`}
           draft={compose}
-          provider={provider}
+          provider={compose.source?.provider ?? composeFrom ?? provider}
+          accounts={compose.mode === 'new' && oauth.length > 1 ? oauth : undefined}
+          onProvider={setComposeFrom}
           onChange={setCompose}
           onClose={() => setCompose(null)}
-          onSent={(text) => { setCompose(null); setNotice({ text }); void client.invalidateQueries({ queryKey: ['email-list', provider], refetchType: folder === 'sent' || folder === 'drafts' ? 'active' : 'none' }); }}
+          onSent={(text) => { setCompose(null); setNotice({ text }); void client.invalidateQueries({ queryKey: ['email-list', scope], refetchType: folder === 'sent' || folder === 'drafts' ? 'active' : 'none' }); }}
         />
       )}
 
@@ -424,7 +454,7 @@ function Client() {
           run={run}
           onRun={(next) => { setRun(next); void settings.refetch(); }}
           onArchive={(ids) => act(ids, 'archive', true)}
-          onUnarchive={async (ids) => { await act(ids, 'unarchive', true); await client.invalidateQueries({ queryKey: ['email-list', provider] }); }}
+          onUnarchive={async (ids) => { await act(ids, 'unarchive', true); await client.invalidateQueries({ queryKey: ['email-list', scope] }); }}
           onClose={() => { setTriageOpen(false); if (run?.finished) setRun(null); }}
         />
       )}

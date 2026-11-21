@@ -230,3 +230,37 @@ test('with no mailbox connected the page says where to connect one', async ({ au
   await expect(page.getByText('No mailbox connected.')).toBeVisible();
   await expect(page.getByRole('link', { name: 'Settings → Integrations' })).toBeVisible();
 });
+
+test('All inboxes merges Gmail and Outlook by date and acts on each message in its own mailbox', async ({ authenticatedPage: page }) => {
+  await stubAllDefaults(page);
+  const box = await stubMailbox(page, [], [{ provider: 'google', address: 'me@gmail.example' }, { provider: 'microsoft', address: 'me@outlook.example' }]);
+  const at = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
+  await page.route('**/api/email/messages?**', route => {
+    const url = new URL(route.request().url());
+    box.lists.push(url);
+    const provider = url.searchParams.get('provider');
+    return json(route, 200, provider === 'google'
+      ? { provider, unreadCount: 1, items: [row('g-new', { subject: 'Newest, Gmail', receivedAt: at(1) }), row('g-old', { subject: 'Oldest, Gmail', receivedAt: at(30) })] }
+      : { provider, unreadCount: 2, items: [row('o-mid', { provider: 'microsoft', subject: 'Middle, Outlook', receivedAt: at(10) })] });
+  });
+  await page.goto('/email');
+  await expect(page.getByText('Newest, Gmail')).toBeVisible();
+  await expect(page.getByText('Middle, Outlook')).toHaveCount(0);
+  await page.getByRole('combobox', { name: 'Mailbox', exact: true }).selectOption('all');
+  const rows = page.getByRole('region', { name: 'Messages' }).getByRole('listitem');
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(0)).toContainText('Newest, Gmail');
+  await expect(rows.nth(1)).toContainText('Middle, Outlook');
+  await expect(rows.nth(1)).toContainText('Outlook');
+  await expect(rows.nth(2)).toContainText('Oldest, Gmail');
+  await expect(page.getByLabel('3 unread')).toBeVisible();
+  // Triage works on one mailbox at a time.
+  await expect(page.getByRole('button', { name: 'Triage inbox' })).toHaveCount(0);
+  await page.getByLabel('Select conversation: Newest, Gmail').check();
+  await page.getByLabel('Select conversation: Middle, Outlook').check();
+  await page.getByRole('region', { name: 'Messages' }).getByRole('button', { name: 'Archive' }).click();
+  await expect.poll(() => box.batches).toEqual([{ ids: ['g-new'], action: 'archive', provider: 'google' }, { ids: ['o-mid'], action: 'archive', provider: 'microsoft' }]);
+  // A new message asks which mailbox sends it.
+  await page.getByRole('button', { name: 'Compose' }).click();
+  await expect(page.getByRole('form', { name: 'New message' }).getByLabel('From')).toHaveValue('google');
+});
