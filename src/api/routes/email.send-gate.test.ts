@@ -43,6 +43,15 @@ describe('POST /api/email/send is ASK-gated', () => {
     expect(r.body.requiresConfirmation).toBe(true);
   });
 
+  test('cc, bcc, a reply target or a chosen provider do not open the gate; only a real boolean true does', async () => {
+    const app = await buildApp();
+    const mail = { to: 'bob@x.com, ann@x.com', cc: 'c@x.com', bcc: 'd@x.com', subject: 'Hi', body: 'hello', replyTo: 'm1', provider: 'google' };
+    expect((await postJson(app, '/api/email/send', mail)).status).toBe(409);
+    expect((await postJson(app, '/api/email/send', { ...mail, confirm: false })).status).toBe(409);
+    // A truthy non-boolean is refused by validation or by the gate, never sent.
+    expect((await postJson(app, '/api/email/send', { ...mail, confirm: 'true' })).status).toBeGreaterThanOrEqual(400);
+  });
+
   test('confirm:true passes the gate (provider detection then runs)', async () => {
     const app = await buildApp();
     // With confirm, the gate is passed; with no mailbox connected in the test

@@ -5,6 +5,7 @@ import {
   parseGraphEvents,
   probeFailingPullRequests,
   probeUpcomingEvents,
+  calendarsToProbe,
 } from './heartbeat-probes';
 
 const NOW = new Date('2026-09-07T09:00:00Z');
@@ -124,5 +125,49 @@ describe('probeUpcomingEvents', () => {
     });
     expect(partial.events.map((e) => e.title)).toEqual(['Ok']);
     expect(partial.partial).toBe(true);
+  });
+  test('follows the calendars the user shows on the Calendar page; none chosen reads the defaults', async () => {
+    const urls: string[] = [];
+    const deps = (visible: string[] | undefined) => ({
+      getToken: async () => 'tok',
+      fetchJson: async (url: string) => { urls.push(url); return url.includes('googleapis') ? { items: [] } : { value: [] }; },
+      visibleCalendars: async () => visible,
+    });
+    await probeUpcomingEvents('u1', NOW, 60, deps(['google:team@group.calendar.google.com', 'google:me@x.dev', 'microsoft:cal/2']));
+    expect(urls.map((u) => u.split('?')[0])).toEqual([
+      'https://www.googleapis.com/calendar/v3/calendars/team%40group.calendar.google.com/events',
+      'https://www.googleapis.com/calendar/v3/calendars/me%40x.dev/events',
+      'https://graph.microsoft.com/v1.0/me/calendars/cal%2F2/calendarView',
+    ]);
+    urls.length = 0;
+    // Every Microsoft calendar hidden: Microsoft is not asked at all.
+    await probeUpcomingEvents('u1', NOW, 60, deps(['google:me@x.dev']));
+    expect(urls).toHaveLength(1);
+    urls.length = 0;
+    await probeUpcomingEvents('u1', NOW, 60, deps(undefined));
+    expect(urls.map((u) => u.split('?')[0])).toEqual(['https://www.googleapis.com/calendar/v3/calendars/primary/events', 'https://graph.microsoft.com/v1.0/me/calendarView']);
+  });
+  test('calendarsToProbe picks one provider\'s calendars from the stored keys, with the account of a further one', () => {
+    expect(calendarsToProbe('google', undefined)).toEqual([{}]);
+    expect(calendarsToProbe('google', ['google:me@x.dev', 'google:work@y.dev:team@group.calendar.google.com', 'microsoft:c'])).toEqual([
+      { calendarId: 'me@x.dev' },
+      { account: 'work@y.dev', calendarId: 'team@group.calendar.google.com' },
+    ]);
+    // A default-account id that itself holds ":" is not mistaken for an account.
+    expect(calendarsToProbe('google', ['google:a:b'])).toEqual([{ calendarId: 'a:b' }]);
+    expect(calendarsToProbe('microsoft', [])).toEqual([]);
+  });
+  test('a calendar of a further account is read with that account\'s token and its own id', async () => {
+    const seen: Array<[string, string]> = [];
+    const out = await probeUpcomingEvents('u1', NOW, 60, {
+      getToken: async (_u, provider, account) => (provider === 'google' ? (account === 'work@y.dev' ? 'work-token' : 'home-token') : null),
+      fetchJson: async (url, headers) => { seen.push([url.split('?')[0], headers.Authorization]); return { items: [] }; },
+      visibleCalendars: async () => ['google:me@x.dev', 'google:work@y.dev:team@group.calendar.google.com'],
+    });
+    expect(out.partial).toBe(false);
+    expect(seen).toEqual([
+      ['https://www.googleapis.com/calendar/v3/calendars/me%40x.dev/events', 'Bearer home-token'],
+      ['https://www.googleapis.com/calendar/v3/calendars/team%40group.calendar.google.com/events', 'Bearer work-token'],
+    ]);
   });
 });

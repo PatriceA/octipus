@@ -79,12 +79,12 @@ describe('triageInbox with a decision model (live)', () => {
   });
 
   test('no decision model → LLM triage unchanged', async () => {
-    expect(await triageInbox('u', [item])).toEqual({ m1: { priority: 'high', category: 'work', reason: 'r' } });
+    expect(await triageInbox('u', [item])).toEqual({ m1: { priority: 'high', category: 'work', reason: 'r', source: 'llm' } });
   });
 
   test('owner labels win without asking any model', async () => {
     owner = { m1: { priority: 'high', category: 'finance' } };
-    expect(await triageInbox('u', [item])).toEqual({ m1: { priority: 'high', category: 'finance' } });
+    expect(await triageInbox('u', [item])).toEqual({ m1: { priority: 'high', category: 'finance', source: 'owner' } });
     expect(llmCalls).toBe(0);
     expect(decide).not.toHaveBeenCalled();
   });
@@ -118,10 +118,10 @@ describe('triageInbox with a decision model (live)', () => {
   test('confident decisions replace the LLM result; the gate is per question', async () => {
     answers = clef(0.9, 0.2, 'promotion', 0.9);
     const random = vi.spyOn(Math, 'random').mockReturnValue(0.99);
-    expect((await triageInbox('u', [item])).m1).toEqual({ priority: 'normal', category: 'promotion' });
+    expect((await triageInbox('u', [item])).m1).toEqual({ priority: 'normal', category: 'promotion', source: 'decision' });
     expect(llmCalls).toBe(0); // decided, not audited: no LLM call
     random.mockReturnValue(0); // audited: the LLM labels it, the decision still wins
-    expect((await triageInbox('u', [item])).m1).toEqual({ priority: 'normal', category: 'promotion' });
+    expect((await triageInbox('u', [item])).m1).toEqual({ priority: 'normal', category: 'promotion', source: 'decision' });
     expect(llmCalls).toBe(1);
     const questions = vi.mocked(decide).mock.calls[0][2];
     expect(Object.keys(questions)).toEqual(['action', 'today', 'category']);
@@ -131,5 +131,24 @@ describe('triageInbox with a decision model (live)', () => {
     // One answer under its threshold → the LLM's answer.
     answers = { ...clef(0.9, 0.2, 'promotion', 0.9), today: { type: 'noul', p: 0.4, confidence: 0.5 } };
     expect((await triageInbox('u', [item])).m1).toMatchObject({ priority: 'high', category: 'work' });
+  });
+});
+
+describe('triageInbox on an IMAP / POP3 mailbox', () => {
+  beforeEach(() => { primary = { modelId: 'chat-model', name: 'chat-model' }; backup = null; answers = null; owner = {}; llmCalls = 0; llmFails = false; vi.mocked(saveModelLabels).mockClear(); vi.mocked(saveObservations).mockClear(); });
+
+  test('labels, answers and the training set are keyed by the mailbox, not by a provider', async () => {
+    const { userLabels } = await import('./triage-labels');
+    vi.mocked(userLabels).mockClear();
+    const box = 'imap:0b9d3c55-5f2c-4c37-9a3e-6d1f00000001' as const;
+    const imapMail: InboxItem = { ...item, provider: 'imap', mailbox: box };
+    expect((await triageInbox('u', [imapMail])).m1).toMatchObject({ priority: 'high', source: 'llm' });
+    expect(vi.mocked(userLabels).mock.calls[0][1]).toBe(box);
+    expect(vi.mocked(saveModelLabels).mock.calls[0][1]).toBe(box);
+  });
+
+  test('IMAP mail without its mailbox is refused rather than filed under a provider', async () => {
+    await expect(triageInbox('u', [{ ...item, provider: 'imap' }])).rejects.toThrow(/must name its mailbox/);
+    expect(llmCalls).toBe(0);
   });
 });

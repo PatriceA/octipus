@@ -111,7 +111,7 @@ export async function parseRawMessage(raw: Buffer): Promise<ParsedMessage> {
     };
   }
   const rawHtml = typeof mail.html === 'string' ? mail.html : '';
-  const html = rawHtml ? sanitizeHtmlFragment(rawHtml.slice(0, BODY_HTML_MAX * 2), { presentational: true }).slice(0, BODY_HTML_MAX) : null;
+  const html = rawHtml ? sanitizeHtmlFragment(rawHtml.slice(0, BODY_HTML_MAX * 2), { presentational: true, blockRemoteImages: true }).slice(0, BODY_HTML_MAX) : null;
   const text = (mail.text?.trim() ? mail.text : htmlToText(rawHtml)).slice(0, BODY_TEXT_MAX);
   return storable({
     messageIdHeader: clean(mail.messageId, 998),

@@ -7,6 +7,81 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Email is a mail client** ([plan](docs/plans/email-calendar-ux.md)).
+  - Folders, list and reading pane; conversations; search; bulk actions with
+    undo; compose, reply all and forward with a two-step send; attachments;
+    keyboard shortcuts. The page frame renders at once.
+  - Mail HTML is drawn in a sandboxed, always-light frame.
+  - Outlook is reachable with Google connected, and "All inboxes" merges both.
+  - **"Triage inbox" shows what it will do first**: which mails, the
+    categories, what the models are told, who answers and what happens
+    afterwards. It then runs in the background with progress and cancel, and
+    lists the mail it proposes to archive. Your own instructions can be saved
+    and are given to both models.
+  - **Behaviour changes:** triage settings are stored per user on the server,
+    and both "label in the mailbox" and auto-archive start off (the earlier
+    per-browser choices are not carried over). Changing categories or
+    instructions restarts the decision model's calibration.
+  - New routes: `/api/email/accounts`, `/messages`, `/thread/:id`,
+    `/messages/batch`, `/message/:id/attachment/:id`, `/triage/settings`,
+    `/triage/preview`, `/triage/run`. The older routes still work.
+- **Writing in Gmail and Outlook:** attachments (20 files, 25 MB), forwarding
+  keeps the original's files, a formatting toolbar (text and HTML). **Snooze**
+  takes a conversation out of the inbox until a chosen time; a Snoozed folder
+  lists it. Migration `0195_email_snooze`, job `email-snooze`.
+- **Several accounts of one provider.** Settings → Integrations → **Add another
+  account** connects a second Google or Microsoft 365 account; each is its own
+  mailbox and has its own calendars, and "All inboxes" merges them. **Make
+  default** picks the account agents and the heartbeat use. Mail routes and
+  calendar writes take an optional `account`.
+- **IMAP/POP3 mailboxes in the mail window**, with summaries, AI drafts and
+  triage (with protection on, mail at level 3–4 reaches local models only).
+  `/mail` is the same window with IMAP mailboxes only.
+- **Triage over All inboxes** in one run, and **automatic triage** (opt-in) of
+  new mail every few minutes, at most 20 mails at a time. Every run uses the
+  bound models.
+- **Local index of Gmail and Outlook headers.** Lists, search and the unread
+  count open at once from an index of the default account's last 90 days of
+  headers (sender, recipients, subject, date, folders, flags, the 300-character
+  preview). Bodies and attachments are never stored. On by default; turned
+  off in the Email page's mailbox settings, which deletes it. Migration
+  `0196_email_index`, job `email-index`.
+- **Calendar is a calendar.** Week, day, month and agenda views; overlapping
+  events side by side; an all-day lane; an event card with Join, RSVP, Edit and
+  Delete; create by clicking or dragging, move by dragging; keyboard shortcuts.
+  - **Shared calendars.** Every calendar of a connected Google or Microsoft 365
+    account can be shown or hidden; the choice is stored per user. Read-only
+    calendars refuse writes.
+  - **Microsoft 365 users reconnect once** to open calendars shared with them
+    (new `Calendars.ReadWrite.Shared` permission; tenants without user consent
+    need admin approval). Their own calendars are unaffected.
+  - **Behaviour change:** the per-save confirmation tick is gone. Changing or
+    deleting an event with guests needs `notifyAttendees: true` (409 with the
+    guest count otherwise).
+  - **Editing is complete:** drag-resize, dragging on touch, all-day and
+    across midnight; repeating events (create; change "This event" or "All
+    events"); reminders; guests and description on edit; "Find a time" from
+    everyone's busy time; up to 2,500 events per calendar and range.
+  - The heartbeat's upcoming-event check and the meeting import follow the
+    calendars shown on the Calendar page.
+  - **Behaviour change:** on `PATCH /api/calendar/events/:id`, `attendees`
+    now replaces the guest list (it was ignored on edit).
+  - Fix: Microsoft all-day events land on their own date in any timezone.
+  - OAuth connections record the scopes the provider granted, not the ones
+    asked for.
+- **Email and calendar fixes** (phase 0 of [the email and calendar plan](docs/plans/email-calendar-ux.md)).
+  - Gmail mail with an attachment showed only its snippet; the body is now
+    found at any MIME depth, and HTML-only mail renders as HTML.
+  - A reply sent from the Email page joins its conversation: `POST /api/email/send`
+    takes `replyTo`. An Outlook reply keeps the original subject.
+  - Remote images in mail are not loaded until **Show images** is chosen.
+  - Triage results survive a reload: `/api/email/inbox` returns the stored
+    triage with the list (migration `0194_email_triage_result`).
+  - **Behaviour change:** auto-archive on triage is off until turned on. It
+    was on by default; anyone relying on that ticks the box once.
+  - Calendar shows the reader's week (not seven days from today) and readable
+    end times.
+
 - **Codemode boundary hardening.** Bounded default and error output, fixed zero-output requests, rejected malformed arguments and misplaced options before dispatch, added a shared source-size limit, preserved prototype-like state keys, and aligned tool discovery aliases with descriptions and invocation. Invalid bridge JSON now returns a client error. Added live-smoke evidence and repeatable request/response, storage, concurrency, timeout and memory boundary tests.
 
 - Codemode now keeps ordinary tool definitions out of API and CLI prompts, including core tools and directly exposed MCP tools. Scripts discover schemas only when needed; coordination controls and existing permission checks are preserved. Models without codemode keep their existing tool advertisement.

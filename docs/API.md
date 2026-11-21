@@ -320,7 +320,39 @@ inert and stays in the array.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/email/send` | Send an email (gated) |
+| POST | `/api/email/send` | Send (gated). `to`/`cc`/`bcc` comma-separated, ≤ 50 recipients; `replyTo` threads it; `provider`/`account` pick the mailbox; `format: plain\|rich`; `originalAt` (where the quoted or forwarded original starts: only what is above it is formatted); `attachments: [{upload}\|{forward:{messageId, attachmentId}}]`, ≤ 20 files / 25 MB |
+| POST | `/api/email/uploads` | Hold one file (`file`, multipart) for a mail being written; ≤ 25 MB; held 1 h, for its uploader only |
+| DELETE | `/api/email/uploads/:id` | Let go of a held file |
+| POST | `/api/email/snooze` | `{ids, wakeAt, provider?, threadId?, from, subject, snippet}`: archive now, back in the inbox unread at `wakeAt` |
+| GET | `/api/email/snoozed` | Snoozed conversations, soonest first; `error`/`retryAt` when a wake failed |
+| POST | `/api/email/snoozed/:id/unsnooze` | Bring it back now |
+| POST | `/api/email/snoozed/:id/dismiss` | Let a snooze go: nothing is moved, the mail stays in the archive |
+| GET/PUT | `/api/email/index` | The local header index: on/off (`{enabled}`; off deletes it) and per-mailbox status |
+| POST | `/api/email/imap/message/:id/summarize` · `/reply-options` · `/draft` · `/task` | AI help for IMAP mail; 403 at protection level 3–4 unless the models are local |
+| PUT | `/api/email/imap/triage/label/:id` | The caller's own label on an IMAP mail they can read |
+| GET | `/api/mail/client/messages` | IMAP/POP3 list in the Email page's shape (`account`, `folder`, `q`, `unread`, `pageToken`, `limit`) |
+| GET | `/api/mail/client/messages/:id` | One IMAP/POP3 message in the Email page's shape |
+| POST | `/api/mail/client/messages/batch` | `{ids ≤ 100, action: read \| unread}` |
+| GET | `/api/email/accounts` | Connected Google / Microsoft 365 mailboxes |
+| GET | `/api/email/messages` | One folder page (`folder`, `q`, `unread`, `pageToken`, `limit` ≤ 50, `provider`, `refresh`) with stored triage and the inbox unread count |
+| GET | `/api/email/thread/:threadId` | A conversation, oldest first, with cc and attachments |
+| GET | `/api/email/message/:id/attachment/:attachmentId` | One attachment, always as a download (max 25 MB) |
+| POST | `/api/email/messages/batch` | `{ids ≤ 100, action}`: archive, unarchive, trash, untrash, read, unread, star, unstar. Nothing is deleted for good |
+| GET/PUT | `/api/email/triage/settings` | How "Triage inbox" runs: `scope`, `applyLabels`, `autoArchive`, `archiveCategories`, `instructions`, `skipDialog`, `auto` (automatic triage); GET adds `lastAuto` |
+| POST | `/api/email/triage/preview` | `{items: [{id, unread}]}`: what a run would do and what the models are told. Asks no model |
+| POST | `/api/email/triage/run` | Rows may carry `mailbox` (`google`, `google:<address>`, `imap:<id>`); `mailboxes` with `newest` runs over several. Start a background run over `items` or the `newest` N (202; 409 while one runs) |
+| GET | `/api/email/triage/run` | The current or last run: progress, then the result |
+| POST | `/api/email/triage/run/cancel` | Stop the current run |
+| PUT | `/api/email/triage/label/:id` | The owner's label `{priority, category, item?}`; with `item` any mail can be labelled |
+| GET | `/api/calendar/calendars` | The caller's calendars (own and shared), visibility preferences, `microsoftSharedAccess`; `?fresh=true` re-reads the providers |
+| PUT | `/api/calendar/preferences` | `{ visible?: ["google:<id>"], hideDeclined? }`; only the given fields change |
+| GET | `/api/calendar/events` | `from`, `to` (≤ 93 days): events of the visible calendars; `partial`, `failedCalendars`, `truncated` |
+| POST | `/api/calendar/events` | Create (`provider`, `account?`, `calendarId?`, `reminderMinutes?`, `recurrence?`, `timeZone?`, `title`, `start`, `end`, `allDay`, `location?`, `description?`, `attendees?`, `confirm: true`) |
+| PATCH | `/api/calendar/events/:id` | Change; fields left out are unchanged; `attendees` is the complete new guest list; `scope: "all"` changes the whole series; `account?`; 409 with `attendees` unless `notifyAttendees: true` when the event has guests |
+| DELETE | `/api/calendar/events/:id` | Body `{ provider, account?, calendarId?, confirm: true, notifyAttendees?, scope? }` |
+| GET | `/api/calendar/events/:id/details` | `provider`, `account?`, `calendarId?`: whole description, guests with answers, reminder, the series' recurrence |
+| POST | `/api/calendar/freebusy` | `{provider, account?, attendees ≤ 20, from, to ≤ 8 days}`: busy and failed per guest, and the caller's own busy time |
+| POST | `/api/calendar/events/:id/respond` | `{ provider, account?, calendarId?, response: accepted \| tentative \| declined }` |
 | POST | `/api/email/triage` | Run email triage (`items`, `autoArchive`, `applyLabels` → Gmail label / Outlook category `Octipus/<category>`) |
 | GET | `/api/email/categories` | The user's triage categories and the presets |
 | PUT | `/api/email/categories` | Save the user's categories (`{categories: {name: description}}`, `null` resets) |
@@ -687,7 +719,10 @@ required by their routes; see `src/security/scopes.ts` for supported names.
 | GET | `/api/auth/oauth/:provider/status` | Get provider connection status |
 | GET | `/api/auth/oauth/:provider/authorize` | Initiate OAuth flow |
 | GET | `/api/auth/oauth/:provider/callback` | OAuth callback |
-| POST | `/api/auth/oauth/:provider/disconnect` | Disconnect OAuth provider |
+| POST | `/api/auth/oauth/:provider/disconnect` | Disconnect OAuth provider; optional `{ account }` disconnects that account only |
+| GET | `/api/auth/oauth/:provider/authorize?addAccount=true` | Connect a further account of the provider |
+| GET | `/api/auth/oauth/:provider/accounts` | The caller's connected accounts of the provider, default first |
+| POST | `/api/auth/oauth/:provider/accounts/default` | `{ account }`: make it the default (agents and the heartbeat use it) |
 
 ## Code index
 

@@ -1,3 +1,4 @@
+import { parseCalendarKey } from '@/shared/calendar';
 /**
  * The two heartbeat probe sources that live outside the database: pull
  * requests of the user's whose checks are failing, and calendar events about
@@ -156,8 +157,24 @@ export function parseGraphEvents(response: unknown, now: Date, until: Date): Upc
 }
 
 export interface CalendarProbeDeps {
-  getToken: (userId: string, provider: 'google' | 'microsoft') => Promise<string | null>;
+  /** `account`: a further connected account of the provider; absent, the default account. */
+  getToken: (userId: string, provider: 'google' | 'microsoft', account?: string) => Promise<string | null>;
   fetchJson: (url: string, headers: Record<string, string>) => Promise<unknown>;
+  /**
+   * The calendars the user chose to see on the Calendar page (`provider:id`
+   * keys), or undefined when they never chose: then each account's default
+   * calendar is read, as before.
+   */
+  visibleCalendars?: (userId: string) => Promise<string[] | undefined>;
+}
+
+/** The calendar ids of one provider to read: `[undefined]` is the account's default calendar. Pure. */
+export function calendarsToProbe(provider: 'google' | 'microsoft', visible: string[] | undefined): Array<{ account?: string; calendarId?: string }> {
+  if (!visible) return [{}];
+  return visible.map(parseCalendarKey)
+    .filter((k): k is NonNullable<ReturnType<typeof parseCalendarKey>> => k?.provider === provider)
+    .map((k) => ({ ...(k.account ? { account: k.account } : {}), calendarId: k.id }))
+    .slice(0, 25);
 }
 
 const CALENDAR_TIMEOUT_MS = 8_000;
@@ -169,8 +186,9 @@ async function defaultFetchJson(url: string, headers: Record<string, string>): P
 }
 
 export const defaultCalendarDeps: CalendarProbeDeps = {
-  getToken: (userId, provider) => getOAuthManager().getValidToken(userId, provider),
+  getToken: (userId, provider, account) => getOAuthManager().getValidToken(userId, provider, account),
   fetchJson: defaultFetchJson,
+  visibleCalendars: async (userId) => (await (await import('@/core/calendar/calendars')).getCalendarPreferences(userId)).visible,
 };
 
 export interface UpcomingEventsProbe {
@@ -181,7 +199,8 @@ export interface UpcomingEventsProbe {
 
 interface CalendarProvider {
   provider: UpcomingEvent['provider'];
-  url: (now: Date, until: Date) => string;
+  /** `calendarId` absent: the account's default calendar. */
+  url: (now: Date, until: Date, calendarId?: string) => string;
   headers: (token: string) => Record<string, string>;
   parse: (response: unknown, now: Date, until: Date) => UpcomingEvent[];
 }
@@ -189,15 +208,15 @@ interface CalendarProvider {
 const CALENDAR_PROVIDERS: readonly CalendarProvider[] = [
   {
     provider: 'google',
-    url: (now, until) =>
-      `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(now.toISOString())}&timeMax=${encodeURIComponent(until.toISOString())}&singleEvents=true&orderBy=startTime&maxResults=20`,
+    url: (now, until, calendarId) =>
+      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId ?? 'primary')}/events?timeMin=${encodeURIComponent(now.toISOString())}&timeMax=${encodeURIComponent(until.toISOString())}&singleEvents=true&orderBy=startTime&maxResults=20`,
     headers: (token) => ({ Authorization: `Bearer ${token}` }),
     parse: parseGoogleEvents,
   },
   {
     provider: 'microsoft',
-    url: (now, until) =>
-      `https://graph.microsoft.com/v1.0/me/calendarView?startDateTime=${encodeURIComponent(now.toISOString())}&endDateTime=${encodeURIComponent(until.toISOString())}&$select=subject,start,end,isAllDay,isCancelled&$orderby=start/dateTime&$top=20`,
+    url: (now, until, calendarId) =>
+      `https://graph.microsoft.com/v1.0/me/${calendarId ? `calendars/${encodeURIComponent(calendarId)}/` : ''}calendarView?startDateTime=${encodeURIComponent(now.toISOString())}&endDateTime=${encodeURIComponent(until.toISOString())}&$select=subject,start,end,isAllDay,isCancelled&$orderby=start/dateTime&$top=20`,
     headers: (token) => ({ Authorization: `Bearer ${token}`, Prefer: 'outlook.timezone="UTC"' }),
     parse: parseGraphEvents,
   },
@@ -217,16 +236,32 @@ export async function probeUpcomingEvents(
   deps: CalendarProbeDeps = defaultCalendarDeps,
 ): Promise<UpcomingEventsProbe> {
   const until = new Date(now.getTime() + lookaheadMinutes * 60_000);
+  // The calendars the user shows on the Calendar page; a failed read falls back to the defaults.
+  const visible = await deps.visibleCalendars?.(userId).catch(() => undefined);
   const results = await Promise.all(
     CALENDAR_PROVIDERS.map(async (cal): Promise<{ events: UpcomingEvent[]; failed: boolean }> => {
+      const targets = calendarsToProbe(cal.provider, visible);
+      if (!targets.length) return { events: [], failed: false };
       const token = await deps.getToken(userId, cal.provider).catch(() => null);
       if (!token) return { events: [], failed: false };
-      try {
-        return { events: cal.parse(await deps.fetchJson(cal.url(now, until), cal.headers(token)), now, until), failed: false };
-      } catch (err) {
-        coreLogger.debug({ err: (err as Error).message, userId, provider: cal.provider }, 'heartbeat: calendar probe failed (skipping provider)');
-        return { events: [], failed: true };
-      }
+      // A further account's calendar is read with that account's own token.
+      const tokens = new Map<string, Promise<string | null>>();
+      const tokenFor = (account?: string) => {
+        if (!account) return Promise.resolve(token);
+        if (!tokens.has(account)) tokens.set(account, deps.getToken(userId, cal.provider, account).catch(() => null));
+        return tokens.get(account)!;
+      };
+      const read = await Promise.all(targets.map(async ({ account, calendarId }) => {
+        try {
+          const own = await tokenFor(account);
+          if (!own) throw new Error('account not connected');
+          return { events: cal.parse(await deps.fetchJson(cal.url(now, until, calendarId), cal.headers(own)), now, until), failed: false };
+        } catch (err) {
+          coreLogger.debug({ err: (err as Error).message, userId, provider: cal.provider }, 'heartbeat: calendar probe failed (skipping calendar)');
+          return { events: [] as UpcomingEvent[], failed: true };
+        }
+      }));
+      return { events: read.flatMap((r) => r.events), failed: read.some((r) => r.failed) };
     }),
   );
   return {

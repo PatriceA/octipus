@@ -89,4 +89,42 @@ describe('label store', () => {
     // Labels written before the new answer survive it (the backlog labels first).
     expect((await store.reviewQueue(owner, 'r2')).items.find(i => i.messageId === 'c')).toBeUndefined();
   });
+
+  test('two accounts of one provider keep their triage apart; the default account keeps the bare key', async () => {
+    const store = await import('./triage-labels');
+    const { inMailbox } = await import('./account-context');
+    const { getDb } = await import('@/db/postgres');
+    const { emailTriageLabels } = await import('@/db/schema/email-triage-labels');
+    const { eq } = await import('drizzle-orm');
+    const second = { provider: 'google' as const, account: 'me@work.example' };
+    const m = mail('same-id', 'x@y.org');
+    // The same message id in both mailboxes: two rows, never one overwritten by the other.
+    await store.saveTriageResults(owner, 'google', [m], { 'same-id': { priority: 'high' } }, () => 'llm');
+    await inMailbox(second, () => store.saveTriageResults(owner, 'google', [m], { 'same-id': { priority: 'low' } }, () => 'decision'));
+    expect(await store.storedTriage(owner, 'google', ['same-id'])).toEqual({ 'same-id': { priority: 'high', source: 'llm' } });
+    expect(await inMailbox(second, () => store.storedTriage(owner, 'google', ['same-id']))).toEqual({ 'same-id': { priority: 'low', source: 'decision' } });
+    // The owner's label in one account does not reach the other.
+    await inMailbox(second, () => store.upsertUserLabel(owner, 'google', m, { priority: 'normal', category: 'work' }));
+    expect(await store.userLabels(owner, 'google', ['same-id'])).toEqual({});
+    expect(await inMailbox(second, () => store.userLabels(owner, 'google', ['same-id']))).toEqual({ 'same-id': { priority: 'normal', category: 'work' } });
+    const keys = (await getDb().select({ provider: emailTriageLabels.provider }).from(emailTriageLabels).where(eq(emailTriageLabels.messageId, 'same-id'))).map(r => r.provider).sort();
+    expect(keys).toEqual(['google', 'google:me@work.example']);
+  });
+
+  test('IMAP mail is kept under its mailbox key, apart from provider mail with the same id', async () => {
+    const store = await import('./triage-labels');
+    const box = `imap:${randomUUID()}` as const;
+    const x: InboxItem = { ...mail('x', 'clerk@office.example'), provider: 'imap', mailbox: box };
+    await store.saveTriageResults(owner, box, [x], { x: { priority: 'high', category: 'work' } }, () => 'llm', 'r1');
+    await store.saveTriageResults(owner, 'google', [mail('x', 'other@else.org')], { x: { priority: 'low', category: 'promotion' } }, () => 'decision');
+    expect(await store.storedTriage(owner, box, ['x'])).toEqual({ x: { priority: 'high', category: 'work', source: 'llm' } });
+    expect((await store.storedTriage(owner, 'google', ['x'])).x).toMatchObject({ priority: 'low', source: 'decision' });
+    // The owner's own label, on a mail of this mailbox only.
+    await store.upsertUserLabel(owner, box, x, { priority: 'normal', category: 'personal' });
+    expect(await store.storedTriage(owner, box, ['x'])).toEqual({ x: { priority: 'normal', category: 'personal', source: 'owner' } });
+    expect((await store.storedTriage(owner, 'google', ['x'])).x.priority).toBe('low');
+    expect(await store.userLabels(owner, box, ['x'])).toEqual({ x: { priority: 'normal', category: 'personal' } });
+    // A sender is the same sender in every mailbox: the label is a worked example for their next mail anywhere.
+    expect((await store.examplesFor(owner, mail('y', 'clerk@office.example')))[0]).toMatchObject({ priority: 'normal', labelledBy: 'owner' });
+  });
 });
