@@ -6,6 +6,7 @@ import { sweepPurgedSpaceFiles } from '@/core/spaces/purge';
 import { maybeRunHeartbeats } from '@/core/heartbeat';
 import { syncDueMailAccounts } from '@/core/mail/sync';
 import { scanDueFolders } from '@/core/scan-folders/sweep';
+import { wakeDueSnoozes } from '@/core/email/snooze';
 import { maybeRunScheduledBackup } from '@/core/backup/service';
 import { isJobOn } from '@/core/modules/registry';
 import { fireDueReminders } from '@/core/tasks/reminders';
@@ -53,6 +54,7 @@ let memoryRepairRunning = false;
 let reminderSweepRunning = false;
 let mailSweepRunning = false;
 let scanSweepRunning = false;
+let snoozeSweepRunning = false;
 
 /**
  * Parse a simple cron expression and compute the next run date.
@@ -558,6 +560,16 @@ export function startModuleSweeps(now: Date): string[] {
       .then((filed) => { if (filed > 0) coreLogger.info({ filed }, 'Scan folders filed new documents'); })
       .catch((err: unknown) => coreLogger.error({ err }, 'Scan folder sweep failed'))
       .finally(() => { scanSweepRunning = false; });
+  }
+
+  // Snoozed mail (core/email/snooze.ts): what is due goes back to the inbox, unread.
+  if (!snoozeSweepRunning && isJobOn('email-snooze')) {
+    snoozeSweepRunning = true;
+    started.push('email-snooze');
+    wakeDueSnoozes(now)
+      .then((woke) => { if (woke > 0) coreLogger.info({ woke }, 'Snoozed mail is back in the inbox'); })
+      .catch((err: unknown) => coreLogger.error({ err }, 'Snooze sweep failed'))
+      .finally(() => { snoozeSweepRunning = false; });
   }
   return started;
 }

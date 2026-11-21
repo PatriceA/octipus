@@ -9,6 +9,6 @@ export const inboxModule: ModuleDefinition = {
   routes: ['/api/email', '/api/calendar'],
   pages: ['/email', '/calendar'],
   tools: ['email-processor'],
-  jobs: ['inbox-watch'],
+  jobs: ['inbox-watch', 'email-snooze'],
   caseEntities: [],
 };

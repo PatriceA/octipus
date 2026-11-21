@@ -8,9 +8,10 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { getConfig } from '@/config';
 import { MODULES } from '@/modules';
 
-const sweeps = vi.hoisted(() => ({ mail: vi.fn(async () => 0), scan: vi.fn(async () => 0) }));
+const sweeps = vi.hoisted(() => ({ mail: vi.fn(async () => 0), scan: vi.fn(async () => 0), snooze: vi.fn(async () => 0) }));
 vi.mock('@/core/mail/sync', () => ({ syncDueMailAccounts: sweeps.mail }));
 vi.mock('@/core/scan-folders/sweep', () => ({ scanDueFolders: sweeps.scan }));
+vi.mock('@/core/email/snooze', () => ({ wakeDueSnoozes: sweeps.snooze }));
 
 const MODULE_TOOLS = MODULES.flatMap((m) => m.tools);
 let saved: string[] = [];
@@ -95,8 +96,9 @@ describe('every module off', () => {
     expect(startModuleSweeps(new Date())).toEqual([]);
     expect(sweeps.mail).not.toHaveBeenCalled();
     expect(sweeps.scan).not.toHaveBeenCalled();
-    getConfig().modules.enabled = ['mail', 'scan-folders'];
-    expect(startModuleSweeps(new Date())).toEqual(['mail-sync', 'scan-folders']);
+    expect(sweeps.snooze).not.toHaveBeenCalled();
+    getConfig().modules.enabled = ['mail', 'scan-folders', 'inbox'];
+    expect(startModuleSweeps(new Date())).toEqual(['mail-sync', 'scan-folders', 'email-snooze']);
     await vi.waitFor(() => expect(sweeps.mail).toHaveBeenCalled());
   });
 

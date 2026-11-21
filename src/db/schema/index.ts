@@ -19,6 +19,7 @@ export * from './contacts';
 export * from './documents';
 export * from './email-handled';
 export * from './email-triage-labels';
+export * from './email-snoozes';
 export * from './context-hooks';
 export * from './embeddings';
 export * from './index-backlog';

@@ -1,7 +1,8 @@
 'use client';
 
 import { type InfiniteData, keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ChevronDown, FileText, Inbox, Loader2, Mail, MailOpen, Paperclip, PenSquare, RefreshCw, Search, Send, Settings2, Sparkles, Star, Trash2, X } from 'lucide-react';
+import { AlarmClock, Archive, ChevronDown, FileText, Inbox, Loader2, Mail, MailOpen, Paperclip, PenSquare, RefreshCw, Search, Send, Settings2, Sparkles, Star, Trash2, X } from 'lucide-react';
+import { SnoozedPane } from './email-snooze';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { useModuleOn } from '@/lib/modules';
@@ -253,7 +254,29 @@ function Client() {
     return () => document.removeEventListener('keydown', onKey);
   }, [provider, visible, openKey, step, act, compose, triageOpen]);
 
-  const changeFolder = (next: EmailFolder) => { setFolder(next); setOpenKey(null); setChecked(new Set()); setFilter('all'); };
+  const changeFolder = (next: EmailFolder) => { setFolder(next); setSnoozedOpen(false); setOpenKey(null); setChecked(new Set()); setFilter('all'); };
+  // Snoozed is Octipus's own list (core/email/snooze.ts), not a mailbox folder.
+  const [snoozedOpen, setSnoozedOpen] = useState(false);
+  const snoozeConversation = async (c: Conversation, ids: string[], until: Date) => {
+    const p = c.latest.provider;
+    try {
+      const res = await api.post<{ snoozed?: { id: string }; error?: string }>('/email/snooze', {
+        ids, wakeAt: until.toISOString(), provider: p, ...(c.latest.threadId ? { threadId: c.latest.threadId } : {}),
+        from: c.latest.from, subject: c.latest.subject, snippet: c.latest.snippet,
+      });
+      if (res.error || !res.snoozed) throw new Error(res.error ?? 'Could not snooze the conversation.');
+      const gone = new Set([...ids, ...c.ids]);
+      patchLists((rows) => rows.filter((it) => !gone.has(it.id)));
+      setOpenKey(null);
+      void client.invalidateQueries({ queryKey: ['email-snoozed'] });
+      const id = res.snoozed.id;
+      setNotice({ text: `Snoozed until ${until.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}.`, action: { label: 'Undo', run: () => {
+        setNotice(null);
+        void api.post(`/email/snoozed/${encodeURIComponent(id)}/unsnooze`, {})
+          .then(() => client.invalidateQueries({ queryKey: ['email-list', scope] }), (err: unknown) => setError((err as Error).message));
+      } } });
+    } catch (err) { setError((err as Error).message); }
+  };
   const checkedIds = visible.filter((c) => checked.has(c.key)).flatMap((c) => c.ids);
   const filters: Array<[string, string]> = [['all', 'All'], ['unread', 'Unread']];
   const priorityFilter = ['high', 'normal', 'low'].includes(filter) ? filter : '';
@@ -319,15 +342,21 @@ function Client() {
             <ul className="flex gap-1 overflow-x-auto px-2 py-1.5 lg:block lg:space-y-0.5 lg:p-0">
               {FOLDERS.map(({ id, label: name, icon: Icon }) => (
                 <li key={id}>
-                  <button aria-current={folder === id ? 'page' : undefined} onClick={() => changeFolder(id)} className={`flex w-full items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm ${folder === id ? 'bg-primary-container font-medium text-on-primary-container' : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'}`}>
+                  <button aria-current={folder === id && !snoozedOpen ? 'page' : undefined} onClick={() => changeFolder(id)} className={`flex w-full items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm ${folder === id && !snoozedOpen ? 'bg-primary-container font-medium text-on-primary-container' : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'}`}>
                     <Icon className="h-4 w-4 shrink-0" /> <span className="flex-1 text-left">{name}</span>
                     {id === 'inbox' && !!unreadCount && <span className="text-xs tabular-nums" aria-label={`${unreadCount} unread`}>{unreadCount}</span>}
                   </button>
                 </li>
               ))}
+              <li>
+                <button aria-current={snoozedOpen ? 'page' : undefined} onClick={() => { setSnoozedOpen(true); setOpenKey(null); setChecked(new Set()); }} className={`flex w-full items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm ${snoozedOpen ? 'bg-primary-container font-medium text-on-primary-container' : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'}`}>
+                  <AlarmClock className="h-4 w-4 shrink-0" /> <span className="flex-1 text-left">Snoozed</span>
+                </button>
+              </li>
             </ul>
           </nav>
 
+          {snoozedOpen ? <SnoozedPane providers={providers} onUnsnoozed={(text) => { setNotice({ text }); void client.invalidateQueries({ queryKey: ['email-list', scope] }); }} /> : <>
           {/* List */}
           <section aria-label="Messages" className={`min-h-0 flex-col border-outline-variant/40 bg-surface lg:flex lg:border-r ${open ? 'hidden' : 'flex'}`}>
             <div className="flex min-h-10 flex-wrap items-center gap-1.5 border-b border-outline-variant/30 px-3 py-1.5">
@@ -422,6 +451,7 @@ function Client() {
                 onCompose={(mode: ComposeMode, source: EmailMessage) => setCompose(composeFor(mode, source, addressOf(source.provider)))}
                 onLabel={label}
                 onNotice={(text) => setNotice({ text })}
+                onSnooze={snoozeConversation}
               />
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-1 p-6 text-center text-sm text-on-surface-variant">
@@ -431,6 +461,7 @@ function Client() {
               </div>
             )}
           </section>
+          </>}
         </div>
       )}
 
@@ -441,7 +472,7 @@ function Client() {
           provider={compose.source?.provider ?? composeFrom ?? provider}
           accounts={compose.mode === 'new' && oauth.length > 1 ? oauth : undefined}
           onProvider={setComposeFrom}
-          onChange={setCompose}
+          onChange={(update) => setCompose((d) => (d ? update(d) : d))}
           onClose={() => setCompose(null)}
           onSent={(text) => { setCompose(null); setNotice({ text }); void client.invalidateQueries({ queryKey: ['email-list', scope], refetchType: folder === 'sent' || folder === 'drafts' ? 'active' : 'none' }); }}
         />

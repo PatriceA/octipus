@@ -72,8 +72,97 @@ export function replySubject(subject: string): string {
   return /^re\s*:/i.test(s) ? s : `Re: ${s}`;
 }
 
-/** The base64url MIME message Gmail's send takes. `inReplyTo`/`references` thread it under the original. */
-export function buildSendRaw(input: Recipients & { subject: string; body: string; inReplyTo?: string; references?: string }): string {
+/** A file that goes out with a mail. */
+export interface OutgoingFile {
+  name: string;
+  contentType: string;
+  content: Uint8Array;
+}
+
+/** At most this much attached to one mail, all files together (what Gmail and Outlook accept). */
+export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+/** At most this many files on one mail. */
+export const MAX_ATTACHMENTS = 20;
+
+/**
+ * A file name safe to put in a header and to save on the recipient's disk:
+ * no path, no control or quote characters, at most 120 characters. Pure.
+ */
+export function safeFileName(raw: string): string {
+  const base = raw.replace(/\\/g, '/').split('/').pop() ?? '';
+  const clean = [...base]
+    .filter((ch) => ch.charCodeAt(0) >= 0x20 && ch.charCodeAt(0) !== 0x7f && !'"<>:|?*;'.includes(ch))
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\.+/, '');
+  if (!clean) return 'attachment';
+  if (clean.length <= 120) return clean;
+  const dot = clean.lastIndexOf('.');
+  const ext = dot > 0 && clean.length - dot <= 12 ? clean.slice(dot) : '';
+  return clean.slice(0, 120 - ext.length) + ext;
+}
+
+/** A content type as `type/subtype`, or the generic one: nothing else reaches the header. Pure. */
+export function safeContentType(raw: string | undefined): string {
+  const type = (raw ?? '').toLowerCase().split(';')[0].trim();
+  return /^[a-z0-9][\w.+-]*\/[a-z0-9][\w.+-]*$/.test(type) ? type : 'application/octet-stream';
+}
+
+/** Check the files of one mail against the limits; throws EmailInputError. */
+export function checkAttachments(files: Array<{ content: Uint8Array }>): void {
+  if (files.length > MAX_ATTACHMENTS) throw new EmailInputError(`At most ${MAX_ATTACHMENTS} attachments per message.`);
+  const total = files.reduce((sum, f) => sum + f.content.byteLength, 0);
+  if (total > MAX_ATTACHMENT_BYTES) throw new EmailInputError(`Attachments may add up to ${MAX_ATTACHMENT_BYTES / 1048576} MB per message.`);
+}
+
+/** Base64 in lines of 76 characters, as MIME bodies are written. */
+function base64Lines(content: Uint8Array | string): string {
+  const b64 = (typeof content === 'string' ? Buffer.from(content, 'utf8') : Buffer.from(content)).toString('base64');
+  return b64.match(/.{1,76}/g)?.join('\r\n') ?? '';
+}
+
+/** A MIME parameter: quoted ASCII, plus the RFC 2231 form when the name is not plain ASCII. */
+function fileNameParam(param: 'name' | 'filename', name: string): string {
+  const ascii = [...name].every((ch) => ch >= ' ' && ch <= '~');
+  const fallback = [...name].map((ch) => (ch >= ' ' && ch <= '~' && ch !== '"' && ch !== '\\' ? ch : '_')).join('');
+  return ascii ? `${param}="${fallback}"` : `${param}="${fallback}"; ${param}*=UTF-8''${encodeURIComponent(name)}`;
+}
+
+let boundaryCount = 0;
+/** A boundary that cannot occur in base64 or in the encoded parts it separates ("=_" never appears in base64 lines). */
+function boundary(): string {
+  boundaryCount = (boundaryCount + 1) % 1_000_000;
+  return `=_octipus_${Date.now().toString(36)}_${boundaryCount}_${Math.random().toString(36).slice(2, 12)}`;
+}
+
+/** The body: plain text alone, or plain text and HTML as alternatives. Base64, so no line of it can look like a boundary. */
+function bodyPart(text: string, html: string | undefined): string[] {
+  const plain = ['Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: base64', '', base64Lines(text)];
+  if (!html) return plain;
+  const b = boundary();
+  return [
+    `Content-Type: multipart/alternative; boundary="${b}"`, '',
+    `--${b}`, ...plain,
+    `--${b}`, 'Content-Type: text/html; charset=utf-8', 'Content-Transfer-Encoding: base64', '', base64Lines(html),
+    `--${b}--`,
+  ];
+}
+
+export type SendMimeInput = Recipients & { subject: string; body: string; html?: string; attachments?: OutgoingFile[]; inReplyTo?: string; references?: string };
+
+/** The base64url MIME message Gmail's JSON send takes. */
+export function buildSendRaw(input: SendMimeInput): string {
+  return Buffer.from(buildSendMime(input), 'utf8').toString('base64url');
+}
+
+/**
+ * The MIME message of a mail. `inReplyTo`/`references` thread it under the
+ * original. With `html` the mail carries text and HTML as alternatives; with
+ * `attachments` it is multipart/mixed. The caller passes HTML it built from a
+ * whitelist (core/email/compose-format.ts), never HTML a browser handed over.
+ */
+export function buildSendMime(input: SendMimeInput): string {
   const lines = [`To: ${input.to.join(', ')}`];
   if (input.cc.length) lines.push(`Cc: ${input.cc.join(', ')}`);
   if (input.bcc.length) lines.push(`Bcc: ${input.bcc.join(', ')}`);
@@ -83,6 +172,30 @@ export function buildSendRaw(input: Recipients & { subject: string; body: string
     lines.push(`In-Reply-To: ${inReplyTo}`);
     lines.push(`References: ${[messageIds(input.references), inReplyTo].filter(Boolean).join(' ')}`);
   }
-  lines.push('MIME-Version: 1.0', 'Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: 8bit', '', input.body);
-  return Buffer.from(lines.join('\r\n'), 'utf8').toString('base64url');
+  lines.push('MIME-Version: 1.0');
+  const files = input.attachments ?? [];
+  if (!input.html && files.length === 0) {
+    // A plain mail keeps the shape it always had.
+    lines.push('Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: 8bit', '', input.body);
+    return lines.join('\r\n');
+  }
+  if (files.length === 0) {
+    lines.push(...bodyPart(input.body, input.html));
+    return lines.join('\r\n');
+  }
+  checkAttachments(files);
+  const b = boundary();
+  lines.push(`Content-Type: multipart/mixed; boundary="${b}"`, '', `--${b}`, ...bodyPart(input.body, input.html));
+  for (const file of files) {
+    const name = safeFileName(file.name);
+    lines.push(
+      `--${b}`,
+      `Content-Type: ${safeContentType(file.contentType)}; ${fileNameParam('name', name)}`,
+      `Content-Disposition: attachment; ${fileNameParam('filename', name)}`,
+      'Content-Transfer-Encoding: base64', '',
+      base64Lines(file.content),
+    );
+  }
+  lines.push(`--${b}--`, '');
+  return lines.join('\r\n');
 }
