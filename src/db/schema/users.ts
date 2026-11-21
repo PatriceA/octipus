@@ -76,6 +76,8 @@ export interface UserPreferences {
   timezone?: string;
   /** Email triage categories, name → description (src/core/email/service.ts). Unset = presets. */
   emailCategories?: Record<string, string>;
+  /** Which calendars the Calendar page shows (src/core/calendar/calendars.ts). */
+  calendar?: import('@/shared/calendar').CalendarPreferences;
 }
 
 export type User = typeof users.$inferSelect;

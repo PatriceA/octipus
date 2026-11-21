@@ -1,7 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest';
 const token = vi.hoisted(() => vi.fn());
 vi.mock('@/security/oauth', () => ({ getOAuthManager: () => ({ getValidToken: token }) }));
-import { calendarEventAttendees, calendarWriteBody, writeCalendarEvent } from './manage';
+import { calendarEventAttendees, calendarWriteBody, deleteCalendarEvent, respondToCalendarEvent, writeCalendarEvent } from './manage';
 const input = { title: 'Review', start: '2026-11-04T09:00:00+01:00', end: '2026-11-04T10:00:00+01:00', allDay: false, location: '' };
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 test('timed events use absolute times and edits leave description and attendees untouched', () => {
@@ -46,4 +46,53 @@ test('provider writes use only the caller token and encode event IDs as one segm
   await writeCalendarEvent('alice', 'google', input, 'event/with?parts');
   expect(token).toHaveBeenCalledWith('alice', 'google');
   expect(request).toHaveBeenCalledWith('https://www.googleapis.com/calendar/v3/calendars/primary/events/event%2Fwith%3Fparts', expect.objectContaining({ method: 'PATCH', headers: { Authorization: 'Bearer caller-secret', 'Content-Type': 'application/json' } }));
+});
+
+const calls = (request: ReturnType<typeof vi.fn>) => request.mock.calls.map(([url, init]) => ({ url, method: (init as RequestInit).method, body: (init as RequestInit).body ? JSON.parse((init as RequestInit).body as string) : undefined }));
+
+test('a named calendar is written by its id, one path segment; Microsoft through the calendar', async () => {
+  token.mockResolvedValue('caller-secret'); const request = vi.fn(async () => new Response('{"id":"e"}')); vi.stubGlobal('fetch', request);
+  await writeCalendarEvent('alice', 'google', input, undefined, { calendarId: 'team/x@group.calendar.google.com' });
+  await writeCalendarEvent('alice', 'microsoft', input, 'evt', { calendarId: 'cal=1' });
+  await deleteCalendarEvent('alice', 'microsoft', 'evt');
+  expect(calls(request).map((c) => [c.method, c.url])).toEqual([
+    ['POST', 'https://www.googleapis.com/calendar/v3/calendars/team%2Fx%40group.calendar.google.com/events'],
+    ['PATCH', 'https://graph.microsoft.com/v1.0/me/calendars/cal%3D1/events/evt'],
+    ['DELETE', 'https://graph.microsoft.com/v1.0/me/events/evt'],
+  ]);
+});
+
+test('guests are invited on create only, and Google is asked to tell them', async () => {
+  token.mockResolvedValue('caller-secret'); const request = vi.fn(async () => new Response('{"id":"e"}')); vi.stubGlobal('fetch', request);
+  await writeCalendarEvent('alice', 'google', { ...input, attendees: ['ada@x.dev', ' grace@x.dev '] });
+  await writeCalendarEvent('alice', 'google', { ...input, attendees: ['ada@x.dev'] }, 'evt');
+  await writeCalendarEvent('alice', 'google', input, 'evt', { notify: true });
+  await deleteCalendarEvent('alice', 'google', 'evt', { calendarId: 'team', notify: true });
+  const [create, edit, notified, removed] = calls(request);
+  expect(create.url).toBe('https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=all');
+  expect(create.body.attendees).toEqual([{ email: 'ada@x.dev' }, { email: 'grace@x.dev' }]);
+  // An edit never replaces the guest list, and stays quiet unless the caller agreed to notify.
+  expect(edit.url).toBe('https://www.googleapis.com/calendar/v3/calendars/primary/events/evt');
+  expect(edit.body).not.toHaveProperty('attendees');
+  expect(notified.url).toBe('https://www.googleapis.com/calendar/v3/calendars/primary/events/evt?sendUpdates=all');
+  expect(removed).toMatchObject({ method: 'DELETE', url: 'https://www.googleapis.com/calendar/v3/calendars/team/events/evt?sendUpdates=all' });
+  expect(calendarWriteBody('microsoft', { ...input, attendees: ['ada@x.dev'] }).attendees).toEqual([{ emailAddress: { address: 'ada@x.dev' }, type: 'required' }]);
+  expect(() => calendarWriteBody('google', { ...input, attendees: ['Ada <ada@x.dev>'] })).toThrow(/email addresses/);
+});
+
+test('answering an invitation: Microsoft has an endpoint, Google changes the caller\'s own guest row', async () => {
+  token.mockResolvedValue('caller-secret');
+  const graph = vi.fn(async () => new Response(null, { status: 202 })); vi.stubGlobal('fetch', graph);
+  await respondToCalendarEvent('alice', 'microsoft', 'evt', 'tentative');
+  expect(calls(graph)).toEqual([{ method: 'POST', url: 'https://graph.microsoft.com/v1.0/me/events/evt/tentativelyAccept', body: { sendResponse: true } }]);
+
+  const google = vi.fn(async (_url: string, init?: RequestInit) => new Response(init?.method === 'GET' ? '{"attendees":[{"email":"ada@x.dev","responseStatus":"accepted"},{"email":"me@x.dev","self":true,"responseStatus":"needsAction"}]}' : '{}'));
+  vi.stubGlobal('fetch', google);
+  await respondToCalendarEvent('alice', 'google', 'evt', 'declined', { calendarId: 'me@x.dev' });
+  const [read, write] = calls(google);
+  expect(read.url).toBe('https://www.googleapis.com/calendar/v3/calendars/me%40x.dev/events/evt?fields=attendees');
+  expect(write).toEqual({ method: 'PATCH', url: 'https://www.googleapis.com/calendar/v3/calendars/me%40x.dev/events/evt?sendUpdates=all', body: { attendees: [{ email: 'ada@x.dev', responseStatus: 'accepted' }, { email: 'me@x.dev', self: true, responseStatus: 'declined' }] } });
+
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{"attendees":[{"email":"ada@x.dev"}]}')));
+  await expect(respondToCalendarEvent('alice', 'google', 'evt', 'accepted')).rejects.toThrow(/guest list/);
 });
