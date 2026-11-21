@@ -257,13 +257,28 @@ describe('durable learning checks', () => {
     expect(evidence.some(row => row.kind === 'execution' && row.text.includes('Observed failure'))).toBe(true);
     expect(evidence.some(row => row.text.includes('Foreign evidence'))).toBe(false);
     const { enqueueTurnLearning } = await import('@/core/learning/queue');
+    const { getConfig } = await import('@/config');
+    const { reviewEveryToolCalls, minReviewIntervalMinutes } = getConfig().learning;
+    const toolCalls = async (n: number, label: string) => {
+      for (let i = 0; i < n; i++) await agentEventRepository.create({ sessionId: learnSid, agentId: 'test', userId: alice,
+        type: 'action', data: { type: 'cli_tool_result', output: `${label} ${i}` } });
+    };
+    // The interval runs from when the previous check was created: move the plan check back past it.
+    const pastInterval = () => executeRaw(`UPDATE background_jobs SET created_at = now() - interval '${minReviewIntervalMinutes + 1} minutes'
+      WHERE kind = 'learning' AND payload->>'sessionId' = '${learnSid}'`);
+    await toolCalls(reviewEveryToolCalls - 2, 'Verified additional work');
     await enqueueTurnLearning(learnSid, alice, 'turn-after-step');
-    expect((await (await view()).json()).checks).toHaveLength(1); // one tool call since the last review
-    for (let i = 0; i < 10; i++) await agentEventRepository.create({ sessionId: learnSid, agentId: 'test', userId: alice,
-      type: 'action', data: { type: 'cli_tool_result', output: `Verified additional work ${i}` } });
+    expect((await (await view()).json()).checks).toHaveLength(1); // one tool call short of reviewEveryToolCalls
+    await toolCalls(1, 'Verified final work');
     await enqueueTurnLearning(learnSid, alice, 'turn-after-step');
-    expect((await (await view()).json()).checks).toHaveLength(2); // the counter reached reviewEveryToolCalls
+    expect((await (await view()).json()).checks).toHaveLength(1); // enough tool calls, but too soon after the plan check
+    await pastInterval();
+    await enqueueTurnLearning(learnSid, alice, 'turn-after-step');
+    expect((await (await view()).json()).checks).toHaveLength(2); // the counter reached reviewEveryToolCalls, counted across turns
     await enqueueTurnLearning(learnSid, alice, 'turn-after-step');
     expect((await (await view()).json()).checks).toHaveLength(2);
+    await toolCalls(reviewEveryToolCalls, 'More work');
+    await enqueueTurnLearning(learnSid, alice, 'turn-after-step');
+    expect((await (await view()).json()).checks).toHaveLength(2); // the new check is too recent
   });
 });
