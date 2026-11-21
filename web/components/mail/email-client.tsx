@@ -11,6 +11,7 @@ import type { MailAccountView } from '../../../src/shared/mail';
 import { type ComposeDraft, type ComposeMode, composeFor, EmailCompose } from './email-compose';
 import { EmailReader } from './email-reader';
 import { btn, btnGhost, btnPrimary, type Conversation, conversations, type EmailFolder, type EmailMessage, type EmailProvider, type EmailTriage, field, type InboxItem, ListSkeleton, priorityTone, providerLabel, shortDate, triageWhy, who } from './email-shared';
+import { EmailIndexSetting } from './email-index-setting';
 import { MailboxInbox } from './mailbox-inbox';
 import { MailboxManager, mailAccountsKey } from './mailbox-manager';
 import { rowsInScope, startTriage, TriageDialog, type TriageRun, type TriageSettings } from './triage-dialog';
@@ -288,7 +289,7 @@ function Client() {
           </div>
         )}
         {provider && <button className={btnGhost} aria-label="Refresh" title="Refresh" disabled={list.isFetching} onClick={() => { fresh.current = true; void list.refetch().finally(() => { fresh.current = false; }); }}><RefreshCw className={`h-4 w-4 ${list.isFetching ? 'animate-spin' : ''}`} /></button>}
-        {mailOn && <button className={btnGhost} aria-label="Manage mailboxes" title="Manage mailboxes" aria-pressed={manage} onClick={() => setManage(!manage)}><Settings2 className="h-4 w-4" /></button>}
+        {(mailOn || oauth.length > 0) && <button className={btnGhost} aria-label="Manage mailboxes" title="Mailbox settings" aria-pressed={manage} onClick={() => setManage(!manage)}><Settings2 className="h-4 w-4" /></button>}
       </div>
 
       {(error || notice) && (
@@ -299,7 +300,10 @@ function Client() {
       )}
 
       {manage ? (
-        <div className="min-h-0 flex-1 overflow-y-auto p-6"><MailboxManager /></div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-6">
+          {oauth.length > 0 && <EmailIndexSetting />}
+          {mailOn && <MailboxManager />}
+        </div>
       ) : imapAccount ? (
         <div className="min-h-0 flex-1 overflow-y-auto p-6"><MailboxInbox key={imapAccount.id} account={imapAccount} /></div>
       ) : !provider ? (

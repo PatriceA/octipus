@@ -28,10 +28,10 @@ export async function detectProvider(userId: string): Promise<EmailProvider | nu
   return null;
 }
 
-async function call(token: string, base: string, method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<unknown> {
+async function call(token: string, base: string, method: string, path: string, body?: unknown, signal?: AbortSignal, extra?: Record<string, string>): Promise<unknown> {
   const res = await fetch(`${base}${path}`, {
     method,
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { ...extra, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
   });
@@ -53,6 +53,14 @@ export async function gmailApi(userId: string, method: string, path: string, bod
 
 export async function graphApi(userId: string, method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<unknown> {
   return call(await requireToken(userId, 'microsoft'), GRAPH_BASE, method, path, body, signal);
+}
+
+/**
+ * A Graph GET with a `Prefer` header: the mail index (mail-index.ts) asks for
+ * bigger delta pages with `odata.maxpagesize`. `path` is relative to /v1.0.
+ */
+export async function graphGetPrefer(userId: string, path: string, prefer: string, signal?: AbortSignal): Promise<unknown> {
+  return call(await requireToken(userId, 'microsoft'), GRAPH_BASE, 'GET', path, undefined, signal, { Prefer: prefer });
 }
 
 /** Which of the two providers this user has connected, Google first. */

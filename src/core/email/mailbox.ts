@@ -4,9 +4,9 @@
  * conversations, attachments, and actions on several messages at once. The
  * shapes are the ones in src/shared/email.ts.
  *
- * Like the rest of core/email this is a live view of the provider: every call
- * runs on the calling user's own OAuth token, nothing is stored, and no
- * sender, subject or body is logged. Mail is untrusted: HTML is sanitized in
+ * Every call runs on the calling user's own OAuth token, and no sender,
+ * subject or body is logged. Lists come from the local header index
+ * (mail-index.ts) when it is fresh, else live from the provider. Mail is untrusted: HTML is sanitized in
  * normalize.ts, ids go into provider paths as single encoded segments, and a
  * page token from the client is never used as a URL.
  *
@@ -19,6 +19,7 @@ import type { EmailAccountsResponse, EmailAttachment, EmailBatchAction, EmailBat
 import { mapLimit } from '@/utils/concurrency';
 import { coreLogger } from '@/utils/logger';
 import { buildGmailBatch, parseGmailBatch } from './gmail-batch';
+import { applyIndexAction, listWithIndex, syncMailIndexSoon } from './mail-index';
 import { findGmailPart, type GmailMessage, type GraphMessage, gmailToMessage, m365ToMessage, normalizeGmail, normalizeM365List } from './normalize';
 import { connectedProviders, detectProvider, gmailApi, gmailBatch, graphApi, graphBytes } from './providers';
 
@@ -89,6 +90,8 @@ export interface ListOptions {
   unread?: boolean;
   limit: number;
   pageToken?: string;
+  /** Only mail received before this (the live pages after the local index's window, mail-index.ts). */
+  before?: Date;
 }
 
 export function isEmailFolder(value: unknown): value is EmailFolder {
@@ -115,7 +118,7 @@ export function gmailListPath(opts: ListOptions): string {
   const folder = GMAIL_FOLDER[opts.folder];
   const params = [`maxResults=${opts.limit}`];
   for (const label of [...folder.labels, ...(opts.unread ? ['UNREAD'] : [])]) params.push(`labelIds=${label}`);
-  const q = [folder.q, cleanQuery(opts.q)].filter(Boolean).join(' ');
+  const q = [folder.q, cleanQuery(opts.q), ...(opts.before ? [`before:${Math.floor(opts.before.getTime() / 1000)}`] : [])].filter(Boolean).join(' ');
   if (q) params.push(`q=${encodeURIComponent(q)}`);
   if (folder.spamTrash) params.push('includeSpamTrash=true');
   if (opts.pageToken) {
@@ -181,7 +184,11 @@ export function graphListPath(opts: ListOptions): string {
     else if (page.skip > 0) throw new MailboxError('Invalid page token.');
   } else {
     if ('skipToken' in page) throw new MailboxError('Invalid page token.');
-    const filters = [...(opts.unread ? ['isRead eq false'] : []), ...(opts.folder === 'starred' ? ["flag/flagStatus eq 'flagged'"] : [])];
+    const filters = [
+      ...(opts.before ? [`receivedDateTime lt ${opts.before.toISOString()}`] : []),
+      ...(opts.unread ? ['isRead eq false'] : []),
+      ...(opts.folder === 'starred' ? ["flag/flagStatus eq 'flagged'"] : []),
+    ];
     if (filters.length) params.push(`$filter=${encodeURIComponent(['receivedDateTime ge 1900-01-01T00:00:00Z', ...filters].join(' and '))}`);
     params.push(`$orderby=${encodeURIComponent('receivedDateTime desc')}`);
     if (page.skip > 0) params.push(`$skip=${page.skip}`);
@@ -245,21 +252,31 @@ const CACHE_TTL_MS = 30_000;
 const CACHE_MAX = 400;
 const cache = new Map<string, { at: number; value: EmailListResponse }>();
 const cacheKey = (userId: string, provider: EmailProvider, o: ListOptions) =>
-  [userId, provider, o.folder, cleanQuery(o.q), o.unread ? 'u' : '', o.limit, o.pageToken ?? ''].join('\n');
+  [userId, provider, o.folder, cleanQuery(o.q), o.unread ? 'u' : '', o.limit, o.pageToken ?? '', o.before?.toISOString() ?? ''].join('\n');
 
 /** Forget this user's remembered list pages: call after anything that changes their mailbox. */
 export function invalidateEmailCache(userId: string): void {
   const prefix = `${userId}\n`;
   for (const key of cache.keys()) if (key.startsWith(prefix)) cache.delete(key);
+  // Whatever changed is read into the local index at its next (soon) sync.
+  syncMailIndexSoon(userId);
 }
 
-/** One page of a folder, newest first. `fresh` skips (and replaces) the remembered page. */
-export async function listMessages(userId: string, provider: EmailProvider, opts: ListOptions, fresh = false): Promise<EmailListResponse> {
+/**
+ * One page of a folder, newest first: from the local index when it can answer
+ * (mail-index.ts), else from the provider. `fresh` (the page's Refresh) syncs
+ * the index first, or skips (and replaces) the remembered live page.
+ */
+export function listMessages(userId: string, provider: EmailProvider, opts: ListOptions, fresh = false): Promise<EmailListResponse> {
+  return listWithIndex(userId, provider, opts, fresh, (live) => listLive(userId, provider, live, fresh));
+}
+
+async function listLive(userId: string, provider: EmailProvider, opts: ListOptions, fresh: boolean): Promise<EmailListResponse> {
   const key = cacheKey(userId, provider, opts);
   const hit = cache.get(key);
   if (!fresh && hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
 
-  const wantsCount = opts.folder === 'inbox' && !opts.pageToken && !cleanQuery(opts.q);
+  const wantsCount = opts.folder === 'inbox' && !opts.pageToken && !opts.before && !cleanQuery(opts.q);
   const counting = wantsCount ? unreadInInbox(userId, provider) : Promise.resolve(undefined);
   let items: InboxItem[];
   let nextPageToken: string | undefined;
@@ -406,25 +423,35 @@ export async function batchAction(userId: string, provider: EmailProvider, ids: 
   const unique = [...new Set(ids)];
   if (unique.length === 0) return { done: [], failed: [] };
   if (unique.length > BATCH_MAX) throw new MailboxError(`At most ${BATCH_MAX} messages at once.`);
+  let result: EmailBatchResponse;
   try {
-    if (provider === 'google') {
-      const change = GMAIL_LABEL_CHANGE[action];
-      if (change) {
-        // One call for all of them, and all or nothing.
-        try {
-          await gmailApi(userId, 'POST', '/messages/batchModify', { ids: unique, ...change });
-          return { done: unique, failed: [] };
-        } catch {
-          return { done: [], failed: unique };
-        }
-      }
-    }
-    const results = await mapLimit(unique, 5, (id) => (provider === 'google'
-      ? gmailApi(userId, 'POST', `/messages/${encodeURIComponent(id)}/${action === 'trash' ? 'trash' : 'untrash'}`)
-      : graphAction(userId, id, action)
-    ).then(() => true, () => false));
-    return { done: unique.filter((_, i) => results[i]), failed: unique.filter((_, i) => !results[i]) };
+    result = await applyAction(userId, provider, unique, action);
   } finally {
     invalidateEmailCache(userId);
   }
+  // The local index shows the change at once; a failure there only waits for the next sync.
+  await applyIndexAction(userId, provider, result.done, action).catch((err: unknown) => {
+    coreLogger.warn({ userId, error: String((err as Error)?.message ?? err).slice(0, 120) }, 'email: index not updated after an action; the next sync catches up');
+  });
+  return result;
+}
+
+async function applyAction(userId: string, provider: EmailProvider, unique: string[], action: EmailBatchAction): Promise<EmailBatchResponse> {
+  if (provider === 'google') {
+    const change = GMAIL_LABEL_CHANGE[action];
+    if (change) {
+      // One call for all of them, and all or nothing.
+      try {
+        await gmailApi(userId, 'POST', '/messages/batchModify', { ids: unique, ...change });
+        return { done: unique, failed: [] };
+      } catch {
+        return { done: [], failed: unique };
+      }
+    }
+  }
+  const results = await mapLimit(unique, 5, (id) => (provider === 'google'
+    ? gmailApi(userId, 'POST', `/messages/${encodeURIComponent(id)}/${action === 'trash' ? 'trash' : 'untrash'}`)
+    : graphAction(userId, id, action)
+  ).then(() => true, () => false));
+  return { done: unique.filter((_, i) => results[i]), failed: unique.filter((_, i) => !results[i]) };
 }

@@ -264,3 +264,27 @@ test('All inboxes merges Gmail and Outlook by date and acts on each message in i
   await page.getByRole('button', { name: 'Compose' }).click();
   await expect(page.getByRole('form', { name: 'New message' }).getByLabel('From')).toHaveValue('google');
 });
+
+test('mailbox settings say what the local index keeps, and turning it off deletes it', async ({ authenticatedPage: page }) => {
+  await stubAllDefaults(page);
+  await stubMailbox(page, [row('a')]);
+  const puts: unknown[] = [];
+  let enabled = true;
+  await page.route('**/api/email/index', route => {
+    if (route.request().method() === 'PUT') { puts.push(route.request().postDataJSON()); enabled = route.request().postDataJSON().enabled; }
+    return json(route, 200, enabled
+      ? { enabled, mailboxes: [{ provider: 'google', status: 'ready', messages: 1234, coveredFrom: now, lastSyncAt: now, lastError: null }] }
+      : { enabled, mailboxes: [] });
+  });
+  await page.goto('/email');
+  await page.getByRole('button', { name: 'Manage mailboxes' }).click();
+  const setting = page.getByRole('region', { name: 'Local mail index' });
+  await expect(setting).toContainText('Never the body or attachments');
+  await expect(setting).toContainText('Gmail: up to date · 1234 messages');
+  const box = setting.getByLabel(/Keep a local index/);
+  await expect(box).toBeChecked();
+  await box.uncheck();
+  await expect.poll(() => puts).toEqual([{ enabled: false }]);
+  await expect(box).not.toBeChecked();
+  await expect(setting).not.toContainText('1234 messages');
+});

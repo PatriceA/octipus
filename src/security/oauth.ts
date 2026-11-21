@@ -492,6 +492,12 @@ export class OAuthManager {
 
       await v.delete(userId, entry.id);
       securityLogger.info({ userId, provider }, 'OAuth token revoked');
+      // A disconnected mailbox keeps no local index of its headers.
+      if (provider === 'google' || provider === 'microsoft') {
+        await import('@/core/email/mail-index')
+          .then(({ forgetMailIndex }) => forgetMailIndex(userId, provider))
+          .catch((err: unknown) => securityLogger.warn({ userId, provider, err: String((err as Error)?.message ?? err).slice(0, 120) }, 'Mail index not deleted on disconnect; the next index sweep deletes it'));
+      }
     }
   }
 

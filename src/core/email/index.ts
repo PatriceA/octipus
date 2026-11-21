@@ -26,3 +26,4 @@ export { gmailToMessage, m365ToMessage, normalizeGmail, normalizeGmailList, norm
 export type { EmailAddress, EmailMessage, EmailProvider, EmailTriage, InboxItem } from './types';
 export { batchAction, getAttachment, getThread, invalidateEmailCache, listAccounts, listMessages, MailboxError, readMessage, resolveProvider } from './mailbox';
 export { EmailInputError } from './send-mime';
+export { mailIndexStatus, setMailIndexEnabled, syncMailIndex } from './mail-index';

@@ -199,6 +199,54 @@ All under `/api/mail`, scoped by the workspace header like every space route.
 | `DELETE /drafts/:id` | Remove a draft or a failed send |
 | `POST /drafts/:id/send` | `{ confirm: true, expectedRevision? }`; the web UI supplies the saved message view's revision |
 
+## Local index of Gmail and Outlook headers
+
+The Google and Microsoft 365 mailboxes are read through their providers'
+APIs, not over IMAP. So that the Email page's lists, its search and the
+inbox's unread count open at once, Octipus keeps a small index of those
+mailboxes' **headers** (`src/core/email/mail-index.ts`, tables `email_index`
+and `email_index_state`). It is on unless the owner turns it off.
+
+**What is stored**, per message of the last 90 days: its id and conversation
+id, its folders (inbox, sent, drafts, archive, trash) and flags (unread,
+starred), sender, recipients and cc, subject, date, whether it has
+attachments (Outlook only), and the provider's own short preview, cut to 300
+characters. Per mailbox: where the provider's change feed stands, when it was
+last synced, the last sync error, and the provider's unread count for the
+inbox. **Never stored:** a body, an attachment, or anything of the HTML.
+Nothing of it is logged.
+
+**Why:** without it, every list page costs one provider call per message,
+search waits for the provider, and nothing can be shown before the provider
+answers.
+
+**How far back:** Gmail reads the newest 2000 messages of the last 90 days;
+Outlook reads each folder's 90 days whole (its change feed only continues
+from the end of a full read), over several syncs if it is large. Mail older
+than that is still listed: past the indexed window a folder continues live
+from the provider.
+
+**Kept current:** a mailbox is read in full the first time it is opened in
+the Email page. Then, every 3 minutes, Gmail's history and Outlook's delta
+feed bring the changes, for mailboxes opened in the last 14 days. Archiving,
+reading, starring or trashing in the Email page changes the index at once,
+and a sync follows a few seconds later. A list is served from the index only
+when the mailbox's last sync is less than 10 minutes old (and, on Outlook,
+the folder was read to its end); otherwise the page reads live, as before.
+Search words are matched in the subject, sender and preview; a search with
+the provider's own operators (`from:`, `has:attachment`, quotes) goes to the
+provider.
+
+**Deleted:** with the user; when the Google or Microsoft account is
+disconnected; and at once when the owner turns the index off in **Email →
+Mailbox settings** (or `PUT /api/email/index {enabled: false}`). With it
+off nothing is synced or stored and every list is read live.
+
+| Method and path | What |
+|---|---|
+| `GET /api/email/index` | Whether the index is on, and per mailbox: `building`, `ready`, `stale` or `error`, how many messages it holds, when it last synced |
+| `PUT /api/email/index` | `{ enabled }`; off deletes the index |
+
 ## Not yet
 
 - The heartbeat's "new mail" check for IMAP/POP3 accounts (it covers Gmail

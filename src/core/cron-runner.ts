@@ -52,6 +52,7 @@ let lastMemoryRepair = 0;
 let memoryRepairRunning = false;
 let reminderSweepRunning = false;
 let mailSweepRunning = false;
+let mailIndexSweepRunning = false;
 let scanSweepRunning = false;
 
 /**
@@ -548,6 +549,17 @@ export function startModuleSweeps(now: Date): string[] {
       .then((stored) => { if (stored > 0) coreLogger.info({ stored }, 'Mail sync stored new messages'); })
       .catch((err: unknown) => coreLogger.error({ err }, 'Mail sync sweep failed'))
       .finally(() => { mailSweepRunning = false; });
+  }
+
+  // The local index of Gmail / Outlook headers (core/email/mail-index.ts):
+  // mailboxes the owner opened lately read their changes.
+  if (!mailIndexSweepRunning && isJobOn('email-index')) {
+    mailIndexSweepRunning = true;
+    started.push('email-index');
+    import('@/core/email/mail-index')
+      .then(({ syncDueMailIndexes }) => syncDueMailIndexes(now))
+      .catch((err: unknown) => coreLogger.error({ err }, 'Mail index sweep failed'))
+      .finally(() => { mailIndexSweepRunning = false; });
   }
 
   // Scan folders (core/scan-folders/sweep.ts): settled files into documents.

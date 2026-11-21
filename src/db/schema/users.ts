@@ -74,6 +74,8 @@ export interface UserPreferences {
   notificationsEnabled?: boolean;
   defaultModel?: string;
   timezone?: string;
+  /** Keep a local index of Gmail / Outlook headers (src/core/email/mail-index.ts). Unset = on; false = off, nothing stored. */
+  emailIndex?: boolean;
   /** Email triage categories, name → description (src/core/email/service.ts). Unset = presets. */
   emailCategories?: Record<string, string>;
   /** How "Triage inbox" runs for this user (src/core/email/triage-run.ts). Unset = defaults. */
