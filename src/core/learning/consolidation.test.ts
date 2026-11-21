@@ -122,6 +122,20 @@ async function read(id: string) {
 }
 
 describe('consolidateProposals', () => {
+  test('the row that keeps a cluster does not depend on the order of the ids', async () => {
+    // Ids chosen so the two lesser rows form the first pair the query returns.
+    const small = await seed({ id: '00000000-0000-4000-8000-000000000001', name: 'token-rotation', exemplarCount: 1 });
+    const candidate = await seed({ id: '00000000-0000-4000-8000-000000000002', name: 'credential-rotation', status: 'candidate', exemplarCount: 2, sourceRefs: ['session:d', 'session:e'] });
+    const big = await seed({ id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', name: 'rotate-credentials', exemplarCount: 3, sourceRefs: ['session:a', 'session:b', 'session:c'] });
+    complete.mockResolvedValue(reply('unchanged'));
+
+    expect(await consolidation.consolidateProposals(userId)).toMatchObject({ merged: 2 });
+
+    expect(await read(big)).toMatchObject({ status: 'pending', exemplarCount: 6 });
+    expect(await read(small)).toMatchObject({ status: 'merged', mergedIntoId: big });
+    expect(await read(candidate)).toMatchObject({ status: 'merged', mergedIntoId: big });
+  });
+
   test('duplicates merge into the pending one with the most observations, and the counts add up', async () => {
     const small = await seed({ name: 'token-rotation', exemplarCount: 1 });
     const big = await seed({ name: 'rotate-credentials', exemplarCount: 3, sourceRefs: ['session:a', 'session:b', 'session:c'] });

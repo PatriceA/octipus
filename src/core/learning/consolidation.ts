@@ -75,15 +75,19 @@ async function similarPairs(userId: string, threshold: number): Promise<Pair[]> 
   return rows.map(row => ({ a: row.a, b: row.b, similarity: Number(row.similarity) }));
 }
 
+/**
+ * Whether `p` is the better merge target: a pending row before a candidate,
+ * then the one with more observations, then the older (ids break a tie).
+ */
+function betterTarget(p: SkillProposalRecord, q: SkillProposalRecord): boolean {
+  if ((p.status === 'pending') !== (q.status === 'pending')) return p.status === 'pending';
+  if (p.status === 'pending' && p.exemplarCount !== q.exemplarCount) return p.exemplarCount > q.exemplarCount;
+  return p.createdAt.getTime() !== q.createdAt.getTime() ? p.createdAt < q.createdAt : p.id < q.id;
+}
+
 /** The pending member with the most observations, else the oldest. */
 function pickTarget(x: SkillProposalRecord, y: SkillProposalRecord): [target: SkillProposalRecord, absorbed: SkillProposalRecord] {
-  const older = (p: SkillProposalRecord, q: SkillProposalRecord) =>
-    p.createdAt.getTime() !== q.createdAt.getTime() ? p.createdAt < q.createdAt : p.id < q.id;
-  const xPending = x.status === 'pending';
-  const yPending = y.status === 'pending';
-  if (xPending !== yPending) return xPending ? [x, y] : [y, x];
-  if (xPending && x.exemplarCount !== y.exemplarCount) return x.exemplarCount > y.exemplarCount ? [x, y] : [y, x];
-  return older(x, y) ? [x, y] : [y, x];
+  return betterTarget(x, y) ? [x, y] : [y, x];
 }
 
 /**
@@ -118,6 +122,21 @@ export async function consolidateProposals(userId: string, opts: ConsolidationOp
       .where(and(inArray(skillProposals.id, ids), eq(skillProposals.userId, userId)))).map(row => [row.id, row]));
     // Rows absorbed (or changed) this round wait for the next read.
     const touched = new Set<string>();
+    // The pair holding the best target of all goes first. Taken in the
+    // order of the query (similarity, then ids), two lesser rows of a
+    // cluster could merge first and outgrow the row that should have kept
+    // the cluster, so which proposal survived depended on its random id.
+    const best = (pair: Pair): SkillProposalRecord | undefined => {
+      const x = rows.get(pair.a);
+      const y = rows.get(pair.b);
+      return x && y ? pickTarget(x, y)[0] : x ?? y;
+    };
+    pairs.sort((p, q) => {
+      const bp = best(p);
+      const bq = best(q);
+      if (bp && bq && bp.id !== bq.id) return betterTarget(bp, bq) ? -1 : 1;
+      return q.similarity - p.similarity;
+    });
     for (const pair of pairs) {
       if (report.merged >= maxMerges) break;
       if (touched.has(pair.a) || touched.has(pair.b)) continue;
