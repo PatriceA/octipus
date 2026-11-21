@@ -13,7 +13,8 @@
 import { ingestMeeting, type MeetingResult, meetingSlug } from '@/core/knowledge/meetings';
 import { getNoteRepository } from '@/db/repositories/note-repository';
 import { coreLogger } from '@/utils/logger';
-import { type CalendarDeps, type CalendarEvent, listCalendarEvents } from './events';
+import { selectedCalendars } from './calendars';
+import { type CalendarDeps, type CalendarEvent, type CalendarSource, listCalendarEvents } from './events';
 
 export interface ImportResult {
   imported: Array<MeetingResult & { title: string; at: string; provider: string }>;
@@ -59,12 +60,16 @@ export async function importCalendarMeetings(input: {
   includeAllDay?: boolean;
   deps?: CalendarDeps;
   createdByAgentId?: string | null;
+  /** Which calendars to read. Absent: the ones the user shows on the Calendar page, or each account's default when they never chose. */
+  calendars?: CalendarSource[];
 }): Promise<ImportResult> {
+  const calendars = input.calendars ?? (await selectedCalendars(input.userId, input.deps));
   const listed = await listCalendarEvents(input.userId, {
     from: input.from,
     to: input.to,
     limit: input.limit,
     deps: input.deps,
+    ...(calendars ? { calendars } : {}),
   });
 
   const notes = getNoteRepository();

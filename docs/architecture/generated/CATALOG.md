@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-731 mounted routes across 89 route files. The path is the full one, group prefix included — what a client actually calls.
+766 mounted routes across 94 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -102,6 +102,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/auth/login-mobile` | `src/api/routes/auth.ts` |
 | POST | `/api/auth/logout` | `src/api/routes/auth.ts` |
 | GET | `/api/auth/me` | `src/api/routes/auth.ts` |
+| GET | `/api/auth/oauth/:provider/accounts` | `src/api/routes/oauth.ts` |
+| POST | `/api/auth/oauth/:provider/accounts/default` | `src/api/routes/oauth.ts` |
 | GET | `/api/auth/oauth/:provider/authorize` | `src/api/routes/oauth.ts` |
 | GET | `/api/auth/oauth/:provider/callback` | `src/api/routes/oauth.ts` |
 | POST | `/api/auth/oauth/:provider/disconnect` | `src/api/routes/oauth.ts` |
@@ -120,9 +122,15 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/backups` | `src/api/routes/backups.ts` |
 | POST | `/api/backups/:id/verify` | `src/api/routes/backups.ts` |
 | POST | `/api/backups/run` | `src/api/routes/backups.ts` |
+| GET | `/api/calendar/calendars` | `src/api/routes/calendar.ts` |
 | GET | `/api/calendar/events` | `src/api/routes/calendar.ts` |
 | POST | `/api/calendar/events` | `src/api/routes/calendar.ts` |
+| DELETE | `/api/calendar/events/:id` | `src/api/routes/calendar.ts` |
 | PATCH | `/api/calendar/events/:id` | `src/api/routes/calendar.ts` |
+| GET | `/api/calendar/events/:id/details` | `src/api/routes/calendar.ts` |
+| POST | `/api/calendar/events/:id/respond` | `src/api/routes/calendar.ts` |
+| POST | `/api/calendar/freebusy` | `src/api/routes/calendar.ts` |
+| PUT | `/api/calendar/preferences` | `src/api/routes/calendar.ts` |
 | GET | `/api/capabilities` | `src/api/routes/capabilities.ts` |
 | POST | `/api/capabilities/:id/install` | `src/api/routes/capabilities.ts` |
 | POST | `/api/capabilities/install-all-missing` | `src/api/routes/capabilities.ts` |
@@ -190,11 +198,20 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/documents/:id/cancel` | `src/api/routes/documents.ts` |
 | GET | `/api/documents/:id/raw` | `src/api/routes/documents.ts` |
 | POST | `/api/documents/upload` | `src/api/routes/documents.ts` |
+| GET | `/api/email/accounts` | `src/api/routes/email-mailbox.ts` |
 | GET | `/api/email/categories` | `src/api/routes/email.ts` |
 | PUT | `/api/email/categories` | `src/api/routes/email.ts` |
+| POST | `/api/email/imap/message/:id/draft` | `src/api/routes/email-imap.ts` |
+| POST | `/api/email/imap/message/:id/reply-options` | `src/api/routes/email-imap.ts` |
+| POST | `/api/email/imap/message/:id/summarize` | `src/api/routes/email-imap.ts` |
+| POST | `/api/email/imap/message/:id/task` | `src/api/routes/email-imap.ts` |
+| PUT | `/api/email/imap/triage/label/:id` | `src/api/routes/email-imap.ts` |
 | GET | `/api/email/inbox` | `src/api/routes/email.ts` |
+| GET | `/api/email/index` | `src/api/routes/email-index.ts` |
+| PUT | `/api/email/index` | `src/api/routes/email-index.ts` |
 | GET | `/api/email/message/:id` | `src/api/routes/email.ts` |
 | POST | `/api/email/message/:id/archive` | `src/api/routes/email.ts` |
+| GET | `/api/email/message/:id/attachment/:attachmentId` | `src/api/routes/email-mailbox.ts` |
 | POST | `/api/email/message/:id/draft` | `src/api/routes/email.ts` |
 | POST | `/api/email/message/:id/mark-read` | `src/api/routes/email.ts` |
 | POST | `/api/email/message/:id/reply-options` | `src/api/routes/email.ts` |
@@ -202,11 +219,26 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/email/message/:id/summarize` | `src/api/routes/email.ts` |
 | POST | `/api/email/message/:id/task` | `src/api/routes/email.ts` |
 | POST | `/api/email/message/:id/unarchive` | `src/api/routes/email.ts` |
+| GET | `/api/email/messages` | `src/api/routes/email-mailbox.ts` |
+| POST | `/api/email/messages/batch` | `src/api/routes/email-mailbox.ts` |
 | POST | `/api/email/send` | `src/api/routes/email.ts` |
+| POST | `/api/email/snooze` | `src/api/routes/email-compose.ts` |
+| GET | `/api/email/snoozed` | `src/api/routes/email-compose.ts` |
+| POST | `/api/email/snoozed/:id/dismiss` | `src/api/routes/email-compose.ts` |
+| POST | `/api/email/snoozed/:id/unsnooze` | `src/api/routes/email-compose.ts` |
+| GET | `/api/email/thread/:threadId` | `src/api/routes/email-mailbox.ts` |
 | POST | `/api/email/triage` | `src/api/routes/email.ts` |
 | POST | `/api/email/triage/backlog` | `src/api/routes/email.ts` |
 | PUT | `/api/email/triage/label/:id` | `src/api/routes/email.ts` |
+| POST | `/api/email/triage/preview` | `src/api/routes/email.ts` |
 | GET | `/api/email/triage/review` | `src/api/routes/email.ts` |
+| GET | `/api/email/triage/run` | `src/api/routes/email.ts` |
+| POST | `/api/email/triage/run` | `src/api/routes/email.ts` |
+| POST | `/api/email/triage/run/cancel` | `src/api/routes/email.ts` |
+| GET | `/api/email/triage/settings` | `src/api/routes/email.ts` |
+| PUT | `/api/email/triage/settings` | `src/api/routes/email.ts` |
+| POST | `/api/email/uploads` | `src/api/routes/email-compose.ts` |
+| DELETE | `/api/email/uploads/:id` | `src/api/routes/email-compose.ts` |
 | GET | `/api/eval/compare` | `src/api/routes/eval.ts` |
 | GET | `/api/eval/results` | `src/api/routes/eval.ts` |
 | GET | `/api/eval/results/:id` | `src/api/routes/eval.ts` |
@@ -280,6 +312,9 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | PATCH | `/api/mail/accounts/:id` | `src/api/routes/mail.ts` |
 | POST | `/api/mail/accounts/:id/sync` | `src/api/routes/mail.ts` |
 | POST | `/api/mail/accounts/:id/test` | `src/api/routes/mail.ts` |
+| GET | `/api/mail/client/messages` | `src/api/routes/mail-client.ts` |
+| GET | `/api/mail/client/messages/:id` | `src/api/routes/mail-client.ts` |
+| POST | `/api/mail/client/messages/batch` | `src/api/routes/mail-client.ts` |
 | POST | `/api/mail/drafts` | `src/api/routes/mail.ts` |
 | DELETE | `/api/mail/drafts/:id` | `src/api/routes/mail.ts` |
 | PATCH | `/api/mail/drafts/:id` | `src/api/routes/mail.ts` |
@@ -768,19 +803,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 9 |
 | `api` | `channels` | 22 |
 | `api` | `config` | 29 |
-| `api` | `core` | 219 |
-| `api` | `db` | 149 |
+| `api` | `core` | 246 |
+| `api` | `db` | 152 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 9 |
 | `api` | `mcp` | 7 |
 | `api` | `models` | 43 |
 | `api` | `plugins` | 70 |
-| `api` | `security` | 182 |
+| `api` | `security` | 188 |
 | `api` | `services` | 5 |
-| `api` | `shared` | 29 |
+| `api` | `shared` | 32 |
 | `api` | `skills` | 7 |
 | `api` | `tools` | 6 |
-| `api` | `utils` | 76 |
+| `api` | `utils` | 78 |
 | `api` | `voice` | 39 |
 | `capabilities` | `config` | 1 |
 | `capabilities` | `db` | 2 |
@@ -806,21 +841,21 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `config` | `voice` | 1 |
 | `core` | `capabilities` | 3 |
 | `core` | `channels` | 15 |
-| `core` | `config` | 73 |
-| `core` | `db` | 520 |
+| `core` | `config` | 74 |
+| `core` | `db` | 534 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 7 |
 | `core` | `mcp` | 12 |
-| `core` | `models` | 147 |
+| `core` | `models` | 150 |
 | `core` | `modules` | 2 |
 | `core` | `plugins` | 8 |
-| `core` | `security` | 243 |
+| `core` | `security` | 249 |
 | `core` | `services` | 2 |
 | `core` | `setup` | 1 |
-| `core` | `shared` | 77 |
+| `core` | `shared` | 84 |
 | `core` | `skills` | 14 |
 | `core` | `tools` | 36 |
-| `core` | `utils` | 244 |
+| `core` | `utils` | 255 |
 | `core` | `voice` | 3 |
 | `db` | `config` | 4 |
 | `db` | `core` | 22 |
@@ -876,7 +911,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `plugins` | `utils` | 38 |
 | `security` | `api` | 1 |
 | `security` | `config` | 20 |
-| `security` | `core` | 39 |
+| `security` | `core` | 41 |
 | `security` | `db` | 88 |
 | `security` | `mcp` | 2 |
 | `security` | `plugins` | 2 |

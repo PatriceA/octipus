@@ -12,6 +12,17 @@ export interface ClefObservation {
   at: string;
 }
 
+/** The triage answer the owner was last shown for a mail, and which model gave it. */
+export interface StoredTriage {
+  priority: 'low' | 'normal' | 'high';
+  category?: string;
+  reason?: string;
+  source: 'decision' | 'llm';
+  /** The rubric key (question wording, categories, owner instructions) the answer was given under. */
+  rubric?: string;
+  at: string;
+}
+
 /**
  * The email triage training set (core/email/triage-labels.ts): per mail, what
  * the decision model answered and the label to measure it against — set by
@@ -33,6 +44,8 @@ export const emailTriageLabels = pgTable('email_triage_labels', {
   subject: text('subject').notNull(),
   snippet: text('snippet').notNull(),
   clef: jsonb('clef').$type<ClefObservation>(),
+  /** The last triage result shown for this mail; the inbox reads it back. An owner label still wins. */
+  triage: jsonb('triage').$type<StoredTriage>(),
   labelPriority: text('label_priority').$type<'low' | 'normal' | 'high'>(),
   labelCategory: text('label_category'),
   labelSource: text('label_source').$type<'user' | 'model'>(),

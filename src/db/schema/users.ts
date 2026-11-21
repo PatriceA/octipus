@@ -74,8 +74,27 @@ export interface UserPreferences {
   notificationsEnabled?: boolean;
   defaultModel?: string;
   timezone?: string;
+  /** Keep a local index of Gmail / Outlook headers (src/core/email/mail-index.ts). Unset = on; false = off, nothing stored. */
+  emailIndex?: boolean;
   /** Email triage categories, name → description (src/core/email/service.ts). Unset = presets. */
   emailCategories?: Record<string, string>;
+  /** How "Triage inbox" runs for this user (src/core/email/triage-run.ts). Unset = defaults. */
+  emailTriage?: {
+    scope?: 'untriaged' | 'unread' | 'all';
+    applyLabels?: boolean;
+    autoArchive?: boolean;
+    archiveCategories?: string[];
+    instructions?: string;
+    skipDialog?: boolean;
+    /** Triage new inbox mail without being asked (src/core/email/auto-triage.ts). */
+    auto?: boolean;
+    /** When `auto` was turned on: older mail is left alone. ISO. */
+    autoSince?: string;
+    /** The last automatic run that triaged something or failed. */
+    lastAuto?: { at: string; triaged: number; archived: number; skipped?: number; error?: string };
+  };
+  /** Which calendars the Calendar page shows (src/core/calendar/calendars.ts). */
+  calendar?: import('@/shared/calendar').CalendarPreferences;
 }
 
 export type User = typeof users.$inferSelect;

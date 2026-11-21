@@ -8,9 +8,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { getConfig } from '@/config';
 import { MODULES } from '@/modules';
 
-const sweeps = vi.hoisted(() => ({ mail: vi.fn(async () => 0), scan: vi.fn(async () => 0) }));
+const sweeps = vi.hoisted(() => ({ mail: vi.fn(async () => 0), scan: vi.fn(async () => 0), snooze: vi.fn(async () => 0), index: vi.fn(async () => 0), autoTriage: vi.fn(async () => 0) }));
 vi.mock('@/core/mail/sync', () => ({ syncDueMailAccounts: sweeps.mail }));
 vi.mock('@/core/scan-folders/sweep', () => ({ scanDueFolders: sweeps.scan }));
+vi.mock('@/core/email/snooze', () => ({ wakeDueSnoozes: sweeps.snooze }));
+vi.mock('@/core/email/mail-index', () => ({ syncDueMailIndexes: sweeps.index }));
+vi.mock('@/core/email/auto-triage', () => ({ autoTriageTick: sweeps.autoTriage }));
 
 const MODULE_TOOLS = MODULES.flatMap((m) => m.tools);
 let saved: string[] = [];
@@ -95,9 +98,15 @@ describe('every module off', () => {
     expect(startModuleSweeps(new Date())).toEqual([]);
     expect(sweeps.mail).not.toHaveBeenCalled();
     expect(sweeps.scan).not.toHaveBeenCalled();
-    getConfig().modules.enabled = ['mail', 'scan-folders'];
-    expect(startModuleSweeps(new Date())).toEqual(['mail-sync', 'scan-folders']);
+    expect(sweeps.snooze).not.toHaveBeenCalled();
+    expect(sweeps.index).not.toHaveBeenCalled();
+    expect(sweeps.autoTriage).not.toHaveBeenCalled();
+    getConfig().modules.enabled = ['mail', 'scan-folders', 'inbox'];
+    expect(startModuleSweeps(new Date())).toEqual(['mail-sync', 'email-index', 'scan-folders', 'inbox-auto-triage', 'email-snooze']);
     await vi.waitFor(() => expect(sweeps.mail).toHaveBeenCalled());
+    await vi.waitFor(() => expect(sweeps.index).toHaveBeenCalled());
+    await vi.waitFor(() => expect(sweeps.autoTriage).toHaveBeenCalled());
+    await vi.waitFor(() => expect(sweeps.snooze).toHaveBeenCalled());
   });
 
   test('case links to an off module\'s entity are hidden and kept', async () => {

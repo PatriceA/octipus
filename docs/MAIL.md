@@ -21,13 +21,39 @@ so a message is read exactly where its account is.
 ## Accounts
 
 Open **Settings → Mailboxes**, or choose **Manage mailboxes** on the Email or
-Mailboxes page. Add an address, incoming server and password, and optionally an
+Mail page. Add an address, incoming server and password, and optionally an
 SMTP server. Each account can be edited, tested, synced and removed there.
 Blank password fields retain a saved login; passwords are never read back.
 
-The Email page's mailbox selector switches between the existing Google/Microsoft
-inbox and individual IMAP/POP3 accounts. **Mailboxes** (`/mail`) also works when
-the separate Google/Microsoft inbox module is off. Accounts are scoped to the
+The Email page's mailbox selector switches between the Google and Microsoft
+mailboxes, the IMAP/POP3 accounts, and **All inboxes** (every one of them in one
+list). Each connected Google or Microsoft account is its own mailbox: with two
+Gmail accounts (Settings → Integrations → **Add another account**) the selector
+lists both. The default account (Settings → Integrations → **Make default**) is
+the one agents and the heartbeat use. **Mail** (`/mail`) is the same window with the IMAP/POP3 mailboxes only;
+it also works when the separate Google/Microsoft inbox module is off.
+
+### In the mail window
+
+An IMAP/POP3 mailbox opens in the same mail window as Gmail or Outlook:
+
+- **Folders:** Inbox (received), Sent, Drafts and Failed sends: what Octipus
+  stores. There is no archive, trash or star: nothing on the server changes.
+- **Reading** marks received mail read for editors; a viewer reads without
+  changing anything. Mail HTML is drawn in a sandboxed frame, remote images
+  held back until asked for. Attachments download when the raw message is kept.
+- **Writing** goes through a saved draft: **Send** saves the draft (a reply
+  takes its recipients, subject and quote from the original on the server),
+  then shows exactly what was saved; **Send now** sends that revision. A change
+  after saving is saved again first. A draft or failed send opens again from
+  its folder with **Edit draft**. Needs SMTP set up and the editor role.
+- **Refresh** syncs the mailbox now (editors); a failed sync is shown above
+  the list.
+- **AI help and triage** (summary, reply directions, AI drafts, a to-do,
+  priority and category) need the Email & calendar module. Mail at protection
+  level 3-4 goes to local models only while protection is on
+  ([EMAIL-TRIAGE.md](EMAIL-TRIAGE.md#which-mailboxes)).
+ Accounts are scoped to the
 selected local workspace; remote-install mailbox management is not supported.
 The `mail` module must be enabled in Settings → Modules.
 
@@ -55,6 +81,28 @@ are cleaned up within the hour.
 
 Testing a login (`POST /accounts/:id/test`) is part of setting up: in a space
 only its owners can do it.
+
+### Writing and snoozing in Gmail and Outlook
+
+- **Attachments:** up to 20 files and 25 MB per mail, picked or dropped on the
+  compose panel. They are held in the server's memory for an hour, for their
+  uploader only, until the mail is sent. A forward takes the original's files
+  along (removable); the server fetches them from the mailbox at send time.
+- **Formatting:** a toolbar adds `**bold**`, `_italic_`, links, lists and
+  quotes as signs in the text; the server builds the HTML part from those
+  signs and sanitizes it. **Plain text** sends the text alone.
+- **Snooze:** a conversation leaves the inbox until a chosen time and comes
+  back unread (table `email_snoozes`, job `email-snooze`). The **Snoozed**
+  folder lists what is out, says why a wake failed, and has **Unsnooze**. A
+  snooze is stored with its account's address (the default's too) and woken
+  in that account. A wake strikes each message from the row as it comes
+  back, so a retry never moves one twice; a message the mailbox no longer
+  has counts as back. After 12 failed wakes (about a day and a half) it is
+  no longer tried: the folder says so and offers **Try again** or **Leave in
+  archive**. A snooze that could move only some messages keeps those and
+  says the rest stayed in the inbox.
+- An IMAP / POP3 mailbox sends plain text without attachments and has no
+  snooze: Octipus changes nothing on its server.
 
 ### Hosts
 
@@ -105,7 +153,7 @@ more than 5 minutes old. After a failure the wait doubles, up to an hour.
   the mail client.
 
 Stored per message: the addresses, subject, a plain-text body, the HTML body
-sanitized like the Gmail inbox's (no scripts, no remote images), the
+sanitized like the Gmail inbox's (no scripts; a remote image's address is kept aside in `data-remote-src`, so nothing loads until a reader asks for the images), the
 attachments' names and sizes, and the raw source (in `mail_raw`), from which
 attachments are downloaded.
 
@@ -196,7 +244,58 @@ All under `/api/mail`, scoped by the workspace header like every space route.
 | `POST /drafts` | `{ replyTo, body, all }` or `{ accountId, to, cc, subject, body }` |
 | `PATCH /drafts/:id` | Change a draft or a failed send |
 | `DELETE /drafts/:id` | Remove a draft or a failed send |
+| `GET /client/messages` | The Email page's list: `account`, `folder` (`inbox`, `sent`, `drafts`, `failed`), `q`, `unread`, `pageToken`, `limit`; with the reader's triage |
+| `GET /client/messages/:id` | One message in the Email page's shape |
+| `POST /client/messages/batch` | `{ ids, action: read \| unread }` |
 | `POST /drafts/:id/send` | `{ confirm: true, expectedRevision? }`; the web UI supplies the saved message view's revision |
+
+## Local index of Gmail and Outlook headers
+
+The Google and Microsoft 365 mailboxes are read through their providers'
+APIs, not over IMAP. So that the Email page's lists and the inbox's unread
+count open at once, Octipus keeps a small index of those
+mailboxes' **headers** (`src/core/email/mail-index.ts`, tables `email_index`
+and `email_index_state`). It is on unless the owner turns it off.
+
+**What is stored**, per message of the last 90 days: its id and conversation
+id, its folders (inbox, sent, drafts, archive, trash) and flags (unread,
+starred), sender, recipients and cc, subject, date, whether it has
+attachments (Outlook only), and the provider's own short preview, cut to 300
+characters. Per mailbox: where the provider's change feed stands, when it was
+last synced, the last sync error, and the provider's unread count for the
+inbox. **Never stored:** a body, an attachment, or anything of the HTML.
+Nothing of it is logged.
+
+**Why:** without it, every list page costs one provider call per message,
+and nothing can be shown before the provider answers.
+
+**How far back:** Gmail reads the newest 2000 messages of the last 90 days;
+Outlook reads each folder's 90 days whole (its change feed only continues
+from the end of a full read), over several syncs if it is large. Mail older
+than that is still listed: past the indexed window a folder continues live
+from the provider.
+
+**Kept current:** a mailbox is read in full the first time it is opened in
+the Email page. Then, every 3 minutes, Gmail's history and Outlook's delta
+feed bring the changes, for mailboxes opened in the last 14 days. Archiving,
+reading, starring or trashing in the Email page changes the index at once,
+and a sync follows a few seconds later. A list is served from the index only
+when the mailbox's last sync is less than 10 minutes old (and, on Outlook,
+the folder was read to its end); otherwise the page reads live, as before.
+**Search goes to the provider**, which also matches words in a body or an
+attachment name; the index holds too little for that. Only when the provider
+cannot answer a search does the index answer it, with what the subject,
+sender and preview match, and no further pages.
+
+**Deleted:** with the user; when the Google or Microsoft account is
+disconnected; and at once when the owner turns the index off in **Email →
+Mailbox settings** (or `PUT /api/email/index {enabled: false}`). With it
+off nothing is synced or stored and every list is read live.
+
+| Method and path | What |
+|---|---|
+| `GET /api/email/index` | Whether the index is on, and per mailbox: `building`, `ready`, `stale` or `error`, how many messages it holds, when it last synced |
+| `PUT /api/email/index` | `{ enabled }`; off deletes the index |
 
 ## Not yet
 

@@ -189,6 +189,8 @@ const SPACE_ACTING = [
   'POST /api/mail/accounts/:id/test', 'POST /api/mail/accounts/:id/sync',
   'GET /api/mail/messages', 'GET /api/mail/messages/:id', 'PATCH /api/mail/messages/:id', 'GET /api/mail/messages/:id/attachments/:index',
   'POST /api/mail/drafts', 'PATCH /api/mail/drafts/:id', 'DELETE /api/mail/drafts/:id', 'POST /api/mail/drafts/:id/send',
+  // The Email page's view of them (routes/mail-client.ts): the same `contentRepos`; marking read needs write, like PATCH above.
+  'GET /api/mail/client/messages', 'GET /api/mail/client/messages/:id', 'POST /api/mail/client/messages/batch',
   // Protection levels (docs/PROTECTION-LEVELS.md): `contentRepos`, editors.
   'PUT /api/protection/:entity/:id',
   // Scan folders (docs/SCAN-FOLDERS.md): admins only, and in a space a writer there.

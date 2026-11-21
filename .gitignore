@@ -45,6 +45,7 @@ workspace/
 
 # Playwright
 web/dist-test/
+web/dist-test-*/
 test-results/
 playwright-report/
 

@@ -6,6 +6,7 @@ import { sweepPurgedSpaceFiles } from '@/core/spaces/purge';
 import { maybeRunHeartbeats } from '@/core/heartbeat';
 import { syncDueMailAccounts } from '@/core/mail/sync';
 import { scanDueFolders } from '@/core/scan-folders/sweep';
+import { wakeDueSnoozes } from '@/core/email/snooze';
 import { maybeRunScheduledBackup } from '@/core/backup/service';
 import { isJobOn } from '@/core/modules/registry';
 import { fireDueReminders } from '@/core/tasks/reminders';
@@ -52,7 +53,10 @@ let lastMemoryRepair = 0;
 let memoryRepairRunning = false;
 let reminderSweepRunning = false;
 let mailSweepRunning = false;
+let mailIndexSweepRunning = false;
 let scanSweepRunning = false;
+let autoTriageRunning = false;
+let snoozeSweepRunning = false;
 
 /**
  * Parse a simple cron expression and compute the next run date.
@@ -550,6 +554,17 @@ export function startModuleSweeps(now: Date): string[] {
       .finally(() => { mailSweepRunning = false; });
   }
 
+  // The local index of Gmail / Outlook headers (core/email/mail-index.ts):
+  // mailboxes the owner opened lately read their changes.
+  if (!mailIndexSweepRunning && isJobOn('email-index')) {
+    mailIndexSweepRunning = true;
+    started.push('email-index');
+    import('@/core/email/mail-index')
+      .then(({ syncDueMailIndexes }) => syncDueMailIndexes(now))
+      .catch((err: unknown) => coreLogger.error({ err }, 'Mail index sweep failed'))
+      .finally(() => { mailIndexSweepRunning = false; });
+  }
+
   // Scan folders (core/scan-folders/sweep.ts): settled files into documents.
   if (!scanSweepRunning && isJobOn('scan-folders')) {
     scanSweepRunning = true;
@@ -558,6 +573,27 @@ export function startModuleSweeps(now: Date): string[] {
       .then((filed) => { if (filed > 0) coreLogger.info({ filed }, 'Scan folders filed new documents'); })
       .catch((err: unknown) => coreLogger.error({ err }, 'Scan folder sweep failed'))
       .finally(() => { scanSweepRunning = false; });
+  }
+
+  // Automatic email triage (core/email/auto-triage.ts): new inbox mail of the
+  // users who turned it on. Loaded on first use: most installs never run it.
+  if (!autoTriageRunning && isJobOn('inbox-auto-triage')) {
+    autoTriageRunning = true;
+    started.push('inbox-auto-triage');
+    import('@/core/email/auto-triage')
+      .then(({ autoTriageTick }) => autoTriageTick(now))
+      .then((triaged) => { if (triaged > 0) coreLogger.info({ triaged }, 'Automatic triage sorted new mail'); })
+      .catch((err: unknown) => coreLogger.error({ err }, 'Automatic triage sweep failed'))
+      .finally(() => { autoTriageRunning = false; });
+  }
+  // Snoozed mail (core/email/snooze.ts): what is due goes back to the inbox, unread.
+  if (!snoozeSweepRunning && isJobOn('email-snooze')) {
+    snoozeSweepRunning = true;
+    started.push('email-snooze');
+    wakeDueSnoozes(now)
+      .then((woke) => { if (woke > 0) coreLogger.info({ woke }, 'Snoozed mail is back in the inbox'); })
+      .catch((err: unknown) => coreLogger.error({ err }, 'Snooze sweep failed'))
+      .finally(() => { snoozeSweepRunning = false; });
   }
   return started;
 }
